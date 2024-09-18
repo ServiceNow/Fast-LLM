@@ -1,0 +1,9 @@
+*
+!setup.py
+!setup.cfg
+!Megatron-LM
+!fast_llm
+!examples
+!tools
+!tests
+!pyproject.toml

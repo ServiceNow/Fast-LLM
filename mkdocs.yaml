@@ -1,0 +1,178 @@
+# Site information
+site_name: Fast-LLM
+site_author: The Fast-LLM developers
+site_description: >-
+  Fast-LLM is a high-performance library for training large language models,
+  emphasizing speed, flexibility, and convenience.
+site_url: https://ServiceNow.github.io/Fast-LLM/
+
+# Repository
+repo_name: ServiceNow/Fast-LLM
+repo_url: https://github.com/ServiceNow/Fast-LLM
+edit_uri: edit/main/docs/
+
+# Copyright
+copyright: Copyright 2024 ServiceNow, Inc.
+
+# Configuration
+theme:
+  name: material
+  custom_dir: docs/overrides
+  logo: assets/images/logo.png
+  favicon: assets/images/logo.png
+  icon:
+    repo: fontawesome/brands/github
+  features:
+    - announce.dismiss
+    - content.action.edit
+    - content.action.view
+    - content.code.annotate
+    - content.code.copy
+    # - content.code.select
+    # - content.footnote.tooltips
+    # - content.tabs.link
+    - content.tooltips
+    # - header.autohide
+    # - navigation.expand
+    - navigation.footer
+    - navigation.indexes
+    - navigation.instant
+    - navigation.instant.prefetch
+    - navigation.instant.progress
+    # - navigation.prune
+    - navigation.sections
+    - navigation.tabs
+    # - navigation.tabs.sticky
+    - navigation.top
+    - navigation.tracking
+    - navigation.path
+    - search.highlight
+    - search.share
+    - search.suggest
+    - toc.follow
+    # - toc.integrate
+  palette:
+    - media: "(prefers-color-scheme)"
+      toggle:
+        icon: material/link
+        name: Switch to light mode
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/toggle-switch
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: black
+      accent: indigo
+      toggle:
+        icon: material/toggle-switch-off
+        name: Switch to system preference
+  font:
+    text: Roboto
+    code: Roboto Mono
+
+# Hooks
+hooks:
+  - docs/overrides/hooks/shortcodes.py
+
+# Additional configuration
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/ServiceNow
+    - icon: fontawesome/brands/twitter
+      link: https://twitter.com/ServiceNowRSRCH
+  generator: false
+
+# Extensions
+markdown_extensions:
+  - abbr
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - toc:
+      permalink: true
+  - pymdownx.arithmatex:
+      generic: true
+  - pymdownx.betterem:
+      smart_enable: all
+  - pymdownx.caret
+  - pymdownx.details
+  - pymdownx.emoji:
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.keys
+  - pymdownx.magiclink:
+      normalize_issue_symbols: true
+      repo_url_shorthand: true
+      user: squidfunk
+      repo: mkdocs-material
+  - pymdownx.mark
+  - pymdownx.smartsymbols
+  - pymdownx.snippets:
+      auto_append:
+        - includes/mkdocs.md
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+      combine_header_slug: true
+      slugify: !!python/object/apply:pymdownx.slugs.slugify
+        kwds:
+          case: lower
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - pymdownx.tilde
+
+plugins:
+  - blog
+  - mkdocstrings:
+      default_handler: python
+      handlers:
+        python:
+          options:
+            show_submodules: true
+  - search
+  - section-index
+  - social:
+      cards_layout_options:
+        color: #173a58
+  - git-revision-date-localized:
+      enable_creation_date: true
+  - git-committers:
+      repository: ServiceNow/Fast-LLM
+      branch: main
+
+nav:
+  - 🏠 Home: index.md
+  - 🚀 Getting Started:
+    - 📜 License: license.md
+  - 🍳 Tutorial:
+    - tutorial/index.md
+    - 🚀 Getting started: tutorial/getting_started.md
+    - 💨 Load Mistral-7B: tutorial/prepare_mistral.md
+    - 📊 Prepare and load the dataset: tutorial/prepare_data.md
+    - 💨 Prepare the training configuration: tutorial/prepare_training.md
+    - 🌪 Launch and monitor training: tutorial/launch_training.md
+    - 🤗 Convert to Huggingface: tutorial/convert_to_huggingface.md
+  - 🗂️ Reference:
+    - reference/index.md
+  - 🧑‍💻 Developer Guide:
+    - developers/index.md
+    - 🛠️ How to contribute: developers/contribute.md
+  - 👥 Community:
+    - community/index.md
+    - 🫶 Feedback: community/feedback.md

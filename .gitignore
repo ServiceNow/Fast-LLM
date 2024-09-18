@@ -1,0 +1,29 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Doc build
+.cache
+
+# Distribution / packaging
+*.egg-info/
+
+# Environment
+.env*
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# MacOS
+.DS_Store
+
+# Project specifics
+/.idea/
+/.vscode/
