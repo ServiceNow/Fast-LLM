@@ -9,7 +9,7 @@ Such training requires a careful selection and optimization of:
 - The training parameters: optimizer, learning rate schedule, training duration, etc.
 - The training performance optimizations: distributed layout, activation recomputation, etc.
 
-When training a model with Fast LLM (and other training libraries),
+When training a model with Fast-LLM (and other training libraries),
 we generally assume the first four points to be predetermined as they are unrelated to the training framework,
 and focus on the last one, i.e., we optimize a fixed training scheme for throughput.
 (However, in practice the batch size may be adjusted together with the distributed layout,

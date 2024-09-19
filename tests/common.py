@@ -1,12 +1,16 @@
 import os
 import pathlib
+import random
 import shutil
+import string
 import subprocess
 import sys
 
+import numpy as np
 import pytest
 import torch
 
+from fast_llm.data.mmap import MMapIndexedDataset
 from fast_llm.models.gpt.config import HuggingfaceModelType
 from fast_llm.models.gpt.huggingface import HuggingfaceGPTModelForCausalLM
 from tests.compare_tensor_logs import CompareConfig, compare_tensor_logs
@@ -16,12 +20,16 @@ sys.path.append(os.getcwd())
 
 
 # Keep all results in one place to allow recovering them for debugging in case of failure.
-TEST_RESULTS_PATH = pathlib.Path(os.environ.get("TEST_RESULTS_PATH", "/tmp/test_fastllm_correctness"))
+TEST_RESULTS_PATH = pathlib.Path(os.environ.get("TEST_RESULTS_PATH", "/tmp/fast_llm_tests"))
 FORCE_REUSE_RESULTS = int(os.environ.get("FORCE_REUSE_RESULTS", 0)) != 0
 REUSE_RESULTS = FORCE_REUSE_RESULTS or int(os.environ.get("REUSE_RESULTS", 0)) != 0
 _LOG_LEVEL = int(os.environ.get("LOG_LEVEL", 13))
 
 ARTIFACT_PATH = "runs/0/artifacts"
+
+TOKENIZER_PATH = TEST_RESULTS_PATH / "data" / "tokenizer"
+TOKENIZER_FILE = TOKENIZER_PATH / "tokenizer.json"
+DATASET_PREFIX = TEST_RESULTS_PATH / "data" / "dataset/data"
 
 CONFIG_BASE_FAST_LLM = [
     "--num_layers=2",
@@ -45,7 +53,7 @@ CONFIG_BASE_FAST_LLM = [
     "--lr=0.0001",
     "--vocab_size=49152",
     "--num_workers=4",
-    "--data_path=/mnt/datasets/march_datasets/fixed_tokenizer_2/jupyter_structured/gpt2-preprocessed_content_document",
+    f"--data_path={DATASET_PREFIX}",
     "--save_tensor_log=1",
     "--show_tensor_logs=0",
     "--transposed_mlp_weight=1",
@@ -71,10 +79,10 @@ CONFIG_BASE_MEGATRON = [
     "--lr=0.0001",
     "--num-workers=4",
     "--valid-num-workers=4",
-    "--tokenizer-type=TokenizerFromFile",
-    "--tokenizer-file=/mnt/datasets/tokenizers/tokenizer-the-stack-march-sample-v3/tokenizer.json",
-    "--make-vocab-size-divisible-by=128",
-    "--data-path=/mnt/datasets/march_datasets/fixed_tokenizer_2/jupyter_structured/gpt2-preprocessed_content_document",
+    "--tokenizer-type=NullTokenizer",
+    # Megatron messes with the vocab size, so we have to subtract 1.
+    "--vocab-size=49151",
+    f"--data-path={DATASET_PREFIX}",
     "--lr-decay-style=constant",
     # Initialization is set up to match MCore models (MCore inverts self-attn qkv and dense layers compared to original Megatron)
     "--use-mcore-models",
@@ -151,6 +159,23 @@ TEST_MODEL = os.environ.get("MODEL", "mistral")
 TEST_MODEL_TYPE, CONFIG_FAST_LLM, CONFIG_GPT2, CONFIG_COMMON, HUGGINGFACE_MODEL_TYPE = _CONFIGS[TEST_MODEL]
 
 
+def get_test_data():
+    if not TOKENIZER_FILE.is_file():
+        import transformers
+
+        transformers.AutoTokenizer.from_pretrained("bigcode/santacoder").save_pretrained(TOKENIZER_PATH)
+
+    if not (DATASET_PREFIX.with_suffix(".idx").is_file() and DATASET_PREFIX.with_suffix(".bin").is_file()):
+        import transformers
+
+        characters = (string.ascii_lowercase) * 5 + " " * 30 + "\n"
+        documents = "".join(random.Random(1234).choices(characters, k=1000000)).splitlines()
+        tokenizer = transformers.AutoTokenizer.from_pretrained(TOKENIZER_PATH)
+
+        documents = [np.array(tokenizer(document)["input_ids"], dtype=np.uint16) for document in documents]
+        MMapIndexedDataset.write_dataset(DATASET_PREFIX, documents)
+
+
 def run_test_script(
     name: str,
     script: list[str],
@@ -205,6 +230,7 @@ def run_test_script(
     if skip:
         print("Reusing existing run.")
     else:
+        get_test_data()
         completed_proc = subprocess.run(command, env=env)
         if completed_proc.returncode:
             raise RuntimeError(f"Process failed with return code {completed_proc.returncode}")

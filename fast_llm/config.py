@@ -3,6 +3,7 @@ import dataclasses
 import enum
 import logging
 import pathlib
+import traceback
 import types
 import typing
 
@@ -312,13 +313,16 @@ class Config:
                 if new_value is not value:
                     setattr(self, name, new_value)
                 if not valid:
-                    raise TypeError(f"Invalid type `{type(value)}` (expected `{field.type}`)")
+                    raise ValidationError(f"Invalid type `{type(value)}` (expected `{field.type}`)")
             except ValidationError as e:
                 errors.append(f"Validation failed for field `{name}` in class {self.__class__.__name__}:)")
                 errors.extend(["  " + arg for arg in e.args])
             except Exception as e:
                 errors.append(
                     f"Validation failed for field `{name}` in class {self.__class__.__name__}: {', '.join(e.args)}"
+                    f"\n\n====================== stack trace ========================\n"
+                    + traceback.format_exc()
+                    + "===========================================================\n"
                 )
 
         if errors:
