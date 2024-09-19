@@ -194,7 +194,7 @@ class TransformerArchitectureConfig(BaseModelArchitectureConfig):
         if self.num_experts > 1:
             assert self.transposed_mlp_weight
 
-        Assert.geq(self.num_shared_experts, self.num_experts)
+        Assert.leq(self.num_shared_experts, self.num_experts)
         Assert.leq(self.num_shared_experts + self.num_experts_per_token, self.num_experts)
         Assert.multiple(self.num_attention_heads, self.head_groups)
 
