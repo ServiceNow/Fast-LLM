@@ -1,9 +1,13 @@
+import typing
+
 from fast_llm.config import ConfigDictFormat, Field, FieldHint, config_class
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig, PretrainedFastLLMModelConfig
-from fast_llm.engine.multi_stage.conversion import ModelConverter
 from fast_llm.engine.training.config import TrainerConfig
 from fast_llm.layers.language_model.config import LanguageModelArchitectureConfig, LanguageModelBaseConfig
 from fast_llm.models.gpt.megatron import set_megatron_distributed_seeds
+
+if typing.TYPE_CHECKING:
+    from fast_llm.engine.multi_stage.conversion import ModelConverter
 
 
 @config_class()
@@ -64,6 +68,18 @@ class GPTModelConfig(FastLLMModelConfig):
     _abstract = False
     base_model: GPTBaseModelConfig = Field(default_factory=GPTBaseModelConfig)
 
+    @classmethod
+    def get_model_class(cls):
+        from fast_llm.models.gpt.model import GPTModel
+
+        return GPTModel
+
+    @classmethod
+    def get_huggingface_model_class(cls):
+        from fast_llm.models.gpt.huggingface import HuggingfaceGPTModelForCausalLM
+
+        return HuggingfaceGPTModelForCausalLM
+
 
 @config_class()
 class PretrainedGPTModelConfig(PretrainedFastLLMModelConfig):
@@ -80,6 +96,12 @@ class GPTTrainerConfig(PretrainedGPTModelConfig, TrainerConfig):
             self.batch.sequence_length = self.base_model.max_position_embeddings
         if self.base_model.use_megatron_initialization:
             set_megatron_distributed_seeds(self.distributed)
+
+    @classmethod
+    def get_trainer_class(cls):
+        from fast_llm.models.gpt.trainer import GPTTrainer
+
+        return GPTTrainer
 
 
 class HuggingfaceModelType:

@@ -6,13 +6,15 @@ import numpy as np
 import torch
 from torch._C._distributed_c10d import ProcessGroup
 
-from fast_llm.distributed import Distributed, DistributedConfig, DistributedDim, DistributedDimNames
 from fast_llm.engine.base_model.base_model import BaseModel
+from fast_llm.engine.config_utils.tensor_space import TensorDim
+from fast_llm.engine.distributed.config import DistributedConfig, DistributedDim, DistributedDimNames
+from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.engine.multi_stage.config import MultiStageConfig, StageMode
 from fast_llm.engine.multi_stage.stage import Stage
 from fast_llm.engine.optimizer.config import ParamGroup
-from fast_llm.run import log_main_rank, log_model_parallel_main_rank
-from fast_llm.tensor import ParameterMeta, TensorDim, TensorMeta
+from fast_llm.engine.run.run import log_main_rank, log_model_parallel_main_rank
+from fast_llm.tensor import ParameterMeta, TensorMeta
 from fast_llm.utils import Assert, get_unique
 
 logger = logging.getLogger(__name__)

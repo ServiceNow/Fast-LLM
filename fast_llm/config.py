@@ -7,9 +7,6 @@ import traceback
 import types
 import typing
 
-import requests
-import yaml
-
 from fast_llm.utils import Assert, Tag
 
 logger = logging.getLogger(__name__)
@@ -218,29 +215,14 @@ def _process_config_class(cls: type["Config"]):
     return cls
 
 
-def config_class(
-    cls=None,
-    /,
-    *,
-    init=True,
-    repr=True,
-    eq=True,
-    order=False,
-    unsafe_hash=False,
-    frozen=False,
-    match_args=True,
-    kw_only=False,
-    slots=False,
-):
+def config_class(cls=None):
     """
     Fast-LLM replacement for the default dataclass wrapper. Performs additional verifications.
     """
 
     def wrap(cls):
         Assert.custom(issubclass, cls, Config)
-        return _process_config_class(
-            dataclasses._process_class(cls, init, repr, eq, order, unsafe_hash, frozen, match_args, kw_only, slots)
-        )
+        return _process_config_class(dataclasses.dataclass(cls))
 
     # See if we're being called as @config_class or @config_class().
     if cls is None:
@@ -401,8 +383,9 @@ class Config:
             valid = isinstance(x, type_)
             x.validate(_is_validating=True)
         else:
-            # TODO: Make a dict of special classes instead?
-            if type_ is float and isinstance(x, int):
+            if hasattr(type_, "__fast_llm_validator__"):
+                x = type_.__fast_llm_validator__(x)
+            elif type_ is float and isinstance(x, int):
                 # Ints are ok too.
                 x = float(x)
             elif issubclass(type_, enum.Enum) and not isinstance(x, type_) and issubclass(type_, type(x)):
@@ -485,57 +468,66 @@ class Config:
         cls.check_abstract()
         field: Field
         for name, field in cls.fields():
-            if not field.init or field._field_type == dataclasses._FIELD_CLASSVAR:  # noqa
-                assert name not in cls.__argparse_map__
-                continue
-            if name in cls.__argparse_map__:
-                if cls.__argparse_map__[name] is None:
+            try:
+                if not field.init or field._field_type == dataclasses._FIELD_CLASSVAR:  # noqa
+                    assert name not in cls.__argparse_map__
                     continue
-                argparse_kwargs = cls.__argparse_map__[name].copy()
-            else:
-                argparse_kwargs = {}
-            if "type" in argparse_kwargs:
-                is_list = False
-            else:
-                type_ = field.type
-                is_list = isinstance(type_, types.GenericAlias) and type_.__origin__ in (list, set)
-                if is_list:
-                    Assert.eq(len(type_.__args__), 1)
-                    Assert.eq(type_.__origin__, field.default_factory)
-                    type_ = type_.__args__[0]
-                elif isinstance(field.default_factory, _ConfigFactory):
-                    Assert.custom(issubclass, type_, Config)
-                elif field.default_factory is not dataclasses.MISSING:
-                    raise NotImplementedError(name)
-                if isinstance(type_, types.UnionType) and len(type_.__args__) == 2 and type_.__args__[1] is type(None):
-                    # Optional
-                    type_ = type_.__args__[0]
-                    # Would break other things.
-                    Assert.not_custom(issubclass, type_, Config)
-                Assert.custom(isinstance, type_, type)
-                if issubclass(type_, Config):
-                    type_.to_argparse(parser)
-                    continue
-                if type_ is bool:
-                    type_ = lambda x: bool(int(x))
-                elif not issubclass(type_, (str, int, float, pathlib.Path)):
-                    raise NotImplementedError(name, type_)
-                argparse_kwargs["type"] = type_
-            if "required" not in argparse_kwargs:
-                argparse_kwargs["required"] = (
-                    field.default is dataclasses.MISSING and "default" not in argparse_kwargs and not is_list
+                if name in cls.__argparse_map__:
+                    if cls.__argparse_map__[name] is None:
+                        continue
+                    argparse_kwargs = cls.__argparse_map__[name].copy()
+                else:
+                    argparse_kwargs = {}
+                if "type" in argparse_kwargs:
+                    is_list = False
+                else:
+                    type_ = field.type
+                    is_list = isinstance(type_, types.GenericAlias) and type_.__origin__ in (list, set)
+                    if is_list:
+                        Assert.eq(len(type_.__args__), 1)
+                        Assert.eq(type_.__origin__, field.default_factory)
+                        type_ = type_.__args__[0]
+                    elif isinstance(field.default_factory, _ConfigFactory):
+                        Assert.custom(issubclass, type_, Config)
+                    elif field.default_factory is not dataclasses.MISSING:
+                        raise NotImplementedError(name)
+                    if (
+                        isinstance(type_, types.UnionType)
+                        and len(type_.__args__) == 2
+                        and type_.__args__[1] is type(None)
+                    ):
+                        # Optional
+                        type_ = type_.__args__[0]
+                        # Would break other things.
+                        Assert.not_custom(issubclass, type_, Config)
+                    Assert.custom(isinstance, type_, type)
+                    if issubclass(type_, Config):
+                        type_.to_argparse(parser)
+                        continue
+                    if hasattr(type_, "__fast_llm_argparse_type__"):
+                        type_ = type_.__fast_llm_argparse_type__
+                    elif type_ is bool:
+                        type_ = lambda x: bool(int(x))
+                    elif not issubclass(type_, (str, int, float, pathlib.Path)):
+                        raise NotImplementedError(name, type_)
+                    argparse_kwargs["type"] = type_
+                if "required" not in argparse_kwargs:
+                    argparse_kwargs["required"] = (
+                        field.default is dataclasses.MISSING and "default" not in argparse_kwargs and not is_list
+                    )
+                if "default" not in argparse_kwargs and not is_list and not argparse_kwargs["required"]:
+                    argparse_kwargs["default"] = field.default
+                if "nargs" not in argparse_kwargs and is_list:
+                    argparse_kwargs["nargs"] = "*"
+                if "help" not in argparse_kwargs:
+                    argparse_kwargs["help"] = field.desc
+                parser.add_argument(
+                    f"--{name}",
+                    f"--{name.replace('_', '-')}",
+                    **argparse_kwargs,
                 )
-            if "default" not in argparse_kwargs and not is_list and not argparse_kwargs["required"]:
-                argparse_kwargs["default"] = field.default
-            if "nargs" not in argparse_kwargs and is_list:
-                argparse_kwargs["nargs"] = "*"
-            if "help" not in argparse_kwargs:
-                argparse_kwargs["help"] = field.desc
-            parser.add_argument(
-                f"--{name}",
-                f"--{name.replace('_', '-')}",
-                **argparse_kwargs,
-            )
+            except Exception:
+                raise ValueError(f"Failed to add argparse argument for field {name}")
 
     @classmethod
     def from_dict(
@@ -658,6 +650,8 @@ class Config:
         """
         Read a config from a URL, typically a config file hosted on GitHub.
         """
+        import requests
+        import yaml
 
         headers = {"Accept": "application/vnd.github.v3.raw"}
         if config_auth_token_file:

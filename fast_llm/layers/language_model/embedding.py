@@ -3,9 +3,10 @@ import torch
 from fast_llm.core.distributed import set_generator
 from fast_llm.core.ops import reduce_forward, split
 from fast_llm.engine.base_model.base_model import Layer
+from fast_llm.engine.config_utils.tensor_space import TensorSpace
 from fast_llm.layers.language_model.config import LanguageModelBaseConfig, LanguageModelDimNames, LanguageModelKwargs
 from fast_llm.layers.transformer.config import TransformerDimNames, TransformerKwargs
-from fast_llm.tensor import ParameterMeta, TensorMeta, TensorSpace, init_normal_
+from fast_llm.tensor import ParameterMeta, TensorMeta, init_normal_
 from fast_llm.utils import Assert
 
 WORD_EMBEDDINGS_WEIGHT = "word_embeddings_weight"
@@ -34,7 +35,7 @@ class LanguageModelEmbedding(Layer):
             self._distributed_config.optimization_dtype
             if config.transformer.full_precision_residual
             else self._distributed_config.training_dtype
-        )
+        ).torch
         self._group_size = self._distributed_config.tensor_parallel
         self._sequence_parallel = self._distributed_config.sequence_tensor_parallel
         self._parallel_embeddings = tensor_space.distributed_config.tensor_parallel > 1 and config.parallel_embeddings

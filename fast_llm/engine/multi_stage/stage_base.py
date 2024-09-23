@@ -6,12 +6,15 @@ import torch._dynamo  # noqa
 
 from fast_llm.core.distributed import ProcessGroup, check_parallel_match
 from fast_llm.core.ops import gather_op
-from fast_llm.distributed import Distributed, DistributedConfig
 from fast_llm.engine.base_model.base_model import BaseModel
+from fast_llm.engine.config_utils.data_type import DataType
+from fast_llm.engine.config_utils.tensor_space import TensorDim
+from fast_llm.engine.distributed.config import DistributedConfig
+from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.engine.multi_stage.config import SHARD_PAD_TO_MULTIPLE, StageConfig, StageMode
 from fast_llm.engine.optimizer.config import ParamGroup
 from fast_llm.logging import log_distributed_tensor, log_generator
-from fast_llm.tensor import ParameterMeta, SafeTensorSlice, TensorDim, TensorMeta
+from fast_llm.tensor import ParameterMeta, SafeTensorSlice, TensorMeta
 from fast_llm.utils import Assert, clamp, div, padded_cumsum
 
 logger = logging.getLogger(__name__)
@@ -86,17 +89,17 @@ class StageBase:
         self._weight_shard_meta = TensorMeta.from_dims(
             (shard_dim,),
             tensor_name=f"stage_{self._index}_weight_shard",
-            dtype=self._distributed_config.optimization_dtype,
+            dtype=self._distributed_config.optimization_dtype.torch,
         )
         self._grad_shard_meta = TensorMeta.from_dims(
             (shard_dim,),
             tensor_name=f"stage_{self._index}_grad_shard",
-            dtype=self._distributed_config.optimization_dtype,
+            dtype=self._distributed_config.optimization_dtype.torch,
         )
         self._weight_buffer_meta = TensorMeta.from_dims(
             (buffer_dim,),
             tensor_name=f"stage_{self._index}_weight_buffer",
-            dtype=self._distributed_config.training_dtype,
+            dtype=self._distributed_config.training_dtype.torch,
         )
         self._grad_buffer_meta = TensorMeta.from_dims(
             (buffer_dim,),
@@ -105,7 +108,7 @@ class StageBase:
                 self._distributed_config.optimization_dtype
                 if self._config.full_precision_gradients
                 else self._distributed_config.training_dtype
-            ),
+            ).torch,
         )
 
     @property
@@ -446,7 +449,9 @@ class StageBase:
         shard[begin:end].copy_(tensor_shard)
         return end - begin
 
-    def _export_shard(self, shard: torch.Tensor, dtype: torch.dtype | None = None):
+    def _export_shard(self, shard: torch.Tensor, dtype: DataType | None = None):
+        if dtype is not None:
+            shard = shard.to(dtype=dtype.torch)
         tensors = self._split_buffer(self._reconstruct_from_shard(shard.to(dtype=dtype)))
         for name, param_index in self._parameter_index.items():
             yield name, self._parameter_metas[param_index].local_to_global(
@@ -477,7 +482,7 @@ class StageBase:
         for layer in self._layers:
             for name, meta in layer.named_parameters():
                 Assert.custom(isinstance, meta, ParameterMeta)
-                Assert.eq(meta.dtype, self._distributed_config.optimization_dtype)
+                Assert.eq(meta.dtype, self._distributed_config.optimization_dtype.torch)
                 parameter_metas.append(meta)
 
         reorder_index = sorted(

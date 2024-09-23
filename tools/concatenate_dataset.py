@@ -4,7 +4,7 @@ import pathlib
 
 from fast_llm.config import Config, Field, config_class
 from fast_llm.data.mmap import MMapIndexedDataset
-from fast_llm.logging import configure_logging
+from fast_llm.engine.config_utils.logging import configure_logging
 
 logger = logging.getLogger(__name__)
 

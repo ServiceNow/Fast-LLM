@@ -1,9 +1,9 @@
 from fast_llm.config import Field, FieldHint, check_field, config_class, skip_valid_if_none
-from fast_llm.distributed import DistributedDimNames
 from fast_llm.engine.base_model.config import BaseModelArchitectureConfig, BaseModelConfig
-from fast_llm.functional.cross_entropy import CrossEntropyImpl
+from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
+from fast_llm.engine.distributed.config import DistributedDimNames
+from fast_llm.functional.config import CrossEntropyImpl
 from fast_llm.layers.transformer.config import TransformerArchitectureConfig, TransformerConfig
-from fast_llm.tensor import TensorDim, TensorSpace
 from fast_llm.utils import Assert
 
 

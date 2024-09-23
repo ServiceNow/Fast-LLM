@@ -2,9 +2,10 @@ import logging
 
 import torch
 
+from fast_llm.engine.config_utils.tensor_space import DefaultDimNames, TensorDim, TensorSpace
 from fast_llm.layers.language_model.config import LanguageModelBaseConfig, LanguageModelKwargs
 from fast_llm.layers.transformer.config import TransformerKwargs
-from fast_llm.tensor import DefaultDimNames, TensorDim, TensorMeta, TensorSpace
+from fast_llm.tensor import TensorMeta
 from fast_llm.utils import Assert
 
 logger = logging.getLogger(__name__)

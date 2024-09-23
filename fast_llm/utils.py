@@ -3,8 +3,8 @@ import logging
 import math
 import typing
 
-import numpy as np
-import torch
+if typing.TYPE_CHECKING:
+    import torch
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +34,8 @@ def format_number(x, prec=4, exp_threshold=3):
 
 
 def padded_cumsum(x):
+    import numpy as np
+
     y = np.hstack((0, x))
     return y.cumsum(out=y)
 
@@ -42,7 +44,9 @@ def clamp(x, x_min, x_max):
     return min(max(x, x_min), x_max)
 
 
-def rms_diff(x: torch.Tensor, y: torch.Tensor):
+def rms_diff(x: "torch.Tensor", y: "torch.Tensor"):
+    import torch
+
     return torch.norm(x - y, 2, dtype=torch.float32) / x.numel() ** 0.5  # noqa
 
 
@@ -119,6 +123,8 @@ class Assert:
 
     @staticmethod
     def all_equal(x, y):
+        import torch
+
         neq = x != y
         if neq.any().item():  # noqa
             index = torch.where(neq)  # noqa
@@ -129,6 +135,8 @@ class Assert:
 
     @staticmethod
     def all_different(x, y):
+        import torch
+
         eq = x == y
         if eq.any().item():  # noqa
             index = torch.where(eq)  # noqa

@@ -7,6 +7,7 @@ import torch
 import triton
 from triton import language as tl
 
+from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.functional.config import TritonConfig
 
 
@@ -75,7 +76,7 @@ def triton_fill(
         input_,
         value,  # noqa
         numel,  # noqa
-        TritonConfig.DTYPE_MAP[input_.dtype],
+        DataType.from_torch(input_.dtype).triton,
         block_size=TritonConfig.POINTWISE_BLOCK_SIZE,  # noqa
     )
     return input_

@@ -7,7 +7,7 @@ from triton import language as tl
 from fast_llm.core.distributed import ProcessGroup
 from fast_llm.core.ops import gather_op
 from fast_llm.functional.autograd import wrap_forward_backward
-from fast_llm.functional.config import ActivationType, MLPRecomputeLevel, SparseMap, TritonConfig
+from fast_llm.functional.config import ActivationType, MLPRecomputeLevel, TritonConfig
 from fast_llm.functional.linear import (
     input_parallel_linear_forward,
     maybe_transpose,
@@ -16,6 +16,7 @@ from fast_llm.functional.linear import (
     update_linear_gradients,
 )
 from fast_llm.functional.triton.sparse_copy import (
+    SparseMap,
     copy_dense_to_sparse_backward,
     copy_dense_to_sparse_forward,
     copy_sparse_to_dense_backward,

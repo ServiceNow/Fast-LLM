@@ -1,8 +1,6 @@
 import dataclasses
 import typing
 
-import torch
-
 from fast_llm.config import Config, Field, FieldHint, check_field, config_class, skip_valid_if_none
 from fast_llm.utils import Assert
 
@@ -19,10 +17,6 @@ class LearningRateStageType:
 
 @config_class()
 class LearningRateScheduleConfig(Config):
-    __argparse_map__ = {
-        "schedule": None,
-    }
-
     lr: float = Field(default=0.0001, desc="Base learning rate for the optimizer.", hint=FieldHint.core)
     lr_decay_style: str = Field(default="constant", desc="The learning rate decay formula.", hint=FieldHint.feature)
     lr_decay_iters: int | None = Field(
@@ -106,7 +100,7 @@ class OptimizerConfig(Config):
     )
     hysteresis: int = Field(
         default=2,
-        desc="Number of failed updates to tolerate before lowering the llearning rate in dynamic scaling (fp16).",
+        desc="Number of failed updates to tolerate before lowering the learning rate in dynamic scaling (fp16).",
         hint=FieldHint.feature,
         valid=check_field(Assert.gt, 0),
     )
@@ -140,11 +134,12 @@ class OptimizerConfig(Config):
 class ParamGroup:
     # TODO: Validate list lengths?
     # TODO: Name is only used to combine matching groups. Use more robust comparison instead?
+    # TODO: Use list[torch.Tensor] type hints (needs refactoring so torch isn't imported in this file)
     name: str
-    params: list[torch.Tensor] = dataclasses.field(default_factory=list)
-    grads: list[torch.Tensor] = dataclasses.field(default_factory=list)
-    exp_avgs: list[torch.Tensor] = dataclasses.field(default_factory=list)
-    exp_avgs_sq: list[torch.Tensor] = dataclasses.field(default_factory=list)
+    params: list = dataclasses.field(default_factory=list)
+    grads: list = dataclasses.field(default_factory=list)
+    exp_avgs: list = dataclasses.field(default_factory=list)
+    exp_avgs_sq: list = dataclasses.field(default_factory=list)
     weight_decay: float | None = None
     lr: float | None = None
     beta1: float | None = None

@@ -1,9 +1,12 @@
 import enum
+import typing
 
 from fast_llm.config import Field, FieldHint, check_field, config_class
 from fast_llm.engine.base_model.config import BaseModelArchitectureConfig, BaseModelConfig
-from fast_llm.tensor import TensorDim, init_uniform_
 from fast_llm.utils import Assert
+
+if typing.TYPE_CHECKING:
+    from fast_llm.engine.config_utils.tensor_space import TensorDim
 
 
 class NormalizationImplementation(str, enum.Enum):
@@ -64,8 +67,9 @@ class NormalizationConfig(NormalizationArchitectureConfig, BaseModelConfig):
         valid=check_field(Assert.geq, 0),
     )
 
-    def get_layer(self, hidden_dim: TensorDim):
+    def get_layer(self, hidden_dim: "TensorDim"):
         from fast_llm.layers.common.normalization import LayerNorm, RMSNorm
+        from fast_llm.tensor import init_uniform_
 
         kwargs = {
             "hidden_dim": hidden_dim,

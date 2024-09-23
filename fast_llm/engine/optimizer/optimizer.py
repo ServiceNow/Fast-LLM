@@ -4,10 +4,11 @@ import torch
 
 from fast_llm.core.distributed import ReduceOp, all_reduce
 from fast_llm.core.kernels import fused_adam, l2_norm, scale_
-from fast_llm.distributed import Distributed
+from fast_llm.engine.config_utils.data_type import DataType
+from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.engine.optimizer.config import OptimizerConfig, ParamGroup
 from fast_llm.engine.optimizer.learning_rate import create_schedule_from_config
-from fast_llm.run import log_main_rank
+from fast_llm.engine.run.run import log_main_rank
 from fast_llm.utils import Assert
 
 
@@ -17,7 +18,7 @@ def get_grad_scaler(config: OptimizerConfig, distributed: Distributed) -> "GradS
             initial_scale=config.loss_scale,
             distributed=distributed,
         )
-    elif distributed.config.training_dtype == torch.float16:
+    elif distributed.config.training_dtype == DataType.float16:
         return DynamicGradScaler(
             initial_scale=config.initial_loss_scale,
             min_scale=config.min_loss_scale,

@@ -9,9 +9,9 @@ import torch
 import yaml
 
 from fast_llm.core.distributed import all_reduce, broadcast, safe_barrier
-from fast_llm.distributed import Distributed
 from fast_llm.engine.base_model.base_model import BaseModel
 from fast_llm.engine.base_model.config import BaseModelArchitectureConfig
+from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.engine.multi_stage.config import (
     CHECKPOINT_VERSION,
     CheckpointConfig,

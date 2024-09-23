@@ -2,9 +2,10 @@ import logging
 
 import torch
 
+from fast_llm.engine.config_utils.tensor_space import DefaultDimNames, TensorDim, TensorSpace
 from fast_llm.functional.rotary import get_rotary_frequencies
 from fast_llm.layers.transformer.config import TransformerConfig, TransformerDimNames, TransformerKwargs
-from fast_llm.tensor import DefaultDimNames, TensorDim, TensorMeta, TensorSpace
+from fast_llm.tensor import TensorMeta
 
 logger = logging.getLogger(__name__)
 
@@ -103,8 +104,8 @@ class BackupAttentionPreprocessor:
             self._mask.triu_(-self._config.window_size + 1)
         self._mask_value = torch.full(
             [],
-            torch.finfo(self._distributed_config.training_dtype).min,
-            dtype=self._distributed_config.training_dtype,
+            torch.finfo(self._distributed_config.training_dtype.torch).min,
+            dtype=self._distributed_config.training_dtype.torch,
             device=self._tensor_space.distributed.device,
         )
 
@@ -130,5 +131,5 @@ class BackupAttentionPreprocessor:
         kwargs[TransformerKwargs.attention_mask_value] = TensorMeta.from_dims(
             (self._scalar_dim,),
             tensor_name=TransformerKwargs.attention_mask_value,
-            dtype=self._tensor_space.distributed_config.training_dtype,
+            dtype=self._tensor_space.distributed_config.training_dtype.torch,
         )

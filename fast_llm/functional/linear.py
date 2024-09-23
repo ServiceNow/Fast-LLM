@@ -7,7 +7,8 @@ import torch
 from fast_llm.core.distributed import ProcessGroup
 from fast_llm.core.ops import gather_op, reduce_op, reduce_scatter_op
 from fast_llm.functional.autograd import wrap_forward_backward
-from fast_llm.functional.config import SparseMap, TritonConfig
+from fast_llm.functional.config import TritonConfig
+from fast_llm.functional.triton.sparse_copy import SparseMap
 from fast_llm.functional.triton.sparse_linear import (
     dense_matmul,
     input_inner_sparse_matmul,

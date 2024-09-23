@@ -7,6 +7,8 @@ import torch
 import yaml
 from transformers import AutoModelForCausalLM
 
+from fast_llm.engine.config_utils.logging import configure_logging
+
 try:
     import hf_transfer  # type: ignore[no-redef]
 except ImportError as e:
@@ -24,8 +26,6 @@ except ImportError as e:
     raise ImportError("Please install huggingface_hub to use this script") from e
 
 from fast_llm.config import Config, Field, config_class  # isort:skip
-from fast_llm.logging import configure_logging  # isort:skip
-
 
 logger = logging.getLogger(__name__)
 

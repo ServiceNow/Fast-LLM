@@ -5,7 +5,7 @@ import typing
 import transformers.modeling_outputs
 
 from fast_llm.config import NoAutoValidate
-from fast_llm.distributed import PhaseType
+from fast_llm.engine.distributed.config import PhaseType
 from fast_llm.engine.huggingface.config import HuggingfaceModelConfig
 from fast_llm.engine.multi_stage.config import CheckpointType, PretrainedCheckpointConfig, PretrainedConfig, StageMode
 from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
@@ -16,6 +16,7 @@ from fast_llm.engine.schedule.schedule import Schedule
 
 class HuggingfacePreTrainedModel(transformers.PreTrainedModel):
     config_class: typing.ClassVar[type[HuggingfaceModelConfig]] = HuggingfaceModelConfig
+    model_class: typing.ClassVar[type[FastLLMModel]] = FastLLMModel
     config: HuggingfaceModelConfig
     # base_model_prefix = ""
     # _no_split_modules = None
@@ -23,6 +24,7 @@ class HuggingfacePreTrainedModel(transformers.PreTrainedModel):
     # _tied_weights_keys = []
 
     def __init__(self, config: HuggingfaceModelConfig, fast_llm_model: FastLLMModel, **kwargs):
+        assert self.model_class.config_class is config.model_config_class
         assert config.fast_llm_config is fast_llm_model.fast_llm_config
         assert isinstance(config, self.config_class)
         super().__init__(config, **kwargs)
@@ -74,7 +76,7 @@ class HuggingfacePreTrainedModel(transformers.PreTrainedModel):
             config_updates[("distributed", "training_dtype")] = torch_dtype
 
         # Create the model
-        fast_llm_model = cls.config_class.model_class.from_pretrained(
+        fast_llm_model = cls.model_class.from_pretrained(
             pretrained_model_name_or_path, config_updates=config_updates, mode=mode
         )
         config = cls.config_class(fast_llm_model.fast_llm_config)

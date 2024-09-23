@@ -3,15 +3,13 @@ import logging
 import math
 import warnings
 
-import torch
-import torch.nn
-
 from fast_llm.config import Field, FieldHint, check_field, config_class, skip_valid_if_none
-from fast_llm.distributed import DistributedConfig, DistributedDimNames
 from fast_llm.engine.base_model.config import BaseModelArchitectureConfig, BaseModelConfig
+from fast_llm.engine.config_utils.data_type import DataType
+from fast_llm.engine.config_utils.tensor_space import CompositeTensorDim, TensorDim, TensorSpace
+from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
 from fast_llm.functional.config import ActivationType, MLPRecomputeLevel, TritonConfig
 from fast_llm.layers.common.config import NormalizationArchitectureConfig, NormalizationConfig
-from fast_llm.tensor import CompositeTensorDim, TensorDim, TensorSpace
 from fast_llm.utils import Assert, div
 
 logger = logging.getLogger(__name__)
@@ -426,4 +424,4 @@ class TransformerConfig(TransformerArchitectureConfig, BaseModelConfig):
                 Assert.geq(scale, 0)
 
     def do_use_flash_attention(self, distributed_config: DistributedConfig):
-        return self.use_flash_attention and distributed_config.training_dtype in (torch.float16, torch.bfloat16)
+        return self.use_flash_attention and distributed_config.training_dtype in (DataType.float16, DataType.bfloat16)

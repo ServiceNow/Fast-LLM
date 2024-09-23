@@ -14,9 +14,10 @@ from fast_llm.data.dataset import BlendedDataset, SampledDataset, Sampler
 from fast_llm.data.gpt import DummyGPTDataset, GPTDataset, GPTSampledDataset
 from fast_llm.data.mmap import MMapIndexedDataset
 from fast_llm.data.tokenizer import Tokenizer
-from fast_llm.distributed import Distributed, DistributedConfig, PhaseType
+from fast_llm.engine.distributed.config import DistributedConfig, PhaseType
+from fast_llm.engine.distributed.distributed import Distributed
+from fast_llm.engine.run.run import get_dataset_cache_dir, is_main_rank, log_main_rank
 from fast_llm.engine.schedule.config import BatchConfig
-from fast_llm.run import get_dataset_cache_dir, is_main_rank, log_main_rank
 from fast_llm.utils import Assert
 
 logger = logging.getLogger(__name__)

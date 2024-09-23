@@ -1,19 +1,11 @@
-import enum
-
 import torch
 import torch._dynamo  # noqa
 import torch.autograd
 
 from fast_llm.core.distributed import ProcessGroup, ReduceOp, all_reduce
+from fast_llm.functional.config import CrossEntropyImpl
 from fast_llm.functional.triton.cross_entropy import triton_cross_entropy_forward_backward
 from fast_llm.utils import Assert
-
-
-class CrossEntropyImpl(str, enum.Enum):
-    auto = "auto"
-    torch = "torch"
-    fused = "fused"
-    triton = "triton"
 
 
 def torch_cross_entropy_forward_backward(logits, target, grad_output):

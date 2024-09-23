@@ -13,16 +13,17 @@ import wandb
 
 from fast_llm.core.distributed import safe_barrier
 from fast_llm.data.data import Data
-from fast_llm.distributed import Distributed, PhaseType
+from fast_llm.engine.distributed.config import PhaseType
+from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.engine.multi_stage.config import CheckpointConfig, CheckpointType
 from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
 from fast_llm.engine.optimizer.config import ParamGroup
 from fast_llm.engine.optimizer.optimizer import Optimizer
+from fast_llm.engine.run.run import Run, is_main_rank, log_main_rank, log_pipeline_parallel_main_rank
 from fast_llm.engine.schedule.runner import ScheduleRunner
 from fast_llm.engine.schedule.schedule import Schedule
 from fast_llm.engine.training.config import TrainerConfig
 from fast_llm.logging import format_metrics, get_memory_usage_mib, log_memory_usage
-from fast_llm.run import Run, is_main_rank, log_main_rank, log_pipeline_parallel_main_rank
 from fast_llm.utils import Assert
 
 logger = logging.getLogger(__name__)
@@ -425,7 +426,7 @@ class Trainer:
         return self._data.get_iterator(
             self._config.batch,
             phase,
-            consumed_samples=completed_steps * self._config.batch.micro_batch_size,
+            consumed_samples=completed_steps * self._config.batch.batch_size,
             num_workers=self._config.training.num_workers,
             prefetch_factor=prefetch_factor,
         )

@@ -3,13 +3,14 @@ import torch
 from fast_llm.core.distributed import set_generator
 from fast_llm.core.kernels import flash_attn
 from fast_llm.core.ops import gather_op, reduce_op, reduce_scatter_op, swap_mult_dim
+from fast_llm.engine.config_utils.tensor_space import TensorSpace
 from fast_llm.functional.autograd import wrap_forward_backward
 from fast_llm.functional.rotary import apply_rotary_embeddings
 from fast_llm.functional.triton.rotary import triton_rotary_autograd_
 from fast_llm.layers.common.linear import InputParallelLinear, OutputParallelLinear
 from fast_llm.layers.transformer.config import TransformerConfig, TransformerDimNames, TransformerKwargs
 from fast_llm.logging import log_distributed_grad, log_distributed_tensor
-from fast_llm.tensor import TensorMeta, TensorSpace, init_normal_, init_zeros_
+from fast_llm.tensor import TensorMeta, init_normal_, init_zeros_
 from fast_llm.utils import Assert
 
 

@@ -1,11 +1,16 @@
+import typing
+
 from fast_llm.config import Config, Field, FieldHint, check_field, config_class, skip_valid_if_none
 from fast_llm.data.config import DataConfig
 from fast_llm.engine.multi_stage.config import PretrainedFastLLMModelConfig
 from fast_llm.engine.optimizer.config import OptimizerConfig
+from fast_llm.engine.run.config import ExperimentConfig
 from fast_llm.engine.schedule.config import BatchConfig, ScheduleConfig
 from fast_llm.profile import ProfilingConfig
-from fast_llm.run import ExperimentConfig
 from fast_llm.utils import Assert
+
+if typing.TYPE_CHECKING:
+    from fast_llm.engine.training.trainer import Trainer
 
 
 @config_class()
@@ -83,6 +88,10 @@ class TrainerConfig(PretrainedFastLLMModelConfig, ExperimentConfig):
         desc="Configuration for the training optimizer and learning rate schedule.",
         hint=FieldHint.core,
     )
+
+    @classmethod
+    def get_trainer_class(cls) -> type["Trainer"]:
+        raise NotImplementedError
 
     def _setup(self):
         super()._setup()

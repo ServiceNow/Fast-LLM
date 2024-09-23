@@ -1,10 +1,11 @@
 import torch
 
+from fast_llm.engine.config_utils.tensor_space import TensorDim
+from fast_llm.engine.run.run import log_main_rank
 from fast_llm.functional.config import TritonConfig
 from fast_llm.functional.triton.normalization import rms_norm, triton_normalization_autograd
 from fast_llm.layers.common.config import NormalizationImplementation
-from fast_llm.run import log_main_rank
-from fast_llm.tensor import ParameterMeta, TensorDim, accumulate_gradient, init_ones_, init_zeros_
+from fast_llm.tensor import ParameterMeta, accumulate_gradient, init_ones_, init_zeros_
 from fast_llm.utils import Assert
 
 try:

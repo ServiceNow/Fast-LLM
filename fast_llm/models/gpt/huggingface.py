@@ -4,7 +4,7 @@ import random
 import torch
 import transformers.modeling_outputs
 
-from fast_llm.distributed import PhaseType
+from fast_llm.engine.distributed.config import PhaseType
 from fast_llm.engine.huggingface.config import HuggingfaceModelConfig
 from fast_llm.engine.huggingface.model import HuggingfacePreTrainedModel
 from fast_llm.layers.transformer.config import TransformerKwargs
@@ -15,13 +15,14 @@ logger = logging.getLogger(__name__)
 
 class HuggingfaceGPTModelConfig(HuggingfaceModelConfig):
     model_type = "fast_llm_gpt"
-    model_class = GPTModel
+    model_config_class = GPTModelConfig
     fast_llm_config: GPTModelConfig
 
 
 class HuggingfaceGPTModelForCausalLM(HuggingfacePreTrainedModel):
     config_class = HuggingfaceGPTModelConfig
     config: HuggingfaceGPTModelConfig
+    model_class = GPTModel
     _fast_llm_model: GPTModel
     # base_model_prefix = ""
     # _no_split_modules = None

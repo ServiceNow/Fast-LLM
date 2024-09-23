@@ -1,66 +1,21 @@
 import datetime
 import logging
-import logging.config
 import math
-import pathlib
 import typing
 
 import torch
 import torch._dynamo  # noqa
 
-from fast_llm.core.distributed import ProcessGroup
-from fast_llm.distributed import Distributed, PhaseType
 from fast_llm.engine.base_model.base_model import LossDef
+from fast_llm.engine.distributed.config import PhaseType
 from fast_llm.tensor import TensorMeta
 from fast_llm.utils import format_number
 
+if typing.TYPE_CHECKING:
+    from fast_llm.core.distributed import ProcessGroup
+    from fast_llm.engine.distributed.distributed import Distributed
+
 logger = logging.getLogger(__name__)
-
-
-def configure_logging(
-    *,
-    log_timestamps: bool = True,
-    enable_all_loggers: bool = False,
-    rank: int = 0,
-    world_size: int = 1,
-    directory: pathlib.Path | str | None = None,
-):
-    rank_str = str(rank).zfill(math.ceil(math.log10(world_size)))
-    format_ = f"{f'%(asctime)s ' if log_timestamps else ''}{'' if world_size==1 else f'[Rank {rank_str}] '}%(message)s"
-    logging_config = {
-        "version": 1,
-        "disable_existing_loggers": False,
-        "formatters": {
-            "default": {
-                "format": format_,
-                "use_colors": True,
-            }
-        },
-        "handlers": {
-            "default": {
-                "level": "INFO",
-                "formatter": "default",
-                "class": "logging.StreamHandler",
-                "stream": "ext://sys.stdout",
-            }
-        },
-        "loggers": {
-            "fast_llm": {"level": "INFO"},
-            "__main__": {"level": "INFO"},
-        },
-        "root": {"handlers": ["default"], "level": "INFO" if enable_all_loggers else "WARNING"},
-    }
-    if directory is not None:
-        directory = pathlib.Path(directory)
-        directory.mkdir(parents=True, exist_ok=True)
-        logging_config["handlers"]["file"] = {
-            "level": "INFO",
-            "formatter": "default",
-            "class": "logging.FileHandler",
-            "filename": directory / f"logs_rank_{rank_str}.txt",
-        }
-        logging_config["root"]["handlers"].append("file")
-    logging.config.dictConfig(logging_config)
 
 
 def log(*message, log_fn=logger.info):
@@ -314,8 +269,8 @@ def log_distributed_tensor(
     scale: float = 1.0,
     level: int = 2,
     storage: bool = False,
-    distributed: Distributed,
-    duplicate_groups: tuple[ProcessGroup | None, ...] = (),
+    distributed: "Distributed",
+    duplicate_groups: tuple[typing.Optional["ProcessGroup"], ...] = (),
     global_: bool = True,
     log_fn: typing.Callable[[str], typing.Any] | None = logger.info,
     meta: TensorMeta,
@@ -347,8 +302,8 @@ def log_distributed_grad(
     scale: float = 1.0,
     level: int = 2,
     storage: bool = False,
-    distributed: Distributed,
-    duplicate_groups: tuple[ProcessGroup | None, ...] = (),
+    distributed: "Distributed",
+    duplicate_groups: tuple[typing.Optional["ProcessGroup"], ...] = (),
     grad_fn: typing.Callable[[torch.Tensor], torch.Tensor] | None = None,
     global_: bool = True,
     log_fn: typing.Callable[[str], None] | None = logger.info,

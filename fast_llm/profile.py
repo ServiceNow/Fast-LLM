@@ -2,13 +2,14 @@ import contextlib
 import enum
 import logging
 import traceback
-
-import torch
+import typing
 
 from fast_llm.config import Config, Field, FieldHint, check_field, config_class
-from fast_llm.distributed import DistributedConfig
-from fast_llm.run import open_artifact
+from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.utils import Assert
+
+if typing.TYPE_CHECKING:
+    import torch
 
 logger = logging.getLogger(__name__)
 
@@ -100,7 +101,9 @@ class ProfilingConfig(Config):
 
     def get_profiler(
         self, *, distributed_config: DistributedConfig | None = None, start_step: int = 0
-    ) -> torch.profiler.profile | NoProfiler:
+    ) -> typing.Union["torch.profiler.profile", NoProfiler]:
+        import torch
+
         activities = ([torch.profiler.ProfilerActivity.CPU] if self.profile_cpu else []) + (
             [torch.profiler.ProfilerActivity.CUDA] if self.profile_cuda else []
         )
@@ -130,8 +133,10 @@ def get_trace_fn(config: ProfilingConfig, start_step: int = 0):
     config.validate()
 
     def trace_fn(
-        profiler: torch.profiler.profile,
+        profiler: "torch.profiler.profile",
     ):
+        from fast_llm.engine.run.run import open_artifact
+
         try:
             step = start_step + profiler.step_num
             f"self_{'cuda' if config.profile_cuda else 'cpu'}_time_total"
@@ -221,7 +226,7 @@ _MISC_CUDA_OPS = (
 
 
 def build_trace_table(
-    profiler: torch.profiler.profile, *, cuda: bool = True, cpu: bool = False, column_width=80, header="Trace"
+    profiler: "torch.profiler.profile", *, cuda: bool = True, cpu: bool = False, column_width=80, header="Trace"
 ):
     var_name = f"self_{'cuda' if cuda else 'cpu'}_time_total"
     events = [evt for evt in profiler.profiler.function_events if getattr(evt, var_name) > 0]
@@ -235,7 +240,7 @@ def build_trace_table(
 
 
 def build_average_table(
-    profiler: torch.profiler.profile, *, cuda: bool = True, cpu: bool = False, column_width=80, header="Averages"
+    profiler: "torch.profiler.profile", *, cuda: bool = True, cpu: bool = False, column_width=80, header="Averages"
 ):
     var_name = f"self_{'cuda' if cuda else 'cpu'}_time_total"
     return _build_table(

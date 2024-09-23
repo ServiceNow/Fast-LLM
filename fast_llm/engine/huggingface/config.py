@@ -4,28 +4,26 @@ import pathlib
 import typing
 
 import transformers
-import transformers.modeling_outputs
 
 from fast_llm.config import ConfigDictFormat
 from fast_llm.engine.multi_stage.config import CheckpointType, FastLLMModelConfig, PretrainedConfig
-from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
 
 logger = logging.getLogger(__name__)
 
 
 class HuggingfaceModelConfig(transformers.PretrainedConfig):
     model_type = "fast_llm"
-    model_class: typing.ClassVar[type[FastLLMModel]] = FastLLMModel
+    model_config_class: typing.ClassVar[type[FastLLMModelConfig]] = FastLLMModelConfig
 
     def __init__(self, fast_llm_config: FastLLMModelConfig | None = None, **kwargs):
         # Needed for `to_diff_dict` (`__repr__`)
         if fast_llm_config is None:
-            fast_llm_config = self.model_class.config_class()
+            fast_llm_config = self.model_config_class()
         self.fast_llm_config = fast_llm_config
         self.use_cache = kwargs.pop("use_cache", True)
         super().__init__(**kwargs)
         if self.torch_dtype is not None:
-            assert self.torch_dtype == self.fast_llm_config.distributed.training_dtype
+            assert self.torch_dtype == self.fast_llm_config.distributed.training_dtype.torch
 
     def save_pretrained(self, save_directory: str | os.PathLike, push_to_hub: bool = False, **kwargs):
         # Hack the method to save at the right place.
@@ -68,12 +66,12 @@ class HuggingfaceModelConfig(transformers.PretrainedConfig):
                 pretrained_checkpoint_path=pathlib.Path(pretrained_model_name_or_path),
                 pretrained_checkpoint_type=CheckpointType.state_dict,
             )
-        metadata = cls.model_class.config_class.load_pretrained_metadata(pretrained)
+        metadata = cls.model_config_class.load_pretrained_metadata(pretrained)
         updates = {}
         torch_dtype = kwargs.pop("torch_dtype", None)
         if torch_dtype is not None:
             updates[("distributed", "training_dtype")] = torch_dtype
-        fast_llm_config = cls.model_class.config_class.from_metadata(
+        fast_llm_config = cls.model_config_class.from_metadata(
             pretrained, metadata, default=kwargs.pop("fast_llm_config", None), updates=updates
         )
 

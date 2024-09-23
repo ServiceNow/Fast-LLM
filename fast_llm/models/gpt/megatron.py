@@ -1,14 +1,18 @@
-import torch
+import typing
 
-from fast_llm.distributed import Distributed, DistributedConfig
-from fast_llm.functional.rotary import convert_rotary_real_to_complex
 from fast_llm.layers.transformer.config import TransformerConfig
-from fast_llm.tensor import ParameterMeta
 from fast_llm.utils import Assert, div
 
+if typing.TYPE_CHECKING:
+    import torch
 
-def get_init_megatron(meta: ParameterMeta, config: TransformerConfig):
-    def init_megatron(tensor: torch.Tensor, distributed: Distributed):
+    from fast_llm.engine.distributed.config import DistributedConfig
+    from fast_llm.engine.distributed.distributed import Distributed
+    from fast_llm.tensor import ParameterMeta
+
+
+def get_init_megatron(meta: "ParameterMeta", config: TransformerConfig):
+    def init_megatron(tensor: "torch.Tensor", distributed: "Distributed"):
         Assert.eq(distributed.config.world_size, 1)
         if "bias" in meta.tensor_name:
             # Generator unused.
@@ -31,7 +35,7 @@ def get_init_megatron(meta: ParameterMeta, config: TransformerConfig):
     return init_megatron
 
 
-def set_megatron_distributed_seeds(config: DistributedConfig):
+def set_megatron_distributed_seeds(config: "DistributedConfig"):
     # Only single-gpu is supported.
     Assert.eq(config.world_size, 1)
     # Shifts are hard-coded in Megatron.
@@ -45,7 +49,7 @@ def set_megatron_distributed_seeds(config: DistributedConfig):
 
 
 def _init_attention_megatron(
-    config: TransformerConfig, meta: ParameterMeta, tensor: torch.Tensor, distributed: Distributed
+    config: TransformerConfig, meta: "ParameterMeta", tensor: "torch.Tensor", distributed: "Distributed"
 ):
     # Megatron combines q and kv and inverts the initialization order of qkv and dense layers.
     # It also always treats the tensors as tensor-parallel and uses a different rotary embedding format.
@@ -89,13 +93,17 @@ def _init_attention_megatron(
             raise NotImplementedError(meta.tensor_name)
 
     if config.use_rotary_position_embeddings and config.complex_rotary_embeddings:
+        from fast_llm.functional.rotary import convert_rotary_real_to_complex
+
         # Megatron uses (2, kv_channels/2) for the complex split; we use (kv_channels/2, 2).
         # TODO: Avoid unnecessarily changing the value and dense tensors.
         tensor_ = convert_rotary_real_to_complex(tensor_.view_as(meta), config.kv_channels, kv_dim)
     return tensor_
 
 
-def _init_position_embeddings_megatron(meta: ParameterMeta, tensor: torch.Tensor, distributed: Distributed):
+def _init_position_embeddings_megatron(meta: "ParameterMeta", tensor: "torch.Tensor", distributed: "Distributed"):
+    import torch
+
     # Megatron initializes the position embeddings on cpu twice.
     assert meta.param_init_method is not None
     generator = distributed.default_cpu_generator
@@ -104,8 +112,10 @@ def _init_position_embeddings_megatron(meta: ParameterMeta, tensor: torch.Tensor
 
 
 def _init_transposed_mlp_weight_megatron(
-    config: TransformerConfig, meta: ParameterMeta, tensor: torch.Tensor, distributed: Distributed
+    config: TransformerConfig, meta: "ParameterMeta", tensor: "torch.Tensor", distributed: "Distributed"
 ):
+    import torch
+
     # Megatron never transposes the mlp layer 2 weight.
     assert meta.param_init_method is not None
     tensor_ = meta.param_init_method(meta, torch.empty_like(tensor), distributed.tp_init_generator)
@@ -114,7 +124,9 @@ def _init_transposed_mlp_weight_megatron(
     return tensor_
 
 
-def _init_moe_router_megatron(meta: ParameterMeta, tensor: torch.Tensor, distributed: Distributed):
+def _init_moe_router_megatron(meta: "ParameterMeta", tensor: "torch.Tensor", distributed: "Distributed"):
+    import torch
+
     # Megatron initializes the router on cpu.
     assert meta.param_init_method is not None
     tensor_ = meta.param_init_method(
@@ -124,7 +136,7 @@ def _init_moe_router_megatron(meta: ParameterMeta, tensor: torch.Tensor, distrib
 
 
 def _init_moe_mlp_megatron(
-    config: TransformerConfig, meta: ParameterMeta, tensor: torch.Tensor, distributed: Distributed
+    config: TransformerConfig, meta: "ParameterMeta", tensor: "torch.Tensor", distributed: "Distributed"
 ):
     assert meta.param_init_method is not None
     generator = distributed.tp_init_generator if meta.is_tensor_parallel else distributed.pp_init_generator

@@ -1,12 +1,8 @@
-import dataclasses
 import enum
-import typing
 import warnings
 
-import torch
-
 from fast_llm.config import Config, Field, FieldHint, check_field, config_class, test_field
-from fast_llm.distributed import DistributedConfig
+from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.utils import Assert, div
 
 
@@ -188,103 +184,6 @@ class ScheduleConfig(Config):
         desc="Skip the weight update during training steps. Still runs the forward and backward passes.",
         hint=FieldHint.testing,
     )
-
-
-@dataclasses.dataclass()
-class Step:
-    config: BatchConfig
-    # The step type (forward or backward).
-    type_: StepType
-    # Index of the stage to be processed.
-    stage: int
-    # Data index (combines micro-batch and micro-sequence)
-    data_index: int
-    pipeline_rank: int = 0
-    # Estimated relative duration of the step.
-    duration: float = 1.0
-    # Estimated begin time of the step
-    start: float | None = None
-    # Estimated end time of the compute part of the step
-    compute_end: float | None = None
-    # Estimated true end time of the step, including send
-    end: float | None = None
-    # Index of the step.
-    local_index: int | None = None
-    global_index: int | None = None
-    reduce: bool = False
-    reduce_accumulate: bool = False
-    # Related steps
-    next_step: typing.Optional["Step"] = None
-    prev_step: typing.Optional["Step"] = None
-    forward_step: typing.Optional["Step"] = None
-    backward_step: typing.Optional["Step"] = None
-    # The step in which the restore op for this layer is launched.
-    restore_step: typing.Optional["Step"] = None
-    # A cuda event for the restore operation, used for stream synchronization.
-    restore_event: typing.Optional[torch.cuda.Event] = None
-    # The step that launches the recv for this step.
-    recv_step: typing.Optional["Step"] = None
-    # A cuda event for the recv operation, used for stream synchronization.
-    recv_event: torch.cuda.Event | None = None
-    # The layer input (forward) or output gradients (backward)
-    recv_launch: list["Step"] = dataclasses.field(default_factory=list)
-    # The `recv_launch` step associated to this step send.
-    send_to: typing.Optional["Step"] = None
-    # List of steps with other.restore_step==self.step
-    restore_launch: list["Step"] = dataclasses.field(default_factory=list)
-    # Synchronize with that step's throttle event before running this step.
-    throttle_step: typing.Optional["Step"] = None
-    # Event for cpu throttling.
-    throttle_event: torch.cuda.Event | None = None
-    # Input and output meta.
-    meta_input: torch.Tensor | None = None
-    meta_output: torch.Tensor | None = None
-    meta_kwargs: dict | None = None
-
-    @property
-    def micro_sequence(self):
-        return self.data_index % self.config.num_micro_sequences
-
-    @property
-    def micro_batch(self):
-        return self.data_index // self.config.num_micro_sequences
-
-    @property
-    def depth_first_micro_batch(self):
-        return self.micro_batch % self.config.depth_first_micro_batches
-
-    @property
-    def breadth_first_micro_batch(self):
-        return self.micro_batch // self.config.depth_first_micro_batches
-
-    @property
-    def map_index(self):
-        return (
-            self.type_,
-            self.stage,
-            self.data_index,
-        )
-
-    def __repr__(self):
-        misc = ""
-        if self.start is not None and self.compute_end is not None:
-            misc += f", time = ({self.start}, {self.compute_end})"
-        if self.restore_step:
-            misc += f", restore={self.restore_step.global_index}"
-        if self.recv_launch:
-            misc += f", recv={[step.global_index for step in self.recv_launch]}"
-        if self.reduce:
-            misc += f", reduce"
-        return (
-            f"Step(idx={self.global_index},"
-            f" local_idx={self.local_index},"
-            f" stage={self.stage}{'f' if self.type_ == StepType.forward else 'b'},"
-            f" dfmb={self.depth_first_micro_batch}, bfmb={self.breadth_first_micro_batch},"
-            f" ms={self.micro_sequence}{misc})"
-        )
-
-    def get_stage_index(self, num_stages):
-        return self.stage if self.type_ == StepType.forward else 2 * num_stages - 1 - self.stage
 
 
 class StreamType(str, enum.Enum):

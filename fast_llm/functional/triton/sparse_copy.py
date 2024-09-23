@@ -1,9 +1,24 @@
+import dataclasses
+
 import torch
 import triton
 import triton.language as tl
 
+from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.functional.autograd import wrap_forward_backward
-from fast_llm.functional.config import MAX_DROPLESS_BLOCK_SIZE_ROW, SparseMap, TritonConfig
+from fast_llm.functional.config import MAX_DROPLESS_BLOCK_SIZE_ROW, TritonConfig
+
+
+@dataclasses.dataclass()
+class SparseMap:
+    sparse_rows: torch.Tensor
+    expert_ends: torch.Tensor
+    expert_pad_begins: torch.Tensor
+    num_rows_dense: int
+    num_rows: int
+    num_rows_unpadded: int
+    num_experts: int
+    num_experts_per_token: int
 
 
 @triton.jit
@@ -293,7 +308,7 @@ def get_sparse_map(
             pad_to_multiple,  # noqa
             block_size,
             triton.next_power_of_2(num_experts),
-            TritonConfig.DTYPE_MAP[dtype],
+            DataType.from_torch(dtype).triton,
         )
     else:
         expert_ends, expert_pad_begins, sparse_rows = sparse_map_pytorch(top_experts, num_experts, pad_to_multiple)

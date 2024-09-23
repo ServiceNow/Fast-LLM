@@ -5,9 +5,11 @@ import typing
 import torch
 import torch.nn
 
-from fast_llm.distributed import Distributed, DistributedConfig, PhaseType
 from fast_llm.engine.base_model.config import BaseModelConfig
-from fast_llm.tensor import ParameterMeta, TensorMeta, TensorSpace
+from fast_llm.engine.config_utils.tensor_space import TensorSpace
+from fast_llm.engine.distributed.config import DistributedConfig, PhaseType
+from fast_llm.engine.distributed.distributed import Distributed
+from fast_llm.tensor import ParameterMeta, TensorMeta
 from fast_llm.utils import Assert
 
 

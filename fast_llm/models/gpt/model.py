@@ -2,9 +2,11 @@ import logging
 
 import torch
 
-from fast_llm.distributed import Distributed, DistributedConfig, DistributedDimNames, PhaseType
 from fast_llm.engine.base_model.base_model import BaseModel, LossDef
 from fast_llm.engine.base_model.config import BaseModelConfig
+from fast_llm.engine.config_utils.tensor_space import TensorDim
+from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames, PhaseType
+from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
 from fast_llm.engine.schedule.config import BatchConfig
 from fast_llm.layers.language_model.config import LanguageModelKwargs, LanguageModelLossNames
@@ -21,7 +23,7 @@ from fast_llm.layers.transformer.preprocessing import BackupAttentionPreprocesso
 from fast_llm.layers.transformer.transformer import TransformerLayer
 from fast_llm.models.gpt.config import GPTBaseModelConfig, GPTModelConfig
 from fast_llm.models.gpt.megatron import get_init_megatron
-from fast_llm.tensor import ParameterMeta, TensorDim, TensorMeta
+from fast_llm.tensor import ParameterMeta, TensorMeta
 from fast_llm.utils import Assert, div
 
 logger = logging.getLogger(__name__)

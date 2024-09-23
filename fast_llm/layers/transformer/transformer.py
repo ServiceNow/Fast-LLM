@@ -4,13 +4,14 @@ import torch
 
 from fast_llm.core.distributed import set_generator
 from fast_llm.engine.base_model.base_model import Layer
+from fast_llm.engine.config_utils.tensor_space import TensorSpace
+from fast_llm.engine.run.run import log_pipeline_parallel_main_rank
 from fast_llm.layers.transformer.attention import Attention
 from fast_llm.layers.transformer.config import TransformerConfig, TransformerDimNames, TransformerKwargs
 from fast_llm.layers.transformer.mixture_of_experts import MixtureOfExpertMLP
 from fast_llm.layers.transformer.mlp import MLP
 from fast_llm.logging import log_distributed_grad, log_distributed_tensor, log_memory_usage
-from fast_llm.run import log_pipeline_parallel_main_rank
-from fast_llm.tensor import TensorMeta, TensorSpace
+from fast_llm.tensor import TensorMeta
 
 logger = logging.getLogger(__name__)
 

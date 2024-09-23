@@ -1,9 +1,8 @@
-import dataclasses
 import enum
+import typing
 
-import torch
-import torch.nn
-from triton import language as tl
+if typing.TYPE_CHECKING:
+    import torch
 
 
 class TritonConfig:
@@ -14,15 +13,6 @@ class TritonConfig:
     # A block size of 1024 is usually optimal for large pointwise kernels
     POINTWISE_BLOCK_SIZE = 1024
     MAX_BLOCK_SIZE_BYTES = 65536
-
-    DTYPE_MAP = {
-        torch.float32: tl.float32,
-        torch.float16: tl.float16,
-        torch.bfloat16: tl.bfloat16,
-        torch.int16: tl.int16,
-        torch.int32: tl.int32,
-        torch.int64: tl.int64,
-    }
 
 
 class MLPRecomputeLevel(str, enum.Enum):
@@ -56,6 +46,8 @@ class ActivationType(str, enum.Enum):
 
     @property
     def activation_fn(self):
+        if not _ACTIVATION_FN_MAP:
+            _set_activation_fn_map()
         return _ACTIVATION_FN_MAP[self]
 
     @property
@@ -67,12 +59,22 @@ class ActivationType(str, enum.Enum):
         return _ACTIVATION_HF_NAMES_INV[hf_name]
 
 
-_ACTIVATION_FN_MAP = {
-    ActivationType.gelu: lambda x: torch.nn.functional.gelu(x, approximate="tanh"),
-    ActivationType.silu: torch.nn.functional.silu,
-    ActivationType.relu: torch.nn.functional.relu,
-    ActivationType.squared_relu: lambda x: torch.pow(torch.nn.functional.relu(x), 2),
-}
+def _set_activation_fn_map():
+    import torch
+    import torch.nn
+
+    global _ACTIVATION_FN_MAP
+
+    _ACTIVATION_FN_MAP = {
+        ActivationType.gelu: lambda x: torch.nn.functional.gelu(x, approximate="tanh"),
+        ActivationType.silu: torch.nn.functional.silu,
+        ActivationType.relu: torch.nn.functional.relu,
+        ActivationType.squared_relu: lambda x: torch.pow(torch.nn.functional.relu(x), 2),
+    }
+
+
+_ACTIVATION_FN_MAP: dict[ActivationType, typing.Callable[["torch.Tensor"], "torch.Tensor"]] = {}
+
 _ACTIVATION_HF_NAMES = {
     ActivationType.gelu: "gelu_pytorch_tanh",
     ActivationType.silu: "silu",
@@ -81,17 +83,11 @@ _ACTIVATION_HF_NAMES = {
 }
 _ACTIVATION_HF_NAMES_INV = {value: key for key, value in _ACTIVATION_HF_NAMES.items()}
 
-
-@dataclasses.dataclass()
-class SparseMap:
-    sparse_rows: torch.Tensor
-    expert_ends: torch.Tensor
-    expert_pad_begins: torch.Tensor
-    num_rows_dense: int
-    num_rows: int
-    num_rows_unpadded: int
-    num_experts: int
-    num_experts_per_token: int
-
-
 MAX_DROPLESS_BLOCK_SIZE_ROW = 128
+
+
+class CrossEntropyImpl(str, enum.Enum):
+    auto = "auto"
+    torch = "torch"
+    fused = "fused"
+    triton = "triton"

@@ -9,14 +9,15 @@ import torch.cuda
 import yaml
 
 from fast_llm.core.distributed import all_reduce, recv, safe_barrier, send
-from fast_llm.distributed import Distributed, DistributedConfig
+from fast_llm.engine.distributed.config import DistributedConfig
+from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.engine.multi_stage.multi_stage import MultiStageModel
 from fast_llm.engine.multi_stage.stage import Stage
 from fast_llm.engine.optimizer.optimizer import Optimizer
-from fast_llm.engine.schedule.config import EventType, ScheduleConfig, Step, StepType, StreamType
-from fast_llm.engine.schedule.schedule import Schedule
+from fast_llm.engine.run.run import log_pipeline_parallel_main_rank, open_artifact
+from fast_llm.engine.schedule.config import EventType, ScheduleConfig, StepType, StreamType
+from fast_llm.engine.schedule.schedule import Schedule, Step
 from fast_llm.logging import log_memory_usage
-from fast_llm.run import log_pipeline_parallel_main_rank, open_artifact
 from fast_llm.utils import Assert
 
 logger = logging.getLogger(__name__)

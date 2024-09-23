@@ -6,6 +6,8 @@ import re
 import shutil
 import subprocess
 
+from fast_llm.engine.config_utils.logging import configure_logging
+
 try:
     import hf_transfer  # type: ignore[no-redef]
 except ImportError as e:
@@ -25,7 +27,6 @@ except ImportError as e:
 
 from fast_llm.config import Config, config_class, Field  # isort:skip
 from fast_llm.engine.multi_stage.config import CheckpointType  # isort:skip
-from fast_llm.logging import configure_logging  # isort:skip
 from fast_llm.tools.convert import ConversionConfig, convert_model  # isort:skip
 
 

@@ -1,7 +1,7 @@
 from transformers import PreTrainedTokenizerFast
 
 from fast_llm.data.config import EOD, TokenizerConfig
-from fast_llm.run import log_main_rank
+from fast_llm.engine.run.run import log_main_rank
 
 
 class Tokenizer:

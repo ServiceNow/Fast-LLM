@@ -4,6 +4,8 @@ import warnings
 import torch
 
 from fast_llm.core.distributed import ProcessGroup, set_generator
+from fast_llm.engine.config_utils.tensor_space import TensorSpace
+from fast_llm.engine.run.run import log_pipeline_parallel_main_rank
 from fast_llm.functional.triton.mlp import mlp_autograd, mlp_autograd_looped
 from fast_llm.functional.triton.sparse_copy import get_sparse_map
 from fast_llm.layers.common.auxiliary_loss import AuxiliaryLoss, z_loss
@@ -17,8 +19,7 @@ from fast_llm.layers.transformer.config import (
 )
 from fast_llm.layers.transformer.mlp import MLPBase
 from fast_llm.logging import log_distributed_grad, log_distributed_tensor, log_memory_usage
-from fast_llm.run import log_pipeline_parallel_main_rank
-from fast_llm.tensor import TensorMeta, TensorSpace, init_normal_
+from fast_llm.tensor import TensorMeta, init_normal_
 from fast_llm.utils import Assert
 
 logger = logging.getLogger(__name__)

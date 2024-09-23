@@ -4,9 +4,6 @@ import logging
 import pathlib
 import typing
 
-import torch
-import yaml
-
 from fast_llm.config import (
     Config,
     ConfigDictFormat,
@@ -17,9 +14,14 @@ from fast_llm.config import (
     config_class,
     skip_valid_if_none,
 )
-from fast_llm.distributed import DistributedConfig, get_float_dtype
 from fast_llm.engine.base_model.config import BaseModelConfig
+from fast_llm.engine.config_utils.data_type import DataType
+from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.utils import Assert
+
+if typing.TYPE_CHECKING:
+    from fast_llm.engine.huggingface.model import HuggingfacePreTrainedModel
+    from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
 
 logger = logging.getLogger(__name__)
 
@@ -262,11 +264,10 @@ class CheckpointConfig(Config):
         hint=FieldHint.feature,
         valid=check_field(Assert.geq, 2**20),
     )
-    dtype: torch.dtype | None = Field(
+    dtype: DataType | None = Field(
         default=None,
         desc="Data type to save the checkpoint.",
         hint=FieldHint.feature,
-        valid=skip_valid_if_none(get_float_dtype),
     )
 
 
@@ -284,6 +285,14 @@ class FastLLMModelConfig(Config):
     distributed: DistributedConfig = Field(
         default_factory=DistributedConfig, desc="Distributed configuration.", hint=FieldHint.core
     )
+
+    @classmethod
+    def get_model_class(cls) -> "FastLLMModel":
+        raise NotImplementedError
+
+    @classmethod
+    def get_huggingface_model_class(cls) -> "HuggingfacePreTrainedModel":
+        raise NotImplementedError
 
     @classmethod
     def get_base_model_config_cls(cls) -> type[BaseModelConfig]:
@@ -366,6 +375,8 @@ class FastLLMModelConfig(Config):
 
     @classmethod
     def load_pretrained_metadata(cls, pretrained):
+        import yaml
+
         base_model_config_cls = cls.get_base_model_config_cls()
         if pretrained.pretrained_checkpoint_type == CheckpointType.distributed:
             return yaml.safe_load((pretrained.pretrained_checkpoint_path / "metadata.yaml").open("r"))

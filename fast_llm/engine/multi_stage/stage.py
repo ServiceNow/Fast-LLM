@@ -4,12 +4,12 @@ import torch
 from torch.distributed import all_reduce, reduce_scatter_tensor
 
 from fast_llm.core.distributed import ReduceOp, check_parallel_match
-from fast_llm.distributed import Distributed
+from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.engine.multi_stage.config import StageMode
 from fast_llm.engine.multi_stage.stage_base import StageBase
+from fast_llm.engine.run.run import log_pipeline_parallel_main_rank
 from fast_llm.functional.triton.pointwise import triton_add, triton_copy, triton_fill
 from fast_llm.logging import log_distributed_grad, log_distributed_tensor, log_memory_usage, log_tensor
-from fast_llm.run import log_pipeline_parallel_main_rank
 from fast_llm.tensor import ParameterMeta, TensorMeta, accumulate_gradient
 from fast_llm.utils import Assert
 

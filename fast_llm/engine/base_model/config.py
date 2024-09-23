@@ -1,9 +1,9 @@
 import typing
 
 from fast_llm.config import Config, config_class
-from fast_llm.tensor import TensorSpace
 
 if typing.TYPE_CHECKING:
+    from fast_llm.engine.config_utils.tensor_space import TensorSpace
     from fast_llm.engine.multi_stage.conversion import ModelConverter
 
 
@@ -16,7 +16,7 @@ class BaseModelArchitectureConfig(Config):
 
     _abstract = True
 
-    def setup_tensor_space(self, tensor_space: TensorSpace):
+    def setup_tensor_space(self, tensor_space: "TensorSpace"):
         raise NotImplementedError()
 
     def get_architecture(self):

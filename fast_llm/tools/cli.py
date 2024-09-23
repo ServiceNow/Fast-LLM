@@ -3,11 +3,15 @@ import logging
 import sys
 import traceback
 
+from fast_llm.engine.config_utils.logging import configure_logging
+
 logger = logging.getLogger(__name__)
 
 
 def fast_llm(args=None):
     # TODO: Add hook to register model classes? (environment variable?)
+    # (Pre-)configure logging
+    configure_logging()
     parser = argparse.ArgumentParser()
     parser.add_argument("subcommand", choices=["train", "convert"], help="The Fast-LLM command to run")
     parsed, unparsed = parser.parse_known_args(args)

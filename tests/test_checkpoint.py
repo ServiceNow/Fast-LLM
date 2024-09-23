@@ -8,7 +8,7 @@ import transformers
 import yaml
 
 from fast_llm.engine.multi_stage.config import CheckpointType, PretrainedCheckpointConfig, StageMode
-from fast_llm.models.auto import huggingface_model_registry, model_registry
+from fast_llm.models.auto import model_registry
 from fast_llm.tools.convert import ConversionConfig, convert_model
 from tests.common import (
     CONFIG_COMMON,
@@ -22,9 +22,9 @@ from tests.common import (
 )
 from tests.compare_tensor_logs import CompareConfig, compare_logged_tensor
 
-TEST_MODEL_HF_CLS = huggingface_model_registry[TEST_MODEL_TYPE]
-TEST_MODEL_CLS = model_registry[TEST_MODEL_TYPE]
-TEST_MODEL_CONFIG_CLS = TEST_MODEL_CLS.config_class
+TEST_MODEL_CONFIG_CLS = model_registry[TEST_MODEL_TYPE]
+TEST_MODEL_HF_CLS = TEST_MODEL_CONFIG_CLS.get_huggingface_model_class()
+TEST_MODEL_CLS = TEST_MODEL_CONFIG_CLS.get_model_class()
 TEST_BASE_MODEL_CONFIG_CLS = TEST_MODEL_CONFIG_CLS.get_base_model_config_cls()
 TEST_ARCHITECTURE_CONFIG_CLS = TEST_BASE_MODEL_CONFIG_CLS.architecture_cls
 
