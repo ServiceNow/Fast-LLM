@@ -167,11 +167,6 @@ class TransformerArchitectureConfig(BaseModelArchitectureConfig):
         desc="The routing method, i.e., the method used to assign experts to tokens.",
         hint=FieldHint.feature,
     )
-    transposed_mlp_weight: bool = Field(
-        default=True,
-        desc="Transpose the second MLP layer weight to allow splitting by experts into contiguous chunks.",
-        hint=FieldHint.deprecated,
-    )
 
     def _validate(self):
         if self.ffn_hidden_size is None:
@@ -185,12 +180,6 @@ class TransformerArchitectureConfig(BaseModelArchitectureConfig):
         super()._validate()
         if not TritonConfig.TRITON_ENABLED:
             warnings.warn("Triton is disabled, but triton rotary kernel will be used anyway.")
-        if not self.transposed_mlp_weight:
-            warnings.warn(
-                "--transposed_mlp_weight=0 is deprecated. Set it to 1 unless needed for backward compatibility."
-            )
-        if self.num_experts > 1:
-            assert self.transposed_mlp_weight
 
         Assert.leq(self.num_shared_experts, self.num_experts)
         Assert.leq(self.num_shared_experts + self.num_experts_per_token, self.num_experts)

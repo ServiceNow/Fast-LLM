@@ -41,7 +41,6 @@ class MixtureOfExpertMLP(MLPBase):
 
     def __init__(self, config: TransformerConfig, tensor_space: TensorSpace, name: str = "mlp"):
         Assert.gt(config.num_experts, 1)
-        assert config.transposed_mlp_weight
         # TODO: Implement?
         assert not config.add_linear_biases, "Biases not supported for MoE."
         super().__init__(config, tensor_space, name)

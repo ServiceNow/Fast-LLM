@@ -29,7 +29,6 @@ class MLPBase(Layer, ABC):
         self._activation_type = config.activation_type
         self._activation_fn = triton_mlp_activation_autograd if TritonConfig.TRITON_ENABLED else torch_mlp_activation
 
-        # With transposed_mlp_weight, only layer_2 is transposed.
         # So both layers' weights have shape (num_experts [* gate_up] * ffn, hidden_size)
         self.layer_1 = LinearBase(
             hidden_dim,
@@ -46,7 +45,7 @@ class MLPBase(Layer, ABC):
             weight_init_method=init_method_2,
             bias_init_method=init_method_2 if config.random_bias_init else init_zeros_,
             auto_bias_grad_accumulation=tensor_space.distributed_config.tensor_parallel > 1,
-            transposed_weight=config.transposed_mlp_weight,
+            transposed_weight=True,
             lr_scale=tuple(config.mlp_lr_scale),
         )
 

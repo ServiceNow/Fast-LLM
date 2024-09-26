@@ -9,6 +9,15 @@ if typing.TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def header(title: str | None = None, width: int = 60, fill_char: str = "-"):
+    if title is None:
+        return fill_char * width
+    title_width = len(title) + 2
+    left = (width - title_width) // 2
+    right = width - left - title_width
+    return fill_char * left + f" {title} " + fill_char * right
+
+
 def div(x, y):
     """
     Ensure that numerator is divisible by the denominator and return

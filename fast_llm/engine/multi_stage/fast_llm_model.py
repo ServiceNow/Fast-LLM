@@ -8,6 +8,7 @@ import safetensors.torch
 import torch
 import yaml
 
+from fast_llm.config import FieldVerboseLevel
 from fast_llm.core.distributed import all_reduce, broadcast, safe_barrier
 from fast_llm.engine.base_model.base_model import BaseModel
 from fast_llm.engine.base_model.config import BaseModelArchitectureConfig
@@ -210,9 +211,11 @@ class FastLLMModel(MultiStageModel):
             self.self_shard = model._state_shard[: self.num_shards]
             self.shard_names = model._state_shard_names[: self.num_shards]
             self.directory = directory
+            # TODO v0.2: remove config parts, `full_metadata`
             self.metadata = {
                 "checkpoint_type": CheckpointType.distributed.value,
                 "checkpoint_version": str(CHECKPOINT_VERSION),
+                "fast_llm_config": model.fast_llm_config.save(),
                 "model_config": model._base_model_config.to_dict(serializable=True),
                 "state_shard_names": list(model._state_shard_names[: self.num_shards]),
                 "metadata": metadata,
@@ -673,8 +676,8 @@ class FastLLMModel(MultiStageModel):
             assert not state_dict, list(state_dict)
 
     def _check_model_config(self, model_config: BaseModelArchitectureConfig):
-        model_config_dict = model_config.get_architecture().to_dict()
-        for key, value in self._base_model_config.get_architecture().to_dict().items():
+        model_config_dict = model_config.get_architecture().to_dict(FieldVerboseLevel.everything)
+        for key, value in self._base_model_config.get_architecture().to_dict(FieldVerboseLevel.everything).items():
             # TODO: Only check meaningful params.
             if model_config_dict[key] != value:
                 logger.warning(

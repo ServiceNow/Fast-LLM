@@ -56,7 +56,6 @@ CONFIG_BASE_FAST_LLM = [
     f"--data_path={DATASET_PREFIX}",
     "--save_tensor_log=1",
     "--show_tensor_logs=0",
-    "--transposed_mlp_weight=1",
 ]
 CONFIG_BASE_MEGATRON = [
     "--num-layers=2",

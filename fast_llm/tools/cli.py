@@ -12,7 +12,7 @@ def fast_llm(args=None):
     # TODO: Add hook to register model classes? (environment variable?)
     # (Pre-)configure logging
     configure_logging()
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("subcommand", choices=["train", "convert"], help="The Fast-LLM command to run")
     parsed, unparsed = parser.parse_known_args(args)
     try:

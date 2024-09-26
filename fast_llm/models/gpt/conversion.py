@@ -80,17 +80,13 @@ class MLPLayer2Converter(WeightConverter):
         self, weight: tuple[torch.Tensor | SafeTensorSlice, ...]
     ) -> tuple[torch.Tensor | SafeTensorSlice, ...]:
         (merged_weight,) = weight
-        if self._config.transformer.transposed_mlp_weight:
-            merged_weight = merged_weight[:].t()
-        return tuple(t.contiguous() for t in merged_weight[:].chunk(len(self.export_name), dim=-1))
+        return tuple(t.contiguous() for t in merged_weight[:].t().chunk(len(self.export_name), dim=-1))
 
     def import_weight(
         self, weight: tuple[torch.Tensor | SafeTensorSlice, ...]
     ) -> tuple[torch.Tensor | SafeTensorSlice, ...]:
         merged_weight = torch.cat([weight_[:] for weight_ in weight], dim=-1)
-        if self._config.transformer.transposed_mlp_weight:
-            merged_weight = merged_weight.t().contiguous()
-        return (merged_weight,)
+        return (merged_weight.t().contiguous(),)
 
 
 class CommonHuggingfaceConverter(HuggingfaceModelConverter):

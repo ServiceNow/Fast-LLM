@@ -23,8 +23,8 @@ class GPTArchitectureConfig(LanguageModelArchitectureConfig):
         strict_cls: bool = False,
     ):
         # Backward compatibility
-        if format_ == ConfigDictFormat.flat and "transposed_mlp_weight" not in arg_dict:
-            arg_dict["transposed_mlp_weight"] = False
+        if "transposed_mlp_weight" in arg_dict:
+            assert arg_dict.pop("transposed_mlp_weight")
         return super().from_dict(arg_dict, format_=format_, strict=strict, strict_cls=strict_cls)
 
     @classmethod

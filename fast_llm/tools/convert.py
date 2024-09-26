@@ -5,7 +5,7 @@ import math
 import pathlib
 import typing
 
-from fast_llm.config import Config, Field, config_class
+from fast_llm.config import Config, Field, NoAutoValidate, config_class
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.engine.multi_stage.config import CheckpointConfig, CheckpointType, PretrainedCheckpointConfig, StageMode
 from fast_llm.functional.config import TritonConfig
@@ -159,7 +159,8 @@ def convert_model(model_class: type["FastLLMModel"], config: ConversionConfig):
 
 
 def convert(args=None):
-    parser = argparse.ArgumentParser()
+    # TODO: This part is very similar to train, merge common parts?
+    parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument(
         "model_type",
         choices=model_registry.keys(),
@@ -174,7 +175,15 @@ def convert(args=None):
     )
     parsed, unparsed = parser.parse_known_args(args)
     model_class = model_registry[parsed.model_type].get_model_class()
-    config: ConversionConfig = ConversionConfig.from_args(unparsed)
+    with NoAutoValidate():
+        config: ConversionConfig = ConversionConfig.from_args(unparsed)
+    try:
+        config.validate()
+        if not parsed.do_run:
+            return
+    finally:
+        # We always want to show the config for debugging.
+        config.show()
     convert_model(model_class, config)
 
 

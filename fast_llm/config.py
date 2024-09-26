@@ -7,7 +7,10 @@ import traceback
 import types
 import typing
 
-from fast_llm.utils import Assert, Tag
+import requests
+import yaml
+
+from fast_llm.utils import Assert, Tag, header
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +41,8 @@ def serialize_field(value):
         value = value.value
     elif isinstance(value, (list, tuple)):
         value = [serialize_field(x) for x in value]
+    elif isinstance(value, set):
+        value = list(value)
     elif isinstance(value, dict):
         value = {key: serialize_field(value_) for key, value_ in value.items()}
     elif not isinstance(value, int | float | bool | str | None):
@@ -58,7 +63,6 @@ class FieldHint:
     """
 
     core = "core"
-    architecture = "architecture"
     optional = "optional"
     performance = "performance"
     stability = "stability"
@@ -73,16 +77,41 @@ class FieldHint:
     wip = "wip"
 
 
+FieldHintImportance = {
+    FieldHint.core: 0,
+    FieldHint.optional: 10,
+    FieldHint.performance: 20,
+    FieldHint.stability: 20,
+    FieldHint.feature: 10,
+    FieldHint.expert: 40,
+    FieldHint.unknown: 20,
+    FieldHint.logging: 30,
+    FieldHint.testing: 40,
+    FieldHint.derived: 100,
+    FieldHint.setup: 90,
+    FieldHint.deprecated: 80,
+    FieldHint.wip: 80,
+}
+
+
+class FieldVerboseLevel:
+    nothing = -1
+    core = 0
+    optional = 10
+    performance = 20
+    debug = 50
+    everything = 1000
+
+
 FieldHintDoc = {
     FieldHint.core: "A core configuration parameter that is expected to always be provided explicitly.",
-    FieldHint.architecture: "A core configuration parameter that defines a base model architecture, i.e., that cannot be changed without breaking the model.",
     FieldHint.optional: "An optional parameter that may be ignored as the default tends to be good enough.",
     FieldHint.performance: "An optional parameter related to computational performance.",
     FieldHint.stability: "An optional parameter related to numerical precision and computational stability.",
     FieldHint.feature: "An parameter related to an optional feature, that should only be defined if that feature is enabled.",
     FieldHint.expert: "An advanced parameter that needs some additional expertise to be handled.",
     FieldHint.unknown: "No hint has been provided for this parameter.",
-    FieldHint.logging: "An optional parameter related logging or debug logs",
+    FieldHint.logging: "An optional parameter related to logging or debug logs",
     FieldHint.testing: "A rarely defined parameter that is only meant for testing and debugging.",
     FieldHint.derived: "A parameter that is typically calculated from others.",
     FieldHint.setup: "An external parameter that must be provided in `setup` after initialization.",
@@ -408,19 +437,13 @@ class Config:
     def get_field(cls, name) -> Field:
         return cls.__dataclass_fields__[name]  # noqa
 
-    def items(self, all_fields=False):
-        """
-        A generator for the field values of a `Config` instance.
-        Optionally include the derived fields, with `init=False`.
-        """
-        return (
-            (key, getattr(self, key, MISSING))
-            for key, field in self.fields()
-            if all_fields or (field.init and field._field_type != dataclasses._FIELD_CLASSVAR)  # noqa
-        )
-
     def to_dict(
-        self, all_fields: bool = False, format_: ConfigDictFormat = ConfigDictFormat.flat, serializable: bool = False
+        self,
+        verbose: int = FieldVerboseLevel.core,
+        all_fields: bool = False,
+        format_: ConfigDictFormat = ConfigDictFormat.flat,
+        serializable: bool = False,
+        class_name: bool | None = None,
     ):
         """
         Serialize the config to a dict that can (generally) be used to reconstruct an identical `Config`.
@@ -439,24 +462,67 @@ class Config:
             serializable: Ensure the dict is serializable to json or yaml. Information may be lost.
         """
         arg_dict = {}
-        for name, value in self.items(all_fields=all_fields):
-            if isinstance(value, Config):
-                field_dict = value.to_dict(all_fields=all_fields, format_=format_, serializable=serializable)
+        for name, field in self.fields():
+            value = getattr(self, name, MISSING)
+            if (not field.init or field._field_type == dataclasses._FIELD_CLASSVAR) and not (all_fields):
+                # Exclude class variables and derived fields unless requested explicitly.
+                continue
+            elif isinstance(value, Config):
+                field_dict = value.to_dict(
+                    verbose=verbose,
+                    all_fields=all_fields,
+                    format_=format_,
+                    serializable=serializable,
+                    class_name=class_name is True,
+                )
                 if format_ == ConfigDictFormat.flat:
                     arg_dict.update(field_dict)
-                elif format_ == ConfigDictFormat.nested:
-                    arg_dict[name] = field_dict
                 elif format_ == ConfigDictFormat.tuple:
                     arg_dict.update({(name,) + name_: value_ for name_, value_ in field_dict.items()})
+                elif format_ == ConfigDictFormat.nested:
+                    if len(field_dict) > (class_name is True) or all_fields:
+                        arg_dict[name] = field_dict
                 else:
                     raise NotImplementedError(format_)
-            else:
+            elif FieldHintImportance[field.hint] <= verbose or value != field.default:
                 arg_dict[(name,) if format_ == ConfigDictFormat.tuple else name] = (
                     serialize_field(value) if serializable else value
                 )
-        if format_ == ConfigDictFormat.nested:
-            arg_dict["__class__"] = self.__class__.__name__ if serializable else self.__class__
+        if class_name or (class_name is None and format_ == ConfigDictFormat.nested):
+            arg_dict["__class__"] = self._class_name() if serializable else self.__class__
         return arg_dict
+
+    def save(self, verbose: int = FieldVerboseLevel.core, class_name: bool | None = None):
+        return self.to_dict(verbose=verbose, format_=ConfigDictFormat.nested, serializable=True, class_name=class_name)
+
+    def show(
+        self,
+        verbose: int = FieldVerboseLevel.core,
+        log_fn=logger.info,
+        title: str | None = None,
+        width: int = 80,
+        fill_char: str = "-",
+    ):
+        """
+        Print all config and sub-config arguments in alphabetical order, following the Megatron-LM format.
+        TODO: Avoid flattening.
+
+        Args:
+            all_fields: Include the derived fields, with `init=False`.
+            log_fn: The logging function to use.
+        """
+        arg_dict = self.save(verbose=verbose, class_name=False)
+        if title is None:
+            title = self._class_name()
+        return log_fn(
+            f"\n{header(title, width, fill_char)}"
+            f"\n{yaml.safe_dump(arg_dict, sort_keys=False)}"
+            f"{header('end', width, fill_char)}"
+        )
+
+    @classmethod
+    def _class_name(cls):
+        return f"{cls.__module__}.{cls.__name__}"
 
     @classmethod
     def to_argparse(cls, parser: argparse.ArgumentParser):
@@ -650,8 +716,6 @@ class Config:
         """
         Read a config from a URL, typically a config file hosted on GitHub.
         """
-        import requests
-        import yaml
 
         headers = {"Accept": "application/vnd.github.v3.raw"}
         if config_auth_token_file:
@@ -688,22 +752,6 @@ class Config:
             return cls.from_url(initial_args.config_url, initial_args.config_auth_token_file)
         else:
             return cls.from_namespace(cls.get_parser().parse_args(remaining_args))
-
-    def show(self, all_fields=False, log_fn=logger.info):
-        """
-        Print all config and sub-config arguments in alphabetical order, following the Megatron-LM format.
-        TODO: Avoid flattening.
-
-        Args:
-            all_fields: Include the derived fields, with `init=False`.
-            log_fn: The logging function to use.
-        """
-        args = self.to_dict(all_fields=all_fields)
-        log_fn(
-            "------------------------ arguments ------------------------"
-            + "".join([f"\n  {arg} {'.' * (48 - len(arg))} {args[arg]}" for arg in sorted(args)])
-            + "\n-------------------- end of arguments ---------------------"
-        )
 
     @classmethod
     def check_abstract(cls):

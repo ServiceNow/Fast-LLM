@@ -161,11 +161,25 @@ class ExperimentConfig(Config):
     run: RunConfig = Field(
         default_factory=RunConfig, desc="Global properties for the experiment.", hint=FieldHint.core
     )
+    config_verbose_level: int = Field(
+        default=0,
+        desc="Verbosity level when showing the config."
+        " Parameters with importance level above this value are hidden if they are equal to the default value.",
+        hint=FieldHint.logging,
+    )
 
-    def show_main_rank(self, distributed_config: DistributedConfig, main_rank: int = 0, log_fn=logger.info):
+    def show_main_rank(
+        self,
+        distributed_config: DistributedConfig,
+        main_rank: int = 0,
+        log_fn=logger.info,
+        title: str | None = None,
+        width: int = 60,
+        fill_char: str = "-",
+    ):
         if distributed_config.rank == main_rank:
             log_fn(f"Command run:\n{shlex.join(sys.argv)}")
-            self.show(log_fn=log_fn)
+            self.show(verbose=self.config_verbose_level, log_fn=log_fn, title=title, width=width, fill_char=fill_char)
 
     def get_run(self, distributed: "Distributed", main_rank: int = 0):
         from fast_llm.engine.run.run import Run

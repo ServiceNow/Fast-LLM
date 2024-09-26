@@ -147,13 +147,13 @@ class DistributedConfig(Config):
     )
     batch_data_parallel: int = Field(init=False, desc="Batch data parallelism group size.", hint=FieldHint.performance)
     world_size: int = Field(
-        default=int(os.environ.get("WORLD_SIZE", 1)),
+        default=None,
         desc="Size of the world group, e.e., total number of GPUs. Typically provided by torchrun or equivalent through the `WORLD_SIZE` environment variable.",
         hint=FieldHint.expert,
         valid=check_field(Assert.gt, 0),
     )
     rank: int = Field(
-        default=int(os.environ.get("RANK", 0)),
+        default=None,
         desc="Rank of the local process. Typically provided by torchrun or equivalent through the `RANK` environment variable.",
         hint=FieldHint.expert,
         valid=check_field(Assert.geq, 0),
@@ -176,7 +176,7 @@ class DistributedConfig(Config):
         hint=FieldHint.derived,
     )
     local_world_size: int = Field(
-        default=int(os.environ.get("LOCAL_WORLD_SIZE", 1)),
+        default=None,
         desc="Number of GPUs in each node. Typically provided by torchrun or equivalent through the `LOCAL_WORLD_SIZE` environment variable.",
         hint=FieldHint.expert,
         valid=check_field(Assert.gt, 0),
@@ -248,6 +248,12 @@ class DistributedConfig(Config):
     )
 
     def _validate(self):
+        if self.world_size is None:
+            self.world_size = int(os.environ.get("WORLD_SIZE", 1))
+        if self.rank is None:
+            self.rank = int(os.environ.get("RANK", 0))
+        if self.local_world_size is None:
+            self.local_world_size = int(os.environ.get("LOCAL_WORLD_SIZE", 1))
         self.model_parallel = self.tensor_parallel * self.pipeline_parallel
         self.data_parallel = div(self.world_size, self.model_parallel)
         self.num_nodes = div(self.world_size, self.local_world_size)

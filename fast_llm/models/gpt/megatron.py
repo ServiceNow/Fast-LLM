@@ -36,8 +36,6 @@ def get_init_megatron(meta: "ParameterMeta", config: TransformerConfig):
 
 
 def set_megatron_distributed_seeds(config: "DistributedConfig"):
-    # Only single-gpu is supported.
-    Assert.eq(config.world_size, 1)
     # Shifts are hard-coded in Megatron.
     # Note: Megatron doesn't separate init generators so post-init random (dropout) won't match.
     config.dp_seed_shift = 0
@@ -119,9 +117,7 @@ def _init_transposed_mlp_weight_megatron(
     # Megatron never transposes the mlp layer 2 weight.
     assert meta.param_init_method is not None
     tensor_ = meta.param_init_method(meta, torch.empty_like(tensor), distributed.tp_init_generator)
-    if config.transposed_mlp_weight:
-        tensor_ = tensor_.view(meta.size(1), meta.size(0)).t()
-    return tensor_
+    return tensor_.view(meta.size(1), meta.size(0)).t()
 
 
 def _init_moe_router_megatron(meta: "ParameterMeta", tensor: "torch.Tensor", distributed: "Distributed"):

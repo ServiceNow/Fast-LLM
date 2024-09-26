@@ -5,7 +5,7 @@ import typing
 
 import transformers
 
-from fast_llm.config import ConfigDictFormat
+from fast_llm.config import FieldVerboseLevel
 from fast_llm.engine.multi_stage.config import CheckpointType, FastLLMModelConfig, PretrainedConfig
 
 logger = logging.getLogger(__name__)
@@ -92,12 +92,12 @@ class HuggingfaceModelConfig(transformers.PretrainedConfig):
 
     def to_dict(self) -> dict:
         out = super().to_dict()
-        out["fast_llm_config"] = self.fast_llm_config.to_dict(format_=ConfigDictFormat.nested, serializable=True)
+        out["fast_llm_config"] = self.fast_llm_config.save(verbose=FieldVerboseLevel.everything)
         return out
 
     def to_diff_dict(self) -> dict:
         out = super().to_diff_dict()
-        out["fast_llm_config"] = self.fast_llm_config.to_dict(format_=ConfigDictFormat.nested, serializable=True)
+        out["fast_llm_config"] = self.fast_llm_config.save()
         return out
 
     def to_json_file(self, json_file_path: str | os.PathLike, use_diff: bool = True):
