@@ -15,6 +15,7 @@ def triton_cross_entropy_forward_backward_kernel(
     n_cols,
     logits_stride_0,
     grad_logits_stride_0,
+    logits_scale_factor: tl.constexpr,
     block_size: tl.constexpr,
 ):
     # TODO: Int64 ptr only if needed?
@@ -24,6 +25,9 @@ def triton_cross_entropy_forward_backward_kernel(
     mask = col_offsets < n_cols
 
     logits = tl.load(logits_ptr + col_offsets, mask=mask, other=-float("inf")).to(tl.float32)
+    if logits_scale_factor != 1.0:
+        logits *= logits_scale_factor
+
     max_logits = tl.max(logits, 0)
     exp_logits = tl.exp(logits - max_logits)
     sum_exp_logits = tl.sum(exp_logits, 0)
@@ -41,17 +45,15 @@ def triton_cross_entropy_forward_backward_kernel(
     col_offsets = tl.arange(0, block_size)
     label_idx = tl.load(labels_ptr + block_idx)
     exp_logits = exp_logits / sum_exp_logits
+    if logits_scale_factor != 1.0:
+        exp_logits *= logits_scale_factor
     if label_idx < 0:
         grad_losses = 0.0
     grad_logits = grad_losses * tl.where(col_offsets == label_idx, exp_logits - 1.0, exp_logits)
     tl.store(grad_logits_ptr + col_offsets, grad_logits, mask=mask)
 
 
-def triton_cross_entropy_forward_backward(
-    logits,
-    target,
-    grad_output: float,
-):
+def triton_cross_entropy_forward_backward(logits, target, grad_output: float, logits_scale_factor: float = 1.0):
     """
     A fast triton implementation of cross-entropy, which combines the casting and forward and backward passes,
     all in a single kernel.
@@ -78,6 +80,7 @@ def triton_cross_entropy_forward_backward(
         n_cols,
         logits.stride(0),
         grad_logits.stride(0),
+        logits_scale_factor,
         block_size=block_size,
         num_warps=num_warps,
     )

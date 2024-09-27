@@ -379,6 +379,21 @@ class TransformerConfig(TransformerArchitectureConfig, BaseModelConfig):
         hint=FieldHint.feature,
         valid=skip_valid_if_none(check_field(Assert.geq, 0)),
     )
+    attention_lr_scale: float | None = Field(
+        default=None,
+        desc="Custom learning rate scale for the Attention projection weights.",
+        doc="Can be used in muP to scale the Attention learning rate by 1/width_factor",
+        hint=FieldHint.feature,
+        valid=skip_valid_if_none(check_field(Assert.geq, 0)),
+    )
+    attention_softmax_scale_power: float = Field(
+        default=0.5,
+        desc="The scaling power to apply to kv_channel in the attention calculation. "
+        " Under Standard Parameterization (SP): default to 0.5. "
+        " Under muP (if scaling kv_channels size): use 1. "
+        " Under muP (if scaling number of heads instead of kv_channels): use 0.5.",
+        valid=skip_valid_if_none(check_field(Assert.geq, 0)),
+    )
     dropless_moe: bool = Field(
         default=True, desc="Evaluate all the experts at once using dropless MoE.", hint=FieldHint.expert
     )

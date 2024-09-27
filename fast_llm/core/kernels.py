@@ -85,6 +85,7 @@ def flash_attn(
     window_size: int | None,
     causal: bool = False,
     generator: torch.Generator | None,
+    softmax_scale: float | None = None,
 ):
     assert _flash_available
     with set_generator(generator):
@@ -95,4 +96,5 @@ def flash_attn(
             window_size=(-1, -1) if window_size is None else (window_size - 1, 0),
             dropout_p=dropout_p,
             causal=causal,
+            softmax_scale=softmax_scale,
         )

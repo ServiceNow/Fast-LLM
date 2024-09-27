@@ -141,6 +141,14 @@ class LanguageModelBaseConfig(LanguageModelArchitectureConfig, BaseModelConfig):
         hint=FieldHint.feature,
         valid=check_field(Assert.geq, 0),
     )
+    logits_scale_factor: float = Field(
+        default=1.0,
+        desc="Multiply output logits by scale factor.",
+        doc="Useful in muP setting, since we need to adjust the output logits by the width factor."
+        " Since we are mupltiplying the output logits, under muP the scale factor should be < 1.0.",
+        hint=FieldHint.feature,
+        valid=check_field(Assert.geq, 0),
+    )
 
     def _validate(self):
         if self.transformer.init_method_std is None:

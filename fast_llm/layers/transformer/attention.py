@@ -87,6 +87,7 @@ class Attention(torch.nn.Module):
         self._heads_per_group = self._tensor_space.get_tensor_dim(TransformerDimNames.group_heads).global_size
         local_heads_per_group = self._tensor_space.get_tensor_dim(TransformerDimNames.group_heads).size
         self._local_heads = self._local_head_groups * local_heads_per_group
+        self._softmax_scale = self._kv_channels ** (-self._config.attention_softmax_scale_power)
 
         hidden_dim = self._tensor_space.get_tensor_dim(TransformerDimNames.hidden)
 
@@ -98,6 +99,7 @@ class Attention(torch.nn.Module):
             weight_init_method=init_method_qkv,
             bias_init_method=init_method_qkv if self._config.random_bias_init else init_zeros_,
             sequence_parallel=self._sequence_parallel,
+            lr_scale=self._config.attention_lr_scale,
         )
         self.key_value = OutputParallelLinear(
             hidden_dim,
@@ -106,6 +108,7 @@ class Attention(torch.nn.Module):
             weight_init_method=init_method_qkv,
             bias_init_method=init_method_qkv if self._config.random_bias_init else init_zeros_,
             sequence_parallel=self._sequence_parallel,
+            lr_scale=self._config.attention_lr_scale,
         )
         self._query_key_value = wrap_forward_backward(self._query_key_value_forward, self._query_key_value_backward)
 
@@ -117,6 +120,7 @@ class Attention(torch.nn.Module):
             weight_init_method=init_method_std_attn_proj,
             bias_init_method=init_method_std_attn_proj if self._config.random_bias_init else init_zeros_,
             sequence_parallel=self._sequence_parallel,
+            lr_scale=self._config.attention_lr_scale,
         )
 
     def _attn_fused(self, query, key, value, mask, mask_value):
@@ -144,7 +148,7 @@ class Attention(torch.nn.Module):
             query,
             key,
             beta=0,
-            alpha=self._kv_channels**-0.5 / self._layer_index,
+            alpha=self._softmax_scale / self._layer_index,
         ).view(b, self._local_head_groups, sq, self._heads_per_group, sk)
 
         attn_weights = attn_weights.to(torch.float32) * self._layer_index
@@ -309,6 +313,7 @@ class Attention(torch.nn.Module):
                 window_size=self._config.window_size,
                 causal=True,
                 generator=self._tensor_space.distributed.tp_generator,
+                softmax_scale=self._softmax_scale,
             ).flatten(-2)
         else:
             # TODO: Avoid the flattens.

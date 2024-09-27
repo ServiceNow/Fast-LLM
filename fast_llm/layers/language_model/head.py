@@ -53,6 +53,7 @@ class LanguageModelHead(Layer):
         hidden_dim = self._tensor_space.get_tensor_dim(TransformerDimNames.hidden)
 
         self.final_norm = config.transformer.normalization.get_layer(hidden_dim)
+        self._logits_scale_factor = config.logits_scale_factor
         self._z_loss_factor = config.logit_z_loss
 
         # untie embedding weights
@@ -180,9 +181,16 @@ class LanguageModelHead(Layer):
             group=self._tensor_space.distributed.tensor_group if self._parallel_embeddings else None,
             sequence_parallel=self._sequence_parallel and self._parallel_embeddings,
         )
+
         if self._z_loss_factor > 0.0:
             logits = z_loss(
-                logits, self._z_loss_factor, self.training, grad_output, losses, LanguageModelLossNames.z_loss
+                logits,
+                self._z_loss_factor,
+                self.training,
+                grad_output,
+                losses,
+                LanguageModelLossNames.z_loss,
+                logits_scale_factor=self._logits_scale_factor,
             )
         if self._debug_transformer and self._cross_entropy_splits is None:
             vocab_dim = self._tensor_space.get_tensor_dim(
@@ -211,16 +219,18 @@ class LanguageModelHead(Layer):
                 level=self._debug_transformer,
                 meta=TensorMeta.from_dims(tuple(dims), tensor_name="transformer logits", dtype=logits.dtype),
                 distributed=self._tensor_space.distributed,
+                scale=self._logits_scale_factor,
             )
 
         if labels is None:
-            return logits, None
+            return logits * self._logits_scale_factor, None
         loss, grad = cross_entropy_forward_backward(
             logits.flatten(0, -2),
             labels,
             group=self._tensor_space.distributed.tensor_group if self._parallel_embeddings else None,
             grad_output=grad_output,
             implementation=self._cross_entropy_impl,
+            logits_scale_factor=self._logits_scale_factor,
         )
         # TODO: de-allocate earlier.
         del logits
