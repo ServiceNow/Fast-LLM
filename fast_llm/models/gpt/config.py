@@ -1,6 +1,6 @@
 import typing
 
-from fast_llm.config import ConfigDictFormat, Field, FieldHint, config_class
+from fast_llm.config import Field, FieldHint, config_class
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig, PretrainedFastLLMModelConfig
 from fast_llm.engine.training.config import TrainerConfig
 from fast_llm.layers.language_model.config import LanguageModelArchitectureConfig, LanguageModelBaseConfig
@@ -15,17 +15,16 @@ class GPTArchitectureConfig(LanguageModelArchitectureConfig):
     _abstract = False
 
     @classmethod
-    def from_dict(
+    def _from_dict(
         cls,
-        arg_dict: dict,
-        format_: ConfigDictFormat = ConfigDictFormat.flat,
+        default: dict,
         strict: bool = True,
-        strict_cls: bool = False,
+        flat: bool = False,
     ):
-        # Backward compatibility
-        if "transposed_mlp_weight" in arg_dict:
-            assert arg_dict.pop("transposed_mlp_weight")
-        return super().from_dict(arg_dict, format_=format_, strict=strict, strict_cls=strict_cls)
+        # TODO v0.2: Remove backward compatibility fix
+        if "transposed_mlp_weight" in default:
+            assert default.pop("transposed_mlp_weight")
+        return super()._from_dict(default, strict, flat)
 
     @classmethod
     def get_converter_class(cls, model_type: str | None = None) -> type["ModelConverter"]:
@@ -44,23 +43,22 @@ class GPTBaseModelConfig(LanguageModelBaseConfig, GPTArchitectureConfig):
     )
 
     @classmethod
-    def from_dict(
+    def _from_dict(
         cls,
-        arg_dict: dict,
-        format_: ConfigDictFormat = ConfigDictFormat.flat,
+        default: dict,
         strict: bool = True,
-        strict_cls: bool = False,
+        flat: bool = False,
     ):
-        # Backward compatibility
-        if "match_megatron" in arg_dict:
-            assert "use_megatron_initialization" not in arg_dict
-            arg_dict["use_megatron_initialization"] = arg_dict.pop("match_megatron")
-        if "layer_norm_impl" in arg_dict:
-            assert "normalization_implementation" not in arg_dict
-            arg_dict["normalization_implementation"] = arg_dict.pop("layer_norm_impl")
-        if "fused_mlp" in arg_dict:
-            del arg_dict["fused_mlp"]
-        return super().from_dict(arg_dict, format_=format_, strict=strict, strict_cls=strict)
+        # TODO v0.2: Remove backward compatibility fix
+        if "match_megatron" in default:
+            assert "use_megatron_initialization" not in default
+            default["use_megatron_initialization"] = default.pop("match_megatron")
+        if "layer_norm_impl" in default:
+            assert "normalization_implementation" not in default
+            default["normalization_implementation"] = default.pop("layer_norm_impl")
+        if "fused_mlp" in default:
+            del default["fused_mlp"]
+        return super()._from_dict(default, strict, flat)
 
 
 @config_class()

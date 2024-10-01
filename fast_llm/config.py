@@ -7,7 +7,6 @@ import traceback
 import types
 import typing
 
-import requests
 import yaml
 
 from fast_llm.utils import Assert, Tag, header
@@ -50,7 +49,8 @@ def serialize_field(value):
     return value
 
 
-class ConfigDictFormat(str, enum.Enum):
+class _ConfigDictFormat(str, enum.Enum):
+    # TODO v0.2: delete class
     flat = "flat"
     nested = "nested"
     tuple = "tuple"
@@ -100,7 +100,7 @@ class FieldVerboseLevel:
     optional = 10
     performance = 20
     debug = 50
-    everything = 1000
+    everything = None
 
 
 FieldHintDoc = {
@@ -284,7 +284,7 @@ class Config:
         In general this should not be overridden in derived classes,
         and all post-processing should be done in `_validate`
         """
-        self.check_abstract()
+        self._check_abstract()
         self._validated = False
         if _AUTO_VALIDATE:
             self.validate()
@@ -437,13 +437,12 @@ class Config:
     def get_field(cls, name) -> Field:
         return cls.__dataclass_fields__[name]  # noqa
 
-    def to_dict(
+    def _to_dict(
         self,
-        verbose: int = FieldVerboseLevel.core,
+        verbose: int | None = None,
         all_fields: bool = False,
-        format_: ConfigDictFormat = ConfigDictFormat.flat,
+        format_: _ConfigDictFormat = _ConfigDictFormat.nested,
         serializable: bool = False,
-        class_name: bool | None = None,
     ):
         """
         Serialize the config to a dict that can (generally) be used to reconstruct an identical `Config`.
@@ -468,50 +467,50 @@ class Config:
                 # Exclude class variables and derived fields unless requested explicitly.
                 continue
             elif isinstance(value, Config):
-                field_dict = value.to_dict(
+                field_dict = value._to_dict(
                     verbose=verbose,
                     all_fields=all_fields,
                     format_=format_,
                     serializable=serializable,
-                    class_name=class_name is True,
                 )
-                if format_ == ConfigDictFormat.flat:
+                if format_ == _ConfigDictFormat.flat:
                     arg_dict.update(field_dict)
-                elif format_ == ConfigDictFormat.tuple:
+                elif format_ == _ConfigDictFormat.tuple:
                     arg_dict.update({(name,) + name_: value_ for name_, value_ in field_dict.items()})
-                elif format_ == ConfigDictFormat.nested:
-                    if len(field_dict) > (class_name is True) or all_fields:
+                elif format_ == _ConfigDictFormat.nested:
+                    if len(field_dict) > 0 or all_fields:
                         arg_dict[name] = field_dict
                 else:
                     raise NotImplementedError(format_)
-            elif FieldHintImportance[field.hint] <= verbose or value != field.default:
-                arg_dict[(name,) if format_ == ConfigDictFormat.tuple else name] = (
+            elif verbose is None or FieldHintImportance[field.hint] <= verbose or value != field.default:
+                arg_dict[(name,) if format_ == _ConfigDictFormat.tuple else name] = (
                     serialize_field(value) if serializable else value
                 )
-        if class_name or (class_name is None and format_ == ConfigDictFormat.nested):
-            arg_dict["__class__"] = self._class_name() if serializable else self.__class__
         return arg_dict
 
-    def save(self, verbose: int = FieldVerboseLevel.core, class_name: bool | None = None):
-        return self.to_dict(verbose=verbose, format_=ConfigDictFormat.nested, serializable=True, class_name=class_name)
+    def to_flat_dict(self, verbose: int | None = FieldVerboseLevel.core):
+        # TODO v0.2: Remove flat format
+        return self._to_dict(verbose=verbose, format_=_ConfigDictFormat.flat, serializable=True)
 
-    def show(
+    def to_copy(
         self,
-        verbose: int = FieldVerboseLevel.core,
+        *updates: typing.Union["Config", dict[str | tuple[str, ...], typing.Any]],
+        strict: bool = True,
+    ):
+        return self.from_dict(self, *updates, strict=strict)
+
+    def to_serialized(self, verbose: int | None = FieldVerboseLevel.core):
+        return self._to_dict(verbose=verbose, format_=_ConfigDictFormat.nested, serializable=True)
+
+    def to_logs(
+        self,
+        verbose: int | None = FieldVerboseLevel.core,
         log_fn=logger.info,
         title: str | None = None,
         width: int = 80,
         fill_char: str = "-",
     ):
-        """
-        Print all config and sub-config arguments in alphabetical order, following the Megatron-LM format.
-        TODO: Avoid flattening.
-
-        Args:
-            all_fields: Include the derived fields, with `init=False`.
-            log_fn: The logging function to use.
-        """
-        arg_dict = self.save(verbose=verbose, class_name=False)
+        arg_dict = self.to_serialized(verbose=verbose)
         if title is None:
             title = self._class_name()
         return log_fn(
@@ -525,13 +524,13 @@ class Config:
         return f"{cls.__module__}.{cls.__name__}"
 
     @classmethod
-    def to_argparse(cls, parser: argparse.ArgumentParser):
+    def _to_argparse(cls, parser: argparse.ArgumentParser):
         """
         Add arguments for the config and its sub-configs to an existing parser.
         The whole config hierarchy is flattened (see `to_dict`),
         and the user is responsible for preventing name clashes.
         """
-        cls.check_abstract()
+        cls._check_abstract()
         field: Field
         for name, field in cls.fields():
             try:
@@ -568,7 +567,7 @@ class Config:
                         Assert.not_custom(issubclass, type_, Config)
                     Assert.custom(isinstance, type_, type)
                     if issubclass(type_, Config):
-                        type_.to_argparse(parser)
+                        type_._to_argparse(parser)
                         continue
                     if hasattr(type_, "__fast_llm_argparse_type__"):
                         type_ = type_.__fast_llm_argparse_type__
@@ -594,167 +593,88 @@ class Config:
                 )
             except Exception:
                 raise ValueError(f"Failed to add argparse argument for field {name}")
+        return parser
 
     @classmethod
     def from_dict(
         cls,
-        arg_dict: dict,
-        *,
-        format_: ConfigDictFormat = ConfigDictFormat.flat,
+        default: typing.Union["Config", dict],
+        *updates: typing.Union["Config", dict[str | tuple[str, ...], typing.Any]],
         strict: bool = True,
-        strict_cls: bool = False,
     ):
-        """
-        Create a `Config` from a config dict (see `to_dict`).
+        if isinstance(default, Config):
+            default = default._to_dict()
+        for update in updates:
+            if isinstance(update, Config):
+                update = update._to_dict(format_=_ConfigDictFormat.tuple)
+            for keys, value in update.items():
+                if isinstance(keys, str):
+                    default[keys] = value
+                else:
+                    dict_to_update = default
+                    for key in keys[:-1]:
+                        if key not in dict_to_update:
+                            dict_to_update[key] = {}
+                        dict_to_update = dict_to_update[key]
+                    dict_to_update[keys[-1]] = value
 
-        Args:
-            arg_dict: A config dict. Will be modified in-place.
-            format_: The config format used to represent nested configs. See `to_dict`
-            strict: Ensure that all fields are used.
-            strict_cls: Ignore the `__class__` field and use the default values. Applied recursively to nested configs.
-        """
-        cls.check_abstract()
+        return cls._from_dict(default, strict)
+
+    @classmethod
+    def from_flat_dict(
+        cls,
+        default: dict,
+        strict: bool = True,
+    ):
+        # TODO v0.2: Separate dict only needed for flat format
+        return cls._from_dict(default, strict, True)
+
+    @classmethod
+    def _from_dict(
+        cls,
+        default: dict,
+        strict: bool = True,
+        flat: bool = False,
+    ):
+        cls._check_abstract()
+        # TODO v0.2: Separate dict only needed for flat format
         out_arg_dict = {}
 
-        if format_ == ConfigDictFormat.tuple:
-            arg_dict = cls.update_config_dict({}, arg_dict)
-            format_ = ConfigDictFormat.nested
+        # TODO v0.2: Remove backward compatibility fix
+        if "__class__" in default:
+            del default["__class__"]
 
-        if format_ == ConfigDictFormat.nested:
-            arg_dict_cls = arg_dict.pop("__class__", cls)
-            if not strict_cls:
-                if isinstance(arg_dict_cls, str):
-                    if arg_dict_cls != cls.__name__:
-                        # TODO: Support serialized class names?
-                        raise NotImplementedError()
-                else:
-                    Assert.custom(issubclass, arg_dict_cls, cls)
-                    cls = arg_dict_cls  # noqa
         for name, field in cls.fields():
             if not field.init or field._field_type == dataclasses._FIELD_CLASSVAR:  # noqa
                 continue
             if isinstance(field.type, type) and issubclass(field.type, Config):
                 # Do not validate yet in case the root class sets cross-dependencies in validation.
                 with NoAutoValidate():
-                    if format_ == ConfigDictFormat.flat:
-                        out_arg_dict[name] = field.type.from_dict(
-                            arg_dict, format_=format_, strict=False, strict_cls=strict_cls
-                        )
+                    if flat:
+                        out_arg_dict[name] = field.type._from_dict(default, False, True)
                     else:
-                        out_arg_dict[name] = field.type.from_dict(
-                            arg_dict.pop(name, {}), format_=format_, strict=strict, strict_cls=strict_cls
-                        )
-            elif name in arg_dict:
-                out_arg_dict[name] = arg_dict.pop(name)
-        if strict and arg_dict:
-            raise ValueError(cls, list(arg_dict))
+                        out_arg_dict[name] = field.type._from_dict(default.pop(name, {}), strict)
+            elif name in default:
+                out_arg_dict[name] = default.pop(name)
+        if strict and default:
+            raise ValueError(cls, list(default))
         out = cls(**out_arg_dict)  # noqa
         if _AUTO_VALIDATE:
             out.validate()
         return out
 
     @classmethod
-    def from_namespace(cls, value: argparse.Namespace, strict: bool = True):
+    def from_flat_args(cls, args: list[str] | None = None):
         """
-        Create a `Config` from a flat argparse namespace.
-
-        Args:
-            value: A config namespace.
-            strict: Ensure that all fields are used.
-        """
-        return cls.from_dict(value.__dict__.copy(), strict=strict)
-
-    @classmethod
-    def from_other(
-        cls,
-        other: "Config",
-        updates: dict[str | tuple[str, ...], typing.Any] | None = None,
-        strict: bool = True,
-        strict_cls: bool = False,
-    ):
-        """
-        Create a `Config` from another one, copying and possibly updating the fields.
-
-        Args:
-            other: The config to copy from. May have a different class.
-            updates: Change the value of some fields.
-            strict: Ensure that all fields are used (may need to disable if the class is different).
-            strict_cls: Ignore the `__class__` field and use the default values. Applied recursively to nested configs.
-        """
-        config_dict = other.to_dict(format_=ConfigDictFormat.nested)
-        cls.update_config_dict(config_dict, updates)
-        return cls.from_dict(config_dict, format_=ConfigDictFormat.nested, strict=strict, strict_cls=strict_cls)
-
-    @classmethod
-    def update_config_dict(cls, config: dict, updates: dict[str | tuple[str, ...], typing.Any] | None = None):
-        if updates is not None:
-            for keys, value in updates.items():
-                if isinstance(keys, str):
-                    config[keys] = value
-                else:
-                    dict_to_update = config
-                    for key in keys[:-1]:
-                        if key not in dict_to_update:
-                            dict_to_update[key] = {}
-                        dict_to_update = dict_to_update[key]
-                    dict_to_update[keys[-1]] = value
-        return config
-
-    @classmethod
-    def get_parser(cls):
-        """
-        Make an argument parser for the config and its sub-configs.
-        The whole config hierarchy is flattened (see `to_dict`),
-        and the user is responsible for preventing name clashes.
-        """
-        parser = argparse.ArgumentParser()
-        cls.to_argparse(parser)
-        return parser
-
-    @classmethod
-    def from_url(cls, config_url: str, config_auth_token_file: None | str = None):
-        """
-        Read a config from a URL, typically a config file hosted on GitHub.
-        """
-
-        headers = {"Accept": "application/vnd.github.v3.raw"}
-        if config_auth_token_file:
-            with open(config_auth_token_file) as f:
-                headers["Authorization"] = f"token {f.read().strip()}"
-        response = requests.get(config_url, headers=headers)
-        if response.status_code == 200:
-            arg_dict = yaml.safe_load(response.text)
-            return cls.from_dict(arg_dict, format_=ConfigDictFormat.nested, strict=True, strict_cls=True)
-        else:
-            if isinstance(response.reason, bytes):
-                try:
-                    reason = response.reason.decode("utf-8")
-                except UnicodeDecodeError:
-                    reason = response.reason.decode("iso-8859-1")
-            else:
-                reason = response.reason
-            raise ValueError(f"Failed to fetch config from {config_url}: {response.status_code}, {reason}")
-
-    @classmethod
-    def from_args(cls, args: list[str] | None = None):
-        """
+        TODO v0.2: Remove flat format
         Make an argument parser for the config and its sub-configs,
         parse the provided args (or `sys.argv`),
         and create a config from the resulting namespace.
         """
-        cls.check_abstract()
-        initial_parser = argparse.ArgumentParser(add_help=False)
-        initial_parser.add_argument("--config_url")
-        initial_parser.add_argument("--config_auth_token_file")
-        initial_args, remaining_args = initial_parser.parse_known_args(args)
-        if initial_args.config_url:
-            Assert.empty(remaining_args)
-            return cls.from_url(initial_args.config_url, initial_args.config_auth_token_file)
-        else:
-            return cls.from_namespace(cls.get_parser().parse_args(remaining_args))
+        return cls.from_flat_dict(cls._to_argparse(argparse.ArgumentParser()).parse_args(args).__dict__.copy())
 
     @classmethod
-    def check_abstract(cls):
+    def _check_abstract(cls):
         if cls._abstract:
             raise RuntimeError(f"{cls.__name__} is abstract")
         if not cls.__class_validated__:

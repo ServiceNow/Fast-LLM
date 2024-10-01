@@ -22,7 +22,7 @@ class ConcatenateDatasetConfig(Config):
 
 
 def concatenate_dataset(config: ConcatenateDatasetConfig):
-    config.show()
+    config.to_logs()
     assert config.directory.is_dir()
     output_file = config.directory / config.output_name
     assert not output_file.exists(), str(output_file)
@@ -59,7 +59,7 @@ def concatenate_dataset(config: ConcatenateDatasetConfig):
 
 def main(args=None):
     configure_logging()
-    config: ConcatenateDatasetConfig = ConcatenateDatasetConfig.from_args(args)
+    config: ConcatenateDatasetConfig = ConcatenateDatasetConfig.from_flat_args(args)
     concatenate_dataset(config)
 
 

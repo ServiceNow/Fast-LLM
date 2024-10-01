@@ -3,7 +3,7 @@ import logging
 import os
 import typing
 
-from fast_llm.config import Config, ConfigDictFormat, Field, FieldHint, check_field, config_class
+from fast_llm.config import Config, Field, FieldHint, check_field, config_class
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.utils import Assert, div
 
@@ -351,18 +351,15 @@ class DistributedConfig(Config):
         return self._log_on_rank(*message, rank=0, log_fn=log_fn)
 
     @classmethod
-    def from_dict(
+    def _from_dict(
         cls,
-        arg_dict: dict,
-        format_: ConfigDictFormat = ConfigDictFormat.flat,
+        default: dict,
         strict: bool = True,
-        strict_cls: bool = False,
+        flat: bool = False,
     ):
-        # Backward compatibility
-        # Keep it if not strict in case the dict is used later for the model.
-        # TODO: Improve.
-        if "sequence_first" in arg_dict and strict:
-            del arg_dict["sequence_first"]
-        if "separate_init_generators" in arg_dict and strict:
-            del arg_dict["separate_init_generators"]
-        return super().from_dict(arg_dict, format_=format_, strict=strict, strict_cls=strict_cls)
+        # TODO v0.2: Remove backward compatibility fix
+        if "sequence_first" in default and strict:
+            del default["sequence_first"]
+        if "separate_init_generators" in default and strict:
+            del default["separate_init_generators"]
+        return super()._from_dict(default, strict, flat)

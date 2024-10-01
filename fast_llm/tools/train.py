@@ -5,7 +5,7 @@ import urllib.parse
 import requests
 import yaml
 
-from fast_llm.config import ConfigDictFormat, NoAutoValidate
+from fast_llm.config import NoAutoValidate
 from fast_llm.engine.training.config import TrainerConfig
 from fast_llm.models.auto import trainer_registry
 from fast_llm.utils import Assert
@@ -90,16 +90,14 @@ def train(args=None):
                 raise ValueError(f"Cannot deduce source from config `{parsed.config}`")
         config: TrainerConfig
         if parsed.source == ConfigSource.args:
-            config = trainer_config_class.from_args(unparsed)
+            config = trainer_config_class.from_flat_args(unparsed)
         else:
             Assert.empty(unparsed)
             if parsed.source == ConfigSource.url:
                 config_file = load_url(parsed.config, parsed.config_auth_token_file)
             elif parsed.source == ConfigSource.file:
                 config_file = pathlib.Path(parsed.config).open("r").read()
-            config = trainer_config_class.from_dict(
-                yaml.safe_load(config_file), format_=ConfigDictFormat.nested, strict=True, strict_cls=True
-            )
+            config = trainer_config_class.from_dict(yaml.safe_load(config_file))
     try:
         config.validate()
         if not parsed.do_run:

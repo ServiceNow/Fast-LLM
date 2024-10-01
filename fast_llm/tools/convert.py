@@ -70,7 +70,7 @@ def _convert_model_partial(
 def convert_model(model_class: type["FastLLMModel"], config: ConversionConfig):
     # TODO: Set logging in tests
     logging.getLogger().setLevel(logging.INFO)
-    config.show()
+    config.to_logs()
     # Disable Triton to convert model on CPU
     if config.use_cpu:
         TritonConfig.TRITON_ENABLED = False
@@ -176,14 +176,14 @@ def convert(args=None):
     parsed, unparsed = parser.parse_known_args(args)
     model_class = model_registry[parsed.model_type].get_model_class()
     with NoAutoValidate():
-        config: ConversionConfig = ConversionConfig.from_args(unparsed)
+        config: ConversionConfig = ConversionConfig.from_flat_args(unparsed)
     try:
         config.validate()
         if not parsed.do_run:
             return
     finally:
         # We always want to show the config for debugging.
-        config.show()
+        config.to_logs()
     convert_model(model_class, config)
 
 

@@ -52,7 +52,7 @@ class Run:
         self.is_pipeline_parallel_main_rank = (
             self._distributed_config.data_rank == 0 and self._distributed_config.tensor_rank == 0
         )
-        config_dict = config.to_dict(all_fields=False, serializable=True)
+        config_dict = config.to_flat_dict()
 
         if self._config.experiment_dir is not None:
             experiment_dir = self._config.experiment_dir.resolve()

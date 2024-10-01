@@ -179,7 +179,9 @@ class ExperimentConfig(Config):
     ):
         if distributed_config.rank == main_rank:
             log_fn(f"Command run:\n{shlex.join(sys.argv)}")
-            self.show(verbose=self.config_verbose_level, log_fn=log_fn, title=title, width=width, fill_char=fill_char)
+            self.to_logs(
+                verbose=self.config_verbose_level, log_fn=log_fn, title=title, width=width, fill_char=fill_char
+            )
 
     def get_run(self, distributed: "Distributed", main_rank: int = 0):
         from fast_llm.engine.run.run import Run

@@ -34,11 +34,10 @@ def fused_cross_entropy_forward_backward(logits, target, grad_output: float | No
     # Do the forward and backward passes all at once, and fused with dtype conversion.
     # Way faster and more memory-efficient than the pytorch version.
     target = target.unsqueeze(1)
-    logits = logits.sub(torch.max(logits, dim=-1)[0].unsqueeze(dim=-1))
-    logits = logits.float()
+    logits_norm = logits.sub(torch.max(logits, dim=-1)[0].unsqueeze(dim=-1)).float()
     if logits_scale_factor != 1.0:
-        logits *= logits_scale_factor
-    exp_logits = logits.exp()
+        logits_norm *= logits_scale_factor
+    exp_logits = logits_norm.exp()
     sum_exp_logits = exp_logits.sum(dim=-1)
 
     if grad_output is None:
@@ -53,7 +52,7 @@ def fused_cross_entropy_forward_backward(logits, target, grad_output: float | No
 
         grad = exp_logits.to(logits.dtype)
 
-    loss = sum_exp_logits.log().sub(logits.gather(1, target).squeeze(1)).mean()
+    loss = sum_exp_logits.log().sub(logits_norm.gather(1, target).squeeze(1)).mean()
 
     return loss, grad
 
@@ -72,8 +71,7 @@ def parallel_cross_entropy_forward_backward(
 
     logits_max = torch.max(logits, dim=-1)[0]
     all_reduce(logits_max, op=ReduceOp.MAX, group=group)
-    logits_norm = logits.sub(logits_max.unsqueeze(dim=-1))
-    logits_norm = logits_norm.float()
+    logits_norm = logits.sub(logits_max.unsqueeze(dim=-1)).float()
     if logits_scale_factor != 1.0:
         logits_norm *= logits_scale_factor
 
@@ -83,8 +81,8 @@ def parallel_cross_entropy_forward_backward(
 
     # Mask the target (fused)
     # TODO: Could mask earlier on cpu or overlap with reduce?
-    vocab_start_index = logits_norm.size(-1) * group.rank()
-    target_mask = (target >= vocab_start_index) * (target < vocab_start_index + logits_norm.size(-1))
+    vocab_start_index = logits.size(-1) * group.rank()
+    target_mask = (target >= vocab_start_index) * (target < vocab_start_index + logits.size(-1))
     target = (target - vocab_start_index) * target_mask
 
     if grad_output is None:
@@ -93,11 +91,11 @@ def parallel_cross_entropy_forward_backward(
         exp_logits1 = exp_logits.scatter(
             1, target, exp_logits.gather(1, target) - target_mask * sum_exp_logits.unsqueeze(dim=-1)
         )
-        exp_logits2 = exp_logits1.mul((grad_output / logits_norm.size(0)) / sum_exp_logits.unsqueeze(dim=-1))
+        exp_logits2 = exp_logits1.mul((grad_output / logits.size(0)) / sum_exp_logits.unsqueeze(dim=-1))
         if logits_scale_factor != 1.0:
             exp_logits2 *= logits_scale_factor
 
-        grad = exp_logits2.to(logits_norm.dtype)
+        grad = exp_logits2.to(logits.dtype)
 
     predicted_logits = (target_mask * logits_norm.gather(1, target)).squeeze(1)
     all_reduce(predicted_logits, op=ReduceOp.SUM, group=group)

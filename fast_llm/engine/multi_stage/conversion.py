@@ -8,7 +8,6 @@ import typing
 import safetensors
 import torch
 
-from fast_llm.config import ConfigDictFormat
 from fast_llm.engine.base_model.config import BaseModelArchitectureConfig, BaseModelConfig
 from fast_llm.tensor import SafeTensorSlice
 from fast_llm.utils import Assert
@@ -207,7 +206,7 @@ class ModelConverter(abc.ABC):
                 kwargs[converter.fast_llm_name] = value
 
         config_class = cls._base_model_cls.architecture_cls if architecture_only else cls._base_model_cls
-        return config_class.from_dict(kwargs, format_=ConfigDictFormat.tuple)
+        return config_class.from_dict({}, kwargs)
 
     @classmethod
     def from_config(cls, config: dict[str], architecture_only: bool = False):

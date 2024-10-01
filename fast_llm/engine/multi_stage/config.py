@@ -4,16 +4,7 @@ import logging
 import pathlib
 import typing
 
-from fast_llm.config import (
-    Config,
-    ConfigDictFormat,
-    Field,
-    FieldHint,
-    NoAutoValidate,
-    check_field,
-    config_class,
-    skip_valid_if_none,
-)
+from fast_llm.config import Config, Field, FieldHint, NoAutoValidate, check_field, config_class, skip_valid_if_none
 from fast_llm.engine.base_model.config import BaseModelConfig
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.engine.distributed.config import DistributedConfig
@@ -323,8 +314,8 @@ class FastLLMModelConfig(Config):
         if "checkpoint_version" in metadata:
             Assert.eq(metadata["checkpoint_version"], str(CHECKPOINT_VERSION))
 
-        architecture_config = base_model_config_cls.architecture_cls.from_dict(
-            metadata["model_config"].copy(), format_=ConfigDictFormat.flat, strict=False
+        architecture_config = base_model_config_cls.architecture_cls.from_flat_dict(
+            metadata["model_config"].copy(), strict=False
         )
 
         with NoAutoValidate():
@@ -332,30 +323,28 @@ class FastLLMModelConfig(Config):
                 assert pretrained.use_pretrained_config
                 config = cls(base_model=base_model_config_cls())
             else:
-                config = default.from_other(default)
+                config = default.to_copy()
 
         if pretrained.use_pretrained_config:
             if pretrained.load_full_base_model_config:
                 # Replace the whole config
-                config.base_model = base_model_config_cls.from_dict(
-                    metadata["model_config"], format_=ConfigDictFormat.flat
+                config.base_model = base_model_config_cls.from_flat_dict(
+                    metadata["model_config"],
                 )
             else:
                 # Replace the architecture parts of the config.
-                config.base_model = base_model_config_cls.from_other(
-                    config.base_model, architecture_config.to_dict(format_=ConfigDictFormat.tuple)
-                )
+                config.base_model = config.base_model.to_copy(architecture_config)
             if pretrained.load_full_fast_llm_config:
-                config.multi_stage = MultiStageConfig.from_dict(
-                    metadata["multi_stage_config"], format_=ConfigDictFormat.nested
+                config.multi_stage = MultiStageConfig.from_flat_dict(
+                    metadata["multi_stage_config"],
                 )
-                config.distributed = DistributedConfig.from_dict(
-                    metadata["distributed_config"], format_=ConfigDictFormat.nested
+                config.distributed = DistributedConfig.from_flat_dict(
+                    metadata["distributed_config"],
                 )
         else:
             # TODO: Redundant with FastLLMModel._check_model_config
-            pretrained_architecture_config = architecture_config.to_dict(format_=ConfigDictFormat.flat)
-            default_architecture_config = default.base_model.get_architecture().to_dict(format_=ConfigDictFormat.flat)
+            pretrained_architecture_config = architecture_config.to_flat_dict()
+            default_architecture_config = default.base_model.get_architecture().to_flat_dict()
             invalid_keys = {
                 key
                 for key, value in default_architecture_config.items()
@@ -370,7 +359,7 @@ class FastLLMModelConfig(Config):
 
         config.validate()
         if updates:
-            config = config.from_other(config, updates)
+            config = config.to_copy(updates)
         return config
 
     @classmethod
@@ -389,7 +378,7 @@ class FastLLMModelConfig(Config):
             imported_model_config = converter_class.import_config(
                 converter_class.load_config(pretrained.pretrained_checkpoint_path), True
             )
-            return {"model_config": imported_model_config.to_dict(format_=ConfigDictFormat.flat)}
+            return {"model_config": imported_model_config.to_flat_dict()}
         else:
             raise NotImplementedError(pretrained.pretrained_checkpoint_type)
 

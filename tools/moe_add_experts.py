@@ -97,13 +97,13 @@ def add_experts(config: AddExpertsConfig):
     model.save_pretrained(config.output_dir, state_dict=state_dict)
 
     # Save surgery config as yaml
-    yaml.safe_dump(config.to_dict(serializable=True), (config.output_dir / "surgery_config.yaml").open("w"))
+    yaml.safe_dump(config.to_flat_dict(), (config.output_dir / "surgery_config.yaml").open("w"))
     logger.info("Done!")
 
 
 def main(args=None):
     configure_logging()
-    config: AddExpertsConfig = AddExpertsConfig.from_args(args)
+    config: AddExpertsConfig = AddExpertsConfig.from_flat_args(args)
     add_experts(config)
 
 

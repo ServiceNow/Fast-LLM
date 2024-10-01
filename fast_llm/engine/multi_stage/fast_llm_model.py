@@ -215,16 +215,16 @@ class FastLLMModel(MultiStageModel):
             self.metadata = {
                 "checkpoint_type": CheckpointType.distributed.value,
                 "checkpoint_version": str(CHECKPOINT_VERSION),
-                "fast_llm_config": model.fast_llm_config.save(),
-                "model_config": model._base_model_config.to_dict(serializable=True),
+                "fast_llm_config": model.fast_llm_config.to_serialized(),
+                "model_config": model._base_model_config.to_flat_dict(),
                 "state_shard_names": list(model._state_shard_names[: self.num_shards]),
                 "metadata": metadata,
             }
             if full_metadata:
                 self.metadata.update(
                     {
-                        "multi_stage_config": model._multi_stage_config.to_dict(serializable=True),
-                        "distributed_config": model._distributed_config.to_dict(serializable=True),
+                        "multi_stage_config": model._multi_stage_config.to_flat_dict(),
+                        "distributed_config": model._distributed_config.to_flat_dict(),
                     }
                 )
 
@@ -591,8 +591,7 @@ class FastLLMModel(MultiStageModel):
     def _load_distributed_checkpoint(self, pretrained_config: PretrainedCheckpointConfig):
         # TODO: More safety checks
         metadata = self.config_class.load_pretrained_metadata(pretrained_config)
-        loaded_pretrained_config = pretrained_config.from_other(
-            pretrained_config,
+        loaded_pretrained_config = pretrained_config.to_copy(
             {
                 "use_pretrained_config": True,
                 "load_full_base_model_config": True,
@@ -610,7 +609,7 @@ class FastLLMModel(MultiStageModel):
 
             for rank in range(loaded_config.distributed.world_size):
                 loaded_multi_stage = self.__class__(
-                    self.config_class.from_other(loaded_config, updates={("distributed", "rank"): rank}),
+                    loaded_config.to_copy({("distributed", "rank"): rank}),
                     optimizer_state_names=context.shard_names[1:],
                     verbose=False,
                 )
@@ -676,8 +675,10 @@ class FastLLMModel(MultiStageModel):
             assert not state_dict, list(state_dict)
 
     def _check_model_config(self, model_config: BaseModelArchitectureConfig):
-        model_config_dict = model_config.get_architecture().to_dict(FieldVerboseLevel.everything)
-        for key, value in self._base_model_config.get_architecture().to_dict(FieldVerboseLevel.everything).items():
+        model_config_dict = model_config.get_architecture().to_flat_dict(FieldVerboseLevel.everything)
+        for key, value in (
+            self._base_model_config.get_architecture().to_flat_dict(FieldVerboseLevel.everything).items()
+        ):
             # TODO: Only check meaningful params.
             if model_config_dict[key] != value:
                 logger.warning(

@@ -92,7 +92,7 @@ def copy_tokenizer_files(tokenizer_path: pathlib.Path, tmp_checkpoint_dir: pathl
 
 
 def setup(config: PushConfig) -> hf_hub.HfApi:
-    config.show()
+    config.to_logs()
     os.environ["HF_TOKEN"] = pathlib.Path(os.environ["HUGGINGFACE_API_KEY_PATH"]).open("r").read().strip()
     hf_api = hf_hub.HfApi()
     git_add_safe_directory(config.tmp_checkpoint_dir)
@@ -195,7 +195,7 @@ def push_model(config: PushConfig) -> None:
 
 def main(args=None):
     configure_logging()
-    config: PushConfig = PushConfig.from_args(args)
+    config: PushConfig = PushConfig.from_flat_args(args)
     push_model(config)
 
 
