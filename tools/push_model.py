@@ -7,6 +7,7 @@ import shutil
 import subprocess
 
 from fast_llm.engine.config_utils.logging import configure_logging
+from fast_llm.models.auto import model_registry
 
 try:
     import hf_transfer  # type: ignore[no-redef]
@@ -41,6 +42,7 @@ class PushConfig(Config):
     experiment_dir: pathlib.Path = Field()
     repo_name: str = Field()
     model_type: str = Field()
+    model_class: str = Field(default="gpt")
     tokenizer_path: pathlib.Path = Field()
     tmp_checkpoint_dir: pathlib.Path | None = Field(default=None)
     use_cpu: bool = Field(default=False)
@@ -61,7 +63,7 @@ def get_iter_number(maybe_iter_number: str) -> None | int:
 def get_commited_iter_numbers(hf_repo: hf_hub.Repository) -> list[int]:
     subprocess.run(["git", "fetch", "origin"], cwd=hf_repo.local_dir, capture_output=True)
     commits = subprocess.run(
-        ["git", "log", f"origin/main", "--pretty=format:%H %s"], cwd=hf_repo.local_dir, capture_output=True, text=True
+        ["git", "log", "origin/main", "--pretty=format:%H %s"], cwd=hf_repo.local_dir, capture_output=True, text=True
     ).stdout.split("\n")
     # Each line is hash and message
     # Just keep the message
@@ -147,6 +149,7 @@ def push_model(config: PushConfig) -> None:
 
             # Block until the conversion is done
             convert_model(
+                model_registry[config.model_class].get_model_class(),
                 ConversionConfig(
                     input_type=CheckpointType.distributed,
                     output_type=CheckpointType.huggingface,
@@ -158,7 +161,7 @@ def push_model(config: PushConfig) -> None:
                     layers_per_step=(
                         8 if config.model_type == "mixtral" else None
                     ),  # split into 8 layers per step for mixtral
-                )
+                ),
             )
 
             # Wait for the previous commit to be done before linking the files
@@ -190,7 +193,7 @@ def push_model(config: PushConfig) -> None:
 
     logger.info(f"Removing tmp directory {config.tmp_checkpoint_dir}")
     shutil.rmtree(config.tmp_checkpoint_dir)
-    logger.info(f"Done!")
+    logger.info("Done!")
 
 
 def main(args=None):
