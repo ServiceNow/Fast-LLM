@@ -11,7 +11,7 @@ from fast_llm.models.auto import trainer_registry
 from fast_llm.utils import Assert
 
 
-def load_url(config_url: str, config_auth_token_file: pathlib.Path | None = None):
+def load_url(config_url: str, config_auth_token_file: pathlib.Path | None = None) -> str:
     """
     Read a config from a URL, typically a config file hosted on GitHub.
     """
@@ -23,7 +23,7 @@ def load_url(config_url: str, config_auth_token_file: pathlib.Path | None = None
             headers["Authorization"] = f"token {config_auth_token}"
     response = requests.get(config_url, headers=headers)
     if response.status_code == 200:
-        return response
+        return response.text
     else:
         if isinstance(response.reason, bytes):
             try:
