@@ -196,14 +196,12 @@ def test_converted_huggingface():
 
 
 def _compare_configs(config_ref, config_test):
-    config_ref.to_logs(log_fn=print)
-    config_test.to_logs(log_fn=print)
-    assert config_ref.get_architecture().to_flat_dict() == config_test.get_architecture().to_flat_dict()
+    config_ref.compare(config_test)
 
 
 @pytest.mark.depends(on=["test_converted_distributed"])
 def test_load_pretrained_distributed_checkpoint():
-    config = TEST_ARCHITECTURE_CONFIG_CLS.from_flat_dict(
+    config = TEST_ARCHITECTURE_CONFIG_CLS.from_dict(
         yaml.safe_load((_CKPT_PATH / ".." / ".." / "config.yaml").open("r")), strict=False
     )
     pretrained_config_ref = PretrainedCheckpointConfig(

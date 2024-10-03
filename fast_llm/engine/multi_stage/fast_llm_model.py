@@ -8,10 +8,8 @@ import safetensors.torch
 import torch
 import yaml
 
-from fast_llm.config import FieldVerboseLevel
 from fast_llm.core.distributed import all_reduce, broadcast, safe_barrier
 from fast_llm.engine.base_model.base_model import BaseModel
-from fast_llm.engine.base_model.config import BaseModelArchitectureConfig
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.engine.multi_stage.config import (
     CHECKPOINT_VERSION,
@@ -202,7 +200,6 @@ class FastLLMModel(MultiStageModel):
             *,
             directory: pathlib.Path,
             save_optimizer: bool,
-            full_metadata: bool,
         ):
             assert model._is_setup
             assert model._is_loaded
@@ -211,22 +208,13 @@ class FastLLMModel(MultiStageModel):
             self.self_shard = model._state_shard[: self.num_shards]
             self.shard_names = model._state_shard_names[: self.num_shards]
             self.directory = directory
-            # TODO v0.2: remove config parts, `full_metadata`
             self.metadata = {
                 "checkpoint_type": CheckpointType.distributed.value,
                 "checkpoint_version": str(CHECKPOINT_VERSION),
                 "fast_llm_config": model.fast_llm_config.to_serialized(),
-                "model_config": model._base_model_config.to_flat_dict(),
                 "state_shard_names": list(model._state_shard_names[: self.num_shards]),
                 "metadata": metadata,
             }
-            if full_metadata:
-                self.metadata.update(
-                    {
-                        "multi_stage_config": model._multi_stage_config.to_flat_dict(),
-                        "distributed_config": model._distributed_config.to_flat_dict(),
-                    }
-                )
 
         def __enter__(self):
             # Is a context for future-proofing.
@@ -243,13 +231,10 @@ class FastLLMModel(MultiStageModel):
             *,
             directory: pathlib.Path,
             save_optimizer: bool,
-            full_metadata: bool,
             base_file_name: str,
             target_params_per_file,
         ):
-            super().__init__(
-                model, metadata, directory=directory, save_optimizer=save_optimizer, full_metadata=full_metadata
-            )
+            super().__init__(model, metadata, directory=directory, save_optimizer=save_optimizer)
             self.distributed_config = model._distributed_config
             self.distributed = model._distributed
             self.base_file_name = (
@@ -332,7 +317,6 @@ class FastLLMModel(MultiStageModel):
             metadata,
             directory=checkpoint_config.checkpoint_path,
             save_optimizer=checkpoint_config.save_optimizer,
-            full_metadata=True,
         ) as context:
             if self._distributed_config.rank == 0:
                 yaml.safe_dump(context.metadata, (context.directory / "metadata.yaml").open("w"))
@@ -350,7 +334,6 @@ class FastLLMModel(MultiStageModel):
             metadata,
             directory=checkpoint_config.checkpoint_path,
             save_optimizer=checkpoint_config.save_optimizer,
-            full_metadata=False,
             base_file_name="state_dict",
             target_params_per_file=checkpoint_config.target_params_per_file,
         ) as context:
@@ -371,7 +354,6 @@ class FastLLMModel(MultiStageModel):
             metadata,
             directory=checkpoint_config.checkpoint_path,
             save_optimizer=False,
-            full_metadata=False,
             base_file_name="model",
             target_params_per_file=checkpoint_config.target_params_per_file,
         ) as context:
@@ -658,7 +640,7 @@ class FastLLMModel(MultiStageModel):
         converter = converter_class.from_config(
             converter_class.load_config(pretrained_config.pretrained_checkpoint_path)
         )
-        self._check_model_config(converter.config)
+        self._base_model_config.compare_architecture(converter.config, pretrained_config.compare_log_fn)
 
         state_dict = {}
         with self._LoadContext(
@@ -673,14 +655,3 @@ class FastLLMModel(MultiStageModel):
                     context.import_state_tensor("weights", parameter_name, fast_llm_tensor)
 
             assert not state_dict, list(state_dict)
-
-    def _check_model_config(self, model_config: BaseModelArchitectureConfig):
-        model_config_dict = model_config.get_architecture().to_flat_dict(FieldVerboseLevel.everything)
-        for key, value in (
-            self._base_model_config.get_architecture().to_flat_dict(FieldVerboseLevel.everything).items()
-        ):
-            # TODO: Only check meaningful params.
-            if model_config_dict[key] != value:
-                logger.warning(
-                    f"Loaded model has different value for `{key}`: `{model_config_dict[key]}` != `{value}`"
-                )

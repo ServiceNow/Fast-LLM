@@ -7,7 +7,6 @@ import shutil
 import subprocess
 
 from fast_llm.engine.config_utils.logging import configure_logging
-from fast_llm.models.auto import model_registry
 
 try:
     import hf_transfer  # type: ignore[no-redef]
@@ -149,7 +148,7 @@ def push_model(config: PushConfig) -> None:
 
             # Block until the conversion is done
             convert_model(
-                model_registry[config.model_class].get_model_class(),
+                config.model_class,
                 ConversionConfig(
                     input_type=CheckpointType.distributed,
                     output_type=CheckpointType.huggingface,

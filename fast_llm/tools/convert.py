@@ -7,7 +7,13 @@ import typing
 
 from fast_llm.config import Config, Field, NoAutoValidate, config_class
 from fast_llm.engine.config_utils.data_type import DataType
-from fast_llm.engine.multi_stage.config import CheckpointConfig, CheckpointType, PretrainedCheckpointConfig, StageMode
+from fast_llm.engine.multi_stage.config import (
+    CheckpointConfig,
+    CheckpointType,
+    FastLLMModelConfig,
+    PretrainedCheckpointConfig,
+    StageMode,
+)
 from fast_llm.functional.config import TritonConfig
 from fast_llm.models.auto import model_registry
 from fast_llm.utils import Assert
@@ -67,7 +73,7 @@ def _convert_model_partial(
     logger.info(f"Done!")
 
 
-def convert_model(model_class: type["FastLLMModel"], config: ConversionConfig):
+def convert_model(model_config_class: type["FastLLMModelConfig"] | str, config: ConversionConfig):
     # TODO: Set logging in tests
     logging.getLogger().setLevel(logging.INFO)
     config.to_logs()
@@ -80,6 +86,9 @@ def convert_model(model_class: type["FastLLMModel"], config: ConversionConfig):
             f"Output path {config.output_path} already exists and has been processed. Skipping model conversion..."
         )
         return
+    if isinstance(model_config_class, str):
+        model_config_class = model_registry[model_config_class]
+    model_class = model_config_class.get_model_class()
     if config.layers_per_step is None:
         _convert_model_partial(model_class, config, config.output_path)
     else:
@@ -174,7 +183,6 @@ def convert(args=None):
         help="Validate the config without running the actual experiment.",
     )
     parsed, unparsed = parser.parse_known_args(args)
-    model_class = model_registry[parsed.model_type].get_model_class()
     with NoAutoValidate():
         config: ConversionConfig = ConversionConfig.from_flat_args(unparsed)
     try:
@@ -184,7 +192,7 @@ def convert(args=None):
     finally:
         # We always want to show the config for debugging.
         config.to_logs()
-    convert_model(model_class, config)
+    convert_model(parsed.model_type, config)
 
 
 if __name__ == "__main__":

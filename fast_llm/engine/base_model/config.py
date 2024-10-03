@@ -22,6 +22,13 @@ class BaseModelArchitectureConfig(Config):
     def get_architecture(self):
         return self
 
+    def compare_architecture(
+        self,
+        model_config: "BaseModelArchitectureConfig",
+        log_fn: typing.Union[BaseException, typing.Callable] = ValueError,
+    ):
+        return self.get_architecture().compare(model_config.get_architecture(), log_fn)
+
     @classmethod
     def get_converter_class(cls, model_type: str | None = None) -> type["ModelConverter"]:
         raise NotImplementedError()

@@ -399,9 +399,12 @@ class Config:
                         if origin is not tuple:
                             Assert.eq(len(args), 1)
                         arg = args[0]
-                        x, valid_ = zip(*[cls._post_process_field(y, arg, field, errors) for y in x])
+                        if len(x) > 0:
+                            x, valid_ = zip(*[cls._post_process_field(y, arg, field, errors) for y in x])
+                            valid = all(valid_)
+                        else:
+                            valid = True
                         x = origin(x)
-                        valid = all(valid_)
             else:
                 raise NotImplementedError(origin)
         elif not isinstance(type_, type):
@@ -451,9 +454,6 @@ class Config:
         Args:
             all_fields: Include the derived fields, with `init=False`.
             format_: The config format used to represent nested configs. Options:
-              * `ConfigDictFormat.flat`: Flatten nested configs into a flat dict, keep only the innermost config keys.
-                The user is responsible for preventing name clashes.
-                Legacy format, used mainly for argparse configuration.
               * `ConfigDictFormat.nested`: Preserve the nested config structure by returning nested dicts.
                 Also save a `__class__` entry to support derived classes. Standard format.
               * `ConfigDictFormat.tuple`: Preserve the nested config structure by returning tuples of keys.
@@ -473,9 +473,7 @@ class Config:
                     format_=format_,
                     serializable=serializable,
                 )
-                if format_ == _ConfigDictFormat.flat:
-                    arg_dict.update(field_dict)
-                elif format_ == _ConfigDictFormat.tuple:
+                if format_ == _ConfigDictFormat.tuple:
                     arg_dict.update({(name,) + name_: value_ for name_, value_ in field_dict.items()})
                 elif format_ == _ConfigDictFormat.nested:
                     if len(field_dict) > 0 or all_fields:
@@ -487,10 +485,6 @@ class Config:
                     serialize_field(value) if serializable else value
                 )
         return arg_dict
-
-    def to_flat_dict(self, verbose: int | None = FieldVerboseLevel.core):
-        # TODO v0.2: Remove flat format
-        return self._to_dict(verbose=verbose, format_=_ConfigDictFormat.flat, serializable=True)
 
     def to_copy(
         self,
@@ -526,6 +520,7 @@ class Config:
     @classmethod
     def _to_argparse(cls, parser: argparse.ArgumentParser):
         """
+        TODO v0.2: Remove flat format
         Add arguments for the config and its sub-configs to an existing parser.
         The whole config hierarchy is flattened (see `to_dict`),
         and the user is responsible for preventing name clashes.
@@ -626,7 +621,7 @@ class Config:
         default: dict,
         strict: bool = True,
     ):
-        # TODO v0.2: Separate dict only needed for flat format
+        # TODO v0.2: Remove flat format
         return cls._from_dict(default, strict, True)
 
     @classmethod
@@ -637,7 +632,7 @@ class Config:
         flat: bool = False,
     ):
         cls._check_abstract()
-        # TODO v0.2: Separate dict only needed for flat format
+        # TODO v0.2: Remove flat format
         out_arg_dict = {}
 
         # TODO v0.2: Remove backward compatibility fix
@@ -672,6 +667,29 @@ class Config:
         and create a config from the resulting namespace.
         """
         return cls.from_flat_dict(cls._to_argparse(argparse.ArgumentParser()).parse_args(args).__dict__.copy())
+
+    def compare(self, other: "Config", log_fn: typing.Union[BaseException, typing.Callable] = ValueError):
+        # TODO: Check classes?
+        self_dict = self._to_dict(format_=_ConfigDictFormat.tuple, serializable=True)
+        other_dict = other._to_dict(format_=_ConfigDictFormat.tuple, serializable=True)
+        compare = {
+            key: (self_dict.get(key, MISSING), other_dict.get(key, MISSING))
+            for key in self_dict.keys() | other_dict.keys()
+        }
+        diff = {
+            key: (self_value, other_value)
+            for key, (self_value, other_value) in compare.items()
+            if self_value != other_value
+        }
+        if diff:
+            diff_str = f"Config diff:\n  " + "\n  ".join(
+                f"{''.join(key)}`: `{self_value}` != `{other_value}`"
+                for key, (self_value, other_value) in diff.items()
+            )
+            if isinstance(log_fn, BaseException):
+                raise log_fn(diff_str)
+            else:
+                return log_fn(diff_str)
 
     @classmethod
     def _check_abstract(cls):
