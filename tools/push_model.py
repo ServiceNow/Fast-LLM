@@ -42,8 +42,8 @@ class PushConfig(Config):
     experiment_dir: pathlib.Path = Field()
     repo_name: str = Field()
     model_type: str = Field()
-    model_class: str = Field(default="gpt")
     tokenizer_path: pathlib.Path = Field()
+    model_class: str = Field(default="gpt")
     tmp_checkpoint_dir: pathlib.Path | None = Field(default=None)
     use_cpu: bool = Field(default=False)
 
