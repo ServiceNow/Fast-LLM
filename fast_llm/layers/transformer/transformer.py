@@ -4,8 +4,8 @@ import torch
 
 from fast_llm.core.distributed import set_generator
 from fast_llm.engine.base_model.base_model import Layer
+from fast_llm.engine.config_utils.run import log_pipeline_parallel_main_rank
 from fast_llm.engine.config_utils.tensor_space import TensorSpace
-from fast_llm.engine.run.run import log_pipeline_parallel_main_rank
 from fast_llm.layers.transformer.attention import Attention
 from fast_llm.layers.transformer.config import TransformerConfig, TransformerDimNames, TransformerKwargs
 from fast_llm.layers.transformer.mixture_of_experts import MixtureOfExpertMLP

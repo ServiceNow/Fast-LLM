@@ -9,17 +9,16 @@ import time
 import typing
 
 import torch
-import wandb
 
 from fast_llm.core.distributed import safe_barrier
 from fast_llm.data.data import Data
+from fast_llm.engine.config_utils.run import Run, is_main_rank, log_main_rank, log_pipeline_parallel_main_rank
 from fast_llm.engine.distributed.config import PhaseType
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.engine.multi_stage.config import CheckpointConfig, CheckpointType
 from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
 from fast_llm.engine.optimizer.config import ParamGroup
 from fast_llm.engine.optimizer.optimizer import Optimizer
-from fast_llm.engine.run.run import Run, is_main_rank, log_main_rank, log_pipeline_parallel_main_rank
 from fast_llm.engine.schedule.runner import ScheduleRunner
 from fast_llm.engine.schedule.schedule import Schedule
 from fast_llm.engine.training.config import TrainerConfig
@@ -158,7 +157,7 @@ class Trainer:
             )
             formatted_metrics = format_metrics(metrics[PhaseType.test], self._loss_defs, PhaseType.test)
             log_main_rank(formatted_metrics)
-            self._run.post_wandb_alert("Testing results", formatted_metrics, wandb.AlertLevel.WARN)
+            self._run.post_wandb_alert("Testing results", formatted_metrics, "WARN")
             # TODO: This may erase some metrics.
             self._run.log_wandb_metrics(self._completed_steps, metrics)
 
@@ -226,7 +225,7 @@ class Trainer:
                 if is_logging:
                     # TODO: Synchronization is probably unnecessary.
                     safe_barrier(self._distributed.world_group, f"logging {self._completed_steps}")
-                    if is_main_rank():
+                    if self._run.is_main_rank:
                         new_time = time.perf_counter()
                         time_per_iteration = (new_time - last_time) / (self._completed_steps - last_iteration)
                         average_time_per_iteration = (new_time - start_time) / (
@@ -277,7 +276,7 @@ class Trainer:
                             % self._config.run.wandb_status_interval
                             == 0
                         ):
-                            self._run.post_wandb_alert("Training results", formatted_metrics, wandb.AlertLevel.INFO)
+                            self._run.post_wandb_alert("Training results", formatted_metrics, "INFO")
 
                     advanced_iters = 0
                     skipped_iters = 0
@@ -323,7 +322,7 @@ class Trainer:
                         % self._config.run.wandb_status_interval
                         == 0
                     ):
-                        self._run.post_wandb_alert("Validation results", formatted_metrics, wandb.AlertLevel.INFO)
+                        self._run.post_wandb_alert("Validation results", formatted_metrics, "INFO")
 
                 if is_main_rank() and metrics:
                     self._run.log_wandb_metrics(self._completed_steps, metrics)

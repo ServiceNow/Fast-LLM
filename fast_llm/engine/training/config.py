@@ -2,9 +2,9 @@ import typing
 
 from fast_llm.config import Config, Field, FieldHint, check_field, config_class, skip_valid_if_none
 from fast_llm.data.config import DataConfig
+from fast_llm.engine.config_utils.run import ExperimentConfig
 from fast_llm.engine.multi_stage.config import PretrainedFastLLMModelConfig
 from fast_llm.engine.optimizer.config import OptimizerConfig
-from fast_llm.engine.run.config import ExperimentConfig
 from fast_llm.engine.schedule.config import BatchConfig, ScheduleConfig
 from fast_llm.profile import ProfilingConfig
 from fast_llm.utils import Assert

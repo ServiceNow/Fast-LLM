@@ -5,6 +5,7 @@ import traceback
 import typing
 
 from fast_llm.config import Config, Field, FieldHint, check_field, config_class
+from fast_llm.engine.config_utils.run import get_run
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.utils import Assert
 
@@ -135,7 +136,7 @@ def get_trace_fn(config: ProfilingConfig, start_step: int = 0):
     def trace_fn(
         profiler: "torch.profiler.profile",
     ):
-        from fast_llm.engine.run.run import open_artifact
+        run = get_run()
 
         try:
             step = start_step + profiler.step_num
@@ -151,7 +152,7 @@ def get_trace_fn(config: ProfilingConfig, start_step: int = 0):
                 if config.profile_log:
                     logger.info(table)
                 else:
-                    open_artifact(f"profile_trace_step_{step}").write(table)
+                    run.open_artifact(f"profile_trace_step_{step}").write(table)
 
             if config.profile_averages:
                 table = build_average_table(
@@ -164,10 +165,10 @@ def get_trace_fn(config: ProfilingConfig, start_step: int = 0):
                 if config.profile_log:
                     logger.info(table)
                 else:
-                    open_artifact(f"profile_averages_step_{step}").write(table)
+                    run.open_artifact(f"profile_averages_step_{step}").write(table)
 
             if config.profile_export:
-                profiler.export_chrome_trace(str(open_artifact(f"profile_chrome_step_{step}", mode=None)))
+                profiler.export_chrome_trace(str(run.open_artifact(f"profile_chrome_step_{step}", mode=None)))
 
             # Store results for future use.
             profiler.bc_profile_result = profiler.profiler.function_events

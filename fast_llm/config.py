@@ -9,6 +9,7 @@ import typing
 
 import yaml
 
+from fast_llm.engine.config_utils.logging import log
 from fast_llm.utils import Assert, Tag, header
 
 logger = logging.getLogger(__name__)
@@ -301,7 +302,7 @@ class Config:
                 if _is_validating:
                     raise
                 else:
-                    raise ValueError("\n".join(e.args))
+                    raise ValidationError("\n".join(e.args)) from None
             self._validated = True
         return self
 
@@ -682,14 +683,14 @@ class Config:
             if self_value != other_value
         }
         if diff:
-            diff_str = f"Config diff:\n  " + "\n  ".join(
-                f"{''.join(key)}`: `{self_value}` != `{other_value}`"
-                for key, (self_value, other_value) in diff.items()
+            log(
+                f"Config diff:\n  "
+                + "\n  ".join(
+                    f"{''.join(key)}`: `{self_value}` != `{other_value}`"
+                    for key, (self_value, other_value) in diff.items()
+                ),
+                log_fn=log_fn,
             )
-            if isinstance(log_fn, BaseException):
-                raise log_fn(diff_str)
-            else:
-                return log_fn(diff_str)
 
     @classmethod
     def _check_abstract(cls):

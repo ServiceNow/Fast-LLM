@@ -10,8 +10,8 @@ from fast_llm.data.dataset import RawDataset, SampledDataset
 from fast_llm.data.fim import Fim
 from fast_llm.data.mmap import MMapIndexedDataset
 from fast_llm.data.tokenizer import Tokenizer
+from fast_llm.engine.config_utils.run import log_main_rank
 from fast_llm.engine.distributed.config import MAX_SEED, PhaseType
-from fast_llm.engine.run.run import log_main_rank
 from fast_llm.utils import Assert, padded_cumsum
 
 try:

@@ -14,9 +14,9 @@ from fast_llm.data.dataset import BlendedDataset, SampledDataset, Sampler
 from fast_llm.data.gpt import DummyGPTDataset, GPTDataset, GPTSampledDataset
 from fast_llm.data.mmap import MMapIndexedDataset
 from fast_llm.data.tokenizer import Tokenizer
+from fast_llm.engine.config_utils.run import get_run, log_main_rank
 from fast_llm.engine.distributed.config import DistributedConfig, PhaseType
 from fast_llm.engine.distributed.distributed import Distributed
-from fast_llm.engine.run.run import get_dataset_cache_dir, is_main_rank, log_main_rank
 from fast_llm.engine.schedule.config import BatchConfig
 from fast_llm.utils import Assert
 
@@ -121,11 +121,12 @@ class Data:
         Load the datasets, and prepare or load the samplings.
         This may take a while and a significant amount of cpu memory.
         """
+        run = get_run()
         Assert.leq(set(samples_per_phase), set(self._phase_split))
         log_main_rank(f"Preparing {self._num_datasets} datasets. This may take several minutes.")
         self._tokenizer = Tokenizer(self._config.tokenizer) if self._config.fim.fim_rate > 0 else None
         self._distributed = distributed
-        self._cache_dir = get_dataset_cache_dir()
+        self._cache_dir = run.dataset_cache_dir
         self._samples_per_phase = samples_per_phase
         if self._cache_dir is None:
             warnings.warn(f"Using the dataset directory for the index cache.")
@@ -159,7 +160,7 @@ class Data:
                     num_samples=self._samples_per_phase[phase],
                     cache_dir=self._cache_dir,
                     group=self._distributed.world_group,
-                    verbose=is_main_rank(),
+                    verbose=run.is_main_rank,
                     data_sample_warn_time_ms=self._config.data_sample_warn_time_ms,
                 )
             )

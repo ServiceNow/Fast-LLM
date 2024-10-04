@@ -5,10 +5,10 @@ import torch
 from fast_llm.core.distributed import ReduceOp, all_reduce
 from fast_llm.core.kernels import fused_adam, l2_norm, scale_
 from fast_llm.engine.config_utils.data_type import DataType
+from fast_llm.engine.config_utils.run import log_main_rank
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.engine.optimizer.config import OptimizerConfig, ParamGroup
 from fast_llm.engine.optimizer.learning_rate import create_schedule_from_config
-from fast_llm.engine.run.run import log_main_rank
 from fast_llm.utils import Assert
 
 

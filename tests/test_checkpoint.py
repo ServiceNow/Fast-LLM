@@ -75,7 +75,7 @@ def _run_conversion(config: ConversionConfig):
     if not config.output_path.is_dir():
         if FORCE_REUSE_RESULTS:
             raise RuntimeError(config.output_path)
-        convert_model(TEST_MODEL_CLS, config)
+        convert_model(TEST_MODEL_CONFIG_CLS, config)
 
 
 _CKPT_PATH = TEST_RESULTS_PATH / f"test_{TEST_MODEL}_checkpoint_and_eval" / "checkpoints" / "2"

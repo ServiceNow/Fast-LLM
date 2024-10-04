@@ -99,6 +99,7 @@ def train(args=None):
                 config_file = pathlib.Path(parsed.config).open("r").read()
             config = trainer_config_class.from_dict(yaml.safe_load(config_file))
     try:
+        config.configure_logging()
         config.validate()
         if not parsed.do_run:
             return
@@ -109,7 +110,8 @@ def train(args=None):
         trainer = trainer_config_class.get_trainer_class()(config=config)
     finally:
         # We always want to show the config for debugging.
-        config.show_main_rank(config.model.distributed)
+        config.show_main_rank()
+
     with run:
         trainer.setup(distributed, run)
         trainer.run()

@@ -7,6 +7,7 @@ import torch
 import torch._dynamo  # noqa
 
 from fast_llm.engine.base_model.base_model import LossDef
+from fast_llm.engine.config_utils.logging import TensorLogs
 from fast_llm.engine.distributed.config import PhaseType
 from fast_llm.tensor import TensorMeta
 from fast_llm.utils import format_number
@@ -16,11 +17,6 @@ if typing.TYPE_CHECKING:
     from fast_llm.engine.distributed.distributed import Distributed
 
 logger = logging.getLogger(__name__)
-
-
-def log(*message, log_fn=logger.info):
-    return log_fn(", ".join([str(m() if callable(m) else m) for m in message]))
-
 
 _MEMORY_METRIC_FORMAT_KEYS = {
     "allocated",
@@ -104,13 +100,6 @@ _METRIC_FORMATS = {
     PhaseType.test: _VALIDATION_METRIC_FORMATS,
 }
 
-_max_logged_elements = 8
-
-
-def set_max_logged_elements(value: int):
-    global _max_logged_elements
-    _max_logged_elements = value
-
 
 def format_metrics(metrics: dict[str, float | int], loss_defs: list[LossDef], phase: PhaseType):
     # TODO: Improve, add flexibility.
@@ -128,25 +117,6 @@ def format_metrics(metrics: dict[str, float | int], loss_defs: list[LossDef], ph
     return " | ".join(outputs)
 
 
-# A global buffer for holding logged tensor stats.
-_tensor_log_stats: list | None = None
-_tensor_log_show: bool = True
-
-
-def set_show_tensor_logs(enabled=True):
-    global _tensor_log_show
-    _tensor_log_show = enabled
-
-
-def reset_tensor_stats_logging(enabled=True):
-    global _tensor_log_stats
-    _tensor_log_stats = [] if enabled else None
-
-
-def get_logged_tensor_stats():
-    return _tensor_log_stats
-
-
 @torch._dynamo.disable  # noqa
 def log_tensor(
     name: str,
@@ -159,7 +129,7 @@ def log_tensor(
 ):
     if level < 1:
         return
-    save_stats = _tensor_log_stats is not None
+    save_stats = TensorLogs.enabled()
     shape = tuple(tensor.shape)
     _, dtype = str(tensor.dtype).split("torch.")
     txt = [
@@ -219,7 +189,7 @@ def log_tensor(
             samples = tensor.flatten()[: target_samples * step : step].cpu()
             stats.update(samples=samples, step=step)
             # Crop the list in the logs. The full tensor is still in stats.
-            samples = [format_number(x) for x in samples.tolist()[:_max_logged_elements]]
+            samples = [format_number(x) for x in samples.tolist()[: TensorLogs.max_logged_elements]]
             num_logged_elements = len(samples)
             samples = ",".join(f"{sample:10s}" for sample in samples)
             txt.append((f"{f'samples (step={step})':21s}", f" ({samples})", num_logged_elements * 11 + 3))
@@ -229,12 +199,12 @@ def log_tensor(
             min=v_float.min().item(),  # noqa
             max=v_float.max().item(),  # noqa
         )
-        _tensor_log_stats.append(stats)
+        TensorLogs.append(stats)
     for prefix, val, col_len in txt:
         prefix = "" if prefix is None else f" {prefix}="
         len_ += col_len + len(prefix) + 1
         out = f"{f'{out}{prefix}{str(val)}':{len_}s}"
-    if _tensor_log_show:
+    if TensorLogs.verbose:
         return log_fn(out)
 
 
