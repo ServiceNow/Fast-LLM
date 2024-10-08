@@ -1,16 +1,15 @@
 import logging
 import os
 import pathlib
-import shlex
 import shutil
-import sys
 import typing
 import warnings
 
 import yaml
 
-from fast_llm.config import Config, Field, FieldHint, check_field, config_class, skip_valid_if_none
+from fast_llm.config import Config, Field, FieldHint, FieldVerboseLevel, check_field, config_class, skip_valid_if_none
 from fast_llm.engine.config_utils.logging import TensorLogs, configure_logging, log
+from fast_llm.engine.config_utils.runnable import RunnableConfig
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.utils import Assert
 
@@ -161,29 +160,22 @@ class RunConfig(Config):
 
 
 @config_class()
-class ExperimentConfig(Config):
+class ExperimentConfig(RunnableConfig):
     run: RunConfig = Field(
         default_factory=RunConfig, desc="Global properties for the experiment.", hint=FieldHint.core
     )
-    config_verbose_level: int = Field(
-        default=0,
-        desc="Verbosity level when showing the config."
-        " Parameters with importance level above this value are hidden if they are equal to the default value.",
-        hint=FieldHint.logging,
-    )
 
-    def show_main_rank(
+    def _show(
         self,
+        verbose: int = FieldVerboseLevel.core,
+        *,
         log_fn=logger.info,
         title: str | None = None,
         width: int = 60,
         fill_char: str = "-",
     ):
         if is_main_rank():
-            log_fn(f"Command run:\n{shlex.join(sys.argv)}")
-            self.to_logs(
-                verbose=self.config_verbose_level, log_fn=log_fn, title=title, width=width, fill_char=fill_char
-            )
+            return super()._show(verbose, log_fn=log_fn, title=title, width=width, fill_char=fill_char)
 
     def configure_logging(self, directory: pathlib.Path | str | None = None):
         configure_logging(

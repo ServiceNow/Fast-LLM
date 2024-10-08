@@ -1,3 +1,4 @@
+import argparse
 import typing
 
 from fast_llm.config import Config, Field, FieldHint, check_field, config_class, skip_valid_if_none
@@ -96,3 +97,17 @@ class TrainerConfig(PretrainedFastLLMModelConfig, ExperimentConfig):
     def _setup(self):
         super()._setup()
         self.batch.setup(self.distributed)
+
+    def _get_runnable(self, parsed: argparse.Namespace) -> typing.Callable[[], None]:
+        from fast_llm.engine.distributed.distributed import Distributed
+
+        distributed = Distributed(self.distributed)
+        run = self.get_run(distributed)
+        trainer = self.get_trainer_class()(config=self)
+
+        def runnable():
+            with run:
+                trainer.setup(distributed, run)
+                trainer.run()
+
+        return runnable

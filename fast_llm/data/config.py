@@ -34,21 +34,12 @@ class MultiprocessingContext(str, enum.Enum):
 
 
 def _validate_split(value):
-    if isinstance(value, str):
-        # This happens with yaml serialization
-        value = [float(x) for x in value.strip("[]").split(",")]
     Assert.leq(len(value), 3)
     return value + [0] * (len(value) - 3)
 
 
 def _validate_path(value):
-    if isinstance(value, str):
-        # This happens with yaml serialization
-        return [x.strip() for x in value.strip("[]").split(",")]
-    elif value is None:
-        return []
-    else:
-        return value
+    return [value] if isinstance(value, str) else value
 
 
 FIM_PREFIX = "<fim_prefix>"

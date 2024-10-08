@@ -18,7 +18,7 @@ def test_validate_without_import():
                 # We still want to enable imports from within Fast-llm
                 f"sys.path.append('{repo_path}')",
                 "from fast_llm.tools.cli import fast_llm as main",
-                "main(['train', 'gpt', '-v', '--data_path=path/to/data'])",
+                "main(['train', 'gpt', '-v'])",
             ]
         ),
     ]

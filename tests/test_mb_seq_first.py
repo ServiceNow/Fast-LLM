@@ -3,12 +3,12 @@ import pytest
 from tests.common import CONFIG_COMMON, TEST_MODEL, run_test_script
 from tests.compare_tensor_logs import CompareConfig
 
-CONFIG_DF_SF = CONFIG_COMMON + ["--depth_first_micro_batches=4", "--sequence_first=1"]
-CONFIG_BF_SF = CONFIG_COMMON + ["--breadth_first_micro_batches=4", "--sequence_first=1"]
+CONFIG_DF_SF = CONFIG_COMMON + ["--depth_first_micro_batches=4", "--sequence_first=True"]
+CONFIG_BF_SF = CONFIG_COMMON + ["--breadth_first_micro_batches=4", "--sequence_first=True"]
 CONFIG_BF_DF_SF = CONFIG_COMMON + [
     "--depth_first_micro_batches=2",
     "--breadth_first_micro_batches=2",
-    "--sequence_first=1",
+    "--sequence_first=True",
 ]
 
 
@@ -27,7 +27,12 @@ def test_model_dp2_sp2_mb4():
     # TODO: Compiled cross-entropy broken for this config
     run_test_script(
         f"test_{TEST_MODEL}_dp2_sp2_mb4",
-        CONFIG_BF_SF + ["--tensor-parallel=2", "--sequence_tensor_parallel=1", "--torch_dynamo_enable=0"],
+        CONFIG_BF_SF
+        + [
+            "model.distributed.tensor-parallel=2",
+            "model.distributed.sequence_tensor_parallel=True",
+            "run.torch_dynamo_enable=False",
+        ],
         num_gpus=4,
         compare=f"test_{TEST_MODEL}_mb4_sf",
     )
@@ -40,7 +45,12 @@ def test_model_dp2_sp2_pp2s1():
     run_test_script(
         f"test_{TEST_MODEL}_dp2_sp2_pp2s1",
         CONFIG_BF_SF
-        + ["--tensor-parallel=2", "--pipeline-parallel=2", "--sequence_tensor_parallel=1", "--torch_dynamo_enable=0"],
+        + [
+            "model.distributed.tensor-parallel=2",
+            "model.distributed.pipeline-parallel=2",
+            "model.distributed.sequence_tensor_parallel=True",
+            "run.torch_dynamo_enable=False",
+        ],
         num_gpus=8,
         compare=f"test_{TEST_MODEL}_mb4_sf",
         config=CompareConfig(ignore_duplicates=["layers.0.word_embeddings_weight"]),

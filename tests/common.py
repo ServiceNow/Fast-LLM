@@ -31,31 +31,28 @@ TOKENIZER_PATH = TEST_RESULTS_PATH / "data" / "tokenizer"
 TOKENIZER_FILE = TOKENIZER_PATH / "tokenizer.json"
 DATASET_PREFIX = TEST_RESULTS_PATH / "data" / "dataset/data"
 
+
 CONFIG_BASE_FAST_LLM = [
-    "--num_layers=2",
-    "--hidden_size=1024",
-    "--num_attention_heads=8",
-    "--log_interval=1",
-    "--train_iters=2",
-    "--validation_iters=0",
-    "--hidden_dropout=0",
-    "--attention_dropout=0",
-    f"--debug_param_init={_LOG_LEVEL}",
-    f"--debug_layer_outputs={_LOG_LEVEL}",
-    f"--debug_layer_gradients={_LOG_LEVEL}",
-    f"--debug_all_param_gradients={_LOG_LEVEL}",
-    "--debug_tensor_parallel=1",
-    "--debug_param_update=0",
-    "--reproducible_init=1",
-    "--batch_size=8",
-    "--sequence_length=2048",
-    "--init_method_std=0.022",
-    "--lr=0.0001",
-    "--vocab_size=49152",
-    "--num_workers=4",
-    f"--data_path={DATASET_PREFIX}",
-    "--save_tensor_log=1",
-    "--show_tensor_logs=0",
+    "run.log_interval=1",
+    "run.save_tensor_logs=True",
+    "run.show_tensor_logs=False",
+    "model.base_model.transformer.num_layers=2",
+    "model.base_model.transformer.hidden_size=1024",
+    "model.base_model.transformer.num_attention_heads=8",
+    "model.base_model.transformer.init_method_std=0.022",
+    "model.base_model.vocab_size=49152",
+    f"model.multi_stage.debug_param_init={_LOG_LEVEL}",
+    f"model.multi_stage.debug_layer_outputs={_LOG_LEVEL}",
+    f"model.multi_stage.debug_layer_gradients={_LOG_LEVEL}",
+    f"model.multi_stage.debug_all_param_gradients={_LOG_LEVEL}",
+    "model.multi_stage.debug_tensor_parallel=True",
+    "model.distributed.reproducible_init=True",
+    "training.train_iters=2",
+    "training.num_workers=4",
+    "batch.batch_size=8",
+    "batch.sequence_length=2048",
+    f"data.data_path={DATASET_PREFIX}",
+    "optimizer.lr_schedule.lr=0.0001",
 ]
 CONFIG_BASE_MEGATRON = [
     "--num-layers=2",
@@ -89,21 +86,24 @@ CONFIG_BASE_MEGATRON = [
     "--transformer-impl=transformer_engine",
 ]
 
-CONFIG_SC1_FAST_LLM = CONFIG_BASE_FAST_LLM + ["--max_position_embeddings=2048"]
+CONFIG_SC1_FAST_LLM = CONFIG_BASE_FAST_LLM + ["model.base_model.max_position_embeddings=2048"]
 CONFIG_SC1_MEGATRON = CONFIG_BASE_MEGATRON + ["--group-query-attention"]
-CONFIG_SC1_COMMON = CONFIG_SC1_FAST_LLM + ["--training-dtype=bf16"]
+CONFIG_SC1_COMMON = CONFIG_SC1_FAST_LLM + ["model.distributed.training_dtype=bf16"]
 
-CONFIG_GPT2_FAST_LLM = CONFIG_SC1_FAST_LLM + ["--head_groups=8"]
+CONFIG_GPT2_FAST_LLM = CONFIG_SC1_FAST_LLM + ["model.base_model.transformer.head_groups=8"]
 CONFIG_GPT2_MEGATRON = CONFIG_BASE_MEGATRON
-CONFIG_GPT2_COMMON = CONFIG_GPT2_FAST_LLM + ["--training-dtype=bf16"]
+CONFIG_GPT2_COMMON = CONFIG_GPT2_FAST_LLM + ["model.distributed.training_dtype=bf16"]
 
-CONFIG_SC2_FAST_LLM = CONFIG_BASE_FAST_LLM + ["--head_groups=4", "--use_rotary_embeddings=1"]
+CONFIG_SC2_FAST_LLM = CONFIG_BASE_FAST_LLM + [
+    "model.base_model.transformer.head_groups=4",
+    "model.base_model.transformer.use_rotary_embeddings=True",
+]
 CONFIG_SC2_MEGATRON = CONFIG_SC1_MEGATRON + [
     "--num-query-groups=4",
     "--use-rotary-position-embeddings",
     "--no-position-embedding",
 ]
-CONFIG_SC2_COMMON = CONFIG_SC2_FAST_LLM + ["--training-dtype=bf16"]
+CONFIG_SC2_COMMON = CONFIG_SC2_FAST_LLM + ["model.distributed.training_dtype=bf16"]
 
 CONFIG_MISTRAL_MEGATRON = CONFIG_SC2_MEGATRON + [
     "--swiglu",
@@ -113,18 +113,24 @@ CONFIG_MISTRAL_MEGATRON = CONFIG_SC2_MEGATRON + [
     "--untie-embeddings-and-output-weights",
 ]
 CONFIG_MISTRAL_FAST_LLM = CONFIG_SC2_FAST_LLM + [
-    "--gated=1",
-    "--activation_type=silu",
-    "--add_linear_biases=0",
-    "--normalization_type=rms_norm",
-    "--ffn_hidden_size=4096",
-    "--tie_word_embeddings=0",
+    "model.base_model.transformer.gated=True",
+    "model.base_model.transformer.activation_type=silu",
+    "model.base_model.transformer.add_linear_biases=False",
+    "model.base_model.transformer.normalization.normalization_type=rms_norm",
+    "model.base_model.transformer.ffn_hidden_size=4096",
+    "model.base_model.tie_word_embeddings=False",
 ]
-CONFIG_MISTRAL_COMMON = CONFIG_MISTRAL_FAST_LLM + ["--training-dtype=bf16"]
+CONFIG_MISTRAL_COMMON = CONFIG_MISTRAL_FAST_LLM + ["model.distributed.training_dtype=bf16"]
 
-CONFIG_MIXTRAL_MEGATRON = CONFIG_MISTRAL_MEGATRON + ["--num-experts=4", "--moe-router-topk=4"]
-CONFIG_MIXTRAL_FAST_LLM = CONFIG_MISTRAL_FAST_LLM + ["--num_experts=4", "--num_experts_per_token=4"]
-CONFIG_MIXTRAL_COMMON = CONFIG_MIXTRAL_FAST_LLM + ["--training-dtype=bf16"]
+CONFIG_MIXTRAL_MEGATRON = CONFIG_MISTRAL_MEGATRON + [
+    "--num-experts=4",
+    "--moe-router-topk=4",
+]
+CONFIG_MIXTRAL_FAST_LLM = CONFIG_MISTRAL_FAST_LLM + [
+    "model.base_model.transformer.num_experts=4",
+    "model.base_model.transformer.num_experts_per_token=4",
+]
+CONFIG_MIXTRAL_COMMON = CONFIG_MIXTRAL_FAST_LLM + ["model.distributed.training_dtype=bf16"]
 
 _CONFIGS = {
     "gpt2": ("gpt", CONFIG_GPT2_FAST_LLM, CONFIG_GPT2_MEGATRON, CONFIG_GPT2_COMMON, None),
@@ -224,7 +230,7 @@ def run_test_script(
     if is_megatron:
         command.extend([f"--structured-logs-dir={path}", f"--data-cache-path={path}"])
     else:
-        command.append(f"--experiment_dir={path}")
+        command.append(f"run.experiment_dir={path}")
     print(" ".join(command))
     if skip:
         print("Reusing existing run.")

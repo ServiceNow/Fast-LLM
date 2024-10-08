@@ -9,7 +9,7 @@ import yaml
 
 from fast_llm.engine.multi_stage.config import CheckpointType, PretrainedCheckpointConfig, StageMode
 from fast_llm.models.auto import model_registry
-from fast_llm.tools.convert import ConversionConfig, convert_model
+from fast_llm.tools.convert import ConversionConfig
 from tests.common import (
     CONFIG_COMMON,
     FORCE_REUSE_RESULTS,
@@ -34,7 +34,7 @@ def test_checkpoint_and_eval():
     # A baseline config (single-gpu, bf16, flash-attn).
     run_test_script(
         f"test_{TEST_MODEL}_checkpoint_and_eval",
-        CONFIG_COMMON + ["--checkpoint_interval=1", "--validation_interval=2", "--validation_iters=1"],
+        CONFIG_COMMON + ["run.checkpoint_interval=1", "training.validation_interval=2", "training.validation_iters=1"],
     )
 
 
@@ -62,7 +62,7 @@ def _compare_resume_fn(test_path: pathlib.Path, compare_path: pathlib.Path):
 def test_resume():
     run_test_script(
         f"test_{TEST_MODEL}_resume",
-        CONFIG_COMMON + ["--checkpoint_interval=1", "--validation_interval=2", "--validation_iters=1"],
+        CONFIG_COMMON + ["run.checkpoint_interval=1", "training.validation_interval=2", "training.validation_iters=1"],
         compare=f"test_{TEST_MODEL}_checkpoint_and_eval",
         prepare_fn=_prepare_resume_fn,
         compare_fn=_compare_resume_fn,
@@ -75,7 +75,7 @@ def _run_conversion(config: ConversionConfig):
     if not config.output_path.is_dir():
         if FORCE_REUSE_RESULTS:
             raise RuntimeError(config.output_path)
-        convert_model(TEST_MODEL_CONFIG_CLS, config)
+        config.run(TEST_MODEL_CONFIG_CLS)
 
 
 _CKPT_PATH = TEST_RESULTS_PATH / f"test_{TEST_MODEL}_checkpoint_and_eval" / "checkpoints" / "2"
@@ -340,10 +340,10 @@ def test_load_pretrained_distributed_in_dp2():
         f"test_{TEST_MODEL}_load_pretrained_distributed_in_dp2",
         CONFIG_COMMON
         + [
-            "--checkpoint_interval=1",
-            "--train_iters=1",
-            f"--pretrained_checkpoint_path={_CONVERT_PATH / 'distributed_0'}",
-            "--skip_step=1",
+            "run.checkpoint_interval=1",
+            "training.train_iters=1",
+            f"pretrained.pretrained_checkpoint_path={_CONVERT_PATH / 'distributed_0'}",
+            "schedule.skip_step=True",
         ],
         num_gpus=2,
     )
@@ -355,11 +355,10 @@ def test_load_pretrained_distributed_with_config():
         f"test_{TEST_MODEL}_load_pretrained_distributed_with_config",
         CONFIG_COMMON
         + [
-            "--checkpoint_interval=1",
-            "--train_iters=1",
-            f"--pretrained_checkpoint_path={_CONVERT_PATH / 'distributed_0'}",
-            "--skip_step=1",
-            "--use_pretrained_config=1",
+            "run.checkpoint_interval=1",
+            "training.train_iters=1",
+            f"pretrained.pretrained_checkpoint_path={_CONVERT_PATH / 'distributed_0'}",
+            "schedule.skip_step=True",
         ],
     )
 
@@ -437,11 +436,11 @@ def test_load_pretrained_state_dict_in_dp2():
         f"test_{TEST_MODEL}_load_pretrained_state_dict_in_dp2",
         CONFIG_COMMON
         + [
-            "--checkpoint_interval=1",
-            "--train_iters=1",
-            f"--pretrained_checkpoint_path={_CONVERT_PATH / 'state_dict_0'}",
-            f"--pretrained_checkpoint_type=state_dict",
-            "--skip_step=1",
+            "run.checkpoint_interval=1",
+            "training.train_iters=1",
+            f"pretrained.pretrained_checkpoint_path={_CONVERT_PATH / 'state_dict_0'}",
+            f"pretrained.pretrained_checkpoint_type=state_dict",
+            "schedule.skip_step=True",
         ],
         num_gpus=2,
     )
@@ -469,11 +468,11 @@ def test_load_pretrained_huggingface_in_dp2():
         f"test_{TEST_MODEL}_load_pretrained_huggingface_in_dp2",
         CONFIG_COMMON
         + [
-            "--checkpoint_interval=1",
-            "--train_iters=1",
-            f"--pretrained_checkpoint_path={_CONVERT_PATH / 'huggingface_0'}",
-            f"--pretrained_checkpoint_type=huggingface",
-            "--skip_step=1",
+            "run.checkpoint_interval=1",
+            "training.train_iters=1",
+            f"pretrained.pretrained_checkpoint_path={_CONVERT_PATH / 'huggingface_0'}",
+            f"pretrained.pretrained_checkpoint_type=huggingface",
+            "schedule.skip_step=True",
         ],
         num_gpus=2,
     )

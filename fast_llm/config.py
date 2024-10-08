@@ -278,6 +278,7 @@ class Config:
     __class_validated__: typing.ClassVar[bool] = True
     _abstract: typing.ClassVar[bool] = False
     _validated: bool = Field(init=False)
+    _unknown_fields: tuple = Field(init=False)
 
     def __post_init__(self):
         """
@@ -327,7 +328,7 @@ class Config:
                 if not valid:
                     raise ValidationError(f"Invalid type `{type(value)}` (expected `{field.type}`)")
             except ValidationError as e:
-                errors.append(f"Validation failed for field `{name}` in class {self.__class__.__name__}:)")
+                errors.append(f"Validation failed for field `{name}` in class {self.__class__.__name__}:")
                 errors.extend(["  " + arg for arg in e.args])
             except Exception as e:
                 errors.append(
@@ -336,7 +337,8 @@ class Config:
                     + traceback.format_exc()
                     + "===========================================================\n"
                 )
-
+        for name in getattr(self, "_unknown_fields", ()):
+            errors.append(f"Unknown field `{name}` in class {self.__class__.__name__}")
         if errors:
             # TODO: Option to show traceback for errors.
             raise ValidationError(*errors)
@@ -652,22 +654,12 @@ class Config:
                         out_arg_dict[name] = field.type._from_dict(default.pop(name, {}), strict)
             elif name in default:
                 out_arg_dict[name] = default.pop(name)
-        if strict and default:
-            raise ValueError(cls, list(default))
         out = cls(**out_arg_dict)  # noqa
+        if strict and default:
+            out._unknown_fields = tuple(default)
         if _AUTO_VALIDATE:
             out.validate()
         return out
-
-    @classmethod
-    def from_flat_args(cls, args: list[str] | None = None):
-        """
-        TODO v0.2: Remove flat format
-        Make an argument parser for the config and its sub-configs,
-        parse the provided args (or `sys.argv`),
-        and create a config from the resulting namespace.
-        """
-        return cls.from_flat_dict(cls._to_argparse(argparse.ArgumentParser()).parse_args(args).__dict__.copy())
 
     def compare(self, other: "Config", log_fn: typing.Union[BaseException, typing.Callable] = ValueError):
         # TODO: Check classes?
