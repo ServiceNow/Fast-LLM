@@ -5,6 +5,7 @@ import shlex
 import sys
 import typing
 import urllib.parse
+import warnings
 
 import requests
 import yaml
@@ -45,11 +46,9 @@ class RunnableConfig(Config):
             help="Validate the config without running the command.",
         )
         parser.add_argument(
-            # TODO: remove --config_url once changed in fml-ops
             "-c",
             "--config",
-            "--config_url",
-            help="The configuration file or url.",
+            help="The path or url to the base configuration yaml file.",
         )
         parser.add_argument(
             "--verbose", type=int, help="Verbose level for logging the config.", default=FieldVerboseLevel.core
@@ -59,12 +58,35 @@ class RunnableConfig(Config):
             type=pathlib.Path,
             help="Path to a file containing a (Github) authentication token.",
         )
+        parser.add_argument(
+            "--hydra",
+            action="store_true",
+            help="Enable the hydra syntax for configuration updates."
+            " Note: this will only enable the update syntax for the command line arguments."
+            " See the other Hydra options for enabling more optional features.",
+        )
+        parser.add_argument(
+            "--hydra-path",
+            type=pathlib.Path,
+            help="The hydra configuration path in which to loop for updates relative to the current working directory."
+            " Setting this will implicitly enable --hydra.",
+        )
+        parser.add_argument(
+            "--hydra-config",
+            help="The name of the hydra base configuration as would be provided in a typical Hydra application."
+            " Mutually exclusive with `--config`, which it replaces."
+            " Requires --hydra-path to be set.",
+        )
         return parser
 
     @classmethod
     def _from_parsed_args(cls, parsed: argparse.Namespace, unparsed: list[str]):
-        default = cls._load_default_config_dict(parsed)
-        updates = cls._parse_updates(unparsed)
+        if parsed.hydra or parsed.hydra_path is not None or parsed.hydra_config is not None:
+            default = cls._load_hydra(parsed, unparsed)
+            updates = {}
+        else:
+            default = cls._load_default_config_dict(parsed)
+            updates = cls._parse_updates(unparsed)
         return cls.from_dict(default, updates)
 
     def configure_logging(self):
@@ -87,6 +109,32 @@ class RunnableConfig(Config):
     ):
         log_fn(f"Command run:\n{shlex.join(sys.argv)}")
         self.to_logs(verbose=verbose, log_fn=log_fn, title=title, width=width, fill_char=fill_char)
+
+    @classmethod
+    def _load_hydra(cls, parsed: argparse.Namespace, unparsed: list[str]):
+        warnings.warn("Hydra support is experimental and may be modified or removed in the future")
+        import hydra.core.config_store
+        import omegaconf
+
+        default = cls._load_default_config_dict(parsed)
+        # Hydra expects a path relative to the application path but that doesn't make sense here.
+        config_path = (
+            None
+            if parsed.hydra_path is None
+            else str(parsed.hydra_path.resolve().relative_to(pathlib.Path(__file__).parent.resolve(), walk_up=True))
+        )
+        with hydra.initialize(version_base=None, config_path=config_path):
+            if default:
+                assert parsed.hydra_config is None
+                cs = hydra.core.config_store.ConfigStore.instance()
+                cs.store(name="__fast_llm__default__", node=omegaconf.DictConfig(default))
+                default = "__fast_llm__default__"
+            else:
+                default = parsed.hydra_config
+                if default is not None:
+                    assert config_path is not None
+            cfg = hydra.compose(config_name=default, overrides=unparsed)
+            return omegaconf.OmegaConf.to_object(cfg)
 
     @classmethod
     def _load_default_config_dict(cls, parsed: argparse.Namespace):
