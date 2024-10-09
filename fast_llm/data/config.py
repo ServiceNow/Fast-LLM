@@ -10,6 +10,7 @@ class DatasetType(str, enum.Enum):
     """
 
     gpt = "gpt"
+    stardoc = "stardoc"
 
 
 class DatasetSource(str, enum.Enum):
@@ -23,6 +24,7 @@ class DatasetSource(str, enum.Enum):
     file = "file"
     sample = "sample"
     random = "random"
+    multimodal = "multimodal"
 
 
 class MultiprocessingContext(str, enum.Enum):
@@ -110,7 +112,7 @@ class FimConfig(Config):
 
 EOD = "<|endoftext|>"
 TokenizerFromFile = "TokenizerFromFile"
-
+PreTrainedTokenizer = "PreTrainedTokenzier"
 
 @config_class()
 class TokenizerConfig(Config):
@@ -123,13 +125,39 @@ class TokenizerConfig(Config):
         default="TokenizerFromFile",
         desc="Unused.",
         hint=FieldHint.deprecated,
-        valid=check_field(Assert.eq, TokenizerFromFile),
     )
     tokenizer_file: str | None = Field(
         default=None,
         desc="Path to the tokenizer file.",
         hint=FieldHint.core,
     )
+    tokenizer_path: str | None = Field(
+        default=None, 
+        desc="Path to pretrained tokenizer",
+        hint=FieldHint.core,
+    )
+    # max_seq_length: int | None = Field(
+    #     default=8192,
+    #     desc="Max. sequence length",
+    #     hint=FieldHint.core,
+    # )
+
+    # def build_tokenizer(self, max_sequence_length=8192):
+    #     self.validate()
+    #     """Initialize tokenizer."""
+    #     log_main_rank(f"> building {self.tokenizer_type}, {self.tokenizer_type or self.tokenizer_file} tokenizer ...")
+
+    #     # Select and instantiate the tokenizer.
+    #     if self.tokenizer_type == "TokenizerFromFile":
+    #         assert self.tokenizer_file is not None
+    #         tokenizer = Tokenizer(self.tokenizer_file, special_tokens=[EOD])
+    #     elif self.tokenizer_type == "PreTrainedTokenizer":
+    #         assert self.tokenizer_path is not None
+    #         tokenizer = HuggingfacePreTrainedTokenizer(self.tokenizer_path, max_seq_length=max_sequence_length)
+    #     else:
+    #         raise NotImplementedError(f"{self.tokenizer_type} tokenizer is not implemented.")
+
+    #     return tokenizer
 
 
 @config_class()

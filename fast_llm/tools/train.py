@@ -4,6 +4,7 @@ import urllib.parse
 
 import requests
 import yaml
+import sys
 
 from fast_llm.config import NoAutoValidate
 from fast_llm.engine.training.config import TrainerConfig
@@ -116,4 +117,4 @@ def train(args=None):
 
 
 if __name__ == "__main__":
-    train()
+    train(sys.argv[1:])

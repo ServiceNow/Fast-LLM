@@ -4,6 +4,7 @@ from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
 from fast_llm.engine.distributed.config import DistributedDimNames
 from fast_llm.functional.config import CrossEntropyImpl
 from fast_llm.layers.transformer.config import TransformerArchitectureConfig, TransformerConfig
+from fast_llm.layers.multimodal_model.config import MultimodalModelArchitectureConfig, MultimodalModelBaseConfig
 from fast_llm.utils import Assert
 
 
@@ -26,6 +27,7 @@ class LanguageModelKwargs:
     # TODO: These are generic
     labels = "labels"
     phase = "phase"
+    tokens = "tokens"
 
 
 @config_class()
@@ -33,6 +35,11 @@ class LanguageModelArchitectureConfig(BaseModelArchitectureConfig):
     transformer: TransformerArchitectureConfig = Field(
         default_factory=TransformerArchitectureConfig,
         desc="Configuration for the transformer architecture.",
+        hint=FieldHint.core,
+    )
+    multimodal_model: MultimodalModelArchitectureConfig = Field(
+        default_factory=MultimodalModelArchitectureConfig,
+        desc="Configuration for the multimodal components (image encoder and adapter).",
         hint=FieldHint.core,
     )
     max_position_embeddings: int = Field(
@@ -63,6 +70,7 @@ class LanguageModelArchitectureConfig(BaseModelArchitectureConfig):
 
     def setup_tensor_space(self, tensor_space: TensorSpace):
         self.transformer.setup_tensor_space(tensor_space)
+        self.multimodal_model.setup_tensor_space(tensor_space)
         tensor = tensor_space.distributed_config.get_distributed_dim(DistributedDimNames.tensor)
 
         # Embedding dimensions
@@ -97,6 +105,11 @@ class LanguageModelBaseConfig(LanguageModelArchitectureConfig, BaseModelConfig):
 
     transformer: TransformerConfig = Field(
         default_factory=TransformerConfig, desc="Configuration for the transformer.", hint=FieldHint.core
+    )
+    multimodal_model: MultimodalModelBaseConfig = Field(
+        default_factory=MultimodalModelBaseConfig,
+        desc="Configuration for the multimodal components (image encoder and adapter).",
+        hint=FieldHint.core,
     )
     init_method_std_embed: float = Field(
         default=None,

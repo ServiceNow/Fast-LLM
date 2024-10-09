@@ -10,9 +10,14 @@ from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
 from fast_llm.engine.schedule.config import BatchConfig
 from fast_llm.layers.language_model.config import LanguageModelKwargs, LanguageModelLossNames
+from fast_llm.layers.multimodal_model.config import MultimodalModelDimNames, MultimodalModelKwargs
 from fast_llm.layers.language_model.embedding import WORD_EMBEDDINGS_WEIGHT, LanguageModelEmbedding
 from fast_llm.layers.language_model.head import LanguageModelHead
 from fast_llm.layers.language_model.preprocessing import PositionEmbeddingPreprocessor
+from fast_llm.layers.multimodal_model.multimodal_language_embedding import MultiModalLanguageModelEmbedding
+from fast_llm.layers.multimodal_model.image_encoder import ImageEncoder
+from fast_llm.layers.multimodal_model.adapter import Adapter
+
 from fast_llm.layers.transformer.config import (
     RoutingType,
     TransformerDimNames,
@@ -21,27 +26,26 @@ from fast_llm.layers.transformer.config import (
 )
 from fast_llm.layers.transformer.preprocessing import BackupAttentionPreprocessor, RotaryEmbeddingPreprocessor
 from fast_llm.layers.transformer.transformer import TransformerLayer
-from fast_llm.models.gpt.config import GPTBaseModelConfig, GPTModelConfig
-from fast_llm.models.gpt.megatron import get_init_megatron
+from fast_llm.models.stardoc.config import StarDocBaseModelConfig, StarDocModelConfig
 from fast_llm.tensor import ParameterMeta, TensorMeta
 from fast_llm.utils import Assert, div
 
 logger = logging.getLogger(__name__)
 
 
-class GPTBaseModel(BaseModel):
+class StarDocBaseModel(BaseModel):
     """
-    A transformer-based language model generalizing the GPT model architecture.
+    A transformer-based language model generalizing the StarDoc model architecture.
     """
 
     _is_setup: bool = False
-    _config: GPTBaseModelConfig
+    _config: StarDocBaseModelConfig
     _rotary_embedding_frequencies: torch.Tensor
     _position_ids: torch.Tensor
     _mask: torch.Tensor
     _mask_value: torch.Tensor
     _tensor_cache_max_sequence_length: int = -1
-    config_cls = GPTBaseModelConfig
+    config_cls = StarDocBaseModelConfig
 
     def __init__(
         self,
@@ -50,10 +54,6 @@ class GPTBaseModel(BaseModel):
     ):
         super().__init__(config, distributed_config)
         self._use_flash_attention = self._config.transformer.do_use_flash_attention(distributed_config)
-        if self._config.use_megatron_initialization:
-            for param in self.parameters():
-                Assert.custom(isinstance, param, ParameterMeta)
-                param.init_parameter = get_init_megatron(param, self._config.transformer)  # Noqa
         if self._config.use_absolute_position_embeddings:
             self._position_embedding_preprocessor = PositionEmbeddingPreprocessor(self._config, self._tensor_space)
         if self._config.transformer.use_rotary_position_embeddings:
@@ -67,7 +67,9 @@ class GPTBaseModel(BaseModel):
 
     def get_layers(self):
         return [
-            LanguageModelEmbedding(self._config, self._tensor_space),
+            ImageEncoder(self._config, self._tensor_space),
+            Adapter(self._config, self._tensor_space),
+            MultiModalLanguageModelEmbedding(self._config, self._tensor_space),
             *[
                 TransformerLayer(
                     self._config.transformer,
@@ -99,6 +101,8 @@ class GPTBaseModel(BaseModel):
                 sequence_length -= 1
             micro_sequence_length = sequence_length
         
+        print(f'Sequence length for meta {sequence_length}')
+
         batch_data = self._tensor_space.distributed_config.get_distributed_dim(DistributedDimNames.batch_data)
         batch_dim = TensorDim(TransformerDimNames.batch, micro_batch_size * batch_data.size, batch_data)
 
@@ -143,13 +147,31 @@ class GPTBaseModel(BaseModel):
             else (batch_dim, hidden_sequence_q_dim, hidden_dim)
         )
 
+        max_num_images = self._tensor_space.get_tensor_dim(MultimodalModelDimNames.max_num_images)
+        image_pixel_count = self._tensor_space.get_tensor_dim(MultimodalModelDimNames.image_pixel_count)
+        num_image_tokens = self._tensor_space.get_tensor_dim(MultimodalModelDimNames.num_image_tokens)
+        image_encoder_hidden_size = self._tensor_space.get_tensor_dim(MultimodalModelDimNames.image_encoder_hidden_size)
+
+        image_encoder_hidden_dims = (
+            (batch_dim, max_num_images, num_image_tokens, image_encoder_hidden_size)
+        )
+        adapter_hidden_dims = (
+            (batch_dim, max_num_images, num_image_tokens, hidden_dim)
+        )
+
         common_kwargs = {
             LanguageModelKwargs.phase: phase,
             TransformerKwargs.sequence_first: sequence_first,
             TransformerKwargs.hidden_dims: hidden_dims,
             TransformerKwargs.sequence_length: sequence_length,
             TransformerKwargs.sequence_q_dim: sequence_q_dim,
+            MultimodalModelKwargs.image_encoder_hidden_dims: image_encoder_hidden_dims,
+            MultimodalModelKwargs.adapter_hidden_dims: adapter_hidden_dims,
         }
+
+        # For stardoc, since image tokens and text tokens need to be merged, sequence parallel is complicated
+        Assert.eq(micro_sequence_length, sequence_length)
+        Assert.eq(local_micro_sequence_length, sequence_length)
 
         preprocessed_meta = []
         for sequence_k_past in range(
@@ -164,8 +186,19 @@ class GPTBaseModel(BaseModel):
                 hidden_dims[:2], tensor_name=f"tokens_{sequence_k_past}_to_{sequence_k-1}", dtype=torch.int64
             )
 
+            image_data = TensorMeta.from_dims(
+                (
+                    batch_dim,
+                    max_num_images,
+                    image_pixel_count,
+                ),
+                tensor_name="image_data",
+                dtype=torch.float32,
+            )
+
             kwargs = {
                 **common_kwargs,
+                LanguageModelKwargs.tokens: tokens,
                 TransformerKwargs.sequence_k_dim: sequence_k_dim,
             }
             if phase != PhaseType.inference:
@@ -178,13 +211,13 @@ class GPTBaseModel(BaseModel):
                 self._rotary_embedding_preprocessor.preprocess_meta(kwargs)
             if not self._use_flash_attention:
                 self._backup_attention_preprocessor.preprocess_meta(kwargs)
-            preprocessed_meta.append((tokens, kwargs))
+            preprocessed_meta.append((image_data, kwargs))
 
         return preprocessed_meta
 
     def preprocess(
         self,
-        batch: torch.Tensor,
+        batch: dict,
         preprocessed_meta: list[tuple[TensorMeta, dict]] | None = None,
         *,
         phase: PhaseType,
@@ -202,14 +235,26 @@ class GPTBaseModel(BaseModel):
         sequence_first = common_kwargs[TransformerKwargs.sequence_first]
         sequence_length = common_kwargs[TransformerKwargs.sequence_length]
 
-        batch = batch.to(
+        tokens = batch["input_ids"]
+        labels = batch["labels"]
+        image_data = batch["images"]
+
+        # Move input_ids, labels and images to device
+        tokens = tokens.to(
             device=self._tensor_space.distributed.device,
             dtype=torch.int64,
             non_blocking=True,
-        )
-        if sequence_first:
-            # Move the sequence dimension first to make sequence parallel ops more efficient.
-            batch = batch.transpose(0, 1).contiguous()
+        ).contiguous()
+        labels = labels.to(
+            device=self._tensor_space.distributed.device,
+            dtype=torch.int64,
+            non_blocking=True,
+        ).contiguous()
+        image_data = image_data.to(
+            device=self._tensor_space.distributed.device,
+            dtype=torch.float32,
+            non_blocking=True,
+        ).contiguous()
 
         if self._config.use_absolute_position_embeddings:
             self._position_embedding_preprocessor.create_tensors(sequence_length)
@@ -218,39 +263,35 @@ class GPTBaseModel(BaseModel):
         if not self._use_flash_attention:
             self._backup_attention_preprocessor.create_tensors(sequence_length)
 
+        # TODO: Pasts and presents for inference?
         preprocessed = []
         presents = None
         for tokens_meta, kwargs_meta in preprocessed_meta:
             sequence_k = kwargs_meta[TransformerKwargs.sequence_k_dim].size
-            if sequence_first:
-                tokens = batch[sequence_k - sequence_q : sequence_k]
-            else:
-                # TODO: Avoid multiple contiguous calls?
-                tokens = batch[:, sequence_k - sequence_q : sequence_k].contiguous()
+            tokens = tokens[:, sequence_k - sequence_q : sequence_k].contiguous()
+            print(f'Tokens sequence_k: {sequence_k} sequence_q: {sequence_q} shape: {tokens.shape}')
 
-            # TODO: Add pasts/presents to meta input?
-            # Use lists as pointers so `past_key_values` is populated during the previous micro_sequence.
             pasts = presents
             presents = None if sequence_k == sequence_length else []
             kwargs = {
                 **kwargs_meta,
+                LanguageModelKwargs.tokens: tokens,
                 TransformerKwargs.past_key_values: pasts,
                 TransformerKwargs.presents: presents,
+
             }
             if phase != PhaseType.inference:
-                if sequence_first:
-                    labels = batch[sequence_k - sequence_q + 1 : sequence_k + 1]
-                else:
-                    # TODO: Avoid multiple contiguous calls?
-                    labels = batch[:, sequence_k - sequence_q + 1 : sequence_k + 1].contiguous()
+                labels = labels[:, sequence_k - sequence_q + 1 : sequence_k + 1].contiguous()
+                print(f'Labels sequence_k: {sequence_k} sequence_q: {sequence_q} shape: {labels.shape}')
                 kwargs[LanguageModelKwargs.labels] = labels
+
             if self._config.use_absolute_position_embeddings:
                 self._position_embedding_preprocessor.preprocess(kwargs)
             if self._config.transformer.use_rotary_position_embeddings:
                 self._rotary_embedding_preprocessor.preprocess(kwargs)
             if not self._use_flash_attention:
                 self._backup_attention_preprocessor.preprocess(kwargs)
-            preprocessed.append((tokens, kwargs))
+            preprocessed.append((image_data, kwargs))
 
         return preprocessed
 
@@ -302,6 +343,6 @@ class GPTBaseModel(BaseModel):
         return loss_defs
 
 
-class GPTModel(FastLLMModel):
-    config_class = GPTModelConfig
-    base_model_class = GPTBaseModel
+class StarDocModel(FastLLMModel):
+    config_class = StarDocModelConfig
+    base_model_class = StarDocBaseModel

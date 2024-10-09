@@ -1,17 +1,19 @@
-# Required or optional environment variables
-# export PROJECT_DIR=
-# export PROJECT_NAME=
-# export PROJECT_VERSION=
-# export DATA_PATH_LIST=
-# export DATA_PATH_JSON=
-# export PRETRAINED_MISTRAL_PATH=
-# export PRETRAINED_MIXTRAL_PATH=
+#!/bin/bash
+
+export PROJECT_DIR="/mnt/akshay/stardoc-FastLLM/Fast-LLM/output"
+export PROJECT_NAME="stardoc_debug"
+export PROJECT_VERSION="1.0"
+export RUN_NAME="debug"
+
+export DATA_PATH="/mnt/stardoc/datasets/save_hf/BigDoc-MultiTurn-v0.13"
+export PRETRAINED_STARDOC_PATH="/mnt/akshay/stardoc-FastLLM/Fast-LLM/stardoc_hf_model/stardoc_checkpoint"
+export TOKENIZER_PATH="/mnt/core_llm/models/mistral/HF/Mistral-7B-v0.3"
 
 export CMD_ARGS="fast-llm train gpt"
 
 export MODEL_ARGS_PRETRAINED="\
 --pretrained_checkpoint_type=huggingface \
---pretrained_checkpoint_path=$PRETRAINED_MISTRAL_PATH \
+--pretrained_checkpoint_path=$PRETRAINED_STARDOC_PATH \
 --use_pretrained_config=1 \
 "
 
@@ -30,23 +32,19 @@ export MODEL_ARGS_ARCHITECTURE="\
 --activation_type=silu \
 --normalization_type=rms_norm \
 --tie_word_embeddings=0 \
---window_size=4096 \
+--window_size=8192 \
 "
 
-export DATA_ARGS_JSON="\
+export DATA_ARGS="\
 --split=9998,2,0 \
---dataset_source=file \
---data_path=$DATA_PATH_JSON \
-"
-
-export DATA_ARGS_LIST="\
---split=9998,2,0 \
---dataset_source=list \
---data_path=$DATA_PATH_DATA_ARGS_LIST \
+--dataset_source=multimodal \
+--data_path=$DATA_PATH \
+--tokenizer_type=PreTrainedTokenizer \
+--tokenizer_path=$TOKENIZER_PATH \
 "
 
 export TRAINING_ARGS="\
---batch_size=128 \
+--batch_size=8 \
 --sequence_length=8192 \
 --train_iters=500000 \
 --weight_decay=0.1 \
@@ -61,7 +59,7 @@ export TRAINING_ARGS="\
 "
 
 export PERFORMANCE_ARGS="\
---micro_batch_size=4 \
+--micro_batch_size=1 \
 --training_dtype=bf16 \
 --zero_stage=2 \
 --num_workers=8 \
@@ -84,22 +82,10 @@ export MONITORING_ARGS="\
 export ALL_ARGS="\
 $CMD_ARGS \
 $MODEL_ARGS_PRETRAINED \
-$DATA_ARGS_LIST \
+$DATA_ARGS \
 $TRAINING_ARGS \
 $PERFORMANCE_ARGS \
 $MONITORING_ARGS \
-"
-
-export MODEL_ARGS_MIXTRAL_ARCHITECTURE="\
-$MODEL_ARGS_ARCHITECTURE \
---num_experts=8 \
---num_experts_per_token=2 \
-"
-
-export MIXTRAL_ARGS="\
---pretrained_checkpoint_path=$PRETRAINED_MIXTRAL_PATH \
---zero_stage=3 \
---mlp_recompute_level=activation \
 "
 
 export PROFILE_ARGS="\
@@ -110,19 +96,3 @@ export PROFILE_ARGS="\
 --profile_cycles=3 \
 --profile_export=1 \
 "
-
-
-run_local () { # run(name, num_gpus, base_cmd)
-  echo $1 $2 $3
-  export TORCHRUN="torchrun --nproc-per-node=$2 --nnodes=1 --no-python"
-  $TORCHRUN $3 --experiment_dir=$PROJECT_DIR/$PROJECT_NAME_$PROJECT_VERSION/$1
-}
-
-run_c10d () { # run(name, num_nodes, base_cmd)
-  echo $1 $2 $3
-  export TORCHRUN="torchrun --nproc-per-node=8 --nnodes=$2 --no-python --rdzv-backend=c10d --rdzv-endpoint=$HOST_NODE_ADDR"
-  $TORCHRUN $3 --experiment_dir=$PROJECT_DIR/$PROJECT_NAME_$PROJECT_VERSION/$1
-}
-
-run_c10d mistral_example 16 "$ALL_ARGS"
-# run_c10d mixtral_example 16 "$ALL_ARGS $MIXTRAL_ARGS --train_iters=50"

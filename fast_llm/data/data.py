@@ -9,11 +9,12 @@ import numpy as np
 import torch
 import torch.utils.data
 
-from fast_llm.data.config import DataConfig, DatasetSource, DatasetType
+from fast_llm.data.config import DataConfig, DatasetSource, DatasetType, EOD
 from fast_llm.data.dataset import BlendedDataset, SampledDataset, Sampler
 from fast_llm.data.gpt import DummyGPTDataset, GPTDataset, GPTSampledDataset
+from fast_llm.data.stardoc import StarDocDataset
 from fast_llm.data.mmap import MMapIndexedDataset
-from fast_llm.data.tokenizer import Tokenizer
+from fast_llm.data.tokenizer import Tokenizer, HuggingfacePreTrainedTokenizer
 from fast_llm.engine.distributed.config import DistributedConfig, PhaseType
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.engine.run.run import get_dataset_cache_dir, is_main_rank, log_main_rank
@@ -86,6 +87,12 @@ class Data:
                 assert len(dataset_prefixes) == len(set(dataset_prefixes))
                 dataset_weights = normalize_probs([float(x) for x in self._config.data_path[::2]])
             self._build_and_sample_dataset = self._build_and_sample_gpt_dataset
+        elif self._config.dataset_source == DatasetSource.multimodal:
+            # FastLLM Split logic is overriden. Huggingface dataset defines the split
+            Assert.eq(len(self._config.data_path), 1)
+            Assert.eq(self._config.dataset_type, DatasetType.stardoc)
+            dataset_prefixes, dataset_weights = [None], [1.0]
+            self._build_and_sample_dataset = self._build_and_sample_stardoc_dataset
         elif self._config.dataset_source == DatasetSource.sample:
             Assert.eq(len(self._config.data_path), 1)
             dataset_prefixes, dataset_weights = [self._config.data_path[0].strip()], [1.0]
@@ -115,6 +122,23 @@ class Data:
             for name, prefix in zip(dataset_names, dataset_prefixes)
         }
         self._dataset_weights = {name: weight for name, weight in zip(dataset_names, dataset_weights)}
+    
+    def build_tokenizer(self, max_sequence_length):
+        """Initialize tokenizer."""
+        log_main_rank(f"> building {self._config.tokenizer.tokenizer_type}, {self._config.tokenizer.tokenizer_type or self._config.tokenizer.tokenizer_file} tokenizer ...")
+
+        # Select and instantiate the tokenizer.
+        if self._config.tokenizer.tokenizer_type == "TokenizerFromFile":
+            assert self._config.tokenizer.tokenizer_file is not None
+            tokenizer = Tokenizer(self._config.tokenizer)
+        elif self._config.tokenizer.tokenizer_type == "PreTrainedTokenizer":
+            assert self._config.tokenizer.tokenizer_path is not None
+            tokenizer = HuggingfacePreTrainedTokenizer(self._config.tokenizer, max_sequence_length=max_sequence_length)
+        else:
+            raise NotImplementedError(f"{self.config.tokenizer.tokenizer_type} tokenizer is not implemented.")
+
+        return tokenizer
+
 
     def setup(self, distributed: Distributed, samples_per_phase: dict[PhaseType, int]):
         """
@@ -123,7 +147,7 @@ class Data:
         """
         Assert.leq(set(samples_per_phase), set(self._phase_split))
         log_main_rank(f"Preparing {self._num_datasets} datasets. This may take several minutes.")
-        self._tokenizer = Tokenizer(self._config.tokenizer) if self._config.fim.fim_rate > 0 else None
+        self._tokenizer = self.build_tokenizer(self._max_sequence_length) if (self._config.fim.fim_rate > 0 or self._config.dataset_type == DatasetType.stardoc) else None        
         self._distributed = distributed
         self._cache_dir = get_dataset_cache_dir()
         self._samples_per_phase = samples_per_phase
@@ -228,3 +252,29 @@ class Data:
             )
             for phase in dataset_samples_per_phase
         }
+
+    def _build_and_sample_stardoc_dataset(self, name: str, dataset_samples_per_phase: dict[PhaseType, int]):
+        #TODO: Only training split implemented for now
+        sampled_dataset = {}
+        sampled_dataset[PhaseType.training] = StarDocDataset(
+            im_size=224,
+            num_samples=-1,
+            num_im_tokens=256,
+            transforms=False,
+            multi_imgs=True,
+            split="train",
+            tokenizer=self._tokenizer,
+            config=self._config,
+        )
+        sampled_dataset[PhaseType.validation] = StarDocDataset(
+            im_size=224,
+            num_samples=-1,
+            num_im_tokens=256,
+            transforms=False,
+            multi_imgs=True,
+            split="val",
+            tokenizer=self._tokenizer,
+            config=self._config,
+        )
+
+        return sampled_dataset
