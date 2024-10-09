@@ -339,9 +339,12 @@ class Trainer:
                     self._save_checkpoint(
                         metrics,
                         export=self._config.run.export_interval
-                        and (self._completed_steps - self._config.run.checkpoint_offset)
-                        % self._config.run.export_interval
-                        == 0,
+                        and (
+                            done
+                            or (self._completed_steps - self._config.run.checkpoint_offset)
+                            % self._config.run.export_interval
+                            == 0
+                        ),
                     )
 
         return done, metrics
