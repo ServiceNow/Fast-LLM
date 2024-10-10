@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1.7-labs
 FROM nvcr.io/nvidia/pytorch:24.07-py3
 
 # Install git-lfs for Huggingface hub interaction and sudo for system adjustments
@@ -29,10 +30,9 @@ COPY --chown=fast_llm ./tests tests
 COPY --chown=fast_llm ./tools tools
 
 # Compile the C++ extensions (fast_llm/csrc)
-COPY --chown=fast_llm fast_llm/csrc/ ./fast_llm/csrc/
+COPY --chown=fast_llm ./fast_llm/csrc/ fast_llm/csrc/
 RUN make -C ./fast_llm/csrc/
 
 # Copy the main source code for Fast-LLM and install in editable mode
-COPY --chown=fast_llm ./fast_llm/ ./fast_llm/ \
-     --exclude ./fast_llm/csrc/
+COPY --exclude=./fast_llm/csrc/ --chown=fast_llm ./fast_llm/ fast_llm/
 RUN PIP_NO_INPUT=1 pip3 install --no-deps -e .
