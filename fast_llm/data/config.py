@@ -1,7 +1,14 @@
+import abc
 import enum
+import typing
 
 from fast_llm.config import Config, Field, FieldHint, check_field, config_class, skip_valid_if_none
+from fast_llm.engine.distributed.config import PhaseType
+from fast_llm.engine.schedule.config import BatchConfig
 from fast_llm.utils import Assert
+
+if typing.TYPE_CHECKING:
+    from fast_llm.engine.distributed.distributed import Distributed
 
 
 class DatasetType(str, enum.Enum):
@@ -124,12 +131,38 @@ class TokenizerConfig(Config):
 
 
 @config_class()
-class DataConfig(Config):
+class AbstractDataConfig(Config):
+    _abstract = True
+
+
+class AbstractData(abc.ABC):
+    # TODO: Improve interface
+    @abc.abstractmethod
+    def setup(self, distributed: "Distributed", samples_per_phase: dict[PhaseType, int]):
+        pass
+
+    @abc.abstractmethod
+    def get_iterator(
+        self,
+        batch_config: BatchConfig,
+        phase: PhaseType,
+        *,
+        consumed_samples: int,
+        num_workers: int,
+        prefetch_factor: int | None = None,
+    ):
+        pass
+
+
+@config_class()
+class DataConfig(AbstractDataConfig):
     """
     Configuration for the dataset(s), split and sampling.
     Currently hard-coded to a GPT dataset.
-    TODO: Separate generic and GPT classes.
+    TODO: Extract generalizable content.
     """
+
+    _abstract = False
 
     __argparse_map__ = {
         "data_path": {"nargs": "+"},

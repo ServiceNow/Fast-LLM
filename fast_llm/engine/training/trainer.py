@@ -11,6 +11,7 @@ import typing
 import torch
 
 from fast_llm.core.distributed import safe_barrier
+from fast_llm.data.config import AbstractData
 from fast_llm.data.data import Data
 from fast_llm.engine.config_utils.run import Run, is_main_rank, log_main_rank, log_pipeline_parallel_main_rank
 from fast_llm.engine.distributed.config import PhaseType
@@ -28,7 +29,7 @@ from fast_llm.utils import Assert
 logger = logging.getLogger(__name__)
 
 
-class Trainer:
+class Trainer(abc.ABC):
     config_class: typing.ClassVar[type[TrainerConfig]] = TrainerConfig
     model_class: typing.ClassVar[type[FastLLMModel]] = FastLLMModel
     # TODO: Generalize data, schedule, logging, etc.
@@ -42,13 +43,7 @@ class Trainer:
         Assert.custom(isinstance, config, self.config_class)
         config.validate()
         self._config = config
-        self._data = Data(
-            config=self._config.data,
-            distributed_config=self._config.distributed,
-            # TODO: `vocab_size` is not generic.
-            vocab_size=self._config.base_model.vocab_size,  # Noqa
-            max_sequence_length=self._config.batch.sequence_length,
-        )
+        self._data = self._get_data()
         log_main_rank("Creating model...")
         self._multi_stage = self.model_class(
             self._config.model,
@@ -110,6 +105,16 @@ class Trainer:
         # Setup the datasets.
         log_main_rank("Preparing datasets...")
         self._data.setup(distributed, self._samples_per_split)
+
+    @abc.abstractmethod
+    def _get_data(self) -> AbstractData:
+        return Data(
+            config=self._config.data,
+            distributed_config=self._config.distributed,
+            # TODO: `vocab_size` is not generic.
+            vocab_size=self._config.base_model.vocab_size,  # Noqa
+            max_sequence_length=self._config.batch.sequence_length,
+        )
 
     @property
     def _consumed_samples(self):

@@ -9,7 +9,7 @@ import numpy as np
 import torch
 import torch.utils.data
 
-from fast_llm.data.config import DataConfig, DatasetSource, DatasetType
+from fast_llm.data.config import AbstractData, DataConfig, DatasetSource, DatasetType
 from fast_llm.data.dataset import BlendedDataset, SampledDataset, Sampler
 from fast_llm.data.gpt import DummyGPTDataset, GPTDataset, GPTSampledDataset
 from fast_llm.data.mmap import MMapIndexedDataset
@@ -31,7 +31,7 @@ def normalize_probs(p: list[float]) -> list[float]:
     return (p / p_sum).tolist()
 
 
-class Data:
+class Data(AbstractData):
     """
     A global class for all dataset needs, including loading, splitting, sampling and iteration.
     Currently hard-coded to a GPT dataset.

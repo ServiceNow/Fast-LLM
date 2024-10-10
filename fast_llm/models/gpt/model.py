@@ -3,7 +3,6 @@ import logging
 import torch
 
 from fast_llm.engine.base_model.base_model import BaseModel, LossDef
-from fast_llm.engine.base_model.config import BaseModelConfig
 from fast_llm.engine.config_utils.tensor_space import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames, PhaseType
 from fast_llm.engine.distributed.distributed import Distributed
@@ -45,7 +44,7 @@ class GPTBaseModel(BaseModel):
 
     def __init__(
         self,
-        config: BaseModelConfig,
+        config: GPTBaseModelConfig,
         distributed_config: DistributedConfig,
     ):
         super().__init__(config, distributed_config)

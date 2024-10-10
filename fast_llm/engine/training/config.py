@@ -2,7 +2,7 @@ import argparse
 import typing
 
 from fast_llm.config import Config, Field, FieldHint, check_field, config_class, skip_valid_if_none
-from fast_llm.data.config import DataConfig
+from fast_llm.data.config import AbstractDataConfig
 from fast_llm.engine.config_utils.run import ExperimentConfig
 from fast_llm.engine.multi_stage.config import PretrainedFastLLMModelConfig
 from fast_llm.engine.optimizer.config import OptimizerConfig
@@ -74,8 +74,8 @@ class TrainerConfig(PretrainedFastLLMModelConfig, ExperimentConfig):
     schedule: ScheduleConfig = Field(
         default_factory=ScheduleConfig, desc="Configuration for the scheduling of each iteration.", hint=FieldHint.core
     )
-    data: DataConfig = Field(
-        default_factory=DataConfig,
+    data: AbstractDataConfig = Field(
+        default_factory=AbstractDataConfig,
         desc="Configuration for the dataset and model-independent preprocessing.",
         hint=FieldHint.core,
     )
