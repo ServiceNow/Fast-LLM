@@ -3,7 +3,7 @@ FROM nvcr.io/nvidia/pytorch:24.07-py3
 
 # Install git-lfs for Huggingface hub interaction and sudo for system adjustments
 RUN apt-get update \
-    && apt-get install --no-install-recommends -y git-lfs sudo \
+    && apt-get install --no-install-recommends -y git-lfs sudo util-linux \
     && rm -rf /var/lib/apt/lists/* \
     && git lfs install
 
