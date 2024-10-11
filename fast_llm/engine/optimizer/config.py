@@ -38,9 +38,6 @@ class LearningRateScheduleConfig(Config):
 
 @config_class()
 class OptimizerConfig(Config):
-    __argparse_map__ = {
-        "lr_schedule_offset": None,
-    }
 
     lr_schedule: LearningRateScheduleConfig = Field(
         default_factory=LearningRateScheduleConfig,

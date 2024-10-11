@@ -1,4 +1,3 @@
-import argparse
 import dataclasses
 import enum
 import logging
@@ -10,7 +9,7 @@ import typing
 import yaml
 
 from fast_llm.engine.config_utils.logging import log
-from fast_llm.utils import Assert, Tag, header
+from fast_llm.utils import Assert, Tag, get_type_name, header
 
 logger = logging.getLogger(__name__)
 
@@ -34,20 +33,6 @@ class NoAutoValidate:
     def __exit__(self, exc_type, exc_val, exc_tb):
         global _AUTO_VALIDATE
         _AUTO_VALIDATE = self._old_value
-
-
-def serialize_field(value):
-    if isinstance(value, enum.Enum):
-        value = value.value
-    elif isinstance(value, (list, tuple)):
-        value = [serialize_field(x) for x in value]
-    elif isinstance(value, set):
-        value = list(value)
-    elif isinstance(value, dict):
-        value = {key: serialize_field(value_) for key, value_ in value.items()}
-    elif not isinstance(value, int | float | bool | str | None):
-        value = str(value)
-    return value
 
 
 class _ConfigDictFormat(str, enum.Enum):
@@ -237,6 +222,14 @@ class ValidationError(ValueError):
     pass
 
 
+class NestedValidationError(ValidationError):
+    pass
+
+
+class FieldTypeError(ValueError):
+    pass
+
+
 def _process_config_class(cls: type["Config"]):
     for _, field in cls.fields():
         if field._field_type is dataclasses._FIELD:
@@ -273,12 +266,11 @@ class Config:
     * Add new functionality.
     """
 
-    __argparse_map__: typing.ClassVar[dict] = {}
     # We can't use @config_class on this one because it needs this class to be defined, so we assume this one is OK.
     __class_validated__: typing.ClassVar[bool] = True
     _abstract: typing.ClassVar[bool] = False
-    _validated: bool = Field(init=False)
-    _unknown_fields: tuple = Field(init=False)
+    _validated: bool = Field(init=False, repr=False)
+    _unknown_fields: tuple = Field(init=False, repr=False)
 
     def __post_init__(self):
         """
@@ -290,58 +282,6 @@ class Config:
         self._validated = False
         if _AUTO_VALIDATE:
             self.validate()
-
-    def validate(self, *, _is_validating=False):
-        """
-        Validate a class and mark it as read-only
-        This should not be overridden in derived classes.
-        """
-        if not self._validated:
-            try:
-                self._validate()
-            except ValidationError as e:
-                if _is_validating:
-                    raise
-                else:
-                    raise ValidationError("\n".join(e.args)) from None
-            self._validated = True
-        return self
-
-    def _validate(self):
-        """
-        Verify that the type hints are respected,
-        and fix some know entries compatible with the type hint (ex. `int -> float`, `str -> pathlib.Path`)
-
-        Can be extended to add custom post-processing (typically before the super() call)
-        and validation (typically after)
-        """
-        errors = []
-        for name, field in self.fields():
-            if not field.init or field._field_type == dataclasses._FIELD_CLASSVAR:  # noqa
-                continue
-            value = getattr(self, name)
-            try:
-                new_value = value if field.valid is None else field.valid(value)
-                new_value, valid = self._post_process_field(new_value, field.type, field, errors)
-                if new_value is not value:
-                    setattr(self, name, new_value)
-                if not valid:
-                    raise ValidationError(f"Invalid type `{type(value)}` (expected `{field.type}`)")
-            except ValidationError as e:
-                errors.append(f"Validation failed for field `{name}` in class {self.__class__.__name__}:")
-                errors.extend(["  " + arg for arg in e.args])
-            except Exception as e:
-                errors.append(
-                    f"Validation failed for field `{name}` in class {self.__class__.__name__}: {', '.join(e.args)}"
-                    f"\n\n====================== stack trace ========================\n"
-                    + traceback.format_exc()
-                    + "===========================================================\n"
-                )
-        for name in getattr(self, "_unknown_fields", ()):
-            errors.append(f"Unknown field `{name}` in class {self.__class__.__name__}")
-        if errors:
-            # TODO: Option to show traceback for errors.
-            raise ValidationError(*errors)
 
     def __setattr__(self, key, value):
         """
@@ -364,73 +304,184 @@ class Config:
             raise RuntimeError()
         super().__delattr__(key)
 
+    def validate(self, *, _is_validating=False):
+        """
+        Validate a class and mark it as read-only
+        This should not be overridden in derived classes.
+        """
+        if not self._validated:
+            try:
+                self._validate()
+            except (ValidationError, FieldTypeError) as e:
+                if _is_validating:
+                    raise
+                else:
+                    raise type(e)("\n".join(e.args)) from None
+            self._validated = True
+        return self
+
+    def _validate(self):
+        """
+        Verify that the type hints are respected,
+        and fix some know entries compatible with the type hint (ex. `int -> float`, `str -> pathlib.Path`)
+
+        Can be extended to add custom post-processing (typically before the super() call)
+        and validation (typically after)
+        """
+        errors = []
+        for name, field in self.fields():
+            if not field.init or field._field_type == dataclasses._FIELD_CLASSVAR:  # noqa
+                continue
+            value = getattr(self, name)
+            new_value = self._validate_nested(value, field.type, field.name, field.valid, errors, False)
+            setattr(self, name, new_value)
+        for name in getattr(self, "_unknown_fields", ()):
+            errors.append(f"Unknown field `{name}` in class {self._get_class_name()}")
+        if errors:
+            # TODO: Option to show traceback for errors.
+            raise NestedValidationError(*errors)
+
     @classmethod
-    def _post_process_field(cls, x, type_, field: Field, errors: list[str]):
+    def _validate_nested(cls, value, type_, name: str, valid_fn: typing.Optional[typing.Callable], errors, nested):
+        try:
+            value = value if valid_fn is None else valid_fn(value)
+            value = cls._validate_element(value, type_, name)
+        except FieldTypeError as e:
+            # There is a problem with the config class itself, no point in continuing.
+            raise FieldTypeError(
+                f"Invalid field type `{get_type_name(type_)}` in class {cls._get_class_name()}:",
+                *["  " + arg for arg in e.args],
+            )
+        except ValidationError as e:
+            # This is a known error, `e.args` should have all the required information.
+            message = f"Validation failed for field `{name}`" + (
+                ":" if nested else f" of type `{get_type_name(type_)}` in class {cls._get_class_name()}:"
+            )
+            if len(e.args) > 1 or isinstance(e, NestedValidationError):
+                errors.extend([message] + ["  " + arg for arg in e.args])
+            else:
+                # No need to have the error description on a separate line.
+                errors.append(f"{message} {e.args[0]}")
+        except Exception as e:
+            # This is an unknown error, so we need to provide the stack trace so the user can tell what the problem is.
+            errors.append(
+                f"Validation failed for field `{name}` in class {cls._get_class_name()}: {', '.join(e.args)}"
+                f"\n\n====================== stack trace ========================\n"
+                + traceback.format_exc()
+                + "===========================================================\n"
+            )
+        return value
+
+    @classmethod
+    def _validate_element(cls, value, type_, name: str):
         if type_ is typing.Any:
-            valid = True
+            # TODO: Check if x is or contains a config?
+            pass
         elif type_ is types.NoneType:
-            if x == "":
-                x = None
-            valid = x is None
+            if value == "":
+                value = None
+            if value is not None:
+                raise ValidationError(f"Unexpected type `{get_type_name(type(value))}`")
         elif isinstance(type_, types.UnionType):
             # Takes care of Optional too
-            valid = False
-            if types.NoneType in type_.__args__ and x == "":
-                x = None
-            for subtype in type_.__args__:
-                x_, valid = cls._post_process_field(x, subtype, field, errors)
-                if valid:
-                    x = x_
-                    break
+            value = cls._validate_union(value, type_, name)
         elif hasattr(type_, "__origin__"):
+            # TODO: Improve error messages for nested entries.
             origin = type_.__origin__
-            if origin is typing.Union:
-                raise NotImplementedError(f"Use python 3.10 format instead ({type_})")
-            elif origin in (list, set, tuple):
-                valid = isinstance(x, (origin, list, tuple))
-                if valid and hasattr(type_, "__args__"):
-                    args = type_.__args__
-                    if origin is tuple and not (len(args) == 2 and args[1] is ...):
-                        if len(x) == len(args):
-                            x, valid_ = zip(
-                                *[cls._post_process_field(y, arg, field, errors) for y, arg in zip(x, args)]
-                            )
-                            valid = all(valid_)
-                        else:
-                            valid = False
-                    else:
-                        if origin is not tuple:
-                            Assert.eq(len(args), 1)
-                        arg = args[0]
-                        if len(x) > 0:
-                            x, valid_ = zip(*[cls._post_process_field(y, arg, field, errors) for y in x])
-                            valid = all(valid_)
-                        else:
-                            valid = True
-                        x = origin(x)
+            if origin in (list, set, tuple):
+                value = cls._validate_array(value, type_, name)
+            elif issubclass(origin, dict):
+                value = cls._validate_dict(value, type_, name)
             else:
-                raise NotImplementedError(origin)
+                raise FieldTypeError(f"Unsupported __origin__ `{origin}`")
         elif not isinstance(type_, type):
-            raise NotImplementedError(type_)
+            raise FieldTypeError(f"Not a type.")
         elif issubclass(type_, Config):
-            if isinstance(x, dict):
-                raise ValueError(f"Nested config not properly initialized. Use `{type_.__name__}.from_dict` instead.")
-            valid = isinstance(x, type_)
-            x.validate(_is_validating=True)
+            cls._validate_type(value, type_, name)
+            value.validate(_is_validating=True)
         else:
-            if hasattr(type_, "__fast_llm_validator__"):
-                x = type_.__fast_llm_validator__(x)
-            elif type_ is float and isinstance(x, int):
-                # Ints are ok too.
-                x = float(x)
-            elif issubclass(type_, enum.Enum) and not isinstance(x, type_) and issubclass(type_, type(x)):
-                # Enum values are ok too.
-                x = type_(x)
-            elif issubclass(type_, pathlib.PurePath) and isinstance(x, str):
-                # Str paths are ok too.
-                x = type_(x)
-            valid = isinstance(x, type_)
-        return x, valid
+            value = cls._validate_simple(value, type_, name)
+        return value
+
+    @classmethod
+    def _validate_union(cls, value, type_, name: str):
+        errors = []
+        for subtype in type_.__args__:
+            errors_ = []
+            x_ = cls._validate_nested(value, subtype, f"{name}[{get_type_name(subtype)}]", None, errors_, True)
+            if errors_:
+                errors.extend(errors_)
+            else:
+                # Only need one valid subtype, we return the first one.
+                return x_
+        # If none of the subtype works, we provide information for all of them.
+        raise ValidationError(*errors)
+
+    @classmethod
+    def _validate_array(cls, value, type_, name: str):
+        origin = type_.__origin__
+        cls._validate_type(value, (origin, list, tuple), name)
+        args = getattr(type_, "__args__", [typing.Any, ...] if origin is tuple else [typing.Any])
+        errors = []
+        if issubclass(origin, tuple) and not (len(args) == 2 and args[1] is ...):
+            if len(value) != len(args):
+                raise ValidationError(f"Invalid length {len(value)} (expected {len(args)})")
+            new_value = origin(
+                cls._validate_nested(value_, arg, f"{name}[{i}]", None, errors, True)
+                for i, (value_, arg) in enumerate(zip(value, args))
+            )
+        else:
+            if not issubclass(origin, tuple) and len(args) != 1:
+                FieldTypeError(f"Invalid array specification")
+            new_value = origin(
+                cls._validate_nested(value_, args[0], f"{name}[{i}]", None, errors, True)
+                for i, value_ in enumerate(value)
+            )
+        if errors:
+            raise ValidationError(*errors)
+        return new_value
+
+    @classmethod
+    def _validate_dict(cls, value, type_, name: str):
+        args = list(getattr(type_, "__args__", []))
+        if len(args) > 2:
+            raise FieldTypeError(f"Invalid dict specification `{get_type_name(type_)}` for field `{name}`")
+        args.extend([typing.Any for _ in range(2 - len(args))])
+        cls._validate_type(value, type_.__origin__, name)
+        errors = []
+        new_value = {}
+        old_keys = {}
+        for key, value_ in value.items():
+            new_key = cls._validate_nested(key, args[0], f"{name}(key {key})", None, errors, True)
+            new_value_ = cls._validate_nested(value_, args[1], f"{name}[{key}]", None, errors, True)
+            if key in new_value:
+                errors.append(f"Duplicate key `{new_key}` after validation (from `{old_keys[new_key]}`, `{key}`)")
+            old_keys[new_key] = key
+            new_value[new_key] = new_value_
+        if errors:
+            raise ValidationError(*errors)
+        return new_value
+
+    @classmethod
+    def _validate_simple(cls, value, type_, name: str):
+        if hasattr(type_, "__fast_llm_validator__"):
+            value = type_.__fast_llm_validator__(value)
+        elif type_ is float and isinstance(value, int):
+            # Ints are ok too.
+            value = float(value)
+        elif issubclass(type_, enum.Enum) and not isinstance(value, type_) and issubclass(type_, type(value)):
+            # Enum values are ok too.
+            value = type_(value)
+        elif issubclass(type_, pathlib.PurePath) and isinstance(value, str):
+            # Str paths are ok too.
+            value = type_(value)
+        cls._validate_type(value, type_, name)
+        return value
+
+    @classmethod
+    def _validate_type(cls, value, type_: type | tuple[type, ...], name):
+        if not isinstance(value, type_):
+            raise ValidationError(f"Unexpected type `{get_type_name(type(value))}`")
 
     @classmethod
     def fields(cls) -> typing.Iterable[tuple[str, Field]]:
@@ -466,28 +517,75 @@ class Config:
         arg_dict = {}
         for name, field in self.fields():
             value = getattr(self, name, MISSING)
-            if (not field.init or field._field_type == dataclasses._FIELD_CLASSVAR) and not (all_fields):
-                # Exclude class variables and derived fields unless requested explicitly.
-                continue
-            elif isinstance(value, Config):
-                field_dict = value._to_dict(
-                    verbose=verbose,
-                    all_fields=all_fields,
-                    format_=format_,
-                    serializable=serializable,
-                )
-                if format_ == _ConfigDictFormat.tuple:
-                    arg_dict.update({(name,) + name_: value_ for name_, value_ in field_dict.items()})
-                elif format_ == _ConfigDictFormat.nested:
-                    if len(field_dict) > 0 or all_fields:
-                        arg_dict[name] = field_dict
-                else:
-                    raise NotImplementedError(format_)
-            elif verbose is None or FieldHintImportance[field.hint] <= verbose or value != field.default:
-                arg_dict[(name,) if format_ == _ConfigDictFormat.tuple else name] = (
-                    serialize_field(value) if serializable else value
-                )
+            self._add_field_to_args(arg_dict, name, field, value, verbose, all_fields, format_, serializable)
         return arg_dict
+
+    @classmethod
+    def _add_field_to_args(
+        cls,
+        args: dict | list,
+        name: str | None,
+        field: Field | None,
+        value,
+        verbose: int | None = None,
+        all_fields: bool = False,
+        format_: _ConfigDictFormat = _ConfigDictFormat.nested,
+        serializable: bool = False,
+    ):
+        if (
+            field is not None
+            and (not field.init or field._field_type == dataclasses._FIELD_CLASSVAR)
+            and not (all_fields)
+        ):
+            # Exclude class variables and derived fields unless requested explicitly.
+            return
+        elif isinstance(value, Config):
+            field_value = value._to_dict(
+                verbose=verbose,
+                all_fields=all_fields,
+                format_=format_,
+                serializable=serializable,
+            )
+        elif isinstance(value, (list, tuple, set)):
+            field_value = {} if format_ == _ConfigDictFormat.tuple else []
+            for i, list_value in enumerate(value):
+                cls._add_field_to_args(
+                    field_value, str(i), None, list_value, verbose, all_fields, format_, serializable
+                )
+        elif isinstance(value, dict):
+            field_value = {}
+            for dict_name, dict_value in value.items():
+                cls._add_field_to_args(
+                    field_value, dict_name, None, dict_value, verbose, all_fields, format_, serializable
+                )
+        elif (
+            verbose is not None
+            and field is not None
+            and FieldHintImportance[field.hint] > verbose
+            and value == field.default
+        ):
+            # Exclude unimportant default values.
+            return
+        else:
+            field_value = value
+            if serializable:
+                if isinstance(value, enum.Enum):
+                    field_value = field_value.value
+                elif not isinstance(value, int | float | bool | str | None):
+                    field_value = str(field_value)
+            if format_ == _ConfigDictFormat.tuple:
+                field_value = {(): field_value}
+
+        if format_ == _ConfigDictFormat.tuple:
+            args.update({(name,) + name_: value_ for name_, value_ in field_value.items()})
+        elif format_ == _ConfigDictFormat.nested:
+            if not isinstance(field_value, (dict, list)) or len(field_value) > 0 or all_fields:
+                if isinstance(args, dict):
+                    args[name] = field_value
+                else:
+                    args.append(field_value)
+        else:
+            raise NotImplementedError(format_)
 
     def to_copy(
         self,
@@ -509,7 +607,7 @@ class Config:
     ):
         arg_dict = self.to_serialized(verbose=verbose)
         if title is None:
-            title = self._class_name()
+            title = self._get_class_name()
         return log_fn(
             f"\n{header(title, width, fill_char)}"
             f"\n{yaml.safe_dump(arg_dict, sort_keys=False)}"
@@ -517,81 +615,8 @@ class Config:
         )
 
     @classmethod
-    def _class_name(cls):
-        return f"{cls.__module__}.{cls.__name__}"
-
-    @classmethod
-    def _to_argparse(cls, parser: argparse.ArgumentParser):
-        """
-        TODO v0.2: Remove flat format
-        Add arguments for the config and its sub-configs to an existing parser.
-        The whole config hierarchy is flattened (see `to_dict`),
-        and the user is responsible for preventing name clashes.
-        """
-        cls._check_abstract()
-        field: Field
-        for name, field in cls.fields():
-            try:
-                if not field.init or field._field_type == dataclasses._FIELD_CLASSVAR:  # noqa
-                    assert name not in cls.__argparse_map__
-                    continue
-                if name in cls.__argparse_map__:
-                    if cls.__argparse_map__[name] is None:
-                        continue
-                    argparse_kwargs = cls.__argparse_map__[name].copy()
-                else:
-                    argparse_kwargs = {}
-                if "type" in argparse_kwargs:
-                    is_list = False
-                else:
-                    type_ = field.type
-                    is_list = isinstance(type_, types.GenericAlias) and type_.__origin__ in (list, set)
-                    if is_list:
-                        Assert.eq(len(type_.__args__), 1)
-                        Assert.eq(type_.__origin__, field.default_factory)
-                        type_ = type_.__args__[0]
-                    elif isinstance(field.default_factory, _ConfigFactory):
-                        Assert.custom(issubclass, type_, Config)
-                    elif field.default_factory is not dataclasses.MISSING:
-                        raise NotImplementedError(name)
-                    if (
-                        isinstance(type_, types.UnionType)
-                        and len(type_.__args__) == 2
-                        and type_.__args__[1] is type(None)
-                    ):
-                        # Optional
-                        type_ = type_.__args__[0]
-                        # Would break other things.
-                        Assert.not_custom(issubclass, type_, Config)
-                    Assert.custom(isinstance, type_, type)
-                    if issubclass(type_, Config):
-                        type_._to_argparse(parser)
-                        continue
-                    if hasattr(type_, "__fast_llm_argparse_type__"):
-                        type_ = type_.__fast_llm_argparse_type__
-                    elif type_ is bool:
-                        type_ = lambda x: bool(int(x))
-                    elif not issubclass(type_, (str, int, float, pathlib.Path)):
-                        raise NotImplementedError(name, type_)
-                    argparse_kwargs["type"] = type_
-                if "required" not in argparse_kwargs:
-                    argparse_kwargs["required"] = (
-                        field.default is dataclasses.MISSING and "default" not in argparse_kwargs and not is_list
-                    )
-                if "default" not in argparse_kwargs and not is_list and not argparse_kwargs["required"]:
-                    argparse_kwargs["default"] = field.default
-                if "nargs" not in argparse_kwargs and is_list:
-                    argparse_kwargs["nargs"] = "*"
-                if "help" not in argparse_kwargs:
-                    argparse_kwargs["help"] = field.desc
-                parser.add_argument(
-                    f"--{name}",
-                    f"--{name.replace('_', '-')}",
-                    **argparse_kwargs,
-                )
-            except Exception:
-                raise ValueError(f"Failed to add argparse argument for field {name}")
-        return parser
+    def _get_class_name(cls):
+        return get_type_name(cls)
 
     @classmethod
     def from_dict(
@@ -642,24 +667,105 @@ class Config:
         if "__class__" in default:
             del default["__class__"]
 
-        for name, field in cls.fields():
-            if not field.init or field._field_type == dataclasses._FIELD_CLASSVAR:  # noqa
-                continue
-            if isinstance(field.type, type) and issubclass(field.type, Config):
-                # Do not validate yet in case the root class sets cross-dependencies in validation.
-                with NoAutoValidate():
-                    if flat:
-                        out_arg_dict[name] = field.type._from_dict(default, False, True)
-                    else:
-                        out_arg_dict[name] = field.type._from_dict(default.pop(name, {}), strict)
-            elif name in default:
-                out_arg_dict[name] = default.pop(name)
+        # Do not validate yet in case the root class sets cross-dependencies in validation.
+        with NoAutoValidate():
+            for name, field in cls.fields():
+                if not field.init or field._field_type == dataclasses._FIELD_CLASSVAR:  # noqa
+                    continue
+                if flat:
+                    if isinstance(field.type, type) and issubclass(field.type, Config):
+                        if flat:
+                            out_arg_dict[name] = field.type._from_dict(default, False, True)
+                        else:
+                            out_arg_dict[name] = field.type._from_dict(default.pop(name, {}), strict)
+                    elif name in default:
+                        out_arg_dict[name] = default.pop(name)
+                else:
+                    # Check for nested configs to instantiate.
+                    try:
+                        value = cls._from_dict_nested(default.pop(name, MISSING), field.type, strict)
+                        if value is not MISSING:
+                            out_arg_dict[name] = value
+                    except FieldTypeError as e:
+                        raise FieldTypeError(
+                            f"Invalid field type `{get_type_name(field.type)}` in class {cls._get_class_name()}: "
+                            + ", ".join(e.args)
+                        )
         out = cls(**out_arg_dict)  # noqa
         if strict and default:
             out._unknown_fields = tuple(default)
         if _AUTO_VALIDATE:
             out.validate()
         return out
+
+    @classmethod
+    def _from_dict_nested(cls, value, type_, strict: bool):
+        if type_ in (typing.Any, types.NoneType):
+            pass
+        elif isinstance(type_, types.UnionType):
+            # Takes care of Optional too
+            value = cls._from_dict_union(value, type_, strict)
+        elif hasattr(type_, "__origin__"):
+            # TODO: Improve error messages for nested entries.
+            origin = type_.__origin__
+            if origin in (list, set, tuple):
+                value = cls._from_dict_array(value, type_, strict)
+            elif issubclass(origin, dict):
+                value = cls._from_dict_dict(value, type_, strict)
+            else:
+                raise FieldTypeError(f"Unsupported __origin__ `{origin}`")
+        elif not isinstance(type_, type):
+            raise FieldTypeError(f"Not a type: {type_}.")
+        elif issubclass(type_, Config):
+            if value is MISSING:
+                value = {}
+            if isinstance(value, dict):
+                value = type_._from_dict(value, strict)
+        return value
+
+    @classmethod
+    def _from_dict_union(cls, value, type_, strict: bool):
+        new_value = value
+        for subtype in type_.__args__:
+            new_value_ = cls._from_dict_nested(value, subtype, strict)
+            if new_value_ is not value:
+                if new_value is not value:
+                    # Happens if the union contains more than one Config class (or dict)
+                    raise FieldTypeError(f"Ambiguous config class in union type {get_type_name(type_)}")
+                new_value = new_value_
+        return new_value
+
+    @classmethod
+    def _from_dict_array(cls, value, type_, strict: bool):
+        origin = type_.__origin__
+        if not isinstance(value, (list, set, tuple)):
+            # This case will be handled during validation.
+            return value
+        args = getattr(type_, "__args__", [typing.Any, ...] if origin is tuple else [typing.Any])
+        if issubclass(origin, tuple) and not (len(args) == 2 and args[1] is ...):
+            new_value = origin(
+                cls._from_dict_nested(value_, arg, strict) for i, (value_, arg) in enumerate(zip(value, args))
+            )
+            if len(new_value) < len(value):
+                # We keep this for validation.
+                new_value += value[len(value) - len(new_value) :]
+        else:
+            if not issubclass(origin, tuple) and len(args) != 1:
+                FieldTypeError(f"Invalid array specification")
+            new_value = origin(cls._from_dict_nested(value_, args[0], strict) for i, value_ in enumerate(value))
+        return new_value
+
+    @classmethod
+    def _from_dict_dict(cls, value, type_, strict: bool):
+        args = list(getattr(type_, "__args__", []))
+        if len(args) > 2:
+            raise FieldTypeError(f"Invalid dict specification `{get_type_name(type_)}`")
+        if not isinstance(value, dict):
+            # This case will be handled during validation.
+            return value
+        args.extend([typing.Any for _ in range(2 - len(args))])
+        # Keys can't include configs so we only recurse on values.
+        return {key: cls._from_dict_nested(value_, args[1], strict) for key, value_ in value.items()}
 
     def compare(self, other: "Config", log_fn: typing.Union[BaseException, typing.Callable] = ValueError):
         # TODO: Check classes?

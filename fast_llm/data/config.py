@@ -164,11 +164,6 @@ class DataConfig(AbstractDataConfig):
 
     _abstract = False
 
-    __argparse_map__ = {
-        "data_path": {"nargs": "+"},
-        "split": {"type": str, "default": [969, 30, 1]},
-    }
-
     tokenizer: TokenizerConfig = Field(
         default_factory=TokenizerConfig,
         desc="Configuration for the tokenizer (for FIM).",

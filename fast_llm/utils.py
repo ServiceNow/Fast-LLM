@@ -18,6 +18,14 @@ def header(title: str | None = None, width: int = 60, fill_char: str = "-"):
     return fill_char * left + f" {title} " + fill_char * right
 
 
+def get_type_name(type_):
+    if isinstance(type_, type):
+        module = type_.__module__
+        return type_.__qualname__ if module == "builtins" else f"{module}.{type_.__qualname__}"
+    # Happens for aliases, None and invalid types.
+    return type_
+
+
 def div(x, y):
     """
     Ensure that numerator is divisible by the denominator and return
