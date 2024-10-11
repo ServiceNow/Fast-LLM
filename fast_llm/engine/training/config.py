@@ -14,22 +14,129 @@ if typing.TYPE_CHECKING:
     from fast_llm.engine.training.trainer import Trainer
 
 
+def get_interval_config_class(desc:str, offset_desc:str|None=None):
+    # Intervals are a common pattern, so we standardize them with this helper.
+    @config_class()
+    class IntervalConfig(Config):
+        interval: int | None = Field(
+            default=None,
+            desc=f"The number of training iterations between each {desc}. Setting to None will disable.",
+            hint=FieldHint.feature,
+            valid=skip_valid_if_none(check_field(Assert.gt, 0)),
+        )
+        offset: int = Field(
+            default=0,
+            desc=f"Offset for the first {offset_desc or desc}.",
+            hint=FieldHint.feature,
+            valid=check_field(Assert.geq, 0),
+        )
+
+        def enabled(self, iteration: int|None=None):
+            return self.interval and (iteration is None or (iteration - self.offset) % self.interval == 0)
+
+        def is_sub_interval(self, other: "IntervalConfig"):
+            if not self.enabled():
+                return True
+            elif not other.enabled():
+                return False
+            return other.interval%self.interval == 0 and (other.offset%other.interval)==(self.offset%other.interval)
+
+        def assert_sub_interval(self, other: "IntervalConfig"):
+            assert self.is_sub_interval(other), f"{self} is not a sub-interval of {other}"
+
+
+    return IntervalConfig
+
+@config_class()
+class WandbAlertConfig(
+    get_interval_config_class(
+        "Wandb status post (alert). Must be a multiple of the logging interval",
+        "Wandb status post (alert). Must be compatible with the logging offset"
+    )
+):
+    status_updates: bool|None = Field(
+        default=None,
+        desc="Post wandb status updates on status changes (run begin/end). "
+        "The update may be posted by email and/or slack depending on the Wandb account configuration.",
+        hint=FieldHint.feature,
+    )
+
+    def _validate(self):
+        if self.status_updates is None:
+            self.post_alerts = self.enabled()
+        super()._validate()
+
+
+@config_class()
+class MetricsLogsConfig(get_interval_config_class("metric logs")):
+    pass
+
+
+@config_class()
+class WandbConfig:
+    alert: WandbAlertConfig = Field(
+        default_factory=WandbAlertConfig,
+        desc="Configuration for Wandb alerts. The alerts may be posted by email and/or slack depending on the Wandb account configuration.",
+        hint=FieldHint.core
+    )
+    group_name: str = Field(default="default", desc="A group name for Wandb", hint=FieldHint.feature)
+    project_name: str = Field(default="fast_llm", desc="A project name for Wandb", hint=FieldHint.feature)
+    entity_name: str | None = Field(default=None, desc="An entity (user) name for Wandb", hint=FieldHint.feature)
+
+
+@config_class()
+class ValidationConfig(get_interval_config_class("validation")):
+    iterations: int | None = Field(
+        default=None,
+        desc="Number of iterations for each validation phase. Setting to None will disable.",
+        hint=FieldHint.feature,
+        valid=skip_valid_if_none(check_field(Assert.gt, 0)),
+    )
+
+@config_class()
+class CheckpointConfig(get_interval_config_class("checkpoint")):
+    keep: int | None = Field(
+        default=5,
+        desc="The maximum number of checkpoints to keep. When exceeding this value, checkpoints are deleted starting from the older ones.",
+        hint=FieldHint.feature,
+        valid=skip_valid_if_none(check_field(Assert.gt, 0)),
+    )
+
+@config_class()
+class ExportConfig(get_interval_config_class("export")):
+    pass
+
+@config_class()
+class ShutdownConfig(get_interval_config_class("automated shutdown")):
+    pass
+
+
+
 @config_class()
 class TrainingConfig(Config):
-    train_iters: int = Field(
-        default=0, desc="Total number of training iterations.", hint=FieldHint.core, valid=check_field(Assert.geq, 0)
-    )
-    validation_iters: int = Field(
-        default=0,
-        desc="Number of iterations for each validation phase. Setting to 0 will disable the validation phase.",
+    validation:ValidationConfig = Field(
+        default_factory=ValidationConfig,
+        desc="Configuration for the validation phase",
         hint=FieldHint.feature,
         valid=check_field(Assert.geq, 0),
     )
-    validation_interval: int = Field(
-        default=1000,
-        desc="Number of training steps between each validation phase.",
-        hint=FieldHint.feature,
-        valid=check_field(Assert.gt, 0),
+    logs: MetricsLogsConfig = Field(
+        default_factory=MetricsLogsConfig, desc="Configuration for metric logging.", hint=FieldHint.core
+    )
+    checkpoint: CheckpointConfig = Field(
+        default_factory=MetricsLogsConfig, desc="Configuration for checkpoints.", hint=FieldHint.core
+    )
+    export: CheckpointConfig = Field(
+        default_factory=MetricsLogsConfig, desc="Configuration for exports.", hint=FieldHint.core
+    )
+    wandb: WandbConfig = Field(
+        default_factory=WandbConfig, desc="Configuration for Wandb.", hint=FieldHint.core
+    )
+    shutdown: ShutdownConfig = Field(
+        default_factory=ShutdownConfig, desc="Configuration for automated shutdown.", hint=FieldHint.core
+    )
+    train_iters: int = Field(
+        default=0, desc="Total number of training iterations.", hint=FieldHint.core, valid=check_field(Assert.geq, 0)
     )
     test_iters: int = Field(
         default=0,
@@ -55,6 +162,12 @@ class TrainingConfig(Config):
         desc="Environment variables to add to the export script, encoded in json format.",
         hint=FieldHint.feature,
     )
+
+    def _validate(self):
+        super()._validate()
+        self.export.assert_sub_interval(self.checkpoint)
+        self.shutdown.assert_sub_interval(self.checkpoint)
+        self.wandb.alert.assert_sub_interval(self.logs)
 
 
 @config_class()
@@ -89,6 +202,11 @@ class TrainerConfig(PretrainedFastLLMModelConfig, ExperimentConfig):
         desc="Configuration for the training optimizer and learning rate schedule.",
         hint=FieldHint.core,
     )
+
+    def _validate(self):
+        super()._validate()
+        if self.run.experiment_dir is None:
+            assert not self.training.checkpoint.enabled()
 
     @classmethod
     def get_trainer_class(cls) -> type["Trainer"]:

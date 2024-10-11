@@ -23,6 +23,7 @@ from fast_llm.engine.optimizer.optimizer import Optimizer
 from fast_llm.engine.schedule.runner import ScheduleRunner
 from fast_llm.engine.schedule.schedule import Schedule
 from fast_llm.engine.training.config import TrainerConfig
+from fast_llm.engine.training.wandb import Wandb
 from fast_llm.logging import format_metrics, get_memory_usage_mib, log_memory_usage
 from fast_llm.utils import Assert
 
@@ -36,7 +37,9 @@ class Trainer(abc.ABC):
     _is_setup: bool = False
     _distributed: Distributed
     _run: Run
+    _wandb: Wandb
     _optimizer: Optimizer
+
     _completed_steps: int
 
     def __init__(self, config: TrainerConfig):
@@ -57,8 +60,8 @@ class Trainer(abc.ABC):
         )
         steps_per_split = {
             PhaseType.training: self._config.training.train_iters,
-            PhaseType.validation: (self._config.training.train_iters // self._config.training.validation_interval + 1)
-            * self._config.training.validation_iters,
+            PhaseType.validation: (self._config.training.train_iters // self._config.training.validation.interval + 1)
+            * self._config.training.validation.iters,
             PhaseType.test: self._config.training.test_iters,
         }
         self._samples_per_split = {
@@ -84,6 +87,7 @@ class Trainer(abc.ABC):
         self._is_setup = True
         self._distributed = distributed
         self._run = run
+        self._wandb = Wandb(self._config.training.wandb, self._run, self._config)
 
         # Setup the model.
         with torch.no_grad():
@@ -131,8 +135,8 @@ class Trainer(abc.ABC):
         # Number of validation steps performed before the current step
         return (
             (self._completed_steps - 1)
-            // self._config.training.validation_interval
-            * self._config.training.validation_iters
+            // self._config.training.validation.interval
+            * self._config.training.validation.iters
         )
 
     def run(self):
@@ -162,9 +166,9 @@ class Trainer(abc.ABC):
             )
             formatted_metrics = format_metrics(metrics[PhaseType.test], self._loss_defs, PhaseType.test)
             log_main_rank(formatted_metrics)
-            self._run.post_wandb_alert("Testing results", formatted_metrics, "WARN")
+            self._wandb.alert("Testing results", formatted_metrics, "WARN")
             # TODO: This may erase some metrics.
-            self._run.log_wandb_metrics(self._completed_steps, metrics)
+            self._wandb.log_metrics(self._completed_steps, metrics)
 
     def _train(self):
         # Tracking loss.
@@ -202,10 +206,7 @@ class Trainer(abc.ABC):
             while not stop:
                 # Iteration starts at 1, so we increment at the beginning.
                 self._completed_steps += 1
-                is_logging = (
-                    self._config.run.log_interval
-                    and (self._completed_steps - self._config.run.log_offset) % self._config.run.log_interval == 0
-                )
+                is_logging = self._config.training.logs.enabled(self._completed_steps)
 
                 # TODO: Data loader hates getting all micro-batches at once.
                 #   (Also preprocessing adds overhead)
@@ -275,13 +276,8 @@ class Trainer(abc.ABC):
                             metrics[PhaseType.training], self._loss_defs, PhaseType.training
                         )
                         logger.info(formatted_metrics)
-                        if (
-                            self._config.run.wandb_status_interval
-                            and (self._completed_steps - self._config.run.log_offset)
-                            % self._config.run.wandb_status_interval
-                            == 0
-                        ):
-                            self._run.post_wandb_alert("Training results", formatted_metrics, "INFO")
+                        if self._config.training.wandb.alert.enabled(self._completed_steps):
+                            self._wandb.alert("Training results", formatted_metrics, "INFO")
 
                     advanced_iters = 0
                     skipped_iters = 0
@@ -294,17 +290,14 @@ class Trainer(abc.ABC):
 
                 done = self._completed_steps >= self._config.training.train_iters
                 # TODO: Signal-based stop.
-                stop = done or (
-                    self._config.run.stop_interval
-                    and (self._completed_steps - self._config.run.stop_offset) % self._config.run.stop_interval == 0
-                )
+                stop = done or self._config.training.shutdown.enabled(self._completed_steps)
                 # Evaluation
                 # TODO: Adjust valid iterator length.
                 if PhaseType.validation in self._samples_per_split and (
                     done
                     or (
-                        self._config.training.validation_interval
-                        and self._completed_steps % self._config.training.validation_interval == 0
+                        self._config.training.validation.interval
+                        and self._completed_steps % self._config.training.validation.interval == 0
                     )
                 ):
                     if valid_iterator is None:
@@ -314,42 +307,23 @@ class Trainer(abc.ABC):
                     metrics[PhaseType.validation] = self._evaluate(
                         data_iterator=valid_iterator,
                         phase=PhaseType.validation,
-                        num_iters=self._config.training.validation_iters,
+                        num_iters=self._config.training.validation.iters,
                         begin_iter=self._completed_validation_steps,
                     )
                     formatted_metrics = format_metrics(
                         metrics[PhaseType.validation], self._loss_defs, PhaseType.validation
                     )
                     log_main_rank(formatted_metrics)
-                    if (
-                        self._config.run.wandb_status_interval
-                        and (self._completed_steps - self._config.run.log_offset)
-                        % self._config.run.wandb_status_interval
-                        == 0
-                    ):
-                        self._run.post_wandb_alert("Validation results", formatted_metrics, "INFO")
+                    if self._config.training.wandb.alert.enabled(self._completed_steps):
+                        self._wandb.alert("Validation results", formatted_metrics, "INFO")
 
                 if is_main_rank() and metrics:
-                    self._run.log_wandb_metrics(self._completed_steps, metrics)
+                    self._wandb.log_metrics(self._completed_steps, metrics)
 
-                if self._config.run.checkpoint_interval and (
-                    stop
-                    or (
-                        self._config.run.checkpoint_interval
-                        and (self._completed_steps - self._config.run.checkpoint_offset)
-                        % self._config.run.checkpoint_interval
-                        == 0
-                    )
-                ):
+                if self._config.training.checkpoint.enabled(None if stop else self._completed_steps):
                     self._save_checkpoint(
                         metrics,
-                        export=self._config.run.export_interval
-                        and (
-                            done
-                            or (self._completed_steps - self._config.run.checkpoint_offset)
-                            % self._config.run.export_interval
-                            == 0
-                        ),
+                        export=self._config.training.export.enabled(None if done else self._completed_steps),
                     )
 
         return done, metrics
@@ -440,7 +414,7 @@ class Trainer(abc.ABC):
 
     def _save_checkpoint(self, metrics: dict[PhaseType, dict[str, float | int]] | None, export: bool = False):
         assert self._is_setup
-        with self._run.get_save_checkpoint_context(self._completed_steps, export) as checkpoint:
+        with self._run.get_save_checkpoint_context(self._completed_steps, export, self._config.training.checkpoint.keep) as checkpoint:
             metadata = {
                 "optimizer": self._optimizer.save(),
                 "completed_steps": self._completed_steps,
