@@ -133,10 +133,10 @@ class TrainingConfig(Config):
     export: CheckpointConfig = Field(
         default_factory=MetricsLogsConfig, desc="Configuration for exports.", hint=FieldHint.core
     )
-    wandb: WandbConfig = Field(default_factory=WandbConfig, desc="Configuration for Wandb.", hint=FieldHint.core)
     shutdown: ShutdownConfig = Field(
         default_factory=ShutdownConfig, desc="Configuration for automated shutdown.", hint=FieldHint.core
     )
+    wandb: WandbConfig = Field(default_factory=WandbConfig, desc="Configuration for Wandb.", hint=FieldHint.core)
     train_iters: int = Field(
         default=0, desc="Total number of training iterations.", hint=FieldHint.core, valid=check_field(Assert.geq, 0)
     )

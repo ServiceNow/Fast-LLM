@@ -141,6 +141,10 @@ class Trainer(abc.ABC):
 
     def run(self):
         assert self._is_setup
+        with self._wandb:
+            self._run_training()
+
+    def _run_training(self):
         self._prepare_training_state()
         log_main_rank("done with setup ...")
         log_pipeline_parallel_main_rank(lambda: log_memory_usage(f"After initial setup", str))
