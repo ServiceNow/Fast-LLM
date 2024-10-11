@@ -1,9 +1,8 @@
 import math
 
 import torch
-import triton
-from triton import language as tl
 
+import triton
 from fast_llm.core.distributed import ProcessGroup
 from fast_llm.core.ops import gather_op
 from fast_llm.functional.autograd import wrap_forward_backward
@@ -24,6 +23,7 @@ from fast_llm.functional.triton.sparse_copy import (
 )
 from fast_llm.functional.triton.sparse_linear import output_sparse_matmul
 from fast_llm.tensor import param_get_and_unset_is_zero
+from triton import language as tl
 
 
 @triton.jit

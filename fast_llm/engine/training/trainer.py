@@ -414,7 +414,9 @@ class Trainer(abc.ABC):
 
     def _save_checkpoint(self, metrics: dict[PhaseType, dict[str, float | int]] | None, export: bool = False):
         assert self._is_setup
-        with self._run.get_save_checkpoint_context(self._completed_steps, export, self._config.training.checkpoint.keep) as checkpoint:
+        with self._run.get_save_checkpoint_context(
+            self._completed_steps, export, self._config.training.checkpoint.keep
+        ) as checkpoint:
             metadata = {
                 "optimizer": self._optimizer.save(),
                 "completed_steps": self._completed_steps,

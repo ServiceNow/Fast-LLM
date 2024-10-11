@@ -9,7 +9,7 @@ from fast_llm.engine.training.config import WandbConfig
 
 
 class Wandb:
-    def __init__(self, config: WandbConfig, run: Run, experiment_config:Config):
+    def __init__(self, config: WandbConfig, run: Run, experiment_config: Config):
         self._config = config
         self._is_setup = True
         self._run = run
@@ -20,7 +20,11 @@ class Wandb:
             api_key_path = os.environ.get("WANDB_API_KEY_PATH")
             if api_key_path:
                 os.environ["WANDB_API_KEY"] = pathlib.Path(api_key_path).open("r").read().strip()
-            wandb_path = None if self._run.experiment_directory is None else self._run.experiment_directory / "wandb_config.yaml"
+            wandb_path = (
+                None
+                if self._run.experiment_directory is None
+                else self._run.experiment_directory / "wandb_config.yaml"
+            )
             if wandb_path is not None and wandb_path.is_file():
                 wandb_config = yaml.safe_load(wandb_path.open("r"))
             else:
@@ -36,10 +40,9 @@ class Wandb:
                 if wandb_path is not None:
                     yaml.safe_dump(wandb_config, wandb_path.open("w"))
             # TODO: Does wandb work with nested configs?
-            self._wandb=wandb.init(config=experiment_config.to_serialized(), **wandb_config)
+            self._wandb = wandb.init(config=experiment_config.to_serialized(), **wandb_config)
         else:
-            self._wandb=None
-
+            self._wandb = None
 
     def log_metrics(self, completed_steps: int, metrics: dict[str, dict[str, float | int]]):
         # Note: metrics modified in-place
@@ -50,9 +53,9 @@ class Wandb:
 
     def alert(self, title, text, level="INFO", wait=0.001):
         if self._wandb is not None and self._config.alert.post_alerts:
-            import wandb
+            pass
 
-            self._wandb.alert( # noqa
+            self._wandb.alert(  # noqa
                 title=title() if callable(title) else title,
                 text=f"[{self._config.project_name}/{self._run.experiment_name}, run {self._run.index}]"
                 f" {text() if callable(text) else text}",
@@ -68,6 +71,3 @@ class Wandb:
             self.alert(f"Run crashed!", (lambda: ", ".join(exc_val.args)), "ERROR")
         else:
             self.alert(f"Run ended!", "", "INFO")
-
-
-

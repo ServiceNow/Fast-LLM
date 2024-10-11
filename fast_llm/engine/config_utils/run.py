@@ -19,8 +19,6 @@ if typing.TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-
-
 @config_class()
 class RunConfig(Config):
     # TODO v0.2: Adjust (now only affects logging to file).
@@ -224,7 +222,7 @@ class Run:
                 torch.save(tensor_stats, self.open_artifact(f"tensor_logs_{iteration}.pt", mode="wb"))
             TensorLogs.reset()
 
-    def get_save_checkpoint_context(self, iteration: int, export: bool = False, keep:int|None=None):
+    def get_save_checkpoint_context(self, iteration: int, export: bool = False, keep: int | None = None):
         return self._SaveCheckpointContext(self, iteration, export, keep)
 
     def get_load_checkpoint_context(self, iteration: int):
@@ -254,7 +252,7 @@ class Run:
             return self._directory
 
     class _SaveCheckpointContext(_CheckpointContext):
-        def __init__(self, run: "Run", iteration: int, export: bool = False, keep:int|None=None):
+        def __init__(self, run: "Run", iteration: int, export: bool = False, keep: int | None = None):
             super().__init__(run, iteration)
             self._export = export
             self._keep = keep
@@ -292,12 +290,12 @@ class Run:
             if not exc_type:
                 self._run.barrier(f"load {self._iteration} exit")
 
-    def _delete_old_checkpoints(self, keep:int|None):
+    def _delete_old_checkpoints(self, keep: int | None):
         assert self._is_running
         if keep is None:
             return
         checkpoints = sorted(int(path.name) for path in self._checkpoint_dir.iterdir())
-        for checkpoint in checkpoints[: -keep]:
+        for checkpoint in checkpoints[:-keep]:
             path = self._checkpoint_dir / str(checkpoint)
             logger.info(f"Deleting checkpoint at {path}")
             try:
@@ -363,7 +361,7 @@ def log_main_rank(*message, log_fn: typing.Union[BaseException, typing.Callable]
 
 
 def is_model_parallel_main_rank():
-    return is_main_rank() if _run is None else _run._is_model_parallel_main_rank # Noqa
+    return is_main_rank() if _run is None else _run._is_model_parallel_main_rank  # Noqa
 
 
 def log_model_parallel_main_rank(*message, log_fn=logger.info):
@@ -372,7 +370,7 @@ def log_model_parallel_main_rank(*message, log_fn=logger.info):
 
 
 def is_pipeline_parallel_main_rank():
-    return is_main_rank() if _run is None else _run._is_pipeline_parallel_main_rank # Noqa
+    return is_main_rank() if _run is None else _run._is_pipeline_parallel_main_rank  # Noqa
 
 
 def log_pipeline_parallel_main_rank(*message, log_fn=logger.info):

@@ -14,7 +14,7 @@ if typing.TYPE_CHECKING:
     from fast_llm.engine.training.trainer import Trainer
 
 
-def get_interval_config_class(desc:str, offset_desc:str|None=None):
+def get_interval_config_class(desc: str, offset_desc: str | None = None):
     # Intervals are a common pattern, so we standardize them with this helper.
     @config_class()
     class IntervalConfig(Config):
@@ -31,7 +31,7 @@ def get_interval_config_class(desc:str, offset_desc:str|None=None):
             valid=check_field(Assert.geq, 0),
         )
 
-        def enabled(self, iteration: int|None=None):
+        def enabled(self, iteration: int | None = None):
             return self.interval and (iteration is None or (iteration - self.offset) % self.interval == 0)
 
         def is_sub_interval(self, other: "IntervalConfig"):
@@ -39,22 +39,24 @@ def get_interval_config_class(desc:str, offset_desc:str|None=None):
                 return True
             elif not other.enabled():
                 return False
-            return other.interval%self.interval == 0 and (other.offset%other.interval)==(self.offset%other.interval)
+            return other.interval % self.interval == 0 and (other.offset % other.interval) == (
+                self.offset % other.interval
+            )
 
         def assert_sub_interval(self, other: "IntervalConfig"):
             assert self.is_sub_interval(other), f"{self} is not a sub-interval of {other}"
 
-
     return IntervalConfig
+
 
 @config_class()
 class WandbAlertConfig(
     get_interval_config_class(
         "Wandb status post (alert). Must be a multiple of the logging interval",
-        "Wandb status post (alert). Must be compatible with the logging offset"
+        "Wandb status post (alert). Must be compatible with the logging offset",
     )
 ):
-    status_updates: bool|None = Field(
+    status_updates: bool | None = Field(
         default=None,
         desc="Post wandb status updates on status changes (run begin/end). "
         "The update may be posted by email and/or slack depending on the Wandb account configuration.",
@@ -77,7 +79,7 @@ class WandbConfig:
     alert: WandbAlertConfig = Field(
         default_factory=WandbAlertConfig,
         desc="Configuration for Wandb alerts. The alerts may be posted by email and/or slack depending on the Wandb account configuration.",
-        hint=FieldHint.core
+        hint=FieldHint.core,
     )
     group_name: str = Field(default="default", desc="A group name for Wandb", hint=FieldHint.feature)
     project_name: str = Field(default="fast_llm", desc="A project name for Wandb", hint=FieldHint.feature)
@@ -93,6 +95,7 @@ class ValidationConfig(get_interval_config_class("validation")):
         valid=skip_valid_if_none(check_field(Assert.gt, 0)),
     )
 
+
 @config_class()
 class CheckpointConfig(get_interval_config_class("checkpoint")):
     keep: int | None = Field(
@@ -102,19 +105,20 @@ class CheckpointConfig(get_interval_config_class("checkpoint")):
         valid=skip_valid_if_none(check_field(Assert.gt, 0)),
     )
 
+
 @config_class()
 class ExportConfig(get_interval_config_class("export")):
     pass
+
 
 @config_class()
 class ShutdownConfig(get_interval_config_class("automated shutdown")):
     pass
 
 
-
 @config_class()
 class TrainingConfig(Config):
-    validation:ValidationConfig = Field(
+    validation: ValidationConfig = Field(
         default_factory=ValidationConfig,
         desc="Configuration for the validation phase",
         hint=FieldHint.feature,
@@ -129,9 +133,7 @@ class TrainingConfig(Config):
     export: CheckpointConfig = Field(
         default_factory=MetricsLogsConfig, desc="Configuration for exports.", hint=FieldHint.core
     )
-    wandb: WandbConfig = Field(
-        default_factory=WandbConfig, desc="Configuration for Wandb.", hint=FieldHint.core
-    )
+    wandb: WandbConfig = Field(default_factory=WandbConfig, desc="Configuration for Wandb.", hint=FieldHint.core)
     shutdown: ShutdownConfig = Field(
         default_factory=ShutdownConfig, desc="Configuration for automated shutdown.", hint=FieldHint.core
     )

@@ -1,10 +1,10 @@
 import torch
-import triton
-from triton import language as tl
 
+import triton
 from fast_llm.functional.autograd import wrap_forward_backward
 from fast_llm.functional.config import TritonConfig
 from fast_llm.utils import div
+from triton import language as tl
 
 
 @triton.jit

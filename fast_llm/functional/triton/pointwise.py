@@ -4,11 +4,11 @@ These triton kernels tend to be much faster than their pytorch equivalent (obser
 """
 
 import torch
-import triton
-from triton import language as tl
 
+import triton
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.functional.config import TritonConfig
+from triton import language as tl
 
 
 @triton.jit
