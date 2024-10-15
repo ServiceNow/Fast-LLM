@@ -1,4 +1,7 @@
 import argparse
+import os
+import shlex
+import subprocess
 import typing
 
 from fast_llm.config import Config, Field, FieldHint, check_field, config_class, skip_valid_if_none
@@ -75,7 +78,7 @@ class MetricsLogsConfig(get_interval_config_class("metric logs")):
 
 
 @config_class()
-class WandbConfig:
+class WandbConfig(Config):
     alert: WandbAlertConfig = Field(
         default_factory=WandbAlertConfig,
         desc="Configuration for Wandb alerts. The alerts may be posted by email and/or slack depending on the Wandb account configuration.",
@@ -106,9 +109,41 @@ class CheckpointConfig(get_interval_config_class("checkpoint")):
     )
 
 
+def _validate_script(value):
+    if isinstance(value, str):
+        value = shlex.split(value)
+    Assert.geq(len(value), 1)
+    return value
+
+
+@config_class()
+class CallbackConfig(Config):
+    script: list[str] | None = Field(
+        default=None,
+        desc="Shell script to run after.",
+        hint=FieldHint.feature,
+        valid=skip_valid_if_none(_validate_script),
+    )
+    environment: dict[str, str] = Field(
+        default_factory=dict,
+        desc="Environment variables to add to the script.",
+        hint=FieldHint.feature,
+    )
+
+    def run(self):
+        if self.script is not None:
+            environment = os.environ.copy()
+            environment.update(self.environment)
+            subprocess.Popen(self.script, env=environment)
+
+
 @config_class()
 class ExportConfig(get_interval_config_class("export")):
-    pass
+    callback: CallbackConfig = Field(
+        default_factory=CallbackConfig,
+        desc="Callback (shell script) to run after export.",
+        hint=FieldHint.core,
+    )
 
 
 @config_class()
@@ -121,8 +156,7 @@ class TrainingConfig(Config):
     validation: ValidationConfig = Field(
         default_factory=ValidationConfig,
         desc="Configuration for the validation phase",
-        hint=FieldHint.feature,
-        valid=check_field(Assert.geq, 0),
+        hint=FieldHint.core,
     )
     logs: MetricsLogsConfig = Field(
         default_factory=MetricsLogsConfig, desc="Configuration for metric logging.", hint=FieldHint.core
@@ -130,7 +164,7 @@ class TrainingConfig(Config):
     checkpoint: CheckpointConfig = Field(
         default_factory=MetricsLogsConfig, desc="Configuration for checkpoints.", hint=FieldHint.core
     )
-    export: CheckpointConfig = Field(
+    export: ExportConfig = Field(
         default_factory=MetricsLogsConfig, desc="Configuration for exports.", hint=FieldHint.core
     )
     shutdown: ShutdownConfig = Field(
@@ -157,12 +191,6 @@ class TrainingConfig(Config):
         desc="Prefetch factor for the data loaders, i.e., number of micro-batches that each worker may prepare in advance.",
         hint=FieldHint.performance,
         valid=skip_valid_if_none(check_field(Assert.gt, 0)),
-    )
-    export_callback_script: str = Field(default="", desc="Shell script to run after export.", hint=FieldHint.feature)
-    export_callback_env: str = Field(
-        default="",
-        desc="Environment variables to add to the export script, encoded in json format.",
-        hint=FieldHint.feature,
     )
 
     def _validate(self):

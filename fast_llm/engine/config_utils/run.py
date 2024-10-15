@@ -7,11 +7,11 @@ import warnings
 
 import yaml
 
-from fast_llm.config import Config, Field, FieldHint, FieldVerboseLevel, check_field, config_class, skip_valid_if_none
-from fast_llm.engine.config_utils.logging import TensorLogs, configure_logging, log
+from fast_llm.config import Config, Field, FieldHint, FieldVerboseLevel, config_class
+from fast_llm.engine.config_utils.logging import TensorLogs, TensorLogsConfig, configure_logging
 from fast_llm.engine.config_utils.runnable import RunnableConfig
 from fast_llm.engine.distributed.config import DistributedConfig
-from fast_llm.utils import Assert
+from fast_llm.utils import Assert, log
 
 if typing.TYPE_CHECKING:
     from fast_llm.engine.distributed.distributed import Distributed
@@ -21,6 +21,9 @@ logger = logging.getLogger(__name__)
 
 @config_class()
 class RunConfig(Config):
+    tensor_logs: TensorLogsConfig = Field(
+        default_factory=TensorLogsConfig, desc="Configuration for debug tensor logs.", hint=FieldHint.logging
+    )
     # TODO v0.2: Adjust (now only affects logging to file).
     structured_logs: bool = Field(
         default=True, desc="Configure logging to the Fast-LLM format.", hint=FieldHint.logging
@@ -34,7 +37,7 @@ class RunConfig(Config):
         hint=FieldHint.logging,
     )
     log_timestamps: bool = Field(
-        default=False, desc="Add a timestamp to every Fast-LLM (structured) log.", hint=FieldHint.logging
+        default=True, desc="Add a timestamp to every Fast-LLM (structured) log.", hint=FieldHint.logging
     )
     # TODO: Only needed for wandb?
     experiment_name: str | None = Field(
@@ -47,22 +50,6 @@ class RunConfig(Config):
         default=True,
         desc="Set to False to disable torch compile entirely. Not recommended unless there is a good reason to do so.",
         hint=FieldHint.expert,
-    )
-    save_tensor_logs: bool = Field(
-        default=False,
-        desc="Save tensor logs to an artifact file.",
-        hint=FieldHint.logging,
-    )
-    show_tensor_logs: bool = Field(
-        default=True,
-        desc="Post all tensor logs to stdout. May lead to extremely large log",
-        hint=FieldHint.logging,
-    )
-    tensor_logs_show_elements: int = Field(
-        default=8,
-        desc="Maximum number of tensor values to print for each tensor when posting tensor logs to stdout.",
-        hint=FieldHint.logging,
-        valid=skip_valid_if_none(check_field(Assert.gt, 0)),
     )
     enable_triton_kernels: bool = Field(
         default=True,
@@ -78,7 +65,8 @@ class RunConfig(Config):
 
     def _validate(self):
         if self.experiment_dir is None:
-            assert not self.checkpoint_interval
+            assert not self.tensor_logs.save
+        super()._validate()
 
 
 @config_class()
@@ -182,12 +170,10 @@ class Run:
             run_dir = self._experiment_directory / "runs" / str(self.index)
             self._artifact_dir = run_dir / "artifacts" / str(self._distributed_config.rank)
             log_dir = run_dir / "logs"
-            self._save_tensor_logs = self._config.save_tensor_logs
         else:
             _experiment_directory, self._checkpoint_dir, self._artifact_dir, log_dir = None, None, None, None
             self.dataset_cache_dir = None
             self.index = None
-            self._save_tensor_logs = False
 
         if self._config.structured_logs:
             config.configure_logging(log_dir)
@@ -216,11 +202,10 @@ class Run:
         import torch
 
         assert self._is_running
-        if self._save_tensor_logs:
-            tensor_stats = TensorLogs.get()
-            if tensor_stats:
-                torch.save(tensor_stats, self.open_artifact(f"tensor_logs_{iteration}.pt", mode="wb"))
-            TensorLogs.reset()
+        tensor_stats = TensorLogs.get()
+        if tensor_stats:
+            torch.save(tensor_stats, self.open_artifact(f"tensor_logs_{iteration}.pt", mode="wb"))
+            TensorLogs.reset(self._config.tensor_logs)
 
     def get_save_checkpoint_context(self, iteration: int, export: bool = False, keep: int | None = None):
         return self._SaveCheckpointContext(self, iteration, export, keep)
@@ -331,10 +316,7 @@ class Run:
         assert not self._is_running
         global _run
         _run = self
-        if self._save_tensor_logs:
-            TensorLogs.reset()
-        TensorLogs.verbose = self._config.show_tensor_logs
-        TensorLogs.max_logged_elements = self._config.tensor_logs_show_elements
+        TensorLogs.reset(self._config.tensor_logs)
 
     def __exit__(self, exc_type, exc_val: OSError, exc_tb):
         assert self._is_running

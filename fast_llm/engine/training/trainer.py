@@ -1,10 +1,6 @@
 import abc
-import json
 import logging
 import math
-import os
-import shlex
-import subprocess
 import time
 import typing
 
@@ -186,9 +182,6 @@ class Trainer(abc.ABC):
             distributed_config=self._config.distributed, start_step=self._completed_steps
         )
 
-        # The triton compilation during the first iteration breaks parallel data loading
-        # https://github.com/ServiceNow/Fast-LLM/issues/101,
-        # so we run the first iteration without it.
         train_iterator = self._get_data_iterator(
             PhaseType.training,
             self._completed_steps,
@@ -379,12 +372,10 @@ class Trainer(abc.ABC):
     def _prepare_training_state(self):
         # Setup the training state.
         if (last_iteration := self._run.get_last_checkpoint()) is None:
-            if (
-                path := self._config.pretrained.pretrained_checkpoint_path
-            ) is not None and self._config.pretrained.load_pretrained_weights:
+            if (path := self._config.pretrained.path) is not None and self._config.pretrained.load_weights:
                 log_main_rank(
                     f"Initializing training state from pretrained checkpoint at {path}"
-                    f" ({'loading' if self._config.pretrained.load_pretrained_optimizer else 'resetting'}"
+                    f" ({'loading' if self._config.pretrained.load_optimizer else 'resetting'}"
                     f" optimizer state)..."
                 )
                 self._multi_stage.load_pretrained_checkpoint(self._config.pretrained)
@@ -431,11 +422,8 @@ class Trainer(abc.ABC):
                 CheckpointConfig(checkpoint_type=CheckpointType.distributed, checkpoint_path=checkpoint.directory),
                 metadata,
             )
-        if export and self._run.is_main_rank and self._config.training.export_callback_script:  # noqa
-            custom_env = os.environ.copy()
-            if self._config.training.export_callback_env:
-                custom_env.update(json.loads(self._config.training.export_callback_env))
-            subprocess.Popen(shlex.split(self._config.training.export_callback_script), env=custom_env)
+        if export and self._run.is_main_rank:  # noqa
+            self._config.training.export.callback.run()
 
     @abc.abstractmethod
     def get_tflops(self, phase: PhaseType, elapsed_time_per_iteration) -> tuple[int, int]:

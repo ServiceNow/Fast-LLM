@@ -126,7 +126,7 @@ class CommonHuggingfaceConverter(HuggingfaceModelConverter):
     def _create_weight_converters(self) -> list[WeightConverter]:
         converters = []
         num_layers = self.config.transformer.num_layers
-        norm_bias: bool = self.config.transformer.normalization.normalization_type == NormalizationType.layer_norm
+        norm_bias: bool = self.config.transformer.normalization.type == NormalizationType.layer_norm
         linear_bias: bool = self.config.transformer.add_linear_biases
 
         # Embedding and output

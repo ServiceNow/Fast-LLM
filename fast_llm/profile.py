@@ -27,63 +27,59 @@ class NoProfiler(contextlib.nullcontext):
 
 @config_class()
 class ProfilingConfig(Config):
-    profile_cpu: bool = Field(
-        default=False, desc="Profile the CUDA operations on the CPU side.", hint=FieldHint.feature
-    )
-    profile_cuda: bool = Field(default=False, desc="Profile the CUDA operations on the CPU side.", hint=FieldHint.core)
-    profile_skip: int = Field(
+    cpu: bool = Field(default=False, desc="Profile the CUDA operations on the CPU side.", hint=FieldHint.feature)
+    cuda: bool = Field(default=False, desc="Profile the CUDA operations on the CPU side.", hint=FieldHint.core)
+    skip: int = Field(
         default=1,
         desc="Skip this many iterations before starting the profiler for the first time.",
         hint=FieldHint.optional,
         valid=check_field(Assert.geq, 0),
     )
     # Skip on every cycle (profiler disabled)
-    profile_wait: int = Field(
+    wait: int = Field(
         default=0,
         desc="Wait this many iterations before each profiling cycle.",
         hint=FieldHint.optional,
         valid=check_field(Assert.geq, 0),
     )
     # Warmup on every cycle (profiler enabled, results ignored)
-    profile_warmup: int = Field(
+    warmup: int = Field(
         default=1,
         desc="Warmup the profiler for this many iterations before each profiling cycle, i.e., enable the profiler but discard the results.",
         hint=FieldHint.optional,
         valid=check_field(Assert.geq, 0),
     )
     # Profile on every cycle (profiler enabled, results kept)
-    profile_cycles: int = Field(
+    cycles: int = Field(
         default=1,
         desc="Profile this many iterations in each profiling cycle.",
         hint=FieldHint.optional,
         valid=check_field(Assert.gt, 0),
     )
-    profile_averages: bool = Field(
+    averages: bool = Field(
         default=False,
         desc="Log a table of average and total properties for each CUDA operation.",
         hint=FieldHint.logging,
     )
-    profile_trace: bool = Field(
+    trace: bool = Field(
         default=False, desc="Log a table of every CUDA operation in chronological order.", hint=FieldHint.logging
     )
-    profile_column_width: int = Field(
+    table_width: int = Field(
         default=80,
         desc="Target width for logged tables, in characters.",
         hint=FieldHint.logging,
         valid=check_field(Assert.geq, 40),
     )
     # The ranks to profile (all by default)
-    profile_ranks: set[int] = Field(
-        default_factory=set, desc="Profile only on the specified ranks.", hint=FieldHint.feature
-    )
+    ranks: set[int] = Field(default_factory=set, desc="Profile only on the specified ranks.", hint=FieldHint.feature)
     # Print the profile table(s), otherwise save to file.
-    profile_log: bool = Field(
+    log: bool = Field(
         default=False,
         desc="Log the profile tables to stdout, otherwise save them as artifacts.",
         hint=FieldHint.logging,
     )
     # Export for chrome/tensorboard
-    profile_export: bool = Field(
+    export: bool = Field(
         default=False,
         desc="Export the raw profile as an artifact in chrome trace format.",
         doc="The profile is saved to profile_chrome_step_{step}. "
@@ -92,35 +88,33 @@ class ProfilingConfig(Config):
     )
 
     def _validate(self):
-        if isinstance(self.profile_ranks, str):
+        if isinstance(self.ranks, str):
             # This happens with yaml serialization
-            Assert.eq(self.profile_ranks, "set()")
+            Assert.eq(self.ranks, "set()")
             self.global_attention_layers = set()
-        profile_ranks = set(self.profile_ranks or [])
-        Assert.eq(len(profile_ranks), len(self.profile_ranks or []))
-        self.profile_ranks = profile_ranks  # noqa
+        profile_ranks = set(self.ranks or [])
+        Assert.eq(len(profile_ranks), len(self.ranks or []))
+        self.ranks = profile_ranks  # noqa
 
     def get_profiler(
         self, *, distributed_config: DistributedConfig | None = None, start_step: int = 0
     ) -> typing.Union["torch.profiler.profile", NoProfiler]:
         import torch
 
-        activities = ([torch.profiler.ProfilerActivity.CPU] if self.profile_cpu else []) + (
-            [torch.profiler.ProfilerActivity.CUDA] if self.profile_cuda else []
+        activities = ([torch.profiler.ProfilerActivity.CPU] if self.cpu else []) + (
+            [torch.profiler.ProfilerActivity.CUDA] if self.cuda else []
         )
         if (
             not activities
-            or not (self.profile_averages or self.profile_trace or self.profile_export)
-            or not (
-                distributed_config is None or not self.profile_ranks or distributed_config.rank in self.profile_ranks
-            )
+            or not (self.averages or self.trace or self.export)
+            or not (distributed_config is None or not self.ranks or distributed_config.rank in self.ranks)
         ):
             return NoProfiler()
         schedule = torch.profiler.schedule(
-            skip_first=self.profile_skip,
-            warmup=self.profile_warmup,
-            wait=self.profile_wait,
-            active=self.profile_cycles,
+            skip_first=self.skip,
+            warmup=self.warmup,
+            wait=self.wait,
+            active=self.cycles,
         )
         return torch.profiler.profile(
             schedule=schedule,
@@ -140,34 +134,34 @@ def get_trace_fn(config: ProfilingConfig, start_step: int = 0):
 
         try:
             step = start_step + profiler.step_num
-            f"self_{'cuda' if config.profile_cuda else 'cpu'}_time_total"
-            if config.profile_trace:
+            f"self_{'cuda' if config.cuda else 'cpu'}_time_total"
+            if config.trace:
                 table = build_trace_table(
                     profiler,
-                    cuda=config.profile_cuda,
-                    cpu=config.profile_cpu,
-                    column_width=config.profile_column_width,
+                    cuda=config.cuda,
+                    cpu=config.cpu,
+                    column_width=config.table_width,
                     header=f"Trace for step {step}",
                 )
-                if config.profile_log:
+                if config.log:
                     logger.info(table)
                 else:
                     run.open_artifact(f"profile_trace_step_{step}").write(table)
 
-            if config.profile_averages:
+            if config.averages:
                 table = build_average_table(
                     profiler,
-                    cuda=config.profile_cuda,
-                    cpu=config.profile_cpu,
-                    column_width=config.profile_column_width,
+                    cuda=config.cuda,
+                    cpu=config.cpu,
+                    column_width=config.table_width,
                     header=f"Averages for step {step}",
                 )
-                if config.profile_log:
+                if config.log:
                     logger.info(table)
                 else:
                     run.open_artifact(f"profile_averages_step_{step}").write(table)
 
-            if config.profile_export:
+            if config.export:
                 profiler.export_chrome_trace(str(run.open_artifact(f"profile_chrome_step_{step}", mode=None)))
 
             # Store results for future use.

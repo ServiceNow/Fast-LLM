@@ -154,7 +154,7 @@ class GPTSampledDataset(SampledDataset):
     ):
         self._dataset = dataset
 
-        if config.fim.fim_rate > 0:
+        if config.fim.rate > 0:
             assert tokenizer is not None
             self._fim = Fim(config.fim, tokenizer)
         else:

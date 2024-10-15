@@ -1,5 +1,6 @@
 import torch
 
+import fast_llm.utils
 import triton
 import triton.language as tl
 from fast_llm.functional.config import TritonConfig
@@ -38,7 +39,7 @@ def triton_cross_entropy_forward_backward_kernel(
     if label_idx < 0:
         loss = 0.0
     else:
-        loss = tl.log(sum_exp_logits) + max_logits - label_logits
+        loss = fast_llm.utils.log(sum_exp_logits) + max_logits - label_logits
     tl.store(losses_ptr + block_idx, loss)
 
     grad_logits_ptr = grad_logits_ptr + block_idx * grad_logits_stride_0

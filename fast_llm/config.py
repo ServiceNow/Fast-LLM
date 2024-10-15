@@ -8,8 +8,7 @@ import typing
 
 import yaml
 
-from fast_llm.engine.config_utils.logging import log
-from fast_llm.utils import Assert, Tag, get_type_name, header
+from fast_llm.utils import Assert, Tag, get_type_name, header, log
 
 logger = logging.getLogger(__name__)
 
