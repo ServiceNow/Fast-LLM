@@ -42,7 +42,7 @@ def get_interval_config_class(desc: str, offset_desc: str | None = None):
                 return True
             elif not other.enabled():
                 return False
-            return other.interval % self.interval == 0 and (other.offset % other.interval) == (
+            return self.interval % other.interval == 0 and (other.offset % other.interval) == (
                 self.offset % other.interval
             )
 
