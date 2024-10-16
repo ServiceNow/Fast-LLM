@@ -51,6 +51,7 @@ class NormalizationArchitectureConfig(BaseModelArchitectureConfig):
         hint=FieldHint.stability,
     )
 
+    @classmethod
     def _from_dict(
         cls,
         default: dict[str],
@@ -102,6 +103,7 @@ class NormalizationConfig(NormalizationArchitectureConfig, BaseModelConfig):
         else:
             raise ValueError(self.type)
 
+    @classmethod
     def _from_dict(
         cls,
         default: dict[str],
