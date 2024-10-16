@@ -1,7 +1,7 @@
 import torch
+
 import triton
 import triton.language as tl
-
 from fast_llm.functional.triton.sparse_copy import SparseMap
 from fast_llm.utils import Assert, div
 

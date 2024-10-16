@@ -56,14 +56,14 @@ class HuggingfaceModelConfig(transformers.PretrainedConfig):
         # Get the pretrained config.
         if "pretrained" in kwargs:
             assert isinstance(kwargs["pretrained"], PretrainedConfig)
-            assert kwargs["pretrained"].pretrained_checkpoint_path == pretrained_model_name_or_path
+            assert kwargs["pretrained"].path == pretrained_model_name_or_path
             pretrained = kwargs.pop("pretrained")
         elif isinstance(pretrained_model_name_or_path, PretrainedConfig):
             pretrained = pretrained_model_name_or_path
         else:
             pretrained = PretrainedConfig(
-                pretrained_checkpoint_path=pathlib.Path(pretrained_model_name_or_path),
-                pretrained_checkpoint_type=CheckpointType.state_dict,
+                path=pathlib.Path(pretrained_model_name_or_path),
+                format=CheckpointType.state_dict,
             )
         metadata = cls.model_config_class.load_pretrained_metadata(pretrained)
         updates = {}

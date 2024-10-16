@@ -1,9 +1,9 @@
 import dataclasses
 
 import torch
+
 import triton
 import triton.language as tl
-
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.functional.autograd import wrap_forward_backward
 from fast_llm.functional.config import MAX_DROPLESS_BLOCK_SIZE_ROW, TritonConfig

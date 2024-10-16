@@ -17,7 +17,7 @@ class Fim:
             self._tokenizer.vocab[tok] for tok in [FIM_SUFFIX, FIM_PREFIX, FIM_MIDDLE, FIM_PAD]
         )
         self.fim_split_sample = (
-            self._tokenizer.vocab[self._config.fim_split_sample] if self._config.fim_split_sample is not None else None
+            self._tokenizer.vocab[self._config.split_sample] if self._config.split_sample is not None else None
         )
 
     def __call__(self, sample, np_rng):
@@ -61,15 +61,15 @@ class Fim:
         fragment_fim_rate: if set, apply fim with this rate to each fragment.
         """
         if self.fim_split_sample is None:
-            return self._fim_permute_sequence(sequence, np_rng, self._config.fim_rate)
+            return self._fim_permute_sequence(sequence, np_rng, self._config.rate)
         # fim_split_sample is set: split the sample on this token and permute each fragment separately.
         # Typically, if each sample is a repository, then we split again on the file level.
         # Each fragment is a file, and we permute the files.
         fragment_breaks = np.argwhere(sequence == self.fim_split_sample)
         if fragment_breaks.shape == (0, 1):
             # no split token in this sample
-            return self._fim_permute_sequence(sequence, np_rng, self._config.fim_rate)
-        if not np_rng.binomial(1, self._config.fim_rate):
+            return self._fim_permute_sequence(sequence, np_rng, self._config.rate)
+        if not np_rng.binomial(1, self._config.rate):
             # don't do FIM preproc
             return sequence
         # Do FIM on each fragment
@@ -79,12 +79,12 @@ class Fim:
         for loc in np.nditer(fragment_breaks):
             if loc - curr_start_position > 0:
                 permuted = self._fim_permute_sequence(
-                    sequence[curr_start_position:loc], np_rng, self._config.fim_fragment_rate
+                    sequence[curr_start_position:loc], np_rng, self._config.fragment_rate
                 )
                 new_samples += [permuted, [self.fim_split_sample]]
             curr_start_position = loc + 1  # Jump over the split token
         # Permute the segment after the last split token
-        permuted = self._fim_permute_sequence(sequence[curr_start_position:], np_rng, self._config.fim_fragment_rate)
+        permuted = self._fim_permute_sequence(sequence[curr_start_position:], np_rng, self._config.fragment_rate)
         new_samples.append(permuted)
         return np.concatenate(new_samples)
 
@@ -106,10 +106,10 @@ class Fim:
         contents = self._tokenizer.detokenize(sequence)
 
         # Do not apply FIM if the sample starts with no_fim_prefix
-        if self._config.fim_ignore_prefix is not None and contents.startswith(self._config.fim_ignore_prefix):
+        if self._config.ignore_prefix is not None and contents.startswith(self._config.ignore_prefix):
             return sequence
 
-        if self._config.fim_max_middle_len is None:
+        if self._config.max_middle_len is None:
             # Sample the two boundaries uniformly at random
             # A boundary can be =0 (prefix will be empty)
             # a boundary can be =len(contents) (suffix will be empty)
@@ -118,7 +118,7 @@ class Fim:
             boundaries.sort()
         else:
             # Sample a window-length
-            middle_length = np_rng.randint(low=0, high=min(self._config.fim_max_middle_len, len(contents)) + 1)
+            middle_length = np_rng.randint(low=0, high=min(self._config.max_middle_len, len(contents)) + 1)
             first_boundary = np_rng.randint(low=0, high=len(contents) - middle_length + 1)
             # middle_length <= Second-boundary <= len(contents)
             boundaries = [first_boundary, first_boundary + middle_length]
@@ -134,7 +134,7 @@ class Fim:
         # here we truncate each given segment to fit the same length as it was before
         # A consequence is that we never reach the end of a file?
         # we should rather truncate at the context-level
-        if self._config.fim_truncate_or_pad:
+        if self._config.truncate_or_pad:
             # need to make same length as the input. Take the 3 sentinel tokens into account
             new_length = suffix.shape[0] + prefix.shape[0] + middle.shape[0] + 3
             diff = new_length - sequence.shape[0]
@@ -145,7 +145,7 @@ class Fim:
             elif diff < 0:  # too short
                 suffix = np.concatenate([suffix, np.full((-1 * diff), self._pad_tok_id)])
 
-        if np_rng.binomial(1, self._config.fim_spm_rate):
+        if np_rng.binomial(1, self._config.spm_rate):
             # SPM (variant 2 from FIM paper)
             new_sample = np.concatenate(
                 [[self._prefix_tok_id, self._suffix_tok_id], suffix, [self._middle_tok_id], prefix, middle]  # noqa

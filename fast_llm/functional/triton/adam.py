@@ -5,11 +5,11 @@ Simpler and faster than the apex implementation, but doesn't have a multi-tensor
 """
 
 import torch
-import triton
 from torch.optim.adamw import adamw  # noqa
-from triton import language as tl
 
+import triton
 from fast_llm.functional.config import TritonConfig
+from triton import language as tl
 
 
 @triton.jit
