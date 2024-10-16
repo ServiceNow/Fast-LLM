@@ -16,8 +16,12 @@ USER fast_llm
 WORKDIR /app
 
 # Environment settings for Python and PATH
-ENV PYTHONPATH=/app:/app:/app/Megatron-LM \
+ENV PYTHONPATH=/app:/app/Megatron-LM \
     PATH=$PATH:/home/fast_llm/.local/bin/
+
+# Compile the C++ extensions (fast_llm/csrc)
+COPY --chown=fast_llm ./fast_llm/csrc/ fast_llm/csrc/
+RUN make -C ./fast_llm/csrc/
 
 # Copy the dependency files and install dependencies
 COPY --chown=fast_llm setup.py setup.cfg pyproject.toml ./
@@ -28,10 +32,6 @@ COPY --chown=fast_llm ./Megatron-LM Megatron-LM
 COPY --chown=fast_llm ./examples examples
 COPY --chown=fast_llm ./tests tests
 COPY --chown=fast_llm ./tools tools
-
-# Compile the C++ extensions (fast_llm/csrc)
-COPY --chown=fast_llm ./fast_llm/csrc/ fast_llm/csrc/
-RUN make -C ./fast_llm/csrc/
 
 # Copy the main source code for Fast-LLM and install in editable mode
 COPY --exclude=./fast_llm/csrc/ --chown=fast_llm ./fast_llm/ fast_llm/
