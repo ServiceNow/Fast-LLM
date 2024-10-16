@@ -129,7 +129,7 @@ def log_tensor(
 ):
     if level < 1:
         return
-    save_stats = TensorLogs.enabled()
+    save_stats = TensorLogs.config.save
     shape = tuple(tensor.shape)
     _, dtype = str(tensor.dtype).split("torch.")
     txt = [
@@ -189,7 +189,7 @@ def log_tensor(
             samples = tensor.flatten()[: target_samples * step : step].cpu()
             stats.update(samples=samples, step=step)
             # Crop the list in the logs. The full tensor is still in stats.
-            samples = [format_number(x) for x in samples.tolist()[: TensorLogs.max_logged_elements]]
+            samples = [format_number(x) for x in samples.tolist()[: TensorLogs.config.max_elements]]
             num_logged_elements = len(samples)
             samples = ",".join(f"{sample:10s}" for sample in samples)
             txt.append((f"{f'samples (step={step})':21s}", f" ({samples})", num_logged_elements * 11 + 3))
@@ -204,7 +204,7 @@ def log_tensor(
         prefix = "" if prefix is None else f" {prefix}="
         len_ += col_len + len(prefix) + 1
         out = f"{f'{out}{prefix}{str(val)}':{len_}s}"
-    if TensorLogs.verbose:
+    if TensorLogs.config.show:
         return log_fn(out)
 
 

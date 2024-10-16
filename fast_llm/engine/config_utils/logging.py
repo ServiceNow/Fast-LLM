@@ -2,7 +2,9 @@ import logging
 import logging.config
 import math
 import pathlib
-import typing
+
+from fast_llm.config import Config, Field, FieldHint, check_field, config_class, skip_valid_if_none
+from fast_llm.utils import Assert
 
 logger = logging.getLogger(__name__)
 
@@ -53,27 +55,35 @@ def configure_logging(
     logging.config.dictConfig(logging_config)
 
 
-def log(*message, log_fn: typing.Union[BaseException, typing.Callable] = logger.info, join: str = ", "):
-    message = join.join([str(m() if callable(m) else m) for m in message])
-    if isinstance(log_fn, BaseException):
-        raise log_fn(message)
-    else:
-        return log_fn(message)
+@config_class()
+class TensorLogsConfig(Config):
+    save: bool = Field(
+        default=False,
+        desc="Save tensor logs to an artifact file.",
+        hint=FieldHint.logging,
+    )
+    show: bool = Field(
+        default=True,
+        desc="Post all tensor logs to stdout. May lead to extremely large log",
+        hint=FieldHint.logging,
+    )
+    max_elements: int = Field(
+        default=8,
+        desc="Maximum number of tensor values to print for each tensor when posting tensor logs to stdout.",
+        hint=FieldHint.logging,
+        valid=skip_valid_if_none(check_field(Assert.gt, 0)),
+    )
 
 
 class TensorLogs:
     # A global buffer for holding logged tensor stats.
     _tensor_log_stats: list | None = None
-    max_logged_elements = 8
-    verbose: bool = True
+    config: TensorLogsConfig | None = None
 
     @classmethod
-    def reset(cls, enabled=True):
-        cls._tensor_log_stats = [] if enabled else None
-
-    @classmethod
-    def enabled(cls):
-        return cls._tensor_log_stats is not None
+    def reset(cls, config: TensorLogsConfig):
+        cls.config = config
+        cls._tensor_log_stats = [] if config.save else None
 
     @classmethod
     def append(cls, stats):

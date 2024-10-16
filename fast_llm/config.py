@@ -5,11 +5,11 @@ import pathlib
 import traceback
 import types
 import typing
+import warnings
 
 import yaml
 
-from fast_llm.engine.config_utils.logging import log
-from fast_llm.utils import Assert, Tag, get_type_name, header
+from fast_llm.utils import Assert, Tag, get_type_name, header, log
 
 logger = logging.getLogger(__name__)
 
@@ -270,7 +270,7 @@ class Config:
     __class_validated__: typing.ClassVar[bool] = True
     _abstract: typing.ClassVar[bool] = False
     _validated: bool = Field(init=False, repr=False)
-    _unknown_fields: tuple = Field(init=False, repr=False)
+    _unknown_fields: dict[str] = Field(init=False, repr=False)
 
     def __post_init__(self):
         """
@@ -335,7 +335,7 @@ class Config:
             value = getattr(self, name)
             new_value = self._validate_nested(value, field.type, field.name, field.valid, errors, False)
             setattr(self, name, new_value)
-        for name in getattr(self, "_unknown_fields", ()):
+        for name in getattr(self, "_unknown_fields", {}):
             errors.append(f"Unknown field `{name}` in class {self._get_class_name()}")
         if errors:
             # TODO: Option to show traceback for errors.
@@ -621,7 +621,7 @@ class Config:
     @classmethod
     def from_dict(
         cls,
-        default: typing.Union["Config", dict],
+        default: typing.Union["Config", dict[str]],
         *updates: typing.Union["Config", dict[str | tuple[str, ...], typing.Any]],
         strict: bool = True,
     ):
@@ -646,7 +646,7 @@ class Config:
     @classmethod
     def from_flat_dict(
         cls,
-        default: dict,
+        default: dict[str],
         strict: bool = True,
     ):
         # TODO v0.2: Remove flat format
@@ -655,7 +655,7 @@ class Config:
     @classmethod
     def _from_dict(
         cls,
-        default: dict,
+        default: dict[str],
         strict: bool = True,
         flat: bool = False,
     ):
@@ -691,9 +691,9 @@ class Config:
                             f"Invalid field type `{get_type_name(field.type)}` in class {cls._get_class_name()}: "
                             + ", ".join(e.args)
                         )
-        out = cls(**out_arg_dict)  # noqa
-        if strict and default:
-            out._unknown_fields = tuple(default)
+            out = cls(**out_arg_dict)  # noqa
+            if strict and default:
+                out._unknown_fields = default.copy()
         if _AUTO_VALIDATE:
             out.validate()
         return out
@@ -766,6 +766,12 @@ class Config:
         args.extend([typing.Any for _ in range(2 - len(args))])
         # Keys can't include configs so we only recurse on values.
         return {key: cls._from_dict_nested(value_, args[1], strict) for key, value_ in value.items()}
+
+    @classmethod
+    def _handle_renamed_field(cls, default: dict[str], old_name: str, new_name: str):
+        if old_name in default:
+            warnings.warn(f"Field `{old_name}` is deprecated in class {get_type_name(cls)}, use `{new_name}` instead.")
+            default[new_name] = default.pop(old_name)
 
     def compare(self, other: "Config", log_fn: typing.Union[BaseException, typing.Callable] = ValueError):
         # TODO: Check classes?

@@ -7,22 +7,22 @@ from fast_llm.core.kernels import fused_adam, l2_norm, scale_
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.engine.config_utils.run import log_main_rank
 from fast_llm.engine.distributed.distributed import Distributed
-from fast_llm.engine.optimizer.config import OptimizerConfig, ParamGroup
+from fast_llm.engine.optimizer.config import GradientScalerConfig, OptimizerConfig, ParamGroup
 from fast_llm.engine.optimizer.learning_rate import create_schedule_from_config
 from fast_llm.utils import Assert
 
 
-def get_grad_scaler(config: OptimizerConfig, distributed: Distributed) -> "GradScaler":
-    if config.loss_scale:
+def get_grad_scaler(config: GradientScalerConfig, distributed: Distributed) -> "GradScaler":
+    if config.constant:
         return ConstantGradScaler(
-            initial_scale=config.loss_scale,
+            initial_scale=config.constant,
             distributed=distributed,
         )
     elif distributed.config.training_dtype == DataType.float16:
         return DynamicGradScaler(
-            initial_scale=config.initial_loss_scale,
-            min_scale=config.min_loss_scale,
-            growth_interval=config.loss_scale_window,
+            initial_scale=config.initial,
+            min_scale=config.minimum,
+            growth_interval=config.window,
             hysteresis=config.hysteresis,
             distributed=distributed,
         )
@@ -56,15 +56,15 @@ class Optimizer:
         grads_for_norm: list[torch.Tensor],
         distributed: Distributed,
     ):
-        self._config = config.validate()
+        self._config = config
         self._param_groups = _merge_and_filter_groups(param_groups)
         self._grads_for_norm = [g for g in grads_for_norm if g.device.type != "meta" and g.numel() > 0]
         self._grad_norm = None if self._grads_for_norm else torch.zeros([1], device=distributed.device)
         self._grads = [g for group in self._param_groups for g in group.grads]
-        self._grad_scaler = get_grad_scaler(self._config, distributed)
+        self._grad_scaler = get_grad_scaler(self._config.gradient_scaler, distributed)
         self._noop_flag = self._grad_scaler.noop_flag
         self._reduce_group = distributed.world_group
-        self._lr_schedule = create_schedule_from_config(self._config.lr_schedule)
+        self._lr_schedule = create_schedule_from_config(self._config.learning_rate)
 
     def _clip_grad_norm(self):
         # TODO: Optimize this.
@@ -78,9 +78,9 @@ class Optimizer:
                 group=self._reduce_group,
             )
             grad_norm.pow_(0.5)
-        if self._config.clip_grad > 0.0:
+        if self._config.gradient_norm_clipping > 0.0:
             # TODO: Use noop flag instead of clamp.
-            clip_coeff = torch.clamp_max_(self._config.clip_grad / (grad_norm + 1.0e-6), 1.0)
+            clip_coeff = torch.clamp_max_(self._config.gradient_norm_clipping / (grad_norm + 1.0e-6), 1.0)
             # if clip_coeff < 1.0:
             scale_(self._grads, self._noop_flag, clip_coeff)
         return grad_norm
@@ -95,8 +95,12 @@ class Optimizer:
         update_successful = self._grad_scaler.update_successful()
         if update_successful:
             self._optimizer_step += 1
-            lr = self._lr_schedule(self._optimizer_step + self._config.lr_schedule_offset)
-            grad_norm = self._clip_grad_norm().item() if self._config.clip_grad > 0.0 or metrics is not None else None
+            lr = self._lr_schedule(self._optimizer_step)
+            grad_norm = (
+                self._clip_grad_norm().item()
+                if self._config.gradient_norm_clipping > 0.0 or metrics is not None
+                else None
+            )
             for group in self._param_groups:
                 fused_adam(
                     params=group.params,
@@ -104,11 +108,11 @@ class Optimizer:
                     exp_avgs=group.exp_avgs,
                     exp_avg_sqs=group.exp_avgs_sq,
                     noop_flag=self._noop_flag,
-                    lr=lr * (self._config.default_lr_scale if group.lr_scale is None else group.lr_scale),
-                    beta1=self._config.adam_beta1 if group.beta1 is None else group.beta1,
-                    beta2=self._config.adam_beta2 if group.beta2 is None else group.beta2,
+                    lr=lr * (self._config.default_learning_rate_scale if group.lr_scale is None else group.lr_scale),
+                    beta1=self._config.beta_1 if group.beta1 is None else group.beta1,
+                    beta2=self._config.beta_2 if group.beta2 is None else group.beta2,
                     wd=self._config.weight_decay if group.weight_decay is None else group.weight_decay,
-                    eps=self._config.adam_eps if group.eps is None else group.eps,
+                    eps=self._config.epsilon if group.eps is None else group.eps,
                     step=self._optimizer_step,
                 )
 

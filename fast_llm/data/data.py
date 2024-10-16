@@ -9,7 +9,7 @@ import numpy as np
 import torch
 import torch.utils.data
 
-from fast_llm.data.config import AbstractData, DataConfig, DatasetSource, DatasetType
+from fast_llm.data.config import AbstractData, DataConfig, DatasetSource
 from fast_llm.data.dataset import BlendedDataset, SampledDataset, Sampler
 from fast_llm.data.gpt import DummyGPTDataset, GPTDataset, GPTSampledDataset
 from fast_llm.data.mmap import MMapIndexedDataset
@@ -67,35 +67,34 @@ class Data(AbstractData):
         }
 
         data_base_path = None
-        if self._config.dataset_source == DatasetSource.file:
-            Assert.eq(len(self._config.data_path), 1)
-            data_path = pathlib.Path(self._config.data_path[0])
+        if self._config.format == DatasetSource.file:
+            Assert.eq(len(self._config.path), 1)
+            data_path = pathlib.Path(self._config.path[0])
             dataset_defs = json.load(data_path.open("r"))
             data_base_path = data_path.parent
             dataset_prefixes = [dataset_def["prefix"] for dataset_def in dataset_defs["datasets"]]
             dataset_weights = normalize_probs([dataset_def["weight"] for dataset_def in dataset_defs["datasets"]])
             self._build_and_sample_dataset = self._build_and_sample_gpt_dataset
-        elif self._config.dataset_source == DatasetSource.list:
-            Assert.geq(len(self._config.data_path), 1)
-            if len(self._config.data_path) == 1:
-                dataset_prefixes, dataset_weights = [self._config.data_path[0].strip()], [1.0]
+        elif self._config.format == DatasetSource.list:
+            Assert.geq(len(self._config.path), 1)
+            if len(self._config.path) == 1:
+                dataset_prefixes, dataset_weights = [self._config.path[0].strip()], [1.0]
             else:
-                Assert.eq(self._config.dataset_type, DatasetType.gpt)
-                Assert.custom(lambda x: x % 2 == 0, len(self._config.data_path))
-                dataset_prefixes = [x.strip() for x in self._config.data_path[1::2]]
+                Assert.custom(lambda x: x % 2 == 0, len(self._config.path))
+                dataset_prefixes = [x.strip() for x in self._config.path[1::2]]
                 assert len(dataset_prefixes) == len(set(dataset_prefixes))
-                dataset_weights = normalize_probs([float(x) for x in self._config.data_path[::2]])
+                dataset_weights = normalize_probs([float(x) for x in self._config.path[::2]])
             self._build_and_sample_dataset = self._build_and_sample_gpt_dataset
-        elif self._config.dataset_source == DatasetSource.sample:
-            Assert.eq(len(self._config.data_path), 1)
-            dataset_prefixes, dataset_weights = [self._config.data_path[0].strip()], [1.0]
+        elif self._config.format == DatasetSource.sample:
+            Assert.eq(len(self._config.path), 1)
+            dataset_prefixes, dataset_weights = [self._config.path[0].strip()], [1.0]
             self._build_and_sample_dataset = self._build_and_sample_dummy_dataset
-        elif self._config.dataset_source == DatasetSource.random:
-            Assert.eq(len(self._config.data_path), 0)
+        elif self._config.format == DatasetSource.random:
+            Assert.eq(len(self._config.path), 0)
             dataset_prefixes, dataset_weights = [None], [1.0]
             self._build_and_sample_dataset = self._build_and_sample_dummy_dataset
         else:
-            raise NotImplementedError(self._config.dataset_source)
+            raise NotImplementedError(self._config.format)
 
         dataset_names = [
             f"dataset_{i}_{'dummy' if prefix is None else prefix.replace('/','__')}"
@@ -124,7 +123,7 @@ class Data(AbstractData):
         run = get_run()
         Assert.leq(set(samples_per_phase), set(self._phase_split))
         log_main_rank(f"Preparing {self._num_datasets} datasets. This may take several minutes.")
-        self._tokenizer = Tokenizer(self._config.tokenizer) if self._config.fim.fim_rate > 0 else None
+        self._tokenizer = Tokenizer(self._config.tokenizer) if self._config.fim.rate > 0 else None
         self._distributed = distributed
         self._cache_dir = run.dataset_cache_dir
         self._samples_per_phase = samples_per_phase

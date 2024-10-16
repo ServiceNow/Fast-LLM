@@ -34,7 +34,8 @@ def test_checkpoint_and_eval():
     # A baseline config (single-gpu, bf16, flash-attn).
     run_test_script(
         f"test_{TEST_MODEL}_checkpoint_and_eval",
-        CONFIG_COMMON + ["run.checkpoint_interval=1", "training.validation_interval=2", "training.validation_iters=1"],
+        CONFIG_COMMON
+        + ["training.checkpoint.interval=1", "training.validation.interval=2", "training.validation.iterations=1"],
     )
 
 
@@ -62,7 +63,8 @@ def _compare_resume_fn(test_path: pathlib.Path, compare_path: pathlib.Path):
 def test_resume():
     run_test_script(
         f"test_{TEST_MODEL}_resume",
-        CONFIG_COMMON + ["run.checkpoint_interval=1", "training.validation_interval=2", "training.validation_iters=1"],
+        CONFIG_COMMON
+        + ["training.checkpoint.interval=1", "training.validation.interval=2", "training.validation.iterations=1"],
         compare=f"test_{TEST_MODEL}_checkpoint_and_eval",
         prepare_fn=_prepare_resume_fn,
         compare_fn=_compare_resume_fn,
@@ -205,9 +207,9 @@ def test_load_pretrained_distributed_checkpoint():
         yaml.safe_load((_CKPT_PATH / ".." / ".." / "config.yaml").open("r")), strict=False
     )
     pretrained_config_ref = PretrainedCheckpointConfig(
-        pretrained_checkpoint_path=_CKPT_PATH,
-        pretrained_checkpoint_type=CheckpointType.distributed,
-        load_pretrained_optimizer=True,
+        path=_CKPT_PATH,
+        format=CheckpointType.distributed,
+        load_optimizer=True,
         load_full_base_model_config=True,
         load_full_fast_llm_config=True,
     )
@@ -221,16 +223,14 @@ def test_load_pretrained_distributed_checkpoint():
 
 @pytest.mark.depends(on=["test_load_pretrained_distributed_checkpoint"])
 def test_load_converted_distributed_checkpoint():
-    pretrained_config_ref = PretrainedCheckpointConfig(
-        pretrained_checkpoint_path=_CKPT_PATH, pretrained_checkpoint_type=CheckpointType.distributed
-    )
+    pretrained_config_ref = PretrainedCheckpointConfig(path=_CKPT_PATH, format=CheckpointType.distributed)
     pretrained_config_0 = PretrainedCheckpointConfig(
-        pretrained_checkpoint_path=_CONVERT_PATH / "distributed_0",
-        pretrained_checkpoint_type=CheckpointType.distributed,
+        path=_CONVERT_PATH / "distributed_0",
+        format=CheckpointType.distributed,
     )
     pretrained_config_1 = PretrainedCheckpointConfig(
-        pretrained_checkpoint_path=_CONVERT_PATH / "distributed_1",
-        pretrained_checkpoint_type=CheckpointType.distributed,
+        path=_CONVERT_PATH / "distributed_1",
+        format=CheckpointType.distributed,
     )
     config = TEST_MODEL_CONFIG_CLS.from_pretrained(pretrained_config_ref)
     model = TEST_MODEL_CLS.from_pretrained(pretrained_config_0)
@@ -245,14 +245,12 @@ def test_load_converted_distributed_checkpoint():
 
 @pytest.mark.depends(on=["test_converted_state_dict", "test_load_pretrained_distributed_checkpoint"])
 def test_load_converted_state_dict_checkpoint():
-    pretrained_config_ref = PretrainedCheckpointConfig(
-        pretrained_checkpoint_path=_CKPT_PATH, pretrained_checkpoint_type=CheckpointType.distributed
-    )
+    pretrained_config_ref = PretrainedCheckpointConfig(path=_CKPT_PATH, format=CheckpointType.distributed)
     pretrained_config_0 = PretrainedCheckpointConfig(
-        pretrained_checkpoint_path=_CONVERT_PATH / "state_dict_0", pretrained_checkpoint_type=CheckpointType.state_dict
+        path=_CONVERT_PATH / "state_dict_0", format=CheckpointType.state_dict
     )
     pretrained_config_1 = PretrainedCheckpointConfig(
-        pretrained_checkpoint_path=_CONVERT_PATH / "state_dict_1", pretrained_checkpoint_type=CheckpointType.state_dict
+        path=_CONVERT_PATH / "state_dict_1", format=CheckpointType.state_dict
     )
     config = TEST_MODEL_CONFIG_CLS.from_pretrained(pretrained_config_ref)
     model = TEST_MODEL_CLS.from_pretrained(pretrained_config_0)
@@ -268,16 +266,16 @@ def test_load_converted_state_dict_checkpoint():
 @pytest.mark.depends(on=["test_converted_state_dict", "test_load_pretrained_distributed_checkpoint"])
 def test_load_converted_huggingface_checkpoint():
     pretrained_config_ref = PretrainedCheckpointConfig(
-        pretrained_checkpoint_path=_CKPT_PATH,
-        pretrained_checkpoint_type=CheckpointType.distributed,
+        path=_CKPT_PATH,
+        format=CheckpointType.distributed,
     )
     pretrained_config_0 = PretrainedCheckpointConfig(
-        pretrained_checkpoint_path=_CONVERT_PATH / "huggingface_0",
-        pretrained_checkpoint_type=CheckpointType.huggingface,
+        path=_CONVERT_PATH / "huggingface_0",
+        format=CheckpointType.huggingface,
     )
     pretrained_config_1 = PretrainedCheckpointConfig(
-        pretrained_checkpoint_path=_CONVERT_PATH / "huggingface_1",
-        pretrained_checkpoint_type=CheckpointType.huggingface,
+        path=_CONVERT_PATH / "huggingface_1",
+        format=CheckpointType.huggingface,
     )
     config = TEST_MODEL_CONFIG_CLS.from_pretrained(pretrained_config_ref)
     model = TEST_MODEL_CLS.from_pretrained(pretrained_config_0, mode=StageMode.weights)
@@ -294,8 +292,8 @@ def test_load_converted_huggingface_checkpoint():
 def test_run_converted_model():
     model_ref = TEST_MODEL_HF_CLS.from_pretrained(
         PretrainedCheckpointConfig(
-            pretrained_checkpoint_path=_CKPT_PATH,
-            pretrained_checkpoint_type=CheckpointType.distributed,
+            path=_CKPT_PATH,
+            format=CheckpointType.distributed,
         )
     )
     test_input = torch.randint(
@@ -305,8 +303,8 @@ def test_run_converted_model():
     model_from_state_dict = TEST_MODEL_HF_CLS.from_pretrained(_CONVERT_PATH / "state_dict_0")
     model_from_hf = TEST_MODEL_HF_CLS.from_pretrained(
         PretrainedCheckpointConfig(
-            pretrained_checkpoint_path=_CONVERT_PATH / "huggingface_0",
-            pretrained_checkpoint_type=CheckpointType.huggingface,
+            path=_CONVERT_PATH / "huggingface_0",
+            format=CheckpointType.huggingface,
         )
     )
     errors = []
@@ -340,9 +338,9 @@ def test_load_pretrained_distributed_in_dp2():
         f"test_{TEST_MODEL}_load_pretrained_distributed_in_dp2",
         CONFIG_COMMON
         + [
-            "run.checkpoint_interval=1",
+            "training.checkpoint.interval=1",
             "training.train_iters=1",
-            f"pretrained.pretrained_checkpoint_path={_CONVERT_PATH / 'distributed_0'}",
+            f"pretrained.path={_CONVERT_PATH / 'distributed_0'}",
             "schedule.skip_step=True",
         ],
         num_gpus=2,
@@ -355,9 +353,9 @@ def test_load_pretrained_distributed_with_config():
         f"test_{TEST_MODEL}_load_pretrained_distributed_with_config",
         CONFIG_COMMON
         + [
-            "run.checkpoint_interval=1",
+            "training.checkpoint.interval=1",
             "training.train_iters=1",
-            f"pretrained.pretrained_checkpoint_path={_CONVERT_PATH / 'distributed_0'}",
+            f"pretrained.path={_CONVERT_PATH / 'distributed_0'}",
             "schedule.skip_step=True",
         ],
     )
@@ -367,13 +365,13 @@ def test_load_pretrained_distributed_with_config():
 def test_load_pretrained_in_dp2_match_checkpoint():
     test_ckpt_path = TEST_RESULTS_PATH / f"test_{TEST_MODEL}_load_pretrained_distributed_in_dp2" / "checkpoints" / "1"
     pretrained_config_ref = PretrainedCheckpointConfig(
-        pretrained_checkpoint_path=_CKPT_PATH,
-        pretrained_checkpoint_type=CheckpointType.distributed,
+        path=_CKPT_PATH,
+        format=CheckpointType.distributed,
         load_full_fast_llm_config=True,
     )
     pretrained_config_test = PretrainedCheckpointConfig(
-        pretrained_checkpoint_path=test_ckpt_path,
-        pretrained_checkpoint_type=CheckpointType.distributed,
+        path=test_ckpt_path,
+        format=CheckpointType.distributed,
         load_full_fast_llm_config=True,
     )
     config_ref = TEST_MODEL_CONFIG_CLS.from_pretrained(pretrained_config_ref)
@@ -409,17 +407,14 @@ def test_load_pretrained_in_dp2_match_checkpoint():
 def test_load_distributed_checkpoint_dp2():
     # This also tests conversion which uses `FastLLMModel.from_checkpoint`
     pretrained_config_ref = PretrainedCheckpointConfig(
-        pretrained_checkpoint_path=_CKPT_PATH,
-        pretrained_checkpoint_type=CheckpointType.distributed,
+        path=_CKPT_PATH,
+        format=CheckpointType.distributed,
         load_full_base_model_config=True,
         load_full_fast_llm_config=True,
     )
     pretrained_config_test = PretrainedCheckpointConfig(
-        pretrained_checkpoint_path=TEST_RESULTS_PATH
-        / f"test_{TEST_MODEL}_load_pretrained_distributed_in_dp2"
-        / "checkpoints"
-        / "1",
-        pretrained_checkpoint_type=CheckpointType.distributed,
+        path=TEST_RESULTS_PATH / f"test_{TEST_MODEL}_load_pretrained_distributed_in_dp2" / "checkpoints" / "1",
+        format=CheckpointType.distributed,
     )
     config = TEST_MODEL_CONFIG_CLS.from_pretrained(pretrained_config_ref)
     model = TEST_MODEL_CLS.from_pretrained(pretrained_config_test, mode=StageMode.weights)
@@ -436,10 +431,10 @@ def test_load_pretrained_state_dict_in_dp2():
         f"test_{TEST_MODEL}_load_pretrained_state_dict_in_dp2",
         CONFIG_COMMON
         + [
-            "run.checkpoint_interval=1",
+            "training.checkpoint.interval=1",
             "training.train_iters=1",
-            f"pretrained.pretrained_checkpoint_path={_CONVERT_PATH / 'state_dict_0'}",
-            f"pretrained.pretrained_checkpoint_type=state_dict",
+            f"pretrained.path={_CONVERT_PATH / 'state_dict_0'}",
+            f"pretrained.format=state_dict",
             "schedule.skip_step=True",
         ],
         num_gpus=2,
@@ -468,10 +463,10 @@ def test_load_pretrained_huggingface_in_dp2():
         f"test_{TEST_MODEL}_load_pretrained_huggingface_in_dp2",
         CONFIG_COMMON
         + [
-            "run.checkpoint_interval=1",
+            "training.checkpoint.interval=1",
             "training.train_iters=1",
-            f"pretrained.pretrained_checkpoint_path={_CONVERT_PATH / 'huggingface_0'}",
-            f"pretrained.pretrained_checkpoint_type=huggingface",
+            f"pretrained.path={_CONVERT_PATH / 'huggingface_0'}",
+            f"pretrained.format=huggingface",
             "schedule.skip_step=True",
         ],
         num_gpus=2,

@@ -200,3 +200,11 @@ class Registry:
 class LazyRegistry(Registry):
     def __getitem__(self, key):
         return super().__getitem__(key)()
+
+
+def log(*message, log_fn: typing.Union[BaseException, typing.Callable] = logger.info, join: str = ", "):
+    message = join.join([str(m() if callable(m) else m) for m in message])
+    if isinstance(log_fn, BaseException):
+        raise log_fn(message)
+    else:
+        return log_fn(message)
