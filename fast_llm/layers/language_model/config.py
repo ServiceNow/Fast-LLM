@@ -81,6 +81,20 @@ class LanguageModelArchitectureConfig(BaseModelArchitectureConfig):
         # TODO: Set through num embeddings instead instead.
         return self.use_position_embeddings
 
+    @classmethod
+    def from_flat_dict(
+        cls,
+        default: dict[str],
+        strict: bool = True,
+    ):
+        # The backward compatibility fix in `NormalizationArchitectureConfig`
+        # won't work for older checkpoints saved with a flat config.
+        # TODO v0.2: Remove flat format
+        cls._handle_renamed_field(default, "normalization_type", "type")
+        cls._handle_renamed_field(default, "layer_norm_eps", "epsilon")
+        cls._handle_renamed_field(default, "zero_centered_normalization", "zero_centered")
+        return super().from_flat_dict(default, strict)
+
 
 @config_class()
 class LanguageModelBaseConfig(LanguageModelArchitectureConfig, BaseModelConfig):
