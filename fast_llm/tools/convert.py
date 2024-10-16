@@ -63,9 +63,9 @@ class ConversionConfig(RunnableConfig):
         logger.info(f"Loading {self.input_type} checkpoint from {self.input_path}...")
         model = model_class.from_pretrained(
             PretrainedCheckpointConfig(
-                pretrained_checkpoint_path=self.input_path,
-                pretrained_checkpoint_type=self.input_type,
-                imported_model_type=self.model_type,
+                path=self.input_path,
+                format=self.input_type,
+                imported_type=self.model_type,
             ),
             mode=StageMode.weights,
             use_cpu=self.use_cpu,
@@ -111,9 +111,9 @@ class ConversionConfig(RunnableConfig):
             # Create a dummy version to determine the stage split.
             model = model_class.from_pretrained(
                 PretrainedCheckpointConfig(
-                    pretrained_checkpoint_path=self.input_path,
-                    pretrained_checkpoint_type=self.input_type,
-                    imported_model_type=self.model_type,
+                    path=self.input_path,
+                    format=self.input_type,
+                    imported_type=self.model_type,
                     load_pretrained_weights=False,
                 ),
                 mode=StageMode.off_device,

@@ -2,7 +2,6 @@ import torch
 import torch._dynamo  # noqa
 import torch.autograd
 
-import fast_llm.utils
 from fast_llm.core.distributed import ProcessGroup, ReduceOp, all_reduce
 from fast_llm.functional.config import CrossEntropyImpl
 from fast_llm.functional.triton.cross_entropy import triton_cross_entropy_forward_backward
@@ -53,7 +52,7 @@ def fused_cross_entropy_forward_backward(logits, target, grad_output: float | No
 
         grad = exp_logits.to(logits.dtype)
 
-    loss = fast_llm.utils.log().sub(logits_norm.gather(1, target).squeeze(1)).mean()
+    loss = sum_exp_logits.log().sub(logits_norm.gather(1, target).squeeze(1)).mean()
 
     return loss, grad
 
@@ -100,7 +99,7 @@ def parallel_cross_entropy_forward_backward(
 
     predicted_logits = (target_mask * logits_norm.gather(1, target)).squeeze(1)
     all_reduce(predicted_logits, op=ReduceOp.SUM, group=group)
-    loss = fast_llm.utils.log().sub(predicted_logits).mean()
+    loss = sum_exp_logits.log().sub(predicted_logits).mean()
 
     return loss, grad
 

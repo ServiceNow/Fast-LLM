@@ -56,8 +56,9 @@ class Trainer(abc.ABC):
         )
         steps_per_split = {
             PhaseType.training: self._config.training.train_iters,
-            PhaseType.validation: (self._config.training.train_iters // self._config.training.validation.interval + 1)
-            * self._config.training.validation.iters,
+            PhaseType.validation: self._config.training.validation.get_completed_iterations(
+                self._config.training.train_iters, 1
+            ),
             PhaseType.test: self._config.training.test_iters,
         }
         self._samples_per_split = {
@@ -129,11 +130,7 @@ class Trainer(abc.ABC):
     @property
     def _completed_validation_steps(self) -> int:
         # Number of validation steps performed before the current step
-        return (
-            (self._completed_steps - 1)
-            // self._config.training.validation.interval
-            * self._config.training.validation.iters
-        )
+        return self._config.training.validation.get_completed_iterations(self._completed_steps - 1)
 
     def run(self):
         assert self._is_setup
@@ -291,11 +288,7 @@ class Trainer(abc.ABC):
                 # Evaluation
                 # TODO: Adjust valid iterator length.
                 if PhaseType.validation in self._samples_per_split and (
-                    done
-                    or (
-                        self._config.training.validation.interval
-                        and self._completed_steps % self._config.training.validation.interval == 0
-                    )
+                    done or self._config.training.validation.enabled(self._completed_steps)
                 ):
                     if valid_iterator is None:
                         valid_iterator = self._get_data_iterator(
@@ -304,7 +297,7 @@ class Trainer(abc.ABC):
                     metrics[PhaseType.validation] = self._evaluate(
                         data_iterator=valid_iterator,
                         phase=PhaseType.validation,
-                        num_iters=self._config.training.validation.iters,
+                        num_iters=self._config.training.validation.iterations,
                         begin_iter=self._completed_validation_steps,
                     )
                     formatted_metrics = format_metrics(

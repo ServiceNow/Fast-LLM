@@ -62,8 +62,8 @@ class HuggingfaceModelConfig(transformers.PretrainedConfig):
             pretrained = pretrained_model_name_or_path
         else:
             pretrained = PretrainedConfig(
-                pretrained_checkpoint_path=pathlib.Path(pretrained_model_name_or_path),
-                pretrained_checkpoint_type=CheckpointType.state_dict,
+                path=pathlib.Path(pretrained_model_name_or_path),
+                format=CheckpointType.state_dict,
             )
         metadata = cls.model_config_class.load_pretrained_metadata(pretrained)
         updates = {}

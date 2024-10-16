@@ -51,6 +51,17 @@ class NormalizationArchitectureConfig(BaseModelArchitectureConfig):
         hint=FieldHint.stability,
     )
 
+    def _from_dict(
+        cls,
+        default: dict[str],
+        strict: bool = True,
+        flat: bool = False,
+    ):
+        cls._handle_renamed_field(default, "normalization_type", "type")
+        cls._handle_renamed_field(default, "layer_norm_eps", "epsilon")
+        cls._handle_renamed_field(default, "zero_centered_normalization", "zero_centered")
+        return super()._from_dict(default, strict, flat)
+
 
 @config_class()
 class NormalizationConfig(NormalizationArchitectureConfig, BaseModelConfig):
@@ -90,3 +101,13 @@ class NormalizationConfig(NormalizationArchitectureConfig, BaseModelConfig):
             return RMSNorm(**kwargs)
         else:
             raise ValueError(self.type)
+
+    def _from_dict(
+        cls,
+        default: dict[str],
+        strict: bool = True,
+        flat: bool = False,
+    ):
+        cls._handle_renamed_field(default, "normalization_implementation", "implementation")
+        cls._handle_renamed_field(default, "layer_norm_init_range", "initialization_range")
+        return super()._from_dict(default, strict, flat)

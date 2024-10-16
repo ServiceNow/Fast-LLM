@@ -113,9 +113,7 @@ class FastLLMModel(MultiStageModel):
         # TODO: Handle barriers, ok file, etc. here
         # TODO: More safety checks
         # TODO: Integrate to load_checkpoint.
-        pretrained_config = PretrainedCheckpointConfig(
-            pretrained_checkpoint_path=directory, pretrained_checkpoint_type=CheckpointType.distributed
-        )
+        pretrained_config = PretrainedCheckpointConfig(path=directory, format=CheckpointType.distributed)
         metadata = self.config_class.load_pretrained_metadata(pretrained_config)
         with self._LoadContext(self, safe=False, load_optimizer=True, reset_pads=False) as context:
             Assert.eq(
@@ -575,7 +573,6 @@ class FastLLMModel(MultiStageModel):
         metadata = self.config_class.load_pretrained_metadata(pretrained_config)
         loaded_pretrained_config = pretrained_config.to_copy(
             {
-                "use_pretrained_config": True,
                 "load_full_base_model_config": True,
                 "load_full_fast_llm_config": True,
             },

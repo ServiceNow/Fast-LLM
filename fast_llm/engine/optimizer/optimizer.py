@@ -56,15 +56,15 @@ class Optimizer:
         grads_for_norm: list[torch.Tensor],
         distributed: Distributed,
     ):
-        self._config = config.validate()
+        self._config = config
         self._param_groups = _merge_and_filter_groups(param_groups)
         self._grads_for_norm = [g for g in grads_for_norm if g.device.type != "meta" and g.numel() > 0]
         self._grad_norm = None if self._grads_for_norm else torch.zeros([1], device=distributed.device)
         self._grads = [g for group in self._param_groups for g in group.grads]
-        self._grad_scaler = get_grad_scaler(self._config, distributed)
+        self._grad_scaler = get_grad_scaler(self._config.gradient_scaler, distributed)
         self._noop_flag = self._grad_scaler.noop_flag
         self._reduce_group = distributed.world_group
-        self._lr_schedule = create_schedule_from_config(self._config.schedule)
+        self._lr_schedule = create_schedule_from_config(self._config.learning_rate)
 
     def _clip_grad_norm(self):
         # TODO: Optimize this.

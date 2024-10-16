@@ -98,6 +98,12 @@ class ValidationConfig(get_interval_config_class("validation")):
         valid=skip_valid_if_none(check_field(Assert.gt, 0)),
     )
 
+    def get_completed_iterations(self, training_iterations: int, completed_validations: int = 0):
+        # Number of completed validation iterations
+        return (
+            (training_iterations // self.interval + completed_validations) * self.iterations if self.enabled() else 0
+        )
+
 
 @config_class()
 class CheckpointConfig(get_interval_config_class("checkpoint")):

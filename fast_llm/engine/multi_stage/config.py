@@ -233,7 +233,7 @@ class PretrainedConfig(Config):
 
 @config_class()
 class PretrainedCheckpointConfig(PretrainedConfig):
-    # Load weights from pretrained_checkpoint_path (if applicable),
+    # Load weights from path (if applicable),
     # otherwise reinitialize them (i.e. load the config only.)
     load_weights: bool = Field(default=True, desc="Load model weights from the checkpoint.", hint=FieldHint.feature)
     load_optimizer: bool = Field(
