@@ -33,9 +33,9 @@ DATASET_PREFIX = TEST_RESULTS_PATH / "data" / "dataset/data"
 
 
 CONFIG_BASE_FAST_LLM = [
-    "run.log_interval=1",
-    "run.save_tensor_logs=True",
-    "run.show_tensor_logs=False",
+    "training.logs.interval=1",
+    "run.tensor_logs.save=True",
+    "run.tensor_logs.show=False",
     "model.base_model.transformer.num_layers=2",
     "model.base_model.transformer.hidden_size=1024",
     "model.base_model.transformer.num_attention_heads=8",
@@ -51,8 +51,8 @@ CONFIG_BASE_FAST_LLM = [
     "training.num_workers=4",
     "batch.batch_size=8",
     "batch.sequence_length=2048",
-    f"data.data_path={DATASET_PREFIX}",
-    "optimizer.lr_schedule.lr=0.0001",
+    f"data.path={DATASET_PREFIX}",
+    "optimizer.learning_rate.base=0.0001",
 ]
 CONFIG_BASE_MEGATRON = [
     "--num-layers=2",
@@ -116,7 +116,7 @@ CONFIG_MISTRAL_FAST_LLM = CONFIG_SC2_FAST_LLM + [
     "model.base_model.transformer.gated=True",
     "model.base_model.transformer.activation_type=silu",
     "model.base_model.transformer.add_linear_biases=False",
-    "model.base_model.transformer.normalization.normalization_type=rms_norm",
+    "model.base_model.transformer.normalization.type=rms_norm",
     "model.base_model.transformer.ffn_hidden_size=4096",
     "model.base_model.tie_word_embeddings=False",
 ]

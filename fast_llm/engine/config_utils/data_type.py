@@ -6,6 +6,7 @@ from fast_llm.utils import Assert
 if typing.TYPE_CHECKING:
     import numpy as np
     import torch
+
     from triton import language as tl
 
 

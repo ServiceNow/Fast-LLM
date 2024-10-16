@@ -8,7 +8,8 @@ from fast_llm.engine.distributed.config import PhaseType
 from fast_llm.engine.huggingface.config import HuggingfaceModelConfig
 from fast_llm.engine.huggingface.model import HuggingfacePreTrainedModel
 from fast_llm.layers.transformer.config import TransformerKwargs
-from fast_llm.models.gpt.model import GPTModel, GPTModelConfig
+from fast_llm.models.gpt.config import GPTModelConfig
+from fast_llm.models.gpt.model import GPTModel
 
 logger = logging.getLogger(__name__)
 
