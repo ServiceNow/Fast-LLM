@@ -25,7 +25,7 @@ RUN make -C ./fast_llm/csrc/
 
 # Copy the dependency files and install dependencies
 COPY --chown=fast_llm setup.py setup.cfg pyproject.toml ./
-RUN PIP_NO_INPUT=1 pip3 install --no-cache-dir ".[CORE,OPTIONAL,DEV]"
+RUN PIP_NO_INPUT=1 pip3 install --no-cache-dir -e ".[CORE,OPTIONAL,DEV]"
 
 # Copy the rest of the code
 COPY --chown=fast_llm ./Megatron-LM Megatron-LM
@@ -35,4 +35,3 @@ COPY --chown=fast_llm ./tools tools
 
 # Copy the main source code for Fast-LLM and install in editable mode
 COPY --exclude=./fast_llm/csrc/ --chown=fast_llm ./fast_llm/ fast_llm/
-RUN PIP_NO_INPUT=1 pip3 install --no-deps -e .
