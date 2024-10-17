@@ -27,8 +27,8 @@ model:
     distributed_timeout: 60.0
     training_dtype: float32
 pretrained:
-  pretrained_checkpoint_path: null
-  pretrained_checkpoint_type: distributed
+  path: null
+  format: distributed
 batch:
   micro_batch_size: 1
   depth_first_micro_batches: 1
@@ -42,13 +42,13 @@ data:
   - 969.0
   - 30.0
   - 1.0
-  dataset_source: list
-  data_path:
+  format: list
+  path:
   - fkgtiu
   data_sample_warn_time_ms: 1000.0
 profiling:
-  profile_cuda: false
-  profile_ranks: []
+  cuda: false
+  ranks: []
 optimizer:
   weight_decay: 0.01
   initial_loss_scale: 65536.0

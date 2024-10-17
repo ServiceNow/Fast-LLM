@@ -9,10 +9,10 @@ import torch
 from fast_llm.core.distributed import safe_barrier
 from fast_llm.data.config import AbstractData
 from fast_llm.data.data import Data
+from fast_llm.engine.config_utils.checkpoint import CheckpointSaveConfig, CheckpointType
 from fast_llm.engine.config_utils.run import Run, is_main_rank, log_main_rank, log_pipeline_parallel_main_rank
 from fast_llm.engine.distributed.config import PhaseType
 from fast_llm.engine.distributed.distributed import Distributed
-from fast_llm.engine.multi_stage.config import CheckpointConfig, CheckpointType
 from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
 from fast_llm.engine.optimizer.config import ParamGroup
 from fast_llm.engine.optimizer.optimizer import Optimizer
@@ -56,8 +56,10 @@ class Trainer(abc.ABC):
         )
         steps_per_split = {
             PhaseType.training: self._config.training.train_iters,
-            PhaseType.validation: self._config.training.validation.get_completed_iterations(
-                self._config.training.train_iters, 1
+            PhaseType.validation: self._config.training.validation.get_iteration_count(
+                self._config.training.train_iters,
+                # There may be an extra validation after the last training step.
+                not self._config.training.validation.enabled(self._config.training.train_iters),
             ),
             PhaseType.test: self._config.training.test_iters,
         }
@@ -130,7 +132,7 @@ class Trainer(abc.ABC):
     @property
     def _completed_validation_steps(self) -> int:
         # Number of validation steps performed before the current step
-        return self._config.training.validation.get_completed_iterations(self._completed_steps - 1)
+        return self._config.training.validation.get_iteration_count(self._completed_steps - 1)
 
     def run(self):
         assert self._is_setup
@@ -365,10 +367,10 @@ class Trainer(abc.ABC):
     def _prepare_training_state(self):
         # Setup the training state.
         if (last_iteration := self._run.get_last_checkpoint()) is None:
-            if (path := self._config.pretrained.path) is not None and self._config.pretrained.load_weights:
+            if (path := self._config.pretrained.path) is not None and self._config.pretrained.model_weights:
                 log_main_rank(
                     f"Initializing training state from pretrained checkpoint at {path}"
-                    f" ({'loading' if self._config.pretrained.load_optimizer else 'resetting'}"
+                    f" ({'loading' if self._config.pretrained.optimizer_state else 'resetting'}"
                     f" optimizer state)..."
                 )
                 self._multi_stage.load_pretrained_checkpoint(self._config.pretrained)
@@ -412,7 +414,7 @@ class Trainer(abc.ABC):
             if metrics is not None:
                 metadata["metrics"] = {key.value: value for key, value in metrics.items()}
             self._multi_stage.save_checkpoint(
-                CheckpointConfig(checkpoint_type=CheckpointType.distributed, checkpoint_path=checkpoint.directory),
+                CheckpointSaveConfig(path=checkpoint.directory, format=CheckpointType.distributed),
                 metadata,
             )
         if export and self._run.is_main_rank:  # noqa

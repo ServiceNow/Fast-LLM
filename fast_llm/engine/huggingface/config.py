@@ -5,7 +5,8 @@ import typing
 
 import transformers
 
-from fast_llm.engine.multi_stage.config import CheckpointType, FastLLMModelConfig, PretrainedConfig
+from fast_llm.engine.config_utils.checkpoint import CheckpointMetadataConfig, CheckpointType
+from fast_llm.engine.multi_stage.config import FastLLMModelConfig
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +36,7 @@ class HuggingfaceModelConfig(transformers.PretrainedConfig):
             transformers.configuration_utils.CONFIG_NAME = _backup
 
     @classmethod
-    def _get_config_dict(cls, pretrained_model_name_or_path: str | os.PathLike | PretrainedConfig, **kwargs):
+    def _get_config_dict(cls, pretrained_model_name_or_path: str | os.PathLike | CheckpointMetadataConfig, **kwargs):
         # TODO: Support download from hub/url
 
         # Unused arguments, remove to avoid warnings.
@@ -55,13 +56,13 @@ class HuggingfaceModelConfig(transformers.PretrainedConfig):
 
         # Get the pretrained config.
         if "pretrained" in kwargs:
-            assert isinstance(kwargs["pretrained"], PretrainedConfig)
+            assert isinstance(kwargs["pretrained"], CheckpointMetadataConfig)
             assert kwargs["pretrained"].path == pretrained_model_name_or_path
             pretrained = kwargs.pop("pretrained")
-        elif isinstance(pretrained_model_name_or_path, PretrainedConfig):
+        elif isinstance(pretrained_model_name_or_path, CheckpointMetadataConfig):
             pretrained = pretrained_model_name_or_path
         else:
-            pretrained = PretrainedConfig(
+            pretrained = CheckpointMetadataConfig(
                 path=pathlib.Path(pretrained_model_name_or_path),
                 format=CheckpointType.state_dict,
             )

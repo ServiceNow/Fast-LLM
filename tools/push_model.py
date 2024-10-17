@@ -6,6 +6,7 @@ import re
 import shutil
 import subprocess
 
+from fast_llm.engine.config_utils.checkpoint import CheckpointType
 from fast_llm.engine.config_utils.runnable import RunnableConfig
 
 try:
@@ -26,7 +27,6 @@ except ImportError as e:
 
 
 from fast_llm.config import Config, config_class, Field  # isort:skip
-from fast_llm.engine.multi_stage.config import CheckpointType  # isort:skip
 from fast_llm.tools.convert import ConversionConfig  # isort:skip
 
 
@@ -149,7 +149,7 @@ class PushConfig(RunnableConfig):
                 # Block until the conversion is done
                 ConversionConfig(
                     input_type=CheckpointType.distributed,
-                    output_type=CheckpointType.huggingface,
+                    output_type=CheckpointType.external,
                     input_path=checkpoint_path,
                     output_path=checkpoint_path_hf,
                     model_type=self.model_type,

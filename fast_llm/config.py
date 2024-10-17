@@ -153,6 +153,14 @@ class Field(dataclasses.Field):
         self.valid = valid
 
 
+class FieldUpdate(dict):
+    """
+    Specify some entries in the field that should be updated from the base class.
+    Useful for changing the default or description in a derived class.
+    Processed in `__init_subclass__`.
+    """
+
+
 def check_field(fn, *args, **kwargs):
     """
     Helper function to define a condition that a config field should satisfy,
@@ -811,3 +819,26 @@ class Config:
             cls.__class_validated__
         ), f"Parent class of config class {cls.__name__} has not been validated. Make sure to use the @config_class decorator."
         cls.__class_validated__ = False
+        for key, value in cls.__dict__:
+            if isinstance(value, FieldUpdate):
+                base_class_field = cls.get_field(key)
+                cls.__dict__[key] = Field(
+                    desc=kwargs.pop("desc", base_class_field.desc),
+                    doc=kwargs.pop("doc", base_class_field.doc),
+                    hint=kwargs.pop("hint", base_class_field.hint),
+                    valid=kwargs.pop("valid", base_class_field.valid),
+                    default=kwargs.pop("default", base_class_field.default),
+                    default_factory=kwargs.pop("default_factory", base_class_field.default_factory),
+                    repr=kwargs.pop("repr", base_class_field.repr),
+                    hash=kwargs.pop("hash", base_class_field.hash),
+                    compare=kwargs.pop("compare", base_class_field.compare),
+                    metadata=kwargs.pop("metadata", base_class_field.metadata),
+                    kw_only=kwargs.pop("kw_only", base_class_field.kw_only),
+                )
+                if key in cls.__annotations__:
+                    # TODO: Generalize to other type hints.
+                    if isinstance(cls.__annotations__[key], type) and isinstance(base_class_field.type, type):
+                        Assert.custom(issubclass, cls.__annotations__[key], base_class_field.type)
+                else:
+                    # dataclasses expects an annotation, so we use the one from the base class.
+                    cls.__annotations__[key] = base_class_field.type
