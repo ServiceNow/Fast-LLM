@@ -1,7 +1,6 @@
 import logging
 import os
 import pathlib
-import shutil
 import typing
 import warnings
 
@@ -207,9 +206,6 @@ class Run:
             torch.save(tensor_stats, self.open_artifact(f"tensor_logs_{iteration}.pt", mode="wb"))
             TensorLogs.reset(self._config.tensor_logs)
 
-    def get_save_checkpoint_context(self, iteration: int, export: bool = False, keep: int | None = None):
-        return self._SaveCheckpointContext(self, iteration, export, keep)
-
     def get_load_checkpoint_context(self, iteration: int):
         return self._LoadCheckpointContext(self, iteration)
 
@@ -236,35 +232,6 @@ class Run:
         def directory(self):
             return self._directory
 
-    class _SaveCheckpointContext(_CheckpointContext):
-        def __init__(self, run: "Run", iteration: int, export: bool = False, keep: int | None = None):
-            super().__init__(run, iteration)
-            self._export = export
-            self._keep = keep
-            if self._export:
-                self._link_directory = self._directory
-                self._directory = self._run._export_dir / str(self._iteration)
-
-        def __enter__(self):
-            assert self._run._is_running
-            if self._run._is_main_rank:
-                logger.info(f"Saving checkpoint at iteration {self._iteration}")
-                self._directory.mkdir(parents=True)
-                if self._export:
-                    (self._run._checkpoint_dir / str(self._iteration)).symlink_to(self._directory)
-            # Barrier to ensure the directory is created correctly (and didn't exist before).
-            self._run.barrier(f"save {self._iteration} enter")
-            return self
-
-        def __exit__(self, exc_type, exc_val, exc_tb):
-            if not exc_type:
-                self._run.barrier(f"save {self._iteration} exit")
-                if self._run._is_main_rank:
-                    # Prevent corrupted checkpoint.
-                    (self._directory / "ok").open("w")
-                    logger.info(f"Checkpoint saved to {self._directory}")
-                    self._run._delete_old_checkpoints(self._keep)
-
     class _LoadCheckpointContext(_CheckpointContext):
         def __enter__(self):
             assert self._run._is_running
@@ -274,19 +241,6 @@ class Run:
         def __exit__(self, exc_type, exc_val, exc_tb):
             if not exc_type:
                 self._run.barrier(f"load {self._iteration} exit")
-
-    def _delete_old_checkpoints(self, keep: int | None):
-        assert self._is_running
-        if keep is None:
-            return
-        checkpoints = sorted(int(path.name) for path in self._checkpoint_dir.iterdir())
-        for checkpoint in checkpoints[:-keep]:
-            path = self._checkpoint_dir / str(checkpoint)
-            logger.info(f"Deleting checkpoint at {path}")
-            try:
-                shutil.rmtree(path, ignore_errors=True)
-            except OSError as e:
-                logger.warning(f"Could not remove checkpoint directory: {e.args}")
 
     def get_last_checkpoint(self):
         assert self._is_running

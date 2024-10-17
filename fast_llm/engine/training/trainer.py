@@ -1,6 +1,7 @@
 import abc
 import logging
 import math
+import shutil
 import time
 import typing
 
@@ -9,7 +10,6 @@ import torch
 from fast_llm.core.distributed import safe_barrier
 from fast_llm.data.config import AbstractData
 from fast_llm.data.data import Data
-from fast_llm.engine.config_utils.checkpoint import CheckpointSaveConfig, CheckpointType
 from fast_llm.engine.config_utils.run import Run, is_main_rank, log_main_rank, log_pipeline_parallel_main_rank
 from fast_llm.engine.distributed.config import PhaseType
 from fast_llm.engine.distributed.distributed import Distributed
@@ -18,7 +18,7 @@ from fast_llm.engine.optimizer.config import ParamGroup
 from fast_llm.engine.optimizer.optimizer import Optimizer
 from fast_llm.engine.schedule.runner import ScheduleRunner
 from fast_llm.engine.schedule.schedule import Schedule
-from fast_llm.engine.training.config import TrainerConfig
+from fast_llm.engine.training.config import CheckpointBaseConfig, TrainerConfig
 from fast_llm.engine.training.wandb import Wandb
 from fast_llm.logging import format_metrics, get_memory_usage_mib, log_memory_usage
 from fast_llm.utils import Assert
@@ -313,10 +313,10 @@ class Trainer(abc.ABC):
                     self._wandb.log_metrics(self._completed_steps, metrics)
 
                 if self._config.training.checkpoint.enabled(None if stop else self._completed_steps):
-                    self._save_checkpoint(
-                        metrics,
-                        export=self._config.training.export.enabled(None if done else self._completed_steps),
-                    )
+                    self._save_checkpoint(self._config.training.checkpoint, metrics)
+
+                if self._config.training.export.enabled(None if done else self._completed_steps):
+                    self._save_checkpoint(self._config.training.export, metrics)
 
         return done, metrics
 
@@ -402,23 +402,42 @@ class Trainer(abc.ABC):
             prefetch_factor=prefetch_factor,
         )
 
-    def _save_checkpoint(self, metrics: dict[PhaseType, dict[str, float | int]] | None, export: bool = False):
-        assert self._is_setup
-        with self._run.get_save_checkpoint_context(
-            self._completed_steps, export, self._config.training.checkpoint.keep
-        ) as checkpoint:
-            metadata = {
-                "optimizer": self._optimizer.save(),
-                "completed_steps": self._completed_steps,
-            }
-            if metrics is not None:
-                metadata["metrics"] = {key.value: value for key, value in metrics.items()}
-            self._multi_stage.save_checkpoint(
-                CheckpointSaveConfig(path=checkpoint.directory, format=CheckpointType.distributed),
-                metadata,
-            )
-        if export and self._run.is_main_rank:  # noqa
-            self._config.training.export.callback.run()
+    def _save_checkpoint(self, config: CheckpointBaseConfig, metrics: dict[PhaseType, dict[str, float | int]] | None):
+        checkpoint_base_directory = self._run.experiment_directory / config.save_name
+        checkpoint_directory = checkpoint_base_directory / str(self._completed_steps)
+
+        # Create the checkpoint
+        log_main_rank(f"Saving {config.save_name} at iteration {self._completed_steps}")
+        checkpoint_directory.mkdir(exist_ok=False, parents=True)
+        # Barrier to ensure the directory is created correctly (and didn't exist before).
+        self._run.barrier(f"{config.save_name} {self._completed_steps} enter")
+
+        metadata = {
+            "optimizer": self._optimizer.save(),
+            "completed_steps": self._completed_steps,
+        }
+        if metrics is not None:
+            metadata["metrics"] = {key.value: value for key, value in metrics.items()}
+        self._multi_stage.save_checkpoint(config.get_save_config(checkpoint_directory), metadata)
+
+        # Barrier to ensure everyone is done.
+        self._run.barrier(f"{config.save_name} {self._completed_steps} exit")
+        # Mark the checkpoint as complete.
+        (checkpoint_directory / "ok").open("w")
+        logger.info(f"Saved {config.save_name} to {checkpoint_directory}")
+
+        to_delete = config.to_delete(sorted(int(path.name) for path in checkpoint_directory.iterdir()))
+
+        for iteration in to_delete:
+            path = checkpoint_base_directory / str(iteration)
+            logger.info(f"Deleting {config.save_name} at {path}")
+            try:
+                shutil.rmtree(path, ignore_errors=True)
+            except OSError as e:
+                logger.warning(f"Could not remove {config.save_name} directory: {e.args}")
+
+        if self._run.is_main_rank:  # noqa
+            config.callback.run()
 
     @abc.abstractmethod
     def get_tflops(self, phase: PhaseType, elapsed_time_per_iteration) -> tuple[int, int]:

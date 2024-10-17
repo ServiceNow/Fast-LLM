@@ -65,6 +65,34 @@ class IntervalConfig(Config):
         return (iteration - self.offset) // self.interval + 1 if self.enabled() else 0
 
 
+def _validate_script(value):
+    if isinstance(value, str):
+        value = shlex.split(value)
+    Assert.geq(len(value), 1)
+    return value
+
+
+@config_class()
+class CallbackConfig(Config):
+    script: list[str] | None = Field(
+        default=None,
+        desc="Shell script to run.",
+        hint=FieldHint.feature,
+        valid=skip_valid_if_none(_validate_script),
+    )
+    environment: dict[str, str] = Field(
+        default_factory=dict,
+        desc="Environment variables to add to the script.",
+        hint=FieldHint.feature,
+    )
+
+    def run(self):
+        if self.script is not None:
+            environment = os.environ.copy()
+            environment.update(self.environment)
+            subprocess.Popen(self.script, env=environment)
+
+
 @config_class()
 class WandbAlertConfig(IntervalConfig):
     interval = FieldUpdate(
@@ -131,23 +159,50 @@ class ValidationConfig(IntervalConfig):
 
 
 @config_class()
-class CheckpointConfig(IntervalConfig):
-    interval = FieldUpdate(
-        desc="The number of training iterations between each checkpoint." " Setting to None will disable checkpoints."
+class CheckpointBaseConfig(IntervalConfig):
+    save_name: typing.ClassVar[str] = "save"
+    callback: CallbackConfig = Field(
+        default_factory=CallbackConfig,
+        desc="Callback (shell script).",
+        hint=FieldHint.core,
     )
-    offset = FieldUpdate(desc="Offset for the first checkpoint.")
     keep: int | None = Field(
-        default=5,
-        desc="The maximum number of checkpoints to keep. When exceeding this value, checkpoints are deleted starting from the older ones.",
+        default=None,
+        desc="The maximum number of saves to keep. When exceeding this value, checkpoints are deleted starting from the older ones.",
         hint=FieldHint.feature,
         valid=skip_valid_if_none(check_field(Assert.gt, 0)),
     )
     keep_every: int | None = Field(
         default=None,
-        desc="Keep every nth checkpoint, i.e. Exclude it from the checkpoint count and deletion in `keep`.",
+        desc="Keep every nth saves, i.e. Exclude it from the checkpoint count and deletion in `keep`.",
         hint=FieldHint.feature,
         valid=skip_valid_if_none(check_field(Assert.gt, 0)),
     )
+
+    def get_save_config(self, path: pathlib.Path):
+        raise NotImplementedError()
+
+    def to_delete(self, iterations: list[int]):
+        if not self.keep:
+            return []
+        # Ignore checkpoints that aren't supposed to be there.
+        iterations = [iteration for iteration in iterations if self.enabled(iteration)]
+        # Ignore excluded checkpoints.
+        if self.keep_every:
+            iterations = [iteration for iteration in iterations if self.get_count(iteration) % self.keep_every != 0]
+        # Exclude the last `keep`.
+        return iterations[: -self.keep]
+
+
+@config_class()
+class CheckpointConfig(CheckpointBaseConfig):
+    save_name: typing.ClassVar[str] = "checkpoint"
+    interval = FieldUpdate(
+        desc="The number of training iterations between each checkpoint." " Setting to None will disable checkpoints."
+    )
+    offset = FieldUpdate(desc="Offset for the first checkpoint.")
+    callback: CallbackConfig = FieldUpdate(desc="Callback (shell script) to run after checkpoint.")
+    keep: int | None = FieldUpdate(default=5)
 
     def get_save_config(self, path: pathlib.Path):
         return CheckpointSaveConfig(
@@ -159,45 +214,14 @@ class CheckpointConfig(IntervalConfig):
         )
 
 
-def _validate_script(value):
-    if isinstance(value, str):
-        value = shlex.split(value)
-    Assert.geq(len(value), 1)
-    return value
-
-
 @config_class()
-class CallbackConfig(Config):
-    script: list[str] | None = Field(
-        default=None,
-        desc="Shell script to run after.",
-        hint=FieldHint.feature,
-        valid=skip_valid_if_none(_validate_script),
-    )
-    environment: dict[str, str] = Field(
-        default_factory=dict,
-        desc="Environment variables to add to the script.",
-        hint=FieldHint.feature,
-    )
-
-    def run(self):
-        if self.script is not None:
-            environment = os.environ.copy()
-            environment.update(self.environment)
-            subprocess.Popen(self.script, env=environment)
-
-
-@config_class()
-class ExportConfig(IntervalConfig, CheckpointConfigBase, CheckpointStateConfigBase, CheckpointSaveConfigBase):
+class ExportConfig(CheckpointBaseConfig, CheckpointConfigBase, CheckpointStateConfigBase, CheckpointSaveConfigBase):
+    save_name: typing.ClassVar[str] = "export"
     interval = FieldUpdate(
         desc="The number of training iterations between each export." " Setting to None will disable exports."
     )
     offset = FieldUpdate(desc="Offset for the first export.")
-    callback: CallbackConfig = Field(
-        default_factory=CallbackConfig,
-        desc="Callback (shell script) to run after export.",
-        hint=FieldHint.core,
-    )
+    callback: CallbackConfig = FieldUpdate(desc="Callback (shell script) to run after export.")
 
     def get_save_config(self, path: pathlib.Path):
         return CheckpointSaveConfig.from_dict(self, {"path": path}, strict=False)
