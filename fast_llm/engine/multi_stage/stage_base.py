@@ -239,6 +239,8 @@ class StageBase:
             def _replace(module: torch.nn.Module):
                 nonlocal i
                 for key in module._parameters:  # noqa
+                    if module._parameters[key] is None:
+                        continue
                     meta = typing.cast(ParameterMeta, module._parameters[key])  # noqa
                     module._parameters[key] = self._parameter_buffers[self._parameter_index[meta.tensor_name]]  # noqa
                     i += 1
