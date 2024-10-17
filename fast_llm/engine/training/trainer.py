@@ -1,55 +1,48 @@
 import abc
-import json
 import logging
 import math
-import os
-import shlex
-import subprocess
 import time
 import typing
 
 import torch
-import wandb
 
 from fast_llm.core.distributed import safe_barrier
+from fast_llm.data.config import AbstractData
 from fast_llm.data.data import Data
+from fast_llm.engine.config_utils.run import Run, is_main_rank, log_main_rank, log_pipeline_parallel_main_rank
 from fast_llm.engine.distributed.config import PhaseType
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.engine.multi_stage.config import CheckpointConfig, CheckpointType
 from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
 from fast_llm.engine.optimizer.config import ParamGroup
 from fast_llm.engine.optimizer.optimizer import Optimizer
-from fast_llm.engine.run.run import Run, is_main_rank, log_main_rank, log_pipeline_parallel_main_rank
 from fast_llm.engine.schedule.runner import ScheduleRunner
 from fast_llm.engine.schedule.schedule import Schedule
 from fast_llm.engine.training.config import TrainerConfig
+from fast_llm.engine.training.wandb import Wandb
 from fast_llm.logging import format_metrics, get_memory_usage_mib, log_memory_usage
 from fast_llm.utils import Assert
 
 logger = logging.getLogger(__name__)
 
 
-class Trainer:
+class Trainer(abc.ABC):
     config_class: typing.ClassVar[type[TrainerConfig]] = TrainerConfig
     model_class: typing.ClassVar[type[FastLLMModel]] = FastLLMModel
     # TODO: Generalize data, schedule, logging, etc.
     _is_setup: bool = False
     _distributed: Distributed
     _run: Run
+    _wandb: Wandb
     _optimizer: Optimizer
+
     _completed_steps: int
 
     def __init__(self, config: TrainerConfig):
         Assert.custom(isinstance, config, self.config_class)
         config.validate()
         self._config = config
-        self._data = Data(
-            config=self._config.data,
-            distributed_config=self._config.distributed,
-            # TODO: `vocab_size` is not generic.
-            vocab_size=self._config.base_model.vocab_size,  # Noqa
-            max_sequence_length=self._config.batch.sequence_length,
-        )
+        self._data = self._get_data()
         log_main_rank("Creating model...")
         self._multi_stage = self.model_class(
             self._config.model,
@@ -63,8 +56,9 @@ class Trainer:
         )
         steps_per_split = {
             PhaseType.training: self._config.training.train_iters,
-            PhaseType.validation: (self._config.training.train_iters // self._config.training.validation_interval + 1)
-            * self._config.training.validation_iters,
+            PhaseType.validation: self._config.training.validation.get_completed_iterations(
+                self._config.training.train_iters, 1
+            ),
             PhaseType.test: self._config.training.test_iters,
         }
         self._samples_per_split = {
@@ -90,6 +84,7 @@ class Trainer:
         self._is_setup = True
         self._distributed = distributed
         self._run = run
+        self._wandb = Wandb(self._config.training.wandb, self._run, self._config)
 
         # Setup the model.
         with torch.no_grad():
@@ -112,6 +107,16 @@ class Trainer:
         log_main_rank("Preparing datasets...")
         self._data.setup(distributed, self._samples_per_split)
 
+    @abc.abstractmethod
+    def _get_data(self) -> AbstractData:
+        return Data(
+            config=self._config.data,
+            distributed_config=self._config.distributed,
+            # TODO: `vocab_size` is not generic.
+            vocab_size=self._config.base_model.vocab_size,  # Noqa
+            max_sequence_length=self._config.batch.sequence_length,
+        )
+
     @property
     def _consumed_samples(self):
         assert self._is_setup
@@ -125,14 +130,14 @@ class Trainer:
     @property
     def _completed_validation_steps(self) -> int:
         # Number of validation steps performed before the current step
-        return (
-            (self._completed_steps - 1)
-            // self._config.training.validation_interval
-            * self._config.training.validation_iters
-        )
+        return self._config.training.validation.get_completed_iterations(self._completed_steps - 1)
 
     def run(self):
         assert self._is_setup
+        with self._wandb:
+            self._run_training()
+
+    def _run_training(self):
         self._prepare_training_state()
         log_main_rank("done with setup ...")
         log_pipeline_parallel_main_rank(lambda: log_memory_usage(f"After initial setup", str))
@@ -158,9 +163,9 @@ class Trainer:
             )
             formatted_metrics = format_metrics(metrics[PhaseType.test], self._loss_defs, PhaseType.test)
             log_main_rank(formatted_metrics)
-            self._run.post_wandb_alert("Testing results", formatted_metrics, wandb.AlertLevel.WARN)
+            self._wandb.alert("Testing results", formatted_metrics, "WARN")
             # TODO: This may erase some metrics.
-            self._run.log_wandb_metrics(self._completed_steps, metrics)
+            self._wandb.log_metrics(self._completed_steps, metrics)
 
     def _train(self):
         # Tracking loss.
@@ -174,9 +179,6 @@ class Trainer:
             distributed_config=self._config.distributed, start_step=self._completed_steps
         )
 
-        # The triton compilation during the first iteration breaks parallel data loading
-        # https://github.com/ServiceNow/Fast-LLM/issues/101,
-        # so we run the first iteration without it.
         train_iterator = self._get_data_iterator(
             PhaseType.training,
             self._completed_steps,
@@ -198,10 +200,7 @@ class Trainer:
             while not stop:
                 # Iteration starts at 1, so we increment at the beginning.
                 self._completed_steps += 1
-                is_logging = (
-                    self._config.run.log_interval
-                    and (self._completed_steps - self._config.run.log_offset) % self._config.run.log_interval == 0
-                )
+                is_logging = self._config.training.logs.enabled(self._completed_steps)
 
                 # TODO: Data loader hates getting all micro-batches at once.
                 #   (Also preprocessing adds overhead)
@@ -226,7 +225,7 @@ class Trainer:
                 if is_logging:
                     # TODO: Synchronization is probably unnecessary.
                     safe_barrier(self._distributed.world_group, f"logging {self._completed_steps}")
-                    if is_main_rank():
+                    if self._run.is_main_rank:
                         new_time = time.perf_counter()
                         time_per_iteration = (new_time - last_time) / (self._completed_steps - last_iteration)
                         average_time_per_iteration = (new_time - start_time) / (
@@ -271,13 +270,8 @@ class Trainer:
                             metrics[PhaseType.training], self._loss_defs, PhaseType.training
                         )
                         logger.info(formatted_metrics)
-                        if (
-                            self._config.run.wandb_status_interval
-                            and (self._completed_steps - self._config.run.log_offset)
-                            % self._config.run.wandb_status_interval
-                            == 0
-                        ):
-                            self._run.post_wandb_alert("Training results", formatted_metrics, wandb.AlertLevel.INFO)
+                        if self._config.training.wandb.alert.enabled(self._completed_steps):
+                            self._wandb.alert("Training results", formatted_metrics, "INFO")
 
                     advanced_iters = 0
                     skipped_iters = 0
@@ -290,18 +284,11 @@ class Trainer:
 
                 done = self._completed_steps >= self._config.training.train_iters
                 # TODO: Signal-based stop.
-                stop = done or (
-                    self._config.run.stop_interval
-                    and (self._completed_steps - self._config.run.stop_offset) % self._config.run.stop_interval == 0
-                )
+                stop = done or self._config.training.shutdown.enabled(self._completed_steps)
                 # Evaluation
                 # TODO: Adjust valid iterator length.
                 if PhaseType.validation in self._samples_per_split and (
-                    done
-                    or (
-                        self._config.training.validation_interval
-                        and self._completed_steps % self._config.training.validation_interval == 0
-                    )
+                    done or self._config.training.validation.enabled(self._completed_steps)
                 ):
                     if valid_iterator is None:
                         valid_iterator = self._get_data_iterator(
@@ -310,39 +297,23 @@ class Trainer:
                     metrics[PhaseType.validation] = self._evaluate(
                         data_iterator=valid_iterator,
                         phase=PhaseType.validation,
-                        num_iters=self._config.training.validation_iters,
+                        num_iters=self._config.training.validation.iterations,
                         begin_iter=self._completed_validation_steps,
                     )
                     formatted_metrics = format_metrics(
                         metrics[PhaseType.validation], self._loss_defs, PhaseType.validation
                     )
                     log_main_rank(formatted_metrics)
-                    if (
-                        self._config.run.wandb_status_interval
-                        and (self._completed_steps - self._config.run.log_offset)
-                        % self._config.run.wandb_status_interval
-                        == 0
-                    ):
-                        self._run.post_wandb_alert("Validation results", formatted_metrics, wandb.AlertLevel.INFO)
+                    if self._config.training.wandb.alert.enabled(self._completed_steps):
+                        self._wandb.alert("Validation results", formatted_metrics, "INFO")
 
                 if is_main_rank() and metrics:
-                    self._run.log_wandb_metrics(self._completed_steps, metrics)
+                    self._wandb.log_metrics(self._completed_steps, metrics)
 
-                if self._config.run.checkpoint_interval and (
-                    stop
-                    or (
-                        self._config.run.checkpoint_interval
-                        and (self._completed_steps - self._config.run.checkpoint_offset)
-                        % self._config.run.checkpoint_interval
-                        == 0
-                    )
-                ):
+                if self._config.training.checkpoint.enabled(None if stop else self._completed_steps):
                     self._save_checkpoint(
                         metrics,
-                        export=self._config.run.export_interval
-                        and (self._completed_steps - self._config.run.checkpoint_offset)
-                        % self._config.run.export_interval
-                        == 0,
+                        export=self._config.training.export.enabled(None if done else self._completed_steps),
                     )
 
         return done, metrics
@@ -394,12 +365,10 @@ class Trainer:
     def _prepare_training_state(self):
         # Setup the training state.
         if (last_iteration := self._run.get_last_checkpoint()) is None:
-            if (
-                path := self._config.pretrained.pretrained_checkpoint_path
-            ) is not None and self._config.pretrained.load_pretrained_weights:
+            if (path := self._config.pretrained.path) is not None and self._config.pretrained.load_weights:
                 log_main_rank(
                     f"Initializing training state from pretrained checkpoint at {path}"
-                    f" ({'loading' if self._config.pretrained.load_pretrained_optimizer else 'resetting'}"
+                    f" ({'loading' if self._config.pretrained.load_optimizer else 'resetting'}"
                     f" optimizer state)..."
                 )
                 self._multi_stage.load_pretrained_checkpoint(self._config.pretrained)
@@ -433,7 +402,9 @@ class Trainer:
 
     def _save_checkpoint(self, metrics: dict[PhaseType, dict[str, float | int]] | None, export: bool = False):
         assert self._is_setup
-        with self._run.get_save_checkpoint_context(self._completed_steps, export) as checkpoint:
+        with self._run.get_save_checkpoint_context(
+            self._completed_steps, export, self._config.training.checkpoint.keep
+        ) as checkpoint:
             metadata = {
                 "optimizer": self._optimizer.save(),
                 "completed_steps": self._completed_steps,
@@ -444,11 +415,8 @@ class Trainer:
                 CheckpointConfig(checkpoint_type=CheckpointType.distributed, checkpoint_path=checkpoint.directory),
                 metadata,
             )
-        if export and self._run.is_main_rank and self._config.training.export_callback_script:  # noqa
-            custom_env = os.environ.copy()
-            if self._config.training.export_callback_env:
-                custom_env.update(json.loads(self._config.training.export_callback_env))
-            subprocess.Popen(shlex.split(self._config.training.export_callback_script), env=custom_env)
+        if export and self._run.is_main_rank:  # noqa
+            self._config.training.export.callback.run()
 
     @abc.abstractmethod
     def get_tflops(self, phase: PhaseType, elapsed_time_per_iteration) -> tuple[int, int]:

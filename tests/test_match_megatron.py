@@ -27,7 +27,7 @@ def test_sc1_match_meg():
     # QKV tensors are in a different format.
     run_test_script(
         "test_sc1_match_meg",
-        CONFIG_SC1_FAST_LLM + ["--use_megatron_initialization=1"],
+        CONFIG_SC1_FAST_LLM + ["model.base_model.use_megatron_initialization=True"],
         compare="test_sc1_meg",
         config=CompareConfig(
             ignore_tensors=[
@@ -53,7 +53,7 @@ def test_sc2_match_meg():
     # dense not matching because of the way initialization is corrected for RoPE format.
     run_test_script(
         "test_sc2_match_meg",
-        CONFIG_SC2_FAST_LLM + ["--use_megatron_initialization=1"],
+        CONFIG_SC2_FAST_LLM + ["model.base_model.use_megatron_initialization=True"],
         compare="test_sc2_meg",
         config=CompareConfig(
             ignore_tensors=[
@@ -78,7 +78,7 @@ def test_gpt2_match_meg():
     # QKV tensors are in a different format.
     run_test_script(
         "test_gpt2_match_meg",
-        CONFIG_GPT2_FAST_LLM + ["--use_megatron_initialization=1"],
+        CONFIG_GPT2_FAST_LLM + ["model.base_model.use_megatron_initialization=True"],
         compare="test_gpt2_meg",
         config=CompareConfig(
             ignore_tensors=[
@@ -102,7 +102,7 @@ def test_mistral_match_meg():
     # Mistral with Fast-LLM.
     run_test_script(
         "test_mistral_match_meg",
-        CONFIG_MISTRAL_FAST_LLM + ["--use_megatron_initialization=1"],
+        CONFIG_MISTRAL_FAST_LLM + ["model.base_model.use_megatron_initialization=True"],
         compare="test_mistral_meg",
         config=CompareConfig(
             ignore_tensors=[
@@ -127,7 +127,7 @@ def test_mixtral_match_meg():
     # Mistral with Fast-LLM.
     run_test_script(
         "test_mixtral_match_meg",
-        CONFIG_MIXTRAL_FAST_LLM + ["--use_megatron_initialization=1"],
+        CONFIG_MIXTRAL_FAST_LLM + ["model.base_model.use_megatron_initialization=True"],
         compare="test_mixtral_meg",
         config=CompareConfig(
             ignore_tensors=[

@@ -1,5 +1,6 @@
 import logging
 
+from fast_llm.data.data import Data
 from fast_llm.engine.distributed.config import PhaseType
 from fast_llm.engine.training.trainer import Trainer
 from fast_llm.models.gpt.config import GPTTrainerConfig
@@ -10,8 +11,17 @@ logger = logging.getLogger(__name__)
 
 class GPTTrainer(Trainer):
     _abstract = False
+    _config: GPTTrainerConfig
     config_class = GPTTrainerConfig
     model_class = GPTModel
+
+    def _get_data(self):
+        return Data(
+            config=self._config.data,
+            distributed_config=self._config.distributed,
+            vocab_size=self._config.base_model.vocab_size,
+            max_sequence_length=self._config.batch.sequence_length,
+        )
 
     def get_tflops(self, phase: PhaseType, elapsed_time_per_iteration) -> tuple[int, int]:
         # TODO: Do in model, automate/generalize, get other stats

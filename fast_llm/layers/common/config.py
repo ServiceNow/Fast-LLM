@@ -36,31 +36,43 @@ class NormalizationArchitectureConfig(BaseModelArchitectureConfig):
     _abstract = False
     # TODO: Remove "normalization" from names once we have fully nested configs?
     # Normalization type
-    normalization_type: NormalizationType = Field(
+    type: NormalizationType = Field(
         default=NormalizationType.layer_norm,
         desc="The type of normalization to use, for example Layer Norm or RMS Norm.",
         hint=FieldHint.core,
     )
     # TODO: Rename to normalization_epsilon
-    layer_norm_eps: float = Field(
+    epsilon: float = Field(
         default=1e-5, desc="Regularizer for the division.", hint=FieldHint.stability, valid=check_field(Assert.gt, 0)
     )
-    zero_centered_normalization: bool = Field(
+    zero_centered: bool = Field(
         default=False,
         desc="Write the normalization weight as `w = 1 + w'`, to improve numerical accuracy when close to one.",
         hint=FieldHint.stability,
     )
 
+    @classmethod
+    def _from_dict(
+        cls,
+        default: dict[str],
+        strict: bool = True,
+        flat: bool = False,
+    ):
+        cls._handle_renamed_field(default, "normalization_type", "type")
+        cls._handle_renamed_field(default, "layer_norm_eps", "epsilon")
+        cls._handle_renamed_field(default, "zero_centered_normalization", "zero_centered")
+        return super()._from_dict(default, strict, flat)
+
 
 @config_class()
 class NormalizationConfig(NormalizationArchitectureConfig, BaseModelConfig):
-    normalization_implementation: NormalizationImplementation = Field(
+    implementation: NormalizationImplementation = Field(
         default=NormalizationImplementation.auto,
         desc="The implementation to use for the normalization layer.",
         hint=FieldHint.performance,
     )
     # TODO: Rename to normalization_init_range
-    layer_norm_init_range: float = Field(
+    initialization_range: float = Field(
         default=0.0,
         desc="Randomize the initialization with a uniform noise. Used to test for issues that may not be visible with the default initialization.",
         hint=FieldHint.testing,
@@ -73,20 +85,31 @@ class NormalizationConfig(NormalizationArchitectureConfig, BaseModelConfig):
 
         kwargs = {
             "hidden_dim": hidden_dim,
-            "eps": self.layer_norm_eps,
-            "implementation": self.normalization_implementation,
-            "zero_centered": self.zero_centered_normalization,
+            "eps": self.epsilon,
+            "implementation": self.implementation,
+            "zero_centered": self.zero_centered,
         }
-        if self.layer_norm_init_range:
-            mean = 0 if self.zero_centered_normalization else 1
+        if self.initialization_range:
+            mean = 0 if self.zero_centered else 1
             kwargs["weight_init_method"] = init_uniform_(
-                mean - self.layer_norm_init_range, mean + self.layer_norm_init_range
+                mean - self.initialization_range, mean + self.initialization_range
             )
-        if self.normalization_type == NormalizationType.layer_norm:
-            if self.layer_norm_init_range:
-                kwargs["bias_init_method"] = init_uniform_(-self.layer_norm_init_range, self.layer_norm_init_range)
+        if self.type == NormalizationType.layer_norm:
+            if self.initialization_range:
+                kwargs["bias_init_method"] = init_uniform_(-self.initialization_range, self.initialization_range)
             return LayerNorm(**kwargs)
-        elif self.normalization_type == NormalizationType.rms_norm:
+        elif self.type == NormalizationType.rms_norm:
             return RMSNorm(**kwargs)
         else:
-            raise ValueError(self.normalization_type)
+            raise ValueError(self.type)
+
+    @classmethod
+    def _from_dict(
+        cls,
+        default: dict[str],
+        strict: bool = True,
+        flat: bool = False,
+    ):
+        cls._handle_renamed_field(default, "normalization_implementation", "implementation")
+        cls._handle_renamed_field(default, "layer_norm_init_range", "initialization_range")
+        return super()._from_dict(default, strict, flat)

@@ -7,7 +7,7 @@ import numpy as np
 import torch.utils.data
 
 from fast_llm.core.distributed import ProcessGroup, safe_barrier
-from fast_llm.engine.run.run import log_main_rank
+from fast_llm.engine.config_utils.run import log_main_rank
 from fast_llm.utils import Assert
 
 try:

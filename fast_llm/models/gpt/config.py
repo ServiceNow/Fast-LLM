@@ -1,6 +1,7 @@
 import typing
 
 from fast_llm.config import Field, FieldHint, config_class
+from fast_llm.data.config import DataConfig
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig, PretrainedFastLLMModelConfig
 from fast_llm.engine.training.config import TrainerConfig
 from fast_llm.layers.language_model.config import LanguageModelArchitectureConfig, LanguageModelBaseConfig
@@ -87,6 +88,13 @@ class PretrainedGPTModelConfig(PretrainedFastLLMModelConfig):
 
 @config_class()
 class GPTTrainerConfig(PretrainedGPTModelConfig, TrainerConfig):
+
+    data: DataConfig = Field(
+        default_factory=DataConfig,
+        desc="Configuration for the dataset and model-independent preprocessing.",
+        hint=FieldHint.core,
+    )
+
     def _setup(self):
         super()._setup()
         if self.batch.sequence_length is None:

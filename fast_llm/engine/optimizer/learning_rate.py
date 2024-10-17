@@ -105,16 +105,20 @@ _STAGE_TYPE_MAP = {
 
 def create_schedule_from_config(config: LearningRateScheduleConfig) -> LearningRateSchedule:
     stages = []
-    if config.lr_schedule is None:
-        if config.lr_warmup_iters > 0:
-            stages.append(PowerLRStage(begin_step=0, end_step=config.lr_warmup_iters, lr=0, end_lr=config.lr))
-        kwargs = {"begin_step": config.lr_warmup_iters, "end_step": config.lr_decay_iters, "lr": float(config.lr)}
-        if config.lr_decay_style != "constant":
-            kwargs.update(end_lr=config.min_lr, power=config.lr_decay_power)
-        stages.append(_STAGE_TYPE_MAP[config.lr_decay_style](**kwargs))
+    if config.schedule is None:
+        if config.warmup_iterations > 0:
+            stages.append(PowerLRStage(begin_step=0, end_step=config.warmup_iterations, lr=0, end_lr=config.base))
+        kwargs = {
+            "begin_step": config.warmup_iterations,
+            "end_step": config.decay_iterations,
+            "lr": float(config.base),
+        }
+        if config.decay_style != "constant":
+            kwargs.update(end_lr=config.minimum, power=config.decay_power)
+        stages.append(_STAGE_TYPE_MAP[config.decay_style](**kwargs))
     else:
         begin_step = 0
-        for stage_arg_str in config.lr_schedule.split(";"):
+        for stage_arg_str in config.schedule.split(";"):
             try:
                 for stage_type, num_steps, lr, *stage_args in stage_arg_str.split(","):
                     assert begin_step is not None

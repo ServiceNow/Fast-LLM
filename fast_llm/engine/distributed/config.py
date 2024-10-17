@@ -125,6 +125,10 @@ class DistributedConfig(Config):
     TODO: Separate distributed space from config?
     """
 
+    default_world_size: typing.ClassVar[int] = int(os.environ.get("WORLD_SIZE", 1))
+    default_local_world_size: typing.ClassVar[int] = int(os.environ.get("LOCAL_WORLD_SIZE", 1))
+    default_rank: typing.ClassVar[int] = int(os.environ.get("RANK", 0))
+
     tensor_parallel: int = Field(
         default=1, desc="Tensor parallelism group size.", hint=FieldHint.performance, valid=check_field(Assert.gt, 0)
     )
@@ -249,11 +253,11 @@ class DistributedConfig(Config):
 
     def _validate(self):
         if self.world_size is None:
-            self.world_size = int(os.environ.get("WORLD_SIZE", 1))
+            self.world_size = self.default_world_size
         if self.rank is None:
-            self.rank = int(os.environ.get("RANK", 0))
+            self.rank = self.default_rank
         if self.local_world_size is None:
-            self.local_world_size = int(os.environ.get("LOCAL_WORLD_SIZE", 1))
+            self.local_world_size = self.default_local_world_size
         self.model_parallel = self.tensor_parallel * self.pipeline_parallel
         self.data_parallel = div(self.world_size, self.model_parallel)
         self.num_nodes = div(self.world_size, self.local_world_size)

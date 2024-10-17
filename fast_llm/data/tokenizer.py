@@ -1,7 +1,7 @@
 from transformers import PreTrainedTokenizerFast
 
 from fast_llm.data.config import EOD, TokenizerConfig
-from fast_llm.engine.run.run import log_main_rank
+from fast_llm.engine.config_utils.run import log_main_rank
 
 
 class Tokenizer:
@@ -10,9 +10,9 @@ class Tokenizer:
     """
 
     def __init__(self, config: TokenizerConfig):
-        log_main_rank(f"> loading tokenizer from {config.tokenizer_file} ...")
+        log_main_rank(f"> loading tokenizer from {config.path} ...")
         special_tokens = [EOD]
-        self.tokenizer = PreTrainedTokenizerFast(tokenizer_file=config.tokenizer_file, errors="replace", max_len=None)
+        self.tokenizer = PreTrainedTokenizerFast(tokenizer_file=config.path, errors="replace", max_len=None)
         self.tokenizer.add_special_tokens({"additional_special_tokens": special_tokens})
         self.eod_id = self.tokenizer.vocab[EOD]
         # Token->id mapping for additional special-tokens

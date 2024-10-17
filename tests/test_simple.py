@@ -10,7 +10,12 @@ def test_model_safe():
     # The safest possible config, identical to the one in test_match_megatron except for the initialization.
     run_test_script(
         f"test_{TEST_MODEL}_safe",
-        CONFIG_FAST_LLM + ["--torch_dynamo_enable=0", "--data_overlap=0", "--dropless_moe=0"],
+        CONFIG_FAST_LLM
+        + [
+            "run.torch_dynamo_enable=False",
+            "schedule.data_overlap=False",
+            "model.base_model.transformer.dropless_moe=False",
+        ],
     )
 
 
@@ -30,7 +35,10 @@ def test_model_dp2():
 def test_model_tp2():
     # Simple tensor-parallel.
     run_test_script(
-        f"test_{TEST_MODEL}_tp2", CONFIG_COMMON + ["--tensor-parallel=2"], num_gpus=2, compare=f"test_{TEST_MODEL}"
+        f"test_{TEST_MODEL}_tp2",
+        CONFIG_COMMON + ["model.distributed.tensor_parallel=2"],
+        num_gpus=2,
+        compare=f"test_{TEST_MODEL}",
     )
 
 
@@ -38,7 +46,9 @@ def test_model_tp2():
 def test_model_ce4():
     # Cross-entropy splits.
     run_test_script(
-        f"test_{TEST_MODEL}_ce4", CONFIG_COMMON + ["--cross_entropy_splits=4"], compare=f"test_{TEST_MODEL}"
+        f"test_{TEST_MODEL}_ce4",
+        CONFIG_COMMON + ["model.base_model.cross_entropy_splits=4"],
+        compare=f"test_{TEST_MODEL}",
     )
 
 
@@ -46,7 +56,10 @@ def test_model_ce4():
 def test_model_dp2_z2():
     # Data-parallel with zero stage 2.
     run_test_script(
-        f"test_{TEST_MODEL}_dp2_z2", CONFIG_COMMON + ["--zero_stage=2"], num_gpus=2, compare=f"test_{TEST_MODEL}"
+        f"test_{TEST_MODEL}_dp2_z2",
+        CONFIG_COMMON + ["model.multi_stage.zero_stage=2"],
+        num_gpus=2,
+        compare=f"test_{TEST_MODEL}",
     )
 
 
@@ -54,5 +67,8 @@ def test_model_dp2_z2():
 def test_model_dp2_z3():
     # Data-parallel with zero stage 3.
     run_test_script(
-        f"test_{TEST_MODEL}_dp2_z3", CONFIG_COMMON + ["--zero_stage=3"], num_gpus=2, compare=f"test_{TEST_MODEL}"
+        f"test_{TEST_MODEL}_dp2_z3",
+        CONFIG_COMMON + ["model.multi_stage.zero_stage=3"],
+        num_gpus=2,
+        compare=f"test_{TEST_MODEL}",
     )

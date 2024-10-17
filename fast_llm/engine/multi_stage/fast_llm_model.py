@@ -8,10 +8,8 @@ import safetensors.torch
 import torch
 import yaml
 
-from fast_llm.config import FieldVerboseLevel
 from fast_llm.core.distributed import all_reduce, broadcast, safe_barrier
 from fast_llm.engine.base_model.base_model import BaseModel
-from fast_llm.engine.base_model.config import BaseModelArchitectureConfig
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.engine.multi_stage.config import (
     CHECKPOINT_VERSION,
@@ -101,23 +99,21 @@ class FastLLMModel(MultiStageModel):
             raise NotImplementedError(checkpoint_config.checkpoint_type)
 
     def load_pretrained_checkpoint(self, pretrained_config: PretrainedCheckpointConfig):
-        if pretrained_config.pretrained_checkpoint_type == CheckpointType.distributed:
+        if pretrained_config.format == CheckpointType.distributed:
             # TODO: Check if same format.
             self._load_distributed_checkpoint(pretrained_config)
-        elif pretrained_config.pretrained_checkpoint_type == CheckpointType.state_dict:
+        elif pretrained_config.format == CheckpointType.state_dict:
             self._load_state_dict_checkpoint(pretrained_config)
-        elif pretrained_config.pretrained_checkpoint_type == CheckpointType.huggingface:
+        elif pretrained_config.format == CheckpointType.huggingface:
             self._import_checkpoint(pretrained_config)
         else:
-            raise NotImplementedError(pretrained_config.pretrained_checkpoint_type)
+            raise NotImplementedError(pretrained_config.format)
 
     def load_distributed_checkpoint_same_format(self, directory: pathlib.Path):
         # TODO: Handle barriers, ok file, etc. here
         # TODO: More safety checks
         # TODO: Integrate to load_checkpoint.
-        pretrained_config = PretrainedCheckpointConfig(
-            pretrained_checkpoint_path=directory, pretrained_checkpoint_type=CheckpointType.distributed
-        )
+        pretrained_config = PretrainedCheckpointConfig(path=directory, format=CheckpointType.distributed)
         metadata = self.config_class.load_pretrained_metadata(pretrained_config)
         with self._LoadContext(self, safe=False, load_optimizer=True, reset_pads=False) as context:
             Assert.eq(
@@ -170,7 +166,7 @@ class FastLLMModel(MultiStageModel):
             model.setup(Distributed(config.distributed, use_cpu=use_cpu), mode=mode)
 
             if mode.on_device:
-                if pretrained_config.load_pretrained_weights:
+                if pretrained_config.load_weights:
                     model.load_pretrained_checkpoint(pretrained_config)
                 else:
                     model.initialize_weights()
@@ -202,7 +198,6 @@ class FastLLMModel(MultiStageModel):
             *,
             directory: pathlib.Path,
             save_optimizer: bool,
-            full_metadata: bool,
         ):
             assert model._is_setup
             assert model._is_loaded
@@ -211,22 +206,13 @@ class FastLLMModel(MultiStageModel):
             self.self_shard = model._state_shard[: self.num_shards]
             self.shard_names = model._state_shard_names[: self.num_shards]
             self.directory = directory
-            # TODO v0.2: remove config parts, `full_metadata`
             self.metadata = {
                 "checkpoint_type": CheckpointType.distributed.value,
                 "checkpoint_version": str(CHECKPOINT_VERSION),
                 "fast_llm_config": model.fast_llm_config.to_serialized(),
-                "model_config": model._base_model_config.to_flat_dict(),
                 "state_shard_names": list(model._state_shard_names[: self.num_shards]),
                 "metadata": metadata,
             }
-            if full_metadata:
-                self.metadata.update(
-                    {
-                        "multi_stage_config": model._multi_stage_config.to_flat_dict(),
-                        "distributed_config": model._distributed_config.to_flat_dict(),
-                    }
-                )
 
         def __enter__(self):
             # Is a context for future-proofing.
@@ -243,13 +229,10 @@ class FastLLMModel(MultiStageModel):
             *,
             directory: pathlib.Path,
             save_optimizer: bool,
-            full_metadata: bool,
             base_file_name: str,
             target_params_per_file,
         ):
-            super().__init__(
-                model, metadata, directory=directory, save_optimizer=save_optimizer, full_metadata=full_metadata
-            )
+            super().__init__(model, metadata, directory=directory, save_optimizer=save_optimizer)
             self.distributed_config = model._distributed_config
             self.distributed = model._distributed
             self.base_file_name = (
@@ -332,7 +315,6 @@ class FastLLMModel(MultiStageModel):
             metadata,
             directory=checkpoint_config.checkpoint_path,
             save_optimizer=checkpoint_config.save_optimizer,
-            full_metadata=True,
         ) as context:
             if self._distributed_config.rank == 0:
                 yaml.safe_dump(context.metadata, (context.directory / "metadata.yaml").open("w"))
@@ -350,7 +332,6 @@ class FastLLMModel(MultiStageModel):
             metadata,
             directory=checkpoint_config.checkpoint_path,
             save_optimizer=checkpoint_config.save_optimizer,
-            full_metadata=False,
             base_file_name="state_dict",
             target_params_per_file=checkpoint_config.target_params_per_file,
         ) as context:
@@ -371,7 +352,6 @@ class FastLLMModel(MultiStageModel):
             metadata,
             directory=checkpoint_config.checkpoint_path,
             save_optimizer=False,
-            full_metadata=False,
             base_file_name="model",
             target_params_per_file=checkpoint_config.target_params_per_file,
         ) as context:
@@ -593,7 +573,6 @@ class FastLLMModel(MultiStageModel):
         metadata = self.config_class.load_pretrained_metadata(pretrained_config)
         loaded_pretrained_config = pretrained_config.to_copy(
             {
-                "use_pretrained_config": True,
                 "load_full_base_model_config": True,
                 "load_full_fast_llm_config": True,
             },
@@ -603,7 +582,7 @@ class FastLLMModel(MultiStageModel):
             metadata,
         )
         with self._LoadContext(
-            self, safe=True, load_optimizer=pretrained_config.load_pretrained_optimizer, reset_pads=True
+            self, safe=True, load_optimizer=pretrained_config.load_optimizer, reset_pads=True
         ) as context:
             Assert.eq(metadata["state_shard_names"][: context.num_shards], list(context.shard_names))
 
@@ -613,7 +592,7 @@ class FastLLMModel(MultiStageModel):
                     optimizer_state_names=context.shard_names[1:],
                     verbose=False,
                 )
-                path = pretrained_config.pretrained_checkpoint_path / f"rank_{rank}.safetensors"
+                path = pretrained_config.path / f"rank_{rank}.safetensors"
                 logger.info(f"Loading from {path}")
                 # TODO: skip shards without overlap.
                 with safetensors.safe_open(path, framework="pt", device=str(self._distributed.device)) as f:
@@ -627,15 +606,15 @@ class FastLLMModel(MultiStageModel):
         # TODO: Verify more distributed configs.
         # TODO: More safety checks
         with self._LoadContext(
-            self, safe=True, load_optimizer=pretrained_config.load_pretrained_optimizer, reset_pads=True
+            self, safe=True, load_optimizer=pretrained_config.load_optimizer, reset_pads=True
         ) as context:
-            index_path = pretrained_config.pretrained_checkpoint_path / f"state_dict.safetensors.index.json"
+            index_path = pretrained_config.path / f"state_dict.safetensors.index.json"
             logger.info(f"Loading index from {index_path}")
             file_names = set(json.load(index_path.open("r"))["weight_map"].values())
             for file_name in file_names:
-                logger.info(f"Loading from {pretrained_config.pretrained_checkpoint_path/file_name}")
+                logger.info(f"Loading from {pretrained_config.path / file_name}")
                 with safetensors.safe_open(
-                    pretrained_config.pretrained_checkpoint_path / file_name,
+                    pretrained_config.path / file_name,
                     framework="pt",
                     device=str(self._distributed.device),
                 ) as f:
@@ -650,37 +629,22 @@ class FastLLMModel(MultiStageModel):
 
     def _import_checkpoint(self, pretrained_config: PretrainedCheckpointConfig):
         # TODO: Support optimizer?
-        assert not pretrained_config.load_pretrained_optimizer
+        assert not pretrained_config.load_optimizer
         # TODO: Verify more distributed configs.
         # TODO: Safety checks
 
-        converter_class = self.base_model.architecture_cls().get_converter_class(pretrained_config.imported_model_type)
-        converter = converter_class.from_config(
-            converter_class.load_config(pretrained_config.pretrained_checkpoint_path)
-        )
-        self._check_model_config(converter.config)
+        converter_class = self.base_model.architecture_cls().get_converter_class(pretrained_config.imported_type)
+        converter = converter_class.from_config(converter_class.load_config(pretrained_config.path))
+        self._base_model_config.compare_architecture(converter.config, pretrained_config.compare_log_fn)
 
         state_dict = {}
         with self._LoadContext(
-            self, safe=True, load_optimizer=pretrained_config.load_pretrained_optimizer, reset_pads=True
+            self, safe=True, load_optimizer=pretrained_config.load_optimizer, reset_pads=True
         ) as context:
-            for name, tensor in converter.load_weights(
-                pretrained_config.pretrained_checkpoint_path, self._distributed.device
-            ):
+            for name, tensor in converter.load_weights(pretrained_config.path, self._distributed.device):
                 assert name not in state_dict
                 state_dict[name] = tensor
                 for parameter_name, fast_llm_tensor in converter.convert_state_dict(state_dict, False).items():
                     context.import_state_tensor("weights", parameter_name, fast_llm_tensor)
 
             assert not state_dict, list(state_dict)
-
-    def _check_model_config(self, model_config: BaseModelArchitectureConfig):
-        model_config_dict = model_config.get_architecture().to_flat_dict(FieldVerboseLevel.everything)
-        for key, value in (
-            self._base_model_config.get_architecture().to_flat_dict(FieldVerboseLevel.everything).items()
-        ):
-            # TODO: Only check meaningful params.
-            if model_config_dict[key] != value:
-                logger.warning(
-                    f"Loaded model has different value for `{key}`: `{model_config_dict[key]}` != `{value}`"
-                )

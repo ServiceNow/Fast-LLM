@@ -17,7 +17,7 @@ ENV PATH=$PATH:/app:/home/fast_llm/.local/bin/
 COPY --chown=fast_llm setup.py setup.cfg ./
 COPY --chown=fast_llm fast_llm/__init__.py ./fast_llm/
 
-RUN PIP_NO_INPUT=1 pip3 install --no-cache-dir -e ".[CUDA]"
+RUN PIP_NO_INPUT=1 pip3 install --no-cache-dir -e ".[CORE,OPTIONAL,DEV]"
 
 COPY --chown=fast_llm fast_llm/csrc/ ./fast_llm/csrc/
 RUN make -C ./fast_llm/csrc/
