@@ -56,7 +56,7 @@ class ImageEncoder(torch.nn.Module):
         
     def get_fastllm_parameter(self, param_name, param):
         param_dims = tuple([TensorDim(name=f'{param_name}_{idx}', global_size=x, parallel_dim=None) for idx, x in enumerate(param.shape)])
-        return ParameterMeta(param.to("meta"), tensor_name=param_name, dims=param_dims, init_method=init_normal_(std=0.02))
+        return ParameterMeta(param.to("meta"), tensor_name=param_name, dims=param_dims, init_method=init_normal_(std=0.02), requires_grad=True, allow_no_grad=True)
 
     def _forward(self, input_: tuple[torch.Tensor], losses: dict | None = None, metrics: dict | None = None):
         if not self.image_encoder_type.lower() == "clip":

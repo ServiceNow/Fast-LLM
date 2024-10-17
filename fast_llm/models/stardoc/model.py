@@ -269,7 +269,6 @@ class StarDocBaseModel(BaseModel):
         for tokens_meta, kwargs_meta in preprocessed_meta:
             sequence_k = kwargs_meta[TransformerKwargs.sequence_k_dim].size
             tokens = tokens[:, sequence_k - sequence_q : sequence_k].contiguous()
-            print(f'Tokens sequence_k: {sequence_k} sequence_q: {sequence_q} shape: {tokens.shape}')
 
             pasts = presents
             presents = None if sequence_k == sequence_length else []
@@ -278,11 +277,9 @@ class StarDocBaseModel(BaseModel):
                 LanguageModelKwargs.tokens: tokens,
                 TransformerKwargs.past_key_values: pasts,
                 TransformerKwargs.presents: presents,
-
             }
             if phase != PhaseType.inference:
                 labels = labels[:, sequence_k - sequence_q + 1 : sequence_k + 1].contiguous()
-                print(f'Labels sequence_k: {sequence_k} sequence_q: {sequence_q} shape: {labels.shape}')
                 kwargs[LanguageModelKwargs.labels] = labels
 
             if self._config.use_absolute_position_embeddings:

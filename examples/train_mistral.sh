@@ -61,7 +61,7 @@ export TRAINING_ARGS="\
 "
 
 export PERFORMANCE_ARGS="\
---micro_batch_size=4 \
+--micro_batch_size=1 \
 --training_dtype=bf16 \
 --zero_stage=2 \
 --num_workers=8 \

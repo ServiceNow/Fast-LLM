@@ -17,6 +17,7 @@ from fast_llm.data.stardoc_data_utils.utils import (
     image_loading_function,
 )
 from fast_llm.data.stardoc_data_utils.docowl_stardoc_processor import docowl_text_preprocess_v1
+from fast_llm.data.stardoc_data_utils.constants import IGNORE_INDEX
 
 logger = logging.getLogger(__name__)
 
@@ -106,7 +107,7 @@ class StarDocDataset(Dataset):
                 sample_tokenized_buffer.extend(dummy_image_token_id * self.num_im_tokens)
         
         # Don't learn on any image tokens
-        [labels.append(-200) for x in range(len(sample_tokenized_buffer))]
+        [labels.append(IGNORE_INDEX) for x in range(len(sample_tokenized_buffer))]
 
         assert(len(queries) == len(annotations))
         for i, (q, a) in enumerate(zip(queries, annotations)):
@@ -120,6 +121,13 @@ class StarDocDataset(Dataset):
         sample_tokenized_buffer.append(self.tokenizer.eos_token_id)
         labels.extend(sample_tokenized_buffer[len(labels):len(sample_tokenized_buffer)])
         assert len(sample_tokenized_buffer) == len(labels)
+
+        # Right pad to max. sequence length
+        n_pad_tokens = self.tokenizer.max_seq_length - len(sample_tokenized_buffer)
+        sample_tokenized_buffer = sample_tokenized_buffer + n_pad_tokens*[self.tokenizer.pad_token_id]
+
+        # Add an extra pad token to the labels at the end to support shifting left 
+        labels = labels + (n_pad_tokens + 1) *[IGNORE_INDEX]
         
         return {
             'input_ids': torch.tensor(sample_tokenized_buffer),

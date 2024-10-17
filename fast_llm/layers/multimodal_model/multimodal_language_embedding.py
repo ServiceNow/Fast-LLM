@@ -66,7 +66,6 @@ class MultiModalLanguageModelEmbedding(Layer):
     def _forward(self, input_: torch.Tensor, position_ids: torch.Tensor | None, tokens: torch.Tensor | None):
         Assert.eq(position_ids is not None, self._use_absolute_position_embeddings)
         Assert.eq(tokens is not None)
-        group = self._tensor_space.distributed.tensor_group
 
         text_embeddings = torch.embedding(self.word_embeddings_weight, tokens)
 

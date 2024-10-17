@@ -1,15 +1,22 @@
 # Required or optional environment variables
-# export PROJECT_DIR=
-# export PROJECT_NAME=
-# export PROJECT_VERSION=
-# export DATA_PATH=
-# export PRETRAINED_STARDOC_PATH=
-# export TOKENIZER_PATH=
+export PROJECT_DIR="/mnt/akshay/stardoc-FastLLM/Fast-LLM/output"
+export PROJECT_NAME="stardoc-debug"
+export PROJECT_VERSION="1.0"
+# export DATA_PATH_LIST=
+export DATA_PATH="/mnt/stardoc/datasets/save_hf/BigDoc-MultiTurn-v0.3"
+# export DATA_PATH_JSON=
+# export PRETRAINED_MISTRAL_PATH=
+# export PRETRAINED_MIXTRAL_PATH=
+export PRETRAINED_STARDOC_PATH="/mnt/akshay/stardoc-FastLLM/Fast-LLM/stardoc_hf_model/stardoc_checkpoint"
+export TOKENIZER_PATH="/mnt/core_llm/models/mistral/HF/Mistral-7B-v0.3"
 
-# export HF_HOME=
-# export HF_TOKEN=
+export HF_HOME=/mnt/stardoc/hf
+export HF_TOKEN=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
+
+export PYTHONHASHSEED=12345
 
 export CMD_ARGS="fast-llm train stardoc"
+# export CMD_ARGS="python /mnt/akshay/stardoc-FastLLM/Fast-LLM/fast_llm/tools/train.py stardoc"
 
 export MODEL_ARGS_PRETRAINED="\
 --pretrained_checkpoint_type=huggingface \
@@ -81,11 +88,12 @@ export MONITORING_ARGS="\
 --checkpoint_interval=500 \
 --max_checkpoints=5 \
 --export_interval=25000 \
---wandb_status_interval=25000 \
---wandb_entity_name=$WANDB_ENTITY_NAME \
---wandb_project_name=$PROJECT_NAME \
---wandb_group_name=$PROJECT_VERSION \
 "
+# --wandb_status_interval=25000 \
+# --wandb_entity_name=$WANDB_ENTITY_NAME \
+# --wandb_project_name=$PROJECT_NAME \
+# --wandb_group_name=$PROJECT_VERSION \
+# "
 
 export ALL_ARGS="\
 $CMD_ARGS \
@@ -107,6 +115,12 @@ export PROFILE_ARGS="\
 --profile_export=1 \
 "
 
+# cd /mnt/akshay/stardoc-FastLLM/Fast-LLM
+
+# PIP_NO_INPUT=1 pip3 install --user --no-cache-dir --no-dependencies -e .
+# export PATH="$PATH:$HOME/.local/bin/"
+# make -C ./fast_llm/csrc/
+
 run_local () { # run(name, num_gpus, base_cmd)
   echo $1 $2 $3
   export TORCHRUN="torchrun --nproc-per-node=$2 --nnodes=1 --no-python"
@@ -119,6 +133,24 @@ run_c10d () { # run(name, num_nodes, base_cmd)
   $TORCHRUN $3 --experiment_dir=$PROJECT_DIR/$PROJECT_NAME_$PROJECT_VERSION/$1
 }
 
-run_local stardoc_example 8 "$ALL_ARGS"
-# run_c10d stardoc_example 16 "$ALL_ARGS"
-# run_c10d stardoc_example 16 "$ALL_ARGS $MIXTRAL_ARGS --train_iters=50"
+run_distributed () {
+  echo $1 $2 $3
+  # Master address and rank
+  MASTER_ADDR="dns-$EAI_PROCESS_AGENT-0"
+  MASTER_PORT=8001
+  NODE_RANK="$EAI_PROCESS_AGENT_INDEX"
+  LOG_DIR="$PROJECT_DIR/$PROJECT_NAME_$PROJECT_VERSION/$1"
+
+  echo "MASTER ADDR: $MASTER_ADDR"
+  echo "PORT: $MASTER_PORT"
+  echo "NODE_RANK: $NODE_RANK"
+  echo "LOG_DIR: $LOG_DIR"
+  
+  export TORCHRUN="torchrun --nproc-per-node=8 --nnodes=$2 --no-python --master_addr=$MASTER_ADDR --master_port=$MASTER_PORT --node_rank=$NODE_RANK --log-dir=$LOG_DIR --redirects=3"
+  $TORCHRUN $3 --experiment_dir=$PROJECT_DIR/$PROJECT_NAME_$PROJECT_VERSION/$1
+}
+
+run_local debug 8 "$ALL_ARGS"
+# run_distributed debug 2 "$ALL_ARGS"
+# run_c10d mistral_example 16 "$ALL_ARGS"
+# run_c10d mixtral_example 16 "$ALL_ARGS $MIXTRAL_ARGS --train_iters=50"

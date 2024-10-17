@@ -174,7 +174,6 @@ class LanguageModelHead(Layer):
         kwargs: dict,
         losses: dict | None = None,
     ):
-        print(f'Loss head input_ shape: {input_.shape} Labels shape: {labels.shape}')
         logits, context = output_parallel_linear_forward(
             input_=input_,
             weight=weight,
