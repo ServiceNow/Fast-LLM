@@ -58,8 +58,8 @@ class PushConfig(RunnableConfig):
             return int(m.group(1))
         return None
 
-    @staticmethod
-    def _get_commited_iter_numbers(hf_repo: hf_hub.Repository) -> list[int]:
+    @classmethod
+    def _get_commited_iter_numbers(cls, hf_repo: hf_hub.Repository) -> list[int]:
         subprocess.run(["git", "fetch", "origin"], cwd=hf_repo.local_dir, capture_output=True)
         commits = subprocess.run(
             ["git", "log", "origin/main", "--pretty=format:%H %s"],
@@ -72,7 +72,7 @@ class PushConfig(RunnableConfig):
         print("commits", commits)
         commits = [c.split(" ", 1)[1] for c in commits]
         # Keep commits corresponding to a new iter
-        return [iter_number for c in commits if (iter_number := self.get_iter_number(c)) is not None]
+        return [iter_number for c in commits if (iter_number := cls._get_iter_number(c)) is not None]
 
     @staticmethod
     def _git_add_safe_directory(directory: pathlib.Path) -> None:
