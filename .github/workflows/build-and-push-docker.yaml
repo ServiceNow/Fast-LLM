@@ -1,0 +1,54 @@
+name: Build and Push Docker Image
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      - name: Cache Docker layers
+        uses: actions/cache@v3
+        with:
+          path: /tmp/.buildx-cache
+          key: ${{ runner.os }}-buildx-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-buildx-
+
+      - name: Log in to DockerHub
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Build and push Docker image
+        id: docker_build
+        run: |
+          IMAGE_NAME="servicenowdocker/fast-llm"
+          GIT_COMMIT_HASH=$(git rev-parse --short HEAD)
+
+          TAG_OPTION=""
+          TAG_OPTION="-t ${IMAGE_NAME}:${GIT_COMMIT_HASH} -t ${IMAGE_NAME}:latest"
+
+          # If it's a tagged release, add the git tag as a docker tag
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            TAG_NAME=${GITHUB_REF#refs/tags/}
+            TAG_OPTION="${TAG_OPTION} -t ${IMAGE_NAME}:${TAG_NAME}"
+          fi
+
+          docker buildx build --cache-from=type=local,src=/tmp/.buildx-cache \
+                              --cache-to=type=local,dest=/tmp/.buildx-cache-new \
+                              --push ${TAG_OPTION} .
+
+      - name: Move new cache to replace old cache
+        run: mv /tmp/.buildx-cache-new /tmp/.buildx-cache
