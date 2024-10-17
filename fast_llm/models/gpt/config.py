@@ -1,6 +1,6 @@
 import typing
 
-from fast_llm.config import Field, FieldHint, config_class
+from fast_llm.config import Field, FieldHint, FieldUpdate, config_class
 from fast_llm.data.config import DataConfig
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig, PretrainedFastLLMModelConfig
 from fast_llm.engine.training.config import TrainerConfig
@@ -65,7 +65,7 @@ class GPTBaseModelConfig(LanguageModelBaseConfig, GPTArchitectureConfig):
 @config_class()
 class GPTModelConfig(FastLLMModelConfig):
     _abstract = False
-    base_model: GPTBaseModelConfig = Field(default_factory=GPTBaseModelConfig)
+    base_model: GPTBaseModelConfig = FieldUpdate(default_factory=GPTBaseModelConfig)
 
     @classmethod
     def get_model_class(cls):
@@ -83,17 +83,13 @@ class GPTModelConfig(FastLLMModelConfig):
 @config_class()
 class PretrainedGPTModelConfig(PretrainedFastLLMModelConfig):
     _abstract = False
-    model: GPTModelConfig = Field(default_factory=GPTModelConfig)
+    model: GPTModelConfig = FieldUpdate(default_factory=GPTModelConfig)
 
 
 @config_class()
 class GPTTrainerConfig(PretrainedGPTModelConfig, TrainerConfig):
 
-    data: DataConfig = Field(
-        default_factory=DataConfig,
-        desc="Configuration for the dataset and model-independent preprocessing.",
-        hint=FieldHint.core,
-    )
+    data: DataConfig = FieldUpdate(default_factory=DataConfig)
 
     def _setup(self):
         super()._setup()
