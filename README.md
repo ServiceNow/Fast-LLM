@@ -15,7 +15,7 @@ Made with ❤️ by [ServiceNow Research][servicenow-research]
 
 ## Overview
 
-Fast-LLM is a new open-source library for training large language models. It's design focuses on speed, scalability, flexibility, and ease of use. Fast-LLM is built on top of [PyTorch](https://pytorch.org/) and [Triton](https://triton-lang.org) to provide a state-of-the-art training experience.
+Fast-LLM is a new open-source library for training large language models. Its design focuses on speed, scalability, flexibility, and ease of use. Fast-LLM is built on top of [PyTorch](https://pytorch.org/) and [Triton](https://triton-lang.org) to provide a state-of-the-art training experience.
 
 ## Why Fast-LLM?
 
@@ -69,7 +69,7 @@ Expect to see a significant speedup in training time compared to other libraries
 
 #### Steps
 
-1. Deploy nvcr.io/nvidia/pytorch:24.07-py3 Docker image to all nodes (recommended).
+1. Deploy the [nvcr.io/nvidia/pytorch:24.07-py3](https://catalog.ngc.nvidia.com/orgs/nvidia/containers/pytorch) Docker image to all nodes (recommended).
 2. Install Fast-LLM on all nodes:
 
     ```bash
@@ -84,7 +84,7 @@ Expect to see a significant speedup in training time compared to other libraries
     EOF
     ```
 
-3. Use the provided Slurm job script `examples/fast-llm.sbat` to submit the job to the cluster:
+3. Use the provided Slurm job script [examples/fast-llm.sbat](examples/fast-llm.sbat) to submit the job to the cluster:
 
     ```bash
     sbatch examples/fast-llm.sbat
@@ -107,13 +107,13 @@ Now, you can sit back and relax while Fast-LLM trains your model at full speed! 
 
 #### Steps
 
-1. Create a Kubernetes PersistentVolumeClaim (PVC) named `fast-llm-home` that will be mounted to `/home/fast-llm` in the container:
+1. Create a Kubernetes [PersistentVolumeClaim](https://kubernetes.io/docs/concepts/storage/persistent-volumes/) (PVC) named `fast-llm-home` that will be mounted to `/home/fast-llm` in the container:
 
     ```bash
     kubectl apply -f examples/fast-llm-pvc.yaml
     ```
 
-2. Create a PyTorchJob resource:
+2. Create a [PyTorchJob](https://www.kubeflow.org/docs/components/training/user-guides/pytorch/) resource:
 
     ```bash
     kubectl apply -f examples/fast-llm.pytorchjob.yaml

@@ -34,4 +34,4 @@ srun --gpus-per-node=$SLURM_GPUS_PER_NODE \
                  --rdzv_conf=timeout=3600 \
                  --no_python \
                  fast-llm train gpt \
-                 --config examples/mistral_4_node_benchmark.yaml
+                 --config examples/mistral_4_node_benchmark.yaml"
