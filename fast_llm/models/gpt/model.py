@@ -97,7 +97,7 @@ class GPTBaseModel(BaseModel):
             if phase != PhaseType.inference:
                 sequence_length -= 1
             micro_sequence_length = sequence_length
-        
+
         batch_data = self._tensor_space.distributed_config.get_distributed_dim(DistributedDimNames.batch_data)
         batch_dim = TensorDim(TransformerDimNames.batch, micro_batch_size * batch_data.size, batch_data)
 

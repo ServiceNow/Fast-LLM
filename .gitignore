@@ -27,5 +27,3 @@ venv.bak/
 # Project specifics
 /.idea/
 /.vscode/
-output/
-stardoc_hf_model/

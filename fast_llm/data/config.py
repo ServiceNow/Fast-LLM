@@ -114,6 +114,7 @@ class TokenizerConfig(Config):
         default="TokenizerFromFile",
         desc="Unused.",
         hint=FieldHint.deprecated,
+        valid=check_field(Assert.eq, TokenizerFromFile),
     )
     path: str | None = Field(
         default=None,
