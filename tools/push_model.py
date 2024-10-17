@@ -72,7 +72,7 @@ class PushConfig(RunnableConfig):
         print("commits", commits)
         commits = [c.split(" ", 1)[1] for c in commits]
         # Keep commits corresponding to a new iter
-        return [iter_number for c in commits if (iter_number := self.get_iter_number(c)) is not None]
+        return [iter_number for c in commits if (iter_number := PushConfig._get_iter_number(c)) is not None]
 
     @staticmethod
     def _git_add_safe_directory(directory: pathlib.Path) -> None:
