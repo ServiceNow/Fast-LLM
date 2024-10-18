@@ -1,0 +1,127 @@
+apiVersion: "kubeflow.org/v1"
+kind: "PyTorchJob"
+metadata:
+  name: "fast-llm"
+spec:
+  nprocPerNode: "8"
+  pytorchReplicaSpecs:
+    Master:
+      replicas: 1
+      restartPolicy: Never
+      template:
+        spec:
+          tolerations:
+            - key: nvidia.com/gpu
+              value: "true"
+              operator: Equal
+              effect: NoSchedule
+          containers:
+            - name: pytorch
+              image: servicenowdocker/fast-llm:latest
+              resources:
+                limits:
+                  nvidia.com/gpu: 8
+                  rdma/rdma_shared_device_a: 1
+                  memory: "1024Gi"
+                  cpu:
+                requests:
+                  nvidia.com/gpu: 8
+                  rdma/rdma_shared_device_a: 1
+                  memory: "1024Gi"
+                  cpu: 128
+              command:
+                - /bin/bash
+                - -c
+                - |
+                  torchrun --rdzv_backend=static \
+                           --rdzv_endpoint=${MASTER_ADDR}:${MASTER_PORT} \
+                           --node_rank=${RANK} \
+                           --nproc_per_node=${PET_NPROC_PER_NODE} \
+                           --nnodes=${PET_NNODES} \
+                           --max_restarts=0 \
+                           --rdzv_conf=timeout=3600 \
+                           --no_python \
+                           fast-llm train gpt \
+                           --config examples/mistral-4-node-benchmark.yaml
+              env:
+                - name: NCCL_DEBUG
+                  value: "INFO"
+                - name: PYTHONHASHSEED
+                  value: "0"
+              securityContext:
+                capabilities:
+                  add:
+                    - IPC_LOCK
+              volumeMounts:
+                - mountPath: /home/fast-llm
+                  name: fast-llm-home
+                - mountPath: /dev/shm
+                  name: dshm
+          volumes:
+            - name: fast-llm-home
+              persistentVolumeClaim:
+                claimName: pvc-fast-llm-home
+            - name: dshm
+              emptyDir:
+                medium: Memory
+                sizeLimit: "1024Gi"
+    Worker:
+      replicas: 3
+      restartPolicy: Never
+      template:
+        spec:
+          tolerations:
+            - key: nvidia.com/gpu
+              value: "true"
+              operator: Equal
+              effect: NoSchedule
+          containers:
+            - name: pytorch
+              image: servicenowdocker/fast-llm:latest
+              resources:
+                limits:
+                  nvidia.com/gpu: 8
+                  rdma/rdma_shared_device_a: 1
+                  memory: "1024Gi"
+                  cpu:
+                requests:
+                  nvidia.com/gpu: 8
+                  rdma/rdma_shared_device_a: 1
+                  memory: "1024Gi"
+                  cpu: 128
+              command:
+                - /bin/bash
+                - -c
+                - |
+                  torchrun --rdzv_backend=static \
+                           --rdzv_endpoint=${MASTER_ADDR}:${MASTER_PORT} \
+                           --node_rank=${RANK} \
+                           --nproc_per_node=${PET_NPROC_PER_NODE} \
+                           --nnodes=${PET_NNODES} \
+                           --max_restarts=0 \
+                           --rdzv_conf=timeout=3600 \
+                           --no_python \
+                           fast-llm train gpt \
+                           --config examples/mistral-4-node-benchmark.yaml
+              env:
+                - name: NCCL_DEBUG
+                  value: "INFO"
+                - name: PYTHONHASHSEED
+                  value: "0"
+              securityContext:
+                capabilities:
+                  add:
+                    - IPC_LOCK
+              volumeMounts:
+                - mountPath: /home/fast-llm
+                  name: fast-llm-home
+                - mountPath: /dev/shm
+                  name: dshm
+          volumes:
+            - name: fast-llm-home
+              persistentVolumeClaim:
+                claimName: pvc-fast-llm-home
+            - name: dshm
+              emptyDir:
+                medium: Memory
+                sizeLimit: "1024Gi"

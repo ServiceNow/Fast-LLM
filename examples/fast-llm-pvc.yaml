@@ -1,0 +1,12 @@
+# Create persistent volume claim for Fast-LLM
+apiVersion: "v1"
+kind: "PersistentVolumeClaim"
+metadata:
+ name: "pvc-fast-llm-home"
+spec:
+ storageClassName: local-path
+ accessModes:
+  - ReadWriteMany
+ resources:
+  requests:
+   storage: 1000Gi
