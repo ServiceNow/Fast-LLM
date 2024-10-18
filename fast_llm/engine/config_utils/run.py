@@ -165,7 +165,7 @@ class Run:
             else:
                 run = 0
             # Make sure all the workers agree on the run. This also acts as a barrier.
-            self.index = self._broadcast_int(run)
+            self.index = self.broadcast_int(run)
             run_dir = self._experiment_directory / "runs" / str(self.index)
             self._artifact_dir = run_dir / "artifacts" / str(self._distributed_config.rank)
             log_dir = run_dir / "logs"
@@ -206,53 +206,17 @@ class Run:
             torch.save(tensor_stats, self.open_artifact(f"tensor_logs_{iteration}.pt", mode="wb"))
             TensorLogs.reset(self._config.tensor_logs)
 
-    def get_load_checkpoint_context(self, iteration: int):
-        return self._LoadCheckpointContext(self, iteration)
-
     def barrier(self, value: int | str = 1):
         from fast_llm.core.distributed import safe_barrier
 
         safe_barrier(self._distributed.world_group, value)
 
-    def _broadcast_int(self, value: int):
+    def broadcast_int(self, value: int):
         import torch
 
         from fast_llm.core.distributed import broadcast_scalar
 
         return broadcast_scalar(value, dtype=torch.int64, src=_MAIN_RANK, group=self._distributed.world_group)
-
-    class _CheckpointContext:
-        def __init__(self, run: "Run", iteration: int):
-            self._run = run
-            self._iteration = iteration
-            assert self._run._checkpoint_dir is not None
-            self._directory = self._run._checkpoint_dir / str(self._iteration)
-
-        @property
-        def directory(self):
-            return self._directory
-
-    class _LoadCheckpointContext(_CheckpointContext):
-        def __enter__(self):
-            assert self._run._is_running
-            Assert.custom(pathlib.Path.is_file, self._directory / "ok")
-            return self
-
-        def __exit__(self, exc_type, exc_val, exc_tb):
-            if not exc_type:
-                self._run.barrier(f"load {self._iteration} exit")
-
-    def get_last_checkpoint(self):
-        assert self._is_running
-        if self._checkpoint_dir is None:
-            return None
-        if self._is_main_rank:
-            checkpoints = [int(path.name) for path in self._checkpoint_dir.iterdir()]
-            iteration = max(checkpoints) if checkpoints else -1
-        else:
-            iteration = -1
-        iteration = self._broadcast_int(iteration)
-        return iteration if iteration >= 0 else None
 
     def open_artifact(self, name: str, mode: str | None = "w", verbose=True):
         assert self._is_running

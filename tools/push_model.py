@@ -6,6 +6,7 @@ import re
 import shutil
 import subprocess
 
+from fast_llm.config import Field, config_class
 from fast_llm.engine.config_utils.checkpoint import CheckpointType
 from fast_llm.engine.config_utils.runnable import RunnableConfig
 
@@ -26,7 +27,6 @@ except ImportError as e:
     raise ImportError("Please install huggingface_hub to use this script") from e
 
 
-from fast_llm.config import Config, config_class, Field  # isort:skip
 from fast_llm.tools.convert import ConversionConfig  # isort:skip
 
 

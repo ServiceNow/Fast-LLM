@@ -1,6 +1,7 @@
 import abc
 import logging
 import math
+import pathlib
 import shutil
 import time
 import typing
@@ -366,7 +367,7 @@ class Trainer(abc.ABC):
 
     def _prepare_training_state(self):
         # Setup the training state.
-        if (last_iteration := self._run.get_last_checkpoint()) is None:
+        if (last_iteration := self._get_last_checkpoint()) is None:
             if (path := self._config.pretrained.path) is not None and self._config.pretrained.model_weights:
                 log_main_rank(
                     f"Initializing training state from pretrained checkpoint at {path}"
@@ -381,17 +382,24 @@ class Trainer(abc.ABC):
             self._completed_steps = 0
         else:
             log_main_rank(lambda: f"Loading checkpoint from iteration {last_iteration}...")
-            with self._run.get_load_checkpoint_context(last_iteration) as context:
-                metadata = self._multi_stage.load_distributed_checkpoint_same_format(context.directory)
-            self._optimizer.load(metadata["optimizer"])
-            if "schedules" in metadata:
-                # Backward compatibility.
-                self._completed_steps = metadata["schedules"][PhaseType.training.value]["completed_steps"]
-            else:
-                self._completed_steps = metadata["completed_steps"]
+            self._load_checkpoint(self._config.training.checkpoint, last_iteration)
 
         Assert.eq(self._completed_steps, last_iteration or 0)
         assert self._multi_stage._is_loaded  # noqa
+
+    def _load_checkpoint(self, config: CheckpointBaseConfig, iteration: int):
+        checkpoint_directory = self._run.experiment_directory / config.save_name / str(iteration)
+        Assert.custom(pathlib.Path.is_file, checkpoint_directory / "ok")
+        # TODO v0.2: Use config.get_load_config to make it generic
+        # TODO v0.2: Detect format instead of hard-coding
+        metadata = self._multi_stage.load_distributed_checkpoint_same_format(checkpoint_directory)
+        self._optimizer.load(metadata["optimizer"])
+        if "schedules" in metadata:
+            # Backward compatibility.
+            self._completed_steps = metadata["schedules"][PhaseType.training.value]["completed_steps"]
+        else:
+            self._completed_steps = metadata["completed_steps"]
+        self._run.barrier(f"load {config.save_name} {iteration} exit")
 
     def _get_data_iterator(self, phase, completed_steps: int = 0, prefetch_factor: int | None = None):
         return self._data.get_iterator(
@@ -438,6 +446,18 @@ class Trainer(abc.ABC):
 
         if self._run.is_main_rank:  # noqa
             config.callback.run()
+
+    def _get_last_checkpoint(self):
+        if self._run.experiment_directory is None:
+            return None
+        checkpoint_base_directory = self._run.experiment_directory / self._config.training.checkpoint.save_name
+        if self._run.is_main_rank:
+            checkpoints = [int(path.name) for path in checkpoint_base_directory.iterdir()]
+            iteration = max(checkpoints) if checkpoints else -1
+        else:
+            iteration = -1
+        iteration = self._run.broadcast_int(iteration)
+        return iteration if iteration >= 0 else None
 
     @abc.abstractmethod
     def get_tflops(self, phase: PhaseType, elapsed_time_per_iteration) -> tuple[int, int]:
