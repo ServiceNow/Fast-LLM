@@ -27,7 +27,7 @@ Fast-LLM is a new open-source library for training large language models. Its de
 2. 📈 **Fast-LLM is Highly Scalable**:
     - 📡 Distributed training across multiple GPUs and nodes using 3D parallelism (Data, Tensor, and Pipeline).
     - 🔄 Supports sequence length parallelism.
-    - 🧠 ZeRO-1, ZeRO-2, and ZeRO-3 offloading for memory efficiency.
+    - 🧠 ZeRO-1, ZeRO-2, and ZeRO-3 for memory efficiency.
     - 🎛️ Support for mixed precision training.
     - 🏋️‍♂️ Large batch training and gradient accumulation support.
 
@@ -66,7 +66,7 @@ Expect to see a significant speedup in training time compared to other libraries
 
 - A functioning [Slurm](https://slurm.schedmd.com/) cluster with at least 4 DGX nodes with 8 A100-80GB or H100-80GB GPUs each.
 - CUDA 12.1 or higher.
-- Dependencies: [PyTorch][pytorch], [Triton][triton], [Apex](https://github.com/NVIDIA/apex), and [TransformerEngine](https://github.com/NVIDIA/TransformerEngine) installed on all nodes.
+- Dependencies: [PyTorch][pytorch], [Triton][triton], and [Apex](https://github.com/NVIDIA/apex) installed on all nodes.
 
 #### Steps
 
