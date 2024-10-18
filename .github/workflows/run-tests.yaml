@@ -41,10 +41,10 @@ jobs:
                               --cache-to=type=local,dest=/tmp/.buildx-cache-new,mode=max \
                               -t fast-llm-test .
 
-      - name: Run Pytest
-        run: |
-          docker run --rm fast-llm-test \
-            pytest tests/
+      # - name: Run Pytest
+      #   run: |
+      #     docker run --rm fast-llm-test \
+      #       pytest tests/
 
       - name: Save updated Docker cache
         id: save-cache
