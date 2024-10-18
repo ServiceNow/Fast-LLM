@@ -811,34 +811,51 @@ class Config:
         if not cls.__class_validated__:
             raise RuntimeError(f"{cls.__name__} hasn't been validated. Make sure to use the @config_class decorator.")
 
-    def __init_subclass__(cls, **kwargs):
+    def __init_subclass__(cls):
         """
         We need to postpone validation until the class has been processed by the dataclass wrapper.
         """
-        assert (
-            cls.__class_validated__
-        ), f"Parent class of config class {cls.__name__} has not been validated. Make sure to use the @config_class decorator."
-        cls.__class_validated__ = False
-        for key, value in cls.__dict__:
-            if isinstance(value, FieldUpdate):
-                base_class_field = cls.get_field(key)
-                cls.__dict__[key] = Field(
-                    desc=kwargs.pop("desc", base_class_field.desc),
-                    doc=kwargs.pop("doc", base_class_field.doc),
-                    hint=kwargs.pop("hint", base_class_field.hint),
-                    valid=kwargs.pop("valid", base_class_field.valid),
-                    default=kwargs.pop("default", base_class_field.default),
-                    default_factory=kwargs.pop("default_factory", base_class_field.default_factory),
-                    repr=kwargs.pop("repr", base_class_field.repr),
-                    hash=kwargs.pop("hash", base_class_field.hash),
-                    compare=kwargs.pop("compare", base_class_field.compare),
-                    metadata=kwargs.pop("metadata", base_class_field.metadata),
-                    kw_only=kwargs.pop("kw_only", base_class_field.kw_only),
+        for base_class in cls.__mro__:
+            if issubclass(base_class, Config):
+                assert cls.__class_validated__, (
+                    f"Parent class {get_type_name(base_class)} of config class {get_type_name(cls)} has not been validated."
+                    f" Make sure to use the @config_class decorator."
                 )
-                if key in cls.__annotations__:
+        cls.__class_validated__ = False
+        for name in list(cls.__dict__):
+            value = getattr(cls, name)
+            if isinstance(value, FieldUpdate):
+                # In case of multiple inheritance, the base class field may not appear in `cls.__dataclass_fields__`.
+                # so we iterate over superclasses following mro and use the first match.
+                base_class_field = None
+                for base_class in cls.__mro__:
+                    base_class_fields = getattr(base_class, "__dataclass_fields__", {})
+                    if name in base_class_fields:
+                        base_class_field = base_class_fields[name]
+                        break
+                if base_class_field is None:
+                    raise RuntimeError(f"Trying to update the non-existent field {name} in class {get_type_name(cls)}")
+                setattr(
+                    cls,
+                    name,
+                    Field(
+                        desc=value.pop("desc", base_class_field.desc),
+                        doc=value.pop("doc", base_class_field.doc),
+                        hint=value.pop("hint", base_class_field.hint),
+                        valid=value.pop("valid", base_class_field.valid),
+                        default=value.pop("default", base_class_field.default),
+                        default_factory=value.pop("default_factory", base_class_field.default_factory),
+                        repr=value.pop("repr", base_class_field.repr),
+                        hash=value.pop("hash", base_class_field.hash),
+                        compare=value.pop("compare", base_class_field.compare),
+                        metadata=value.pop("metadata", base_class_field.metadata),
+                        kw_only=value.pop("kw_only", base_class_field.kw_only),
+                    ),
+                )
+                if name in cls.__annotations__:
                     # TODO: Generalize to other type hints.
-                    if isinstance(cls.__annotations__[key], type) and isinstance(base_class_field.type, type):
-                        Assert.custom(issubclass, cls.__annotations__[key], base_class_field.type)
+                    if isinstance(cls.__annotations__[name], type) and isinstance(base_class_field.type, type):
+                        Assert.custom(issubclass, cls.__annotations__[name], base_class_field.type)
                 else:
                     # dataclasses expects an annotation, so we use the one from the base class.
-                    cls.__annotations__[key] = base_class_field.type
+                    cls.__annotations__[name] = base_class_field.type

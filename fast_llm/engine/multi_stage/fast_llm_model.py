@@ -15,6 +15,7 @@ from fast_llm.engine.config_utils.checkpoint import (
     CheckpointLoadConfig,
     CheckpointSaveConfig,
     CheckpointType,
+    LoadConfig,
 )
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig, StageMode
@@ -570,12 +571,7 @@ class FastLLMModel(MultiStageModel):
     def _load_distributed_checkpoint(self, pretrained_config: CheckpointLoadConfig):
         # TODO: More safety checks
         metadata = self.config_class.load_pretrained_metadata(pretrained_config)
-        loaded_pretrained_config = pretrained_config.to_copy(
-            {
-                "base_model_config": True,
-                "fast_llm_config": True,
-            },
-        )
+        loaded_pretrained_config = pretrained_config.to_copy({"load_config": LoadConfig.fast_llm})
         loaded_config = self.config_class.from_metadata(
             loaded_pretrained_config,
             metadata,
@@ -640,7 +636,7 @@ class FastLLMModel(MultiStageModel):
         with self._LoadContext(
             self, safe=True, load_optimizer=pretrained_config.optimizer_state, reset_pads=True
         ) as context:
-            for name, tensor in converter.model_weights(pretrained_config.path, self._distributed.device):
+            for name, tensor in converter.load_weights(pretrained_config.path, self._distributed.device):
                 assert name not in state_dict
                 state_dict[name] = tensor
                 for parameter_name, fast_llm_tensor in converter.convert_state_dict(state_dict, False).items():

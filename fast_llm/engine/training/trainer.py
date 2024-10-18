@@ -365,6 +365,15 @@ class Trainer(abc.ABC):
 
         return metrics
 
+    def _get_data_iterator(self, phase, completed_steps: int = 0, prefetch_factor: int | None = None):
+        return self._data.get_iterator(
+            self._config.batch,
+            phase,
+            consumed_samples=completed_steps * self._config.batch.batch_size,
+            num_workers=self._config.training.num_workers,
+            prefetch_factor=prefetch_factor,
+        )
+
     def _prepare_training_state(self):
         # Setup the training state.
         if (last_iteration := self._get_last_checkpoint()) is None:
@@ -387,36 +396,15 @@ class Trainer(abc.ABC):
         Assert.eq(self._completed_steps, last_iteration or 0)
         assert self._multi_stage._is_loaded  # noqa
 
-    def _load_checkpoint(self, config: CheckpointBaseConfig, iteration: int):
-        checkpoint_directory = self._run.experiment_directory / config.save_name / str(iteration)
-        Assert.custom(pathlib.Path.is_file, checkpoint_directory / "ok")
-        # TODO v0.2: Use config.get_load_config to make it generic
-        # TODO v0.2: Detect format instead of hard-coding
-        metadata = self._multi_stage.load_distributed_checkpoint_same_format(checkpoint_directory)
-        self._optimizer.load(metadata["optimizer"])
-        if "schedules" in metadata:
-            # Backward compatibility.
-            self._completed_steps = metadata["schedules"][PhaseType.training.value]["completed_steps"]
-        else:
-            self._completed_steps = metadata["completed_steps"]
-        self._run.barrier(f"load {config.save_name} {iteration} exit")
-
-    def _get_data_iterator(self, phase, completed_steps: int = 0, prefetch_factor: int | None = None):
-        return self._data.get_iterator(
-            self._config.batch,
-            phase,
-            consumed_samples=completed_steps * self._config.batch.batch_size,
-            num_workers=self._config.training.num_workers,
-            prefetch_factor=prefetch_factor,
-        )
-
     def _save_checkpoint(self, config: CheckpointBaseConfig, metrics: dict[PhaseType, dict[str, float | int]] | None):
-        checkpoint_base_directory = self._run.experiment_directory / config.save_name
+        # TODO v0.2: Move barrier, ok file to FastLLMModel
+        checkpoint_base_directory = self._run.experiment_directory / config.directory_name
         checkpoint_directory = checkpoint_base_directory / str(self._completed_steps)
 
         # Create the checkpoint
-        log_main_rank(f"Saving {config.save_name} at iteration {self._completed_steps}")
-        checkpoint_directory.mkdir(exist_ok=False, parents=True)
+        if self._run.is_main_rank:
+            logger.info(f"Saving {config.save_name} at iteration {self._completed_steps}")
+            checkpoint_directory.mkdir(exist_ok=False, parents=True)
         # Barrier to ensure the directory is created correctly (and didn't exist before).
         self._run.barrier(f"{config.save_name} {self._completed_steps} enter")
 
@@ -431,27 +419,42 @@ class Trainer(abc.ABC):
         # Barrier to ensure everyone is done.
         self._run.barrier(f"{config.save_name} {self._completed_steps} exit")
         # Mark the checkpoint as complete.
-        (checkpoint_directory / "ok").open("w")
-        logger.info(f"Saved {config.save_name} to {checkpoint_directory}")
+        if self._run.is_main_rank:
+            (checkpoint_directory / "ok").open("w")
+            logger.info(f"Saved {config.save_name} to {checkpoint_directory}")
 
-        to_delete = config.to_delete(sorted(int(path.name) for path in checkpoint_directory.iterdir()))
+            to_delete = config.to_delete(sorted(int(path.name) for path in checkpoint_base_directory.iterdir()))
 
-        for iteration in to_delete:
-            path = checkpoint_base_directory / str(iteration)
-            logger.info(f"Deleting {config.save_name} at {path}")
-            try:
-                shutil.rmtree(path, ignore_errors=True)
-            except OSError as e:
-                logger.warning(f"Could not remove {config.save_name} directory: {e.args}")
+            for iteration in to_delete:
+                path = checkpoint_base_directory / str(iteration)
+                logger.info(f"Deleting {config.save_name} at {path}")
+                try:
+                    shutil.rmtree(path, ignore_errors=True)
+                except OSError as e:
+                    logger.warning(f"Could not remove {config.save_name} directory: {e.args}")
 
-        if self._run.is_main_rank:  # noqa
             config.callback.run()
+
+    def _load_checkpoint(self, config: CheckpointBaseConfig, iteration: int):
+        checkpoint_directory = self._run.experiment_directory / config.directory_name / str(iteration)
+        Assert.custom(pathlib.Path.is_file, checkpoint_directory / "ok")
+        # TODO v0.2: Use config.get_load_config to make it generic
+        # TODO v0.2: Detect format instead of hard-coding
+        metadata = self._multi_stage.load_distributed_checkpoint_same_format(checkpoint_directory)
+        self._optimizer.load(metadata["optimizer"])
+        if "schedules" in metadata:
+            # Backward compatibility.
+            self._completed_steps = metadata["schedules"][PhaseType.training.value]["completed_steps"]
+        else:
+            self._completed_steps = metadata["completed_steps"]
+        # TODO v0.2: Move barrier, ok file to FastLLMModel
+        self._run.barrier(f"load {config.save_name} {iteration} exit")
 
     def _get_last_checkpoint(self):
         if self._run.experiment_directory is None:
             return None
-        checkpoint_base_directory = self._run.experiment_directory / self._config.training.checkpoint.save_name
-        if self._run.is_main_rank:
+        checkpoint_base_directory = self._run.experiment_directory / self._config.training.checkpoint.directory_name
+        if self._run.is_main_rank and checkpoint_base_directory.is_dir():
             checkpoints = [int(path.name) for path in checkpoint_base_directory.iterdir()]
             iteration = max(checkpoints) if checkpoints else -1
         else:

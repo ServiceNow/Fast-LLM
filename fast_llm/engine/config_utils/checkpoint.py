@@ -2,6 +2,7 @@
 import enum
 import logging
 import pathlib
+import warnings
 
 from fast_llm.config import Config, Field, FieldHint, check_field, config_class
 from fast_llm.engine.config_utils.data_type import DataType
@@ -21,6 +22,25 @@ class CheckpointType(str, enum.Enum):
     state_dict = "state_dict"
     # A checkpoint format external to Fast-LLM.
     external = "external"
+
+
+class LoadConfig(str, enum.Enum):
+    none = "none"
+    architecture = "architecture"
+    model = "model"
+    fast_llm = "fast_llm"
+
+    @property
+    def load_architecture(self):
+        return self != LoadConfig.none
+
+    @property
+    def load_base_model(self):
+        return self in (LoadConfig.model, LoadConfig.fast_llm)
+
+    @property
+    def load_fast_llm(self):
+        return self == LoadConfig.fast_llm
 
 
 @config_class()
@@ -46,15 +66,10 @@ class CheckpointConfigBase(Config):
         desc="Model type for external models (ex. Huggingace model name).",
         hint=FieldHint.feature,
     )
-    architecture_config: bool = Field(
-        default=False,
-        desc="Save/load the model architecture configuration.",
-        hint=FieldHint.feature,
-    )
-    base_model_config: bool = Field(
-        default=False,
-        desc="Save/load the full base model configuration, including the non-architecture fields.",
-        hint=FieldHint.feature,
+    load_config: LoadConfig = Field(
+        default=LoadConfig.architecture,
+        desc="Configuration to save/load.",
+        hint=FieldHint.core,
     )
     fast_llm_config: bool = Field(
         default=False,
@@ -64,14 +79,21 @@ class CheckpointConfigBase(Config):
 
     @property
     def compare_log_fn(self):
-        return logger.warning if self.architecture_config else ValueError
+        return ValueError if self.load_config.load_architecture else logger.warning
 
-    def _validate(self):
-        if self.fast_llm_config:
-            self.base_model_config = True
-        if self.base_model_config:
-            self.architecture_config = True
-        super()._validate()
+    @classmethod
+    def _from_dict(
+        cls,
+        default: dict[str],
+        strict: bool = True,
+        flat: bool = False,
+    ):
+        # TODO v0.2: Remove.
+        if default.get("format", None) == "huggingface":
+            warnings.warn(f"`huggingface` checkpoint format has been renamed to `external`.")
+            default["format"] = CheckpointType.external.value
+        cls._handle_renamed_field(default, "imported_type", "model_type")
+        return super()._from_dict(default, strict, flat)
 
 
 @config_class()
@@ -79,6 +101,17 @@ class CheckpointStateConfigBase(Config):
     _abstract = True
     model_weights: bool = Field(default=True, desc="Save/load the model weights.", hint=FieldHint.feature)
     optimizer_state: bool = Field(default=False, desc="Save/load the optimizer state.", hint=FieldHint.feature)
+
+    @classmethod
+    def _from_dict(
+        cls,
+        default: dict[str],
+        strict: bool = True,
+        flat: bool = False,
+    ):
+        cls._handle_renamed_field(default, "load_weights", "model_weights")
+        cls._handle_renamed_field(default, "load_optimizer", "optimizer_state")
+        return super()._from_dict(default, strict, flat)
 
 
 @config_class()

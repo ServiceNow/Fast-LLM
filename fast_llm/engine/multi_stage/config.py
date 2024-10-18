@@ -239,16 +239,16 @@ class FastLLMModelConfig(Config):
             return cls._from_metadata_v0(pretrained, metadata, default, updates)
 
         pretrained_config = cls.from_dict(metadata["fast_llm_config"])
-        if pretrained.architecture_config:
+        if not pretrained.load_config.load_architecture:
             assert default is not None
             config = default.to_copy()
             config.base_model.compare_architecture(pretrained_config.base_model, pretrained.compare_log_fn)
-        elif pretrained.fast_llm_config:
+        elif pretrained.load_config.load_fast_llm:
             config = pretrained_config
         else:
             with NoAutoValidate():
                 config = cls() if default is None else default.to_copy()
-            if pretrained.base_model_config:
+            if pretrained.load_config.load_base_model:
                 config.base_model = pretrained_config.base_model
             else:
                 config.base_model = config.base_model.to_copy(pretrained_config.base_model.get_architecture())
@@ -274,22 +274,22 @@ class FastLLMModelConfig(Config):
 
         with NoAutoValidate():
             if default is None:
-                assert not pretrained.architecture_config
+                assert pretrained.load_config.load_architecture
                 config = cls(base_model=base_model_config_cls())
             else:
                 config = default.to_copy()
 
-        if pretrained.architecture_config:
+        if pretrained.load_config.load_architecture:
             config.validate()
             architecture_config.compare_architecture(default.base_model, pretrained.compare_log_fn)
         else:
-            if pretrained.base_model_config:
+            if pretrained.load_config.load_base_model:
                 # Replace the whole config
                 config.base_model = base_model_config_cls.from_flat_dict(metadata["model_config"])
             else:
                 # Replace the architecture parts of the config.
                 config.base_model = config.base_model.to_copy(architecture_config)
-            if pretrained.fast_llm_config:
+            if pretrained.load_config.load_fast_llm:
                 config.multi_stage = MultiStageConfig.from_flat_dict(metadata["multi_stage_config"])
                 config.distributed = DistributedConfig.from_flat_dict(
                     metadata["distributed_config"],

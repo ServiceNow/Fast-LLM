@@ -42,7 +42,8 @@ class IntervalConfig(Config):
     )
 
     def _validate(self):
-        self.offset %= self.interval
+        if self.interval:
+            self.offset %= self.interval
         super()._validate()
 
     def enabled(self, iteration: int | None = None):
@@ -160,7 +161,9 @@ class ValidationConfig(IntervalConfig):
 
 @config_class()
 class CheckpointBaseConfig(IntervalConfig):
+    _abstract = True
     save_name: typing.ClassVar[str] = "save"
+    directory_name: typing.ClassVar[str] = "save"
     callback: CallbackConfig = Field(
         default_factory=CallbackConfig,
         desc="Callback (shell script).",
@@ -196,7 +199,10 @@ class CheckpointBaseConfig(IntervalConfig):
 
 @config_class()
 class CheckpointConfig(CheckpointBaseConfig):
+    _abstract = False
     save_name: typing.ClassVar[str] = "checkpoint"
+    # TODO v0.2: Rename to `checkpoint` so we don't need this extra variable?
+    directory_name = "checkpoints"
     interval = FieldUpdate(
         desc="The number of training iterations between each checkpoint." " Setting to None will disable checkpoints."
     )
@@ -216,7 +222,9 @@ class CheckpointConfig(CheckpointBaseConfig):
 
 @config_class()
 class ExportConfig(CheckpointBaseConfig, CheckpointConfigBase, CheckpointStateConfigBase, CheckpointSaveConfigBase):
+    _abstract = False
     save_name: typing.ClassVar[str] = "export"
+    directory_name = "export"
     interval = FieldUpdate(
         desc="The number of training iterations between each export." " Setting to None will disable exports."
     )

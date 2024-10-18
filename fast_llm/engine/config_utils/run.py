@@ -127,7 +127,6 @@ class Run:
     """
 
     _experiment_dir: pathlib.Path | None
-    _checkpoint_dir: pathlib.Path | None
 
     def __init__(
         self,
@@ -153,10 +152,7 @@ class Run:
         if self._config.experiment_dir is not None:
             self._experiment_directory = self._config.experiment_dir.resolve()
             self.dataset_cache_dir = self._experiment_directory / "dataset_cache"
-            self._checkpoint_dir = self._experiment_directory / "checkpoints"
-            self._export_dir = self._experiment_directory / "export"
             if self._is_main_rank:
-                self._checkpoint_dir.mkdir(exist_ok=True, parents=True)
                 (self._experiment_directory / "runs").mkdir(exist_ok=True, parents=True)
                 run = len(list((self._experiment_directory / "runs").iterdir()))
                 (self._experiment_directory / "runs" / str(run)).mkdir()
@@ -170,7 +166,7 @@ class Run:
             self._artifact_dir = run_dir / "artifacts" / str(self._distributed_config.rank)
             log_dir = run_dir / "logs"
         else:
-            _experiment_directory, self._checkpoint_dir, self._artifact_dir, log_dir = None, None, None, None
+            _experiment_directory, self._artifact_dir, log_dir = None, None, None
             self.dataset_cache_dir = None
             self.index = None
 
