@@ -66,11 +66,6 @@ class CheckpointConfigBase(Config):
         desc="Model type for external models (ex. Huggingace model name).",
         hint=FieldHint.feature,
     )
-    fast_llm_config: bool = Field(
-        default=False,
-        desc="Save/load the full fast-llm model configuration, including the distributed and multi-stage configurations.",
-        hint=FieldHint.feature,
-    )
 
     @classmethod
     def _from_dict(
