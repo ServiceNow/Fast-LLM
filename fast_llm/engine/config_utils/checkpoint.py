@@ -24,7 +24,7 @@ class CheckpointType(str, enum.Enum):
     external = "external"
 
 
-class LoadConfig(str, enum.Enum):
+class ModelConfigType(str, enum.Enum):
     none = "none"
     architecture = "architecture"
     model = "model"
@@ -32,15 +32,15 @@ class LoadConfig(str, enum.Enum):
 
     @property
     def load_architecture(self):
-        return self != LoadConfig.none
+        return self != ModelConfigType.none
 
     @property
     def load_base_model(self):
-        return self in (LoadConfig.model, LoadConfig.fast_llm)
+        return self in (ModelConfigType.model, ModelConfigType.fast_llm)
 
     @property
     def load_fast_llm(self):
-        return self == LoadConfig.fast_llm
+        return self == ModelConfigType.fast_llm
 
 
 @config_class()
@@ -66,20 +66,11 @@ class CheckpointConfigBase(Config):
         desc="Model type for external models (ex. Huggingace model name).",
         hint=FieldHint.feature,
     )
-    load_config: LoadConfig = Field(
-        default=LoadConfig.architecture,
-        desc="Configuration to save/load.",
-        hint=FieldHint.core,
-    )
     fast_llm_config: bool = Field(
         default=False,
         desc="Save/load the full fast-llm model configuration, including the distributed and multi-stage configurations.",
         hint=FieldHint.feature,
     )
-
-    @property
-    def compare_log_fn(self):
-        return ValueError if self.load_config.load_architecture else logger.warning
 
     @classmethod
     def _from_dict(
@@ -131,20 +122,30 @@ class CheckpointSaveConfigBase(Config):
 
 
 @config_class()
-class CheckpointMetadataConfig(CheckpointPathConfigBase, CheckpointConfigBase):
+class CheckpointSaveMetadataConfig(CheckpointPathConfigBase, CheckpointConfigBase):
     _abstract = False
 
 
 @config_class()
-class CheckpointSaveConfig(CheckpointMetadataConfig, CheckpointStateConfigBase, CheckpointSaveConfigBase):
+class CheckpointSaveConfig(CheckpointSaveMetadataConfig, CheckpointStateConfigBase, CheckpointSaveConfigBase):
     _abstract = False
 
 
 @config_class()
-class CheckpointLoadConfig(CheckpointMetadataConfig, CheckpointStateConfigBase):
+class CheckpointLoadMetadataConfig(CheckpointPathConfigBase, CheckpointConfigBase):
     _abstract = False
 
+    load_config: ModelConfigType = Field(
+        default=ModelConfigType.architecture,
+        desc="Configuration to save/load.",
+        hint=FieldHint.core,
+    )
 
-# @config_class()
-# class TrainingExportConfig(CheckpointConfigBase, CheckpointStateConfigBase, CheckpointSaveConfigBase):
-#    _abstract=False
+    @property
+    def compare_log_fn(self):
+        return ValueError if self.load_config.load_architecture else logger.warning
+
+
+@config_class()
+class CheckpointLoadConfig(CheckpointLoadMetadataConfig, CheckpointStateConfigBase):
+    _abstract = False

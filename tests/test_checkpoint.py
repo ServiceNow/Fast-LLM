@@ -7,7 +7,7 @@ import torch
 import transformers
 import yaml
 
-from fast_llm.engine.config_utils.checkpoint import CheckpointLoadConfig, CheckpointType, LoadConfig
+from fast_llm.engine.config_utils.checkpoint import CheckpointLoadConfig, CheckpointType, ModelConfigType
 from fast_llm.engine.multi_stage.config import StageMode
 from fast_llm.models.auto import model_registry
 from fast_llm.tools.convert import ConversionConfig
@@ -211,7 +211,7 @@ def test_load_pretrained_distributed_checkpoint():
         path=_CKPT_PATH,
         format=CheckpointType.distributed,
         optimizer_state=True,
-        load_config=LoadConfig.fast_llm,
+        load_config=ModelConfigType.fast_llm,
     )
     model = TEST_MODEL_CLS.from_pretrained(pretrained_config_ref)
     _compare_configs(config, model._base_model_config)
@@ -363,12 +363,12 @@ def test_load_pretrained_in_dp2_match_checkpoint():
     pretrained_config_ref = CheckpointLoadConfig(
         path=_CKPT_PATH,
         format=CheckpointType.distributed,
-        load_config=LoadConfig.fast_llm,
+        load_config=ModelConfigType.fast_llm,
     )
     pretrained_config_test = CheckpointLoadConfig(
         path=test_ckpt_path,
         format=CheckpointType.distributed,
-        load_config=LoadConfig.fast_llm,
+        load_config=ModelConfigType.fast_llm,
     )
     config_ref = TEST_MODEL_CONFIG_CLS.from_pretrained(pretrained_config_ref)
     config_test = TEST_MODEL_CONFIG_CLS.from_pretrained(pretrained_config_test)
@@ -405,7 +405,7 @@ def test_load_distributed_checkpoint_dp2():
     pretrained_config_ref = CheckpointLoadConfig(
         path=_CKPT_PATH,
         format=CheckpointType.distributed,
-        load_config=LoadConfig.fast_llm,
+        load_config=ModelConfigType.fast_llm,
     )
     pretrained_config_test = CheckpointLoadConfig(
         path=TEST_RESULTS_PATH / f"test_{TEST_MODEL}_load_pretrained_distributed_in_dp2" / "checkpoints" / "1",

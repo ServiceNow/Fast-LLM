@@ -9,7 +9,7 @@ from fast_llm.engine.config_utils.checkpoint import (
     CHECKPOINT_VERSION,
     KNOWN_CHECKPOINT_VERSIONS,
     CheckpointLoadConfig,
-    CheckpointMetadataConfig,
+    CheckpointLoadMetadataConfig,
     CheckpointType,
 )
 from fast_llm.engine.distributed.config import DistributedConfig
@@ -211,7 +211,7 @@ class FastLLMModelConfig(Config):
     @classmethod
     def from_pretrained(
         cls,
-        pretrained: CheckpointMetadataConfig,
+        pretrained: CheckpointLoadMetadataConfig,
         default: "FastLLMModelConfig" = None,
     ):
         # TODO: Add *updates?
@@ -222,7 +222,7 @@ class FastLLMModelConfig(Config):
     @classmethod
     def from_metadata(
         cls,
-        pretrained: CheckpointMetadataConfig,
+        pretrained: CheckpointLoadMetadataConfig,
         metadata: dict,
         default: "FastLLMModelConfig" = None,
         updates: dict[str | tuple[str, ...], typing.Any] | None = None,
@@ -261,7 +261,7 @@ class FastLLMModelConfig(Config):
     @classmethod
     def _from_metadata_v0(
         cls,
-        pretrained: CheckpointMetadataConfig,
+        pretrained: CheckpointLoadMetadataConfig,
         metadata: dict,
         default: "FastLLMModelConfig" = None,
         updates: dict[str | tuple[str, ...], typing.Any] | None = None,
@@ -301,7 +301,7 @@ class FastLLMModelConfig(Config):
         return config
 
     @classmethod
-    def load_pretrained_metadata(cls, pretrained: CheckpointMetadataConfig):
+    def load_pretrained_metadata(cls, pretrained: CheckpointLoadMetadataConfig):
         import yaml
 
         base_model_config_cls = cls.get_base_model_config_cls()
