@@ -55,7 +55,8 @@ We'll walk you through how to use Fast-LLM to train a large language model on a 
 
 For this demo, we will train a Mistral-7B model from scratch using random data. The config file `examples/mistral-4-node-benchmark.yaml` is pre-configured for a multi-node setup with 4 DGX nodes, each with 8 A100-80GB or H100-80GB GPUs.
 
-💡 *Note: Fast-LLM scales from a single GPU to large clusters. You can start small and expand based on your resources.*
+> [!NOTE]
+> Fast-LLM scales from a single GPU to large clusters. You can start small and expand based on your resources.
 
 Expect to see a significant speedup in training time compared to other libraries! For training Mistral-7B, Fast-LLM is expected to achieve a throughput of **9,500 tokens/s/H100** (batch size 32, sequence length 8k) on a 4-node cluster with 32 H100s.
 
@@ -140,7 +141,7 @@ Fast-LLM is licensed by ServiceNow, Inc. under the Apache 2.0 License. See [LICE
 
 ## Vulnerability Reporting
 
-or security issues, email [psirt-oss@servicenow.com](mailto:psirt-oss@servicenow.com). See our [security policy](SECURITY.md).
+For security issues, email [psirt-oss@servicenow.com](mailto:psirt-oss@servicenow.com). See our [security policy](SECURITY.md).
 
 [roadmap]: https://github.com/ServiceNow/Fast-LLM/milestones
 [issues]: https://github.com/ServiceNow/Fast-LLM/issues
