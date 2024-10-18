@@ -1,4 +1,4 @@
-from fast_llm.config import Field, FieldHint, config_class
+from fast_llm.config import FieldUpdate, config_class
 from fast_llm.data.config import DataConfig
 from fast_llm.models.gpt.config import (
     GPTArchitectureConfig,
@@ -30,7 +30,7 @@ class CustomBaseModelConfig(GPTBaseModelConfig, CustomArchitectureConfig):
 @config_class()
 class CustomModelConfig(GPTModelConfig):
     # TODO: Add custom model config parameters, if any (typically none).
-    base_model: CustomBaseModelConfig = Field(default_factory=CustomBaseModelConfig)
+    base_model: CustomBaseModelConfig = FieldUpdate(default_factory=CustomBaseModelConfig)
 
     @classmethod
     def get_model_class(cls):
@@ -47,18 +47,14 @@ class CustomModelConfig(GPTModelConfig):
 
 @config_class()
 class PretrainedCustomModelConfig(PretrainedGPTModelConfig):
-    model: CustomModelConfig = Field(default_factory=CustomModelConfig)
+    model: CustomModelConfig = FieldUpdate(default_factory=CustomModelConfig)
 
 
 @config_class()
 class CustomTrainerConfig(PretrainedCustomModelConfig, GPTTrainerConfig):
     # TODO: Add custom trainer config parameters, if any (typically none).
 
-    data: CustomDataConfig = Field(
-        default_factory=CustomDataConfig,
-        desc="Configuration for the dataset and model-independent preprocessing.",
-        hint=FieldHint.core,
-    )
+    data: CustomDataConfig = FieldUpdate(default_factory=CustomDataConfig)
 
     @classmethod
     def get_trainer_class(cls):

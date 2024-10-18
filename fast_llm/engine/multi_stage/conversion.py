@@ -138,6 +138,30 @@ class SplitWeightConverter(WeightConverter):
 
 
 class ModelConverter(abc.ABC):
+    base_file_name: typing.ClassVar[str]
+
+    @abc.abstractmethod
+    def convert_state_dict(
+        self, state_dict: dict[tuple[str, str], torch.Tensor | SafeTensorSlice], export: bool
+    ) -> dict[str, torch.Tensor | SafeTensorSlice]:
+        pass
+
+
+class TrivialConverter(ModelConverter):
+    base_file_name = "state_dict"
+
+    def convert_state_dict(
+        self, state_dict: dict[tuple[str, str], torch.Tensor | SafeTensorSlice], export: bool
+    ) -> dict[str, torch.Tensor | SafeTensorSlice]:
+        out_state_dict = {}
+        for key in list(state_dict):
+            name, shard_name = key
+            out_state_dict[f"{name}/{shard_name}"] = state_dict.pop(key)
+        return out_state_dict
+
+
+class ExternalModelConverter(ModelConverter):
+    base_file_name = "model"
     _base_model_cls: type[BaseModelConfig]
     _config_converters: list[ParamConverter]
 
@@ -213,20 +237,21 @@ class ModelConverter(abc.ABC):
         return cls(cls.import_config(config, architecture_only=architecture_only))
 
     def convert_state_dict(
-        self, state_dict: dict[str, torch.Tensor | SafeTensorSlice], export: bool
+        self, state_dict: dict[tuple[str, str], torch.Tensor | SafeTensorSlice], export: bool
     ) -> dict[str, torch.Tensor | SafeTensorSlice]:
         out_state_dict = {}
         weight_converters = self._export_converters if export else self._import_converters
 
-        for state_dict_name in list(state_dict):
+        for state_dict_name, shard_name in list(state_dict):
+            assert shard_name == "weights"
             try:
                 if state_dict_name not in weight_converters:
                     continue
                 weight_converter: WeightConverter = weight_converters[state_dict_name]
                 in_names = weight_converter.fast_llm_name if export else weight_converter.export_name
-                if not all(name in state_dict for name in in_names):
+                if not all((name, shard_name) in state_dict for name in in_names):
                     continue
-                in_weights = tuple(state_dict.pop(name) for name in in_names)
+                in_weights = tuple(state_dict.pop((name, shard_name)) for name in in_names)
                 out_names = weight_converter.export_name if export else weight_converter.fast_llm_name
                 out_weights = (
                     weight_converter.export_weight(in_weights)
@@ -262,8 +287,8 @@ class ModelConverter(abc.ABC):
         return val
 
 
-class AutoModelConverter(ModelConverter, abc.ABC):
-    converter_map: dict[str, type[ModelConverter]]
+class AutoModelConverter(ExternalModelConverter, abc.ABC):
+    converter_map: dict[str, type[ExternalModelConverter]]
 
     @classmethod
     def import_config(cls, config: dict[str], architecture_only: bool = False):
@@ -274,7 +299,7 @@ class AutoModelConverter(ModelConverter, abc.ABC):
         return cls.converter_map[config["model_type"]].from_config(config, architecture_only)
 
 
-class HuggingfaceModelConverter(ModelConverter, abc.ABC):
+class HuggingfaceModelConverter(ExternalModelConverter, abc.ABC):
     model_type: str | None = None
 
     @classmethod
