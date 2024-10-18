@@ -7,6 +7,7 @@ from fast_llm.functional.triton.sparse_copy import get_sparse_map
 from fast_llm.utils import Assert
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is not available")
 @pytest.mark.parametrize("gated", [True, False])
 @pytest.mark.parametrize(
     "activation_type", [ActivationType.gelu, ActivationType.silu, ActivationType.relu, ActivationType.squared_relu]
@@ -62,6 +63,7 @@ def test_mlp_recomputation(gated, activation_type):
                 Assert.all_equal(param.grad_buffer, param_grad_ref)
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is not available")
 def test_dropless_mlp():
     num_experts = 4
     experts_per_token = 4

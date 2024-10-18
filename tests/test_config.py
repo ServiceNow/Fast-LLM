@@ -1,5 +1,7 @@
 import pathlib
 import subprocess
+import yaml
+from fast_llm.models.auto import trainer_registry
 
 
 def test_validate_without_import():
@@ -26,3 +28,10 @@ def test_validate_without_import():
     completed_proc = subprocess.run(command)
     if completed_proc.returncode:
         raise RuntimeError(f"Process failed with return code {completed_proc.returncode}")
+
+
+def test_validate_example_config():
+    fast_llm_config_dict = yaml.safe_load(
+        (pathlib.Path(__file__).parents[1] / "examples" / "mistral-4-node-benchmark.yaml").read_text()
+    )
+    trainer_registry["gpt"].from_dict(fast_llm_config_dict)
