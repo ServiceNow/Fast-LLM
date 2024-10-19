@@ -34,7 +34,7 @@ jobs:
       - name: Install dependencies
         run: |
           pip install -e .
-          pip install "torch>=2.2.2" "numpy>=1.24.4,<2.0.0" "safetensors>=0.4.4" "transformers>=4.44.2" "pytest"
+          pip install "torch>=2.2.2" "numpy>=1.24.4,<2.0.0" "safetensors>=0.4.4" "transformers>=4.44.2" "pytest>=8.3.2" "pytest-depends>=1.0.1"
 
       - name: Run tests
         run: pytest .
