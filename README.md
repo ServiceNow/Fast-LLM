@@ -2,7 +2,6 @@
 
 <img width=50% src="docs/assets/images/logo.png" alt="Fast-LLM Logo"></img>
 
-[![Tests][tests-badge]][tests]
 [![Docker Build][docker-badge]][docker]
 [![Documentation Build][docs-badge]][docs]
 [![License][license-badge]][license]
@@ -145,8 +144,6 @@ For security issues, email [psirt-oss@servicenow.com](mailto:psirt-oss@serviceno
 
 [roadmap]: https://github.com/ServiceNow/Fast-LLM/milestones
 [issues]: https://github.com/ServiceNow/Fast-LLM/issues
-[tests-badge]: https://github.com/ServiceNow/Fast-LLM/actions/workflows/run-tests.yaml/badge.svg
-[tests]: https://github.com/ServiceNow/Fast-LLM/actions/workflows/run-tests.yaml
 [docker-badge]: https://github.com/ServiceNow/Fast-LLM/actions/workflows/build-and-push-docker.yaml/badge.svg
 [docker]: https://github.com/ServiceNow/Fast-LLM/actions/workflows/build-and-push-docker.yaml
 [docs-badge]: https://github.com/ServiceNow/Fast-LLM/actions/workflows/deploy-documentation.yaml/badge.svg
