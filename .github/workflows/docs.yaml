@@ -33,7 +33,7 @@ jobs:
         run: mkdocs build
 
   deploy:
-    if: github.event_name == 'push'
+    # if: github.event_name == 'push'
     name: Deploy
     needs: build
     runs-on: ubuntu-latest
