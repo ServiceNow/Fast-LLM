@@ -1,64 +1,52 @@
-name: Build and Push Docker Image
-
 on:
-  workflow_run:
-    workflows: ["Run Tests"]
-    types:
-      - completed
+  schedule:
+    - cron: "0 10 * * *"
+  push:
+    branches:
+      - "main"
+    tags:
+      - "v*.*.*"
+  pull_request:
+    branches:
+      - "main"
 
 jobs:
-  build:
-    if: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')) }}
+  docker:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Clean unused files
-        run: |
-          sudo rm -rf /usr/local/lib/android # will release about 10 GB if you don't need Android
-          sudo rm -rf /usr/share/dotnet # will release about 20GB if you don't need .NET
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            ghcr.io/servicenow/fast-llm
+          tags: |
+            type=schedule
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=sha
+            type=raw,value=latest
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Restore Docker layers cache
-        id: restore-cache
-        uses: actions/cache/restore@v4
-        with:
-          path: /tmp/.buildx-cache
-          key: ${{ runner.os }}-buildx-${{ github.ref_name }}
-          restore-keys: |
-            ${{ runner.os }}-buildx-
-
-      - name: Log in to DockerHub
+      - name: Login to GHCR
+        if: github.event_name != 'pull_request'
         uses: docker/login-action@v3
         with:
-          username: ${{ secrets.DOCKER_USERNAME }}
-          password: ${{ secrets.DOCKER_PASSWORD }}
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push Docker image
-        id: docker_build
-        run: |
-          IMAGE_NAME="servicenowdocker/fast-llm"
-          GIT_COMMIT_HASH=$(git rev-parse --short HEAD)
-
-          TAG_OPTION=""
-          TAG_OPTION="-t ${IMAGE_NAME}:${GIT_COMMIT_HASH} -t ${IMAGE_NAME}:latest"
-
-          # If it's a tagged release, add the git tag as a docker tag
-          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
-            TAG_NAME=${GITHUB_REF#refs/tags/}
-            TAG_OPTION="${TAG_OPTION} -t ${IMAGE_NAME}:${TAG_NAME}"
-          fi
-
-          docker buildx build --cache-from=type=local,src=/tmp/.buildx-cache \
-                              --cache-to=type=local,dest=/tmp/.buildx-cache-new,mode=max \
-                              --push ${TAG_OPTION} .
-
-      - name: Save updated Docker cache
-        id: save-cache
-        uses: actions/cache/save@v4
+      - name: Build and push
+        uses: docker/build-push-action@v6
         with:
-          path: /tmp/.buildx-cache-new
-          key: ${{ steps.restore-cache.outputs.cache-primary-key }}
+          context: .
+          platforms: linux/amd64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=registry,ref=ghcr.io/servicenow/fast-llm:cache
+          cache-to: type=registry,ref=ghcr.io/servicenow/fast-llm:cache,mode=max
