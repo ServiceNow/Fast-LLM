@@ -13,8 +13,28 @@ on:
       - "main"
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          pip install -e .
+          pip install "torch>=2.2.2" "numpy>=1.24.4,<2.0.0" "safetensors>=0.4.4" "transformers>=4.44.2" "pytest>=8.3.2" "pytest-depends>=1.0.1"
+
+      - name: Run tests
+        run: pytest .
+
   docker:
     runs-on: ubuntu-latest
+    needs: test
     steps:
       - name: Clean unused files
         run: |
@@ -25,19 +45,6 @@ jobs:
 
       - name: Checkout repository
         uses: actions/checkout@v4
-      
-      # - uses: actions/setup-python@v5
-      #   with:
-      #     python-version: '3.12'
-      #     cache: 'pip'
-
-      # - name: Install dependencies
-      #   run: |
-      #     pip install -e .
-      #     pip install "torch>=2.2.2" "numpy>=1.24.4,<2.0.0" "safetensors>=0.4.4" "transformers>=4.44.2" "pytest>=8.3.2" "pytest-depends>=1.0.1"
-
-      # - name: Run tests
-      #   run: pytest .
 
       - name: Docker meta
         id: meta
