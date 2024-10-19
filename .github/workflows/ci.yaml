@@ -1,4 +1,4 @@
-name: Build and push Docker image
+name: CI
 
 on:
   schedule:
@@ -14,6 +14,7 @@ on:
 
 jobs:
   test:
+    name: Test
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -33,6 +34,7 @@ jobs:
         run: pytest .
 
   docker:
+    name: Docker
     runs-on: ubuntu-latest
     needs: test
     steps:

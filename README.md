@@ -2,8 +2,8 @@
 
 <img width=50% src="docs/assets/images/logo.png" alt="Fast-LLM Logo"></img>
 
-[![Docker Build][docker-badge]][docker]
-[![Documentation Build][docs-badge]][docs]
+[![Docker][ci-badge]][ci]
+[![Documentation][docs-badge]][docs]
 [![License][license-badge]][license]
 
 *Accelerating your LLM training to full speed*
@@ -144,10 +144,10 @@ For security issues, email [psirt-oss@servicenow.com](mailto:psirt-oss@serviceno
 
 [roadmap]: https://github.com/ServiceNow/Fast-LLM/milestones
 [issues]: https://github.com/ServiceNow/Fast-LLM/issues
-[docker-badge]: https://github.com/ServiceNow/Fast-LLM/actions/workflows/build-and-push-docker.yaml/badge.svg
-[docker]: https://github.com/ServiceNow/Fast-LLM/actions/workflows/build-and-push-docker.yaml
-[docs-badge]: https://github.com/ServiceNow/Fast-LLM/actions/workflows/deploy-documentation.yaml/badge.svg
-[docs]: https://github.com/ServiceNow/Fast-LLM/actions/workflows/deploy-documentation.yaml
+[ci-badge]: https://github.com/ServiceNow/Fast-LLM/actions/workflows/ci.yaml/badge.svg
+[ci]: https://github.com/ServiceNow/Fast-LLM/actions/workflows/ci.yaml
+[docs-badge]: https://github.com/ServiceNow/Fast-LLM/actions/workflows/docs.yaml/badge.svg
+[docs]: https://github.com/ServiceNow/Fast-LLM/actions/workflows/docs.yaml
 [license-badge]: https://img.shields.io/badge/License-Apache%202.0-blue.svg
 [license]: LICENSE
 [servicenow-research]: https://www.servicenow.com/research/
