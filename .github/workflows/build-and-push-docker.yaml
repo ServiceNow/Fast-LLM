@@ -1,3 +1,5 @@
+name: Build and push Docker image
+
 on:
   schedule:
     - cron: "0 10 * * *"
@@ -49,12 +51,25 @@ jobs:
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push
+      - name: Build and export to Docker
         uses: docker/build-push-action@v6
         with:
           context: .
-          push: true
-          # push: ${{ github.event_name != 'pull_request' }}
+          load: true
+          tags: ghcr.io/servicenow/fast-llm:test
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=registry,ref=ghcr.io/servicenow/fast-llm:cache
+          cache-to: type=registry,ref=ghcr.io/servicenow/fast-llm:cache,mode=max
+        
+      - name: Run tests
+        run: |
+          docker run --rm ghcr.io/servicenow/fast-llm:test pytest
+      
+      - name: Push to GHCR
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=registry,ref=ghcr.io/servicenow/fast-llm:cache
