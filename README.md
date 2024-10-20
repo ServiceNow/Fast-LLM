@@ -80,7 +80,7 @@ Expect to see a significant speedup in training time compared to other libraries
     #SBATCH --ntasks=$(scontrol show node | grep -c NodeName)
     #SBATCH --exclusive
 
-    srun bash -c 'pip install git+ssh://git@github.com/ServiceNow/Fast-LLM.git'
+    srun bash -c 'pip install --no-cache-dir -e "git+https://github.com/ServiceNow/Fast-LLM.git#egg=llm[CORE,OPTIONAL,DEV]"'
     EOF
     ```
 
