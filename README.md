@@ -2,8 +2,8 @@
 
 <img width=50% src="docs/assets/images/logo.png" alt="Fast-LLM Logo"></img>
 
-[![Docker][ci-badge]][ci]
-[![Documentation][docs-badge]][docs]
+[![Docker][ci-badge]][ci-workflow]
+[![Documentation][docs-badge]][docs-workflow]
 [![License][license-badge]][license]
 
 *Accelerating your LLM training to full speed*
@@ -14,34 +14,38 @@ Made with ❤️ by [ServiceNow Research][servicenow-research]
 
 ## Overview
 
-Fast-LLM is a new open-source library for training large language models, built on [PyTorch][pytorch] and [Triton][triton]. It is extremely fast, scales to large clusters, supports a wide range of model architectures, and is easy to use. Unlike commercial frameworks like Megatron-LM, which are largely closed off and fragmented across forks, Fast-LLM is fully open-source and encourages community-driven development. Researchers can freely customize and optimize as needed, making it a flexible and hackable alternative that combines the speed of specialized tools with the openness of libraries like Hugging Face Transformers.
+Fast-LLM is a new open-source library for training large language models, built on [PyTorch][pytorch] and [Triton][triton]. It is extremely fast, scales to large clusters, supports a wide range of model architectures, and is easy to use. Unlike commercial frameworks like Megatron-LM, which are largely closed off and fragmented across forks, Fast-LLM is fully open-source and encourages community-driven development. Researchers can freely customize and optimize as needed, making it a flexible and hackable alternative that combines the speed of specialized tools with the openness of libraries like [Hugging Face Transformers][transformers].
+
+> [!NOTE]
+> Fast-LLM is not affiliated with Fast.AI, FastHTML, FastAPI, FastText, or other similarly named projects. Our library's name refers to its speed and efficiency in language model training.
 
 ## Why Fast-LLM?
 
 1. 🚀 **Fast-LLM is Blazingly Fast**:
     - ⚡️ Optimized kernel efficiency and reduced overheads.
-    - 🔋 Optimized memory usage.
-    - ⏳ Low training time and cost.
+    - 🔋 Optimized memory usage for best performance.
+    - ⏳ Minimizes training time and cost.
   
 2. 📈 **Fast-LLM is Highly Scalable**:
     - 📡 Distributed training across multiple GPUs and nodes using 3D parallelism (Data, Tensor, and Pipeline).
-    - 🔄 Supports sequence length parallelism.
-    - 🧠 ZeRO-1, ZeRO-2, and ZeRO-3 for memory efficiency.
-    - 🎛️ Support for mixed precision training.
+    - 🔗 Supports sequence length parallelism to handle longer sequences effectively.
+    - 🧠 ZeRO-1, ZeRO-2, and ZeRO-3 implementations for improved memory efficiency.
+    - 🎛️ Mixed precision training support for better performance.
     - 🏋️‍♂️ Large batch training and gradient accumulation support.
+    - 🔄 Reproducible training with deterministic behavior.
 
 3. 🎨 **Fast-LLM is Incredibly Flexible**:
     - 🤖 Compatible with all common language model architectures in a unified class.
-    - ⚡ Efficient dropless Mixture-of-Experts (MoE) support.
-    - 🧩 Customizable for language model architectures, data loaders, loss functions, and optimizers.
-    - 🤗 Seamless integration with [Hugging Face Transformers](https://huggingface.co/transformers/).
+    - ⚡ Efficient dropless Mixture-of-Experts (MoE) implementation with SoTA performance.
+    - 🧩 Customizable language model architectures, data loaders, loss functions, and optimizers.
+    - 🤗 Seamless integration with [Hugging Face Transformers][transformers].
 
 4. 🎯 **Fast-LLM is Super Easy to Use**:
-    - 📦 Pre-built Docker images for quick deployment.
+    - 📦 [Pre-built Docker images](https://github.com/ServiceNow/Fast-LLM/pkgs/container/fast-llm) for quick deployment.
     - 📝 Simple YAML configuration for hassle-free setup.
     - 💻 Command-line interface for easy launches.
     - 📊 Detailed logging and real-time monitoring features.
-    - 📚 Extensive documentation and practical tutorials.
+    - 📚 Extensive [documentation][docs] and practical tutorials.
 
 5. 🌐 **Fast-LLM is Truly Open Source**:
     - ⚖️ Licensed under [Apache 2.0][license] for maximum freedom to use Fast-LLM at work, in your projects, or for research.
@@ -52,7 +56,7 @@ Fast-LLM is a new open-source library for training large language models, built 
 
 We'll walk you through how to use Fast-LLM to train a large language model on a cluster with multiple nodes and GPUs. We'll show an example setup using a Slurm cluster and a Kubernetes cluster.
 
-For this demo, we will train a Mistral-7B model from scratch using random data. The config file `examples/mistral-4-node-benchmark.yaml` is pre-configured for a multi-node setup with 4 DGX nodes, each with 8 A100-80GB or H100-80GB GPUs.
+For this demo, we will train a Mistral-7B model from scratch for 1000 steps on random data. The config file `examples/mistral-4-node-benchmark.yaml` is pre-configured for a multi-node setup with 4 DGX nodes, each with 8 A100-80GB or H100-80GB GPUs.
 
 > [!NOTE]
 > Fast-LLM scales from a single GPU to large clusters. You can start small and expand based on your resources.
@@ -63,7 +67,7 @@ Expect to see a significant speedup in training time compared to other libraries
 
 #### Prerequisites
 
-- A functioning [Slurm](https://slurm.schedmd.com/) cluster with at least 4 DGX nodes with 8 A100-80GB or H100-80GB GPUs each.
+- A [Slurm](https://slurm.schedmd.com/) cluster with at least 4 DGX nodes with 8 A100-80GB or H100-80GB GPUs each.
 - CUDA 12.1 or higher.
 - Dependencies: [PyTorch][pytorch], [Triton][triton], and [Apex](https://github.com/NVIDIA/apex) installed on all nodes.
 
@@ -101,7 +105,7 @@ Now, you can sit back and relax while Fast-LLM trains your model at full speed! 
 
 #### Prerequisites
 
-- A working [Kubernetes](https://kubernetes.io/) cluster with at least 4 DGX nodes with 8 A100-80GB or H100-80GB GPUs each.
+- A [Kubernetes](https://kubernetes.io/) cluster with at least 4 DGX nodes with 8 A100-80GB or H100-80GB GPUs each.
 - [KubeFlow](https://www.kubeflow.org/) installed.
 - Locked memory limit set to unlimited at the host level on all nodes. Ask your cluster admin to do this if needed.
 
@@ -145,11 +149,13 @@ For security issues, email [psirt-oss@servicenow.com](mailto:psirt-oss@serviceno
 [roadmap]: https://github.com/ServiceNow/Fast-LLM/milestones
 [issues]: https://github.com/ServiceNow/Fast-LLM/issues
 [ci-badge]: https://github.com/ServiceNow/Fast-LLM/actions/workflows/ci.yaml/badge.svg
-[ci]: https://github.com/ServiceNow/Fast-LLM/actions/workflows/ci.yaml
+[ci-workflow]: https://github.com/ServiceNow/Fast-LLM/actions/workflows/ci.yaml
 [docs-badge]: https://github.com/ServiceNow/Fast-LLM/actions/workflows/docs.yaml/badge.svg
-[docs]: https://github.com/ServiceNow/Fast-LLM/actions/workflows/docs.yaml
+[docs-workflow]: https://github.com/ServiceNow/Fast-LLM/actions/workflows/docs.yaml
+[docs]: https://servicenow.github.io/Fast-LLM
 [license-badge]: https://img.shields.io/badge/License-Apache%202.0-blue.svg
 [license]: LICENSE
 [servicenow-research]: https://www.servicenow.com/research/
 [pytorch]: https://pytorch.org/
 [triton]: https://triton-lang.org
+[transformers]: https://huggingface.co/transformers
