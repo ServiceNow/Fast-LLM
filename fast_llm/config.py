@@ -153,6 +153,14 @@ class Field(dataclasses.Field):
         self.valid = valid
 
 
+class FieldUpdate(dict):
+    """
+    Specify some entries in the field that should be updated from the base class.
+    Useful for changing the default or description in a derived class.
+    Processed in `__init_subclass__`.
+    """
+
+
 def check_field(fn, *args, **kwargs):
     """
     Helper function to define a condition that a config field should satisfy,
@@ -270,7 +278,7 @@ class Config:
     __class_validated__: typing.ClassVar[bool] = True
     _abstract: typing.ClassVar[bool] = False
     _validated: bool = Field(init=False, repr=False)
-    _unknown_fields: dict[str] = Field(init=False, repr=False)
+    _unknown_fields: dict[str, typing.Any] = Field(init=False, repr=False)
 
     def __post_init__(self):
         """
@@ -621,7 +629,7 @@ class Config:
     @classmethod
     def from_dict(
         cls,
-        default: typing.Union["Config", dict[str]],
+        default: typing.Union["Config", dict[str, typing.Any]],
         *updates: typing.Union["Config", dict[str | tuple[str, ...], typing.Any]],
         strict: bool = True,
     ):
@@ -646,7 +654,7 @@ class Config:
     @classmethod
     def from_flat_dict(
         cls,
-        default: dict[str],
+        default: dict[str, typing.Any],
         strict: bool = True,
     ):
         # TODO v0.2: Remove flat format
@@ -655,7 +663,7 @@ class Config:
     @classmethod
     def _from_dict(
         cls,
-        default: dict[str],
+        default: dict[str, typing.Any],
         strict: bool = True,
         flat: bool = False,
     ):
@@ -768,7 +776,7 @@ class Config:
         return {key: cls._from_dict_nested(value_, args[1], strict) for key, value_ in value.items()}
 
     @classmethod
-    def _handle_renamed_field(cls, default: dict[str], old_name: str, new_name: str):
+    def _handle_renamed_field(cls, default: dict[str, typing.Any], old_name: str, new_name: str):
         if old_name in default:
             warnings.warn(f"Field `{old_name}` is deprecated in class {get_type_name(cls)}, use `{new_name}` instead.")
             default[new_name] = default.pop(old_name)
@@ -803,11 +811,51 @@ class Config:
         if not cls.__class_validated__:
             raise RuntimeError(f"{cls.__name__} hasn't been validated. Make sure to use the @config_class decorator.")
 
-    def __init_subclass__(cls, **kwargs):
+    def __init_subclass__(cls):
         """
         We need to postpone validation until the class has been processed by the dataclass wrapper.
         """
-        assert (
-            cls.__class_validated__
-        ), f"Parent class of config class {cls.__name__} has not been validated. Make sure to use the @config_class decorator."
+        for base_class in cls.__mro__:
+            if issubclass(base_class, Config):
+                assert cls.__class_validated__, (
+                    f"Parent class {get_type_name(base_class)} of config class {get_type_name(cls)} has not been validated."
+                    f" Make sure to use the @config_class decorator."
+                )
         cls.__class_validated__ = False
+        for name in list(cls.__dict__):
+            value = getattr(cls, name)
+            if isinstance(value, FieldUpdate):
+                # In case of multiple inheritance, the base class field may not appear in `cls.__dataclass_fields__`.
+                # so we iterate over superclasses following mro and use the first match.
+                base_class_field = None
+                for base_class in cls.__mro__:
+                    base_class_fields = getattr(base_class, "__dataclass_fields__", {})
+                    if name in base_class_fields:
+                        base_class_field = base_class_fields[name]
+                        break
+                if base_class_field is None:
+                    raise RuntimeError(f"Trying to update the non-existent field {name} in class {get_type_name(cls)}")
+                setattr(
+                    cls,
+                    name,
+                    Field(
+                        desc=value.pop("desc", base_class_field.desc),
+                        doc=value.pop("doc", base_class_field.doc),
+                        hint=value.pop("hint", base_class_field.hint),
+                        valid=value.pop("valid", base_class_field.valid),
+                        default=value.pop("default", base_class_field.default),
+                        default_factory=value.pop("default_factory", base_class_field.default_factory),
+                        repr=value.pop("repr", base_class_field.repr),
+                        hash=value.pop("hash", base_class_field.hash),
+                        compare=value.pop("compare", base_class_field.compare),
+                        metadata=value.pop("metadata", base_class_field.metadata),
+                        kw_only=value.pop("kw_only", base_class_field.kw_only),
+                    ),
+                )
+                if name in cls.__annotations__:
+                    # TODO: Generalize to other type hints.
+                    if isinstance(cls.__annotations__[name], type) and isinstance(base_class_field.type, type):
+                        Assert.custom(issubclass, cls.__annotations__[name], base_class_field.type)
+                else:
+                    # dataclasses expects an annotation, so we use the one from the base class.
+                    cls.__annotations__[name] = base_class_field.type

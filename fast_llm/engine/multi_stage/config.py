@@ -1,12 +1,17 @@
 import enum
 import json
 import logging
-import pathlib
 import typing
 
 from fast_llm.config import Config, Field, FieldHint, NoAutoValidate, check_field, config_class, skip_valid_if_none
 from fast_llm.engine.base_model.config import BaseModelConfig
-from fast_llm.engine.config_utils.data_type import DataType
+from fast_llm.engine.config_utils.checkpoint import (
+    CHECKPOINT_VERSION,
+    KNOWN_CHECKPOINT_VERSIONS,
+    CheckpointFormat,
+    CheckpointLoadConfig,
+    CheckpointLoadMetadataConfig,
+)
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.utils import Assert
 
@@ -174,98 +179,6 @@ class MultiStageConfig(StageConfig):
 # TODO: Does this matter? Best value?
 SHARD_PAD_TO_MULTIPLE = 32
 
-# TODO: Use packaging.version? (Safer but extra requirement)
-CHECKPOINT_VERSION = "0.1"
-_KNOWN_CHECKPOINT_VERSIONS = ("0", "0.1")
-
-
-class CheckpointType(str, enum.Enum):
-    distributed = "distributed"
-    # TODO: Rename
-    huggingface = "huggingface"
-    # Model state dict, mostly for debug.
-    state_dict = "state_dict"
-
-
-@config_class()
-class PretrainedConfig(Config):
-    path: pathlib.Path | None = Field(
-        default=None,
-        desc="Path to the checkpoint.",
-        hint=FieldHint.core,
-    )
-    format: CheckpointType = Field(
-        default=CheckpointType.distributed,
-        desc="Format of the checkpoint.",
-        hint=FieldHint.core,
-    )
-    imported_type: str | None = Field(
-        default=None,
-        desc="Model type for external models (ex. Huggingace type).",
-        hint=FieldHint.feature,
-    )
-    override_architecture: bool = Field(
-        default=False,
-        desc="Ignore the base model architecture from the pretrained checkpoint and use the provided one instead."
-        " May have unintended consequences.",
-        hint=FieldHint.feature,
-    )
-    load_full_base_model_config: bool = Field(
-        default=False,
-        desc="Load the non-architecture model config from the checkpoint.",
-        hint=FieldHint.feature,
-    )
-    load_full_fast_llm_config: bool = Field(
-        default=False,
-        desc="Load the distributed and multi-stage config from the checkpoint.",
-        hint=FieldHint.feature,
-    )
-
-    def _validate(self):
-        if self.load_full_fast_llm_config:
-            self.load_full_base_model_config = True
-        super()._validate()
-
-    @property
-    def compare_log_fn(self):
-        return logger.warning if self.override_architecture else ValueError
-
-
-@config_class()
-class PretrainedCheckpointConfig(PretrainedConfig):
-    # Load weights from path (if applicable),
-    # otherwise reinitialize them (i.e. load the config only.)
-    load_weights: bool = Field(default=True, desc="Load model weights from the checkpoint.", hint=FieldHint.feature)
-    load_optimizer: bool = Field(
-        default=False, desc="Load the optimizer state from the checkpoint.", hint=FieldHint.feature
-    )
-
-
-@config_class()
-class CheckpointConfig(Config):
-    # TODO: Merge/match with PretrainedConfig?
-    checkpoint_path: pathlib.Path = Field(desc="Path to the checkpoint.", hint=FieldHint.core)
-    checkpoint_type: CheckpointType = Field(
-        default=CheckpointType.distributed, desc="Format of the checkpoint.", hint=FieldHint.core
-    )
-    exported_model_type: str | None = Field(
-        default=None, desc="Model type for external models (ex. Huggingace type).", hint=FieldHint.feature
-    )
-    save_optimizer: bool = Field(
-        default=True, desc="Save the optimizer state from the checkpoint.", hint=FieldHint.feature
-    )
-    target_params_per_file: int = Field(
-        default=2**32,
-        desc="Limit the number of parameters saved in each file.",
-        hint=FieldHint.feature,
-        valid=check_field(Assert.geq, 2**20),
-    )
-    dtype: DataType | None = Field(
-        default=None,
-        desc="Data type to save the checkpoint.",
-        hint=FieldHint.feature,
-    )
-
 
 @config_class()
 class FastLLMModelConfig(Config):
@@ -298,7 +211,7 @@ class FastLLMModelConfig(Config):
     @classmethod
     def from_pretrained(
         cls,
-        pretrained: PretrainedConfig,
+        pretrained: CheckpointLoadMetadataConfig,
         default: "FastLLMModelConfig" = None,
     ):
         # TODO: Add *updates?
@@ -309,7 +222,7 @@ class FastLLMModelConfig(Config):
     @classmethod
     def from_metadata(
         cls,
-        pretrained: PretrainedConfig,
+        pretrained: CheckpointLoadMetadataConfig,
         metadata: dict,
         default: "FastLLMModelConfig" = None,
         updates: dict[str | tuple[str, ...], typing.Any] | None = None,
@@ -318,24 +231,24 @@ class FastLLMModelConfig(Config):
         # TODO: Standardize to *updates?
         if "checkpoint_type" in metadata:
             # TODO python 3.12: Assert.incl(metadata["checkpoint_type"], CheckpointType)
-            CheckpointType(metadata["checkpoint_type"])
+            CheckpointFormat(metadata["checkpoint_type"])
         version = metadata["checkpoint_version"]
-        if version not in _KNOWN_CHECKPOINT_VERSIONS:
+        if version not in KNOWN_CHECKPOINT_VERSIONS:
             raise ValueError(f"Unrecognised checkpoint version: {version}")
         if version == "0":
             return cls._from_metadata_v0(pretrained, metadata, default, updates)
 
         pretrained_config = cls.from_dict(metadata["fast_llm_config"])
-        if pretrained.override_architecture:
+        if not pretrained.load_config.load_architecture:
             assert default is not None
             config = default.to_copy()
             config.base_model.compare_architecture(pretrained_config.base_model, pretrained.compare_log_fn)
-        elif pretrained.load_full_fast_llm_config:
+        elif pretrained.load_config.load_fast_llm:
             config = pretrained_config
         else:
             with NoAutoValidate():
                 config = cls() if default is None else default.to_copy()
-            if pretrained.load_full_base_model_config:
+            if pretrained.load_config.load_base_model:
                 config.base_model = pretrained_config.base_model
             else:
                 config.base_model = config.base_model.to_copy(pretrained_config.base_model.get_architecture())
@@ -348,7 +261,7 @@ class FastLLMModelConfig(Config):
     @classmethod
     def _from_metadata_v0(
         cls,
-        pretrained: PretrainedConfig,
+        pretrained: CheckpointLoadMetadataConfig,
         metadata: dict,
         default: "FastLLMModelConfig" = None,
         updates: dict[str | tuple[str, ...], typing.Any] | None = None,
@@ -361,22 +274,22 @@ class FastLLMModelConfig(Config):
 
         with NoAutoValidate():
             if default is None:
-                assert not pretrained.override_architecture
+                assert pretrained.load_config.load_architecture
                 config = cls(base_model=base_model_config_cls())
             else:
                 config = default.to_copy()
 
-        if pretrained.override_architecture:
+        if pretrained.load_config.load_architecture:
             config.validate()
             architecture_config.compare_architecture(default.base_model, pretrained.compare_log_fn)
         else:
-            if pretrained.load_full_base_model_config:
+            if pretrained.load_config.load_base_model:
                 # Replace the whole config
                 config.base_model = base_model_config_cls.from_flat_dict(metadata["model_config"])
             else:
                 # Replace the architecture parts of the config.
                 config.base_model = config.base_model.to_copy(architecture_config)
-            if pretrained.load_full_fast_llm_config:
+            if pretrained.load_config.load_fast_llm:
                 config.multi_stage = MultiStageConfig.from_flat_dict(metadata["multi_stage_config"])
                 config.distributed = DistributedConfig.from_flat_dict(
                     metadata["distributed_config"],
@@ -388,20 +301,20 @@ class FastLLMModelConfig(Config):
         return config
 
     @classmethod
-    def load_pretrained_metadata(cls, pretrained):
+    def load_pretrained_metadata(cls, pretrained: CheckpointLoadMetadataConfig):
         import yaml
 
         base_model_config_cls = cls.get_base_model_config_cls()
-        if pretrained.format == CheckpointType.distributed:
+        if pretrained.format == CheckpointFormat.distributed:
             return yaml.safe_load((pretrained.path / "metadata.yaml").open("r"))
-        elif pretrained.format == CheckpointType.state_dict:
+        elif pretrained.format == CheckpointFormat.state_dict:
             return json.load((pretrained.path / f"state_dict.safetensors.index.json").open("r"))["metadata"]
-        elif pretrained.format == CheckpointType.huggingface:
-            converter_class = base_model_config_cls.get_converter_class(pretrained.imported_type)
+        elif pretrained.format == CheckpointFormat.external:
+            converter_class = base_model_config_cls.get_converter_class(pretrained.model_type)
             imported_model_config = converter_class.import_config(converter_class.load_config(pretrained.path), True)
             return {
                 "fast_llm_config": {"base_model": imported_model_config.to_serialized()},
-                "checkpoint_type": CheckpointType.huggingface.value,
+                "checkpoint_type": CheckpointFormat.external.value,
                 "checkpoint_version": CHECKPOINT_VERSION,
             }
         else:
@@ -415,8 +328,8 @@ class PretrainedFastLLMModelConfig(Config):
     model: FastLLMModelConfig = Field(
         default_factory=FastLLMModelConfig, desc="Configuration for the Fast-LLM model.", hint=FieldHint.core
     )
-    pretrained: PretrainedCheckpointConfig = Field(
-        default_factory=PretrainedCheckpointConfig,
+    pretrained: CheckpointLoadConfig = Field(
+        default_factory=CheckpointLoadConfig,
         desc="Configuration for loading the configuration and state of a pretrained model.",
         hint=FieldHint.feature,
     )

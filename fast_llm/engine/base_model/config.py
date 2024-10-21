@@ -4,7 +4,7 @@ from fast_llm.config import Config, config_class
 
 if typing.TYPE_CHECKING:
     from fast_llm.engine.config_utils.tensor_space import TensorSpace
-    from fast_llm.engine.multi_stage.conversion import ModelConverter
+    from fast_llm.engine.multi_stage.conversion import ExternalModelConverter
 
 
 @config_class()
@@ -30,7 +30,7 @@ class BaseModelArchitectureConfig(Config):
         return self.get_architecture().compare(model_config.get_architecture(), log_fn)
 
     @classmethod
-    def get_converter_class(cls, model_type: str | None = None) -> type["ModelConverter"]:
+    def get_converter_class(cls, model_type: str | None = None) -> type["ExternalModelConverter"]:
         raise NotImplementedError()
 
 

@@ -8,17 +8,19 @@ import safetensors.torch
 import torch
 import yaml
 
-from fast_llm.core.distributed import all_reduce, broadcast, safe_barrier
+from fast_llm.core.distributed import all_reduce, broadcast
 from fast_llm.engine.base_model.base_model import BaseModel
-from fast_llm.engine.distributed.distributed import Distributed
-from fast_llm.engine.multi_stage.config import (
+from fast_llm.engine.config_utils.checkpoint import (
     CHECKPOINT_VERSION,
-    CheckpointConfig,
-    CheckpointType,
-    FastLLMModelConfig,
-    PretrainedCheckpointConfig,
-    StageMode,
+    CheckpointFormat,
+    CheckpointLoadConfig,
+    CheckpointSaveConfig,
+    ModelConfigType,
 )
+from fast_llm.engine.distributed.distributed import Distributed
+from fast_llm.engine.multi_stage.checkpoint import StateDictSaver
+from fast_llm.engine.multi_stage.config import FastLLMModelConfig, StageMode
+from fast_llm.engine.multi_stage.conversion import ModelConverter, TrivialConverter
 from fast_llm.engine.multi_stage.multi_stage import MultiStageModel
 from fast_llm.engine.multi_stage.stage import Stage
 from fast_llm.functional.triton.pointwise import triton_fill
@@ -83,28 +85,83 @@ class FastLLMModel(MultiStageModel):
 
     def save_checkpoint(
         self,
-        checkpoint_config: CheckpointConfig,
+        checkpoint_config: CheckpointSaveConfig,
         metadata: dict | None = None,
     ):
-        if metadata is None:
-            metadata = {}
-        if checkpoint_config.checkpoint_type == CheckpointType.distributed:
-            self._save_distributed_checkpoint(checkpoint_config, metadata)
-        elif checkpoint_config.checkpoint_type == CheckpointType.state_dict:
-            self._save_state_dict_checkpoint(checkpoint_config, metadata)
-        elif checkpoint_config.checkpoint_type == CheckpointType.huggingface:
-            assert checkpoint_config.exported_model_type is not None
-            self._export_checkpoint(checkpoint_config, metadata)
-        else:
-            raise NotImplementedError(checkpoint_config.checkpoint_type)
+        # TODO: Handle barriers, ok file, mkdir, etc. here
 
-    def load_pretrained_checkpoint(self, pretrained_config: PretrainedCheckpointConfig):
-        if pretrained_config.format == CheckpointType.distributed:
+        num_shards = len(self._state_shard_names) if checkpoint_config.optimizer_state else 1
+        metadata = {
+            "checkpoint_type": CheckpointFormat.distributed.value,
+            "checkpoint_version": str(CHECKPOINT_VERSION),
+            "fast_llm_config": self._fast_llm_config.to_serialized(),
+            "state_shard_names": list(self._state_shard_names[:num_shards]),
+            "metadata": {} if metadata is None else metadata,
+        }
+
+        # TODO: Simplify branching.
+        if checkpoint_config.format == CheckpointFormat.external:
+            # TODO: Support optimizer?
+            assert not checkpoint_config.optimizer_state
+            converter_class = self._base_model_config.get_converter_class(checkpoint_config.model_type)
+            exported_config = converter_class.export_config(self._base_model_config)
+            converter_class.save_config(checkpoint_config.path, exported_config)
+            self._save_state_dict(
+                checkpoint_config,
+                converter_class(self._base_model_config),
+                {
+                    "fast_llm_metadata": metadata,
+                    "model_config": exported_config,
+                    "format": "pt",
+                },
+            )
+        elif checkpoint_config.format == CheckpointFormat.state_dict:
+            self._save_state_dict(checkpoint_config, TrivialConverter(), metadata)
+        elif checkpoint_config.format == CheckpointFormat.distributed:
+            if self._distributed_config.rank == 0:
+                yaml.safe_dump(metadata, (checkpoint_config.path / "metadata.yaml").open("w"))
+            safetensors.torch.save_file(
+                tensors={"state_shard": self._state_shard[:num_shards]},
+                filename=checkpoint_config.path / f"rank_{self._distributed_config.rank}.safetensors",
+                metadata=_export_safetensors_metadata(metadata),
+            )
+        else:
+            raise NotImplementedError(checkpoint_config.format)
+
+    def _save_state_dict(self, checkpoint_config: CheckpointSaveConfig, converter: ModelConverter, metadata: dict):
+        with StateDictSaver(
+            checkpoint_config,
+            distributed=self._distributed,
+            metadata=metadata,
+            base_file_name=converter.base_file_name,
+        ) as context:
+            # The tensor mapping may not be one-to-one. `convert_state_dict` pops all tensors from
+            #   `fast_llm_state_dict` that are ready for conversion,
+            #   and return a dict containing the converted tensors(s).
+            #   If converting a tensor requires another one that is not yet available (e.g. for concatenation),
+            #   it will remain in `fast_llm_state_dict` until that tensor is available.
+            fast_llm_state_dict = {}
+            for i, shard_name in enumerate(
+                self._state_shard_names if checkpoint_config.optimizer_state else self._state_shard_names[:1]
+            ):
+                shard_split = self._state_shard[i].split(self._stage_shard_sizes, 0)
+                for stage, shard in zip(self._stages_on_device.values(), shard_split):
+                    for name, tensor in stage._export_shard(shard, dtype=checkpoint_config.data_type):  # noqa
+                        assert name not in fast_llm_state_dict
+                        fast_llm_state_dict[(name, shard_name)] = tensor
+                        for exported_name, exported_tensor in converter.convert_state_dict(
+                            fast_llm_state_dict, True
+                        ).items():
+                            context.add_tensor(exported_name, exported_tensor)
+            assert not fast_llm_state_dict, list(fast_llm_state_dict)
+
+    def load_pretrained_checkpoint(self, pretrained_config: CheckpointLoadConfig):
+        if pretrained_config.format == CheckpointFormat.distributed:
             # TODO: Check if same format.
             self._load_distributed_checkpoint(pretrained_config)
-        elif pretrained_config.format == CheckpointType.state_dict:
+        elif pretrained_config.format == CheckpointFormat.state_dict:
             self._load_state_dict_checkpoint(pretrained_config)
-        elif pretrained_config.format == CheckpointType.huggingface:
+        elif pretrained_config.format == CheckpointFormat.external:
             self._import_checkpoint(pretrained_config)
         else:
             raise NotImplementedError(pretrained_config.format)
@@ -113,7 +170,7 @@ class FastLLMModel(MultiStageModel):
         # TODO: Handle barriers, ok file, etc. here
         # TODO: More safety checks
         # TODO: Integrate to load_checkpoint.
-        pretrained_config = PretrainedCheckpointConfig(path=directory, format=CheckpointType.distributed)
+        pretrained_config = CheckpointLoadConfig(path=directory, format=CheckpointFormat.distributed)
         metadata = self.config_class.load_pretrained_metadata(pretrained_config)
         with self._LoadContext(self, safe=False, load_optimizer=True, reset_pads=False) as context:
             Assert.eq(
@@ -132,7 +189,7 @@ class FastLLMModel(MultiStageModel):
     @classmethod
     def from_pretrained(
         cls,
-        pretrained_config: PretrainedCheckpointConfig,
+        pretrained_config: CheckpointLoadConfig,
         default_config: FastLLMModelConfig = None,
         *,
         config_updates: dict[str | tuple[str, ...], typing.Any] | None = None,
@@ -166,7 +223,7 @@ class FastLLMModel(MultiStageModel):
             model.setup(Distributed(config.distributed, use_cpu=use_cpu), mode=mode)
 
             if mode.on_device:
-                if pretrained_config.load_weights:
+                if pretrained_config.model_weights:
                     model.load_pretrained_checkpoint(pretrained_config)
                 else:
                     model.initialize_weights()
@@ -189,200 +246,6 @@ class FastLLMModel(MultiStageModel):
             for stage, stage_shard in zip(self._stages_on_device.values(), shard_split):
                 counter += stage.reset_shard_pad(stage_shard)
         return counter
-
-    class _SaveContext:
-        def __init__(
-            self,
-            model: "FastLLMModel",
-            metadata,
-            *,
-            directory: pathlib.Path,
-            save_optimizer: bool,
-        ):
-            assert model._is_setup
-            assert model._is_loaded
-            self.save_optimizer = save_optimizer
-            self.num_shards = len(model._state_shard_names) if self.save_optimizer else 1
-            self.self_shard = model._state_shard[: self.num_shards]
-            self.shard_names = model._state_shard_names[: self.num_shards]
-            self.directory = directory
-            self.metadata = {
-                "checkpoint_type": CheckpointType.distributed.value,
-                "checkpoint_version": str(CHECKPOINT_VERSION),
-                "fast_llm_config": model.fast_llm_config.to_serialized(),
-                "state_shard_names": list(model._state_shard_names[: self.num_shards]),
-                "metadata": metadata,
-            }
-
-        def __enter__(self):
-            # Is a context for future-proofing.
-            return self
-
-        def __exit__(self, exc_type, exc_val, exc_tb):
-            return
-
-    class _SaveStateDictContext(_SaveContext):
-        def __init__(
-            self,
-            model: "FastLLMModel",
-            metadata,
-            *,
-            directory: pathlib.Path,
-            save_optimizer: bool,
-            base_file_name: str,
-            target_params_per_file,
-        ):
-            super().__init__(model, metadata, directory=directory, save_optimizer=save_optimizer)
-            self.distributed_config = model._distributed_config
-            self.distributed = model._distributed
-            self.base_file_name = (
-                base_file_name
-                if self.distributed_config.pipeline_parallel == 1
-                else f"{base_file_name}_{self.distributed_config.pipeline_rank}"
-            )
-            self.target_params_per_file = target_params_per_file
-            # All ranks reconstruct the pipeline-parallel state (for simplicity), but only one saves it.
-            self.do_save = self.distributed_config.data_rank == self.distributed_config.tensor_rank == 0
-
-        def add_tensor(self, name: str, tensor: torch.Tensor):
-            assert name not in self.tensors
-            self.tensors[name] = tensor
-            self.param_count += tensor.numel()
-            if self.param_count >= self.target_params_per_file:
-                self._save_next_file()
-
-        def __enter__(self):
-            self.file_count = 0
-            self.param_count = 0
-            self.tensors = {}
-            self.index = {}
-            return self
-
-        def __exit__(self, exc_type, exc_val, exc_tb):
-            if self.tensors:
-                # Save the last file.
-                self._save_next_file()
-
-            if self.do_save and self.distributed_config.pipeline_parallel != 1:
-                # Combine the indexes from all pipeline ranks.
-                logger.info(f"Merging pipeline-parallel indexes.")
-                json.dump(
-                    self.index, (self.directory / f"index_{self.distributed_config.pipeline_rank}.json").open("w")
-                )
-                safe_barrier(self.distributed.pipeline_group, "save state dict")
-                if self.distributed_config.pipeline_rank == 0:
-                    self.index = {}
-                    for rank in range(self.distributed_config.pipeline_parallel):
-                        file_name = self.directory / f"index_{rank}.json"
-                        local_index = json.load(file_name.open("r"))
-                        for key, value in local_index.items():
-                            assert key not in self.index, key
-                            self.index[key] = value
-                        file_name.unlink()
-
-            if self.distributed_config.rank == 0:
-                path = self.directory / f"{self.base_file_name}.safetensors.index.json"
-                logger.info(f"Saving index to {path}")
-                # Save the index.
-                json.dump(
-                    {"metadata": self.metadata, "weight_map": self.index},
-                    path.open("w"),
-                    indent=4,
-                )
-
-        def _save_next_file(self):
-            file_name = f"{self.base_file_name}_{self.file_count}.safetensors"
-            if self.do_save:
-                logger.info(f"Saving tensors to {self.directory/file_name}")
-                safetensors.torch.save_file(
-                    tensors=self.tensors,
-                    filename=self.directory / file_name,
-                    metadata=_export_safetensors_metadata(self.metadata),
-                )
-            for name_ in self.tensors:
-                assert name_ not in self.index
-                self.index[name_] = file_name
-            self.file_count += 1
-            self.param_count = 0
-            self.tensors = {}
-
-    def _save_distributed_checkpoint(self, checkpoint_config: CheckpointConfig, metadata: dict):
-        # TODO: Non blocking?
-        # TODO: CPU memory?
-        # TODO: Handle barriers, ok file, mkdir, etc. here
-        with self._SaveContext(
-            self,
-            metadata,
-            directory=checkpoint_config.checkpoint_path,
-            save_optimizer=checkpoint_config.save_optimizer,
-        ) as context:
-            if self._distributed_config.rank == 0:
-                yaml.safe_dump(context.metadata, (context.directory / "metadata.yaml").open("w"))
-            safetensors.torch.save_file(
-                tensors={"state_shard": self._state_shard[: context.num_shards]},
-                filename=context.directory / f"rank_{self._distributed_config.rank}.safetensors",
-                metadata=_export_safetensors_metadata(context.metadata),
-            )
-
-    def _save_state_dict_checkpoint(self, checkpoint_config: CheckpointConfig, metadata: dict):
-        # TODO: Make into a special case of _export_checkpoint?
-        # TODO: Handle barriers, ok file, mkdir, etc. here
-        with self._SaveStateDictContext(
-            self,
-            metadata,
-            directory=checkpoint_config.checkpoint_path,
-            save_optimizer=checkpoint_config.save_optimizer,
-            base_file_name="state_dict",
-            target_params_per_file=checkpoint_config.target_params_per_file,
-        ) as context:
-            for i, shard_name in enumerate(
-                self._state_shard_names if checkpoint_config.save_optimizer else self._state_shard_names[:1]
-            ):
-                shard_split = self._state_shard[i].split(self._stage_shard_sizes, 0)
-                for stage, shard in zip(self._stages_on_device.values(), shard_split):
-                    for name, tensor in stage._export_shard(shard, dtype=checkpoint_config.dtype):  # noqa
-                        context.add_tensor(f"{name}/{shard_name}", tensor)
-
-    def _export_checkpoint(self, checkpoint_config: CheckpointConfig, metadata: dict):
-        # TODO: Handle barriers, ok file, mkdir, etc. here
-        # TODO: Support optimizer?
-        assert not checkpoint_config.save_optimizer
-        with self._SaveStateDictContext(
-            self,
-            metadata,
-            directory=checkpoint_config.checkpoint_path,
-            save_optimizer=False,
-            base_file_name="model",
-            target_params_per_file=checkpoint_config.target_params_per_file,
-        ) as context:
-            converter_class = self._base_model_config.get_converter_class(checkpoint_config.exported_model_type)
-            exported_config = converter_class.export_config(self._base_model_config)
-            converter_class.save_config(checkpoint_config.checkpoint_path, exported_config)
-            context.metadata = {
-                "fast_llm_metadata": context.metadata,
-                "model_config": exported_config,
-                "format": "pt",
-            }
-            converter = converter_class(self._base_model_config)
-            # The tensor mapping may not be one-to-one. `convert_state_dict` pops all tensors from
-            #   `fast_llm_state_dict` that are ready for conversion,
-            #   and return a dict containing the converted tensors(s).
-            #   If converting a tensor requires another one that is not yet available (e.g. for concatenation),
-            #   it will remain in `fast_llm_state_dict` until that tensor is available.
-            fast_llm_state_dict = {}
-            for i, shard_name in enumerate(
-                self._state_shard_names if checkpoint_config.save_optimizer else self._state_shard_names[:1]
-            ):
-                shard_split = self._state_shard[i].split(self._stage_shard_sizes, 0)
-                for stage, shard in zip(self._stages_on_device.values(), shard_split):
-                    for name, tensor in stage._export_shard(shard, dtype=checkpoint_config.dtype):  # noqa
-                        assert name not in fast_llm_state_dict
-                        fast_llm_state_dict[name] = tensor
-                        for exported_name, exported_tensor in converter.convert_state_dict(
-                            fast_llm_state_dict, True
-                        ).items():
-                            context.add_tensor(exported_name, exported_tensor)
-            assert not fast_llm_state_dict, list(fast_llm_state_dict)
 
     class _LoadContext:
         # TODO: Improve
@@ -568,21 +431,16 @@ class FastLLMModel(MultiStageModel):
                 self.loaded_parameters[shard_name] = {}
             self.loaded_parameters[shard_name][parameter_name] = loaded
 
-    def _load_distributed_checkpoint(self, pretrained_config: PretrainedCheckpointConfig):
+    def _load_distributed_checkpoint(self, pretrained_config: CheckpointLoadConfig):
         # TODO: More safety checks
         metadata = self.config_class.load_pretrained_metadata(pretrained_config)
-        loaded_pretrained_config = pretrained_config.to_copy(
-            {
-                "load_full_base_model_config": True,
-                "load_full_fast_llm_config": True,
-            },
-        )
+        loaded_pretrained_config = pretrained_config.to_copy({"load_config": ModelConfigType.fast_llm})
         loaded_config = self.config_class.from_metadata(
             loaded_pretrained_config,
             metadata,
         )
         with self._LoadContext(
-            self, safe=True, load_optimizer=pretrained_config.load_optimizer, reset_pads=True
+            self, safe=True, load_optimizer=pretrained_config.optimizer_state, reset_pads=True
         ) as context:
             Assert.eq(metadata["state_shard_names"][: context.num_shards], list(context.shard_names))
 
@@ -601,12 +459,12 @@ class FastLLMModel(MultiStageModel):
 
         return metadata["metadata"]
 
-    def _load_state_dict_checkpoint(self, pretrained_config: PretrainedCheckpointConfig):
+    def _load_state_dict_checkpoint(self, pretrained_config: CheckpointLoadConfig):
         # TODO: Make into a special case of _import_state_tensor?
         # TODO: Verify more distributed configs.
         # TODO: More safety checks
         with self._LoadContext(
-            self, safe=True, load_optimizer=pretrained_config.load_optimizer, reset_pads=True
+            self, safe=True, load_optimizer=pretrained_config.optimizer_state, reset_pads=True
         ) as context:
             index_path = pretrained_config.path / f"state_dict.safetensors.index.json"
             logger.info(f"Loading index from {index_path}")
@@ -627,23 +485,23 @@ class FastLLMModel(MultiStageModel):
 
         return metadata["metadata"]
 
-    def _import_checkpoint(self, pretrained_config: PretrainedCheckpointConfig):
+    def _import_checkpoint(self, pretrained_config: CheckpointLoadConfig):
         # TODO: Support optimizer?
-        assert not pretrained_config.load_optimizer
+        assert not pretrained_config.optimizer_state
         # TODO: Verify more distributed configs.
         # TODO: Safety checks
 
-        converter_class = self.base_model.architecture_cls().get_converter_class(pretrained_config.imported_type)
+        converter_class = self.base_model.architecture_cls().get_converter_class(pretrained_config.model_type)
         converter = converter_class.from_config(converter_class.load_config(pretrained_config.path))
         self._base_model_config.compare_architecture(converter.config, pretrained_config.compare_log_fn)
 
         state_dict = {}
         with self._LoadContext(
-            self, safe=True, load_optimizer=pretrained_config.load_optimizer, reset_pads=True
+            self, safe=True, load_optimizer=pretrained_config.optimizer_state, reset_pads=True
         ) as context:
             for name, tensor in converter.load_weights(pretrained_config.path, self._distributed.device):
                 assert name not in state_dict
-                state_dict[name] = tensor
+                state_dict[(name, "weights")] = tensor
                 for parameter_name, fast_llm_tensor in converter.convert_state_dict(state_dict, False).items():
                     context.import_state_tensor("weights", parameter_name, fast_llm_tensor)
 

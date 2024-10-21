@@ -54,10 +54,11 @@ class NormalizationArchitectureConfig(BaseModelArchitectureConfig):
     @classmethod
     def _from_dict(
         cls,
-        default: dict[str],
+        default: dict[str, typing.Any],
         strict: bool = True,
         flat: bool = False,
     ):
+        # TODO v0.2: Remove.
         cls._handle_renamed_field(default, "normalization_type", "type")
         cls._handle_renamed_field(default, "layer_norm_eps", "epsilon")
         cls._handle_renamed_field(default, "zero_centered_normalization", "zero_centered")
@@ -106,7 +107,7 @@ class NormalizationConfig(NormalizationArchitectureConfig, BaseModelConfig):
     @classmethod
     def _from_dict(
         cls,
-        default: dict[str],
+        default: dict[str, typing.Any],
         strict: bool = True,
         flat: bool = False,
     ):
