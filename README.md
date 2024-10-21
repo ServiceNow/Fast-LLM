@@ -37,7 +37,7 @@ Fast-LLM is a new open-source library for training large language models, built 
 3. 🎨 **Fast-LLM is Incredibly Flexible**:
     - 🤖 Compatible with all common language model architectures in a unified class.
     - ⚡ Efficient dropless Mixture-of-Experts (MoE) implementation with SoTA performance.
-    - 🧩 Customizable language model architectures, data loaders, loss functions, and optimizers.
+    - 🧩 Customizable language model architectures, data loaders, loss functions, and optimizers (in progress).
     - 🤗 Seamless integration with [Hugging Face Transformers][transformers].
 
 4. 🎯 **Fast-LLM is Super Easy to Use**:
@@ -45,7 +45,7 @@ Fast-LLM is a new open-source library for training large language models, built 
     - 📝 Simple YAML configuration for hassle-free setup.
     - 💻 Command-line interface for easy launches.
     - 📊 Detailed logging and real-time monitoring features.
-    - 📚 Extensive [documentation][docs] and practical tutorials.
+    - 📚 Extensive [documentation][docs] and practical tutorials (in progress).
 
 5. 🌐 **Fast-LLM is Truly Open Source**:
     - ⚖️ Licensed under [Apache 2.0][license] for maximum freedom to use Fast-LLM at work, in your projects, or for research.
