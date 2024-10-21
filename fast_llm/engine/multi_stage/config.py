@@ -8,9 +8,9 @@ from fast_llm.engine.base_model.config import BaseModelConfig
 from fast_llm.engine.config_utils.checkpoint import (
     CHECKPOINT_VERSION,
     KNOWN_CHECKPOINT_VERSIONS,
+    CheckpointFormat,
     CheckpointLoadConfig,
     CheckpointLoadMetadataConfig,
-    CheckpointType,
 )
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.utils import Assert
@@ -231,7 +231,7 @@ class FastLLMModelConfig(Config):
         # TODO: Standardize to *updates?
         if "checkpoint_type" in metadata:
             # TODO python 3.12: Assert.incl(metadata["checkpoint_type"], CheckpointType)
-            CheckpointType(metadata["checkpoint_type"])
+            CheckpointFormat(metadata["checkpoint_type"])
         version = metadata["checkpoint_version"]
         if version not in KNOWN_CHECKPOINT_VERSIONS:
             raise ValueError(f"Unrecognised checkpoint version: {version}")
@@ -305,16 +305,16 @@ class FastLLMModelConfig(Config):
         import yaml
 
         base_model_config_cls = cls.get_base_model_config_cls()
-        if pretrained.format == CheckpointType.distributed:
+        if pretrained.format == CheckpointFormat.distributed:
             return yaml.safe_load((pretrained.path / "metadata.yaml").open("r"))
-        elif pretrained.format == CheckpointType.state_dict:
+        elif pretrained.format == CheckpointFormat.state_dict:
             return json.load((pretrained.path / f"state_dict.safetensors.index.json").open("r"))["metadata"]
-        elif pretrained.format == CheckpointType.external:
+        elif pretrained.format == CheckpointFormat.external:
             converter_class = base_model_config_cls.get_converter_class(pretrained.model_type)
             imported_model_config = converter_class.import_config(converter_class.load_config(pretrained.path), True)
             return {
                 "fast_llm_config": {"base_model": imported_model_config.to_serialized()},
-                "checkpoint_type": CheckpointType.external.value,
+                "checkpoint_type": CheckpointFormat.external.value,
                 "checkpoint_version": CHECKPOINT_VERSION,
             }
         else:

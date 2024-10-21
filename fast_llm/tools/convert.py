@@ -7,7 +7,7 @@ import pathlib
 import typing
 
 from fast_llm.config import Field, config_class
-from fast_llm.engine.config_utils.checkpoint import CheckpointLoadConfig, CheckpointSaveConfig, CheckpointType
+from fast_llm.engine.config_utils.checkpoint import CheckpointFormat, CheckpointLoadConfig, CheckpointSaveConfig
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.engine.config_utils.runnable import RunnableConfig
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig, StageMode
@@ -23,8 +23,8 @@ logger = logging.getLogger(__name__)
 
 @config_class()
 class ConversionConfig(RunnableConfig):
-    input_type: CheckpointType = Field()
-    output_type: CheckpointType = Field()
+    input_type: CheckpointFormat = Field()
+    output_type: CheckpointFormat = Field()
     input_path: pathlib.Path = Field()
     output_path: pathlib.Path = Field()
     model_type: str | None = Field(default=None)
@@ -101,7 +101,7 @@ class ConversionConfig(RunnableConfig):
             self._convert_model_partial(model_class, self.output_path)
         else:
             # TODO: Support other types?
-            assert self.output_type == CheckpointType.external
+            assert self.output_type == CheckpointFormat.external
             logger.info(f">>> Loading model config")
             # Create a dummy version to determine the stage split.
             model = model_class.from_pretrained(

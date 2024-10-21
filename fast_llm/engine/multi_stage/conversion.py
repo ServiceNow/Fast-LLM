@@ -189,12 +189,12 @@ class ExternalModelConverter(ModelConverter):
 
     @classmethod
     @abc.abstractmethod
-    def load_config(cls, directory: pathlib.Path | str) -> dict[str]:
+    def load_config(cls, directory: pathlib.Path | str) -> dict[str, typing.Any]:
         pass
 
     @classmethod
     @abc.abstractmethod
-    def save_config(cls, directory: pathlib.Path | str, config: dict[str]):
+    def save_config(cls, directory: pathlib.Path | str, config: dict[str, typing.Any]):
         pass
 
     @abc.abstractmethod
@@ -204,7 +204,7 @@ class ExternalModelConverter(ModelConverter):
         pass
 
     @classmethod
-    def export_config(cls, config: BaseModelArchitectureConfig) -> dict[str]:
+    def export_config(cls, config: BaseModelArchitectureConfig) -> dict[str, typing.Any]:
         exported_config = {}
         for converter in cls._get_config_converters():
             value = converter.export_param(
@@ -218,7 +218,7 @@ class ExternalModelConverter(ModelConverter):
         return exported_config  # Noqa
 
     @classmethod
-    def import_config(cls, config: dict[str], architecture_only: bool = False):  # noqa
+    def import_config(cls, config: dict[str, typing.Any], architecture_only: bool = False):  # noqa
         kwargs = {}
         for converter in cls._get_config_converters():
             value = converter.import_param(
@@ -233,7 +233,7 @@ class ExternalModelConverter(ModelConverter):
         return config_class.from_dict({}, kwargs)
 
     @classmethod
-    def from_config(cls, config: dict[str], architecture_only: bool = False):
+    def from_config(cls, config: dict[str, typing.Any], architecture_only: bool = False):
         return cls(cls.import_config(config, architecture_only=architecture_only))
 
     def convert_state_dict(
@@ -291,11 +291,11 @@ class AutoModelConverter(ExternalModelConverter, abc.ABC):
     converter_map: dict[str, type[ExternalModelConverter]]
 
     @classmethod
-    def import_config(cls, config: dict[str], architecture_only: bool = False):
+    def import_config(cls, config: dict[str, typing.Any], architecture_only: bool = False):
         return cls.converter_map[config["model_type"]].import_config(config, architecture_only)
 
     @classmethod
-    def from_config(cls, config: dict[str], architecture_only: bool = False):
+    def from_config(cls, config: dict[str, typing.Any], architecture_only: bool = False):
         return cls.converter_map[config["model_type"]].from_config(config, architecture_only)
 
 
@@ -317,7 +317,7 @@ class HuggingfaceModelConverter(ExternalModelConverter, abc.ABC):
         return config
 
     @classmethod
-    def save_config(cls, directory: pathlib.Path | str, config: dict[str]):
+    def save_config(cls, directory: pathlib.Path | str, config: dict[str, typing.Any]):
         import transformers
 
         transformers.CONFIG_MAPPING[config["model_type"]].from_dict(config).save_pretrained(directory)

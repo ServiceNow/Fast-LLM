@@ -2,6 +2,7 @@
 import enum
 import logging
 import pathlib
+import typing
 import warnings
 
 from fast_llm.config import Config, Field, FieldHint, check_field, config_class
@@ -15,7 +16,7 @@ CHECKPOINT_VERSION = "0.1"
 KNOWN_CHECKPOINT_VERSIONS = ("0", "0.1")
 
 
-class CheckpointType(str, enum.Enum):
+class CheckpointFormat(str, enum.Enum):
     # Distributed checkpoint for fast checkpointing and resuming.
     distributed = "distributed"
     # Model state dict, for safe long-term storage in Fast-LLM format.
@@ -56,8 +57,8 @@ class CheckpointPathConfigBase(Config):
 @config_class()
 class CheckpointConfigBase(Config):
     _abstract = True
-    format: CheckpointType = Field(
-        default=CheckpointType.distributed,
+    format: CheckpointFormat = Field(
+        default=CheckpointFormat.distributed,
         desc="Format of the checkpoint.",
         hint=FieldHint.core,
     )
@@ -70,14 +71,14 @@ class CheckpointConfigBase(Config):
     @classmethod
     def _from_dict(
         cls,
-        default: dict[str],
+        default: dict[str, typing.Any],
         strict: bool = True,
         flat: bool = False,
     ):
         # TODO v0.2: Remove.
         if default.get("format", None) == "huggingface":
             warnings.warn(f"`huggingface` checkpoint format has been renamed to `external`.")
-            default["format"] = CheckpointType.external.value
+            default["format"] = CheckpointFormat.external.value
         cls._handle_renamed_field(default, "imported_type", "model_type")
         return super()._from_dict(default, strict, flat)
 
@@ -91,7 +92,7 @@ class CheckpointStateConfigBase(Config):
     @classmethod
     def _from_dict(
         cls,
-        default: dict[str],
+        default: dict[str, typing.Any],
         strict: bool = True,
         flat: bool = False,
     ):

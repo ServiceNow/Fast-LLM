@@ -54,7 +54,7 @@ class NormalizationArchitectureConfig(BaseModelArchitectureConfig):
     @classmethod
     def _from_dict(
         cls,
-        default: dict[str],
+        default: dict[str, typing.Any],
         strict: bool = True,
         flat: bool = False,
     ):
@@ -107,7 +107,7 @@ class NormalizationConfig(NormalizationArchitectureConfig, BaseModelConfig):
     @classmethod
     def _from_dict(
         cls,
-        default: dict[str],
+        default: dict[str, typing.Any],
         strict: bool = True,
         flat: bool = False,
     ):

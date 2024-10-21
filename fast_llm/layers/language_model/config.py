@@ -1,3 +1,5 @@
+import typing
+
 from fast_llm.config import Field, FieldHint, FieldUpdate, check_field, config_class, skip_valid_if_none
 from fast_llm.engine.base_model.config import BaseModelArchitectureConfig, BaseModelConfig
 from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
@@ -84,7 +86,7 @@ class LanguageModelArchitectureConfig(BaseModelArchitectureConfig):
     @classmethod
     def from_flat_dict(
         cls,
-        default: dict[str],
+        default: dict[str, typing.Any],
         strict: bool = True,
     ):
         # The backward compatibility fix in `NormalizationArchitectureConfig`

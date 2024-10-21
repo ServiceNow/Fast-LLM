@@ -5,7 +5,7 @@ import typing
 
 import transformers
 
-from fast_llm.engine.config_utils.checkpoint import CheckpointLoadMetadataConfig, CheckpointType
+from fast_llm.engine.config_utils.checkpoint import CheckpointFormat, CheckpointLoadMetadataConfig
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig
 
 logger = logging.getLogger(__name__)
@@ -66,7 +66,7 @@ class HuggingfaceModelConfig(transformers.PretrainedConfig):
         else:
             pretrained = CheckpointLoadMetadataConfig(
                 path=pathlib.Path(pretrained_model_name_or_path),
-                format=CheckpointType.state_dict,
+                format=CheckpointFormat.state_dict,
             )
         metadata = cls.model_config_class.load_pretrained_metadata(pretrained)
         updates = {}
