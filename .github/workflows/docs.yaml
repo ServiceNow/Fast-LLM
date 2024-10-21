@@ -28,7 +28,9 @@ jobs:
           path: .cache
           restore-keys: |
             mkdocs-material-
-      - run: FLASH_ATTENTION_SKIP_CUDA_BUILD=TRUE FLASH_ATTENTION_FORCE_BUILD=TRUE pip install --no-build-isolation ".[CORE,OPTIONAL,DEV,DOCS]"
+      - run: |
+          pip install setuptools
+          FLASH_ATTENTION_SKIP_CUDA_BUILD=TRUE FLASH_ATTENTION_FORCE_BUILD=TRUE pip install --no-build-isolation ".[CORE,OPTIONAL,DEV,DOCS]"
       - name: Build the documentation
         run: mkdocs build
 
@@ -50,6 +52,8 @@ jobs:
           path: .cache
           restore-keys: |
             mkdocs-material-
-      - run: FLASH_ATTENTION_SKIP_CUDA_BUILD=TRUE FLASH_ATTENTION_FORCE_BUILD=TRUE pip install --no-build-isolation ".[CORE,OPTIONAL,DEV,DOCS]"
+      - run: |
+          pip install setuptools
+          FLASH_ATTENTION_SKIP_CUDA_BUILD=TRUE FLASH_ATTENTION_FORCE_BUILD=TRUE pip install --no-build-isolation ".[CORE,OPTIONAL,DEV,DOCS]"
       - name: Publish the documentation
         run: mkdocs gh-deploy --force --dirty
