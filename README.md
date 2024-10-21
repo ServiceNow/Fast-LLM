@@ -144,7 +144,7 @@ Fast-LLM is licensed by ServiceNow, Inc. under the Apache 2.0 License. See [LICE
 
 ## Vulnerability Reporting
 
-For security issues, email [psirt-oss@servicenow.com](mailto:psirt-oss@servicenow.com). See our [security policy](SECURITY.md).
+For security issues, email [disclosure@servicenow.com](mailto:disclosure@servicenow.com). See our [security policy](SECURITY.md).
 
 [roadmap]: https://github.com/ServiceNow/Fast-LLM/milestones
 [issues]: https://github.com/ServiceNow/Fast-LLM/issues

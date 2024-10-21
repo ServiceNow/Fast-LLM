@@ -15,7 +15,7 @@ To report a security vulnerability in Fast-LLM, please email our [Product Securi
 
 ## Guidelines
 
-Please follow the guidelines below when [disclosing vulnerabilitie](https://www.servicenow.com/company/trust/privacy/responsible-disclosure.html):
+Please follow the guidelines below when [disclosing vulnerabilities](https://www.servicenow.com/company/trust/privacy/responsible-disclosure.html):
 
 - Report any potential security issue as soon as possible. ServiceNow will make every effort to quickly resolve the issue.
 - Provide sufficient detail to reproduce the vulnerability, including proof of concept. The use of ReproNow to demonstrate reproducibility is encouraged but not required.
