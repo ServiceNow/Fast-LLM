@@ -27,8 +27,8 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install setuptools
-          FLASH_ATTENTION_SKIP_CUDA_BUILD=TRUE FLASH_ATTENTION_FORCE_BUILD=TRUE pip install -e ".[CORE,OPTIONAL,DEV,DOCS]" --no-build-isolation
+          pip install "torch>=2.2.2"
+          FLASH_ATTENTION_SKIP_CUDA_BUILD=TRUE FLASH_ATTENTION_FORCE_BUILD=TRUE pip install --no-build-isolation -e ".[CORE,OPTIONAL,DEV,DOCS]"
 
       - name: Run tests
         run: pytest .
