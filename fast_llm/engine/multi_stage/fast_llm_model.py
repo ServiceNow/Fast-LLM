@@ -89,10 +89,9 @@ class FastLLMModel(MultiStageModel):
         metadata: dict | None = None,
     ):
         # TODO: Handle barriers, ok file, mkdir, etc. here
-
         num_shards = len(self._state_shard_names) if checkpoint_config.optimizer_state else 1
         metadata = {
-            "checkpoint_type": CheckpointFormat.distributed.value,
+            "checkpoint_format": checkpoint_config.format,
             "checkpoint_version": str(CHECKPOINT_VERSION),
             "fast_llm_config": self._fast_llm_config.to_serialized(),
             "state_shard_names": list(self._state_shard_names[:num_shards]),
@@ -135,18 +134,13 @@ class FastLLMModel(MultiStageModel):
             #   If converting a tensor requires another one that is not yet available (e.g. for concatenation),
             #   it will remain in `fast_llm_state_dict` until that tensor is available.
             fast_llm_state_dict = {}
-            for i, shard_name in enumerate(
+            for name, shard_name, tensor in self.get_state_tensor_iterator(
                 self._state_shard_names if checkpoint_config.optimizer_state else self._state_shard_names[:1]
             ):
-                shard_split = self._state_shard[i].split(self._stage_shard_sizes, 0)
-                for stage, shard in zip(self._stages_on_device.values(), shard_split):
-                    for name, tensor in stage._export_shard(shard, dtype=checkpoint_config.data_type):  # noqa
-                        assert name not in fast_llm_state_dict
-                        fast_llm_state_dict[(name, shard_name)] = tensor
-                        for exported_name, exported_tensor in converter.convert_state_dict(
-                            fast_llm_state_dict, True
-                        ).items():
-                            context.add_tensor(exported_name, exported_tensor)
+                assert name not in fast_llm_state_dict
+                fast_llm_state_dict[(name, shard_name)] = tensor
+                for exported_name, exported_tensor in converter.convert_state_dict(fast_llm_state_dict, True).items():
+                    context.add_tensor(exported_name, exported_tensor)
             assert not fast_llm_state_dict, list(fast_llm_state_dict)
 
     def load_pretrained_checkpoint(self, pretrained_config: CheckpointLoadConfig):
