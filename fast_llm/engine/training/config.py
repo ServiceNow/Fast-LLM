@@ -214,7 +214,6 @@ class CheckpointConfig(CheckpointBaseConfig):
         return CheckpointSaveConfig(
             path=path,
             format=CheckpointType.distributed,
-            fast_llm_config=True,
             model_weights=True,
             optimizer_state=True,
         )
