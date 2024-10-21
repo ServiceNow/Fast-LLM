@@ -27,7 +27,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install -e .[CORE,OPTIONAL,DEV,DOCS]
+          pip install -e ".[CORE,OPTIONAL,DEV,DOCS]"
 
       - name: Run tests
         run: pytest .

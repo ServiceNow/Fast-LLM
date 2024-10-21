@@ -50,6 +50,6 @@ jobs:
           path: .cache
           restore-keys: |
             mkdocs-material-
-      - run: pip install ".[DOCS]"
+      - run: pip install ".[CORE,OPTIONAL,DEV,DOCS]"
       - name: Publish the documentation
         run: mkdocs gh-deploy --force --dirty
