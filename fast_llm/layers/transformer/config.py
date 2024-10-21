@@ -3,7 +3,7 @@ import logging
 import math
 import warnings
 
-from fast_llm.config import Field, FieldHint, check_field, config_class, skip_valid_if_none
+from fast_llm.config import Field, FieldHint, FieldUpdate, check_field, config_class, skip_valid_if_none
 from fast_llm.engine.base_model.config import BaseModelArchitectureConfig, BaseModelConfig
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.engine.config_utils.tensor_space import CompositeTensorDim, TensorDim, TensorSpace
@@ -262,11 +262,7 @@ class TransformerArchitectureConfig(BaseModelArchitectureConfig):
 
 @config_class()
 class TransformerConfig(TransformerArchitectureConfig, BaseModelConfig):
-    normalization: NormalizationConfig = Field(
-        default_factory=NormalizationConfig,
-        desc="Configuration for the normalization layers.",
-        hint=FieldHint.core,
-    )
+    normalization: NormalizationConfig = FieldUpdate(default_factory=NormalizationConfig)
     # Default: hidden_size**-0.5
     # TODO: Allow custom initialization (InitializationConfig?)
     init_method_std: float = Field(

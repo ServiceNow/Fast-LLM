@@ -7,15 +7,10 @@ import pathlib
 import typing
 
 from fast_llm.config import Field, config_class
+from fast_llm.engine.config_utils.checkpoint import CheckpointFormat, CheckpointLoadConfig, CheckpointSaveConfig
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.engine.config_utils.runnable import RunnableConfig
-from fast_llm.engine.multi_stage.config import (
-    CheckpointConfig,
-    CheckpointType,
-    FastLLMModelConfig,
-    PretrainedCheckpointConfig,
-    StageMode,
-)
+from fast_llm.engine.multi_stage.config import FastLLMModelConfig, StageMode
 from fast_llm.functional.config import TritonConfig
 from fast_llm.models.auto import model_registry
 from fast_llm.utils import Assert
@@ -28,8 +23,8 @@ logger = logging.getLogger(__name__)
 
 @config_class()
 class ConversionConfig(RunnableConfig):
-    input_type: CheckpointType = Field()
-    output_type: CheckpointType = Field()
+    input_type: CheckpointFormat = Field()
+    output_type: CheckpointFormat = Field()
     input_path: pathlib.Path = Field()
     output_path: pathlib.Path = Field()
     model_type: str | None = Field(default=None)
@@ -62,10 +57,10 @@ class ConversionConfig(RunnableConfig):
     ):
         logger.info(f"Loading {self.input_type} checkpoint from {self.input_path}...")
         model = model_class.from_pretrained(
-            PretrainedCheckpointConfig(
+            CheckpointLoadConfig(
                 path=self.input_path,
                 format=self.input_type,
-                imported_type=self.model_type,
+                model_type=self.model_type,
             ),
             mode=StageMode.weights,
             use_cpu=self.use_cpu,
@@ -74,13 +69,13 @@ class ConversionConfig(RunnableConfig):
         logger.info(f"Saving {self.output_type} checkpoint to {output_path}...")
         output_path.mkdir(parents=True, exist_ok=self.exist_ok)
         model.save_checkpoint(
-            CheckpointConfig(
-                checkpoint_path=output_path,
-                checkpoint_type=self.output_type,
-                exported_model_type=self.model_type,
-                save_optimizer=False,
-                target_params_per_file=self.target_params_per_file,
-                dtype=self.dtype,
+            CheckpointSaveConfig(
+                path=output_path,
+                format=self.output_type,
+                model_type=self.model_type,
+                optimizer_state=False,
+                parameters_per_file=self.target_params_per_file,
+                data_type=self.dtype,
             )
         )
         (output_path / "ok").open("w")
@@ -106,15 +101,15 @@ class ConversionConfig(RunnableConfig):
             self._convert_model_partial(model_class, self.output_path)
         else:
             # TODO: Support other types?
-            assert self.output_type == CheckpointType.huggingface
+            assert self.output_type == CheckpointFormat.external
             logger.info(f">>> Loading model config")
             # Create a dummy version to determine the stage split.
             model = model_class.from_pretrained(
-                PretrainedCheckpointConfig(
+                CheckpointLoadConfig(
                     path=self.input_path,
                     format=self.input_type,
-                    imported_type=self.model_type,
-                    load_pretrained_weights=False,
+                    model_type=self.model_type,
+                    model_weights=False,
                 ),
                 mode=StageMode.off_device,
                 use_cpu=self.use_cpu,

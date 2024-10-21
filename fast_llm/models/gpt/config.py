@@ -1,6 +1,6 @@
 import typing
 
-from fast_llm.config import Field, FieldHint, config_class
+from fast_llm.config import Field, FieldHint, FieldUpdate, config_class
 from fast_llm.data.config import DataConfig
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig, PretrainedFastLLMModelConfig
 from fast_llm.engine.training.config import TrainerConfig
@@ -8,7 +8,7 @@ from fast_llm.layers.language_model.config import LanguageModelArchitectureConfi
 from fast_llm.models.gpt.megatron import set_megatron_distributed_seeds
 
 if typing.TYPE_CHECKING:
-    from fast_llm.engine.multi_stage.conversion import ModelConverter
+    from fast_llm.engine.multi_stage.conversion import ExternalModelConverter
 
 
 @config_class()
@@ -28,7 +28,7 @@ class GPTArchitectureConfig(LanguageModelArchitectureConfig):
         return super()._from_dict(default, strict, flat)
 
     @classmethod
-    def get_converter_class(cls, model_type: str | None = None) -> type["ModelConverter"]:
+    def get_converter_class(cls, model_type: str | None = None) -> type["ExternalModelConverter"]:
         from fast_llm.models.gpt.conversion import AutoGPTConverter
 
         return AutoGPTConverter if model_type is None else AutoGPTConverter.converter_map[model_type]
@@ -65,7 +65,7 @@ class GPTBaseModelConfig(LanguageModelBaseConfig, GPTArchitectureConfig):
 @config_class()
 class GPTModelConfig(FastLLMModelConfig):
     _abstract = False
-    base_model: GPTBaseModelConfig = Field(default_factory=GPTBaseModelConfig)
+    base_model: GPTBaseModelConfig = FieldUpdate(default_factory=GPTBaseModelConfig)
 
     @classmethod
     def get_model_class(cls):
@@ -83,17 +83,13 @@ class GPTModelConfig(FastLLMModelConfig):
 @config_class()
 class PretrainedGPTModelConfig(PretrainedFastLLMModelConfig):
     _abstract = False
-    model: GPTModelConfig = Field(default_factory=GPTModelConfig)
+    model: GPTModelConfig = FieldUpdate(default_factory=GPTModelConfig)
 
 
 @config_class()
 class GPTTrainerConfig(PretrainedGPTModelConfig, TrainerConfig):
 
-    data: DataConfig = Field(
-        default_factory=DataConfig,
-        desc="Configuration for the dataset and model-independent preprocessing.",
-        hint=FieldHint.core,
-    )
+    data: DataConfig = FieldUpdate(default_factory=DataConfig)
 
     def _setup(self):
         super()._setup()

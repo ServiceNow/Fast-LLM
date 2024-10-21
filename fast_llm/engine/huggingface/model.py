@@ -5,9 +5,10 @@ import typing
 import transformers.modeling_outputs
 
 from fast_llm.config import NoAutoValidate
+from fast_llm.engine.config_utils.checkpoint import CheckpointFormat, CheckpointLoadConfig
 from fast_llm.engine.distributed.config import PhaseType
 from fast_llm.engine.huggingface.config import HuggingfaceModelConfig
-from fast_llm.engine.multi_stage.config import CheckpointType, PretrainedCheckpointConfig, PretrainedConfig, StageMode
+from fast_llm.engine.multi_stage.config import StageMode
 from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
 from fast_llm.engine.schedule.config import BatchConfig, ScheduleConfig
 from fast_llm.engine.schedule.runner import ScheduleRunner
@@ -58,16 +59,16 @@ class HuggingfacePreTrainedModel(transformers.PreTrainedModel):
     @classmethod
     def from_pretrained(
         cls,
-        pretrained_model_name_or_path: str | os.PathLike | PretrainedCheckpointConfig,
+        pretrained_model_name_or_path: str | os.PathLike | CheckpointLoadConfig,
         *,
         mode: StageMode = StageMode.inference,
         **kwargs,
     ):
         # Pretrained config.
-        if not isinstance(pretrained_model_name_or_path, PretrainedConfig):
-            pretrained_model_name_or_path = PretrainedCheckpointConfig(
+        if not isinstance(pretrained_model_name_or_path, CheckpointLoadConfig):
+            pretrained_model_name_or_path = CheckpointLoadConfig(
                 path=pathlib.Path(pretrained_model_name_or_path),
-                format=CheckpointType.state_dict,
+                format=CheckpointFormat.state_dict,
             )
 
         config_updates = {}

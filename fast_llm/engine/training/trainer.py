@@ -1,6 +1,8 @@
 import abc
 import logging
 import math
+import pathlib
+import shutil
 import time
 import typing
 
@@ -12,13 +14,12 @@ from fast_llm.data.data import Data
 from fast_llm.engine.config_utils.run import Run, is_main_rank, log_main_rank, log_pipeline_parallel_main_rank
 from fast_llm.engine.distributed.config import PhaseType
 from fast_llm.engine.distributed.distributed import Distributed
-from fast_llm.engine.multi_stage.config import CheckpointConfig, CheckpointType
 from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
 from fast_llm.engine.optimizer.config import ParamGroup
 from fast_llm.engine.optimizer.optimizer import Optimizer
 from fast_llm.engine.schedule.runner import ScheduleRunner
 from fast_llm.engine.schedule.schedule import Schedule
-from fast_llm.engine.training.config import TrainerConfig
+from fast_llm.engine.training.config import CheckpointBaseConfig, TrainerConfig
 from fast_llm.engine.training.wandb import Wandb
 from fast_llm.logging import format_metrics, get_memory_usage_mib, log_memory_usage
 from fast_llm.utils import Assert
@@ -56,8 +57,10 @@ class Trainer(abc.ABC):
         )
         steps_per_split = {
             PhaseType.training: self._config.training.train_iters,
-            PhaseType.validation: self._config.training.validation.get_completed_iterations(
-                self._config.training.train_iters, 1
+            PhaseType.validation: self._config.training.validation.get_iteration_count(
+                self._config.training.train_iters,
+                # There may be an extra validation after the last training step.
+                not self._config.training.validation.enabled(self._config.training.train_iters),
             ),
             PhaseType.test: self._config.training.test_iters,
         }
@@ -130,7 +133,7 @@ class Trainer(abc.ABC):
     @property
     def _completed_validation_steps(self) -> int:
         # Number of validation steps performed before the current step
-        return self._config.training.validation.get_completed_iterations(self._completed_steps - 1)
+        return self._config.training.validation.get_iteration_count(self._completed_steps - 1)
 
     def run(self):
         assert self._is_setup
@@ -311,10 +314,10 @@ class Trainer(abc.ABC):
                     self._wandb.log_metrics(self._completed_steps, metrics)
 
                 if self._config.training.checkpoint.enabled(None if stop else self._completed_steps):
-                    self._save_checkpoint(
-                        metrics,
-                        export=self._config.training.export.enabled(None if done else self._completed_steps),
-                    )
+                    self._save_checkpoint(self._config.training.checkpoint, metrics)
+
+                if self._config.training.export.enabled(None if done else self._completed_steps):
+                    self._save_checkpoint(self._config.training.export, metrics)
 
         return done, metrics
 
@@ -362,13 +365,22 @@ class Trainer(abc.ABC):
 
         return metrics
 
+    def _get_data_iterator(self, phase, completed_steps: int = 0, prefetch_factor: int | None = None):
+        return self._data.get_iterator(
+            self._config.batch,
+            phase,
+            consumed_samples=completed_steps * self._config.batch.batch_size,
+            num_workers=self._config.training.num_workers,
+            prefetch_factor=prefetch_factor,
+        )
+
     def _prepare_training_state(self):
         # Setup the training state.
-        if (last_iteration := self._run.get_last_checkpoint()) is None:
-            if (path := self._config.pretrained.path) is not None and self._config.pretrained.load_weights:
+        if (last_iteration := self._get_last_checkpoint()) is None:
+            if (path := self._config.pretrained.path) is not None and self._config.pretrained.model_weights:
                 log_main_rank(
                     f"Initializing training state from pretrained checkpoint at {path}"
-                    f" ({'loading' if self._config.pretrained.load_optimizer else 'resetting'}"
+                    f" ({'loading' if self._config.pretrained.optimizer_state else 'resetting'}"
                     f" optimizer state)..."
                 )
                 self._multi_stage.load_pretrained_checkpoint(self._config.pretrained)
@@ -379,44 +391,76 @@ class Trainer(abc.ABC):
             self._completed_steps = 0
         else:
             log_main_rank(lambda: f"Loading checkpoint from iteration {last_iteration}...")
-            with self._run.get_load_checkpoint_context(last_iteration) as context:
-                metadata = self._multi_stage.load_distributed_checkpoint_same_format(context.directory)
-            self._optimizer.load(metadata["optimizer"])
-            if "schedules" in metadata:
-                # Backward compatibility.
-                self._completed_steps = metadata["schedules"][PhaseType.training.value]["completed_steps"]
-            else:
-                self._completed_steps = metadata["completed_steps"]
+            self._load_checkpoint(self._config.training.checkpoint, last_iteration)
 
         Assert.eq(self._completed_steps, last_iteration or 0)
         assert self._multi_stage._is_loaded  # noqa
 
-    def _get_data_iterator(self, phase, completed_steps: int = 0, prefetch_factor: int | None = None):
-        return self._data.get_iterator(
-            self._config.batch,
-            phase,
-            consumed_samples=completed_steps * self._config.batch.batch_size,
-            num_workers=self._config.training.num_workers,
-            prefetch_factor=prefetch_factor,
-        )
+    def _save_checkpoint(self, config: CheckpointBaseConfig, metrics: dict[PhaseType, dict[str, float | int]] | None):
+        # TODO v0.2: Move barrier, ok file to FastLLMModel
+        checkpoint_base_directory = self._run.experiment_directory / config.directory_name
+        checkpoint_directory = checkpoint_base_directory / str(self._completed_steps)
 
-    def _save_checkpoint(self, metrics: dict[PhaseType, dict[str, float | int]] | None, export: bool = False):
-        assert self._is_setup
-        with self._run.get_save_checkpoint_context(
-            self._completed_steps, export, self._config.training.checkpoint.keep
-        ) as checkpoint:
-            metadata = {
-                "optimizer": self._optimizer.save(),
-                "completed_steps": self._completed_steps,
-            }
-            if metrics is not None:
-                metadata["metrics"] = {key.value: value for key, value in metrics.items()}
-            self._multi_stage.save_checkpoint(
-                CheckpointConfig(checkpoint_type=CheckpointType.distributed, checkpoint_path=checkpoint.directory),
-                metadata,
-            )
-        if export and self._run.is_main_rank:  # noqa
-            self._config.training.export.callback.run()
+        # Create the checkpoint
+        if self._run.is_main_rank:
+            logger.info(f"Saving {config.save_name} at iteration {self._completed_steps}")
+            checkpoint_directory.mkdir(exist_ok=False, parents=True)
+        # Barrier to ensure the directory is created correctly (and didn't exist before).
+        self._run.barrier(f"{config.save_name} {self._completed_steps} enter")
+
+        metadata = {
+            "optimizer": self._optimizer.save(),
+            "completed_steps": self._completed_steps,
+        }
+        if metrics is not None:
+            metadata["metrics"] = {key.value: value for key, value in metrics.items()}
+        self._multi_stage.save_checkpoint(config.get_save_config(checkpoint_directory), metadata)
+
+        # Barrier to ensure everyone is done.
+        self._run.barrier(f"{config.save_name} {self._completed_steps} exit")
+        # Mark the checkpoint as complete.
+        if self._run.is_main_rank:
+            (checkpoint_directory / "ok").open("w")
+            logger.info(f"Saved {config.save_name} to {checkpoint_directory}")
+
+            to_delete = config.to_delete(sorted(int(path.name) for path in checkpoint_base_directory.iterdir()))
+
+            for iteration in to_delete:
+                path = checkpoint_base_directory / str(iteration)
+                logger.info(f"Deleting {config.save_name} at {path}")
+                try:
+                    shutil.rmtree(path, ignore_errors=True)
+                except OSError as e:
+                    logger.warning(f"Could not remove {config.save_name} directory: {e.args}")
+
+            config.callback.run()
+
+    def _load_checkpoint(self, config: CheckpointBaseConfig, iteration: int):
+        checkpoint_directory = self._run.experiment_directory / config.directory_name / str(iteration)
+        Assert.custom(pathlib.Path.is_file, checkpoint_directory / "ok")
+        # TODO v0.2: Use config.get_load_config to make it generic
+        # TODO v0.2: Detect format instead of hard-coding
+        metadata = self._multi_stage.load_distributed_checkpoint_same_format(checkpoint_directory)
+        self._optimizer.load(metadata["optimizer"])
+        if "schedules" in metadata:
+            # Backward compatibility.
+            self._completed_steps = metadata["schedules"][PhaseType.training.value]["completed_steps"]
+        else:
+            self._completed_steps = metadata["completed_steps"]
+        # TODO v0.2: Move barrier, ok file to FastLLMModel
+        self._run.barrier(f"load {config.save_name} {iteration} exit")
+
+    def _get_last_checkpoint(self):
+        if self._run.experiment_directory is None:
+            return None
+        checkpoint_base_directory = self._run.experiment_directory / self._config.training.checkpoint.directory_name
+        if self._run.is_main_rank and checkpoint_base_directory.is_dir():
+            checkpoints = [int(path.name) for path in checkpoint_base_directory.iterdir()]
+            iteration = max(checkpoints) if checkpoints else -1
+        else:
+            iteration = -1
+        iteration = self._run.broadcast_int(iteration)
+        return iteration if iteration >= 0 else None
 
     @abc.abstractmethod
     def get_tflops(self, phase: PhaseType, elapsed_time_per_iteration) -> tuple[int, int]:

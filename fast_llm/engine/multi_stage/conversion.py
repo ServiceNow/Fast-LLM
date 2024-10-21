@@ -138,6 +138,30 @@ class SplitWeightConverter(WeightConverter):
 
 
 class ModelConverter(abc.ABC):
+    base_file_name: typing.ClassVar[str]
+
+    @abc.abstractmethod
+    def convert_state_dict(
+        self, state_dict: dict[tuple[str, str], torch.Tensor | SafeTensorSlice], export: bool
+    ) -> dict[str, torch.Tensor | SafeTensorSlice]:
+        pass
+
+
+class TrivialConverter(ModelConverter):
+    base_file_name = "state_dict"
+
+    def convert_state_dict(
+        self, state_dict: dict[tuple[str, str], torch.Tensor | SafeTensorSlice], export: bool
+    ) -> dict[str, torch.Tensor | SafeTensorSlice]:
+        out_state_dict = {}
+        for key in list(state_dict):
+            name, shard_name = key
+            out_state_dict[f"{name}/{shard_name}"] = state_dict.pop(key)
+        return out_state_dict
+
+
+class ExternalModelConverter(ModelConverter):
+    base_file_name = "model"
     _base_model_cls: type[BaseModelConfig]
     _config_converters: list[ParamConverter]
 
@@ -165,12 +189,12 @@ class ModelConverter(abc.ABC):
 
     @classmethod
     @abc.abstractmethod
-    def load_config(cls, directory: pathlib.Path | str) -> dict[str]:
+    def load_config(cls, directory: pathlib.Path | str) -> dict[str, typing.Any]:
         pass
 
     @classmethod
     @abc.abstractmethod
-    def save_config(cls, directory: pathlib.Path | str, config: dict[str]):
+    def save_config(cls, directory: pathlib.Path | str, config: dict[str, typing.Any]):
         pass
 
     @abc.abstractmethod
@@ -180,7 +204,7 @@ class ModelConverter(abc.ABC):
         pass
 
     @classmethod
-    def export_config(cls, config: BaseModelArchitectureConfig) -> dict[str]:
+    def export_config(cls, config: BaseModelArchitectureConfig) -> dict[str, typing.Any]:
         exported_config = {}
         for converter in cls._get_config_converters():
             value = converter.export_param(
@@ -194,7 +218,7 @@ class ModelConverter(abc.ABC):
         return exported_config  # Noqa
 
     @classmethod
-    def import_config(cls, config: dict[str], architecture_only: bool = False):  # noqa
+    def import_config(cls, config: dict[str, typing.Any], architecture_only: bool = False):  # noqa
         kwargs = {}
         for converter in cls._get_config_converters():
             value = converter.import_param(
@@ -209,24 +233,25 @@ class ModelConverter(abc.ABC):
         return config_class.from_dict({}, kwargs)
 
     @classmethod
-    def from_config(cls, config: dict[str], architecture_only: bool = False):
+    def from_config(cls, config: dict[str, typing.Any], architecture_only: bool = False):
         return cls(cls.import_config(config, architecture_only=architecture_only))
 
     def convert_state_dict(
-        self, state_dict: dict[str, torch.Tensor | SafeTensorSlice], export: bool
+        self, state_dict: dict[tuple[str, str], torch.Tensor | SafeTensorSlice], export: bool
     ) -> dict[str, torch.Tensor | SafeTensorSlice]:
         out_state_dict = {}
         weight_converters = self._export_converters if export else self._import_converters
 
-        for state_dict_name in list(state_dict):
+        for state_dict_name, shard_name in list(state_dict):
+            assert shard_name == "weights"
             try:
                 if state_dict_name not in weight_converters:
                     continue
                 weight_converter: WeightConverter = weight_converters[state_dict_name]
                 in_names = weight_converter.fast_llm_name if export else weight_converter.export_name
-                if not all(name in state_dict for name in in_names):
+                if not all((name, shard_name) in state_dict for name in in_names):
                     continue
-                in_weights = tuple(state_dict.pop(name) for name in in_names)
+                in_weights = tuple(state_dict.pop((name, shard_name)) for name in in_names)
                 out_names = weight_converter.export_name if export else weight_converter.fast_llm_name
                 out_weights = (
                     weight_converter.export_weight(in_weights)
@@ -262,19 +287,19 @@ class ModelConverter(abc.ABC):
         return val
 
 
-class AutoModelConverter(ModelConverter, abc.ABC):
-    converter_map: dict[str, type[ModelConverter]]
+class AutoModelConverter(ExternalModelConverter, abc.ABC):
+    converter_map: dict[str, type[ExternalModelConverter]]
 
     @classmethod
-    def import_config(cls, config: dict[str], architecture_only: bool = False):
+    def import_config(cls, config: dict[str, typing.Any], architecture_only: bool = False):
         return cls.converter_map[config["model_type"]].import_config(config, architecture_only)
 
     @classmethod
-    def from_config(cls, config: dict[str], architecture_only: bool = False):
+    def from_config(cls, config: dict[str, typing.Any], architecture_only: bool = False):
         return cls.converter_map[config["model_type"]].from_config(config, architecture_only)
 
 
-class HuggingfaceModelConverter(ModelConverter, abc.ABC):
+class HuggingfaceModelConverter(ExternalModelConverter, abc.ABC):
     model_type: str | None = None
 
     @classmethod
@@ -292,7 +317,7 @@ class HuggingfaceModelConverter(ModelConverter, abc.ABC):
         return config
 
     @classmethod
-    def save_config(cls, directory: pathlib.Path | str, config: dict[str]):
+    def save_config(cls, directory: pathlib.Path | str, config: dict[str, typing.Any]):
         import transformers
 
         transformers.CONFIG_MAPPING[config["model_type"]].from_dict(config).save_pretrained(directory)
