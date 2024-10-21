@@ -30,7 +30,7 @@ Before diving into code, [open an issue](https://github.com/ServiceNow/Fast-LLM/
 1. **Fork the Repository**: [Fork Fast-LLM](https://github.com/ServiceNow/Fast-LLM/fork) to your own GitHub account.
 2. **Clone Your Fork Locally**: Use `git clone` to bring the code to your local machine.
 3. **Create a New Branch**: Name your branch descriptively, such as `feature/awesome-feature` or `fix/nasty-bug`.
-4. **Make Your Changes**: Work your magic! Don’t forget to add or update tests, benchmarks, or configurations as needed.
+4. **Make Your Changes**: Work your magic! Don't forget to add or update tests, benchmarks, or configurations as needed.
 5. **Commit Your Changes**: Use clear and descriptive commit messages. Follow our [commit message guidelines](https://servicenow.github.io/Fast-LLM/development/commit-guidelines/).
 6. **Push to Your Fork**: Push the branch to your GitHub fork.
 7. **Open a Pull Request**: [Submit a pull request](https://github.com/ServiceNow/Fast-LLM/compare) to the `main` branch. Reference the original issue number and provide a brief summary of your changes.
@@ -50,7 +50,7 @@ Here are some tips to ensure your pull request gets reviewed and merged promptly
 
 ## Seeking Help or Clarification
 
-If you’re unsure about something or need help, you've got options:
+If you're unsure about something or need help, you've got options:
 
 - **GitHub Discussions**: [Start a discussion](https://github.com/ServiceNow/Fast-LLM/discussions) if you need advice or just want to chat.
 - **Project Maintainers**: Mention a maintainer in an issue or pull request if you need a review or guidance.
