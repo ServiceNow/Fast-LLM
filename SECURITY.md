@@ -13,7 +13,7 @@ The Fast-LLM project is currently in a pre-release state. There are no officiall
 
 If you find a vulnerability in ServiceNow systems, products, or network infrastructure, our [Responsible Disclosure Program](https://www.servicenow.com/company/trust/privacy/responsible-disclosure.html) is the place to make a report.
 
-If you find a vulnerability in this open-source project published by the ServiceNow Research team, please email [servicenow-research@servicenow.com](mailto:servicenow-research) to report your findings.
+If you find a vulnerability in this open-source project published by the ServiceNow Research team, please email [servicenow-research@servicenow.com](mailto:servicenow-research@servicenow.com) to report your findings.
 
 We will process your report as soon as possible, depending on the severity of your report. We appreciate everyone's help in disclosing vulnerabilities in a responsible manner.
  
