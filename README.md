@@ -132,7 +132,7 @@ That's it! You're now up and running with Fast-LLM on Kubernetes. 🚀
 
 ## Next Steps
 
-📖 **Want to learn more?** Check out our [documentation](https://servicenow.github.io/Fast-LLM) for more information on how to use Fast-LLM.
+📖 **Want to learn more?** Check out our [documentation][docs] for more information on how to use Fast-LLM.
 
 🔨 **We welcome contributions to Fast-LLM!** Have a look at our [contribution guidelines](CONTRIBUTING.md).
 
