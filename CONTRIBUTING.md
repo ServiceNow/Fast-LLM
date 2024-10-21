@@ -31,7 +31,7 @@ Before diving into code, [open an issue](https://github.com/ServiceNow/Fast-LLM/
 2. **Clone Your Fork Locally**: Use `git clone` to bring the code to your local machine.
 3. **Create a New Branch**: Name your branch descriptively, such as `feature/awesome-feature` or `fix/nasty-bug`.
 4. **Make Your Changes**: Work your magic! Don't forget to add or update tests, benchmarks, or configurations as needed.
-5. **Commit Your Changes**: Use clear and descriptive commit messages. Follow our [commit message guidelines](https://servicenow.github.io/Fast-LLM/development/commit-guidelines/).
+5. **Create a Properly Titled Pull Request**: When you're ready to open a PR, make sure to use a clear and descriptive title that follows our [PR title guidelines](https://servicenow.github.io/Fast-LLM/development/pr-title-guidelines). This title will become the commit message for the squashed merge.
 6. **Push to Your Fork**: Push the branch to your GitHub fork.
 7. **Open a Pull Request**: [Submit a pull request](https://github.com/ServiceNow/Fast-LLM/compare) to the `main` branch. Reference the original issue number and provide a brief summary of your changes.
 
