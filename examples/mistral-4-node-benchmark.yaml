@@ -1,13 +1,8 @@
 training:
-  train_iters: 1000
+  train_iters: 100
   num_workers: 8
   logs:
     interval: 10
-  checkpoint:
-    interval: 1000
-    keep: 1
-  export:
-    interval: 1000
   validation:
     iterations: null
   test_iters: 0
@@ -51,7 +46,7 @@ model:
     vocab_size: 32000
     tie_word_embeddings: false
   multi_stage:
-    zero_stage: 3
+    zero_stage: 2
   distributed:
     training_dtype: bf16
     distributed_timeout: 3600

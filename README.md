@@ -56,12 +56,12 @@ Fast-LLM is a new open-source library for training large language models, built 
 
 We'll walk you through how to use Fast-LLM to train a large language model on a cluster with multiple nodes and GPUs. We'll show an example setup using a Slurm cluster and a Kubernetes cluster.
 
-For this demo, we will train a Mistral-7B model from scratch for 1000 steps on random data. The config file `examples/mistral-4-node-benchmark.yaml` is pre-configured for a multi-node setup with 4 DGX nodes, each with 8 A100-80GB or H100-80GB GPUs.
+For this demo, we will train a Mistral-7B model from scratch for 100 steps on random data. The config file `examples/mistral-4-node-benchmark.yaml` is pre-configured for a multi-node setup with 4 DGX nodes, each with 8 A100-80GB or H100-80GB GPUs.
 
 > [!NOTE]
 > Fast-LLM scales from a single GPU to large clusters. You can start small and expand based on your resources.
 
-Expect to see a significant speedup in training time compared to other libraries! For training Mistral-7B, Fast-LLM is expected to achieve a throughput of **9,500 tokens/s/H100** (batch size 32, sequence length 8k) on a 4-node cluster with 32 H100s.
+Expect to see a significant speedup in training time compared to other libraries! For training Mistral-7B, Fast-LLM is expected to achieve a throughput of **9,800 tokens/s/H100** (batch size 32, sequence length 8k) on a 4-node cluster with 32 H100s.
 
 ### Running Fast-LLM on a Slurm Cluster
 
