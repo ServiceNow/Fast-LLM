@@ -358,6 +358,13 @@ class MultiStageModel:
                 stage.train(mode)
             self._training = mode
 
+    def get_state_tensor_iterator(self, shard_names):
+        for i, shard_name in enumerate(shard_names):
+            shard_split = self._state_shard[i].split(self._stage_shard_sizes, 0)
+            for stage, shard in zip(self._stages_on_device.values(), shard_split):
+                for name, tensor in stage._export_shard(shard, dtype=checkpoint_config.data_type):  # noqa
+                    yield name, shard_name, tensor
+
     def _split_into_stages(self):
         # Create stages (greedy split, could do better).
         stage_splits = [0]

@@ -15,6 +15,7 @@ class BaseModelArchitectureConfig(Config):
     """
 
     _abstract = True
+    checkpoint_formats: typing.ClassVar[set[str]] = set()
 
     def setup_tensor_space(self, tensor_space: "TensorSpace"):
         raise NotImplementedError()

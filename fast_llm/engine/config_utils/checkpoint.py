@@ -16,7 +16,7 @@ CHECKPOINT_VERSION = "0.1"
 KNOWN_CHECKPOINT_VERSIONS = ("0", "0.1")
 
 
-class CheckpointFormat(str, enum.Enum):
+class CheckpointFormat(str):
     # Distributed checkpoint for fast checkpointing and resuming.
     distributed = "distributed"
     # Model state dict, for safe long-term storage in Fast-LLM format.
