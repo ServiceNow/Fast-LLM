@@ -18,6 +18,7 @@ from tests.common import (
     TEST_MODEL,
     TEST_MODEL_TYPE,
     TEST_RESULTS_PATH,
+    requires_cuda,
     run_test_script,
 )
 from tests.compare_tensor_logs import CompareConfig, compare_logged_tensor
@@ -29,6 +30,7 @@ TEST_BASE_MODEL_CONFIG_CLS = TEST_MODEL_CONFIG_CLS.get_base_model_config_cls()
 TEST_ARCHITECTURE_CONFIG_CLS = TEST_BASE_MODEL_CONFIG_CLS.architecture_cls
 
 
+@requires_cuda
 @pytest.mark.depends()
 def test_checkpoint_and_eval():
     # A baseline config (single-gpu, bf16, flash-attn).
