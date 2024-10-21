@@ -12,6 +12,9 @@ from fast_llm.engine.base_model.config import BaseModelArchitectureConfig, BaseM
 from fast_llm.tensor import SafeTensorSlice
 from fast_llm.utils import Assert
 
+if typing.TYPE_CHECKING:
+    from fast_llm.engine.multi_stage.config import FastLLMModelConfig
+
 logger = logging.getLogger(__name__)
 
 
@@ -140,14 +143,22 @@ class SplitWeightConverter(WeightConverter):
 class ModelConverter(abc.ABC):
     base_file_name: typing.ClassVar[str]
 
+    def __init__(self, config: "FastLLMModelConfig", fast_llm_metadata: dict[str, typing.Any]):
+        self._config = config
+        self._fast_llm_metadata = fast_llm_metadata
+
     @abc.abstractmethod
     def convert_state_dict(
         self, state_dict: dict[tuple[str, str], torch.Tensor | SafeTensorSlice], export: bool
     ) -> dict[str, torch.Tensor | SafeTensorSlice]:
         pass
 
+    @abc.abstractmethod
+    def save_metadata(self, directory: pathlib.Path | str):
+        pass
 
-class TrivialConverter(ModelConverter):
+
+class StateDictConverter(ModelConverter):
     base_file_name = "state_dict"
 
     def convert_state_dict(
@@ -159,14 +170,18 @@ class TrivialConverter(ModelConverter):
             out_state_dict[f"{name}/{shard_name}"] = state_dict.pop(key)
         return out_state_dict
 
+    def save_metadata(self, directory: pathlib.Path | str):
+        # TODO: Add a metadata file?
+        pass
+
 
 class ExternalModelConverter(ModelConverter):
     base_file_name = "model"
     _base_model_cls: type[BaseModelConfig]
     _config_converters: list[ParamConverter]
 
-    def __init__(self, config: BaseModelArchitectureConfig):
-        self.config = config
+    def __init__(self, config: "FastLLMModelConfig", fast_llm_metadata: dict[str, typing.Any]):
+        super().__init__(config, fast_llm_metadata)
         Assert.custom(isinstance, config, self._base_model_cls.architecture_cls)
         weight_converters = self._create_weight_converters()
         self._export_converters = {
@@ -189,12 +204,12 @@ class ExternalModelConverter(ModelConverter):
 
     @classmethod
     @abc.abstractmethod
-    def load_config(cls, directory: pathlib.Path | str) -> dict[str]:
+    def load_config(cls, directory: pathlib.Path | str) -> dict[str, typing.Any]:
         pass
 
     @classmethod
     @abc.abstractmethod
-    def save_config(cls, directory: pathlib.Path | str, config: dict[str]):
+    def save_config(cls, directory: pathlib.Path | str, config: dict[str, typing.Any]):
         pass
 
     @abc.abstractmethod
@@ -203,8 +218,19 @@ class ExternalModelConverter(ModelConverter):
     ) -> typing.Iterator[tuple[str, torch.Tensor | SafeTensorSlice]]:
         pass
 
+    def convert_metadata(self, fast_llm_metadata: dict[str, typing.Any]) -> dict[str, typing.Any]:
+        return {
+            "fast_llm_metadata": fast_llm_metadata,
+            "model_config": self.export_config(self._config),
+            "format": "pt",
+        }
+
+    def save_metadata(self, metadata: dict[str, typing.Any]):
+        # TODO: Add a metadata file?
+        pass
+
     @classmethod
-    def export_config(cls, config: BaseModelArchitectureConfig) -> dict[str]:
+    def export_config(cls, config: "FastLLMModelConfig") -> dict[str, typing.Any]:
         exported_config = {}
         for converter in cls._get_config_converters():
             value = converter.export_param(
@@ -218,7 +244,7 @@ class ExternalModelConverter(ModelConverter):
         return exported_config  # Noqa
 
     @classmethod
-    def import_config(cls, config: dict[str], architecture_only: bool = False):  # noqa
+    def import_config(cls, config: dict[str, typing.Any], architecture_only: bool = False):  # noqa
         kwargs = {}
         for converter in cls._get_config_converters():
             value = converter.import_param(
@@ -233,7 +259,7 @@ class ExternalModelConverter(ModelConverter):
         return config_class.from_dict({}, kwargs)
 
     @classmethod
-    def from_config(cls, config: dict[str], architecture_only: bool = False):
+    def from_config(cls, config: dict[str, typing.Any], architecture_only: bool = False):
         return cls(cls.import_config(config, architecture_only=architecture_only))
 
     def convert_state_dict(
@@ -291,11 +317,11 @@ class AutoModelConverter(ExternalModelConverter, abc.ABC):
     converter_map: dict[str, type[ExternalModelConverter]]
 
     @classmethod
-    def import_config(cls, config: dict[str], architecture_only: bool = False):
+    def import_config(cls, config: dict[str, typing.Any], architecture_only: bool = False):
         return cls.converter_map[config["model_type"]].import_config(config, architecture_only)
 
     @classmethod
-    def from_config(cls, config: dict[str], architecture_only: bool = False):
+    def from_config(cls, config: dict[str, typing.Any], architecture_only: bool = False):
         return cls.converter_map[config["model_type"]].from_config(config, architecture_only)
 
 
@@ -317,7 +343,7 @@ class HuggingfaceModelConverter(ExternalModelConverter, abc.ABC):
         return config
 
     @classmethod
-    def save_config(cls, directory: pathlib.Path | str, config: dict[str]):
+    def save_config(cls, directory: pathlib.Path | str, config: dict[str, typing.Any]):
         import transformers
 
         transformers.CONFIG_MAPPING[config["model_type"]].from_dict(config).save_pretrained(directory)

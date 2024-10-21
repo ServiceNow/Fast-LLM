@@ -278,7 +278,7 @@ class Config:
     __class_validated__: typing.ClassVar[bool] = True
     _abstract: typing.ClassVar[bool] = False
     _validated: bool = Field(init=False, repr=False)
-    _unknown_fields: dict[str] = Field(init=False, repr=False)
+    _unknown_fields: dict[str, typing.Any] = Field(init=False, repr=False)
 
     def __post_init__(self):
         """
@@ -629,7 +629,7 @@ class Config:
     @classmethod
     def from_dict(
         cls,
-        default: typing.Union["Config", dict[str]],
+        default: typing.Union["Config", dict[str, typing.Any]],
         *updates: typing.Union["Config", dict[str | tuple[str, ...], typing.Any]],
         strict: bool = True,
     ):
@@ -654,7 +654,7 @@ class Config:
     @classmethod
     def from_flat_dict(
         cls,
-        default: dict[str],
+        default: dict[str, typing.Any],
         strict: bool = True,
     ):
         # TODO v0.2: Remove flat format
@@ -663,7 +663,7 @@ class Config:
     @classmethod
     def _from_dict(
         cls,
-        default: dict[str],
+        default: dict[str, typing.Any],
         strict: bool = True,
         flat: bool = False,
     ):
@@ -776,7 +776,7 @@ class Config:
         return {key: cls._from_dict_nested(value_, args[1], strict) for key, value_ in value.items()}
 
     @classmethod
-    def _handle_renamed_field(cls, default: dict[str], old_name: str, new_name: str):
+    def _handle_renamed_field(cls, default: dict[str, typing.Any], old_name: str, new_name: str):
         if old_name in default:
             warnings.warn(f"Field `{old_name}` is deprecated in class {get_type_name(cls)}, use `{new_name}` instead.")
             default[new_name] = default.pop(old_name)

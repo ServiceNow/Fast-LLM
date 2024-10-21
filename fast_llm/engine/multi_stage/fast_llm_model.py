@@ -12,15 +12,15 @@ from fast_llm.core.distributed import all_reduce, broadcast
 from fast_llm.engine.base_model.base_model import BaseModel
 from fast_llm.engine.config_utils.checkpoint import (
     CHECKPOINT_VERSION,
+    CheckpointFormat,
     CheckpointLoadConfig,
     CheckpointSaveConfig,
-    CheckpointType,
     ModelConfigType,
 )
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.engine.multi_stage.checkpoint import StateDictSaver
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig, StageMode
-from fast_llm.engine.multi_stage.conversion import ModelConverter, TrivialConverter
+from fast_llm.engine.multi_stage.conversion import ModelConverter, StateDictConverter
 from fast_llm.engine.multi_stage.multi_stage import MultiStageModel
 from fast_llm.engine.multi_stage.stage import Stage
 from fast_llm.functional.triton.pointwise import triton_fill
@@ -92,7 +92,7 @@ class FastLLMModel(MultiStageModel):
 
         num_shards = len(self._state_shard_names) if checkpoint_config.optimizer_state else 1
         metadata = {
-            "checkpoint_type": CheckpointType.distributed.value,
+            "checkpoint_type": CheckpointFormat.distributed.value,
             "checkpoint_version": str(CHECKPOINT_VERSION),
             "fast_llm_config": self._fast_llm_config.to_serialized(),
             "state_shard_names": list(self._state_shard_names[:num_shards]),
@@ -100,33 +100,27 @@ class FastLLMModel(MultiStageModel):
         }
 
         # TODO: Simplify branching.
-        if checkpoint_config.format == CheckpointType.external:
-            # TODO: Support optimizer?
-            assert not checkpoint_config.optimizer_state
-            converter_class = self._base_model_config.get_converter_class(checkpoint_config.model_type)
-            exported_config = converter_class.export_config(self._base_model_config)
-            converter_class.save_config(checkpoint_config.path, exported_config)
-            self._save_state_dict(
-                checkpoint_config,
-                converter_class(self._base_model_config),
-                {
-                    "fast_llm_metadata": metadata,
-                    "model_config": exported_config,
-                    "format": "pt",
-                },
-            )
-        elif checkpoint_config.format == CheckpointType.state_dict:
-            self._save_state_dict(checkpoint_config, TrivialConverter(), metadata)
-        elif checkpoint_config.format == CheckpointType.distributed:
+        if checkpoint_config.format == CheckpointFormat.distributed:
             if self._distributed_config.rank == 0:
                 yaml.safe_dump(metadata, (checkpoint_config.path / "metadata.yaml").open("w"))
-            safetensors.torch.save_file(
+            return safetensors.torch.save_file(
                 tensors={"state_shard": self._state_shard[:num_shards]},
                 filename=checkpoint_config.path / f"rank_{self._distributed_config.rank}.safetensors",
                 metadata=_export_safetensors_metadata(metadata),
             )
+        if checkpoint_config.format == CheckpointFormat.state_dict:
+            converter = StateDictConverter(self._fast_llm_config)
         else:
-            raise NotImplementedError(checkpoint_config.format)
+            # TODO: Support optimizer?
+            assert not checkpoint_config.optimizer_state
+            converter = self._base_model_config.get_converter_class(checkpoint_config.format)(self._fast_llm_config)
+            converter.save_config(checkpoint_config.path, exported_config)
+        metadata = converter.convert_metadata(metadata)
+        self._save_state_dict(
+            checkpoint_config,
+            converter,
+            metadata,
+        )
 
     def _save_state_dict(self, checkpoint_config: CheckpointSaveConfig, converter: ModelConverter, metadata: dict):
         with StateDictSaver(
@@ -156,12 +150,12 @@ class FastLLMModel(MultiStageModel):
             assert not fast_llm_state_dict, list(fast_llm_state_dict)
 
     def load_pretrained_checkpoint(self, pretrained_config: CheckpointLoadConfig):
-        if pretrained_config.format == CheckpointType.distributed:
+        if pretrained_config.format == CheckpointFormat.distributed:
             # TODO: Check if same format.
             self._load_distributed_checkpoint(pretrained_config)
-        elif pretrained_config.format == CheckpointType.state_dict:
+        elif pretrained_config.format == CheckpointFormat.state_dict:
             self._load_state_dict_checkpoint(pretrained_config)
-        elif pretrained_config.format == CheckpointType.external:
+        elif pretrained_config.format == CheckpointFormat.external:
             self._import_checkpoint(pretrained_config)
         else:
             raise NotImplementedError(pretrained_config.format)
@@ -170,7 +164,7 @@ class FastLLMModel(MultiStageModel):
         # TODO: Handle barriers, ok file, etc. here
         # TODO: More safety checks
         # TODO: Integrate to load_checkpoint.
-        pretrained_config = CheckpointLoadConfig(path=directory, format=CheckpointType.distributed)
+        pretrained_config = CheckpointLoadConfig(path=directory, format=CheckpointFormat.distributed)
         metadata = self.config_class.load_pretrained_metadata(pretrained_config)
         with self._LoadContext(self, safe=False, load_optimizer=True, reset_pads=False) as context:
             Assert.eq(

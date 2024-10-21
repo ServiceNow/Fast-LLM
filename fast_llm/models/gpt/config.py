@@ -11,9 +11,28 @@ if typing.TYPE_CHECKING:
     from fast_llm.engine.multi_stage.conversion import ExternalModelConverter
 
 
+class HuggingfaceModelType:
+    """
+    An enum for the huggingface models with conversion support.
+    """
+
+    auto = "auto"
+    starcoder2 = "starcoder2"
+    llama = "llama"
+    mistral = "mistral"
+    mixtral = "mixtral"
+
+
 @config_class()
 class GPTArchitectureConfig(LanguageModelArchitectureConfig):
     _abstract = False
+    checkpoint_formats = {
+        HuggingfaceModelType.auto,
+        HuggingfaceModelType.starcoder2,
+        HuggingfaceModelType.llama,
+        HuggingfaceModelType.mistral,
+        HuggingfaceModelType.mixtral,
+    }
 
     @classmethod
     def _from_dict(
@@ -29,9 +48,12 @@ class GPTArchitectureConfig(LanguageModelArchitectureConfig):
 
     @classmethod
     def get_converter_class(cls, model_type: str | None = None) -> type["ExternalModelConverter"]:
+        if model_type not in cls.checkpoint_formats:
+            raise NotImplementedError(model_type)
+
         from fast_llm.models.gpt.conversion import AutoGPTConverter
 
-        return AutoGPTConverter if model_type is None else AutoGPTConverter.converter_map[model_type]
+        return AutoGPTConverter if model_type == "auto" else AutoGPTConverter.converter_map[model_type]
 
 
 @config_class()
@@ -104,14 +126,3 @@ class GPTTrainerConfig(PretrainedGPTModelConfig, TrainerConfig):
         from fast_llm.models.gpt.trainer import GPTTrainer
 
         return GPTTrainer
-
-
-class HuggingfaceModelType:
-    """
-    An enum for the huggingface models with conversion support.
-    """
-
-    starcoder2 = "starcoder2"
-    llama = "llama"
-    mistral = "mistral"
-    mixtral = "mixtral"
