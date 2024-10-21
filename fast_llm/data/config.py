@@ -22,6 +22,7 @@ class DatasetSource(str, enum.Enum):
     file = "file"
     sample = "sample"
     random = "random"
+    multimodal = "multimodal"
 
 
 class MultiprocessingContext(str, enum.Enum):
@@ -100,7 +101,7 @@ class FimConfig(Config):
 
 EOD = "<|endoftext|>"
 TokenizerFromFile = "TokenizerFromFile"
-
+PreTrainedTokenizer = "PreTrainedTokenzier"
 
 @config_class()
 class TokenizerConfig(Config):
@@ -118,6 +119,11 @@ class TokenizerConfig(Config):
     path: str | None = Field(
         default=None,
         desc="Path to the tokenizer file.",
+        hint=FieldHint.core,
+    )
+    tokenizer_path: str | None = Field(
+        default=None, 
+        desc="Path to pretrained tokenizer",
         hint=FieldHint.core,
     )
 
