@@ -1,0 +1,28 @@
+cff-version: 1.2.0
+message: "If you use Fast-LLM in your research, please cite it as follows:"
+title: "Fast-LLM"
+repository-code: "https://github.com/ServiceNow/Fast-LLM"
+url: "https://github.com/ServiceNow/Fast-LLM"
+license: "Apache-2.0"
+keywords:
+  - large language models
+  - machine learning
+  - deep learning
+  - distributed training
+  - open source
+authors:
+  - family-names: "Lamy Poirier"
+    given-names: "Joel"
+  - family-names: "Tian"
+    given-names: "Max"
+  - family-names: "Li"
+    given-names: "Raymond"
+  - family-names: "Guille-Escuret"
+    given-names: "Charles"
+  - family-names: "Kumar"
+    given-names: "Luke Nitish"
+  - family-names: "Kocetkov"
+    given-names: "Denis"
+  - family-names: "Scholak"
+    given-names: "Torsten"
+date-released: "2024-10-19"
