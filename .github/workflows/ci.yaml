@@ -27,7 +27,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install -e ".[CORE,OPTIONAL,DEV,DOCS]"
+          FLASH_ATTENTION_SKIP_CUDA_BUILD=TRUE FLASH_ATTENTION_FORCE_BUILD=TRUE pip install -e ".[CORE,OPTIONAL,DEV,DOCS]"
 
       - name: Run tests
         run: pytest .
