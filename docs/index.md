@@ -10,7 +10,7 @@ Welcome to **Fast-LLM**, the cutting-edge open-source library built for training
 
 ## Why Fast-LLM?
 
-Fast-LLM is designed for professionals who demand speed, scalability, and customization in training large language models. It goes beyond off-the-shelf solutions to meet the rigorous requirements of large-scale AI projects, offering a robust, flexible, and high-performance alternative to frameworks like NVIDIA NeMo Megatron. With Fast-LLM, you can train your most sophisticated models while optimizing for both performance and cost.
+Fast-LLM is designed for professionals who demand speed, scalability, and customization in training large language models. It goes beyond off-the-shelf solutions to meet the rigorous requirements of large-scale AI projects, offering a robust, flexible, and high-performance open-source alternative to commercial frameworks like NVIDIA NeMo Megatron. With Fast-LLM, you can train your most sophisticated models while optimizing for both performance and cost.
 
 ### The Fast-LLM Advantage
 
