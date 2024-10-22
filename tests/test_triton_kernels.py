@@ -24,8 +24,10 @@ from fast_llm.functional.triton.pointwise import triton_add, triton_copy, triton
 from fast_llm.functional.triton.rotary import triton_rotary_
 from fast_llm.functional.triton.sparse_copy import get_sparse_map
 from fast_llm.utils import Assert, rms_diff
+from tests.common import requires_cuda
 
 
+@requires_cuda
 def test_triton_fill():
     assert TritonConfig.TRITON_ENABLED
     x = torch.randn(425, 549, dtype=torch.bfloat16, device="cuda")
@@ -33,6 +35,7 @@ def test_triton_fill():
     assert x.min().item() == x.max().item() == 32
 
 
+@requires_cuda
 def test_triton_copy():
     assert TritonConfig.TRITON_ENABLED
     x = torch.randn(7563, dtype=torch.bfloat16, device="cuda")
@@ -44,6 +47,7 @@ def test_triton_copy():
     Assert.all_equal(x, x1)
 
 
+@requires_cuda
 def test_triton_copy_cast():
     assert TritonConfig.TRITON_ENABLED
     x = torch.randn(7563, dtype=torch.bfloat16, device="cuda")
@@ -55,6 +59,7 @@ def test_triton_copy_cast():
     Assert.all_equal(x, x1)
 
 
+@requires_cuda
 def test_triton_add():
     assert TritonConfig.TRITON_ENABLED
     x = torch.randn(8934, dtype=torch.float32, device="cuda")
@@ -69,6 +74,7 @@ def test_triton_add():
     Assert.all_equal(y, y1)
 
 
+@requires_cuda
 @pytest.mark.parametrize(
     ("batch_size", "sequence_length", "num_heads", "kv_channels"),
     [(4, 1024, 8, 128), (1, 32, 1, 16), (2, 2048, 2, 192), (3, 519, 7, 134)],
@@ -90,6 +96,7 @@ def test_triton_rotary(batch_size, sequence_length, num_heads, kv_channels):
     Assert.rms_close(y1, y2, 1e-3)
 
 
+@requires_cuda
 @pytest.mark.parametrize("has_bias", [True, False])
 @pytest.mark.parametrize("zero_centered", [True, False])
 def test_triton_normalization(has_bias, zero_centered):
@@ -139,6 +146,7 @@ def test_triton_normalization(has_bias, zero_centered):
         Assert.rms_close(bias_grad0, bias.grad, 1e-3)
 
 
+@requires_cuda
 @pytest.mark.parametrize("gated", [True, False])
 @pytest.mark.parametrize(
     "activation_type", [ActivationType.gelu, ActivationType.silu, ActivationType.relu, ActivationType.squared_relu]
@@ -161,6 +169,7 @@ def test_triton_mlp_activation(gated, activation_type, recompute):
         Assert.rms_close(output1, output3, 1e-5)
 
 
+@requires_cuda
 def test_triton_cross_entropy():
     assert TritonConfig.TRITON_ENABLED
     logits = torch.randn(1024, 8192, dtype=torch.bfloat16, device="cuda", requires_grad=True)
@@ -181,6 +190,7 @@ def test_triton_cross_entropy():
     Assert.rms_close(g2, g3, 1e-3)
 
 
+@requires_cuda
 def test_triton_adam():
     assert TritonConfig.TRITON_ENABLED
     params = torch.randn(4576427, dtype=torch.float32, device="cuda")
@@ -238,6 +248,7 @@ def test_triton_adam():
     compare(0, 4, Assert.eq, 0)
 
 
+@requires_cuda
 @pytest.mark.parametrize(
     ("num_rows_dense", "num_experts", "num_experts_per_token"),
     [(2048, 8, 2), (2048, 6, 2), (2048, 8, 8), (256, 8, 2), (5627, 8, 2)],

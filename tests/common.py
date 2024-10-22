@@ -164,6 +164,9 @@ TEST_MODEL = os.environ.get("MODEL", "mistral")
 TEST_MODEL_TYPE, CONFIG_FAST_LLM, CONFIG_GPT2, CONFIG_COMMON, HUGGINGFACE_MODEL_TYPE = _CONFIGS[TEST_MODEL]
 
 
+requires_cuda = pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is not available")
+
+
 def get_test_data():
     if not TOKENIZER_FILE.is_file():
         import transformers
