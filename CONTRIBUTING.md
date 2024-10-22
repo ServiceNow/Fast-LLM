@@ -18,8 +18,8 @@ Found a bug? Let's squash it together! [Open an issue](https://github.com/Servic
 
 - Steps to reproduce the issue.
 - What you expected to happen versus what actually happened.
-- Screenshots, log files, or error messages (if applicable).
-- Details about your environment setup (e.g., OS, Docker version, and relevant configurations).
+- Logs, Fast-LLM configuration, and error messages.
+- Details about your environment setup (e.g., CUDA hardware, PyTorch version, CUDA version).
 
 If you're familiar with the codebase, consider adding a failing unit test to demonstrate the problem (optional, but helpful!).
 
