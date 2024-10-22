@@ -1,7 +1,0 @@
-mkdocs
-mkdocs-material
-mkdocs-material[imaging]
-mkdocs-section-index
-mkdocstrings[python]
-mkdocs-git-committers-plugin-2
-mkdocs-git-revision-date-localized-plugin
