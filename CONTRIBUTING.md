@@ -18,8 +18,8 @@ Found a bug? Let's squash it together! [Open an issue](https://github.com/Servic
 
 - Steps to reproduce the issue.
 - What you expected to happen versus what actually happened.
-- Screenshots, log files, or error messages (if applicable).
-- Details about your environment setup (e.g., OS, Docker version, and relevant configurations).
+- Logs, Fast-LLM configuration, and error messages.
+- Details about your environment setup (e.g., CUDA hardware, PyTorch version, CUDA version).
 
 If you're familiar with the codebase, consider adding a failing unit test to demonstrate the problem (optional, but helpful!).
 
@@ -46,7 +46,7 @@ Here are some tips to ensure your pull request gets reviewed and merged promptly
 - **Avoid introducing new issues**: Check that there are no new runtime warnings, type checker errors, linting problems, or unhandled edge cases.
 - **Comment non-trivial code**: Make your code easy to understand for others.
 - **Keep sensitive data out**: Make sure your code or commit messages don't expose private or proprietary information.
-- **Use the [PR template](https://github.com/ServiceNow/Fast-LLM/blob/main/.github/pull_request_template.md)**: Complete the checklist to make sure everything is in order before hitting submit.
+- **Use the [PR template](https://github.com/ServiceNow/Fast-LLM/blob/main/.github/PULL_REQUEST_TEMPLATE.md)**: Complete the checklist to make sure everything is in order before hitting submit.
 
 ## Seeking Help or Clarification
 
