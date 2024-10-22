@@ -9,10 +9,14 @@ The Fast-LLM project is currently in a pre-release state. There are no officiall
 | 0.1.x   | :white_check_mark: |
 | < 0.1.0 | :x:                | -->
 
-## Reporting a Vulnerability
+## ServiceNow is Committed to Full Transparency
 
-To report a security vulnerability in Fast-LLM, please email our [Product Security Incident Response Team (PSIRT)](https://securitylab.servicenow.com) at [disclosure@servicenow.com](mailto:disclosure@servicenow.com). Include a detailed description of the issue, steps to reproduce it, and any relevant information that may help in investigating the matter.
+If you find a vulnerability in ServiceNow systems, products, or network infrastructure, our [Responsible Disclosure Program](https://www.servicenow.com/company/trust/privacy/responsible-disclosure.html) is the place to make a report.
 
+If you find a vulnerability in this open-source project published by the ServiceNow Research team, please email [servicenow-research@servicenow.com](mailto:servicenow-research@servicenow.com) to report your findings.
+
+We will process your report as soon as possible, depending on the severity of your report. We appreciate everyone's help in disclosing vulnerabilities in a responsible manner.
+ 
 ## Guidelines
 
 Please follow the guidelines below when [disclosing vulnerabilities](https://www.servicenow.com/company/trust/privacy/responsible-disclosure.html):
