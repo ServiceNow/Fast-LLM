@@ -7,6 +7,7 @@ import torch
 from torch._C._distributed_c10d import ProcessGroup
 
 from fast_llm.engine.base_model.base_model import BaseModel
+from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.engine.config_utils.run import log_main_rank, log_model_parallel_main_rank
 from fast_llm.engine.config_utils.tensor_space import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDim, DistributedDimNames
@@ -122,7 +123,8 @@ class MultiStageModel:
         stage_shard_dtype = get_unique([stage.weight_shard_meta.dtype for stage in self._stages_on_device.values()])
 
         self._state_shard_names = ("weights",) + optimizer_state_names
-        self._num_shards = len(self._state_shard_names) + 1
+        self._num_state_shards = len(self._state_shard_names)
+        self._num_shards = self._num_state_shards + 1
 
         shard_dim = TensorDim("flat_shard", sum(self._stage_shard_sizes))
         self._weight_shard_meta = TensorMeta.from_dims(
@@ -131,7 +133,7 @@ class MultiStageModel:
             dtype=stage_shard_dtype,
         )
         self._state_shard_meta = TensorMeta.from_dims(
-            (TensorDim("state_shards", self._num_shards - 1), shard_dim),
+            (TensorDim("state_shards", self._num_state_shards), shard_dim),
             tensor_name=f"multi_stage_state_shard",
             dtype=stage_shard_dtype,
         )
@@ -357,6 +359,13 @@ class MultiStageModel:
             for stage in self._stages_on_device.values():
                 stage.train(mode)
             self._training = mode
+
+    def get_state_tensor_iterator(self, shard_names: list[str], data_type: DataType | None = None):
+        for i, shard_name in enumerate(shard_names):
+            shard_split = self._state_shard[i].split(self._stage_shard_sizes, 0)
+            for stage, shard in zip(self._stages_on_device.values(), shard_split):
+                for name, tensor in stage._export_shard(shard, data_type=data_type):  # noqa
+                    yield name, shard_name, tensor
 
     def _split_into_stages(self):
         # Create stages (greedy split, could do better).
