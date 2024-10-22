@@ -18,11 +18,14 @@ Fast-LLM is designed for professionals who demand exceptional performance in lar
 
 Fast-LLM isn't just another library, **it's a platform for powering the next generation of AI breakthroughs**. Here’s what sets it apart:
 
-- **🚀 Purpose-Built for Large-Scale AI:** Optimized specifically for training large language models at scale, Fast-LLM features advanced parallelism techniques, ZeRO optimizations, and high-throughput kernels, making it ideal for handling demanding training tasks across small and massive compute clusters.
+- **🚀 Purpose-Built for Small- and Large-Scale AI:** Optimized specifically for training language models of all sizes, Fast-LLM excels from **small models around 1B parameters to massive clusters** running 70B+ parameter models. Our kernels are fine-tuned for maximum throughput across this entire range, making Fast-LLM the go-to choice for diverse training needs.
+
+- **🧠 Unified Support for GPT-Like Architectures:** Unlike other frameworks that specialize in specific architectures, Fast-LLM **unifies all GPT-like model implementations** in a [single file](https://github.com/ServiceNow/Fast-LLM/blob/main/fast_llm/models/gpt/model.py). Whether you're training Llama, Mistral, Mixtral, StarCoder, or custom architectures, Fast-LLM adapts effortlessly.
 
 - **💰 Cost Efficiency That Sets Fast-LLM Apart:**
 
   - **Lower Training Costs:** With higher throughput per GPU, Fast-LLM reduces the training time required. For instance, training a Mistral-7B model can be up to **xx% cheaper** compared to other frameworks due to faster processing and memory efficiency.
+
   - **More Tokens for Your Budget:** Train up to xx% more tokens for the same budget, leading to better-trained models without breaking your financial constraints.
 
   [Learn more about Fast-LLM's cost efficiency and see detailed comparisons](cost-efficiency.md).
