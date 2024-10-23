@@ -7,9 +7,10 @@ import typing
 
 from fast_llm.config import Config, Field, FieldHint, FieldUpdate, check_field, config_class, skip_valid_if_none
 from fast_llm.data.config import AbstractDataConfig
-from fast_llm.engine.config_utils.checkpoint import (
+from fast_llm.engine.checkpoint.config import (
     CheckpointConfigBase,
     CheckpointFormat,
+    CheckpointLoadConfig,
     CheckpointSaveConfig,
     CheckpointSaveConfigBase,
     CheckpointStateConfigBase,
@@ -212,6 +213,14 @@ class CheckpointConfig(CheckpointBaseConfig):
 
     def get_save_config(self, path: pathlib.Path):
         return CheckpointSaveConfig(
+            path=path,
+            format=CheckpointFormat.distributed,
+            model_weights=True,
+            optimizer_state=True,
+        )
+
+    def get_load_config(self, path: pathlib.Path):
+        return CheckpointLoadConfig(
             path=path,
             format=CheckpointFormat.distributed,
             model_weights=True,

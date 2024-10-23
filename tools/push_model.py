@@ -7,7 +7,7 @@ import shutil
 import subprocess
 
 from fast_llm.config import Field, config_class
-from fast_llm.engine.config_utils.checkpoint import CheckpointFormat
+from fast_llm.engine.checkpoint.config import CheckpointFormat
 from fast_llm.engine.config_utils.runnable import RunnableConfig
 
 try:
