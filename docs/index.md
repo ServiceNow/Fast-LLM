@@ -6,7 +6,7 @@ hide:
   - feedback
 ---
 
-Welcome to **Fast-LLM**, the cutting-edge open-source library built for training large language models (LLMs) with **unmatched speed**, scalability, and cost-efficiency**. Developed by [ServiceNow Research](https://www.servicenow.com/research/)'s Foundation Models Lab, Fast-LLM is engineered to meet the rigorous demands of professional AI teams, research institutions, and enterprises pushing the limits of generative AI. **Achieve groundbreaking research and high-stakes production goals faster with Fast-LLM.**
+Welcome to **Fast-LLM**, the cutting-edge open-source library built for training large language models (LLMs) with **unmatched speed, scalability, and cost-efficiency**. Developed by [ServiceNow Research](https://www.servicenow.com/research/)'s Foundation Models Lab, Fast-LLM is engineered to meet the rigorous demands of professional AI teams, research institutions, and enterprises pushing the limits of generative AI. **Achieve groundbreaking research and high-stakes production goals faster with Fast-LLM.**
 
 [Get started with Fast-LLM](quickstart.md) and experience the next generation of LLM training. [See Fast-LLM in action](in-action.md) and discover how it can transform your training workflows.
 
@@ -16,7 +16,7 @@ Fast-LLM is designed for professionals who demand exceptional performance in lar
 
 ### The Fast-LLM Advantage
 
-Fast-LLM isn't just another library, **it's a platform for powering the next generation of AI breakthroughs**. Here’s what sets it apart:
+Fast-LLM isn't just another library, **it's a platform for powering the next generation of AI breakthroughs**. Here's what sets it apart:
 
 - **🚀 Purpose-Built for Small- and Large-Scale AI:** Optimized specifically for training language models of all sizes, Fast-LLM excels from **small models around 1B parameters to massive clusters** running 70B+ parameter models. Our kernels are fine-tuned for maximum throughput across this entire range, making Fast-LLM the go-to choice for diverse training needs.
 
@@ -24,13 +24,13 @@ Fast-LLM isn't just another library, **it's a platform for powering the next gen
 
 - **💰 Cost Efficiency That Sets Fast-LLM Apart:**
 
-  - **Lower Training Costs:** With higher throughput per GPU, Fast-LLM reduces the training time required. For instance, training a Mistral-7B model can be up to **xx% cheaper** compared to other frameworks due to faster processing and memory efficiency.
+  - **Lower Training Costs:** With higher throughput per GPU, Fast-LLM reduces the training time required. For instance, training a Mistral-7B model can be up to **xx% cheaper** compared to other frameworks due to faster processing and better memory efficiency.
 
   - **More Tokens for Your Budget:** Train up to xx% more tokens for the same budget, leading to better-trained models without breaking your financial constraints.
 
   [Learn more about Fast-LLM's cost efficiency and see detailed comparisons](cost-efficiency.md).
 
-- **🔓 Openness Without Compromise:** Fast-LLM's commitment to open-source ensures full customization and extension capabilities, allowing users to tailor the framework to specific needs without the limitations of proprietary software.
+- **🔓 Openness Without Compromise:** Fast-LLM's open-source model ensures that you can **fully customize and extend the library** to fit your exact needs, without the restrictions of proprietary software. Developed transparently by a community of professionals on GitHub, every change is **openly discussed and vetted**, ensuring **trust and collaboration** as you innovate with confidence, knowing the entire development process is out in the open.
 
 - **🌍 Community-Driven Development:** Built by professionals for professionals, Fast-LLM's development is transparent, with an open invitation to the community to contribute. [**Join the Fast-LLM community**](community/join-us) to help shape the future of large-scale AI training.
 
