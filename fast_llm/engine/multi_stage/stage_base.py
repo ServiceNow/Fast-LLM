@@ -283,6 +283,9 @@ class StageBase:
                 elif self._mode.on_device:
                     meta.init_parameter(parameter, self._distributed)
 
+            if self.mode.on_device:
+                self.reset_shard_pad(self._weight_shard)
+
         if self._config.debug_param_init:
             log_generator("CPU generator after reset", torch.random.default_generator)
             log_generator("PP init generator after reset", self._distributed.pp_init_generator)

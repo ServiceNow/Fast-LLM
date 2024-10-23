@@ -19,7 +19,7 @@ from fast_llm.engine.optimizer.config import ParamGroup
 from fast_llm.engine.optimizer.optimizer import Optimizer
 from fast_llm.engine.schedule.runner import ScheduleRunner
 from fast_llm.engine.schedule.schedule import Schedule
-from fast_llm.engine.training.config import CheckpointBaseConfig, TrainerConfig
+from fast_llm.engine.training.config import CheckpointBaseConfig, CheckpointConfig, TrainerConfig
 from fast_llm.engine.training.wandb import Wandb
 from fast_llm.logging import format_metrics, get_memory_usage_mib, log_memory_usage
 from fast_llm.utils import Assert
@@ -383,7 +383,7 @@ class Trainer(abc.ABC):
                     f" ({'loading' if self._config.pretrained.optimizer_state else 'resetting'}"
                     f" optimizer state)..."
                 )
-                self._multi_stage.load_pretrained_checkpoint(self._config.pretrained)
+                self._multi_stage.load_checkpoint(self._config.pretrained)
             else:
                 log_main_rank(f"Initializing training state from scratch...")
                 self._multi_stage.initialize_weights()
@@ -435,12 +435,13 @@ class Trainer(abc.ABC):
 
             config.callback.run()
 
-    def _load_checkpoint(self, config: CheckpointBaseConfig, iteration: int):
+    def _load_checkpoint(self, config: CheckpointConfig, iteration: int):
         checkpoint_directory = self._run.experiment_directory / config.directory_name / str(iteration)
         Assert.custom(pathlib.Path.is_file, checkpoint_directory / "ok")
         # TODO v0.2: Use config.get_load_config to make it generic
         # TODO v0.2: Detect format instead of hard-coding
-        metadata = self._multi_stage.load_distributed_checkpoint_same_format(checkpoint_directory)
+
+        metadata = self._multi_stage.load_checkpoint(config.get_load_config(checkpoint_directory))
         self._optimizer.load(metadata["optimizer"])
         if "schedules" in metadata:
             # Backward compatibility.

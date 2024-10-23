@@ -10,6 +10,7 @@ from fast_llm.data.config import AbstractDataConfig
 from fast_llm.engine.config_utils.checkpoint import (
     CheckpointConfigBase,
     CheckpointFormat,
+    CheckpointLoadConfig,
     CheckpointSaveConfig,
     CheckpointSaveConfigBase,
     CheckpointStateConfigBase,
@@ -212,6 +213,14 @@ class CheckpointConfig(CheckpointBaseConfig):
 
     def get_save_config(self, path: pathlib.Path):
         return CheckpointSaveConfig(
+            path=path,
+            format=CheckpointFormat.distributed,
+            model_weights=True,
+            optimizer_state=True,
+        )
+
+    def get_load_config(self, path: pathlib.Path):
+        return CheckpointLoadConfig(
             path=path,
             format=CheckpointFormat.distributed,
             model_weights=True,

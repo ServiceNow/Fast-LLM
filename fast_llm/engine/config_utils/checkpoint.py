@@ -137,6 +137,11 @@ class CheckpointLoadMetadataConfig(CheckpointPathConfigBase, CheckpointConfigBas
         hint=FieldHint.core,
     )
 
+    def _validate(self):
+        super()._validate()
+        if self.format == CheckpointFormat.distributed:
+            assert self.load_config.load_architecture
+
     @property
     def compare_log_fn(self):
         return ValueError if self.load_config.load_architecture else logger.warning
@@ -145,3 +150,9 @@ class CheckpointLoadMetadataConfig(CheckpointPathConfigBase, CheckpointConfigBas
 @config_class()
 class CheckpointLoadConfig(CheckpointLoadMetadataConfig, CheckpointStateConfigBase):
     _abstract = False
+
+    def _validate(self):
+        super()._validate()
+        if self.format == CheckpointFormat.external:
+            # TODO: Support optimizer?
+            assert not self.optimizer_state
