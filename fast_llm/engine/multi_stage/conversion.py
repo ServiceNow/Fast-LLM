@@ -207,7 +207,7 @@ class TrivialConverter(ModelConverter):
                 device=str(device),
             ) as f:
                 metadata = _import_safetensors_metadata(f.metadata())
-                Assert.eq(metadata["state_shard_names"][: len(shard_names)], shard_names)
+                Assert.eq(metadata["state_shard_names"][: len(shard_names)], list(shard_names))
                 for key in f.keys():
                     parameter_name, shard_name = key.split("/", 1)
                     if shard_name in shard_names:
@@ -388,7 +388,7 @@ class HuggingfaceModelConverter(ExternalModelConverter, abc.ABC):
     ) -> typing.Iterator[tuple[str, str, torch.Tensor | SafeTensorSlice]]:
         import transformers
 
-        Assert.eq(shard_names, ["weights"])
+        Assert.eq(shard_names, ("weights",))
         if (directory / transformers.utils.SAFE_WEIGHTS_NAME).is_file():
             paths = {directory / transformers.utils.SAFE_WEIGHTS_NAME}
         elif (directory / transformers.utils.SAFE_WEIGHTS_INDEX_NAME).is_file():

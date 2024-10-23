@@ -188,7 +188,7 @@ class FastLLMModel(MultiStageModel):
                     stage_shard = self._state_shard[self._state_shard_names.index(shard_name)].split(
                         self._stage_shard_sizes, 0
                     )[self._stage_shard_indices[stage_index]]
-                    loaded = multi_stage._stages[stage_index]._import_state_tensor(
+                    loaded = self._stages[stage_index]._import_state_tensor(
                         stage_shard, parameter_name, fast_llm_tensor
                     )  # noqa
                     context.mark_as_loaded(loaded, (parameter_name, shard_name))
