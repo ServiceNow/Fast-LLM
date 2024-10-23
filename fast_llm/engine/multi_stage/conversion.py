@@ -146,11 +146,6 @@ class ModelConverter(abc.ABC):
     def get_key(cls, parameter_name: str, shard_name: str) -> str:
         pass
 
-    @classmethod
-    @abc.abstractmethod
-    def load_key(cls, key: str) -> tuple[str, str]:
-        pass
-
     @abc.abstractmethod
     def convert_state_dict(
         self, state_dict: dict[str, torch.Tensor | SafeTensorSlice], export: bool
@@ -177,11 +172,6 @@ class TrivialConverter(ModelConverter):
     @classmethod
     def get_key(cls, parameter_name: str, shard_name: str) -> str:
         return f"{parameter_name}/{shard_name}"
-
-    @classmethod
-    def load_key(cls, key: str) -> tuple[str, str]:
-        parameter_name, shard_name = key.split("/", 1)
-        return parameter_name, shard_name
 
     def convert_state_dict(
         self, state_dict: dict[str, torch.Tensor | SafeTensorSlice], export: bool
@@ -355,10 +345,6 @@ class HuggingfaceModelConverter(ExternalModelConverter, abc.ABC):
     def get_key(cls, parameter_name: str, shard_name: str) -> str:
         Assert.eq(shard_name, "weights")
         return parameter_name
-
-    @classmethod
-    def load_key(cls, key: str) -> tuple[str, str]:
-        return key, "weights"
 
     @classmethod
     @abc.abstractmethod
