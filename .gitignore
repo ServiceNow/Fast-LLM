@@ -31,9 +31,7 @@ venv.bak/
 # Devenv
 .devenv*
 devenv.local.nix
-devenv.lock
-devenv.nix
-devenv.yaml
+devenv.*
 
 # direnv
 .direnv
