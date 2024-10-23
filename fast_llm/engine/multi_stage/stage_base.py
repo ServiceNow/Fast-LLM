@@ -452,7 +452,7 @@ class StageBase:
     def _export_shard(self, shard: torch.Tensor, data_type: DataType | None = None):
         if data_type is not None:
             shard = shard.to(dtype=data_type.torch)
-        tensors = self._split_buffer(self._reconstruct_from_shard(shard.to(dtype=data_type.torch)))
+        tensors = self._split_buffer(self._reconstruct_from_shard(shard))
         for name, param_index in self._parameter_index.items():
             yield name, self._parameter_metas[param_index].local_to_global(
                 tensors[param_index], distributed=self._distributed
