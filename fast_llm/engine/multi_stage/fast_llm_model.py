@@ -8,17 +8,16 @@ import yaml
 
 from fast_llm.core.distributed import all_reduce, broadcast
 from fast_llm.engine.base_model.base_model import BaseModel
-from fast_llm.engine.config_utils.checkpoint import (
+from fast_llm.engine.checkpoint.config import (
     CHECKPOINT_VERSION,
     CheckpointFormat,
     CheckpointLoadConfig,
     CheckpointSaveConfig,
     ModelConfigType,
 )
+from fast_llm.engine.checkpoint.state_dict import StateDictConverter, StateDictSaver, TrivialConverter
 from fast_llm.engine.distributed.distributed import Distributed
-from fast_llm.engine.multi_stage.checkpoint import StateDictSaver
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig, StageMode
-from fast_llm.engine.multi_stage.conversion import ModelConverter, TrivialConverter
 from fast_llm.engine.multi_stage.multi_stage import MultiStageModel
 from fast_llm.functional.triton.pointwise import triton_fill
 from fast_llm.utils import Assert
@@ -120,7 +119,7 @@ class FastLLMModel(MultiStageModel):
         else:
             raise NotImplementedError(config.format)
 
-    def _save_state_dict(self, config: CheckpointSaveConfig, converter: ModelConverter, metadata: dict):
+    def _save_state_dict(self, config: CheckpointSaveConfig, converter: StateDictConverter, metadata: dict):
         with StateDictSaver(
             config,
             distributed=self._distributed,
@@ -168,7 +167,7 @@ class FastLLMModel(MultiStageModel):
             raise NotImplementedError(config.format)
         return metadata.get("metadata")
 
-    def _load_state_dict(self, config: CheckpointLoadConfig, converter: ModelConverter):
+    def _load_state_dict(self, config: CheckpointLoadConfig, converter: StateDictConverter):
         num_shards = len(self._state_shard_names) if config.optimizer_state else 1
         with self._SafeLoadContext(self, num_shards=num_shards) as context:
             state_dict = {}

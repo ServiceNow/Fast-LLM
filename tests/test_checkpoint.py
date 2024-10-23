@@ -7,7 +7,7 @@ import torch
 import transformers
 import yaml
 
-from fast_llm.engine.config_utils.checkpoint import CheckpointFormat, CheckpointLoadConfig, ModelConfigType
+from fast_llm.engine.checkpoint.config import CheckpointFormat, CheckpointLoadConfig, ModelConfigType
 from fast_llm.engine.multi_stage.config import StageMode
 from fast_llm.models.auto import model_registry
 from fast_llm.tools.convert import ConversionConfig

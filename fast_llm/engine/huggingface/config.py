@@ -5,7 +5,7 @@ import typing
 
 import transformers
 
-from fast_llm.engine.config_utils.checkpoint import CheckpointFormat, CheckpointLoadMetadataConfig
+from fast_llm.engine.checkpoint.config import CheckpointFormat, CheckpointLoadMetadataConfig
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig
 
 logger = logging.getLogger(__name__)

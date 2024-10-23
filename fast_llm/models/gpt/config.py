@@ -8,7 +8,7 @@ from fast_llm.layers.language_model.config import LanguageModelArchitectureConfi
 from fast_llm.models.gpt.megatron import set_megatron_distributed_seeds
 
 if typing.TYPE_CHECKING:
-    from fast_llm.engine.multi_stage.conversion import ExternalModelConverter
+    from fast_llm.engine.checkpoint.external import ExternalStateDictConverter
 
 
 @config_class()
@@ -28,7 +28,7 @@ class GPTArchitectureConfig(LanguageModelArchitectureConfig):
         return super()._from_dict(default, strict, flat)
 
     @classmethod
-    def get_converter_class(cls, model_type: str | None = None) -> type["ExternalModelConverter"]:
+    def get_converter_class(cls, model_type: str | None = None) -> type["ExternalStateDictConverter"]:
         from fast_llm.models.gpt.conversion import AutoGPTConverter
 
         return AutoGPTConverter if model_type is None else AutoGPTConverter.converter_map[model_type]
