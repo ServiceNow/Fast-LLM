@@ -27,3 +27,11 @@ venv.bak/
 # Project specifics
 /.idea/
 /.vscode/
+
+# Devenv
+.devenv*
+devenv.local.nix
+devenv.*
+
+# direnv
+.direnv

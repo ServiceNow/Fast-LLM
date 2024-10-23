@@ -149,7 +149,7 @@ plugins:
   - section-index
   - social:
       cards_layout_options:
-        color: #173a58
+        color: "#173a58"
   - git-revision-date-localized:
       enable_creation_date: true
   - git-committers:
@@ -157,22 +157,24 @@ plugins:
       branch: main
 
 nav:
-  - 🏠 Home: index.md
-  - 🚀 Getting Started:
-    - 📜 License: license.md
-  - 🍳 Tutorial:
-    - tutorial/index.md
-    - 🚀 Getting started: tutorial/getting_started.md
-    - 💨 Load Mistral-7B: tutorial/prepare_mistral.md
-    - 📊 Prepare and load the dataset: tutorial/prepare_data.md
-    - 💨 Prepare the training configuration: tutorial/prepare_training.md
-    - 🌪 Launch and monitor training: tutorial/launch_training.md
-    - 🤗 Convert to Huggingface: tutorial/convert_to_huggingface.md
-  - 🗂️ Reference:
-    - reference/index.md
-  - 🧑‍💻 Developer Guide:
-    - developers/index.md
-    - 🛠️ How to contribute: developers/contribute.md
-  - 👥 Community:
-    - community/index.md
-    - 🫶 Feedback: community/feedback.md
+  - Fast-LLM:
+    - Welcome: index.md
+    - Cost Efficiency: cost-efficiency.md
+    - Help: help.md
+    - In Action:
+      - On Slurm: in-action/slurm.md
+      - On Kubernetes: in-action/kubernetes.md
+    - Success Stories: success-stories.md
+    - License: license.md
+  - Examples:
+    - Data Preparation: examples/data-preparation.md
+    - Train Llama 8B from scratch: examples/train-llama-8b.md
+    - Continue training Llama 8B: examples/continue-training-llama-8b.md
+    - Upcycle Llama 3B to MoE: examples/upcycle-llama-3b-to-moe.md
+  - Reference:
+    - Configuration: reference/configuration.md
+  - Developers:
+    - Contributing: developers/contributing.md
+    - Best Practices: developers/best-practices.md
+  - About Us: about-us.md
+  - Join Us: join-us.md

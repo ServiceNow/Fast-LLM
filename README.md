@@ -14,7 +14,11 @@ Made with ❤️ by [ServiceNow Research][servicenow-research]
 
 ## Overview
 
-Fast-LLM is a new open-source library for training large language models, built on [PyTorch][pytorch] and [Triton][triton]. It is extremely fast, scales to large clusters, supports a wide range of model architectures, and is easy to use. Unlike commercial frameworks like Megatron-LM, which are largely closed off and fragmented across forks, Fast-LLM is fully open-source and encourages community-driven development. Researchers can freely customize and optimize as needed, making it a flexible and hackable alternative that combines the speed of specialized tools with the openness of libraries like [Hugging Face Transformers][transformers].
+Fast-LLM is a cutting-edge open-source library for training large language models with exceptional speed, scalability, and flexibility. Built on [PyTorch][pytorch] and [Triton][triton], Fast-LLM empowers AI teams to push the limits of generative AI, from research to production.
+
+Optimized for training models of all sizes—from small 1B-parameter models to massive clusters with 70B+ parameters—Fast-LLM delivers faster training, lower costs, and seamless scalability. Its fine-tuned kernels, advanced parallelism techniques, and efficient memory management make it the go-to choice for diverse training needs.
+
+As a truly open-source project, Fast-LLM allows full customization and extension without proprietary restrictions. Developed transparently by a community of professionals on GitHub, the library benefits from collaborative innovation, with every change discussed and reviewed in the open to ensure trust and quality. Fast-LLM combines professional-grade tools with unified support for GPT-like architectures, offering the cost efficiency and flexibility that serious AI practitioners demand.
 
 > [!NOTE]
 > Fast-LLM is not affiliated with Fast.AI, FastHTML, FastAPI, FastText, or other similarly named projects. Our library's name refers to its speed and efficiency in language model training.
@@ -25,7 +29,7 @@ Fast-LLM is a new open-source library for training large language models, built 
     - ⚡️ Optimized kernel efficiency and reduced overheads.
     - 🔋 Optimized memory usage for best performance.
     - ⏳ Minimizes training time and cost.
-  
+
 2. 📈 **Fast-LLM is Highly Scalable**:
     - 📡 Distributed training across multiple GPUs and nodes using 3D parallelism (Data, Tensor, and Pipeline).
     - 🔗 Supports sequence length parallelism to handle longer sequences effectively.
@@ -49,7 +53,7 @@ Fast-LLM is a new open-source library for training large language models, built 
 
 5. 🌐 **Fast-LLM is Truly Open Source**:
     - ⚖️ Licensed under [Apache 2.0][license] for maximum freedom to use Fast-LLM at work, in your projects, or for research.
-    - 💻 Fully developed on GitHub with a public [roadmap][roadmap] and transparent [issue tracking][issues].
+    - 💻 Transparently developed on GitHub with public [roadmap][roadmap] and [issue tracking][issues].
     - 🤝 Contributions and collaboration are always welcome!
 
 ## Usage
