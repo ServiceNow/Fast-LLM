@@ -5,7 +5,7 @@ import typing
 
 from fast_llm.config import Config, Field, FieldHint, NoAutoValidate, check_field, config_class, skip_valid_if_none
 from fast_llm.engine.base_model.config import BaseModelConfig
-from fast_llm.engine.config_utils.checkpoint import (
+from fast_llm.engine.checkpoint.config import (
     CHECKPOINT_VERSION,
     KNOWN_CHECKPOINT_VERSIONS,
     CheckpointFormat,

@@ -7,9 +7,9 @@ import typing
 
 import safetensors
 import torch
-import yaml
 
 from fast_llm.engine.base_model.config import BaseModelArchitectureConfig, BaseModelConfig
+from fast_llm.engine.checkpoint.state_dict import StateDictConverter
 from fast_llm.tensor import SafeTensorSlice
 from fast_llm.utils import Assert
 
@@ -138,75 +138,7 @@ class SplitWeightConverter(WeightConverter):
         return (torch.cat([weight_[:] for weight_ in weight]),)
 
 
-class ModelConverter(abc.ABC):
-    base_file_name: typing.ClassVar[str]
-
-    @classmethod
-    @abc.abstractmethod
-    def get_key(cls, parameter_name: str, shard_name: str) -> str:
-        pass
-
-    @abc.abstractmethod
-    def convert_state_dict(
-        self, state_dict: dict[str, torch.Tensor | SafeTensorSlice], export: bool
-    ) -> dict[str, torch.Tensor | SafeTensorSlice]:
-        pass
-
-    @abc.abstractmethod
-    def load_weights(
-        self,
-        directory: pathlib.Path | str,
-        device,
-        shard_names: list[str],
-    ) -> typing.Iterator[tuple[str, str, torch.Tensor | SafeTensorSlice]]:
-        pass
-
-
-def _import_safetensors_metadata(metadata):
-    return {key: yaml.safe_load(value) for key, value in metadata.items()}
-
-
-class TrivialConverter(ModelConverter):
-    base_file_name = "state_dict"
-
-    @classmethod
-    def get_key(cls, parameter_name: str, shard_name: str) -> str:
-        return f"{parameter_name}/{shard_name}"
-
-    def convert_state_dict(
-        self, state_dict: dict[str, torch.Tensor | SafeTensorSlice], export: bool
-    ) -> dict[str, torch.Tensor | SafeTensorSlice]:
-        out_state_dict = state_dict.copy()
-        state_dict.clear()
-        return out_state_dict
-
-    def load_weights(
-        self,
-        directory: pathlib.Path | str,
-        device,
-        shard_names: list[str],
-    ) -> typing.Iterator[tuple[str, str, torch.Tensor | SafeTensorSlice]]:
-        index_path = directory / f"state_dict.safetensors.index.json"
-        logger.info(f"Loading index from {index_path}")
-        file_names = set(json.load(index_path.open("r"))["weight_map"].values())
-        for file_name in file_names:
-            logger.info(f"Loading from {directory / file_name}")
-            with safetensors.safe_open(
-                directory / file_name,
-                framework="pt",
-                device=str(device),
-            ) as f:
-                metadata = _import_safetensors_metadata(f.metadata())
-                Assert.eq(metadata["state_shard_names"][: len(shard_names)], list(shard_names))
-                for key in f.keys():
-                    parameter_name, shard_name = key.split("/", 1)
-                    if shard_name in shard_names:
-                        yield parameter_name, shard_name, f.get_slice(key)
-
-        # return metadata["metadata"]
-
-
-class ExternalModelConverter(ModelConverter):
+class ExternalStateDictConverter(StateDictConverter):
     base_file_name = "model"
     _base_model_cls: type[BaseModelConfig]
     _config_converters: list[ParamConverter]
@@ -326,8 +258,8 @@ class ExternalModelConverter(ModelConverter):
         return val
 
 
-class AutoModelConverter(ExternalModelConverter, abc.ABC):
-    converter_map: dict[str, type[ExternalModelConverter]]
+class AutoStateDictConverter(ExternalStateDictConverter, abc.ABC):
+    converter_map: dict[str, type[ExternalStateDictConverter]]
 
     @classmethod
     def import_config(cls, config: dict[str, typing.Any], architecture_only: bool = False):
@@ -338,7 +270,7 @@ class AutoModelConverter(ExternalModelConverter, abc.ABC):
         return cls.converter_map[config["model_type"]].from_config(config, architecture_only)
 
 
-class HuggingfaceModelConverter(ExternalModelConverter, abc.ABC):
+class HuggingfaceStateDictConverter(ExternalStateDictConverter, abc.ABC):
     model_type: str | None = None
 
     @classmethod

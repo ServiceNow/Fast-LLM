@@ -5,7 +5,7 @@ import typing
 import transformers.modeling_outputs
 
 from fast_llm.config import NoAutoValidate
-from fast_llm.engine.config_utils.checkpoint import CheckpointFormat, CheckpointLoadConfig
+from fast_llm.engine.checkpoint.config import CheckpointFormat, CheckpointLoadConfig
 from fast_llm.engine.distributed.config import PhaseType
 from fast_llm.engine.huggingface.config import HuggingfaceModelConfig
 from fast_llm.engine.multi_stage.config import StageMode

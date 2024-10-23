@@ -4,11 +4,11 @@ import typing
 
 import torch
 
-from fast_llm.engine.multi_stage.conversion import (
-    AutoModelConverter,
+from fast_llm.engine.checkpoint.external import (
+    AutoStateDictConverter,
     ConstantExportParamConverter,
     ConstantImportParamConverter,
-    HuggingfaceModelConverter,
+    HuggingfaceStateDictConverter,
     IgnoreImportParamConverter,
     IgnoreWeightConverter,
     MappedConfigParamConverter,
@@ -89,7 +89,7 @@ class MLPLayer2Converter(WeightConverter):
         return (merged_weight.t().contiguous(),)
 
 
-class CommonHuggingfaceConverter(HuggingfaceModelConverter):
+class CommonHuggingfaceConverter(HuggingfaceStateDictConverter):
     config: GPTArchitectureConfig
     _base_model_cls = GPTBaseModelConfig
     """
@@ -324,7 +324,7 @@ class MixtralHuggingfaceConverter(CommonLlamaHuggingfaceConverter):
         ]
 
 
-class AutoGPTConverter(AutoModelConverter, HuggingfaceModelConverter, abc.ABC):
+class AutoGPTConverter(AutoStateDictConverter, HuggingfaceStateDictConverter, abc.ABC):
     converter_map = {
         HuggingfaceModelType.starcoder2: Starcoder2HuggingfaceConverter,
         HuggingfaceModelType.llama: LlamaHuggingfaceConverter,
