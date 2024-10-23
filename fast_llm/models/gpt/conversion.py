@@ -325,6 +325,7 @@ class MixtralHuggingfaceConverter(CommonLlamaHuggingfaceConverter):
 
 
 class AutoGPTConverter(AutoStateDictConverter, HuggingfaceStateDictConverter, abc.ABC):
+
     converter_map = {
         HuggingfaceModelType.starcoder2: Starcoder2HuggingfaceConverter,
         HuggingfaceModelType.llama: LlamaHuggingfaceConverter,

@@ -1,16 +1,15 @@
 import enum
-import json
 import logging
 import typing
 
 from fast_llm.config import Config, Field, FieldHint, NoAutoValidate, check_field, config_class, skip_valid_if_none
 from fast_llm.engine.base_model.config import BaseModelConfig
 from fast_llm.engine.checkpoint.config import (
-    CHECKPOINT_VERSION,
     KNOWN_CHECKPOINT_VERSIONS,
     CheckpointFormat,
     CheckpointLoadConfig,
     CheckpointLoadMetadataConfig,
+    Converter,
 )
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.utils import Assert
@@ -196,6 +195,23 @@ class FastLLMModelConfig(Config):
     )
 
     @classmethod
+    def get_supported_checkpoint_formats(cls):
+        return CheckpointFormat.distributed, CheckpointFormat.state_dict
+
+    @classmethod
+    def get_converter_class(cls, format: str) -> type["Converter"]:
+        if format == CheckpointFormat.distributed:
+            from fast_llm.engine.checkpoint.distributed import DistributedConverter
+
+            return DistributedConverter
+        elif format == CheckpointFormat.state_dict:
+            from fast_llm.engine.checkpoint.state_dict import TrivialConverter
+
+            return TrivialConverter
+        else:
+            raise NotImplementedError(format)
+
+    @classmethod
     def get_model_class(cls) -> type["FastLLMModel"]:
         raise NotImplementedError
 
@@ -216,7 +232,7 @@ class FastLLMModelConfig(Config):
     ):
         # TODO: Add *updates?
         assert pretrained.path is not None
-        metadata = cls.load_pretrained_metadata(pretrained)
+        metadata = cls.load_metadata(pretrained)
         return cls.from_metadata(pretrained, metadata, default)
 
     @classmethod
@@ -301,24 +317,9 @@ class FastLLMModelConfig(Config):
         return config
 
     @classmethod
-    def load_pretrained_metadata(cls, pretrained: CheckpointLoadMetadataConfig):
-        import yaml
-
-        base_model_config_cls = cls.get_base_model_config_cls()
-        if pretrained.format == CheckpointFormat.distributed:
-            return yaml.safe_load((pretrained.path / "metadata.yaml").open("r"))
-        elif pretrained.format == CheckpointFormat.state_dict:
-            return json.load((pretrained.path / f"state_dict.safetensors.index.json").open("r"))["metadata"]
-        elif pretrained.format == CheckpointFormat.external:
-            converter_class = base_model_config_cls.get_converter_class(pretrained.model_type)
-            imported_model_config = converter_class.import_config(converter_class.load_config(pretrained.path), True)
-            return {
-                "fast_llm_config": {"base_model": imported_model_config.to_serialized()},
-                "checkpoint_type": CheckpointFormat.external.value,
-                "checkpoint_version": CHECKPOINT_VERSION,
-            }
-        else:
-            raise NotImplementedError(pretrained.format)
+    def load_metadata(cls, config: CheckpointLoadMetadataConfig):
+        converter_class = cls.get_converter_class(config.format)
+        return converter_class.load_metadata(config)
 
 
 @config_class()
