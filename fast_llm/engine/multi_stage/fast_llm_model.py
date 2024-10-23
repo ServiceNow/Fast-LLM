@@ -146,7 +146,7 @@ class FastLLMModel(MultiStageModel):
             ):
                 shard_split = self._state_shard[i].split(self._stage_shard_sizes, 0)
                 for stage, shard in zip(self._stages_on_device.values(), shard_split):
-                    for name, tensor in stage._export_shard(shard, dtype=checkpoint_config.data_type):  # noqa
+                    for name, tensor in stage._export_shard(shard, data_type=checkpoint_config.data_type):  # noqa
                         assert name not in fast_llm_state_dict
                         fast_llm_state_dict[(name, shard_name)] = tensor
                         for exported_name, exported_tensor in converter.convert_state_dict(
