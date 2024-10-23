@@ -35,7 +35,7 @@ Our core team includes members affiliated with ServiceNow Research, as well as o
 
 Fast-LLM is an open-source project that thrives on collaboration. If you're a professional or researcher looking to contribute, there are many ways to get involved:
 
-- **Code Contributions:** Dive into our [contribution guidelines](CONTRIBUTING.md) to learn how you can help improve Fast-LLM.
+- **Code Contributions:** Dive into our [contribution guidelines](https://github.com/ServiceNow/Fast-LLM/blob/main/CONTRIBUTING.md) to learn how you can help improve Fast-LLM.
 - **Discussion and Ideas:** Join us on [GitHub Discussions](https://github.com/ServiceNow/Fast-LLM/discussions) to share your insights, ask questions, or discuss new features.
 - **Documentation and Tutorials:** Help us expand our [documentation](https://servicenow.github.io/Fast-LLM/), making it even more valuable for other professionals.
 
