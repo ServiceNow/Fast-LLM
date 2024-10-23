@@ -12,41 +12,83 @@ To showcase the cost-saving potential of Fast-LLM, we've compared the cost of tr
 
 The tables below provide a comparison of training costs for three different model setups, including costs for training on **1 trillion tokens** and the total tokens trained within a **$100,000 budget**.
 
-#### 1B Llama 3 Model on 1 DGX Node (8 H100s)
+#### 1B Model on 1 DGX Node (8 H100s)
 
-| Framework                 | Training Throughput (tokens/s/GPU) | Cost to Train 1T Tokens (USD) | Tokens Trained for $100k (Billion) |
-|---------------------------|-----------------------------------:|------------------------------:|-----------------------------------:|
-| **Fast-LLM**              | 6,500                              | **$384,600**                  | **260**                            |
-| NVIDIA Megatron           | 5,000                              | $500,000                      | 200                                |
-| MosaicML Composer         | 5,800                              | $431,000                      | 233                                |
-| Hugging Face Transformers | 4,800                              | $520,800                      | 192                                |
-| Meta Lingua               | 5,200                              | $480,800                      | 208                                |
+| Framework                                  | Training Throughput (tokens/s/GPU) | Cost to Train 1T Tokens (USD)  | Tokens Trained for $100k (Billion)  |
+|:-------------------------------------------|-----------------------------------:|-------------------------------:|------------------------------------:|
+| **Fast-LLM**[^fast-llm-1b]                 | [PLACEHOLDER]                      | **[PLACEHOLDER]**              | **[PLACEHOLDER]**                   |
+| NVIDIA Megatron[^megatron-1b]              | [PLACEHOLDER]                      | [PLACEHOLDER]                  | [PLACEHOLDER]                       |
+| MosaicML Composer[^mosaic-1b]              | [PLACEHOLDER]                      | [PLACEHOLDER]                  | [PLACEHOLDER]                       |
+| Hugging Face Transformers[^huggingface-1b] | [PLACEHOLDER]                      | [PLACEHOLDER]                  | [PLACEHOLDER]                       |
+| Meta Lingua[^metaligua-1b]                 | [PLACEHOLDER]                      | [PLACEHOLDER]                  | [PLACEHOLDER]                       |
 
-#### 8B Llama 3 Model on 4 DGX Nodes (32 H100s)
+#### 8B Model on 4 DGX Nodes (32 H100s)
 
-| Framework                 | Training Throughput (tokens/s/GPU) | Cost to Train 1T Tokens (USD) | Tokens Trained for $100k (Billion) |
-|---------------------------|-----------------------------------:|------------------------------:|-----------------------------------:|
-| **Fast-LLM**              | 9,800                              | **$283,200**                  | **442**                            |
-| NVIDIA Megatron           | 7,500                              | $370,400                      | 338                                |
-| MosaicML Composer         | 8,200                              | $338,000                      | 370                                |
-| Hugging Face Transformers | 7,000                              | $392,900                      | 320                                |
-| Meta Lingua               | 7,800                              | $352,200                      | 355                                |
+| Framework                                  | Training Throughput (tokens/s/GPU) | Cost to Train 1T Tokens (USD)  | Tokens Trained for $100k (Billion)  |
+|:-------------------------------------------|-----------------------------------:|-------------------------------:|------------------------------------:|
+| **Fast-LLM**[^fast-llm-8b]                 | [PLACEHOLDER]                      | **[PLACEHOLDER]**              | **[PLACEHOLDER]**                   |
+| NVIDIA Megatron[^megatron-8b]              | [PLACEHOLDER]                      | [PLACEHOLDER]                  | [PLACEHOLDER]                       |
+| MosaicML Composer[^mosaic-8b]              | [PLACEHOLDER]                      | [PLACEHOLDER]                  | [PLACEHOLDER]                       |
+| Hugging Face Transformers[^huggingface-8b] | [PLACEHOLDER]                      | [PLACEHOLDER]                  | [PLACEHOLDER]                       |
+| Meta Lingua[^metaligua-8b]                 | [PLACEHOLDER]                      | [PLACEHOLDER]                  | [PLACEHOLDER]                       |
 
 #### Mixtral-8x7B Model on 16 DGX Nodes (128 H100s)
 
-| Framework                 | Training Throughput (tokens/s/GPU) | Cost to Train 1T Tokens (USD) | Tokens Trained for $100k (Billion) |
-|---------------------------|-----------------------------------:|------------------------------:|-----------------------------------:|
-| **Fast-LLM**              | 4,000                              | **$233,300**                  | **515**                            |
-| NVIDIA Megatron           | 9,200                              | $304,300                      | 412                                |
-| MosaicML Composer         | 10,000                             | $280,000                      | 450                                |
-| Hugging Face Transformers | 8,500                              | $329,400                      | 382                                |
-| Meta Lingua               | not supported                      | not supported                 | not supported                      |
-
-> [!NOTE]
-> All scenarios assume a sequence length of 8k tokens for consistency.
+| Framework                                       | Training Throughput (tokens/s/GPU) | Cost to Train 1T Tokens (USD)  | Tokens Trained for $100k (Billion)  |
+|:------------------------------------------------|-----------------------------------:|-------------------------------:|------------------------------------:|
+| **Fast-LLM**[^fast-llm-mixtral]                 | [PLACEHOLDER]                      | **[PLACEHOLDER]**              | **[PLACEHOLDER]**                   |
+| NVIDIA Megatron[^megatron-mixtral]              | [PLACEHOLDER]                      | [PLACEHOLDER]                  | [PLACEHOLDER]                       |
+| MosaicML Composer[^mosaic-mixtral]              | [PLACEHOLDER]                      | [PLACEHOLDER]                  | [PLACEHOLDER]                       |
+| Hugging Face Transformers[^huggingface-mixtral] | [PLACEHOLDER]                      | [PLACEHOLDER]                  | [PLACEHOLDER]                       |
+| Meta Lingua[^metaligua-mixtral]                 | not supported                      | not supported                  | not supported                       |
 
 ### Key Takeaways
 
-- **Fast-LLM consistently delivers lower training costs and higher token efficiency across various model configurations and cluster sizes.**
-- The cost savings are most significant with larger setups, where Fast-LLM's optimizations for high throughput and memory efficiency make a bigger impact.
-- In all scenarios, Fast-LLM trains on **more tokens within the same budget**, resulting in better-trained models.
+- **Cost efficiency at all scales:** Fast-LLM consistently achieves lower training costs due to its advanced parallelism and memory efficiency, delivering value across various model sizes and hardware configurations.
+- **Superior token throughput:** By processing more tokens per second per GPU than other frameworks, Fast-LLM maximizes token efficiency, leading to substantial savings, particularly for longer training durations or larger GPU clusters.
+- **Optimized for large-scale training:** Fast-LLM's design allows it to scale effectively as model size and training setups expand, ensuring that the benefits of its optimizations grow with the size of the deployment.
+
+[^fast-llm-1b]:
+    Testing conducted in [Month, Year] using 8 NVIDIA H100 SXM5 80 GB GPUs in 1 DGX node connected with 3200 Gbps Infiniband. Fast-LLM version [VERSION/COMMIT HASH], CUDA version [VERSION]. Training was performed on randomly generated data. Configuration file: [Link to config file].
+
+[^megatron-1b]:
+    Testing conducted in [Month, Year] using 8 NVIDIA H100 SXM5 80 GB GPUs in 1 DGX node connected with 3200 Gbps Infiniband. NVIDIA Megatron version [VERSION], CUDA version [VERSION]. Training was performed on randomly generated data. Configuration file: [Link to config file].
+
+[^mosaic-1b]:
+    Testing conducted in [Month, Year] using 8 NVIDIA H100 SXM5 80 GB GPUs in 1 DGX node connected with 3200 Gbps Infiniband. MosaicML Composer version [VERSION], CUDA version [VERSION]. Training was performed on randomly generated data. Configuration file: [Link to config file].
+
+[^huggingface-1b]:
+    Testing conducted in [Month, Year] using 8 NVIDIA H100 SXM5 80 GB GPUs in 1 DGX node connected with 3200 Gbps Infiniband. Hugging Face Transformers version [VERSION], CUDA version [VERSION]. Training was performed on randomly generated data. Configuration file: [Link to config file].
+
+[^metaligua-1b]:
+    Testing conducted in [Month, Year] using 8 NVIDIA H100 SXM5 80 GB GPUs in 1 DGX node connected with 3200 Gbps Infiniband. Meta Lingua version [VERSION], CUDA version [VERSION]. Training was performed on randomly generated data. Configuration file: [Link to config file].
+
+[^fast-llm-8b]:
+    Testing conducted in [Month, Year] using 32 NVIDIA H100 SXM5 80 GB GPUs across 4 DGX nodes connected with 3200 Gbps Infiniband. Fast-LLM version [VERSION/COMMIT HASH], CUDA version [VERSION]. Training was performed on randomly generated data. Configuration file: [Link to config file].
+
+[^megatron-8b]:
+    Testing conducted in [Month, Year] using 32 NVIDIA H100 SXM5 80 GB GPUs across 4 DGX nodes connected with 3200 Gbps Infiniband. NVIDIA Megatron version [VERSION], CUDA version [VERSION]. Training was performed on randomly generated data. Configuration file: [Link to config file].
+
+[^mosaic-8b]:
+    Testing conducted in [Month, Year] using 32 NVIDIA H100 SXM5 80 GB GPUs across 4 DGX nodes connected with 3200 Gbps Infiniband. MosaicML Composer version [VERSION], CUDA version [VERSION]. Training was performed on randomly generated data. Configuration file: [Link to config file].
+
+[^huggingface-8b]:
+    Testing conducted in [Month, Year] using 32 NVIDIA H100 SXM5 80 GB GPUs across 4 DGX nodes connected with 3200 Gbps Infiniband. Hugging Face Transformers version [VERSION], CUDA version [VERSION]. Training was performed on randomly generated data. Configuration file: [Link to config file].
+
+[^metaligua-8b]:
+    Testing conducted in [Month, Year] using 32 NVIDIA H100 SXM5 80 GB GPUs across 4 DGX nodes connected with 3200 Gbps Infiniband. Meta Lingua version [VERSION], CUDA version [VERSION]. Training was performed on randomly generated data. Configuration file: [Link to config file].
+
+[^fast-llm-mixtral]:
+    Testing conducted in [Month, Year] using 128 NVIDIA H100 SXM5 80 GB GPUs across 16 DGX nodes connected with 3200 Gbps Infiniband. Fast-LLM version [VERSION/COMMIT HASH], CUDA version [VERSION]. Training was performed on randomly generated data. Configuration file: [Link to config file].
+
+[^megatron-mixtral]:
+    Testing conducted in [Month, Year] using 128 NVIDIA H100 SXM5 80 GB GPUs across 16 DGX nodes connected with 3200 Gbps Infiniband. NVIDIA Megatron version [VERSION], CUDA version [VERSION]. Training was performed on randomly generated data. Configuration file: [Link to config file].
+
+[^mosaic-mixtral]:
+    Testing conducted in [Month, Year] using 128 NVIDIA H100 SXM5 80 GB GPUs across 16 DGX nodes connected with 3200 Gbps Infiniband. MosaicML Composer version [VERSION], CUDA version [VERSION]. Training was performed on randomly generated data. Configuration file: [Link to config file].
+
+[^huggingface-mixtral]:
+    Testing conducted in [Month, Year] using 128 NVIDIA H100 SXM5 80 GB GPUs across 16 DGX nodes connected with 3200 Gbps Infiniband. Hugging Face Transformers version [VERSION], CUDA version [VERSION]. Training was performed on randomly generated data. Configuration file: [Link to config file].
+
+[^metaligua-mixtral]:
+    In [Month, Year], Meta Lingua did not support training this configuration.
