@@ -29,7 +29,7 @@ As a truly open-source project, Fast-LLM allows full customization and extension
     - ⚡️ Optimized kernel efficiency and reduced overheads.
     - 🔋 Optimized memory usage for best performance.
     - ⏳ Minimizes training time and cost.
-  
+
 2. 📈 **Fast-LLM is Highly Scalable**:
     - 📡 Distributed training across multiple GPUs and nodes using 3D parallelism (Data, Tensor, and Pipeline).
     - 🔗 Supports sequence length parallelism to handle longer sequences effectively.
