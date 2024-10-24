@@ -45,8 +45,6 @@ class CheckpointFormat(str):
     distributed = "distributed"
     # Model state dict, for safe long-term storage in Fast-LLM format.
     state_dict = "state_dict"
-    # A checkpoint format external to Fast-LLM.
-    external = "external"
 
 
 class ModelConfigType(str, enum.Enum):
@@ -176,12 +174,6 @@ class CheckpointLoadMetadataConfig(CheckpointPathConfigBase, CheckpointConfigBas
 @config_class()
 class CheckpointLoadConfig(CheckpointLoadMetadataConfig, CheckpointStateConfigBase):
     _abstract = False
-
-    def _validate(self):
-        super()._validate()
-        if self.format == CheckpointFormat.external:
-            # TODO: Support optimizer?
-            assert not self.optimizer_state
 
 
 class Converter(abc.ABC):

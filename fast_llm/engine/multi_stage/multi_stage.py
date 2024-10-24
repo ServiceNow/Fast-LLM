@@ -37,7 +37,7 @@ class MultiStageModel:
         self,
         config: FastLLMModelConfig,
         *,
-        optimizer_state_names: tuple[str, ...],
+        optimizer_state_names: tuple[str, ...] = (),
         verbose: bool = True,
         # A filter to create only a subset of the stages. Used for model conversion.
         stage_filter: set | None = None,

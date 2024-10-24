@@ -274,9 +274,11 @@ class HuggingfaceStateDictConverter(ExternalStateDictConverter, abc.ABC):
     model_type: str | None = None
     base_file_name = "model"
 
+    @classmethod
     def load_metadata(cls, config: CheckpointLoadMetadataConfig):
         imported_model_config = cls._import_config(cls._load_config(config.path), True)
         return {
+            # TODO: Avoid `to_serialized`?
             "fast_llm_config": {"base_model": imported_model_config.to_serialized()},
             # TODO: Handle "auto"?
             "checkpoint_type": config.format,
@@ -295,7 +297,9 @@ class HuggingfaceStateDictConverter(ExternalStateDictConverter, abc.ABC):
 
     def load(self, config: CheckpointLoadConfig, metadata: dict):
         assert not config.optimizer_state
-        self._model.base_model_config.compare_architecture(self._load_config(config.path), config.compare_log_fn)
+        self._model.base_model_config.compare_architecture(
+            self._base_model_cls.from_dict(metadata["fast_llm_config"]["base_model"]), config.compare_log_fn
+        )
         super().load(config, metadata)
 
     @classmethod

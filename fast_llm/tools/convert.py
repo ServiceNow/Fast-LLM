@@ -3,12 +3,12 @@ import functools
 import json
 import logging
 import math
-import pathlib
 import typing
+import warnings
 
 from fast_llm.config import Field, config_class
-from fast_llm.engine.checkpoint.config import CheckpointFormat, CheckpointLoadConfig, CheckpointSaveConfig
-from fast_llm.engine.config_utils.data_type import DataType
+from fast_llm.engine.checkpoint.config import CheckpointLoadConfig, CheckpointSaveConfig
+from fast_llm.engine.checkpoint.external import HuggingfaceStateDictConverter
 from fast_llm.engine.config_utils.runnable import RunnableConfig
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig, StageMode
 from fast_llm.functional.config import TritonConfig
@@ -23,18 +23,48 @@ logger = logging.getLogger(__name__)
 
 @config_class()
 class ConversionConfig(RunnableConfig):
-    input_type: CheckpointFormat = Field()
-    output_type: CheckpointFormat = Field()
-    input_path: pathlib.Path = Field()
-    output_path: pathlib.Path = Field()
-    model_type: str | None = Field(default=None)
+    input: CheckpointLoadConfig = Field(default_factory=CheckpointLoadConfig)
+    output: CheckpointSaveConfig = Field(default_factory=CheckpointSaveConfig)
     use_cpu: bool = Field(default=False)
     exist_ok: bool = Field(default=False)
-    target_params_per_file: int = Field(default=2**32)
-    dtype: DataType | None = Field(
-        default=None,
-    )
     layers_per_step: int | None = Field(default=None)
+
+    @classmethod
+    def _from_dict(
+        cls,
+        default: dict[str, typing.Any],
+        strict: bool = True,
+        flat: bool = False,
+    ):
+        # TODO v0.2: Remove.
+        if "input" not in default:
+            default["input"] = {}
+        if "output" not in default:
+            default["output"] = {}
+        if "input_type" in default:
+            warnings.warn("`input_type` is deprecated. Use `input.format` instead.")
+            default["input"]["format"] = default.pop("input_type")
+        if "input_path" in default:
+            warnings.warn("`input_path` is deprecated. Use `input.path` instead.")
+            default["input"]["path"] = default.pop("input_path")
+        if "output_type" in default:
+            warnings.warn("`output_type` is deprecated. Use `output.format` instead.")
+            default["output"]["format"] = default.pop("output_type")
+        if "output_path" in default:
+            warnings.warn("`output_path` is deprecated. Use `output.path` instead.")
+            default["output"]["path"] = default.pop("output_path")
+        if "model_type" in default:
+            warnings.warn("`model_type` is deprecated. Use `output.format` instead.")
+            # Will be handled in CheckpointConfigBase.from_dict
+            default["input"]["model_type"] = default.pop("model_type")
+            default["output"]["model_type"] = default.pop("model_type")
+        if "target_params_per_file" in default:
+            warnings.warn("`target_params_per_file` is deprecated. Use `output.parameters_per_file` instead.")
+            default["output"]["parameters_per_file"] = default.pop("target_params_per_file")
+        if "dtype" in default:
+            warnings.warn("`dtype` is deprecated. Use `output.data_type` instead.")
+            default["data_type"]["parameters_per_file"] = default.pop("dtype")
+        return super()._from_dict(default, strict, flat)
 
     @classmethod
     def _get_parser(cls):
@@ -52,33 +82,20 @@ class ConversionConfig(RunnableConfig):
     def _convert_model_partial(
         self,
         model_class: type["FastLLMModel"],
-        output_path: pathlib.Path,
+        output: CheckpointSaveConfig,
         stage_filter: set | None = None,
     ):
-        logger.info(f"Loading {self.input_type} checkpoint from {self.input_path}...")
+        logger.info(f"Loading {self.input.format} checkpoint from {self.input.path}...")
         model = model_class.from_pretrained(
-            CheckpointLoadConfig(
-                path=self.input_path,
-                format=self.input_type,
-                model_type=self.model_type,
-            ),
+            self.input,
             mode=StageMode.weights,
             use_cpu=self.use_cpu,
             stage_filter=stage_filter,
         )
-        logger.info(f"Saving {self.output_type} checkpoint to {output_path}...")
-        output_path.mkdir(parents=True, exist_ok=self.exist_ok)
-        model.save_checkpoint(
-            CheckpointSaveConfig(
-                path=output_path,
-                format=self.output_type,
-                model_type=self.model_type,
-                optimizer_state=False,
-                parameters_per_file=self.target_params_per_file,
-                data_type=self.dtype,
-            )
-        )
-        (output_path / "ok").open("w")
+        logger.info(f"Saving {output.format} checkpoint to {output.path}...")
+        output.path.mkdir(parents=True, exist_ok=self.exist_ok)
+        model.save_checkpoint(output)
+        (output.path / "ok").open("w")
         logger.info(f"Done!")
 
     def run(self, model_config_class: type["FastLLMModelConfig"] | str):
@@ -89,28 +106,24 @@ class ConversionConfig(RunnableConfig):
         if self.use_cpu:
             TritonConfig.TRITON_ENABLED = False
         # Skip on exist_ok=False if the model has already been processed
-        if not self.exist_ok and (self.output_path / "ok").exists():
+        if not self.exist_ok and (self.output.path / "ok").exists():
             logger.info(
-                f"Output path {self.output_path} already exists and has been processed. Skipping model conversion..."
+                f"Output path {self.output.path} already exists and has been processed. Skipping model conversion..."
             )
             return
         if isinstance(model_config_class, str):
             model_config_class = model_registry[model_config_class]
         model_class = model_config_class.get_model_class()
         if self.layers_per_step is None:
-            self._convert_model_partial(model_class, self.output_path)
+            self._convert_model_partial(model_class, self.output)
         else:
+            converter_class = model_config_class.get_converter_class(self.output.format)
             # TODO: Support other types?
-            assert self.output_type == CheckpointFormat.external
+            assert issubclass(converter_class, HuggingfaceStateDictConverter)
             logger.info(f">>> Loading model config")
             # Create a dummy version to determine the stage split.
             model = model_class.from_pretrained(
-                CheckpointLoadConfig(
-                    path=self.input_path,
-                    format=self.input_type,
-                    model_type=self.model_type,
-                    model_weights=False,
-                ),
+                self.input.to_copy({"model_weights": False}),
                 mode=StageMode.off_device,
                 use_cpu=self.use_cpu,
             )
@@ -120,9 +133,11 @@ class ConversionConfig(RunnableConfig):
             for step_begin in range(0, num_stages, stages_per_step):
                 step_end = min(step_begin + stages_per_step, num_stages)
                 logger.info(f">>> Converting stages {step_begin} to {step_end-1} of {num_stages}")
-                step_path = self.output_path / str(step_begin)
+                step_path = self.output.path / str(step_begin)
                 step_paths.append(step_path)
-                self._convert_model_partial(model_class, step_path, set(range(step_begin, step_end)))
+                self._convert_model_partial(
+                    model_class, self.output.to_copy({"path": step_path}), set(range(step_begin, step_end))
+                )
             logger.info(f">>> Aggregating conversion steps")
 
             # Combine weight maps and rename data files to avoid duplications.
@@ -146,18 +161,18 @@ class ConversionConfig(RunnableConfig):
                         new_file_name = f"model_{file_count}.safetensors"
                         file_count += 1
                         rename_map[file_name] = new_file_name
-                        global_rename_map[step_path / file_name] = self.output_path / new_file_name
+                        global_rename_map[step_path / file_name] = self.output.path / new_file_name
                     Assert.not_incl(name, weight_map)
                     weight_map[name] = new_file_name
 
             # Save the combined index
-            path = self.output_path / index_filename
+            path = self.output.path / index_filename
 
             # Save the index.
             json.dump(index, path.open("w"), indent=4)
 
             # Copy the config
-            (step_paths[0] / config_filename).rename(self.output_path / config_filename)
+            (step_paths[0] / config_filename).rename(self.output.path / config_filename)
 
             # Move the data files
             for old_file_name, new_file_name in global_rename_map.items():
@@ -171,7 +186,7 @@ class ConversionConfig(RunnableConfig):
                 step_path.rmdir()
 
             # All good!
-            (self.output_path / "ok").open("w")
+            (self.output.path / "ok").open("w")
             logger.info(f">>> All done!")
 
 
