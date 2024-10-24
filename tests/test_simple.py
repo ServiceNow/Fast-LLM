@@ -22,7 +22,10 @@ def test_model_safe():
 @pytest.mark.depends(on=["test_model_safe"])
 def test_model():
     # A baseline config (single-gpu, bf16, flash-attn).
-    run_test_script(f"test_{TEST_MODEL}", CONFIG_COMMON, compare=f"test_{TEST_MODEL}_safe")
+    # Also tests for multiple data loaders.
+    run_test_script(
+        f"test_{TEST_MODEL}", CONFIG_COMMON + ["training.num_workers=2"], compare=f"test_{TEST_MODEL}_safe"
+    )
 
 
 @pytest.mark.depends(on=["test_model"])

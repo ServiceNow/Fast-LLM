@@ -13,6 +13,7 @@ import torch
 from fast_llm.data.mmap import MMapIndexedDataset
 from fast_llm.models.gpt.config import HuggingfaceModelType
 from fast_llm.models.gpt.huggingface import HuggingfaceGPTModelForCausalLM
+from fast_llm.tools.train import CliTrainingConfig
 from tests.compare_tensor_logs import CompareConfig, compare_tensor_logs
 
 # FIXME: figure out correct import of megatron modules without this hack
@@ -48,7 +49,7 @@ CONFIG_BASE_FAST_LLM = [
     "model.multi_stage.debug_tensor_parallel=True",
     "model.distributed.reproducible_init=True",
     "training.train_iters=2",
-    "training.num_workers=4",
+    "training.num_workers=0",
     "batch.batch_size=8",
     "batch.sequence_length=2048",
     f"data.path={DATASET_PREFIX}",
@@ -73,8 +74,8 @@ CONFIG_BASE_MEGATRON = [
     "--seq-length=2048",
     "--init-method-std=0.022",
     "--lr=0.0001",
-    "--num-workers=4",
-    "--valid-num-workers=4",
+    "--num-workers=0",
+    "--valid-num-workers=0",
     "--tokenizer-type=NullTokenizer",
     # Megatron messes with the vocab size, so we have to subtract 1.
     "--vocab-size=49151",
@@ -223,25 +224,28 @@ def run_test_script(
         raise RuntimeError(path)
     if prepare_fn is not None:
         skip = prepare_fn(TEST_RESULTS_PATH / name, None if compare is None else TEST_RESULTS_PATH / compare, skip)
-    header = ["Megatron-LM/pretrain_gpt.py"] if is_megatron else ["--no-python", "fast-llm", "train", model_type]
+    if is_megatron:
+        script = [*script, f"--structured-logs-dir={path}", f"--data-cache-path={path}"]
+    else:
+        script = [model_type, *script, f"run.experiment_dir={path}"]
+    header = ["Megatron-LM/pretrain_gpt.py"] if is_megatron else ["--no-python", "fast-llm", "train"]
     command = [
         "torchrun",
         f"--nproc-per-node={num_gpus}",
         *header,
         *script,
     ]
-    if is_megatron:
-        command.extend([f"--structured-logs-dir={path}", f"--data-cache-path={path}"])
-    else:
-        command.append(f"run.experiment_dir={path}")
     print(" ".join(command))
     if skip:
         print("Reusing existing run.")
     else:
         get_test_data()
-        completed_proc = subprocess.run(command, env=env)
-        if completed_proc.returncode:
-            raise RuntimeError(f"Process failed with return code {completed_proc.returncode}")
+        if num_gpus == 1 and not is_megatron:
+            CliTrainingConfig.parse_and_run(script)
+        else:
+            completed_proc = subprocess.run(command, env=env)
+            if completed_proc.returncode:
+                raise RuntimeError(f"Process failed with return code {completed_proc.returncode}")
     if compare:
         if compare_fn is not None:
             compare_fn(TEST_RESULTS_PATH / name, TEST_RESULTS_PATH / compare)
