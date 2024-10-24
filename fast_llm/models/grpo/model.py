@@ -1,8 +1,8 @@
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.layers.language_model.embedding import LanguageModelEmbedding
+from fast_llm.layers.language_model.head import LanguageModelHead
 from fast_llm.layers.transformer.transformer import TransformerLayer
 from fast_llm.models.grpo.config import GRPOBaseModelConfig, GRPOModelConfig
-from fast_llm.models.grpo.head import GRPOHead
 from fast_llm.models.gpt.model import GPTBaseModel, GPTModel
 
 
@@ -12,11 +12,12 @@ class GRPOBaseModel(GPTBaseModel):
 
     def __init__(
         self,
-        config: GRPOBaseModelConfig,
+        config: GRPOModelConfig,
         distributed_config: DistributedConfig,
     ):
-        # TODO: Implement / update.
         super().__init__(config, distributed_config)
+        assert self._config.transformer.use_rotary_position_embeddings
+        assert not self._config.use_absolute_position_embeddings
 
     def get_layers(self):
         # TODO: Adjust as needed.
@@ -30,7 +31,7 @@ class GRPOBaseModel(GPTBaseModel):
                 )
                 for i in range(self._config.transformer.num_layers)
             ],
-            GRPOHead(self._config, self._tensor_space),
+            LanguageModelHead(self._config, self._tensor_space),
         ]
 
     def preprocess_meta(self, input_, phase):
