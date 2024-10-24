@@ -64,6 +64,8 @@ def test_mlp_recomputation(gated, activation_type):
                 Assert.all_equal(param.grad_buffer, param_grad_ref)
 
 
+# Takes ~6s, much more if it needs to compile, reducing the hidden size doesn't help.
+@pytest.mark.slow
 @requires_cuda
 def test_dropless_mlp():
     num_experts = 4
