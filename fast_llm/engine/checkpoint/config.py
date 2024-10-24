@@ -10,8 +10,10 @@ import yaml
 
 from fast_llm.config import Config, Field, FieldHint, check_field, config_class
 from fast_llm.engine.config_utils.data_type import DataType
-from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
 from fast_llm.utils import Assert
+
+if typing.TYPE_CHECKING:
+    from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
 
 logger = logging.getLogger(__name__)
 

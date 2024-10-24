@@ -146,7 +146,6 @@ class SplitWeightConverter(WeightConverter):
 
 
 class ExternalStateDictConverter(StateDictConverter):
-    base_file_name = "model"
     _base_model_cls: type[BaseModelConfig]
     _config_converters: list[ParamConverter]
 
@@ -273,6 +272,7 @@ class AutoStateDictConverter(ExternalStateDictConverter, abc.ABC):
 
 class HuggingfaceStateDictConverter(ExternalStateDictConverter, abc.ABC):
     model_type: str | None = None
+    base_file_name = "model"
 
     def load_metadata(cls, config: CheckpointLoadMetadataConfig):
         imported_model_config = cls._import_config(cls._load_config(config.path), True)
