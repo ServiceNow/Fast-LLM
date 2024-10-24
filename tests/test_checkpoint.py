@@ -330,6 +330,7 @@ def test_run_converted_model():
         raise ValueError(f"Comparison failed ({len(errors)} errors)")
 
 
+@pytest.mark.slow
 @pytest.mark.depends(on=["test_load_converted_distributed_checkpoint"])
 def test_load_pretrained_distributed_in_dp2():
     run_test_script(
@@ -401,6 +402,7 @@ def test_load_pretrained_in_dp2_match_checkpoint():
         assert (stage_shard_test[stage_shard_ref.numel() :] == 0).all()  # noqa
 
 
+@pytest.mark.slow
 @pytest.mark.depends(on=["test_load_pretrained_in_dp2_match_checkpoint"])
 def test_load_distributed_checkpoint_dp2():
     # This also tests conversion which uses `FastLLMModel.from_checkpoint`
@@ -422,6 +424,7 @@ def test_load_distributed_checkpoint_dp2():
     assert (weight_shard == model._state_shard).all()
 
 
+@pytest.mark.slow
 @pytest.mark.depends(on=["test_load_converted_state_dict_checkpoint", "test_load_pretrained_in_dp2_match_checkpoint"])
 def test_load_pretrained_state_dict_in_dp2():
     run_test_script(
@@ -454,6 +457,7 @@ def test_load_pretrained_state_dict_in_dp2():
         assert (ref_shard == test_shard).all()
 
 
+@pytest.mark.slow
 @pytest.mark.depends(on=["test_load_converted_huggingface_checkpoint", "test_load_pretrained_in_dp2_match_checkpoint"])
 def test_load_pretrained_huggingface_in_dp2():
     run_test_script(
