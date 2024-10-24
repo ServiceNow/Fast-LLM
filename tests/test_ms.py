@@ -14,6 +14,7 @@ def test_model_ms256():
     run_test_script(f"test_{TEST_MODEL}_ms256", CONFIG_MS)
 
 
+@pytest.mark.slow
 @pytest.mark.depends(on=["test_model_ms256"])
 def test_model_pp2s2_ms256():
     # Sequence-pipeline-parallel
@@ -25,6 +26,7 @@ def test_model_pp2s2_ms256():
     )
 
 
+@pytest.mark.slow
 @pytest.mark.skip
 @pytest.mark.depends(on=["test_model_ms256"])
 def test_model_dp2s2_stp2_pp2s2_ms256():

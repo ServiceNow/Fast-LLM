@@ -12,6 +12,7 @@ def test_model_sf():
     run_test_script(f"test_{TEST_MODEL}_sf", CONFIG_SF)
 
 
+@pytest.mark.slow
 @pytest.mark.depends(on=["test_model_sf"])
 def test_model_sp2():
     # Sequence-tensor-parallel.
@@ -23,6 +24,7 @@ def test_model_sp2():
     )
 
 
+@pytest.mark.slow
 @pytest.mark.depends(on=["test_model_sf"])
 def test_model_sp2_ce4():
     # Sequence-tensor-parallel with cross-entropy splits.
