@@ -68,7 +68,7 @@ class HuggingfaceModelConfig(transformers.PretrainedConfig):
                 path=pathlib.Path(pretrained_model_name_or_path),
                 format=CheckpointFormat.state_dict,
             )
-        metadata = cls.model_config_class.load_pretrained_metadata(pretrained)
+        metadata = cls.model_config_class.load_metadata(pretrained)
         updates = {}
         torch_dtype = kwargs.pop("torch_dtype", None)
         if torch_dtype is not None:

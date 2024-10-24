@@ -7,10 +7,17 @@ import typing
 import safetensors
 import safetensors.torch
 import torch
-import yaml
 
 from fast_llm.core.distributed import safe_barrier
-from fast_llm.engine.checkpoint.config import CheckpointSaveConfig
+from fast_llm.engine.checkpoint.config import (
+    CheckpointLoadConfig,
+    CheckpointLoadMetadataConfig,
+    CheckpointSaveConfig,
+    Converter,
+    export_safetensors_metadata,
+    import_safetensors_metadata,
+)
+from fast_llm.engine.checkpoint.safe_load import SafeLoad
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.tensor import SafeTensorSlice
 from fast_llm.utils import Assert
@@ -18,40 +25,74 @@ from fast_llm.utils import Assert
 logger = logging.getLogger(__name__)
 
 
-def _import_safetensors_metadata(metadata):
-    return {key: yaml.safe_load(value) for key, value in metadata.items()}
-
-
-def _export_safetensors_metadata(metadata):
-    """
-    Safetensor only accepts string entries, so we convert to string explicitly.
-    We use yaml rather than json because json requires explicit quotation marks on strings, which breaks things.
-    (ex. "format": "pt" becomes '"pt"' which breaks huggingface models.)
-    We avoid using safe_dump for scalars because it adds junk ("\n...\n") at the end of the string
-    (decoding is unaffected.)
-    """
-    return {
-        key: str(value) if isinstance(value, (str, int, float, bool)) else yaml.safe_dump(value)
-        for key, value in metadata.items()
-    }
-
-
-class StateDictConverter(abc.ABC):
+class StateDictConverter(Converter):
     base_file_name: typing.ClassVar[str]
+
+    def save(self, config: CheckpointSaveConfig, metadata: dict):
+        num_shards = len(self._model.state_shard_names) if config.optimizer_state else 1
+        with StateDictSaver(
+            config,
+            distributed=self._model.distributed,
+            metadata=metadata,
+            base_file_name=self.base_file_name,
+        ) as context:
+            # The tensor mapping may not be one-to-one. `convert_state_dict` pops all tensors from
+            #   `state_dict` that are ready for conversion,
+            #   and return a dict containing the converted tensors(s).
+            #   If converting a tensor requires another one that is not yet available (e.g. for concatenation),
+            #   it will remain in `state_dict` until that tensor is available.
+            state_dict = {}
+            for parameter_name, shard_name, tensor in self._model.get_state_tensor_iterator(
+                self._model.state_shard_names[:num_shards], config.data_type
+            ):
+                if shard_name not in state_dict:
+                    state_dict[shard_name] = {}
+                shard_state_dict = state_dict[shard_name]
+                assert parameter_name not in shard_state_dict
+                shard_state_dict[parameter_name] = tensor
+                for exported_name, exported_tensor in self._convert_state_dict(shard_state_dict, True).items():
+                    context.add_tensor(self._get_key(exported_name, shard_name), exported_tensor)
+
+            for shard_name, shard_state_dict in state_dict.items():
+                assert not shard_state_dict, (shard_name, list(state_dict))
+
+    def load(self, config: CheckpointLoadConfig, metadata: dict):
+        num_shards = len(self._model.state_shard_names) if config.optimizer_state else 1
+        with SafeLoad(self._model, num_shards=num_shards) as context:
+            # The tensor mapping may not be one-to-one. `convert_state_dict` pops all tensors from
+            #   `state_dict` that are ready for conversion,
+            #   and return a dict containing the converted tensors(s).
+            #   If converting a tensor requires another one that is not yet available (e.g. for concatenation),
+            #   it will remain in `state_dict` until that tensor is available.
+            state_dict = {}
+            for parameter_name, shard_name, tensor in self._load_weights(
+                config.path, self._model.distributed.device, self._model.state_shard_names[:num_shards]
+            ):
+                if shard_name not in state_dict:
+                    state_dict[shard_name] = {}
+                shard_state_dict = state_dict[shard_name]
+                assert parameter_name not in shard_state_dict
+                shard_state_dict[parameter_name] = tensor
+                for parameter_name, fast_llm_tensor in self._convert_state_dict(shard_state_dict, False).items():
+                    loaded = self._model.import_state_tensor(parameter_name, shard_name, fast_llm_tensor)
+                    context.mark_as_loaded(loaded, (parameter_name, shard_name))
+
+            for shard_name, shard_state_dict in state_dict.items():
+                assert not shard_state_dict, (shard_name, list(state_dict))
 
     @classmethod
     @abc.abstractmethod
-    def get_key(cls, parameter_name: str, shard_name: str) -> str:
+    def _get_key(cls, parameter_name: str, shard_name: str) -> str:
         pass
 
     @abc.abstractmethod
-    def convert_state_dict(
+    def _convert_state_dict(
         self, state_dict: dict[str, torch.Tensor | SafeTensorSlice], export: bool
     ) -> dict[str, torch.Tensor | SafeTensorSlice]:
         pass
 
     @abc.abstractmethod
-    def load_weights(
+    def _load_weights(
         self,
         directory: pathlib.Path | str,
         device,
@@ -64,17 +105,21 @@ class TrivialConverter(StateDictConverter):
     base_file_name = "state_dict"
 
     @classmethod
-    def get_key(cls, parameter_name: str, shard_name: str) -> str:
+    def load_metadata(cls, config: CheckpointLoadMetadataConfig):
+        return json.load((config.path / f"state_dict.safetensors.index.json").open("r"))["metadata"]
+
+    @classmethod
+    def _get_key(cls, parameter_name: str, shard_name: str) -> str:
         return f"{parameter_name}/{shard_name}"
 
-    def convert_state_dict(
+    def _convert_state_dict(
         self, state_dict: dict[str, torch.Tensor | SafeTensorSlice], export: bool
     ) -> dict[str, torch.Tensor | SafeTensorSlice]:
         out_state_dict = state_dict.copy()
         state_dict.clear()
         return out_state_dict
 
-    def load_weights(
+    def _load_weights(
         self,
         directory: pathlib.Path | str,
         device,
@@ -90,7 +135,7 @@ class TrivialConverter(StateDictConverter):
                 framework="pt",
                 device=str(device),
             ) as f:
-                metadata = _import_safetensors_metadata(f.metadata())
+                metadata = import_safetensors_metadata(f.metadata())
                 Assert.eq(metadata["state_shard_names"][: len(shard_names)], list(shard_names))
                 for key in f.keys():
                     parameter_name, shard_name = key.split("/", 1)
@@ -172,7 +217,7 @@ class StateDictSaver:
             safetensors.torch.save_file(
                 tensors=self.tensors,
                 filename=self._config.path / file_name,
-                metadata=_export_safetensors_metadata(self._metadata),
+                metadata=export_safetensors_metadata(self._metadata),
             )
         for name_ in self.tensors:
             assert name_ not in self.index

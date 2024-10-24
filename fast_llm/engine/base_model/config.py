@@ -3,7 +3,6 @@ import typing
 from fast_llm.config import Config, config_class
 
 if typing.TYPE_CHECKING:
-    from fast_llm.engine.checkpoint.external import ExternalStateDictConverter
     from fast_llm.engine.config_utils.tensor_space import TensorSpace
 
 
@@ -28,10 +27,6 @@ class BaseModelArchitectureConfig(Config):
         log_fn: typing.Union[BaseException, typing.Callable] = ValueError,
     ):
         return self.get_architecture().compare(model_config.get_architecture(), log_fn)
-
-    @classmethod
-    def get_converter_class(cls, model_type: str | None = None) -> type["ExternalStateDictConverter"]:
-        raise NotImplementedError()
 
 
 @config_class()

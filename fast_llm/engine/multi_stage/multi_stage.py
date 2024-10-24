@@ -1,5 +1,6 @@
 import dataclasses
 import logging
+import typing
 import warnings
 
 import numpy as np
@@ -10,12 +11,12 @@ from fast_llm.engine.base_model.base_model import BaseModel
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.engine.config_utils.run import log_main_rank, log_model_parallel_main_rank
 from fast_llm.engine.config_utils.tensor_space import TensorDim
-from fast_llm.engine.distributed.config import DistributedConfig, DistributedDim, DistributedDimNames
+from fast_llm.engine.distributed.config import DistributedDim, DistributedDimNames
 from fast_llm.engine.distributed.distributed import Distributed
-from fast_llm.engine.multi_stage.config import MultiStageConfig, StageMode
+from fast_llm.engine.multi_stage.config import FastLLMModelConfig, StageMode
 from fast_llm.engine.multi_stage.stage import Stage
 from fast_llm.engine.optimizer.config import ParamGroup
-from fast_llm.tensor import ParameterMeta, TensorMeta
+from fast_llm.tensor import ParameterMeta, SafeTensorSlice, TensorMeta
 from fast_llm.utils import Assert, get_unique
 
 logger = logging.getLogger(__name__)
@@ -29,22 +30,24 @@ class MultiStageModel:
     _optimizer_shard: torch.Tensor
     _distributed: Distributed
     _mode: StageMode
+    config_class: typing.ClassVar[type[FastLLMModelConfig]] = FastLLMModelConfig
+    base_model_class: typing.ClassVar[type[BaseModel]] = BaseModel
 
     def __init__(
         self,
+        config: FastLLMModelConfig,
         *,
-        base_model: BaseModel,
-        multi_stage_config: MultiStageConfig,
-        distributed_config: DistributedConfig,
-        optimizer_state_names: tuple[str, ...],
+        optimizer_state_names: tuple[str, ...] = (),
         verbose: bool = True,
         # A filter to create only a subset of the stages. Used for model conversion.
         stage_filter: set | None = None,
     ):
         super().__init__()
-        self._multi_stage_config = multi_stage_config
-        self._distributed_config = distributed_config
-        self._base_model = base_model
+        self._fast_llm_config = config
+        self._base_model_config = self._fast_llm_config.base_model
+        self._multi_stage_config = self._fast_llm_config.multi_stage
+        self._distributed_config = self._fast_llm_config.distributed
+        self._base_model = self.base_model_class(self._base_model_config, self._distributed_config)
         self._training = None
         self._verbose = verbose
         self._stage_filter = stage_filter
@@ -123,8 +126,6 @@ class MultiStageModel:
         stage_shard_dtype = get_unique([stage.weight_shard_meta.dtype for stage in self._stages_on_device.values()])
 
         self._state_shard_names = ("weights",) + optimizer_state_names
-        self._num_state_shards = len(self._state_shard_names)
-        self._num_shards = self._num_state_shards + 1
 
         shard_dim = TensorDim("flat_shard", sum(self._stage_shard_sizes))
         self._weight_shard_meta = TensorMeta.from_dims(
@@ -133,12 +134,12 @@ class MultiStageModel:
             dtype=stage_shard_dtype,
         )
         self._state_shard_meta = TensorMeta.from_dims(
-            (TensorDim("state_shards", self._num_state_shards), shard_dim),
+            (TensorDim("state_shards", self.num_state_shards), shard_dim),
             tensor_name=f"multi_stage_state_shard",
             dtype=stage_shard_dtype,
         )
         self._full_shards_meta = TensorMeta.from_dims(
-            (TensorDim("shards", self._num_shards), shard_dim),
+            (TensorDim("shards", self.num_shards), shard_dim),
             tensor_name=f"multi_stage_state_shard",
             dtype=stage_shard_dtype,
         )
@@ -227,7 +228,7 @@ class MultiStageModel:
             allocated += (mem := num_shards * self._full_shards_meta.memory_usage // self._full_shards_meta.size(0))
             if self._verbose:
                 log_model_parallel_main_rank(
-                    f">>> Allocating {self._num_shards} x {len(self._stage_shard_sizes)}"
+                    f">>> Allocating {self.num_shards} x {len(self._stage_shard_sizes)}"
                     f" shards ({mem / 2 ** 20:,.2f} MiB)"
                 )
             shards = torch.empty_like(self._full_shards_meta[:num_shards], device=self._distributed.device)
@@ -312,6 +313,10 @@ class MultiStageModel:
         return param_groups, grads_for_norm
 
     @property
+    def state_shard_meta(self):
+        return self._state_shard_meta
+
+    @property
     def support_forward(self):
         assert self._is_setup
         return self._mode.support_forward and self._stage_filter is None
@@ -335,8 +340,36 @@ class MultiStageModel:
         return self._stages
 
     @property
+    def state_shard(self):
+        return self._state_shard
+
+    @property
+    def num_shards(self):
+        return len(self._state_shard_names) + 1
+
+    @property
+    def num_state_shards(self):
+        return len(self._state_shard_names)
+
+    @property
+    def stages_on_device(self):
+        return self._stages_on_device
+
+    @property
+    def fast_llm_config(self):
+        return self._fast_llm_config
+
+    @property
+    def base_model_config(self):
+        return self._base_model_config
+
+    @property
     def multi_stage_config(self):
         return self._multi_stage_config
+
+    @property
+    def distributed_config(self):
+        return self._distributed_config
 
     @property
     def tied_parameters(self):
@@ -349,6 +382,28 @@ class MultiStageModel:
     @property
     def grad_buffer_indices(self):
         return self._grad_buffer_indices
+
+    @property
+    def state_shard_names(self):
+        return self._state_shard_names
+
+    @property
+    def stage_shard_sizes(self):
+        return self._stage_shard_sizes
+
+    @property
+    def parameter_names(self):
+        return list(self._parameter_stages)
+
+    def get_parameter_stage(self, parameter_name: str):
+        return self._stages[self._parameter_stages[parameter_name]]
+
+    def is_parameter_on_device(self, parameter_name: str):
+        return self._parameter_stages[parameter_name] in self._stages_on_device
+
+    @property
+    def distributed(self):
+        return self._distributed
 
     def invalidate_buffers(self):
         for stage in self._stages_on_device.values():
@@ -366,6 +421,20 @@ class MultiStageModel:
             for stage, shard in zip(self._stages_on_device.values(), shard_split):
                 for name, tensor in stage._export_shard(shard, data_type=data_type):  # noqa
                     yield name, shard_name, tensor
+
+    def import_state_tensor(self, parameter_name: str, shard_name: str, tensor: torch.Tensor | SafeTensorSlice):
+        """
+        Given a global parameter tensor, set the associated slice of a local parameter shard.
+        Return the size of the local slice.
+        """
+        if not self.is_parameter_on_device(parameter_name):
+            # Parameter is not on device, nothing to do.
+            return 0
+        stage_index = self._stage_shard_indices[self._parameter_stages[parameter_name]]
+        stage_shard = self._state_shard[self._state_shard_names.index(shard_name)].split(self._stage_shard_sizes, 0)[
+            stage_index
+        ]
+        return self.get_parameter_stage(parameter_name).import_state_tensor(parameter_name, stage_shard, tensor)
 
     def _split_into_stages(self):
         # Create stages (greedy split, could do better).

@@ -9,7 +9,14 @@ import safetensors
 import torch
 
 from fast_llm.engine.base_model.config import BaseModelArchitectureConfig, BaseModelConfig
+from fast_llm.engine.checkpoint.config import (
+    CHECKPOINT_VERSION,
+    CheckpointLoadConfig,
+    CheckpointLoadMetadataConfig,
+    CheckpointSaveConfig,
+)
 from fast_llm.engine.checkpoint.state_dict import StateDictConverter
+from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
 from fast_llm.tensor import SafeTensorSlice
 from fast_llm.utils import Assert
 
@@ -139,13 +146,12 @@ class SplitWeightConverter(WeightConverter):
 
 
 class ExternalStateDictConverter(StateDictConverter):
-    base_file_name = "model"
     _base_model_cls: type[BaseModelConfig]
     _config_converters: list[ParamConverter]
 
-    def __init__(self, config: BaseModelArchitectureConfig):
-        self.config = config
-        Assert.custom(isinstance, config, self._base_model_cls.architecture_cls)
+    def __init__(self, model: "FastLLMModel"):
+        super().__init__(model)
+        Assert.custom(isinstance, self._model.base_model_config, self._base_model_cls.architecture_cls)
         weight_converters = self._create_weight_converters()
         self._export_converters = {
             weight_converter.fast_llm_name[0]: weight_converter
@@ -166,17 +172,7 @@ class ExternalStateDictConverter(StateDictConverter):
         pass
 
     @classmethod
-    @abc.abstractmethod
-    def load_config(cls, directory: pathlib.Path | str) -> dict[str, typing.Any]:
-        pass
-
-    @classmethod
-    @abc.abstractmethod
-    def save_config(cls, directory: pathlib.Path | str, config: dict[str, typing.Any]):
-        pass
-
-    @classmethod
-    def export_config(cls, config: BaseModelArchitectureConfig) -> dict[str, typing.Any]:
+    def _export_config(cls, config: BaseModelArchitectureConfig) -> dict[str, typing.Any]:
         exported_config = {}
         for converter in cls._get_config_converters():
             value = converter.export_param(
@@ -190,7 +186,7 @@ class ExternalStateDictConverter(StateDictConverter):
         return exported_config  # Noqa
 
     @classmethod
-    def import_config(cls, config: dict[str, typing.Any], architecture_only: bool = False):  # noqa
+    def _import_config(cls, config: dict[str, typing.Any], architecture_only: bool = False):  # noqa
         kwargs = {}
         for converter in cls._get_config_converters():
             value = converter.import_param(
@@ -204,11 +200,7 @@ class ExternalStateDictConverter(StateDictConverter):
         config_class = cls._base_model_cls.architecture_cls if architecture_only else cls._base_model_cls
         return config_class.from_dict({}, kwargs)
 
-    @classmethod
-    def from_config(cls, config: dict[str, typing.Any], architecture_only: bool = False):
-        return cls(cls.import_config(config, architecture_only=architecture_only))
-
-    def convert_state_dict(
+    def _convert_state_dict(
         self, state_dict: dict[str, torch.Tensor | SafeTensorSlice], export: bool
     ) -> dict[str, torch.Tensor | SafeTensorSlice]:
         out_state_dict = {}
@@ -262,19 +254,56 @@ class AutoStateDictConverter(ExternalStateDictConverter, abc.ABC):
     converter_map: dict[str, type[ExternalStateDictConverter]]
 
     @classmethod
-    def import_config(cls, config: dict[str, typing.Any], architecture_only: bool = False):
-        return cls.converter_map[config["model_type"]].import_config(config, architecture_only)
+    def get_converter_class(cls, format: str):
+        if format in cls.converter_map:
+            return cls.converter_map[format]
+        elif format == "auto":
+            return cls
+        else:
+            raise NotImplementedError(format)
+
+    # TODO: load_metadata???
 
     @classmethod
-    def from_config(cls, config: dict[str, typing.Any], architecture_only: bool = False):
-        return cls.converter_map[config["model_type"]].from_config(config, architecture_only)
+    def _import_config(cls, config: dict[str, typing.Any], architecture_only: bool = False):
+        # TODO: ???
+        return cls.converter_map[config["model_type"]]._import_config(config, architecture_only)
 
 
 class HuggingfaceStateDictConverter(ExternalStateDictConverter, abc.ABC):
     model_type: str | None = None
+    base_file_name = "model"
 
     @classmethod
-    def get_key(cls, parameter_name: str, shard_name: str) -> str:
+    def load_metadata(cls, config: CheckpointLoadMetadataConfig):
+        imported_model_config = cls._import_config(cls._load_config(config.path), True)
+        return {
+            # TODO: Avoid `to_serialized`?
+            "fast_llm_config": {"base_model": imported_model_config.to_serialized()},
+            # TODO: Handle "auto"?
+            "checkpoint_type": config.format,
+            "checkpoint_version": CHECKPOINT_VERSION,
+        }
+
+    def save(self, config: CheckpointSaveConfig, metadata: dict):
+        huggingface_config = self._export_config(self._model.base_model_config)
+        self._save_config(config.path, huggingface_config)
+        metadata = {
+            "fast_llm_metadata": metadata,
+            "model_config": huggingface_config,
+            "format": "pt",
+        }
+        super().save(config, metadata)
+
+    def load(self, config: CheckpointLoadConfig, metadata: dict):
+        assert not config.optimizer_state
+        self._model.base_model_config.compare_architecture(
+            self._base_model_cls.from_dict(metadata["fast_llm_config"]["base_model"]), config.compare_log_fn
+        )
+        super().load(config, metadata)
+
+    @classmethod
+    def _get_key(cls, parameter_name: str, shard_name: str) -> str:
         Assert.eq(shard_name, "weights")
         return parameter_name
 
@@ -284,7 +313,7 @@ class HuggingfaceStateDictConverter(ExternalStateDictConverter, abc.ABC):
         return [ConstantExportParamConverter(None, "model_type", cls.model_type)]
 
     @classmethod
-    def load_config(cls, directory: pathlib.Path | str):
+    def _load_config(cls, directory: pathlib.Path | str):
         import transformers
 
         config = transformers.AutoConfig.from_pretrained(directory).to_dict()
@@ -293,12 +322,12 @@ class HuggingfaceStateDictConverter(ExternalStateDictConverter, abc.ABC):
         return config
 
     @classmethod
-    def save_config(cls, directory: pathlib.Path | str, config: dict[str, typing.Any]):
+    def _save_config(cls, directory: pathlib.Path | str, config: dict[str, typing.Any]):
         import transformers
 
         transformers.CONFIG_MAPPING[config["model_type"]].from_dict(config).save_pretrained(directory)
 
-    def load_weights(
+    def _load_weights(
         self,
         directory: pathlib.Path | str,
         device,

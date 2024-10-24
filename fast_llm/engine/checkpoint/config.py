@@ -1,13 +1,19 @@
 # TODO: Use packaging.version? (Safer but extra requirement)
+import abc
 import enum
 import logging
 import pathlib
 import typing
 import warnings
 
+import yaml
+
 from fast_llm.config import Config, Field, FieldHint, check_field, config_class
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.utils import Assert
+
+if typing.TYPE_CHECKING:
+    from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
 
 logger = logging.getLogger(__name__)
 
@@ -16,13 +22,29 @@ CHECKPOINT_VERSION = "0.1"
 KNOWN_CHECKPOINT_VERSIONS = ("0", "0.1")
 
 
-class CheckpointFormat(str, enum.Enum):
+def export_safetensors_metadata(metadata):
+    """
+    Safetensor only accepts string entries, so we convert to string explicitly.
+    We use yaml rather than json because json requires explicit quotation marks on strings, which breaks things.
+    (ex. "format": "pt" becomes '"pt"' which breaks huggingface models.)
+    We avoid using safe_dump for scalars because it adds junk ("\n...\n") at the end of the string
+    (decoding is unaffected.)
+    """
+    return {
+        key: str(value) if isinstance(value, (str, int, float, bool)) else yaml.safe_dump(value)
+        for key, value in metadata.items()
+    }
+
+
+def import_safetensors_metadata(metadata):
+    return {key: yaml.safe_load(value) for key, value in metadata.items()}
+
+
+class CheckpointFormat(str):
     # Distributed checkpoint for fast checkpointing and resuming.
     distributed = "distributed"
     # Model state dict, for safe long-term storage in Fast-LLM format.
     state_dict = "state_dict"
-    # A checkpoint format external to Fast-LLM.
-    external = "external"
 
 
 class ModelConfigType(str, enum.Enum):
@@ -57,15 +79,10 @@ class CheckpointPathConfigBase(Config):
 @config_class()
 class CheckpointConfigBase(Config):
     _abstract = True
-    format: CheckpointFormat = Field(
+    format: str = Field(
         default=CheckpointFormat.distributed,
         desc="Format of the checkpoint.",
         hint=FieldHint.core,
-    )
-    model_type: str | None = Field(
-        default=None,
-        desc="Model type for external models (ex. Huggingace model name).",
-        hint=FieldHint.feature,
     )
 
     @classmethod
@@ -76,10 +93,17 @@ class CheckpointConfigBase(Config):
         flat: bool = False,
     ):
         # TODO v0.2: Remove.
-        if default.get("format", None) == "huggingface":
-            warnings.warn(f"`huggingface` checkpoint format has been renamed to `external`.")
-            default["format"] = CheckpointFormat.external.value
         cls._handle_renamed_field(default, "imported_type", "model_type")
+        if "model_type" in default:
+            warnings.warn(
+                "`CheckpointConfigBase.model_type` is deprecated."
+                " Instead, use the model name directly as the checkpoint format."
+            )
+            if default.get("format", None) in ("huggingface", "external"):
+                default["format"] = default.get("model_type")
+                if default["format"] is None:
+                    default["format"] = "auto"
+            del default["model_type"]
         return super()._from_dict(default, strict, flat)
 
 
@@ -151,8 +175,24 @@ class CheckpointLoadMetadataConfig(CheckpointPathConfigBase, CheckpointConfigBas
 class CheckpointLoadConfig(CheckpointLoadMetadataConfig, CheckpointStateConfigBase):
     _abstract = False
 
-    def _validate(self):
-        super()._validate()
-        if self.format == CheckpointFormat.external:
-            # TODO: Support optimizer?
-            assert not self.optimizer_state
+
+class Converter(abc.ABC):
+    # TODO: Rename? (Checkpointer? Saver?)
+
+    def __init__(self, model: "FastLLMModel"):
+        self._model = model
+
+    # TODO: save_metadata?
+
+    @classmethod
+    @abc.abstractmethod
+    def load_metadata(cls, config: CheckpointLoadMetadataConfig):
+        pass
+
+    @abc.abstractmethod
+    def save(self, config: CheckpointSaveConfig, metadata: dict):
+        pass
+
+    @abc.abstractmethod
+    def load(self, config: CheckpointLoadConfig, metadata: dict):
+        pass
