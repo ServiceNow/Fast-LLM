@@ -10,10 +10,10 @@ import torch
 
 from fast_llm.core.distributed import safe_barrier
 from fast_llm.engine.checkpoint.config import (
+    CheckpointHandler,
     CheckpointLoadConfig,
     CheckpointLoadMetadataConfig,
     CheckpointSaveConfig,
-    Converter,
     export_safetensors_metadata,
     import_safetensors_metadata,
 )
@@ -25,7 +25,7 @@ from fast_llm.utils import Assert
 logger = logging.getLogger(__name__)
 
 
-class StateDictConverter(Converter):
+class StateDictCheckpointHandler(CheckpointHandler):
     base_file_name: typing.ClassVar[str]
 
     def save(self, config: CheckpointSaveConfig, metadata: dict):
@@ -101,7 +101,7 @@ class StateDictConverter(Converter):
         pass
 
 
-class TrivialConverter(StateDictConverter):
+class TrivialConverter(StateDictCheckpointHandler):
     base_file_name = "state_dict"
 
     @classmethod

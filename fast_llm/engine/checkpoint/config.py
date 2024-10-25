@@ -13,6 +13,7 @@ from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
+    from fast_llm.engine.multi_stage.config import CheckpointMetadata
     from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
 
 logger = logging.getLogger(__name__)
@@ -80,7 +81,7 @@ class CheckpointPathConfigBase(Config):
 class CheckpointConfigBase(Config):
     _abstract = True
     format: str = Field(
-        default=CheckpointFormat.distributed,
+        default=CheckpointFormat.state_dict,
         desc="Format of the checkpoint.",
         hint=FieldHint.core,
     )
@@ -176,9 +177,7 @@ class CheckpointLoadConfig(CheckpointLoadMetadataConfig, CheckpointStateConfigBa
     _abstract = False
 
 
-class Converter(abc.ABC):
-    # TODO: Rename? (Checkpointer? Saver?)
-
+class CheckpointHandler(abc.ABC):
     def __init__(self, model: "FastLLMModel"):
         self._model = model
 
@@ -186,13 +185,13 @@ class Converter(abc.ABC):
 
     @classmethod
     @abc.abstractmethod
-    def load_metadata(cls, config: CheckpointLoadMetadataConfig):
+    def load_metadata(cls, config: CheckpointLoadMetadataConfig) -> "CheckpointMetadata":
         pass
 
     @abc.abstractmethod
-    def save(self, config: CheckpointSaveConfig, metadata: dict):
+    def save(self, config: CheckpointSaveConfig, metadata: "CheckpointMetadata"):
         pass
 
     @abc.abstractmethod
-    def load(self, config: CheckpointLoadConfig, metadata: dict):
+    def load(self, config: CheckpointLoadConfig, metadata: "CheckpointMetadata"):
         pass

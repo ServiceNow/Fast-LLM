@@ -2,14 +2,16 @@ import enum
 import logging
 import typing
 
+import packaging.version
+
 from fast_llm.config import Config, Field, FieldHint, NoAutoValidate, check_field, config_class, skip_valid_if_none
 from fast_llm.engine.base_model.config import BaseModelConfig
 from fast_llm.engine.checkpoint.config import (
     KNOWN_CHECKPOINT_VERSIONS,
     CheckpointFormat,
+    CheckpointHandler,
     CheckpointLoadConfig,
     CheckpointLoadMetadataConfig,
-    Converter,
 )
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.utils import Assert
@@ -182,6 +184,7 @@ SHARD_PAD_TO_MULTIPLE = 32
 @config_class()
 class FastLLMModelConfig(Config):
     _abstract = True
+    model_name: typing.ClassVar[str]
     base_model: BaseModelConfig = Field(
         default_factory=BaseModelConfig, desc="Configuration for the base model.", hint=FieldHint.core
     )
@@ -199,11 +202,11 @@ class FastLLMModelConfig(Config):
         return CheckpointFormat.distributed, CheckpointFormat.state_dict
 
     @classmethod
-    def get_converter_class(cls, format: str) -> type["Converter"]:
+    def get_converter_class(cls, format: str) -> type["CheckpointHandler"]:
         if format == CheckpointFormat.distributed:
-            from fast_llm.engine.checkpoint.distributed import DistributedConverter
+            from fast_llm.engine.checkpoint.distributed import DistributedCheckpointHandler
 
-            return DistributedConverter
+            return DistributedCheckpointHandler
         elif format == CheckpointFormat.state_dict:
             from fast_llm.engine.checkpoint.state_dict import TrivialConverter
 
@@ -239,12 +242,12 @@ class FastLLMModelConfig(Config):
     def from_metadata(
         cls,
         pretrained: CheckpointLoadMetadataConfig,
-        metadata: dict,
+        metadata: "CheckpointMetadata",
         default: "FastLLMModelConfig" = None,
         updates: dict[str | tuple[str, ...], typing.Any] | None = None,
     ):
-        # TODO v0.2: Make checkpoint type mandatory
         # TODO: Standardize to *updates?
+        cls.get_supported_checkpoint_formats()
         if "checkpoint_type" in metadata:
             # TODO python 3.12: Assert.incl(metadata["checkpoint_type"], CheckpointType)
             CheckpointFormat(metadata["checkpoint_type"])
@@ -376,3 +379,45 @@ class PretrainedFastLLMModelConfig(Config):
         self._distributed = self.model.distributed
         self._multi_stage = self.model.multi_stage
         self._base_model = self.model.base_model
+
+
+@config_class
+class CheckpointMetadata(Config):
+    fast_llm_version: packaging.version.Version
+    model: str
+    format: str
+    config: FastLLMModelConfig
+    shard_names: list[str]
+    metadata: dict
+
+    def _validate(self):
+        if isinstance(self.fast_llm_version, str):
+            self.fast_llm_version = packaging.version.Version(self.fast_llm_version)
+
+        super()._validate()
+        from fast_llm.models.auto import model_registry
+
+        Assert.incl(self.model, model_registry)
+        Assert.incl(self.format, model_registry[self.model].get_supported_checkpoint_formats())
+
+    @classmethod
+    def _from_dict(
+        cls,
+        default: dict[str, typing.Any],
+        strict: bool = True,
+        flat: bool = False,
+    ):
+        # TODO v0.2: Remove.
+        cls._handle_renamed_field(default, "checkpoint_type", "format")
+        cls._handle_renamed_field(default, "checkpoint_version", "fast_llm_version")
+        cls._handle_renamed_field(default, "fast_llm_config", "config")
+        cls._handle_renamed_field(default, "state_shard_names", "shard_names")
+        config = default.get("config", {})
+        if not isinstance(config, FastLLMModelConfig):
+            # Instantiate the appropriate config class
+            Assert.incl("model", config)
+            from fast_llm.models.auto import model_registry
+
+            Assert.incl(config["model"], model_registry)
+            default["config"] = model_registry[config["model"]](config)
+        return super()._from_dict(default, strict, flat)

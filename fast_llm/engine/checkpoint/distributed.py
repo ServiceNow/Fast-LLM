@@ -5,41 +5,43 @@ import torch
 import yaml
 
 from fast_llm.engine.checkpoint.config import (
+    CheckpointHandler,
     CheckpointLoadConfig,
     CheckpointLoadMetadataConfig,
     CheckpointSaveConfig,
-    Converter,
     ModelConfigType,
     export_safetensors_metadata,
 )
 from fast_llm.engine.checkpoint.safe_load import SafeLoad
+from fast_llm.engine.multi_stage.config import CheckpointMetadata
 from fast_llm.utils import Assert
 
 logger = logging.getLogger(__name__)
 
 
-class DistributedConverter(Converter):
+class DistributedCheckpointHandler(CheckpointHandler):
 
     @classmethod
     def load_metadata(cls, config: CheckpointLoadMetadataConfig):
-        return yaml.safe_load((config.path / "metadata.yaml").open("r"))
+        return CheckpointMetadata.from_dict(yaml.safe_load((config.path / "metadata.yaml").open("r")))
 
-    def save(self, config: CheckpointSaveConfig, metadata: dict):
+    def save(self, config: CheckpointSaveConfig, metadata: CheckpointMetadata):
+        serialized_metadata = metadata.to_serialized()
         if self._model.distributed_config.rank == 0:
-            yaml.safe_dump(metadata, (config.path / "metadata.yaml").open("w"))
+            yaml.safe_dump(metadata.to_serialized(), (config.path / "metadata.yaml").open("w"))
         num_shards = len(self._model.state_shard_names) if config.optimizer_state else 1
         safetensors.torch.save_file(
             tensors={"state_shard": self._model.state_shard[:num_shards]},
             filename=config.path / f"rank_{self._model.distributed_config.rank}.safetensors",
-            metadata=export_safetensors_metadata(metadata),
+            metadata=export_safetensors_metadata(serialized_metadata),
         )
 
-    def load(self, config: CheckpointLoadConfig, metadata: dict):
+    def load(self, config: CheckpointLoadConfig, metadata: CheckpointMetadata):
         # TODO: More safety checks
         loaded_config_dict = config.to_copy({"load_config": ModelConfigType.fast_llm})
         loaded_config = self._model.config_class.from_metadata(loaded_config_dict, metadata)
         num_shards = self._model.num_state_shards if config.optimizer_state else 1
-        Assert.eq(metadata["state_shard_names"][:num_shards], list(self._model.state_shard_names[:num_shards]))
+        Assert.eq(metadata.shard_names[:num_shards], list(self._model.state_shard_names[:num_shards]))
 
         if (
             loaded_config.to_serialized(verbose=None) == self._model.fast_llm_config.to_serialized(verbose=None)

@@ -15,7 +15,7 @@ from fast_llm.engine.checkpoint.config import (
     CheckpointLoadMetadataConfig,
     CheckpointSaveConfig,
 )
-from fast_llm.engine.checkpoint.state_dict import StateDictConverter
+from fast_llm.engine.checkpoint.state_dict import StateDictCheckpointHandler
 from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
 from fast_llm.tensor import SafeTensorSlice
 from fast_llm.utils import Assert
@@ -145,7 +145,7 @@ class SplitWeightConverter(WeightConverter):
         return (torch.cat([weight_[:] for weight_ in weight]),)
 
 
-class ExternalStateDictConverter(StateDictConverter):
+class ExternalStateDictCheckpointHandler(StateDictCheckpointHandler):
     _base_model_cls: type[BaseModelConfig]
     _config_converters: list[ParamConverter]
 
@@ -250,8 +250,8 @@ class ExternalStateDictConverter(StateDictConverter):
         return val
 
 
-class AutoStateDictConverter(ExternalStateDictConverter, abc.ABC):
-    converter_map: dict[str, type[ExternalStateDictConverter]]
+class AutoStateDictCheckpointHandler(ExternalStateDictCheckpointHandler, abc.ABC):
+    converter_map: dict[str, type[ExternalStateDictCheckpointHandler]]
 
     @classmethod
     def get_converter_class(cls, format: str):
@@ -270,7 +270,7 @@ class AutoStateDictConverter(ExternalStateDictConverter, abc.ABC):
         return cls.converter_map[config["model_type"]]._import_config(config, architecture_only)
 
 
-class HuggingfaceStateDictConverter(ExternalStateDictConverter, abc.ABC):
+class HuggingfaceStateDictCheckpointHandler(ExternalStateDictCheckpointHandler, abc.ABC):
     model_type: str | None = None
     base_file_name = "model"
 

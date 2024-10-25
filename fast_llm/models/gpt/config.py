@@ -2,7 +2,7 @@ import typing
 
 from fast_llm.config import Field, FieldHint, FieldUpdate, config_class
 from fast_llm.data.config import DataConfig
-from fast_llm.engine.checkpoint.config import Converter
+from fast_llm.engine.checkpoint.config import CheckpointHandler
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig, PretrainedFastLLMModelConfig
 from fast_llm.engine.training.config import TrainerConfig
 from fast_llm.layers.language_model.config import LanguageModelArchitectureConfig, LanguageModelBaseConfig
@@ -72,6 +72,7 @@ class GPTBaseModelConfig(LanguageModelBaseConfig, GPTArchitectureConfig):
 @config_class()
 class GPTModelConfig(FastLLMModelConfig):
     _abstract = False
+    model_name: typing.ClassVar[str] = "gpt"
     base_model: GPTBaseModelConfig = FieldUpdate(default_factory=GPTBaseModelConfig)
 
     @classmethod
@@ -93,13 +94,13 @@ class GPTModelConfig(FastLLMModelConfig):
         )
 
     @classmethod
-    def get_converter_class(cls, format: str) -> type["Converter"]:
+    def get_converter_class(cls, format: str) -> type["CheckpointHandler"]:
         try:
             return super().get_converter_class(format)
         except NotImplementedError:
-            from fast_llm.models.gpt.conversion import AutoGPTConverter
+            from fast_llm.models.gpt.conversion import AutoGPTHuggingfaceCheckpointHandler
 
-            return AutoGPTConverter.get_converter_class(format)
+            return AutoGPTHuggingfaceCheckpointHandler.get_converter_class(format)
 
 
 @config_class()
