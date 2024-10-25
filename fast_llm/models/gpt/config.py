@@ -2,13 +2,26 @@ import typing
 
 from fast_llm.config import Field, FieldHint, FieldUpdate, config_class
 from fast_llm.data.config import DataConfig
+from fast_llm.engine.checkpoint.config import Converter
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig, PretrainedFastLLMModelConfig
 from fast_llm.engine.training.config import TrainerConfig
 from fast_llm.layers.language_model.config import LanguageModelArchitectureConfig, LanguageModelBaseConfig
 from fast_llm.models.gpt.megatron import set_megatron_distributed_seeds
 
 if typing.TYPE_CHECKING:
-    from fast_llm.engine.checkpoint.external import ExternalStateDictConverter
+    pass
+
+
+class HuggingfaceModelType:
+    """
+    An enum for the huggingface models with conversion support.
+    """
+
+    auto = "auto"
+    starcoder2 = "starcoder2"
+    llama = "llama"
+    mistral = "mistral"
+    mixtral = "mixtral"
 
 
 @config_class()
@@ -26,12 +39,6 @@ class GPTArchitectureConfig(LanguageModelArchitectureConfig):
         if "transposed_mlp_weight" in default:
             assert default.pop("transposed_mlp_weight")
         return super()._from_dict(default, strict, flat)
-
-    @classmethod
-    def get_converter_class(cls, model_type: str | None = None) -> type["ExternalStateDictConverter"]:
-        from fast_llm.models.gpt.conversion import AutoGPTConverter
-
-        return AutoGPTConverter if model_type is None else AutoGPTConverter.converter_map[model_type]
 
 
 @config_class()
@@ -79,6 +86,21 @@ class GPTModelConfig(FastLLMModelConfig):
 
         return HuggingfaceGPTModelForCausalLM
 
+    @classmethod
+    def get_supported_checkpoint_formats(cls):
+        return super().get_supported_checkpoint_formats() + tuple(
+            name for name in HuggingfaceModelType.__dict__ if not name.startswith("_")
+        )
+
+    @classmethod
+    def get_converter_class(cls, format: str) -> type["Converter"]:
+        try:
+            return super().get_converter_class(format)
+        except NotImplementedError:
+            from fast_llm.models.gpt.conversion import AutoGPTConverter
+
+            return AutoGPTConverter.get_converter_class(format)
+
 
 @config_class()
 class PretrainedGPTModelConfig(PretrainedFastLLMModelConfig):
@@ -104,14 +126,3 @@ class GPTTrainerConfig(PretrainedGPTModelConfig, TrainerConfig):
         from fast_llm.models.gpt.trainer import GPTTrainer
 
         return GPTTrainer
-
-
-class HuggingfaceModelType:
-    """
-    An enum for the huggingface models with conversion support.
-    """
-
-    starcoder2 = "starcoder2"
-    llama = "llama"
-    mistral = "mistral"
-    mixtral = "mixtral"

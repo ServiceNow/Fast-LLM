@@ -7,7 +7,7 @@ import shutil
 import subprocess
 
 from fast_llm.config import Field, config_class
-from fast_llm.engine.checkpoint.config import CheckpointFormat
+from fast_llm.engine.checkpoint.config import CheckpointFormat, CheckpointLoadConfig, CheckpointSaveConfig
 from fast_llm.engine.config_utils.runnable import RunnableConfig
 
 try:
@@ -148,11 +148,14 @@ class PushConfig(RunnableConfig):
                 checkpoint_path_hf = checkpoint_path.with_name(checkpoint_path.name + "_hf")
                 # Block until the conversion is done
                 ConversionConfig(
-                    input_type=CheckpointFormat.distributed,
-                    output_type=CheckpointFormat.external,
-                    input_path=checkpoint_path,
-                    output_path=checkpoint_path_hf,
-                    model_type=self.model_type,
+                    input=CheckpointLoadConfig(
+                        path=checkpoint_path,
+                        format=CheckpointFormat.distributed,
+                    ),
+                    output=CheckpointSaveConfig(
+                        path=checkpoint_path_hf,
+                        format=self.model_type,
+                    ),
                     use_cpu=self.use_cpu,
                     exist_ok=False,  # skip if already processed
                     layers_per_step=(

@@ -7,7 +7,12 @@ import torch
 import transformers
 import yaml
 
-from fast_llm.engine.checkpoint.config import CheckpointFormat, CheckpointLoadConfig, ModelConfigType
+from fast_llm.engine.checkpoint.config import (
+    CheckpointFormat,
+    CheckpointLoadConfig,
+    CheckpointSaveConfig,
+    ModelConfigType,
+)
 from fast_llm.engine.multi_stage.config import StageMode
 from fast_llm.models.auto import model_registry
 from fast_llm.tools.convert import ConversionConfig
@@ -75,11 +80,11 @@ def test_resume():
 
 
 def _run_conversion(config: ConversionConfig):
-    if config.output_path.is_dir() and not REUSE_RESULTS:
-        shutil.rmtree(config.output_path)
-    if not config.output_path.is_dir():
+    if config.output.path.is_dir() and not REUSE_RESULTS:
+        shutil.rmtree(config.output.path)
+    if not config.output.path.is_dir():
         if FORCE_REUSE_RESULTS:
-            raise RuntimeError(config.output_path)
+            raise RuntimeError(config.output.path)
         config.run(TEST_MODEL_CONFIG_CLS)
 
 
@@ -91,10 +96,14 @@ _CONVERT_PATH = TEST_RESULTS_PATH / f"test_{TEST_MODEL}_convert_model"
 def test_convert_distributed_to_state_dict():
     _run_conversion(
         ConversionConfig(
-            input_type=CheckpointFormat.distributed,
-            input_path=_CKPT_PATH,
-            output_type=CheckpointFormat.state_dict,
-            output_path=_CONVERT_PATH / "state_dict_0",
+            input=CheckpointLoadConfig(
+                path=_CKPT_PATH,
+                format=CheckpointFormat.distributed,
+            ),
+            output=CheckpointSaveConfig(
+                path=_CONVERT_PATH / "state_dict_0",
+                format=CheckpointFormat.state_dict,
+            ),
         )
     )
 
@@ -105,11 +114,14 @@ def test_convert_state_dict_to_huggingface():
         pytest.skip(f"Conversion not supported for {TEST_MODEL}")
     _run_conversion(
         ConversionConfig(
-            input_type=CheckpointFormat.state_dict,
-            input_path=_CONVERT_PATH / "state_dict_0",
-            output_type=CheckpointFormat.external,
-            output_path=_CONVERT_PATH / "huggingface_0",
-            model_type=HUGGINGFACE_MODEL_TYPE,
+            input=CheckpointLoadConfig(
+                path=_CONVERT_PATH / "state_dict_0",
+                format=CheckpointFormat.state_dict,
+            ),
+            output=CheckpointSaveConfig(
+                path=_CONVERT_PATH / "huggingface_0",
+                format=HUGGINGFACE_MODEL_TYPE,
+            ),
         )
     )
 
@@ -118,10 +130,14 @@ def test_convert_state_dict_to_huggingface():
 def test_convert_huggingface_to_distributed():
     _run_conversion(
         ConversionConfig(
-            input_type=CheckpointFormat.external,
-            input_path=_CONVERT_PATH / "huggingface_0",
-            output_type=CheckpointFormat.distributed,
-            output_path=_CONVERT_PATH / "distributed_0",
+            input=CheckpointLoadConfig(
+                path=_CONVERT_PATH / "huggingface_0",
+                format=HUGGINGFACE_MODEL_TYPE,
+            ),
+            output=CheckpointSaveConfig(
+                path=_CONVERT_PATH / "distributed_0",
+                format=CheckpointFormat.distributed,
+            ),
         )
     )
 
@@ -132,11 +148,14 @@ def test_convert_distributed_to_huggingface():
         pytest.skip(f"Conversion not supported for {TEST_MODEL}")
     _run_conversion(
         ConversionConfig(
-            input_type=CheckpointFormat.distributed,
-            input_path=_CKPT_PATH,
-            output_type=CheckpointFormat.external,
-            output_path=_CONVERT_PATH / "huggingface_1",
-            model_type=HUGGINGFACE_MODEL_TYPE,
+            input=CheckpointLoadConfig(
+                path=_CKPT_PATH,
+                format=CheckpointFormat.distributed,
+            ),
+            output=CheckpointSaveConfig(
+                path=_CONVERT_PATH / "huggingface_1",
+                format=HUGGINGFACE_MODEL_TYPE,
+            ),
         )
     )
 
@@ -145,10 +164,14 @@ def test_convert_distributed_to_huggingface():
 def test_convert_huggingface_to_state_dict():
     _run_conversion(
         ConversionConfig(
-            input_type=CheckpointFormat.external,
-            input_path=_CONVERT_PATH / "huggingface_1",
-            output_type=CheckpointFormat.state_dict,
-            output_path=_CONVERT_PATH / "state_dict_1",
+            input=CheckpointLoadConfig(
+                path=_CONVERT_PATH / "huggingface_1",
+                format=HUGGINGFACE_MODEL_TYPE,
+            ),
+            output=CheckpointSaveConfig(
+                path=_CONVERT_PATH / "state_dict_1",
+                format=CheckpointFormat.state_dict,
+            ),
         )
     )
 
@@ -157,10 +180,14 @@ def test_convert_huggingface_to_state_dict():
 def test_convert_state_dict_to_distributed():
     _run_conversion(
         ConversionConfig(
-            input_type=CheckpointFormat.state_dict,
-            input_path=_CONVERT_PATH / "state_dict_1",
-            output_type=CheckpointFormat.distributed,
-            output_path=_CONVERT_PATH / "distributed_1",
+            input=CheckpointLoadConfig(
+                path=_CONVERT_PATH / "state_dict_1",
+                format=CheckpointFormat.state_dict,
+            ),
+            output=CheckpointSaveConfig(
+                path=_CONVERT_PATH / "distributed_1",
+                format=CheckpointFormat.distributed,
+            ),
         )
     )
 
@@ -269,11 +296,11 @@ def test_load_converted_huggingface_checkpoint():
     )
     pretrained_config_0 = CheckpointLoadConfig(
         path=_CONVERT_PATH / "huggingface_0",
-        format=CheckpointFormat.external,
+        format=HUGGINGFACE_MODEL_TYPE,
     )
     pretrained_config_1 = CheckpointLoadConfig(
         path=_CONVERT_PATH / "huggingface_1",
-        format=CheckpointFormat.external,
+        format=HUGGINGFACE_MODEL_TYPE,
     )
     config = TEST_MODEL_CONFIG_CLS.from_pretrained(pretrained_config_ref)
     model = TEST_MODEL_CLS.from_pretrained(pretrained_config_0, mode=StageMode.weights)
@@ -302,7 +329,7 @@ def test_run_converted_model():
     model_from_hf = TEST_MODEL_HF_CLS.from_pretrained(
         CheckpointLoadConfig(
             path=_CONVERT_PATH / "huggingface_0",
-            format=CheckpointFormat.external,
+            format=HUGGINGFACE_MODEL_TYPE,
         )
     )
     errors = []
@@ -467,7 +494,7 @@ def test_load_pretrained_huggingface_in_dp2():
             "training.checkpoint.interval=1",
             "training.train_iters=1",
             f"pretrained.path={_CONVERT_PATH / 'huggingface_0'}",
-            f"pretrained.format=external",
+            f"pretrained.format={HUGGINGFACE_MODEL_TYPE}",
             "schedule.skip_step=True",
         ],
         num_gpus=2,
