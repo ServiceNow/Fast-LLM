@@ -442,8 +442,11 @@ class StageBase:
                 shard[begin:end][overlap_mask] = loaded_shard[overlap_index_map_masked]
                 counter += overlap_count
 
-    def _import_state_tensor(self, shard: torch.Tensor, parameter_name: str, tensor: torch.Tensor | SafeTensorSlice):
-        # See FastLLMModel._import_state_tensor.
+    def import_state_tensor(self, parameter_name: str, shard: torch.Tensor, tensor: torch.Tensor | SafeTensorSlice):
+        """
+        Given a global parameter tensor, set the associated slice of a local parameter shard.
+        Return the size of the local slice.
+        """
         Assert.eq(shard.shape, (self._shard_size,))
         parameter_index = self._parameter_index[parameter_name]
         tensor_shard = self._parameter_global_to_shard(tensor, parameter_index)

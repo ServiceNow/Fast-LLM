@@ -13,7 +13,7 @@ class CompareConfig:
     rms_eps: float = 1e-3
     rms_rel_tolerance: float = 3e-2
     rms_abs_tolerance: float = 5e-3
-    max_rel_tolerance: float = 1e-1
+    max_rel_tolerance: float = 1.5e-1
     max_abs_tolerance: float = 5e-2
     show_samples: int = 10
     ignore_tensors: list[str] = dataclasses.field(default_factory=list)

@@ -22,15 +22,20 @@ def test_model_safe():
 @pytest.mark.depends(on=["test_model_safe"])
 def test_model():
     # A baseline config (single-gpu, bf16, flash-attn).
-    run_test_script(f"test_{TEST_MODEL}", CONFIG_COMMON, compare=f"test_{TEST_MODEL}_safe")
+    # Also tests for multiple data loaders.
+    run_test_script(
+        f"test_{TEST_MODEL}", CONFIG_COMMON + ["training.num_workers=2"], compare=f"test_{TEST_MODEL}_safe"
+    )
 
 
+@pytest.mark.slow
 @pytest.mark.depends(on=["test_model"])
 def test_model_dp2():
     # Simple data-parallel.
     run_test_script(f"test_{TEST_MODEL}_dp2", CONFIG_COMMON, num_gpus=2, compare=f"test_{TEST_MODEL}")
 
 
+@pytest.mark.slow
 @pytest.mark.depends(on=["test_model"])
 def test_model_tp2():
     # Simple tensor-parallel.
@@ -52,6 +57,7 @@ def test_model_ce4():
     )
 
 
+@pytest.mark.slow
 @pytest.mark.depends(on=["test_model"])
 def test_model_dp2_z2():
     # Data-parallel with zero stage 2.
@@ -63,6 +69,7 @@ def test_model_dp2_z2():
     )
 
 
+@pytest.mark.slow
 @pytest.mark.depends(on=["test_model"])
 def test_model_dp2_z3():
     # Data-parallel with zero stage 3.

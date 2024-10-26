@@ -21,6 +21,7 @@ from fast_llm.functional.rotary import convert_rotary_complex_to_real, convert_r
 from fast_llm.layers.common.config import NormalizationType
 from fast_llm.layers.transformer.config import RoutingType
 from fast_llm.models.gpt.config import GPTArchitectureConfig, GPTBaseModelConfig, HuggingfaceModelType
+from fast_llm.models.gpt.model import GPTModel
 from fast_llm.tensor import SafeTensorSlice
 
 if typing.TYPE_CHECKING:
@@ -90,7 +91,7 @@ class MLPLayer2Converter(WeightConverter):
 
 
 class CommonHuggingfaceConverter(HuggingfaceStateDictConverter):
-    config: GPTArchitectureConfig
+    _model: GPTModel
     _base_model_cls = GPTBaseModelConfig
     """
     Common converter for llama-based huggingface models (llama, starcoder2, mistral, mixtral)
@@ -125,12 +126,12 @@ class CommonHuggingfaceConverter(HuggingfaceStateDictConverter):
 
     def _create_weight_converters(self) -> list[WeightConverter]:
         converters = []
-        num_layers = self.config.transformer.num_layers
-        norm_bias: bool = self.config.transformer.normalization.type == NormalizationType.layer_norm
-        linear_bias: bool = self.config.transformer.add_linear_biases
+        num_layers = self._model.base_model_config.transformer.num_layers
+        norm_bias: bool = self._model.base_model_config.transformer.normalization.type == NormalizationType.layer_norm
+        linear_bias: bool = self._model.base_model_config.transformer.add_linear_biases
 
         # Embedding and output
-        if self.config.tie_word_embeddings:
+        if self._model.base_model_config.tie_word_embeddings:
             converters.append(WeightConverter("layers.0.word_embeddings_weight", "model.embed_tokens.weight"))
             converters.append(IgnoreWeightConverter((), "lm_head.weight"))
         else:
@@ -188,7 +189,7 @@ class CommonHuggingfaceConverter(HuggingfaceStateDictConverter):
             cls(
                 tuple(f"{prefix}.weight" for prefix in fast_llm_prefix),
                 tuple(f"{prefix}.weight" for prefix in hf_prefix),
-                self.config,
+                self._model.base_model_config,
             )
         ]
         if use_bias:
@@ -196,7 +197,7 @@ class CommonHuggingfaceConverter(HuggingfaceStateDictConverter):
                 cls(
                     tuple(f"{prefix}.bias" for prefix in fast_llm_prefix),
                     tuple(f"{prefix}.bias" for prefix in hf_prefix),
-                    self.config,
+                    self._model.base_model_config,
                 )
             )
         return converters
@@ -216,7 +217,7 @@ class Starcoder2HuggingfaceConverter(CommonHuggingfaceConverter):
         ]
 
     def _get_mlp_converters(self, fast_llm_prefix: str, hf_prefix: str):
-        linear_bias: bool = self.config.transformer.add_linear_biases
+        linear_bias: bool = self._model.base_model_config.transformer.add_linear_biases
         return [
             *self._get_weight_and_bias_converters(
                 f"{fast_llm_prefix}.mlp.layer_1", f"{hf_prefix}.mlp.c_fc", linear_bias
@@ -252,7 +253,7 @@ class LlamaHuggingfaceConverter(CommonLlamaHuggingfaceConverter):
         ]
 
     def _get_mlp_converters(self, fast_llm_prefix: str, hf_prefix: str):
-        linear_bias: bool = self.config.transformer.add_linear_biases
+        linear_bias: bool = self._model.base_model_config.transformer.add_linear_biases
         return [
             *self._get_weight_and_bias_converters(
                 f"{fast_llm_prefix}.mlp.layer_1",
@@ -286,7 +287,9 @@ class MistralHuggingfaceConverter(CommonLlamaHuggingfaceConverter):
                 (f"{hf_prefix}.mlp.gate_proj.weight", f"{hf_prefix}.mlp.up_proj.weight"),
             ),
             MLPLayer2Converter(
-                f"{fast_llm_prefix}.mlp.layer_2.weight", f"{hf_prefix}.mlp.down_proj.weight", self.config
+                f"{fast_llm_prefix}.mlp.layer_2.weight",
+                f"{hf_prefix}.mlp.down_proj.weight",
+                self._model.base_model_config,
             ),
         ]
 
@@ -305,7 +308,7 @@ class MixtralHuggingfaceConverter(CommonLlamaHuggingfaceConverter):
         ]
 
     def _get_mlp_converters(self, fast_llm_prefix: str, hf_prefix: str):
-        num_experts = self.config.transformer.num_experts
+        num_experts = self._model.base_model_config.transformer.num_experts
         return [
             WeightConverter(f"{fast_llm_prefix}.mlp.router.weight", f"{hf_prefix}.block_sparse_moe.gate.weight"),
             SplitWeightConverter(
@@ -319,12 +322,13 @@ class MixtralHuggingfaceConverter(CommonLlamaHuggingfaceConverter):
             MLPLayer2Converter(
                 f"{fast_llm_prefix}.mlp.layer_2.weight",
                 tuple(f"{hf_prefix}.block_sparse_moe.experts.{i}.w2.weight" for i in range(num_experts)),
-                self.config,
+                self._model.base_model_config,
             ),
         ]
 
 
 class AutoGPTConverter(AutoStateDictConverter, HuggingfaceStateDictConverter, abc.ABC):
+
     converter_map = {
         HuggingfaceModelType.starcoder2: Starcoder2HuggingfaceConverter,
         HuggingfaceModelType.llama: LlamaHuggingfaceConverter,
