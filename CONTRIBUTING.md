@@ -59,4 +59,4 @@ If you're unsure about something or need help, you've got options:
 
 We're grateful for all the awesome contributors who help make Fast-LLM better. Join our contributors' list and make your first contribution!
 
-To learn more about the team and maintainers, visit our [About page](https://servicenow.github.io/Fast-LLM/about-us/).
+To learn more about the team and maintainers, visit our [About page](https://servicenow.github.io/Fast-LLM/about-us).

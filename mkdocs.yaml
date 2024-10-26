@@ -159,6 +159,7 @@ plugins:
 nav:
   - Fast-LLM:
     - Welcome: index.md
+    - Quick Start: quick-start.md
     - Cost Efficiency: cost-efficiency.md
     - Help: help.md
     - In Action:
