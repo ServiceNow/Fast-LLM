@@ -180,19 +180,15 @@ Expect training to run for a few days (for a full 300B tokens). Keep an eye on t
 
 With Weights & Biases, you'll see the loss curve, training metrics, and more. If you follow this whole training setup, you should see the validation loss approaching the ballpark of ~2.85 (similar to the original GPT-2 model finetuned on OpenWebText).
 
-### Troubleshooting Basics 🛠️
+## Troubleshooting Basics 🛠️
 
-Some common issues you might run into and how to address them:
+Here are some common issues you might encounter and how to address them:
 
-- **CUDA Out of Memory**: If you encounter memory issues, try **lowering the `micro_batch_size` or `sequence_length`** in your config file.
+- **CUDA Out of Memory**: Try lowering the `micro_batch_size` or `sequence_length` in your configuration to fit within available memory.
 
-- **Low Memory Usage**: If your memory utilization is low, but you aren't close to maximum GPU usage, try **increasing the `micro_batch_size` or `sequence_length`** to better utilize your GPU.
+- **Underutilized GPU or Low Memory Usage**: If memory usage is low or GPU utilization isn't maxed out, try increasing `micro_batch_size` (to 4, 8, or 16 if memory allows) or extending `sequence_length` (up to 2048, 3072, or 4096, as memory permits). Larger batches and longer sequences help keep GPUs engaged and reduce idle time.
 
-- **Low GPU Utilization or Slow Training**:
-  - **Increase `micro_batch_size`**: If memory allows, increase `micro_batch_size` to 4, 8, or even 16. Larger micro batches ensure GPUs have more work per step, which reduces idle time and improves overall utilization.
-  - **Extend `sequence_length`**: If your model and GPU memory can handle it, try increasing the `sequence_length` to 2048, 3072, or 4096. Longer sequences allow each forward pass to do more work, better engaging the GPU.
-
-- **Docker Permission Issues**: If you experience Docker permission errors, ensure Docker has the necessary permissions to access your GPUs. This can be checked by ensuring `--gpus all` is specified in your Docker run command, or by confirming that your user has access to the `docker` and `nvidia-docker` groups.
+- **Docker Permission Issues**: If you encounter Docker permission errors, confirm that Docker has permission to access your GPUs. Use the `--gpus all` flag in your Docker run command and ensure your user has access to the `docker` and `nvidia-docker` groups.
 
 ## Final Thoughts
 
