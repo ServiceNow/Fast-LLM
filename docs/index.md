@@ -1,9 +1,5 @@
 ---
 title: "Fast-LLM: Train Large Language Models Faster Than Ever Before"
-hide:
-  - navigation
-  - toc
-  - feedback
 ---
 
 Welcome to **Fast-LLM**, the cutting-edge open-source library built for training large language models (LLMs) with **unmatched speed, scalability, and cost-efficiency**. Developed by [ServiceNow Research](https://www.servicenow.com/research/)'s Foundation Models Lab, Fast-LLM is engineered to meet the rigorous demands of professional AI teams, research institutions, and enterprises pushing the limits of generative AI. **Achieve groundbreaking research and high-stakes production goals faster with Fast-LLM.**
@@ -81,6 +77,6 @@ Fast-LLM is more than just software, it's a community. Get involved by exploring
 
 ## Getting Started
 
-Ready to dive in? Check out our [quickstart guide](quickstart.md) for an overview of how to set up and run Fast-LLM on different platforms, including [Slurm](https://slurm.schedmd.com) and [Kubernetes](https://kubernetes.io). Explore the [examples](https://github.com/ServiceNow/Fast-LLM/tree/main/examples) for pre-configured setups to help you get started quickly with your own training experiments.
+Ready to dive in? Check out our [quickstart guide](quick-start) for an overview of how to set up and run Fast-LLM on different platforms, including [Slurm](https://slurm.schedmd.com) and [Kubernetes](https://kubernetes.io). Explore the [examples](https://github.com/ServiceNow/Fast-LLM/tree/main/examples) for pre-configured setups to help you get started quickly with your own training experiments.
 
 For any questions or issues, open an [issue](https://github.com/ServiceNow/Fast-LLM/issues) or join the [community discussion](https://github.com/ServiceNow/Fast-LLM/discussions).
