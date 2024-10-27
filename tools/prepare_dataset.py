@@ -5,7 +5,8 @@ from multiprocessing import Pool
 from pathlib import Path
 
 import numpy as np
-from datasets import load_dataset
+from datasets import load_dataset, load_from_disk
+from torch import distributed as dist
 from tqdm import tqdm
 from transformers import AutoTokenizer, logging
 
@@ -76,6 +77,21 @@ class PrepareDatasetConfig(RunnableConfig):
         desc="Data type of the dataset field.",
         hint=FieldHint.derived,
     )
+    rank: int = Field(
+        default=0,
+        desc="Rank of the process for distributed processing.",
+        hint=FieldHint.optional,
+    )
+    world_size: int = Field(
+        default=1,
+        desc="Total number of processes in distributed processing.",
+        hint=FieldHint.optional,
+    )
+    distributed_backend: str = Field(
+        default="gloo",
+        desc="Distributed backend for distributed processing.",
+        hint=FieldHint.optional,
+    )
 
     @cached_property
     def tokenizer(self):
@@ -119,7 +135,7 @@ class PrepareDatasetConfig(RunnableConfig):
 
     def _save_shard(self, args) -> dict:
         shard_idx, shard_dataset = args
-        prefix = f"shard_{shard_idx}"
+        prefix = f"shard_{self.rank}_{shard_idx}"
         shard_output_path = Path(self.output_dir) / prefix
         documents = [
             np.array(item["input_ids"], dtype=self.dataset_dtype.numpy)
@@ -134,13 +150,30 @@ class PrepareDatasetConfig(RunnableConfig):
         return dataset_dict
 
     def run(self):
-        # Load dataset
-        dataset = load_dataset(
-            path=self.dataset_name_or_path,
-            name=self.dataset_config_name,
-            split=self.dataset_split,
-            num_proc=self.num_processes_load,
-        )
+        # Initialize distributed processing
+        if self.world_size > 1:
+            dist.init_process_group(backend=self.distributed_backend, rank=self.rank, world_size=self.world_size)
+
+        # Prepare output directory
+        os.makedirs(self.output_dir, exist_ok=True)
+
+        # Download dataset
+        download_dir = Path(self.output_dir) / "downloaded_dataset"
+        if self.rank == 0:
+            load_dataset(
+                path=self.dataset_name_or_path,
+                name=self.dataset_config_name,
+                split=self.dataset_split,
+                num_proc=self.num_processes_load,
+                trust_remote_code=True,
+            ).save_to_disk(download_dir, num_proc=self.num_processes_save)
+
+        # Synchronize processes to wait for the download
+        if self.world_size > 1:
+            dist.barrier()
+
+        # Load and shard the dataset
+        dataset = load_from_disk(download_dir).shard(num_shards=self.world_size, index=self.rank)
         if self.dataset_field not in dataset.column_names:
             raise ValueError(f"Dataset does not have field '{self.dataset_field}'.")
 
@@ -162,19 +195,29 @@ class PrepareDatasetConfig(RunnableConfig):
             for i in tqdm(range(num_shards), desc="Creating shards")
         ]
 
-        # Prepare output directory
-        os.makedirs(self.output_dir, exist_ok=True)
-
         # Use multiprocessing to save each shard in parallel
         with Pool(processes=self.num_processes_save) as pool:
             dataset_dicts = pool.map(self._save_shard, shards)
 
+        # Gather dataset_dicts from all ranks to rank 0
+        if self.world_size > 1:
+            all_dataset_dicts = [None] * self.world_size
+            dist.gather_object(dataset_dicts, all_dataset_dicts, dst=0)
+            if self.rank == 0:
+                dataset_dicts = [item for sublist in all_dataset_dicts for item in sublist]
+
         # Create a metadata file
-        total_tokens = sum(dataset_dict["num_tokens"] for dataset_dict in dataset_dicts)
-        for dataset_dict in dataset_dicts:
-            dataset_dict["weight"] = float(dataset_dict["num_tokens"]) / float(total_tokens)
-        output_file = Path(self.output_dir) / "fast_llm_dataset.json"
-        json.dump({"datasets": dataset_dicts}, output_file.open("w"))
+        if self.rank == 0:
+            total_tokens = sum(dataset_dict["num_tokens"] for dataset_dict in dataset_dicts)
+            for dataset_dict in dataset_dicts:
+                dataset_dict["weight"] = float(dataset_dict["num_tokens"]) / float(total_tokens)
+            output_file = Path(self.output_dir) / "fast_llm_dataset.json"
+            json.dump({"datasets": dataset_dicts}, output_file.open("w"))
+
+        # Finalize distributed processing
+        if self.world_size > 1:
+            dist.barrier()
+            dist.destroy_process_group()
 
 
 if __name__ == "__main__":
