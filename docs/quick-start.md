@@ -136,7 +136,7 @@ run:
   experiment_dir: /app/results
 ```
 
-1. Total number of tokens will be ~300B.
+1. Total number of training tokens will be ~300B.
 2. Replace `servicenow` with your own W&B entity name.
 3. Adjust based on GPU memory. For GPT-2 and an A100-80GB, a `micro_batch_size` of 1 should work well.
 4. Should be a power of 2 and divisible by 8. For an A100-80GB, 1024 is a good starting point.
