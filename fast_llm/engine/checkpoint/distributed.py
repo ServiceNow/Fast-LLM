@@ -4,6 +4,7 @@ import safetensors.torch
 import torch
 import yaml
 
+from fast_llm.core.distributed import broadcast_scalar, safe_barrier
 from fast_llm.engine.checkpoint.config import (
     CheckpointLoadConfig,
     CheckpointLoadMetadataConfig,
@@ -13,6 +14,7 @@ from fast_llm.engine.checkpoint.config import (
     export_safetensors_metadata,
 )
 from fast_llm.engine.checkpoint.safe_load import SafeLoad
+from fast_llm.engine.config_utils.run import log_main_rank
 from fast_llm.utils import Assert
 
 logger = logging.getLogger(__name__)
@@ -41,11 +43,16 @@ class DistributedConverter(Converter):
         num_shards = self._model.num_state_shards if config.optimizer_state else 1
         Assert.eq(metadata["state_shard_names"][:num_shards], list(self._model.state_shard_names[:num_shards]))
 
-        if (
+        same_format = (
             loaded_config.to_serialized(verbose=None) == self._model.fast_llm_config.to_serialized(verbose=None)
             and config.optimizer_state
-        ):
-            logger.info("Checkpoint format matches, using fast load")
+        )
+        # Make sure all nodes agree on which loading scheme to use.
+        # Note: they may not agree before the broadcast because of the rank comparison, but that's ok.
+        same_format = broadcast_scalar(same_format, torch.uint8, self._model.distributed.world_group)
+
+        if same_format:
+            log_main_rank("Checkpoint format matches, using fast load")
             # TODO: Add version without optimizer state?
             with safetensors.safe_open(
                 config.path / f"rank_{self._model.distributed_config.rank}.safetensors",
@@ -55,7 +62,7 @@ class DistributedConverter(Converter):
                 # TODO: Does this copy twice?
                 self._model.state_shard[:num_shards].copy_(f.get_slice("state_shard")[:num_shards])
         else:
-            logger.info("Checkpoint format doesn't match, using safe load")
+            log_main_rank("Checkpoint format doesn't match, using safe load")
             self._model.base_model_config.compare_architecture(loaded_config.base_model, config.compare_log_fn)
             with SafeLoad(self._model, num_shards=num_shards) as context:
                 for rank in range(loaded_config.distributed.world_size):
@@ -65,7 +72,8 @@ class DistributedConverter(Converter):
                         verbose=False,
                     )
                     path = config.path / f"rank_{rank}.safetensors"
-                    logger.info(f"Loading from {path}")
+                    log_main_rank(f"Loading from {path}")
+                    safe_barrier(self._model.distributed.world_group, f"load {path}")
                     # TODO: skip shards without overlap.
                     with safetensors.safe_open(path, framework="pt", device=str(self._model.distributed.device)) as f:
                         # TODO: Use self_shard
