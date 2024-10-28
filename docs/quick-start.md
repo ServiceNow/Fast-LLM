@@ -117,21 +117,22 @@ batch:
   batch_size: 480  # (5)!
 data:
   format: file
-  split: [998, 2, 0]  # (6)!
+  path: /app/inputs/fast_llm_dataset.json  # (6)!
+  split: [998, 2, 0]  # (7)!
 optimizer:
-  weight_decay: 0.1  # (7)!
-  beta_1: 0.9  # (8)!
-  beta_2: 0.95  # (9)!
+  weight_decay: 0.1  # (8)!
+  beta_1: 0.9  # (9)!
+  beta_2: 0.95  # (10)!
   learning_rate:
-    base: 6.0e-04  # (10)!
-    minimum: 6.0e-05  # (11)!
-    decay_style: cosine  # (12)!
-    decay_iterations: 600_000  # (13)!
-    warmup_iterations: 2000  # (14)!
+    base: 6.0e-04  # (11)!
+    minimum: 6.0e-05  # (12)!
+    decay_style: cosine  # (13)!
+    decay_iterations: 600_000  # (14)!
+    warmup_iterations: 2000  # (15)!
 pretrained:
   format: huggingface
-  path: /app/inputs  # (15)!
-  load_weights: False  # (16)!
+  path: /app/inputs  # (16)!
+  load_weights: False  # (176)!
 model:
   multi_stage:
     zero_stage: 2
@@ -146,17 +147,18 @@ run:
 3. Adjust based on GPU memory. For GPT-2 and an A100-80GB, a `micro_batch_size` of 1 should work well.
 4. Should be a power of 2 and divisible by 8. For an A100-80GB, 1024 is a good starting point.
 5. Must be divisible by number of GPUs. At 1024 tokens per sequence, 480 corresponds to about ~500k tokens per batch.
-6. 99.8% train, 0.2% validation, 0% test.
-7. L2 regularization penalty.
-8. 1st Adam optimizer parameter.
-9. 2nd Adam optimizer parameter.
-10. Peak learning rate.
-11. Should be 1/10th of base per Chinchilla.
-12. Cosine decay starting at `base` after warmup and ending at `minimum` after `decay_iterations`.
-13. Usually the same as `train_iters`.
-14. Number of steps of linear warmup.
-15. Location of the `config.json` file downloaded in Step 4.
-16. Set to `False` to train from scratch.
+6. Location of the dataset metadata file generated in Step 4.
+7. 99.8% train, 0.2% validation, 0% test.
+8. L2 regularization penalty.
+9. 1st Adam optimizer parameter.
+10. 2nd Adam optimizer parameter.
+11. Peak learning rate.
+12. Should be 1/10th of base per Chinchilla.
+13. Cosine decay starting at `base` after warmup and ending at `minimum` after `decay_iterations`.
+14. Usually the same as `train_iters`.
+15. Number of steps of linear warmup.
+16. Location of the `config.json` file downloaded in Step 4.
+17. Set to `False` to train from scratch.
 
 ## Step 6: Add Your Weights & Biases API Key
 
