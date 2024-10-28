@@ -26,30 +26,7 @@ Let's create folders to store our input data and output results:
 mkdir ~/inputs ~/results
 ```
 
-## Step 3: Preparing the Training Data
-
-For this tutorial, we'll use 9B tokens of text from the [OpenWebText](https://skylion007.github.io/OpenWebTextCorpus/) dataset. This dataset is a free approximation of the WebText data OpenAI used for GPT-2, and it's perfect for our setup!
-
-We've got a script that'll download and preprocess the dataset for you. Run it like this:
-
-!!! info inline end "What's Happening Here?"
-
-    This will grab the OpenWebText data, tokenize it with the GPT-2 tokenizer, and save it in 91 shards of 100M tokens each. Expect around 2 hours for the whole thing to finish, mainly due to tokenization. If you've got more CPU cores, try upping `num_processes_*` to speed things up.
-
-```bash
-python tools/prepare_dataset.py \                          
-    tokenizer_path_or_name="gpt2" \             
-    dataset_name_or_path="openwebtext" \                                       
-    dataset_split="train" \
-    dataset_field="text" \
-    output_dir="inputs" \ 
-    num_processes_load=4 \
-    num_processes_map=4 \
-    num_processes_save=4 \
-    num_tokens_per_shard=100000000
-```
-
-## Step 4: Choose Your Model
+## Step 3: Choose Your Model
 
 Fast-LLM supports many GPT variants, including (but not limited to) GPT-2, Llama, Mistral, and Qwen. For this tutorial, let's train the GPT-2 model from scratch with Fully Sharded Data Parallelism (FSDP). We'll grab a configuration file from Huggingface Hub and save it as `~/inputs/config.json`:
 
@@ -80,6 +57,34 @@ Fast-LLM supports many GPT variants, including (but not limited to) GPT-2, Llama
 !!! tip "Model Size Matters"
 
     Smaller models like GPT-2 (124M) will train relatively quickly, especially if you've only got a few GPUs. But if you're feeling adventurous (and patient), give the larger models a shot!
+
+## Step 4: Preparing the Training Data
+
+For this tutorial, we'll use 9B tokens of text from the [OpenWebText](https://skylion007.github.io/OpenWebTextCorpus/) dataset. This dataset is a free approximation of the WebText data OpenAI used for GPT-2, and it's perfect for our setup!
+
+We've got a script that'll download and preprocess the dataset for you. Run it like this:
+
+```bash
+docker run -it --rm ghcr.io/servicenow/fast-llm:latest \
+    -v ~/inputs:/app/inputs \
+    python tools/prepare_dataset.py \
+    tokenizer_path_or_name="gpt2" \
+    dataset_name_or_path="openwebtext" \
+    dataset_split="train" \
+    output_dir="inputs" \
+    num_processes_load=4 \
+    num_processes_map=4 \
+    num_processes_save=4 \
+    num_tokens_per_shard=100000000
+```
+
+!!! info "What's Happening Here?"
+
+    This will grab the OpenWebText data, tokenize it with the GPT-2 tokenizer, and save it in 91 shards of 100M tokens each. Expect around 2 hours for the whole thing to finish, mainly due to tokenization. If you've got more CPU cores, try upping `num_processes_*` to speed things up.
+
+!!! warning "Tokenizer Mismatch"
+
+    If you chose a different model in Step 3, make sure to adjust the `tokenizer_path_or_name` parameter to match the model's tokenizer.
 
 ## Step 5: Set Up Your Training Configuration
 
@@ -167,10 +172,11 @@ docker run --gpus all -it --rm ghcr.io/servicenow/fast-llm:latest \
     -v ~/results:/app/results \
     -e PYTHONHASHSEED=0 \
     -e WANDB_API_KEY_PATH=/app/inputs/.wandb_api_key \
-    torchrun --nproc_per_node=8 --no_python fast-llm train gpt --config /app/inputs/fast-llm-config.yaml
+    torchrun --nproc_per_node=8 --no_python \
+    fast-llm train gpt --config /app/inputs/fast-llm-config.yaml
 ```
 
-!!! note
+!!! note "Python Hash Seed"
 
     Setting the Python hash seed to 0 ensures consistent, reproducible ordering in hash-dependent operations across processes, which is crucial for parallel computations.
 

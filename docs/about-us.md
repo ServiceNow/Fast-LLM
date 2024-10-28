@@ -1,5 +1,7 @@
 ---
 title: About Us
+hide:
+  - navigation
 ---
 
 Welcome to Fast-LLM! We are a global team of engineers, researchers, and AI professionals led by the Foundation Models Lab at [ServiceNow Research](https://www.servicenow.com/research/), dedicated to advancing large language models (LLMs) and providing the highest-performance tools for serious users. Designed with professionals, research institutions, and enterprises in mind, Fast-LLM offers the speed, scalability, and flexibility needed to train the biggest and most complex models. Our commitment to open-source ensures that you have full control over your workflows, without the limitations or compromises of commercial frameworks.
@@ -30,13 +32,3 @@ Fast-LLM is led by the Foundation Models Lab at [ServiceNow Research](https://ww
 - [**Torsten Scholak**](https://www.servicenow.com/research/author/torsten-scholak.html) - Research Lead, ServiceNow Research: Torsten leads our research efforts, driving the scientific innovations that keep Fast-LLM at the forefront of AI training.
 
 Our core team includes members affiliated with ServiceNow Research, as well as other contributors who bring unique perspectives and skills to the project. We welcome new participants from the broader AI community who share our vision of creating the best tools for training large-scale language models.
-
-## Get Involved
-
-Fast-LLM is an open-source project that thrives on collaboration. If you're a professional or researcher looking to contribute, there are many ways to get involved:
-
-- **Code Contributions:** Dive into our [contribution guidelines](https://github.com/ServiceNow/Fast-LLM/blob/main/CONTRIBUTING.md) to learn how you can help improve Fast-LLM.
-- **Discussion and Ideas:** Join us on [GitHub Discussions](https://github.com/ServiceNow/Fast-LLM/discussions) to share your insights, ask questions, or discuss new features.
-- **Documentation and Tutorials:** Help us expand our [documentation](https://servicenow.github.io/Fast-LLM/), making it even more valuable for other professionals.
-
-If you're serious about training large language models, Fast-LLM is here to help you push the limits. We look forward to your contributions and feedback as we continue to make LLM training faster and better.

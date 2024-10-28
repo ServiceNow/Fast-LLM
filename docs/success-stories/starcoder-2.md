@@ -2,28 +2,24 @@
 title: "StarCoder2"
 ---
 
-2023 marked a big year for our team at ServiceNow Research as we embarked on training **StarCoder2**, an open-source LLM optimized for coding tasks. This project, an evolution of the StarCoder model, aimed to create a family of models capable of handling a wide array of programming languages, achieving performance comparable to (or even surpassing) larger models in some benchmarks.
+2023 was a transformative year for ServiceNow Research's Foundation Model Lab. Partnering with [BigCode](https://www.bigcode-project.org), we set out to build **StarCoder2** [@lozhkov2024starcoder], an open-source language model designed specifically for coding tasks. This iteration of StarCoder [@li2023starcoder] has been built to handle a wide range of programming languages with performance on par with some larger models.
 
-Through the year, we put Fast-LLM to the test on **NVIDIA's DGX SuperCloud**, using multiple **DGX A100-80GB nodes**. The Fast-LLM framework was developed specifically to optimize the training workflow for LLMs like StarCoder 2, combining **data parallelism** with **tensor parallelism** to maximize GPU utilization, minimize idle time, and maintain high throughput across all nodes. The framework's adaptable design allowed us to scale the model on a large compute cluster seamlessly, handling everything from distributed data loading to real-time monitoring and load balancing between compute nodes.
+Our goal was ambitious: to train the [3-billion-parameter StarCoder2 model](https://huggingface.co/bigcode/starcoder2-3b) on over **3 trillion tokens** from **The Stack V2**—a rich, diverse dataset compiled by BigCode from the Software Heritage archive. This data provided StarCoder2 with the breadth of real-world code examples and programming paradigms it needed to tackle complex coding tasks with high accuracy and deep contextual understanding.
 
-Our goal was ambitious: to train the 3-billion-parameter StarCoder2 model on **The Stack V2** dataset, a large and diverse code corpus containing repositories across more than 600 programming languages, courtesy of the Software Heritage archive. This dataset provided real-world code examples and broad coverage of programming paradigms, ensuring that StarCoder2-3B could understand context-rich coding tasks with high precision and accuracy.
+To bring StarCoder2 to life, we ran Fast-LLM on **NVIDIA's DGX SuperCloud**, utilizing **DGX A100-80GB nodes**. Fast-LLM allowed us to maximize GPU throughput and streamline our entire training pipeline. The complexity of scaling StarCoder2's training across nodes became a seamless experience.
 
-## The Role of Fast-LLM
+## How Fast-LLM Made StarCoder2 Possible
 
-Fast-LLM enabled us to achieve a training throughput of **10,000 tokens per second per A100-80GB GPU**, which allowed us to reduce the expected training time by **20%** compared to the Megatron framework. This boost in scalable efficiency was made possible by Fast-LLM's optimized data pipelines and balanced load distribution, ensuring minimal latency and consistent GPU saturation across all nodes. This performance demonstrates Fast-LLM's capacity to handle a model of this scale with impressive efficiency and stability, setting a new benchmark for training large language models.
+Fast-LLM was designed to maximize efficiency in large-scale language model training—especially for tasks like StarCoder2. Here's how Fast-LLM's capabilities helped us achieve our goals:
 
-Fast-LLM's adaptability shone as we trained StarCoder2-3B with a **Fill-in-the-Middle (FIM) objective**, a novel approach for the model to generate and complete code snippets in a contextually relevant way. FIM training requires dynamically structured data inputs and, therefore, efficient shuffling and sample handling—all handled seamlessly by Fast-LLM.
+- **Optimized Throughput and GPU Utilization**: Fast-LLM's data parallelism allowed each A100-80GB GPU to operate at its peak, sustaining **10,000 tokens per second** throughput. This boosted GPU utilization and brought down training time by **20%** compared to other frameworks. Fast-LLM made sure every GPU cycle was used efficiently, cutting down on idle time across the board.
 
-## Technical Highlights
+- **Support for Long Contexts**: With Fast-LLM's built-in Grouped Query Attention (GQA), StarCoder2-3B was able to leverage a **16,384 token context window**. This is essential for code comprehension, where context often spans hundreds of lines or more. GQA enabled the model to hold extensive context across sequences, which translates into better understanding of long code snippets, in-depth documentation, and detailed coding conversations.
 
-- **16K Context Window**: StarCoder2-3B boasts a **16,384 token context window**. That's four times the length of the original model. With Fast-LLM, we integrated Grouped Query Attention (GQA) to achieve this, allowing the model to retain context over extensive code snippets, conversations, and documentation.
-  
-- **Dynamic Dataset Handling**: Training with The Stack V2 posed challenges; the dataset's sheer size and variety required Fast-LLM's efficient, adaptive sharding and fast sample batching. These features allowed us to effectively leverage our compute resources, creating a streamlined experience when dealing with billions of code tokens.
+- **Fill-in-the-Middle (FIM) Training**: Fast-LLM supported FIM training objectives natively, allowing StarCoder2-3B to complete and understand code by predicting missing snippets in various contexts. This structure-focused training enhanced the model's performance, making it adept at understanding code structure, flow, and syntax.
 
-- **High Throughput on DGX Nodes**: Although we're awaiting precise throughput metrics, preliminary tests showed that Fast-LLM allowed each node to perform at peak efficiency, even when processing over **4 trillion tokens** in total.
+## The Takeaway
 
-## The Road Ahead
+StarCoder2-3B is the first large-scale, real-world demonstration of Fast-LLM's capabilities in specialized language model training. This project exemplifies how Fast-LLM not only powers large models but does so with adaptability and efficiency. It's not just about achieving results—it's about doing so in a way that's replicable and accessible to labs of all sizes.
 
-The results of StarCoder2-3B have set the stage for ongoing innovation. With Fast-LLM's framework as a robust foundation, we are now exploring fine-tuning for even more targeted code generation applications, building models that offer immediate utility across development, deployment, and debugging tasks. StarCoder2-3B's performance and versatility stand as a testament to the power of Fast-LLM and to the incredible potential of open-source models in advancing the AI landscape.
-
-For more insights and technical details, please refer to our publications on StarCoder2 and Fast-LLM [Cite relevant papers].
+With Fast-LLM, we've made a leap in efficiency and performance, setting the stage for future innovation in LLM training. This is just the beginning, and we're excited to see how Fast-LLM will continue to push the boundaries of language model development for coding and beyond.

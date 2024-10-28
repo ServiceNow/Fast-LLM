@@ -44,9 +44,9 @@ If you're the type who loves configurations and tweaking every detail, the [**Co
 
 We've got some excellent tutorials to help you get the most out of Fast-LLM:
 
-- [**Quick-Start Guide**](quick-start): Perfect for launching Fast-LLM on a single GPU machine. We walk you through setting up Docker, running your first training job, and handling common issues.
+- [**Quick-Start Guide**](/quick-start): Perfect for launching Fast-LLM on a single GPU machine. We walk you through setting up Docker, running your first training job, and handling common issues.
 
-- [**In-Action Guides**](in-action/slurm): Ready to go big? These guides cover setting up Fast-LLM with Slurm and Kubernetes for multi-node training. This is where Fast-LLM really shows its power.
+- [**In-Action Guides**](/in-action/slurm): Ready to go big? These guides cover setting up Fast-LLM with Slurm and Kubernetes for multi-node training. This is where Fast-LLM really shows its power.
 
 ---
 
