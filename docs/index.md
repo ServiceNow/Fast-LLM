@@ -54,7 +54,7 @@ Fast-LLM powers the world's most advanced AI projects:
 - **Enterprise AI Solutions:** Accelerate time-to-market for AI products by reducing training costs and enabling faster iteration.
 - **Academic Collaborations:** Drive AI innovation with high-performance training capabilities that support cutting-edge research in machine learning.
 
-See how Fast-LLM has helped early adopters achieve up to xx% faster results. [Explore use cases and success stories](success-stories).
+See how Fast-LLM has helped early adopters achieve up to xx% faster results. [Explore use cases and success stories](success-stories/starcoder-2).
 
 ## Project Scope and Objectives
 

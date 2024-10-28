@@ -165,7 +165,8 @@ nav:
     - In Action:
       - On Slurm: in-action/slurm.md
       - On Kubernetes: in-action/kubernetes.md
-    - Success Stories: success-stories.md
+    - Success Stories:
+      - StarCoder 2: success-stories/starcoder-2.md
     - License: license.md
   - Examples:
     - Data Preparation: examples/data-preparation.md
