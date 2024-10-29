@@ -6,6 +6,32 @@ This folder contains the source files for the Fast-LLM documentation. The conten
 
 To view the complete, rendered documentation, please visit the [Fast-LLM Documentation Site](https://servicenow.github.io/Fast-LLM).
 
+## Building and Serving the Documentation
+
+To build and preview the documentation locally, follow these simple steps:
+
+1. **Install the necessary dependencies:**
+
+   ```bash
+   pip install -e ".[DOCS]"
+   ```
+
+2. **Build the documentation:**
+
+   ```bash
+   mkdocs build
+   ```
+
+   This will generate the static documentation files in a `site/` folder.
+
+3. **Serve the documentation locally (with auto-reload):**
+
+   ```bash
+   mkdocs serve
+   ```
+
+   The documentation site will be served locally at [http://127.0.0.1:8000](http://127.0.0.1:8000), and any changes made to the source files will automatically trigger a rebuild.
+
 ## Contributing to the Documentation
 
 If you'd like to contribute to the Fast-LLM documentation, feel free to edit these source files and submit a pull request. The changes will be reflected on the rendered documentation site after they are merged into the `main` branch.
