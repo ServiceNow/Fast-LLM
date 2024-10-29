@@ -5,10 +5,13 @@ import typing
 import torch
 
 from fast_llm.engine.checkpoint.external import (
-    AutoStateDictCheckpointHandler,
+    AutoStateDictCheckpointLoader,
+    AutoStateDictCheckpointSaver,
     ConstantExportParamConverter,
     ConstantImportParamConverter,
     HuggingfaceStateDictCheckpointHandler,
+    HuggingfaceStateDictCheckpointLoader,
+    HuggingfaceStateDictCheckpointSaver,
     IgnoreImportParamConverter,
     IgnoreWeightConverter,
     MappedConfigParamConverter,
@@ -228,6 +231,18 @@ class Starcoder2HuggingfaceCheckpointHandler(CommonHuggingfaceCheckpointHandler)
         ]
 
 
+class Starcoder2HuggingfaceCheckpointSaver(
+    Starcoder2HuggingfaceCheckpointHandler, HuggingfaceStateDictCheckpointSaver
+):
+    pass
+
+
+class Starcoder2HuggingfaceCheckpointLoader(
+    Starcoder2HuggingfaceCheckpointHandler, HuggingfaceStateDictCheckpointLoader
+):
+    pass
+
+
 class CommonLlamaHuggingfaceCheckpointHandler(CommonHuggingfaceCheckpointHandler, abc.ABC):
     @classmethod
     def _create_config_converters(cls) -> list[ParamConverter]:
@@ -270,6 +285,14 @@ class LlamaHuggingfaceCheckpointHandler(CommonLlamaHuggingfaceCheckpointHandler)
         ]
 
 
+class LlamaHuggingfaceCheckpointSaver(LlamaHuggingfaceCheckpointHandler, HuggingfaceStateDictCheckpointSaver):
+    pass
+
+
+class LlamaHuggingfaceCheckpointLoader(LlamaHuggingfaceCheckpointHandler, HuggingfaceStateDictCheckpointLoader):
+    pass
+
+
 class MistralHuggingfaceCheckpointHandler(CommonLlamaHuggingfaceCheckpointHandler):
     model_type = HuggingfaceModelType.mistral
 
@@ -292,6 +315,14 @@ class MistralHuggingfaceCheckpointHandler(CommonLlamaHuggingfaceCheckpointHandle
                 self._model.base_model_config,
             ),
         ]
+
+
+class MistralHuggingfaceCheckpointSaver(MistralHuggingfaceCheckpointHandler, HuggingfaceStateDictCheckpointSaver):
+    pass
+
+
+class MistralHuggingfaceCheckpointLoader(MistralHuggingfaceCheckpointHandler, HuggingfaceStateDictCheckpointLoader):
+    pass
 
 
 class MixtralHuggingfaceCheckpointHandler(CommonLlamaHuggingfaceCheckpointHandler):
@@ -327,13 +358,29 @@ class MixtralHuggingfaceCheckpointHandler(CommonLlamaHuggingfaceCheckpointHandle
         ]
 
 
-class AutoGPTHuggingfaceCheckpointHandler(
-    AutoStateDictCheckpointHandler, HuggingfaceStateDictCheckpointHandler, abc.ABC
-):
+class MixtralHuggingfaceCheckpointSaver(MistralHuggingfaceCheckpointHandler, HuggingfaceStateDictCheckpointSaver):
+    pass
+
+
+class MixtralHuggingfaceCheckpointLoader(MistralHuggingfaceCheckpointHandler, HuggingfaceStateDictCheckpointLoader):
+    pass
+
+
+class AutoGPTHuggingfaceCheckpointSaver(AutoStateDictCheckpointSaver, HuggingfaceStateDictCheckpointSaver, abc.ABC):
 
     converter_map = {
-        HuggingfaceModelType.starcoder2: Starcoder2HuggingfaceCheckpointHandler,
-        HuggingfaceModelType.llama: LlamaHuggingfaceCheckpointHandler,
-        HuggingfaceModelType.mistral: MistralHuggingfaceCheckpointHandler,
-        HuggingfaceModelType.mixtral: MixtralHuggingfaceCheckpointHandler,
+        HuggingfaceModelType.starcoder2: Starcoder2HuggingfaceCheckpointSaver,
+        HuggingfaceModelType.llama: LlamaHuggingfaceCheckpointSaver,
+        HuggingfaceModelType.mistral: MistralHuggingfaceCheckpointSaver,
+        HuggingfaceModelType.mixtral: MixtralHuggingfaceCheckpointSaver,
+    }
+
+
+class AutoGPTHuggingfaceCheckpointLoader(AutoStateDictCheckpointLoader, HuggingfaceStateDictCheckpointLoader, abc.ABC):
+
+    converter_map = {
+        HuggingfaceModelType.starcoder2: Starcoder2HuggingfaceCheckpointLoader,
+        HuggingfaceModelType.llama: LlamaHuggingfaceCheckpointLoader,
+        HuggingfaceModelType.mistral: MistralHuggingfaceCheckpointLoader,
+        HuggingfaceModelType.mixtral: MixtralHuggingfaceCheckpointLoader,
     }

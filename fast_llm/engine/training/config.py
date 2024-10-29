@@ -13,7 +13,7 @@ from fast_llm.engine.checkpoint.config import (
     CheckpointLoadConfig,
     CheckpointSaveConfig,
     CheckpointSaveConfigBase,
-    CheckpointStateConfigBase,
+    CheckpointStateSaveConfigBase,
 )
 from fast_llm.engine.config_utils.run import ExperimentConfig
 from fast_llm.engine.multi_stage.config import PretrainedFastLLMModelConfig
@@ -229,7 +229,9 @@ class CheckpointConfig(CheckpointBaseConfig):
 
 
 @config_class()
-class ExportConfig(CheckpointBaseConfig, CheckpointConfigBase, CheckpointStateConfigBase, CheckpointSaveConfigBase):
+class ExportConfig(
+    CheckpointBaseConfig, CheckpointConfigBase, CheckpointStateSaveConfigBase, CheckpointSaveConfigBase
+):
     _abstract = False
     save_name: typing.ClassVar[str] = "export"
     directory_name = "export"

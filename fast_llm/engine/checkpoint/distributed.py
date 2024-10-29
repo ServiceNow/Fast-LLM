@@ -1,14 +1,14 @@
 import logging
+import typing
 
 import safetensors.torch
 import torch
 import yaml
 
 from fast_llm.engine.checkpoint.config import (
-    CheckpointHandler,
-    CheckpointLoadConfig,
+    CheckpointLoader,
     CheckpointLoadMetadataConfig,
-    CheckpointSaveConfig,
+    CheckpointSaver,
     ModelConfigType,
     export_safetensors_metadata,
 )
@@ -19,59 +19,60 @@ from fast_llm.utils import Assert
 logger = logging.getLogger(__name__)
 
 
-class DistributedCheckpointHandler(CheckpointHandler):
+class DistributedCheckpointSaver(CheckpointSaver):
+    support_optimizer_state: typing.ClassVar[bool] = True
 
+    def save(self, metadata: CheckpointMetadata):
+        serialized_metadata = metadata.to_serialized()
+        if self._model.distributed_config.rank == 0:
+            yaml.safe_dump(metadata.to_serialized(), (self._config.path / "metadata.yaml").open("w"))
+        safetensors.torch.save_file(
+            tensors={"state_shard": self._model.state_shard[: self._num_shards]},
+            filename=self._config.path / f"rank_{self._model.distributed_config.rank}.safetensors",
+            metadata=export_safetensors_metadata(serialized_metadata),
+        )
+
+
+class DistributedCheckpointLoader(CheckpointLoader):
     @classmethod
     def load_metadata(cls, config: CheckpointLoadMetadataConfig):
         return CheckpointMetadata.from_dict(yaml.safe_load((config.path / "metadata.yaml").open("r")))
 
-    def save(self, config: CheckpointSaveConfig, metadata: CheckpointMetadata):
-        serialized_metadata = metadata.to_serialized()
-        if self._model.distributed_config.rank == 0:
-            yaml.safe_dump(metadata.to_serialized(), (config.path / "metadata.yaml").open("w"))
-        safetensors.torch.save_file(
-            tensors={"state_shard": self._model.state_shard[: self._get_num_shards(config)]},
-            filename=config.path / f"rank_{self._model.distributed_config.rank}.safetensors",
-            metadata=export_safetensors_metadata(serialized_metadata),
-        )
-
-    def load(self, config: CheckpointLoadConfig, metadata: CheckpointMetadata):
+    def load(self, metadata: CheckpointMetadata):
         # TODO: More safety checks
-        loaded_config_dict = config.to_copy({"load_config": ModelConfigType.fast_llm})
+        loaded_config_dict = self._config.to_copy({"load_config": ModelConfigType.fast_llm})
         loaded_config = self._model.config_class.from_metadata(loaded_config_dict, metadata)
-        num_shards = self._get_num_shards(config)
-        shard_names = self._get_shard_names(config)
-        Assert.eq(metadata.shards[:num_shards], list(shard_names))
+        Assert.eq(metadata.shards[: self._num_shards], list(self._shard_names))
 
         if (
             loaded_config.to_serialized(verbose=None) == self._model.fast_llm_config.to_serialized(verbose=None)
-            and config.optimizer_state
+            and self._config.optimizer_state
         ):
             logger.info("Checkpoint format matches, using fast load")
             # TODO: Add version without optimizer state?
             with safetensors.safe_open(
-                config.path / f"rank_{self._model.distributed_config.rank}.safetensors",
+                self._config.path / f"rank_{self._model.distributed_config.rank}.safetensors",
                 framework="pt",
                 device=str(self._model.distributed.device),
             ) as f:
                 # TODO: Does this copy twice?
-                self._model.state_shard[:num_shards].copy_(f.get_slice("state_shard")[:num_shards])
+                self._model.state_shard[: self._num_shards].copy_(f.get_slice("state_shard")[: self._num_shards])
         else:
             logger.info("Checkpoint format doesn't match, using safe load")
-            self._model.base_model_config.compare_architecture(loaded_config.base_model, config.compare_log_fn)
-            with SafeLoad(self._model, num_shards=num_shards) as context:
+            self._model.base_model_config.compare_architecture(loaded_config.base_model, self._config.compare_log_fn)
+            with SafeLoad(self._model, num_shards=self._num_shards) as context:
                 for rank in range(loaded_config.distributed.world_size):
                     loaded_model = self._model.__class__(
                         loaded_config.to_copy({("distributed", "rank"): rank}),
-                        optimizer_state_names=shard_names[1:],
+                        optimizer_state_names=self._shard_names[1:],
                         verbose=False,
                     )
-                    path = config.path / f"rank_{rank}.safetensors"
+                    path = self._config.path / f"rank_{rank}.safetensors"
                     logger.info(f"Loading from {path}")
                     # TODO: skip shards without overlap.
                     with safetensors.safe_open(path, framework="pt", device=str(self._model.distributed.device)) as f:
                         # TODO: Use self_shard
-                        loaded_shard = f.get_slice("state_shard")[:num_shards]
+                        loaded_shard = f.get_slice("state_shard")[: self._num_shards]
                         loaded_model.state_shard_meta.validate(loaded_shard)
 
                         # TODO: Improve num shard selection.

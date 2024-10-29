@@ -2,7 +2,7 @@ import typing
 
 from fast_llm.config import Field, FieldHint, FieldUpdate, config_class
 from fast_llm.data.config import DataConfig
-from fast_llm.engine.checkpoint.config import CheckpointHandler
+from fast_llm.engine.checkpoint.config import CheckpointLoader, CheckpointSaver
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig, PretrainedFastLLMModelConfig
 from fast_llm.engine.training.config import TrainerConfig
 from fast_llm.layers.language_model.config import LanguageModelArchitectureConfig, LanguageModelBaseConfig
@@ -94,13 +94,22 @@ class GPTModelConfig(FastLLMModelConfig):
         )
 
     @classmethod
-    def get_converter_class(cls, format: str) -> type["CheckpointHandler"]:
+    def get_saver_class(cls, format: str) -> type[CheckpointSaver]:
         try:
-            return super().get_converter_class(format)
+            return super().get_saver_class(format)
         except NotImplementedError:
-            from fast_llm.models.gpt.conversion import AutoGPTHuggingfaceCheckpointHandler
+            from fast_llm.models.gpt.conversion import AutoGPTHuggingfaceCheckpointSaver
 
-            return AutoGPTHuggingfaceCheckpointHandler.get_converter_class(format)
+            return AutoGPTHuggingfaceCheckpointSaver.get_converter_class(format)
+
+    @classmethod
+    def get_loader_class(cls, format: str) -> type[CheckpointLoader]:
+        try:
+            return super().get_loader_class(format)
+        except NotImplementedError:
+            from fast_llm.models.gpt.conversion import AutoGPTHuggingfaceCheckpointLoader
+
+            return AutoGPTHuggingfaceCheckpointLoader.get_converter_class(format)
 
 
 @config_class()

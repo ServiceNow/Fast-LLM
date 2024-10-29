@@ -9,10 +9,11 @@ from fast_llm.config import Config, Field, FieldHint, NoAutoValidate, check_fiel
 from fast_llm.engine.base_model.config import BaseModelConfig
 from fast_llm.engine.checkpoint.config import (
     CheckpointFormat,
-    CheckpointHandler,
     CheckpointLoadConfig,
+    CheckpointLoader,
     CheckpointLoadMetadataConfig,
     CheckpointSaveMetadataConfig,
+    CheckpointSaver,
 )
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.utils import Assert
@@ -203,15 +204,28 @@ class FastLLMModelConfig(Config):
         return CheckpointFormat.distributed, CheckpointFormat.state_dict
 
     @classmethod
-    def get_converter_class(cls, format: str) -> type["CheckpointHandler"]:
+    def get_saver_class(cls, format: str) -> type[CheckpointSaver]:
         if format == CheckpointFormat.distributed:
-            from fast_llm.engine.checkpoint.distributed import DistributedCheckpointHandler
+            from fast_llm.engine.checkpoint.distributed import DistributedCheckpointSaver
 
-            return DistributedCheckpointHandler
+            return DistributedCheckpointSaver
         elif format == CheckpointFormat.state_dict:
-            from fast_llm.engine.checkpoint.state_dict import TrivialConverter
+            from fast_llm.engine.checkpoint.state_dict import TrivialCheckpointSaver
 
-            return TrivialConverter
+            return TrivialCheckpointSaver
+        else:
+            raise NotImplementedError(format)
+
+    @classmethod
+    def get_loader_class(cls, format: str) -> type[CheckpointLoader]:
+        if format == CheckpointFormat.distributed:
+            from fast_llm.engine.checkpoint.distributed import DistributedCheckpointLoader
+
+            return DistributedCheckpointLoader
+        elif format == CheckpointFormat.state_dict:
+            from fast_llm.engine.checkpoint.state_dict import TrivialCheckpointLoader
+
+            return TrivialCheckpointLoader
         else:
             raise NotImplementedError(format)
 
@@ -273,7 +287,7 @@ class FastLLMModelConfig(Config):
 
     @classmethod
     def load_metadata(cls, config: CheckpointLoadMetadataConfig) -> "CheckpointMetadata":
-        converter_class = cls.get_converter_class(config.format)
+        converter_class = cls.get_loader_class(config.format)
         return converter_class.load_metadata(config)
 
     def to_metadata(self, config: CheckpointSaveMetadataConfig, **kwargs):
