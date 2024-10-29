@@ -8,14 +8,16 @@ import typing
 import safetensors
 import torch
 
+from fast_llm import __version__
 from fast_llm.engine.base_model.config import BaseModelArchitectureConfig, BaseModelConfig
 from fast_llm.engine.checkpoint.config import (
-    CHECKPOINT_VERSION,
     CheckpointLoadConfig,
     CheckpointLoadMetadataConfig,
     CheckpointSaveConfig,
+    CheckpointSaveMetadataConfig,
 )
 from fast_llm.engine.checkpoint.state_dict import StateDictCheckpointHandler
+from fast_llm.engine.multi_stage.config import CheckpointMetadata
 from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
 from fast_llm.tensor import SafeTensorSlice
 from fast_llm.utils import Assert
@@ -271,34 +273,36 @@ class AutoStateDictCheckpointHandler(ExternalStateDictCheckpointHandler, abc.ABC
 
 
 class HuggingfaceStateDictCheckpointHandler(ExternalStateDictCheckpointHandler, abc.ABC):
-    model_type: str | None = None
-    base_file_name = "model"
+    model_type: typing.ClassVar[str | None] = None
+    base_file_name: typing.ClassVar[str] = "model"
 
     @classmethod
     def load_metadata(cls, config: CheckpointLoadMetadataConfig):
         imported_model_config = cls._import_config(cls._load_config(config.path), True)
-        return {
-            # TODO: Avoid `to_serialized`?
-            "fast_llm_config": {"base_model": imported_model_config.to_serialized()},
-            # TODO: Handle "auto"?
-            "checkpoint_type": config.format,
-            "checkpoint_version": CHECKPOINT_VERSION,
-        }
+        return CheckpointMetadata(
+            fast_llm_version=__version__,
+            model=cls.model_type,
+            format=config.format,
+            config=imported_model_config,
+            shards=["weights"],
+        )
 
-    def save(self, config: CheckpointSaveConfig, metadata: dict):
+    def _save_metadata(self, config: CheckpointSaveMetadataConfig, metadata: CheckpointMetadata) -> dict:
         huggingface_config = self._export_config(self._model.base_model_config)
         self._save_config(config.path, huggingface_config)
-        metadata = {
-            "fast_llm_metadata": metadata,
+        return {
+            "fast_llm_metadata": metadata.to_serialized(),
             "model_config": huggingface_config,
             "format": "pt",
         }
+
+    def save(self, config: CheckpointSaveConfig, metadata: CheckpointMetadata):
         super().save(config, metadata)
 
-    def load(self, config: CheckpointLoadConfig, metadata: dict):
+    def load(self, config: CheckpointLoadConfig, metadata: CheckpointMetadata):
         assert not config.optimizer_state
         self._model.base_model_config.compare_architecture(
-            self._base_model_cls.from_dict(metadata["fast_llm_config"]["base_model"]), config.compare_log_fn
+            self._base_model_cls.from_dict(metadata.config.base_model), config.compare_log_fn
         )
         super().load(config, metadata)
 

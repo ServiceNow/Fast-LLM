@@ -112,6 +112,8 @@ class CheckpointConfigBase(Config):
 class CheckpointStateConfigBase(Config):
     _abstract = True
     model_weights: bool = Field(default=True, desc="Save/load the model weights.", hint=FieldHint.feature)
+    # TODO v0.2: Default to saving it when possible?
+    #  (Want to save in state dict export by default)
     optimizer_state: bool = Field(default=False, desc="Save/load the optimizer state.", hint=FieldHint.feature)
 
     @classmethod
@@ -195,3 +197,9 @@ class CheckpointHandler(abc.ABC):
     @abc.abstractmethod
     def load(self, config: CheckpointLoadConfig, metadata: "CheckpointMetadata"):
         pass
+
+    def _get_num_shards(self, config: CheckpointStateConfigBase):
+        return len(self._model.state_shard_names) if config.optimizer_state else 1
+
+    def _get_shard_names(self, config: CheckpointStateConfigBase):
+        return self._model.state_shard_names if config.optimizer_state else self._model.state_shard_names[:1]
