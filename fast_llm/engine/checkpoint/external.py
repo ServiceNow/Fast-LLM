@@ -10,12 +10,13 @@ import torch
 
 from fast_llm import __version__
 from fast_llm.engine.base_model.config import BaseModelArchitectureConfig, BaseModelConfig
-from fast_llm.engine.checkpoint.config import CheckpointLoadMetadataConfig
-from fast_llm.engine.checkpoint.state_dict import (
-    StateDictCheckpointHandler,
-    StateDictCheckpointLoader,
-    StateDictCheckpointSaver,
+from fast_llm.engine.checkpoint.config import (
+    CheckpointLoadConfig,
+    CheckpointLoadMetadataConfig,
+    CheckpointSaveConfig,
+    CheckpointSaveMetadataConfig,
 )
+from fast_llm.engine.checkpoint.state_dict import StateDictCheckpointHandler
 from fast_llm.engine.multi_stage.config import CheckpointMetadata
 from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
 from fast_llm.tensor import SafeTensorSlice
@@ -172,6 +173,35 @@ class ExternalStateDictCheckpointHandler(StateDictCheckpointHandler):
     def _create_weight_converters(self) -> list[WeightConverter]:
         pass
 
+    @classmethod
+    def _export_config(cls, config: BaseModelArchitectureConfig) -> dict[str, typing.Any]:
+        exported_config = {}
+        for converter in cls._get_config_converters():
+            value = converter.export_param(
+                None
+                if converter.fast_llm_name is None
+                else cls._get_fast_llm_attribute(config, converter.fast_llm_name)  # Noqa
+            )
+            if converter.export_name is not None:
+                exported_config[converter.export_name] = value
+
+        return exported_config  # Noqa
+
+    @classmethod
+    def _import_config(cls, config: dict[str, typing.Any], architecture_only: bool = False):  # noqa
+        kwargs = {}
+        for converter in cls._get_config_converters():
+            value = converter.import_param(
+                None
+                if converter.export_name is None or converter.export_name not in config
+                else config[converter.export_name]
+            )
+            if converter.fast_llm_name is not None:
+                kwargs[converter.fast_llm_name] = value
+
+        config_class = cls._base_model_cls.architecture_cls if architecture_only else cls._base_model_cls
+        return config_class.from_dict({}, kwargs)
+
     def _convert_state_dict(
         self, state_dict: dict[str, torch.Tensor | SafeTensorSlice], export: bool
     ) -> dict[str, torch.Tensor | SafeTensorSlice]:
@@ -212,22 +242,6 @@ class ExternalStateDictCheckpointHandler(StateDictCheckpointHandler):
             cls._config_converters = cls._create_config_converters()
         return cls._config_converters
 
-
-class ExternalStateDictCheckpointSaver(ExternalStateDictCheckpointHandler, StateDictCheckpointSaver, abc.ABC):
-    @classmethod
-    def _export_config(cls, config: BaseModelArchitectureConfig) -> dict[str, typing.Any]:
-        exported_config = {}
-        for converter in cls._get_config_converters():
-            value = converter.export_param(
-                None
-                if converter.fast_llm_name is None
-                else cls._get_fast_llm_attribute(config, converter.fast_llm_name)  # Noqa
-            )
-            if converter.export_name is not None:
-                exported_config[converter.export_name] = value
-
-        return exported_config  # Noqa
-
     @staticmethod
     def _get_fast_llm_attribute(config: BaseModelArchitectureConfig, name: str | tuple[str, ...]):
         if isinstance(name, str):
@@ -238,94 +252,29 @@ class ExternalStateDictCheckpointSaver(ExternalStateDictCheckpointHandler, State
         return val
 
 
-class ExternalStateDictCheckpointLoader(ExternalStateDictCheckpointHandler, StateDictCheckpointLoader, abc.ABC):
-    @classmethod
-    def _import_config(cls, config: dict[str, typing.Any], architecture_only: bool = False):  # noqa
-        kwargs = {}
-        for converter in cls._get_config_converters():
-            value = converter.import_param(
-                None
-                if converter.export_name is None or converter.export_name not in config
-                else config[converter.export_name]
-            )
-            if converter.fast_llm_name is not None:
-                kwargs[converter.fast_llm_name] = value
-
-        config_class = cls._base_model_cls.architecture_cls if architecture_only else cls._base_model_cls
-        return config_class.from_dict({}, kwargs)
-
-
 class AutoStateDictCheckpointHandler(ExternalStateDictCheckpointHandler, abc.ABC):
-    converter_map: typing.ClassVar[dict[str, type[ExternalStateDictCheckpointHandler]]]
+    handler_map: dict[str, type[ExternalStateDictCheckpointHandler]]
 
     @classmethod
-    def get_converter_class(cls, format: str):
-        if format in cls.converter_map:
-            return cls.converter_map[format]
+    def get_handler_class(cls, format: str):
+        if format in cls.handler_map:
+            return cls.handler_map[format]
         elif format == "auto":
             return cls
         else:
             raise NotImplementedError(format)
-
-
-class AutoStateDictCheckpointSaver(AutoStateDictCheckpointHandler, ExternalStateDictCheckpointSaver, abc.ABC):
-    converter_map: typing.ClassVar[dict[str, type[ExternalStateDictCheckpointSaver]]]
-
-
-class AutoStateDictCheckpointLoader(AutoStateDictCheckpointHandler, ExternalStateDictCheckpointLoader, abc.ABC):
-    converter_map: typing.ClassVar[dict[str, type[ExternalStateDictCheckpointLoader]]]
 
     # TODO: load_metadata???
 
     @classmethod
     def _import_config(cls, config: dict[str, typing.Any], architecture_only: bool = False):
         # TODO: ???
-        return cls.converter_map[config["model_type"]]._import_config(config, architecture_only)
+        return cls.handler_map[config["model_type"]]._import_config(config, architecture_only)
 
 
 class HuggingfaceStateDictCheckpointHandler(ExternalStateDictCheckpointHandler, abc.ABC):
-    support_optimizer_state: typing.ClassVar[bool] = True
-
-    @classmethod
-    def get_huggingface_model_type(self):
-        # We assume the two names match, but derived classes can make it different.
-        return self.format.name
-
-    @classmethod
-    @abc.abstractmethod
-    def _create_config_converters(cls) -> list[ParamConverter]:
-        return [ConstantExportParamConverter(None, "model_type", cls.get_huggingface_model_type())]
-
-
-class HuggingfaceStateDictCheckpointSaver(
-    HuggingfaceStateDictCheckpointHandler, ExternalStateDictCheckpointSaver, abc.ABC
-):
     base_file_name: typing.ClassVar[str] = "model"
 
-    def _save_metadata(self, metadata: CheckpointMetadata) -> dict:
-        huggingface_config = self._export_config(self._model.base_model_config)
-        self._save_config(self._config.path, huggingface_config)
-        return {
-            "fast_llm_metadata": metadata.to_serialized(),
-            "model_config": huggingface_config,
-            "format": "pt",
-        }
-
-    @classmethod
-    def _save_config(cls, directory: pathlib.Path | str, config: dict[str, typing.Any]):
-        import transformers
-
-        transformers.CONFIG_MAPPING[config["model_type"]].from_dict(config).save_pretrained(directory)
-
-    @classmethod
-    def _get_key(cls, parameter_name: str, shard_name: str) -> str:
-        Assert.eq(shard_name, "weights")
-        return parameter_name
-
-
-class HuggingfaceStateDictCheckpointLoader(
-    HuggingfaceStateDictCheckpointHandler, ExternalStateDictCheckpointLoader, abc.ABC
-):
     @classmethod
     def load_metadata(cls, config: CheckpointLoadMetadataConfig):
         imported_model_config = cls._import_config(cls._load_config(config.path), True)
@@ -337,11 +286,39 @@ class HuggingfaceStateDictCheckpointLoader(
             shards=["weights"],
         )
 
-    def load(self, metadata: CheckpointMetadata):
+    def _save_metadata(self, config: CheckpointSaveMetadataConfig, metadata: CheckpointMetadata) -> dict:
+        huggingface_config = self._export_config(self._model.base_model_config)
+        self._save_config(config.path, huggingface_config)
+        return {
+            "fast_llm_metadata": metadata.to_serialized(),
+            "model_config": huggingface_config,
+            "format": "pt",
+        }
+
+    def save(self, config: CheckpointSaveConfig, metadata: CheckpointMetadata):
+        super().save(config, metadata)
+
+    def load(self, config: CheckpointLoadConfig, metadata: CheckpointMetadata):
+        assert not config.optimizer_state
         self._model.base_model_config.compare_architecture(
-            self._base_model_cls.from_dict(metadata.config.base_model), self._config.compare_log_fn
+            self._base_model_cls.from_dict(metadata.config.base_model), config.compare_log_fn
         )
-        super().load(metadata)
+        super().load(config, metadata)
+
+    @classmethod
+    def get_huggingface_model_type(self):
+        # We assume the two names match, but derived classes can make it different.
+        return self.format.name
+
+    @classmethod
+    def _get_key(cls, parameter_name: str, shard_name: str) -> str:
+        Assert.eq(shard_name, "weights")
+        return parameter_name
+
+    @classmethod
+    @abc.abstractmethod
+    def _create_config_converters(cls) -> list[ParamConverter]:
+        return [ConstantExportParamConverter(None, "model_type", cls.get_huggingface_model_type())]
 
     @classmethod
     def _load_config(cls, directory: pathlib.Path | str):
@@ -351,33 +328,44 @@ class HuggingfaceStateDictCheckpointLoader(
         Assert.eq(config["model_type"], cls.get_huggingface_model_type())
         return config
 
-    def _load_weights(self, device) -> typing.Iterator[tuple[str, str, torch.Tensor | SafeTensorSlice]]:
+    @classmethod
+    def _save_config(cls, directory: pathlib.Path | str, config: dict[str, typing.Any]):
         import transformers
 
-        Assert.eq(self._shard_names, ("weights",))
-        if (self._config.path / transformers.utils.SAFE_WEIGHTS_NAME).is_file():
-            paths = {self._config.path / transformers.utils.SAFE_WEIGHTS_NAME}
-        elif (self._config.path / transformers.utils.SAFE_WEIGHTS_INDEX_NAME).is_file():
-            logger.info(f"Loading index from {self._config.path / transformers.utils.SAFE_WEIGHTS_INDEX_NAME}")
+        transformers.CONFIG_MAPPING[config["model_type"]].from_dict(config).save_pretrained(directory)
+
+    @abc.abstractmethod
+    def _load_weights(
+        self, config: CheckpointLoadConfig, device
+    ) -> typing.Iterator[tuple[str, str, torch.Tensor | SafeTensorSlice]]:
+        pass
+
+        import transformers
+
+        Assert.eq(self._get_shard_names(config), ("weights",))
+        if (config.path / transformers.utils.SAFE_WEIGHTS_NAME).is_file():
+            paths = {config.path / transformers.utils.SAFE_WEIGHTS_NAME}
+        elif (config.path / transformers.utils.SAFE_WEIGHTS_INDEX_NAME).is_file():
+            logger.info(f"Loading index from {config.path / transformers.utils.SAFE_WEIGHTS_INDEX_NAME}")
             paths = {
-                self._config.path / path
-                for path in json.load((self._config.path / transformers.utils.SAFE_WEIGHTS_INDEX_NAME).open("r"))[
+                config.path / path
+                for path in json.load((config.path / transformers.utils.SAFE_WEIGHTS_INDEX_NAME).open("r"))[
                     "weight_map"
                 ].values()
             }
-        elif (self._config.path / transformers.utils.WEIGHTS_NAME).is_file():
+        elif (config.path / transformers.utils.WEIGHTS_NAME).is_file():
             # TODO: Prevent unsafe by default
-            paths = {self._config.path / transformers.utils.WEIGHTS_NAME}
-        elif (self._config.path / transformers.utils.WEIGHTS_INDEX_NAME).is_file():
-            logger.info(f"Loading index from {self._config.path / transformers.utils.WEIGHTS_INDEX_NAME}")
+            paths = {config.path / transformers.utils.WEIGHTS_NAME}
+        elif (config.path / transformers.utils.WEIGHTS_INDEX_NAME).is_file():
+            logger.info(f"Loading index from {config.path / transformers.utils.WEIGHTS_INDEX_NAME}")
             paths = {
-                self._config.path / path
-                for path in json.load((self._config.path / transformers.utils.WEIGHTS_INDEX_NAME).open("r"))[
+                config.path / path
+                for path in json.load((config.path / transformers.utils.WEIGHTS_INDEX_NAME).open("r"))[
                     "weight_map"
                 ].values()
             }
         else:
-            raise FileNotFoundError(f"No compatible checkpoint found in {self._config.path}")
+            raise FileNotFoundError(f"No compatible checkpoint found in {config.path}")
 
         for path in paths:
             logger.info(f"Loading from {path}")

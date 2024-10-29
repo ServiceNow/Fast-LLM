@@ -47,12 +47,7 @@ class CheckpointFormat(abc.ABC):
 
     @classmethod
     @abc.abstractmethod
-    def get_saver_class(cls):
-        pass
-
-    @classmethod
-    @abc.abstractmethod
-    def get_loader_class(cls):
+    def get_handler_class(cls) -> type["CheckpointHandler"]:
         pass
 
 
@@ -62,32 +57,20 @@ class DistributedCheckpointFormat(CheckpointFormat):
     enforce_architecture_match: typing.ClassVar[bool] = True
 
     @classmethod
-    def get_saver_class(cls):
-        from fast_llm.engine.checkpoint.distributed import DistributedCheckpointSaver
+    def get_handler_class(cls):
+        from fast_llm.engine.checkpoint.distributed import DistributedCheckpointHandler
 
-        return DistributedCheckpointSaver
-
-    @classmethod
-    def get_loader_class(cls):
-        from fast_llm.engine.checkpoint.distributed import DistributedCheckpointLoader
-
-        return DistributedCheckpointLoader
+        return DistributedCheckpointHandler
 
 
 class StateDictCheckpointFormat(CheckpointFormat):
     name: typing.ClassVar[str] = "state_dict"
 
     @classmethod
-    def get_saver_class(cls):
-        from fast_llm.engine.checkpoint.state_dict import TrivialCheckpointSaver
+    def get_handler_class(cls):
+        from fast_llm.engine.checkpoint.state_dict import TrivialCheckpointHandler
 
-        return TrivialCheckpointSaver
-
-    @classmethod
-    def get_loader_class(cls):
-        from fast_llm.engine.checkpoint.state_dict import TrivialCheckpointLoader
-
-        return TrivialCheckpointLoader
+        return TrivialCheckpointHandler
 
 
 class ModelConfigType(str, enum.Enum):
@@ -254,53 +237,7 @@ class CheckpointHandler(abc.ABC):
     def __init__(self, model: "FastLLMModel"):
         self._model = model
 
-    @property
-    @abc.abstractmethod
-    def _include_optimizer_state(self) -> bool:
-        pass
-
-    @property
-    def _num_shards(self):
-        return len(self._model.state_shard_names) if self._include_optimizer_state else 1
-
-    @property
-    def _shard_names(self):
-        return self._model.state_shard_names if self._include_optimizer_state else self._model.state_shard_names[:1]
-
-
-class CheckpointSaver(CheckpointHandler):
-    def __init__(self, model: "FastLLMModel", config: CheckpointSaveConfig):
-        super().__init__(model)
-        self._config = config
-
     # TODO: save_metadata?
-
-    @property
-    def _include_optimizer_state(self):
-        if self._config.optimizer_state is None:
-            return self.format.support_optimizer
-        if self._config.optimizer_state:
-            # TODO: This is not automatically checked in config validation.
-            assert self.format.support_optimizer
-        return self._config.optimizer_state
-
-    @abc.abstractmethod
-    def save(self, metadata: "CheckpointMetadata"):
-        pass
-
-
-class CheckpointLoader(CheckpointHandler):
-    def __init__(self, model: "FastLLMModel", config: CheckpointLoadConfig):
-        super().__init__(model)
-        self._config = config
-
-    @property
-    def _include_optimizer_state(self):
-        assert self.format.support_optimizer is not None
-        if self._config.optimizer_state:
-            # TODO: This is not automatically checked in config validation.
-            assert self.format.support_optimizer
-        return self._config.optimizer_state
 
     @classmethod
     @abc.abstractmethod
@@ -308,5 +245,15 @@ class CheckpointLoader(CheckpointHandler):
         pass
 
     @abc.abstractmethod
-    def load(self, metadata: "CheckpointMetadata"):
+    def save(self, config: CheckpointSaveConfig, metadata: "CheckpointMetadata"):
         pass
+
+    @abc.abstractmethod
+    def load(self, config: CheckpointLoadConfig, metadata: "CheckpointMetadata"):
+        pass
+
+    def _get_num_shards(self, config: CheckpointStateConfigBase):
+        return len(self._model.state_shard_names) if config.optimizer_state else 1
+
+    def _get_shard_names(self, config: CheckpointStateConfigBase):
+        return self._model.state_shard_names if config.optimizer_state else self._model.state_shard_names[:1]

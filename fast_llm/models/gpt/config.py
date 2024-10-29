@@ -2,7 +2,7 @@ import typing
 
 from fast_llm.config import Field, FieldHint, FieldUpdate, config_class
 from fast_llm.data.config import DataConfig
-from fast_llm.engine.checkpoint.config import CheckpointFormat
+from fast_llm.engine.checkpoint.config import CheckpointFormat, CheckpointHandler
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig, PretrainedFastLLMModelConfig
 from fast_llm.engine.training.config import TrainerConfig
 from fast_llm.layers.language_model.config import LanguageModelArchitectureConfig, LanguageModelBaseConfig
@@ -16,16 +16,10 @@ class GPTHuggingfaceCheckpointFormat(CheckpointFormat):
     support_optimizer: typing.ClassVar[bool] = False
 
     @classmethod
-    def get_saver_class(cls):
-        from fast_llm.models.gpt.conversion import AutoGPTHuggingfaceCheckpointSaver
+    def get_handler_class(cls) -> type[CheckpointHandler]:
+        from fast_llm.models.gpt.conversion import AutoGPTHuggingfaceCheckpointHandler
 
-        return AutoGPTHuggingfaceCheckpointSaver.get_converter_class(cls.name)
-
-    @classmethod
-    def get_loader_class(cls):
-        from fast_llm.models.gpt.conversion import AutoGPTHuggingfaceCheckpointLoader
-
-        return AutoGPTHuggingfaceCheckpointLoader.get_converter_class(cls.name)
+        return AutoGPTHuggingfaceCheckpointHandler.get_handler_class(cls.name)
 
 
 class AutoGPTHuggingfaceCheckpointFormat(GPTHuggingfaceCheckpointFormat):

@@ -9,11 +9,10 @@ from fast_llm.config import Config, Field, FieldHint, NoAutoValidate, check_fiel
 from fast_llm.engine.base_model.config import BaseModelConfig
 from fast_llm.engine.checkpoint.config import (
     CheckpointFormat,
+    CheckpointHandler,
     CheckpointLoadConfig,
-    CheckpointLoader,
     CheckpointLoadMetadataConfig,
     CheckpointSaveMetadataConfig,
-    CheckpointSaver,
     DistributedCheckpointFormat,
     StateDictCheckpointFormat,
 )
@@ -213,12 +212,8 @@ class FastLLMModelConfig(Config):
         raise ValueError(f"Checkpoint format {format} not supported for model {cls.model_name}")
 
     @classmethod
-    def get_saver_class(cls, format: str) -> type[CheckpointSaver]:
-        return cls.get_checkpoint_format(format).get_saver_class()
-
-    @classmethod
-    def get_loader_class(cls, format: str) -> type[CheckpointLoader]:
-        return cls.get_checkpoint_format(format).get_loader_class()
+    def get_checkpoint_handler_class(cls, format: str) -> type[CheckpointHandler]:
+        return cls.get_checkpoint_format(format).get_handler_class()
 
     @classmethod
     def get_model_class(cls) -> type["FastLLMModel"]:
@@ -278,8 +273,7 @@ class FastLLMModelConfig(Config):
 
     @classmethod
     def load_metadata(cls, config: CheckpointLoadMetadataConfig) -> "CheckpointMetadata":
-        converter_class = cls.get_loader_class(config.format)
-        return converter_class.load_metadata(config)
+        return config.format.get_handler_class().load_metadata(config)
 
     def to_metadata(self, config: CheckpointSaveMetadataConfig, **kwargs):
         return CheckpointMetadata(
