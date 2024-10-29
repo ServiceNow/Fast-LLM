@@ -14,6 +14,8 @@ from fast_llm.engine.checkpoint.config import (
     CheckpointLoadMetadataConfig,
     CheckpointSaveMetadataConfig,
     CheckpointSaver,
+    DistributedCheckpointFormat,
+    StateDictCheckpointFormat,
 )
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.utils import Assert
@@ -186,6 +188,10 @@ SHARD_PAD_TO_MULTIPLE = 32
 @config_class()
 class FastLLMModelConfig(Config):
     _abstract = True
+    checkpoint_formats: typing.ClassVar[tuple[type[CheckpointFormat], ...]] = (
+        DistributedCheckpointFormat,
+        StateDictCheckpointFormat,
+    )
     model_name: typing.ClassVar[str]
     base_model: BaseModelConfig = Field(
         default_factory=BaseModelConfig, desc="Configuration for the base model.", hint=FieldHint.core
@@ -200,34 +206,19 @@ class FastLLMModelConfig(Config):
     )
 
     @classmethod
-    def get_supported_checkpoint_formats(cls):
-        return CheckpointFormat.distributed, CheckpointFormat.state_dict
+    def get_checkpoint_format(cls, format: str):
+        for format_ in cls.checkpoint_formats:
+            if format_.name == format:
+                return format_
+        raise ValueError(f"Checkpoint format {format} not supported for model {cls.model_name}")
 
     @classmethod
     def get_saver_class(cls, format: str) -> type[CheckpointSaver]:
-        if format == CheckpointFormat.distributed:
-            from fast_llm.engine.checkpoint.distributed import DistributedCheckpointSaver
-
-            return DistributedCheckpointSaver
-        elif format == CheckpointFormat.state_dict:
-            from fast_llm.engine.checkpoint.state_dict import TrivialCheckpointSaver
-
-            return TrivialCheckpointSaver
-        else:
-            raise NotImplementedError(format)
+        return cls.get_checkpoint_format(format).get_saver_class()
 
     @classmethod
     def get_loader_class(cls, format: str) -> type[CheckpointLoader]:
-        if format == CheckpointFormat.distributed:
-            from fast_llm.engine.checkpoint.distributed import DistributedCheckpointLoader
-
-            return DistributedCheckpointLoader
-        elif format == CheckpointFormat.state_dict:
-            from fast_llm.engine.checkpoint.state_dict import TrivialCheckpointLoader
-
-            return TrivialCheckpointLoader
-        else:
-            raise NotImplementedError(format)
+        return cls.get_checkpoint_format(format).get_loader_class()
 
     @classmethod
     def get_model_class(cls) -> type["FastLLMModel"]:
@@ -399,7 +390,7 @@ class CheckpointMetadata(Config):
         from fast_llm.models.auto import model_registry
 
         Assert.incl(self.model, model_registry)
-        Assert.incl(self.format, model_registry[self.model].get_supported_checkpoint_formats())
+        model_registry[self.model].get_checkpoint_format(self.format)
 
     @classmethod
     def _from_dict(
@@ -416,7 +407,7 @@ class CheckpointMetadata(Config):
         if "model" not in default:
             default["model"] = "gpt"
         if "format" not in default:
-            default["format"] = CheckpointFormat.distributed
+            default["format"] = DistributedCheckpointFormat
         if "fast_llm_version" not in default:
             default["fast_llm_version"] = "0"
         if "config" not in default:

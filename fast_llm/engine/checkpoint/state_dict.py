@@ -9,11 +9,13 @@ import torch
 
 from fast_llm.core.distributed import safe_barrier
 from fast_llm.engine.checkpoint.config import (
+    CheckpointFormat,
     CheckpointHandler,
     CheckpointLoader,
     CheckpointLoadMetadataConfig,
     CheckpointSaveConfig,
     CheckpointSaver,
+    StateDictCheckpointFormat,
     export_safetensors_metadata,
 )
 from fast_llm.engine.checkpoint.safe_load import SafeLoad
@@ -26,6 +28,8 @@ logger = logging.getLogger(__name__)
 
 
 class StateDictCheckpointHandler(CheckpointHandler):
+    format: typing.ClassVar[type[CheckpointFormat]] = StateDictCheckpointFormat
+
     @abc.abstractmethod
     def _convert_state_dict(
         self, state_dict: dict[str, torch.Tensor | SafeTensorSlice], export: bool

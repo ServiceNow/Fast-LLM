@@ -285,12 +285,16 @@ class AutoStateDictCheckpointLoader(AutoStateDictCheckpointHandler, ExternalStat
 
 class HuggingfaceStateDictCheckpointHandler(ExternalStateDictCheckpointHandler, abc.ABC):
     support_optimizer_state: typing.ClassVar[bool] = True
-    model_type: typing.ClassVar[str | None] = None
+
+    @classmethod
+    def get_huggingface_model_type(self):
+        # We assume the two names match, but derived classes can make it different.
+        return self.format.name
 
     @classmethod
     @abc.abstractmethod
     def _create_config_converters(cls) -> list[ParamConverter]:
-        return [ConstantExportParamConverter(None, "model_type", cls.model_type)]
+        return [ConstantExportParamConverter(None, "model_type", cls.get_huggingface_model_type())]
 
 
 class HuggingfaceStateDictCheckpointSaver(
@@ -327,7 +331,7 @@ class HuggingfaceStateDictCheckpointLoader(
         imported_model_config = cls._import_config(cls._load_config(config.path), True)
         return CheckpointMetadata(
             fast_llm_version=__version__,
-            model=cls.model_type,
+            model=cls.format.name,
             format=config.format,
             config=imported_model_config,
             shards=["weights"],
@@ -344,8 +348,7 @@ class HuggingfaceStateDictCheckpointLoader(
         import transformers
 
         config = transformers.AutoConfig.from_pretrained(directory).to_dict()
-        if cls.model_type is not None:
-            Assert.eq(config["model_type"], cls.model_type)
+        Assert.eq(config["model_type"], cls.get_huggingface_model_type())
         return config
 
     def _load_weights(self, device) -> typing.Iterator[tuple[str, str, torch.Tensor | SafeTensorSlice]]:

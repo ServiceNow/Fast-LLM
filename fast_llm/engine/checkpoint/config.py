@@ -18,10 +18,6 @@ if typing.TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# TODO: Use packaging.version? (Safer but extra requirement)
-CHECKPOINT_VERSION = "0.1"
-KNOWN_CHECKPOINT_VERSIONS = ("0", "0.1")
-
 
 def export_safetensors_metadata(metadata):
     """
@@ -41,11 +37,57 @@ def import_safetensors_metadata(metadata):
     return {key: yaml.safe_load(value) for key, value in metadata.items()}
 
 
-class CheckpointFormat(str):
-    # Distributed checkpoint for fast checkpointing and resuming.
-    distributed = "distributed"
-    # Model state dict, for safe long-term storage in Fast-LLM format.
-    state_dict = "state_dict"
+class CheckpointFormat(abc.ABC):
+    # A data structure to make information about a checkpoint format accessible during validation.
+    name: typing.ClassVar[str]
+    support_optimizer: typing.ClassVar[bool] = True
+    support_saving: typing.ClassVar[bool] = True
+    support_loading: typing.ClassVar[bool] = True
+    enforce_architecture_match: typing.ClassVar[bool] = False
+
+    @classmethod
+    @abc.abstractmethod
+    def get_saver_class(cls):
+        pass
+
+    @classmethod
+    @abc.abstractmethod
+    def get_loader_class(cls):
+        pass
+
+
+class DistributedCheckpointFormat(CheckpointFormat):
+    # TODO v0.2: Add `enforce_version_match`
+    name: typing.ClassVar[str] = "distributed"
+    enforce_architecture_match: typing.ClassVar[bool] = True
+
+    @classmethod
+    def get_saver_class(cls):
+        from fast_llm.engine.checkpoint.distributed import DistributedCheckpointSaver
+
+        return DistributedCheckpointSaver
+
+    @classmethod
+    def get_loader_class(cls):
+        from fast_llm.engine.checkpoint.distributed import DistributedCheckpointLoader
+
+        return DistributedCheckpointLoader
+
+
+class StateDictCheckpointFormat(CheckpointFormat):
+    name: typing.ClassVar[str] = "state_dict"
+
+    @classmethod
+    def get_saver_class(cls):
+        from fast_llm.engine.checkpoint.state_dict import TrivialCheckpointSaver
+
+        return TrivialCheckpointSaver
+
+    @classmethod
+    def get_loader_class(cls):
+        from fast_llm.engine.checkpoint.state_dict import TrivialCheckpointLoader
+
+        return TrivialCheckpointLoader
 
 
 class ModelConfigType(str, enum.Enum):
@@ -68,20 +110,13 @@ class ModelConfigType(str, enum.Enum):
 
 
 @config_class()
-class CheckpointPathConfigBase(Config):
-    _abstract = True
-    path: pathlib.Path | None = Field(
-        default=None,
-        desc="Location of the checkpoint.",
-        hint=FieldHint.core,
-    )
-
-
-@config_class()
 class CheckpointConfigBase(Config):
     _abstract = True
-    format: str = Field(
-        default=CheckpointFormat.state_dict,
+    # Note: the `format` may be a str when configuring from file or cli.
+    #   The actual class should be set through `model_config.get_checkpoint_format`,
+    #   but we don't know the model type here so we expect the value to be set in a parent config validation.
+    format: type[CheckpointFormat] = Field(
+        default=StateDictCheckpointFormat,
         desc="Format of the checkpoint.",
         hint=FieldHint.core,
     )
@@ -109,11 +144,11 @@ class CheckpointConfigBase(Config):
 
 
 @config_class()
-class CheckpointStateConfigBase(Config):
+class CheckpointStateConfigBase(CheckpointConfigBase):
     _abstract = True
     # Defaults and descriptions are set in derived classes.
-    model_weights: bool = Field(hint=FieldHint.feature)
-    optimizer_state: bool | None = Field(hint=FieldHint.feature)
+    model_weights: bool = Field(default=True, hint=FieldHint.feature)
+    optimizer_state: bool = Field(hint=FieldHint.feature)
 
     @classmethod
     def _from_dict(
@@ -128,22 +163,7 @@ class CheckpointStateConfigBase(Config):
 
 
 @config_class()
-class CheckpointStateSaveConfigBase(CheckpointStateConfigBase):
-    model_weights: bool = Field(desc="Save the model weights.")
-    optimizer_state: bool | None = FieldUpdate(
-        desc="Save the optimizer state. Default: save if supported, or as as specified by the `format`."
-    )
-
-
-@config_class()
-class CheckpointStateLoadConfigBase(CheckpointStateConfigBase):
-    # TODO: Is type override ok?
-    model_weights: bool = Field(desc="Load the model weights.")
-    optimizer_state: bool = FieldUpdate(default=False, desc="Load the optimizer state.")
-
-
-@config_class()
-class CheckpointSaveConfigBase(Config):
+class CheckpointSaveConfigBase(CheckpointConfigBase):
     _abstract = True
     parameters_per_file: int = Field(
         default=2**32,
@@ -159,17 +179,43 @@ class CheckpointSaveConfigBase(Config):
 
 
 @config_class()
-class CheckpointSaveMetadataConfig(CheckpointPathConfigBase, CheckpointConfigBase):
+class CheckpointStateSaveConfigBase(CheckpointSaveConfigBase, CheckpointStateConfigBase):
+    model_weights: bool = Field(desc="Save the model weights.")
+    optimizer_state: bool = FieldUpdate(
+        default=None, desc="Save the optimizer state. Default: save if supported by the `format`."
+    )
+
+    def _validate(self):
+        if self.optimizer_state is None:
+            # TODO: Make sure it's a type
+            self.optimizer_state = self.format.support_optimizer
+        super()._validate()
+        if self.optimizer_state:
+            assert self.format.support_optimizer
+
+
+@config_class()
+class CheckpointPathConfigBase(CheckpointConfigBase):
+    _abstract = True
+    path: pathlib.Path | None = Field(
+        default=None,
+        desc="Location of the checkpoint.",
+        hint=FieldHint.core,
+    )
+
+
+@config_class()
+class CheckpointSaveMetadataConfig(CheckpointPathConfigBase):
     _abstract = False
 
 
 @config_class()
-class CheckpointSaveConfig(CheckpointSaveMetadataConfig, CheckpointStateSaveConfigBase, CheckpointSaveConfigBase):
+class CheckpointSaveConfig(CheckpointSaveMetadataConfig, CheckpointStateSaveConfigBase):
     _abstract = False
 
 
 @config_class()
-class CheckpointLoadMetadataConfig(CheckpointPathConfigBase, CheckpointConfigBase):
+class CheckpointLoadMetadataConfig(CheckpointPathConfigBase):
     _abstract = False
 
     load_config: ModelConfigType = Field(
@@ -180,7 +226,7 @@ class CheckpointLoadMetadataConfig(CheckpointPathConfigBase, CheckpointConfigBas
 
     def _validate(self):
         super()._validate()
-        if self.format == CheckpointFormat.distributed:
+        if self.format.enforce_architecture_match:
             assert self.load_config.load_architecture
 
     @property
@@ -189,17 +235,21 @@ class CheckpointLoadMetadataConfig(CheckpointPathConfigBase, CheckpointConfigBas
 
 
 @config_class()
-class CheckpointLoadConfig(CheckpointLoadMetadataConfig, CheckpointStateLoadConfigBase):
+class CheckpointLoadConfig(CheckpointLoadMetadataConfig, CheckpointStateConfigBase):
     _abstract = False
+
+    model_weights: bool = Field(desc="Load the model weights.")
+    # TODO: We don't know yet if the format supports it.
+    optimizer_state: bool = FieldUpdate(default=False, desc="Load the optimizer state.")
 
     def _validate(self):
         super()._validate()
-        if self.format == CheckpointFormat.distributed:
-            assert self.load_config.load_architecture
+        if self.optimizer_state:
+            assert self.format.support_optimizer
 
 
 class CheckpointHandler(abc.ABC):
-    support_optimizer_state: typing.ClassVar[bool]
+    format: typing.ClassVar[type[CheckpointFormat]]
 
     def __init__(self, model: "FastLLMModel"):
         self._model = model
@@ -228,10 +278,10 @@ class CheckpointSaver(CheckpointHandler):
     @property
     def _include_optimizer_state(self):
         if self._config.optimizer_state is None:
-            return self.support_optimizer_state
+            return self.format.support_optimizer
         if self._config.optimizer_state:
             # TODO: This is not automatically checked in config validation.
-            assert self.support_optimizer_state
+            assert self.format.support_optimizer
         return self._config.optimizer_state
 
     @abc.abstractmethod
@@ -246,10 +296,10 @@ class CheckpointLoader(CheckpointHandler):
 
     @property
     def _include_optimizer_state(self):
-        assert self.support_optimizer_state is not None
+        assert self.format.support_optimizer is not None
         if self._config.optimizer_state:
             # TODO: This is not automatically checked in config validation.
-            assert self.support_optimizer_state
+            assert self.format.support_optimizer
         return self._config.optimizer_state
 
     @classmethod

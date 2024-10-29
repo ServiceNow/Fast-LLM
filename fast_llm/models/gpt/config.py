@@ -2,7 +2,7 @@ import typing
 
 from fast_llm.config import Field, FieldHint, FieldUpdate, config_class
 from fast_llm.data.config import DataConfig
-from fast_llm.engine.checkpoint.config import CheckpointLoader, CheckpointSaver
+from fast_llm.engine.checkpoint.config import CheckpointFormat
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig, PretrainedFastLLMModelConfig
 from fast_llm.engine.training.config import TrainerConfig
 from fast_llm.layers.language_model.config import LanguageModelArchitectureConfig, LanguageModelBaseConfig
@@ -12,16 +12,40 @@ if typing.TYPE_CHECKING:
     pass
 
 
-class HuggingfaceModelType:
-    """
-    An enum for the huggingface models with conversion support.
-    """
+class GPTHuggingfaceCheckpointFormat(CheckpointFormat):
+    support_optimizer: typing.ClassVar[bool] = False
 
-    auto = "auto"
-    starcoder2 = "starcoder2"
-    llama = "llama"
-    mistral = "mistral"
-    mixtral = "mixtral"
+    @classmethod
+    def get_saver_class(cls):
+        from fast_llm.models.gpt.conversion import AutoGPTHuggingfaceCheckpointSaver
+
+        return AutoGPTHuggingfaceCheckpointSaver.get_converter_class(cls.name)
+
+    @classmethod
+    def get_loader_class(cls):
+        from fast_llm.models.gpt.conversion import AutoGPTHuggingfaceCheckpointLoader
+
+        return AutoGPTHuggingfaceCheckpointLoader.get_converter_class(cls.name)
+
+
+class AutoGPTHuggingfaceCheckpointFormat(GPTHuggingfaceCheckpointFormat):
+    name: typing.ClassVar[str] = "auto"
+
+
+class Starcoder2GPTHuggingfaceCheckpointFormat(GPTHuggingfaceCheckpointFormat):
+    name: typing.ClassVar[str] = "starcoder2"
+
+
+class LlamaGPTHuggingfaceCheckpointFormat(GPTHuggingfaceCheckpointFormat):
+    name: typing.ClassVar[str] = "llama"
+
+
+class MistralGPTHuggingfaceCheckpointFormat(GPTHuggingfaceCheckpointFormat):
+    name: typing.ClassVar[str] = "mistral"
+
+
+class MixtralGPTHuggingfaceCheckpointFormat(GPTHuggingfaceCheckpointFormat):
+    name: typing.ClassVar[str] = "mixtral"
 
 
 @config_class()
@@ -74,6 +98,13 @@ class GPTModelConfig(FastLLMModelConfig):
     _abstract = False
     model_name: typing.ClassVar[str] = "gpt"
     base_model: GPTBaseModelConfig = FieldUpdate(default_factory=GPTBaseModelConfig)
+    checkpoint_formats: typing.ClassVar[tuple[type[CheckpointFormat], ...]] = FastLLMModelConfig.checkpoint_formats + (
+        AutoGPTHuggingfaceCheckpointFormat,
+        Starcoder2GPTHuggingfaceCheckpointFormat,
+        LlamaGPTHuggingfaceCheckpointFormat,
+        MistralGPTHuggingfaceCheckpointFormat,
+        MixtralGPTHuggingfaceCheckpointFormat,
+    )
 
     @classmethod
     def get_model_class(cls):
@@ -86,30 +117,6 @@ class GPTModelConfig(FastLLMModelConfig):
         from fast_llm.models.gpt.huggingface import HuggingfaceGPTModelForCausalLM
 
         return HuggingfaceGPTModelForCausalLM
-
-    @classmethod
-    def get_supported_checkpoint_formats(cls):
-        return super().get_supported_checkpoint_formats() + tuple(
-            name for name in HuggingfaceModelType.__dict__ if not name.startswith("_")
-        )
-
-    @classmethod
-    def get_saver_class(cls, format: str) -> type[CheckpointSaver]:
-        try:
-            return super().get_saver_class(format)
-        except NotImplementedError:
-            from fast_llm.models.gpt.conversion import AutoGPTHuggingfaceCheckpointSaver
-
-            return AutoGPTHuggingfaceCheckpointSaver.get_converter_class(format)
-
-    @classmethod
-    def get_loader_class(cls, format: str) -> type[CheckpointLoader]:
-        try:
-            return super().get_loader_class(format)
-        except NotImplementedError:
-            from fast_llm.models.gpt.conversion import AutoGPTHuggingfaceCheckpointLoader
-
-            return AutoGPTHuggingfaceCheckpointLoader.get_converter_class(format)
 
 
 @config_class()

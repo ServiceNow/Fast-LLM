@@ -6,9 +6,12 @@ import torch
 import yaml
 
 from fast_llm.engine.checkpoint.config import (
+    CheckpointFormat,
+    CheckpointHandler,
     CheckpointLoader,
     CheckpointLoadMetadataConfig,
     CheckpointSaver,
+    DistributedCheckpointFormat,
     ModelConfigType,
     export_safetensors_metadata,
 )
@@ -19,8 +22,11 @@ from fast_llm.utils import Assert
 logger = logging.getLogger(__name__)
 
 
-class DistributedCheckpointSaver(CheckpointSaver):
-    support_optimizer_state: typing.ClassVar[bool] = True
+class DistributedCheckpointHandler(CheckpointHandler):
+    format: typing.ClassVar[type[CheckpointFormat]] = DistributedCheckpointFormat
+
+
+class DistributedCheckpointSaver(DistributedCheckpointHandler, CheckpointSaver):
 
     def save(self, metadata: CheckpointMetadata):
         serialized_metadata = metadata.to_serialized()
@@ -33,7 +39,7 @@ class DistributedCheckpointSaver(CheckpointSaver):
         )
 
 
-class DistributedCheckpointLoader(CheckpointLoader):
+class DistributedCheckpointLoader(DistributedCheckpointHandler, CheckpointLoader):
     @classmethod
     def load_metadata(cls, config: CheckpointLoadMetadataConfig):
         return CheckpointMetadata.from_dict(yaml.safe_load((config.path / "metadata.yaml").open("r")))

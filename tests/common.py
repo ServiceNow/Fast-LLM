@@ -11,7 +11,11 @@ import pytest
 import torch
 
 from fast_llm.data.mmap import MMapIndexedDataset
-from fast_llm.models.gpt.config import HuggingfaceModelType
+from fast_llm.models.gpt.config import (
+    MistralGPTHuggingfaceCheckpointFormat,
+    MixtralGPTHuggingfaceCheckpointFormat,
+    Starcoder2GPTHuggingfaceCheckpointFormat,
+)
 from fast_llm.models.gpt.huggingface import HuggingfaceGPTModelForCausalLM
 from fast_llm.tools.train import CliTrainingConfig
 from tests.compare_tensor_logs import CompareConfig, compare_tensor_logs
@@ -141,21 +145,21 @@ _CONFIGS = {
         CONFIG_SC2_FAST_LLM,
         CONFIG_SC2_MEGATRON,
         CONFIG_SC2_COMMON,
-        HuggingfaceModelType.starcoder2,
+        Starcoder2GPTHuggingfaceCheckpointFormat,
     ),
     "mistral": (
         "gpt",
         CONFIG_MISTRAL_FAST_LLM,
         CONFIG_MISTRAL_MEGATRON,
         CONFIG_MISTRAL_COMMON,
-        HuggingfaceModelType.mistral,
+        MistralGPTHuggingfaceCheckpointFormat,
     ),
     "mixtral": (
         "gpt",
         CONFIG_MIXTRAL_FAST_LLM,
         CONFIG_MIXTRAL_MEGATRON,
         CONFIG_MIXTRAL_COMMON,
-        HuggingfaceModelType.mixtral,
+        MixtralGPTHuggingfaceCheckpointFormat,
     ),
 }
 
