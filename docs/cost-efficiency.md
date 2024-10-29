@@ -8,6 +8,10 @@ Fast-LLM is built for speed and scalability to minimize training costs. Its adva
 
 To showcase the cost-saving potential of Fast-LLM, we've compared the cost of training a language model across various frameworks for different scenarios. For these calculations, we assume a cost of **USD 2.50 per H100 GPU per hour**.
 
+!!! note "Disclaimer"
+
+    All comparisons were conducted with identical model configurations and training setups across frameworks to maintain fairness. We optimized training parameters within each framework to achieve the best possible performance. Detailed configuration files are available in the footnotes for reference. If you have questions about our methods, assumptions, or suggestions for enhancing performance on any framework, please contact us at [fast-llm-team@servicenow.com](mailto:fast-llm-team@servicenow.com).
+
 ### Scenario Comparison: Training Costs and Token Efficiency
 
 The tables below provide a comparison of training costs for three different model setups, including costs for training on **1 trillion tokens** and the total tokens trained within a **$100,000 budget**.
