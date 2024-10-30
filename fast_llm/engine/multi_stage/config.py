@@ -253,8 +253,7 @@ class FastLLMModelConfig(Config):
         # TODO v0.2: Make checkpoint type mandatory
         # TODO: Standardize to *updates?
         if "checkpoint_type" in metadata:
-            # TODO python 3.12: Assert.incl(metadata["checkpoint_type"], CheckpointType)
-            CheckpointFormat(metadata["checkpoint_type"])
+            cls.get_checkpoint_format(metadata["checkpoint_type"])
         version = metadata["checkpoint_version"]
         if version not in KNOWN_CHECKPOINT_VERSIONS:
             raise ValueError(f"Unrecognised checkpoint version: {version}")

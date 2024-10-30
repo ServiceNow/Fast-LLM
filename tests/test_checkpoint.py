@@ -383,6 +383,7 @@ def test_load_pretrained_distributed_with_config():
             "training.checkpoint.interval=1",
             "training.train_iters=1",
             f"pretrained.path={_CONVERT_PATH / 'distributed_0'}",
+            f"pretrained.format={DistributedCheckpointFormat.name}",
             "schedule.skip_step=True",
         ],
     )

@@ -23,7 +23,7 @@ class FastLLMModel(MultiStageModel):
         # TODO: Handle barriers, ok file, mkdir, etc. here
         num_shards = self.num_state_shards if config.optimizer_state else 1
         fast_llm_metadata = {
-            "checkpoint_type": config.format,
+            "checkpoint_type": config.format.name,
             "checkpoint_version": str(CHECKPOINT_VERSION),
             "fast_llm_config": self._fast_llm_config.to_serialized(),
             "state_shard_names": list(self._state_shard_names[:num_shards]),

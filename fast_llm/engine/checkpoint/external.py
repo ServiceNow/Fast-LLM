@@ -280,7 +280,7 @@ class HuggingfaceStateDictCheckpointHandler(ExternalStateDictCheckpointHandler, 
             # TODO: Avoid `to_serialized`?
             "fast_llm_config": {"base_model": imported_model_config.to_serialized()},
             # TODO: Handle "auto"?
-            "checkpoint_type": config.format,
+            "checkpoint_type": config.format.name,
             "checkpoint_version": CHECKPOINT_VERSION,
         }
 
