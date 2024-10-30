@@ -7,9 +7,11 @@ from fast_llm.engine.base_model.config import BaseModelConfig
 from fast_llm.engine.checkpoint.config import (
     KNOWN_CHECKPOINT_VERSIONS,
     CheckpointFormat,
+    CheckpointHandler,
     CheckpointLoadConfig,
     CheckpointLoadMetadataConfig,
-    Converter,
+    DistributedCheckpointFormat,
+    StateDictCheckpointFormat,
 )
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.utils import Assert
@@ -182,6 +184,11 @@ SHARD_PAD_TO_MULTIPLE = 32
 @config_class()
 class FastLLMModelConfig(Config):
     _abstract = True
+    checkpoint_formats: typing.ClassVar[tuple[type[CheckpointFormat], ...]] = (
+        DistributedCheckpointFormat,
+        StateDictCheckpointFormat,
+    )
+    model_name: typing.ClassVar[str]
     base_model: BaseModelConfig = Field(
         default_factory=BaseModelConfig, desc="Configuration for the base model.", hint=FieldHint.core
     )
@@ -195,21 +202,15 @@ class FastLLMModelConfig(Config):
     )
 
     @classmethod
-    def get_supported_checkpoint_formats(cls):
-        return CheckpointFormat.distributed, CheckpointFormat.state_dict
+    def get_checkpoint_format(cls, format: str):
+        for format_ in cls.checkpoint_formats:
+            if format_.name == format:
+                return format_
+        raise ValueError(f"Checkpoint format {format} not supported for model {cls.model_name}")
 
     @classmethod
-    def get_converter_class(cls, format: str) -> type["Converter"]:
-        if format == CheckpointFormat.distributed:
-            from fast_llm.engine.checkpoint.distributed import DistributedConverter
-
-            return DistributedConverter
-        elif format == CheckpointFormat.state_dict:
-            from fast_llm.engine.checkpoint.state_dict import TrivialConverter
-
-            return TrivialConverter
-        else:
-            raise NotImplementedError(format)
+    def get_checkpoint_handler_class(cls, format: str) -> type[CheckpointHandler]:
+        return cls.get_checkpoint_format(format).get_handler_class()
 
     @classmethod
     def get_model_class(cls) -> type["FastLLMModel"]:
@@ -318,8 +319,7 @@ class FastLLMModelConfig(Config):
 
     @classmethod
     def load_metadata(cls, config: CheckpointLoadMetadataConfig):
-        converter_class = cls.get_converter_class(config.format)
-        return converter_class.load_metadata(config)
+        return config.format.get_handler_class().load_metadata(config)
 
 
 @config_class()

@@ -1,4 +1,5 @@
 import logging
+import typing
 
 import safetensors.torch
 import torch
@@ -6,10 +7,12 @@ import yaml
 
 from fast_llm.core.distributed import broadcast_scalar, safe_barrier
 from fast_llm.engine.checkpoint.config import (
+    CheckpointFormat,
+    CheckpointHandler,
     CheckpointLoadConfig,
     CheckpointLoadMetadataConfig,
     CheckpointSaveConfig,
-    Converter,
+    DistributedCheckpointFormat,
     ModelConfigType,
     export_safetensors_metadata,
 )
@@ -20,7 +23,8 @@ from fast_llm.utils import Assert
 logger = logging.getLogger(__name__)
 
 
-class DistributedConverter(Converter):
+class DistributedCheckpointHandler(CheckpointHandler):
+    format: typing.ClassVar[type[CheckpointFormat]] = DistributedCheckpointFormat
 
     @classmethod
     def load_metadata(cls, config: CheckpointLoadMetadataConfig):

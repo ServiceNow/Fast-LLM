@@ -7,7 +7,7 @@ import shutil
 import subprocess
 
 from fast_llm.config import Field, config_class
-from fast_llm.engine.checkpoint.config import CheckpointFormat, CheckpointLoadConfig, CheckpointSaveConfig
+from fast_llm.engine.checkpoint.config import CheckpointLoadConfig, CheckpointSaveConfig, DistributedCheckpointFormat
 from fast_llm.engine.config_utils.runnable import RunnableConfig
 
 try:
@@ -150,7 +150,7 @@ class PushConfig(RunnableConfig):
                 ConversionConfig(
                     input=CheckpointLoadConfig(
                         path=checkpoint_path,
-                        format=CheckpointFormat.distributed,
+                        format=DistributedCheckpointFormat,
                     ),
                     output=CheckpointSaveConfig(
                         path=checkpoint_path_hf,

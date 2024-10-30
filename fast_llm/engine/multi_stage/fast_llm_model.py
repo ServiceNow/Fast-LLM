@@ -29,7 +29,7 @@ class FastLLMModel(MultiStageModel):
             "state_shard_names": list(self._state_shard_names[:num_shards]),
             "metadata": {} if extra_metadata is None else extra_metadata,
         }
-        converter = self._fast_llm_config.get_converter_class(config.format)(self)
+        converter = config.format.get_handler_class()(self)
         converter.save(config, fast_llm_metadata)
 
     def load_checkpoint(self, config: CheckpointLoadConfig):
@@ -38,7 +38,7 @@ class FastLLMModel(MultiStageModel):
         # TODO: Safety checks
         # TODO: Handle barriers, ok file, etc. here
         fast_llm_metadata = self.config_class.load_metadata(config)
-        converter = self._fast_llm_config.get_converter_class(config.format)(self)
+        converter = config.format.get_handler_class()(self)
         converter.load(config, fast_llm_metadata)
         self._finalize_load(reset_optimizer=not config.optimizer_state)
         return fast_llm_metadata.get("metadata")
