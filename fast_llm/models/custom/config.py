@@ -1,3 +1,5 @@
+import typing
+
 from fast_llm.config import FieldUpdate, config_class
 from fast_llm.data.config import DataConfig
 from fast_llm.models.gpt.config import (
@@ -30,6 +32,7 @@ class CustomBaseModelConfig(GPTBaseModelConfig, CustomArchitectureConfig):
 @config_class()
 class CustomModelConfig(GPTModelConfig):
     # TODO: Add custom model config parameters, if any (typically none).
+    model_name: typing.ClassVar[str] = "gpt_custom"
     base_model: CustomBaseModelConfig = FieldUpdate(default_factory=CustomBaseModelConfig)
 
     @classmethod

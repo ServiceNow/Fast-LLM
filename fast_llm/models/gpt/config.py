@@ -90,6 +90,7 @@ class GPTBaseModelConfig(LanguageModelBaseConfig, GPTArchitectureConfig):
 @config_class()
 class GPTModelConfig(FastLLMModelConfig):
     _abstract = False
+    model_name: typing.ClassVar[str] = "gpt"
     base_model: GPTBaseModelConfig = FieldUpdate(default_factory=GPTBaseModelConfig)
     checkpoint_formats: typing.ClassVar[tuple[type[CheckpointFormat], ...]] = FastLLMModelConfig.checkpoint_formats + (
         AutoGPTHuggingfaceCheckpointFormat,

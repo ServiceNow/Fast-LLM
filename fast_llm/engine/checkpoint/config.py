@@ -13,6 +13,7 @@ from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
+    from fast_llm.engine.multi_stage.config import FastLLMModelConfig
     from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
 
 logger = logging.getLogger(__name__)
@@ -52,6 +53,10 @@ class CheckpointFormat(abc.ABC):
     @abc.abstractmethod
     def get_handler_class(cls) -> type["CheckpointHandler"]:
         pass
+
+    @classmethod
+    def __fast_llm_serialize__(cls):
+        return cls.name
 
 
 class DistributedCheckpointFormat(CheckpointFormat):
@@ -109,13 +114,16 @@ class CheckpointPathConfigBase(Config):
 class CheckpointConfigBase(Config):
     _abstract = True
     # Note: the `format` may be a str when configuring from file or cli.
-    #   The actual class should be set through `model_config.get_checkpoint_format`,
-    #   but we don't know the model type here so we expect the value to be set in a parent config validation.
+    #   The actual class should be set through `setup` in a parent config validation.
     format: type[CheckpointFormat] = Field(
         default=StateDictCheckpointFormat,
         desc="Format of the checkpoint.",
         hint=FieldHint.core,
     )
+
+    def setup(self, model_config: "FastLLMModelConfig"):
+        assert not self._validated
+        self.format = model_config.get_checkpoint_format(self.format)
 
     @classmethod
     def _from_dict(
