@@ -20,7 +20,7 @@ from fast_llm.tools.convert import ConversionConfig
 from tests.common import (
     CONFIG_COMMON,
     FORCE_REUSE_RESULTS,
-    HUGGINGFACE_MODEL_TYPE,
+    HUGGINGFACE_CHECKPOINT_FORMAT,
     REUSE_RESULTS,
     TEST_MODEL,
     TEST_MODEL_TYPE,
@@ -111,7 +111,7 @@ def test_convert_distributed_to_state_dict():
 
 @pytest.mark.depends(on=["test_convert_distributed_to_state_dict"])
 def test_convert_state_dict_to_huggingface():
-    if HUGGINGFACE_MODEL_TYPE is None:
+    if HUGGINGFACE_CHECKPOINT_FORMAT is None:
         pytest.skip(f"Conversion not supported for {TEST_MODEL}")
     _run_conversion(
         ConversionConfig(
@@ -121,7 +121,7 @@ def test_convert_state_dict_to_huggingface():
             ),
             output=CheckpointSaveConfig(
                 path=_CONVERT_PATH / "huggingface_0",
-                format=HUGGINGFACE_MODEL_TYPE,
+                format=HUGGINGFACE_CHECKPOINT_FORMAT,
             ),
         )
     )
@@ -133,7 +133,7 @@ def test_convert_huggingface_to_distributed():
         ConversionConfig(
             input=CheckpointLoadConfig(
                 path=_CONVERT_PATH / "huggingface_0",
-                format=HUGGINGFACE_MODEL_TYPE,
+                format=HUGGINGFACE_CHECKPOINT_FORMAT,
             ),
             output=CheckpointSaveConfig(
                 path=_CONVERT_PATH / "distributed_0",
@@ -145,7 +145,7 @@ def test_convert_huggingface_to_distributed():
 
 @pytest.mark.depends(on=["test_checkpoint_and_eval"])
 def test_convert_distributed_to_huggingface():
-    if HUGGINGFACE_MODEL_TYPE is None:
+    if HUGGINGFACE_CHECKPOINT_FORMAT is None:
         pytest.skip(f"Conversion not supported for {TEST_MODEL}")
     _run_conversion(
         ConversionConfig(
@@ -155,7 +155,7 @@ def test_convert_distributed_to_huggingface():
             ),
             output=CheckpointSaveConfig(
                 path=_CONVERT_PATH / "huggingface_1",
-                format=HUGGINGFACE_MODEL_TYPE,
+                format=HUGGINGFACE_CHECKPOINT_FORMAT,
             ),
         )
     )
@@ -167,7 +167,7 @@ def test_convert_huggingface_to_state_dict():
         ConversionConfig(
             input=CheckpointLoadConfig(
                 path=_CONVERT_PATH / "huggingface_1",
-                format=HUGGINGFACE_MODEL_TYPE,
+                format=HUGGINGFACE_CHECKPOINT_FORMAT,
             ),
             output=CheckpointSaveConfig(
                 path=_CONVERT_PATH / "state_dict_1",
@@ -297,11 +297,11 @@ def test_load_converted_huggingface_checkpoint():
     )
     pretrained_config_0 = CheckpointLoadConfig(
         path=_CONVERT_PATH / "huggingface_0",
-        format=HUGGINGFACE_MODEL_TYPE,
+        format=HUGGINGFACE_CHECKPOINT_FORMAT,
     )
     pretrained_config_1 = CheckpointLoadConfig(
         path=_CONVERT_PATH / "huggingface_1",
-        format=HUGGINGFACE_MODEL_TYPE,
+        format=HUGGINGFACE_CHECKPOINT_FORMAT,
     )
     config = TEST_MODEL_CONFIG_CLS.from_pretrained(pretrained_config_ref)
     model = TEST_MODEL_CLS.from_pretrained(pretrained_config_0, mode=StageMode.weights)
@@ -330,7 +330,7 @@ def test_run_converted_model():
     model_from_hf = TEST_MODEL_HF_CLS.from_pretrained(
         CheckpointLoadConfig(
             path=_CONVERT_PATH / "huggingface_0",
-            format=HUGGINGFACE_MODEL_TYPE,
+            format=HUGGINGFACE_CHECKPOINT_FORMAT,
         )
     )
     errors = []
@@ -368,6 +368,7 @@ def test_load_pretrained_distributed_in_dp2():
             "training.checkpoint.interval=1",
             "training.train_iters=1",
             f"pretrained.path={_CONVERT_PATH / 'distributed_0'}",
+            f"pretrained.format={DistributedCheckpointFormat.name}",
             "schedule.skip_step=True",
         ],
         num_gpus=2,
@@ -383,6 +384,7 @@ def test_load_pretrained_distributed_with_config():
             "training.checkpoint.interval=1",
             "training.train_iters=1",
             f"pretrained.path={_CONVERT_PATH / 'distributed_0'}",
+            f"pretrained.format={DistributedCheckpointFormat.name}",
             "schedule.skip_step=True",
         ],
     )
@@ -495,7 +497,7 @@ def test_load_pretrained_huggingface_in_dp2():
             "training.checkpoint.interval=1",
             "training.train_iters=1",
             f"pretrained.path={_CONVERT_PATH / 'huggingface_0'}",
-            f"pretrained.format={HUGGINGFACE_MODEL_TYPE.name}",
+            f"pretrained.format={HUGGINGFACE_CHECKPOINT_FORMAT.name}",
             "schedule.skip_step=True",
         ],
         num_gpus=2,

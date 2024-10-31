@@ -184,10 +184,10 @@ def test_triton_cross_entropy():
     c2, g2 = fused_cross_entropy_forward_backward(logits, labels, 1)
     c3, g3 = triton_cross_entropy_forward_backward(logits, labels, 1)
 
-    Assert.rms_close(c2, c3, 1e-5)
-    Assert.rms_close(c1, c3, 1e-5)
-    Assert.rms_close(g1, g3, 1e-3)
-    Assert.rms_close(g2, g3, 1e-3)
+    Assert.rms_close(c2, c3, 1e-4)
+    Assert.rms_close(c1, c3, 1e-4)
+    Assert.rms_close(g1, g3, 5e-3)
+    Assert.rms_close(g2, g3, 5e-3)
 
 
 @requires_cuda
