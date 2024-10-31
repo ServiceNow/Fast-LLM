@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1.7-labs
 FROM nvcr.io/nvidia/pytorch:24.07-py3
 
 # Install git-lfs for Huggingface hub interaction and sudo for system adjustments
@@ -20,6 +21,7 @@ ENV PYTHONPATH=/app:/app/Megatron-LM \
 
 # Copy the dependency files and install dependencies
 COPY --chown=fast_llm setup.py setup.cfg pyproject.toml ./
+COPY --chown=fast_llm ./fast_llm/csrc/ fast_llm/csrc/
 RUN PIP_NO_INPUT=1 pip3 install --no-cache-dir --no-build-isolation -e ".[CORE,OPTIONAL,DEV]"
 
 # Copy the rest of the code
@@ -29,4 +31,4 @@ COPY --chown=fast_llm ./tests tests
 COPY --chown=fast_llm ./tools tools
 
 # Copy the main source code for Fast-LLM
-COPY --chown=fast_llm ./fast_llm/ fast_llm/
+COPY --exclude=./fast_llm/csrc/ --chown=fast_llm ./fast_llm/ fast_llm/
