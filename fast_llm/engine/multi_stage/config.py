@@ -362,7 +362,7 @@ class CheckpointMetadata(Config):
         desc="The name of the model saved in this checkpoint (ex. gpt).",
         hint=FieldHint.core,
     )
-    format: str = Field(
+    format: type[CheckpointFormat] = Field(
         desc="The format this checkpoint was saved in.",
         hint=FieldHint.core,
     )
@@ -387,11 +387,11 @@ class CheckpointMetadata(Config):
         if isinstance(self.fast_llm_version, str):
             self.fast_llm_version = packaging.version.Version(self.fast_llm_version)
 
-        super()._validate()
         from fast_llm.models.auto import model_registry
 
         Assert.incl(self.model, model_registry)
-        model_registry[self.model].get_checkpoint_format(self.format)
+        self.format = model_registry[self.model].get_checkpoint_format(self.format)
+        super()._validate()
 
     @classmethod
     def _from_dict(
