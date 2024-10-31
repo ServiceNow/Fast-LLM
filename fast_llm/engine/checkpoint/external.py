@@ -15,7 +15,7 @@ from fast_llm.engine.checkpoint.config import (
     CheckpointLoadMetadataConfig,
     CheckpointSaveConfig,
 )
-from fast_llm.engine.checkpoint.state_dict import StateDictConverter
+from fast_llm.engine.checkpoint.state_dict import StateDictCheckpointHandler
 from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
 from fast_llm.tensor import SafeTensorSlice
 from fast_llm.utils import Assert
@@ -145,7 +145,7 @@ class SplitWeightConverter(WeightConverter):
         return (torch.cat([weight_[:] for weight_ in weight]),)
 
 
-class ExternalStateDictConverter(StateDictConverter):
+class ExternalStateDictCheckpointHandler(StateDictCheckpointHandler):
     _base_model_cls: type[BaseModelConfig]
     _config_converters: list[ParamConverter]
 
@@ -250,13 +250,13 @@ class ExternalStateDictConverter(StateDictConverter):
         return val
 
 
-class AutoStateDictConverter(ExternalStateDictConverter, abc.ABC):
-    converter_map: dict[str, type[ExternalStateDictConverter]]
+class AutoStateDictCheckpointHandler(ExternalStateDictCheckpointHandler, abc.ABC):
+    handler_map: dict[str, type[ExternalStateDictCheckpointHandler]]
 
     @classmethod
-    def get_converter_class(cls, format: str):
-        if format in cls.converter_map:
-            return cls.converter_map[format]
+    def get_handler_class(cls, format: str):
+        if format in cls.handler_map:
+            return cls.handler_map[format]
         elif format == "auto":
             return cls
         else:
@@ -267,12 +267,11 @@ class AutoStateDictConverter(ExternalStateDictConverter, abc.ABC):
     @classmethod
     def _import_config(cls, config: dict[str, typing.Any], architecture_only: bool = False):
         # TODO: ???
-        return cls.converter_map[config["model_type"]]._import_config(config, architecture_only)
+        return cls.handler_map[config["model_type"]]._import_config(config, architecture_only)
 
 
-class HuggingfaceStateDictConverter(ExternalStateDictConverter, abc.ABC):
-    model_type: str | None = None
-    base_file_name = "model"
+class HuggingfaceStateDictCheckpointHandler(ExternalStateDictCheckpointHandler, abc.ABC):
+    base_file_name: typing.ClassVar[str] = "model"
 
     @classmethod
     def load_metadata(cls, config: CheckpointLoadMetadataConfig):
@@ -281,7 +280,7 @@ class HuggingfaceStateDictConverter(ExternalStateDictConverter, abc.ABC):
             # TODO: Avoid `to_serialized`?
             "fast_llm_config": {"base_model": imported_model_config.to_serialized()},
             # TODO: Handle "auto"?
-            "checkpoint_type": config.format,
+            "checkpoint_type": config.format.name,
             "checkpoint_version": CHECKPOINT_VERSION,
         }
 
@@ -303,6 +302,11 @@ class HuggingfaceStateDictConverter(ExternalStateDictConverter, abc.ABC):
         super().load(config, metadata)
 
     @classmethod
+    def get_huggingface_model_type(self):
+        # We assume the two names match, but derived classes can make it different.
+        return self.format.name
+
+    @classmethod
     def _get_key(cls, parameter_name: str, shard_name: str) -> str:
         Assert.eq(shard_name, "weights")
         return parameter_name
@@ -310,15 +314,14 @@ class HuggingfaceStateDictConverter(ExternalStateDictConverter, abc.ABC):
     @classmethod
     @abc.abstractmethod
     def _create_config_converters(cls) -> list[ParamConverter]:
-        return [ConstantExportParamConverter(None, "model_type", cls.model_type)]
+        return [ConstantExportParamConverter(None, "model_type", cls.get_huggingface_model_type())]
 
     @classmethod
     def _load_config(cls, directory: pathlib.Path | str):
         import transformers
 
         config = transformers.AutoConfig.from_pretrained(directory).to_dict()
-        if cls.model_type is not None:
-            Assert.eq(config["model_type"], cls.model_type)
+        Assert.eq(config["model_type"], cls.get_huggingface_model_type())
         return config
 
     @classmethod

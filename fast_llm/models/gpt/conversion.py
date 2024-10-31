@@ -4,11 +4,12 @@ import typing
 
 import torch
 
+from fast_llm.engine.checkpoint.config import CheckpointFormat
 from fast_llm.engine.checkpoint.external import (
-    AutoStateDictConverter,
+    AutoStateDictCheckpointHandler,
     ConstantExportParamConverter,
     ConstantImportParamConverter,
-    HuggingfaceStateDictConverter,
+    HuggingfaceStateDictCheckpointHandler,
     IgnoreImportParamConverter,
     IgnoreWeightConverter,
     MappedConfigParamConverter,
@@ -20,7 +21,14 @@ from fast_llm.functional.config import ActivationType
 from fast_llm.functional.rotary import convert_rotary_complex_to_real, convert_rotary_real_to_complex
 from fast_llm.layers.common.config import NormalizationType
 from fast_llm.layers.transformer.config import RoutingType
-from fast_llm.models.gpt.config import GPTArchitectureConfig, GPTBaseModelConfig, HuggingfaceModelType
+from fast_llm.models.gpt.config import (
+    GPTArchitectureConfig,
+    GPTBaseModelConfig,
+    LlamaGPTHuggingfaceCheckpointFormat,
+    MistralGPTHuggingfaceCheckpointFormat,
+    MixtralGPTHuggingfaceCheckpointFormat,
+    Starcoder2GPTHuggingfaceCheckpointFormat,
+)
 from fast_llm.models.gpt.model import GPTModel
 from fast_llm.tensor import SafeTensorSlice
 
@@ -90,7 +98,7 @@ class MLPLayer2Converter(WeightConverter):
         return (merged_weight.t().contiguous(),)
 
 
-class CommonHuggingfaceConverter(HuggingfaceStateDictConverter):
+class CommonHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
     _model: GPTModel
     _base_model_cls = GPTBaseModelConfig
     """
@@ -203,8 +211,8 @@ class CommonHuggingfaceConverter(HuggingfaceStateDictConverter):
         return converters
 
 
-class Starcoder2HuggingfaceConverter(CommonHuggingfaceConverter):
-    model_type = HuggingfaceModelType.starcoder2
+class Starcoder2HuggingfaceCheckpointHandler(CommonHuggingfaceCheckpointHandler):
+    format: typing.ClassVar[type[CheckpointFormat]] = Starcoder2GPTHuggingfaceCheckpointFormat
 
     @classmethod
     def _create_config_converters(cls) -> list[ParamConverter]:
@@ -228,7 +236,7 @@ class Starcoder2HuggingfaceConverter(CommonHuggingfaceConverter):
         ]
 
 
-class CommonLlamaHuggingfaceConverter(CommonHuggingfaceConverter, abc.ABC):
+class CommonLlamaHuggingfaceCheckpointHandler(CommonHuggingfaceCheckpointHandler, abc.ABC):
     @classmethod
     def _create_config_converters(cls) -> list[ParamConverter]:
         return super()._create_config_converters() + [
@@ -239,8 +247,8 @@ class CommonLlamaHuggingfaceConverter(CommonHuggingfaceConverter, abc.ABC):
         ]
 
 
-class LlamaHuggingfaceConverter(CommonLlamaHuggingfaceConverter):
-    model_type = HuggingfaceModelType.llama
+class LlamaHuggingfaceCheckpointHandler(CommonLlamaHuggingfaceCheckpointHandler):
+    format: typing.ClassVar[type[CheckpointFormat]] = LlamaGPTHuggingfaceCheckpointFormat
 
     @classmethod
     def _create_config_converters(cls) -> list[ParamConverter]:
@@ -270,8 +278,8 @@ class LlamaHuggingfaceConverter(CommonLlamaHuggingfaceConverter):
         ]
 
 
-class MistralHuggingfaceConverter(CommonLlamaHuggingfaceConverter):
-    model_type = HuggingfaceModelType.mistral
+class MistralHuggingfaceCheckpointHandler(CommonLlamaHuggingfaceCheckpointHandler):
+    format: typing.ClassVar[type[CheckpointFormat]] = MistralGPTHuggingfaceCheckpointFormat
 
     @classmethod
     def _create_config_converters(cls) -> list[ParamConverter]:
@@ -294,8 +302,8 @@ class MistralHuggingfaceConverter(CommonLlamaHuggingfaceConverter):
         ]
 
 
-class MixtralHuggingfaceConverter(CommonLlamaHuggingfaceConverter):
-    model_type = HuggingfaceModelType.mixtral
+class MixtralHuggingfaceCheckpointHandler(CommonLlamaHuggingfaceCheckpointHandler):
+    format: typing.ClassVar[type[CheckpointFormat]] = MixtralGPTHuggingfaceCheckpointFormat
 
     @classmethod
     def _create_config_converters(cls) -> list[ParamConverter]:
@@ -327,11 +335,13 @@ class MixtralHuggingfaceConverter(CommonLlamaHuggingfaceConverter):
         ]
 
 
-class AutoGPTConverter(AutoStateDictConverter, HuggingfaceStateDictConverter, abc.ABC):
+class AutoGPTHuggingfaceCheckpointHandler(
+    AutoStateDictCheckpointHandler, HuggingfaceStateDictCheckpointHandler, abc.ABC
+):
 
-    converter_map = {
-        HuggingfaceModelType.starcoder2: Starcoder2HuggingfaceConverter,
-        HuggingfaceModelType.llama: LlamaHuggingfaceConverter,
-        HuggingfaceModelType.mistral: MistralHuggingfaceConverter,
-        HuggingfaceModelType.mixtral: MixtralHuggingfaceConverter,
+    handler_map = {
+        Starcoder2GPTHuggingfaceCheckpointFormat.name: Starcoder2HuggingfaceCheckpointHandler,
+        LlamaGPTHuggingfaceCheckpointFormat.name: LlamaHuggingfaceCheckpointHandler,
+        MistralGPTHuggingfaceCheckpointFormat.name: MistralHuggingfaceCheckpointHandler,
+        MixtralGPTHuggingfaceCheckpointFormat.name: MixtralHuggingfaceCheckpointHandler,
     }

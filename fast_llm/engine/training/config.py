@@ -9,11 +9,11 @@ from fast_llm.config import Config, Field, FieldHint, FieldUpdate, check_field, 
 from fast_llm.data.config import AbstractDataConfig
 from fast_llm.engine.checkpoint.config import (
     CheckpointConfigBase,
-    CheckpointFormat,
     CheckpointLoadConfig,
     CheckpointSaveConfig,
     CheckpointSaveConfigBase,
     CheckpointStateConfigBase,
+    DistributedCheckpointFormat,
 )
 from fast_llm.engine.config_utils.run import ExperimentConfig
 from fast_llm.engine.multi_stage.config import PretrainedFastLLMModelConfig
@@ -161,7 +161,7 @@ class ValidationConfig(IntervalConfig):
 
 
 @config_class()
-class CheckpointBaseConfig(IntervalConfig):
+class TrainingCheckpointBaseConfig(IntervalConfig):
     _abstract = True
     save_name: typing.ClassVar[str] = "save"
     directory_name: typing.ClassVar[str] = "save"
@@ -199,7 +199,7 @@ class CheckpointBaseConfig(IntervalConfig):
 
 
 @config_class()
-class CheckpointConfig(CheckpointBaseConfig):
+class TrainingCheckpointConfig(TrainingCheckpointBaseConfig):
     _abstract = False
     save_name: typing.ClassVar[str] = "checkpoint"
     # TODO v0.2: Rename to `checkpoint` so we don't need this extra variable?
@@ -214,7 +214,7 @@ class CheckpointConfig(CheckpointBaseConfig):
     def get_save_config(self, path: pathlib.Path):
         return CheckpointSaveConfig(
             path=path,
-            format=CheckpointFormat.distributed,
+            format=DistributedCheckpointFormat,
             model_weights=True,
             optimizer_state=True,
         )
@@ -222,14 +222,16 @@ class CheckpointConfig(CheckpointBaseConfig):
     def get_load_config(self, path: pathlib.Path):
         return CheckpointLoadConfig(
             path=path,
-            format=CheckpointFormat.distributed,
+            format=DistributedCheckpointFormat,
             model_weights=True,
             optimizer_state=True,
         )
 
 
 @config_class()
-class ExportConfig(CheckpointBaseConfig, CheckpointConfigBase, CheckpointStateConfigBase, CheckpointSaveConfigBase):
+class TrainingExportConfig(
+    TrainingCheckpointBaseConfig, CheckpointConfigBase, CheckpointStateConfigBase, CheckpointSaveConfigBase
+):
     _abstract = False
     save_name: typing.ClassVar[str] = "export"
     directory_name = "export"
@@ -265,10 +267,10 @@ class TrainingConfig(Config):
     logs: MetricsLogsConfig = Field(
         default_factory=MetricsLogsConfig, desc="Configuration for metric logging.", hint=FieldHint.core
     )
-    checkpoint: CheckpointConfig = Field(
+    checkpoint: TrainingCheckpointConfig = Field(
         default_factory=MetricsLogsConfig, desc="Configuration for checkpoints.", hint=FieldHint.core
     )
-    export: ExportConfig = Field(
+    export: TrainingExportConfig = Field(
         default_factory=MetricsLogsConfig, desc="Configuration for exports.", hint=FieldHint.core
     )
     shutdown: ShutdownConfig = Field(
@@ -337,6 +339,7 @@ class TrainerConfig(PretrainedFastLLMModelConfig, ExperimentConfig):
     )
 
     def _validate(self):
+        self.training.export.setup(self.model)
         super()._validate()
         if self.run.experiment_dir is None:
             assert not self.training.checkpoint.enabled()

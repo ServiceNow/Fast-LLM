@@ -13,6 +13,7 @@ from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
+    from fast_llm.engine.multi_stage.config import FastLLMModelConfig
     from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
 
 logger = logging.getLogger(__name__)
@@ -40,11 +41,44 @@ def import_safetensors_metadata(metadata):
     return {key: yaml.safe_load(value) for key, value in metadata.items()}
 
 
-class CheckpointFormat(str):
-    # Distributed checkpoint for fast checkpointing and resuming.
-    distributed = "distributed"
-    # Model state dict, for safe long-term storage in Fast-LLM format.
-    state_dict = "state_dict"
+class CheckpointFormat(abc.ABC):
+    # A data structure to make information about a checkpoint format accessible during validation.
+    name: typing.ClassVar[str]
+    support_optimizer: typing.ClassVar[bool] = True
+    support_saving: typing.ClassVar[bool] = True
+    support_loading: typing.ClassVar[bool] = True
+    enforce_architecture_match: typing.ClassVar[bool] = False
+
+    @classmethod
+    @abc.abstractmethod
+    def get_handler_class(cls) -> type["CheckpointHandler"]:
+        pass
+
+    @classmethod
+    def __fast_llm_serialize__(cls):
+        return cls.name
+
+
+class DistributedCheckpointFormat(CheckpointFormat):
+    # TODO v0.2: Add `enforce_version_match`
+    name: typing.ClassVar[str] = "distributed"
+    enforce_architecture_match: typing.ClassVar[bool] = True
+
+    @classmethod
+    def get_handler_class(cls):
+        from fast_llm.engine.checkpoint.distributed import DistributedCheckpointHandler
+
+        return DistributedCheckpointHandler
+
+
+class StateDictCheckpointFormat(CheckpointFormat):
+    name: typing.ClassVar[str] = "state_dict"
+
+    @classmethod
+    def get_handler_class(cls):
+        from fast_llm.engine.checkpoint.state_dict import TrivialCheckpointHandler
+
+        return TrivialCheckpointHandler
 
 
 class ModelConfigType(str, enum.Enum):
@@ -79,11 +113,17 @@ class CheckpointPathConfigBase(Config):
 @config_class()
 class CheckpointConfigBase(Config):
     _abstract = True
-    format: str = Field(
-        default=CheckpointFormat.distributed,
+    # Note: the `format` may be a str when configuring from file or cli.
+    #   The actual class should be set through `setup` in a parent config validation.
+    format: type[CheckpointFormat] = Field(
+        default=StateDictCheckpointFormat,
         desc="Format of the checkpoint.",
         hint=FieldHint.core,
     )
+
+    def setup(self, model_config: "FastLLMModelConfig"):
+        assert not self._validated
+        self.format = model_config.get_checkpoint_format(self.format)
 
     @classmethod
     def _from_dict(
@@ -163,7 +203,7 @@ class CheckpointLoadMetadataConfig(CheckpointPathConfigBase, CheckpointConfigBas
 
     def _validate(self):
         super()._validate()
-        if self.format == CheckpointFormat.distributed:
+        if self.format.enforce_architecture_match:
             assert self.load_config.load_architecture
 
     @property
@@ -176,8 +216,8 @@ class CheckpointLoadConfig(CheckpointLoadMetadataConfig, CheckpointStateConfigBa
     _abstract = False
 
 
-class Converter(abc.ABC):
-    # TODO: Rename? (Checkpointer? Saver?)
+class CheckpointHandler(abc.ABC):
+    format: typing.ClassVar[type[CheckpointFormat]]
 
     def __init__(self, model: "FastLLMModel"):
         self._model = model
