@@ -1,0 +1,25 @@
+# See https://github.com/DavidAnson/markdownlint/blob/v0.32.1/schema/.markdownlint.yaml for schema documentation
+
+# Default state for all rules
+default: true
+
+# MD007/ul-indent : Unordered list indentation : https://github.com/DavidAnson/markdownlint/blob/v0.32.1/doc/md007.md
+MD007:
+  # Spaces for indent
+  indent: 4
+  # Whether to indent the first level of the list
+  start_indented: true
+  # Spaces for first level indent (when start_indented is set)
+  start_indent: 4
+
+# MD010/no-hard-tabs : Hard tabs : https://github.com/DavidAnson/markdownlint/blob/v0.32.1/doc/md010.md
+MD010:
+  # Include code blocks
+  code_blocks: false
+  # Fenced code languages to ignore
+  ignore_code_languages: []
+  # Number of spaces for each hard tab
+  spaces_per_tab: 4
+
+# MD013/line-length : Line length : https://github.com/DavidAnson/markdownlint/blob/v0.32.1/doc/md013.md
+MD013: false
