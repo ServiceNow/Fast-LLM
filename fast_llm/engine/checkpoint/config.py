@@ -50,6 +50,10 @@ class CheckpointFormat(abc.ABC):
     def get_handler_class(cls) -> type["CheckpointHandler"]:
         pass
 
+    @classmethod
+    def __fast_llm_serialize__(cls):
+        return cls.name
+
 
 class DistributedCheckpointFormat(CheckpointFormat):
     # TODO v0.2: Add `enforce_version_match`
@@ -95,9 +99,7 @@ class ModelConfigType(str, enum.Enum):
 @config_class()
 class CheckpointConfigBase(Config):
     _abstract = True
-    # Note: the `format` may be a str when configuring from file or cli.
-    #   The actual class should be set through `model_config.get_checkpoint_format`,
-    #   but we don't know the model type here so we expect the value to be set in a parent config validation.
+    # The actual class should be set through `setup` in a parent config validation.
     format: type[CheckpointFormat] = Field(
         default=StateDictCheckpointFormat,
         desc="Format of the checkpoint.",
