@@ -18,7 +18,7 @@ Fast-LLM isn't just another library, **it's a platform for powering the next gen
 
 - **🚀 Purpose-Built for Small- and Large-Scale AI:** Optimized specifically for training language models of all sizes, Fast-LLM excels from **small models around 1B parameters to massive clusters running 70B+ parameter models**, with kernels that are fine-tuned for maximum throughput across this entire range. At 10B-parameter scale, Fast-LLM avoids costly 3D-paralelism through memory optimization techniques such as ZeRO and activation recomputation, whereas at 100B-parameter scale, Fast-LLM optimally supports 3D-parallelism; making Fast-LLM the go-to choice for diverse training needs.
 
-- **🧠 Unified Support for GPT-Like Architectures:** Fast-LLM **unifies all GPT-like model implementations** in a [single configuration file](https://github.com/ServiceNow/Fast-LLM/blob/main/fast_llm/models/gpt/model.py), and unlike HuggingFace transformers, where every model has it's own, mostly independent implementation, Fast-LLM reduces coding and adapts effortlessly, even with custom architectures.
+- **🧠 Unified Support for GPT-Like Architectures:** Fast-LLM **unifies all GPT-like model implementations** in a [single configuration file](https://github.com/ServiceNow/Fast-LLM/blob/main/fast_llm/models/gpt/model.py), and unlike HuggingFace transformers where every model has it's own, mostly independent implementation, Fast-LLM reduces coding and adapts effortlessly, even with custom architectures.
 
 - **💰 Cost Efficiency That Sets Fast-LLM Apart:**
 
