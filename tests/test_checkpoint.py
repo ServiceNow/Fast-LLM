@@ -11,8 +11,8 @@ from fast_llm.engine.checkpoint.config import (
     CheckpointLoadConfig,
     CheckpointSaveConfig,
     DistributedCheckpointFormat,
+    FastLLMCheckpointFormat,
     ModelConfigType,
-    StateDictCheckpointFormat,
 )
 from fast_llm.engine.multi_stage.config import StageMode
 from fast_llm.models.auto import model_registry
@@ -103,7 +103,7 @@ def test_convert_distributed_to_state_dict():
             ),
             output=CheckpointSaveConfig(
                 path=_CONVERT_PATH / "state_dict_0",
-                format=StateDictCheckpointFormat,
+                format=FastLLMCheckpointFormat,
             ),
         )
     )
@@ -117,7 +117,7 @@ def test_convert_state_dict_to_huggingface():
         ConversionConfig(
             input=CheckpointLoadConfig(
                 path=_CONVERT_PATH / "state_dict_0",
-                format=StateDictCheckpointFormat,
+                format=FastLLMCheckpointFormat,
             ),
             output=CheckpointSaveConfig(
                 path=_CONVERT_PATH / "huggingface_0",
@@ -171,7 +171,7 @@ def test_convert_huggingface_to_state_dict():
             ),
             output=CheckpointSaveConfig(
                 path=_CONVERT_PATH / "state_dict_1",
-                format=StateDictCheckpointFormat,
+                format=FastLLMCheckpointFormat,
             ),
         )
     )
@@ -183,7 +183,7 @@ def test_convert_state_dict_to_distributed():
         ConversionConfig(
             input=CheckpointLoadConfig(
                 path=_CONVERT_PATH / "state_dict_1",
-                format=StateDictCheckpointFormat,
+                format=FastLLMCheckpointFormat,
             ),
             output=CheckpointSaveConfig(
                 path=_CONVERT_PATH / "distributed_1",
@@ -276,8 +276,8 @@ def test_load_converted_distributed_checkpoint():
 @pytest.mark.depends(on=["test_converted_state_dict", "test_load_pretrained_distributed_checkpoint"])
 def test_load_converted_state_dict_checkpoint():
     pretrained_config_ref = CheckpointLoadConfig(path=_CKPT_PATH, format=DistributedCheckpointFormat)
-    pretrained_config_0 = CheckpointLoadConfig(path=_CONVERT_PATH / "state_dict_0", format=StateDictCheckpointFormat)
-    pretrained_config_1 = CheckpointLoadConfig(path=_CONVERT_PATH / "state_dict_1", format=StateDictCheckpointFormat)
+    pretrained_config_0 = CheckpointLoadConfig(path=_CONVERT_PATH / "state_dict_0", format=FastLLMCheckpointFormat)
+    pretrained_config_1 = CheckpointLoadConfig(path=_CONVERT_PATH / "state_dict_1", format=FastLLMCheckpointFormat)
     config = TEST_MODEL_CONFIG_CLS.from_pretrained(pretrained_config_ref)
     model = TEST_MODEL_CLS.from_pretrained(pretrained_config_0)
     config_1 = TEST_MODEL_CONFIG_CLS.from_pretrained(pretrained_config_1)
