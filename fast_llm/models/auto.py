@@ -16,7 +16,7 @@ model_registry = Registry(
 trainer_registry = Registry(
     "Model",
     {
-        trainer.model.model_name: trainer
+        trainer.get_field("model").type.model_name: trainer
         for trainer in [
             GPTTrainerConfig,
             CustomTrainerConfig,
