@@ -229,7 +229,6 @@ class CheckpointLoadConfig(CheckpointLoadMetadataConfig, CheckpointStateConfigBa
     _abstract = False
 
     model_weights: bool = Field(desc="Load the model weights.")
-    # TODO: We don't know yet if the format supports it.
     optimizer_state: bool = FieldUpdate(default=False, desc="Load the optimizer state.")
 
     def _validate(self):
@@ -259,8 +258,8 @@ class CheckpointHandler(abc.ABC):
     def load(self, config: CheckpointLoadConfig, metadata: "CheckpointMetadata"):
         pass
 
-    def _get_num_shards(self, config: CheckpointStateConfigBase):
+    def get_num_shards(self, config: CheckpointStateConfigBase):
         return len(self._model.state_shard_names) if config.optimizer_state else 1
 
-    def _get_shard_names(self, config: CheckpointStateConfigBase):
+    def get_shard_names(self, config: CheckpointStateConfigBase):
         return self._model.state_shard_names if config.optimizer_state else self._model.state_shard_names[:1]

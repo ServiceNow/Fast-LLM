@@ -21,12 +21,12 @@ class FastLLMModel(MultiStageModel):
         extra_metadata: dict | None = None,
     ):
         # TODO: Handle barriers, ok file, mkdir, etc. here
+        converter = config.format.get_handler_class()(self)
         fast_llm_metadata = self._config.to_metadata(
             config,
-            shard_names=list(self._state_shard_names[: self.num_state_shards if config.optimizer_state else 1]),
+            shards=converter.get_shard_names(config),
             metadata={} if extra_metadata is None else extra_metadata,
         )
-        converter = config.format.get_handler_class()(self)
         converter.save(config, fast_llm_metadata)
 
     def load_checkpoint(self, config: CheckpointLoadConfig):

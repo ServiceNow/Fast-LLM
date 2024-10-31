@@ -34,9 +34,9 @@ class DistributedCheckpointHandler(CheckpointHandler):
     def save(self, config: CheckpointSaveConfig, metadata: CheckpointMetadata):
         serialized_metadata = metadata.to_serialized()
         if self._model.distributed_config.rank == 0:
-            yaml.safe_dump(metadata.to_serialized(), (config.path / "metadata.yaml").open("w"))
+            yaml.safe_dump(serialized_metadata, (config.path / "metadata.yaml").open("w"))
         safetensors.torch.save_file(
-            tensors={"state_shard": self._model.state_shard[: self._get_num_shards(config)]},
+            tensors={"state_shard": self._model.state_shard[: self.get_num_shards(config)]},
             filename=config.path / f"rank_{self._model.distributed_config.rank}.safetensors",
             metadata=export_safetensors_metadata(serialized_metadata),
         )
@@ -45,8 +45,8 @@ class DistributedCheckpointHandler(CheckpointHandler):
         # TODO: More safety checks
         loaded_config_dict = config.to_copy({"load_config": ModelConfigType.fast_llm})
         loaded_config = self._model.config_class.from_metadata(loaded_config_dict, metadata)
-        num_shards = self._get_num_shards(config)
-        shard_names = self._get_shard_names(config)
+        num_shards = self.get_num_shards(config)
+        shard_names = self.get_shard_names(config)
         Assert.eq(metadata.shards[:num_shards], list(shard_names))
 
         same_format = (

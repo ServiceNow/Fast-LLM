@@ -13,7 +13,6 @@ from fast_llm.engine.base_model.config import BaseModelArchitectureConfig, BaseM
 from fast_llm.engine.checkpoint.config import (
     CheckpointLoadConfig,
     CheckpointLoadMetadataConfig,
-    CheckpointSaveConfig,
     CheckpointSaveMetadataConfig,
 )
 from fast_llm.engine.checkpoint.state_dict import StateDictCheckpointHandler
@@ -295,14 +294,9 @@ class HuggingfaceStateDictCheckpointHandler(ExternalStateDictCheckpointHandler, 
             "format": "pt",
         }
 
-    def save(self, config: CheckpointSaveConfig, metadata: CheckpointMetadata):
-        super().save(config, metadata)
-
     def load(self, config: CheckpointLoadConfig, metadata: CheckpointMetadata):
         assert not config.optimizer_state
-        self._model.base_model_config.compare_architecture(
-            self._base_model_cls.from_dict(metadata.config.base_model), config.compare_log_fn
-        )
+        self._model.base_model_config.compare_architecture(metadata.config.base_model, config.compare_log_fn)
         super().load(config, metadata)
 
     @classmethod
@@ -334,15 +328,12 @@ class HuggingfaceStateDictCheckpointHandler(ExternalStateDictCheckpointHandler, 
 
         transformers.CONFIG_MAPPING[config["model_type"]].from_dict(config).save_pretrained(directory)
 
-    @abc.abstractmethod
     def _load_weights(
         self, config: CheckpointLoadConfig, device
     ) -> typing.Iterator[tuple[str, str, torch.Tensor | SafeTensorSlice]]:
-        pass
-
         import transformers
 
-        Assert.eq(self._get_shard_names(config), ("weights",))
+        Assert.eq(self.get_shard_names(config), ("weights",))
         if (config.path / transformers.utils.SAFE_WEIGHTS_NAME).is_file():
             paths = {config.path / transformers.utils.SAFE_WEIGHTS_NAME}
         elif (config.path / transformers.utils.SAFE_WEIGHTS_INDEX_NAME).is_file():
