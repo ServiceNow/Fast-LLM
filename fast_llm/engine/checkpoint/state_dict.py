@@ -1,7 +1,6 @@
 import abc
 import json
 import logging
-import pathlib
 import typing
 
 import safetensors
@@ -15,12 +14,13 @@ from fast_llm.engine.checkpoint.config import (
     CheckpointLoadConfig,
     CheckpointLoadMetadataConfig,
     CheckpointSaveConfig,
+    CheckpointSaveMetadataConfig,
     StateDictCheckpointFormat,
     export_safetensors_metadata,
-    import_safetensors_metadata,
 )
 from fast_llm.engine.checkpoint.safe_load import SafeLoad
 from fast_llm.engine.distributed.distributed import Distributed
+from fast_llm.engine.multi_stage.config import CheckpointMetadata
 from fast_llm.tensor import SafeTensorSlice
 from fast_llm.utils import Assert
 
@@ -30,12 +30,11 @@ logger = logging.getLogger(__name__)
 class StateDictCheckpointHandler(CheckpointHandler):
     base_file_name: typing.ClassVar[str]
 
-    def save(self, config: CheckpointSaveConfig, metadata: dict):
-        num_shards = len(self._model.state_shard_names) if config.optimizer_state else 1
+    def save(self, config: CheckpointSaveConfig, metadata: CheckpointMetadata):
         with StateDictSaveContext(
             config,
             distributed=self._model.distributed,
-            metadata=metadata,
+            metadata=self._save_metadata(config, metadata),
             base_file_name=self.base_file_name,
         ) as context:
             # The tensor mapping may not be one-to-one. `convert_state_dict` pops all tensors from
@@ -45,7 +44,7 @@ class StateDictCheckpointHandler(CheckpointHandler):
             #   it will remain in `state_dict` until that tensor is available.
             state_dict = {}
             for parameter_name, shard_name, tensor in self._model.get_state_tensor_iterator(
-                self._model.state_shard_names[:num_shards], config.data_type
+                self.get_shard_names(config), config.data_type
             ):
                 if shard_name not in state_dict:
                     state_dict[shard_name] = {}
@@ -58,18 +57,18 @@ class StateDictCheckpointHandler(CheckpointHandler):
             for shard_name, shard_state_dict in state_dict.items():
                 assert not shard_state_dict, (shard_name, list(state_dict))
 
-    def load(self, config: CheckpointLoadConfig, metadata: dict):
-        num_shards = len(self._model.state_shard_names) if config.optimizer_state else 1
-        with SafeLoad(self._model, num_shards=num_shards) as context:
+    def _save_metadata(self, config: CheckpointSaveMetadataConfig, metadata: CheckpointMetadata) -> dict:
+        return metadata.to_serialized()
+
+    def load(self, config: CheckpointLoadConfig, metadata: CheckpointMetadata):
+        with SafeLoad(self._model, num_shards=self.get_num_shards(config)) as context:
             # The tensor mapping may not be one-to-one. `convert_state_dict` pops all tensors from
             #   `state_dict` that are ready for conversion,
             #   and return a dict containing the converted tensors(s).
             #   If converting a tensor requires another one that is not yet available (e.g. for concatenation),
             #   it will remain in `state_dict` until that tensor is available.
             state_dict = {}
-            for parameter_name, shard_name, tensor in self._load_weights(
-                config.path, self._model.distributed.device, self._model.state_shard_names[:num_shards]
-            ):
+            for parameter_name, shard_name, tensor in self._load_weights(config, self._model.distributed.device):
                 if shard_name not in state_dict:
                     state_dict[shard_name] = {}
                 shard_state_dict = state_dict[shard_name]
@@ -95,10 +94,7 @@ class StateDictCheckpointHandler(CheckpointHandler):
 
     @abc.abstractmethod
     def _load_weights(
-        self,
-        directory: pathlib.Path | str,
-        device,
-        shard_names: list[str],
+        self, config: CheckpointLoadConfig, device
     ) -> typing.Iterator[tuple[str, str, torch.Tensor | SafeTensorSlice]]:
         pass
 
@@ -109,7 +105,9 @@ class TrivialCheckpointHandler(StateDictCheckpointHandler):
 
     @classmethod
     def load_metadata(cls, config: CheckpointLoadMetadataConfig):
-        return json.load((config.path / f"state_dict.safetensors.index.json").open("r"))["metadata"]
+        return CheckpointMetadata.from_dict(
+            json.load((config.path / f"state_dict.safetensors.index.json").open("r"))["metadata"]
+        )
 
     @classmethod
     def _get_key(cls, parameter_name: str, shard_name: str) -> str:
@@ -123,23 +121,21 @@ class TrivialCheckpointHandler(StateDictCheckpointHandler):
         return out_state_dict
 
     def _load_weights(
-        self,
-        directory: pathlib.Path | str,
-        device,
-        shard_names: list[str],
+        self, config: CheckpointLoadConfig, device
     ) -> typing.Iterator[tuple[str, str, torch.Tensor | SafeTensorSlice]]:
-        index_path = directory / f"state_dict.safetensors.index.json"
+        index_path = config.path / f"state_dict.safetensors.index.json"
         logger.info(f"Loading index from {index_path}")
         file_names = set(json.load(index_path.open("r"))["weight_map"].values())
+        metadata = self.load_metadata(config)
+        shard_names = self.get_shard_names(config)
+        Assert.eq(metadata.shards[: self.get_num_shards(config)], list(shard_names))
         for file_name in file_names:
-            logger.info(f"Loading from {directory / file_name}")
+            logger.info(f"Loading from {config.path / file_name}")
             with safetensors.safe_open(
-                directory / file_name,
+                config.path / file_name,
                 framework="pt",
                 device=str(device),
             ) as f:
-                metadata = import_safetensors_metadata(f.metadata())
-                Assert.eq(metadata["state_shard_names"][: len(shard_names)], list(shard_names))
                 for key in f.keys():
                     parameter_name, shard_name = key.split("/", 1)
                     if shard_name in shard_names:

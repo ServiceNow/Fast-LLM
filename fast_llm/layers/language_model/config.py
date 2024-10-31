@@ -109,7 +109,7 @@ class LanguageModelBaseConfig(LanguageModelArchitectureConfig, BaseModelConfig):
     TODO: Generalize model configurations.
     """
 
-    architecture_cls = LanguageModelArchitectureConfig
+    architecture_class = LanguageModelArchitectureConfig
 
     transformer: TransformerConfig = FieldUpdate(default_factory=TransformerConfig)
     init_method_std_embed: float = Field(

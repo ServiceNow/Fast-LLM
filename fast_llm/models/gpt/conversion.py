@@ -17,13 +17,14 @@ from fast_llm.engine.checkpoint.external import (
     SplitWeightConverter,
     WeightConverter,
 )
+from fast_llm.engine.multi_stage.config import FastLLMModelConfig
 from fast_llm.functional.config import ActivationType
 from fast_llm.functional.rotary import convert_rotary_complex_to_real, convert_rotary_real_to_complex
 from fast_llm.layers.common.config import NormalizationType
 from fast_llm.layers.transformer.config import RoutingType
 from fast_llm.models.gpt.config import (
     GPTArchitectureConfig,
-    GPTBaseModelConfig,
+    GPTModelConfig,
     LlamaGPTHuggingfaceCheckpointFormat,
     MistralGPTHuggingfaceCheckpointFormat,
     MixtralGPTHuggingfaceCheckpointFormat,
@@ -100,7 +101,7 @@ class MLPLayer2Converter(WeightConverter):
 
 class CommonHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
     _model: GPTModel
-    _base_model_cls = GPTBaseModelConfig
+    _model_class: typing.ClassVar[FastLLMModelConfig] = GPTModelConfig
     """
     Common converter for llama-based huggingface models (llama, starcoder2, mistral, mixtral)
     """

@@ -26,7 +26,7 @@ class CustomArchitectureConfig(GPTArchitectureConfig):
 @config_class()
 class CustomBaseModelConfig(GPTBaseModelConfig, CustomArchitectureConfig):
     # TODO: Add custom other base model config parameters, if any.
-    architecture_cls = CustomArchitectureConfig
+    architecture_class = CustomArchitectureConfig
 
 
 @config_class()

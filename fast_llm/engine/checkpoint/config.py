@@ -8,19 +8,15 @@ import warnings
 
 import yaml
 
-from fast_llm.config import Config, Field, FieldHint, check_field, config_class
+from fast_llm.config import Config, Field, FieldHint, FieldUpdate, check_field, config_class
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
-    from fast_llm.engine.multi_stage.config import FastLLMModelConfig
+    from fast_llm.engine.multi_stage.config import CheckpointMetadata, FastLLMModelConfig
     from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
 
 logger = logging.getLogger(__name__)
-
-# TODO: Use packaging.version? (Safer but extra requirement)
-CHECKPOINT_VERSION = "0.1"
-KNOWN_CHECKPOINT_VERSIONS = ("0", "0.1")
 
 
 def export_safetensors_metadata(metadata):
@@ -101,16 +97,6 @@ class ModelConfigType(str, enum.Enum):
 
 
 @config_class()
-class CheckpointPathConfigBase(Config):
-    _abstract = True
-    path: pathlib.Path | None = Field(
-        default=None,
-        desc="Location of the checkpoint.",
-        hint=FieldHint.core,
-    )
-
-
-@config_class()
 class CheckpointConfigBase(Config):
     _abstract = True
     # Note: the `format` may be a str when configuring from file or cli.
@@ -148,10 +134,11 @@ class CheckpointConfigBase(Config):
 
 
 @config_class()
-class CheckpointStateConfigBase(Config):
+class CheckpointStateConfigBase(CheckpointConfigBase):
     _abstract = True
-    model_weights: bool = Field(default=True, desc="Save/load the model weights.", hint=FieldHint.feature)
-    optimizer_state: bool = Field(default=False, desc="Save/load the optimizer state.", hint=FieldHint.feature)
+    # Defaults and descriptions are set in derived classes.
+    model_weights: bool = Field(default=True, hint=FieldHint.feature)
+    optimizer_state: bool = Field(default=None, hint=FieldHint.feature)
 
     @classmethod
     def _from_dict(
@@ -166,7 +153,7 @@ class CheckpointStateConfigBase(Config):
 
 
 @config_class()
-class CheckpointSaveConfigBase(Config):
+class CheckpointSaveConfigBase(CheckpointConfigBase):
     _abstract = True
     parameters_per_file: int = Field(
         default=2**32,
@@ -182,17 +169,41 @@ class CheckpointSaveConfigBase(Config):
 
 
 @config_class()
-class CheckpointSaveMetadataConfig(CheckpointPathConfigBase, CheckpointConfigBase):
+class CheckpointStateSaveConfigBase(CheckpointSaveConfigBase, CheckpointStateConfigBase):
+    model_weights: bool = FieldUpdate(desc="Save the model weights.")
+    optimizer_state: bool = FieldUpdate(desc="Save the optimizer state. Default: save if supported by the `format`.")
+
+    def _validate(self):
+        if self.optimizer_state is None:
+            # TODO: Make sure it's a type
+            self.optimizer_state = self.format.support_optimizer
+        super()._validate()
+        if self.optimizer_state:
+            assert self.format.support_optimizer
+
+
+@config_class()
+class CheckpointPathConfigBase(CheckpointConfigBase):
+    _abstract = True
+    path: pathlib.Path | None = Field(
+        default=None,
+        desc="Location of the checkpoint.",
+        hint=FieldHint.core,
+    )
+
+
+@config_class()
+class CheckpointSaveMetadataConfig(CheckpointPathConfigBase):
     _abstract = False
 
 
 @config_class()
-class CheckpointSaveConfig(CheckpointSaveMetadataConfig, CheckpointStateConfigBase, CheckpointSaveConfigBase):
+class CheckpointSaveConfig(CheckpointSaveMetadataConfig, CheckpointStateSaveConfigBase):
     _abstract = False
 
 
 @config_class()
-class CheckpointLoadMetadataConfig(CheckpointPathConfigBase, CheckpointConfigBase):
+class CheckpointLoadMetadataConfig(CheckpointPathConfigBase):
     _abstract = False
 
     load_config: ModelConfigType = Field(
@@ -215,6 +226,14 @@ class CheckpointLoadMetadataConfig(CheckpointPathConfigBase, CheckpointConfigBas
 class CheckpointLoadConfig(CheckpointLoadMetadataConfig, CheckpointStateConfigBase):
     _abstract = False
 
+    model_weights: bool = FieldUpdate(desc="Load the model weights.")
+    optimizer_state: bool = FieldUpdate(default=False, desc="Load the optimizer state.")
+
+    def _validate(self):
+        super()._validate()
+        if self.optimizer_state:
+            assert self.format.support_optimizer
+
 
 class CheckpointHandler(abc.ABC):
     format: typing.ClassVar[type[CheckpointFormat]]
@@ -226,13 +245,19 @@ class CheckpointHandler(abc.ABC):
 
     @classmethod
     @abc.abstractmethod
-    def load_metadata(cls, config: CheckpointLoadMetadataConfig):
+    def load_metadata(cls, config: CheckpointLoadMetadataConfig) -> "CheckpointMetadata":
         pass
 
     @abc.abstractmethod
-    def save(self, config: CheckpointSaveConfig, metadata: dict):
+    def save(self, config: CheckpointSaveConfig, metadata: "CheckpointMetadata"):
         pass
 
     @abc.abstractmethod
-    def load(self, config: CheckpointLoadConfig, metadata: dict):
+    def load(self, config: CheckpointLoadConfig, metadata: "CheckpointMetadata"):
         pass
+
+    def get_num_shards(self, config: CheckpointStateConfigBase):
+        return len(self._model.state_shard_names) if config.optimizer_state else 1
+
+    def get_shard_names(self, config: CheckpointStateConfigBase):
+        return self._model.state_shard_names if config.optimizer_state else self._model.state_shard_names[:1]

@@ -2,7 +2,7 @@ import logging
 import typing
 
 from fast_llm.core.distributed import broadcast
-from fast_llm.engine.checkpoint.config import CHECKPOINT_VERSION, CheckpointLoadConfig, CheckpointSaveConfig
+from fast_llm.engine.checkpoint.config import CheckpointLoadConfig, CheckpointSaveConfig
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig, StageMode
 from fast_llm.engine.multi_stage.multi_stage import MultiStageModel
@@ -21,15 +21,12 @@ class FastLLMModel(MultiStageModel):
         extra_metadata: dict | None = None,
     ):
         # TODO: Handle barriers, ok file, mkdir, etc. here
-        num_shards = self.num_state_shards if config.optimizer_state else 1
-        fast_llm_metadata = {
-            "checkpoint_type": config.format.name,
-            "checkpoint_version": str(CHECKPOINT_VERSION),
-            "fast_llm_config": self._fast_llm_config.to_serialized(),
-            "state_shard_names": list(self._state_shard_names[:num_shards]),
-            "metadata": {} if extra_metadata is None else extra_metadata,
-        }
         converter = config.format.get_handler_class()(self)
+        fast_llm_metadata = self._config.to_metadata(
+            config,
+            shards=converter.get_shard_names(config),
+            metadata={} if extra_metadata is None else extra_metadata,
+        )
         converter.save(config, fast_llm_metadata)
 
     def load_checkpoint(self, config: CheckpointLoadConfig):
@@ -41,7 +38,7 @@ class FastLLMModel(MultiStageModel):
         converter = config.format.get_handler_class()(self)
         converter.load(config, fast_llm_metadata)
         self._finalize_load(reset_optimizer=not config.optimizer_state)
-        return fast_llm_metadata.get("metadata")
+        return fast_llm_metadata.metadata
 
     @classmethod
     def from_pretrained(
@@ -59,11 +56,12 @@ class FastLLMModel(MultiStageModel):
         metadata = cls.config_class.load_metadata(pretrained_config)
         config = cls.config_class.from_metadata(pretrained_config, metadata, default_config, config_updates)
         if mode.support_training:
-            if "state_shard_names" in metadata:
+            # TODO v0.2: Make metadata.shards mandatory?
+            if metadata.shards:
                 if optimizer_state_names is None:
-                    optimizer_state_names = metadata["state_shard_names"][1:]
+                    optimizer_state_names = metadata.shards[1:]
                 else:
-                    Assert.eq(optimizer_state_names, metadata["state_shard_names"][1:])
+                    Assert.eq(optimizer_state_names, metadata.shards[1:])
             elif optimizer_state_names is None:
                 raise ValueError("`optimizer_state_names` is required")
         else:

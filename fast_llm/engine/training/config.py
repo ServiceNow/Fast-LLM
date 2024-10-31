@@ -8,11 +8,9 @@ import typing
 from fast_llm.config import Config, Field, FieldHint, FieldUpdate, check_field, config_class, skip_valid_if_none
 from fast_llm.data.config import AbstractDataConfig
 from fast_llm.engine.checkpoint.config import (
-    CheckpointConfigBase,
     CheckpointLoadConfig,
     CheckpointSaveConfig,
-    CheckpointSaveConfigBase,
-    CheckpointStateConfigBase,
+    CheckpointStateSaveConfigBase,
     DistributedCheckpointFormat,
 )
 from fast_llm.engine.config_utils.run import ExperimentConfig
@@ -229,9 +227,7 @@ class TrainingCheckpointConfig(TrainingCheckpointBaseConfig):
 
 
 @config_class()
-class TrainingExportConfig(
-    TrainingCheckpointBaseConfig, CheckpointConfigBase, CheckpointStateConfigBase, CheckpointSaveConfigBase
-):
+class TrainingExportConfig(TrainingCheckpointBaseConfig, CheckpointStateSaveConfigBase):
     _abstract = False
     save_name: typing.ClassVar[str] = "export"
     directory_name = "export"

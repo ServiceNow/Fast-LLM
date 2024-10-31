@@ -2,14 +2,17 @@ import enum
 import logging
 import typing
 
+import packaging.version
+
+from fast_llm import __version__
 from fast_llm.config import Config, Field, FieldHint, NoAutoValidate, check_field, config_class, skip_valid_if_none
 from fast_llm.engine.base_model.config import BaseModelConfig
 from fast_llm.engine.checkpoint.config import (
-    KNOWN_CHECKPOINT_VERSIONS,
     CheckpointFormat,
     CheckpointHandler,
     CheckpointLoadConfig,
     CheckpointLoadMetadataConfig,
+    CheckpointSaveMetadataConfig,
     DistributedCheckpointFormat,
     StateDictCheckpointFormat,
 )
@@ -202,6 +205,10 @@ class FastLLMModelConfig(Config):
     )
 
     @classmethod
+    def __fast_llm_serialize__(cls):
+        return cls.model_name
+
+    @classmethod
     def get_checkpoint_format(cls, format: typing.Union[type[CheckpointFormat], str]) -> type[CheckpointFormat]:
         if isinstance(format, type) and issubclass(format, CheckpointFormat):
             format_ = cls.get_checkpoint_format(format.name)
@@ -227,7 +234,7 @@ class FastLLMModelConfig(Config):
         raise NotImplementedError
 
     @classmethod
-    def get_base_model_config_cls(cls) -> type[BaseModelConfig]:
+    def get_base_model_config_class(cls) -> type[BaseModelConfig]:
         # TODO v0.2: Still needed?
         return cls.get_field("base_model").type
 
@@ -246,21 +253,15 @@ class FastLLMModelConfig(Config):
     def from_metadata(
         cls,
         pretrained: CheckpointLoadMetadataConfig,
-        metadata: dict,
+        metadata: "CheckpointMetadata",
         default: "FastLLMModelConfig" = None,
         updates: dict[str | tuple[str, ...], typing.Any] | None = None,
     ):
-        # TODO v0.2: Make checkpoint type mandatory
         # TODO: Standardize to *updates?
-        if "checkpoint_type" in metadata:
-            cls.get_checkpoint_format(metadata["checkpoint_type"])
-        version = metadata["checkpoint_version"]
-        if version not in KNOWN_CHECKPOINT_VERSIONS:
-            raise ValueError(f"Unrecognised checkpoint version: {version}")
-        if version == "0":
-            return cls._from_metadata_v0(pretrained, metadata, default, updates)
-
-        pretrained_config = cls.from_dict(metadata["fast_llm_config"])
+        # TODO v0.2: Update, remove support for older checkpoints.
+        if metadata.fast_llm_version.major != 0 or metadata.fast_llm_version.minor not in (0, 1):
+            raise ValueError(f"Invalid checkpoint version: {metadata.fast_llm_version}")
+        pretrained_config = cls.from_dict(metadata.config)
         if not pretrained.load_config.load_architecture:
             assert default is not None
             config = default.to_copy()
@@ -281,50 +282,19 @@ class FastLLMModelConfig(Config):
         return config
 
     @classmethod
-    def _from_metadata_v0(
-        cls,
-        pretrained: CheckpointLoadMetadataConfig,
-        metadata: dict,
-        default: "FastLLMModelConfig" = None,
-        updates: dict[str | tuple[str, ...], typing.Any] | None = None,
-    ):
-        # TODO v0.2: Remove
-        base_model_config_cls = cls.get_base_model_config_cls()
-        architecture_config = base_model_config_cls.architecture_cls.from_flat_dict(
-            metadata["model_config"].copy(), strict=False
+    def load_metadata(cls, config: CheckpointLoadMetadataConfig) -> "CheckpointMetadata":
+        metadata = config.format.get_handler_class().load_metadata(config)
+        Assert.eq(metadata.model, cls)
+        return metadata
+
+    def to_metadata(self, config: CheckpointSaveMetadataConfig, **kwargs):
+        return CheckpointMetadata(
+            fast_llm_version=__version__,
+            model=self.__class__,
+            format=config.format,
+            config=self,
+            **kwargs,
         )
-
-        with NoAutoValidate():
-            if default is None:
-                assert pretrained.load_config.load_architecture
-                config = cls(base_model=base_model_config_cls())
-            else:
-                config = default.to_copy()
-
-        if pretrained.load_config.load_architecture:
-            config.validate()
-            architecture_config.compare_architecture(default.base_model, pretrained.compare_log_fn)
-        else:
-            if pretrained.load_config.load_base_model:
-                # Replace the whole config
-                config.base_model = base_model_config_cls.from_flat_dict(metadata["model_config"])
-            else:
-                # Replace the architecture parts of the config.
-                config.base_model = config.base_model.to_copy(architecture_config)
-            if pretrained.load_config.load_fast_llm:
-                config.multi_stage = MultiStageConfig.from_flat_dict(metadata["multi_stage_config"])
-                config.distributed = DistributedConfig.from_flat_dict(
-                    metadata["distributed_config"],
-                )
-
-        config.validate()
-        if updates:
-            config = config.to_copy(updates)
-        return config
-
-    @classmethod
-    def load_metadata(cls, config: CheckpointLoadMetadataConfig):
-        return config.format.get_handler_class().load_metadata(config)
 
 
 @config_class()
@@ -382,3 +352,87 @@ class PretrainedFastLLMModelConfig(Config):
         self._distributed = self.model.distributed
         self._multi_stage = self.model.multi_stage
         self._base_model = self.model.base_model
+
+
+@config_class
+class CheckpointMetadata(Config):
+    # TODO: Make entries more flexible?
+    #  I.e.. model / format / usage (ex. training) - specific entries instead of a generic metadata?
+    fast_llm_version: packaging.version.Version = Field(
+        default=__version__,
+        desc="The Fast-LLM version this checkpoint was saved with.",
+        hint=FieldHint.core,
+    )
+    # TODO: Model-specific versioning?
+    model: type[FastLLMModelConfig] = Field(
+        default=None,
+        desc="The name of the model saved in this checkpoint (ex. gpt).",
+        hint=FieldHint.core,
+    )
+    format: type[CheckpointFormat] = Field(
+        default=None,
+        desc="The format this checkpoint was saved in.",
+        hint=FieldHint.core,
+    )
+    config: FastLLMModelConfig = Field(
+        default_factory=FastLLMModelConfig,
+        desc="The Fast-LLM model configuration for the saved model.",
+        hint=FieldHint.core,
+    )
+    shards: list[str] = Field(
+        default_factory=list,
+        desc="The name of the model shards saved in this checkpoint.",
+        hint=FieldHint.optional,
+    )
+    # TODO: Anything not included here.
+    metadata: dict = Field(
+        default_factory=dict,
+        desc="Additional information for this checkpoint.",
+        hint=FieldHint.optional,
+    )
+
+    def _validate(self):
+        if isinstance(self.fast_llm_version, str):
+            self.fast_llm_version = packaging.version.Version(self.fast_llm_version)
+
+        self.format = self.model.get_checkpoint_format(self.format)
+        super()._validate()
+        Assert.eq(self.config.__class__, self.model)
+
+    @classmethod
+    def _from_dict(
+        cls,
+        default: dict[str, typing.Any],
+        strict: bool = True,
+        flat: bool = False,
+    ):
+        # TODO v0.2: Remove backward compatibility.
+        cls._handle_renamed_field(default, "checkpoint_type", "format")
+        cls._handle_renamed_field(default, "checkpoint_version", "fast_llm_version")
+        cls._handle_renamed_field(default, "fast_llm_config", "config")
+        cls._handle_renamed_field(default, "state_shard_names", "shards")
+        if "model" not in default:
+            default["model"] = "gpt"
+        if "format" not in default:
+            default["format"] = DistributedCheckpointFormat
+        if "fast_llm_version" not in default:
+            default["fast_llm_version"] = "0"
+        if "config" not in default:
+            default["config"] = {
+                "base_model": default.pop("model_config", {}),
+                "multi_stage": default.pop("multi_stage_config", {}),
+                "distributed": default.pop("distributed_config", {}),
+            }
+        # Determine the model config class.
+        from fast_llm.models.auto import model_registry
+
+        model_config_class = default["model"]
+        if isinstance(model_config_class, str):
+            Assert.incl(model_config_class, model_registry)
+            model_config_class = model_registry[model_config_class]
+            default["model"] = model_config_class
+        # Instantiate the config with the appropriate class
+        config = default.get("config", {})
+        if isinstance(config, dict):
+            default["config"] = model_config_class.from_dict(config)
+        return super()._from_dict(default, strict, flat)
