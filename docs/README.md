@@ -35,3 +35,5 @@ To build and preview the documentation locally, follow these simple steps:
 ## Contributing to the Documentation
 
 If you'd like to contribute to the Fast-LLM documentation, feel free to edit these source files and submit a pull request. The changes will be reflected on the rendered documentation site after they are merged into the `main` branch.
+
+Your contributions could be as simple as helping to correct typos and spelling errors, improving existing content to provide more details on how to approach a tricky step for novice users, or even to add new content that describes functionality with limited or no detailed coverage anywhere else. No matter how small, we value all contributions from the Fast-LLM community.
