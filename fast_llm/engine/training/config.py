@@ -335,6 +335,7 @@ class TrainerConfig(PretrainedFastLLMModelConfig, ExperimentConfig):
     )
 
     def _validate(self):
+        self.training.export.setup(self.model)
         super()._validate()
         if self.run.experiment_dir is None:
             assert not self.training.checkpoint.enabled()

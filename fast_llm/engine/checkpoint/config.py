@@ -13,7 +13,7 @@ from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
-    from fast_llm.engine.multi_stage.config import CheckpointMetadata
+    from fast_llm.engine.multi_stage.config import CheckpointMetadata, FastLLMModelConfig
     from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
 
 logger = logging.getLogger(__name__)
@@ -99,12 +99,17 @@ class ModelConfigType(str, enum.Enum):
 @config_class()
 class CheckpointConfigBase(Config):
     _abstract = True
-    # The actual class should be set through `setup` in a parent config validation.
+    # Note: the `format` may be a str when configuring from file or cli.
+    #   The actual class should be set through `setup` in a parent config validation.
     format: type[CheckpointFormat] = Field(
         default=StateDictCheckpointFormat,
         desc="Format of the checkpoint.",
         hint=FieldHint.core,
     )
+
+    def setup(self, model_config: "FastLLMModelConfig"):
+        assert not self._validated
+        self.format = model_config.get_checkpoint_format(self.format)
 
     @classmethod
     def _from_dict(

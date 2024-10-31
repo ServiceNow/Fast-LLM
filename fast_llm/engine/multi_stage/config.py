@@ -205,14 +205,20 @@ class FastLLMModelConfig(Config):
     )
 
     @classmethod
-    def get_checkpoint_format(cls, format: str):
+    def get_checkpoint_format(cls, format: typing.Union[type[CheckpointFormat], str]) -> type[CheckpointFormat]:
+        if isinstance(format, type) and issubclass(format, CheckpointFormat):
+            format_ = cls.get_checkpoint_format(format.name)
+            Assert.is_(format, format_)
+            return format_
         for format_ in cls.checkpoint_formats:
             if format_.name == format:
                 return format_
         raise ValueError(f"Checkpoint format {format} not supported for model {cls.model_name}")
 
     @classmethod
-    def get_checkpoint_handler_class(cls, format: str) -> type[CheckpointHandler]:
+    def get_checkpoint_handler_class(
+        cls, format: typing.Union[type[CheckpointFormat], str]
+    ) -> type[CheckpointHandler]:
         return cls.get_checkpoint_format(format).get_handler_class()
 
     @classmethod
@@ -328,6 +334,7 @@ class PretrainedFastLLMModelConfig(Config):
 
     def _validate(self):
         assert self.model is not None
+        self.pretrained.setup(self.model)
         self.pretrained.validate()
         if self.pretrained.path is not None:
             self.model = self.model.from_pretrained(self.pretrained, default=self.model)
