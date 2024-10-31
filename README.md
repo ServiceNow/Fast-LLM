@@ -25,36 +25,36 @@ As a truly open-source project, Fast-LLM allows full customization and extension
 
 ## Why Fast-LLM?
 
-1. 🚀 **Fast-LLM is Blazingly Fast**:
-    - ⚡️ Optimized kernel efficiency and reduced overheads.
-    - 🔋 Optimized memory usage for best performance.
-    - ⏳ Minimizes training time and cost.
+1.   🚀 **Fast-LLM is Blazingly Fast**:
+    -   ⚡️ Optimized kernel efficiency and reduced overheads.
+    -   🔋 Optimized memory usage for best performance.
+    -   ⏳ Minimizes training time and cost.
 
-2. 📈 **Fast-LLM is Highly Scalable**:
-    - 📡 Distributed training across multiple GPUs and nodes using 3D parallelism (Data, Tensor, and Pipeline).
-    - 🔗 Supports sequence length parallelism to handle longer sequences effectively.
-    - 🧠 ZeRO-1, ZeRO-2, and ZeRO-3 implementations for improved memory efficiency.
-    - 🎛️ Mixed precision training support for better performance.
-    - 🏋️‍♂️ Large batch training and gradient accumulation support.
-    - 🔄 Reproducible training with deterministic behavior.
+2.   📈 **Fast-LLM is Highly Scalable**:
+    -   📡 Distributed training across multiple GPUs and nodes using 3D parallelism (Data, Tensor, and Pipeline).
+    -   🔗 Supports sequence length parallelism to handle longer sequences effectively.
+    -   🧠 ZeRO-1, ZeRO-2, and ZeRO-3 implementations for improved memory efficiency.
+    -   🎛️ Mixed precision training support for better performance.
+    -   🏋️‍♂️ Large batch training and gradient accumulation support.
+    -   🔄 Reproducible training with deterministic behavior.
 
-3. 🎨 **Fast-LLM is Incredibly Flexible**:
-    - 🤖 Compatible with all common language model architectures in a unified class.
-    - ⚡ Efficient dropless Mixture-of-Experts (MoE) implementation with SoTA performance.
-    - 🧩 Customizable language model architectures, data loaders, loss functions, and optimizers (in progress).
-    - 🤗 Seamless integration with [Hugging Face Transformers][transformers].
+3.   🎨 **Fast-LLM is Incredibly Flexible**:
+    -   🤖 Compatible with all common language model architectures in a unified class.
+    -   ⚡ Efficient dropless Mixture-of-Experts (MoE) implementation with SoTA performance.
+    -   🧩 Customizable language model architectures, data loaders, loss functions, and optimizers (in progress).
+    -   🤗 Seamless integration with [Hugging Face Transformers][transformers].
 
-4. 🎯 **Fast-LLM is Super Easy to Use**:
-    - 📦 [Pre-built Docker images](https://github.com/ServiceNow/Fast-LLM/pkgs/container/fast-llm) for quick deployment.
-    - 📝 Simple YAML configuration for hassle-free setup.
-    - 💻 Command-line interface for easy launches.
-    - 📊 Detailed logging and real-time monitoring features.
-    - 📚 Extensive [documentation][docs] and practical tutorials (in progress).
+4.   🎯 **Fast-LLM is Super Easy to Use**:
+    -   📦 [Pre-built Docker images](https://github.com/ServiceNow/Fast-LLM/pkgs/container/fast-llm) for quick deployment.
+    -   📝 Simple YAML configuration for hassle-free setup.
+    -   💻 Command-line interface for easy launches.
+    -   📊 Detailed logging and real-time monitoring features.
+    -   📚 Extensive [documentation][docs] and practical tutorials (in progress).
 
-5. 🌐 **Fast-LLM is Truly Open Source**:
-    - ⚖️ Licensed under [Apache 2.0][license] for maximum freedom to use Fast-LLM at work, in your projects, or for research.
-    - 💻 Transparently developed on GitHub with public [roadmap][roadmap] and [issue tracking][issues].
-    - 🤝 Contributions and collaboration are always welcome!
+5.   🌐 **Fast-LLM is Truly Open Source**:
+    -   ⚖️ Licensed under [Apache 2.0][license] for maximum freedom to use Fast-LLM at work, in your projects, or for research.
+    -   💻 Transparently developed on GitHub with public [roadmap][roadmap] and [issue tracking][issues].
+    -   🤝 Contributions and collaboration are always welcome!
 
 ## Usage
 
@@ -71,14 +71,14 @@ Expect to see a significant speedup in training time compared to other libraries
 
 #### Prerequisites
 
-- A [Slurm](https://slurm.schedmd.com/) cluster with at least 4 DGX nodes with 8 A100-80GB or H100-80GB GPUs each.
-- CUDA 12.1 or higher.
-- Dependencies: [PyTorch][pytorch], [Triton][triton], and [Apex](https://github.com/NVIDIA/apex) installed on all nodes.
+-   A [Slurm](https://slurm.schedmd.com/) cluster with at least 4 DGX nodes with 8 A100-80GB or H100-80GB GPUs each.
+-   CUDA 12.1 or higher.
+-   Dependencies: [PyTorch][pytorch], [Triton][triton], and [Apex](https://github.com/NVIDIA/apex) installed on all nodes.
 
 #### Steps
 
-1. Deploy the [nvcr.io/nvidia/pytorch:24.07-py3](https://catalog.ngc.nvidia.com/orgs/nvidia/containers/pytorch) Docker image to all nodes (recommended), because it contains all the necessary dependencies.
-2. Install Fast-LLM on all nodes:
+1.   Deploy the [nvcr.io/nvidia/pytorch:24.07-py3](https://catalog.ngc.nvidia.com/orgs/nvidia/containers/pytorch) Docker image to all nodes (recommended), because it contains all the necessary dependencies.
+2.   Install Fast-LLM on all nodes:
 
     ```bash
     sbatch <<EOF
@@ -92,16 +92,16 @@ Expect to see a significant speedup in training time compared to other libraries
     EOF
     ```
 
-3. Use the example Slurm job script [examples/fast-llm.sbat](examples/fast-llm.sbat) to submit the job to the cluster:
+3.   Use the example Slurm job script [examples/fast-llm.sbat](examples/fast-llm.sbat) to submit the job to the cluster:
 
     ```bash
     sbatch examples/fast-llm.sbat
     ```
 
-4. Monitor the job's progress:
+4.   Monitor the job's progress:
 
-    - Logs: Follow `job_output.log` and `job_error.log` in your working directory for logs.
-    - Status: Use `squeue -u $USER` to see the job status.
+    -   Logs: Follow `job_output.log` and `job_error.log` in your working directory for logs.
+    -   Status: Use `squeue -u $USER` to see the job status.
 
 Now, you can sit back and relax while Fast-LLM trains your model at full speed! ☕
 
@@ -109,28 +109,28 @@ Now, you can sit back and relax while Fast-LLM trains your model at full speed! 
 
 #### Prerequisites
 
-- A [Kubernetes](https://kubernetes.io/) cluster with at least 4 DGX nodes with 8 A100-80GB or H100-80GB GPUs each.
-- [KubeFlow](https://www.kubeflow.org/) installed.
-- Locked memory limit set to unlimited at the host level on all nodes. Ask your cluster admin to do this if needed.
+-   A [Kubernetes](https://kubernetes.io/) cluster with at least 4 DGX nodes with 8 A100-80GB or H100-80GB GPUs each.
+-   [KubeFlow](https://www.kubeflow.org/) installed.
+-   Locked memory limit set to unlimited at the host level on all nodes. Ask your cluster admin to do this if needed.
 
 #### Steps
 
-1. Create a Kubernetes [PersistentVolumeClaim](https://kubernetes.io/docs/concepts/storage/persistent-volumes/) (PVC) named `fast-llm-home` that will be mounted to `/home/fast-llm` in the container using [examples/fast-llm-pvc.yaml](examples/fast-llm-pvc.yaml):
+1.   Create a Kubernetes [PersistentVolumeClaim](https://kubernetes.io/docs/concepts/storage/persistent-volumes/) (PVC) named `fast-llm-home` that will be mounted to `/home/fast-llm` in the container using [examples/fast-llm-pvc.yaml](examples/fast-llm-pvc.yaml):
 
     ```bash
     kubectl apply -f examples/fast-llm-pvc.yaml
     ```
 
-2. Create a [PyTorchJob](https://www.kubeflow.org/docs/components/training/user-guides/pytorch/) resource using the example configuration file [examples/fast-llm.pytorchjob.yaml](examples/fast-llm.pytorchjob.yaml):
+2.   Create a [PyTorchJob](https://www.kubeflow.org/docs/components/training/user-guides/pytorch/) resource using the example configuration file [examples/fast-llm.pytorchjob.yaml](examples/fast-llm.pytorchjob.yaml):
 
     ```bash
     kubectl apply -f examples/fast-llm.pytorchjob.yaml
     ```
 
-3. Monitor the job status:
+3.   Monitor the job status:
 
-    - Use `kubectl get pytorchjobs` to see the job status.
-    - Use `kubectl logs -f fast-llm-master-0 -c pytorch` to follow the logs.
+    -   Use `kubectl get pytorchjobs` to see the job status.
+    -   Use `kubectl logs -f fast-llm-master-0 -c pytorch` to follow the logs.
 
 That's it! You're now up and running with Fast-LLM on Kubernetes. 🚀
 

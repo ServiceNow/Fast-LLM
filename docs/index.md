@@ -16,35 +16,35 @@ Fast-LLM is designed for professionals who demand exceptional performance for ef
 
 Fast-LLM isn't just another library, **it's a platform for powering the next generation of AI breakthroughs**. Here's what sets it apart:
 
-- **🚀 Purpose-Built for Small- and Large-Scale AI:** Optimized specifically for training language models of all sizes, Fast-LLM excels from **small models around 1B parameters to massive clusters running 70B+ parameter models**, with kernels that are fine-tuned for maximum throughput across this entire range. At 10B-parameter scale, Fast-LLM avoids costly 3D-paralelism through memory optimization techniques such as ZeRO and activation recomputation, whereas at 100B-parameter scale, Fast-LLM optimally supports 3D-parallelism; making Fast-LLM the go-to choice for diverse training needs.
+-   **🚀 Purpose-Built for Small- and Large-Scale AI:** Optimized specifically for training language models of all sizes, Fast-LLM excels from **small models around 1B parameters to massive clusters running 70B+ parameter models**, with kernels that are fine-tuned for maximum throughput across this entire range. At 10B-parameter scale, Fast-LLM avoids costly 3D-paralelism through memory optimization techniques such as ZeRO and activation recomputation, whereas at 100B-parameter scale, Fast-LLM optimally supports 3D-parallelism; making Fast-LLM the go-to choice for diverse training needs.
 
-- **🧠 Unified Support for GPT-Like Architectures:** Fast-LLM **unifies all GPT-like model implementations** in a [single configuration file](https://github.com/ServiceNow/Fast-LLM/blob/main/fast_llm/models/gpt/model.py), and unlike HuggingFace transformers where every model has it's own, mostly independent, implementation, Fast-LLM reduces coding and adapts effortlessly, even with custom architectures.
+-   **🧠 Unified Support for GPT-Like Architectures:** Fast-LLM **unifies all GPT-like model implementations** in a [single configuration file](https://github.com/ServiceNow/Fast-LLM/blob/main/fast_llm/models/gpt/model.py), and unlike HuggingFace transformers where every model has it's own, mostly independent, implementation, Fast-LLM reduces coding and adapts effortlessly, even with custom architectures.
 
-- **💰 Cost Efficiency That Sets Fast-LLM Apart:**
+-   **💰 Cost Efficiency That Sets Fast-LLM Apart:**
 
-  - **Lower Training Costs:** With higher throughput per GPU, Fast-LLM reduces the training time required. For instance, training a Mistral-7B model can be up to **xx% cheaper** compared to other frameworks due to faster processing and better memory efficiency.
+    -   **Lower Training Costs:** With higher throughput per GPU, Fast-LLM reduces the training time required. For instance, training a Mistral-7B model can be up to **xx% cheaper** compared to other frameworks due to faster processing and better memory efficiency.
 
-  - **More Tokens for Your Budget:** Train up to xx% more tokens for the same budget, leading to better-trained models without breaking your financial constraints.
+    -   **More Tokens for Your Budget:** Train up to xx% more tokens for the same budget, leading to better-trained models without breaking your financial constraints.
 
   [Learn more about Fast-LLM's cost efficiency and see detailed comparisons](cost-efficiency).
 
-- **🔓 Openness Without Compromise:** Fast-LLM's open-source approach ensures that you can **fully customize and extend the library** to fit your exact needs, without the restrictions of proprietary software. Developed transparently by a community of experts on GitHub, every change is **publicly discussed and vetted**, fostering **trust and collaboration** so you can innovate with confidence, knowing the entire development process and decision making is out in the open.
+-   **🔓 Openness Without Compromise:** Fast-LLM's open-source approach ensures that you can **fully customize and extend the library** to fit your exact needs, without the restrictions of proprietary software. Developed transparently by a community of experts on GitHub, every change is **publicly discussed and vetted**, fostering **trust and collaboration** so you can innovate with confidence, knowing the entire development process and decision making is out in the open.
 
-- **🌍 Community-Driven Development:** Built by professionals for professionals, Fast-LLM's development is transparent, with an open invitation to the community to contribute. [**Join the Fast-LLM community**](join-us) to help shape the future of large-scale AI training.
+-   **🌍 Community-Driven Development:** Built by professionals for professionals, Fast-LLM's development is transparent, with an open invitation to the community to contribute. [**Join the Fast-LLM community**](join-us) to help shape the future of large-scale AI training.
 
 ### Key Features
 
 Fast-LLM offers all the capabilities you need to accelerate your LLM training and **push the boundaries of what's possible**:
 
-- **🚀 Speed Like No Other:** Achieve record-breaking training throughput with Fast-LLM. For instance, train Mistral-7B at **9,800 tokens/s/GPU** on a 4-node cluster with 32 H100 GPUs (batch size 32, sequence length 8k). Our optimized kernels, advanced parallelism, and memory-efficient techniques drastically reduce training time and cost.
+-   **🚀 Speed Like No Other:** Achieve record-breaking training throughput with Fast-LLM. For instance, train Mistral-7B at **9,800 tokens/s/GPU** on a 4-node cluster with 32 H100 GPUs (batch size 32, sequence length 8k). Our optimized kernels, advanced parallelism, and memory-efficient techniques drastically reduce training time and cost.
 
-- **📡 Unmatched Scalability:** Seamlessly scale from a single GPU to large compute clusters. Fast-LLM supports 3D parallelism (data, tensor, and pipeline), sequence length parallelism, and ZeRO-1,2,3 techniques for maximum memory efficiency. Scale to the size you need without sacrificing performance.
+-   **📡 Unmatched Scalability:** Seamlessly scale from a single GPU to large compute clusters. Fast-LLM supports 3D parallelism (data, tensor, and pipeline), sequence length parallelism, and ZeRO-1,2,3 techniques for maximum memory efficiency. Scale to the size you need without sacrificing performance.
 
-- **🎛️ Total Flexibility:** Compatible with all major language model architectures, including but not limited to Llama, Mistral, StarCoder, and Mixtral. Fast-LLM's modular design gives you full control over your training workflows.
+-   **🎛️ Total Flexibility:** Compatible with all major language model architectures, including but not limited to Llama, Mistral, StarCoder, and Mixtral. Fast-LLM's modular design gives you full control over your training workflows.
 
-- **📦 Seamless Integration:** Integrate smoothly with popular libraries such as [Hugging Face Transformers](https://huggingface.co/transformers). Benefit from Fast-LLM's optimizations without disrupting your existing pipelines.
+-   **📦 Seamless Integration:** Integrate smoothly with popular libraries such as [Hugging Face Transformers](https://huggingface.co/transformers). Benefit from Fast-LLM's optimizations without disrupting your existing pipelines.
 
-- **🛠️ Professional-Grade Tools:** Enjoy mixed precision training, large batch training, and gradient accumulation. Fast-LLM ensures reproducibility through deterministic behavior and provides pre-built Docker images, YAML configurations, and a simple, intuitive command-line interface.
+-   **🛠️ Professional-Grade Tools:** Enjoy mixed precision training, large batch training, and gradient accumulation. Fast-LLM ensures reproducibility through deterministic behavior and provides pre-built Docker images, YAML configurations, and a simple, intuitive command-line interface.
 
 [Download Fast-LLM](https://github.com/ServiceNow/Fast-LLM/releases) and start training your large language models in record time. [Join the Fast-LLM community](join-us) and collaborate with like-minded professionals to advance the state-of-the-art in AI research and development.
 
@@ -52,9 +52,9 @@ Fast-LLM offers all the capabilities you need to accelerate your LLM training an
 
 Fast-LLM powers the world's most advanced AI projects:
 
-- **NLP Research and Development:** Train state-of-the-art language models for natural language understanding, summarization, and conversational AI.
-- **Enterprise AI Solutions:** Accelerate time-to-market for AI products by reducing training costs and enabling faster iteration.
-- **Academic Collaborations:** Drive AI innovation with high-performance training capabilities that support cutting-edge research in machine learning.
+-   **NLP Research and Development:** Train state-of-the-art language models for natural language understanding, summarization, and conversational AI.
+-   **Enterprise AI Solutions:** Accelerate time-to-market for AI products by reducing training costs and enabling faster iteration.
+-   **Academic Collaborations:** Drive AI innovation with high-performance training capabilities that support cutting-edge research in machine learning.
 
 See how Fast-LLM has helped early adopters achieve up to xx% faster results. [Explore use cases and success stories](success-stories/starcoder-2).
 
@@ -62,18 +62,18 @@ See how Fast-LLM has helped early adopters achieve up to xx% faster results. [Ex
 
 Fast-LLM is designed to be the **go-to solution** for those training the most sophisticated language models. Our objectives include:
 
-- **Accelerating Training Workflows:** Deliver the fastest LLM training experience with optimized kernel efficiency, parallelism, and memory management.
-- **Supporting a Broad Range of Architectures:** Offer built-in support for all major language model architectures, with an architecture-agnostic approach that allows users to easily adapt the framework to emerging models.
-- **Enabling Seamless Integration and Deployment:** Integrate effortlessly into existing ML pipelines, including [Hugging Face Transformers](https://huggingface.co/transformers) and [Kubernetes](https://kubernetes.io)-based clusters.
-- **Advancing LLM Research and Production-Readiness:** Be suitable for both cutting-edge research and mission-critical production workloads.
+-   **Accelerating Training Workflows:** Deliver the fastest LLM training experience with optimized kernel efficiency, parallelism, and memory management.
+-   **Supporting a Broad Range of Architectures:** Offer built-in support for all major language model architectures, with an architecture-agnostic approach that allows users to easily adapt the framework to emerging models.
+-   **Enabling Seamless Integration and Deployment:** Integrate effortlessly into existing ML pipelines, including [Hugging Face Transformers](https://huggingface.co/transformers) and [Kubernetes](https://kubernetes.io)-based clusters.
+-   **Advancing LLM Research and Production-Readiness:** Be suitable for both cutting-edge research and mission-critical production workloads.
 
 ## Collaboration and Contribution
 
 As we continue to expand Fast-LLM, we're looking for contributions from the community to help shape its future. We welcome:
 
-- **Testing and Bug Fixes:** Help us identify issues and improve stability.
-- **Feature Development:** Contribute new capabilities, such as custom kernels or support for alternative hardware like AMD and Intel.
-- **Documentation and Tutorials:** Make Fast-LLM more accessible by improving our [documentation](https://servicenow.github.io/Fast-LLM) and writing practical guides.
+-   **Testing and Bug Fixes:** Help us identify issues and improve stability.
+-   **Feature Development:** Contribute new capabilities, such as custom kernels or support for alternative hardware like AMD and Intel.
+-   **Documentation and Tutorials:** Make Fast-LLM more accessible by improving our [documentation](https://servicenow.github.io/Fast-LLM) and writing practical guides.
 
 Fast-LLM is more than just software, it's a community. Get involved by exploring our [contribution guidelines](https://github.com/ServiceNow/Fast-LLM/CONTRIBUTING.md) and engaging with us on [GitHub Discussions](https://github.com/ServiceNow/Fast-LLM/discussions).
 

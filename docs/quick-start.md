@@ -6,9 +6,9 @@ This guide will get you up and running with Fast-LLM on a single machine. Let's 
 
 You'll need:
 
-- At least one NVIDIA GPU on your machine. We recommend 8 A100s or higher for this tutorial 🤑
-- Docker (installed and running)
-- Some patience for the initial setup and training 😊
+-   At least one NVIDIA GPU on your machine. We recommend 8 A100s or higher for this tutorial 🤑
+-   Docker (installed and running)
+-   Some patience for the initial setup and training 😊
 
 ## Step 1: Pull the Fast-LLM Docker Image
 
@@ -142,23 +142,23 @@ run:
   experiment_dir: /app/results
 ```
 
-1. Total number of training tokens will be ~300B.
-2. Replace `servicenow` with your own W&B entity name.
-3. Adjust based on GPU memory. For GPT-2 and an A100-80GB, a `micro_batch_size` of 1 should work well.
-4. Should be a power of 2 and divisible by 8. For an A100-80GB, 1024 is a good starting point.
-5. Must be divisible by number of GPUs. At 1024 tokens per sequence, 480 corresponds to about ~500k tokens per batch.
-6. Location of the dataset metadata file generated in Step 4.
-7. 99.8% train, 0.2% validation, 0% test.
-8. L2 regularization penalty.
-9. 1st Adam optimizer parameter.
-10. 2nd Adam optimizer parameter.
-11. Peak learning rate.
-12. Should be 1/10th of base per Chinchilla.
-13. Cosine decay starting at `base` after warmup and ending at `minimum` after `decay_iterations`.
-14. Usually the same as `train_iters`.
-15. Number of steps of linear warmup.
-16. Location of the `config.json` file downloaded in Step 4.
-17. Set to `False` to train from scratch.
+1.   Total number of training tokens will be ~300B.
+2.   Replace `servicenow` with your own W&B entity name.
+3.   Adjust based on GPU memory. For GPT-2 and an A100-80GB, a `micro_batch_size` of 1 should work well.
+4.   Should be a power of 2 and divisible by 8. For an A100-80GB, 1024 is a good starting point.
+5.   Must be divisible by number of GPUs. At 1024 tokens per sequence, 480 corresponds to about ~500k tokens per batch.
+6.   Location of the dataset metadata file generated in Step 4.
+7.   99.8% train, 0.2% validation, 0% test.
+8.   L2 regularization penalty.
+9.   1st Adam optimizer parameter.
+10.   2nd Adam optimizer parameter.
+11.   Peak learning rate.
+12.   Should be 1/10th of base per Chinchilla.
+13.   Cosine decay starting at `base` after warmup and ending at `minimum` after `decay_iterations`.
+14.   Usually the same as `train_iters`.
+15.   Number of steps of linear warmup.
+16.   Location of the `config.json` file downloaded in Step 4.
+17.   Set to `False` to train from scratch.
 
 ## Step 6: Add Your Weights & Biases API Key
 
@@ -192,11 +192,11 @@ With Weights & Biases, you'll see the loss curve, training metrics, and more. If
 
 Here are some common issues you might encounter and how to address them:
 
-- **CUDA Out of Memory**: Try lowering the `micro_batch_size` or `sequence_length` in your configuration to fit within available memory.
+-   **CUDA Out of Memory**: Try lowering the `micro_batch_size` or `sequence_length` in your configuration to fit within available memory.
 
-- **Underutilized GPU or Low Memory Usage**: If memory usage is low or GPU utilization isn't maxed out, try increasing `micro_batch_size` (to 4, 8, or 16 if memory allows) or extending `sequence_length` (up to 2048, 3072, or 4096, as memory permits). Larger batches and longer sequences help keep GPUs engaged and reduce idle time.
+-   **Underutilized GPU or Low Memory Usage**: If memory usage is low or GPU utilization isn't maxed out, try increasing `micro_batch_size` (to 4, 8, or 16 if memory allows) or extending `sequence_length` (up to 2048, 3072, or 4096, as memory permits). Larger batches and longer sequences help keep GPUs engaged and reduce idle time.
 
-- **Docker Permission Issues**: If you encounter Docker permission errors, confirm that Docker has permission to access your GPUs. Use the `--gpus all` flag in your Docker run command and ensure your user has access to the `docker` and `nvidia-docker` groups.
+-   **Docker Permission Issues**: If you encounter Docker permission errors, confirm that Docker has permission to access your GPUs. Use the `--gpus all` flag in your Docker run command and ensure your user has access to the `docker` and `nvidia-docker` groups.
 
 ## Final Thoughts
 

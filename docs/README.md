@@ -10,13 +10,13 @@ To view the complete, rendered documentation, please visit the [Fast-LLM Documen
 
 To build and preview the documentation locally, follow these simple steps:
 
-1. **Install the necessary dependencies:**
+1.   **Install the necessary dependencies:**
 
    ```bash
    pip install -e ".[DOCS]"
    ```
 
-2. **Build the documentation:**
+2.   **Build the documentation:**
 
    ```bash
    mkdocs build
@@ -24,7 +24,7 @@ To build and preview the documentation locally, follow these simple steps:
 
    This will generate the static documentation files in a `site/` folder.
 
-3. **Serve the documentation locally (with auto-reload):**
+3.   **Serve the documentation locally (with auto-reload):**
 
    ```bash
    mkdocs serve

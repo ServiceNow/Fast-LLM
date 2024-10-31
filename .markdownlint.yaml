@@ -7,10 +7,6 @@ default: true
 MD007:
   # Spaces for indent
   indent: 4
-  # Whether to indent the first level of the list
-  start_indented: true
-  # Spaces for first level indent (when start_indented is set)
-  start_indent: 4
 
 # MD010/no-hard-tabs : Hard tabs : https://github.com/DavidAnson/markdownlint/blob/v0.32.1/doc/md010.md
 MD010:
@@ -23,3 +19,14 @@ MD010:
 
 # MD013/line-length : Line length : https://github.com/DavidAnson/markdownlint/blob/v0.32.1/doc/md013.md
 MD013: false
+
+# MD030/list-marker-space : Spaces after list markers : https://github.com/DavidAnson/markdownlint/blob/v0.32.1/doc/md030.md
+MD030:
+  # Spaces for single-line unordered list items
+  ul_single: 3
+  # Spaces for single-line ordered list items
+  ol_single: 3
+  # Spaces for multi-line unordered list items
+  ul_multi: 3
+  # Spaces for multi-line ordered list items
+  ol_multi: 3

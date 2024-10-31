@@ -48,9 +48,9 @@ The tables below provide a comparison of training costs for three different mode
 
 ### Key Takeaways
 
-- **Cost efficiency at all scales:** Fast-LLM consistently achieves lower training costs due to its advanced parallelism and memory efficiency, delivering value across various model sizes and hardware configurations.
-- **Superior token throughput:** By processing more tokens per second per GPU than other frameworks, Fast-LLM maximizes token efficiency, leading to substantial savings, particularly for longer training durations or larger GPU clusters.
-- **Optimized for large-scale training:** Fast-LLM's design allows it to scale effectively as model size and training setups expand, ensuring that the benefits of its optimizations grow with the size of the deployment.
+-   **Cost efficiency at all scales:** Fast-LLM consistently achieves lower training costs due to its advanced parallelism and memory efficiency, delivering value across various model sizes and hardware configurations.
+-   **Superior token throughput:** By processing more tokens per second per GPU than other frameworks, Fast-LLM maximizes token efficiency, leading to substantial savings, particularly for longer training durations or larger GPU clusters.
+-   **Optimized for large-scale training:** Fast-LLM's design allows it to scale effectively as model size and training setups expand, ensuring that the benefits of its optimizations grow with the size of the deployment.
 
 [^fast-llm-1b]:
     Testing conducted in [Month, Year] using 8 NVIDIA H100 SXM5 80 GB GPUs in 1 DGX node connected with 3200 Gbps Infiniband. Fast-LLM version [VERSION/COMMIT HASH], CUDA version [VERSION]. Training was performed on randomly generated data. Configuration file: [Link to config file].

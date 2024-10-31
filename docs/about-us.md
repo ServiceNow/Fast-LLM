@@ -18,17 +18,17 @@ We envision Fast-LLM as the go-to solution for serious AI practitioners who requ
 
 At Fast-LLM, we adhere to a set of guiding principles that define our approach:
 
-- **Performance-Driven:** We are relentless in our pursuit of speed and efficiency. Fast-LLM is built to reduce training time and scale to the largest clusters, enabling our users to achieve breakthrough results faster.
-- **Professional-Grade Customization:** We understand that serious AI work demands flexibility. Fast-LLM is designed for extensive customization, allowing users to tailor every aspect of the training process to their unique needs.
-- **Open Innovation:** While we cater to advanced users, our commitment to open-source ensures that innovation remains accessible. We believe in building a community where professionals can collaborate and contribute to shaping the future of AI.
-- **Reliability at Scale:** Fast-LLM is built with rigorous standards to support production-level workloads. We prioritize stability, reproducibility, and robustness, ensuring that your models can scale from research to real-world applications seamlessly.
+-   **Performance-Driven:** We are relentless in our pursuit of speed and efficiency. Fast-LLM is built to reduce training time and scale to the largest clusters, enabling our users to achieve breakthrough results faster.
+-   **Professional-Grade Customization:** We understand that serious AI work demands flexibility. Fast-LLM is designed for extensive customization, allowing users to tailor every aspect of the training process to their unique needs.
+-   **Open Innovation:** While we cater to advanced users, our commitment to open-source ensures that innovation remains accessible. We believe in building a community where professionals can collaborate and contribute to shaping the future of AI.
+-   **Reliability at Scale:** Fast-LLM is built with rigorous standards to support production-level workloads. We prioritize stability, reproducibility, and robustness, ensuring that your models can scale from research to real-world applications seamlessly.
 
 ## Meet the Team
 
 Fast-LLM is led by the Foundation Models Lab at [ServiceNow Research](https://www.servicenow.com/research/), with development driven by a dedicated group of professionals who bring extensive expertise in AI, machine learning, and distributed systems. While the project direction is guided by the Foundation Models Lab, contributions come from a growing network of researchers, developers, and industry experts worldwide. Here are some of the key members leading the project:
 
-- [**Joel Lamy Poirier**](https://www.servicenow.com/research/author/joel-lamy-poirier.html) - Lead Developer and maintainer, ServiceNow Research: Joel spearheads the core development, ensuring that Fast-LLM delivers on its promise of speed and scalability.
-- [**Sean Hughes**](https://www.servicenow.com/research/author/sean-hughes.html) - Ecosystem Director, ServiceNow Research: Sean focuses on building partnerships and open scientific collaborations to advance Fast-LLM's capabilities and reach.
-- [**Torsten Scholak**](https://www.servicenow.com/research/author/torsten-scholak.html) - Research Lead, ServiceNow Research: Torsten leads our research efforts, driving the scientific innovations that keep Fast-LLM at the forefront of AI training.
+-   [**Joel Lamy Poirier**](https://www.servicenow.com/research/author/joel-lamy-poirier.html) - Lead Developer and maintainer, ServiceNow Research: Joel spearheads the core development, ensuring that Fast-LLM delivers on its promise of speed and scalability.
+-   [**Sean Hughes**](https://www.servicenow.com/research/author/sean-hughes.html) - Ecosystem Director, ServiceNow Research: Sean focuses on building partnerships and open scientific collaborations to advance Fast-LLM's capabilities and reach.
+-   [**Torsten Scholak**](https://www.servicenow.com/research/author/torsten-scholak.html) - Research Lead, ServiceNow Research: Torsten leads our research efforts, driving the scientific innovations that keep Fast-LLM at the forefront of AI training.
 
 Our core team includes members affiliated with ServiceNow Research, as well as other contributors who bring unique perspectives and skills to the project. We welcome new participants from the broader AI community who share our vision of creating the best tools for training large-scale language models.

@@ -12,11 +12,11 @@ To bring StarCoder2 to life, we ran Fast-LLM on **NVIDIA's DGX SuperCloud**, uti
 
 Fast-LLM was designed to maximize efficiency in large-scale language model training—especially for tasks like StarCoder2. Here's how Fast-LLM's capabilities helped us achieve our goals:
 
-- **Optimized Throughput and GPU Utilization**: Fast-LLM's data parallelism allowed each A100-80GB GPU to operate at its peak, sustaining **10,000 tokens per second** throughput. This boosted GPU utilization and brought down training time by **20%** compared to other frameworks. Fast-LLM made sure every GPU cycle was used efficiently, cutting down on idle time across the board.
+-   **Optimized Throughput and GPU Utilization**: Fast-LLM's data parallelism allowed each A100-80GB GPU to operate at its peak, sustaining **10,000 tokens per second** throughput. This boosted GPU utilization and brought down training time by **20%** compared to other frameworks. Fast-LLM made sure every GPU cycle was used efficiently, cutting down on idle time across the board.
 
-- **Support for Long Contexts**: With Fast-LLM's built-in Grouped Query Attention (GQA), StarCoder2-3B was able to leverage a **16,384 token context window**. This is essential for code comprehension, where context often spans hundreds of lines or more. GQA enabled the model to hold extensive context across sequences, which translates into better understanding of long code snippets, in-depth documentation, and detailed coding conversations.
+-   **Support for Long Contexts**: With Fast-LLM's built-in Grouped Query Attention (GQA), StarCoder2-3B was able to leverage a **16,384 token context window**. This is essential for code comprehension, where context often spans hundreds of lines or more. GQA enabled the model to hold extensive context across sequences, which translates into better understanding of long code snippets, in-depth documentation, and detailed coding conversations.
 
-- **Fill-in-the-Middle (FIM) Training**: Fast-LLM supported FIM training objectives natively, allowing StarCoder2-3B to complete and understand code by predicting missing snippets in various contexts. This structure-focused training enhanced the model's performance, making it adept at understanding code structure, flow, and syntax.
+-   **Fill-in-the-Middle (FIM) Training**: Fast-LLM supported FIM training objectives natively, allowing StarCoder2-3B to complete and understand code by predicting missing snippets in various contexts. This structure-focused training enhanced the model's performance, making it adept at understanding code structure, flow, and syntax.
 
 ## The Takeaway
 
