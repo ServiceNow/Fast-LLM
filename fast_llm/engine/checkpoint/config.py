@@ -138,7 +138,7 @@ class CheckpointStateConfigBase(CheckpointConfigBase):
     _abstract = True
     # Defaults and descriptions are set in derived classes.
     model_weights: bool = Field(default=True, hint=FieldHint.feature)
-    optimizer_state: bool = Field(hint=FieldHint.feature)
+    optimizer_state: bool = Field(default=None, hint=FieldHint.feature)
 
     @classmethod
     def _from_dict(
@@ -170,10 +170,8 @@ class CheckpointSaveConfigBase(CheckpointConfigBase):
 
 @config_class()
 class CheckpointStateSaveConfigBase(CheckpointSaveConfigBase, CheckpointStateConfigBase):
-    model_weights: bool = Field(desc="Save the model weights.")
-    optimizer_state: bool = FieldUpdate(
-        default=None, desc="Save the optimizer state. Default: save if supported by the `format`."
-    )
+    model_weights: bool = FieldUpdate(desc="Save the model weights.")
+    optimizer_state: bool = FieldUpdate(desc="Save the optimizer state. Default: save if supported by the `format`.")
 
     def _validate(self):
         if self.optimizer_state is None:
@@ -228,7 +226,7 @@ class CheckpointLoadMetadataConfig(CheckpointPathConfigBase):
 class CheckpointLoadConfig(CheckpointLoadMetadataConfig, CheckpointStateConfigBase):
     _abstract = False
 
-    model_weights: bool = Field(desc="Load the model weights.")
+    model_weights: bool = FieldUpdate(desc="Load the model weights.")
     optimizer_state: bool = FieldUpdate(default=False, desc="Load the optimizer state.")
 
     def _validate(self):

@@ -36,7 +36,7 @@ class BaseModelConfig(BaseModelArchitectureConfig):
     # TODO: Find better name?
     """
 
-    architecture_cls: typing.ClassVar[type[BaseModelArchitectureConfig]]
+    architecture_class: typing.ClassVar[type[BaseModelArchitectureConfig]]
 
     def get_architecture(self):
-        return self.architecture_cls.from_dict(self, strict=False)
+        return self.architecture_class.from_dict(self, strict=False)

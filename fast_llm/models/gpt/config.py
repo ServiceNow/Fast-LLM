@@ -61,7 +61,7 @@ class GPTArchitectureConfig(LanguageModelArchitectureConfig):
 
 @config_class()
 class GPTBaseModelConfig(LanguageModelBaseConfig, GPTArchitectureConfig):
-    architecture_cls = GPTArchitectureConfig
+    architecture_class = GPTArchitectureConfig
 
     # Debug, to get an exact match with megatron init.
     use_megatron_initialization: bool = Field(

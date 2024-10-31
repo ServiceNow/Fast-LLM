@@ -89,7 +89,7 @@ class BaseModel(Sequential):
 
     @classmethod
     def architecture_cls(cls):
-        return cls.config_cls.architecture_cls
+        return cls.config_cls.architecture_class
 
     @abc.abstractmethod
     def get_layers(self):
