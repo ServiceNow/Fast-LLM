@@ -1,3 +1,4 @@
+import abc
 import argparse
 import os
 import pathlib
@@ -162,7 +163,6 @@ class ValidationConfig(IntervalConfig):
 class TrainingCheckpointBaseConfig(IntervalConfig):
     _abstract = True
     save_name: typing.ClassVar[str] = "save"
-    directory_name: typing.ClassVar[str] = "save"
     callback: CallbackConfig = Field(
         default_factory=CallbackConfig,
         desc="Callback (shell script).",
@@ -180,6 +180,10 @@ class TrainingCheckpointBaseConfig(IntervalConfig):
         hint=FieldHint.feature,
         valid=skip_valid_if_none(check_field(Assert.gt, 0)),
     )
+
+    @abc.abstractmethod
+    def get_save_directory(self, experiment_directory: pathlib.Path) -> pathlib.Path:
+        pass
 
     def get_save_config(self, path: pathlib.Path):
         raise NotImplementedError()
@@ -201,13 +205,18 @@ class TrainingCheckpointConfig(TrainingCheckpointBaseConfig):
     _abstract = False
     save_name: typing.ClassVar[str] = "checkpoint"
     # TODO v0.2: Rename to `checkpoint` so we don't need this extra variable?
-    directory_name = "checkpoints"
     interval = FieldUpdate(
         desc="The number of training iterations between each checkpoint." " Setting to None will disable checkpoints."
     )
     offset = FieldUpdate(desc="Offset for the first checkpoint.")
     callback: CallbackConfig = FieldUpdate(desc="Callback (shell script) to run after checkpoint.")
     keep: int | None = FieldUpdate(default=5)
+
+    def get_save_directory(self, experiment_directory: pathlib.Path) -> pathlib.Path:
+        # TODO v0.2: Remove backward compatibility.
+        old_path = experiment_directory / "checkpoints"
+        new_path = experiment_directory / "checkpoint"
+        return old_path if old_path.is_dir() and not new_path.is_dir() else new_path
 
     def get_save_config(self, path: pathlib.Path):
         return CheckpointSaveConfig(
@@ -230,12 +239,15 @@ class TrainingCheckpointConfig(TrainingCheckpointBaseConfig):
 class TrainingExportConfig(TrainingCheckpointBaseConfig, CheckpointStateSaveConfigBase):
     _abstract = False
     save_name: typing.ClassVar[str] = "export"
-    directory_name = "export"
     interval = FieldUpdate(
         desc="The number of training iterations between each export." " Setting to None will disable exports."
     )
     offset = FieldUpdate(desc="Offset for the first export.")
     callback: CallbackConfig = FieldUpdate(desc="Callback (shell script) to run after export.")
+
+    @abc.abstractmethod
+    def get_save_directory(self, experiment_directory: pathlib.Path) -> pathlib.Path:
+        return experiment_directory / "export" / self.format.name
 
     def get_save_config(self, path: pathlib.Path):
         return CheckpointSaveConfig.from_dict(self, {"path": path}, strict=False)

@@ -14,7 +14,7 @@ from fast_llm.engine.checkpoint.config import (
     CheckpointLoadMetadataConfig,
     CheckpointSaveMetadataConfig,
     DistributedCheckpointFormat,
-    StateDictCheckpointFormat,
+    FastLLMCheckpointFormat,
 )
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.utils import Assert
@@ -189,7 +189,7 @@ class FastLLMModelConfig(Config):
     _abstract = True
     checkpoint_formats: typing.ClassVar[tuple[type[CheckpointFormat], ...]] = (
         DistributedCheckpointFormat,
-        StateDictCheckpointFormat,
+        FastLLMCheckpointFormat,
     )
     model_name: typing.ClassVar[str]
     base_model: BaseModelConfig = Field(
@@ -214,6 +214,9 @@ class FastLLMModelConfig(Config):
             format_ = cls.get_checkpoint_format(format.name)
             Assert.is_(format, format_)
             return format_
+        # TODO v0.2: Remove backward compatibility.
+        if format == "state_dict":
+            format = "fast_llm"
         for format_ in cls.checkpoint_formats:
             if format_.name == format:
                 return format_

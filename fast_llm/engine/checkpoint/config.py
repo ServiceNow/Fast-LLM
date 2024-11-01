@@ -67,14 +67,14 @@ class DistributedCheckpointFormat(CheckpointFormat):
         return DistributedCheckpointHandler
 
 
-class StateDictCheckpointFormat(CheckpointFormat):
-    name: typing.ClassVar[str] = "state_dict"
+class FastLLMCheckpointFormat(CheckpointFormat):
+    name: typing.ClassVar[str] = "fast_llm"
 
     @classmethod
     def get_handler_class(cls):
-        from fast_llm.engine.checkpoint.state_dict import TrivialCheckpointHandler
+        from fast_llm.engine.checkpoint.state_dict import FastLLMCheckpointHandler
 
-        return TrivialCheckpointHandler
+        return FastLLMCheckpointHandler
 
 
 class ModelConfigType(str, enum.Enum):
@@ -102,7 +102,7 @@ class CheckpointConfigBase(Config):
     # Note: the `format` may be a str when configuring from file or cli.
     #   The actual class should be set through `setup` in a parent config validation.
     format: type[CheckpointFormat] = Field(
-        default=StateDictCheckpointFormat,
+        default=FastLLMCheckpointFormat,
         desc="Format of the checkpoint.",
         hint=FieldHint.core,
     )

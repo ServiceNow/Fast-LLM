@@ -11,8 +11,8 @@ from fast_llm.engine.checkpoint.config import (
     CheckpointLoadConfig,
     CheckpointSaveConfig,
     DistributedCheckpointFormat,
+    FastLLMCheckpointFormat,
     ModelConfigType,
-    StateDictCheckpointFormat,
 )
 from fast_llm.engine.multi_stage.config import StageMode
 from fast_llm.models.auto import model_registry
@@ -49,13 +49,13 @@ def test_checkpoint_and_eval():
 
 
 def _prepare_resume_fn(test_path: pathlib.Path, compare_path: pathlib.Path, skip: bool) -> bool:
-    if skip and (test_path / "checkpoints" / "2" / "ok").is_file():
+    if skip and (test_path / "checkpoint" / "2" / "ok").is_file():
         return True
     elif test_path.is_dir():
         shutil.rmtree(test_path)
     shutil.copytree(compare_path, test_path)
-    shutil.rmtree(test_path / "checkpoints" / "2")
-    assert (test_path / "checkpoints" / "1" / "ok").is_file()
+    shutil.rmtree(test_path / "checkpoint" / "2")
+    assert (test_path / "checkpoint" / "1" / "ok").is_file()
     # TODO: Eval
     shutil.rmtree(test_path / "runs")
     return False
@@ -89,12 +89,12 @@ def _run_conversion(config: ConversionConfig):
         config.run(TEST_MODEL_CONFIG_CLS)
 
 
-_CKPT_PATH = TEST_RESULTS_PATH / f"test_{TEST_MODEL}_checkpoint_and_eval" / "checkpoints" / "2"
+_CKPT_PATH = TEST_RESULTS_PATH / f"test_{TEST_MODEL}_checkpoint_and_eval" / "checkpoint" / "2"
 _CONVERT_PATH = TEST_RESULTS_PATH / f"test_{TEST_MODEL}_convert_model"
 
 
 @pytest.mark.depends(on=["test_checkpoint_and_eval"])
-def test_convert_distributed_to_state_dict():
+def test_convert_distributed_to_fast_llm():
     _run_conversion(
         ConversionConfig(
             input=CheckpointLoadConfig(
@@ -102,22 +102,22 @@ def test_convert_distributed_to_state_dict():
                 format=DistributedCheckpointFormat,
             ),
             output=CheckpointSaveConfig(
-                path=_CONVERT_PATH / "state_dict_0",
-                format=StateDictCheckpointFormat,
+                path=_CONVERT_PATH / "fast_llm_0",
+                format=FastLLMCheckpointFormat,
             ),
         )
     )
 
 
-@pytest.mark.depends(on=["test_convert_distributed_to_state_dict"])
-def test_convert_state_dict_to_huggingface():
+@pytest.mark.depends(on=["test_convert_distributed_to_fast_llm"])
+def test_convert_fast_llm_to_huggingface():
     if HUGGINGFACE_CHECKPOINT_FORMAT is None:
         pytest.skip(f"Conversion not supported for {TEST_MODEL}")
     _run_conversion(
         ConversionConfig(
             input=CheckpointLoadConfig(
-                path=_CONVERT_PATH / "state_dict_0",
-                format=StateDictCheckpointFormat,
+                path=_CONVERT_PATH / "fast_llm_0",
+                format=FastLLMCheckpointFormat,
             ),
             output=CheckpointSaveConfig(
                 path=_CONVERT_PATH / "huggingface_0",
@@ -127,7 +127,7 @@ def test_convert_state_dict_to_huggingface():
     )
 
 
-@pytest.mark.depends(on=["test_convert_state_dict_to_huggingface"])
+@pytest.mark.depends(on=["test_convert_fast_llm_to_huggingface"])
 def test_convert_huggingface_to_distributed():
     _run_conversion(
         ConversionConfig(
@@ -162,7 +162,7 @@ def test_convert_distributed_to_huggingface():
 
 
 @pytest.mark.depends(on=["test_convert_distributed_to_huggingface"])
-def test_convert_huggingface_to_state_dict():
+def test_convert_huggingface_to_fast_llm():
     _run_conversion(
         ConversionConfig(
             input=CheckpointLoadConfig(
@@ -170,20 +170,20 @@ def test_convert_huggingface_to_state_dict():
                 format=HUGGINGFACE_CHECKPOINT_FORMAT,
             ),
             output=CheckpointSaveConfig(
-                path=_CONVERT_PATH / "state_dict_1",
-                format=StateDictCheckpointFormat,
+                path=_CONVERT_PATH / "fast_llm_1",
+                format=FastLLMCheckpointFormat,
             ),
         )
     )
 
 
-@pytest.mark.depends(on=["test_convert_huggingface_to_state_dict"])
-def test_convert_state_dict_to_distributed():
+@pytest.mark.depends(on=["test_convert_huggingface_to_fast_llm"])
+def test_convert_fast_llm_to_distributed():
     _run_conversion(
         ConversionConfig(
             input=CheckpointLoadConfig(
-                path=_CONVERT_PATH / "state_dict_1",
-                format=StateDictCheckpointFormat,
+                path=_CONVERT_PATH / "fast_llm_1",
+                format=FastLLMCheckpointFormat,
             ),
             output=CheckpointSaveConfig(
                 path=_CONVERT_PATH / "distributed_1",
@@ -193,7 +193,7 @@ def test_convert_state_dict_to_distributed():
     )
 
 
-@pytest.mark.depends(on=["test_convert_huggingface_to_distributed", "test_convert_state_dict_to_distributed"])
+@pytest.mark.depends(on=["test_convert_huggingface_to_distributed", "test_convert_fast_llm_to_distributed"])
 def test_converted_distributed():
     # Compare the fast llm weights
     # TODO: Compare configs
@@ -208,17 +208,17 @@ def test_converted_distributed():
         assert (w[key][:1] == w1[key]).all(), (w[key][:1], w1[key])
 
 
-@pytest.mark.depends(on=["test_convert_distributed_to_state_dict", "test_convert_huggingface_to_state_dict"])
-def test_converted_state_dict():
-    s0 = safetensors.torch.load_file(_CONVERT_PATH / "state_dict_0" / "state_dict_0.safetensors")
-    s1 = safetensors.torch.load_file(_CONVERT_PATH / "state_dict_1" / "state_dict_0.safetensors")
+@pytest.mark.depends(on=["test_convert_distributed_to_fast_llm", "test_convert_huggingface_to_fast_llm"])
+def test_converted_fast_llm():
+    s0 = safetensors.torch.load_file(_CONVERT_PATH / "fast_llm_0" / "model_0.safetensors")
+    s1 = safetensors.torch.load_file(_CONVERT_PATH / "fast_llm_1" / "model_0.safetensors")
     assert s0.keys() == s1.keys()
     for key in s0:
         assert s0[key].shape == s1[key].shape, (key, s0[key].shape, s1[key].shape)
         assert (s0[key] == s1[key]).all(), (key, s0, s1)
 
 
-@pytest.mark.depends(on=["test_convert_state_dict_to_huggingface", "test_convert_distributed_to_huggingface"])
+@pytest.mark.depends(on=["test_convert_fast_llm_to_huggingface", "test_convert_distributed_to_huggingface"])
 def test_converted_huggingface():
     h0 = safetensors.torch.load_file(_CONVERT_PATH / "huggingface_0" / "model_0.safetensors")
     h1 = safetensors.torch.load_file(_CONVERT_PATH / "huggingface_1" / "model_0.safetensors")
@@ -273,11 +273,11 @@ def test_load_converted_distributed_checkpoint():
     assert (weight_shard == model._state_shard).all()
 
 
-@pytest.mark.depends(on=["test_converted_state_dict", "test_load_pretrained_distributed_checkpoint"])
-def test_load_converted_state_dict_checkpoint():
+@pytest.mark.depends(on=["test_converted_fast_llm", "test_load_pretrained_distributed_checkpoint"])
+def test_load_converted_fast_llm_checkpoint():
     pretrained_config_ref = CheckpointLoadConfig(path=_CKPT_PATH, format=DistributedCheckpointFormat)
-    pretrained_config_0 = CheckpointLoadConfig(path=_CONVERT_PATH / "state_dict_0", format=StateDictCheckpointFormat)
-    pretrained_config_1 = CheckpointLoadConfig(path=_CONVERT_PATH / "state_dict_1", format=StateDictCheckpointFormat)
+    pretrained_config_0 = CheckpointLoadConfig(path=_CONVERT_PATH / "fast_llm_0", format=FastLLMCheckpointFormat)
+    pretrained_config_1 = CheckpointLoadConfig(path=_CONVERT_PATH / "fast_llm_1", format=FastLLMCheckpointFormat)
     config = TEST_MODEL_CONFIG_CLS.from_pretrained(pretrained_config_ref)
     model = TEST_MODEL_CLS.from_pretrained(pretrained_config_0)
     config_1 = TEST_MODEL_CONFIG_CLS.from_pretrained(pretrained_config_1)
@@ -289,7 +289,7 @@ def test_load_converted_state_dict_checkpoint():
     assert (weight_shard == model._state_shard).all()
 
 
-@pytest.mark.depends(on=["test_converted_state_dict", "test_load_pretrained_distributed_checkpoint"])
+@pytest.mark.depends(on=["test_converted_fast_llm", "test_load_pretrained_distributed_checkpoint"])
 def test_load_converted_huggingface_checkpoint():
     pretrained_config_ref = CheckpointLoadConfig(
         path=_CKPT_PATH,
@@ -314,7 +314,7 @@ def test_load_converted_huggingface_checkpoint():
     assert (weight_shard == model._state_shard).all()
 
 
-@pytest.mark.depends(on=["test_load_converted_state_dict_checkpoint", "test_load_converted_huggingface_checkpoint"])
+@pytest.mark.depends(on=["test_load_converted_fast_llm_checkpoint", "test_load_converted_huggingface_checkpoint"])
 def test_run_converted_model():
     model_ref = TEST_MODEL_HF_CLS.from_pretrained(
         CheckpointLoadConfig(
@@ -326,7 +326,7 @@ def test_run_converted_model():
         0, model_ref.config.fast_llm_config.base_model.vocab_size, size=(4, 100), dtype=torch.int64, device="cuda"
     )
     output_ref = model_ref(test_input)
-    model_from_state_dict = TEST_MODEL_HF_CLS.from_pretrained(_CONVERT_PATH / "state_dict_0")
+    model_from_fast_llm = TEST_MODEL_HF_CLS.from_pretrained(_CONVERT_PATH / "fast_llm_0")
     model_from_hf = TEST_MODEL_HF_CLS.from_pretrained(
         CheckpointLoadConfig(
             path=_CONVERT_PATH / "huggingface_0",
@@ -338,7 +338,7 @@ def test_run_converted_model():
     model_as_hf = transformers.AutoModelForCausalLM.from_pretrained(_CONVERT_PATH / "huggingface_0").cuda()
     for name, model in zip(
         ("From state dict", "From Huggingface", "Native Huggingface"),
-        (model_from_state_dict, model_from_hf, model_as_hf),
+        (model_from_fast_llm, model_from_hf, model_as_hf),
     ):
         print(name)
         output = model(test_input)
@@ -392,7 +392,7 @@ def test_load_pretrained_distributed_with_config():
 
 @pytest.mark.depends(on=["test_load_pretrained_distributed_in_dp2"])
 def test_load_pretrained_in_dp2_match_checkpoint():
-    test_ckpt_path = TEST_RESULTS_PATH / f"test_{TEST_MODEL}_load_pretrained_distributed_in_dp2" / "checkpoints" / "1"
+    test_ckpt_path = TEST_RESULTS_PATH / f"test_{TEST_MODEL}_load_pretrained_distributed_in_dp2" / "checkpoint" / "1"
     pretrained_config_ref = CheckpointLoadConfig(
         path=_CKPT_PATH,
         format=DistributedCheckpointFormat,
@@ -442,7 +442,7 @@ def test_load_distributed_checkpoint_dp2():
         load_config=ModelConfigType.fast_llm,
     )
     pretrained_config_test = CheckpointLoadConfig(
-        path=TEST_RESULTS_PATH / f"test_{TEST_MODEL}_load_pretrained_distributed_in_dp2" / "checkpoints" / "1",
+        path=TEST_RESULTS_PATH / f"test_{TEST_MODEL}_load_pretrained_distributed_in_dp2" / "checkpoint" / "1",
         format=DistributedCheckpointFormat,
     )
     config = TEST_MODEL_CONFIG_CLS.from_pretrained(pretrained_config_ref)
@@ -455,16 +455,16 @@ def test_load_distributed_checkpoint_dp2():
 
 
 @pytest.mark.slow
-@pytest.mark.depends(on=["test_load_converted_state_dict_checkpoint", "test_load_pretrained_in_dp2_match_checkpoint"])
-def test_load_pretrained_state_dict_in_dp2():
+@pytest.mark.depends(on=["test_load_converted_fast_llm_checkpoint", "test_load_pretrained_in_dp2_match_checkpoint"])
+def test_load_pretrained_fast_llm_in_dp2():
     run_test_script(
-        f"test_{TEST_MODEL}_load_pretrained_state_dict_in_dp2",
+        f"test_{TEST_MODEL}_load_pretrained_fast_llm_in_dp2",
         CONFIG_COMMON
         + [
             "training.checkpoint.interval=1",
             "training.train_iters=1",
-            f"pretrained.path={_CONVERT_PATH / 'state_dict_0'}",
-            f"pretrained.format=state_dict",
+            f"pretrained.path={_CONVERT_PATH / 'fast_llm_0'}",
+            f"pretrained.format=fast_llm",
             "schedule.skip_step=True",
         ],
         num_gpus=2,
@@ -473,14 +473,14 @@ def test_load_pretrained_state_dict_in_dp2():
         ref_shard = safetensors.torch.load_file(
             TEST_RESULTS_PATH
             / f"test_{TEST_MODEL}_load_pretrained_distributed_in_dp2"
-            / "checkpoints"
+            / "checkpoint"
             / "1"
             / f"rank_{rank}.safetensors"
         )["state_shard"]
         test_shard = safetensors.torch.load_file(
             TEST_RESULTS_PATH
-            / f"test_{TEST_MODEL}_load_pretrained_state_dict_in_dp2"
-            / "checkpoints"
+            / f"test_{TEST_MODEL}_load_pretrained_fast_llm_in_dp2"
+            / "checkpoint"
             / "1"
             / f"rank_{rank}.safetensors"
         )["state_shard"]
@@ -506,14 +506,14 @@ def test_load_pretrained_huggingface_in_dp2():
         ref_shard = safetensors.torch.load_file(
             TEST_RESULTS_PATH
             / f"test_{TEST_MODEL}_load_pretrained_distributed_in_dp2"
-            / "checkpoints"
+            / "checkpoint"
             / "1"
             / f"rank_{rank}.safetensors"
         )["state_shard"]
         test_shard = safetensors.torch.load_file(
             TEST_RESULTS_PATH
             / f"test_{TEST_MODEL}_load_pretrained_huggingface_in_dp2"
-            / "checkpoints"
+            / "checkpoint"
             / "1"
             / f"rank_{rank}.safetensors"
         )["state_shard"]

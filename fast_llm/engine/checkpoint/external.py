@@ -298,9 +298,18 @@ class AutoStateDictCheckpointHandler(ExternalStateDictCheckpointHandler, abc.ABC
 
 
 class HuggingfaceStateDictCheckpointHandler(ExternalStateDictCheckpointHandler, abc.ABC):
-    base_file_name: typing.ClassVar[str] = "model"
 
-    def _save_metadata(self, config: CheckpointSaveMetadataConfig, metadata: CheckpointMetadata) -> dict:
+    def _save_serialized_metadata(self, config: CheckpointSaveMetadataConfig, metadata: dict, index: dict):
+        path = config.path / f"{self.base_file_name}.safetensors.index.json"
+        logger.info(f"Saving index to {path}")
+        # Save the index.
+        json.dump(
+            {"metadata": metadata, "weight_map": index},
+            path.open("w"),
+            indent=4,
+        )
+
+    def _serialize_metadata(self, config: CheckpointSaveMetadataConfig, metadata: CheckpointMetadata) -> dict:
         huggingface_config = self._export_config(self._model.base_model_config)
         self._save_config(config.path, huggingface_config)
         return {
