@@ -304,7 +304,7 @@ class HuggingfaceStateDictCheckpointHandler(ExternalStateDictCheckpointHandler, 
         logger.info(f"Saving index to {path}")
         # Save the index.
         json.dump(
-            {"metadata": metadata, "weight_map": self._index},
+            {"metadata": metadata, "weight_map": index},
             path.open("w"),
             indent=4,
         )

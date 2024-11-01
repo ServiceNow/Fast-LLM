@@ -130,6 +130,8 @@ class FastLLMCheckpointHandler(StateDictCheckpointHandler):
     def _save_serialized_metadata(self, config: CheckpointSaveMetadataConfig, serialized_metadata: dict, index: dict):
         path = config.path / f"metadata.yaml"
         logger.info(f"Saving metadata to {path}")
+        if "metadata" not in serialized_metadata:
+            serialized_metadata["metadata"] = {}
         serialized_metadata["metadata"]["state_index"] = index
         yaml.safe_dump(serialized_metadata, path.open("w"))
 

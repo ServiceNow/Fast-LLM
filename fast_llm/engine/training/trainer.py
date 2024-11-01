@@ -7,7 +7,6 @@ import time
 import typing
 
 import torch
-from wandb import config
 
 from fast_llm.core.distributed import safe_barrier
 from fast_llm.data.config import AbstractData
@@ -457,8 +456,9 @@ class Trainer(abc.ABC):
     def _get_last_checkpoint(self):
         if self._run.experiment_directory is None:
             return None
-        checkpoint_base_directory = self._run.experiment_directory / config.get_save_directory(
+        checkpoint_base_directory = (
             self._run.experiment_directory
+            / self._config.training.checkpoint.get_save_directory(self._run.experiment_directory)
         )
         if self._run.is_main_rank and checkpoint_base_directory.is_dir():
             checkpoints = [int(path.name) for path in checkpoint_base_directory.iterdir()]
