@@ -2,7 +2,6 @@ import sys
 
 import pybind11
 import setuptools
-from setuptools.command.build_ext import build_ext
 
 # Minimum setuptools version required to parse setup.cfg metadata.
 _SETUPTOOLS_MIN_VERSION = "30.3"
@@ -10,7 +9,6 @@ _SETUPTOOLS_MIN_VERSION = "30.3"
 if setuptools.__version__ < _SETUPTOOLS_MIN_VERSION:
     print(f"Error: setuptools version {_SETUPTOOLS_MIN_VERSION} " "or greater is required")
     sys.exit(1)
-
 
 cpp_extension = setuptools.Extension(
     "fast_llm.csrc.data",
@@ -21,13 +19,6 @@ cpp_extension = setuptools.Extension(
     language="c++",
 )
 
-
-class BuildExt(build_ext):
-    def build_extensions(self):
-        super().build_extensions()
-
-
 setuptools.setup(
     ext_modules=[cpp_extension],
-    cmdclass={"build_ext": BuildExt},
 )
