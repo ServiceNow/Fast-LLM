@@ -21,11 +21,8 @@ ENV PYTHONPATH=/app:/app/Megatron-LM \
 
 # Copy the dependency files and install dependencies
 COPY --chown=fast_llm setup.py setup.cfg pyproject.toml ./
-RUN PIP_NO_INPUT=1 pip3 install --no-cache-dir -e ".[CORE,OPTIONAL,DEV]"
-
-# Compile the C++ extensions (fast_llm/csrc)
 COPY --chown=fast_llm ./fast_llm/csrc/ fast_llm/csrc/
-RUN make -C ./fast_llm/csrc/
+RUN PIP_NO_INPUT=1 pip3 install --no-cache-dir --no-build-isolation -e ".[CORE,OPTIONAL,DEV]"
 
 # Copy the rest of the code
 COPY --chown=fast_llm ./Megatron-LM Megatron-LM
@@ -33,5 +30,5 @@ COPY --chown=fast_llm ./examples examples
 COPY --chown=fast_llm ./tests tests
 COPY --chown=fast_llm ./tools tools
 
-# Copy the main source code for Fast-LLM and install in editable mode
+# Copy the main source code for Fast-LLM
 COPY --exclude=./fast_llm/csrc/ --chown=fast_llm ./fast_llm/ fast_llm/
