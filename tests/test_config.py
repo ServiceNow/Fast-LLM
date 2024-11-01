@@ -1,6 +1,8 @@
 import pathlib
 import subprocess
+
 import yaml
+
 from fast_llm.models.auto import trainer_registry
 
 
@@ -14,7 +16,7 @@ def test_validate_without_import():
         "\n".join(
             [
                 # Import required third party libraries here, so they can be found later.
-                "import sys, yaml, requests",
+                "import sys, yaml, requests, packaging.version",
                 # Prevent any other third party package from being imported (or at least try to)
                 "sys.path=[p for p in sys.path if not any(x in p for x in ('site-packages', 'dist-packages', '.egg'))]",
                 # We still want to enable imports from within Fast-llm

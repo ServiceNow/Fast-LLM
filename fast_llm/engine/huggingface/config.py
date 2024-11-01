@@ -5,7 +5,7 @@ import typing
 
 import transformers
 
-from fast_llm.engine.checkpoint.config import CheckpointFormat, CheckpointLoadMetadataConfig
+from fast_llm.engine.checkpoint.config import CheckpointLoadMetadataConfig, StateDictCheckpointFormat
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig
 
 logger = logging.getLogger(__name__)
@@ -66,7 +66,7 @@ class HuggingfaceModelConfig(transformers.PretrainedConfig):
         else:
             pretrained = CheckpointLoadMetadataConfig(
                 path=pathlib.Path(pretrained_model_name_or_path),
-                format=CheckpointFormat.state_dict,
+                format=StateDictCheckpointFormat,
             )
         metadata = cls.model_config_class.load_metadata(pretrained)
         updates = {}
@@ -78,6 +78,7 @@ class HuggingfaceModelConfig(transformers.PretrainedConfig):
         )
 
         config_dict = {"fast_llm_config": fast_llm_config}
+        # TODO v0.2: ???
         if "huggingface_config" in metadata:
             assert "fast_llm_config" not in metadata["huggingface_config"]
             config_dict.update(metadata.pop("huggingface_config"))
