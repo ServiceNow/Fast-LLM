@@ -5,15 +5,21 @@ from fast_llm.utils import Registry
 model_registry = Registry(
     "Model",
     {
-        "gpt": GPTModelConfig,
-        "gpt_custom": CustomModelConfig,
+        model.model_name: model
+        for model in [
+            GPTModelConfig,
+            CustomModelConfig,
+        ]
     },
 )
 
 trainer_registry = Registry(
     "Model",
     {
-        "gpt": GPTTrainerConfig,
-        "gpt_custom": CustomTrainerConfig,
+        trainer.get_field("model").type.model_name: trainer
+        for trainer in [
+            GPTTrainerConfig,
+            CustomTrainerConfig,
+        ]
     },
 )

@@ -42,11 +42,10 @@ class MultiStageModel:
         # A filter to create only a subset of the stages. Used for model conversion.
         stage_filter: set | None = None,
     ):
-        super().__init__()
-        self._fast_llm_config = config
-        self._base_model_config = self._fast_llm_config.base_model
-        self._multi_stage_config = self._fast_llm_config.multi_stage
-        self._distributed_config = self._fast_llm_config.distributed
+        self._config = config
+        self._base_model_config = self._config.base_model
+        self._multi_stage_config = self._config.multi_stage
+        self._distributed_config = self._config.distributed
         self._base_model = self.base_model_class(self._base_model_config, self._distributed_config)
         self._training = None
         self._verbose = verbose
@@ -357,7 +356,7 @@ class MultiStageModel:
 
     @property
     def fast_llm_config(self):
-        return self._fast_llm_config
+        return self._config
 
     @property
     def base_model_config(self):

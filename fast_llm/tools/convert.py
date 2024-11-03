@@ -8,7 +8,7 @@ import warnings
 
 from fast_llm.config import Field, config_class
 from fast_llm.engine.checkpoint.config import CheckpointLoadConfig, CheckpointSaveConfig
-from fast_llm.engine.checkpoint.external import HuggingfaceStateDictConverter
+from fast_llm.engine.checkpoint.external import HuggingfaceStateDictCheckpointHandler
 from fast_llm.engine.config_utils.runnable import RunnableConfig
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig, StageMode
 from fast_llm.functional.config import TritonConfig
@@ -117,9 +117,9 @@ class ConversionConfig(RunnableConfig):
         if self.layers_per_step is None:
             self._convert_model_partial(model_class, self.output)
         else:
-            converter_class = model_config_class.get_converter_class(self.output.format)
+            converter_class = model_config_class.get_handler_class(self.output.format)
             # TODO: Support other types?
-            assert issubclass(converter_class, HuggingfaceStateDictConverter)
+            assert issubclass(converter_class, HuggingfaceStateDictCheckpointHandler)
             logger.info(f">>> Loading model config")
             # Create a dummy version to determine the stage split.
             model = model_class.from_pretrained(

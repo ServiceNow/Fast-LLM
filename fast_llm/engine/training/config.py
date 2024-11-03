@@ -1,3 +1,4 @@
+import abc
 import argparse
 import os
 import pathlib
@@ -8,12 +9,10 @@ import typing
 from fast_llm.config import Config, Field, FieldHint, FieldUpdate, check_field, config_class, skip_valid_if_none
 from fast_llm.data.config import AbstractDataConfig
 from fast_llm.engine.checkpoint.config import (
-    CheckpointConfigBase,
-    CheckpointFormat,
     CheckpointLoadConfig,
     CheckpointSaveConfig,
-    CheckpointSaveConfigBase,
-    CheckpointStateConfigBase,
+    CheckpointStateSaveConfigBase,
+    DistributedCheckpointFormat,
 )
 from fast_llm.engine.config_utils.run import ExperimentConfig
 from fast_llm.engine.multi_stage.config import PretrainedFastLLMModelConfig
@@ -161,10 +160,9 @@ class ValidationConfig(IntervalConfig):
 
 
 @config_class()
-class CheckpointBaseConfig(IntervalConfig):
+class TrainingCheckpointBaseConfig(IntervalConfig):
     _abstract = True
     save_name: typing.ClassVar[str] = "save"
-    directory_name: typing.ClassVar[str] = "save"
     callback: CallbackConfig = Field(
         default_factory=CallbackConfig,
         desc="Callback (shell script).",
@@ -183,6 +181,10 @@ class CheckpointBaseConfig(IntervalConfig):
         valid=skip_valid_if_none(check_field(Assert.gt, 0)),
     )
 
+    @abc.abstractmethod
+    def get_save_directory(self, experiment_directory: pathlib.Path) -> pathlib.Path:
+        pass
+
     def get_save_config(self, path: pathlib.Path):
         raise NotImplementedError()
 
@@ -199,11 +201,10 @@ class CheckpointBaseConfig(IntervalConfig):
 
 
 @config_class()
-class CheckpointConfig(CheckpointBaseConfig):
+class TrainingCheckpointConfig(TrainingCheckpointBaseConfig):
     _abstract = False
     save_name: typing.ClassVar[str] = "checkpoint"
     # TODO v0.2: Rename to `checkpoint` so we don't need this extra variable?
-    directory_name = "checkpoints"
     interval = FieldUpdate(
         desc="The number of training iterations between each checkpoint." " Setting to None will disable checkpoints."
     )
@@ -211,10 +212,16 @@ class CheckpointConfig(CheckpointBaseConfig):
     callback: CallbackConfig = FieldUpdate(desc="Callback (shell script) to run after checkpoint.")
     keep: int | None = FieldUpdate(default=5)
 
+    def get_save_directory(self, experiment_directory: pathlib.Path) -> pathlib.Path:
+        # TODO v0.2: Remove backward compatibility.
+        old_path = experiment_directory / "checkpoints"
+        new_path = experiment_directory / "checkpoint"
+        return old_path if old_path.is_dir() and not new_path.is_dir() else new_path
+
     def get_save_config(self, path: pathlib.Path):
         return CheckpointSaveConfig(
             path=path,
-            format=CheckpointFormat.distributed,
+            format=DistributedCheckpointFormat,
             model_weights=True,
             optimizer_state=True,
         )
@@ -222,22 +229,25 @@ class CheckpointConfig(CheckpointBaseConfig):
     def get_load_config(self, path: pathlib.Path):
         return CheckpointLoadConfig(
             path=path,
-            format=CheckpointFormat.distributed,
+            format=DistributedCheckpointFormat,
             model_weights=True,
             optimizer_state=True,
         )
 
 
 @config_class()
-class ExportConfig(CheckpointBaseConfig, CheckpointConfigBase, CheckpointStateConfigBase, CheckpointSaveConfigBase):
+class TrainingExportConfig(TrainingCheckpointBaseConfig, CheckpointStateSaveConfigBase):
     _abstract = False
     save_name: typing.ClassVar[str] = "export"
-    directory_name = "export"
     interval = FieldUpdate(
         desc="The number of training iterations between each export." " Setting to None will disable exports."
     )
     offset = FieldUpdate(desc="Offset for the first export.")
     callback: CallbackConfig = FieldUpdate(desc="Callback (shell script) to run after export.")
+
+    @abc.abstractmethod
+    def get_save_directory(self, experiment_directory: pathlib.Path) -> pathlib.Path:
+        return experiment_directory / "export" / self.format.name
 
     def get_save_config(self, path: pathlib.Path):
         return CheckpointSaveConfig.from_dict(self, {"path": path}, strict=False)
@@ -265,10 +275,10 @@ class TrainingConfig(Config):
     logs: MetricsLogsConfig = Field(
         default_factory=MetricsLogsConfig, desc="Configuration for metric logging.", hint=FieldHint.core
     )
-    checkpoint: CheckpointConfig = Field(
+    checkpoint: TrainingCheckpointConfig = Field(
         default_factory=MetricsLogsConfig, desc="Configuration for checkpoints.", hint=FieldHint.core
     )
-    export: ExportConfig = Field(
+    export: TrainingExportConfig = Field(
         default_factory=MetricsLogsConfig, desc="Configuration for exports.", hint=FieldHint.core
     )
     shutdown: ShutdownConfig = Field(
@@ -337,6 +347,7 @@ class TrainerConfig(PretrainedFastLLMModelConfig, ExperimentConfig):
     )
 
     def _validate(self):
+        self.training.export.setup(self.model)
         super()._validate()
         if self.run.experiment_dir is None:
             assert not self.training.checkpoint.enabled()

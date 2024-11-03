@@ -400,12 +400,14 @@ class Config:
                 value = cls._validate_array(value, type_, name)
             elif issubclass(origin, dict):
                 value = cls._validate_dict(value, type_, name)
+            elif origin is type:
+                cls._validate_type(value, type_, name)
             else:
                 raise FieldTypeError(f"Unsupported __origin__ `{origin}`")
         elif not isinstance(type_, type):
             raise FieldTypeError(f"Not a type.")
         elif issubclass(type_, Config):
-            cls._validate_type(value, type_, name)
+            cls._validate_element_type(value, type_, name)
             value.validate(_is_validating=True)
         else:
             value = cls._validate_simple(value, type_, name)
@@ -428,7 +430,7 @@ class Config:
     @classmethod
     def _validate_array(cls, value, type_, name: str):
         origin = type_.__origin__
-        cls._validate_type(value, (origin, list, tuple), name)
+        cls._validate_element_type(value, (origin, list, tuple), name)
         args = getattr(type_, "__args__", [typing.Any, ...] if origin is tuple else [typing.Any])
         errors = []
         if issubclass(origin, tuple) and not (len(args) == 2 and args[1] is ...):
@@ -455,7 +457,7 @@ class Config:
         if len(args) > 2:
             raise FieldTypeError(f"Invalid dict specification `{get_type_name(type_)}` for field `{name}`")
         args.extend([typing.Any for _ in range(2 - len(args))])
-        cls._validate_type(value, type_.__origin__, name)
+        cls._validate_element_type(value, type_.__origin__, name)
         errors = []
         new_value = {}
         old_keys = {}
@@ -483,11 +485,21 @@ class Config:
         elif issubclass(type_, pathlib.PurePath) and isinstance(value, str):
             # Str paths are ok too.
             value = type_(value)
-        cls._validate_type(value, type_, name)
+        cls._validate_element_type(value, type_, name)
         return value
 
     @classmethod
     def _validate_type(cls, value, type_: type | tuple[type, ...], name):
+        args = list(getattr(type_, "__args__", []))
+        if len(args) != 1:
+            raise FieldTypeError(f"Invalid type specification `{get_type_name(type_)}` for field `{name}`")
+        if not isinstance(value, type):
+            raise ValidationError(f"Unexpected type `{get_type_name(type(value))}`")
+        if not issubclass(value, args[0]):
+            raise ValidationError(f"Field value `{value} is not a subclass of `{get_type_name(type_)}`")
+
+    @classmethod
+    def _validate_element_type(cls, value, type_: type | tuple[type, ...], name):
         if not isinstance(value, type_):
             raise ValidationError(f"Unexpected type `{get_type_name(type(value))}`")
 
@@ -577,6 +589,8 @@ class Config:
         else:
             field_value = value
             if serializable:
+                if hasattr(value, "__fast_llm_serialize__"):
+                    field_value = field_value.__fast_llm_serialize__()
                 if isinstance(value, enum.Enum):
                     field_value = field_value.value
                 elif not isinstance(value, int | float | bool | str | None):
@@ -720,6 +734,8 @@ class Config:
                 value = cls._from_dict_array(value, type_, strict)
             elif issubclass(origin, dict):
                 value = cls._from_dict_dict(value, type_, strict)
+            elif origin is type:
+                pass
             else:
                 raise FieldTypeError(f"Unsupported __origin__ `{origin}`")
         elif not isinstance(type_, type):

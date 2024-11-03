@@ -19,7 +19,7 @@ from fast_llm.engine.optimizer.config import ParamGroup
 from fast_llm.engine.optimizer.optimizer import Optimizer
 from fast_llm.engine.schedule.runner import ScheduleRunner
 from fast_llm.engine.schedule.schedule import Schedule
-from fast_llm.engine.training.config import CheckpointBaseConfig, CheckpointConfig, TrainerConfig
+from fast_llm.engine.training.config import TrainerConfig, TrainingCheckpointBaseConfig, TrainingCheckpointConfig
 from fast_llm.engine.training.wandb import Wandb
 from fast_llm.logging import format_metrics, get_memory_usage_mib, log_memory_usage
 from fast_llm.utils import Assert
@@ -396,9 +396,11 @@ class Trainer(abc.ABC):
         Assert.eq(self._completed_steps, last_iteration or 0)
         assert self._multi_stage._is_loaded  # noqa
 
-    def _save_checkpoint(self, config: CheckpointBaseConfig, metrics: dict[PhaseType, dict[str, float | int]] | None):
+    def _save_checkpoint(
+        self, config: TrainingCheckpointBaseConfig, metrics: dict[PhaseType, dict[str, float | int]] | None
+    ):
         # TODO v0.2: Move barrier, ok file to FastLLMModel
-        checkpoint_base_directory = self._run.experiment_directory / config.directory_name
+        checkpoint_base_directory = config.get_save_directory(self._run.experiment_directory)
         checkpoint_directory = checkpoint_base_directory / str(self._completed_steps)
 
         # Create the checkpoint
@@ -435,8 +437,8 @@ class Trainer(abc.ABC):
 
             config.callback.run()
 
-    def _load_checkpoint(self, config: CheckpointConfig, iteration: int):
-        checkpoint_directory = self._run.experiment_directory / config.directory_name / str(iteration)
+    def _load_checkpoint(self, config: TrainingCheckpointConfig, iteration: int):
+        checkpoint_directory = config.get_save_directory(self._run.experiment_directory) / str(iteration)
         Assert.custom(pathlib.Path.is_file, checkpoint_directory / "ok")
         # TODO v0.2: Use config.get_load_config to make it generic
         # TODO v0.2: Detect format instead of hard-coding
@@ -454,7 +456,10 @@ class Trainer(abc.ABC):
     def _get_last_checkpoint(self):
         if self._run.experiment_directory is None:
             return None
-        checkpoint_base_directory = self._run.experiment_directory / self._config.training.checkpoint.directory_name
+        checkpoint_base_directory = (
+            self._run.experiment_directory
+            / self._config.training.checkpoint.get_save_directory(self._run.experiment_directory)
+        )
         if self._run.is_main_rank and checkpoint_base_directory.is_dir():
             checkpoints = [int(path.name) for path in checkpoint_base_directory.iterdir()]
             iteration = max(checkpoints) if checkpoints else -1
