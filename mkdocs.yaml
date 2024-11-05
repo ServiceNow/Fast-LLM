@@ -162,7 +162,7 @@ nav:
   - Welcome: index.md
   - Get Started:
     - Quick Start: quick-start.md
-    - Cost Efficiency: cost-efficiency.md
+    # - Cost Efficiency: cost-efficiency.md
     - Help: help.md
     - In Action:
       - On Slurm: in-action/slurm.md
@@ -170,11 +170,11 @@ nav:
     - Success Stories:
       - StarCoder 2: success-stories/starcoder-2.md
     - License: license.md
-  - Examples:
-    - Data Preparation: examples/data-preparation.md
-    - Train Llama 8B from scratch: examples/train-llama-8b.md
-    - Continue training Llama 8B: examples/continue-training-llama-8b.md
-    - Upcycle Llama 3B to MoE: examples/upcycle-llama-3b-to-moe.md
+  - Recipes:
+    - Data Preparation: recipes/data-preparation.md
+    - Train Llama 8B from scratch: recipes/train-llama-8b.md
+    - Continue training Llama 8B: recipes/continue-training-llama-8b.md
+    - Upcycle Llama 3B to MoE: recipes/upcycle-llama-3b-to-moe.md
   - Reference:
     - Configuration: reference/configuration.md
   - Developers:

@@ -18,19 +18,19 @@ Fast-LLM isn't just another library, **it's a platform for powering the next gen
 
 -   **🚀 Purpose-Built for Small- and Large-Scale AI:** Optimized specifically for training language models of all sizes, Fast-LLM excels from **small models around 1B parameters to massive clusters running 70B+ parameter models**, with kernels that are fine-tuned for maximum throughput across this entire range. At 10B-parameter scale, Fast-LLM avoids costly 3D-paralelism through memory optimization techniques such as ZeRO and activation recomputation, whereas at 100B-parameter scale, Fast-LLM optimally supports 3D-parallelism; making Fast-LLM the go-to choice for diverse training needs.
 
--   **🧠 Unified Support for GPT-Like Architectures:** Fast-LLM **unifies all GPT-like model implementations** in a [single configuration file](https://github.com/ServiceNow/Fast-LLM/blob/main/fast_llm/models/gpt/model.py), and unlike HuggingFace transformers where every model has it's own, mostly independent, implementation, Fast-LLM reduces coding and adapts effortlessly, even with custom architectures.
+-   **🧠 Unified Support for GPT-Like Architectures:** Fast-LLM **unifies all GPT-like model implementations** in a [single Python file](https://github.com/ServiceNow/Fast-LLM/blob/main/fast_llm/models/gpt/model.py), and unlike HuggingFace transformers where every model has it's own, mostly independent, implementation, Fast-LLM reduces coding and adapts effortlessly, even with custom architectures.
 
 -   **💰 Cost Efficiency That Sets Fast-LLM Apart:**
 
-    -   **Lower Training Costs:** With higher throughput per GPU, Fast-LLM reduces the training time required. For instance, training a Mistral-7B model can be up to **xx% cheaper** compared to other frameworks due to faster processing and better memory efficiency.
+    -   **Lower Training Costs:** With higher throughput per GPU, Fast-LLM reduces the training time required. For instance, training models can cheaper compared to other frameworks due to faster processing and better memory efficiency.
 
-    -   **More Tokens for Your Budget:** Train up to xx% more tokens for the same budget, leading to better-trained models without breaking your financial constraints.
+    -   **More Tokens for Your Budget:** Train on more tokens for the same budget, leading to better-trained models without breaking your financial constraints.
 
-  [Learn more about Fast-LLM's cost efficiency and see detailed comparisons](cost-efficiency).
+    <!-- [Learn more about Fast-LLM's cost efficiency and see detailed comparisons](cost-efficiency.md). -->
 
 -   **🔓 Openness Without Compromise:** Fast-LLM's open-source approach ensures that you can **fully customize and extend the library** to fit your exact needs, without the restrictions of proprietary software. Developed transparently by a community of experts on GitHub, every change is **publicly discussed and vetted**, fostering **trust and collaboration** so you can innovate with confidence, knowing the entire development process and decision making is out in the open.
 
--   **🌍 Community-Driven Development:** Built by professionals for professionals, Fast-LLM's development is transparent, with an open invitation to the community to contribute. [**Join the Fast-LLM community**](join-us) to help shape the future of large-scale AI training.
+-   **🌍 Community-Driven Development:** Built by professionals for professionals, Fast-LLM's development is transparent, with an open invitation to the community to contribute. [**Join the Fast-LLM community**](join-us.md) to help shape the future of large-scale AI training.
 
 ### Key Features
 
@@ -46,7 +46,7 @@ Fast-LLM offers all the capabilities you need to accelerate your LLM training an
 
 -   **🛠️ Professional-Grade Tools:** Enjoy mixed precision training, large batch training, and gradient accumulation. Fast-LLM ensures reproducibility through deterministic behavior and provides pre-built Docker images, YAML configurations, and a simple, intuitive command-line interface.
 
-[Download Fast-LLM](https://github.com/ServiceNow/Fast-LLM/releases) and start training your large language models in record time. [Join the Fast-LLM community](join-us) and collaborate with like-minded professionals to advance the state-of-the-art in AI research and development.
+[Get Fast-LLM](https://github.com/ServiceNow/Fast-LLM/releases) and start training your large language models in record time. [Join the Fast-LLM community](join-us.md) and collaborate with like-minded professionals to advance the state-of-the-art in AI research and development.
 
 ## Use Cases and Success Stories
 
@@ -56,7 +56,7 @@ Fast-LLM powers the world's most advanced AI projects:
 -   **Enterprise AI Solutions:** Accelerate time-to-market for AI products by reducing training costs and enabling faster iteration.
 -   **Academic Collaborations:** Drive AI innovation with high-performance training capabilities that support cutting-edge research in machine learning.
 
-See how Fast-LLM has helped early adopters achieve up to xx% faster results. [Explore use cases and success stories](success-stories/starcoder-2).
+See how Fast-LLM has helped early adopters achieve faster results. [Explore use cases and success stories](success-stories/starcoder-2).
 
 ## Project Scope and Objectives
 
@@ -69,16 +69,16 @@ Fast-LLM is designed to be the **go-to solution** for those training the most so
 
 ## Collaboration and Contribution
 
-As we continue to expand Fast-LLM, we're looking for contributions from the community to help shape its future. We welcome:
+As Fast-LLM evolves, we invite the community to contribute and help shape its future. We welcome:
 
 -   **Testing and Bug Fixes:** Help us identify issues and improve stability.
--   **Feature Development:** Contribute new capabilities, such as custom kernels or support for alternative hardware like AMD and Intel.
--   **Documentation and Tutorials:** Make Fast-LLM more accessible by improving our [documentation](https://servicenow.github.io/Fast-LLM) and writing practical guides.
+-   **Feature Development:** Contribute new models, new training features, and new optimizations.
+-   **Documentation and Tutorials:** Make Fast-LLM more accessible by improving our documentation and writing practical guides.
 
-Fast-LLM is more than just software, it's a community. Get involved by exploring our [contribution guidelines](https://github.com/ServiceNow/Fast-LLM/CONTRIBUTING.md) and engaging with us on [GitHub Discussions](https://github.com/ServiceNow/Fast-LLM/discussions).
+Fast-LLM is more than just software, it's a community. Get involved by exploring our [contribution guidelines](developers/contributing.md) and engaging with us on [GitHub Discussions](https://github.com/ServiceNow/Fast-LLM/discussions).
 
 ## Getting Started
 
-Ready to dive in? Check out our [quick-start guide](quick-start) for an overview of how to set up and run Fast-LLM on different platforms, including [Slurm](https://slurm.schedmd.com) and [Kubernetes](https://kubernetes.io). Explore the [examples](https://github.com/ServiceNow/Fast-LLM/tree/main/examples) for pre-configured setups to help you get started quickly with your own training experiments.
+Ready to dive in? Check out our [quick-start guide](quick-start.md) for an overview of how to set up and run Fast-LLM on different platforms, including [Slurm](https://slurm.schedmd.com) and [Kubernetes](https://kubernetes.io). Explore the [examples](https://github.com/ServiceNow/Fast-LLM/tree/main/examples) for pre-configured setups to help you get started quickly with your own training experiments.
 
 For any questions or issues, open an [issue](https://github.com/ServiceNow/Fast-LLM/issues) or join the [community discussion](https://github.com/ServiceNow/Fast-LLM/discussions).
