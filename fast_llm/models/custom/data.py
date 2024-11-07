@@ -1,9 +1,9 @@
-from fast_llm.data.data import Data
+from fast_llm.data.gpt.data import GPTData
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.models.custom.config import CustomDataConfig
 
 
-class CustomData(Data):
+class CustomData(GPTData):
     # TODO: If needed, inherit from AbstractData instead and re-implement everything.
     def __init__(
         self,

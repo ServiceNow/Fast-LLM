@@ -151,13 +151,11 @@ class Run:
 
         if self._config.experiment_dir is not None:
             self._experiment_directory = self._config.experiment_dir.resolve()
-            self.dataset_cache_dir = self._experiment_directory / "dataset_cache"
             if self._is_main_rank:
                 (self._experiment_directory / "runs").mkdir(exist_ok=True, parents=True)
                 run = len(list((self._experiment_directory / "runs").iterdir()))
                 (self._experiment_directory / "runs" / str(run)).mkdir()
                 yaml.safe_dump(config_dict, (self._experiment_directory / "config.yaml").open("w"))
-                self.dataset_cache_dir.mkdir(exist_ok=True)
             else:
                 run = 0
             # Make sure all the workers agree on the run. This also acts as a barrier.
@@ -167,7 +165,6 @@ class Run:
             log_dir = run_dir / "logs"
         else:
             _experiment_directory, self._artifact_dir, log_dir = None, None, None
-            self.dataset_cache_dir = None
             self.index = None
 
         if self._config.structured_logs:

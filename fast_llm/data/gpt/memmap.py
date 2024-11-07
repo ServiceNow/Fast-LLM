@@ -3,10 +3,11 @@ import struct
 
 import numpy as np
 
+from fast_llm.data.gpt.config import GPTMemmapDatasetConfig, GPTRawDataset
 from fast_llm.utils import Assert, div, padded_cumsum
 
 
-class MMapIndexedDataset:
+class GPTMemmapDataset(GPTRawDataset):
     """
     A memory map dataset, which handles lazy loading of a pre-processed dataset in the Megatron-LM format,
     i.e. a pair of numpy file containing
@@ -27,14 +28,14 @@ class MMapIndexedDataset:
     }
     _INDEX_HEADER = b"MMIDIDX\x00\x00"
 
-    def __init__(self, prefix: pathlib.Path | str):
-        self._init(prefix)
+    def __init__(self, config: GPTMemmapDatasetConfig):
+        self._init(config)
 
-    def _init(self, prefix: pathlib.Path | str):
+    def _init(self, config: GPTMemmapDatasetConfig):
         super().__init__()
-        self._prefix = pathlib.Path(prefix)
+        self._config = config
 
-        with self._prefix.with_suffix(".idx").open("rb") as stream:
+        with self._config.path.with_suffix(".idx").open("rb") as stream:
             Assert.eq(stream.read(9), self._INDEX_HEADER)
             Assert.eq(struct.unpack("<Q", stream.read(8))[0], 1)
 
@@ -43,21 +44,20 @@ class MMapIndexedDataset:
             _ = struct.unpack("<Q", stream.read(8))[0]
             offset = stream.tell()
 
-        self._index_bin_buffer_mmap = np.memmap(self._prefix.with_suffix(".idx"), mode="r", order="C")
+        self._index_bin_buffer_mmap = np.memmap(self._config.path.with_suffix(".idx"), mode="r", order="C")
         self._index_bin_buffer = memoryview(self._index_bin_buffer_mmap)
-        self.sizes = np.frombuffer(self._index_bin_buffer, dtype=np.int32, count=self._num_documents, offset=offset)
+        self._sizes = np.frombuffer(self._index_bin_buffer, dtype=np.int32, count=self._num_documents, offset=offset)
         self._pointers = np.frombuffer(
-            self._index_bin_buffer, dtype=np.int64, count=self._num_documents, offset=offset + self.sizes.nbytes
+            self._index_bin_buffer, dtype=np.int64, count=self._num_documents, offset=offset + self._sizes.nbytes
         )
-
-        self._bin_buffer_mmap = np.memmap(self._prefix.with_suffix(".bin"), mode="r", order="C")
+        self._bin_buffer_mmap = np.memmap(self._config.path.with_suffix(".bin"), mode="r", order="C")
         self._bin_buffer = memoryview(self._bin_buffer_mmap)
 
     def __getstate__(self):
-        return self.prefix
+        return self._config.to_serialized()
 
     def __setstate__(self, state):
-        self._init(state)
+        self._init(GPTMemmapDatasetConfig.from_dict(state))
 
     def __del__(self):
         self._bin_buffer_mmap._mmap.close()  # noqa
@@ -68,12 +68,12 @@ class MMapIndexedDataset:
     def __len__(self):
         return self._num_documents
 
-    def get(self, idx, offset=0, length=None):
+    def get(self, document: int, offset: int = 0, length: int | None = None):
         return np.frombuffer(
             self._bin_buffer,
             dtype=self._dtype,
-            count=self.sizes[idx] - offset if length is None else length,
-            offset=self._pointers[idx] + offset * np.dtype(self._dtype).itemsize,
+            count=self._sizes[document] - offset if length is None else length,
+            offset=self._pointers[document] + offset * np.dtype(self._dtype).itemsize,
         )
 
     @property
@@ -85,8 +85,8 @@ class MMapIndexedDataset:
         return div(self._bin_buffer_mmap.size, np.dtype(self._dtype).itemsize)
 
     @property
-    def prefix(self):
-        return self._prefix
+    def document_sizes(self):
+        return self._sizes
 
     @classmethod
     def write_dataset(cls, prefix: pathlib.Path | str, documents: list[np.ndarray]):
