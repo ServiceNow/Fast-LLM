@@ -704,7 +704,7 @@ Next, we'll create a configuration file for Fast-LLM. Save the following as `~/i
 
 ## (Optional) Step 6: Add Your Weights & Biases API Key 🔑
 
-If you included the W&B section in your configuration, you'll need to add your API key. Save your W&B API key to `~/inputs/.wandb_api_key` so Fast-LLM can track your training progress there. You can create a free W&B account if you don't already have one.
+If you included the W&B section in your configuration, you'll need to add your API key. Save your W&B API key to `.wandb_api_key` in your inputs folder so Fast-LLM can track your training progress there. You can create a free W&B account if you don't already have one.
 
 ## Step 7: Launch Training 🚀
 
@@ -730,12 +730,17 @@ Alright, the big moment! Let's launch the training run.
 
 === "Local Environment"
 
+    If you have 8 GPUs available, run the following to start training:
+
     ```bash
     export PYTHONHASHSEED=0
     export WANDB_API_KEY_PATH=/mnt/inputs/.wandb_api_key
     torchrun --standalone --nnodes 1 --nproc_per_node=8 --no_python \
         fast-llm train gpt --config /mnt/inputs/fast-llm-config.yaml
     ```
+
+    Adjust `--nproc_per_node` based on the number of GPUs you have available.
+    Remove `export WANDB_API_KEY_PATH=/mnt/inputs/.wandb_api_key` if you're not using W&B.
 
 === "Slurm"
 
