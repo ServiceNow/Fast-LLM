@@ -36,7 +36,7 @@ For more detailed solutions, check out our GitHub Issues page. Odds are someone'
 
 ## Reference 📚
 
-If you're the type who loves configurations and tweaking every detail, the [**Configuration Reference**](reference/configuration) is for you. It covers every config option you could imagine. From optimizer settings to batch sizes to distributed training parameters. It's all in there.
+If you're the type who loves configurations and tweaking every detail, the [**Configuration Reference**](reference/configuration.md) is for you. It covers every config option you could imagine. From optimizer settings to batch sizes to distributed training parameters. It's all in there.
 
 ---
 
@@ -44,9 +44,9 @@ If you're the type who loves configurations and tweaking every detail, the [**Co
 
 We've got some excellent tutorials to help you get the most out of Fast-LLM:
 
--   [**Quick-Start Guide**](/quick-start): Perfect for launching Fast-LLM on a single GPU machine. We walk you through setting up Docker, running your first training job, and handling common issues.
+-   [**Quick-Start Guide**](quick-start.md): Perfect for launching Fast-LLM on a single GPU machine. We walk you through setting up Docker, running your first training job, and handling common issues.
 
--   [**In-Action Guides**](/in-action/slurm): Ready to go big? These guides cover setting up Fast-LLM with Slurm and Kubernetes for multi-node training. This is where Fast-LLM really shows its power.
+-   [**Cookbook**](recipes/train-llama-8b.md): Ready to go big? These recipes cover real-world scenarios like training big models from scratch, continuing training from a checkpoint, and more. This is where Fast-LLM really shows its power.
 
 ---
 
@@ -54,9 +54,9 @@ We've got some excellent tutorials to help you get the most out of Fast-LLM:
 
 If Fast-LLM still isn't cooperating, here's where to look next:
 
-1.   **GitHub [Issues](https://github.com/ServiceNow/Fast-LLM/issues) & [Discussions](https://github.com/ServiceNow/Fast-LLM/discussions)**: This is your best resource. Use the search function to see if anyone has run into the same issue. The community and our team are pretty active, so you'll likely find a solution or get help quickly.
+1.  **GitHub [Issues](https://github.com/ServiceNow/Fast-LLM/issues) & [Discussions](https://github.com/ServiceNow/Fast-LLM/discussions)**: This is your best resource. Use the search function to see if anyone has run into the same issue. The community and our team are pretty active, so you'll likely find a solution or get help quickly.
 
-2.   **Email (last resort)**: As a final option, you can email us at [fast-llm-team@servicenow.com](mailto:fast-llm-team@servicenow.com). This is only for rare cases, though. GitHub is our go-to for answering questions, as it lets others benefit from the conversation too.
+2.  **Email (last resort)**: As a final option, you can email us at [fast-llm-team@servicenow.com](mailto:fast-llm-team@servicenow.com). This is only for rare cases, though. GitHub is our go-to for answering questions, as it lets others benefit from the conversation too.
 
 Fast-LLM is a growing community, and your questions and contributions help make it better for everyone. Who knows, you might just solve the next person's roadblock!
 
