@@ -5,33 +5,28 @@ import pathlib
 import typing
 import warnings
 
-import numpy as np
 import torch
 import torch.utils.data
 
-from fast_llm.data.config import AbstractData, DataConfig, DatasetSource
-from fast_llm.data.dataset import BlendedDataset, SampledDataset, Sampler
-from fast_llm.data.gpt import DummyGPTDataset, GPTDataset, GPTSampledDataset
-from fast_llm.data.mmap import MMapIndexedDataset
+from fast_llm.data.blended import BlendedDataset
+from fast_llm.data.config import Data, DatasetSource, SampledDataset
+from fast_llm.data.gpt.config import DataConfig
+from fast_llm.data.gpt.dataset import GPTDataset
+from fast_llm.data.gpt.dummy import DummyGPTDataset
+from fast_llm.data.gpt.memmap import GPTMemmapDataset
+from fast_llm.data.gpt.sampled import GPTSampledDataset
+from fast_llm.data.iterator import SampledDatasetIterator
 from fast_llm.data.tokenizer import Tokenizer
 from fast_llm.engine.config_utils.run import get_run, log_main_rank
 from fast_llm.engine.distributed.config import DistributedConfig, PhaseType
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.engine.schedule.config import BatchConfig
-from fast_llm.utils import Assert
+from fast_llm.utils import Assert, normalize_probabilities
 
 logger = logging.getLogger(__name__)
 
 
-def normalize_probs(p: list[float]) -> list[float]:
-    p = np.array(p)
-    Assert.custom(lambda x: np.all(x >= 0), p)
-    p_sum = p.sum()
-    Assert.gt(p_sum, 0)
-    return (p / p_sum).tolist()
-
-
-class Data(AbstractData):
+class GPTData(Data):
     """
     A global class for all dataset needs, including loading, splitting, sampling and iteration.
     Currently hard-coded to a GPT dataset.
@@ -42,7 +37,7 @@ class Data(AbstractData):
     _blended_datasets: dict[PhaseType, SampledDataset]
     _tokenizer: Tokenizer | None
     _distributed: Distributed
-    _cache_dir: pathlib.Path | None
+    _cache_directory: pathlib.Path | None
     _samples_per_phase: dict[PhaseType, int]
     _phases: typing.ClassVar[tuple[PhaseType, ...]] = (PhaseType.training, PhaseType.validation, PhaseType.test)
 
@@ -63,7 +58,9 @@ class Data(AbstractData):
         self._max_sequence_length = max_sequence_length
         Assert.eq(len(self._config.split), len(self._phases))
         self._phase_split = {
-            phase: ratio for phase, ratio in zip(self._phases, normalize_probs(self._config.split)) if ratio > 0
+            phase: ratio
+            for phase, ratio in zip(self._phases, normalize_probabilities(self._config.split))
+            if ratio > 0
         }
 
         data_base_path = None
@@ -73,7 +70,9 @@ class Data(AbstractData):
             dataset_defs = json.load(data_path.open("r"))
             data_base_path = data_path.parent
             dataset_prefixes = [dataset_def["prefix"] for dataset_def in dataset_defs["datasets"]]
-            dataset_weights = normalize_probs([dataset_def["weight"] for dataset_def in dataset_defs["datasets"]])
+            dataset_weights = normalize_probabilities(
+                [dataset_def["weight"] for dataset_def in dataset_defs["datasets"]]
+            )
             self._build_and_sample_dataset = self._build_and_sample_gpt_dataset
         elif self._config.format == DatasetSource.list:
             Assert.geq(len(self._config.path), 1)
@@ -83,7 +82,7 @@ class Data(AbstractData):
                 Assert.custom(lambda x: x % 2 == 0, len(self._config.path))
                 dataset_prefixes = [x.strip() for x in self._config.path[1::2]]
                 assert len(dataset_prefixes) == len(set(dataset_prefixes))
-                dataset_weights = normalize_probs([float(x) for x in self._config.path[::2]])
+                dataset_weights = normalize_probabilities([float(x) for x in self._config.path[::2]])
             self._build_and_sample_dataset = self._build_and_sample_gpt_dataset
         elif self._config.format == DatasetSource.sample:
             Assert.eq(len(self._config.path), 1)
@@ -125,10 +124,12 @@ class Data(AbstractData):
         log_main_rank(f"Preparing {self._num_datasets} datasets. This may take several minutes.")
         self._tokenizer = Tokenizer(self._config.tokenizer) if self._config.fim.rate > 0 else None
         self._distributed = distributed
-        self._cache_dir = run.dataset_cache_dir
         self._samples_per_phase = samples_per_phase
-        if self._cache_dir is None:
+        if run.experiment_directory is None:
             warnings.warn(f"Using the dataset directory for the index cache.")
+            self._cache_directory = None
+        else:
+            self._cache_directory = run.experiment_directory / "dataset_cache"
 
         # Build and split datasets.
         self._sampled_datasets = {phase: {} for phase in self._samples_per_phase}
@@ -157,7 +158,7 @@ class Data(AbstractData):
                     weights=[self._dataset_weights[name] for name in datasets],
                     name=phase.value,
                     num_samples=self._samples_per_phase[phase],
-                    cache_dir=self._cache_dir,
+                    cache_directory=self._cache_directory,
                     group=self._distributed.world_group,
                     verbose=run.is_main_rank,
                     data_sample_warn_time_ms=self._config.data_sample_warn_time_ms,
@@ -181,7 +182,7 @@ class Data(AbstractData):
         return iter(
             torch.utils.data.DataLoader(
                 self._blended_datasets[phase],  # noqa
-                batch_sampler=Sampler(
+                batch_sampler=SampledDatasetIterator(
                     total_samples=len(self._blended_datasets[phase]),
                     begin_index=consumed_samples,
                     micro_batch_size=batch_config.micro_batch_size,
@@ -196,9 +197,7 @@ class Data(AbstractData):
         )
 
     def _build_and_sample_gpt_dataset(self, name: str, dataset_samples_per_phase: dict[PhaseType, int]):
-        dataset_split = GPTDataset.from_splits(
-            name, MMapIndexedDataset(self._dataset_prefixes[name]), self._phase_split
-        )
+        dataset_split = GPTDataset.from_splits(name, GPTMemmapDataset(self._dataset_prefixes[name]), self._phase_split)
 
         sampled_datasets = {}
         for phase, num_samples in dataset_samples_per_phase.items():
@@ -212,7 +211,9 @@ class Data(AbstractData):
                 group=self._distributed.world_group,
                 config=self._config,
                 tokenizer=self._tokenizer,
-                cache_dir=self._dataset_prefixes[name].parent if self._cache_dir is None else self._cache_dir,
+                cache_directory=(
+                    self._dataset_prefixes[name].parent if self._cache_directory is None else self._cache_directory
+                ),
                 verbose=self._num_datasets <= 5,
             )
         return sampled_datasets
