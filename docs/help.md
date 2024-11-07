@@ -10,7 +10,7 @@ Welcome to the Fast-LLM Help Center! Here, you'll find fixes for common hiccups,
 
 Let's stay one step ahead of those pesky gotchas. Here's a list of common issues and quick fixes:
 
--   **CUDA Out of Memory**: When the GPU throws a fit, a few tweaks can help. First, try lowering `micro_batch_size` or `sequence_length` in the configuration to fit within the available memory. Still stuck? Try setting the `mlp_recompute_level` option to `activation` to save memory in the backward pass, or experiment with higher ZeRO stages for reduced memory usage. And if that's not enough, tensor or model parallelism may be your friend. We've got a guide for this, so you're covered.
+-   **CUDA Out of Memory**: When the GPU throws a fit, a few tweaks can help. First, try lowering `micro_batch_size` or `sequence_length` in the configuration to fit within the available memory. Still stuck? Try setting the `mlp_recompute_level` option to `activation` or `full` to save memory in the backward pass, or experiment with higher ZeRO stages for reduced memory usage. And if that's not enough, tensor or model parallelism may be your friend.
 
 -   **Python Hash Seed Sync Error**: Encountering an error like
 
@@ -18,7 +18,7 @@ Let's stay one step ahead of those pesky gotchas. Here's a list of common issues
     RuntimeError: Desync detected for barrier train begin (66830148464 != 133042721120)
     ```
   
-    points to a hashing inconsistency. To fix it, set `PYTHONHASHSEED=0` in your environment variables. This ensures consistent hashing across processes, keeping them in sync.
+    points to a hashing inconsistency. To fix it, set `PYTHONHASHSEED=0` in your environment variables. This ensures that Python's hash seed is consistent across all processes. If these processes have different hash seeds, they'll generate different hash values, leading to desynchronization, as seen in the error message.
 
 -   **`torchrun` Timeout Errors**: If you see timeout errors related to `torchrun` during rendezvous, it could be DNS resolution or a networking issue. Check that all worker nodes are communicating properly with the master node.
 
@@ -28,7 +28,7 @@ Let's stay one step ahead of those pesky gotchas. Here's a list of common issues
     Watchdog caught collective operation timeout: WorkNCCL(SeqNum=408951, OpType=_ALLGATHER_BASE, … , Timeout(ms)=600000) ran for 600351 milliseconds before timing out
     ```
   
-    appearing across all GPU workers, it usually means one or more hosts failed to complete a NCCL operation, causing others to block. NCCL errors can be frustrating to diagnose since they rarely specify which node or GPU caused the issue. We're working on improving this by surfacing which messages and operations are in progress during these crashes to better identify any problematic hosts or GPUs. Stay tuned!
+    appearing across all GPU workers, it usually means one or more hosts failed to complete a NCCL operation, causing others to block. NCCL errors can be frustrating to diagnose since they rarely specify which node or GPU caused the issue. It is difficult to surface which messages and operations are in progress during these crashes. In most cases, the best we can do is to restart the training job and hope it doesn't happen again. If the issue persists, it might be because of network congestion or a problematic GPU. If the worker that crashed is consistent across multiple runs, it's likely a hardware issue. If you can't resolve it, open an issue on GitHub, and we'll help you troubleshoot.
 
 For more detailed solutions, check out our GitHub Issues page. Odds are someone's already tackled a similar problem, and you might find the exact fix you need.
 
