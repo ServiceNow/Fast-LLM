@@ -7,13 +7,13 @@ from fast_llm.core.distributed import safe_barrier
 from fast_llm.data.config import SampledDataset
 from fast_llm.data.fim import Fim
 from fast_llm.data.gpt.config import DataConfig
-from fast_llm.data.gpt.dataset import GPTDataset
+from fast_llm.data.gpt.dataset import GPTIndexedDataset
 from fast_llm.data.tokenizer import Tokenizer
 from fast_llm.engine.config_utils.run import log_main_rank
 from fast_llm.engine.distributed.config import MAX_SEED
 
 
-class GPTSampledDataset(SampledDataset):
+class GPTSampledIndexedDataset(SampledDataset):
     """
     A GPT dataset augmented with a sampling, i.e.,
     a pre-computed, shuffled list of samples to be indexed sequentially (as-is) during training.
@@ -23,7 +23,7 @@ class GPTSampledDataset(SampledDataset):
 
     def __init__(
         self,
-        dataset: GPTDataset,
+        indexed_dataset: GPTIndexedDataset,
         num_samples: int,
         sequence_length: int,
         seed: int,
@@ -33,7 +33,7 @@ class GPTSampledDataset(SampledDataset):
         cache_directory: pathlib.Path,
         verbose: bool = True,
     ):
-        self._dataset = dataset
+        self._indexed_dataset = indexed_dataset
 
         if config.fim.rate > 0:
             assert tokenizer is not None
@@ -60,18 +60,20 @@ class GPTSampledDataset(SampledDataset):
         ):
             if verbose:
                 log_main_rank(" > Building the index map on rank 0 ...")
-            doc_idx, sample_idx, shuffle_idx = self._dataset.sample(num_samples, sequence_length, np_rng, verbose)
+            doc_idx, sample_idx, shuffle_idx = self._indexed_dataset.sample(
+                num_samples, sequence_length, np_rng, verbose
+            )
             cache_directory.mkdir(parents=True, exist_ok=True)
             np.save(self._doc_idx_filename, doc_idx)
             np.save(self._sample_idx_filename, sample_idx)
             np.save(self._shuffle_idx_filename, shuffle_idx)
 
-        safe_barrier(group, self._dataset.name)
+        safe_barrier(group, self._indexed_dataset.name)
         self._load_mappings(verbose)
 
     def __getstate__(self):
         return (
-            self._dataset,
+            self._indexed_dataset,
             self._fim,
             self._seed,
             self._doc_idx_filename,
@@ -81,7 +83,7 @@ class GPTSampledDataset(SampledDataset):
 
     def __setstate__(self, state):
         (
-            self._dataset,
+            self._indexed_dataset,
             self._fim,
             self._seed,
             self._doc_idx_filename,
@@ -120,7 +122,7 @@ class GPTSampledDataset(SampledDataset):
         doc_f, offset_f = self._sample_idx[shuffled_idx]
         doc_l, offset_l = self._sample_idx[shuffled_idx + 1]
         sample_list = [
-            self._dataset.get(
+            self._indexed_dataset.get(
                 self._doc_idx[doc],
                 offset=(doc == doc_f) * offset_f,
                 length=offset_l + 1 - (doc == doc_f) * offset_f if doc == doc_l else None,
@@ -138,4 +140,4 @@ class GPTSampledDataset(SampledDataset):
 
     @property
     def name(self):
-        return self._dataset.name
+        return self._indexed_dataset.name

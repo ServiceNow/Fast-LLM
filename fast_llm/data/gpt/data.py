@@ -11,10 +11,10 @@ import torch.utils.data
 from fast_llm.data.blended import BlendedDataset
 from fast_llm.data.config import Data, DatasetSource, SampledDataset
 from fast_llm.data.gpt.config import DataConfig
-from fast_llm.data.gpt.dataset import GPTDataset
 from fast_llm.data.gpt.dummy import DummyGPTDataset
 from fast_llm.data.gpt.memmap import GPTMemmapDataset
-from fast_llm.data.gpt.sampled import GPTSampledDataset
+from fast_llm.data.gpt.sampled import GPTSampledIndexedDataset
+from fast_llm.data.gpt.slice import GPTDatasetSlice
 from fast_llm.data.iterator import SampledDatasetIterator
 from fast_llm.data.tokenizer import Tokenizer
 from fast_llm.engine.config_utils.run import get_run, log_main_rank
@@ -197,13 +197,15 @@ class GPTData(Data):
         )
 
     def _build_and_sample_gpt_dataset(self, name: str, dataset_samples_per_phase: dict[PhaseType, int]):
-        dataset_split = GPTDataset.from_splits(name, GPTMemmapDataset(self._dataset_prefixes[name]), self._phase_split)
+        dataset_split = GPTDatasetSlice.from_splits(
+            GPTMemmapDataset(name, self._dataset_prefixes[name]), self._phase_split
+        )
 
         sampled_datasets = {}
         for phase, num_samples in dataset_samples_per_phase.items():
             if num_samples == 0:
                 continue
-            sampled_datasets[phase] = GPTSampledDataset(
+            sampled_datasets[phase] = GPTSampledIndexedDataset(
                 dataset_split[phase],
                 num_samples=num_samples,
                 sequence_length=self._max_sequence_length,
