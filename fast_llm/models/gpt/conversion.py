@@ -258,7 +258,7 @@ class LlamaHuggingfaceCheckpointHandler(CommonLlamaHuggingfaceCheckpointHandler)
             # TODO: Llama supports biases
             ConstantExportParamConverter(None, "attention_bias", False),
             ConstantExportParamConverter(None, "mlp_bias", False),
-            ConstantExportParamConverter(None, "rope_scaling", False),
+            ConstantExportParamConverter(None, "rope_scaling", None),
         ]
 
     def _get_mlp_converters(self, fast_llm_prefix: str, hf_prefix: str):
