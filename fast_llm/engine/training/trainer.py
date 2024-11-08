@@ -9,7 +9,7 @@ import typing
 import torch
 
 from fast_llm.core.distributed import safe_barrier
-from fast_llm.data.config import AbstractData
+from fast_llm.data.config import Data
 from fast_llm.data.gpt.data import GPTData
 from fast_llm.engine.config_utils.run import Run, is_main_rank, log_main_rank, log_pipeline_parallel_main_rank
 from fast_llm.engine.distributed.config import PhaseType
@@ -111,7 +111,7 @@ class Trainer(abc.ABC):
         self._data.setup(distributed, self._samples_per_split)
 
     @abc.abstractmethod
-    def _get_data(self) -> AbstractData:
+    def _get_data(self) -> Data:
         return GPTData(
             config=self._config.data,
             distributed_config=self._config.distributed,

@@ -2,11 +2,10 @@ import logging
 import pathlib
 import typing
 
-import numpy as np
 import torch
 import torch.utils.data
 
-from fast_llm.data.config import AbstractData, SampledDataset
+from fast_llm.data.config import Data, SampledDataset
 from fast_llm.data.gpt.config import GPTDataConfig
 from fast_llm.data.sampler import Sampler
 from fast_llm.data.tokenizer import Tokenizer
@@ -19,15 +18,7 @@ from fast_llm.utils import Assert
 logger = logging.getLogger(__name__)
 
 
-def normalize_probs(p: list[float]) -> list[float]:
-    p = np.array(p)
-    Assert.custom(lambda x: np.all(x >= 0), p)
-    p_sum = p.sum()
-    Assert.gt(p_sum, 0)
-    return (p / p_sum).tolist()
-
-
-class GPTData(AbstractData):
+class GPTData(Data):
     """
     A global class for all dataset needs, including loading, splitting, sampling and iteration.
     Currently hard-coded to a GPT dataset.

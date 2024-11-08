@@ -1,7 +1,6 @@
 import logging
 import pathlib
 import time
-import typing
 
 import numpy as np
 
@@ -35,8 +34,8 @@ class BlendedDataset(SampledDataset):
         *,
         name: str = "blended",
         num_samples: int,
-        cache_dir: pathlib.Path | None = None,
-        group: typing.Optional["ProcessGroup"] = None,
+        cache_directory: pathlib.Path | None = None,
+        group: ProcessGroup | None = None,
         verbose: bool = True,
         data_sample_warn_time_ms: float = 1000,
     ):
@@ -46,12 +45,12 @@ class BlendedDataset(SampledDataset):
         self._weights = weights
         self._data_sample_warn_time_ms = data_sample_warn_time_ms
 
-        if cache_dir is None:
+        if cache_directory is None:
             self._dataset_idx_filename, self._sample_idx_filename = None, None
             self._dataset_index, self._sample_index = self._build_blending_indices(verbose and len(datasets) <= 20)
         else:
-            self._dataset_idx_filename = cache_dir / (self._name + "_blending_dataset_idx.npy")
-            self._sample_idx_filename = cache_dir / (self._name + "_blending_sample_idx.npy")
+            self._dataset_idx_filename = cache_directory / (self._name + "_blending_dataset_idx.npy")
+            self._sample_idx_filename = cache_directory / (self._name + "_blending_sample_idx.npy")
 
             # Build the indexed mapping if it doesn't exist.
             # TODO: This only works if the dataset location is accessible by all job.
@@ -59,6 +58,7 @@ class BlendedDataset(SampledDataset):
                 self._dataset_idx_filename.is_file() and self._sample_idx_filename.is_file()
             ):
                 dataset_index, sample_index = self._build_blending_indices(verbose and len(datasets) <= 20)
+                cache_directory.mkdir(exist_ok=True, parents=True)
                 np.save(self._dataset_idx_filename, dataset_index)
                 np.save(self._sample_idx_filename, sample_index)
 
@@ -103,7 +103,9 @@ class BlendedDataset(SampledDataset):
         return self._num_samples
 
     def _build_blending_indices(self, verbose: bool):
-        assert _extension_available, "Please run `make -C ./fast_llm/csrc/` first."
+        assert _extension_available, (
+            "The C++ extension for dataset blending is missing." " Please make sure Fast-LLM is installed correctly."
+        )
         Assert.lt(len(self._datasets), 32767)
         dataset_index = np.zeros(self._num_samples, dtype=np.int16)
         dataset_sample_index = np.zeros(self._num_samples, dtype=np.int64)

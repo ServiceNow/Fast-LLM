@@ -123,11 +123,11 @@ class TokenizerConfig(Config):
 
 
 @config_class()
-class AbstractDataConfig(Config):
+class DataConfig(Config):
     _abstract = True
 
 
-class AbstractData(abc.ABC):
+class Data(abc.ABC):
     # TODO: Improve interface
     @abc.abstractmethod
     def setup(self, distributed: "Distributed", samples_per_phase: dict[PhaseType, int]):

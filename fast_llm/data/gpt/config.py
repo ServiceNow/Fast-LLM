@@ -6,7 +6,7 @@ import typing
 
 from fast_llm.config import Config, Field, FieldHint, check_field, config_class
 from fast_llm.data.config import (
-    AbstractDataConfig,
+    DataConfig,
     FimConfig,
     MultiprocessingContext,
     RawDataset,
@@ -373,7 +373,7 @@ class GPTBlendedDatasetConfig(GPTDatasetConfig):
 
 
 @config_class()
-class GPTDataConfig(AbstractDataConfig):
+class GPTDataConfig(DataConfig):
     """
     Configuration for the dataset(s), split and sampling.
     Currently hard-coded to a GPT dataset.
