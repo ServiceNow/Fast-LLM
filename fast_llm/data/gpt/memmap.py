@@ -3,11 +3,12 @@ import struct
 
 import numpy as np
 
-from fast_llm.data.gpt.config import GPTMemmapDatasetConfig, GPTRawDataset
+from fast_llm.data.gpt.config import GPTMemmapDatasetConfig
+from fast_llm.data.gpt.dataset import GPTIndexedDataset
 from fast_llm.utils import Assert, div, padded_cumsum
 
 
-class GPTMemmapDataset(GPTRawDataset):
+class GPTMemmapDataset(GPTIndexedDataset):
     """
     A memory map dataset, which handles lazy loading of a pre-processed dataset in the Megatron-LM format,
     i.e. a pair of numpy file containing

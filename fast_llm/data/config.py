@@ -151,14 +151,6 @@ class Dataset(abc.ABC):
     A generic dataset class compatible with torch.utils.data.Dataset but with a slightly different signature.
     """
 
-    @abc.abstractmethod
-    def __getitem__(self, index: int):
-        pass
-
-    @abc.abstractmethod
-    def __len__(self):
-        pass
-
     @property
     @abc.abstractmethod
     def name(self):
@@ -167,17 +159,16 @@ class Dataset(abc.ABC):
         """
 
 
-class RawDataset(Dataset):  # noqa
-    """
-    A raw dataset class containing a list of unsampled, unprocessed samples, i.e., matching what is stored on disk.
-    (Excluding off-line processing prior to training.)
-    Functionally identical to a `Dataset`, but renamed for clarity.
-    """
-
-
 class SampledDataset(Dataset):  # noqa
     """
     A sampled dataset class containing a prepared list of samples to be indexed sequentially (as-is) during training.
     (See the `Sampler` class below.)
-    Functionally identical to a `Dataset`, but renamed for clarity.
     """
+
+    @abc.abstractmethod
+    def __getitem__(self, index: int):
+        pass
+
+    @abc.abstractmethod
+    def __len__(self):
+        pass

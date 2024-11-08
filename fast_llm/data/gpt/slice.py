@@ -1,11 +1,11 @@
 import numpy as np
 
-from fast_llm.data.gpt.config import GPTRawDataset
+from fast_llm.data.gpt.dataset import GPTIndexedDataset
 from fast_llm.engine.distributed.config import PhaseType
 from fast_llm.utils import Assert, padded_cumsum
 
 
-class GPTDatasetSlice(GPTRawDataset):
+class GPTDatasetSlice(GPTIndexedDataset):
     """
     A GPT dataset, which reads samples from (a split of) a `MMapIndexedDataset` pointing to a GPT dataset.
     """
@@ -13,7 +13,7 @@ class GPTDatasetSlice(GPTRawDataset):
     def __init__(
         self,
         name: str,
-        dataset: GPTRawDataset,
+        dataset: GPTIndexedDataset,
         begin: int | None = None,
         end: int | None = None,
     ):
@@ -56,7 +56,7 @@ class GPTDatasetSlice(GPTRawDataset):
         return self._name
 
     @classmethod
-    def from_splits(cls, dataset: GPTRawDataset, phase_split: dict[PhaseType, float]):
+    def from_splits(cls, dataset: GPTIndexedDataset, phase_split: dict[PhaseType, float]):
         """
         Create a set of GPT datasets from a MMapIndexedDataset,
         each containing approximately the requested proportion of the total tokens.

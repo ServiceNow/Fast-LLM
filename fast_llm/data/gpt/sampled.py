@@ -8,7 +8,8 @@ from torch._C._distributed_c10d import ProcessGroup
 from fast_llm.core.distributed import safe_barrier
 from fast_llm.data.config import SampledDataset
 from fast_llm.data.fim import Fim
-from fast_llm.data.gpt.config import GPTDataConfig, GPTRawDataset
+from fast_llm.data.gpt.config import GPTDataConfig
+from fast_llm.data.gpt.dataset import GPTIndexedDataset
 from fast_llm.data.tokenizer import Tokenizer
 from fast_llm.engine.config_utils.run import log_main_rank
 from fast_llm.engine.distributed.config import MAX_SEED
@@ -32,7 +33,7 @@ class GPTSampledDataset(SampledDataset):
 
     def __init__(
         self,
-        dataset: GPTRawDataset,
+        dataset: GPTIndexedDataset,
         num_samples: int,
         sequence_length: int,
         seed: int,
