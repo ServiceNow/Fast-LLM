@@ -584,13 +584,13 @@ Next, we'll create a configuration file for Fast-LLM. Save the following as `~/i
         interval: 1000
         keep: 5
       test_iters: 0
-      export: # (2)!
+      export:  # (2)!
         format: llama
         interval: 20_000
-      wandb: # (3)!
-        project_name: fast-llm
+      wandb:  # (3)!
+        project_name: fast-llm-quickstart
+        group_name: smollm-135m
         entity_name: servicenow
-        tags: quick-start
     batch:
       micro_batch_size: 1  # (4)!
       sequence_length: 1024
@@ -612,7 +612,7 @@ Next, we'll create a configuration file for Fast-LLM. Save the following as `~/i
     pretrained:
       format: llama  # (10)!
       path: /mnt/inputs
-      load_weights: no  # (11)!
+      model_weights: no  # (11)!
     model:
       multi_stage:
         zero_stage: null  # (12)!
@@ -654,9 +654,9 @@ Next, we'll create a configuration file for Fast-LLM. Save the following as `~/i
         format: llama
         interval: 20_000
       wandb:  # (3)!
-        project_name: fast-llm
+        project_name: fast-llm-quickstart
+        group_name: llama-3.2-1B
         entity_name: servicenow
-        tags: quick-start
     batch:
       micro_batch_size: 1  # (4)!
       sequence_length: 1024
@@ -678,7 +678,7 @@ Next, we'll create a configuration file for Fast-LLM. Save the following as `~/i
     pretrained:
       format: llama  # (10)!
       path: /mnt/inputs
-      load_weights: yes  # (11)!
+      model_weights: yes  # (11)!
     model:
       multi_stage:
         zero_stage: null  # (12)!
@@ -776,7 +776,7 @@ Alright, the big moment! Let's launch the training run.
     ```
 
     Change the `--gpus-per-node` value to match the number of GPUs on your node.
-    If you're not using W&B, remove the references to `WARDB_API_KEY_PATH`.
+    If you're not using W&B, remove the references to `WANDB_API_KEY_PATH`.
 
     Submit the job to the Slurm cluster:
 
@@ -893,21 +893,21 @@ Alright, the big moment! Let's launch the training run.
     Use `kubectl logs fast-llm-master-0` to check the logs.
     Fast-LLM will log training progress to the console every 10 iterations.
 
-You can expect to see the following throughput:
+You can expect to see the following performance metrics in Fast-LLM's output:
 
 === "SmolLM-135M"
 
-    | Metric              | A100-80GB    | H100         |
-    |---------------------|-------------:|-------------:|
-    | Tokens/s            | 1,234,567    | 1,456,789    |
-    | TFLOPS              | 312          | 512          |
+    | Performance Metric  | A100 SXM4 80 GB | H100 SXM5 80 GB |
+    |---------------------|----------------:|----------------:|
+    | Tokens/s/GPU        | 1,234,567       | 1,456,789       |
+    | TFLOPS              | 312             | 512             |
 
 === "Llama-3.2-1B"
 
-    | Metric              | A100         | H100         |
-    |---------------------|-------------:|-------------:|
-    | Tokens/s            | 1,234,567    | 1,456,789    |
-    | TFLOPS              | 312          | 512          |
+    | Performance Metric  | A100 SXM4 80 GB | H100 SXM5 80 GB |
+    |---------------------|----------------:|----------------:|
+    | Tokens/s/GPU        | 1,234,567       | 1,456,789       |
+    | TFLOPS              | 312             | 512             |
 
 If you included the W&B section in your configuration, you can also track your training progress on the Weights & Biases dashboard as well. Follow the link in the console output to view your training run.
 
