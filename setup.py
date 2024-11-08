@@ -1,7 +1,13 @@
 import sys
 
-import pybind11
-import setuptools
+try:
+    import pybind11
+    import setuptools
+except ImportError:
+    raise ImportError(
+        "Could not import third party module during setup."
+        " Please make sure it is installed before installing Fast-LLM, and use `--no-build-isolation"
+    )
 
 # Minimum setuptools version required to parse setup.cfg metadata.
 _SETUPTOOLS_MIN_VERSION = "30.3"
