@@ -7,7 +7,7 @@ import torch.utils.data
 
 from fast_llm.data.config import Data, SampledDataset
 from fast_llm.data.gpt.config import GPTDataConfig
-from fast_llm.data.sampler import Sampler
+from fast_llm.data.iterator import Sampler
 from fast_llm.data.tokenizer import Tokenizer
 from fast_llm.engine.config_utils.run import get_run, log_main_rank
 from fast_llm.engine.distributed.config import DistributedConfig, PhaseType

@@ -1,13 +1,14 @@
 import torch.utils.data
 
 
-class Sampler(torch.utils.data.Sampler):
+class SampledDatasetIterator(torch.utils.data.Sampler):
     """
     A distributed sampler generating indices for a `SampledDataset` (i.e., the natural numbers).
     To be used as the `batch_sampler` of a `torch.utils.data.DataLoader`.
     """
 
     def __init__(self, total_samples, begin_index, micro_batch_size, data_rank, data_parallel):
+        super().__init__()
         self._total_samples = total_samples
         self._begin_index = begin_index
         self._batch_size = micro_batch_size * data_parallel
