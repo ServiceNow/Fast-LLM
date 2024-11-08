@@ -8,8 +8,7 @@ from torch._C._distributed_c10d import ProcessGroup
 from fast_llm.core.distributed import safe_barrier
 from fast_llm.data.config import SampledDataset
 from fast_llm.data.fim import Fim
-from fast_llm.data.gpt.config import GPTDataConfig
-from fast_llm.data.gpt.dataset import GPTIndexedDataset
+from fast_llm.data.gpt.config import GPTDataConfig, GPTIndexedDataset
 from fast_llm.data.tokenizer import Tokenizer
 from fast_llm.engine.config_utils.run import log_main_rank
 from fast_llm.engine.distributed.config import MAX_SEED
@@ -33,7 +32,7 @@ class GPTSampledDataset(SampledDataset):
 
     def __init__(
         self,
-        dataset: GPTIndexedDataset,
+        indexed_dataset: GPTIndexedDataset,
         num_samples: int,
         sequence_length: int,
         seed: int,
@@ -43,7 +42,7 @@ class GPTSampledDataset(SampledDataset):
         cache_dir: pathlib.Path,
         verbose: bool = True,
     ):
-        self._dataset = dataset
+        self._indexed_dataset = indexed_dataset
 
         if config.fim.rate > 0:
             assert tokenizer is not None
@@ -75,36 +74,40 @@ class GPTSampledDataset(SampledDataset):
             np.save(self._sample_idx_filename, sample_idx)
             np.save(self._shuffle_idx_filename, shuffle_idx)
 
-        safe_barrier(group, self._dataset.name)
+        safe_barrier(group, self._indexed_dataset.name)
         self._load_mappings(verbose)
 
     def _sample(self, num_samples: int, sequence_length: int, np_rng: numpy.random.RandomState, verbose: bool):
         """
         Create a `GPTSampledDataset` with the requested parameters.
         """
-        tokens_per_epoch = self._dataset.num_tokens
-        num_epochs = math.ceil((sequence_length * num_samples + 1) / tokens_per_epoch)
+        document_sizes = self._indexed_dataset.get_document_sizes()
+        num_documents = len(document_sizes)
+        num_tokens = document_sizes.sum()
+
+        num_epochs = math.ceil((sequence_length * num_samples + 1) / num_tokens)
         # For the last epoch, decide whether include the entire epoch
         # in the global shuffle or not.
         # Get the number of samples for the last epoch
-        main_epochs_samples = ((num_epochs - 1) * tokens_per_epoch - 1) // sequence_length
+        main_epochs_samples = ((num_epochs - 1) * num_tokens - 1) // sequence_length
         last_epoch_samples = num_samples - main_epochs_samples
-        samples_per_epoch = (tokens_per_epoch - 1) // sequence_length
+        samples_per_epoch = (num_tokens - 1) // sequence_length
         # If we have less than 80% of the samples for the last epoch, separate out the epoch and treat it differently.
         # Note: the 80% number is just based on common sense and can be adjusted if needed.
         separate_last_epoch = num_epochs > 1 and last_epoch_samples < 0.8 * samples_per_epoch
 
-        doc_idx = np.tile(np.arange(len(self._dataset), dtype=np.int32), num_epochs)
+        doc_idx = np.tile(np.arange(num_documents, dtype=np.int32), num_epochs)
         if separate_last_epoch:
-            np_rng.shuffle(doc_idx[: -len(self._dataset)])
-            np_rng.shuffle(doc_idx[-len(self._dataset) :])
+            np_rng.shuffle(doc_idx[:-num_documents])
+            np_rng.shuffle(doc_idx[-num_documents:])
         else:
             np_rng.shuffle(doc_idx)
 
-        assert _extension_available, "Please run `make -C ./fast_llm/csrc/` first."
-        sample_idx = build_sample_idx(
-            self._dataset.document_sizes, doc_idx, sequence_length, num_epochs, tokens_per_epoch, verbose
+        assert _extension_available, (
+            "The C++ extension for dataset sampling is missing." " Please make sure Fast-LLM is installed correctly."
         )
+
+        sample_idx = build_sample_idx(document_sizes, doc_idx, sequence_length, num_epochs, num_tokens, verbose)
 
         # shuffle-idx.
         # -1 is due to data structure used to retrieve the index:
@@ -126,7 +129,7 @@ class GPTSampledDataset(SampledDataset):
 
     def __getstate__(self):
         return (
-            self._dataset,
+            self._indexed_dataset,
             self._fim,
             self._seed,
             self._doc_idx_filename,
@@ -136,7 +139,7 @@ class GPTSampledDataset(SampledDataset):
 
     def __setstate__(self, state):
         (
-            self._dataset,
+            self._indexed_dataset,
             self._fim,
             self._seed,
             self._doc_idx_filename,
@@ -175,7 +178,7 @@ class GPTSampledDataset(SampledDataset):
         doc_f, offset_f = self._sample_idx[shuffled_idx]
         doc_l, offset_l = self._sample_idx[shuffled_idx + 1]
         sample_list = [
-            self._dataset.get(
+            self._indexed_dataset.get(
                 self._doc_idx[doc],
                 offset=(doc == doc_f) * offset_f,
                 length=offset_l + 1 - (doc == doc_f) * offset_f if doc == doc_l else None,
@@ -193,4 +196,4 @@ class GPTSampledDataset(SampledDataset):
 
     @property
     def name(self):
-        return self._dataset.name
+        return self._indexed_dataset.name

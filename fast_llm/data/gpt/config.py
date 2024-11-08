@@ -1,16 +1,25 @@
+import abc
 import enum
 import logging
 import pathlib
 import typing
 
 from fast_llm.config import Config, Field, FieldHint, check_field, config_class
-from fast_llm.data.config import DataConfig, FimConfig, MultiprocessingContext, SampledDataset, TokenizerConfig
+from fast_llm.data.config import (
+    DataConfig,
+    Dataset,
+    FimConfig,
+    MultiprocessingContext,
+    SampledDataset,
+    TokenizerConfig,
+)
 from fast_llm.engine.distributed.config import PhaseType
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
+    import numpy as np
+
     from fast_llm.data.gpt.data import GPTData
-    from fast_llm.data.gpt.dataset import GPTIndexedDataset
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +30,56 @@ class GPTDatasetConfigType(str, enum.Enum):
     concatenated = "concatenated"
     blended = "blended"
     memmap = "random"
+
+
+class GPTDataset(Dataset):
+    @abc.abstractmethod
+    def sample(
+        self,
+        data: "GPTData",
+        num_samples: int,
+        sequence_length: int,
+        np_rng: "np.random.RandomState",
+        verbose: bool,
+    ):
+        pass
+
+
+class GPTIndexedDataset(Dataset):
+    """
+    A GPT dataset containing a list of unsampled, unprocessed samples.
+    TODO: Move sampling responsibility here?
+    """
+
+    def get(self, document: int, offset: int = 0, length: int | None = None):
+        pass
+
+    @property
+    def num_documents(self) -> int:
+        """
+        Number of documents in the dataset.
+        Can be calculated from document sizes but may be overridden if there is a better method.
+        """
+        return len(self.get_document_sizes())
+
+    @property
+    def num_tokens(self) -> int:
+        """
+        Number of tokens in the dataset.
+        Can be calculated from document sizes but may be overridden if there is a better method.
+        """
+        return self.get_document_sizes().sum()
+
+    @abc.abstractmethod
+    def get_document_sizes(self) -> "np.ndarray":
+        """
+        The size of each document in the dataset.
+        The resulting array could be very large, so this method should be called cautiously,
+        and derived classes should try to avoid holding the whole array im memory.
+        """
+
+    def sample(self, num_samples: int, sequence_length: int, np_rng: "np.random.RandomState", verbose: bool):
+        return
 
 
 @config_class()
@@ -82,14 +141,14 @@ class GPTDatasetConfig(Config):
         else:
             return self._sample(self.build_unsplit_unsampled(), data)
 
-    def build_split_unsampled(self) -> dict[PhaseType, "GPTIndexedDataset"]:
+    def build_split_unsampled(self) -> dict[PhaseType, GPTIndexedDataset]:
         assert not self.sampled
         if self.split:
             return self._build_split_unsampled()
         else:
             return {PhaseType.training: self.build_unsplit_unsampled()}
 
-    def build_unsplit_unsampled(self) -> "GPTIndexedDataset":
+    def build_unsplit_unsampled(self) -> GPTIndexedDataset:
         assert not self.split
         assert not self.sampled
         return self._build_unsplit_unsampled()
@@ -100,10 +159,10 @@ class GPTDatasetConfig(Config):
     def _build_unsplit_sampled(self, data: "GPTData") -> SampledDataset:
         raise NotImplementedError()
 
-    def _build_split_unsampled(self) -> dict[PhaseType, "GPTIndexedDataset"]:
+    def _build_split_unsampled(self) -> dict[PhaseType, GPTIndexedDataset]:
         raise NotImplementedError()
 
-    def _build_unsplit_unsampled(self) -> "GPTIndexedDataset":
+    def _build_unsplit_unsampled(self) -> GPTIndexedDataset:
         raise NotImplementedError()
 
     @property
@@ -132,7 +191,7 @@ class GPTMemmapDatasetConfig(GPTDatasetConfig):
     def sampled(self) -> bool:
         return False
 
-    def _build_unsplit_unsampled(self) -> "GPTIndexedDataset":
+    def _build_unsplit_unsampled(self) -> GPTIndexedDataset:
         from fast_llm.data.gpt.memmap import GPTMemmapDataset
 
         return GPTMemmapDataset(self)
@@ -182,7 +241,7 @@ class GPTConcatenatedDatasetConfig(GPTDatasetConfig):
     def sampled(self) -> bool:
         return False
 
-    def _build_unsplit_unsampled(self) -> "GPTIndexedDataset":
+    def _build_unsplit_unsampled(self) -> GPTIndexedDataset:
         from fast_llm.data.gpt.concatenated import GPTConcatenatedDataset
 
         return GPTConcatenatedDataset(self, [dataset.build_unsplit_unsampled() for dataset in self.datasets])
@@ -232,7 +291,7 @@ class GPTSplitDatasetConfig(GPTDatasetConfig):
     def split(self) -> bool:
         return True
 
-    def _build_split_unsampled(self) -> dict[PhaseType, "GPTIndexedDataset"]:
+    def _build_split_unsampled(self) -> dict[PhaseType, GPTIndexedDataset]:
         from fast_llm.data.gpt.slice import GPTDatasetSlice
 
         return GPTDatasetSlice.from_splits(self.dataset.build_unsplit_unsampled(), self.ratios)
@@ -281,7 +340,7 @@ class GPTDatasetSplitsConfig(GPTDatasetConfig):
     def _build_split_sampled(self, data: "GPTData") -> dict[PhaseType, SampledDataset]:
         return {phase: dataset.build_unsplit_sampled(data) for phase, dataset in self.datasets.items()}
 
-    def _build_split_unsampled(self) -> dict[PhaseType, "GPTIndexedDataset"]:
+    def _build_split_unsampled(self) -> dict[PhaseType, GPTIndexedDataset]:
         return {phase: dataset.build_unsplit_unsampled() for phase, dataset in self.datasets.items()}
 
     @property

@@ -3,8 +3,7 @@ import struct
 
 import numpy as np
 
-from fast_llm.data.gpt.config import GPTMemmapDatasetConfig
-from fast_llm.data.gpt.dataset import GPTIndexedDataset
+from fast_llm.data.gpt.config import GPTIndexedDataset, GPTMemmapDatasetConfig
 from fast_llm.utils import Assert, div, padded_cumsum
 
 
