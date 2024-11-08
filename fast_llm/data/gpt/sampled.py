@@ -61,6 +61,7 @@ class GPTSampledDataset(SampledDataset):
             if verbose:
                 log_main_rank(" > Building the index map on rank 0 ...")
             doc_idx, sample_idx, shuffle_idx = self._dataset.sample(num_samples, sequence_length, np_rng, verbose)
+            cache_directory.mkdir(parents=True, exist_ok=True)
             np.save(self._doc_idx_filename, doc_idx)
             np.save(self._sample_idx_filename, sample_idx)
             np.save(self._shuffle_idx_filename, shuffle_idx)

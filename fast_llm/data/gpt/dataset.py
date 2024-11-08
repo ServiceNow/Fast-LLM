@@ -102,7 +102,10 @@ class GPTDataset(RawDataset):
         else:
             np_rng.shuffle(doc_idx)
 
-        assert _extension_available, "Please run `make -C ./fast_llm/csrc/` first."
+        assert _extension_available, (
+            "The C++ extension for dataset sampling is missing." " Please make sure Fast-LLM is installed correctly."
+        )
+
         sample_idx = build_sample_idx(
             self._indexed_dataset.sizes, doc_idx, sequence_length, num_epochs, tokens_per_epoch, verbose
         )

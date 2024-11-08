@@ -103,7 +103,9 @@ class BlendedDataset(SampledDataset):
         return self._num_samples
 
     def _build_blending_indices(self, verbose: bool):
-        assert _extension_available, "Please run `make -C ./fast_llm/csrc/` first."
+        assert _extension_available, (
+            "The C++ extension for dataset blending is missing." " Please make sure Fast-LLM is installed correctly."
+        )
         Assert.lt(len(self._datasets), 32767)
         dataset_index = np.zeros(self._num_samples, dtype=np.int16)
         dataset_sample_index = np.zeros(self._num_samples, dtype=np.int64)
