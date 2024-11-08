@@ -6,7 +6,7 @@ import numpy as np
 from fast_llm.utils import Assert, div, padded_cumsum
 
 
-class MMapIndexedDataset:
+class GPTMemmapDataset:
     """
     A memory map dataset, which handles lazy loading of a pre-processed dataset in the Megatron-LM format,
     i.e. a pair of numpy file containing

@@ -1,6 +1,6 @@
 import logging
 
-from fast_llm.data.data import Data
+from fast_llm.data.gpt.data import GPTData
 from fast_llm.engine.distributed.config import PhaseType
 from fast_llm.engine.training.trainer import Trainer
 from fast_llm.models.gpt.config import GPTTrainerConfig
@@ -16,7 +16,7 @@ class GPTTrainer(Trainer):
     model_class = GPTModel
 
     def _get_data(self):
-        return Data(
+        return GPTData(
             config=self._config.data,
             distributed_config=self._config.distributed,
             vocab_size=self._config.base_model.vocab_size,

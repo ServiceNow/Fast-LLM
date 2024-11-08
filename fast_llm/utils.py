@@ -208,3 +208,13 @@ def log(*message, log_fn: typing.Union[BaseException, typing.Callable] = logger.
         raise log_fn(message)
     else:
         return log_fn(message)
+
+
+def normalize_probabilities(p: list[float]) -> list[float]:
+    import numpy as np
+
+    p = np.array(p)
+    Assert.custom(lambda x: np.all(x >= 0), p)
+    p_sum = p.sum()
+    Assert.gt(p_sum, 0)
+    return (p / p_sum).tolist()
