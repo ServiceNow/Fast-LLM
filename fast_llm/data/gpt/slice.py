@@ -1,8 +1,6 @@
-import numpy as np
-
 from fast_llm.data.gpt.dataset import GPTIndexedDataset
 from fast_llm.engine.distributed.config import PhaseType
-from fast_llm.utils import Assert, padded_cumsum
+from fast_llm.utils import Assert, normalize_probabilities, padded_cumsum
 
 
 class GPTDatasetSlice(GPTIndexedDataset):
@@ -20,14 +18,15 @@ class GPTDatasetSlice(GPTIndexedDataset):
         self._name = name
         self._dataset = dataset
         self._begin = 0 if begin is None else begin
-        self._end = len(dataset) if end is None else end
+        dataset_documents = dataset.num_documents
+        self._end = dataset_documents if end is None else end
 
         # Checks
         try:
             Assert.geq(self._begin, 0)
-            Assert.in_range_incl(self._end, self._begin + 1, len(dataset))
+            Assert.in_range_incl(self._end, self._begin + 1, dataset_documents)
         except Exception as e:
-            raise AssertionError(f"Invalid document indices for dataset {name} with length {len(dataset)}") from e
+            raise AssertionError(f"Invalid document indices for dataset {name} with length {dataset_documents}") from e
 
     def __getitem__(self, index: int):
         """
@@ -47,9 +46,9 @@ class GPTDatasetSlice(GPTIndexedDataset):
     def num_documents(self):
         return self._end - self._begin
 
-    @property
-    def num_tokens(self):
-        return np.sum(self._dataset.document_sizes[self._begin : self._end])
+    def get_document_sizes(self):
+        # TODO: This can be really big.
+        return self._dataset.get_document_sizes()[self._begin : self._end]
 
     @property
     def name(self):
@@ -61,10 +60,8 @@ class GPTDatasetSlice(GPTIndexedDataset):
         Create a set of GPT datasets from a MMapIndexedDataset,
         each containing approximately the requested proportion of the total tokens.
         """
-        split_probs = list(phase_split.values())
-        Assert.eq(sum(split_probs), 1)
-        num_documents = dataset.num_documents
-        splits = [round(x) for x in padded_cumsum(split_probs) * num_documents]
+        probabilities = normalize_probabilities(list(phase_split.values()))
+        splits = [round(x) for x in padded_cumsum(probabilities) * dataset.num_documents]
         return {
             phase: GPTDatasetSlice(f"{dataset.name}_{phase.value}", dataset, split_begin, split_end)
             for phase, split_begin, split_end in zip(phase_split, splits[:-1], splits[1:])
