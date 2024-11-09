@@ -10,7 +10,7 @@ import numpy as np
 import pytest
 import torch
 
-from fast_llm.data.mmap import MMapIndexedDataset
+from fast_llm.data.gpt.memmap import GPTMemmapDataset
 from fast_llm.models.gpt.config import (
     MistralGPTHuggingfaceCheckpointFormat,
     MixtralGPTHuggingfaceCheckpointFormat,
@@ -186,7 +186,7 @@ def get_test_data():
         tokenizer = transformers.AutoTokenizer.from_pretrained(TOKENIZER_PATH)
 
         documents = [np.array(tokenizer(document)["input_ids"], dtype=np.uint16) % 8192 for document in documents]
-        MMapIndexedDataset.write_dataset(DATASET_PREFIX, documents)
+        GPTMemmapDataset.write_dataset(DATASET_PREFIX, documents)
 
 
 def run_test_script(
