@@ -8,7 +8,7 @@ This guide will get you up and running with Fast-LLM on a single machine. Let's 
 
 To follow this guide, you'll need:
 
--   **Hardware**: At least one NVIDIA GPU with Ampere architecture or newer. For optimal results in this tutorial, we recommend 8 A100 GPUs or better. 🤑
+-   **Hardware**: At least one NVIDIA GPU with Volta architecture or newer. For optimal results in this tutorial, we recommend 8 A100 GPUs or better. 🤑
 -   **Software**:
     -   **Docker** (if using the Docker setup), or
     -   **Local Environment**: PyTorch 2.2 or later, CUDA 12.1 or later, and APEX AMP (if building from source), or
@@ -35,7 +35,7 @@ First, choose your environment. You can use Docker, your local environment, Slur
 
 === "Local Environment"
 
-    You selected to use your local environment to run Fast-LLM. You should have a machine with at least one NVIDIA GPU with Ampere architecture or newer. We need to install Fast-LLM and its dependencies in your environment. Our Fast-LLM docker image already includes all this, and we recommend using it for simplicity and reproducibility. If you still want to install Fast-LLM in your local environment, follow the steps below.
+    You selected to use your local environment to run Fast-LLM. You should have a machine with at least one NVIDIA GPU with Volta architecture or newer. We need to install Fast-LLM and its dependencies in your environment. Our Fast-LLM docker image already includes all this, and we recommend using it for simplicity and reproducibility. If you still want to install Fast-LLM in your local environment, follow the steps below.
 
     Fast-LLM depends on [CUDA](https://developer.nvidia.com/about-cuda) 12.1 or later, [PyTorch](https://pytorch.org) 2.2 or later, [APEX](https://github.com/NVIDIA/apex?tab=readme-ov-file#installation), and [OpenAI Triton](https://github.com/triton-lang/triton). Follow the instructions on their respective websites to install them. If you use [conda](https://docs.conda.io/projects/conda/en/latest/index.html), you can create a new environment and install these dependencies in it.
     
@@ -93,7 +93,7 @@ First, choose your environment. You can use Docker, your local environment, Slur
 
 === "Slurm"
 
-    You selected Docker-enabled [Slurm](https://slurm.schedmd.com/) for this tutorial. The Slurm setup requires a Slurm cluster with at least one node and one GPU of Ampere architecture or newer. Slurm will use the `ghcr.io/servicenow/fast-llm:latest` Docker image to train our model. It will need a shared file system for input data and output results. We will assume that your home directory is shared across all nodes.
+    You selected Docker-enabled [Slurm](https://slurm.schedmd.com/) for this tutorial. The Slurm setup requires a Slurm cluster with at least one node and one GPU of Volta architecture or newer. Slurm will use the `ghcr.io/servicenow/fast-llm:latest` Docker image to train our model. It will need a shared file system for input data and output results. We will assume that your home directory is shared across all nodes.
 
     Let's create a folder to store our input data and output results in the shared home directory:
 
@@ -103,7 +103,7 @@ First, choose your environment. You can use Docker, your local environment, Slur
 
 === "Kubernetes"
 
-    You selected to use [Kubernetes](https://kubernetes.io/) with [KubeFlow](https://www.kubeflow.org/) for this tutorial. We will use a `PyTorchJob` resource to train our model with the `ghcr.io/servicenow/fast-llm:latest` Docker image and store our input data and output results in shared [persistent volume claims](https://kubernetes.io/docs/concepts/storage/persistent-volumes/) (PVCs). The Kubernetes cluster should have at least one node and one GPU of Ampere architecture or newer.
+    You selected to use [Kubernetes](https://kubernetes.io/) with [KubeFlow](https://www.kubeflow.org/) for this tutorial. We will use a `PyTorchJob` resource to train our model with the `ghcr.io/servicenow/fast-llm:latest` Docker image and store our input data and output results in shared [persistent volume claims](https://kubernetes.io/docs/concepts/storage/persistent-volumes/) (PVCs). The Kubernetes cluster should have at least one node and one GPU of Volta architecture or newer.
 
     Let's now create two PVCs named `pvc-fast-llm-inputs` and `pvc-fast-llm-results` to store our input data and output results, respectively.
     
@@ -634,7 +634,7 @@ Next, we'll create a configuration file for Fast-LLM. Save the following as `~/i
     10.  Format of the pretrained model. Since SmolLM is a Llama model, we set this to `llama`.
     11.  We'll train SmolLM-135M from scratch. You can set to `yes` to continue training from a checkpoint (if you put one in `~/inputs`).
     12.  We're not using ZeRO for this tutorial, so we set `zero_stage` to `null`. You can set this to `1`, `2`, or `3` for ZeRO-1, ZeRO-2, or ZeRO-3, respectively.
-    13.  `bf16` is supported on Ampere GPUs and higher. Fast-LLM also supports `fp16`.
+    13.  `bf16` (bfloat16, or Brain Floating Point 16) is supported on Ampere GPUs and higher. On Volta GPUs, you can use `fp16` (half-precision floating point) for training instead of `bf16`.
 
 === "Llama-3.2-1B"
 
@@ -897,17 +897,17 @@ You can expect to see the following performance metrics in Fast-LLM's output:
 
 === "SmolLM-135M"
 
-    | Performance Metric  | A100 SXM4 80 GB | H100 SXM5 80 GB |
-    |---------------------|----------------:|----------------:|
-    | Tokens/s/GPU        | 1,234,567       | 1,456,789       |
-    | TFLOPS              | 312             | 512             |
+    | Performance Metric  | V100-SXM2-32GB | A100-SXM4-80GB | H100-SXM5-80GB |
+    |---------------------|---------------:|---------------:|---------------:|
+    | Tokens/s/GPU        | 1,234,567      | 1,456,789      | 1,678,901      |
+    | TFLOPS              | 312            | 512            | 768            |
 
 === "Llama-3.2-1B"
 
-    | Performance Metric  | A100 SXM4 80 GB | H100 SXM5 80 GB |
-    |---------------------|----------------:|----------------:|
-    | Tokens/s/GPU        | 1,234,567       | 1,456,789       |
-    | TFLOPS              | 312             | 512             |
+    | Performance Metric  | V100-SXM2-32GB | A100-SXM4-80GB | H100-SXM5-80GB |
+    |---------------------|---------------:|---------------:|---------------:|
+    | Tokens/s/GPU        | 1,234,567      | 1,456,789      | 1,678,901      |
+    | TFLOPS              | 312            | 512            | 768            |
 
 If you included the W&B section in your configuration, you can also track your training progress on the Weights & Biases dashboard as well. Follow the link in the console output to view your training run.
 
