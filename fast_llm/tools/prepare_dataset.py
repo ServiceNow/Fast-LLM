@@ -212,10 +212,10 @@ class GPTDatasetPreparator(DatasetPreparator):
         from tqdm import tqdm
 
         shard_idx, shard_dataset = args
-        prefix = f"shard_{self.rank}_{shard_idx}"
+        prefix = f"shard_{self._config.distributed.rank}_{shard_idx}"
         shard_output_path = self._config.output_path / prefix
         documents = [
-            np.array(item["input_ids"], dtype=self.dataset.data_type.numpy)
+            np.array(item["input_ids"], dtype=self._config.dataset.data_type.numpy)
             for item in tqdm(shard_dataset, desc=f"Saving shard {shard_idx}", unit="docs")
         ]
         GPTMemmapDataset.write_dataset(prefix=shard_output_path, documents=documents)
@@ -295,10 +295,12 @@ class GPTDatasetPreparator(DatasetPreparator):
 
         # Gather dataset_dicts from all ranks to rank 0
         if self._config.distributed.world_size > 1:
-            all_dataset_dicts = [None] * self._config.distributed.world_size
-            torch.distributed.gather_object(dataset_dicts, all_dataset_dicts, dst=0)
             if self._config.distributed.rank == 0:
+                all_dataset_dicts = [None] * self._config.distributed.world_size
+                torch.distributed.gather_object(dataset_dicts, all_dataset_dicts, dst=0)
                 dataset_dicts = [item for sublist in all_dataset_dicts for item in sublist]
+            else:
+                torch.distributed.gather_object(dataset_dicts, [], dst=0)
 
         # Create a metadata file
         if self._config.distributed.rank == 0:
