@@ -116,6 +116,10 @@ class Assert:
     @staticmethod
     def none(x):
         assert x is None, f"Object of type {type(x)} is not None ({str(x)})"
+    
+    @staticmethod
+    def not_none(x):
+        assert x is not None, "Object is None"
 
     @staticmethod
     def empty(x):
@@ -175,8 +179,8 @@ class Assert:
         ), f"Assertion failed: not fn({', '.join(itertools.chain((str(x) for x in args),(f'{str(k)}={str(v)}' for k,v in kwargs.items())))})"
 
 
-class Registry:
-    def __init__(self, name, data: dict):
+class Registry[_KT, _VT]:
+    def __init__(self, name: str, data: dict[_KT, _VT]):
         self._name = name
         self._data = data.copy()
 

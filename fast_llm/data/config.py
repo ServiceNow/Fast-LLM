@@ -106,7 +106,6 @@ TokenizerFromFile = "TokenizerFromFile"
 class TokenizerConfig(Config):
     """
     Configuration for the tokenizer.
-    Currently, the tokenizer is only needed for FIM.
     """
 
     format: str = Field(
