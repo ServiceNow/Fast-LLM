@@ -155,6 +155,11 @@ class GPTDatasetPreparatorConfig(DatasetPreparatorConfig):
         hint=FieldHint.optional,
         valid=check_field(Assert.geq, 1),
     )
+    clean_output: bool = Field(
+        default=False,
+        desc="Remove downloaded dataset after processing.",
+        hint=FieldHint.optional,
+    )
     dataset: GPTDatasetConfig = Field(
         default_factory=GPTDatasetConfig,
         desc="Configuration for the dataset.",
@@ -248,9 +253,10 @@ class GPTDatasetPreparator(DatasetPreparator):
         # Prepare output directory
         self._config.output_path.mkdir(parents=True, exist_ok=True)
 
-        # Download dataset
+        # Download dataset if necessary on rank 0
         download_path = self._config.output_path / "downloaded_dataset"
-        if self._config.distributed.rank == 0:
+        download_path_ok = download_path / "ok"
+        if self._config.distributed.rank == 0 and not download_path_ok.exists():
             datasets.load_dataset(
                 path=self._config.dataset.name_or_path,
                 name=self._config.dataset.config_name,
@@ -258,12 +264,13 @@ class GPTDatasetPreparator(DatasetPreparator):
                 num_proc=self._config.loading_workers,
                 trust_remote_code=self._config.dataset.trust_remote_code,
             ).save_to_disk(download_path, num_proc=self._config.saving_workers)
+            download_path_ok.touch()
 
-        # Synchronize processes to wait for the download
+        # Synchronize processes to wait for the download to finish
         if self._config.distributed.world_size > 1:
             torch.distributed.barrier()
 
-        # Load and shard the dataset
+        # Load and shard the dataset on each rank
         dataset = datasets.load_from_disk(download_path).shard(
             num_shards=self._config.distributed.world_size,
             index=self._config.distributed.rank,
@@ -271,7 +278,7 @@ class GPTDatasetPreparator(DatasetPreparator):
         if self._config.dataset.field not in dataset.column_names:
             raise ValueError(f"Dataset does not have field '{self._config.dataset.field}'.")
 
-        # Tokenize the dataset
+        # Tokenize the dataset in parallel
         tokenized_dataset = dataset.map(
             self._tokenize_batch,
             batched=True,
@@ -282,14 +289,14 @@ class GPTDatasetPreparator(DatasetPreparator):
         # Calculate total number of tokens
         total_tokens = sum(tqdm(tokenized_dataset["num_tokens"], desc="Counting tokens", unit="tokens"))
 
-        # Split dataset into shards
+        # Split dataset into shards based on number of tokens
         num_shards = int(np.ceil(total_tokens / self._config.tokens_per_shard))
         shards = [
             (i, tokenized_dataset.shard(num_shards=num_shards, index=i))
             for i in tqdm(range(num_shards), desc="Creating shards")
         ]
 
-        # Use multiprocessing to save each shard in parallel
+        # Use multiprocessing to save each shard in parallel on all ranks
         with Pool(processes=self._config.saving_workers) as pool:
             dataset_dicts = pool.map(self._save_shard, shards)
 
@@ -302,7 +309,7 @@ class GPTDatasetPreparator(DatasetPreparator):
             else:
                 torch.distributed.gather_object(dataset_dicts, [], dst=0)
 
-        # Create a metadata file
+        # Create a metadata file on rank 0
         if self._config.distributed.rank == 0:
             total_tokens = sum(dataset_dict["num_tokens"] for dataset_dict in dataset_dicts)
             for dataset_dict in dataset_dicts:
@@ -314,6 +321,10 @@ class GPTDatasetPreparator(DatasetPreparator):
         if self._config.distributed.world_size > 1:
             torch.distributed.barrier()
             torch.distributed.destroy_process_group()
+        
+        # Clean up downloaded dataset
+        if self._config.clean_output and self._config.distributed.rank == 0:
+            download_path.unlink(missing_ok=True)
 
 
 dataset_preparator_registry = Registry(
