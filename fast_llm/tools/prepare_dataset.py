@@ -155,7 +155,7 @@ class GPTDatasetPreparatorConfig(DatasetPreparatorConfig):
         hint=FieldHint.optional,
         valid=check_field(Assert.geq, 1),
     )
-    clean_output: bool = Field(
+    remove_downloads: bool = Field(
         default=False,
         desc="Remove downloaded dataset after processing.",
         hint=FieldHint.optional,
@@ -323,7 +323,7 @@ class GPTDatasetPreparator(DatasetPreparator):
             torch.distributed.destroy_process_group()
         
         # Clean up downloaded dataset
-        if self._config.clean_output and self._config.distributed.rank == 0:
+        if self._config.remove_downloads and self._config.distributed.rank == 0:
             download_path.unlink(missing_ok=True)
 
 
