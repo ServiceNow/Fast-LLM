@@ -199,8 +199,8 @@ class GPTDatasetPreparator(DatasetPreparator):
 
     def _tokenize_batch(self, batch):
         input_ids = [
-            np.array(self._tokenizer.tokenize(text), dtype=self.dataset.data_type.numpy)
-            for text in batch[self.dataset.field]
+            np.array(self._config._tokenizer.tokenize(text), dtype=self._config.dataset.data_type.numpy)
+            for text in batch[self._config.dataset.field]
         ]
         num_tokens = [len(x) for x in input_ids]
         return {
@@ -266,7 +266,7 @@ class GPTDatasetPreparator(DatasetPreparator):
         # Load and shard the dataset
         dataset = datasets.load_from_disk(download_path).shard(
             num_shards=self._config.distributed.world_size,
-            index=self._config.distribted.rank,
+            index=self._config.distributed.rank,
         )
         if self._config.dataset.field not in dataset.column_names:
             raise ValueError(f"Dataset does not have field '{self._config.dataset.field}'.")
