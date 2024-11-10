@@ -3,6 +3,7 @@ import argparse
 import json
 import os
 import pathlib
+import shutil
 import typing
 from multiprocessing import Pool
 
@@ -321,10 +322,10 @@ class GPTDatasetPreparator(DatasetPreparator):
         if self._config.distributed.world_size > 1:
             torch.distributed.barrier()
             torch.distributed.destroy_process_group()
-        
+
         # Clean up downloaded dataset
         if self._config.remove_downloads and self._config.distributed.rank == 0:
-            download_path.unlink(missing_ok=True)
+            shutil.rmtree(download_path)
 
 
 dataset_preparator_registry = Registry(
