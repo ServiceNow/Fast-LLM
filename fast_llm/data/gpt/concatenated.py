@@ -1,15 +1,16 @@
 import numpy as np
 
-from fast_llm.data.gpt.config import GPTConcatenatedDatasetConfig, GPTRawDataset
+from fast_llm.data.gpt.config import GPTConcatenatedDatasetConfig
+from fast_llm.data.gpt.dataset import GPTIndexedDataset
 from fast_llm.utils import padded_cumsum
 
 
-class GPTConcatenatedDataset(GPTRawDataset):
+class GPTConcatenatedDataset(GPTIndexedDataset):
 
     def __init__(
         self,
         config: GPTConcatenatedDatasetConfig,
-        datasets: list[GPTRawDataset],
+        datasets: list[GPTIndexedDataset],
     ):
         self._config = config
         self._datasets = datasets
@@ -23,12 +24,6 @@ class GPTConcatenatedDataset(GPTRawDataset):
 
     def num_documents(self):
         return self._num_documents
-
-    def __getitem__(self, index: int):
-        """
-        Get the sample (document) with the given index (in the split dataset).
-        """
-        return self.get(index)
 
     def get(self, document: int, offset: int = 0, length: int | None = None):
         """
