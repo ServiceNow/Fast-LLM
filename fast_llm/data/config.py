@@ -1,5 +1,6 @@
 import abc
 import enum
+import pathlib
 import typing
 
 from fast_llm.config import Config, Field, FieldHint, check_field, config_class, skip_valid_if_none
@@ -159,7 +160,20 @@ class Dataset(abc.ABC):
         """
 
 
-class SampledDataset(Dataset):  # noqa
+@config_class
+class SamplingConfig(Config):
+    num_samples: int = Field(default=1, desc="Number of samples to generate.")
+    seed: int = Field(default=0, desc="Random seed.")
+    cache_directory: pathlib.Path | None = Field(default=None, desc="Path to the sampling cache directory.")
+    verbose: bool = Field(default=True, desc="Log sampling progress.")
+
+
+class SamplableDataset(Dataset):
+    def sample(self, config: SamplingConfig, data: Data):
+        pass
+
+
+class SampledDataset(Dataset):
     """
     A sampled dataset class containing a prepared list of samples to be indexed sequentially (as-is) during training.
     (See the `Sampler` class below.)

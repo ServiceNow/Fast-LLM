@@ -12,7 +12,7 @@ from fast_llm.utils import Assert
 
 
 @config_class()
-class DataConfig(DataConfig):
+class GPTDataConfig(DataConfig):
     """
     Configuration for the dataset(s), split and sampling.
     Currently hard-coded to a GPT dataset.

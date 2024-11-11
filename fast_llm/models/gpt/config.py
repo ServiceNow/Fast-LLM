@@ -1,7 +1,7 @@
 import typing
 
 from fast_llm.config import Field, FieldHint, FieldUpdate, config_class
-from fast_llm.data.gpt.config import DataConfig
+from fast_llm.data.gpt.config import GPTDataConfig
 from fast_llm.engine.checkpoint.config import CheckpointFormat, CheckpointHandler
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig, PretrainedFastLLMModelConfig
 from fast_llm.engine.training.config import TrainerConfig
@@ -122,7 +122,7 @@ class PretrainedGPTModelConfig(PretrainedFastLLMModelConfig):
 @config_class()
 class GPTTrainerConfig(PretrainedGPTModelConfig, TrainerConfig):
 
-    data: DataConfig = FieldUpdate(default_factory=DataConfig)
+    data: GPTDataConfig = FieldUpdate(default_factory=GPTDataConfig)
 
     def _setup(self):
         super()._setup()

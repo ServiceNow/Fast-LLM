@@ -10,10 +10,10 @@ import torch.utils.data
 
 from fast_llm.data.blended import BlendedDataset
 from fast_llm.data.config import Data, DatasetSource, SampledDataset
-from fast_llm.data.gpt.config import DataConfig
+from fast_llm.data.gpt.config import GPTDataConfig
+from fast_llm.data.gpt.dataset import GPTSamplingConfig
 from fast_llm.data.gpt.dummy import DummyGPTDataset
 from fast_llm.data.gpt.memmap import GPTMemmapDataset
-from fast_llm.data.gpt.sampled import GPTSampledIndexedDataset
 from fast_llm.data.gpt.slice import GPTDatasetSlice
 from fast_llm.data.iterator import SampledDatasetIterator
 from fast_llm.data.tokenizer import Tokenizer
@@ -40,10 +40,11 @@ class GPTData(Data):
     _cache_directory: pathlib.Path | None
     _samples_per_phase: dict[PhaseType, int]
     _phases: typing.ClassVar[tuple[PhaseType, ...]] = (PhaseType.training, PhaseType.validation, PhaseType.test)
+    _is_setup: bool = False
 
     def __init__(
         self,
-        config: DataConfig,
+        config: GPTDataConfig,
         distributed_config: DistributedConfig,
         vocab_size: int,
         max_sequence_length: int,
@@ -52,8 +53,8 @@ class GPTData(Data):
         Create the data and gather some basic information on the dataset(s).
         Should be `setup` before use.
         """
-        self._config = config.validate()
-        self._distributed_config = distributed_config.validate()
+        self._config = config
+        self._distributed_config = distributed_config
         self._vocab_size = vocab_size
         self._max_sequence_length = max_sequence_length
         Assert.eq(len(self._config.split), len(self._phases))
@@ -166,6 +167,20 @@ class GPTData(Data):
             )
             for phase, datasets in self._sampled_datasets.items()
         }
+        self._is_setup = True
+
+    @property
+    def config(self):
+        return self._config
+
+    @property
+    def tokenizer(self):
+        assert self._is_setup
+        return self._tokenizer
+
+    @property
+    def distributed(self):
+        return self._distributed
 
     def get_iterator(
         self,
@@ -176,6 +191,7 @@ class GPTData(Data):
         num_workers: int,
         prefetch_factor: int | None = None,
     ):
+        assert self._is_setup
         Assert.incl(phase, self._blended_datasets)
         Assert.in_range_incl(batch_config.sequence_length, 1, self._max_sequence_length)
         log_main_rank(f"Initializing {phase} data iterator from sample {consumed_samples}...")
@@ -205,25 +221,23 @@ class GPTData(Data):
         for phase, num_samples in dataset_samples_per_phase.items():
             if num_samples == 0:
                 continue
-            sampled_datasets[phase] = GPTSampledIndexedDataset(
-                dataset_split[phase],
-                num_samples=num_samples,
-                sequence_length=self._max_sequence_length,
-                seed=self._distributed.config.seed,
-                group=self._distributed.world_group,
-                config=self._config,
-                tokenizer=self._tokenizer,
-                cache_directory=(
-                    self._dataset_prefixes[name].parent if self._cache_directory is None else self._cache_directory
+            sampled_datasets[phase] = dataset_split[phase].sample(
+                GPTSamplingConfig(
+                    num_samples=num_samples,
+                    sequence_length=self._max_sequence_length,
+                    seed=self._distributed_config.seed,
+                    cache_directory=(
+                        self._dataset_prefixes[name].parent if self._cache_directory is None else self._cache_directory
+                    ),
+                    verbose=self._num_datasets <= 5,
                 ),
-                verbose=self._num_datasets <= 5,
+                self,
             )
         return sampled_datasets
 
     def _build_and_sample_dummy_dataset(self, name: str, dataset_samples_per_phase: dict[PhaseType, int]):
         return {
             phase: DummyGPTDataset(
-                self._dataset_prefixes[name],
                 dataset_samples_per_phase[phase],
                 self._max_sequence_length,
                 self._vocab_size,

@@ -1,7 +1,7 @@
 import typing
 
 from fast_llm.config import FieldUpdate, config_class
-from fast_llm.data.gpt.config import DataConfig
+from fast_llm.data.gpt.config import GPTDataConfig
 from fast_llm.models.gpt.config import (
     GPTArchitectureConfig,
     GPTBaseModelConfig,
@@ -12,7 +12,7 @@ from fast_llm.models.gpt.config import (
 
 
 @config_class()
-class CustomDataConfig(DataConfig):
+class CustomDataConfig(GPTDataConfig):
     # TODO: If needed, inherit from AbstractDataConfig instead and re-implement everything.
     pass
 
