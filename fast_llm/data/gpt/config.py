@@ -13,6 +13,7 @@ from fast_llm.data.config import (
     SampledDataset,
     TokenizerConfig,
 )
+from fast_llm.data.gpt.dataset import GPTIndexedDataset
 from fast_llm.engine.distributed.config import PhaseType
 from fast_llm.utils import Assert
 
@@ -43,43 +44,6 @@ class GPTDataset(Dataset):
         verbose: bool,
     ):
         pass
-
-
-class GPTIndexedDataset(Dataset):
-    """
-    A GPT dataset containing a list of unsampled, unprocessed samples.
-    TODO: Move sampling responsibility here?
-    """
-
-    def get(self, document: int, offset: int = 0, length: int | None = None):
-        pass
-
-    @property
-    def num_documents(self) -> int:
-        """
-        Number of documents in the dataset.
-        Can be calculated from document sizes but may be overridden if there is a better method.
-        """
-        return len(self.get_document_sizes())
-
-    @property
-    def num_tokens(self) -> int:
-        """
-        Number of tokens in the dataset.
-        Can be calculated from document sizes but may be overridden if there is a better method.
-        """
-        return self.get_document_sizes().sum()
-
-    @abc.abstractmethod
-    def get_document_sizes(self) -> "np.ndarray":
-        """
-        The size of each document in the dataset.
-        The resulting array could be very large, so this method should be called cautiously,
-        and derived classes should try to avoid holding the whole array im memory.
-        """
-
-    def sample(self, num_samples: int, sequence_length: int, np_rng: "np.random.RandomState", verbose: bool):
-        return
 
 
 @config_class()
