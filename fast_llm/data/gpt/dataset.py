@@ -49,7 +49,7 @@ class GPTIndexedDataset(SamplableDataset):
         return self.get_document_sizes().sum()
 
     @abc.abstractmethod
-    def get_document_sizes(self) -> "np.ndarray":
+    def get_document_sizes(self) -> np.ndarray:
         """
         The size of each document in the dataset.
         The resulting array could be very large, so this method should be called cautiously,

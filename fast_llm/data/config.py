@@ -154,7 +154,7 @@ class Dataset(abc.ABC):
 
     @property
     @abc.abstractmethod
-    def name(self):
+    def name(self) -> str:
         """
         A name for the dataset to facilitate identification and debugging.
         """
@@ -169,7 +169,7 @@ class SamplingConfig(Config):
 
 
 class SamplableDataset(Dataset):
-    def sample(self, config: SamplingConfig, data: Data):
+    def sample(self, config: SamplingConfig, data: Data) -> "SampledDataset":
         pass
 
 

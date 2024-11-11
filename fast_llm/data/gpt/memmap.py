@@ -47,9 +47,14 @@ class GPTMemmapDataset(GPTIndexedDataset):
 
         self._index_bin_buffer_mmap = np.memmap(self._config.path.with_suffix(".idx"), mode="r", order="C")
         self._index_bin_buffer = memoryview(self._index_bin_buffer_mmap)
-        self._sizes = np.frombuffer(self._index_bin_buffer, dtype=np.int32, count=self._num_documents, offset=offset)
+        self._document_sizes = np.frombuffer(
+            self._index_bin_buffer, dtype=np.int32, count=self._num_documents, offset=offset
+        )
         self._pointers = np.frombuffer(
-            self._index_bin_buffer, dtype=np.int64, count=self._num_documents, offset=offset + self._sizes.nbytes
+            self._index_bin_buffer,
+            dtype=np.int64,
+            count=self._num_documents,
+            offset=offset + self._document_sizes.nbytes,
         )
         self._bin_buffer_mmap = np.memmap(self._config.path.with_suffix(".bin"), mode="r", order="C")
         self._bin_buffer = memoryview(self._bin_buffer_mmap)
@@ -73,21 +78,29 @@ class GPTMemmapDataset(GPTIndexedDataset):
         return np.frombuffer(
             self._bin_buffer,
             dtype=self._dtype,
-            count=self._sizes[document] - offset if length is None else length,
+            count=self._document_sizes[document] - offset if length is None else length,
             offset=self._pointers[document] + offset * np.dtype(self._dtype).itemsize,
         )
 
     @property
-    def num_documents(self):
+    def name(self) -> str:
+        return self._name
+
+    @property
+    def num_documents(self) -> int:
         return self._num_documents
 
     @property
-    def num_tokens(self):
+    def num_tokens(self) -> int:
         return div(self._bin_buffer_mmap.size, np.dtype(self._dtype).itemsize)
 
-    @property
-    def document_sizes(self):
-        return self._sizes
+    def get_document_sizes(self) -> np.ndarray:
+        """
+        The size of each document in the dataset.
+        The resulting array could be very large, so this method should be called cautiously,
+        and derived classes should try to avoid holding the whole array im memory.
+        """
+        return self._document_sizes
 
     @classmethod
     def write_dataset(cls, prefix: pathlib.Path | str, documents: list[np.ndarray]):
