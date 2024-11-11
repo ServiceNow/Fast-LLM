@@ -5,7 +5,7 @@ import os
 import pathlib
 import shutil
 import typing
-from multiprocessing import Pool
+import multiprocessing
 
 import numpy as np
 import torch.distributed
@@ -298,7 +298,7 @@ class GPTDatasetPreparator(DatasetPreparator):
         ]
 
         # Use multiprocessing to save each shard in parallel on all ranks
-        with Pool(processes=self._config.saving_workers) as pool:
+        with multiprocessing.Pool(processes=self._config.saving_workers) as pool:
             dataset_dicts = pool.map(self._save_shard, shards)
 
         # Gather dataset_dicts from all ranks to rank 0
