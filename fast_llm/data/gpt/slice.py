@@ -1,4 +1,4 @@
-from fast_llm.data.gpt.config import GPTIndexedDataset
+from fast_llm.data.gpt.dataset import GPTIndexedDataset
 from fast_llm.engine.distributed.config import PhaseType
 from fast_llm.utils import Assert, normalize_probabilities, padded_cumsum
 

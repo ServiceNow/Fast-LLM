@@ -1,15 +1,12 @@
 import math
-import pathlib
 
 import numpy as np
-import numpy.random
-from torch._C._distributed_c10d import ProcessGroup
 
 from fast_llm.core.distributed import safe_barrier
 from fast_llm.data.config import SampledDataset
 from fast_llm.data.fim import Fim
-from fast_llm.data.gpt.config import GPTDataConfig, GPTIndexedDataset
-from fast_llm.data.tokenizer import Tokenizer
+from fast_llm.data.gpt.data import GPTData
+from fast_llm.data.gpt.dataset import GPTIndexedDataset, GPTSamplingConfig
 from fast_llm.engine.config_utils.run import log_main_rank
 from fast_llm.engine.distributed.config import MAX_SEED
 from fast_llm.utils import Assert
@@ -22,7 +19,7 @@ except ImportError:
     _extension_available = False
 
 
-class GPTSampledDataset(SampledDataset):
+class GPTSampledIndexedDataset(SampledDataset):
     """
     A GPT dataset augmented with a sampling, i.e.,
     a pre-computed, shuffled list of samples to be indexed sequentially (as-is) during training.
@@ -33,33 +30,29 @@ class GPTSampledDataset(SampledDataset):
     def __init__(
         self,
         indexed_dataset: GPTIndexedDataset,
-        num_samples: int,
-        sequence_length: int,
-        seed: int,
-        group: ProcessGroup | None,
-        config: GPTDataConfig,
-        tokenizer: Tokenizer | None,
-        cache_dir: pathlib.Path,
-        verbose: bool = True,
+        config: GPTSamplingConfig,
+        data: GPTData,
     ):
+        assert isinstance(config, GPTSamplingConfig)
+        assert isinstance(data, GPTData)
         self._indexed_dataset = indexed_dataset
+        self._config = config
 
-        if config.fim.rate > 0:
-            assert tokenizer is not None
-            self._fim = Fim(config.fim, tokenizer)
+        if data.config.fim.rate > 0:
+            assert data.tokenizer is not None
+            self._fim = Fim(data.config.fim, data.tokenizer)
         else:
             self._fim = None
 
-        self._seed = seed
-        # rng state
-        np_rng = np.random.RandomState(seed=self._seed)
-
-        cache_prefix = f"{self.name}_ns_{num_samples}_sl_{sequence_length}_s_{seed}"
+        cache_prefix = (
+            f"{self.name}_ns_{self._config.num_samples}_sl_{self._config.sequence_length}_s_{self._config.seed}"
+        )
         # TODO: Any way to combine into a single file? (Memmap is harder)
-        self._doc_idx_filename = cache_dir / (cache_prefix + "_doc_idx.npy")
-        self._sample_idx_filename = cache_dir / (cache_prefix + "_sample_idx.npy")
-        self._shuffle_idx_filename = cache_dir / (cache_prefix + "_shuffle_idx.npy")
+        self._doc_idx_filename = self._config.cache_directory / (cache_prefix + "_doc_idx.npy")
+        self._sample_idx_filename = self._config.cache_directory / (cache_prefix + "_sample_idx.npy")
+        self._shuffle_idx_filename = self._config.cache_directory / (cache_prefix + "_shuffle_idx.npy")
 
+        group = data.distributed.world_group
         # Build the indexed mapping if it doesn't exist.
         # TODO: This only works if the dataset location is accessible by all job.
         if (group is None or group.rank() == 0) and not (
@@ -67,31 +60,33 @@ class GPTSampledDataset(SampledDataset):
             and self._sample_idx_filename.is_file()
             and self._shuffle_idx_filename.is_file()
         ):
-            if verbose:
+            if self._config.verbose:
                 log_main_rank(" > Building the index map on rank 0 ...")
-            doc_idx, sample_idx, shuffle_idx = self._sample(num_samples, sequence_length, np_rng, verbose)
+            doc_idx, sample_idx, shuffle_idx = self._sample()
+            self._config.cache_directory.mkdir(parents=True, exist_ok=True)
             np.save(self._doc_idx_filename, doc_idx)
             np.save(self._sample_idx_filename, sample_idx)
             np.save(self._shuffle_idx_filename, shuffle_idx)
 
         safe_barrier(group, self._indexed_dataset.name)
-        self._load_mappings(verbose)
+        self._load_mappings(self._config.verbose)
 
-    def _sample(self, num_samples: int, sequence_length: int, np_rng: numpy.random.RandomState, verbose: bool):
+    def _sample(self):
         """
         Create a `GPTSampledDataset` with the requested parameters.
         """
         document_sizes = self._indexed_dataset.get_document_sizes()
         num_documents = len(document_sizes)
         num_tokens = document_sizes.sum()
+        np_rng = np.random.RandomState(seed=self._config.seed)
 
-        num_epochs = math.ceil((sequence_length * num_samples + 1) / num_tokens)
+        num_epochs = math.ceil((self._config.sequence_length * self._config.num_samples + 1) / num_tokens)
         # For the last epoch, decide whether include the entire epoch
         # in the global shuffle or not.
         # Get the number of samples for the last epoch
-        main_epochs_samples = ((num_epochs - 1) * num_tokens - 1) // sequence_length
-        last_epoch_samples = num_samples - main_epochs_samples
-        samples_per_epoch = (num_tokens - 1) // sequence_length
+        main_epochs_samples = ((num_epochs - 1) * num_tokens - 1) // self._config.sequence_length
+        last_epoch_samples = self._config.num_samples - main_epochs_samples
+        samples_per_epoch = (num_tokens - 1) // self._config.sequence_length
         # If we have less than 80% of the samples for the last epoch, separate out the epoch and treat it differently.
         # Note: the 80% number is just based on common sense and can be adjusted if needed.
         separate_last_epoch = num_epochs > 1 and last_epoch_samples < 0.8 * samples_per_epoch
@@ -107,7 +102,9 @@ class GPTSampledDataset(SampledDataset):
             "The C++ extension for dataset sampling is missing." " Please make sure Fast-LLM is installed correctly."
         )
 
-        sample_idx = build_sample_idx(document_sizes, doc_idx, sequence_length, num_epochs, num_tokens, verbose)
+        sample_idx = build_sample_idx(
+            document_sizes, doc_idx, self._config.sequence_length, num_epochs, num_tokens, self._config.verbose
+        )
 
         # shuffle-idx.
         # -1 is due to data structure used to retrieve the index:
@@ -123,15 +120,15 @@ class GPTSampledDataset(SampledDataset):
         else:
             np_rng.shuffle(shuffle_idx)
 
-        Assert.geq(len(shuffle_idx), num_samples)
+        Assert.geq(len(shuffle_idx), self._config.num_samples)
         # TODO: The doc and sample idx are way bigger than needed when sampling for << 1 epoch.
-        return doc_idx, sample_idx, shuffle_idx[:num_samples]
+        return doc_idx, sample_idx, shuffle_idx[: self._config.num_samples]
 
     def __getstate__(self):
         return (
             self._indexed_dataset,
             self._fim,
-            self._seed,
+            self._config.to_serialized(),
             self._doc_idx_filename,
             self._sample_idx_filename,
             self._shuffle_idx_filename,
@@ -141,11 +138,12 @@ class GPTSampledDataset(SampledDataset):
         (
             self._indexed_dataset,
             self._fim,
-            self._seed,
+            config,
             self._doc_idx_filename,
             self._sample_idx_filename,
             self._shuffle_idx_filename,
         ) = state
+        self._config = GPTSamplingConfig.from_dict(config)
         self._load_mappings(False)
 
     def _load_mappings(self, verbose):
