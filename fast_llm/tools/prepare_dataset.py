@@ -110,10 +110,10 @@ class GPTDatasetConfig(Config):
         desc="Field of the dataset to use.",
         hint=FieldHint.optional,
     )
-    data_type: DataType = Field(
+    data_type: DataType | None = Field(
         default=None,
-        desc="Data type of the dataset field.",
-        hint=FieldHint.derived,
+        desc="Data type of the dataset field. If not provided, it will be inferred based on the tokenizer vocabulary size.",
+        hint=FieldHint.optional,
     )
     trust_remote_code: bool = Field(
         default=False,
@@ -178,19 +178,9 @@ class GPTDatasetPreparatorConfig(DatasetPreparatorConfig):
     )
 
     def _validate(self):
-        Assert.not_none(self.tokenizer.path)
-        self._tokenizer = Tokenizer(config=self.tokenizer)
-        if self.dataset.data_type is None:
-            # Decide the datatype based on the tokenizer vocabulary size
-            vocab_size = self._tokenizer.vocab_size
-            if vocab_size <= np.iinfo(np.int16).max:
-                self.dataset.data_type = DataType.int16
-            # elif vocab_size <= np.iinfo(np.uint16).max:
-            #     self.dataset.data_type = DataType.uint16  # Not supported by Fast-LLM's DataType
-            elif vocab_size <= np.iinfo(np.int32).max:
-                self.dataset.data_type = DataType.int32
-            else:
-                raise ValueError(f"Tokenizer vocabulary size {vocab_size} is too large. This is likely an error.")
+        assert self.tokenizer.path is not None
+        if self.dataset.data_type is not None:
+            Assert.incl(self.dataset.data_type.numpy, GPTMemmapDataset._DTYPES.values())
         super()._validate()
 
     @classmethod
@@ -240,8 +230,25 @@ class GPTDatasetPreparator(DatasetPreparator):
         # Set transformers logging verbosity
         transformers.logging.set_verbosity_error()
 
+        # Disable disk space check if requested
         if self._config.dataset.disable_disk_space_check:
             datasets.builder.has_sufficient_disk_space = lambda needed_bytes, directory=".": True
+
+        # Load tokenizer
+        self._tokenizer = Tokenizer(config=self.tokenizer)
+
+        # Set data type if not provided
+        if self.dataset.data_type is None:
+            # Decide the datatype based on the tokenizer vocabulary size
+            vocab_size = self._tokenizer.vocab_size
+            if vocab_size <= np.iinfo(np.int16).max:
+                self.dataset.data_type = DataType.int16
+            # elif vocab_size <= np.iinfo(np.uint16).max:
+            #     self.dataset.data_type = DataType.uint16  # Not supported by Fast-LLM's DataType
+            elif vocab_size <= np.iinfo(np.int32).max:
+                self.dataset.data_type = DataType.int32
+            else:
+                raise ValueError(f"Tokenizer vocabulary size {vocab_size} is too large. This is likely an error.")
 
         # Initialize distributed processing
         if self._config.distributed.world_size > 1:
