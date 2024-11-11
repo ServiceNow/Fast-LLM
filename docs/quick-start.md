@@ -152,49 +152,43 @@ First, choose your environment. You can use Docker, your local environment, Slur
 
 Fast-LLM supports many GPT variants, including (but not limited to) Llama, Mistral, and Mixtral. For this tutorial, let's train a Llama model with data parallelism. You can choose from two models:
 
-=== "SmolLM-135M"
+=== "SmolLM2-135M"
 
-    SmolLM is a smaller, more manageable model with 135M parameters. It's perfect for testing and getting familiar with Fast-LLM. We'll grab its configuration file from Huggingface Hub and save it to our inputs folder:
+    SmolLM2 is a smaller, more manageable model with 135M parameters. It is similar to GPT-2 but with a few improvements. A perfect choice for testing and getting familiar with Fast-LLM. We'll grab the model from Huggingface Hub and save it to our inputs folder.
 
     === "Docker"
 
         ```bash
-        curl -O https://huggingface.co/HuggingFaceTB/SmolLM-135M/resolve/main/config.json
-        mv config.json ~/inputs
+        git lfs install
+        git clone https://huggingface.co/HuggingFaceTB/SmolLM2-135M ~/inputs/SmolLM2-135M
         ```
 
     === "Local Environment"
 
         ```bash
-        curl -O https://huggingface.co/HuggingFaceTB/SmolLM-135M/resolve/main/config.json
-        mv config.json /mnt/inputs
+        git lfs install
+        git clone https://huggingface.co/HuggingFaceTB/SmolLM2-135M /mnt/inputs/SmolLM2-135M
         ```
 
     === "Slurm"
 
         ```bash
-        curl -O https://huggingface.co/HuggingFaceTB/SmolLM-135M/resolve/main/config.json
-        mv config.json ~/inputs
+        git lfs install
+        git clone https://huggingface.co/HuggingFaceTB/SmolLM2-135M ~/inputs/SmolLM2-135M
         ```
 
     === "Kubernetes"
 
-        First, download the configuration file to your local machine:
-
-        ```bash
-        curl -O https://huggingface.co/HuggingFaceTB/SmolLM-135M/resolve/main/config.json
-        ```
-
-        Then, create a temporary pod that mounts the inputs PVC, allowing you to copy files to it. Here's a basic YAML configuration for such a pod:
+        We need to create a temporary pod that mounts the inputs PVC and allows us to download the model. Here's a basic YAML configuration for such a pod:
 
         ```yaml
         apiVersion: v1
         kind: Pod
         metadata:
-          name: file-transfer
+          name: clone-model
         spec:
           containers:
-            - name: file-transfer-container
+            - name: clone-model-container
               image: ubuntu
               command: ["sleep", "infinity"]
               volumeMounts:
@@ -206,28 +200,33 @@ Fast-LLM supports many GPT variants, including (but not limited to) Llama, Mistr
                 claimName: pvc-fast-llm-inputs
         ```
 
-        Save this configuration to a file named `file-transfer-pod.yaml` and apply it to your Kubernetes cluster:
+        Save this configuration to a file named `clone-model-pod.yaml`. Next, apply this configuration to your Kubernetes cluster:
 
         ```bash
-        kubectl apply -f file-transfer-pod.yaml
+        kubectl apply -f clone-model-pod.yaml
         ```
 
-        Copy the configuration file to the pod:
+        Now, enter the pod, log in to your Hugging Face account, and clone the model:
 
         ```bash
-        kubectl cp config.json file-transfer:/mnt/inputs
+        kubectl exec -it clone-model -- /bin/bash
+        git lfs install
+        git clone https://huggingface.co/HuggingFaceTB/SmolLM2-135M /mnt/inputs/SmolLM2-135M
         ```
 
-        Finally, clean up the temporary pod and configuration file:
+        Finally, clean up the temporary pod, it's no longer needed:
 
         ```bash
-        kubectl delete pod file-transfer
-        rm config.json
+        kubectl delete pod clone-model
         ```
 
 === "Llama-3.2-1B"
 
-    Llama is a larger model with 1B parameters. It's more powerful but requires more resources to train. We'll grab the model from the Huggingface Hub and save it to our inputs folder:
+    Llama is a larger model with 1B parameters. It's more powerful but requires more resources to train. We'll grab the model from the Huggingface Hub and save it to our inputs folder.
+    
+    !!! note "Access Required"
+    
+        Meta gates access to the Llama model. You need to request access to the model from Meta before you can download it at https://huggingface.co/meta-llama/Llama-3.2-1B.
 
     === "Docker"
 
@@ -242,7 +241,7 @@ Fast-LLM supports many GPT variants, including (but not limited to) Llama, Mistr
 
         ```bash
         git lfs install
-        git clone https://huggingface.co/meta-llama/Llama-3.2-1B ~/inputs
+        git clone https://huggingface.co/meta-llama/Llama-3.2-1B ~/inputs/Llama-3.2-1B
         ```
     
     === "Local Environment"
@@ -258,7 +257,7 @@ Fast-LLM supports many GPT variants, including (but not limited to) Llama, Mistr
 
         ```bash
         git lfs install
-        git clone https://huggingface.co/meta-llama/Llama-3.2-1B /mnt/inputs
+        git clone https://huggingface.co/meta-llama/Llama-3.2-1B /mnt/inputs/Llama-3.2-1B
         ```
     
     === "Slurm"
@@ -274,13 +273,13 @@ Fast-LLM supports many GPT variants, including (but not limited to) Llama, Mistr
 
         ```bash
         git lfs install
-        git clone https://huggingface.co/meta-llama/Llama-3.2-1B ~/inputs
+        git clone https://huggingface.co/meta-llama/Llama-3.2-1B ~/inputs/Llama-3.2-1B
         ```
     
     === "Kubernetes"
     
         We need to create a temporary pod that mounts the inputs PVC and allows us to download the model. Here's a basic YAML configuration for such a pod:
-    
+
         ```yaml
         apiVersion: v1
         kind: Pod
@@ -313,7 +312,7 @@ Fast-LLM supports many GPT variants, including (but not limited to) Llama, Mistr
         pip install huggingface_hub
         huggingface-cli login
         git lfs install
-        git clone https://huggingface.co/meta-llama/Llama-3.2-1B /mnt/inputs
+        git clone https://huggingface.co/meta-llama/Llama-3.2-1B /mnt/inputs/Llama-3.2-1B
         ```
 
         Finally, clean up the temporary pod, it's no longer needed:
@@ -324,13 +323,13 @@ Fast-LLM supports many GPT variants, including (but not limited to) Llama, Mistr
 
 !!! tip "Model Size Matters"
 
-    Smaller models like SmolLM-135M will train relatively quickly, especially if you've only got a few GPUs. But if you're feeling adventurous (and patient), give the larger Llama-3.2-1B a shot!
+    Smaller models like SmolLM2-135M will train relatively quickly, especially if you've only got a few GPUs. But if you're feeling adventurous (and patient), give the larger Llama-3.2-1B a shot!
 
 ## Step 3: Prepare the Training Data 📚
 
 For this tutorial, we'll use 9B tokens of text from the [OpenWebText](https://skylion007.github.io/OpenWebTextCorpus/) dataset. This dataset is a free approximation of the WebText data OpenAI used for GPT-2, and it's perfect for our test run!
 
-=== "SmolLM-135M"
+=== "SmolLM2-135M"
 
     === "Docker"
 
@@ -340,7 +339,7 @@ For this tutorial, we'll use 9B tokens of text from the [OpenWebText](https://sk
         docker run -it --rm ghcr.io/servicenow/fast-llm:latest \
             -v ~/inputs:/mnt/inputs \
             python tools/prepare_dataset.py \
-            tokenizer_path_or_name="HuggingFaceTB/SmolLM-135M" \
+            tokenizer_path_or_name="HuggingFaceTB/SmolLM2-135M" \
             dataset_name_or_path="openwebtext" \
             dataset_split="train" \
             output_dir="/mnt/inputs" \
@@ -357,7 +356,7 @@ For this tutorial, we'll use 9B tokens of text from the [OpenWebText](https://sk
         ```bash
         curl -O https://raw.githubusercontent.com/ServiceNow/Fast-LLM/main/tools/prepare_dataset.py
         python prepare_dataset.py \
-            tokenizer_path_or_name="HuggingFaceTB/SmolLM-135M" \
+            tokenizer_path_or_name="HuggingFaceTB/SmolLM2-135M" \
             dataset_name_or_path="openwebtext" \
             dataset_split="train" \
             output_dir="/mnt/inputs" \
@@ -386,7 +385,7 @@ For this tutorial, we'll use 9B tokens of text from the [OpenWebText](https://sk
             --ntasks-per-node=$SLURM_NTASKS_PER_NODE \
             bash -c "
                 python tools/prepare_dataset.py \
-                    tokenizer_path_or_name='HuggingFaceTB/SmolLM-135M' \
+                    tokenizer_path_or_name='HuggingFaceTB/SmolLM2-135M' \
                     dataset_name_or_path='openwebtext' \
                     dataset_split='train' \
                     output_dir='/mnt/inputs' \
@@ -416,7 +415,7 @@ For this tutorial, we'll use 9B tokens of text from the [OpenWebText](https://sk
                   image: ghcr.io/servicenow/fast-llm:latest
                   command: ["python", "tools/prepare_dataset.py"]
                   args:
-                    - tokenizer_path_or_name=HuggingFaceTB/SmolLM-135M
+                    - tokenizer_path_or_name=HuggingFaceTB/SmolLM2-135M
                     - dataset_name_or_path=openwebtext
                     - dataset_split=train
                     - output_dir=/mnt/inputs
@@ -570,7 +569,7 @@ For this tutorial, we'll use 9B tokens of text from the [OpenWebText](https://sk
 
 Next, we'll create a configuration file for Fast-LLM. Save the following as `~/inputs/fast-llm-config.yaml`:
 
-=== "SmolLM-135M"
+=== "SmolLM2-135M"
 
     ```yaml
     training:
@@ -589,15 +588,15 @@ Next, we'll create a configuration file for Fast-LLM. Save the following as `~/i
         interval: 20_000
       wandb:  # (3)!
         project_name: fast-llm-quickstart
-        group_name: smollm-135m
+        group_name: SmolLM2-135M
         entity_name: servicenow
     batch:
-      micro_batch_size: 1  # (4)!
+      micro_batch_size: 20  # (4)!
       sequence_length: 1024
       batch_size: 480  # (5)!
     data:
       format: file
-      path: /mnt/inputs/fast_llm_dataset.json  # (6)!
+      path: /mnt/inputs/openwebtext/fast_llm_dataset.json  # (6)!
       split: [99, 1, 0]  # (7)!
     optimizer: # (8)!
       weight_decay: 0.1
@@ -611,13 +610,16 @@ Next, we'll create a configuration file for Fast-LLM. Save the following as `~/i
         warmup_iterations: 2000
     pretrained:
       format: llama  # (10)!
-      path: /mnt/inputs
+      path: /mnt/inputs/SmolLM2-135M
       model_weights: no  # (11)!
     model:
+      base_model:
+        transformer:
+          use_flash_attention: yes  # (12)!
       multi_stage:
-        zero_stage: null  # (12)!
+        zero_stage: null  # (13)!
       distributed:
-        training_dtype: bf16  # (13)!
+        training_dtype: bf16  # (14)!
     run:
       experiment_dir: /mnt/results
     ```
@@ -625,22 +627,23 @@ Next, we'll create a configuration file for Fast-LLM. Save the following as `~/i
     1.  Total number of training tokens will be approximately 300B.
     2.  A Llama model will be saved in Hugging Face format to `~/results` directory every 20,000 iterations.
     3.  Entirely optional, but it's a good idea to track your training progress with Weights & Biases. Replace `servicenow` with your own W&B entity name. If you don't want to use W&B, just remove this section.
-    4.  Adjust the number of sequences per GPU based on GPU memory. For SmolLM-135M and an A100-80GB, a `micro_batch_size` of 1 should work well.
+    4.  Adjust the number of sequences per GPU based on GPU memory. For SmolLM2-135M and an A100-80GB, a `micro_batch_size` of 1 should work well.
     5.  Must be divisible by the number of GPUs and the `micro_batch_size`. At 1024 tokens per sequence, 480 corresponds to about 500,000 tokens per batch.
     6.  Location of the dataset metadata file generated in Step 4.
     7.  99% train, 1% validation, 0% test. These settings need to be adjusted based on the size of your dataset. If you're using a smaller dataset, you need to increase the validation split.
     8.  These are good default optimizer settings for training models.
     9.  We are using a cosine decay schedule with linear warmup. After reaching the peak learning rate `base` at `warmup_iterations`, the learning rate will decay to `minimum` at `decay_iterations`, following a cosine curve. The minimum learning rate should be 1/10th of the base learning rate per Chinchilla.
     10.  Format of the pretrained model. Since SmolLM is a Llama model, we set this to `llama`.
-    11.  We'll train SmolLM-135M from scratch. You can set to `yes` to continue training from a checkpoint (if you put one in `~/inputs`).
-    12.  We're not using ZeRO for this tutorial, so we set `zero_stage` to `null`. You can set this to `1`, `2`, or `3` for ZeRO-1, ZeRO-2, or ZeRO-3, respectively.
-    13.  `bf16` (bfloat16, or Brain Floating Point 16) is supported on Ampere GPUs and higher. On Volta GPUs, you can use `fp16` (half-precision floating point) for training instead of `bf16`.
+    11.  We'll train SmolLM2-135M from scratch. You can set to `yes` to continue training from a checkpoint (if you put one in `~/inputs`).
+    12.  If you're using Ampere GPUs or higher, you can enable FlashAttention for faster training. Otherwise, set this to `no`. The default is `yes`.
+    13.  We're not using ZeRO for this tutorial, so we set `zero_stage` to `null`. You can set this to `1`, `2`, or `3` for ZeRO-1, ZeRO-2, or ZeRO-3, respectively.
+    14.  `bf16` (bfloat16, or Brain Floating Point 16) is supported on Ampere GPUs and higher. On Volta GPUs, you can use `fp16` (half-precision floating point) for training instead of `bf16`.
 
 === "Llama-3.2-1B"
 
     ```yaml
     training:
-      train_iters: 600_000  # (1)!
+      train_iters: 100_000  # (1)!
       logs:
         interval: 10
       validation:
@@ -680,10 +683,13 @@ Next, we'll create a configuration file for Fast-LLM. Save the following as `~/i
       path: /mnt/inputs
       model_weights: yes  # (11)!
     model:
+      base_model:
+        transformer:
+          use_flash_attention: yes  # (12)!
       multi_stage:
-        zero_stage: null  # (12)!
+        zero_stage: null  # (13)!
       distributed:
-        training_dtype: bf16  # (13)!
+        training_dtype: bf16  # (14)!
     run:
       experiment_dir: /mnt/results
     ```
@@ -699,8 +705,9 @@ Next, we'll create a configuration file for Fast-LLM. Save the following as `~/i
     9.  We are using a cosine decay schedule with linear warmup. After reaching the peak learning rate `base` at `warmup_iterations`, the learning rate will decay to `minimum` at `decay_iterations`, following a cosine curve. The minimum learning rate should be 1/10th of the base learning rate per Chinchilla.
     10.  Format of the pretrained model. Since it's a Llama model, we set this to `llama`.
     11.  We want to continue training Llama-3.2-1B from a checkpoint. If you're training from scratch, set this to `no`.
-    12.  We're not using ZeRO for this tutorial, so we set `zero_stage` to `null`. You can set this to `1`, `2`, or `3` for ZeRO-1, ZeRO-2, or ZeRO-3, respectively.
-    13.  `bf16` is supported on Ampere GPUs and higher. Fast-LLM also supports `fp16`.
+    12.  If you're using Ampere GPUs or higher, you can enable FlashAttention for faster training. Otherwise, set this to `no`. The default is `yes`.
+    13.  We're not using ZeRO for this tutorial, so we set `zero_stage` to `null`. You can set this to `1`, `2`, or `3` for ZeRO-1, ZeRO-2, or ZeRO-3, respectively.
+    14.  `bf16` (bfloat16, or Brain Floating Point 16) is supported on Ampere GPUs and higher. On Volta GPUs, you can use `fp16` (half-precision floating point) for training instead of `bf16`.
 
 ## (Optional) Step 6: Add Your Weights & Biases API Key 🔑
 
@@ -895,19 +902,49 @@ Alright, the big moment! Let's launch the training run.
 
 You can expect to see the following performance metrics in Fast-LLM's output:
 
-=== "SmolLM-135M"
+=== "SmolLM2-135M"
 
-    | Performance Metric  | V100-SXM2-32GB | A100-SXM4-80GB | H100-SXM5-80GB |
-    |---------------------|---------------:|---------------:|---------------:|
-    | Tokens/s/GPU        | 1,234,567      | 1,456,789      | 1,678,901      |
-    | TFLOPS              | 312            | 512            | 768            |
+    | Performance Metric  | 8x V100-SXM2-32GB[^SmolLM2-V100] | 8x A100-SXM4-80GB[^SmolLM2-A100] | 8x H100-SXM5-80GB[^SmolLM2-H100] |
+    |---------------------|---------------------------------:|---------------------------------:|---------------------------------:|
+    | tokens/s/GPU        | 18300                            |                                  |                                  |
+    | tflop/s (model)     | 16.7                             |                                  |                                  |
+    | tflop/s (hardware)  | 17.0                             |                                  |                                  |
+    | total training time | 23.3 days                        |                                  |                                  |
+
+    [^SmolLM2-V100]:
+        `bf16` is not supported on V100 GPUs. Precision was set to `fp16`.
+        FlashAttention is not supported on V100 GPUs, so it was disabled.
+        Micro-batch size was set to 12.
+    [^SmolLM2-A100]:
+        Precision was set to `bf16`.
+        FlashAttention was enabled.
+        Micro-batch size was set to ???.
+    [^SmolLM2-H100]:
+        Precision was set to `bf16`.
+        FlashAttention was enabled.
+        Micro-batch size was set to ???.
 
 === "Llama-3.2-1B"
 
-    | Performance Metric  | V100-SXM2-32GB | A100-SXM4-80GB | H100-SXM5-80GB |
-    |---------------------|---------------:|---------------:|---------------:|
-    | Tokens/s/GPU        | 1,234,567      | 1,456,789      | 1,678,901      |
-    | TFLOPS              | 312            | 512            | 768            |
+    | Performance Metric  | 8x V100-SXM2-32GB[^Llama-V100] | 8x A100-SXM4-80GB[^Llama-A100] | 8x H100-SXM5-80GB[^Llama-H100] |
+    |---------------------|-------------------------------:|-------------------------------:|-------------------------------:|
+    | tokens/s/GPU        | 5680                           |                                |                                |
+    | tflop/s (model)     | 43.3                           |                                |                                |
+    | tflop/s (hardware)  | 43.4                           |                                |                                |
+    | total training time | 12.5                           |                                |                                |
+
+    [^Llama-V100]:
+        `bf16` is not supported on V100 GPUs. Precision was set to `fp16`.
+        FlashAttention is not supported on V100 GPUs, so it was disabled.
+        Micro-batch size was set to 4.
+    [^Llama-A100]:
+        Precision was set to `bf16`.
+        FlashAttention was enabled.
+        Micro-batch size was set to ???.
+    [^Llama-H100]:
+        Precision was set to `bf16`.
+        FlashAttention was enabled.
+        Micro-batch size was set to ???.
 
 If you included the W&B section in your configuration, you can also track your training progress on the Weights & Biases dashboard as well. Follow the link in the console output to view your training run.
 
