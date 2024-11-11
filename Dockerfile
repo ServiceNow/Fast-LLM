@@ -7,28 +7,25 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && git lfs install
 
-# Add a user for Fast-LLM with sudo privileges for runtime adjustments
-ARG FAST_LLM_USER_ID=1000
-RUN useradd -m -u $FAST_LLM_USER_ID -s /bin/bash fast_llm \
-    && echo 'fast_llm ALL=(ALL) NOPASSWD: ALL' >> /etc/sudoers
-
-USER fast_llm
+# Set the working directory
 WORKDIR /app
 
-# Environment settings for Python and PATH
-ENV PYTHONPATH=/app:/app/Megatron-LM \
-    PATH=$PATH:/home/fast_llm/.local/bin/
+# Environment settings for Python and the user
+ENV PYTHONPATH=/app:/app/Megatron-LM
 
-# Copy the dependency files and install dependencies
-COPY --chown=fast_llm setup.py setup.cfg pyproject.toml ./
-COPY --chown=fast_llm ./fast_llm/csrc/ fast_llm/csrc/
+# Copy the dependency files and install dependencies globally
+COPY setup.py setup.cfg pyproject.toml ./
+COPY ./fast_llm/csrc/ fast_llm/csrc/
 RUN PIP_NO_INPUT=1 pip3 install --no-cache-dir --no-build-isolation -e ".[CORE,OPTIONAL,DEV]"
 
 # Copy the rest of the code
-COPY --chown=fast_llm ./Megatron-LM Megatron-LM
-COPY --chown=fast_llm ./examples examples
-COPY --chown=fast_llm ./tests tests
-COPY --chown=fast_llm ./tools tools
+COPY ./Megatron-LM Megatron-LM
+COPY ./examples examples
+COPY ./tests tests
+COPY ./tools tools
 
-# Copy the main source code for Fast-LLM
-COPY --exclude=./fast_llm/csrc/ --chown=fast_llm ./fast_llm/ fast_llm/
+# Copy the main source code
+COPY --exclude=./fast_llm/csrc/ ./fast_llm/ fast_llm/
+
+# Ensure the source code files are writable
+RUN chmod -R a+w /app

@@ -106,7 +106,7 @@ class GPTMemmapDataset(GPTIndexedDataset):
         dtype = documents[0].dtype
         num_documents = len(documents)
         lengths = np.array([len(document) for document in documents], dtype=np.int32)
-        pointers = padded_cumsum(lengths[:-1].astype(np.int64) * 2)
+        pointers = padded_cumsum(lengths[:-1].astype(np.int64)) * np.dtype(dtype).itemsize
         prefix.parent.mkdir(parents=True, exist_ok=True)
         with prefix.with_suffix(".idx").open("wb") as stream:
             stream.write(cls._INDEX_HEADER)
