@@ -7,15 +7,11 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && git lfs install
 
-# Create a generic writable home directory for arbitrary users
-RUN mkdir -p /home/user && chmod -R a+w /home/user
-
 # Set the working directory
 WORKDIR /app
 
 # Environment settings for Python and the user
-ENV PYTHONPATH=/app:/app/Megatron-LM \
-    HOME=/home/user
+ENV PYTHONPATH=/app:/app/Megatron-LM
 
 # Copy the dependency files and install dependencies globally
 COPY setup.py setup.cfg pyproject.toml ./
@@ -33,6 +29,3 @@ COPY --exclude=./fast_llm/csrc/ ./fast_llm/ fast_llm/
 
 # Ensure the source code files are writable
 RUN chmod -R a+w /app
-
-# Ensure the user can write to the home directory
-ENTRYPOINT ["/bin/bash", "-c", "export HOME=${HOME} && exec \"$@\"", "--"]
