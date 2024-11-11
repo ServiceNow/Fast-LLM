@@ -1,11 +1,14 @@
 import abc
+import typing
 
 import numpy as np
 
 from fast_llm.config import Field, config_class
 from fast_llm.data.config import SamplableDataset, SamplingConfig
-from fast_llm.data.gpt.data import GPTData
-from fast_llm.data.gpt.sampled import GPTSampledIndexedDataset
+
+if typing.TYPE_CHECKING:
+    from fast_llm.data.gpt.data import GPTData
+
 
 try:
     from fast_llm.csrc.data import build_sample_idx  # noqa
@@ -53,5 +56,7 @@ class GPTIndexedDataset(SamplableDataset):
         and derived classes should try to avoid holding the whole array im memory.
         """
 
-    def sample(self, config: GPTSamplingConfig, data: GPTData):
+    def sample(self, config: GPTSamplingConfig, data: "GPTData"):
+        from fast_llm.data.gpt.sampled import GPTSampledIndexedDataset
+
         return GPTSampledIndexedDataset(self, config, data)

@@ -128,7 +128,7 @@ class GPTSampledIndexedDataset(SampledDataset):
         return (
             self._indexed_dataset,
             self._fim,
-            self._seed,
+            self._config.to_serialized(),
             self._doc_idx_filename,
             self._sample_idx_filename,
             self._shuffle_idx_filename,
@@ -138,11 +138,12 @@ class GPTSampledIndexedDataset(SampledDataset):
         (
             self._indexed_dataset,
             self._fim,
-            self._seed,
+            config,
             self._doc_idx_filename,
             self._sample_idx_filename,
             self._shuffle_idx_filename,
         ) = state
+        self._config = GPTSamplingConfig.from_dict(config)
         self._load_mappings(False)
 
     def _load_mappings(self, verbose):
