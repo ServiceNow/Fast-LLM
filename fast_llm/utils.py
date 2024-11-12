@@ -176,9 +176,9 @@ class Assert:
 
 
 class Registry:
-    def __init__(self, name, data: dict):
+    def __init__(self, name, data: dict | None = None):
         self._name = name
-        self._data = data.copy()
+        self._data = {} if data is None else data.copy()
 
     def __getitem__(self, key):
         if key not in self:

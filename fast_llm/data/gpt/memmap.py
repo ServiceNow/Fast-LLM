@@ -3,6 +3,7 @@ import struct
 
 import numpy as np
 
+from fast_llm.data.gpt.config import GPTMemmapDatasetConfig
 from fast_llm.data.gpt.dataset import GPTIndexedDataset
 from fast_llm.utils import Assert, div, padded_cumsum
 
@@ -28,15 +29,15 @@ class GPTMemmapDataset(GPTIndexedDataset):
     }
     _INDEX_HEADER = b"MMIDIDX\x00\x00"
 
-    def __init__(self, name: str, prefix: pathlib.Path | str):
-        self._init(name, prefix)
+    def __init__(self, config: GPTMemmapDatasetConfig):
+        self._init(config)
 
-    def _init(self, name: str, prefix: pathlib.Path | str):
+    def _init(self, config: GPTMemmapDatasetConfig):
         super().__init__()
-        self._name = name
-        self._prefix = pathlib.Path(prefix)
+        self._config = config
+        self._name = str(self._config.path).replace("/", "__")
 
-        with self._prefix.with_suffix(".idx").open("rb") as stream:
+        with self._config.path.with_suffix(".idx").open("rb") as stream:
             Assert.eq(stream.read(9), self._INDEX_HEADER)
             Assert.eq(struct.unpack("<Q", stream.read(8))[0], 1)
 
@@ -45,7 +46,7 @@ class GPTMemmapDataset(GPTIndexedDataset):
             _ = struct.unpack("<Q", stream.read(8))[0]
             offset = stream.tell()
 
-        self._index_bin_buffer_mmap = np.memmap(self._prefix.with_suffix(".idx"), mode="r", order="C")
+        self._index_bin_buffer_mmap = np.memmap(self._config.path.with_suffix(".idx"), mode="r", order="C")
         self._index_bin_buffer = memoryview(self._index_bin_buffer_mmap)
         self._document_sizes = np.frombuffer(
             self._index_bin_buffer, dtype=np.int32, count=self._num_documents, offset=offset
@@ -57,14 +58,14 @@ class GPTMemmapDataset(GPTIndexedDataset):
             offset=offset + self._document_sizes.nbytes,
         )
 
-        self._bin_buffer_mmap = np.memmap(self._prefix.with_suffix(".bin"), mode="r", order="C")
+        self._bin_buffer_mmap = np.memmap(self._config.path.with_suffix(".bin"), mode="r", order="C")
         self._bin_buffer = memoryview(self._bin_buffer_mmap)
 
     def __getstate__(self):
-        return (self._name, self._prefix)
+        return self._config.to_serialized()
 
     def __setstate__(self, state):
-        self._init(*state)
+        self._init(GPTMemmapDatasetConfig.from_dict(state))
 
     def __del__(self):
         self._bin_buffer_mmap._mmap.close()  # noqa
@@ -72,16 +73,16 @@ class GPTMemmapDataset(GPTIndexedDataset):
         self._index_bin_buffer_mmap._mmap.close()  # noqa
         del self._index_bin_buffer_mmap
 
-    def get(self, idx, offset=0, length=None):
+    def get(self, document: int, offset: int = 0, length: int | None = None):
         return np.frombuffer(
             self._bin_buffer,
             dtype=self._dtype,
-            count=self._document_sizes[idx] - offset if length is None else length,
-            offset=self._pointers[idx] + offset * np.dtype(self._dtype).itemsize,
+            count=self._document_sizes[document] - offset if length is None else length,
+            offset=self._pointers[document] + offset * np.dtype(self._dtype).itemsize,
         )
 
     @property
-    def name(self):
+    def name(self) -> str:
         return self._name
 
     @property
@@ -92,7 +93,7 @@ class GPTMemmapDataset(GPTIndexedDataset):
     def num_tokens(self) -> int:
         return div(self._bin_buffer_mmap.size, np.dtype(self._dtype).itemsize)
 
-    def get_document_sizes(self) -> "np.ndarray":
+    def get_document_sizes(self) -> np.ndarray:
         """
         The size of each document in the dataset.
         The resulting array could be very large, so this method should be called cautiously,

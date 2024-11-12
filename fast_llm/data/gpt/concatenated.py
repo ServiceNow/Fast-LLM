@@ -1,5 +1,6 @@
 import numpy as np
 
+from fast_llm.data.gpt.config import GPTConcatenatedDatasetConfig
 from fast_llm.data.gpt.dataset import GPTIndexedDataset
 from fast_llm.utils import padded_cumsum
 
@@ -8,10 +9,10 @@ class GPTConcatenatedDataset(GPTIndexedDataset):
 
     def __init__(
         self,
-        name: str,
+        config: GPTConcatenatedDatasetConfig,
         datasets: list[GPTIndexedDataset],
     ):
-        self._name = name
+        self._config = config
         self._datasets = datasets
         sizes = [dataset.num_documents for dataset in self._datasets]
         self._dataset_splits = padded_cumsum(sizes)
@@ -24,7 +25,7 @@ class GPTConcatenatedDataset(GPTIndexedDataset):
     def num_documents(self):
         return sum(dataset.num_documents for dataset in self._datasets)
 
-    def get_document_sizes(self) -> "np.ndarray":
+    def get_document_sizes(self) -> np.ndarray:
         # TODO: This can be really big.
         return np.concatenate([dataset.get_document_sizes() for dataset in self._datasets])
 
@@ -39,4 +40,4 @@ class GPTConcatenatedDataset(GPTIndexedDataset):
 
     @property
     def name(self):
-        return self._name
+        return self._config.name

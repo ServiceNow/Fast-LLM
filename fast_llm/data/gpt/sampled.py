@@ -29,8 +29,8 @@ class GPTSampledIndexedDataset(SampledDataset):
 
     def __init__(
         self,
-        indexed_dataset: GPTIndexedDataset,
         config: GPTSamplingConfig,
+        indexed_dataset: GPTIndexedDataset,
         data: GPTData,
     ):
         assert isinstance(config, GPTSamplingConfig)
@@ -188,7 +188,7 @@ class GPTSampledIndexedDataset(SampledDataset):
             dtype=np.int64,
         )
         if self._fim is not None:
-            sample = self._fim(sample, np.random.RandomState(seed=(self._seed + idx) % MAX_SEED))
+            sample = self._fim(sample, np.random.RandomState(seed=(self._config.seed + idx) % MAX_SEED))
 
         return sample
 
