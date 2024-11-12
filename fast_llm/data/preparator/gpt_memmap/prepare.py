@@ -1,110 +1,18 @@
 import json
 import multiprocessing
 import shutil
-import typing
 
+import datasets
 import numpy as np
 import torch.distributed
+import tqdm
+import transformers
 
-from fast_llm.config import Config, Field, FieldHint, check_field, config_class
-from fast_llm.data.config import DatasetPreparator, DatasetPreparatorConfig, TokenizerConfig
 from fast_llm.data.gpt.memmap import GPTMemmapDataset
+from fast_llm.data.preparator.config import DatasetPreparator
+from fast_llm.data.preparator.gpt_memmap.config import GPTMemmapDatasetPreparatorConfig
 from fast_llm.data.tokenizer import Tokenizer
 from fast_llm.engine.config_utils.data_type import DataType
-from fast_llm.utils import Assert
-
-
-@config_class
-class GPTHuggingfaceDatasetConfig(Config):
-    name_or_path: str = Field(
-        desc="Name or path of the dataset.",
-        hint=FieldHint.core,
-    )
-    config_name: None | str = Field(
-        default=None,
-        desc="Specific configuration name for the dataset.",
-        hint=FieldHint.optional,
-    )
-    split: str = Field(
-        default="train",
-        desc="Split of the dataset to use.",
-        hint=FieldHint.optional,
-    )
-    field: str = Field(
-        default="text",
-        desc="Field of the dataset to use.",
-        hint=FieldHint.optional,
-    )
-    data_type: DataType | None = Field(
-        default=None,
-        desc="Data type of the dataset field. If not provided, it will be inferred based on the tokenizer vocabulary size.",
-        hint=FieldHint.optional,
-    )
-    trust_remote_code: bool = Field(
-        default=False,
-        desc="Trust remote code when downloading the dataset.",
-        hint=FieldHint.optional,
-    )
-    disable_disk_space_check: bool = Field(
-        default=False,
-        desc="Disable disk space check. Useful for environments where disk space is not accurately reported.",
-        hint=FieldHint.optional,
-    )
-
-
-@config_class()
-class GPTMemmapDatasetPreparatorConfig(DatasetPreparatorConfig):
-    preparator_name: typing.ClassVar[str] = "gpt_memmap"
-
-    tokens_per_shard: int = Field(
-        default=10**9,
-        desc="Approximate number of tokens per shard.",
-        hint=FieldHint.feature,
-        valid=check_field(Assert.geq, 10**5),
-    )
-    loading_workers: int = Field(
-        default=1,
-        desc="Number of workers in load_dataset() call.",
-        hint=FieldHint.optional,
-        valid=check_field(Assert.geq, 1),
-    )
-    tokenize_workers: int = Field(
-        default=1,
-        desc="Number of workers for tokenization.",
-        hint=FieldHint.optional,
-        valid=check_field(Assert.geq, 1),
-    )
-    saving_workers: int = Field(
-        default=1,
-        desc="Number of processes for saving the data.",
-        hint=FieldHint.optional,
-        valid=check_field(Assert.geq, 1),
-    )
-    remove_downloads: bool = Field(
-        default=False,
-        desc="Remove downloaded dataset after processing.",
-        hint=FieldHint.optional,
-    )
-    dataset: GPTHuggingfaceDatasetConfig = Field(
-        default_factory=GPTHuggingfaceDatasetConfig,
-        desc="Configuration for the dataset.",
-        hint=FieldHint.feature,
-    )
-    tokenizer: TokenizerConfig = Field(
-        default_factory=TokenizerConfig,
-        desc="Configuration for the tokenizer.",
-        hint=FieldHint.feature,
-    )
-
-    def _validate(self):
-        assert self.tokenizer.path is not None
-        if self.dataset.data_type is not None:
-            Assert.incl(self.dataset.data_type.numpy, GPTMemmapDataset._DTYPES.values())
-        super()._validate()
-
-    @classmethod
-    def get_dataset_preparator_class(cls):
-        return GPTMemmapDatasetPreparator
 
 
 class GPTMemmapDatasetPreparator(DatasetPreparator):
@@ -126,14 +34,13 @@ class GPTMemmapDatasetPreparator(DatasetPreparator):
         }
 
     def _save_shard(self, args) -> dict:
-        from tqdm import tqdm
 
         shard_idx, shard_dataset = args
         prefix = f"shard_{self._config.distributed.rank}_{shard_idx}"
         shard_output_path = self._config.output_path / prefix
         documents = [
             np.array(item["input_ids"], dtype=self._data_type.numpy)
-            for item in tqdm(shard_dataset, desc=f"Saving shard {shard_idx}", unit="docs")
+            for item in tqdm.tqdm(shard_dataset, desc=f"Saving shard {shard_idx}", unit="docs")
         ]
         GPTMemmapDataset.write_dataset(prefix=shard_output_path, documents=documents)
         dataset_dict = {
@@ -144,9 +51,6 @@ class GPTMemmapDatasetPreparator(DatasetPreparator):
         return dataset_dict
 
     def run(self):
-        import datasets
-        import transformers
-        from tqdm import tqdm
 
         # Set transformers logging verbosity
         transformers.logging.set_verbosity_error()
@@ -189,7 +93,7 @@ class GPTMemmapDatasetPreparator(DatasetPreparator):
         download_path_ok = download_path / "ok"
         if self._config.distributed.rank == 0 and not download_path_ok.exists():
             datasets.load_dataset(
-                path=self._config.dataset.name_or_path,
+                path=self._config.dataset.path,
                 name=self._config.dataset.config_name,
                 split=self._config.dataset.split,
                 num_proc=self._config.loading_workers,
@@ -218,13 +122,13 @@ class GPTMemmapDatasetPreparator(DatasetPreparator):
         )
 
         # Calculate total number of tokens
-        total_tokens = sum(tqdm(tokenized_dataset["num_tokens"], desc="Counting tokens", unit="tokens"))
+        total_tokens = sum(tqdm.tqdm(tokenized_dataset["num_tokens"], desc="Counting tokens", unit="tokens"))
 
         # Split dataset into shards based on number of tokens
         num_shards = int(np.ceil(total_tokens / self._config.tokens_per_shard))
         shards = [
             (i, tokenized_dataset.shard(num_shards=num_shards, index=i))
-            for i in tqdm(range(num_shards), desc="Creating shards")
+            for i in tqdm.tqdm(range(num_shards), desc="Creating shards")
         ]
 
         # Use multiprocessing to save each shard in parallel on all ranks

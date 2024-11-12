@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 
 from fast_llm.data.gpt.memmap import GPTMemmapDataset
+from fast_llm.data.preparator.gpt_memmap.config import MEMMAP_DTYPES
 
 
 def dtype_arrays(dtype: np.dtype, min_size: int = 1, max_size: int = 100) -> hypothesis.strategies.SearchStrategy:
@@ -18,7 +19,7 @@ def dtype_arrays(dtype: np.dtype, min_size: int = 1, max_size: int = 100) -> hyp
     )
 
 
-@pytest.mark.parametrize("dtype", GPTMemmapDataset._DTYPES.values())
+@pytest.mark.parametrize("dtype", MEMMAP_DTYPES.values())
 def test_gpt_memmap_dataset(dtype):
     @hypothesis.given(documents=dtype_arrays(dtype))
     def inner_test(documents):

@@ -1,4 +1,4 @@
-from fast_llm.data.gpt.prepare import GPTMemmapDatasetPreparatorConfig
+from fast_llm.data.preparator.gpt_memmap.config import GPTMemmapDatasetPreparatorConfig
 from fast_llm.utils import Registry
 
 dataset_preparator_registry = Registry(
