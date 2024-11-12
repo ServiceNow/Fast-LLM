@@ -1,31 +1,35 @@
 # syntax=docker/dockerfile:1.7-labs
-FROM nvcr.io/nvidia/pytorch:24.07-py3
+FROM nvcr.io/nvidia/pytorch:24.07-py3 as base
 
-# Install git-lfs for Huggingface hub interaction and sudo for system adjustments
+# Install dependencies
 RUN apt-get update \
-    && apt-get install --no-install-recommends -y git-lfs sudo util-linux \
+    && apt-get install --no-install-recommends -y acl python3.10-venv git-lfs \
     && rm -rf /var/lib/apt/lists/* \
     && git lfs install
 
 # Set the working directory
 WORKDIR /app
 
-# Environment settings for Python and the user
-ENV PYTHONPATH=/app:/app/Megatron-LM
+# Set the default ACL for /app to rwx for all users
+RUN setfacl -d -m u::rwx,g::rwx,o::rwx /app
 
-# Copy the dependency files and install dependencies globally
-COPY setup.py setup.cfg pyproject.toml ./
-COPY ./fast_llm/csrc/ fast_llm/csrc/
-RUN PIP_NO_INPUT=1 pip3 install --no-cache-dir --no-build-isolation -e ".[CORE,OPTIONAL,DEV]"
+# Environment settings for the virtual environment
+ENV VIRTUAL_ENV=/app/venv
+ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 
-# Copy the rest of the code
-COPY ./Megatron-LM Megatron-LM
-COPY ./examples examples
-COPY ./tests tests
-COPY ./tools tools
+# Create the virtual environment with system site packages
+RUN python3 -m venv $VIRTUAL_ENV --system-site-packages
 
-# Copy the main source code
-COPY --exclude=./fast_llm/csrc/ ./fast_llm/ fast_llm/
+# Copy dependency files with universal write permissions for all users
+COPY --chmod=777 setup.py setup.cfg pyproject.toml ./
+COPY --chmod=777 ./fast_llm/csrc/ fast_llm/csrc/
 
-# Ensure the source code files are writable
-RUN chmod -R a+w /app
+# Install dependencies within the virtual environment
+RUN pip install --no-cache-dir --no-build-isolation -e ".[CORE,OPTIONAL,DEV]"
+
+# Copy remaining source code with universal write permissions
+COPY --chmod=777 ./Megatron-LM Megatron-LM
+COPY --chmod=777 ./examples examples
+COPY --chmod=777 ./tests tests
+COPY --chmod=777 ./tools tools
+COPY --chmod=777 --exclude=./fast_llm/csrc/ ./fast_llm/ fast_llm/
