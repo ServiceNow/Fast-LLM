@@ -42,12 +42,8 @@ COPY ./tests tests
 COPY ./tools tools
 COPY --exclude=./fast_llm/csrc/ ./fast_llm/ fast_llm/
 
-RUN find Megatron-LM -type f -exec chmod 666 {} \; && \
-    find examples -type f -exec chmod 666 {} \; && \
-    find tests -type f -exec chmod 666 {} \; && \
-    find tools -type f -exec chmod 666 {} \; && \
-    find fast_llm -type f -exec chmod 666 {} \; && \
-    find . -type d -exec chmod 777 {} \;
+# Set permissions for all users to write to /app
+RUN chmod -R a+w /app
 
 # Create a tar archive of /app with permissions preserved
 RUN tar -cf /app.tar -C /app .
