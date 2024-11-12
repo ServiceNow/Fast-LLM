@@ -1,5 +1,5 @@
 import pathlib
-from tempfile import TemporaryDirectory
+import tempfile
 
 import hypothesis
 import hypothesis.extra.numpy
@@ -23,7 +23,7 @@ def dtype_arrays(dtype: np.dtype, min_size: int = 1, max_size: int = 100) -> hyp
 def test_gpt_memmap_dataset(dtype):
     @hypothesis.given(documents=dtype_arrays(dtype))
     def inner_test(documents):
-        with TemporaryDirectory() as temp_dir:
+        with tempfile.TemporaryDirectory() as temp_dir:
             prefix = pathlib.Path(temp_dir)
             GPTMemmapDataset.write_dataset(prefix=prefix, documents=documents)
             dataset = GPTMemmapDataset(name="foo", prefix=prefix)
