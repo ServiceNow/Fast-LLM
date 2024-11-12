@@ -10,10 +10,8 @@ RUN apt-get update \
 # Set the working directory
 WORKDIR /app
 
-# Set the setgid bit and default ACL for /app
-RUN chmod g+s /app && \
-    setfacl -d -m u::rwx,g::rwx,o::rwx /app && \
-    setfacl -d -m u::rw-,g::rw-,o::rw- /app
+# Set the default ACL for /app to rwx for all users
+RUN setfacl -d -m u::rwx,g::rwx,o::rwx /app
 
 # Environment settings for the virtual environment
 ENV VIRTUAL_ENV=/app/venv
@@ -23,34 +21,15 @@ ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 RUN python3 -m venv $VIRTUAL_ENV --system-site-packages
 
 # Copy dependency files with universal write permissions for all users
-COPY --chmod=666 setup.py setup.cfg pyproject.toml ./
-COPY --chmod=666 ./fast_llm/csrc/ fast_llm/csrc/
+COPY --chmod=777 setup.py setup.cfg pyproject.toml ./
+COPY --chmod=777 ./fast_llm/csrc/ fast_llm/csrc/
 
 # Install dependencies within the virtual environment
 RUN pip install --no-cache-dir --no-build-isolation -e ".[CORE,OPTIONAL,DEV]"
 
-# Use intermediate build stage to copy the remaining source code
-FROM alpine as copy_source
-
-# Set the working directory
-WORKDIR /app
-
 # Copy remaining source code with universal write permissions
-COPY ./Megatron-LM Megatron-LM
-COPY ./examples examples
-COPY ./tests tests
-COPY ./tools tools
-COPY --exclude=./fast_llm/csrc/ ./fast_llm/ fast_llm/
-
-# Set permissions for all users to write to /app
-RUN chmod -R a+w /app
-
-# Create a tar archive of /app with permissions preserved
-RUN tar -cf /app.tar -C /app .
-
-# Continue with the base stage
-FROM base
-
-# Copy the remaining source code from the intermediate build stage
-COPY --from=copy_source /app.tar /
-RUN tar -xf /app.tar -C /app && rm /app.tar
+COPY --chmod=777 ./Megatron-LM Megatron-LM
+COPY --chmod=777 ./examples examples
+COPY --chmod=777 ./tests tests
+COPY --chmod=777 ./tools tools
+COPY --chmod=777 --exclude=./fast_llm/csrc/ ./fast_llm/ fast_llm/
