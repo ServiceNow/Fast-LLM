@@ -19,75 +19,6 @@ from fast_llm.engine.config_utils.runnable import RunnableConfig
 from fast_llm.utils import Assert, Registry
 
 
-@config_class
-class DistributedConfig(Config):
-    default_world_size: typing.ClassVar[int] = int(os.environ.get("WORLD_SIZE", 1))
-    default_rank: typing.ClassVar[int] = int(os.environ.get("RANK", 0))
-    world_size: int = Field(
-        default=None,
-        desc="Size of the world group. Typically provided by torchrun or equivalent through the `WORLD_SIZE` environment variable.",
-        hint=FieldHint.expert,
-        valid=check_field(Assert.gt, 0),
-    )
-    rank: int = Field(
-        default=None,
-        desc="Rank of the local process. Typically provided by torchrun or equivalent through the `RANK` environment variable.",
-        hint=FieldHint.expert,
-        valid=check_field(Assert.geq, 0),
-    )
-    backend: str = Field(
-        default="gloo",
-        desc="Distributed backend to use.",
-        hint=FieldHint.optional,
-        valid=check_field(Assert.incl, torch.distributed.Backend.backend_list),
-    )
-
-    def _validate(self):
-        if self.world_size is None:
-            self.world_size = self.default_world_size
-        if self.rank is None:
-            self.rank = self.default_rank
-        super()._validate()
-        Assert.in_range(self.rank, 0, self.world_size)
-
-
-@config_class()
-class DatasetPreparatorConfig(RunnableConfig):
-    _abstract = True
-    model_name: typing.ClassVar[str]
-
-    output_path: pathlib.Path = Field(
-        desc="Output directory for the processed dataset.",
-        hint=FieldHint.core,
-    )
-    distributed: DistributedConfig = Field(
-        default_factory=DistributedConfig,
-        desc="Configuration for distributed processing.",
-        hint=FieldHint.feature,
-    )
-
-    @classmethod
-    def get_dataset_preparator_class(cls) -> typing.Type["DatasetPreparator"]:
-        raise NotImplementedError
-
-    def _get_runnable(self, parsed: argparse.Namespace) -> typing.Callable[[], None]:
-        dataset_preparator = self.get_dataset_preparator_class()(config=self)
-        return dataset_preparator.run
-
-
-class DatasetPreparator(abc.ABC):
-    _abstract = True
-    _config: DatasetPreparatorConfig
-    config_class: typing.ClassVar[type[DatasetPreparatorConfig]] = DatasetPreparatorConfig
-
-    def __init__(self, config: DatasetPreparatorConfig) -> None:
-        Assert.custom(isinstance, config, self.config_class)
-        config.validate()
-        self._config = config
-
-    def run(self) -> None:
-        raise NotImplementedError
-
 
 @config_class
 class GPTDatasetConfig(Config):
@@ -130,13 +61,13 @@ class GPTDatasetConfig(Config):
 @config_class()
 class GPTDatasetPreparatorConfig(DatasetPreparatorConfig):
     _abstract = False
-    model_name: typing.ClassVar[str] = "gpt"
+    preparator_name: typing.ClassVar[str] = "gpt_memmap"
 
     tokens_per_shard: int = Field(
-        default=1_000_000_000,
+        default=10**9,
         desc="Approximate number of tokens per shard.",
         hint=FieldHint.feature,
-        valid=check_field(Assert.geq, 100_000),
+        valid=check_field(Assert.geq, 10**5),
     )
     loading_workers: int = Field(
         default=1,

@@ -175,12 +175,12 @@ class Assert:
         ), f"Assertion failed: not fn({', '.join(itertools.chain((str(x) for x in args),(f'{str(k)}={str(v)}' for k,v in kwargs.items())))})"
 
 
-_KT = typing.TypeVar("_KT")
-_VT = typing.TypeVar("_VT")
+_KeyType = typing.TypeVar("_KeyType")
+_ValueType = typing.TypeVar("_ValueType")
 
 
-class Registry(typing.Generic[_KT, _VT]):
-    def __init__(self, name: str, data: dict[_KT, _VT]):
+class Registry(typing.Generic[_KeyType, _ValueType]):
+    def __init__(self, name: str, data: dict[_KeyType, _ValueType]):
         self._name = name
         self._data = data.copy()
 
