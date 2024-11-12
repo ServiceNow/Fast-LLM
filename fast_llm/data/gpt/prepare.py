@@ -15,7 +15,7 @@ from fast_llm.utils import Assert
 
 
 @config_class
-class GPTDatasetConfig(Config):
+class GPTHuggingfaceDatasetConfig(Config):
     name_or_path: str = Field(
         desc="Name or path of the dataset.",
         hint=FieldHint.core,
@@ -53,8 +53,7 @@ class GPTDatasetConfig(Config):
 
 
 @config_class()
-class GPTDatasetPreparatorConfig(DatasetPreparatorConfig):
-    _abstract = False
+class GPTMemmapDatasetPreparatorConfig(DatasetPreparatorConfig):
     preparator_name: typing.ClassVar[str] = "gpt_memmap"
 
     tokens_per_shard: int = Field(
@@ -86,8 +85,8 @@ class GPTDatasetPreparatorConfig(DatasetPreparatorConfig):
         desc="Remove downloaded dataset after processing.",
         hint=FieldHint.optional,
     )
-    dataset: GPTDatasetConfig = Field(
-        default_factory=GPTDatasetConfig,
+    dataset: GPTHuggingfaceDatasetConfig = Field(
+        default_factory=GPTHuggingfaceDatasetConfig,
         desc="Configuration for the dataset.",
         hint=FieldHint.feature,
     )
@@ -95,11 +94,6 @@ class GPTDatasetPreparatorConfig(DatasetPreparatorConfig):
         default_factory=TokenizerConfig,
         desc="Configuration for the tokenizer.",
         hint=FieldHint.feature,
-    )
-    _tokenizer: Tokenizer = Field(
-        init=False,
-        desc="The tokenizer instance.",
-        hint=FieldHint.derived,
     )
 
     def _validate(self):
@@ -110,17 +104,19 @@ class GPTDatasetPreparatorConfig(DatasetPreparatorConfig):
 
     @classmethod
     def get_dataset_preparator_class(cls):
-        return GPTDatasetPreparator
+        return GPTMemmapDatasetPreparator
 
 
-class GPTDatasetPreparator(DatasetPreparator):
-    _abstract = False
-    _config: GPTDatasetPreparatorConfig
-    config_class = GPTDatasetPreparatorConfig
+class GPTMemmapDatasetPreparator(DatasetPreparator):
+    _config: GPTMemmapDatasetPreparatorConfig
+    config_class = GPTMemmapDatasetPreparatorConfig
+
+    _tokenizer: Tokenizer
+    _data_type: DataType
 
     def _tokenize_batch(self, batch):
         input_ids = [
-            np.array(self._config._tokenizer.tokenize(text), dtype=self._config.dataset.data_type.numpy)
+            np.array(self._tokenizer.tokenize(text), dtype=self._data_type.numpy)
             for text in batch[self._config.dataset.field]
         ]
         num_tokens = [len(x) for x in input_ids]
@@ -136,7 +132,7 @@ class GPTDatasetPreparator(DatasetPreparator):
         prefix = f"shard_{self._config.distributed.rank}_{shard_idx}"
         shard_output_path = self._config.output_path / prefix
         documents = [
-            np.array(item["input_ids"], dtype=self._config.dataset.data_type.numpy)
+            np.array(item["input_ids"], dtype=self._data_type.numpy)
             for item in tqdm(shard_dataset, desc=f"Saving shard {shard_idx}", unit="docs")
         ]
         GPTMemmapDataset.write_dataset(prefix=shard_output_path, documents=documents)
@@ -160,20 +156,22 @@ class GPTDatasetPreparator(DatasetPreparator):
             datasets.builder.has_sufficient_disk_space = lambda needed_bytes, directory=".": True
 
         # Load tokenizer
-        self._tokenizer = Tokenizer(config=self.tokenizer)
+        self._tokenizer = Tokenizer(config=self._config.tokenizer)
 
         # Set data type if not provided
-        if self.dataset.data_type is None:
+        if self._config.dataset.data_type is None:
             # Decide the datatype based on the tokenizer vocabulary size
             vocab_size = self._tokenizer.vocab_size
             if vocab_size <= np.iinfo(np.int16).max:
-                self.dataset.data_type = DataType.int16
+                self._data_type = DataType.int16
             # elif vocab_size <= np.iinfo(np.uint16).max:
-            #     self.dataset.data_type = DataType.uint16  # Not supported by Fast-LLM's DataType
+            #     self._data_type = DataType.uint16  # Not supported by Fast-LLM's DataType
             elif vocab_size <= np.iinfo(np.int32).max:
-                self.dataset.data_type = DataType.int32
+                self._data_type = DataType.int32
             else:
                 raise ValueError(f"Tokenizer vocabulary size {vocab_size} is too large. This is likely an error.")
+        else:
+            self._data_type = self._config.dataset.data_type
 
         # Initialize distributed processing
         if self._config.distributed.world_size > 1:

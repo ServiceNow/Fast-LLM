@@ -256,5 +256,6 @@ class DatasetPreparator(abc.ABC):
         config.validate()
         self._config = config
 
+    @abc.abstractmethod
     def run(self) -> None:
         raise NotImplementedError
