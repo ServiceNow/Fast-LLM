@@ -1,5 +1,5 @@
+from fast_llm.data.gpt.config import GPTSplitDatasetConfig
 from fast_llm.data.gpt.dataset import GPTIndexedDataset
-from fast_llm.engine.distributed.config import PhaseType
 from fast_llm.utils import Assert, normalize_probabilities, padded_cumsum
 
 
@@ -55,14 +55,15 @@ class GPTDatasetSlice(GPTIndexedDataset):
         return self._name
 
     @classmethod
-    def from_splits(cls, dataset: GPTIndexedDataset, phase_split: dict[PhaseType, float]):
+    def from_splits(cls, config: GPTSplitDatasetConfig):
         """
         Create a set of GPT datasets from a MMapIndexedDataset,
         each containing approximately the requested proportion of the total tokens.
         """
-        probabilities = normalize_probabilities(list(phase_split.values()))
+        dataset = config.dataset.build()
+        probabilities = normalize_probabilities(list(config.ratios.values()))
         splits = [round(x) for x in padded_cumsum(probabilities) * dataset.num_documents]
         return {
             phase: GPTDatasetSlice(f"{dataset.name}_{phase.value}", dataset, split_begin, split_end)
-            for phase, split_begin, split_end in zip(phase_split, splits[:-1], splits[1:])
+            for phase, split_begin, split_end in zip(config.ratios, splits[:-1], splits[1:])
         }

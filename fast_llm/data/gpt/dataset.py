@@ -1,12 +1,12 @@
 import abc
 import typing
 
-import numpy as np
-
 from fast_llm.config import Field, config_class
 from fast_llm.data.config import SamplableDataset, SamplingConfig
 
 if typing.TYPE_CHECKING:
+    import numpy as np
+
     from fast_llm.data.gpt.data import GPTData
 
 
@@ -59,4 +59,4 @@ class GPTIndexedDataset(SamplableDataset):
     def sample(self, config: GPTSamplingConfig, data: "GPTData"):
         from fast_llm.data.gpt.sampled import GPTSampledIndexedDataset
 
-        return GPTSampledIndexedDataset(self, config, data)
+        return GPTSampledIndexedDataset(config, self, data)
