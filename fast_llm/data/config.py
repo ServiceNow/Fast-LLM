@@ -107,7 +107,7 @@ TokenizerFromFile = "TokenizerFromFile"
 class TokenizerConfig(Config):
     """
     Configuration for the tokenizer.
-    Currently, the tokenizer is only needed for FIM.
+    The tokenizer is needed for FIM and dataset preparation.
     """
 
     format: str = Field(

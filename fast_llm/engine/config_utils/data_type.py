@@ -25,6 +25,7 @@ class DataType(str, enum.Enum):
     int16 = "int16"
     int8 = "int8"
     uint8 = "uint8"
+    uint16 = "uint16"
 
     @classmethod
     def _missing_(cls, dtype: str) -> "DataType":
@@ -128,8 +129,9 @@ def _set_numpy_dtype_map():
         DataType.int16: np.int16,
         DataType.int8: np.int8,
         DataType.uint8: np.uint8,
+        DataType.uint16: np.uint16,
     }
-    _TORCH_DTYPE_MAP_INV = {y: x for x, y in _NUMPY_DTYPE_MAP.items()}
+    _NUMPY_DTYPE_MAP_INV = {y: x for x, y in _NUMPY_DTYPE_MAP.items()}
 
 
 _TRITON_DTYPE_MAP: dict[DataType, "tl.dtype"] = {}

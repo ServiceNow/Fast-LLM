@@ -1,4 +1,7 @@
+# Ignore everything by default
 *
+
+# Allow specific files and directories
 !setup.py
 !setup.cfg
 !Megatron-LM
@@ -7,3 +10,7 @@
 !tools
 !tests
 !pyproject.toml
+
+# Exclude Python cache directories and shared object files within included directories
+**/__pycache__/
+**/*.so

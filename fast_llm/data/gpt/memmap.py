@@ -4,6 +4,8 @@ import struct
 import numpy as np
 
 from fast_llm.data.gpt.dataset import GPTIndexedDataset
+from fast_llm.data.preparator.gpt_memmap.config import MEMMAP_DTYPES, MEMMAP_DTYPES_INV, MEMMAP_INDEX_HEADER
+from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.utils import Assert, div, padded_cumsum
 
 
@@ -16,18 +18,6 @@ class GPTMemmapDataset(GPTIndexedDataset):
     See https://github.com/NVIDIA/Megatron-LM?tab=readme-ov-file#data-preprocessing for more details.
     """
 
-    _DTYPES = {
-        1: np.uint8,
-        2: np.int8,
-        3: np.int16,
-        4: np.int32,
-        5: np.int64,
-        6: np.float32,
-        7: np.float64,
-        8: np.uint16,
-    }
-    _INDEX_HEADER = b"MMIDIDX\x00\x00"
-
     def __init__(self, name: str, prefix: pathlib.Path | str):
         self._init(name, prefix)
 
@@ -37,10 +27,10 @@ class GPTMemmapDataset(GPTIndexedDataset):
         self._prefix = pathlib.Path(prefix)
 
         with self._prefix.with_suffix(".idx").open("rb") as stream:
-            Assert.eq(stream.read(9), self._INDEX_HEADER)
+            Assert.eq(stream.read(9), MEMMAP_INDEX_HEADER)
             Assert.eq(struct.unpack("<Q", stream.read(8))[0], 1)
 
-            self._dtype = self._DTYPES[struct.unpack("<B", stream.read(1))[0]]
+            self._dtype = MEMMAP_DTYPES[struct.unpack("<B", stream.read(1))[0]].numpy
             self._num_documents = struct.unpack("<Q", stream.read(8))[0]
             _ = struct.unpack("<Q", stream.read(8))[0]
             offset = stream.tell()
@@ -106,13 +96,13 @@ class GPTMemmapDataset(GPTIndexedDataset):
         dtype = documents[0].dtype
         num_documents = len(documents)
         lengths = np.array([len(document) for document in documents], dtype=np.int32)
-        pointers = padded_cumsum(lengths[:-1].astype(np.int64) * 2)
+        pointers = padded_cumsum(lengths[:-1].astype(np.int64)) * np.dtype(dtype).itemsize
         prefix.parent.mkdir(parents=True, exist_ok=True)
         with prefix.with_suffix(".idx").open("wb") as stream:
-            stream.write(cls._INDEX_HEADER)
+            stream.write(MEMMAP_INDEX_HEADER)
             stream.write(struct.pack("<Q", 1))
             # Data type
-            stream.write(struct.pack("<B", {y: x for x, y in cls._DTYPES.items()}[dtype.type]))
+            stream.write(struct.pack("<B", MEMMAP_DTYPES_INV[DataType.from_numpy(dtype.type)]))
             # "Number of sequences", same as documents in our case.
             stream.write(struct.pack("<Q", num_documents))
             # "Number of documents", needs a +1 for some reason.

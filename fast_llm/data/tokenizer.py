@@ -6,7 +6,7 @@ from fast_llm.engine.config_utils.run import log_main_rank
 
 class Tokenizer:
     """
-    A Huggingface (transformers) tokenizer.
+    A wrapper around Huggingface (transformers) tokenizer.
     """
 
     def __init__(self, config: TokenizerConfig):

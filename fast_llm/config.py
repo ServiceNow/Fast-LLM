@@ -301,7 +301,10 @@ class Config:
                 # Allow setting the exact same object to facilitate setup of cross-dependencies.
                 # Ex. allow re-setting cross-dependencies of already validated sub-configs.
                 return
-            raise RuntimeError()
+            raise RuntimeError(
+                f"Cannot set attribute `{key}`"
+                f" in configuration class `{get_type_name(type(self))}` after validation."
+            )
         super().__setattr__(key, value)
 
     def __delattr__(self, key):
@@ -309,7 +312,10 @@ class Config:
         Make the class read-only after validation.
         """
         if getattr(self, "_validated", False):
-            raise RuntimeError()
+            raise RuntimeError(
+                f"Cannot delete attribute `{key}`"
+                f" in configuration class `{get_type_name(type(self))}` after validation."
+            )
         super().__delattr__(key)
 
     def validate(self, *, _is_validating=False):
