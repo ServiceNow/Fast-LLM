@@ -26,6 +26,7 @@ RUN mkdir -m 777 /app/Megatron-LM /app/examples /app/fast_llm /app/tests /app/to
 
 # Copy dependency files with universal write permissions for all users.
 COPY --chmod=777 setup.py setup.cfg pyproject.toml ./
+COPY --chmod=777 ./fast_llm/__init__.py fast_llm/
 COPY --chmod=777 ./fast_llm/csrc/ fast_llm/csrc/
 
 # Install dependencies within the virtual environment.
