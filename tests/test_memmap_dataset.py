@@ -10,7 +10,7 @@ from fast_llm.data.preparator.gpt_memmap.config import MEMMAP_DTYPES
 
 @pytest.mark.parametrize("dtype", MEMMAP_DTYPES.values())
 def test_gpt_memmap_dataset(dtype):
-    documents = [np.random.randint(1000, size=np.random.randint(1, 100)) for _ in range(100)]
+    documents = [np.random.randint(1000, size=np.random.randint(1, 100)).astype(dtype) for _ in range(100)]
     with tempfile.TemporaryDirectory() as temp_dir:
         prefix = pathlib.Path(temp_dir)
         GPTMemmapDataset.write_dataset(prefix=prefix, documents=documents)
