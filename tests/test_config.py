@@ -6,7 +6,7 @@ import yaml
 from fast_llm.models.auto import trainer_registry
 
 
-def test_validate_without_import():
+def run_without_import(cmd: str):
     # Make sure validation imports only the bare minimum.
     # Run the test in a separate process since lots of things are already imported in this one.
     repo_path = pathlib.Path(__file__).parents[1].resolve()
@@ -22,7 +22,7 @@ def test_validate_without_import():
                 # We still want to enable imports from within Fast-llm
                 f"sys.path.append('{repo_path}')",
                 "from fast_llm.tools.cli import fast_llm as main",
-                "main(['train', 'gpt', '-v'])",
+                cmd,
             ]
         ),
     ]
@@ -30,6 +30,16 @@ def test_validate_without_import():
     completed_proc = subprocess.run(command)
     if completed_proc.returncode:
         raise RuntimeError(f"Process failed with return code {completed_proc.returncode}")
+
+
+def test_validate_train_gpt_without_import():
+    run_without_import("main(['train', 'gpt', '-v'])")
+
+
+def test_validate_prepare_gpt_memmap_without_import():
+    run_without_import(
+        "main(['prepare', 'gpt_memmap', '-v', 'dataset.path=test', 'output_path=test', 'tokenizer.path=test'])"
+    )
 
 
 def test_validate_example_config():
