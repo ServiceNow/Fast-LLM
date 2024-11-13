@@ -148,6 +148,55 @@ First, choose your environment. You can use Docker, your local environment, Slur
     kubectl apply -f pvc-fast-llm-results.yaml
     ```
 
+    We also need to create a temporary pod that mounts the inputs PVC and allows us to copy files there. Here's a basic YAML configuration for such a pod:
+
+    ```yaml
+    # Temporary pod to manage input data and results
+    apiVersion: v1
+    kind: Pod
+    metadata:
+      name: fast-llm-data-management
+    spec:
+      containers:
+        - name: fast-llm-data-management-container
+          image: ubuntu
+          command: ["sleep", "infinity"]
+          volumeMounts:
+            - mountPath: /mnt/inputs
+              name: inputs
+            - mountPath: /mnt/results
+              name: results
+      volumes:
+        - name: inputs
+          persistentVolumeClaim:
+            claimName: pvc-fast-llm-inputs
+        - name: results
+          persistentVolumeClaim:
+            claimName: pvc-fast-llm-results
+    ```
+
+    Save this configuration to a file named `pod-fast-llm-data-management.yaml`. Next, apply this configuration to your Kubernetes cluster:
+
+    ```bash
+    kubectl apply -f pod-fast-llm-data-management.yaml
+    ```
+
+    This pod will allow you to copy files to and from the inputs and results PVCs. You can access it by running:
+
+    ```bash
+    kubectl exec -it fast-llm-data-management -- /bin/bash
+    ```
+
+    !!! note "Cleaning up unused resources"
+    
+        At the very end of this guide, you should clean up the data management pod to avoid unnecessary resource consumption by running
+
+        ```bash
+        kubectl delete pod fast-llm-data-management
+        ```
+
+        Don't run this just yet, though. You'll need this pod throughout the guide.
+
 ## Step 2: Choose Your Model 🤖
 
 Fast-LLM supports many GPT variants, including (but not limited to) Llama, Mistral, and Mixtral. For this tutorial, let's train a Llama model with data parallelism. You can choose from two models:
@@ -179,45 +228,10 @@ Fast-LLM supports many GPT variants, including (but not limited to) Llama, Mistr
 
     === "Kubernetes"
 
-        We need to create a temporary pod that mounts the inputs PVC and allows us to download the model. Here's a basic YAML configuration for such a pod:
-
-        ```yaml
-        apiVersion: v1
-        kind: Pod
-        metadata:
-          name: clone-model
-        spec:
-          containers:
-            - name: clone-model-container
-              image: ubuntu
-              command: ["sleep", "infinity"]
-              volumeMounts:
-                - mountPath: /mnt/inputs
-                  name: inputs
-          volumes:
-            - name: inputs
-              persistentVolumeClaim:
-                claimName: pvc-fast-llm-inputs
-        ```
-
-        Save this configuration to a file named `clone-model-pod.yaml`. Next, apply this configuration to your Kubernetes cluster:
-
         ```bash
-        kubectl apply -f clone-model-pod.yaml
-        ```
-
-        Now, enter the pod, log in to your Hugging Face account, and clone the model:
-
-        ```bash
-        kubectl exec -it clone-model -- /bin/bash
+        kubectl exec -it fast-llm-data-management -- /bin/bash
         git lfs install
         git clone https://huggingface.co/HuggingFaceTB/SmolLM2-135M /mnt/inputs/SmolLM2-135M
-        ```
-
-        Finally, clean up the temporary pod, it's no longer needed:
-
-        ```bash
-        kubectl delete pod clone-model
         ```
 
 === "Llama-3.2-1B"
@@ -226,7 +240,7 @@ Fast-LLM supports many GPT variants, including (but not limited to) Llama, Mistr
     
     !!! note "Access Required"
     
-        Meta gates access to the Llama model. You need to request access to the model from Meta before you can download it at https://huggingface.co/meta-llama/Llama-3.2-1B.
+        Meta gates access to their Llama models. You need to request access to the model from Meta before you can download it at https://huggingface.co/meta-llama/Llama-3.2-1B.
 
     === "Docker"
 
@@ -278,47 +292,19 @@ Fast-LLM supports many GPT variants, including (but not limited to) Llama, Mistr
     
     === "Kubernetes"
     
-        We need to create a temporary pod that mounts the inputs PVC and allows us to download the model. Here's a basic YAML configuration for such a pod:
-
-        ```yaml
-        apiVersion: v1
-        kind: Pod
-        metadata:
-          name: clone-model
-        spec:
-          containers:
-            - name: clone-model-container
-              image: ubuntu
-              command: ["sleep", "infinity"]
-              volumeMounts:
-                - mountPath: /mnt/inputs
-                  name: inputs
-          volumes:
-            - name: inputs
-              persistentVolumeClaim:
-                claimName: pvc-fast-llm-inputs
-        ```
-
-        Save this configuration to a file named `clone-model-pod.yaml`. Next, apply this configuration to your Kubernetes cluster:
+        First, sign in to your Hugging Face account:
 
         ```bash
-        kubectl apply -f clone-model-pod.yaml
-        ```
-
-        Now, enter the pod, log in to your Hugging Face account, and clone the model:
-
-        ```bash
-        kubectl exec -it clone-model -- /bin/bash
+        kubectl exec -it fast-llm-data-management -- /bin/bash
         pip install huggingface_hub
         huggingface-cli login
-        git lfs install
-        git clone https://huggingface.co/meta-llama/Llama-3.2-1B /mnt/inputs/Llama-3.2-1B
         ```
-
-        Finally, clean up the temporary pod, it's no longer needed:
+        
+        Then, clone the model:
 
         ```bash
-        kubectl delete pod clone-model
+        git lfs install
+        git clone https://huggingface.co/meta-llama/Llama-3.2-1B /mnt/inputs/Llama-3.2-1B
         ```
 
 !!! tip "Model Size Matters"
@@ -329,237 +315,123 @@ Fast-LLM supports many GPT variants, including (but not limited to) Llama, Mistr
 
 For this tutorial, we'll use 9B tokens of text from the [OpenWebText](https://skylion007.github.io/OpenWebTextCorpus/) dataset. This dataset is a free approximation of the WebText data OpenAI used for GPT-2, and it's perfect for our test run!
 
+Create a configuration file for the dataset preparation. Copy the following content:
+
 === "SmolLM2-135M"
 
-    === "Docker"
+    ```yaml
+    output_path: /mnt/inputs/openwebtext-SmolLM2
 
-        We've got a script that'll download and preprocess the dataset for you. Run it like this:
+    loading_workers: 4
+    tokenize_workers: 4
+    saving_workers: 4
 
-        ```bash
-        docker run -it --rm ghcr.io/servicenow/fast-llm:latest \
-            -v ~/inputs:/mnt/inputs \
-            python tools/prepare_dataset.py \
-            tokenizer_path_or_name="HuggingFaceTB/SmolLM2-135M" \
-            dataset_name_or_path="openwebtext" \
-            dataset_split="train" \
-            output_dir="/mnt/inputs" \
-            num_processes_load=4 \
-            num_processes_map=4 \
-            num_processes_save=4 \
-            num_tokens_per_shard=100000000
-        ```
-    
-    === "Local Environment"
+    dataset:
+      path: openwebtext
 
-        Fast-LLM ships with a [script](https://github.com/ServiceNow/Fast-LLM/blob/main/tools/prepare_dataset.py) that downloads and preprocesses the dataset for you. Download and run it like this:
+    tokenizer:
+      path: /mnt/inputs/SmolLM2-135M/tokenizer.json
 
-        ```bash
-        curl -O https://raw.githubusercontent.com/ServiceNow/Fast-LLM/main/tools/prepare_dataset.py
-        python prepare_dataset.py \
-            tokenizer_path_or_name="HuggingFaceTB/SmolLM2-135M" \
-            dataset_name_or_path="openwebtext" \
-            dataset_split="train" \
-            output_dir="/mnt/inputs" \
-            num_processes_load=4 \
-            num_processes_map=4 \
-            num_processes_save=4 \
-            num_tokens_per_shard=100000000
-        ```
-    
-    === "Slurm"
-
-        Fast-LLM has got you covered with a script that'll download and preprocess the dataset for you. Run it like this:
-
-        ```bash
-        sbatch <<EOF
-        #!/bin/bash
-        # SBATCH --nodes=1
-        # SBATCH --ntasks-per-node=1
-        # SBATCH --exclusive
-        # SBATCH --output=/mnt/outputs/job_output.log
-        # SBATCH --error=/mnt/outputs/job_error.log
-
-        srun \
-            --container-image="ghcr.io/servicenow/fast-llm:latest" \
-            --container-mounts="${HOME}/inputs:/mnt/inputs,${HOME}/results:/mnt/results" \
-            --ntasks-per-node=$SLURM_NTASKS_PER_NODE \
-            bash -c "
-                python tools/prepare_dataset.py \
-                    tokenizer_path_or_name='HuggingFaceTB/SmolLM2-135M' \
-                    dataset_name_or_path='openwebtext' \
-                    dataset_split='train' \
-                    output_dir='/mnt/inputs' \
-                    num_processes_load=4 \
-                    num_processes_map=4 \
-                    num_processes_save=4 \
-                    num_tokens_per_shard=100000000"
-        EOF
-        ```
-
-        You can follow the job's progress by running `squeue -u $USER` and checking the logs in `~/results/job_output.log` and `~/results/job_error.log`.
-    
-    === "Kubernetes"
-
-        Fast-LLM comes with a script that'll download and preprocess the dataset for you. We will run this script in a Kubernetes job. Here's a basic configuration for the job:
-
-        ```yaml
-        apiVersion: batch/v1
-        kind: Job
-        metadata:
-          name: prepare-dataset
-        spec:
-          template:
-            spec:
-              containers:
-                - name: prepare-dataset
-                  image: ghcr.io/servicenow/fast-llm:latest
-                  command: ["python", "tools/prepare_dataset.py"]
-                  args:
-                    - tokenizer_path_or_name=HuggingFaceTB/SmolLM2-135M
-                    - dataset_name_or_path=openwebtext
-                    - dataset_split=train
-                    - output_dir=/mnt/inputs
-                    - num_processes_load=4
-                    - num_processes_map=4
-                    - num_processes_save=4
-                    - num_tokens_per_shard=100000000
-                  resources:
-                    requests:
-                      cpu: 4
-                  volumeMounts:
-                    - name: inputs
-                      mountPath: /mnt/inputs
-              volumes:
-                - name: inputs
-                  persistentVolumeClaim:
-                    claimName: pvc-fast-llm-inputs
-        ```
-
-        Save this configuration to a file named `prepare-dataset-job.yaml` and apply it to your Kubernetes cluster:
-
-        ```bash
-        kubectl apply -f prepare-dataset-job.yaml
-        ```
-
-        You can follow the job's progress by running `kubectl get pods` and checking the logs with `kubectl logs prepare-dataset`.
+    remove_downloads: false
+    ```
 
 === "Llama-3.2-1B"
 
-    === "Docker"
+    ```yaml
+    output_path: /mnt/inputs/openwebtext-Llama
 
-        We've got a script that'll download and preprocess the dataset for you. Run it like this:
+    loading_workers: 4
+    tokenize_workers: 4
+    saving_workers: 4
 
-        ```bash
-        docker run -it --rm ghcr.io/servicenow/fast-llm:latest \
-            -v ~/inputs:/mnt/inputs \
-            python tools/prepare_dataset.py \
-            tokenizer_path_or_name="meta-llama/Llama-3.2-1B" \
-            dataset_name_or_path="openwebtext" \
-            dataset_split="train" \
-            output_dir="inputs" \
-            num_processes_load=4 \
-            num_processes_map=4 \
-            num_processes_save=4 \
-            num_tokens_per_shard=100000000
-        ```
+    dataset:
+      path: openwebtext
     
-    === "Local Environment"
+    tokenizer:
+      path: /mnt/inputs/Llama-3.2-1B/tokenizer.json
+    
+    remove_downloads: false
+    ```
 
-        Fast-LLM ships with a [script](https://github.com/ServiceNow/Fast-LLM/blob/main/tools/prepare_dataset.py) that downloads and preprocesses the dataset for you. Download and run it like this:
+and save it as `prepare-config.yaml` in your inputs folder.
 
-        ```bash
-        curl -O https://raw.githubusercontent.com/ServiceNow/Fast-LLM/main/tools/prepare_dataset.py
-        python prepare_dataset.py \
-            tokenizer_path_or_name="meta-llama/Llama-3.2-1B" \
-            dataset_name_or_path="openwebtext" \
-            dataset_split="train" \
-            output_dir="/mnt/inputs" \
-            num_processes_load=4 \
-            num_processes_map=4 \
-            num_processes_save=4 \
-            num_tokens_per_shard=100000000
-        ```
+Fast-LLM ships with a `prepare` command that'll download and preprocess the dataset for you. Run it like this:
 
-    === "Slurm"
+=== "Docker"
 
-        Fast-LLM has got you covered with a script that'll download and preprocess the dataset for you. Run it like this:
+    ```bash
+    docker run -it --rm ghcr.io/servicenow/fast-llm:latest \
+        -v ~/inputs:/mnt/inputs \
+        fast-llm prepare --config /mnt/inputs/prepare-config.yaml
+    ```
 
-        ```bash
-        sbatch <<EOF
-        #!/bin/bash
-        # SBATCH --nodes=1
-        # SBATCH --ntasks-per-node=1
-        # SBATCH --exclusive
-        # SBATCH --output=/mnt/outputs/job_output.log
-        # SBATCH --error=/mnt/outputs/job_error.log
+=== "Local Environment"
 
-        srun \
-            --container-image="ghcr.io/servicenow/fast-llm:latest" \
-            --container-mounts="${HOME}/inputs:/mnt/inputs,${HOME}/results:/mnt/results" \
-            --ntasks-per-node=$SLURM_NTASKS_PER_NODE \
-            bash -c "
-                python tools/prepare_dataset.py \
-                    tokenizer_path_or_name='meta-llama/Llama-3.2-1B' \
-                    dataset_name_or_path='openwebtext' \
-                    dataset_split='train' \
-                    output_dir='/mnt/inputs' \
-                    num_processes_load=4 \
-                    num_processes_map=4 \
-                    num_processes_save=4 \
-                    num_tokens_per_shard=100000000"
-        EOF
-        ```
+    ```bash
+    fast-llm prepare --config /mnt/inputs/prepare-config.yaml
+    ```
 
-        You can follow the job's progress by running `squeue -u $USER` and checking the logs in `~/results/job_output.log` and `~/results/job_error.log`.
+=== "Slurm"
 
-    === "Kubernetes"
+    ```bash
+    sbatch <<EOF
+    #!/bin/bash
+    # SBATCH --nodes=1
+    # SBATCH --ntasks-per-node=1
+    # SBATCH --exclusive
+    # SBATCH --output=/mnt/results/job_output.log
+    # SBATCH --error=/mnt/results/job_error.log
 
-        Fast-LLM comes with a script that'll download and preprocess the dataset for you. We will run this script in a Kubernetes job. Here's a basic configuration for the job:
+    srun \
+        --container-image="ghcr.io/servicenow/fast-llm:latest" \
+        --container-mounts="${HOME}/inputs:/mnt/inputs" \
+        --ntasks-per-node=$SLURM_NTASKS_PER_NODE \
+        bash -c "fast-llm prepare --config /mnt/inputs/prepare-config.yaml"
+    EOF
+    ```
 
-        ```yaml
-        apiVersion: batch/v1
-        kind: Job
-        metadata:
-          name: prepare-dataset
+    You can follow the job's progress by running `squeue -u $USER` and checking the logs in `job_output.log` and `job_error.log` in your results folder.
+
+=== "Kubernetes"
+
+    ```bash
+    kubectl apply -f prepare-job.yaml
+    ```
+
+    where `prepare-job.yaml` is a file containing the following configuration:
+
+    ```yaml
+    apiVersion: batch/v1
+    kind: Job
+    metadata:
+      name: fast-llm-prepare
+    spec:
+      template:
         spec:
-          template:
-            spec:
-              containers:
-                - name: prepare-dataset
-                  image: ghcr.io/servicenow/fast-llm:latest
-                  command: ["python", "tools/prepare_dataset.py"]
-                  args:
-                    - tokenizer_path_or_name=meta-llama/Llama-3.2-1B
-                    - dataset_name_or_path=openwebtext
-                    - dataset_split=train
-                    - output_dir=/mnt/inputs
-                    - num_processes_load=4
-                    - num_processes_map=4
-                    - num_processes_save=4
-                    - num_tokens_per_shard=100000000
-                  resources:
-                    requests:
-                      cpu: 4
-                  volumeMounts:
-                    - name: inputs
-                      mountPath: /mnt/inputs
-              volumes:
+          containers:
+            - name: fast-llm-prepare-container
+              image: ghcr.io/servicenow/fast-llm:latest
+              command: ["fast-llm", "prepare"]
+              args:
+                - "--config"
+                - "/mnt/inputs/prepare-config.yaml"
+              resources:
+                requests:
+                  cpu: 4
+              volumeMounts:
                 - name: inputs
-                  persistentVolumeClaim:
-                    claimName: pvc-fast-llm-inputs
-        ```
+                  mountPath: /mnt/inputs
+          volumes:
+            - name: inputs
+              persistentVolumeClaim:
+                claimName: pvc-fast-llm-inputs
+    ```
 
-        Save this configuration to a file named `prepare-dataset-job.yaml` and apply it to your Kubernetes cluster:
-
-        ```bash
-        kubectl apply -f prepare-dataset-job.yaml
-        ```
-
-        You can follow the job's progress by running `kubectl get pods` and checking the logs with `kubectl logs prepare-dataset`.
+    You can follow the job's progress by running `kubectl get pods` and checking the logs with `kubectl logs fast-llm-prepare`.
 
 !!! info "What's Happening Here?"
 
-    The `prepare_dataset.py` script will grab the OpenWebText data from the Huggingface Hub, tokenize it, and save it in 91 shards of 100M tokens each to the input folder. Expect around 2 hours for the whole thing to finish, mainly due to tokenization. If you've got more CPU cores, try upping `num_processes_*` to speed things up.
+    The `prepare` command will grab the OpenWebText data from the Huggingface Hub, tokenize it, and save it in 91 shards of 100M tokens each to the input folder. Expect around 2 hours for the whole thing to finish, mainly due to tokenization. If you've got more CPU cores, try upping the number of workers to speed things up.
 
 !!! tip "Use a Smaller Dataset for Testing"
 
@@ -567,7 +439,7 @@ For this tutorial, we'll use 9B tokens of text from the [OpenWebText](https://sk
 
 ## Step 4: Configure Fast-LLM ⚙️
 
-Next, we'll create a configuration file for Fast-LLM. Save the following as `~/inputs/fast-llm-config.yaml`:
+Next, we'll create a configuration file for Fast-LLM. Save the following as `train-config.yaml` in your inputs folder:
 
 === "SmolLM2-135M"
 
@@ -596,7 +468,7 @@ Next, we'll create a configuration file for Fast-LLM. Save the following as `~/i
       batch_size: 480  # (5)!
     data:
       format: file
-      path: /mnt/inputs/openwebtext/fast_llm_dataset.json  # (6)!
+      path: /mnt/inputs/openwebtext-SmolLM2/fast_llm_dataset.json  # (6)!
       split: [99, 1, 0]  # (7)!
     optimizer: # (8)!
       weight_decay: 0.1
@@ -621,7 +493,7 @@ Next, we'll create a configuration file for Fast-LLM. Save the following as `~/i
       distributed:
         training_dtype: bf16  # (14)!
     run:
-      experiment_dir: /mnt/results
+      experiment_dir: /mnt/results/SmolLM2-135M
     ```
 
     1.  Total number of training tokens will be approximately 300B.
@@ -666,9 +538,9 @@ Next, we'll create a configuration file for Fast-LLM. Save the following as `~/i
       batch_size: 480  # (5)!
     data:
       format: file
-      path: /mnt/inputs/fast_llm_dataset.json  # (6)!
+      path: /mnt/inputs/openwebtext-Llama/fast_llm_dataset.json  # (6)!
       split: [99, 1, 0]  # (7)!
-    optimizer: # (8)!
+    optimizer:  # (8)!
       weight_decay: 0.1
       beta_1: 0.9
       beta_2: 0.95
@@ -680,7 +552,7 @@ Next, we'll create a configuration file for Fast-LLM. Save the following as `~/i
         warmup_iterations: 2000
     pretrained:
       format: llama  # (10)!
-      path: /mnt/inputs
+      path: /mnt/inputs/Llama-3.2-1B
       model_weights: yes  # (11)!
     model:
       base_model:
@@ -691,7 +563,7 @@ Next, we'll create a configuration file for Fast-LLM. Save the following as `~/i
       distributed:
         training_dtype: bf16  # (14)!
     run:
-      experiment_dir: /mnt/results
+      experiment_dir: /mnt/results/Llama-3.2-1B
     ```
 
     1.  Total number of training tokens will be approximately 300B.
