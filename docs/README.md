@@ -13,8 +13,10 @@ To build and preview the documentation locally, follow these simple steps:
 1.  **Install the necessary dependencies:**
 
     ```bash
-    pip install -e ".[DOCS]"
+    pip install --no-build-isolation -e ".[DOCS]"
     ```
+
+    You also need to install `libcairo` for image processing on your system. Follow <https://squidfunk.github.io/mkdocs-material/plugins/requirements/image-processing/> for more details.
 
 2.  **Build the documentation:**
 
