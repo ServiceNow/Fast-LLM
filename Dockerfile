@@ -13,6 +13,7 @@ WORKDIR /app
 #   1. Create directories explicitly because docker use the wrong permission for explicit creation.
 #   2. For the rest, set the default ACL to 777 for all users.
 RUN mkdir -m 777 /app/Megatron-LM /app/examples /app/fast_llm /app/tests /app/tools \
+    && install -m 777 /dev/null /app/fast_llm/__init__.py \
     && setfacl -m d:u::rwx,d:g::rwx,d:o::rwx,u::rwx,g::rwx,o::rwx \
       /app \
       /home \
