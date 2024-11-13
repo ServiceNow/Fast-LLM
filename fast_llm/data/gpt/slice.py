@@ -60,7 +60,7 @@ class GPTDatasetSlice(GPTIndexedDataset):
         Create a set of GPT datasets from a MMapIndexedDataset,
         each containing approximately the requested proportion of the total tokens.
         """
-        dataset = config.dataset.build()
+        dataset = config.dataset.build_unsampled()
         probabilities = normalize_probabilities(list(config.ratios.values()))
         splits = [round(x) for x in padded_cumsum(probabilities) * dataset.num_documents]
         return {

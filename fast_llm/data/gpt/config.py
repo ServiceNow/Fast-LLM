@@ -3,12 +3,14 @@ import typing
 
 from fast_llm.config import Config, Field, FieldHint, check_field, config_class
 from fast_llm.data.config import (
+    Data,
     DataConfig,
     DatasetSource,
     FimConfig,
     MultiprocessingContext,
     SamplableDataset,
     SampledDataset,
+    SamplingConfig,
     TokenizerConfig,
     _validate_path,
     _validate_split,
@@ -57,24 +59,25 @@ class DatasetConfig(Config):
 
 @config_class()
 class SamplableDatasetConfig(DatasetConfig):
-    type: str = Field(
-        desc="Format for the dataset definition.",
-        hint=FieldHint.core,
-    )
-
     def build(self, config: "GPTSamplingConfig", data: "GPTData") -> dict[PhaseType, SampledDataset]:
-        datasets = self.build_unsampled()
-        if isinstance(data, SamplableDataset):
-            datasets = {PhaseType.training: datasets}
-        return {phase: dataset.sample(config, data) for phase, dataset in datasets.items()}
+        return {phase: dataset.sample(config, data) for phase, dataset in self.build_unsampled().items()}
 
-    def build_unsampled(self) -> SamplableDataset | dict[PhaseType, SamplableDataset]:
+    def build_unsampled(self) -> dict[PhaseType, SamplableDataset]:
         raise NotImplementedError()
 
 
 @config_class()
-class GPTIndexedDatasetConfig(SamplableDatasetConfig):
-    def build_unsampled(self) -> GPTIndexedDataset:
+class SplittableDatasetConfig(DatasetConfig):
+    def build_unsampled(self) -> dict[PhaseType, SamplableDataset]:
+        return {PhaseType.training: self.build_unsplit()}
+
+    def build_unsplit(self) -> SamplableDataset:
+        raise NotImplementedError()
+
+
+@config_class()
+class GPTIndexedDatasetConfig(SplittableDatasetConfig):
+    def build_unsplit(self) -> GPTIndexedDataset:
         raise NotImplementedError()
 
 
@@ -87,7 +90,7 @@ class GPTMemmapDatasetConfig(GPTIndexedDatasetConfig):
         hint=FieldHint.core,
     )
 
-    def build_unsampled(self) -> SamplableDataset | dict[PhaseType, SamplableDataset]:
+    def build_unsplit(self) -> SamplableDataset:
         from fast_llm.data.gpt.memmap import GPTMemmapDataset
 
         return GPTMemmapDataset(self)
@@ -113,10 +116,10 @@ class GPTConcatenatedDatasetConfig(GPTIndexedDatasetConfig):
         hint=FieldHint.core,
     )
 
-    def build_unsampled(self) -> SamplableDataset | dict[PhaseType, SamplableDataset]:
+    def build_unsplit(self) -> SamplableDataset:
         from fast_llm.data.gpt.concatenated import GPTConcatenatedDataset
 
-        return GPTConcatenatedDataset(self, [dataset.build_unsampled() for dataset in self.datasets])
+        return GPTConcatenatedDataset(self, [dataset.build_unsplit() for dataset in self.datasets])
 
 
 @config_class()
@@ -170,7 +173,7 @@ class GPTBlendedDatasetConfig(DatasetConfig):
 
         datasets = {}
         for dataset in self.datasets:
-            dataset_split = dataset.build_split_sampled(data)
+            dataset_split = dataset.build(data)
             if datasets:
                 Assert.eq(set(datasets), set(dataset_split))
             else:
