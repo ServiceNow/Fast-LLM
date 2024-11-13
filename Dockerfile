@@ -3,7 +3,7 @@ FROM nvcr.io/nvidia/pytorch:24.07-py3
 
 # Install dependencies.
 RUN apt-get update \
-    && apt-get install --no-install-recommends -y acl python3.10-venv git-lfs \
+    && apt-get install --no-install-recommends -y acl git-lfs \
     && rm -rf /var/lib/apt/lists/* \
     && git lfs install
 
