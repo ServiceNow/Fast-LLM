@@ -1,4 +1,4 @@
-from fast_llm.config import FieldUpdate, config_class
+from fast_llm.config import Field, FieldUpdate, config_class
 from fast_llm.data.config import DataConfig
 from fast_llm.models.gpt.config import (
     GPTArchitectureConfig,
@@ -7,6 +7,14 @@ from fast_llm.models.gpt.config import (
     GPTTrainerConfig,
     PretrainedGPTModelConfig,
 )
+
+
+@config_class()
+class GRPOConfig:
+    epsilon: float = Field(default=0.2, desc="PPO clipping parameter")
+    kl_coef: float = Field(default=0.1, desc="KL divergence coefficient")
+    ratio_threshold: float = Field(default=1.5, desc="Early stopping ratio threshold")
+    use_advantages: bool = Field(default=True, desc="Use advantages instead of raw rewards")
 
 
 @config_class()
@@ -25,6 +33,7 @@ class GRPOArchitectureConfig(GPTArchitectureConfig):
 class GRPOBaseModelConfig(GPTBaseModelConfig, GRPOArchitectureConfig):
     # TODO: Add custom other base model config parameters, if any.
     architecture_cls = GRPOArchitectureConfig
+    grpo: GRPOConfig = Field(default_factory=GRPOConfig, desc="GRPO specific configuration")
 
 
 @config_class()

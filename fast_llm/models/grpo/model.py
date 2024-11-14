@@ -1,7 +1,7 @@
-from fast_llm.engine.distributed.config import DistributedConfig
+from fast_llm.engine.distributed.config import DistributedConfig, PhaseType
 from fast_llm.layers.language_model.embedding import LanguageModelEmbedding
-from fast_llm.layers.language_model.head import LanguageModelHead
 from fast_llm.layers.transformer.transformer import TransformerLayer
+from fast_llm.models.grpo.head import GRPOHead
 from fast_llm.models.grpo.config import GRPOBaseModelConfig, GRPOModelConfig
 from fast_llm.models.gpt.model import GPTBaseModel, GPTModel
 
@@ -20,7 +20,6 @@ class GRPOBaseModel(GPTBaseModel):
         assert not self._config.use_absolute_position_embeddings
 
     def get_layers(self):
-        # TODO: Adjust as needed.
         return [
             LanguageModelEmbedding(self._config, self._tensor_space),
             *[
@@ -31,16 +30,41 @@ class GRPOBaseModel(GPTBaseModel):
                 )
                 for i in range(self._config.transformer.num_layers)
             ],
-            LanguageModelHead(self._config, self._tensor_space),
+            GRPOHead(self._config, self._tensor_space),  # Use our custom head
         ]
 
-    def preprocess_meta(self, input_, phase):
-        # TODO: Adjust or reimplement.
-        return super().preprocess_meta(input_, phase)
-
-    def preprocess(self, batch, preprocessed_meta=None, *, phase, iteration, metrics=None):
-        # TODO: Adjust or reimplement.
-        return super().preprocess(batch, preprocessed_meta, phase=phase, iteration=iteration, metrics=metrics)
+    def preprocess(
+        self,
+        batch: dict,
+        preprocessed_meta=None,
+        *,
+        phase: PhaseType,
+        iteration: int,
+        metrics=None
+    ):
+        # Extract GRPO specific inputs
+        grpo_inputs = {
+            "rewards": batch.pop("rewards")[:, 1:],
+            "advantages": batch.pop("advantages")[:, 1:],
+            "ref_logprobs": batch.pop("ref_logprobs")[:, 1:],
+            "old_logprobs": batch.pop("old_logprobs")[:, 1:],
+            "grpo_config": self._config.grpo,
+        }
+        
+        # Process the remaining inputs using parent class
+        preprocessed = super().preprocess(
+            batch["input_ids"], 
+            preprocessed_meta,
+            phase=phase,
+            iteration=iteration,
+            metrics=metrics
+        )
+        
+        # Add GRPO inputs to kwargs
+        for tokens, kwargs in preprocessed:
+            kwargs.update(grpo_inputs)
+            
+        return preprocessed
 
     @property
     def loss_defs(self):
