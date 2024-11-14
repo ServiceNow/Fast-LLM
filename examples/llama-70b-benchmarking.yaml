@@ -42,6 +42,7 @@ model:
       init_method_std: 0.02
       attention_dropout: 0.0
       hidden_dropout: 0.0
+      rotary_embedding_scale: -13.122363377404328
     vocab_size: 128256
     tie_word_embeddings: false
   multi_stage:
