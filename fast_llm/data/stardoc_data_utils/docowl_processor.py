@@ -125,10 +125,10 @@ grid_dict = {
 }
 
 class DocProcessor():
-    def __init__(self, image_size=224, anchors='grid_9', add_global_img=True, add_textual_crop_indicator=False):
+    def __init__(self, image_size=224, anchors='grid_9', add_global_img=True, add_textual_crop_indicator=False, media_token="<image>"):
         self.add_global_img = add_global_img
         self.add_textual_crop_indicator = add_textual_crop_indicator
-        self.media_token= "[control_8]"
+        self.media_token= media_token
         # h,w
         if isinstance(image_size, int):
             image_size = (image_size, image_size)
@@ -205,13 +205,13 @@ class DocProcessor():
                 for patch_pos in patch_position.tolist():
                     # global non-crop image
                     if patch_pos[0] == self.anchor_max and patch_pos[1] == self.anchor_max:
-                        text += '<global_img>[control_8]'
+                        text += '<global_img>' + self.media_token
                     else:
                         row_col = 'row'+str(patch_pos[0])+'_col'+str(patch_pos[1])
-                        text += '<crop_img_'+row_col+'>[control_8]'
+                        text += '<crop_img_'+row_col+'>' + self.media_token
             else: 
                 # generate successive image placeholders for a image, 1 crop img == 1 <|image|>
-                text += '[control_8]'*num_image_mult[image_token_ptr]
+                text += self.media_token*num_image_mult[image_token_ptr]
             text += next_text
             image_token_ptr += 1
 

@@ -129,7 +129,7 @@ class CommonHuggingfaceConverter(HuggingfaceModelConverter):
     def _create_weight_converters(self) -> list[WeightConverter]:
         converters = []
         num_layers = self.config.transformer.num_layers
-        norm_bias: bool = self.config.transformer.normalization.normalization_type == NormalizationType.layer_norm
+        norm_bias: bool = self.config.transformer.normalization.type == NormalizationType.layer_norm
         linear_bias: bool = self.config.transformer.add_linear_biases
 
         # Vision encoder
@@ -517,9 +517,9 @@ class Starcoder2HuggingfaceConverter(CommonHuggingfaceConverter):
         return super()._create_config_converters() + [
             ConstantExportParamConverter(None, "architectures", ["Starcoder2ForCausalLM"]),
             ConstantImportParamConverter(
-                ("transformer", "normalization", "normalization_type"), None, NormalizationType.layer_norm
+                ("transformer", "normalization", "type"), None, NormalizationType.layer_norm
             ),
-            ParamConverter(("transformer", "normalization", "layer_norm_eps"), "norm_epsilon"),
+            ParamConverter(("transformer", "normalization", "epsilon"), "norm_epsilon"),
             ConstantImportParamConverter(("transformer", "gated"), None, False),
             ConstantImportParamConverter(("transformer", "add_linear_biases"), None, True),
         ]
@@ -541,9 +541,9 @@ class CommonLlamaHuggingfaceConverter(CommonHuggingfaceConverter, abc.ABC):
     def _create_config_converters(cls) -> list[ParamConverter]:
         return super()._create_config_converters() + [
             ConstantImportParamConverter(
-                ("transformer", "normalization", "normalization_type"), None, NormalizationType.rms_norm
+                ("transformer", "normalization", "type"), None, NormalizationType.rms_norm
             ),
-            ParamConverter(("transformer", "normalization", "layer_norm_eps"), "rms_norm_eps"),
+            ParamConverter(("transformer", "normalization", "epsilon"), "rms_norm_eps"),
             ConstantImportParamConverter(("transformer", "gated"), None, True),
             ConstantImportParamConverter(("transformer", "add_linear_biases"), None, False),
         ]

@@ -99,9 +99,47 @@ class FimConfig(Config):
         Assert.in_range_incl(self.rate, 0, 1)
 
 
-EOD = "<|endoftext|>"
 TokenizerFromFile = "TokenizerFromFile"
-PreTrainedTokenizer = "PreTrainedTokenzier"
+
+
+@config_class()
+class SpecialTokensConfig(Config):
+    """
+    Define special tokens like EOS, BOS, PAD and image_placeholder tokens
+    """
+    
+    bos_token: str | None = Field(
+        default=None,
+        desc="Beginning of sequence token",
+        hint=FieldHint.core,
+    )
+    eos_token: str | None = Field(
+        default="<|endoftext|>",
+        desc="End of sequence token",
+        hint=FieldHint.core,
+    )
+    pad_token: str | None = Field(
+        default=None,
+        desc="Pad token",
+        hint=FieldHint.core,
+    )
+    image_placeholder_token: str | None = Field(
+        default=None,
+        desc="Placeholder token for images. Used only in multi-modal models",
+        hint=FieldHint.core,
+    )
+
+    def get_special_tokens(self):
+        special_tokens = [
+            self.bos_token,
+            self.eos_token,
+            self.pad_token,
+            self.image_placeholder_token,
+        ]
+
+        # Only return special tokens that are set
+        return [token for token in special_tokens if token is not None]
+
 
 @config_class()
 class TokenizerConfig(Config):
@@ -114,16 +152,15 @@ class TokenizerConfig(Config):
         default="TokenizerFromFile",
         desc="Unused.",
         hint=FieldHint.deprecated,
-        valid=check_field(Assert.eq, TokenizerFromFile),
     )
     path: str | None = Field(
         default=None,
         desc="Path to the tokenizer file.",
         hint=FieldHint.core,
     )
-    tokenizer_path: str | None = Field(
-        default=None, 
-        desc="Path to pretrained tokenizer",
+    special_tokens: SpecialTokensConfig = Field(
+        default_factory=SpecialTokensConfig,
+        desc="Define special tokens.",
         hint=FieldHint.core,
     )
 

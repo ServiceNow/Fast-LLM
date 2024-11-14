@@ -72,7 +72,7 @@ class MultiModalLanguageModelEmbedding(Layer):
         bsz, num_imgs, _, hidden_size = input_.shape
         
         # TODO: Hardcoded image token
-        image_token_mask = tokens == 10
+        image_token_mask = tokens == 11
 
         embeddings = text_embeddings.clone()
         embeddings[image_token_mask] = input_.view(-1, hidden_size)
