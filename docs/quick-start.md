@@ -8,12 +8,12 @@ This guide will get you up and running with Fast-LLM on a single machine. Let's 
 
 To follow this guide, you'll need:
 
--   **Hardware**: At least one NVIDIA GPU with Volta architecture or newer. For optimal results in this tutorial, we recommend 8 A100 GPUs or better. 🤑
+-   **Hardware**: At least one NVIDIA GPU with Volta architecture or newer. We wrote this guide with an 8-GPU machine of Ampere or Hopper architecture in mind.
 -   **Software**:
     -   **Docker** (if using the Docker setup), or
     -   **Local Environment**: PyTorch 2.2 or later, CUDA 12.1 or later, and APEX AMP (if building from source), or
-    -   **Cluster Setup**: Access to a Slurm or Kubernetes cluster.
--   **Time**: The initial setup and training process requires some patience. 😊
+    -   **Cluster Setup**: Access to a Kubernetes or Docker-enabled Slurm cluster.
+-   **Time**: The initial setup and training process requires a little patience. 😊
 
 ## Step 1: Initial Setup 🏗 ️
 
@@ -21,7 +21,7 @@ First, choose your environment. You can use Docker, your local environment, Slur
 
 === "Docker"
 
-    You selected Docker for this tutorial. We'll use the Fast-LLM Docker image to train our model, which includes all the necessary dependencies. Grab the pre-built Fast-LLM Docker image:
+    You selected Docker for this tutorial. We'll use the Fast-LLM Docker image to train our model, which includes all the necessary dependencies. Grab the [pre-built Fast-LLM Docker image](https://github.com/ServiceNow/Fast-LLM/pkgs/container/fast-llm) from GitHub's container registry (GHCR).
 
     ```bash
     docker pull ghcr.io/servicenow/fast-llm:latest
@@ -35,7 +35,7 @@ First, choose your environment. You can use Docker, your local environment, Slur
 
 === "Local Environment"
 
-    You selected to use your local environment to run Fast-LLM. You should have a machine with at least one NVIDIA GPU with Volta architecture or newer. We need to install Fast-LLM and its dependencies in your environment. Our Fast-LLM docker image already includes all this, and we recommend using it for simplicity and reproducibility. If you still want to install Fast-LLM in your local environment, follow the steps below.
+    You're setting up Fast-LLM in your machine's local environment. This means you'll need to install Fast-LLM and its dependencies. For simplicity and reproducibility, we recommend using the Fast-LLM Docker image instead. It's preconfigured with everything you need. But if you're set on a local installation, follow the steps below.
 
     Fast-LLM depends on [CUDA](https://developer.nvidia.com/about-cuda) 12.1 or later, [PyTorch](https://pytorch.org) 2.2 or later, [APEX](https://github.com/NVIDIA/apex?tab=readme-ov-file#installation), and [OpenAI Triton](https://github.com/triton-lang/triton). Follow the instructions on their respective websites to install them. If you use [conda](https://docs.conda.io/projects/conda/en/latest/index.html), you can create a new environment and install these dependencies in it.
     
@@ -93,7 +93,7 @@ First, choose your environment. You can use Docker, your local environment, Slur
 
 === "Slurm"
 
-    You selected Docker-enabled [Slurm](https://slurm.schedmd.com/) for this tutorial. The Slurm setup requires a Slurm cluster with at least one node and one GPU of Volta architecture or newer. Slurm will use the `ghcr.io/servicenow/fast-llm:latest` Docker image to train our model. It will need a shared file system for input data and output results. We will assume that your home directory is shared across all nodes.
+    You've chosen Docker-enabled [Slurm](https://slurm.schedmd.com/) for this tutorial. Slurm will pull the `ghcr.io/servicenow/fast-llm:latest` Docker image to train the model. Just make sure there's a shared file system for both input data and output results. We'll assume your home directory is accessible across all nodes.
 
     Let's create a folder to store our input data and output results in the shared home directory:
 
@@ -103,10 +103,10 @@ First, choose your environment. You can use Docker, your local environment, Slur
 
 === "Kubernetes"
 
-    You selected to use [Kubernetes](https://kubernetes.io/) with [KubeFlow](https://www.kubeflow.org/) for this tutorial. We will use a `PyTorchJob` resource to train our model with the `ghcr.io/servicenow/fast-llm:latest` Docker image and store our input data and output results in shared [persistent volume claims](https://kubernetes.io/docs/concepts/storage/persistent-volumes/) (PVCs). The Kubernetes cluster should have at least one node and one GPU of Volta architecture or newer.
+    You selected to use [Kubernetes](https://kubernetes.io/) with [KubeFlow](https://www.kubeflow.org/) for this tutorial. We will use a `PyTorchJob` resource to train our model with the `ghcr.io/servicenow/fast-llm:latest` Docker image and store our input data and output results in shared [persistent volume claims](https://kubernetes.io/docs/concepts/storage/persistent-volumes/) (PVCs).
 
     Let's now create two PVCs named `pvc-fast-llm-inputs` and `pvc-fast-llm-results` to store our input data and output results, respectively.
-    
+
     Create a file named `pvc-fast-llm-inputs.yaml` with the following content:
 
     ```yaml
@@ -175,13 +175,13 @@ First, choose your environment. You can use Docker, your local environment, Slur
             claimName: pvc-fast-llm-results
     ```
 
-    Save this configuration to a file named `pod-fast-llm-data-management.yaml`. Next, apply this configuration to your Kubernetes cluster:
+    Save this configuration to a file named `pod-fast-llm-data-management.yaml`. Next, apply this configuration to your Kubernetes cluster to create the pod:
 
     ```bash
     kubectl apply -f pod-fast-llm-data-management.yaml
     ```
 
-    This pod will allow you to copy files to and from the inputs and results PVCs. You can access it by running:
+    The pod will allow you to copy files to and from the inputs and results PVCs. You can access it by running:
 
     ```bash
     kubectl exec -it fast-llm-data-management -- /bin/bash
@@ -195,11 +195,11 @@ First, choose your environment. You can use Docker, your local environment, Slur
         kubectl delete pod fast-llm-data-management
         ```
 
-        Don't run this just yet, though. You'll need this pod throughout the guide.
+        Don't run this just yet, though. You'll need the pod throughout the guide.
 
 ## Step 2: Choose Your Model 🤖
 
-Fast-LLM supports many GPT variants, including (but not limited to) Llama, Mistral, and Mixtral. For this tutorial, let's train a Llama model with data parallelism. You can choose from two models:
+Fast-LLM supports many GPT variants, including (but not limited to) Llama, Mistral, and Mixtral. For this tutorial, you can choose from two models:
 
 === "SmolLM2-135M"
 
@@ -237,7 +237,7 @@ Fast-LLM supports many GPT variants, including (but not limited to) Llama, Mistr
 === "Llama-3.2-1B"
 
     Llama is a larger model with 1B parameters. It's more powerful but requires more resources to train. We'll grab the model from the Huggingface Hub and save it to our inputs folder.
-    
+
     !!! note "Access Required"
     
         Meta gates access to their Llama models. You need to request access to the model from Meta before you can download it at https://huggingface.co/meta-llama/Llama-3.2-1B.
@@ -257,7 +257,7 @@ Fast-LLM supports many GPT variants, including (but not limited to) Llama, Mistr
         git lfs install
         git clone https://huggingface.co/meta-llama/Llama-3.2-1B ~/inputs/Llama-3.2-1B
         ```
-    
+
     === "Local Environment"
 
         First, sign in to your Hugging Face account:
@@ -384,7 +384,7 @@ Fast-LLM ships with a `prepare` command that'll download and preprocess the data
 
     srun \
         --container-image="ghcr.io/servicenow/fast-llm:latest" \
-        --container-mounts="${HOME}/inputs:/mnt/inputs" \
+        --container-mounts="${HOME}/inputs:/mnt/inputs,${HOME}/results:/mnt/results" \
         --ntasks-per-node=$SLURM_NTASKS_PER_NODE \
         bash -c "fast-llm prepare --config /mnt/inputs/prepare-config.yaml"
     EOF
@@ -429,13 +429,9 @@ Fast-LLM ships with a `prepare` command that'll download and preprocess the data
 
     You can follow the job's progress by running `kubectl get pods` and checking the logs with `kubectl logs fast-llm-prepare`.
 
-!!! info "What's Happening Here?"
-
-    The `prepare` command will grab the OpenWebText data from the Huggingface Hub, tokenize it, and save it in 91 shards of 100M tokens each to the input folder. Expect around 2 hours for the whole thing to finish, mainly due to tokenization. If you've got more CPU cores, try upping the number of workers to speed things up.
-
 !!! tip "Use a Smaller Dataset for Testing"
 
-    If you're just testing things out, you can also use a smaller dataset. Replace `openwebtext` with `stas/openwebtext-10k` to use a small subset representing the first 10K records from the original dataset. This will speed up the process and let you see how things work without waiting for hours.
+    The full OpenWebText dataset is quite large and will take a while to process, around 2 hours. If you're just testing things out, you can also use a smaller dataset. Replace `openwebtext` with `stas/openwebtext-10k` to use a small subset representing the first 10K records from the original dataset. This will speed up the process and let you see how things work without waiting for hours.
 
 ## Step 4: Configure Fast-LLM ⚙️
 
@@ -470,11 +466,11 @@ Next, we'll create a configuration file for Fast-LLM. Save the following as `tra
       format: file
       path: /mnt/inputs/openwebtext-SmolLM2/fast_llm_dataset.json  # (6)!
       split: [99, 1, 0]  # (7)!
-    optimizer: # (8)!
+    optimizer:  # (8)!
       weight_decay: 0.1
       beta_1: 0.9
       beta_2: 0.95
-      learning_rate: # (9)!
+      learning_rate:  # (9)!
         base: 6.0e-04
         minimum: 6.0e-05
         decay_style: cosine
@@ -603,9 +599,11 @@ Alright, the big moment! Let's launch the training run.
         fast-llm train gpt --config /mnt/inputs/fast-llm-config.yaml
     ```
 
-    Adjust `--nproc_per_node` based on the number of GPUs you have available.
-    Replace `--gpus all` with `--gpus '"device=0,1,2,3,4,5,6,7"'` if you want to use specific GPUs.
-    Remove `-e WANDB_API_KEY_PATH=/mnt/inputs/.wandb_api_key` if you're not using W&B.
+    !!! tip "Customize Your Docker Command"
+
+        * Adjust `--nproc_per_node` based on the number of GPUs you have available.
+        * Replace `--gpus all` with `--gpus '"device=0,1,2,3,4,5,6,7"'` if you want to use specific GPUs.
+        * Remove `-e WANDB_API_KEY_PATH=/mnt/inputs/.wandb_api_key` if you're not using W&B.
 
 === "Local Environment"
 
@@ -618,8 +616,10 @@ Alright, the big moment! Let's launch the training run.
         fast-llm train gpt --config /mnt/inputs/fast-llm-config.yaml
     ```
 
-    Adjust `--nproc_per_node` based on the number of GPUs you have available.
-    Remove `export WANDB_API_KEY_PATH=/mnt/inputs/.wandb_api_key` if you're not using W&B.
+    !!! tip "Customize Your Command"
+    
+        * Adjust `--nproc_per_node` based on the number of GPUs you have available.
+        * Remove `export WANDB_API_KEY_PATH=/mnt/inputs/.wandb_api_key` if you're not using W&B.
 
 === "Slurm"
 
@@ -654,8 +654,10 @@ Alright, the big moment! Let's launch the training run.
             --config /mnt/inputs/fast-llm-config.yaml"
     ```
 
-    Change the `--gpus-per-node` value to match the number of GPUs on your node.
-    If you're not using W&B, remove the references to `WANDB_API_KEY_PATH`.
+    !!! tip "Customize Your Slurm Script"
+
+        * Change the `--gpus-per-node` value to match the number of GPUs on your node.
+        * If you're not using W&B, remove the references to `WANDB_API_KEY_PATH`.
 
     Submit the job to the Slurm cluster:
 
@@ -738,7 +740,10 @@ Alright, the big moment! Let's launch the training run.
                     sizeLimit: "1024Gi"
     ```
 
-    Change the `nprocPerNode` value to match the number of GPUs on your node. If you're not using W&B, remove the references to `WARDB_API_KEY_PATH`.
+    !!! tip "Customize Your PyTorchJob"
+
+        * Change the `nprocPerNode` value to match the number of GPUs on your node.
+        * If you're not using W&B, remove the references to `WARDB_API_KEY_PATH`.
 
     Submit the job to the Kubernetes cluster:
 
