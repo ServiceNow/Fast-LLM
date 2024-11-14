@@ -26,7 +26,6 @@ model:
     transformer:
       normalization:
         type: rms_norm
-        epsilon: 1.0e-05
       num_layers: 80
       hidden_size: 8192
       ffn_hidden_size: 28672
@@ -34,17 +33,16 @@ model:
       head_groups: 8
       add_linear_biases: false
       use_rotary_embeddings: true
+      rotary_embedding_scale: -13.122363377404328
       gated: true
       activation_type: silu
-      triton_rotary: true
       kv_channels: 128
-      window_size: 131072
-      init_method_std: 0.02
-      attention_dropout: 0.0
-      hidden_dropout: 0.0
-      rotary_embedding_scale: -13.122363377404328
+      mlp_lr_scale:
+        - null
     vocab_size: 128256
+    use_position_embeddings: false
     tie_word_embeddings: false
+    cross_entropy_impl: fused
   multi_stage:
     zero_stage: 2
   distributed:
