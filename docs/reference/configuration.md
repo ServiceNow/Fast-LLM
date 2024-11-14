@@ -1,3 +1,7 @@
-# Reference
+---
+title: Configuration Reference
+---
 
-Coming soon...
+!!! warning
+
+    Looking for the full config details? This reference is on the way. Stay tuned!

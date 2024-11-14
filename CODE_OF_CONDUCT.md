@@ -25,8 +25,8 @@ ServiceNow suggests the following technical support pathways for open-source pro
 1. Clearly identify and document the issue or question you have.
 2. View the Documentation.
 3. Search the Discussions.
-4. Search the project knowledge base or Wiki for known errors, useful solutions, and troubleshooting tips.
-5. Check the project guidelines in the [`CONTRIBUTING.md`](CONTRIBUTING.md) file if you would like details on how you can submit a change. Community contributions are valued and appreciated!
+4. Search the project documentation for known errors, useful solutions, and troubleshooting tips.
+5. Check the project contribution guidelines if you would like details on how you can submit a change. Community contributions are valued and appreciated!
 6. Log an Issue if it hasn't already been logged. If the issue has already been logged by another user, vote it up, and add a comment with additional or missing information. Do your best to choose the correct category when logging a new issue. This will make it easier to differentiate bugs from new feature requests or ideas. If after logging an issue you find the solution, please close your issue and provide a comment with the solution. This will help the project owners and other users.
 7. Contact the project team contributors of the project to see if they can help as a last resort only.
 

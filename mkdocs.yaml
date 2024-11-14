@@ -175,6 +175,7 @@ nav:
     - Configuration: reference/configuration.md
   - Developers:
     - Contributing: developers/contributing.md
-    - Best Practices: developers/best-practices.md
+    - Style Guide: developers/style-guide.md
+    - Development Practices: developers/dev-practices.md
   - About Us: about-us.md
   - Join Us: join-us.md

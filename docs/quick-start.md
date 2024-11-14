@@ -1,5 +1,5 @@
 ---
-title: "Quick Start 🚀"
+title: "Quick Start"
 ---
 
 This guide will get you up and running with Fast-LLM on a single machine. Let's train a model and see some results!
@@ -15,7 +15,7 @@ To follow this guide, you'll need:
     -   **Cluster Setup**: Access to a Kubernetes or Docker-enabled Slurm cluster.
 -   **Time**: The initial setup and training process requires a little patience. 😊
 
-## Step 1: Initial Setup 🏗 ️
+## 🏗 Step 1: Initial Setup
 
 First, choose your environment. You can use Docker, your local environment, Slurm, or Kubernetes.
 
@@ -197,7 +197,7 @@ First, choose your environment. You can use Docker, your local environment, Slur
 
         Don't run this just yet, though. You'll need the pod throughout the guide.
 
-## Step 2: Choose Your Model 🤖
+## 🤖 Step 2: Choose Your Model
 
 Fast-LLM supports many GPT variants, including (but not limited to) Llama, Mistral, and Mixtral. For this tutorial, you can choose from two models:
 
@@ -311,7 +311,7 @@ Fast-LLM supports many GPT variants, including (but not limited to) Llama, Mistr
 
     Smaller models like SmolLM2-135M will train relatively quickly, especially if you've only got a few GPUs. But if you're feeling adventurous (and patient), give the larger Llama-3.2-1B a shot!
 
-## Step 3: Prepare the Training Data 📚
+## 📚 Step 3: Prepare the Training Data
 
 For this tutorial, we'll use 9B tokens of text from the [OpenWebText](https://skylion007.github.io/OpenWebTextCorpus/) dataset. This dataset is a free approximation of the WebText data OpenAI used for GPT-2, and it's perfect for our test run!
 
@@ -433,7 +433,7 @@ Fast-LLM ships with a `prepare` command that'll download and preprocess the data
 
     The full OpenWebText dataset is quite large and will take a while to process, around 2 hours. If you're just testing things out, you can also use a smaller dataset. Replace `openwebtext` with `stas/openwebtext-10k` to use a small subset representing the first 10K records from the original dataset. This will speed up the process and let you see how things work without waiting for hours.
 
-## Step 4: Configure Fast-LLM ⚙️
+## ⚙️ Step 4: Configure Fast-LLM
 
 Next, we'll create a configuration file for Fast-LLM. Save the following as `train-config.yaml` in your inputs folder:
 
@@ -577,11 +577,11 @@ Next, we'll create a configuration file for Fast-LLM. Save the following as `tra
     13.  We're not using ZeRO for this tutorial, so we set `zero_stage` to `null`. You can set this to `1`, `2`, or `3` for ZeRO-1, ZeRO-2, or ZeRO-3, respectively.
     14.  `bf16` (bfloat16, or Brain Floating Point 16) is supported on Ampere GPUs and higher. On Volta GPUs, you can use `fp16` (half-precision floating point) for training instead of `bf16`.
 
-## (Optional) Step 6: Add Your Weights & Biases API Key 🔑
+## 🔑 (Optional) Step 6: Add Your Weights & Biases API Key
 
 If you included the W&B section in your configuration, you'll need to add your API key. Save your W&B API key to `.wandb_api_key` in your inputs folder so Fast-LLM can track your training progress there. You can create a free W&B account if you don't already have one.
 
-## Step 7: Launch Training 🚀
+## 🚀 Step 7: Launch Training
 
 Alright, the big moment! Let's launch the training run.
 
@@ -755,7 +755,7 @@ Alright, the big moment! Let's launch the training run.
 
     Setting the Python hash seed to 0 ensures consistent, reproducible ordering in hash-dependent operations across processes. Training will fail if this isn't set.
 
-## Step 8. Track Training Progress 📊
+## 📊 Step 8. Track Training Progress
 
 === "Docker"
 
@@ -825,7 +825,7 @@ You can expect to see the following performance metrics in Fast-LLM's output:
 
 If you included the W&B section in your configuration, you can also track your training progress on the Weights & Biases dashboard as well. Follow the link in the console output to view your training run.
 
-## Troubleshooting Basics 🛠️
+## 🛠️ Troubleshooting Basics
 
 Here are some common issues you might encounter and how to address them:
 
@@ -833,6 +833,6 @@ Here are some common issues you might encounter and how to address them:
 
 -   **Underutilized GPU or Low Memory Usage**: If memory usage is low or GPU utilization isn't maxed out, try increasing `micro_batch_size` (to 4, 8, or 16 if memory allows) or extending `sequence_length` (up to 2048, 3072, or 4096, as memory permits). Larger batches and longer sequences help keep GPUs engaged and reduce idle time.
 
-## Final Thoughts
+## 🎉 Final Thoughts
 
-And that's it! You've set up, prepped data, chosen a model, configured training, and launched a full training run with Fast-LLM. From here, feel free to tweak the model, try out larger datasets, or scale things up to a multi-node setup if you're on a cluster. Happy training! 🚀
+And that's it! You've set up, prepped data, chosen a model, configured training, and launched a full training run with Fast-LLM. From here, feel free to tweak the model, try out larger datasets, or scale things up to a multi-node setup if you're on a cluster. Happy training!
