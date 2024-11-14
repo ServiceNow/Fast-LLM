@@ -1,30 +1,40 @@
+# syntax=docker/dockerfile:1.7-labs
 FROM nvcr.io/nvidia/pytorch:24.07-py3
 
-# git-lfs is needed to interact with the huggingface hub
+# Install dependencies.
 RUN apt-get update \
-    && apt-get install git-lfs \
+    && apt-get install --no-install-recommends -y acl git-lfs \
     && rm -rf /var/lib/apt/lists/* \
     && git lfs install
 
-ARG FAST_LLM_USER_ID=1000
-
-RUN useradd -m -u $FAST_LLM_USER_ID -s /bin/bash -d /home/fast_llm fast_llm
-USER fast_llm
+# Set the working directory.
 WORKDIR /app
-ENV PYTHONPATH=/app:/app:/app/Megatron-LM
-ENV PATH=$PATH:/app:/home/fast_llm/.local/bin/
+# Set the permission to 777 for all files and directories in `/app`, `/home` and python install directories:
+#   1. Create directories explicitly because docker use the wrong permission for explicit creation.
+#   2. For the rest, set the default ACL to 777 for all users.
+RUN mkdir -m 777 /app/Megatron-LM /app/examples /app/fast_llm /app/tests /app/tools \
+    && setfacl -m d:u::rwx,d:g::rwx,d:o::rwx,u::rwx,g::rwx,o::rwx \
+      /app \
+      /home \
+      /usr \
+      /usr/local \
+      /usr/local/bin \
+      /usr/local/lib \
+      /usr/local/lib/python3.10 \
+      /usr/local/lib/python3.10/dist-packages \
+      /usr/local/lib/python3.10/dist-packages/__pycache__
 
-COPY --chown=fast_llm setup.py setup.cfg ./
-COPY --chown=fast_llm fast_llm/__init__.py ./fast_llm/
+# Copy dependency files with universal write permissions for all users.
+COPY --chmod=777 setup.py setup.cfg pyproject.toml ./
+COPY --chmod=777 ./fast_llm/__init__.py fast_llm/
+COPY --chmod=777 ./fast_llm/csrc/ fast_llm/csrc/
 
-RUN PIP_NO_INPUT=1 pip3 install --no-cache-dir -e ".[CORE,OPTIONAL,DEV]"
+# Install dependencies within the virtual environment.
+RUN pip install --no-cache-dir --no-build-isolation -e ".[CORE,OPTIONAL,DEV]"
 
-COPY --chown=fast_llm fast_llm/csrc/ ./fast_llm/csrc/
-RUN make -C ./fast_llm/csrc/
-
-COPY --chown=fast_llm ./Megatron-LM Megatron-LM
-COPY --chown=fast_llm ./examples examples
-COPY --chown=fast_llm ./tests tests
-COPY --chown=fast_llm ./tools tools
-COPY --chown=fast_llm ./fast_llm fast_llm
-COPY --chown=fast_llm fast_llm/tools/train.py pyproject.toml ./
+# Copy the remaining source code with universal write permissions.
+COPY --chmod=777 ./Megatron-LM Megatron-LM
+COPY --chmod=777 ./examples examples
+COPY --chmod=777 ./tests tests
+COPY --chmod=777 ./tools tools
+COPY --chmod=777 --exclude=./fast_llm/csrc/ ./fast_llm/ fast_llm/

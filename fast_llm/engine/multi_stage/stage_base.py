@@ -285,6 +285,9 @@ class StageBase:
                 elif self._mode.on_device:
                     meta.init_parameter(parameter, self._distributed)
 
+            if self.mode.on_device:
+                self.reset_shard_pad(self._weight_shard)
+
         if self._config.debug_param_init:
             log_generator("CPU generator after reset", torch.random.default_generator)
             log_generator("PP init generator after reset", self._distributed.pp_init_generator)
@@ -441,8 +444,11 @@ class StageBase:
                 shard[begin:end][overlap_mask] = loaded_shard[overlap_index_map_masked]
                 counter += overlap_count
 
-    def _import_state_tensor(self, shard: torch.Tensor, parameter_name: str, tensor: torch.Tensor | SafeTensorSlice):
-        # See FastLLMModel._import_state_tensor.
+    def import_state_tensor(self, parameter_name: str, shard: torch.Tensor, tensor: torch.Tensor | SafeTensorSlice):
+        """
+        Given a global parameter tensor, set the associated slice of a local parameter shard.
+        Return the size of the local slice.
+        """
         Assert.eq(shard.shape, (self._shard_size,))
         parameter_index = self._parameter_index[parameter_name]
         tensor_shard = self._parameter_global_to_shard(tensor, parameter_index)
@@ -451,10 +457,10 @@ class StageBase:
         shard[begin:end].copy_(tensor_shard)
         return end - begin
 
-    def _export_shard(self, shard: torch.Tensor, dtype: DataType | None = None):
-        if dtype is not None:
-            shard = shard.to(dtype=dtype.torch)
-        tensors = self._split_buffer(self._reconstruct_from_shard(shard.to(dtype=dtype)))
+    def _export_shard(self, shard: torch.Tensor, data_type: DataType | None = None):
+        if data_type is not None:
+            shard = shard.to(dtype=data_type.torch)
+        tensors = self._split_buffer(self._reconstruct_from_shard(shard))
         for name, param_index in self._parameter_index.items():
             yield name, self._parameter_metas[param_index].local_to_global(
                 tensors[param_index], distributed=self._distributed

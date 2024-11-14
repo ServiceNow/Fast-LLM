@@ -10,15 +10,20 @@ import numpy as np
 import pytest
 import torch
 
-from fast_llm.data.mmap import MMapIndexedDataset
-from fast_llm.models.gpt.config import HuggingfaceModelType
+from fast_llm.data.gpt.memmap import GPTMemmapDataset
+from fast_llm.models.gpt.config import (
+    MistralGPTHuggingfaceCheckpointFormat,
+    MixtralGPTHuggingfaceCheckpointFormat,
+    Starcoder2GPTHuggingfaceCheckpointFormat,
+)
 from fast_llm.models.gpt.huggingface import HuggingfaceGPTModelForCausalLM
+from fast_llm.tools.train import CliTrainingConfig
 from tests.compare_tensor_logs import CompareConfig, compare_tensor_logs
 
 # FIXME: figure out correct import of megatron modules without this hack
 sys.path.append(os.getcwd())
 
-
+# TODO: Use `pytest_addoption` instead?
 # Keep all results in one place to allow recovering them for debugging in case of failure.
 TEST_RESULTS_PATH = pathlib.Path(os.environ.get("TEST_RESULTS_PATH", "/tmp/fast_llm_tests"))
 FORCE_REUSE_RESULTS = int(os.environ.get("FORCE_REUSE_RESULTS", 0)) != 0
@@ -37,10 +42,10 @@ CONFIG_BASE_FAST_LLM = [
     "run.tensor_logs.save=True",
     "run.tensor_logs.show=False",
     "model.base_model.transformer.num_layers=2",
-    "model.base_model.transformer.hidden_size=1024",
+    "model.base_model.transformer.hidden_size=256",
     "model.base_model.transformer.num_attention_heads=8",
     "model.base_model.transformer.init_method_std=0.022",
-    "model.base_model.vocab_size=49152",
+    "model.base_model.vocab_size=8192",
     f"model.multi_stage.debug_param_init={_LOG_LEVEL}",
     f"model.multi_stage.debug_layer_outputs={_LOG_LEVEL}",
     f"model.multi_stage.debug_layer_gradients={_LOG_LEVEL}",
@@ -48,15 +53,15 @@ CONFIG_BASE_FAST_LLM = [
     "model.multi_stage.debug_tensor_parallel=True",
     "model.distributed.reproducible_init=True",
     "training.train_iters=2",
-    "training.num_workers=4",
+    "training.num_workers=0",
     "batch.batch_size=8",
-    "batch.sequence_length=2048",
+    "batch.sequence_length=512",
     f"data.path={DATASET_PREFIX}",
     "optimizer.learning_rate.base=0.0001",
 ]
 CONFIG_BASE_MEGATRON = [
     "--num-layers=2",
-    "--hidden-size=1024",
+    "--hidden-size=256",
     "--num-attention-heads=8",
     "--log-interval=1",
     "--train-iters=2",
@@ -69,15 +74,15 @@ CONFIG_BASE_MEGATRON = [
     f"--debug_all_param_gradients={_LOG_LEVEL}",
     "--debug_param_update=0",
     "--global-batch-size=8",
-    "--max-position-embeddings=2048",
-    "--seq-length=2048",
+    "--max-position-embeddings=512",
+    "--seq-length=512",
     "--init-method-std=0.022",
     "--lr=0.0001",
-    "--num-workers=4",
-    "--valid-num-workers=4",
+    "--num-workers=0",
+    "--valid-num-workers=0",
     "--tokenizer-type=NullTokenizer",
     # Megatron messes with the vocab size, so we have to subtract 1.
-    "--vocab-size=49151",
+    "--vocab-size=8191",
     f"--data-path={DATASET_PREFIX}",
     "--lr-decay-style=constant",
     # Initialization is set up to match MCore models (MCore inverts self-attn qkv and dense layers compared to original Megatron)
@@ -86,7 +91,7 @@ CONFIG_BASE_MEGATRON = [
     "--transformer-impl=transformer_engine",
 ]
 
-CONFIG_SC1_FAST_LLM = CONFIG_BASE_FAST_LLM + ["model.base_model.max_position_embeddings=2048"]
+CONFIG_SC1_FAST_LLM = CONFIG_BASE_FAST_LLM + ["model.base_model.max_position_embeddings=512"]
 CONFIG_SC1_MEGATRON = CONFIG_BASE_MEGATRON + ["--group-query-attention"]
 CONFIG_SC1_COMMON = CONFIG_SC1_FAST_LLM + ["model.distributed.training_dtype=bf16"]
 
@@ -109,7 +114,7 @@ CONFIG_MISTRAL_MEGATRON = CONFIG_SC2_MEGATRON + [
     "--swiglu",
     "--disable-bias-linear",
     "--normalization=RMSNorm",
-    "--ffn-hidden-size=4096",
+    "--ffn-hidden-size=1024",
     "--untie-embeddings-and-output-weights",
 ]
 CONFIG_MISTRAL_FAST_LLM = CONFIG_SC2_FAST_LLM + [
@@ -117,7 +122,7 @@ CONFIG_MISTRAL_FAST_LLM = CONFIG_SC2_FAST_LLM + [
     "model.base_model.transformer.activation_type=silu",
     "model.base_model.transformer.add_linear_biases=False",
     "model.base_model.transformer.normalization.type=rms_norm",
-    "model.base_model.transformer.ffn_hidden_size=4096",
+    "model.base_model.transformer.ffn_hidden_size=1024",
     "model.base_model.tie_word_embeddings=False",
 ]
 CONFIG_MISTRAL_COMMON = CONFIG_MISTRAL_FAST_LLM + ["model.distributed.training_dtype=bf16"]
@@ -140,28 +145,31 @@ _CONFIGS = {
         CONFIG_SC2_FAST_LLM,
         CONFIG_SC2_MEGATRON,
         CONFIG_SC2_COMMON,
-        HuggingfaceModelType.starcoder2,
+        Starcoder2GPTHuggingfaceCheckpointFormat,
     ),
     "mistral": (
         "gpt",
         CONFIG_MISTRAL_FAST_LLM,
         CONFIG_MISTRAL_MEGATRON,
         CONFIG_MISTRAL_COMMON,
-        HuggingfaceModelType.mistral,
+        MistralGPTHuggingfaceCheckpointFormat,
     ),
     "mixtral": (
         "gpt",
         CONFIG_MIXTRAL_FAST_LLM,
         CONFIG_MIXTRAL_MEGATRON,
         CONFIG_MIXTRAL_COMMON,
-        HuggingfaceModelType.mixtral,
+        MixtralGPTHuggingfaceCheckpointFormat,
     ),
 }
 
 
 TEST_MODEL = os.environ.get("MODEL", "mistral")
 
-TEST_MODEL_TYPE, CONFIG_FAST_LLM, CONFIG_GPT2, CONFIG_COMMON, HUGGINGFACE_MODEL_TYPE = _CONFIGS[TEST_MODEL]
+TEST_MODEL_TYPE, CONFIG_FAST_LLM, CONFIG_GPT2, CONFIG_COMMON, HUGGINGFACE_CHECKPOINT_FORMAT = _CONFIGS[TEST_MODEL]
+
+
+requires_cuda = pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is not available")
 
 
 def get_test_data():
@@ -177,8 +185,8 @@ def get_test_data():
         documents = "".join(random.Random(1234).choices(characters, k=1000000)).splitlines()
         tokenizer = transformers.AutoTokenizer.from_pretrained(TOKENIZER_PATH)
 
-        documents = [np.array(tokenizer(document)["input_ids"], dtype=np.uint16) for document in documents]
-        MMapIndexedDataset.write_dataset(DATASET_PREFIX, documents)
+        documents = [np.array(tokenizer(document)["input_ids"], dtype=np.uint16) % 8192 for document in documents]
+        GPTMemmapDataset.write_dataset(DATASET_PREFIX, documents)
 
 
 def run_test_script(
@@ -220,25 +228,28 @@ def run_test_script(
         raise RuntimeError(path)
     if prepare_fn is not None:
         skip = prepare_fn(TEST_RESULTS_PATH / name, None if compare is None else TEST_RESULTS_PATH / compare, skip)
-    header = ["Megatron-LM/pretrain_gpt.py"] if is_megatron else ["--no-python", "fast-llm", "train", model_type]
+    if is_megatron:
+        script = [*script, f"--structured-logs-dir={path}", f"--data-cache-path={path}"]
+    else:
+        script = [model_type, *script, f"run.experiment_dir={path}"]
+    header = ["Megatron-LM/pretrain_gpt.py"] if is_megatron else ["--no-python", "fast-llm", "train"]
     command = [
         "torchrun",
         f"--nproc-per-node={num_gpus}",
         *header,
         *script,
     ]
-    if is_megatron:
-        command.extend([f"--structured-logs-dir={path}", f"--data-cache-path={path}"])
-    else:
-        command.append(f"run.experiment_dir={path}")
     print(" ".join(command))
     if skip:
         print("Reusing existing run.")
     else:
         get_test_data()
-        completed_proc = subprocess.run(command, env=env)
-        if completed_proc.returncode:
-            raise RuntimeError(f"Process failed with return code {completed_proc.returncode}")
+        if num_gpus == 1 and not is_megatron:
+            CliTrainingConfig.parse_and_run(script)
+        else:
+            completed_proc = subprocess.run(command, env=env)
+            if completed_proc.returncode:
+                raise RuntimeError(f"Process failed with return code {completed_proc.returncode}")
     if compare:
         if compare_fn is not None:
             compare_fn(TEST_RESULTS_PATH / name, TEST_RESULTS_PATH / compare)

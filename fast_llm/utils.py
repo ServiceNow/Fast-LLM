@@ -175,8 +175,12 @@ class Assert:
         ), f"Assertion failed: not fn({', '.join(itertools.chain((str(x) for x in args),(f'{str(k)}={str(v)}' for k,v in kwargs.items())))})"
 
 
-class Registry:
-    def __init__(self, name, data: dict):
+_KeyType = typing.TypeVar("_KeyType")
+_ValueType = typing.TypeVar("_ValueType")
+
+
+class Registry(typing.Generic[_KeyType, _ValueType]):
+    def __init__(self, name: str, data: dict[_KeyType, _ValueType]):
         self._name = name
         self._data = data.copy()
 
@@ -208,3 +212,13 @@ def log(*message, log_fn: typing.Union[BaseException, typing.Callable] = logger.
         raise log_fn(message)
     else:
         return log_fn(message)
+
+
+def normalize_probabilities(p: list[float]) -> list[float]:
+    import numpy as np
+
+    p = np.array(p)
+    Assert.custom(lambda x: np.all(x >= 0), p)
+    p_sum = p.sum()
+    Assert.gt(p_sum, 0)
+    return (p / p_sum).tolist()

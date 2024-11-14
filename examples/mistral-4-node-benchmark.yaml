@@ -1,0 +1,55 @@
+training:
+  train_iters: 100
+  num_workers: 8
+  logs:
+    interval: 10
+  validation:
+    iterations: null
+  test_iters: 0
+batch:
+  sequence_length: 8192
+  micro_batch_size: 1
+  batch_size: 32
+data:
+  format: random
+  split: [1, 0, 0]
+optimizer:
+  learning_rate:
+    base: 1.0e-05
+    decay_style: constant
+    warmup_iterations: 0
+  weight_decay: 0.1
+  beta_1: 0.9
+  beta_2: 0.95
+model:
+  base_model:
+    transformer:
+      normalization:
+        type: rms_norm
+        epsilon: 1.0e-05
+      num_layers: 32
+      hidden_size: 4096
+      ffn_hidden_size: 14336
+      num_attention_heads: 32
+      head_groups: 8
+      add_linear_biases: false
+      use_rotary_embeddings: true
+      gated: true
+      activation_type: silu
+      triton_rotary: true
+      kv_channels: 128
+      rotary_embedding_scale: -9.210340371976184
+      window_size: 4096
+      init_method_std: 0.009021
+      attention_dropout: 0.0
+      hidden_dropout: 0.0
+    vocab_size: 32000
+    tie_word_embeddings: false
+  multi_stage:
+    zero_stage: 2
+  distributed:
+    training_dtype: bf16
+    distributed_timeout: 3600
+    seed: 984059
+run:
+  experiment_dir: mistral_4_nodes_benchmark

@@ -1,5 +1,6 @@
 import abc
 import enum
+import pathlib
 import typing
 
 from fast_llm.config import Config, Field, FieldHint, check_field, config_class, skip_valid_if_none
@@ -145,7 +146,7 @@ class SpecialTokensConfig(Config):
 class TokenizerConfig(Config):
     """
     Configuration for the tokenizer.
-    Currently, the tokenizer is only needed for FIM.
+    The tokenizer is needed for FIM and dataset preparation.
     """
 
     format: str = Field(
@@ -166,11 +167,11 @@ class TokenizerConfig(Config):
 
 
 @config_class()
-class AbstractDataConfig(Config):
+class DataConfig(Config):
     _abstract = True
 
 
-class AbstractData(abc.ABC):
+class Data(abc.ABC):
     # TODO: Improve interface
     @abc.abstractmethod
     def setup(self, distributed: "Distributed", samples_per_phase: dict[PhaseType, int]):
@@ -189,52 +190,42 @@ class AbstractData(abc.ABC):
         pass
 
 
-@config_class()
-class DataConfig(AbstractDataConfig):
+class Dataset(abc.ABC):
     """
-    Configuration for the dataset(s), split and sampling.
-    Currently hard-coded to a GPT dataset.
-    TODO: Extract generalizable content.
+    A generic dataset class compatible with torch.utils.data.Dataset but with a slightly different signature.
     """
 
-    _abstract = False
+    @property
+    @abc.abstractmethod
+    def name(self):
+        """
+        A name for the dataset to facilitate identification and debugging.
+        """
 
-    tokenizer: TokenizerConfig = Field(
-        default_factory=TokenizerConfig,
-        desc="Configuration for the tokenizer (for FIM).",
-        hint=FieldHint.feature,
-    )
-    fim: FimConfig = Field(
-        default_factory=FimConfig,
-        desc="Configuration for Fill In the Middle (FIM).",
-        hint=FieldHint.feature,
-    )
-    # TODO: set default to [1,0,0]?
-    split: list[float] = Field(
-        default_factory=lambda: [969, 30, 1],
-        desc="Split ratio for train, valid and test datasets.",
-        hint=FieldHint.core,
-        valid=_validate_split,
-    )
-    format: DatasetSource = Field(
-        default=DatasetSource.list,
-        desc="Format for the dataset definition.",
-        hint=FieldHint.core,
-    )
-    path: list[str] = Field(
-        default_factory=list,
-        desc="Path or list of paths and weights.",
-        hint=FieldHint.core,
-        valid=_validate_path,
-    )
-    data_sample_warn_time_ms: float = Field(
-        default=1000,
-        desc="Warn if a sample takes too long to load.",
-        hint=FieldHint.feature,
-        valid=check_field(Assert.gt, 0),
-    )
-    multiprocessing_context: MultiprocessingContext = Field(
-        default=MultiprocessingContext.spawn,
-        desc="Multiprocessing context. Do not touch.",
-        hint=FieldHint.expert,
-    )
+
+@config_class
+class SamplingConfig(Config):
+    num_samples: int = Field(default=1, desc="Number of samples to generate.")
+    seed: int = Field(default=0, desc="Random seed.")
+    cache_directory: pathlib.Path | None = Field(default=None, desc="Path to the sampling cache directory.")
+    verbose: bool = Field(default=True, desc="Log sampling progress.")
+
+
+class SamplableDataset(Dataset):
+    def sample(self, config: SamplingConfig, data: Data):
+        pass
+
+
+class SampledDataset(Dataset):
+    """
+    A sampled dataset class containing a prepared list of samples to be indexed sequentially (as-is) during training.
+    (See the `Sampler` class below.)
+    """
+
+    @abc.abstractmethod
+    def __getitem__(self, index: int):
+        pass
+
+    @abc.abstractmethod
+    def __len__(self):
+        pass

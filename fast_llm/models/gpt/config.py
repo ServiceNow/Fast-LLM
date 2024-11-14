@@ -1,14 +1,45 @@
 import typing
 
-from fast_llm.config import Field, FieldHint, config_class
-from fast_llm.data.config import DataConfig
+from fast_llm.config import Field, FieldHint, FieldUpdate, config_class
+from fast_llm.data.gpt.config import GPTDataConfig
+from fast_llm.engine.checkpoint.config import CheckpointFormat, CheckpointHandler
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig, PretrainedFastLLMModelConfig
 from fast_llm.engine.training.config import TrainerConfig
 from fast_llm.layers.language_model.config import LanguageModelArchitectureConfig, LanguageModelBaseConfig
 from fast_llm.models.gpt.megatron import set_megatron_distributed_seeds
 
 if typing.TYPE_CHECKING:
-    from fast_llm.engine.multi_stage.conversion import ModelConverter
+    pass
+
+
+class GPTHuggingfaceCheckpointFormat(CheckpointFormat):
+    support_optimizer: typing.ClassVar[bool] = False
+
+    @classmethod
+    def get_handler_class(cls) -> type[CheckpointHandler]:
+        from fast_llm.models.gpt.conversion import AutoGPTHuggingfaceCheckpointHandler
+
+        return AutoGPTHuggingfaceCheckpointHandler.get_handler_class(cls.name)
+
+
+class AutoGPTHuggingfaceCheckpointFormat(GPTHuggingfaceCheckpointFormat):
+    name: typing.ClassVar[str] = "auto"
+
+
+class Starcoder2GPTHuggingfaceCheckpointFormat(GPTHuggingfaceCheckpointFormat):
+    name: typing.ClassVar[str] = "starcoder2"
+
+
+class LlamaGPTHuggingfaceCheckpointFormat(GPTHuggingfaceCheckpointFormat):
+    name: typing.ClassVar[str] = "llama"
+
+
+class MistralGPTHuggingfaceCheckpointFormat(GPTHuggingfaceCheckpointFormat):
+    name: typing.ClassVar[str] = "mistral"
+
+
+class MixtralGPTHuggingfaceCheckpointFormat(GPTHuggingfaceCheckpointFormat):
+    name: typing.ClassVar[str] = "mixtral"
 
 
 @config_class()
@@ -27,16 +58,10 @@ class GPTArchitectureConfig(LanguageModelArchitectureConfig):
             assert default.pop("transposed_mlp_weight")
         return super()._from_dict(default, strict, flat)
 
-    @classmethod
-    def get_converter_class(cls, model_type: str | None = None) -> type["ModelConverter"]:
-        from fast_llm.models.gpt.conversion import AutoGPTConverter
-
-        return AutoGPTConverter if model_type is None else AutoGPTConverter.converter_map[model_type]
-
 
 @config_class()
 class GPTBaseModelConfig(LanguageModelBaseConfig, GPTArchitectureConfig):
-    architecture_cls = GPTArchitectureConfig
+    architecture_class = GPTArchitectureConfig
 
     # Debug, to get an exact match with megatron init.
     use_megatron_initialization: bool = Field(
@@ -65,7 +90,15 @@ class GPTBaseModelConfig(LanguageModelBaseConfig, GPTArchitectureConfig):
 @config_class()
 class GPTModelConfig(FastLLMModelConfig):
     _abstract = False
-    base_model: GPTBaseModelConfig = Field(default_factory=GPTBaseModelConfig)
+    model_name: typing.ClassVar[str] = "gpt"
+    base_model: GPTBaseModelConfig = FieldUpdate(default_factory=GPTBaseModelConfig)
+    checkpoint_formats: typing.ClassVar[tuple[type[CheckpointFormat], ...]] = FastLLMModelConfig.checkpoint_formats + (
+        AutoGPTHuggingfaceCheckpointFormat,
+        Starcoder2GPTHuggingfaceCheckpointFormat,
+        LlamaGPTHuggingfaceCheckpointFormat,
+        MistralGPTHuggingfaceCheckpointFormat,
+        MixtralGPTHuggingfaceCheckpointFormat,
+    )
 
     @classmethod
     def get_model_class(cls):
@@ -83,17 +116,13 @@ class GPTModelConfig(FastLLMModelConfig):
 @config_class()
 class PretrainedGPTModelConfig(PretrainedFastLLMModelConfig):
     _abstract = False
-    model: GPTModelConfig = Field(default_factory=GPTModelConfig)
+    model: GPTModelConfig = FieldUpdate(default_factory=GPTModelConfig)
 
 
 @config_class()
 class GPTTrainerConfig(PretrainedGPTModelConfig, TrainerConfig):
 
-    data: DataConfig = Field(
-        default_factory=DataConfig,
-        desc="Configuration for the dataset and model-independent preprocessing.",
-        hint=FieldHint.core,
-    )
+    data: GPTDataConfig = FieldUpdate(default_factory=GPTDataConfig)
 
     def _setup(self):
         super()._setup()
@@ -108,14 +137,3 @@ class GPTTrainerConfig(PretrainedGPTModelConfig, TrainerConfig):
         from fast_llm.models.gpt.trainer import GPTTrainer
 
         return GPTTrainer
-
-
-class HuggingfaceModelType:
-    """
-    An enum for the huggingface models with conversion support.
-    """
-
-    starcoder2 = "starcoder2"
-    llama = "llama"
-    mistral = "mistral"
-    mixtral = "mixtral"

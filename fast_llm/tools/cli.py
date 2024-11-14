@@ -15,13 +15,15 @@ def fast_llm(args=None):
     # (Pre-)configure logging
     configure_logging()
     parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument("subcommand", choices=["train", "convert"])
+    parser.add_argument("subcommand", choices=["train", "convert", "prepare"])
     parsed, unparsed = parser.parse_known_args(args)
     try:
         if parsed.subcommand == "train":
             from fast_llm.tools.train import CliTrainingConfig as Runnable
         elif parsed.subcommand == "convert":
             from fast_llm.tools.convert import ConversionConfig as Runnable
+        elif parsed.subcommand == "prepare":
+            from fast_llm.tools.prepare_dataset import PrepareDatasetConfig as Runnable
         else:
             raise RuntimeError("Unknown subcommand")
         Runnable.parse_and_run(unparsed)
