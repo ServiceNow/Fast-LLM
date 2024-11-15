@@ -328,6 +328,7 @@ Create a configuration file for the dataset preparation. Copy the following cont
 
     dataset:
       path: openwebtext
+      trust_remote_code: true
 
     tokenizer:
       path: /mnt/inputs/SmolLM2-135M/tokenizer.json
@@ -346,6 +347,7 @@ Create a configuration file for the dataset preparation. Copy the following cont
 
     dataset:
       path: openwebtext
+      trust_remote_code: true
     
     tokenizer:
       path: /mnt/inputs/Llama-3.2-1B/tokenizer.json
@@ -362,13 +364,13 @@ Fast-LLM ships with a `prepare` command that'll download and preprocess the data
     ```bash
     docker run -it --rm ghcr.io/servicenow/fast-llm:latest \
         -v ~/inputs:/mnt/inputs \
-        fast-llm prepare --config /mnt/inputs/prepare-config.yaml
+        fast-llm prepare gpt_memmap --config /mnt/inputs/prepare-config.yaml
     ```
 
 === "Local Environment"
 
     ```bash
-    fast-llm prepare --config /mnt/inputs/prepare-config.yaml
+    fast-llm prepare gpt_memmap --config /mnt/inputs/prepare-config.yaml
     ```
 
 === "Slurm"
@@ -386,7 +388,7 @@ Fast-LLM ships with a `prepare` command that'll download and preprocess the data
         --container-image="ghcr.io/servicenow/fast-llm:latest" \
         --container-mounts="${HOME}/inputs:/mnt/inputs,${HOME}/results:/mnt/results" \
         --ntasks-per-node=$SLURM_NTASKS_PER_NODE \
-        bash -c "fast-llm prepare --config /mnt/inputs/prepare-config.yaml"
+        bash -c "fast-llm prepare gpt_memmap --config /mnt/inputs/prepare-config.yaml"
     EOF
     ```
 
@@ -411,7 +413,7 @@ Fast-LLM ships with a `prepare` command that'll download and preprocess the data
           containers:
             - name: fast-llm-prepare-container
               image: ghcr.io/servicenow/fast-llm:latest
-              command: ["fast-llm", "prepare"]
+              command: ["fast-llm", "prepare", "gpt_memmap"]
               args:
                 - "--config"
                 - "/mnt/inputs/prepare-config.yaml"
