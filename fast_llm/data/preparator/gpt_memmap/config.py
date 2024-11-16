@@ -74,6 +74,11 @@ class DatasetPreparatorDistributedConfig(Config):
         hint=FieldHint.expert,
         valid=check_field(Assert.gt, 0),
     )
+    init_method: str = Field(
+        default="env://",
+        desc="URL specifying how to initialize the process group."
+        hint=FieldHint.expert,
+    )
     rank: int = Field(
         default=None,
         desc="Rank of the local process. Typically provided by torchrun or equivalent through the `RANK` environment variable.",
