@@ -76,7 +76,7 @@ class DatasetPreparatorDistributedConfig(Config):
     )
     init_method: str = Field(
         default="env://",
-        desc="URL specifying how to initialize the process group."
+        desc="URL specifying how to initialize the process group.",
         hint=FieldHint.expert,
     )
     rank: int = Field(
