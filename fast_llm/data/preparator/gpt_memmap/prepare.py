@@ -81,6 +81,7 @@ class GPTMemmapDatasetPreparator(DatasetPreparator):
         if self._config.distributed.world_size > 1:
             torch.distributed.init_process_group(
                 backend=self._config.distributed.backend,
+                init_method=self._config.distributed.init_method,
                 rank=self._config.distributed.rank,
                 world_size=self._config.distributed.world_size,
             )
