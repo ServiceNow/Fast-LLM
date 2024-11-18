@@ -1,27 +1,84 @@
 ---
-title: Fast-LLM
+title: "Fast-LLM: Train Large Language Models Faster Than Ever Before"
 hide:
   - navigation
-  - toc
-  - feedback
 ---
 
-# Fast-LLM
+Introducing **Fast-LLM**, the cutting-edge open-source library built for training large language models (LLMs) with **unmatched speed, scalability, and cost-efficiency**. Developed by [ServiceNow Research](https://www.servicenow.com/research/)'s Foundation Models Lab, Fast-LLM is engineered to meet the rigorous demands of professional AI researchers, AI/ML engineers, academic and industrial research institutions, and enterprise product development teams pushing the limits of generative AI. **Achieve groundbreaking research and high-stakes production goals faster with Fast-LLM.**
 
-Welcome to Fast-LLM, an innovative library designed for training large language models with an emphasis on speed, flexibility, and convenience. Developed by ServiceNow Research's Foundation Models Lab, Fast-LLM is tailored to meet the rigorous demands of enterprise AI solutions, providing a foundation for our bespoke generative AI applications.
+[Start your journey with Fast-LLM](quick-start.md) and explore the future of LLM training. Dive into [real-world use cases](recipes/train-llama-8b.md) to see how Fast-LLM can elevate your training workflows.
 
-## Key Features
+## Why Fast-LLM?
 
-- **Speed**: Fast-LLM delivers unparalleled training throughput, achieving speeds up to 4,000 tokens/s/GPU for Mixtral-8x7B and nearly 9,000 tokens/s/GPU for Mistral-7B, facilitating rapid model development and iteration.
-- **Flexibility**: The library supports a diverse array of model architectures including, but not limited to, GPT, StarCoder, Llama, Mistral, and Mixtral. It is designed to be adaptable, allowing for easy expansion and customization to a broad range of models and training scenarios.
-- **Convenience**: Designed with the user in mind, Fast-LLM aims to be straightforward and intuitive, enabling researchers and developers to focus more on innovation and less on the complexities of the tooling.
+Fast-LLM is designed for professionals who demand exceptional performance for efficient large-scale (FLOPS) language model training on GPUs. Fast-LLM integrates effortlessly into existing ML pipelines and goes beyond off-the-shelf commercial frameworks, like NVIDIA NeMo Megatron, to deliver a **robust, flexible, and high-performance open-source alternative**. Whether you're optimizing for speed, cost, or scalability, Fast-LLM helps you get the most out of your training infrastructure.
+
+### The Fast-LLM Advantage
+
+Fast-LLM isn't just another library, **it's a platform for powering the next generation of AI breakthroughs**. Here's what sets it apart:
+
+-   **🚀 Purpose-Built for Small- and Large-Scale AI:** Optimized specifically for training language models of all sizes, Fast-LLM excels from **small models around 1B parameters to massive clusters running 70B+ parameter models**, with kernels that are fine-tuned for maximum throughput across this entire range. At 10B-parameter scale, Fast-LLM avoids costly 3D-paralelism through memory optimization techniques such as ZeRO and activation recomputation, whereas at 100B-parameter scale, Fast-LLM optimally supports 3D-parallelism; making Fast-LLM the go-to choice for diverse training needs.
+
+-   **🧠 Unified Support for GPT-Like Architectures:** Fast-LLM **unifies all GPT-like model implementations** in a [single Python file](https://github.com/ServiceNow/Fast-LLM/blob/main/fast_llm/models/gpt/model.py), and unlike HuggingFace transformers where every model has it's own, mostly independent, implementation, Fast-LLM reduces coding and adapts effortlessly, even with custom architectures.
+
+-   **💰 Cost Efficiency That Sets Fast-LLM Apart:**
+
+    -   **Lower Training Costs:** With higher throughput per GPU, Fast-LLM reduces the training time required. For instance, training models can cheaper compared to other frameworks due to faster processing and better memory efficiency.
+
+    -   **More Tokens for Your Budget:** Train on more tokens for the same budget, leading to better-trained models without breaking your financial constraints.
+
+    <!-- [Learn more about Fast-LLM's cost efficiency and see detailed comparisons](cost-efficiency.md). -->
+
+-   **🔓 Openness Without Compromise:** Fast-LLM's open-source approach ensures that you can **fully customize and extend the library** to fit your exact needs, without the restrictions of proprietary software. Developed transparently by a community of experts on GitHub, every change is **publicly discussed and vetted**, fostering **trust and collaboration** so you can innovate with confidence, knowing the entire development process and decision making is out in the open.
+
+-   **🌍 Community-Driven Development:** Built by professionals for professionals, Fast-LLM's development is transparent, with an open invitation to the community to contribute. [**Join the Fast-LLM community**](join-us.md) to help shape the future of large-scale AI training.
+
+### Key Features
+
+Fast-LLM offers all the capabilities you need to accelerate your LLM training and **push the boundaries of what's possible**:
+
+-   **🚀 Speed Like No Other:** Achieve record-breaking training throughput with Fast-LLM. For instance, train Mistral-7B at **9,800 tokens/s/GPU** on a 4-node cluster with 32 H100 GPUs (batch size 32, sequence length 8k). Our optimized kernels, advanced parallelism, and memory-efficient techniques drastically reduce training time and cost.
+
+-   **📡 Unmatched Scalability:** Seamlessly scale from a single GPU to large compute clusters. Fast-LLM supports 3D parallelism (data, tensor, and pipeline), sequence length parallelism, and ZeRO-1,2,3 techniques for maximum memory efficiency. Scale to the size you need without sacrificing performance.
+
+-   **🎛️ Total Flexibility:** Compatible with all major language model architectures, including but not limited to Llama, Mistral, StarCoder, and Mixtral. Fast-LLM's modular design gives you full control over your training workflows.
+
+-   **📦 Seamless Integration:** Integrate smoothly with popular libraries such as [Hugging Face Transformers](https://huggingface.co/transformers). Benefit from Fast-LLM's optimizations without disrupting your existing pipelines.
+
+-   **🛠️ Professional-Grade Tools:** Enjoy mixed precision training, large batch training, and gradient accumulation. Fast-LLM ensures reproducibility through deterministic behavior and provides pre-built Docker images, YAML configurations, and a simple, intuitive command-line interface.
+
+[Get Fast-LLM](https://github.com/ServiceNow/Fast-LLM/releases) and start training your large language models in record time. [Join the Fast-LLM community](join-us.md) and collaborate with like-minded professionals to advance the state-of-the-art in AI research and development.
+
+## Use Cases and Success Stories
+
+Fast-LLM powers the world's most advanced AI projects:
+
+-   **NLP Research and Development:** Train state-of-the-art language models for natural language understanding, summarization, and conversational AI.
+-   **Enterprise AI Solutions:** Accelerate time-to-market for AI products by reducing training costs and enabling faster iteration.
+-   **Academic Collaborations:** Drive AI innovation with high-performance training capabilities that support cutting-edge research in machine learning.
+
+See how Fast-LLM has helped early adopters achieve faster results. [Explore use cases and success stories](success-stories/starcoder-2.md).
 
 ## Project Scope and Objectives
 
-Fast-LLM seeks to provide a high-quality alternative to existing frameworks such as Megatron-LM and NeMo. It is compatible with 3D parallelism and is designed to integrate seamlessly with Huggingface Transformers, promoting not only efficient model training but also straightforward model deployment and inference.
+Fast-LLM is designed to be the **go-to solution** for those training the most sophisticated language models. Our objectives include:
+
+-   **Accelerating Training Workflows:** Deliver the fastest LLM training experience with optimized kernel efficiency, parallelism, and memory management.
+-   **Supporting a Broad Range of Architectures:** Offer built-in support for all major language model architectures, with an architecture-agnostic approach that allows users to easily adapt the framework to emerging models.
+-   **Enabling Seamless Integration and Deployment:** Integrate effortlessly into existing ML pipelines, including [Hugging Face Transformers](https://huggingface.co/transformers) and [Kubernetes](https://kubernetes.io)-based clusters.
+-   **Advancing LLM Research and Production-Readiness:** Be suitable for both cutting-edge research and mission-critical production workloads.
 
 ## Collaboration and Contribution
 
-The project is set for open-sourcing in Q2 2024, inviting contributions from the community in areas such as testing, bug fixes, new features, and documentation. We are especially interested in enhancements related to custom kernels using OpenAI's Triton JIT compiler and adaptations for alternative hardware platforms like AMD and Intel.
+As Fast-LLM evolves, we invite the community to contribute and help shape its future. We welcome:
 
-For more details on getting involved or using Fast-LLM, please refer to our [contribution guidelines](https://github.com/ServiceNow/Fast-LLM/CONTRIBUTING.md) and the subsequent sections of this documentation.
+-   **Testing and Bug Fixes:** Help us identify issues and improve stability.
+-   **Feature Development:** Contribute new models, new training features, and new optimizations.
+-   **Documentation and Tutorials:** Make Fast-LLM more accessible by improving our documentation and writing practical guides.
+
+Fast-LLM is more than just software, it's a community. Get involved by exploring our [contribution guidelines](developers/contributing.md) and engaging with us on [GitHub Discussions](https://github.com/ServiceNow/Fast-LLM/discussions).
+
+## Getting Started
+
+Ready to dive in? Check out our [quick-start guide](quick-start.md) for an overview of how to set up and run Fast-LLM on different platforms, including [Slurm](https://slurm.schedmd.com) and [Kubernetes](https://kubernetes.io). Explore the [examples](https://github.com/ServiceNow/Fast-LLM/tree/main/examples) for pre-configured setups to help you get started quickly with your own training experiments.
+
+For any questions or issues, open an [issue](https://github.com/ServiceNow/Fast-LLM/issues) or join the [community discussion](https://github.com/ServiceNow/Fast-LLM/discussions).
