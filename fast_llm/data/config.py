@@ -225,11 +225,11 @@ class SplitDataset(Dataset, PhaseSplits[_DatasetType], typing.Generic[_DatasetTy
         return self._name
 
 
-class SampledSplitDataset(SplitDataset, SplitDataset[_SampledDatasetType], typing.Generic[_SampledDatasetType]):
+class SampledSplitDataset(SplitDataset[_SampledDatasetType], typing.Generic[_SampledDatasetType]):
     pass
 
 
-class SamplableSplitDataset(SplitDataset, SplitDataset[_SamplableDatasetType], typing.Generic[_SamplableDatasetType]):
+class SamplableSplitDataset(SplitDataset[_SamplableDatasetType], typing.Generic[_SamplableDatasetType]):
     def sample(self, sampling_configs: PhaseSplits[SamplingConfig], data: Data):
         return SampledSplitDataset(
             f"{self.name}_sampled",
