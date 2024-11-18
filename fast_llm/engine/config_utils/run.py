@@ -164,7 +164,7 @@ class Run:
             self._artifact_dir = run_dir / "artifacts" / str(self._distributed_config.rank)
             log_dir = run_dir / "logs"
         else:
-            _experiment_directory, self._artifact_dir, log_dir = None, None, None
+            self._experiment_directory, self._artifact_dir, log_dir = None, None, None
             self.index = None
 
         if self._config.structured_logs:

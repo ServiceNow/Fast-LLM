@@ -108,6 +108,7 @@ echo "=== END OF ENVIRONMENT INFORMATION ==="
 # 📝 Additional Context
 
 Include any other information that may help us understand the issue, such as:
+
 - Recent changes to the configuration or code.
 - Whether the issue occurs consistently or intermittently.
 - Any troubleshooting steps you have already tried.

@@ -5,7 +5,16 @@ import typing
 import packaging.version
 
 from fast_llm import __version__
-from fast_llm.config import Config, Field, FieldHint, NoAutoValidate, check_field, config_class, skip_valid_if_none
+from fast_llm.config import (
+    Config,
+    Field,
+    FieldHint,
+    NoAutoValidate,
+    ValidationError,
+    check_field,
+    config_class,
+    skip_valid_if_none,
+)
 from fast_llm.engine.base_model.config import BaseModelConfig
 from fast_llm.engine.checkpoint.config import (
     CheckpointFormat,
@@ -286,7 +295,13 @@ class FastLLMModelConfig(Config):
 
     @classmethod
     def load_metadata(cls, config: CheckpointLoadMetadataConfig) -> "CheckpointMetadata":
-        metadata = config.format.get_handler_class().load_metadata(config)
+        with NoAutoValidate():
+            metadata = config.format.get_handler_class().load_metadata(config)
+        try:
+            metadata.validate()
+        except ValidationError:
+            metadata.to_logs(log_fn=logger.error, title="Loaded metadata")
+            raise ValueError(f"Validation failed for checkpoint metadata. See logs above for details.")
         Assert.eq(metadata.model, cls)
         return metadata
 
@@ -420,12 +435,7 @@ class CheckpointMetadata(Config):
             default["format"] = DistributedCheckpointFormat
         if "fast_llm_version" not in default:
             default["fast_llm_version"] = "0"
-        if "config" not in default:
-            default["config"] = {
-                "base_model": default.pop("model_config", {}),
-                "multi_stage": default.pop("multi_stage_config", {}),
-                "distributed": default.pop("distributed_config", {}),
-            }
+
         # Determine the model config class.
         from fast_llm.models.auto import model_registry
 
@@ -434,6 +444,16 @@ class CheckpointMetadata(Config):
             Assert.incl(model_config_class, model_registry)
             model_config_class = model_registry[model_config_class]
             default["model"] = model_config_class
+
+        # TODO v0.2: Remove backward compatibility.
+        if "config" not in default:
+            default["config"] = {
+                "base_model": model_config_class.get_base_model_config_class().from_flat_dict(
+                    default.pop("model_config", {})
+                ),
+                "multi_stage": default.pop("multi_stage_config", {}),
+                "distributed": default.pop("distributed_config", {}),
+            }
         # Instantiate the config with the appropriate class
         config = default.get("config", {})
         if isinstance(config, dict):

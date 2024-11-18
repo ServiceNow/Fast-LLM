@@ -17,7 +17,7 @@ spec:
               effect: NoSchedule
           containers:
             - name: pytorch
-              image: servicenowdocker/fast-llm:latest
+              image: ghcr.io/servicenow/fast-llm:latest
               resources:
                 limits:
                   nvidia.com/gpu: 8
@@ -77,7 +77,7 @@ spec:
               effect: NoSchedule
           containers:
             - name: pytorch
-              image: servicenowdocker/fast-llm:latest
+              image: ghcr.io/servicenow/fast-llm:latest
               resources:
                 limits:
                   nvidia.com/gpu: 8

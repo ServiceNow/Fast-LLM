@@ -30,7 +30,7 @@ theme:
     - content.code.copy
     # - content.code.select
     # - content.footnote.tooltips
-    # - content.tabs.link
+    - content.tabs.link
     - content.tooltips
     # - header.autohide
     # - navigation.expand
@@ -138,7 +138,7 @@ markdown_extensions:
   - pymdownx.tilde
 
 plugins:
-  - blog
+  # - blog
   - mkdocstrings:
       default_handler: python
       handlers:
@@ -149,30 +149,33 @@ plugins:
   - section-index
   - social:
       cards_layout_options:
-        color: #173a58
+        color: "#173a58"
   - git-revision-date-localized:
       enable_creation_date: true
   - git-committers:
       repository: ServiceNow/Fast-LLM
       branch: main
+  - bibtex:
+      bib_file: "docs/refs.bib"
 
 nav:
-  - 🏠 Home: index.md
-  - 🚀 Getting Started:
-    - 📜 License: license.md
-  - 🍳 Tutorial:
-    - tutorial/index.md
-    - 🚀 Getting started: tutorial/getting_started.md
-    - 💨 Load Mistral-7B: tutorial/prepare_mistral.md
-    - 📊 Prepare and load the dataset: tutorial/prepare_data.md
-    - 💨 Prepare the training configuration: tutorial/prepare_training.md
-    - 🌪 Launch and monitor training: tutorial/launch_training.md
-    - 🤗 Convert to Huggingface: tutorial/convert_to_huggingface.md
-  - 🗂️ Reference:
-    - reference/index.md
-  - 🧑‍💻 Developer Guide:
-    - developers/index.md
-    - 🛠️ How to contribute: developers/contribute.md
-  - 👥 Community:
-    - community/index.md
-    - 🫶 Feedback: community/feedback.md
+  - Welcome: index.md
+  - Get Started:
+    - Quick Start: quick-start.md
+    - Help: help.md
+    - Success Stories:
+      - StarCoder 2: success-stories/starcoder-2.md
+    - License: license.md
+  - Recipes:
+    - Data Preparation: recipes/data-preparation.md
+    - Train Llama 8B from scratch: recipes/train-llama-8b.md
+    - Continue training Llama 8B: recipes/continue-training-llama-8b.md
+    - Upcycle Llama 3B to MoE: recipes/upcycle-llama-3b-to-moe.md
+  - Reference:
+    - Configuration: reference/configuration.md
+  - Developers:
+    - Contributing: developers/contributing.md
+    - Style Guide: developers/style-guide.md
+    - Development Practices: developers/dev-practices.md
+  - About Us: about-us.md
+  - Join Us: join-us.md

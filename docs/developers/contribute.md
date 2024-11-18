@@ -1,3 +1,0 @@
-# Contributing to Fast-LLM
-
-Coming soon...

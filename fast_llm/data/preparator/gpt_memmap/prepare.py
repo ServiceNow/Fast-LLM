@@ -34,7 +34,6 @@ class GPTMemmapDatasetPreparator(DatasetPreparator):
         }
 
     def _save_shard(self, args) -> dict:
-
         shard_idx, shard_dataset = args
         prefix = f"shard_{self._config.distributed.rank}_{shard_idx}"
         shard_output_path = self._config.output_path / prefix
@@ -51,7 +50,6 @@ class GPTMemmapDatasetPreparator(DatasetPreparator):
         return dataset_dict
 
     def run(self):
-
         # Set transformers logging verbosity
         transformers.logging.set_verbosity_error()
 
@@ -159,4 +157,4 @@ class GPTMemmapDatasetPreparator(DatasetPreparator):
 
         # Clean up downloaded dataset
         if self._config.remove_downloads and self._config.distributed.rank == 0:
-            shutil.rmtree(download_path)
+            shutil.rmtree(download_path, ignore_errors=True)

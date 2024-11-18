@@ -2,11 +2,9 @@
 title: License
 ---
 
-# License and citations
-
 Fast-LLM is licenced under the Apache 2.0 license:
 
-```
+```text
 Copyright 2024 ServiceNow, Inc.
 
 Licensed under the Apache License, Version 2.0 (the "License");
