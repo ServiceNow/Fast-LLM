@@ -271,11 +271,33 @@ class TransformerConfig(TransformerArchitectureConfig, BaseModelConfig):
         hint=FieldHint.optional,
         valid=check_field(Assert.geq, 0),
     )
+    init_method_max: float = Field(
+        default=None,
+        desc="Max value for clamping initialized weights. Default: float('inf')",
+        hint=FieldHint.optional,
+    )
+    init_method_min: float = Field(
+        default=None,
+        desc="Min value for clamping initialized weights. Default: -float('inf')",
+        hint=FieldHint.optional,
+        valid=skip_valid_if_none(check_field(Assert.leq, init_method_max)),
+    )
     init_method_std_qkv: float = Field(
         default=None,
         desc="Scale for the query, key and value weight initialization. Default: init_method_std",
         hint=FieldHint.optional,
         valid=check_field(Assert.geq, 0),
+    )
+    init_method_max_qkv: float = Field(
+        default=None,
+        desc="Max value for clamping initialized weights for query, key and value matrices. Default: float('inf')",
+        hint=FieldHint.optional,
+    )
+    init_method_min_qkv: float = Field(
+        default=None,
+        desc="Min value for clamping initialized weights for query, key and value matrices. Default: -float('inf')",
+        hint=FieldHint.optional,
+        valid=skip_valid_if_none(check_field(Assert.leq, init_method_max_qkv)),
     )
     init_method_std_attn_proj: float = Field(
         default=None,
@@ -283,17 +305,50 @@ class TransformerConfig(TransformerArchitectureConfig, BaseModelConfig):
         hint=FieldHint.optional,
         valid=check_field(Assert.geq, 0),
     )
+    init_method_max_attn_proj: float = Field(
+        default=None,
+        desc="Max value for clamping initialized weights for attention projection. Default: float('inf')",
+        hint=FieldHint.optional,
+    )
+    init_method_min_attn_proj: float = Field(
+        default=None,
+        desc="Min value for clamping initialized weights for attention projection. Default: -float('inf')",
+        hint=FieldHint.optional,
+        valid=skip_valid_if_none(check_field(Assert.leq, init_method_max_attn_proj)),
+    )
     init_method_std_mlp_1: float = Field(
         default=None,
         desc="Scale for the MLP first layer weight initialization. Default: init_method_std",
         hint=FieldHint.optional,
         valid=check_field(Assert.geq, 0),
     )
+    init_method_max_mlp_1: float = Field(
+        default=None,
+        desc="Max value for clamping initialized weights for MLP first layer. Default: float('inf')",
+        hint=FieldHint.optional,
+    )
+    init_method_min_mlp_1: float = Field(
+        default=None,
+        desc="Min value for clamping initialized weights for MLP first layer. Default: -float('inf')",
+        hint=FieldHint.optional,
+        valid=skip_valid_if_none(check_field(Assert.leq, init_method_max_mlp_1)),
+    )
     init_method_std_mlp_2: float = Field(
         default=None,
         desc="Scale for the MLP second layer weight initialization. Default: init_method_std",
         hint=FieldHint.optional,
         valid=check_field(Assert.geq, 0),
+    )
+    init_method_max_mlp_2: float = Field(
+        default=None,
+        desc="Max value for clamping initialized weights for MLP second layer. Default: float('inf')",
+        hint=FieldHint.optional,
+    )
+    init_method_min_mlp_2: float = Field(
+        default=None,
+        desc="Min value for clamping initialized weights for MLP second layer. Default: -float('inf')",
+        hint=FieldHint.optional,
+        valid=skip_valid_if_none(check_field(Assert.leq, init_method_max_mlp_2)),
     )
     attention_dropout: float = Field(
         default=0.0,

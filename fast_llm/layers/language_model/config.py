@@ -118,6 +118,17 @@ class LanguageModelBaseConfig(LanguageModelArchitectureConfig, BaseModelConfig):
         hint=FieldHint.feature,
         valid=check_field(Assert.geq, 0),
     )
+    init_method_max_embed: float = Field(
+        default=None,
+        desc="Max value for clamping initialized weights of the vocabulary embedding and output (logits).",
+        hint=FieldHint.feature,
+    )
+    init_method_min_embed: float = Field(
+        default=None,
+        desc="Min value for clamping initialized weights of the vocabulary embedding and output (logits).",
+        hint=FieldHint.feature,
+        valid=check_field(Assert.geq, init_method_max_embed),
+    )
     cross_entropy_impl: CrossEntropyImpl = Field(
         default=CrossEntropyImpl.auto,
         desc="Implementation for the cross-entropy computation.",

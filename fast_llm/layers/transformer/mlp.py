@@ -17,8 +17,16 @@ class MLPBase(Layer, ABC):
         super().__init__()
         self._name = name
 
-        init_method_1 = init_normal_(std=config.init_method_std_mlp_1)
-        init_method_2 = init_normal_(std=config.init_method_std_mlp_2)
+        init_method_1 = init_normal_(
+            std=config.init_method_std_mlp_1,
+            min_val=config.init_method_min_mlp_1,
+            max_val=config.init_method_max_mlp_1,
+        )
+        init_method_2 = init_normal_(
+            std=config.init_method_std_mlp_2,
+            min_val=config.init_method_min_mlp_2,
+            max_val=config.init_method_max_mlp_2,
+        )
 
         hidden_dim = tensor_space.get_tensor_dim(TransformerDimNames.hidden)
         self._intermediate_dim = tensor_space.get_tensor_dim(TransformerDimNames.composite_expert_mlp)
