@@ -118,12 +118,12 @@ class LanguageModelBaseConfig(LanguageModelArchitectureConfig, BaseModelConfig):
         hint=FieldHint.feature,
         valid=check_field(Assert.geq, 0),
     )
-    init_method_max_embed: float = Field(
+    init_method_max_embed: float|None = Field(
         default=None,
         desc="Max value for clamping initialized weights of the vocabulary embedding and output (logits).",
         hint=FieldHint.feature,
     )
-    init_method_min_embed: float = Field(
+    init_method_min_embed: float|None = Field(
         default=None,
         desc="Min value for clamping initialized weights of the vocabulary embedding and output (logits).",
         hint=FieldHint.feature,
@@ -177,15 +177,12 @@ class LanguageModelBaseConfig(LanguageModelArchitectureConfig, BaseModelConfig):
     def _validate(self):
         if self.transformer.init_method_std is None:
             self.transformer.init_method_std = self.transformer.hidden_size**-0.5
-        if self.transformer.init_method_max is None:
-            self.transformer.init_method_max = float("inf")
-        if self.transformer.init_method_min is None:
-            self.transformer.init_method_min = float("-inf")
         if self.init_method_std_embed is None:
             self.init_method_std_embed = self.transformer.init_method_std
         if self.init_method_max_embed is None:
             self.init_method_max_embed = self.transformer.init_method_max
         if self.init_method_min_embed is None:
             self.init_method_min_embed = self.transformer.init_method_min
-        Assert.leq(self.init_method_min_embed, self.init_method_max_embed)
+        if self.init_method_max_embed is not None and self.init_method_min_embed is not None:
+            Assert.leq(self.init_method_min_embed, self.init_method_max_embed)
         super()._validate()
