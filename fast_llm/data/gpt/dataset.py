@@ -3,8 +3,8 @@ import typing
 
 import numpy as np
 
-from fast_llm.config import Field, config_class
-from fast_llm.data.config import SamplableDataset, SamplingConfig
+from fast_llm.data.config import SamplableDataset
+from fast_llm.data.gpt.config import GPTSamplingConfig
 
 if typing.TYPE_CHECKING:
     from fast_llm.data.gpt.data import GPTData
@@ -16,11 +16,6 @@ try:
     _extension_available = True
 except ImportError:
     _extension_available = False
-
-
-@config_class
-class GPTSamplingConfig(SamplingConfig):
-    sequence_length: int = Field(default=None, desc="Number of token in each sample.")
 
 
 class GPTIndexedDataset(SamplableDataset):

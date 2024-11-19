@@ -4,6 +4,7 @@ from fast_llm.data.config import (
     DatasetSource,
     FimConfig,
     MultiprocessingContext,
+    SamplingConfig,
     TokenizerConfig,
     _validate_path,
     _validate_split,
@@ -60,3 +61,8 @@ class GPTDataConfig(DataConfig):
         desc="Multiprocessing context. Do not touch.",
         hint=FieldHint.expert,
     )
+
+
+@config_class
+class GPTSamplingConfig(SamplingConfig):
+    sequence_length: int = Field(default=None, desc="Number of token in each sample.")

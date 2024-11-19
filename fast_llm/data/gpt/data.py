@@ -9,9 +9,8 @@ import torch
 import torch.utils.data
 
 from fast_llm.data.blended import BlendedDataset
-from fast_llm.data.config import Data, DatasetSource, SampledDataset
-from fast_llm.data.gpt.config import GPTDataConfig
-from fast_llm.data.gpt.dataset import GPTSamplingConfig
+from fast_llm.data.config import CopySplitDataset, Data, DatasetSource, PhaseSplits, SampledSplitDataset
+from fast_llm.data.gpt.config import GPTDataConfig, GPTSamplingConfig
 from fast_llm.data.gpt.dummy import DummyGPTDataset
 from fast_llm.data.gpt.memmap import GPTMemmapDataset
 from fast_llm.data.gpt.slice import GPTDatasetSlice
@@ -33,8 +32,7 @@ class GPTData(Data):
     TODO: Separate generic and GPT classes.
     """
 
-    _sampled_datasets: dict[PhaseType, dict[str, SampledDataset]]
-    _blended_datasets: dict[PhaseType, SampledDataset]
+    _datasets: SampledSplitDataset
     _tokenizer: Tokenizer | None
     _distributed: Distributed
     _cache_directory: pathlib.Path | None
@@ -132,8 +130,7 @@ class GPTData(Data):
         else:
             self._cache_directory = run.experiment_directory / "dataset_cache"
 
-        # Build and split datasets.
-        self._sampled_datasets = {phase: {} for phase in self._samples_per_phase}
+        datasets_and_weights = []
         for i, (name, weight) in enumerate(self._dataset_weights.items()):
             if i % 100 == 0 and i > 0:
                 log_main_rank(f"Prepared {i} of {self._num_datasets} datasets.")
@@ -146,27 +143,47 @@ class GPTData(Data):
                     expected_samples
                     + 5 * math.sqrt(expected_samples * self._dataset_weights[name] * (1 - self._dataset_weights[name]))
                 )
-            sampled_datasets = self._build_and_sample_dataset(name, dataset_samples_per_phase)
-            for phase, dataset in sampled_datasets.items():
-                self._sampled_datasets[phase][name] = dataset
-
-        self._blended_datasets = {
-            phase: (
-                list(datasets.values())[0]
-                if len(datasets) == 1
-                else BlendedDataset(
-                    list(datasets.values()),
-                    weights=[self._dataset_weights[name] for name in datasets],
-                    name=phase.value,
-                    num_samples=self._samples_per_phase[phase],
-                    cache_directory=self._cache_directory,
-                    group=self._distributed.world_group,
-                    verbose=run.is_main_rank,
-                    data_sample_warn_time_ms=self._config.data_sample_warn_time_ms,
-                )
+            sampling_configs = PhaseSplits[GPTSamplingConfig](
+                {
+                    phase: GPTSamplingConfig(
+                        num_samples=dataset_samples_per_phase[phase],
+                        sequence_length=self._max_sequence_length,
+                        seed=self._distributed_config.seed,
+                        cache_directory=(
+                            self._dataset_prefixes[name].parent
+                            if self._cache_directory is None
+                            else self._cache_directory
+                        ),
+                        verbose=self._num_datasets <= 5,
+                    )
+                    for phase, num_samples in dataset_samples_per_phase.items()
+                    if num_samples > 0
+                }
             )
-            for phase, datasets in self._sampled_datasets.items()
-        }
+            datasets_and_weights.append(
+                (self._build_and_sample_dataset(name, sampling_configs), self._dataset_weights[name])
+            )
+
+        if len(datasets_and_weights) == 1:
+            self._datasets = datasets_and_weights[0][0]
+        else:
+            self._datasets = BlendedDataset.apply(
+                "blended",
+                datasets_and_weights,
+                PhaseSplits[GPTSamplingConfig](
+                    {
+                        phase: GPTSamplingConfig(
+                            num_samples=samples_per_phase,
+                            sequence_length=self._max_sequence_length,
+                            seed=self._distributed_config.seed,
+                            cache_directory=None if self._cache_directory is None else self._cache_directory,
+                            verbose=self._num_datasets <= 5,
+                        )
+                        for phase, samples_per_phase in self._samples_per_phase.items()
+                    }
+                ),
+                self,
+            )
         self._is_setup = True
 
     @property
@@ -192,14 +209,14 @@ class GPTData(Data):
         prefetch_factor: int | None = None,
     ):
         assert self._is_setup
-        Assert.incl(phase, self._blended_datasets)
+        Assert.incl(phase, self._datasets)
         Assert.in_range_incl(batch_config.sequence_length, 1, self._max_sequence_length)
         log_main_rank(f"Initializing {phase} data iterator from sample {consumed_samples}...")
         return iter(
             torch.utils.data.DataLoader(
-                self._blended_datasets[phase],  # noqa
+                self._datasets[phase],  # noqa
                 batch_sampler=SampledDatasetIterator(
-                    total_samples=len(self._blended_datasets[phase]),
+                    total_samples=len(self._datasets[phase]),
                     begin_index=consumed_samples,
                     micro_batch_size=batch_config.micro_batch_size,
                     data_rank=self._distributed.config.batch_data_rank,
@@ -212,36 +229,14 @@ class GPTData(Data):
             )
         )
 
-    def _build_and_sample_gpt_dataset(self, name: str, dataset_samples_per_phase: dict[PhaseType, int]):
-        dataset_split = GPTDatasetSlice.from_splits(
+    def _build_and_sample_gpt_dataset(self, name: str, sampling_configs: PhaseSplits[GPTSamplingConfig]):
+        return GPTDatasetSlice.from_splits(
             GPTMemmapDataset(name, self._dataset_prefixes[name]), self._phase_split
-        )
+        ).sample(sampling_configs, self)
 
-        sampled_datasets = {}
-        for phase, num_samples in dataset_samples_per_phase.items():
-            if num_samples == 0:
-                continue
-            sampled_datasets[phase] = dataset_split[phase].sample(
-                GPTSamplingConfig(
-                    num_samples=num_samples,
-                    sequence_length=self._max_sequence_length,
-                    seed=self._distributed_config.seed,
-                    cache_directory=(
-                        self._dataset_prefixes[name].parent if self._cache_directory is None else self._cache_directory
-                    ),
-                    verbose=self._num_datasets <= 5,
-                ),
-                self,
-            )
-        return sampled_datasets
-
-    def _build_and_sample_dummy_dataset(self, name: str, dataset_samples_per_phase: dict[PhaseType, int]):
-        return {
-            phase: DummyGPTDataset(
-                dataset_samples_per_phase[phase],
-                self._max_sequence_length,
-                self._vocab_size,
-                name,
-            )
-            for phase in dataset_samples_per_phase
-        }
+    def _build_and_sample_dummy_dataset(self, name: str, sampling_configs: PhaseSplits[GPTSamplingConfig]):
+        return CopySplitDataset(
+            f"{name}_split",
+            DummyGPTDataset(name, self._max_sequence_length, self._vocab_size),
+            list(sampling_configs),
+        ).sample(sampling_configs, self)
