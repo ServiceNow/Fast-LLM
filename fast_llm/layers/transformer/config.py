@@ -280,7 +280,6 @@ class TransformerConfig(TransformerArchitectureConfig, BaseModelConfig):
         default=None,
         desc="Min value for clamping initialized weights. Default: -float('inf')",
         hint=FieldHint.optional,
-        valid=skip_valid_if_none(check_field(Assert.leq, init_method_max)),
     )
     init_method_std_qkv: float = Field(
         default=None,
@@ -297,7 +296,6 @@ class TransformerConfig(TransformerArchitectureConfig, BaseModelConfig):
         default=None,
         desc="Min value for clamping initialized weights for query, key and value matrices. Default: -float('inf')",
         hint=FieldHint.optional,
-        valid=skip_valid_if_none(check_field(Assert.leq, init_method_max_qkv)),
     )
     init_method_std_attn_proj: float = Field(
         default=None,
@@ -314,7 +312,6 @@ class TransformerConfig(TransformerArchitectureConfig, BaseModelConfig):
         default=None,
         desc="Min value for clamping initialized weights for attention projection. Default: -float('inf')",
         hint=FieldHint.optional,
-        valid=skip_valid_if_none(check_field(Assert.leq, init_method_max_attn_proj)),
     )
     init_method_std_mlp_1: float = Field(
         default=None,
@@ -331,7 +328,6 @@ class TransformerConfig(TransformerArchitectureConfig, BaseModelConfig):
         default=None,
         desc="Min value for clamping initialized weights for MLP first layer. Default: -float('inf')",
         hint=FieldHint.optional,
-        valid=skip_valid_if_none(check_field(Assert.leq, init_method_max_mlp_1)),
     )
     init_method_std_mlp_2: float = Field(
         default=None,
@@ -348,7 +344,6 @@ class TransformerConfig(TransformerArchitectureConfig, BaseModelConfig):
         default=None,
         desc="Min value for clamping initialized weights for MLP second layer. Default: -float('inf')",
         hint=FieldHint.optional,
-        valid=skip_valid_if_none(check_field(Assert.leq, init_method_max_mlp_2)),
     )
     attention_dropout: float = Field(
         default=0.0,
@@ -468,6 +463,16 @@ class TransformerConfig(TransformerArchitectureConfig, BaseModelConfig):
             self.init_method_std_mlp_2 = self.init_method_std / (2 * self.num_layers) ** 0.5
         if self.mlp_lr_scale is None or len(self.mlp_lr_scale) == 0:
             self.mlp_lr_scale = [None]
+        if self.init_method_max is not None and self.init_method_min is not None:
+            Assert.leq(self.init_method_min, self.init_method_max)
+        if self.init_method_max_qkv is not None and self.init_method_min_qkv is not None:
+            Assert.leq(self.init_method_min_qkv, self.init_method_max_qkv)
+        if self.init_method_max_attn_proj is not None and self.init_method_min_attn_proj is not None:
+            Assert.leq(self.init_method_min_attn_proj, self.init_method_max_attn_proj)
+        if self.init_method_max_mlp_1 is not None and self.init_method_min_mlp_1 is not None:
+            Assert.leq(self.init_method_min_mlp_1, self.init_method_max_mlp_1)
+        if self.init_method_max_mlp_2 is not None and self.init_method_min_mlp_2 is not None:
+            Assert.leq(self.init_method_min_mlp_2, self.init_method_max_mlp_2)
         super()._validate()
         if self.triton_rotary and not TritonConfig.TRITON_ENABLED:
             warnings.warn("Triton is disabled, but triton rotary kernel will be used anyway.")

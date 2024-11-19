@@ -127,7 +127,6 @@ class LanguageModelBaseConfig(LanguageModelArchitectureConfig, BaseModelConfig):
         default=None,
         desc="Min value for clamping initialized weights of the vocabulary embedding and output (logits).",
         hint=FieldHint.feature,
-        valid=check_field(Assert.geq, init_method_max_embed),
     )
     cross_entropy_impl: CrossEntropyImpl = Field(
         default=CrossEntropyImpl.auto,
@@ -180,4 +179,6 @@ class LanguageModelBaseConfig(LanguageModelArchitectureConfig, BaseModelConfig):
             self.transformer.init_method_std = self.transformer.hidden_size**-0.5
         if self.init_method_std_embed is None:
             self.init_method_std_embed = self.transformer.init_method_std
+        if self.init_method_max_embed is not None and self.init_method_min_embed is not None:
+            Assert.leq(self.init_method_min_embed, self.init_method_max_embed)
         super()._validate()
