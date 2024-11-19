@@ -1,14 +1,17 @@
 import logging
 import pathlib
 import time
+import typing
 
 import numpy as np
 
 from fast_llm.core.distributed import safe_barrier
 from fast_llm.data.config import PhaseSplits, SampledDataset, SamplingConfig, SplitDataset
-from fast_llm.data.gpt.data import GPTData
 from fast_llm.engine.config_utils.run import log_main_rank
 from fast_llm.utils import Assert, normalize_probabilities
+
+if typing.TYPE_CHECKING:
+    from fast_llm.data.gpt.data import GPTData
 
 try:
     from fast_llm.csrc.data import build_blending_indices  # noqa
@@ -34,7 +37,7 @@ class BlendedDataset(SampledDataset):
         datasets_and_weights: list[tuple[SampledDataset, float]],
         sampling_config: SamplingConfig,
         # TODO: Generalize
-        data: GPTData,
+        data: "GPTData",
     ):
         self._name = name
         assert len(datasets_and_weights) > 0
@@ -74,7 +77,7 @@ class BlendedDataset(SampledDataset):
         name: str,
         datasets_and_weights: list[(SplitDataset[SampledDataset], float)],
         sampling_configs: PhaseSplits[SamplingConfig],
-        data: GPTData,
+        data: "GPTData",
     ):
         Assert.leq(set(sampling_configs), set.union(*[set(dataset) for dataset, _ in datasets_and_weights]))
         return SplitDataset[BlendedDataset](

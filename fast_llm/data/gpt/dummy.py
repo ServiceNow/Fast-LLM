@@ -1,8 +1,12 @@
+import typing
+
 import numpy as np
 
 from fast_llm.data.config import SamplableDataset, SampledDataset
 from fast_llm.data.gpt.config import GPTSamplingConfig
-from fast_llm.data.gpt.data import GPTData
+
+if typing.TYPE_CHECKING:
+    from fast_llm.data.gpt.data import GPTData
 
 
 class DummyGPTDataset(SamplableDataset):
@@ -15,7 +19,7 @@ class DummyGPTDataset(SamplableDataset):
         self._dummy_sample = np.random.randint(0, vocab_size, size=(sequence_length + 1,), dtype=np.int64)
         self._name = name
 
-    def sample(self, config: GPTSamplingConfig, data: GPTData):
+    def sample(self, config: GPTSamplingConfig, data: "GPTData"):
         return DummyGPTSampledDataset(self, config)
 
     def get(self):

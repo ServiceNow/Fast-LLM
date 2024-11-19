@@ -184,6 +184,7 @@ class GPTData(Data):
                 ),
                 self,
             )
+        self._is_setup = True
 
     @property
     def config(self):
@@ -213,7 +214,7 @@ class GPTData(Data):
         log_main_rank(f"Initializing {phase} data iterator from sample {consumed_samples}...")
         return iter(
             torch.utils.data.DataLoader(
-                self._blended_datasets[phase],  # noqa
+                self._datasets[phase],  # noqa
                 batch_sampler=SampledDatasetIterator(
                     total_samples=len(self._datasets[phase]),
                     begin_index=consumed_samples,
