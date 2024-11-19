@@ -271,12 +271,12 @@ class TransformerConfig(TransformerArchitectureConfig, BaseModelConfig):
         hint=FieldHint.optional,
         valid=check_field(Assert.geq, 0),
     )
-    init_method_max: float = Field(
+    init_method_max: float|None = Field(
         default=None,
         desc="Max value for clamping initialized weights. Default: float('inf')",
         hint=FieldHint.optional,
     )
-    init_method_min: float = Field(
+    init_method_min: float|None = Field(
         default=None,
         desc="Min value for clamping initialized weights. Default: -float('inf')",
         hint=FieldHint.optional,
@@ -287,12 +287,12 @@ class TransformerConfig(TransformerArchitectureConfig, BaseModelConfig):
         hint=FieldHint.optional,
         valid=check_field(Assert.geq, 0),
     )
-    init_method_max_qkv: float = Field(
+    init_method_max_qkv: float|None = Field(
         default=None,
         desc="Max value for clamping initialized weights for query, key and value matrices. Default: float('inf')",
         hint=FieldHint.optional,
     )
-    init_method_min_qkv: float = Field(
+    init_method_min_qkv: float|None = Field(
         default=None,
         desc="Min value for clamping initialized weights for query, key and value matrices. Default: -float('inf')",
         hint=FieldHint.optional,
@@ -303,12 +303,12 @@ class TransformerConfig(TransformerArchitectureConfig, BaseModelConfig):
         hint=FieldHint.optional,
         valid=check_field(Assert.geq, 0),
     )
-    init_method_max_attn_proj: float = Field(
+    init_method_max_attn_proj: float|None = Field(
         default=None,
         desc="Max value for clamping initialized weights for attention projection. Default: float('inf')",
         hint=FieldHint.optional,
     )
-    init_method_min_attn_proj: float = Field(
+    init_method_min_attn_proj: float|None = Field(
         default=None,
         desc="Min value for clamping initialized weights for attention projection. Default: -float('inf')",
         hint=FieldHint.optional,
@@ -319,12 +319,12 @@ class TransformerConfig(TransformerArchitectureConfig, BaseModelConfig):
         hint=FieldHint.optional,
         valid=check_field(Assert.geq, 0),
     )
-    init_method_max_mlp_1: float = Field(
+    init_method_max_mlp_1: float|None = Field(
         default=None,
         desc="Max value for clamping initialized weights for MLP first layer. Default: float('inf')",
         hint=FieldHint.optional,
     )
-    init_method_min_mlp_1: float = Field(
+    init_method_min_mlp_1: float|None = Field(
         default=None,
         desc="Min value for clamping initialized weights for MLP first layer. Default: -float('inf')",
         hint=FieldHint.optional,
@@ -335,12 +335,12 @@ class TransformerConfig(TransformerArchitectureConfig, BaseModelConfig):
         hint=FieldHint.optional,
         valid=check_field(Assert.geq, 0),
     )
-    init_method_max_mlp_2: float = Field(
+    init_method_max_mlp_2: float|None = Field(
         default=None,
         desc="Max value for clamping initialized weights for MLP second layer. Default: float('inf')",
         hint=FieldHint.optional,
     )
-    init_method_min_mlp_2: float = Field(
+    init_method_min_mlp_2: float|None = Field(
         default=None,
         desc="Min value for clamping initialized weights for MLP second layer. Default: -float('inf')",
         hint=FieldHint.optional,
@@ -463,10 +463,6 @@ class TransformerConfig(TransformerArchitectureConfig, BaseModelConfig):
             self.init_method_std_mlp_2 = self.init_method_std / (2 * self.num_layers) ** 0.5
         if self.mlp_lr_scale is None or len(self.mlp_lr_scale) == 0:
             self.mlp_lr_scale = [None]
-        if self.init_method_max is None:
-            self.init_method_max = float("inf")
-        if self.init_method_min is None:
-            self.init_method_min = -float("inf")
         if self.init_method_max_qkv is None:
             self.init_method_max_qkv = self.init_method_max
         if self.init_method_min_qkv is None:
@@ -483,11 +479,18 @@ class TransformerConfig(TransformerArchitectureConfig, BaseModelConfig):
             self.init_method_max_mlp_2 = self.init_method_max
         if self.init_method_min_mlp_2 is None:
             self.init_method_min_mlp_2 = self.init_method_min
-        Assert.leq(self.init_method_min, self.init_method_max)
-        Assert.leq(self.init_method_min_qkv, self.init_method_max_qkv)
-        Assert.leq(self.init_method_min_attn_proj, self.init_method_max_attn_proj)
-        Assert.leq(self.init_method_min_mlp_1, self.init_method_max_mlp_1)
-        Assert.leq(self.init_method_min_mlp_2, self.init_method_max_mlp_2)
+        if self.init_method_min is not None and self.init_method_max is not None:
+            Assert.leq(self.init_method_min, self.init_method_max)
+        if self.init_method_min_qkv is not None and self.init_method_max_qkv is not None:
+            Assert.leq(self.init_method_min, self.init_method_max)
+        if self.init_method_min_qkv is not None and self.init_method_max_qkv is not None:
+            Assert.leq(self.init_method_min_qkv, self.init_method_max_qkv)
+        if self.init_method_min_attn_proj is not None and self.init_method_max_attn_proj is not None:
+            Assert.leq(self.init_method_min_attn_proj, self.init_method_max_attn_proj)
+        if self.init_method_min_mlp_1 is not None and self.init_method_max_mlp_1 is not None:
+            Assert.leq(self.init_method_min_mlp_1, self.init_method_max_mlp_1)
+        if self.init_method_min_mlp_2 is not None and self.init_method_max_mlp_2 is not None:
+            Assert.leq(self.init_method_min_mlp_2, self.init_method_max_mlp_2)
         super()._validate()
         if self.triton_rotary and not TritonConfig.TRITON_ENABLED:
             warnings.warn("Triton is disabled, but triton rotary kernel will be used anyway.")
