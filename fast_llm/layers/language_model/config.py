@@ -177,6 +177,10 @@ class LanguageModelBaseConfig(LanguageModelArchitectureConfig, BaseModelConfig):
     def _validate(self):
         if self.transformer.init_method_std is None:
             self.transformer.init_method_std = self.transformer.hidden_size**-0.5
+        if self.transformer.init_method_max is None:
+            self.transformer.init_method_max = float("inf")
+        if self.transformer.init_method_min is None:
+            self.transformer.init_method_min = float("-inf")
         if self.init_method_std_embed is None:
             self.init_method_std_embed = self.transformer.init_method_std
         if self.init_method_max_embed is None:
