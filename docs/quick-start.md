@@ -23,6 +23,10 @@ First, choose your environment. You can use Docker, your local environment, Slur
 
     You selected Docker for this tutorial. We'll use the Fast-LLM Docker image to train our model, which includes all the necessary dependencies. Grab the [pre-built Fast-LLM Docker image](https://github.com/ServiceNow/Fast-LLM/pkgs/container/fast-llm) from GitHub's container registry (GHCR).
 
+    ```bash
+    docker pull ghcr.io/servicenow/fast-llm:latest
+    ```
+
     Let's also create folders to store our input data and output results:
 
     ```bash
@@ -149,8 +153,10 @@ First, choose your environment. You can use Docker, your local environment, Slur
           image: ubuntu
           command: ["sleep", "infinity"]
           volumeMounts:
-            - mountPath: /app/fast_llm_tutorial
-              name: fast_llm_tutorial
+            - mountPath: /mnt/inputs
+              name: inputs
+            - mountPath: /mnt/results
+              name: results
       volumes:
         - name: inputs
           persistentVolumeClaim:
@@ -216,7 +222,7 @@ Fast-LLM supports many GPT variants, including (but not limited to) Llama, Mistr
         ```bash
         kubectl exec -it fast-llm-data-management -- /bin/bash
         git lfs install
-        git clone https://huggingface.co/HuggingFaceTB/SmolLM2-135M /app/fast_llm_tutorial/pretrained_model/SmolLM2-135M
+        git clone https://huggingface.co/HuggingFaceTB/SmolLM2-135M /mnt/inputs/SmolLM2-135M
         ```
 
 === "Llama-3.2-1B"
@@ -289,7 +295,7 @@ Fast-LLM supports many GPT variants, including (but not limited to) Llama, Mistr
 
         ```bash
         git lfs install
-        git clone https://huggingface.co/meta-llama/Llama-3.2-1B /app/fast_llm_tutorial/pretrained_model/Llama-3.2-1B
+        git clone https://huggingface.co/meta-llama/Llama-3.2-1B /mnt/inputs/Llama-3.2-1B
         ```
 
 !!! tip "Model Size Matters"
@@ -411,13 +417,13 @@ Fast-LLM ships with a `prepare` command that'll download and preprocess the data
               command: ["fast-llm", "prepare", "gpt_memmap"]
               args:
                 - "--config"
-                - "fast_llm_tutorial/prepare-config.yaml"
+                - "/mnt/inputs/prepare-config.yaml"
               resources:
                 requests:
                   cpu: 4
               volumeMounts:
-                - name: fast_llm_tutorial
-                  mountPath: /app/fast_llm_tutorial
+                - name: inputs
+                  mountPath: /mnt/inputs
           volumes:
             - name: inputs
               persistentVolumeClaim:
@@ -430,7 +436,6 @@ Fast-LLM ships with a `prepare` command that'll download and preprocess the data
 
 Next, we'll create a configuration file for Fast-LLM. Save the following as `train-config.yaml` in your inputs folder:
 
-=== "SmolLM2-135M"
 === "SmolLM2-135M"
 
     ```yaml
