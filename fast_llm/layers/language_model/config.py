@@ -179,6 +179,9 @@ class LanguageModelBaseConfig(LanguageModelArchitectureConfig, BaseModelConfig):
             self.transformer.init_method_std = self.transformer.hidden_size**-0.5
         if self.init_method_std_embed is None:
             self.init_method_std_embed = self.transformer.init_method_std
-        if self.init_method_max_embed is not None and self.init_method_min_embed is not None:
-            Assert.leq(self.init_method_min_embed, self.init_method_max_embed)
+        if self.init_method_max_embed is None:
+            self.init_method_max_embed = self.transformer.init_method_max
+        if self.init_method_min_embed is None:
+            self.init_method_min_embed = self.transformer.init_method_min
+        Assert.leq(self.init_method_min_embed, self.init_method_max_embed)
         super()._validate()
