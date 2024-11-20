@@ -118,12 +118,12 @@ class LanguageModelBaseConfig(LanguageModelArchitectureConfig, BaseModelConfig):
         hint=FieldHint.feature,
         valid=check_field(Assert.geq, 0),
     )
-    init_method_max_embed: float|None = Field(
+    init_method_max_embed: float | None = Field(
         default=None,
         desc="Max value for clamping initialized weights of the vocabulary embedding and output (logits).",
         hint=FieldHint.feature,
     )
-    init_method_min_embed: float|None = Field(
+    init_method_min_embed: float | None = Field(
         default=None,
         desc="Min value for clamping initialized weights of the vocabulary embedding and output (logits).",
         hint=FieldHint.feature,

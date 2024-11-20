@@ -271,12 +271,12 @@ class TransformerConfig(TransformerArchitectureConfig, BaseModelConfig):
         hint=FieldHint.optional,
         valid=check_field(Assert.geq, 0),
     )
-    init_method_max: float|None = Field(
+    init_method_max: float | None = Field(
         default=None,
         desc="Max value for clamping initialized weights. Default: float('inf')",
         hint=FieldHint.optional,
     )
-    init_method_min: float|None = Field(
+    init_method_min: float | None = Field(
         default=None,
         desc="Min value for clamping initialized weights. Default: -float('inf')",
         hint=FieldHint.optional,
@@ -287,12 +287,12 @@ class TransformerConfig(TransformerArchitectureConfig, BaseModelConfig):
         hint=FieldHint.optional,
         valid=check_field(Assert.geq, 0),
     )
-    init_method_max_qkv: float|None = Field(
+    init_method_max_qkv: float | None = Field(
         default=None,
         desc="Max value for clamping initialized weights for query, key and value matrices. Default: float('inf')",
         hint=FieldHint.optional,
     )
-    init_method_min_qkv: float|None = Field(
+    init_method_min_qkv: float | None = Field(
         default=None,
         desc="Min value for clamping initialized weights for query, key and value matrices. Default: -float('inf')",
         hint=FieldHint.optional,
@@ -303,12 +303,12 @@ class TransformerConfig(TransformerArchitectureConfig, BaseModelConfig):
         hint=FieldHint.optional,
         valid=check_field(Assert.geq, 0),
     )
-    init_method_max_attn_proj: float|None = Field(
+    init_method_max_attn_proj: float | None = Field(
         default=None,
         desc="Max value for clamping initialized weights for attention projection. Default: float('inf')",
         hint=FieldHint.optional,
     )
-    init_method_min_attn_proj: float|None = Field(
+    init_method_min_attn_proj: float | None = Field(
         default=None,
         desc="Min value for clamping initialized weights for attention projection. Default: -float('inf')",
         hint=FieldHint.optional,
@@ -319,12 +319,12 @@ class TransformerConfig(TransformerArchitectureConfig, BaseModelConfig):
         hint=FieldHint.optional,
         valid=check_field(Assert.geq, 0),
     )
-    init_method_max_mlp_1: float|None = Field(
+    init_method_max_mlp_1: float | None = Field(
         default=None,
         desc="Max value for clamping initialized weights for MLP first layer. Default: float('inf')",
         hint=FieldHint.optional,
     )
-    init_method_min_mlp_1: float|None = Field(
+    init_method_min_mlp_1: float | None = Field(
         default=None,
         desc="Min value for clamping initialized weights for MLP first layer. Default: -float('inf')",
         hint=FieldHint.optional,
@@ -335,12 +335,12 @@ class TransformerConfig(TransformerArchitectureConfig, BaseModelConfig):
         hint=FieldHint.optional,
         valid=check_field(Assert.geq, 0),
     )
-    init_method_max_mlp_2: float|None = Field(
+    init_method_max_mlp_2: float | None = Field(
         default=None,
         desc="Max value for clamping initialized weights for MLP second layer. Default: float('inf')",
         hint=FieldHint.optional,
     )
-    init_method_min_mlp_2: float|None = Field(
+    init_method_min_mlp_2: float | None = Field(
         default=None,
         desc="Min value for clamping initialized weights for MLP second layer. Default: -float('inf')",
         hint=FieldHint.optional,
