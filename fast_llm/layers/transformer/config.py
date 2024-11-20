@@ -8,7 +8,7 @@ from fast_llm.engine.base_model.config import BaseModelArchitectureConfig, BaseM
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.engine.config_utils.tensor_space import CompositeTensorDim, TensorDim, TensorSpace
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
-from fast_llm.functional.config import ActivationType, MLPRecomputeLevel, RopeScalingType, TritonConfig
+from fast_llm.functional.config import ActivationType, MLPRecomputeLevel, RotaryScalingType, TritonConfig
 from fast_llm.layers.common.config import NormalizationArchitectureConfig, NormalizationConfig
 from fast_llm.utils import Assert, div
 
@@ -127,8 +127,8 @@ class TransformerArchitectureConfig(BaseModelArchitectureConfig):
         desc="Scale for the rotary positional embeddings. Default: -math.log(10000) = -9.210",
         hint=FieldHint.feature,
     )
-    rotary_scaling_type: RopeScalingType = Field(
-        default=RopeScalingType.none,
+    rotary_scaling_type: RotaryScalingType = Field(
+        default=RotaryScalingType.none,
         desc="Scaling type for the rotary frequencies. Default: none.",
         hint=FieldHint.feature,
     )

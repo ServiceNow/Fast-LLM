@@ -2,7 +2,7 @@ import math
 
 import torch
 
-from fast_llm.functional.config import RopeScalingType
+from fast_llm.functional.config import RotaryScalingType
 from fast_llm.utils import div
 
 
@@ -46,7 +46,7 @@ def get_rotary_frequencies(
     scale=-math.log(10000),
     *,
     complex_format: bool = True,
-    rope_scaling_type: RopeScalingType = RopeScalingType.none,
+    rotary_scaling_type: RotaryScalingType = RotaryScalingType.none,
     device="cuda",
 ):
     # Calculate the complex frequencies (https://blog.eleuther.ai/rotary-embeddings/)
@@ -57,7 +57,7 @@ def get_rotary_frequencies(
     positions = torch.arange(sequence_length, device=device, dtype=torch.float64)
     freqs = torch.exp(scale * torch.arange(0, 1, 2 / kv_channels, device=device, dtype=torch.float64))
     # Apply scaling
-    if rope_scaling_type == RopeScalingType.llama3:
+    if rotary_scaling_type == RotaryScalingType.llama3:
         freqs = apply_llama3_scaling(freqs)
     angles = torch.outer(positions, freqs)
     frequencies = torch.polar(torch.ones_like(angles), angles)[None, :, None, :].to(torch.complex64)
