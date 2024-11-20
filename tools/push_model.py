@@ -9,6 +9,7 @@ import subprocess
 from fast_llm.config import Field, config_class
 from fast_llm.engine.checkpoint.config import CheckpointLoadConfig, CheckpointSaveConfig, DistributedCheckpointFormat
 from fast_llm.engine.config_utils.runnable import RunnableConfig
+from fast_llm.models.gpt.conversion import AutoGPTHuggingfaceCheckpointHandler
 
 try:
     import hf_transfer  # type: ignore[no-redef]
@@ -120,7 +121,7 @@ class PushConfig(RunnableConfig):
         committed_iter_numbers = self._get_commited_iter_numbers(hf_repo)
 
         # Get local checkpoints
-        export_dir = self.experiment_dir / "export"
+        export_dir = self.experiment_dir / "export" / self.model_type
         logger.info(f"Looking for checkpoints in {export_dir}...")
         new_checkpoint_paths = [
             (iter_number, p)
@@ -137,6 +138,7 @@ class PushConfig(RunnableConfig):
         self._copy_tokenizer_files(self.tokenizer_path, self.tmp_checkpoint_dir)
 
         logger.info(f"Pushing {len(new_checkpoint_paths)} checkpoints to {self.repo_name}...")
+        logger.info(f"Testtttts: {AutoGPTHuggingfaceCheckpointHandler.get_handler_class(self.model_type)}")
 
         # Launch a thread pool to convert the checkpoints in sequence but push and evaluate them in parallel.
         # The thread pool will wait for pushes to be done before shutting down.
@@ -145,24 +147,26 @@ class PushConfig(RunnableConfig):
             hf_api._thread_pool = executor
 
             for _, checkpoint_path in new_checkpoint_paths:
-                checkpoint_path_hf = checkpoint_path.with_name(checkpoint_path.name + "_hf")
-                # Block until the conversion is done
-                ConversionConfig(
-                    input=CheckpointLoadConfig(
-                        path=checkpoint_path,
-                        format=DistributedCheckpointFormat,
-                    ),
-                    output=CheckpointSaveConfig(
-                        path=checkpoint_path_hf,
-                        format=self.model_type,
-                    ),
-                    use_cpu=self.use_cpu,
-                    exist_ok=False,  # skip if already processed
-                    layers_per_step=(
-                        8 if self.model_type == "mixtral" else None
-                    ),  # split into 8 layers per step for mixtral
-                ).run(self.model_class)
+                # checkpoint_path_hf = checkpoint_path.with_name(checkpoint_path.name + "_hf")
+                # # Block until the conversion is done
+                # ConversionConfig(
+                #     input=CheckpointLoadConfig(
+                #         path=checkpoint_path,
+                #         format=DistributedCheckpointFormat,
+                #     ),
+                #     output=CheckpointSaveConfig(
+                #         path=checkpoint_path_hf,
+                #         format=HUGGINGFACE_CHECKPOINT_FORMATS[self.model_type],
+                #     ),
+                #     use_cpu=self.use_cpu,
+                #     exist_ok=False,  # skip if already processed
+                #     layers_per_step=(
+                #         8 if self.model_type == "mixtral" else None
+                #     ),  # split into 8 layers per step for mixtral
+                # ).run(self.model_class)
 
+                checkpoint_path_hf = checkpoint_path
+                
                 # Wait for the previous commit to be done before linking the files
                 if commit_info is not None:
                     _ = commit_info.result()
