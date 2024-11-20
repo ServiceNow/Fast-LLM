@@ -40,6 +40,7 @@ class RotaryEmbeddingPreprocessor:
             self._config.kv_channels,
             self._config.rotary_position_embedding_scale,
             complex_format=self._config.complex_rotary_embeddings,
+            rope_scaling_type=self._config.rope_scaling_type,
             device=self._tensor_space.distributed.device,
         )
 
