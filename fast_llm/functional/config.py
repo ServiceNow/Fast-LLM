@@ -91,3 +91,8 @@ class CrossEntropyImpl(str, enum.Enum):
     torch = "torch"
     fused = "fused"
     triton = "triton"
+
+
+class RopeScalingType(str, enum.Enum):
+    none = "none"
+    llama3 = "llama3"

@@ -2,6 +2,7 @@ import math
 
 import torch
 
+from fast_llm.functional.config import RopeScalingType
 from fast_llm.utils import div
 
 
@@ -13,12 +14,39 @@ def convert_rotary_real_to_complex(tensor: torch.Tensor, kv_channels: int, dim: 
     return tensor.unflatten(dim, (-1, 2, div(kv_channels, 2))).movedim(dim + 1, dim + 2).flatten(dim, dim + 2)
 
 
+def apply_llama3_scaling(freqs: torch.Tensor) -> torch.Tensor:
+    """
+    Llama3 scaling: https://github.com/meta-llama/llama-models/blob/baf7b01b6e62bc7126c7b558d2b67d4533142680/models/llama3/reference_impl/model.py#L45-L67
+    """
+    # Values obtained from grid search
+    scale_factor = 8
+    low_freq_factor = 1
+    high_freq_factor = 4
+    old_context_len = 8192  # original llama3 length
+
+    low_freq_wavelen = old_context_len / low_freq_factor
+    high_freq_wavelen = old_context_len / high_freq_factor
+    new_freqs = []
+    for freq in freqs:
+        wavelen = 2 * math.pi / freq
+        if wavelen < high_freq_wavelen:
+            new_freqs.append(freq)
+        elif wavelen > low_freq_wavelen:
+            new_freqs.append(freq / scale_factor)
+        else:
+            assert low_freq_wavelen != high_freq_wavelen
+            smooth = (old_context_len / wavelen - low_freq_factor) / (high_freq_factor - low_freq_factor)
+            new_freqs.append((1 - smooth) * freq / scale_factor + smooth * freq)
+    return torch.tensor(new_freqs, dtype=freqs.dtype, device=freqs.device)
+
+
 def get_rotary_frequencies(
     sequence_length,
     kv_channels,
     scale=-math.log(10000),
     *,
     complex_format: bool = True,
+    rope_scaling_type: RopeScalingType = RopeScalingType.none,
     device="cuda",
 ):
     # Calculate the complex frequencies (https://blog.eleuther.ai/rotary-embeddings/)
@@ -26,10 +54,12 @@ def get_rotary_frequencies(
     # `a = theta ** - (2 * (channel // 2) / kv_channels)`,
     # where n is the position in the sequence.
     # We preform the calculation in high precision because it matters for rotary embeddings.
-    angles = torch.outer(
-        torch.arange(sequence_length, device=device, dtype=torch.float64),
-        torch.exp(scale * torch.arange(0, 1, 2 / kv_channels, device=device, dtype=torch.float64)),
-    )
+    positions = torch.arange(sequence_length, device=device, dtype=torch.float64)
+    freqs = torch.exp(scale * torch.arange(0, 1, 2 / kv_channels, device=device, dtype=torch.float64))
+    # Apply scaling
+    if rope_scaling_type == RopeScalingType.llama3:
+        freqs = apply_llama3_scaling(freqs)
+    angles = torch.outer(positions, freqs)
     frequencies = torch.polar(torch.ones_like(angles), angles)[None, :, None, :].to(torch.complex64)
     if not complex_format:
         frequencies = convert_rotary_complex_to_real(
