@@ -53,12 +53,20 @@ class LanguageModelEmbedding(Layer):
 
         self.word_embeddings_weight = ParameterMeta.from_dims(
             (vocab_dim, hidden_dim),
-            init_method=init_normal_(std=config.init_method_std_embed),
+            init_method=init_normal_(
+                std=config.init_method_std_embed,
+                min_val=config.init_method_min_embed,
+                max_val=config.init_method_max_embed,
+            ),
         )
         if self._use_absolute_position_embeddings:
             self.position_embeddings_weight = ParameterMeta.from_dims(
                 (tensor_space.get_tensor_dim(LanguageModelDimNames.position_embed), hidden_dim),
-                init_method=init_normal_(std=config.init_method_std_embed),
+                init_method=init_normal_(
+                    std=config.init_method_std_embed,
+                    min_val=config.init_method_min_embed,
+                    max_val=config.init_method_max_embed,
+                ),
                 allow_sequence_tensor_parallel=not config.parallel_embeddings,
             )
 
