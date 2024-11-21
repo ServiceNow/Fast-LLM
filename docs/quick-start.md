@@ -332,8 +332,6 @@ Create a configuration file for the dataset preparation. Copy the following cont
 
     tokenizer:
       path: /mnt/inputs/SmolLM2-135M/tokenizer.json
-
-    remove_downloads: false
     ```
 
 === "Llama-3.2-1B"
@@ -351,8 +349,6 @@ Create a configuration file for the dataset preparation. Copy the following cont
     
     tokenizer:
       path: /mnt/inputs/Llama-3.2-1B/tokenizer.json
-    
-    remove_downloads: false
     ```
 
 and save it as `prepare-config.yaml` in your inputs folder.
