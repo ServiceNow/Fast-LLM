@@ -1,5 +1,6 @@
 import json
 import multiprocessing
+import pathlib
 import shutil
 
 import datasets
@@ -87,24 +88,39 @@ class GPTMemmapDatasetPreparator(DatasetPreparator):
         self._config.output_path.mkdir(parents=True, exist_ok=True)
 
         # Download dataset if necessary on rank 0
-        download_path = self._config.output_path / "downloaded_dataset"
-        download_path_ok = download_path / "ok"
-        if self._config.distributed.rank == 0 and not download_path_ok.exists():
-            datasets.load_dataset(
+        if pathlib.Path(self._config.dataset.path).is_dir():
+            download_path = None
+            dataset = datasets.load_dataset(
                 path=self._config.dataset.path,
                 name=self._config.dataset.config_name,
                 split=self._config.dataset.split,
                 num_proc=self._config.loading_workers,
                 trust_remote_code=self._config.dataset.trust_remote_code,
-            ).save_to_disk(download_path, num_proc=self._config.saving_workers)
-            download_path_ok.touch()
+            )
+        else:
+            download_path = self._config.output_path / "downloaded_dataset"
+            download_path_ok = download_path / "ok"
+            if self._config.distributed.rank == 0 and not download_path_ok.exists():
+                dataset = datasets.load_dataset(
+                    path=self._config.dataset.path,
+                    name=self._config.dataset.config_name,
+                    split=self._config.dataset.split,
+                    num_proc=self._config.loading_workers,
+                    trust_remote_code=self._config.dataset.trust_remote_code,
+                )
+                assert isinstance(dataset, datasets.Dataset)
+                dataset.save_to_disk(download_path, num_proc=self._config.saving_workers)
+                download_path_ok.touch()
 
-        # Synchronize processes to wait for the download to finish
-        if self._config.distributed.world_size > 1:
-            torch.distributed.barrier()
+            # Synchronize processes to wait for the download to finish
+            if self._config.distributed.world_size > 1:
+                torch.distributed.barrier()
 
-        # Load and shard the dataset on each rank
-        dataset = datasets.load_from_disk(download_path).shard(
+            # Load and shard the dataset on each rank
+            dataset = datasets.load_from_disk(download_path)
+
+        assert isinstance(dataset, datasets.Dataset)
+        dataset = dataset.shard(
             num_shards=self._config.distributed.world_size,
             index=self._config.distributed.rank,
         )
@@ -156,5 +172,5 @@ class GPTMemmapDatasetPreparator(DatasetPreparator):
             torch.distributed.destroy_process_group()
 
         # Clean up downloaded dataset
-        if self._config.remove_downloads and self._config.distributed.rank == 0:
+        if download_path is not None and self._config.remove_downloads and self._config.distributed.rank == 0:
             shutil.rmtree(download_path, ignore_errors=True)
