@@ -133,11 +133,6 @@ class GPTMemmapDatasetPreparatorConfig(DatasetPreparatorConfig):
         hint=FieldHint.optional,
         valid=check_field(Assert.geq, 1),
     )
-    remove_downloads: bool = Field(
-        default=False,
-        desc="Remove downloaded dataset after processing.",
-        hint=FieldHint.optional,
-    )
     dataset: GPTHuggingfaceDatasetConfig = Field(
         default_factory=GPTHuggingfaceDatasetConfig,
         desc="Configuration for the dataset.",

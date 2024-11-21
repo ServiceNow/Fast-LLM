@@ -50,6 +50,17 @@ class GPTMemmapDatasetPreparator(DatasetPreparator):
         }
         return dataset_dict
 
+    def _load_dataset(self) -> datasets.Dataset:
+        dataset = datasets.load_dataset(
+            path=self._config.dataset.path,
+            name=self._config.dataset.config_name,
+            split=self._config.dataset.split,
+            num_proc=self._config.loading_workers,
+            trust_remote_code=self._config.dataset.trust_remote_code,
+        )
+        assert isinstance(dataset, datasets.Dataset)
+        return dataset
+
     def run(self):
         # Set transformers logging verbosity
         transformers.logging.set_verbosity_error()
@@ -87,37 +98,25 @@ class GPTMemmapDatasetPreparator(DatasetPreparator):
         # Prepare output directory
         self._config.output_path.mkdir(parents=True, exist_ok=True)
 
-        # Download dataset if necessary on rank 0
         if pathlib.Path(self._config.dataset.path).is_dir():
-            download_path = None
-            dataset = datasets.load_dataset(
-                path=self._config.dataset.path,
-                name=self._config.dataset.config_name,
-                split=self._config.dataset.split,
-                num_proc=self._config.loading_workers,
-                trust_remote_code=self._config.dataset.trust_remote_code,
-            )
+            # Dataset is already downloaded, load from disk
+            dataset = self._load_dataset()
         else:
-            download_path = self._config.output_path / "downloaded_dataset"
-            download_path_ok = download_path / "ok"
-            if self._config.distributed.rank == 0 and not download_path_ok.exists():
-                dataset = datasets.load_dataset(
-                    path=self._config.dataset.path,
-                    name=self._config.dataset.config_name,
-                    split=self._config.dataset.split,
-                    num_proc=self._config.loading_workers,
-                    trust_remote_code=self._config.dataset.trust_remote_code,
-                )
-                assert isinstance(dataset, datasets.Dataset)
-                dataset.save_to_disk(download_path, num_proc=self._config.saving_workers)
-                download_path_ok.touch()
+            # Dataset is not downloaded, download on rank 0
+            if self._config.distributed.rank == 0:
+                dataset = self._load_dataset()
 
-            # Synchronize processes to wait for the download to finish
+            # Synchronize processes to wait for the download to finish on rank 0
             if self._config.distributed.world_size > 1:
                 torch.distributed.barrier()
 
-            # Load and shard the dataset on each rank
-            dataset = datasets.load_from_disk(download_path)
+            # Load the downloaded dataset on remaining ranks
+            if self._config.distributed.rank != 0:
+                dataset = self._load_dataset()
+
+            # Synchronize processes to wait for the dataset to load on remaining ranks
+            if self._config.distributed.world_size > 1:
+                torch.distributed.barrier()
 
         assert isinstance(dataset, datasets.Dataset)
         dataset = dataset.shard(
@@ -170,7 +169,3 @@ class GPTMemmapDatasetPreparator(DatasetPreparator):
         if self._config.distributed.world_size > 1:
             torch.distributed.barrier()
             torch.distributed.destroy_process_group()
-
-        # Clean up downloaded dataset
-        if download_path is not None and self._config.remove_downloads and self._config.distributed.rank == 0:
-            shutil.rmtree(download_path, ignore_errors=True)
