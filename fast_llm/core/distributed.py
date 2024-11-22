@@ -43,7 +43,11 @@ def check_parallel_match(tensor: torch.Tensor, group: ProcessGroup | None, name:
     mismatches = (all_tensors != tensor).any(dim=0)
     num_mismatches = mismatches.sum().item()
     if num_mismatches > 0:
-        logger.error(f"MISMATCH {name} {num_mismatches} / {tensor.numel()}")
+        num_nans = tensor.isnan().sum().item()
+        logger.error(
+            f"MISMATCH {name} {num_mismatches:,} / {tensor.numel():,}"
+            + ("" if num_nans > 0 else f" [{num_mismatches:,} nans detected locally]")
+        )
 
 
 def safe_barrier(group: ProcessGroup | None, value: int | str = 1):
