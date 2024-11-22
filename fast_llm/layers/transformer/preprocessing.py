@@ -40,11 +40,11 @@ class RotaryEmbeddingPreprocessor:
             self._config.kv_channels,
             self._config.rotary_position_embedding_scale,
             complex_format=self._config.complex_rotary_embeddings,
-            rotary_scaling_type=self._config.rotary_scaling_type,
-            llama3_scale_factor=self._config.rotary_llama3_scale_factor,
-            llama3_low_freq_factor=self._config.rotary_llama3_low_freq_factor,
-            llama3_high_freq_factor=self._config.rotary_llama3_high_freq_factor,
-            llama3_old_context_len=self._config.rotary_llama3_old_context_len,
+            rotary_scaling_type=self._config.rotary.scaling_type,
+            llama3_scale_factor=self._config.rotary.llama3_scale_factor,
+            llama3_low_freq_factor=self._config.rotary.llama3_low_freq_factor,
+            llama3_high_freq_factor=self._config.rotary.llama3_high_freq_factor,
+            llama3_old_context_len=self._config.rotary.llama3_old_context_len,
             device=self._tensor_space.distributed.device,
         )
 

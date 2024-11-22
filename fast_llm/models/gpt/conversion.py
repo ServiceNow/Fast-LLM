@@ -281,25 +281,25 @@ class LlamaHuggingfaceCheckpointHandler(CommonLlamaHuggingfaceCheckpointHandler)
             ConstantExportParamConverter(None, "attention_bias", False),
             ConstantExportParamConverter(None, "mlp_bias", False),
             MappedConfigParamConverter(
-                ("transformer", "rotary_scaling_type"),
+                ("transformer", "rotary", "scaling_type"),
                 ("rope_scaling", "rope_type"),
                 import_rotary_scaling_type,
                 export_rotary_scaling_type
             ),
             ParamConverter(
-                ("transformer", "rotary_llama3_scale_factor"),
+                ("transformer", "rotary", "llama3_scale_factor"),
                 ("rope_scaling", "factor"),
             ),
             ParamConverter(
-                ("transformer", "rotary_llama3_low_freq_factor"),
+                ("transformer", "rotary", "llama3_low_freq_factor"),
                 ("rope_scaling", "low_freq_factor"),
             ),
             ParamConverter(
-                ("transformer", "rotary_llama3_high_freq_factor"),
+                ("transformer", "rotary", "llama3_high_freq_factor"),
                 ("rope_scaling", "high_freq_factor"),
             ),
             ParamConverter(
-                ("transformer", "rotary_llama3_old_context_len"),
+                ("transformer", "rotary", "llama3_old_context_len"),
                 ("rope_scaling", "original_max_position_embeddings"),
             ),
         ]

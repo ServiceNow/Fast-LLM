@@ -76,6 +76,28 @@ class TransformerLossNames:
 
 
 @config_class()
+class RotaryArchitectureConfig(BaseModelArchitectureConfig):
+    _abstract = False
+    scaling_type: RotaryScalingType = Field(
+        default=RotaryScalingType.none,
+        desc="Scaling type for the rotary frequencies. Default: none.",
+        hint=FieldHint.feature,
+    )
+    llama3_scale_factor: int = Field(
+        default=8, desc="Scaling factor for the llama3 rotary frequencies.", hint=FieldHint.feature
+    )
+    llama3_low_freq_factor: int = Field(
+        default=1, desc="Low frequency factor for the llama3 rotary frequencies.", hint=FieldHint.feature
+    )
+    llama3_high_freq_factor: int = Field(
+        default=4, desc="High frequency factor for the llama3 rotary frequencies.", hint=FieldHint.feature
+    )
+    llama3_old_context_len: int = Field(
+        default=8192, desc="Original llama3 context length for the llama3 rotary frequencies.", hint=FieldHint.feature
+    )
+
+
+@config_class()
 class TransformerArchitectureConfig(BaseModelArchitectureConfig):
     _abstract = False
     normalization: NormalizationArchitectureConfig = Field(
@@ -119,6 +141,7 @@ class TransformerArchitectureConfig(BaseModelArchitectureConfig):
         hint=FieldHint.core,
         valid=check_field(Assert.gt, 0),
     )
+    # TODO: move to rotary config (breaking change)
     use_rotary_embeddings: bool = Field(
         default=False, desc="Enable rotary positional embeddings.", hint=FieldHint.feature
     )
@@ -127,22 +150,10 @@ class TransformerArchitectureConfig(BaseModelArchitectureConfig):
         desc="Scale for the rotary positional embeddings. Default: -math.log(10000) = -9.210",
         hint=FieldHint.feature,
     )
-    rotary_scaling_type: RotaryScalingType = Field(
-        default=RotaryScalingType.none,
-        desc="Scaling type for the rotary frequencies. Default: none.",
-        hint=FieldHint.feature,
-    )
-    rotary_llama3_scale_factor: int = Field(
-        default=8, desc="Scaling factor for the llama3 rotary frequencies.", hint=FieldHint.feature
-    )
-    rotary_llama3_low_freq_factor: int = Field(
-        default=1, desc="Low frequency factor for the llama3 rotary frequencies.", hint=FieldHint.feature
-    )
-    rotary_llama3_high_freq_factor: int = Field(
-        default=4, desc="High frequency factor for the llama3 rotary frequencies.", hint=FieldHint.feature
-    )
-    rotary_llama3_old_context_len: int = Field(
-        default=8192, desc="Original llama3 context length for the llama3 rotary frequencies.", hint=FieldHint.feature
+    rotary: RotaryArchitectureConfig = Field(
+        default_factory=RotaryArchitectureConfig,
+        desc="Configuration for the rotary positional embeddings.",
+        hint=FieldHint.feature
     )
     gated: bool = Field(default=False, desc="Enable gated MLP.", hint=FieldHint.feature)
     activation_type: ActivationType = Field(
