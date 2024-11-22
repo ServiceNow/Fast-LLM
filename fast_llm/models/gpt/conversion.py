@@ -249,29 +249,25 @@ class CommonLlamaHuggingfaceCheckpointHandler(CommonHuggingfaceCheckpointHandler
 
 
 def export_rotary_scaling_type(fast_llm_value: RotaryScalingType) -> dict[str, typing.Any] | None:
-    # return None
-    if fast_llm_value == RotaryScalingType.llama3:
-        return {
-            "factor": 8.0,
-            "low_freq_factor": 1.0,
-            "high_freq_factor": 4.0,
-            "original_max_position_embeddings": 8192,
-            "rope_type": "llama3"
-        }
-    else:
-        return None
+    match fast_llm_value:
+        case RotaryScalingType.none:
+            return "default"
+        case RotaryScalingType.llama3:
+            return "llama3"
+        case _:
+            raise ValueError(f"Unsupported rotary scaling type: {fast_llm_value}")
 
 
 def import_rotary_scaling_type(export_value):
-    # return RotaryScalingType.llama3
     if export_value is None:
         return RotaryScalingType.none
-    assert export_value["rope_type"] == "llama3"
-    assert export_value["factor"] == 8.0
-    assert export_value["low_freq_factor"] == 1.0
-    assert export_value["high_freq_factor"] == 4.0
-    assert export_value["original_max_position_embeddings"] == 8192
-    return RotaryScalingType.llama3
+    match export_value:
+        case "default":
+            return RotaryScalingType.none
+        case "llama3":
+            return RotaryScalingType.llama3
+        case _:
+            raise ValueError(f"Unsupported rotary scaling type: {export_value}")
 
 
 class LlamaHuggingfaceCheckpointHandler(CommonLlamaHuggingfaceCheckpointHandler):
@@ -287,9 +283,25 @@ class LlamaHuggingfaceCheckpointHandler(CommonLlamaHuggingfaceCheckpointHandler)
             # TODO: Convert rope_scaling (llama3 scaling)
             MappedConfigParamConverter(
                 ("transformer", "rotary_scaling_type"),
-                "rope_scaling",
+                ("rope_scaling", "rope_type"),
                 import_rotary_scaling_type,
                 export_rotary_scaling_type
+            ),
+            ParamConverter(
+                ("transformer", "rotary_llama3_scale_factor"),
+                ("rope_scaling", "factor"),
+            ),
+            ParamConverter(
+                ("transformer", "rotary_llama3_low_freq_factor"),
+                ("rope_scaling", "low_freq_factor"),
+            ),
+            ParamConverter(
+                ("transformer", "rotary_llama3_high_freq_factor"),
+                ("rope_scaling", "high_freq_factor"),
+            ),
+            ParamConverter(
+                ("transformer", "rotary_llama3_old_context_len"),
+                ("rope_scaling", "original_max_position_embeddings"),
             ),
         ]
 

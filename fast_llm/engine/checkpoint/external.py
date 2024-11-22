@@ -146,6 +146,29 @@ class SplitWeightConverter(WeightConverter):
         return (torch.cat([weight_[:] for weight_ in weight]),)
 
 
+def set_nested_dict_value(d: dict, keys: None | str | tuple[str, ...], value):
+    if keys is None:
+        return
+    if isinstance(keys, str):
+        keys = (keys,)
+    for key in keys[:-1]:
+        d = d.setdefault(key, {})
+        assert isinstance(d, dict)
+    d[keys[-1]] = value
+
+
+def get_nested_dict_value(d: dict, keys: None | str | tuple[str, ...]):
+    if keys is None:
+        return None
+    if isinstance(keys, str):
+        keys = (keys,)
+    for key in keys:
+        if key not in d:
+            return None
+        d = d[key]
+    return d
+
+
 class ExternalStateDictCheckpointHandler(StateDictCheckpointHandler):
     _model_class: typing.ClassVar[FastLLMModelConfig]
     _config_converters: list[ParamConverter]
@@ -202,8 +225,7 @@ class ExternalStateDictCheckpointHandler(StateDictCheckpointHandler):
                 if converter.fast_llm_name is None
                 else cls._get_fast_llm_attribute(config, converter.fast_llm_name)  # Noqa
             )
-            if converter.export_name is not None:
-                exported_config[converter.export_name] = value
+            set_nested_dict_value(exported_config, converter.export_name, value)
 
         return exported_config  # Noqa
 
@@ -215,9 +237,7 @@ class ExternalStateDictCheckpointHandler(StateDictCheckpointHandler):
         kwargs = {}
         for converter in cls._get_config_converters():
             value = converter.import_param(
-                None
-                if converter.export_name is None or converter.export_name not in config
-                else config[converter.export_name]
+                get_nested_dict_value(config, converter.export_name)
             )
             if converter.fast_llm_name is not None:
                 kwargs[converter.fast_llm_name] = value
