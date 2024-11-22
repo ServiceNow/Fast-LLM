@@ -18,7 +18,7 @@ from fast_llm.engine.checkpoint.external import (
     WeightConverter,
 )
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig
-from fast_llm.functional.config import ActivationType
+from fast_llm.functional.config import ActivationType, RotaryScalingType
 from fast_llm.functional.rotary import convert_rotary_complex_to_real, convert_rotary_real_to_complex
 from fast_llm.layers.common.config import NormalizationType
 from fast_llm.layers.transformer.config import RoutingType
@@ -248,6 +248,32 @@ class CommonLlamaHuggingfaceCheckpointHandler(CommonHuggingfaceCheckpointHandler
         ]
 
 
+def export_rotary_scaling_type(fast_llm_value: RotaryScalingType) -> dict[str, typing.Any] | None:
+    # return None
+    if fast_llm_value == RotaryScalingType.llama3:
+        return {
+            "factor": 8.0,
+            "low_freq_factor": 1.0,
+            "high_freq_factor": 4.0,
+            "original_max_position_embeddings": 8192,
+            "rope_type": "llama3"
+        }
+    else:
+        return None
+
+
+def import_rotary_scaling_type(export_value):
+    # return RotaryScalingType.llama3
+    if export_value is None:
+        return RotaryScalingType.none
+    assert export_value["rope_type"] == "llama3"
+    assert export_value["factor"] == 8.0
+    assert export_value["low_freq_factor"] == 1.0
+    assert export_value["high_freq_factor"] == 4.0
+    assert export_value["original_max_position_embeddings"] == 8192
+    return RotaryScalingType.llama3
+
+
 class LlamaHuggingfaceCheckpointHandler(CommonLlamaHuggingfaceCheckpointHandler):
     format: typing.ClassVar[type[CheckpointFormat]] = LlamaGPTHuggingfaceCheckpointFormat
 
@@ -259,7 +285,12 @@ class LlamaHuggingfaceCheckpointHandler(CommonLlamaHuggingfaceCheckpointHandler)
             ConstantExportParamConverter(None, "attention_bias", False),
             ConstantExportParamConverter(None, "mlp_bias", False),
             # TODO: Convert rope_scaling (llama3 scaling)
-            ConstantExportParamConverter(None, "rope_scaling", None),
+            MappedConfigParamConverter(
+                ("transformer", "rotary_scaling_type"),
+                "rope_scaling",
+                import_rotary_scaling_type,
+                export_rotary_scaling_type
+            ),
         ]
 
     def _get_mlp_converters(self, fast_llm_prefix: str, hf_prefix: str):

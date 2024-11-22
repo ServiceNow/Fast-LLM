@@ -12,6 +12,7 @@ import torch
 
 from fast_llm.data.gpt.memmap import GPTMemmapDataset
 from fast_llm.models.gpt.config import (
+    LlamaGPTHuggingfaceCheckpointFormat,
     MistralGPTHuggingfaceCheckpointFormat,
     MixtralGPTHuggingfaceCheckpointFormat,
     Starcoder2GPTHuggingfaceCheckpointFormat,
@@ -137,6 +138,20 @@ CONFIG_MIXTRAL_FAST_LLM = CONFIG_MISTRAL_FAST_LLM + [
 ]
 CONFIG_MIXTRAL_COMMON = CONFIG_MIXTRAL_FAST_LLM + ["model.distributed.training_dtype=bf16"]
 
+CONFIG_LLAMA3_MEGATRON = None  # Megatron does not support Llama3-style Rotary Embeddings
+CONFIG_LLAMA3_FAST_LLM = CONFIG_SC2_FAST_LLM + [
+    "model.base_model.transformer.gated=True",
+    "model.base_model.transformer.activation_type=silu",
+    "model.base_model.transformer.add_linear_biases=False",
+    "model.base_model.transformer.normalization.type=rms_norm",
+    # Larger init-std to trigger error when using the wrong scaling
+    "model.base_model.transformer.init_method_std=0.05",
+    "model.base_model.transformer.rotary_llama3_old_context_len=8192",
+    "model.base_model.transformer.rotary_scaling_type=llama3",
+    "model.base_model.tie_word_embeddings=False",
+]
+CONFIG_LLAMA3_COMMON = CONFIG_LLAMA3_FAST_LLM + ["model.distributed.training_dtype=bf16"]
+
 _CONFIGS = {
     "gpt2": ("gpt", CONFIG_GPT2_FAST_LLM, CONFIG_GPT2_MEGATRON, CONFIG_GPT2_COMMON, None),
     "sc1": ("gpt", HuggingfaceGPTModelForCausalLM, CONFIG_SC1_FAST_LLM, CONFIG_SC1_MEGATRON, CONFIG_SC1_COMMON, None),
@@ -161,6 +176,7 @@ _CONFIGS = {
         CONFIG_MIXTRAL_COMMON,
         MixtralGPTHuggingfaceCheckpointFormat,
     ),
+    "llama3": ("gpt", CONFIG_LLAMA3_FAST_LLM, CONFIG_LLAMA3_MEGATRON, CONFIG_LLAMA3_COMMON, LlamaGPTHuggingfaceCheckpointFormat),  # TODO
 }
 
 
