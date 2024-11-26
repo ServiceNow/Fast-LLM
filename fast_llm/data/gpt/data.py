@@ -112,7 +112,7 @@ class GPTData(Data):
             for name, prefix in zip(dataset_names, dataset_prefixes)
         }
         self._dataset_weights = {name: weight for name, weight in zip(dataset_names, dataset_weights)}
-
+    
     def setup(self, distributed: Distributed, samples_per_phase: dict[PhaseType, int]):
         """
         Load the datasets, and prepare or load the samplings.

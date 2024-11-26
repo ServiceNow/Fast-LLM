@@ -28,6 +28,7 @@ class LanguageModelKwargs:
     # TODO: These are generic
     labels = "labels"
     phase = "phase"
+    tokens = "tokens"
 
 
 @config_class()
