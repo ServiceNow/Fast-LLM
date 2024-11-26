@@ -8,6 +8,7 @@ __pycache__/
 
 # Doc build
 .cache
+site
 
 # Distribution / packaging
 *.egg-info/
@@ -27,3 +28,11 @@ venv.bak/
 # Project specifics
 /.idea/
 /.vscode/
+
+# Devenv
+.devenv*
+devenv.local.nix
+devenv.*
+
+# direnv
+.direnv

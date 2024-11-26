@@ -1,13 +1,17 @@
 import logging
 import pathlib
 import time
+import typing
 
 import numpy as np
 
-from fast_llm.core.distributed import ProcessGroup, safe_barrier
-from fast_llm.data.config import SampledDataset
+from fast_llm.core.distributed import safe_barrier
+from fast_llm.data.config import PhaseSplits, SampledDataset, SamplingConfig, SplitDataset
 from fast_llm.engine.config_utils.run import log_main_rank
-from fast_llm.utils import Assert
+from fast_llm.utils import Assert, normalize_probabilities
+
+if typing.TYPE_CHECKING:
+    from fast_llm.data.gpt.data import GPTData
 
 try:
     from fast_llm.csrc.data import build_blending_indices  # noqa
@@ -29,41 +33,69 @@ class BlendedDataset(SampledDataset):
 
     def __init__(
         self,
-        datasets: list[SampledDataset],
-        weights: list[float],
-        *,
-        name: str = "blended",
-        num_samples: int,
-        cache_directory: pathlib.Path | None = None,
-        group: ProcessGroup | None = None,
-        verbose: bool = True,
-        data_sample_warn_time_ms: float = 1000,
+        name: str,
+        datasets_and_weights: list[tuple[SampledDataset, float]],
+        sampling_config: SamplingConfig,
+        # TODO: Generalize
+        data: "GPTData",
     ):
-        self._datasets = datasets
         self._name = name
-        self._num_samples = num_samples
-        self._weights = weights
-        self._data_sample_warn_time_ms = data_sample_warn_time_ms
+        assert len(datasets_and_weights) > 0
+        self._datasets, weights = zip(*datasets_and_weights)
+        self._weights = normalize_probabilities(weights)
+        self._num_samples = sampling_config.num_samples
+        self._data_sample_warn_time_ms = data.config.data_sample_warn_time_ms
 
-        if cache_directory is None:
+        if sampling_config.cache_directory is None:
             self._dataset_idx_filename, self._sample_idx_filename = None, None
-            self._dataset_index, self._sample_index = self._build_blending_indices(verbose and len(datasets) <= 20)
+            self._dataset_index, self._sample_index = self._build_blending_indices(
+                sampling_config.verbose and len(self._datasets) <= 20
+            )
         else:
-            self._dataset_idx_filename = cache_directory / (self._name + "_blending_dataset_idx.npy")
-            self._sample_idx_filename = cache_directory / (self._name + "_blending_sample_idx.npy")
+            group = data.distributed.world_group
+            self._dataset_idx_filename = sampling_config.cache_directory / (self._name + "_blending_dataset_idx.npy")
+            self._sample_idx_filename = sampling_config.cache_directory / (self._name + "_blending_sample_idx.npy")
 
             # Build the indexed mapping if it doesn't exist.
             # TODO: This only works if the dataset location is accessible by all job.
             if (group is None or group.rank() == 0) and not (
                 self._dataset_idx_filename.is_file() and self._sample_idx_filename.is_file()
             ):
-                dataset_index, sample_index = self._build_blending_indices(verbose and len(datasets) <= 20)
-                cache_directory.mkdir(exist_ok=True, parents=True)
+                dataset_index, sample_index = self._build_blending_indices(
+                    sampling_config.verbose and len(self._datasets) <= 20
+                )
+                sampling_config.cache_directory.mkdir(exist_ok=True, parents=True)
                 np.save(self._dataset_idx_filename, dataset_index)
                 np.save(self._sample_idx_filename, sample_index)
 
             safe_barrier(group, self._name)
-            self._load_mappings(verbose)
+            self._load_mappings(sampling_config.verbose)
+
+    @classmethod
+    def apply(
+        cls,
+        name: str,
+        datasets_and_weights: list[(SplitDataset[SampledDataset], float)],
+        sampling_configs: PhaseSplits[SamplingConfig],
+        data: "GPTData",
+    ):
+        Assert.leq(set(sampling_configs), set.union(*[set(dataset) for dataset, _ in datasets_and_weights]))
+        return SplitDataset[BlendedDataset](
+            name,
+            {
+                phase: BlendedDataset(
+                    f"{name}_{phase.value}",
+                    [
+                        (dataset[phase], weight)
+                        for dataset, weight in datasets_and_weights
+                        if phase in dataset and weight > 0
+                    ],
+                    sampling_config,
+                    data,
+                )
+                for phase, sampling_config in sampling_configs.items()
+            },
+        )
 
     def __getstate__(self):
         return (
