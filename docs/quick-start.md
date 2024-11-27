@@ -17,7 +17,7 @@ To follow this guide, you'll need:
 
 ## 🏗 Step 1: Initial Setup
 
-First, choose your environment. You can use Docker, your local environment, Slurm, or Kubernetes.
+First, choose your environment. You can use Docker, your local environment, Slurm, or Kubernetes (with Kubeflow).
 
 === "Docker"
 
@@ -103,7 +103,7 @@ First, choose your environment. You can use Docker, your local environment, Slur
 
 === "Kubernetes"
 
-    You selected to use [Kubernetes](https://kubernetes.io/) with [KubeFlow](https://www.kubeflow.org/) for this tutorial. We will use a `PyTorchJob` resource to train our model with the `ghcr.io/servicenow/fast-llm:latest` Docker image and store our input data and output results in shared [persistent volume claims](https://kubernetes.io/docs/concepts/storage/persistent-volumes/) (PVCs).
+    You selected to use [Kubernetes](https://kubernetes.io/) with [Kubeflow](https://www.kubeflow.org/) for this tutorial. We will use a `PyTorchJob` resource to train our model with the `ghcr.io/servicenow/fast-llm:latest` Docker image and store our input data and output results in shared [persistent volume claims](https://kubernetes.io/docs/concepts/storage/persistent-volumes/) (PVCs).
 
     Let's now create two PVCs named `pvc-fast-llm-inputs` and `pvc-fast-llm-results` to store our input data and output results, respectively.
 
@@ -328,11 +328,10 @@ Create a configuration file for the dataset preparation. Copy the following cont
 
     dataset:
       path: openwebtext
+      trust_remote_code: true
 
     tokenizer:
       path: /mnt/inputs/SmolLM2-135M/tokenizer.json
-
-    remove_downloads: false
     ```
 
 === "Llama-3.2-1B"
@@ -346,11 +345,10 @@ Create a configuration file for the dataset preparation. Copy the following cont
 
     dataset:
       path: openwebtext
+      trust_remote_code: true
     
     tokenizer:
       path: /mnt/inputs/Llama-3.2-1B/tokenizer.json
-    
-    remove_downloads: false
     ```
 
 and save it as `prepare-config.yaml` in your inputs folder.
@@ -362,13 +360,13 @@ Fast-LLM ships with a `prepare` command that'll download and preprocess the data
     ```bash
     docker run -it --rm ghcr.io/servicenow/fast-llm:latest \
         -v ~/inputs:/mnt/inputs \
-        fast-llm prepare --config /mnt/inputs/prepare-config.yaml
+        fast-llm prepare gpt_memmap --config /mnt/inputs/prepare-config.yaml
     ```
 
 === "Local Environment"
 
     ```bash
-    fast-llm prepare --config /mnt/inputs/prepare-config.yaml
+    fast-llm prepare gpt_memmap --config /mnt/inputs/prepare-config.yaml
     ```
 
 === "Slurm"
@@ -386,7 +384,7 @@ Fast-LLM ships with a `prepare` command that'll download and preprocess the data
         --container-image="ghcr.io/servicenow/fast-llm:latest" \
         --container-mounts="${HOME}/inputs:/mnt/inputs,${HOME}/results:/mnt/results" \
         --ntasks-per-node=$SLURM_NTASKS_PER_NODE \
-        bash -c "fast-llm prepare --config /mnt/inputs/prepare-config.yaml"
+        bash -c "fast-llm prepare gpt_memmap --config /mnt/inputs/prepare-config.yaml"
     EOF
     ```
 
@@ -411,7 +409,7 @@ Fast-LLM ships with a `prepare` command that'll download and preprocess the data
           containers:
             - name: fast-llm-prepare-container
               image: ghcr.io/servicenow/fast-llm:latest
-              command: ["fast-llm", "prepare"]
+              command: ["fast-llm", "prepare", "gpt_memmap"]
               args:
                 - "--config"
                 - "/mnt/inputs/prepare-config.yaml"
@@ -459,7 +457,7 @@ Next, we'll create a configuration file for Fast-LLM. Save the following as `tra
         group_name: SmolLM2-135M
         entity_name: servicenow
     batch:
-      micro_batch_size: 20  # (4)!
+      micro_batch_size: 60  # (4)!
       sequence_length: 1024
       batch_size: 480  # (5)!
     data:
@@ -495,7 +493,7 @@ Next, we'll create a configuration file for Fast-LLM. Save the following as `tra
     1.  Total number of training tokens will be approximately 300B.
     2.  A Llama model will be saved in Hugging Face format to `~/results` directory every 20,000 iterations.
     3.  Entirely optional, but it's a good idea to track your training progress with Weights & Biases. Replace `servicenow` with your own W&B entity name. If you don't want to use W&B, just remove this section.
-    4.  Adjust the number of sequences per GPU based on GPU memory. For SmolLM2-135M and an A100-80GB, a `micro_batch_size` of 1 should work well.
+    4.  Adjust the number of sequences per GPU based on GPU memory. For SmolLM2-135M and an A100-80GB, a `micro_batch_size` of 60 should work well.
     5.  Must be divisible by the number of GPUs and the `micro_batch_size`. At 1024 tokens per sequence, 480 corresponds to about 500,000 tokens per batch.
     6.  Location of the dataset metadata file generated in Step 4.
     7.  99% train, 1% validation, 0% test. These settings need to be adjusted based on the size of your dataset. If you're using a smaller dataset, you need to increase the validation split.
@@ -526,10 +524,10 @@ Next, we'll create a configuration file for Fast-LLM. Save the following as `tra
         interval: 20_000
       wandb:  # (3)!
         project_name: fast-llm-quickstart
-        group_name: llama-3.2-1B
+        group_name: Llama-3.2-1B
         entity_name: servicenow
     batch:
-      micro_batch_size: 1  # (4)!
+      micro_batch_size: 20  # (4)!
       sequence_length: 1024
       batch_size: 480  # (5)!
     data:
@@ -544,7 +542,7 @@ Next, we'll create a configuration file for Fast-LLM. Save the following as `tra
         base: 6.0e-04
         minimum: 6.0e-05
         decay_style: cosine
-        decay_iterations: 600_000
+        decay_iterations: 100_000
         warmup_iterations: 2000
     pretrained:
       format: llama  # (10)!
@@ -554,10 +552,11 @@ Next, we'll create a configuration file for Fast-LLM. Save the following as `tra
       base_model:
         transformer:
           use_flash_attention: yes  # (12)!
+        cross_entropy_impl: fused  # (13)!
       multi_stage:
-        zero_stage: null  # (13)!
+        zero_stage: null  # (14)!
       distributed:
-        training_dtype: bf16  # (14)!
+        training_dtype: bf16  # (15)!
     run:
       experiment_dir: /mnt/results/Llama-3.2-1B
     ```
@@ -565,7 +564,7 @@ Next, we'll create a configuration file for Fast-LLM. Save the following as `tra
     1.  Total number of training tokens will be approximately 300B.
     2.  A Llama model will be saved in Hugging Face format to `~/results` directory every 20,000 iterations.
     3.  Entirely optional, but it's a good idea to track your training progress with Weights & Biases. Replace `servicenow` with your own W&B entity name. If you don't want to use W&B, just remove this section.
-    4.  Adjust the number of sequences per GPU based on GPU memory. For Llama-3.2-1B and an A100-80GB, a `micro_batch_size` of 1 should work well.
+    4.  Adjust the number of sequences per GPU based on GPU memory. For Llama-3.2-1B and an A100-80GB, a `micro_batch_size` of 20 should work well.
     5.  Must be divisible by the number of GPUs and the `micro_batch_size`. At 1024 tokens per sequence, 480 corresponds to about 500,000 tokens per batch.
     6.  Location of the dataset metadata file generated in Step 4.
     7.  99% train, 1% validation, 0% test. These settings need to be adjusted based on the size of your dataset. If you're using a smaller dataset, you need to increase the validation split.
@@ -574,8 +573,9 @@ Next, we'll create a configuration file for Fast-LLM. Save the following as `tra
     10.  Format of the pretrained model. Since it's a Llama model, we set this to `llama`.
     11.  We want to continue training Llama-3.2-1B from a checkpoint. If you're training from scratch, set this to `no`.
     12.  If you're using Ampere GPUs or higher, you can enable FlashAttention for faster training. Otherwise, set this to `no`. The default is `yes`.
-    13.  We're not using ZeRO for this tutorial, so we set `zero_stage` to `null`. You can set this to `1`, `2`, or `3` for ZeRO-1, ZeRO-2, or ZeRO-3, respectively.
-    14.  `bf16` (bfloat16, or Brain Floating Point 16) is supported on Ampere GPUs and higher. On Volta GPUs, you can use `fp16` (half-precision floating point) for training instead of `bf16`.
+    13.  Configure Fast-LLM to use the fused cross-entropy loss implementation rather than the default Triton implementation for Llama models. This avoids issues with block size limitations in our current Triton code, which can cause training failures.
+    14.  We're not using ZeRO for this tutorial, so we set `zero_stage` to `null`. You can set this to `1`, `2`, or `3` for ZeRO-1, ZeRO-2, or ZeRO-3, respectively.
+    15.  `bf16` (bfloat16, or Brain Floating Point 16) is supported on Ampere GPUs and higher. On Volta GPUs, you can use `fp16` (half-precision floating point) for training instead of `bf16`.
 
 ## 🔑 (Optional) Step 6: Add Your Weights & Biases API Key
 
@@ -783,10 +783,10 @@ You can expect to see the following performance metrics in Fast-LLM's output:
 
     | Performance Metric  | 8x V100-SXM2-32GB[^SmolLM2-V100] | 8x A100-SXM4-80GB[^SmolLM2-A100] | 8x H100-SXM5-80GB[^SmolLM2-H100] |
     |---------------------|---------------------------------:|---------------------------------:|---------------------------------:|
-    | tokens/s/GPU        | 18300                            |                                  |                                  |
-    | tflop/s (model)     | 16.7                             |                                  |                                  |
-    | tflop/s (hardware)  | 17.0                             |                                  |                                  |
-    | total training time | 23.3 days                        |                                  |                                  |
+    | tokens/s/GPU        | 18,300                           |                                  | 294,000                          |
+    | tflop/s (model)     | 16.7                             |                                  | 268                              |
+    | tflop/s (hardware)  | 17.0                             |                                  | 274                              |
+    | total training time | 23.3 days                        |                                  | 1.45 days                        |
 
     [^SmolLM2-V100]:
         `bf16` is not supported on V100 GPUs. Precision was set to `fp16`.
@@ -795,20 +795,20 @@ You can expect to see the following performance metrics in Fast-LLM's output:
     [^SmolLM2-A100]:
         Precision was set to `bf16`.
         FlashAttention was enabled.
-        Micro-batch size was set to ???.
+        Micro-batch size was set to 60.
     [^SmolLM2-H100]:
         Precision was set to `bf16`.
         FlashAttention was enabled.
-        Micro-batch size was set to ???.
+        Micro-batch size was set to 60.
 
 === "Llama-3.2-1B"
 
     | Performance Metric  | 8x V100-SXM2-32GB[^Llama-V100] | 8x A100-SXM4-80GB[^Llama-A100] | 8x H100-SXM5-80GB[^Llama-H100] |
     |---------------------|-------------------------------:|-------------------------------:|-------------------------------:|
-    | tokens/s/GPU        | 5680                           |                                |                                |
-    | tflop/s (model)     | 43.3                           |                                |                                |
-    | tflop/s (hardware)  | 43.4                           |                                |                                |
-    | total training time | 12.5                           |                                |                                |
+    | tokens/s/GPU        | 5,680                          |                                | 66,600                         |
+    | tflop/s (model)     | 43.3                           |                                | 508                            |
+    | tflop/s (hardware)  | 43.4                           |                                | 510                            |
+    | total training time | 12.5 days                      |                                | 1.07 days                      |
 
     [^Llama-V100]:
         `bf16` is not supported on V100 GPUs. Precision was set to `fp16`.
@@ -817,11 +817,11 @@ You can expect to see the following performance metrics in Fast-LLM's output:
     [^Llama-A100]:
         Precision was set to `bf16`.
         FlashAttention was enabled.
-        Micro-batch size was set to ???.
+        Micro-batch size was set to 20.
     [^Llama-H100]:
         Precision was set to `bf16`.
         FlashAttention was enabled.
-        Micro-batch size was set to ???.
+        Micro-batch size was set to 20.
 
 If you included the W&B section in your configuration, you can also track your training progress on the Weights & Biases dashboard as well. Follow the link in the console output to view your training run.
 

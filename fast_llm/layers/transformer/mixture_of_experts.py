@@ -62,7 +62,9 @@ class MixtureOfExpertMLP(MLPBase):
             tensor_space.get_tensor_dim(TransformerDimNames.hidden),
             tensor_space.get_tensor_dim(TransformerDimNames.unshared_experts),
             bias=False,
-            weight_init_method=init_normal_(std=config.init_method_std),
+            weight_init_method=init_normal_(
+                std=config.init_method_std, min_val=config.init_method_min, max_val=config.init_method_max
+            ),
             lr_scale=config.router_lr_scale,
         )
         dropless_moe = config.dropless_moe

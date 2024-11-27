@@ -312,15 +312,23 @@ init_zeros_ = init_fill_(0.0)
 init_ones_ = init_fill_(1.0)
 
 
-def init_normal_(mean=0.0, std=1.0):
+def init_normal_(mean=0.0, std=1.0, min_val=None, max_val=None):
     def init_(meta: ParameterMeta, tensor: torch.Tensor, generator: torch.Generator):  # noqa
-        return tensor.normal_(mean, std, generator=generator)
+        tensor = tensor.normal_(mean, std, generator=generator)
+        if min_val is not None or max_val is not None:
+            return tensor.clamp_(min=min_val, max=max_val)  # noqa
+        else:
+            return tensor
 
     return init_
 
 
-def init_uniform_(low=0.0, high=1.0):
+def init_uniform_(low=0.0, high=1.0, min_val=None, max_val=None):
     def init_(meta: ParameterMeta, tensor: torch.Tensor, generator: torch.Generator):  # noqa
-        return tensor.uniform_(low, high, generator=generator)  # noqa
+        tensor = tensor.uniform_(low, high, generator=generator)
+        if min_val is not None or max_val is not None:
+            return tensor.clamp_(min=min_val, max=max_val)  # noqa
+        else:
+            return tensor
 
     return init_

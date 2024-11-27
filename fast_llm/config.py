@@ -544,6 +544,10 @@ class Config:
         for name, field in self.fields():
             value = getattr(self, name, MISSING)
             self._add_field_to_args(arg_dict, name, field, value, verbose, all_fields, format_, serializable)
+        if hasattr(self, "_unknown_fields"):
+            for name, value in self._unknown_fields.items():
+                self._add_field_to_args(arg_dict, f"!!! {name}", None, value, None, all_fields, format_, serializable)
+
         return arg_dict
 
     @classmethod

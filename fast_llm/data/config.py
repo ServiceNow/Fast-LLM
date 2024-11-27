@@ -123,9 +123,18 @@ class TokenizerConfig(Config):
     )
 
 
+@config_class
+class SamplingConfig(Config):
+    num_samples: int = Field(default=1, desc="Number of samples to generate.")
+    seed: int = Field(default=0, desc="Random seed.")
+    cache_directory: pathlib.Path | None = Field(default=None, desc="Path to the sampling cache directory.")
+    verbose: bool = Field(default=True, desc="Log sampling progress.")
+
+
 @config_class()
 class DataConfig(Config):
     _abstract = True
+    _sampling_config_class: typing.ClassVar[type[SamplingConfig]]
 
 
 class Data(abc.ABC):
@@ -159,17 +168,8 @@ class Dataset(abc.ABC):
         A name for the dataset to facilitate identification and debugging.
         """
 
-
-@config_class
-class SamplingConfig(Config):
-    num_samples: int = Field(default=1, desc="Number of samples to generate.")
-    seed: int = Field(default=0, desc="Random seed.")
-    cache_directory: pathlib.Path | None = Field(default=None, desc="Path to the sampling cache directory.")
-    verbose: bool = Field(default=True, desc="Log sampling progress.")
-
-
-class SamplableDataset(Dataset):
-    def sample(self, config: SamplingConfig, data: Data):
+    @abc.abstractmethod
+    def as_split(self, default_phase: PhaseType = PhaseType.training):
         pass
 
 
@@ -186,3 +186,57 @@ class SampledDataset(Dataset):
     @abc.abstractmethod
     def __len__(self):
         pass
+
+    def as_split(self, default_phase: PhaseType = PhaseType.training):
+        return SplitDataset(self.name, {default_phase: self})
+
+
+class SamplableDataset(Dataset):
+    # TODO: Move to dataset config?
+    _data_config_class: typing.ClassVar[type[DataConfig]]
+
+    def sample(self, config: SamplingConfig, data: Data) -> SampledDataset:
+        pass
+
+    def as_split(self, default_phase: PhaseType = PhaseType.training):
+        return SplitDataset(self.name, {default_phase: self})
+
+
+_SplittableType = typing.TypeVar("_SplittableType")
+_DatasetType = typing.TypeVar("_DatasetType", bound=Dataset)
+_SampledDatasetType = typing.TypeVar("_SampledDatasetType", bound=SampledDataset)
+_SamplableDatasetType = typing.TypeVar("_SamplableDatasetType", bound=SamplableDataset)
+
+
+class PhaseSplits(dict[PhaseType, _SplittableType], typing.Generic[_SplittableType]):
+    pass
+
+
+class SplitDataset(Dataset, PhaseSplits[_DatasetType], typing.Generic[_DatasetType]):
+    def __init__(self, name: str, datasets: dict[PhaseType, _DatasetType]):
+        super().__init__(datasets)
+        self._name = name
+
+    def as_split(self, default_phase: PhaseType = PhaseType.training):
+        return self
+
+    @property
+    def name(self):
+        return self._name
+
+
+class SampledSplitDataset(SplitDataset[_SampledDatasetType], typing.Generic[_SampledDatasetType]):
+    pass
+
+
+class SamplableSplitDataset(SplitDataset[_SamplableDatasetType], typing.Generic[_SamplableDatasetType]):
+    def sample(self, sampling_configs: PhaseSplits[SamplingConfig], data: Data):
+        return SampledSplitDataset(
+            f"{self.name}_sampled",
+            {phase: self[phase].sample(sampling_config, data) for phase, sampling_config in sampling_configs.items()},
+        )
+
+
+class CopySplitDataset(SamplableSplitDataset):
+    def __init__(self, name: str, dataset: _SplittableType, phases: list[PhaseType]):
+        super().__init__(name, {phase: dataset for phase in phases})

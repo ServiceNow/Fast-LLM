@@ -1,3 +1,4 @@
+from fast_llm.data.config import SamplableSplitDataset
 from fast_llm.data.gpt.dataset import GPTIndexedDataset
 from fast_llm.engine.distributed.config import PhaseType
 from fast_llm.utils import Assert, normalize_probabilities, padded_cumsum
@@ -62,7 +63,10 @@ class GPTDatasetSlice(GPTIndexedDataset):
         """
         probabilities = normalize_probabilities(list(phase_split.values()))
         splits = [round(x) for x in padded_cumsum(probabilities) * dataset.num_documents]
-        return {
-            phase: GPTDatasetSlice(f"{dataset.name}_{phase.value}", dataset, split_begin, split_end)
-            for phase, split_begin, split_end in zip(phase_split, splits[:-1], splits[1:])
-        }
+        return SamplableSplitDataset[GPTDatasetSlice](
+            f"{dataset.name}_split",
+            {
+                phase: GPTDatasetSlice(f"{dataset.name}_{phase.value}", dataset, split_begin, split_end)
+                for phase, split_begin, split_end in zip(phase_split, splits[:-1], splits[1:])
+            },
+        )
