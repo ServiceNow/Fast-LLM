@@ -44,7 +44,7 @@ If you're the type who loves configurations and tweaking every detail, the [**Co
 
 We've got some excellent tutorials to help you get the most out of Fast-LLM:
 
--   [**Quick-Start Guide**](quick-start.md): Perfect for launching Fast-LLM on a single GPU machine. We walk you through setting up Docker, running your first training job, and handling common issues.
+-   [**Quick-Start Guide**](quick-start.md): Perfect for launching Fast-LLM on a single GPU machine. We walk you through running your first training job (either locally or on a cluster), and handling common issues.
 
 -   [**Cookbook**](recipes/train-llama-8b.md): Ready to go big? These recipes cover real-world scenarios like training big models from scratch, continuing training from a checkpoint, and more. This is where Fast-LLM really shows its power.
 
