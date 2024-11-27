@@ -17,7 +17,7 @@ To follow this guide, you'll need:
 
 ## 🏗 Step 1: Initial Setup
 
-First, choose your environment. You can use Docker, your local environment, Slurm, or Kubernetes.
+First, choose your environment. You can use Docker, your local environment, Slurm, or Kubernetes (with Kubeflow).
 
 === "Docker"
 
@@ -94,7 +94,7 @@ First, choose your environment. You can use Docker, your local environment, Slur
 
 === "Kubernetes"
 
-    You selected to use [Kubernetes](https://kubernetes.io/) with [KubeFlow](https://www.kubeflow.org/) for this tutorial. We will use a `PyTorchJob` resource to train our model with the `ghcr.io/servicenow/fast-llm:latest` Docker image and store our input data and output results in shared [persistent volume claims](https://kubernetes.io/docs/concepts/storage/persistent-volumes/) (PVCs).
+    You selected to use [Kubernetes](https://kubernetes.io/) with [Kubeflow](https://www.kubeflow.org/) for this tutorial. We will use a `PyTorchJob` resource to train our model with the `ghcr.io/servicenow/fast-llm:latest` Docker image and store our input data and output results in shared [persistent volume claims](https://kubernetes.io/docs/concepts/storage/persistent-volumes/) (PVCs).
 
     Let's now create two PVCs named `pvc-fast-llm-inputs` and `pvc-fast-llm-results` to store our input data and output results, respectively.
 
@@ -326,8 +326,6 @@ Create a configuration file for the dataset preparation. Copy the following cont
 
     tokenizer:
       path: /mnt/inputs/SmolLM2-135M/tokenizer.json
-
-    remove_downloads: false
     ```
 
     1. Increase the number of workers to speed up the dataset preparation process if you have more CPUs available.
@@ -349,8 +347,6 @@ Create a configuration file for the dataset preparation. Copy the following cont
     
     tokenizer:
       path: /mnt/inputs/Llama-3.2-1B/tokenizer.json
-    
-    remove_downloads: false
     ```
 
     1. Increase the number of workers to speed up the dataset preparation process if you have more CPUs available.

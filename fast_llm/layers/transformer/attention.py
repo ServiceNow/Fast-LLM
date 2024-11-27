@@ -78,8 +78,16 @@ class Attention(torch.nn.Module):
 
         self._triton_rotary = self._config.triton_rotary
 
-        init_method_qkv = init_normal_(std=self._config.init_method_std_qkv)
-        init_method_std_attn_proj = init_normal_(std=self._config.init_method_std_attn_proj)
+        init_method_qkv = init_normal_(
+            std=self._config.init_method_std_qkv,
+            min_val=self._config.init_method_min_qkv,
+            max_val=self._config.init_method_max_qkv,
+        )
+        init_method_std_attn_proj = init_normal_(
+            std=self._config.init_method_std_attn_proj,
+            min_val=self._config.init_method_min_attn_proj,
+            max_val=self._config.init_method_max_attn_proj,
+        )
 
         self._kv_channels = self._tensor_space.get_tensor_dim(TransformerDimNames.kv_channels).size
         self._head_groups = self._tensor_space.get_tensor_dim(TransformerDimNames.head_groups).global_size

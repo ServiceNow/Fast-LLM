@@ -29,7 +29,7 @@ def z_loss(
     logits_scale_factor: float = 1.0,
 ) -> torch.Tensor:
     if losses is not None or (training and grad_scale is not None):
-        loss = calculate_z_loss(logits, logit_scale_factor=logits_scale_factor)
+        loss = calculate_z_loss(logits, logits_scale_factor=logits_scale_factor)
         if losses is not None and loss_name is not None:
             losses[loss_name].append(loss.detach())
         if training and grad_scale is not None:
