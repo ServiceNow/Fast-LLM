@@ -12,8 +12,6 @@ class Tokenizer:
     def __init__(self, config: TokenizerConfig):
         log_main_rank(f"> loading tokenizer from {config.path} ...")
         self.tokenizer = PreTrainedTokenizerFast(tokenizer_file=config.path, errors="replace", max_len=None)
-        if self.tokenizer.bos_token_id is None:
-            raise ValueError("Tokenizer does not have a BOS token.")
         if self.tokenizer.eos_token_id is None:
             raise ValueError("Tokenizer does not have an EOS token.")
         self.eod_id = self.tokenizer.eos_token_id
@@ -32,9 +30,7 @@ class Tokenizer:
         return self._inv_vocab
 
     def tokenize(self, text: str):
-        return self.tokenizer.encode(
-            f"{self.tokenizer.bos_token}{text}{self.tokenizer.eos_token}", add_special_tokens=False
-        )
+        return self.tokenizer.encode(text)
 
     def detokenize(self, token_ids):
         return self.tokenizer.decode(token_ids)
