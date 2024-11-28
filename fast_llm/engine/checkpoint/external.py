@@ -24,6 +24,8 @@ from fast_llm.utils import Assert
 
 logger = logging.getLogger(__name__)
 
+if "HUGGINGFACE_API_KEY_PATH" in os.environ:
+    os.environ["HF_TOKEN"] = pathlib.Path(os.environ["HUGGINGFACE_API_KEY_PATH"]).open("r").read().strip()
 
 @dataclasses.dataclass
 class ParamConverter:
@@ -319,11 +321,6 @@ class AutoStateDictCheckpointHandler(ExternalStateDictCheckpointHandler, abc.ABC
 
 
 class HuggingfaceStateDictCheckpointHandler(ExternalStateDictCheckpointHandler, abc.ABC):
-    def __init__(self, model: FastLLMModel):
-        super().__init__(model)
-        if "HUGGINGFACE_API_KEY_PATH" in os.environ:
-            os.environ["HF_TOKEN"] = pathlib.Path(os.environ["HUGGINGFACE_API_KEY_PATH"]).open("r").read().strip()
-
     def _save_serialized_metadata(self, config: CheckpointSaveMetadataConfig, metadata: dict, index: dict):
         path = config.path / f"{self.base_file_name}.safetensors.index.json"
         logger.info(f"Saving index to {path}")
