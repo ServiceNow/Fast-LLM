@@ -18,7 +18,7 @@ Fast-LLM isn't just another library, **it's a platform for powering the next gen
 
 -   **🚀 Purpose-Built for Small- and Large-Scale AI:** Optimized specifically for training language models of all sizes, Fast-LLM excels from **small models around 1B parameters to massive clusters running 70B+ parameter models**, with kernels that are fine-tuned for maximum throughput across this entire range. At 10B-parameter scale, Fast-LLM avoids costly 3D-paralelism through memory optimization techniques such as ZeRO and activation recomputation, whereas at 100B-parameter scale, Fast-LLM optimally supports 3D-parallelism; making Fast-LLM the go-to choice for diverse training needs.
 
--   **🧠 Unified Support for GPT-Like Architectures:** Fast-LLM **unifies all GPT-like model implementations** in a [single Python file](https://github.com/ServiceNow/Fast-LLM/blob/main/fast_llm/models/gpt/model.py), and unlike HuggingFace transformers where every model has it's own, mostly independent, implementation, Fast-LLM reduces coding and adapts effortlessly, even with custom architectures.
+-   **🧠 Unified Support for GPT-Like Architectures:** Fast-LLM **unifies all GPT-like model implementations** in a [single Python file](https://github.com/ServiceNow/Fast-LLM/blob/main/fast_llm/models/gpt/model.py), and unlike HuggingFace transformers where every model has its own, mostly independent, implementation, Fast-LLM reduces coding and adapts effortlessly, even with custom architectures.
 
 -   **💰 Cost Efficiency That Sets Fast-LLM Apart:**
 
@@ -42,7 +42,7 @@ Fast-LLM offers all the capabilities you need to accelerate your LLM training an
 
 -   **🎛️ Total Flexibility:** Compatible with all major language model architectures, including but not limited to Llama, Mistral, StarCoder, and Mixtral. Fast-LLM's modular design gives you full control over your training workflows.
 
--   **📦 Seamless Integration:** Integrate smoothly with popular libraries such as [Hugging Face Transformers](https://huggingface.co/transformers). Benefit from Fast-LLM's optimizations without disrupting your existing pipelines.
+-   **📦 Seamless Integration:** Integrate smoothly with popular libraries such as [HuggingFace Transformers](https://huggingface.co/transformers). Benefit from Fast-LLM's optimizations without disrupting your existing pipelines.
 
 -   **🛠️ Professional-Grade Tools:** Enjoy mixed precision training, large batch training, and gradient accumulation. Fast-LLM ensures reproducibility through deterministic behavior and provides pre-built Docker images, YAML configurations, and a simple, intuitive command-line interface.
 
@@ -64,7 +64,7 @@ Fast-LLM is designed to be the **go-to solution** for those training the most so
 
 -   **Accelerating Training Workflows:** Deliver the fastest LLM training experience with optimized kernel efficiency, parallelism, and memory management.
 -   **Supporting a Broad Range of Architectures:** Offer built-in support for all major language model architectures, with an architecture-agnostic approach that allows users to easily adapt the framework to emerging models.
--   **Enabling Seamless Integration and Deployment:** Integrate effortlessly into existing ML pipelines, including [Hugging Face Transformers](https://huggingface.co/transformers) and [Kubernetes](https://kubernetes.io)-based clusters.
+-   **Enabling Seamless Integration and Deployment:** Integrate effortlessly into existing ML pipelines, including [HuggingFace Transformers](https://huggingface.co/transformers) and [Kubernetes](https://kubernetes.io)-based clusters.
 -   **Advancing LLM Research and Production-Readiness:** Be suitable for both cutting-edge research and mission-critical production workloads.
 
 ## Collaboration and Contribution
