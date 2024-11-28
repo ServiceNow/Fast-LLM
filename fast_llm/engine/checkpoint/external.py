@@ -2,6 +2,7 @@ import abc
 import dataclasses
 import json
 import logging
+import os
 import pathlib
 import typing
 
@@ -318,6 +319,10 @@ class AutoStateDictCheckpointHandler(ExternalStateDictCheckpointHandler, abc.ABC
 
 
 class HuggingfaceStateDictCheckpointHandler(ExternalStateDictCheckpointHandler, abc.ABC):
+    def __init__(self, model: FastLLMModel):
+        super().__init__(model)
+        if "HUGGINGFACE_API_KEY_PATH" in os.environ:
+            os.environ["HF_TOKEN"] = pathlib.Path(os.environ["HUGGINGFACE_API_KEY_PATH"]).open("r").read().strip()
 
     def _save_serialized_metadata(self, config: CheckpointSaveMetadataConfig, metadata: dict, index: dict):
         path = config.path / f"{self.base_file_name}.safetensors.index.json"
