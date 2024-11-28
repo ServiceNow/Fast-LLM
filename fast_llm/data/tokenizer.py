@@ -1,6 +1,6 @@
 from transformers import PreTrainedTokenizerFast
 
-from fast_llm.data.config import EOD, TokenizerConfig
+from fast_llm.data.config import TokenizerConfig
 from fast_llm.engine.config_utils.run import log_main_rank
 
 
@@ -11,13 +11,13 @@ class Tokenizer:
 
     def __init__(self, config: TokenizerConfig):
         log_main_rank(f"> loading tokenizer from {config.path} ...")
-        special_tokens = [EOD]
         self.tokenizer = PreTrainedTokenizerFast(tokenizer_file=config.path, errors="replace", max_len=None)
-        self.tokenizer.add_special_tokens({"additional_special_tokens": special_tokens})
-        self.eod_id = self.tokenizer.vocab[EOD]
-        # Token->id mapping for additional special-tokens
-        self.special_tokens = {tok: self.tokenizer.vocab[tok] for tok in special_tokens}
-        self._inv_vocab = {v: k for k, v in self.tokenizer.vocab.items()}
+        if self.tokenizer.bos_token_id is None:
+            raise ValueError("Tokenizer does not have a BOS token.")
+        if self.tokenizer.eos_token_id is None:
+            raise ValueError("Tokenizer does not have an EOS token.")
+        self.eod_id = self.tokenizer.eos_token_id
+        self._inv_vocab = {v: k for k, v in self.vocab.items()}
 
     @property
     def vocab_size(self):
@@ -31,8 +31,10 @@ class Tokenizer:
     def inv_vocab(self):
         return self._inv_vocab
 
-    def tokenize(self, text):
-        return self.tokenizer.encode(text)
+    def tokenize(self, text: str):
+        return self.tokenizer.encode(
+            f"{self.tokenizer.bos_token}{text}{self.tokenizer.eos_token}", add_special_tokens=False
+        )
 
     def detokenize(self, token_ids):
         return self.tokenizer.decode(token_ids)
