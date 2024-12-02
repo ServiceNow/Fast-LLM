@@ -750,6 +750,70 @@ Alright, the big moment! Let's launch the training run.
                   emptyDir:
                     medium: Memory
                     sizeLimit: "1024Gi"
+        Worker:
+          replicas: 3
+          restartPolicy: Never
+          template:
+            spec:
+              tolerations:
+                - key: nvidia.com/gpu
+                  value: "true"
+                  operator: Equal
+                  effect: NoSchedule
+              containers:
+                - name: pytorch
+                  image: ghcr.io/servicenow/fast-llm:latest
+                  resources:
+                    limits:
+                      nvidia.com/gpu: 8
+                      rdma/rdma_shared_device_a: 1
+                      memory: "1024Gi"
+                      cpu:
+                    requests:
+                      nvidia.com/gpu: 8
+                      rdma/rdma_shared_device_a: 1
+                      memory: "1024Gi"
+                      cpu: 128
+                  command:
+                    - /bin/bash
+                    - -c
+                    - |
+                      torchrun --rdzv_backend=static \
+                               --rdzv_endpoint=${MASTER_ADDR}:${MASTER_PORT} \
+                               --node_rank=${RANK} \
+                               --nproc_per_node=${PET_NPROC_PER_NODE} \
+                               --nnodes=${PET_NNODES} \
+                               --max_restarts=0 \
+                               --rdzv_conf=timeout=3600 \
+                               --no_python \
+                               fast-llm train gpt \
+                               --config fast-llm-tutorial/train-config.yaml
+                  env:
+                    - name: PYTHONHASHSEED
+                      value: "0"
+                    - name: WANDB_API_KEY_PATH
+                      value: "/app/fast-llm-tutorial/.wandb_api_key"
+                    - name: TORCH_NCCL_ASYNC_ERROR_HANDLING
+                      value: "1"
+                    - name: NCCL_DEBUG
+                      value: "INFO"
+                  securityContext:
+                    capabilities:
+                      add:
+                        - IPC_LOCK
+                  volumeMounts:
+                    - mountPath: /app/fast-llm-tutorial
+                      name: fast-llm-inputs
+                    - mountPath: /dev/shm
+                      name: dshm
+              volumes:
+                - name: fast-llm-inputs
+                  persistentVolumeClaim:
+                    claimName: pvc-fast-llm-tutorial
+                - name: dshm
+                  emptyDir:
+                    medium: Memory
+                    sizeLimit: "1024Gi"
     EOF
     ```
 
