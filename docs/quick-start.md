@@ -866,16 +866,17 @@ You can expect to see the following performance metrics in Fast-LLM's output:
 
 === "Small"
 
-    | Performance Metric  | 8x V100-SXM2-32GB[^SmolLM2-V100] | 8x A100-SXM4-80GB[^SmolLM2-A100] | 8x H100-SXM5-80GB[^SmolLM2-H100] |
-    |---------------------|---------------------------------:|---------------------------------:|---------------------------------:|
-    | tokens/s/GPU        | 18,300                           |                                  | 294,000                          |
-    | tflop/s (model)     | 16.7                             |                                  | 268                              |
-    | tflop/s (hardware)  | 17.0                             |                                  | 274                              |
-    | total training time | 23.3 days                        |                                  | 1.45 days                        |
+    | Performance Metric   | 8x V100-SXM2-32GB[^SmolLM2-V100] | 8x A100-SXM4-80GB[^SmolLM2-A100] | 8x H100-SXM5-80GB[^SmolLM2-H100] |
+    |----------------------|---------------------------------:|---------------------------------:|---------------------------------:|
+    | tokens/s/GPU         | 16,700                           |                                  |                                  |
+    | tflop/s (model)      | 15.3                             |                                  |                                  |
+    | peak tflop/s (dense) | 125                              | 312                              | 990                              |
+    | utilization          | 12.2%                            |                                  |                                  |
+    | total training time  | 68 minutes                       |                                  |                                  |
 
     [^SmolLM2-V100]:
-        `bf16` is not supported on V100 GPUs. Precision was set to `fp16`.
-        FlashAttention is not supported on V100 GPUs, so it was disabled.
+        Precision was set to `fp16`, since `bf16` is not supported on V100 GPUs. 
+        FlashAttention was disabled, as it is not supported on V100 GPUs.
         Micro-batch size was set to 12.
     [^SmolLM2-A100]:
         Precision was set to `bf16`.
@@ -888,16 +889,17 @@ You can expect to see the following performance metrics in Fast-LLM's output:
 
 === "Big"
 
-    | Performance Metric  | 8x V100-SXM2-32GB[^Llama-V100] | 8x A100-SXM4-80GB[^Llama-A100] | 8x H100-SXM5-80GB[^Llama-H100] |
-    |---------------------|-------------------------------:|-------------------------------:|-------------------------------:|
-    | tokens/s/GPU        | 5,680                          |                                | 66,600                         |
-    | tflop/s (model)     | 43.3                           |                                | 508                            |
-    | tflop/s (hardware)  | 43.4                           |                                | 510                            |
-    | total training time | 12.5 days                      |                                | 1.07 days                      |
+    | Performance Metric   | 32x V100-SXM2-32GB[^Llama-V100] | 32x A100-SXM4-80GB[^Llama-A100] | 32x H100-SXM5-80GB[^Llama-H100] |
+    |----------------------|--------------------------------:|--------------------------------:|--------------------------------:|
+    | tokens/s/GPU         |                                 |                                 |                                 |
+    | tflop/s (model)      |                                 |                                 |                                 |
+    | peak tflop/s (dense) | 125                             | 312                             | 990                             |
+    | utilization          |                                 |                                 |                                 |
+    | total training time  |                                 |                                 |                                 |
 
     [^Llama-V100]:
-        `bf16` is not supported on V100 GPUs. Precision was set to `fp16`.
-        FlashAttention is not supported on V100 GPUs, so it was disabled.
+        Precision was set to `fp16`, since `bf16` is not supported on V100 GPUs. 
+        FlashAttention was disabled, as it is not supported on V100 GPUs.
         Micro-batch size was set to 4.
     [^Llama-A100]:
         Precision was set to `bf16`.
