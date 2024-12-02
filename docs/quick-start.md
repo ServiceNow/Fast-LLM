@@ -796,7 +796,7 @@ Alright, the big moment! Let's launch the training run.
         kubectl delete pvc pvc-fast-llm-tutorial
         ```
 
-        Don't run these commands until you're finished with the tutorial.
+        This will shut down the temporary pod and remove the PVC with all its contents.
 
 You can expect to see the following performance metrics in Fast-LLM's output:
 
