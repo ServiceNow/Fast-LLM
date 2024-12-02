@@ -83,14 +83,14 @@ class RotaryArchitectureConfig(BaseModelArchitectureConfig):
         desc="Scaling type for the rotary frequencies. Default: none.",
         hint=FieldHint.feature,
     )
-    llama3_scale_factor: int = Field(
-        default=8, desc="Scaling factor for the llama3 rotary frequencies.", hint=FieldHint.feature
+    llama3_scale_factor: float = Field(
+        default=8., desc="Scaling factor for the llama3 rotary frequencies.", hint=FieldHint.feature
     )
-    llama3_low_freq_factor: int = Field(
-        default=1, desc="Low frequency factor for the llama3 rotary frequencies.", hint=FieldHint.feature
+    llama3_low_freq_factor: float = Field(
+        default=1., desc="Low frequency factor for the llama3 rotary frequencies.", hint=FieldHint.feature
     )
-    llama3_high_freq_factor: int = Field(
-        default=4, desc="High frequency factor for the llama3 rotary frequencies.", hint=FieldHint.feature
+    llama3_high_freq_factor: float = Field(
+        default=4., desc="High frequency factor for the llama3 rotary frequencies.", hint=FieldHint.feature
     )
     llama3_old_context_len: int = Field(
         default=8192, desc="Original llama3 context length for the llama3 rotary frequencies.", hint=FieldHint.feature
