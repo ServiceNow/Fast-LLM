@@ -11,7 +11,9 @@ class Tokenizer:
 
     def __init__(self, config: TokenizerConfig):
         log_main_rank(f"> loading tokenizer from {config.path} ...")
-        self.tokenizer = PreTrainedTokenizerFast(tokenizer_file=config.path, errors="replace", max_len=None)
+        self.tokenizer = PreTrainedTokenizerFast.from_pretrained(
+            pretrained_model_name_or_path=config.path, errors="replace", max_len=None
+        )
         if self.tokenizer.eos_token_id is None:
             raise ValueError("Tokenizer does not have an EOS token.")
         self.eod_id = self.tokenizer.eos_token_id
