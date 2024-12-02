@@ -107,7 +107,13 @@ class CheckpointConfigBase(Config):
         hint=FieldHint.core,
     )
 
-    def setup(self, model_config: "FastLLMModelConfig"):
+    def _validate(self):
+        if not isinstance(self.format, type) or not issubclass(self.format, CheckpointFormat):
+            # Would break anyway, but this makes the error more explicit.
+            raise ValueError("Please call `setup` first to set the checkpoint format.")
+        super()._validate()
+
+    def setup(self, model_config: typing.Union["FastLLMModelConfig", type["FastLLMModelConfig"]]):
         assert not self._validated
         self.format = model_config.get_checkpoint_format(self.format)
 
