@@ -480,9 +480,9 @@ Save the following as `fast-llm-tutorial/train-config.yaml`:
         format: llama
         interval: 1000
       wandb:  # (3)!
-        # project_name: fast-llm-tutorial
-        # group_name: Small
-        # entity_name: ???
+        project_name: fast-llm-tutorial
+        group_name: Small
+        entity_name: null
     batch:
       micro_batch_size: 60  # (4)!
       sequence_length: 1024
@@ -496,7 +496,7 @@ Save the following as `fast-llm-tutorial/train-config.yaml`:
         base: 6.0e-04
     pretrained:
       format: llama  # (8)!
-      path: fast-llm-tutorial/pretrained_model
+      path: fast-llm-tutorial/pretrained-model
       model_weights: no  # (9)!
     model:
       base_model:
@@ -505,12 +505,12 @@ Save the following as `fast-llm-tutorial/train-config.yaml`:
       distributed:
         training_dtype: bf16  # (11)!
     run:
-      experiment_dir:  fast-llm-tutorial/experiment
+      experiment_dir: fast-llm-tutorial/experiment
     ```
 
     1.  For the small run, we'll stop after 1000 iterations.
     2.  A Llama model will be saved in Hugging Face format to experiment directory at the end of the small run.
-    3.  Entirely optional, but it's a good idea to track your training progress with Weights & Biases. Replace `???` with your own W&B entity name. If you don't want to use W&B, just ignore this section.
+    3.  Entirely optional, but it's a good idea to track your training progress with Weights & Biases. Replace `null` with your own W&B entity name. If you don't want to use W&B, just ignore this section.
     3.  Adjust the number of sequences per GPU based on GPU memory. For SmolLM2-135M at 1024 sequenced length and a 80GB GPU, a `micro_batch_size` of 60 should work well.
     4.  Must be divisible by the number of GPUs and the `micro_batch_size`. At 1024 tokens per sequence, 480 corresponds to about 500,000 tokens per batch.
     5.  Location of the dataset metadata file generated in Step 4.
@@ -538,9 +538,9 @@ Save the following as `fast-llm-tutorial/train-config.yaml`:
         format: llama
         interval: 20_000
       wandb:  # (3)!
-        # project_name: fast-llm-tutorial
-        # group_name: Big
-        # entity_name: ???
+        project_name: fast-llm-tutorial
+        group_name: Big
+        entity_name: null
     batch:
       micro_batch_size: 4  # (4)!
       sequence_length: 4096
@@ -561,7 +561,7 @@ Save the following as `fast-llm-tutorial/train-config.yaml`:
         warmup_iterations: 2000
     pretrained:
       format: llama  # (10)!
-      path: fast-llm-tutorial/pretrained_model
+      path: fast-llm-tutorial/pretrained-model
       model_weights: yes  # (11)!
     model:
       base_model:
@@ -578,7 +578,7 @@ Save the following as `fast-llm-tutorial/train-config.yaml`:
 
     1.  Total number of training tokens will be approximately 200B: 100,000 iterations * 480 * 4096 tokens per batch.
     2.  A Llama model will be saved in Hugging Face format to `~/results` directory every 20,000 iterations.
-    3.  Entirely optional, but it's a good idea to track your training progress with Weights & Biases. Replace `???` with your own W&B entity name. If you don't want to use W&B, just ignore this section.
+    3.  Entirely optional, but it's a good idea to track your training progress with Weights & Biases. Replace `null` with your own W&B entity name. If you don't want to use W&B, just ignore this section.
     4.  Adjust the number of sequences per GPU based on GPU memory. Considering a 4k token sequence length and 80GB GPUs, a `micro_batch_size` of 4 should work well.
     5.  Must be divisible by the number of GPUs and the `micro_batch_size`. At 1024 tokens per sequence, 480 corresponds to about 500,000 tokens per batch.
     6.  Location of the dataset metadata file generated in Step 4.
