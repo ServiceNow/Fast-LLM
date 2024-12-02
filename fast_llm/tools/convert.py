@@ -26,7 +26,7 @@ class ConversionConfig(RunnableConfig):
     use_cpu: bool = Field(default=False)
     exist_ok: bool = Field(default=False)
     layers_per_step: int | None = Field(default=None)
-    model_config_class: type[FastLLMModelConfig] = Field(init=False)
+    model_config_class: type[FastLLMModelConfig] = Field(default=None)
 
     @classmethod
     def _from_dict(
@@ -82,6 +82,7 @@ class ConversionConfig(RunnableConfig):
         return config
 
     def _validate(self):
+        assert self.model_config_class is not None
         self.input.setup(self.model_config_class)
         self.output.setup(self.model_config_class)
         super()._validate()

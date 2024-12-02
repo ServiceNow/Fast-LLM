@@ -114,8 +114,11 @@ class CheckpointConfigBase(Config):
         super()._validate()
 
     def setup(self, model_config: typing.Union["FastLLMModelConfig", type["FastLLMModelConfig"]]):
-        assert not self._validated
-        self.format = model_config.get_checkpoint_format(self.format)
+        format = model_config.get_checkpoint_format(self.format)
+        if self._validated:
+            Assert.eq(self.format, format)
+        else:
+            self.format = format
 
     @classmethod
     def _from_dict(
