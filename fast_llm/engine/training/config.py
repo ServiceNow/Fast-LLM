@@ -1,5 +1,4 @@
 import abc
-import argparse
 import os
 import pathlib
 import shlex
@@ -360,7 +359,7 @@ class TrainerConfig(PretrainedFastLLMModelConfig, ExperimentConfig):
         super()._setup()
         self.batch.setup(self.distributed)
 
-    def _get_runnable(self, parsed: argparse.Namespace) -> typing.Callable[[], None]:
+    def _get_runnable(self) -> typing.Callable[[], None]:
         from fast_llm.engine.distributed.distributed import Distributed
 
         distributed = Distributed(self.distributed)

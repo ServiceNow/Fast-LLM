@@ -1,5 +1,6 @@
 import pathlib
 import struct
+import typing
 
 import numpy as np
 
@@ -91,30 +92,55 @@ class GPTMemmapDataset(GPTIndexedDataset):
         return self._document_sizes
 
     @classmethod
-    def write_dataset(cls, prefix: pathlib.Path | str, documents: list[np.ndarray]):
-        # Write index and binary files.
-        dtype = documents[0].dtype
-        num_documents = len(documents)
-        lengths = np.array([len(document) for document in documents], dtype=np.int32)
-        pointers = padded_cumsum(lengths[:-1].astype(np.int64)) * np.dtype(dtype).itemsize
-        prefix.parent.mkdir(parents=True, exist_ok=True)
-        with prefix.with_suffix(".idx").open("wb") as stream:
-            stream.write(MEMMAP_INDEX_HEADER)
-            stream.write(struct.pack("<Q", 1))
-            # Data type
-            stream.write(struct.pack("<B", MEMMAP_DTYPES_INV[DataType.from_numpy(dtype.type)]))
-            # "Number of sequences", same as documents in our case.
-            stream.write(struct.pack("<Q", num_documents))
-            # "Number of documents", needs a +1 for some reason.
-            stream.write(struct.pack("<Q", num_documents + 1))
-            # Sequence (document) lengths
-            stream.write(lengths.tobytes(order="C"))
-            # Sequence (document) begin offsets in the bin file
-            stream.write(pointers.tobytes(order="C"))
-            # Document indices, unused but needed for compatibility with Megatron-LM
-            stream.write(np.arange(num_documents + 1, dtype=np.int64).tobytes(order="C"))
+    def write_dataset(cls, prefix: pathlib.Path | str, documents: typing.Iterable[np.ndarray]):
+        # Initialize metadata
+        dtype = None
+        num_documents = 0
+        lengths = []
+        pointers = []
+        offset = 0
 
-        with prefix.with_suffix(".bin").open("wb") as stream:
+        prefix = pathlib.Path(prefix)
+        prefix.parent.mkdir(parents=True, exist_ok=True)
+
+        # Write the binary data file (.bin) lazily
+        with prefix.with_suffix(".bin").open("wb") as bin_stream:
             for document in documents:
-                assert document.dtype == dtype
-                stream.write(document.tobytes(order="C"))
+                # Infer dtype from the first document
+                if dtype is None:
+                    dtype = document.dtype
+                    assert dtype is not None, "Document dtype could not be inferred from the data."
+
+                # Ensure all documents have the same dtype
+                assert document.dtype == dtype, f"Expected dtype {dtype}, got {document.dtype}."
+
+                # Write document to binary file
+                bin_stream.write(document.tobytes(order="C"))
+
+                # Update metadata
+                doc_length = len(document)
+                lengths.append(doc_length)
+                pointers.append(offset)
+                offset += doc_length * np.dtype(dtype).itemsize
+                num_documents += 1
+
+        # Finalize metadata arrays
+        lengths = np.array(lengths, dtype=np.int32)
+        pointers = np.array(pointers, dtype=np.int64)
+
+        # Write the index file (.idx)
+        with prefix.with_suffix(".idx").open("wb") as idx_stream:
+            idx_stream.write(MEMMAP_INDEX_HEADER)
+            idx_stream.write(struct.pack("<Q", 1))  # Version
+            # Data type
+            idx_stream.write(struct.pack("<B", MEMMAP_DTYPES_INV[DataType.from_numpy(dtype.type)]))
+            # "Number of sequences", same as documents in our case
+            idx_stream.write(struct.pack("<Q", num_documents))
+            # "Number of documents", needs a +1 for some reason
+            idx_stream.write(struct.pack("<Q", num_documents + 1))
+            # Sequence (document) lengths
+            idx_stream.write(lengths.tobytes(order="C"))
+            # Sequence (document) begin offsets in the bin file
+            idx_stream.write(pointers.tobytes(order="C"))
+            # Document indices, unused but needed for compatibility with Megatron-LM
+            idx_stream.write(np.arange(num_documents + 1, dtype=np.int64).tobytes(order="C"))
