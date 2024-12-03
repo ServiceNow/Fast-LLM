@@ -84,6 +84,8 @@ There are 2 ways of instantiating our Llama-3.1-8B model. We could use a pretrai
       model:
         base_model:
           tie_word_embeddings: false
+          use_position_embeddings: false
+          vocab_size: 128256
           transformer:
             activation_type: silu
             add_linear_biases: false
@@ -100,8 +102,6 @@ There are 2 ways of instantiating our Llama-3.1-8B model. We could use a pretrai
               scaling_type: llama3
             rotary_embedding_scale: -13.122363377404328  # (2)!
             use_rotary_embeddings: true
-          use_position_embeddings: false
-          vocab_size: 128256
       ```
 
       1.  Hidden-size/num-layers will be used to provide good defaults for weight initialization std.
