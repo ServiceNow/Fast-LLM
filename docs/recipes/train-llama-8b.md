@@ -49,15 +49,15 @@ This is not much different from a pretraining config. We will:
     beta_1: 0.9
     beta_2: 0.95
     learning_rate:
-      base: 6.0e-04
-      minimum: 6.0e-05
+      base: 1.0e-04  # (3)!
+      minimum: 1.0e-05
       decay_style: cosine
       decay_iterations: 100_000
       warmup_iterations: 2000
-  pretrained:  # (3)!
+  pretrained:  # (4)!
     format: llama
     path: fast-llm-tutorial/pretrained-model
-    model_weights: yes
+    model_weights: yes  # (5)!
   model:
     base_model:
       transformer:
@@ -73,7 +73,9 @@ This is not much different from a pretraining config. We will:
 
     1.  A Llama model will be saved in Hugging Face format to `~/results` directory every 20,000 iterations.
     2.  Location of the dataset metadata file generated in Step 4.
-    3.  Config of the pretrained model. We load a `llama` model from the repository downloaded earlier.
+    3.  The learning-rate can be used to trade-off between learning and forgetting. A higher learning-rate will learn quickly on our new dataset but will cause forgetting. A lower learning-rate will instead retain more of the pretrained model's knowledge, but will slow down adapting to the new domain.
+    4.  Config of the pretrained model. We load a `llama` model from the repository downloaded earlier.
+    5.  This tells Fast-LLM to load the weights of the pretrained model. If we wanted to use Llama-3.1's configuration, but train from scratch, we could use the same config but set this to `no`.
 
 # Checkpoint usage
 Checkpoints will be saved regularly, and every 20k steps a checkpoint will be exported in the HF format.
