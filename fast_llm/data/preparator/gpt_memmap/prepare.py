@@ -38,15 +38,17 @@ class GPTMemmapDatasetPreparator(DatasetPreparator):
         shard_idx, shard_dataset = args
         prefix = f"shard_{self._config.distributed.rank}_{shard_idx}"
         shard_output_path = self._config.output_path / prefix
-        documents = [
-            np.array(item["input_ids"], dtype=self._data_type.numpy)
-            for item in tqdm.tqdm(shard_dataset, desc=f"Saving shard {shard_idx}", unit="docs")
-        ]
-        GPTMemmapDataset.write_dataset(prefix=shard_output_path, documents=documents)
+
+        def _document_generator():
+            for item in tqdm.tqdm(shard_dataset, desc=f"Saving shard {shard_idx}", unit="docs"):
+                yield np.array(item["input_ids"], dtype=self._data_type.numpy)
+
+        GPTMemmapDataset.write_dataset(prefix=shard_output_path, documents=_document_generator())
+
         dataset_dict = {
             "prefix": prefix,
-            "num_documents": len(documents),
-            "num_tokens": sum(len(doc) for doc in documents),
+            "num_documents": len(shard_dataset),  # Use the length of the shard dataset directly
+            "num_tokens": sum(len(doc["input_ids"]) for doc in shard_dataset),
         }
         return dataset_dict
 
