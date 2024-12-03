@@ -462,7 +462,7 @@ Next, we'll create a configuration file for Fast-LLM.
 
 !!! warning "Micro-Batch Size"
 
-    The `micro_batch_size` in the configuration below is optimized for 80GB GPUs. If you're using GPUs with less memory, you will need to lower this value.
+    The `micro_batch_size` in the configuration below is optimized for 80GB GPUs. If you're using GPUs with less memory, you will need to lower this value. Alternatively, you can decrease the `sequence_length` to reduce the memory footprint.
 
 Save the following as `fast-llm-tutorial/train-config.yaml`:
 
@@ -480,9 +480,9 @@ Save the following as `fast-llm-tutorial/train-config.yaml`:
         format: llama
         interval: 1000
       wandb:  # (3)!
-        # project_name: fast-llm-tutorial
-        # group_name: Small
-        # entity_name: ???
+        project_name: fast-llm-tutorial
+        group_name: Small
+        entity_name: null
     batch:
       micro_batch_size: 60  # (4)!
       sequence_length: 1024
@@ -496,7 +496,7 @@ Save the following as `fast-llm-tutorial/train-config.yaml`:
         base: 6.0e-04
     pretrained:
       format: llama  # (8)!
-      path: fast-llm-tutorial/pretrained_model
+      path: fast-llm-tutorial/pretrained-model
       model_weights: no  # (9)!
     model:
       base_model:
@@ -505,12 +505,12 @@ Save the following as `fast-llm-tutorial/train-config.yaml`:
       distributed:
         training_dtype: bf16  # (11)!
     run:
-      experiment_dir:  fast-llm-tutorial/experiment
+      experiment_dir: fast-llm-tutorial/experiment
     ```
 
     1.  For the small run, we'll stop after 1000 iterations.
     2.  A Llama model will be saved in Hugging Face format to experiment directory at the end of the small run.
-    3.  Entirely optional, but it's a good idea to track your training progress with Weights & Biases. Replace `???` with your own W&B entity name. If you don't want to use W&B, just ignore this section.
+    3.  Entirely optional, but it's a good idea to track your training progress with Weights & Biases. Replace `null` with your own W&B entity name. If you don't want to use W&B, just ignore this section.
     3.  Adjust the number of sequences per GPU based on GPU memory. For SmolLM2-135M at 1024 sequenced length and a 80GB GPU, a `micro_batch_size` of 60 should work well.
     4.  Must be divisible by the number of GPUs and the `micro_batch_size`. At 1024 tokens per sequence, 480 corresponds to about 500,000 tokens per batch.
     5.  Location of the dataset metadata file generated in Step 4.
@@ -538,11 +538,11 @@ Save the following as `fast-llm-tutorial/train-config.yaml`:
         format: llama
         interval: 20_000
       wandb:  # (3)!
-        # project_name: fast-llm-tutorial
-        # group_name: Big
-        # entity_name: ???
+        project_name: fast-llm-tutorial
+        group_name: Big
+        entity_name: null
     batch:
-      micro_batch_size: 4  # (4)!
+      micro_batch_size: 1  # (4)!
       sequence_length: 4096
       batch_size: 480  # (5)!
     data:
@@ -561,7 +561,7 @@ Save the following as `fast-llm-tutorial/train-config.yaml`:
         warmup_iterations: 2000
     pretrained:
       format: llama  # (10)!
-      path: fast-llm-tutorial/pretrained_model
+      path: fast-llm-tutorial/pretrained-model
       model_weights: yes  # (11)!
     model:
       base_model:
@@ -578,9 +578,9 @@ Save the following as `fast-llm-tutorial/train-config.yaml`:
 
     1.  Total number of training tokens will be approximately 200B: 100,000 iterations * 480 * 4096 tokens per batch.
     2.  A Llama model will be saved in Hugging Face format to `~/results` directory every 20,000 iterations.
-    3.  Entirely optional, but it's a good idea to track your training progress with Weights & Biases. Replace `???` with your own W&B entity name. If you don't want to use W&B, just ignore this section.
-    4.  Adjust the number of sequences per GPU based on GPU memory. Considering a 4k token sequence length and 80GB GPUs, a `micro_batch_size` of 4 should work well.
-    5.  Must be divisible by the number of GPUs and the `micro_batch_size`. At 1024 tokens per sequence, 480 corresponds to about 500,000 tokens per batch.
+    3.  Entirely optional, but it's a good idea to track your training progress with Weights & Biases. Replace `null` with your own W&B entity name. If you don't want to use W&B, just ignore this section.
+    4.  Adjust the number of sequences per GPU based on GPU memory. Considering a 4k token sequence length and 80GB GPUs, a `micro_batch_size` of 1 should work well.
+    5.  Must be divisible by the number of GPUs and the `micro_batch_size`. At 4k tokens per sequence, 480 corresponds to about 2 million tokens per batch.
     6.  Location of the dataset metadata file generated in Step 4.
     7.  99% train, 1% validation, 0% test. These settings need to be adjusted based on the size of your dataset. If you're using a smaller dataset, you need to increase the validation split.
     8.  These are good default optimizer settings for training models.
@@ -750,6 +750,70 @@ Alright, the big moment! Let's launch the training run.
                   emptyDir:
                     medium: Memory
                     sizeLimit: "1024Gi"
+        Worker:
+          replicas: 3
+          restartPolicy: Never
+          template:
+            spec:
+              tolerations:
+                - key: nvidia.com/gpu
+                  value: "true"
+                  operator: Equal
+                  effect: NoSchedule
+              containers:
+                - name: pytorch
+                  image: ghcr.io/servicenow/fast-llm:latest
+                  resources:
+                    limits:
+                      nvidia.com/gpu: 8
+                      rdma/rdma_shared_device_a: 1
+                      memory: "1024Gi"
+                      cpu:
+                    requests:
+                      nvidia.com/gpu: 8
+                      rdma/rdma_shared_device_a: 1
+                      memory: "1024Gi"
+                      cpu: 128
+                  command:
+                    - /bin/bash
+                    - -c
+                    - |
+                      torchrun --rdzv_backend=static \
+                               --rdzv_endpoint=${MASTER_ADDR}:${MASTER_PORT} \
+                               --node_rank=${RANK} \
+                               --nproc_per_node=${PET_NPROC_PER_NODE} \
+                               --nnodes=${PET_NNODES} \
+                               --max_restarts=0 \
+                               --rdzv_conf=timeout=3600 \
+                               --no_python \
+                               fast-llm train gpt \
+                               --config fast-llm-tutorial/train-config.yaml
+                  env:
+                    - name: PYTHONHASHSEED
+                      value: "0"
+                    - name: WANDB_API_KEY_PATH
+                      value: "/app/fast-llm-tutorial/.wandb_api_key"
+                    - name: TORCH_NCCL_ASYNC_ERROR_HANDLING
+                      value: "1"
+                    - name: NCCL_DEBUG
+                      value: "INFO"
+                  securityContext:
+                    capabilities:
+                      add:
+                        - IPC_LOCK
+                  volumeMounts:
+                    - mountPath: /app/fast-llm-tutorial
+                      name: fast-llm-inputs
+                    - mountPath: /dev/shm
+                      name: dshm
+              volumes:
+                - name: fast-llm-inputs
+                  persistentVolumeClaim:
+                    claimName: pvc-fast-llm-tutorial
+                - name: dshm
+                  emptyDir:
+                    medium: Memory
+                    sizeLimit: "1024Gi"
     EOF
     ```
 
@@ -802,16 +866,17 @@ You can expect to see the following performance metrics in Fast-LLM's output:
 
 === "Small"
 
-    | Performance Metric  | 8x V100-SXM2-32GB[^SmolLM2-V100] | 8x A100-SXM4-80GB[^SmolLM2-A100] | 8x H100-SXM5-80GB[^SmolLM2-H100] |
-    |---------------------|---------------------------------:|---------------------------------:|---------------------------------:|
-    | tokens/s/GPU        | 18,300                           |                                  | 294,000                          |
-    | tflop/s (model)     | 16.7                             |                                  | 268                              |
-    | tflop/s (hardware)  | 17.0                             |                                  | 274                              |
-    | total training time | 23.3 days                        |                                  | 1.45 days                        |
+    | Performance Metric                       | 8x V100-SXM2-32GB[^SmolLM2-V100] | 8x A100-SXM4-80GB[^SmolLM2-A100] | 8x H100-SXM5-80GB[^SmolLM2-H100] |
+    |------------------------------------------|---------------------------------:|---------------------------------:|---------------------------------:|
+    | tokens/s/GPU                             | 16,700                           |                                  | 294,000                          |
+    | tflop/s (model)                          | 15.3                             |                                  | 268                              |
+    | peak tflop/s (theoretical)[^peak-tflops] | 125                              | 312                              | 990                              |
+    | utilization                              | 12.2%                            |                                  | 27.1%                            |
+    | total training time                      | 68 minutes                       |                                  | 3.9 minutes                      |
 
     [^SmolLM2-V100]:
-        `bf16` is not supported on V100 GPUs. Precision was set to `fp16`.
-        FlashAttention is not supported on V100 GPUs, so it was disabled.
+        Precision was set to `fp16`, since `bf16` is not supported on V100 GPUs. 
+        FlashAttention was disabled, as it is not supported on V100 GPUs.
         Micro-batch size was set to 12.
     [^SmolLM2-A100]:
         Precision was set to `bf16`.
@@ -824,25 +889,28 @@ You can expect to see the following performance metrics in Fast-LLM's output:
 
 === "Big"
 
-    | Performance Metric  | 8x V100-SXM2-32GB[^Llama-V100] | 8x A100-SXM4-80GB[^Llama-A100] | 8x H100-SXM5-80GB[^Llama-H100] |
-    |---------------------|-------------------------------:|-------------------------------:|-------------------------------:|
-    | tokens/s/GPU        | 5,680                          |                                | 66,600                         |
-    | tflop/s (model)     | 43.3                           |                                | 508                            |
-    | tflop/s (hardware)  | 43.4                           |                                | 510                            |
-    | total training time | 12.5 days                      |                                | 1.07 days                      |
+    | Performance Metric                       | 32x V100-SXM2-32GB[^Llama-V100] | 32x A100-SXM4-80GB[^Llama-A100] | 32x H100-SXM5-80GB[^Llama-H100] |
+    |------------------------------------------|--------------------------------:|--------------------------------:|--------------------------------:|
+    | tokens/s/GPU                             |                                 |                                 | 9,220                           |
+    | tflop/s (model)                          |                                 |                                 | 445                             |
+    | peak tflop/s (theoretical)[^peak-tflops] | 125                             | 312                             | 990                             |
+    | utilization                              |                                 |                                 | 45.0%                           |
+    | total training time                      |                                 |                                 | 7.7 days                        |
 
     [^Llama-V100]:
-        `bf16` is not supported on V100 GPUs. Precision was set to `fp16`.
-        FlashAttention is not supported on V100 GPUs, so it was disabled.
+        Precision was set to `fp16`, since `bf16` is not supported on V100 GPUs. 
+        FlashAttention was disabled, as it is not supported on V100 GPUs.
         Micro-batch size was set to 4.
     [^Llama-A100]:
         Precision was set to `bf16`.
         FlashAttention was enabled.
-        Micro-batch size was set to 20.
+        Micro-batch size was set to 1.
+        ZeRO stage 2 was used.
     [^Llama-H100]:
         Precision was set to `bf16`.
         FlashAttention was enabled.
-        Micro-batch size was set to 20.
+        Micro-batch size was set to 1.
+        ZeRO stage 2 was used.
 
 If you included the W&B section in your configuration, you can also track your training progress on the Weights & Biases dashboard as well. Follow the link in the console output to view your training run.
 
@@ -851,3 +919,6 @@ If you included the W&B section in your configuration, you can also track your t
 And that's it! You've set up, prepped data, chosen a model, configured training, and launched a full training run with Fast-LLM. From here, feel free to tweak the model, try out larger datasets, or scale things up to larger clusters. The sky's the limit!
 
 Happy training!
+
+[^peak-tflops]:
+    Theoretical peak performance of the GPU for dense tensors in `fp16` or `bf16` precision, depending on the GPU architecture. Source: [Wikipedia](https://en.wikipedia.org/wiki/Hopper_(microarchitecture)#H100_accelerator_and_DGX_H100).
