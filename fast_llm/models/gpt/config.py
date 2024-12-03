@@ -42,6 +42,10 @@ class MixtralGPTHuggingfaceCheckpointFormat(GPTHuggingfaceCheckpointFormat):
     name: typing.ClassVar[str] = "mixtral"
 
 
+class OlmoeGPTHuggingfaceCheckpointFormat(GPTHuggingfaceCheckpointFormat):
+    name: typing.ClassVar[str] = "olmoe"
+
+
 @config_class()
 class GPTArchitectureConfig(LanguageModelArchitectureConfig):
     _abstract = False
@@ -98,6 +102,7 @@ class GPTModelConfig(FastLLMModelConfig):
         LlamaGPTHuggingfaceCheckpointFormat,
         MistralGPTHuggingfaceCheckpointFormat,
         MixtralGPTHuggingfaceCheckpointFormat,
+        OlmoeGPTHuggingfaceCheckpointFormat,
     )
 
     @classmethod
