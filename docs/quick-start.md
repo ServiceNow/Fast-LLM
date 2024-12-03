@@ -868,11 +868,11 @@ You can expect to see the following performance metrics in Fast-LLM's output:
 
     | Performance Metric   | 8x V100-SXM2-32GB[^SmolLM2-V100] | 8x A100-SXM4-80GB[^SmolLM2-A100] | 8x H100-SXM5-80GB[^SmolLM2-H100] |
     |----------------------|---------------------------------:|---------------------------------:|---------------------------------:|
-    | tokens/s/GPU         | 16,700                           |                                  |                                  |
-    | tflop/s (model)      | 15.3                             |                                  |                                  |
+    | tokens/s/GPU         | 16,700                           |                                  | 294,000                          |
+    | tflop/s (model)      | 15.3                             |                                  | 268                              |
     | peak tflop/s (dense) | 125                              | 312                              | 990                              |
-    | utilization          | 12.2%                            |                                  |                                  |
-    | total training time  | 68 minutes                       |                                  |                                  |
+    | utilization          | 12.2%                            |                                  | 27.1%                            |
+    | total training time  | 68 minutes                       |                                  | 3.9 minutes                      |
 
     [^SmolLM2-V100]:
         Precision was set to `fp16`, since `bf16` is not supported on V100 GPUs. 
