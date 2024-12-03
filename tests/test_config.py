@@ -42,6 +42,10 @@ def test_validate_prepare_gpt_memmap_without_import():
     )
 
 
+def test_validate_convert_gpt_without_import():
+    run_without_import("main(['convert', 'gpt', '-v'])")
+
+
 def test_validate_example_config():
     fast_llm_config_dict = yaml.safe_load(
         (pathlib.Path(__file__).parents[1] / "examples" / "mistral-4-node-benchmark.yaml").read_text()

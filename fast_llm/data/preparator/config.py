@@ -1,5 +1,4 @@
 import abc
-import argparse
 import typing
 
 from fast_llm.config import config_class
@@ -15,7 +14,7 @@ class DatasetPreparatorConfig(RunnableConfig):
     def get_dataset_preparator_class(cls) -> type["DatasetPreparator"]:
         raise NotImplementedError
 
-    def _get_runnable(self, parsed: argparse.Namespace) -> typing.Callable[[], None]:
+    def _get_runnable(self) -> typing.Callable[[], None]:
         dataset_preparator = self.get_dataset_preparator_class()(config=self)
         return dataset_preparator.run
 
