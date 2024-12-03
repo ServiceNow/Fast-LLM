@@ -30,9 +30,9 @@ Let's start from the following training configuration:
         format: llama
         interval: 20_000
     batch:
-      micro_batch_size: 4
+      micro_batch_size: 2
       sequence_length: 4096
-      batch_size: 480
+      batch_size: 256
     data:
       format: file
       path: fast-llm-tutorial/dataset/fast_llm_dataset.json
@@ -107,5 +107,5 @@ There are 2 ways of instantiating our Llama-3.1-8B model. We could use a pretrai
       1.  Hidden-size/num-layers will be used to provide good defaults for weight initialization std.
       2.  -ln(500_000)
 
-      Configuring the model this way is a bit more verbose than using the pretrained configuration, but gives you an idea of how you configure a Llama-3.1-8B-like model with Fast-LLM.
+      Configuring the model this way is a bit more verbose than using the pretrained configuration, but gives an idea of how to configure a Llama-3.1-8B-like model with Fast-LLM.
 
