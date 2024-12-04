@@ -276,7 +276,6 @@ class Attention(torch.nn.Module):
             key_value = torch.cat((past_key_values.pop(0), key_value), dim=0)
 
         if (presents := kwargs.get(TransformerKwargs.presents)) is not None:
-            print("IJKWNGFOIRNGB", presents)
             # Return the presents as a leaf tensors so the gradients from later micro-sequences
             # don't propagate to this one.
             presents.append(present := key_value.detach().requires_grad_())
