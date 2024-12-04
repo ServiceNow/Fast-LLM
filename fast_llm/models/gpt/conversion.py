@@ -18,10 +18,10 @@ from fast_llm.engine.checkpoint.external import (
     WeightConverter,
 )
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig
-from fast_llm.functional.config import ActivationType, RotaryScalingType
+from fast_llm.functional.config import ActivationType
 from fast_llm.functional.rotary import convert_rotary_complex_to_real, convert_rotary_real_to_complex
 from fast_llm.layers.common.config import NormalizationType
-from fast_llm.layers.transformer.config import RoutingType
+from fast_llm.layers.transformer.config import RotaryScalingType, RoutingType
 from fast_llm.models.gpt.config import (
     GPTArchitectureConfig,
     GPTModelConfig,
@@ -45,7 +45,7 @@ class QueryWeightConverter(WeightConverter):
         self, weight: tuple[torch.Tensor | SafeTensorSlice, ...]
     ) -> tuple[torch.Tensor | SafeTensorSlice, ...]:
         (query,) = weight
-        if self._config.transformer.complex_rotary_embeddings:
+        if self._config.transformer.rotary.complex_format:
             query = convert_rotary_complex_to_real(query[:], self._config.transformer.kv_channels, 0)
         return (query,)
 
@@ -53,7 +53,7 @@ class QueryWeightConverter(WeightConverter):
         self, weight: tuple[torch.Tensor | SafeTensorSlice, ...]
     ) -> tuple[torch.Tensor | SafeTensorSlice, ...]:
         (query,) = weight
-        if self._config.transformer.complex_rotary_embeddings:
+        if self._config.transformer.rotary.complex_format:
             query = convert_rotary_real_to_complex(query[:], self._config.transformer.kv_channels, 0)
         return (query,)
 
@@ -67,7 +67,7 @@ class KeyValueWeightConverter(WeightConverter):
     ) -> tuple[torch.Tensor | SafeTensorSlice, ...]:
         (key_value,) = weight
         key, value = key_value[:].chunk(2)
-        if self._config.transformer.complex_rotary_embeddings:
+        if self._config.transformer.rotary.complex_format:
             key = convert_rotary_complex_to_real(key, self._config.transformer.kv_channels, 0)
         return key, value
 
@@ -75,7 +75,7 @@ class KeyValueWeightConverter(WeightConverter):
         self, weight: tuple[torch.Tensor | SafeTensorSlice, ...]
     ) -> tuple[torch.Tensor | SafeTensorSlice, ...]:
         key, value = weight
-        if self._config.transformer.complex_rotary_embeddings:
+        if self._config.transformer.rotary.complex_format:
             key = convert_rotary_real_to_complex(key[:], self._config.transformer.kv_channels, 0)
         key_value = torch.cat([key[:], value[:]])
         return (key_value,)
@@ -284,22 +284,22 @@ class LlamaHuggingfaceCheckpointHandler(CommonLlamaHuggingfaceCheckpointHandler)
                 ("transformer", "rotary", "scaling_type"),
                 ("rope_scaling", "rope_type"),
                 import_rotary_scaling_type,
-                export_rotary_scaling_type
+                export_rotary_scaling_type,
             ),
             ParamConverter(
-                ("transformer", "rotary", "llama3_scale_factor"),
+                ("transformer", "rotary", "scale_factor"),
                 ("rope_scaling", "factor"),
             ),
             ParamConverter(
-                ("transformer", "rotary", "llama3_low_freq_factor"),
+                ("transformer", "rotary", "low_frequency_factor"),
                 ("rope_scaling", "low_freq_factor"),
             ),
             ParamConverter(
-                ("transformer", "rotary", "llama3_high_freq_factor"),
+                ("transformer", "rotary", "high_frequency_factor"),
                 ("rope_scaling", "high_freq_factor"),
             ),
             ParamConverter(
-                ("transformer", "rotary", "llama3_old_context_len"),
+                ("transformer", "rotary", "original_context_length"),
                 ("rope_scaling", "original_max_position_embeddings"),
             ),
         ]

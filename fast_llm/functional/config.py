@@ -91,8 +91,3 @@ class CrossEntropyImpl(str, enum.Enum):
     torch = "torch"
     fused = "fused"
     triton = "triton"
-
-
-class RotaryScalingType(str, enum.Enum):
-    none = "none"
-    llama3 = "llama3"

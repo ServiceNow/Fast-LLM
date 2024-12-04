@@ -222,3 +222,31 @@ def normalize_probabilities(p: list[float]) -> list[float]:
     p_sum = p.sum()
     Assert.gt(p_sum, 0)
     return (p / p_sum).tolist()
+
+
+def set_nested_dict_value(d: dict, keys: str | tuple[str, ...], value):
+    if isinstance(keys, str):
+        d[keys] = value
+    else:
+        for key in keys[:-1]:
+            d = d.setdefault(key, {})
+            assert isinstance(d, dict)
+        d[keys[-1]] = value
+
+
+def get_nested_dict_value(d: dict, keys: str | tuple[str, ...]):
+    if isinstance(keys, str):
+        return d[keys]
+    else:
+        for key in keys:
+            d = d[key]
+        return d
+
+
+def pop_nested_dict_value(d: dict, keys: str | tuple[str, ...]):
+    if isinstance(keys, str):
+        return d.pop(keys)
+    else:
+        for key in keys[:-1]:
+            d = d[key]
+        return d.pop(keys[-1])

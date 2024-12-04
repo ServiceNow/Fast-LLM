@@ -176,7 +176,13 @@ _CONFIGS = {
         CONFIG_MIXTRAL_COMMON,
         MixtralGPTHuggingfaceCheckpointFormat,
     ),
-    "llama3": ("gpt", CONFIG_LLAMA3_FAST_LLM, CONFIG_LLAMA3_MEGATRON, CONFIG_LLAMA3_COMMON, LlamaGPTHuggingfaceCheckpointFormat),  # TODO
+    "llama3": (
+        "gpt",
+        CONFIG_LLAMA3_FAST_LLM,
+        CONFIG_LLAMA3_MEGATRON,
+        CONFIG_LLAMA3_COMMON,
+        LlamaGPTHuggingfaceCheckpointFormat,
+    ),
 }
 
 

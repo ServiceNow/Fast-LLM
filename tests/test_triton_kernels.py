@@ -6,7 +6,6 @@ from fast_llm.functional.rotary import (
     apply_rotary_embeddings,
     convert_rotary_complex_to_real,
     convert_rotary_real_to_complex,
-    get_rotary_frequencies,
 )
 from fast_llm.functional.triton.adam import triton_adam
 from fast_llm.functional.triton.cross_entropy import triton_cross_entropy_forward_backward
@@ -23,6 +22,7 @@ from fast_llm.functional.triton.normalization import (
 from fast_llm.functional.triton.pointwise import triton_add, triton_copy, triton_fill
 from fast_llm.functional.triton.rotary import triton_rotary_
 from fast_llm.functional.triton.sparse_copy import get_sparse_map
+from fast_llm.layers.transformer.preprocessing import get_rotary_frequencies
 from fast_llm.utils import Assert, rms_diff
 from tests.common import requires_cuda
 

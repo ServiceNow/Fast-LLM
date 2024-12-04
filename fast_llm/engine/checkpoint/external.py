@@ -19,7 +19,7 @@ from fast_llm.engine.checkpoint.state_dict import StateDictCheckpointHandler
 from fast_llm.engine.multi_stage.config import CheckpointMetadata, FastLLMModelConfig
 from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
 from fast_llm.tensor import SafeTensorSlice
-from fast_llm.utils import Assert
+from fast_llm.utils import Assert, get_nested_dict_value, set_nested_dict_value
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 @dataclasses.dataclass
 class ParamConverter:
     fast_llm_name: tuple[str, ...] | None
-    export_name: str | None
+    export_name: tuple[str, ...] | str | None
 
     def export_param(self, fast_llm_value):
         return fast_llm_value
@@ -146,29 +146,6 @@ class SplitWeightConverter(WeightConverter):
         return (torch.cat([weight_[:] for weight_ in weight]),)
 
 
-def set_nested_dict_value(d: dict, keys: None | str | tuple[str, ...], value):
-    if keys is None:
-        return
-    if isinstance(keys, str):
-        keys = (keys,)
-    for key in keys[:-1]:
-        d = d.setdefault(key, {})
-        assert isinstance(d, dict)
-    d[keys[-1]] = value
-
-
-def get_nested_dict_value(d: dict, keys: None | str | tuple[str, ...]):
-    if keys is None:
-        return None
-    if isinstance(keys, str):
-        keys = (keys,)
-    for key in keys:
-        if key not in d:
-            return None
-        d = d[key]
-    return d
-
-
 class ExternalStateDictCheckpointHandler(StateDictCheckpointHandler):
     _model_class: typing.ClassVar[FastLLMModelConfig]
     _config_converters: list[ParamConverter]
@@ -225,7 +202,8 @@ class ExternalStateDictCheckpointHandler(StateDictCheckpointHandler):
                 if converter.fast_llm_name is None
                 else cls._get_fast_llm_attribute(config, converter.fast_llm_name)  # Noqa
             )
-            set_nested_dict_value(exported_config, converter.export_name, value)
+            if converter.export_name is not None:
+                set_nested_dict_value(exported_config, converter.export_name, value)
 
         return exported_config  # Noqa
 
@@ -236,9 +214,15 @@ class ExternalStateDictCheckpointHandler(StateDictCheckpointHandler):
         # TODO v0.2: not used in this class
         kwargs = {}
         for converter in cls._get_config_converters():
-            value = converter.import_param(
-                get_nested_dict_value(config, converter.export_name)
-            )
+            try:
+                value = (
+                    None
+                    if converter.export_name is None or converter.export_name not in config
+                    else get_nested_dict_value(config, converter.export_name)
+                )
+            except KeyError:
+                value = None
+            value = converter.import_param(value)
             if converter.fast_llm_name is not None:
                 kwargs[converter.fast_llm_name] = value
 
