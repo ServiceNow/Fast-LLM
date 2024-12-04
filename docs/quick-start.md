@@ -314,10 +314,10 @@ Fast-LLM ships with a `prepare` command that will download and preprocess the da
         bash -c "
             torchrun --rdzv_backend=static \
                      --rdzv_id=0 \
-                     --rdzv_endpoint=${MASTER_ADDR}:${MASTER_PORT} \
-                     --node_rank=\$SLURM_NODEID \
-                     --nproc_per_node=\$SLURM_NTASKS_PER_NODE \
-                     --nnodes=\$SLURM_NNODES:\$SLURM_NNODES \
+                     --rdzv_endpoint=\${MASTER_ADDR}:\${MASTER_PORT} \
+                     --node_rank=\\$SLURM_NODEID \
+                     --nproc_per_node=\\$SLURM_NTASKS_PER_NODE \
+                     --nnodes=\\$SLURM_NNODES:\\$SLURM_NNODES \
                      --max_restarts=0 \
                      --rdzv_conf=timeout=3600 \
                      --no_python \
@@ -352,6 +352,11 @@ Fast-LLM ships with a `prepare` command that will download and preprocess the da
           restartPolicy: Never
           template:
             spec:
+              tolerations:
+                - key: nvidia.com/gpu
+                  value: "true"
+                  operator: Equal
+                  effect: NoSchedule
               containers:
                 - name: pytorch
                   image: ghcr.io/servicenow/fast-llm:latest
@@ -368,10 +373,10 @@ Fast-LLM ships with a `prepare` command that will download and preprocess the da
                     - |
                       torchrun --rdzv_backend=static \
                                --rdzv_id=0 \
-                               --rdzv_endpoint=${MASTER_ADDR}:${MASTER_PORT} \
-                               --node_rank=${RANK} \
-                               --nproc_per_node=${PET_NPROC_PER_NODE} \
-                               --nnodes=${PET_NNODES}:${PET_NNODES} \
+                               --rdzv_endpoint=\${MASTER_ADDR}:\${MASTER_PORT} \
+                               --node_rank=\${RANK} \
+                               --nproc_per_node=\${PET_NPROC_PER_NODE} \
+                               --nnodes=\${PET_NNODES}:\${PET_NNODES} \
                                --max_restarts=0 \
                                --rdzv_conf=timeout=3600 \
                                --no_python \
@@ -402,6 +407,11 @@ Fast-LLM ships with a `prepare` command that will download and preprocess the da
           restartPolicy: Never
           template:
             spec:
+              tolerations:
+                - key: nvidia.com/gpu
+                  value: "true"
+                  operator: Equal
+                  effect: NoSchedule
               containers:
                 - name: pytorch
                   image: ghcr.io/servicenow/fast-llm:latest
@@ -418,10 +428,10 @@ Fast-LLM ships with a `prepare` command that will download and preprocess the da
                     - |
                       torchrun --rdzv_backend=static \
                                --rdzv_id=0 \
-                               --rdzv_endpoint=${MASTER_ADDR}:${MASTER_PORT} \
-                               --node_rank=${RANK} \
-                               --nproc_per_node=${PET_NPROC_PER_NODE} \
-                               --nnodes=${PET_NNODES}:${PET_NNODES} \
+                               --rdzv_endpoint=\${MASTER_ADDR}:\${MASTER_PORT} \
+                               --node_rank=\${RANK} \
+                               --nproc_per_node=\${PET_NPROC_PER_NODE} \
+                               --nnodes=\${PET_NNODES}:\${PET_NNODES} \
                                --max_restarts=0 \
                                --rdzv_conf=timeout=3600 \
                                --no_python \
@@ -542,9 +552,9 @@ Save the following as `fast-llm-tutorial/train-config.yaml`:
         group_name: Big
         entity_name: null
     batch:
-      micro_batch_size: 1  # (4)!
+      micro_batch_size: 2  # (4)!
       sequence_length: 4096
-      batch_size: 480  # (5)!
+      batch_size: 512  # (5)!
     data:
       format: file
       path: fast-llm-tutorial/dataset/fast_llm_dataset.json  # (6)!
@@ -576,11 +586,11 @@ Save the following as `fast-llm-tutorial/train-config.yaml`:
       experiment_dir: fast-llm-tutorial/experiment
     ```
 
-    1.  Total number of training tokens will be approximately 200B: 100,000 iterations * 480 * 4096 tokens per batch.
+    1.  Total number of training tokens will be approximately 210B: 100,000 iterations * 512 * 4096 tokens per batch.
     2.  A Llama model will be saved in Hugging Face format to `~/results` directory every 20,000 iterations.
     3.  Entirely optional, but it's a good idea to track your training progress with Weights & Biases. Replace `null` with your own W&B entity name. If you don't want to use W&B, just ignore this section.
     4.  Adjust the number of sequences per GPU based on GPU memory. Considering a 4k token sequence length and 80GB GPUs, a `micro_batch_size` of 1 should work well.
-    5.  Must be divisible by the number of GPUs and the `micro_batch_size`. At 4k tokens per sequence, 480 corresponds to about 2 million tokens per batch.
+    5.  Must be divisible by the number of GPUs and the `micro_batch_size`. At 4k tokens per sequence, 512 corresponds to about 2.1 million tokens per batch.
     6.  Location of the dataset metadata file generated in Step 4.
     7.  99% train, 1% validation, 0% test. These settings need to be adjusted based on the size of your dataset. If you're using a smaller dataset, you need to increase the validation split.
     8.  These are good default optimizer settings for training models.
@@ -650,15 +660,15 @@ Alright, the big moment! Let's launch the training run.
         --container-image="ghcr.io/servicenow/fast-llm:latest" \
         --container-mounts="$(pwd)/fast-llm-tutorial:/app/fast-llm-tutorial" \
         --container-env="PYTHONHASHSEED,WANDB_API_KEY_PATH,TORCH_NCCL_ASYNC_ERROR_HANDLING,NCCL_DEBUG" \
-        --gpus-per-node=$SLURM_GPUS_PER_NODE \
-        --ntasks-per-node=$SLURM_NTASKS_PER_NODE \
+        --gpus-per-node=\$SLURM_GPUS_PER_NODE \
+        --ntasks-per-node=\$SLURM_NTASKS_PER_NODE \
         bash -c "
             torchrun --rdzv_backend=static \
                      --rdzv_id=0 \
-                     --rdzv_endpoint=${MASTER_ADDR}:${MASTER_PORT} \
-                     --node_rank=\$SLURM_NODEID \
-                     --nproc_per_node=\$SLURM_GPUS_PER_NODE \
-                     --nnodes=\$SLURM_NNODES \
+                     --rdzv_endpoint=\${MASTER_ADDR}:\${MASTER_PORT} \
+                     --node_rank=\\$SLURM_NODEID \
+                     --nproc_per_node=\\$SLURM_GPUS_PER_NODE \
+                     --nnodes=\\$SLURM_NNODES \
                      --max_restarts=0 \
                      --rdzv_conf=timeout=3600 \
                      --no_python \
@@ -715,10 +725,10 @@ Alright, the big moment! Let's launch the training run.
                     - -c
                     - |
                       torchrun --rdzv_backend=static \
-                               --rdzv_endpoint=${MASTER_ADDR}:${MASTER_PORT} \
-                               --node_rank=${RANK} \
-                               --nproc_per_node=${PET_NPROC_PER_NODE} \
-                               --nnodes=${PET_NNODES} \
+                               --rdzv_endpoint=\${MASTER_ADDR}:\${MASTER_PORT} \
+                               --node_rank=\${RANK} \
+                               --nproc_per_node=\${PET_NPROC_PER_NODE} \
+                               --nnodes=\${PET_NNODES} \
                                --max_restarts=0 \
                                --rdzv_conf=timeout=3600 \
                                --no_python \
@@ -779,10 +789,10 @@ Alright, the big moment! Let's launch the training run.
                     - -c
                     - |
                       torchrun --rdzv_backend=static \
-                               --rdzv_endpoint=${MASTER_ADDR}:${MASTER_PORT} \
-                               --node_rank=${RANK} \
-                               --nproc_per_node=${PET_NPROC_PER_NODE} \
-                               --nnodes=${PET_NNODES} \
+                               --rdzv_endpoint=\${MASTER_ADDR}:\${MASTER_PORT} \
+                               --node_rank=\${RANK} \
+                               --nproc_per_node=\${PET_NPROC_PER_NODE} \
+                               --nnodes=\${PET_NNODES} \
                                --max_restarts=0 \
                                --rdzv_conf=timeout=3600 \
                                --no_python \
@@ -891,11 +901,11 @@ You can expect to see the following performance metrics in Fast-LLM's output:
 
     | Performance Metric                       | 32x V100-SXM2-32GB[^Llama-V100] | 32x A100-SXM4-80GB[^Llama-A100] | 32x H100-SXM5-80GB[^Llama-H100] |
     |------------------------------------------|--------------------------------:|--------------------------------:|--------------------------------:|
-    | tokens/s/GPU                             |                                 |                                 | 9,220                           |
-    | tflop/s (model)                          |                                 |                                 | 445                             |
+    | tokens/s/GPU                             |                                 |                                 | 10,100                          |
+    | tflop/s (model)                          |                                 |                                 | 487                             |
     | peak tflop/s (theoretical)[^peak-tflops] | 125                             | 312                             | 990                             |
-    | utilization                              |                                 |                                 | 45.0%                           |
-    | total training time                      |                                 |                                 | 7.7 days                        |
+    | utilization                              |                                 |                                 | 49.2%                           |
+    | total training time                      |                                 |                                 | 180 hours                       |
 
     [^Llama-V100]:
         Precision was set to `fp16`, since `bf16` is not supported on V100 GPUs. 
@@ -909,7 +919,7 @@ You can expect to see the following performance metrics in Fast-LLM's output:
     [^Llama-H100]:
         Precision was set to `bf16`.
         FlashAttention was enabled.
-        Micro-batch size was set to 1.
+        Micro-batch size was set to 2.
         ZeRO stage 2 was used.
 
 If you included the W&B section in your configuration, you can also track your training progress on the Weights & Biases dashboard as well. Follow the link in the console output to view your training run.
