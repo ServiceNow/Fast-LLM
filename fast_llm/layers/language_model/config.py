@@ -91,7 +91,7 @@ class LanguageModelArchitectureConfig(BaseModelArchitectureConfig):
     ):
         # The backward compatibility fix in `NormalizationArchitectureConfig`
         # won't work for older checkpoints saved with a flat config.
-        # TODO v0.2: Remove flat format
+        # TODO v0.3: Remove flat format
         cls._handle_renamed_field(default, "normalization_type", "type")
         cls._handle_renamed_field(default, "layer_norm_eps", "epsilon")
         cls._handle_renamed_field(default, "zero_centered_normalization", "zero_centered")

@@ -203,16 +203,15 @@ class TrainingCheckpointBaseConfig(IntervalConfig):
 class TrainingCheckpointConfig(TrainingCheckpointBaseConfig):
     _abstract = False
     save_name: typing.ClassVar[str] = "checkpoint"
-    # TODO v0.2: Rename to `checkpoint` so we don't need this extra variable?
     interval = FieldUpdate(
-        desc="The number of training iterations between each checkpoint." " Setting to None will disable checkpoints."
+        desc="The number of training iterations between each checkpoint. Setting to None will disable checkpoints."
     )
     offset = FieldUpdate(desc="Offset for the first checkpoint.")
     callback: CallbackConfig = FieldUpdate(desc="Callback (shell script) to run after checkpoint.")
     keep: int | None = FieldUpdate(default=5)
 
     def get_save_directory(self, experiment_directory: pathlib.Path) -> pathlib.Path:
-        # TODO v0.2: Remove backward compatibility.
+        # TODO v0.3: Remove backward compatibility.
         old_path = experiment_directory / "checkpoints"
         new_path = experiment_directory / "checkpoint"
         return old_path if old_path.is_dir() and not new_path.is_dir() else new_path

@@ -9,7 +9,6 @@ CONFIG_BF_DF = CONFIG_COMMON + ["batch.depth_first_micro_batches=2", "batch.brea
 
 
 # TODO: Compare grads with simple
-@pytest.mark.depends(on=["tests/test_simple.py::test_model"], scope="session")
 def test_model_df4():
     # Depth-first gradient accumulation baseline.
     run_test_script(f"test_{TEST_MODEL}_df4", CONFIG_DF)

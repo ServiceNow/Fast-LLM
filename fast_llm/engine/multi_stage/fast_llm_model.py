@@ -56,7 +56,7 @@ class FastLLMModel(MultiStageModel):
         metadata = cls.config_class.load_metadata(pretrained_config)
         config = cls.config_class.from_metadata(pretrained_config, metadata, default_config, config_updates)
         if mode.support_training:
-            # TODO v0.2: Make metadata.shards mandatory?
+            # TODO v0.3: Make metadata.shards mandatory?
             if metadata.shards:
                 if optimizer_state_names is None:
                     optimizer_state_names = metadata.shards[1:]

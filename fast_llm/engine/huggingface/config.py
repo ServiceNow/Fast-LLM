@@ -78,7 +78,7 @@ class HuggingfaceModelConfig(transformers.PretrainedConfig):
         )
 
         config_dict = {"fast_llm_config": fast_llm_config}
-        # TODO v0.2: ???
+        # TODO v0.3: ???
         if "huggingface_config" in metadata:
             assert "fast_llm_config" not in metadata["huggingface_config"]
             config_dict.update(metadata.pop("huggingface_config"))

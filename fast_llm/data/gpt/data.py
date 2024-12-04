@@ -151,7 +151,7 @@ class GPTData(Data):
                         seed=self._distributed_config.seed,
                         cache_directory=(
                             self._dataset_prefixes[name].parent
-                            if self._cache_directory is None
+                            if self._cache_directory is None and isinstance(self._dataset_prefixes[name], pathlib.Path)
                             else self._cache_directory
                         ),
                         verbose=self._num_datasets <= 5,

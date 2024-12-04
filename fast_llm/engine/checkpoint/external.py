@@ -194,7 +194,7 @@ class ExternalStateDictCheckpointHandler(StateDictCheckpointHandler):
 
     @classmethod
     def _export_config(cls, config: BaseModelArchitectureConfig) -> dict[str, typing.Any]:
-        # TODO v0.2: not used in this class
+        # TODO v0.3: not used in this class
         exported_config = {}
         for converter in cls._get_config_converters():
             value = converter.export_param(
@@ -211,7 +211,6 @@ class ExternalStateDictCheckpointHandler(StateDictCheckpointHandler):
     def _import_config(
         cls, config: dict[str, typing.Any], architecture_only: bool = False
     ) -> BaseModelArchitectureConfig:  # noqa
-        # TODO v0.2: not used in this class
         kwargs = {}
         for converter in cls._get_config_converters():
             value = converter.import_param(
