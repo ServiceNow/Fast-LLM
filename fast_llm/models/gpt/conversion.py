@@ -21,7 +21,7 @@ from fast_llm.engine.multi_stage.config import FastLLMModelConfig
 from fast_llm.functional.config import ActivationType
 from fast_llm.functional.rotary import convert_rotary_complex_to_real, convert_rotary_real_to_complex
 from fast_llm.layers.common.config import NormalizationType
-from fast_llm.layers.transformer.config import RotaryScalingType, RoutingType
+from fast_llm.layers.transformer.config import RotaryEmbeddingType, RoutingType
 from fast_llm.models.gpt.config import (
     GPTArchitectureConfig,
     GPTModelConfig,
@@ -248,11 +248,11 @@ class CommonLlamaHuggingfaceCheckpointHandler(CommonHuggingfaceCheckpointHandler
         ]
 
 
-def export_rotary_scaling_type(fast_llm_value: RotaryScalingType) -> dict[str, typing.Any] | None:
+def export_rotary_scaling_type(fast_llm_value: RotaryEmbeddingType):
     match fast_llm_value:
-        case RotaryScalingType.none:
+        case RotaryEmbeddingType.default:
             return "default"
-        case RotaryScalingType.llama3:
+        case RotaryEmbeddingType.llama3:
             return "llama3"
         case _:
             raise ValueError(f"Unsupported rotary scaling type: {fast_llm_value}")
@@ -260,12 +260,12 @@ def export_rotary_scaling_type(fast_llm_value: RotaryScalingType) -> dict[str, t
 
 def import_rotary_scaling_type(export_value):
     if export_value is None:
-        return RotaryScalingType.none
+        return RotaryEmbeddingType.default
     match export_value:
         case "default":
-            return RotaryScalingType.none
+            return RotaryEmbeddingType.default
         case "llama3":
-            return RotaryScalingType.llama3
+            return RotaryEmbeddingType.llama3
         case _:
             raise ValueError(f"Unsupported rotary scaling type: {export_value}")
 
