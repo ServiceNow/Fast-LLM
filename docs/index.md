@@ -10,23 +10,21 @@ Introducing **Fast-LLM**, the cutting-edge open-source library built for trainin
 
 ## Why Fast-LLM?
 
-Fast-LLM is designed for professionals who demand exceptional performance for efficient large-scale (FLOPS) language model training on GPUs. Fast-LLM integrates effortlessly into existing ML pipelines and goes beyond off-the-shelf commercial frameworks, like NVIDIA NeMo Megatron, to deliver a **robust, flexible, and high-performance open-source alternative**. Whether you're optimizing for speed, cost, or scalability, Fast-LLM helps you get the most out of your training infrastructure.
+Fast-LLM is designed for professionals who demand exceptional performance for efficient, large-scale language model training on GPUs, where maximizing FLOPS is key. Fast-LLM integrates effortlessly into existing ML pipelines and goes beyond off-the-shelf commercial frameworks to deliver a **robust, flexible, and high-performance open-source alternative**. Whether you're optimizing for speed, cost, or scalability, Fast-LLM helps you get the most out of your training infrastructure.
 
 ### The Fast-LLM Advantage
 
 Fast-LLM isn't just another library, **it's a platform for powering the next generation of AI breakthroughs**. Here's what sets it apart:
 
--   **🚀 Purpose-Built for Small- and Large-Scale AI:** Optimized specifically for training language models of all sizes, Fast-LLM excels from **small models around 1B parameters to massive clusters running 70B+ parameter models**, with kernels that are fine-tuned for maximum throughput across this entire range. At 10B-parameter scale, Fast-LLM avoids costly 3D-paralelism through memory optimization techniques such as ZeRO and activation recomputation, whereas at 100B-parameter scale, Fast-LLM optimally supports 3D-parallelism; making Fast-LLM the go-to choice for diverse training needs.
+-   **🚀 Purpose-Built for Small- and Large-Scale AI:** Optimized specifically for training language models of all sizes, Fast-LLM excels from **small models around 1B parameters to massive clusters running 70B+ parameter models**, with kernels that are fine-tuned for maximum throughput across this entire range. At 10B-parameter scale, Fast-LLM avoids costly 3D-parallelism through memory optimization techniques such as ZeRO and activation recomputation, whereas at 100B-parameter scale, Fast-LLM optimally supports 3D-parallelism; making Fast-LLM the go-to choice for diverse training needs.
 
--   **🧠 Unified Support for GPT-Like Architectures:** Fast-LLM **unifies all GPT-like model implementations** in a [single Python file](https://github.com/ServiceNow/Fast-LLM/blob/main/fast_llm/models/gpt/model.py), and unlike HuggingFace transformers where every model has its own, mostly independent, implementation, Fast-LLM reduces coding and adapts effortlessly, even with custom architectures.
+-   **🧠 Unified Support for GPT-Like Architectures:** Fast-LLM streamlines the implementation of GPT-like models into a [single, unified module](https://github.com/ServiceNow/Fast-LLM/blob/main/fast_llm/models/gpt/model.py), significantly reducing redundancy and simplifying adaptation to custom architectures. This approach ensures consistency and flexibility while minimizing development overhead.
 
 -   **💰 Cost Efficiency That Sets Fast-LLM Apart:**
 
-    -   **Lower Training Costs:** With higher throughput per GPU, Fast-LLM reduces the training time required. For instance, training models can cheaper compared to other frameworks due to faster processing and better memory efficiency.
+    -   **Lower Training Costs:** With higher throughput per GPU, Fast-LLM reduces the training time required. Training models can be cheaper compared to other frameworks due to faster processing and better memory efficiency.
 
     -   **More Tokens for Your Budget:** Train on more tokens for the same budget, leading to better-trained models without breaking your financial constraints.
-
-    <!-- [Learn more about Fast-LLM's cost efficiency and see detailed comparisons](cost-efficiency.md). -->
 
 -   **🔓 Openness Without Compromise:** Fast-LLM's open-source approach ensures that you can **fully customize and extend the library** to fit your exact needs, without the restrictions of proprietary software. Developed transparently by a community of experts on GitHub, every change is **publicly discussed and vetted**, fostering **trust and collaboration** so you can innovate with confidence, knowing the entire development process and decision making is out in the open.
 
@@ -36,7 +34,7 @@ Fast-LLM isn't just another library, **it's a platform for powering the next gen
 
 Fast-LLM offers all the capabilities you need to accelerate your LLM training and **push the boundaries of what's possible**:
 
--   **🚀 Speed Like No Other:** Achieve record-breaking training throughput with Fast-LLM. For instance, train Mistral-7B at **9,800 tokens/s/GPU** on a 4-node cluster with 32 H100 GPUs (batch size 32, sequence length 8k). Our optimized kernels, advanced parallelism, and memory-efficient techniques drastically reduce training time and cost.
+-   **🚀 Speed Like No Other:** Achieve record-breaking training throughput with Fast-LLM. For instance, train Mistral-7B at **10,350 tokens/s/GPU** on a 4-node cluster with 32 H100 GPUs (batch size 64, sequence length 8k). Our optimized kernels, advanced parallelism, and memory-efficient techniques drastically reduce training time and cost.
 
 -   **📡 Unmatched Scalability:** Seamlessly scale from a single GPU to large compute clusters. Fast-LLM supports 3D parallelism (data, tensor, and pipeline), sequence length parallelism, and ZeRO-1,2,3 techniques for maximum memory efficiency. Scale to the size you need without sacrificing performance.
 
@@ -44,7 +42,7 @@ Fast-LLM offers all the capabilities you need to accelerate your LLM training an
 
 -   **📦 Seamless Integration:** Integrate smoothly with popular libraries such as [HuggingFace Transformers](https://huggingface.co/transformers). Benefit from Fast-LLM's optimizations without disrupting your existing pipelines.
 
--   **🛠️ Professional-Grade Tools:** Enjoy mixed precision training, large batch training, and gradient accumulation. Fast-LLM ensures reproducibility through deterministic behavior and provides pre-built Docker images, YAML configurations, and a simple, intuitive command-line interface.
+-   **🛠️ Professional-Grade Tools:** Enjoy mixed precision training, large batch training, and gradient accumulation. Fast-LLM ensures reproducibility through deterministic behavior and provides [pre-built Docker images](https://github.com/ServiceNow/Fast-LLM/pkgs/container/fast-llm), YAML configurations, and a simple, intuitive command-line interface.
 
 [Get Fast-LLM](https://github.com/ServiceNow/Fast-LLM/releases) and start training your large language models in record time. [Join the Fast-LLM community](join-us.md) and collaborate with like-minded professionals to advance the state-of-the-art in AI research and development.
 

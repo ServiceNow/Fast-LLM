@@ -1,5 +1,4 @@
 import argparse
-import functools
 import json
 import logging
 import math
@@ -8,7 +7,6 @@ import warnings
 
 from fast_llm.config import Field, config_class
 from fast_llm.engine.checkpoint.config import CheckpointLoadConfig, CheckpointSaveConfig
-from fast_llm.engine.checkpoint.external import HuggingfaceStateDictCheckpointHandler
 from fast_llm.engine.config_utils.runnable import RunnableConfig
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig, StageMode
 from fast_llm.functional.config import TritonConfig
@@ -28,6 +26,7 @@ class ConversionConfig(RunnableConfig):
     use_cpu: bool = Field(default=False)
     exist_ok: bool = Field(default=False)
     layers_per_step: int | None = Field(default=None)
+    model_config_class: type[FastLLMModelConfig] = Field(default=None)
 
     @classmethod
     def _from_dict(
@@ -76,8 +75,17 @@ class ConversionConfig(RunnableConfig):
         )
         return parser
 
-    def _get_runnable(self, parsed: argparse.Namespace) -> typing.Callable[[], None]:
-        return functools.partial(self.run, parsed.model_type)
+    @classmethod
+    def _from_parsed_args(cls, parsed: argparse.Namespace, unparsed: list[str]):
+        config = super()._from_parsed_args(parsed, unparsed)
+        config.model_config_class = model_registry[parsed.model_type]
+        return config
+
+    def _validate(self):
+        assert self.model_config_class is not None
+        self.input.setup(self.model_config_class)
+        self.output.setup(self.model_config_class)
+        super()._validate()
 
     def _convert_model_partial(
         self,
@@ -98,7 +106,7 @@ class ConversionConfig(RunnableConfig):
         (output.path / "ok").open("w")
         logger.info(f"Done!")
 
-    def run(self, model_config_class: type["FastLLMModelConfig"] | str):
+    def run(self):
         # TODO: Set logging in tests
         logging.getLogger().setLevel(logging.INFO)
         self.to_logs()
@@ -111,14 +119,14 @@ class ConversionConfig(RunnableConfig):
                 f"Output path {self.output.path} already exists and has been processed. Skipping model conversion..."
             )
             return
-        if isinstance(model_config_class, str):
-            model_config_class = model_registry[model_config_class]
-        model_class = model_config_class.get_model_class()
+        model_class = self.model_config_class.get_model_class()
         if self.layers_per_step is None:
             self._convert_model_partial(model_class, self.output)
         else:
-            converter_class = model_config_class.get_handler_class(self.output.format)
+            converter_class = self.output.format.get_handler_class()
             # TODO: Support other types?
+            from fast_llm.engine.checkpoint.external import HuggingfaceStateDictCheckpointHandler
+
             assert issubclass(converter_class, HuggingfaceStateDictCheckpointHandler)
             logger.info(f">>> Loading model config")
             # Create a dummy version to determine the stage split.
