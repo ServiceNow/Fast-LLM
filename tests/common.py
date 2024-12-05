@@ -144,10 +144,7 @@ CONFIG_LLAMA3_FAST_LLM = CONFIG_SC2_FAST_LLM + [
     "model.base_model.transformer.activation_type=silu",
     "model.base_model.transformer.add_linear_biases=False",
     "model.base_model.transformer.normalization.type=rms_norm",
-    # Larger init-std to trigger error when using the wrong scaling
-    "model.base_model.transformer.init_method_std=0.05",
-    "model.base_model.transformer.rotary.llama3_old_context_len=8192",
-    "model.base_model.transformer.rotary.scaling_type=llama3",
+    "model.base_model.transformer.rotary.type=llama3",
     "model.base_model.tie_word_embeddings=False",
 ]
 CONFIG_LLAMA3_COMMON = CONFIG_LLAMA3_FAST_LLM + ["model.distributed.training_dtype=bf16"]
