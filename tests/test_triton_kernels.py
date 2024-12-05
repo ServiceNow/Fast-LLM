@@ -84,28 +84,21 @@ def test_triton_rotary(batch_size, sequence_length, num_heads, kv_channels):
     assert TritonConfig.TRITON_ENABLED
     x = torch.randn(batch_size, sequence_length, num_heads, kv_channels, dtype=torch.bfloat16, device="cuda")
 
-    RotaryConfig(
-        type=RotaryEmbeddingType.default,
-    )
-
     y1 = apply_rotary_embeddings(
         x,
         get_rotary_frequencies(
-            RotaryConfig(
-                type=RotaryEmbeddingType.default,
-            ),
+            RotaryConfig(type=RotaryEmbeddingType.default, triton=False),
             sequence_length,
             kv_channels,
             device="cuda",
         ),
     )
-    convert_rotary_complex_to_real(x, kv_channels, 3)
 
     y2 = convert_rotary_real_to_complex(
         triton_rotary_(
             convert_rotary_complex_to_real(x, kv_channels, 3),
             get_rotary_frequencies(
-                RotaryConfig(type=RotaryEmbeddingType.default, triton=False),
+                RotaryConfig(type=RotaryEmbeddingType.default, triton=True),
                 sequence_length,
                 kv_channels,
                 device="cuda",

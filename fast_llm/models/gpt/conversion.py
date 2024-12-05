@@ -1,5 +1,4 @@
 import abc
-import math
 import typing
 
 import torch
@@ -114,10 +113,7 @@ class CommonHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
     def _create_config_converters(cls) -> list[ParamConverter]:
         return super()._create_config_converters() + [
             ConstantImportParamConverter(("use_position_embeddings",), None, False),
-            ConstantImportParamConverter(("transformer", "use_rotary_embeddings"), None, True),
-            MappedConfigParamConverter(
-                ("transformer", "rotary_embedding_scale"), "rope_theta", lambda x: -math.log(x), lambda x: math.exp(-x)
-            ),
+            ParamConverter(("transformer", "rotary", "theta"), "rope_theta"),
             MappedConfigParamConverter(
                 ("transformer", "activation_type"),
                 "hidden_act",
@@ -219,6 +215,7 @@ class Starcoder2HuggingfaceCheckpointHandler(CommonHuggingfaceCheckpointHandler)
     def _create_config_converters(cls) -> list[ParamConverter]:
         return super()._create_config_converters() + [
             ConstantExportParamConverter(None, "architectures", ["Starcoder2ForCausalLM"]),
+            ConstantImportParamConverter(("transformer", "rotary", "type"), None, RotaryEmbeddingType.default),
             ConstantImportParamConverter(("transformer", "normalization", "type"), None, NormalizationType.layer_norm),
             ParamConverter(("transformer", "normalization", "epsilon"), "norm_epsilon"),
             ConstantImportParamConverter(("transformer", "gated"), None, False),
@@ -281,7 +278,7 @@ class LlamaHuggingfaceCheckpointHandler(CommonLlamaHuggingfaceCheckpointHandler)
             ConstantExportParamConverter(None, "attention_bias", False),
             ConstantExportParamConverter(None, "mlp_bias", False),
             MappedConfigParamConverter(
-                ("transformer", "rotary", "scaling_type"),
+                ("transformer", "rotary", "type"),
                 ("rope_scaling", "rope_type"),
                 import_rotary_scaling_type,
                 export_rotary_scaling_type,
@@ -329,6 +326,7 @@ class MistralHuggingfaceCheckpointHandler(CommonLlamaHuggingfaceCheckpointHandle
     def _create_config_converters(cls) -> list[ParamConverter]:
         return super()._create_config_converters() + [
             ConstantExportParamConverter(None, "architectures", ["MistralForCausalLM"]),
+            ConstantImportParamConverter(("transformer", "rotary", "type"), None, RotaryEmbeddingType.default),
             IgnoreImportParamConverter(None, "sliding_window", None),
         ]
 
@@ -353,6 +351,7 @@ class MixtralHuggingfaceCheckpointHandler(CommonLlamaHuggingfaceCheckpointHandle
     def _create_config_converters(cls) -> list[ParamConverter]:
         return super()._create_config_converters() + [
             ConstantExportParamConverter(None, "architectures", ["MixtralForCausalLM"]),
+            ConstantImportParamConverter(("transformer", "rotary", "type"), None, RotaryEmbeddingType.default),
             ConstantImportParamConverter(("transformer", "expert_routing_type"), None, RoutingType.topk),
             ParamConverter(("transformer", "num_experts"), "num_local_experts"),
             ParamConverter(("transformer", "num_experts_per_token"), "num_experts_per_tok"),
