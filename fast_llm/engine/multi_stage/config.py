@@ -223,9 +223,6 @@ class FastLLMModelConfig(Config):
             format_ = cls.get_checkpoint_format(format.name)
             Assert.is_(format, format_)
             return format_
-        # TODO v0.2: Remove backward compatibility.
-        if format == "state_dict":
-            format = "fast_llm"
         for format_ in cls.checkpoint_formats:
             if format_.name == format:
                 return format_
@@ -247,7 +244,6 @@ class FastLLMModelConfig(Config):
 
     @classmethod
     def get_base_model_config_class(cls) -> type[BaseModelConfig]:
-        # TODO v0.2: Still needed?
         return cls.get_field("base_model").type
 
     @classmethod
@@ -270,8 +266,8 @@ class FastLLMModelConfig(Config):
         updates: dict[str | tuple[str, ...], typing.Any] | None = None,
     ):
         # TODO: Standardize to *updates?
-        # TODO v0.2: Update, remove support for older checkpoints.
-        if metadata.fast_llm_version.major != 0 or metadata.fast_llm_version.minor not in (0, 1):
+        # TODO v0.3: Update, remove support for older checkpoints.
+        if metadata.fast_llm_version.major != 0 or metadata.fast_llm_version.minor not in (0, 1, 2):
             raise ValueError(f"Invalid checkpoint version: {metadata.fast_llm_version}")
         pretrained_config = cls.from_dict(metadata.config)
         if not pretrained.load_config.load_architecture:
@@ -424,7 +420,7 @@ class CheckpointMetadata(Config):
         strict: bool = True,
         flat: bool = False,
     ):
-        # TODO v0.2: Remove backward compatibility.
+        # TODO v0.3: Remove backward compatibility.
         cls._handle_renamed_field(default, "checkpoint_type", "format")
         cls._handle_renamed_field(default, "checkpoint_version", "fast_llm_version")
         cls._handle_renamed_field(default, "fast_llm_config", "config")
@@ -445,7 +441,7 @@ class CheckpointMetadata(Config):
             model_config_class = model_registry[model_config_class]
             default["model"] = model_config_class
 
-        # TODO v0.2: Remove backward compatibility.
+        # TODO v0.3: Remove backward compatibility.
         if "config" not in default:
             default["config"] = {
                 "base_model": model_config_class.get_base_model_config_class().from_flat_dict(

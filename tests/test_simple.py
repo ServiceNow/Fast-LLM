@@ -3,9 +3,6 @@ import pytest
 from tests.common import CONFIG_COMMON, CONFIG_FAST_LLM, TEST_MODEL, run_test_script
 
 
-@pytest.mark.depends(
-    depends=[f"tests/test_match_megatron.py::test_{TEST_MODEL}_match_meg"],
-)
 def test_model_safe():
     # The safest possible config, identical to the one in test_match_megatron except for the initialization.
     run_test_script(

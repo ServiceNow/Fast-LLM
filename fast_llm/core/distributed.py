@@ -40,13 +40,14 @@ def check_parallel_match(tensor: torch.Tensor, group: ProcessGroup | None, name:
     # A utility function to check for tensor-parallel (or other) mismatches.
     all_tensors = tensor.new_empty((group.size(),) + tensor.shape)
     all_gather_into_tensor(all_tensors, tensor, group)
+
     mismatches = (all_tensors != tensor).any(dim=0)
     num_mismatches = mismatches.sum().item()
     if num_mismatches > 0:
         num_nans = tensor.isnan().sum().item()
         logger.error(
             f"MISMATCH {name} {num_mismatches:,} / {tensor.numel():,}"
-            + ("" if num_nans > 0 else f" [{num_mismatches:,} nans detected locally]")
+            + ("" if num_nans == 0 else f" [{num_nans:,} nans detected locally]")
         )
 
 

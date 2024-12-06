@@ -4,7 +4,6 @@ import enum
 import logging
 import pathlib
 import typing
-import warnings
 
 import yaml
 
@@ -56,7 +55,7 @@ class CheckpointFormat(abc.ABC):
 
 
 class DistributedCheckpointFormat(CheckpointFormat):
-    # TODO v0.2: Add `enforce_version_match`
+    # TODO v0.3: Add `enforce_version_match`
     name: typing.ClassVar[str] = "distributed"
     enforce_architecture_match: typing.ClassVar[bool] = True
 
@@ -119,27 +118,6 @@ class CheckpointConfigBase(Config):
             Assert.eq(self.format, format)
         else:
             self.format = format
-
-    @classmethod
-    def _from_dict(
-        cls,
-        default: dict[str, typing.Any],
-        strict: bool = True,
-        flat: bool = False,
-    ):
-        # TODO v0.2: Remove.
-        cls._handle_renamed_field(default, "imported_type", "model_type")
-        if "model_type" in default:
-            warnings.warn(
-                "`CheckpointConfigBase.model_type` is deprecated."
-                " Instead, use the model name directly as the checkpoint format."
-            )
-            if default.get("format", None) in ("huggingface", "external"):
-                default["format"] = default.get("model_type")
-                if default["format"] is None:
-                    default["format"] = "auto"
-            del default["model_type"]
-        return super()._from_dict(default, strict, flat)
 
 
 @config_class()
