@@ -241,7 +241,7 @@ def _compare_configs(config_ref, config_test):
 @pytest.mark.depends(on=["test_converted_distributed"])
 def test_load_pretrained_distributed_checkpoint():
     config = TEST_ARCHITECTURE_CONFIG_CLS.from_dict(
-        yaml.safe_load((_CKPT_PATH / ".." / ".." / "config.yaml").open("r")), strict=False
+        yaml.safe_load((_CKPT_PATH / ".." / ".." / "config.yaml").open("r"))["model"]["base_model"], strict=False
     )
     pretrained_config_ref = CheckpointLoadConfig(
         path=_CKPT_PATH,
