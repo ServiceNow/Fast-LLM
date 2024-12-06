@@ -749,11 +749,11 @@ Alright, the big moment! Let's launch the training run.
                         - IPC_LOCK
                   volumeMounts:
                     - mountPath: /app/fast-llm-tutorial
-                      name: fast-llm-inputs
+                      name: fast-llm-tutorial
                     - mountPath: /dev/shm
                       name: dshm
               volumes:
-                - name: fast-llm-inputs
+                - name: fast-llm-tutorial
                   persistentVolumeClaim:
                     claimName: pvc-fast-llm-tutorial
                 - name: dshm
@@ -813,11 +813,11 @@ Alright, the big moment! Let's launch the training run.
                         - IPC_LOCK
                   volumeMounts:
                     - mountPath: /app/fast-llm-tutorial
-                      name: fast-llm-inputs
+                      name: fast-llm-tutorial
                     - mountPath: /dev/shm
                       name: dshm
               volumes:
-                - name: fast-llm-inputs
+                - name: fast-llm-tutorial
                   persistentVolumeClaim:
                     claimName: pvc-fast-llm-tutorial
                 - name: dshm
