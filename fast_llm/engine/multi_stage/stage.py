@@ -201,7 +201,11 @@ class Stage(StageBase):
         self._is_restored = False
 
     def _log_layer_forward(self, output, kwargs, i):
-        if self._config.debug_tensor_parallel and self._distributed.tensor_group is not None:
+        if (
+            self._config.debug_tensor_parallel
+            and self._distributed.tensor_group is not None
+            and not self._meta_outputs[i].is_tensor_parallel
+        ):
             check_parallel_match(output, self._distributed.tensor_group, f"layer {self._layer_range[i]} fw")
         if self._config.debug_layer_outputs:
             name = f"layer {self._layer_range[i]} fw"
@@ -224,7 +228,11 @@ class Stage(StageBase):
     def _log_layer_backward(self, input_, kwargs, i):
         if not input_.requires_grad:
             return
-        if self._config.debug_tensor_parallel and self._distributed.tensor_group is not None:
+        if (
+            self._config.debug_tensor_parallel
+            and self._distributed.tensor_group is not None
+            and not self._meta_inputs[i].is_tensor_parallel
+        ):
             input_.register_hook(
                 lambda grad: check_parallel_match(
                     grad, self._distributed.tensor_group, f"layer {self._layer_range[i]} bw"

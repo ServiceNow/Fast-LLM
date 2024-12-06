@@ -36,7 +36,7 @@ class NoAutoValidate:
 
 
 class _ConfigDictFormat(str, enum.Enum):
-    # TODO v0.2: delete class
+    # TODO v0.3: delete class
     flat = "flat"
     nested = "nested"
     tuple = "tuple"
@@ -673,7 +673,7 @@ class Config:
         default: dict[str, typing.Any],
         strict: bool = True,
     ):
-        # TODO v0.2: Remove flat format
+        # TODO v0.3: Remove flat format
         return cls._from_dict(default, strict, True)
 
     @classmethod
@@ -684,10 +684,10 @@ class Config:
         flat: bool = False,
     ):
         cls._check_abstract()
-        # TODO v0.2: Remove flat format
+        # TODO v0.3: Remove flat format
         out_arg_dict = {}
 
-        # TODO v0.2: Remove backward compatibility fix
+        # TODO v0.3: Remove backward compatibility fix
         if "__class__" in default:
             del default["__class__"]
 

@@ -13,9 +13,6 @@ CONFIG_BF_DF_SF = CONFIG_COMMON + [
 
 
 # TODO: Compare grads with simple
-@pytest.mark.depends(
-    on=["tests/test_mb.py::test_model_df4", "tests/test_seq_first.py::test_model_sf"],
-)
 def test_model_df4_sf():
     # Sequence-first gradient accumulation baseline.
     run_test_script(f"test_{TEST_MODEL}_df4_sf", CONFIG_DF_SF)

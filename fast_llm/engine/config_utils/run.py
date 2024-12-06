@@ -23,7 +23,7 @@ class RunConfig(Config):
     tensor_logs: TensorLogsConfig = Field(
         default_factory=TensorLogsConfig, desc="Configuration for debug tensor logs.", hint=FieldHint.logging
     )
-    # TODO v0.2: Adjust (now only affects logging to file).
+    # TODO v0.3: Adjust (now only affects logging to file).
     structured_logs: bool = Field(
         default=True, desc="Configure logging to the Fast-LLM format.", hint=FieldHint.logging
     )

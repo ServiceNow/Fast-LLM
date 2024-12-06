@@ -3,7 +3,6 @@ import json
 import logging
 import math
 import typing
-import warnings
 
 from fast_llm.config import Field, config_class
 from fast_llm.engine.checkpoint.config import CheckpointLoadConfig, CheckpointSaveConfig
@@ -27,43 +26,6 @@ class ConversionConfig(RunnableConfig):
     exist_ok: bool = Field(default=False)
     layers_per_step: int | None = Field(default=None)
     model_config_class: type[FastLLMModelConfig] = Field(default=None)
-
-    @classmethod
-    def _from_dict(
-        cls,
-        default: dict[str, typing.Any],
-        strict: bool = True,
-        flat: bool = False,
-    ):
-        # TODO v0.2: Remove.
-        if "input" not in default:
-            default["input"] = {}
-        if "output" not in default:
-            default["output"] = {}
-        if "input_type" in default:
-            warnings.warn("`input_type` is deprecated. Use `input.format` instead.")
-            default["input"]["format"] = default.pop("input_type")
-        if "input_path" in default:
-            warnings.warn("`input_path` is deprecated. Use `input.path` instead.")
-            default["input"]["path"] = default.pop("input_path")
-        if "output_type" in default:
-            warnings.warn("`output_type` is deprecated. Use `output.format` instead.")
-            default["output"]["format"] = default.pop("output_type")
-        if "output_path" in default:
-            warnings.warn("`output_path` is deprecated. Use `output.path` instead.")
-            default["output"]["path"] = default.pop("output_path")
-        if "model_type" in default:
-            warnings.warn("`model_type` is deprecated. Use `output.format` instead.")
-            # Will be handled in CheckpointConfigBase.from_dict
-            default["input"]["model_type"] = default.pop("model_type")
-            default["output"]["model_type"] = default.pop("model_type")
-        if "target_params_per_file" in default:
-            warnings.warn("`target_params_per_file` is deprecated. Use `output.parameters_per_file` instead.")
-            default["output"]["parameters_per_file"] = default.pop("target_params_per_file")
-        if "dtype" in default:
-            warnings.warn("`dtype` is deprecated. Use `output.data_type` instead.")
-            default["data_type"]["parameters_per_file"] = default.pop("dtype")
-        return super()._from_dict(default, strict, flat)
 
     @classmethod
     def _get_parser(cls):

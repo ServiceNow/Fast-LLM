@@ -6,9 +6,6 @@ CONFIG_MS = CONFIG_COMMON + ["batch.micro_sequence_length=256"]
 
 
 # TODO: Compare grads with simple
-@pytest.mark.depends(
-    on=["tests/test_seq_first.py::test_model_sf"],
-)
 def test_model_ms256():
     # Micro-sequence baseline
     run_test_script(f"test_{TEST_MODEL}_ms256", CONFIG_MS)

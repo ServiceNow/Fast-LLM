@@ -53,7 +53,7 @@ class GPTArchitectureConfig(LanguageModelArchitectureConfig):
         strict: bool = True,
         flat: bool = False,
     ):
-        # TODO v0.2: Remove backward compatibility fix
+        # TODO v0.3: Remove backward compatibility fix
         if "transposed_mlp_weight" in default:
             assert default.pop("transposed_mlp_weight")
         return super()._from_dict(default, strict, flat)
@@ -75,7 +75,7 @@ class GPTBaseModelConfig(LanguageModelBaseConfig, GPTArchitectureConfig):
         strict: bool = True,
         flat: bool = False,
     ):
-        # TODO v0.2: Remove backward compatibility fix
+        # TODO v0.3: Remove backward compatibility fix
         if "match_megatron" in default:
             assert "use_megatron_initialization" not in default
             default["use_megatron_initialization"] = default.pop("match_megatron")

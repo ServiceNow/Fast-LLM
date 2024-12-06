@@ -1,5 +1,4 @@
 import abc
-import json
 import logging
 import typing
 
@@ -114,18 +113,9 @@ class FastLLMCheckpointHandler(StateDictCheckpointHandler):
 
     @classmethod
     def load_metadata(cls, config: CheckpointLoadMetadataConfig):
-        # TODO v0.2: Remove backward compatibility.
-        old_path = config.path / "state_dict.safetensors.index.json"
-        if old_path.is_file():
-            logger.warning(f"Loading metadata from {old_path} (deprecated format)")
-            serialized_metadata = json.load((config.path / "state_dict.safetensors.index.json").open("r"))
-            metadata = CheckpointMetadata.from_dict(serialized_metadata)["metadata"]
-            metadata.metadata["index"] = serialized_metadata["weight_map"]
-        else:
-            path = config.path / f"metadata.yaml"
-            logger.warning(f"Loading metadata from {path}")
-            metadata = CheckpointMetadata.from_dict(yaml.safe_load(path.open("r")))
-        return metadata
+        path = config.path / f"metadata.yaml"
+        logger.warning(f"Loading metadata from {path}")
+        return CheckpointMetadata.from_dict(yaml.safe_load(path.open("r")))
 
     def _save_serialized_metadata(self, config: CheckpointSaveMetadataConfig, serialized_metadata: dict, index: dict):
         path = config.path / f"metadata.yaml"
