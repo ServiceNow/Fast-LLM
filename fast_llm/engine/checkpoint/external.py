@@ -19,7 +19,7 @@ from fast_llm.engine.checkpoint.state_dict import StateDictCheckpointHandler
 from fast_llm.engine.multi_stage.config import CheckpointMetadata, FastLLMModelConfig
 from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
 from fast_llm.tensor import SafeTensorSlice
-from fast_llm.utils import Assert
+from fast_llm.utils import Assert, get_nested_dict_value, set_nested_dict_value
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 @dataclasses.dataclass
 class ParamConverter:
     fast_llm_name: tuple[str, ...] | None
-    export_name: str | None
+    export_name: tuple[str, ...] | str | None
 
     def export_param(self, fast_llm_value):
         return fast_llm_value
@@ -203,7 +203,7 @@ class ExternalStateDictCheckpointHandler(StateDictCheckpointHandler):
                 else cls._get_fast_llm_attribute(config, converter.fast_llm_name)  # Noqa
             )
             if converter.export_name is not None:
-                exported_config[converter.export_name] = value
+                set_nested_dict_value(exported_config, converter.export_name, value)
 
         return exported_config  # Noqa
 
@@ -213,11 +213,11 @@ class ExternalStateDictCheckpointHandler(StateDictCheckpointHandler):
     ) -> BaseModelArchitectureConfig:  # noqa
         kwargs = {}
         for converter in cls._get_config_converters():
-            value = converter.import_param(
-                None
-                if converter.export_name is None or converter.export_name not in config
-                else config[converter.export_name]
-            )
+            try:
+                value = None if converter.export_name is None else get_nested_dict_value(config, converter.export_name)
+            except KeyError:
+                value = None
+            value = converter.import_param(value)
             if converter.fast_llm_name is not None:
                 kwargs[converter.fast_llm_name] = value
 

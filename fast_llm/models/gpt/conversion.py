@@ -1,5 +1,4 @@
 import abc
-import math
 import typing
 
 import torch
@@ -21,7 +20,7 @@ from fast_llm.engine.multi_stage.config import FastLLMModelConfig
 from fast_llm.functional.config import ActivationType
 from fast_llm.functional.rotary import convert_rotary_complex_to_real, convert_rotary_real_to_complex
 from fast_llm.layers.common.config import NormalizationType
-from fast_llm.layers.transformer.config import RoutingType
+from fast_llm.layers.transformer.config import RotaryEmbeddingType, RoutingType
 from fast_llm.models.gpt.config import (
     GPTArchitectureConfig,
     GPTModelConfig,
@@ -45,7 +44,7 @@ class QueryWeightConverter(WeightConverter):
         self, weight: tuple[torch.Tensor | SafeTensorSlice, ...]
     ) -> tuple[torch.Tensor | SafeTensorSlice, ...]:
         (query,) = weight
-        if self._config.transformer.complex_rotary_embeddings:
+        if self._config.transformer.rotary.complex_format:
             query = convert_rotary_complex_to_real(query[:], self._config.transformer.kv_channels, 0)
         return (query,)
 
@@ -53,7 +52,7 @@ class QueryWeightConverter(WeightConverter):
         self, weight: tuple[torch.Tensor | SafeTensorSlice, ...]
     ) -> tuple[torch.Tensor | SafeTensorSlice, ...]:
         (query,) = weight
-        if self._config.transformer.complex_rotary_embeddings:
+        if self._config.transformer.rotary.complex_format:
             query = convert_rotary_real_to_complex(query[:], self._config.transformer.kv_channels, 0)
         return (query,)
 
@@ -67,7 +66,7 @@ class KeyValueWeightConverter(WeightConverter):
     ) -> tuple[torch.Tensor | SafeTensorSlice, ...]:
         (key_value,) = weight
         key, value = key_value[:].chunk(2)
-        if self._config.transformer.complex_rotary_embeddings:
+        if self._config.transformer.rotary.complex_format:
             key = convert_rotary_complex_to_real(key, self._config.transformer.kv_channels, 0)
         return key, value
 
@@ -75,7 +74,7 @@ class KeyValueWeightConverter(WeightConverter):
         self, weight: tuple[torch.Tensor | SafeTensorSlice, ...]
     ) -> tuple[torch.Tensor | SafeTensorSlice, ...]:
         key, value = weight
-        if self._config.transformer.complex_rotary_embeddings:
+        if self._config.transformer.rotary.complex_format:
             key = convert_rotary_real_to_complex(key[:], self._config.transformer.kv_channels, 0)
         key_value = torch.cat([key[:], value[:]])
         return (key_value,)
@@ -114,10 +113,7 @@ class CommonHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
     def _create_config_converters(cls) -> list[ParamConverter]:
         return super()._create_config_converters() + [
             ConstantImportParamConverter(("use_position_embeddings",), None, False),
-            ConstantImportParamConverter(("transformer", "use_rotary_embeddings"), None, True),
-            MappedConfigParamConverter(
-                ("transformer", "rotary_embedding_scale"), "rope_theta", lambda x: -math.log(x), lambda x: math.exp(-x)
-            ),
+            ParamConverter(("transformer", "rotary", "theta"), "rope_theta"),
             MappedConfigParamConverter(
                 ("transformer", "activation_type"),
                 "hidden_act",
@@ -219,6 +215,7 @@ class Starcoder2HuggingfaceCheckpointHandler(CommonHuggingfaceCheckpointHandler)
     def _create_config_converters(cls) -> list[ParamConverter]:
         return super()._create_config_converters() + [
             ConstantExportParamConverter(None, "architectures", ["Starcoder2ForCausalLM"]),
+            ConstantImportParamConverter(("transformer", "rotary", "type"), None, RotaryEmbeddingType.default),
             ConstantImportParamConverter(("transformer", "normalization", "type"), None, NormalizationType.layer_norm),
             ParamConverter(("transformer", "normalization", "epsilon"), "norm_epsilon"),
             ConstantImportParamConverter(("transformer", "gated"), None, False),
@@ -248,6 +245,28 @@ class CommonLlamaHuggingfaceCheckpointHandler(CommonHuggingfaceCheckpointHandler
         ]
 
 
+def export_rotary_scaling_type(fast_llm_value: RotaryEmbeddingType):
+    match fast_llm_value:
+        case RotaryEmbeddingType.default:
+            return "default"
+        case RotaryEmbeddingType.llama3:
+            return "llama3"
+        case _:
+            raise ValueError(f"Unsupported rotary scaling type: {fast_llm_value}")
+
+
+def import_rotary_scaling_type(export_value):
+    if export_value is None:
+        return RotaryEmbeddingType.default
+    match export_value:
+        case "default":
+            return RotaryEmbeddingType.default
+        case "llama3":
+            return RotaryEmbeddingType.llama3
+        case _:
+            raise ValueError(f"Unsupported rotary scaling type: {export_value}")
+
+
 class LlamaHuggingfaceCheckpointHandler(CommonLlamaHuggingfaceCheckpointHandler):
     format: typing.ClassVar[type[CheckpointFormat]] = LlamaGPTHuggingfaceCheckpointFormat
 
@@ -258,7 +277,28 @@ class LlamaHuggingfaceCheckpointHandler(CommonLlamaHuggingfaceCheckpointHandler)
             # TODO: Llama supports biases
             ConstantExportParamConverter(None, "attention_bias", False),
             ConstantExportParamConverter(None, "mlp_bias", False),
-            ConstantExportParamConverter(None, "rope_scaling", None),
+            MappedConfigParamConverter(
+                ("transformer", "rotary", "type"),
+                ("rope_scaling", "rope_type"),
+                import_rotary_scaling_type,
+                export_rotary_scaling_type,
+            ),
+            ParamConverter(
+                ("transformer", "rotary", "scale_factor"),
+                ("rope_scaling", "factor"),
+            ),
+            ParamConverter(
+                ("transformer", "rotary", "low_frequency_factor"),
+                ("rope_scaling", "low_freq_factor"),
+            ),
+            ParamConverter(
+                ("transformer", "rotary", "high_frequency_factor"),
+                ("rope_scaling", "high_freq_factor"),
+            ),
+            ParamConverter(
+                ("transformer", "rotary", "original_context_length"),
+                ("rope_scaling", "original_max_position_embeddings"),
+            ),
         ]
 
     def _get_mlp_converters(self, fast_llm_prefix: str, hf_prefix: str):
@@ -286,6 +326,7 @@ class MistralHuggingfaceCheckpointHandler(CommonLlamaHuggingfaceCheckpointHandle
     def _create_config_converters(cls) -> list[ParamConverter]:
         return super()._create_config_converters() + [
             ConstantExportParamConverter(None, "architectures", ["MistralForCausalLM"]),
+            ConstantImportParamConverter(("transformer", "rotary", "type"), None, RotaryEmbeddingType.default),
             IgnoreImportParamConverter(None, "sliding_window", None),
         ]
 
@@ -310,6 +351,7 @@ class MixtralHuggingfaceCheckpointHandler(CommonLlamaHuggingfaceCheckpointHandle
     def _create_config_converters(cls) -> list[ParamConverter]:
         return super()._create_config_converters() + [
             ConstantExportParamConverter(None, "architectures", ["MixtralForCausalLM"]),
+            ConstantImportParamConverter(("transformer", "rotary", "type"), None, RotaryEmbeddingType.default),
             ConstantImportParamConverter(("transformer", "expert_routing_type"), None, RoutingType.topk),
             ParamConverter(("transformer", "num_experts"), "num_local_experts"),
             ParamConverter(("transformer", "num_experts_per_token"), "num_experts_per_tok"),

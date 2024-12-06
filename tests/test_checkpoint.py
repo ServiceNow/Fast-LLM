@@ -240,8 +240,8 @@ def _compare_configs(config_ref, config_test):
 
 @pytest.mark.depends(on=["test_converted_distributed"])
 def test_load_pretrained_distributed_checkpoint():
-    config = TEST_ARCHITECTURE_CONFIG_CLS.from_dict(
-        yaml.safe_load((_CKPT_PATH / ".." / ".." / "config.yaml").open("r")), strict=False
+    config = TEST_MODEL_CONFIG_CLS.from_dict(
+        yaml.safe_load((_CKPT_PATH / ".." / ".." / "config.yaml").open("r"))["model"], strict=False
     )
     pretrained_config_ref = CheckpointLoadConfig(
         path=_CKPT_PATH,
@@ -250,7 +250,7 @@ def test_load_pretrained_distributed_checkpoint():
         load_config=ModelConfigType.fast_llm,
     )
     model = TEST_MODEL_CLS.from_pretrained(pretrained_config_ref)
-    _compare_configs(config, model._base_model_config)
+    _compare_configs(config.base_model, model._base_model_config)
     weight_shard = safetensors.torch.load_file(
         _CKPT_PATH / "rank_0.safetensors", device=str(model._state_shard.device)
     )["state_shard"]

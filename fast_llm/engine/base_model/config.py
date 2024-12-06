@@ -24,7 +24,7 @@ class BaseModelArchitectureConfig(Config):
     def compare_architecture(
         self,
         model_config: "BaseModelArchitectureConfig",
-        log_fn: typing.Union[BaseException, typing.Callable] = ValueError,
+        log_fn: typing.Union[type[BaseException], typing.Callable] = ValueError,
     ):
         return self.get_architecture().compare(model_config.get_architecture(), log_fn)
 

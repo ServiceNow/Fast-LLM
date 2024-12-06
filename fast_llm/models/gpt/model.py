@@ -55,9 +55,9 @@ class GPTBaseModel(BaseModel):
                 param.init_parameter = get_init_megatron(param, self._config.transformer)  # Noqa
         if self._config.use_absolute_position_embeddings:
             self._position_embedding_preprocessor = PositionEmbeddingPreprocessor(self._config, self._tensor_space)
-        if self._config.transformer.use_rotary_position_embeddings:
+        if self._config.transformer.rotary.enabled:
             self._rotary_embedding_preprocessor = RotaryEmbeddingPreprocessor(
-                self._config.transformer, self._tensor_space
+                self._config.transformer.rotary, self._tensor_space
             )
         if not self._use_flash_attention:
             self._backup_attention_preprocessor = BackupAttentionPreprocessor(
@@ -172,7 +172,7 @@ class GPTBaseModel(BaseModel):
                 )
             if self._config.use_absolute_position_embeddings:
                 self._position_embedding_preprocessor.preprocess_meta(kwargs)
-            if self._config.transformer.use_rotary_position_embeddings:
+            if self._config.transformer.rotary.enabled:
                 self._rotary_embedding_preprocessor.preprocess_meta(kwargs)
             if not self._use_flash_attention:
                 self._backup_attention_preprocessor.preprocess_meta(kwargs)
@@ -211,7 +211,7 @@ class GPTBaseModel(BaseModel):
 
         if self._config.use_absolute_position_embeddings:
             self._position_embedding_preprocessor.create_tensors(sequence_length)
-        if self._config.transformer.use_rotary_position_embeddings:
+        if self._config.transformer.rotary.enabled:
             self._rotary_embedding_preprocessor.create_tensors(sequence_length)
         if not self._use_flash_attention:
             self._backup_attention_preprocessor.create_tensors(sequence_length)
@@ -244,7 +244,7 @@ class GPTBaseModel(BaseModel):
                 kwargs[LanguageModelKwargs.labels] = labels
             if self._config.use_absolute_position_embeddings:
                 self._position_embedding_preprocessor.preprocess(kwargs)
-            if self._config.transformer.use_rotary_position_embeddings:
+            if self._config.transformer.rotary.enabled:
                 self._rotary_embedding_preprocessor.preprocess(kwargs)
             if not self._use_flash_attention:
                 self._backup_attention_preprocessor.preprocess(kwargs)

@@ -6,7 +6,6 @@ from fast_llm.functional.rotary import (
     apply_rotary_embeddings,
     convert_rotary_complex_to_real,
     convert_rotary_real_to_complex,
-    get_rotary_frequencies,
 )
 from fast_llm.functional.triton.adam import triton_adam
 from fast_llm.functional.triton.cross_entropy import triton_cross_entropy_forward_backward
@@ -23,6 +22,8 @@ from fast_llm.functional.triton.normalization import (
 from fast_llm.functional.triton.pointwise import triton_add, triton_copy, triton_fill
 from fast_llm.functional.triton.rotary import triton_rotary_
 from fast_llm.functional.triton.sparse_copy import get_sparse_map
+from fast_llm.layers.transformer.config import RotaryConfig, RotaryEmbeddingType
+from fast_llm.layers.transformer.preprocessing import get_rotary_frequencies
 from fast_llm.utils import Assert, rms_diff
 from tests.common import requires_cuda
 
@@ -82,13 +83,26 @@ def test_triton_add():
 def test_triton_rotary(batch_size, sequence_length, num_heads, kv_channels):
     assert TritonConfig.TRITON_ENABLED
     x = torch.randn(batch_size, sequence_length, num_heads, kv_channels, dtype=torch.bfloat16, device="cuda")
-    y1 = apply_rotary_embeddings(x, get_rotary_frequencies(sequence_length, kv_channels, device="cuda"))
-    convert_rotary_complex_to_real(x, kv_channels, 3)
+
+    y1 = apply_rotary_embeddings(
+        x,
+        get_rotary_frequencies(
+            RotaryConfig(type=RotaryEmbeddingType.default, triton=False),
+            sequence_length,
+            kv_channels,
+            device="cuda",
+        ),
+    )
 
     y2 = convert_rotary_real_to_complex(
         triton_rotary_(
             convert_rotary_complex_to_real(x, kv_channels, 3),
-            get_rotary_frequencies(sequence_length, kv_channels, device="cuda", complex_format=False),
+            get_rotary_frequencies(
+                RotaryConfig(type=RotaryEmbeddingType.default, triton=True),
+                sequence_length,
+                kv_channels,
+                device="cuda",
+            ),
         ),
         kv_channels,
         3,

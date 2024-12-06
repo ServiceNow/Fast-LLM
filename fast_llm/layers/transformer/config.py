@@ -1,6 +1,7 @@
 import enum
 import logging
 import math
+import typing
 import warnings
 
 from fast_llm.config import Field, FieldHint, FieldUpdate, check_field, config_class, skip_valid_if_none
@@ -75,6 +76,72 @@ class TransformerLossNames:
     router_z_loss = "router_z_loss"
 
 
+class RotaryEmbeddingType(str, enum.Enum):
+    none = "none"
+    default = "default"
+    llama3 = "llama3"
+
+
+@config_class()
+class RotaryArchitectureConfig(BaseModelArchitectureConfig):
+    _abstract = False
+    type: RotaryEmbeddingType = Field(
+        default=RotaryEmbeddingType.none,
+        desc="The type of rotary embedding to use. Choices: none, default, llama3.",
+        hint=FieldHint.feature,
+    )
+    theta: float = Field(
+        default=10000,
+        desc="Scale for the rotary positional embeddings",
+        hint=FieldHint.feature,
+    )
+    # TODO: Make a backup implementation that doesn't affect the layout.
+    triton: bool = Field(
+        default=True,
+        desc="Enable the triton implementation of the rotary embeddings. Affects the model layout.",
+        hint=FieldHint.deprecated,
+    )
+    # TODO: These are not really architecture parameters, but we want to import them from huggingface.
+    scale_factor: float = Field(default=8.0, desc="Scaling factor for llama3-type scaling.", hint=FieldHint.feature)
+    low_frequency_factor: float = Field(
+        default=1.0, desc="Low frequency factor for llama3-type scaling.", hint=FieldHint.feature
+    )
+    high_frequency_factor: float = Field(
+        default=4.0, desc="High frequency factor for llama3-type scaling.", hint=FieldHint.feature
+    )
+    original_context_length: int = Field(
+        default=8192, desc="Original context length for llama3-type scaling.", hint=FieldHint.feature
+    )
+
+    @property
+    def enabled(self):
+        return self.type != RotaryEmbeddingType.none
+
+    @property
+    def complex_format(self):
+        # TODO: Make a backup implementation that doesn't affect the layout.
+        return self.enabled and not self.triton
+
+    def _validate(self):
+        # These happen during conversion.
+        if self.scale_factor is None:
+            self.scale_factor = 8.0
+        if self.low_frequency_factor is None:
+            self.low_frequency_factor = 1.0
+        if self.high_frequency_factor is None:
+            self.high_frequency_factor = 4.0
+        if self.original_context_length is None:
+            self.original_context_length = 8192
+        super()._validate()
+        if self.triton and not TritonConfig.TRITON_ENABLED:
+            warnings.warn("Triton is disabled, but the triton rotary kernel will be used anyway.")
+
+
+@config_class()
+class RotaryConfig(RotaryArchitectureConfig, BaseModelConfig):
+    pass
+
+
 @config_class()
 class TransformerArchitectureConfig(BaseModelArchitectureConfig):
     _abstract = False
@@ -119,12 +186,9 @@ class TransformerArchitectureConfig(BaseModelArchitectureConfig):
         hint=FieldHint.core,
         valid=check_field(Assert.gt, 0),
     )
-    use_rotary_embeddings: bool = Field(
-        default=False, desc="Enable rotary positional embeddings.", hint=FieldHint.feature
-    )
-    rotary_embedding_scale: float = Field(
-        default=-math.log(10000),
-        desc="Scale for the rotary positional embeddings. Default: -math.log(10000) = -9.210",
+    rotary: RotaryArchitectureConfig = Field(
+        default_factory=RotaryArchitectureConfig,
+        desc="Configuration for the rotary positional embeddings.",
         hint=FieldHint.feature,
     )
     gated: bool = Field(default=False, desc="Enable gated MLP.", hint=FieldHint.feature)
@@ -132,11 +196,6 @@ class TransformerArchitectureConfig(BaseModelArchitectureConfig):
         default=None,
         desc="The MLP intermediate activation type. Default: SiLU for gated MLP, GeLU otherwise.",
         hint=FieldHint.core,
-    )
-    triton_rotary: bool = Field(
-        default=True,
-        desc="Enable the triton implementation of the rotary embeddings. Affects the model layout.",
-        hint=FieldHint.deprecated,
     )
     num_experts: int = Field(
         default=1,
@@ -184,6 +243,24 @@ class TransformerArchitectureConfig(BaseModelArchitectureConfig):
         Assert.leq(self.num_shared_experts, self.num_experts)
         Assert.leq(self.num_shared_experts + self.num_experts_per_token, self.num_experts)
         Assert.multiple(self.num_attention_heads, self.head_groups)
+
+    @classmethod
+    def _from_dict(
+        cls,
+        default: dict[str, typing.Any],
+        strict: bool = True,
+        flat: bool = False,
+    ):
+        # TODO v0.x: Remove backward compatibility.
+        cls._handle_renamed_field(
+            default,
+            "use_rotary_embeddings",
+            ("rotary", "type"),
+            lambda x: RotaryEmbeddingType.default if x else RotaryEmbeddingType.none,
+        )
+        cls._handle_renamed_field(default, "rotary_embedding_scale", ("rotary", "theta"), lambda x: math.exp(-x))
+        cls._handle_renamed_field(default, "triton_rotary", ("rotary", "triton"))
+        return super()._from_dict(default, strict, flat)
 
     def setup_tensor_space(self, tensor_space: TensorSpace):
         tensor = tensor_space.distributed_config.get_distributed_dim(DistributedDimNames.tensor)
@@ -245,24 +322,11 @@ class TransformerArchitectureConfig(BaseModelArchitectureConfig):
                 )
             )
 
-    @property
-    def complex_rotary_embeddings(self):
-        return self.use_rotary_position_embeddings and not self.triton_rotary
-
-    @property
-    def rotary_position_embedding_scale(self):
-        # TODO: Set through rotary theta instead.
-        return self.rotary_embedding_scale if self.use_rotary_position_embeddings else None
-
-    @property
-    def use_rotary_position_embeddings(self):
-        # TODO: Set through rotary theta instead.
-        return self.use_rotary_embeddings
-
 
 @config_class()
 class TransformerConfig(TransformerArchitectureConfig, BaseModelConfig):
     normalization: NormalizationConfig = FieldUpdate(default_factory=NormalizationConfig)
+    rotary: RotaryConfig = FieldUpdate(default_factory=RotaryConfig)
     # Default: hidden_size**-0.5
     # TODO: Allow custom initialization (InitializationConfig?)
     init_method_std: float = Field(
@@ -492,8 +556,6 @@ class TransformerConfig(TransformerArchitectureConfig, BaseModelConfig):
         if self.init_method_min_mlp_2 is not None and self.init_method_max_mlp_2 is not None:
             Assert.leq(self.init_method_min_mlp_2, self.init_method_max_mlp_2)
         super()._validate()
-        if self.triton_rotary and not TritonConfig.TRITON_ENABLED:
-            warnings.warn("Triton is disabled, but triton rotary kernel will be used anyway.")
         Assert.geq(self.attention_dropout, 0)
         Assert.geq(self.hidden_dropout, 0)
         Assert.incl(len(self.mlp_lr_scale), (1, self.num_experts))
