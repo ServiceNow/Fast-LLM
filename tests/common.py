@@ -102,7 +102,7 @@ CONFIG_GPT2_COMMON = CONFIG_GPT2_FAST_LLM + ["model.distributed.training_dtype=b
 
 CONFIG_SC2_FAST_LLM = CONFIG_BASE_FAST_LLM + [
     "model.base_model.transformer.head_groups=4",
-    "model.base_model.transformer.use_rotary_embeddings=True",
+    "model.base_model.transformer.rotary.type=default",
 ]
 CONFIG_SC2_MEGATRON = CONFIG_SC1_MEGATRON + [
     "--num-query-groups=4",

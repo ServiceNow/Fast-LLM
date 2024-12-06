@@ -206,12 +206,13 @@ class LazyRegistry(Registry):
         return super().__getitem__(key)()
 
 
-def log(*message, log_fn: typing.Union[BaseException, typing.Callable] = logger.info, join: str = ", "):
+def log(*message, log_fn: typing.Union[type[BaseException], typing.Callable] = logger.info, join: str = ", "):
     message = join.join([str(m() if callable(m) else m) for m in message])
-    if isinstance(log_fn, BaseException):
-        raise log_fn(message)
+    logged = log_fn(message)
+    if isinstance(logged, BaseException):
+        raise logged
     else:
-        return log_fn(message)
+        return logged
 
 
 def normalize_probabilities(p: list[float]) -> list[float]:

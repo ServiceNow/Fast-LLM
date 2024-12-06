@@ -808,7 +808,7 @@ class Config:
                 value = fn(value)
             set_nested_dict_value(default, new_name, value)
 
-    def compare(self, other: "Config", log_fn: typing.Union[BaseException, typing.Callable] = ValueError):
+    def compare(self, other: "Config", log_fn: typing.Union[type[BaseException], typing.Callable] = ValueError):
         # TODO: Check classes?
         self_dict = self._to_dict(format_=_ConfigDictFormat.tuple, serializable=True)
         other_dict = other._to_dict(format_=_ConfigDictFormat.tuple, serializable=True)
