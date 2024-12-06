@@ -214,11 +214,7 @@ class ExternalStateDictCheckpointHandler(StateDictCheckpointHandler):
         kwargs = {}
         for converter in cls._get_config_converters():
             try:
-                value = (
-                    None
-                    if converter.export_name is None or converter.export_name not in config
-                    else get_nested_dict_value(config, converter.export_name)
-                )
+                value = None if converter.export_name is None else get_nested_dict_value(config, converter.export_name)
             except KeyError:
                 value = None
             value = converter.import_param(value)
