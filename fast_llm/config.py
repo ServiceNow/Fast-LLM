@@ -825,7 +825,7 @@ class Config:
             log(
                 f"Config diff:\n  "
                 + "\n  ".join(
-                    f"{''.join(key)}`: `{self_value}` != `{other_value}`"
+                    f"{'.'.join(key)}`: `{self_value}` != `{other_value}`"
                     for key, (self_value, other_value) in diff.items()
                 ),
                 log_fn=log_fn,
