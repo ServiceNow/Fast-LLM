@@ -9,7 +9,7 @@ import warnings
 
 import yaml
 
-from fast_llm.utils import Assert, Tag, get_type_name, header, log
+from fast_llm.utils import Assert, Tag, get_type_name, header, log, pop_nested_dict_value, set_nested_dict_value
 
 logger = logging.getLogger(__name__)
 
@@ -663,15 +663,7 @@ class Config:
             if isinstance(update, Config):
                 update = update._to_dict(format_=_ConfigDictFormat.tuple)
             for keys, value in update.items():
-                if isinstance(keys, str):
-                    default[keys] = value
-                else:
-                    dict_to_update = default
-                    for key in keys[:-1]:
-                        if key not in dict_to_update:
-                            dict_to_update[key] = {}
-                        dict_to_update = dict_to_update[key]
-                    dict_to_update[keys[-1]] = value
+                set_nested_dict_value(default, keys, value)
 
         return cls._from_dict(default, strict)
 
@@ -802,12 +794,21 @@ class Config:
         return {key: cls._from_dict_nested(value_, args[1], strict) for key, value_ in value.items()}
 
     @classmethod
-    def _handle_renamed_field(cls, default: dict[str, typing.Any], old_name: str, new_name: str):
+    def _handle_renamed_field(
+        cls,
+        default: dict[str, typing.Any],
+        old_name: str | tuple[str, ...],
+        new_name: str | tuple[str, ...],
+        fn: typing.Callable | None = None,
+    ):
         if old_name in default:
             warnings.warn(f"Field `{old_name}` is deprecated in class {get_type_name(cls)}, use `{new_name}` instead.")
-            default[new_name] = default.pop(old_name)
+            value = pop_nested_dict_value(default, old_name)
+            if fn is not None:
+                value = fn(value)
+            set_nested_dict_value(default, new_name, value)
 
-    def compare(self, other: "Config", log_fn: typing.Union[BaseException, typing.Callable] = ValueError):
+    def compare(self, other: "Config", log_fn: typing.Union[type[BaseException], typing.Callable] = ValueError):
         # TODO: Check classes?
         self_dict = self._to_dict(format_=_ConfigDictFormat.tuple, serializable=True)
         other_dict = other._to_dict(format_=_ConfigDictFormat.tuple, serializable=True)
@@ -824,7 +825,7 @@ class Config:
             log(
                 f"Config diff:\n  "
                 + "\n  ".join(
-                    f"{''.join(key)}`: `{self_value}` != `{other_value}`"
+                    f"{'.'.join(key)}`: `{self_value}` != `{other_value}`"
                     for key, (self_value, other_value) in diff.items()
                 ),
                 log_fn=log_fn,

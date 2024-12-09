@@ -76,8 +76,6 @@ class Attention(torch.nn.Module):
         self._debug_transformer = self._config.debug_transformer
         self._use_flash_attention = self._config.do_use_flash_attention(self._tensor_space.distributed_config)
 
-        self._triton_rotary = self._config.triton_rotary
-
         init_method_qkv = init_normal_(
             std=self._config.init_method_std_qkv,
             min_val=self._config.init_method_min_qkv,
@@ -300,7 +298,7 @@ class Attention(torch.nn.Module):
         key = key.view(*key.shape[:2], self._local_head_groups, self._kv_channels)
         value = value.view(*value.shape[:2], self._local_head_groups, self._kv_channels)
 
-        if self._config.use_rotary_position_embeddings:
+        if self._config.rotary.enabled:
             if self._debug_transformer:
                 self._debug_log(query, "query_rotary_input", self._QUERY_DIMS, kwargs)
                 self._debug_log(
@@ -309,7 +307,7 @@ class Attention(torch.nn.Module):
                     self._KV_DIMS,
                     kwargs,
                 )
-            rotary_fn = triton_rotary_autograd_ if self._triton_rotary else apply_rotary_embeddings
+            rotary_fn = triton_rotary_autograd_ if self._config.rotary.triton else apply_rotary_embeddings
             query = rotary_fn(query, kwargs[TransformerKwargs.rotary_freq_q])
             key = rotary_fn(key, kwargs[TransformerKwargs.rotary_freq_k])
 

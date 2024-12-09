@@ -90,7 +90,7 @@ def _init_attention_megatron(
         else:
             raise NotImplementedError(meta.tensor_name)
 
-    if config.use_rotary_position_embeddings and config.complex_rotary_embeddings:
+    if config.rotary.enabled and config.rotary.complex_format:
         from fast_llm.functional.rotary import convert_rotary_real_to_complex
 
         # Megatron uses (2, kv_channels/2) for the complex split; we use (kv_channels/2, 2).
