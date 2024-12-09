@@ -31,6 +31,8 @@ class HuggingfacePreTrainedModel(transformers.PreTrainedModel):
         super().__init__(config, **kwargs)
         self._fast_llm_config = config.fast_llm_config
         self._fast_llm_model = fast_llm_model
+        # Transformers needs to be able to inspect the base model.
+        self.fast_llm_base_model = self._fast_llm_model.base_model
         self._distributed_config = self._fast_llm_config.distributed
         # TODO: Support distributed models?
         assert self._distributed_config.world_size == 1
