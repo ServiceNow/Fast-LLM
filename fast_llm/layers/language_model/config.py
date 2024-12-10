@@ -60,7 +60,7 @@ class LanguageModelArchitectureConfig(BaseModelArchitectureConfig):
 
     def _validate(self):
         if self.use_position_embeddings is None:
-            self.use_position_embeddings = not self.transformer.use_rotary_embeddings
+            self.use_position_embeddings = not self.transformer.rotary.enabled
         super()._validate()
 
     def setup_tensor_space(self, tensor_space: TensorSpace):

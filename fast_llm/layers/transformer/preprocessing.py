@@ -1,13 +1,68 @@
 import logging
+import math
 
 import torch
 
 from fast_llm.engine.config_utils.tensor_space import DefaultDimNames, TensorDim, TensorSpace
-from fast_llm.functional.rotary import get_rotary_frequencies
-from fast_llm.layers.transformer.config import TransformerConfig, TransformerDimNames, TransformerKwargs
+from fast_llm.functional.rotary import convert_rotary_complex_to_real
+from fast_llm.layers.transformer.config import (
+    RotaryConfig,
+    RotaryEmbeddingType,
+    TransformerConfig,
+    TransformerDimNames,
+    TransformerKwargs,
+)
 from fast_llm.tensor import TensorMeta
 
 logger = logging.getLogger(__name__)
+
+
+def apply_llama3_scaling(config: RotaryConfig, frequencies: torch.Tensor) -> torch.Tensor:
+    """
+    Llama3 scaling: https://github.com/meta-llama/llama-models/blob/baf7b01b6e62bc7126c7b558d2b67d4533142680/models/llama3/reference_impl/model.py#L45-L67
+    """
+    low_frequency_wavelength = config.original_context_length / config.low_frequency_factor
+    high_frequency_wavelength = config.original_context_length / config.high_frequency_factor
+    new_frequencies = []
+    for frequency in frequencies:
+        wavelength = 2 * math.pi / frequency
+        if wavelength < high_frequency_wavelength:
+            new_frequencies.append(frequency)
+        elif wavelength > low_frequency_wavelength:
+            new_frequencies.append(frequency / config.scale_factor)
+        else:
+            assert low_frequency_wavelength != high_frequency_wavelength
+            smooth = (config.original_context_length / wavelength - config.low_frequency_factor) / (
+                config.high_frequency_factor - config.low_frequency_factor
+            )
+            new_frequencies.append((1 - smooth) * frequency / config.scale_factor + smooth * frequency)
+    return torch.tensor(new_frequencies, dtype=frequencies.dtype, device=frequencies.device)
+
+
+def get_rotary_frequencies(
+    config: RotaryConfig,
+    sequence_length,
+    kv_channels,
+    *,
+    device="cuda",
+):
+    # Calculate the complex frequencies (https://blog.eleuther.ai/rotary-embeddings/)
+    # `exp(i * n * a) = cos(n * a) + i sin(n * a)`,
+    # `a = theta ** - (2 * (channel // 2) / kv_channels)`,
+    # where n is the position in the sequence.
+    # We preform the calculation in high precision because it matters for rotary embeddings.
+    positions = torch.arange(sequence_length, device=device, dtype=torch.float64)
+    frequencies = config.theta ** -torch.arange(0, 1, 2 / kv_channels, device=device, dtype=torch.float64)
+    # Apply scaling
+    if config.type == RotaryEmbeddingType.llama3:
+        frequencies = apply_llama3_scaling(config, frequencies)
+    angles = torch.outer(positions, frequencies)
+    frequencies = torch.polar(torch.ones_like(angles), angles)[None, :, None, :].to(torch.complex64)
+    if not config.complex_format:
+        frequencies = convert_rotary_complex_to_real(
+            torch.view_as_real(frequencies).flatten(-2), kv_channels, 3
+        ).contiguous()
+    return frequencies
 
 
 class RotaryEmbeddingPreprocessor:
@@ -20,11 +75,11 @@ class RotaryEmbeddingPreprocessor:
 
     def __init__(
         self,
-        config: TransformerConfig,
+        config: RotaryConfig,
         tensor_space: TensorSpace,
     ):
         self._config = config
-        assert self._config.use_rotary_position_embeddings
+        assert self._config.enabled
         self._tensor_space = tensor_space
         self._distributed_config = self._tensor_space.distributed_config
         self._scalar_dim = self._tensor_space.get_tensor_dim(DefaultDimNames.scalar)
@@ -36,10 +91,9 @@ class RotaryEmbeddingPreprocessor:
         self._tensor_cache_max_sequence_length = sequence_length
 
         self._rotary_embedding_frequencies = get_rotary_frequencies(
+            self._config,
             sequence_length,
-            self._config.kv_channels,
-            self._config.rotary_position_embedding_scale,
-            complex_format=self._config.complex_rotary_embeddings,
+            self._kv_channels_dim.global_size,
             device=self._tensor_space.distributed.device,
         )
 
