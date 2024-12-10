@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.7-labs
-FROM nvcr.io/nvidia/pytorch:24.07-py3
+FROM nvcr.io/nvidia/pytorch:24.11-py3
 
 # Install dependencies.
 RUN apt-get update \
