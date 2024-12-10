@@ -587,7 +587,7 @@ Save the following as `fast-llm-tutorial/train-config.yaml`:
     ```
 
     1.  Total number of training tokens will be approximately 210B: 100,000 iterations * 512 * 4096 tokens per batch.
-    2.  A permanent model checkpoint in `Transformers` Llama format will be saved to `fast-llm-tutorial/experiment/export/llama/[iteration]]/` every 20,000 iterations. You can also save as a `Fast-LLM` checkpoint by setting the `format` to `fast_llm`.
+    2.  A permanent model checkpoint in `Transformers` Llama format will be saved to `fast-llm-tutorial/experiment/export/llama/[iteration]/` every 20,000 iterations. You can also save as a `Fast-LLM` checkpoint by setting the `format` to `fast_llm`.
     3.  Entirely optional, but it's a good idea to track your training progress with Weights & Biases. Replace `null` with your own W&B entity name. If you don't want to use W&B, just ignore this section.
     4.  Adjust the number of sequences per GPU based on GPU memory. Considering a 4k token sequence length and 80GB GPUs, a `micro_batch_size` of 1 should work well.
     5.  Must be divisible by the number of GPUs and the `micro_batch_size`. At 4k tokens per sequence, 512 corresponds to about 2.1 million tokens per batch.
