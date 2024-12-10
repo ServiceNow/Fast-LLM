@@ -399,7 +399,7 @@ class Trainer(abc.ABC):
     def _save_checkpoint(
         self, config: TrainingCheckpointBaseConfig, metrics: dict[PhaseType, dict[str, float | int]] | None
     ):
-        # TODO v0.2: Move barrier, ok file to FastLLMModel
+        # TODO v0.3: Move barrier, ok file to FastLLMModel
         checkpoint_base_directory = config.get_save_directory(self._run.experiment_directory)
         checkpoint_directory = checkpoint_base_directory / str(self._completed_steps)
 
@@ -440,8 +440,6 @@ class Trainer(abc.ABC):
     def _load_checkpoint(self, config: TrainingCheckpointConfig, iteration: int):
         checkpoint_directory = config.get_save_directory(self._run.experiment_directory) / str(iteration)
         Assert.custom(pathlib.Path.is_file, checkpoint_directory / "ok")
-        # TODO v0.2: Use config.get_load_config to make it generic
-        # TODO v0.2: Detect format instead of hard-coding
 
         metadata = self._multi_stage.load_checkpoint(config.get_load_config(checkpoint_directory))
         self._optimizer.load(metadata["optimizer"])
@@ -450,7 +448,7 @@ class Trainer(abc.ABC):
             self._completed_steps = metadata["schedules"][PhaseType.training.value]["completed_steps"]
         else:
             self._completed_steps = metadata["completed_steps"]
-        # TODO v0.2: Move barrier, ok file to FastLLMModel
+        # TODO v0.3: Move barrier, ok file to FastLLMModel
         self._run.barrier(f"load {config.save_name} {iteration} exit")
 
     def _get_last_checkpoint(self):

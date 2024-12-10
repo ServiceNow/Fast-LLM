@@ -99,7 +99,6 @@ class FimConfig(Config):
         Assert.in_range_incl(self.rate, 0, 1)
 
 
-EOD = "<|endoftext|>"
 TokenizerFromFile = "TokenizerFromFile"
 
 

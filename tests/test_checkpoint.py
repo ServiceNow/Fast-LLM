@@ -86,7 +86,7 @@ def _run_conversion(config: ConversionConfig):
     if not config.output.path.is_dir():
         if FORCE_REUSE_RESULTS:
             raise RuntimeError(config.output.path)
-        config.run(TEST_MODEL_CONFIG_CLS)
+        config.run()
 
 
 _CKPT_PATH = TEST_RESULTS_PATH / f"test_{TEST_MODEL}_checkpoint_and_eval" / "checkpoint" / "2"
@@ -105,6 +105,7 @@ def test_convert_distributed_to_fast_llm():
                 path=_CONVERT_PATH / "fast_llm_0",
                 format=FastLLMCheckpointFormat,
             ),
+            model_config_class=TEST_MODEL_CONFIG_CLS,
         )
     )
 
@@ -123,6 +124,7 @@ def test_convert_fast_llm_to_huggingface():
                 path=_CONVERT_PATH / "huggingface_0",
                 format=HUGGINGFACE_CHECKPOINT_FORMAT,
             ),
+            model_config_class=TEST_MODEL_CONFIG_CLS,
         )
     )
 
@@ -139,6 +141,7 @@ def test_convert_huggingface_to_distributed():
                 path=_CONVERT_PATH / "distributed_0",
                 format=DistributedCheckpointFormat,
             ),
+            model_config_class=TEST_MODEL_CONFIG_CLS,
         )
     )
 
@@ -157,6 +160,7 @@ def test_convert_distributed_to_huggingface():
                 path=_CONVERT_PATH / "huggingface_1",
                 format=HUGGINGFACE_CHECKPOINT_FORMAT,
             ),
+            model_config_class=TEST_MODEL_CONFIG_CLS,
         )
     )
 
@@ -173,6 +177,7 @@ def test_convert_huggingface_to_fast_llm():
                 path=_CONVERT_PATH / "fast_llm_1",
                 format=FastLLMCheckpointFormat,
             ),
+            model_config_class=TEST_MODEL_CONFIG_CLS,
         )
     )
 
@@ -189,6 +194,7 @@ def test_convert_fast_llm_to_distributed():
                 path=_CONVERT_PATH / "distributed_1",
                 format=DistributedCheckpointFormat,
             ),
+            model_config_class=TEST_MODEL_CONFIG_CLS,
         )
     )
 
@@ -234,8 +240,8 @@ def _compare_configs(config_ref, config_test):
 
 @pytest.mark.depends(on=["test_converted_distributed"])
 def test_load_pretrained_distributed_checkpoint():
-    config = TEST_ARCHITECTURE_CONFIG_CLS.from_dict(
-        yaml.safe_load((_CKPT_PATH / ".." / ".." / "config.yaml").open("r")), strict=False
+    config = TEST_MODEL_CONFIG_CLS.from_dict(
+        yaml.safe_load((_CKPT_PATH / ".." / ".." / "config.yaml").open("r"))["model"], strict=False
     )
     pretrained_config_ref = CheckpointLoadConfig(
         path=_CKPT_PATH,
@@ -244,7 +250,7 @@ def test_load_pretrained_distributed_checkpoint():
         load_config=ModelConfigType.fast_llm,
     )
     model = TEST_MODEL_CLS.from_pretrained(pretrained_config_ref)
-    _compare_configs(config, model._base_model_config)
+    _compare_configs(config.base_model, model._base_model_config)
     weight_shard = safetensors.torch.load_file(
         _CKPT_PATH / "rank_0.safetensors", device=str(model._state_shard.device)
     )["state_shard"]

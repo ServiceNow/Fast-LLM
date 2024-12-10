@@ -4,7 +4,13 @@ import logging
 import torch
 import torch.distributed
 
-from fast_llm.engine.distributed.config import MAX_SEED, DistributedConfig, DistributedDim, PhaseType
+from fast_llm.engine.distributed.config import (
+    MAX_SEED,
+    DistributedConfig,
+    DistributedDim,
+    DistributedDimNames,
+    PhaseType,
+)
 from fast_llm.utils import Assert
 
 logger = logging.getLogger(__name__)
@@ -49,12 +55,14 @@ class Distributed:
             Assert.eq(distributed_dim.name, name)
             self.add_group(distributed_dim)
 
-        self.world_group = self._process_groups["world"]
-        self.data_group = self._process_groups["data"]
-        self.pipeline_group = self._process_groups["pipeline"]
-        self.tensor_group = self._process_groups["tensor"]
-        self.sequence_data_group = self._process_groups["sequence_data"]
-        self.batch_data_group = self._process_groups["batch_data"]
+        self.world_group = self._process_groups[DistributedDimNames.world]
+        self.data_group = self._process_groups[DistributedDimNames.data]
+        self.pipeline_group = self._process_groups[DistributedDimNames.pipeline]
+        self.tensor_group = self._process_groups[DistributedDimNames.tensor]
+        self.sequence_data_group = self._process_groups[DistributedDimNames.sequence_data]
+        self.batch_data_group = self._process_groups[DistributedDimNames.batch_data]
+        self.tensor_and_sequence_data_group = self._process_groups[DistributedDimNames.tensor_and_sequence_data]
+
         self._config.log_first_rank(f"Setting random seeds...")
 
         dp_shift = self._config.dp_seed_shift * self._config.data_rank
@@ -139,8 +147,15 @@ class Distributed:
     def set_step(self, step: int, phase: PhaseType):
         """
         Reseed pytorch for a given training step.
-        TODO v0.2: Move unrelated content elsewhere.
+        TODO v0.3: Move unrelated content elsewhere.
         """
         seed_shift = step * self._config.sample_seed_shift + self._phase_seeds_shifts[phase]
         self.pp_generator.manual_seed((self._pp_seed + seed_shift) % MAX_SEED)
         self.tp_generator.manual_seed((self._tp_seed + seed_shift) % MAX_SEED)
+
+    def __del__(self):
+        # Shutdown the process group backend explicitly to prevent a nccl warning.
+        # We can't call `destroy_process_group` directly because pytorch doesn't know about it.
+        for group in self._process_groups.values():
+            if group is not None and hasattr(group, "_shutdown"):
+                group._shutdown()  # noqa

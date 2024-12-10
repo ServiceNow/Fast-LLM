@@ -23,7 +23,7 @@ from fast_llm.layers.transformer.transformer import TransformerLayer
 from fast_llm.models.gpt.config import GPTBaseModelConfig, GPTModelConfig
 from fast_llm.models.gpt.megatron import get_init_megatron
 from fast_llm.tensor import ParameterMeta, TensorMeta
-from fast_llm.utils import Assert, div
+from fast_llm.utils import Assert
 
 logger = logging.getLogger(__name__)
 
@@ -55,9 +55,9 @@ class GPTBaseModel(BaseModel):
                 param.init_parameter = get_init_megatron(param, self._config.transformer)  # Noqa
         if self._config.use_absolute_position_embeddings:
             self._position_embedding_preprocessor = PositionEmbeddingPreprocessor(self._config, self._tensor_space)
-        if self._config.transformer.use_rotary_position_embeddings:
+        if self._config.transformer.rotary.enabled:
             self._rotary_embedding_preprocessor = RotaryEmbeddingPreprocessor(
-                self._config.transformer, self._tensor_space
+                self._config.transformer.rotary, self._tensor_space
             )
         if not self._use_flash_attention:
             self._backup_attention_preprocessor = BackupAttentionPreprocessor(
@@ -109,32 +109,31 @@ class GPTBaseModel(BaseModel):
         else:
             Assert.multiple(sequence_length, micro_sequence_length)
 
-        local_micro_sequence_length = div(
-            micro_sequence_length, self._tensor_space.distributed_config.sequence_data_parallel
+        # TODO: Calculate hidden dims elsewhere?
+        sequence_q_dim = TensorDim(
+            TransformerDimNames.sequence_q,
+            micro_sequence_length,
+            self._tensor_space.distributed_config.get_distributed_dim(DistributedDimNames.sequence_data),
+        )
+        hidden_sequence_q_dim = (
+            TensorDim(
+                TransformerDimNames.sequence_q_tp,
+                micro_sequence_length,
+                self._tensor_space.distributed_config.get_distributed_dim(
+                    DistributedDimNames.tensor_and_sequence_data
+                ),
+            )
+            if self._tensor_space.distributed_config.sequence_tensor_parallel
+            else sequence_q_dim
         )
 
-        need_sequence_first = (
-            self._tensor_space.distributed_config.sequence_tensor_parallel
-            or sequence_length > local_micro_sequence_length
-        )
+        need_sequence_first = hidden_sequence_q_dim.size != sequence_length
         if self._config.sequence_first is None:
             sequence_first = need_sequence_first
         else:
             sequence_first = self._config.sequence_first
             assert not (need_sequence_first and not sequence_first)
 
-        sequence_q_dim = TensorDim(TransformerDimNames.sequence_q, local_micro_sequence_length)
-
-        # TODO: Calculate hidden dims elsewhere?
-        hidden_sequence_q_dim = (
-            TensorDim(
-                TransformerDimNames.sequence_q_tp,
-                micro_sequence_length,
-                self._tensor_space.distributed_config.get_distributed_dim(DistributedDimNames.tensor),
-            )
-            if self._tensor_space.distributed_config.sequence_tensor_parallel
-            else sequence_q_dim
-        )
         hidden_dim = self._tensor_space.get_tensor_dim(TransformerDimNames.hidden)
         hidden_dims = (
             (hidden_sequence_q_dim, batch_dim, hidden_dim)
@@ -152,11 +151,11 @@ class GPTBaseModel(BaseModel):
 
         preprocessed_meta = []
         for sequence_k_past in range(
-            local_micro_sequence_length * self._tensor_space.distributed_config.sequence_data_rank,
+            sequence_q_dim.size * self._tensor_space.distributed_config.sequence_data_rank,
             sequence_length,
             micro_sequence_length,
         ):
-            sequence_k = sequence_k_past + local_micro_sequence_length
+            sequence_k = sequence_k_past + sequence_q_dim.size
             sequence_k_dim = TensorDim(TransformerDimNames.sequence_k, sequence_k)
 
             tokens = TensorMeta.from_dims(
@@ -173,7 +172,7 @@ class GPTBaseModel(BaseModel):
                 )
             if self._config.use_absolute_position_embeddings:
                 self._position_embedding_preprocessor.preprocess_meta(kwargs)
-            if self._config.transformer.use_rotary_position_embeddings:
+            if self._config.transformer.rotary.enabled:
                 self._rotary_embedding_preprocessor.preprocess_meta(kwargs)
             if not self._use_flash_attention:
                 self._backup_attention_preprocessor.preprocess_meta(kwargs)
@@ -212,14 +211,14 @@ class GPTBaseModel(BaseModel):
 
         if self._config.use_absolute_position_embeddings:
             self._position_embedding_preprocessor.create_tensors(sequence_length)
-        if self._config.transformer.use_rotary_position_embeddings:
+        if self._config.transformer.rotary.enabled:
             self._rotary_embedding_preprocessor.create_tensors(sequence_length)
         if not self._use_flash_attention:
             self._backup_attention_preprocessor.create_tensors(sequence_length)
 
         preprocessed = []
         presents = None
-        for tokens_meta, kwargs_meta in preprocessed_meta:
+        for i, (tokens_meta, kwargs_meta) in enumerate(preprocessed_meta):
             sequence_k = kwargs_meta[TransformerKwargs.sequence_k_dim].size
             if sequence_first:
                 tokens = batch[sequence_k - sequence_q : sequence_k]
@@ -230,7 +229,7 @@ class GPTBaseModel(BaseModel):
             # TODO: Add pasts/presents to meta input?
             # Use lists as pointers so `past_key_values` is populated during the previous micro_sequence.
             pasts = presents
-            presents = None if sequence_k == sequence_length else []
+            presents = None if i == len(preprocessed_meta) - 1 else []
             kwargs = {
                 **kwargs_meta,
                 TransformerKwargs.past_key_values: pasts,
@@ -245,7 +244,7 @@ class GPTBaseModel(BaseModel):
                 kwargs[LanguageModelKwargs.labels] = labels
             if self._config.use_absolute_position_embeddings:
                 self._position_embedding_preprocessor.preprocess(kwargs)
-            if self._config.transformer.use_rotary_position_embeddings:
+            if self._config.transformer.rotary.enabled:
                 self._rotary_embedding_preprocessor.preprocess(kwargs)
             if not self._use_flash_attention:
                 self._backup_attention_preprocessor.preprocess(kwargs)

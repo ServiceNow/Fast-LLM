@@ -1,14 +1,11 @@
 import argparse
-import functools
 import json
 import logging
 import math
 import typing
-import warnings
 
 from fast_llm.config import Field, config_class
 from fast_llm.engine.checkpoint.config import CheckpointLoadConfig, CheckpointSaveConfig
-from fast_llm.engine.checkpoint.external import HuggingfaceStateDictCheckpointHandler
 from fast_llm.engine.config_utils.runnable import RunnableConfig
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig, StageMode
 from fast_llm.functional.config import TritonConfig
@@ -28,43 +25,7 @@ class ConversionConfig(RunnableConfig):
     use_cpu: bool = Field(default=False)
     exist_ok: bool = Field(default=False)
     layers_per_step: int | None = Field(default=None)
-
-    @classmethod
-    def _from_dict(
-        cls,
-        default: dict[str, typing.Any],
-        strict: bool = True,
-        flat: bool = False,
-    ):
-        # TODO v0.2: Remove.
-        if "input" not in default:
-            default["input"] = {}
-        if "output" not in default:
-            default["output"] = {}
-        if "input_type" in default:
-            warnings.warn("`input_type` is deprecated. Use `input.format` instead.")
-            default["input"]["format"] = default.pop("input_type")
-        if "input_path" in default:
-            warnings.warn("`input_path` is deprecated. Use `input.path` instead.")
-            default["input"]["path"] = default.pop("input_path")
-        if "output_type" in default:
-            warnings.warn("`output_type` is deprecated. Use `output.format` instead.")
-            default["output"]["format"] = default.pop("output_type")
-        if "output_path" in default:
-            warnings.warn("`output_path` is deprecated. Use `output.path` instead.")
-            default["output"]["path"] = default.pop("output_path")
-        if "model_type" in default:
-            warnings.warn("`model_type` is deprecated. Use `output.format` instead.")
-            # Will be handled in CheckpointConfigBase.from_dict
-            default["input"]["model_type"] = default.pop("model_type")
-            default["output"]["model_type"] = default.pop("model_type")
-        if "target_params_per_file" in default:
-            warnings.warn("`target_params_per_file` is deprecated. Use `output.parameters_per_file` instead.")
-            default["output"]["parameters_per_file"] = default.pop("target_params_per_file")
-        if "dtype" in default:
-            warnings.warn("`dtype` is deprecated. Use `output.data_type` instead.")
-            default["data_type"]["parameters_per_file"] = default.pop("dtype")
-        return super()._from_dict(default, strict, flat)
+    model_config_class: type[FastLLMModelConfig] = Field(default=None)
 
     @classmethod
     def _get_parser(cls):
@@ -76,8 +37,17 @@ class ConversionConfig(RunnableConfig):
         )
         return parser
 
-    def _get_runnable(self, parsed: argparse.Namespace) -> typing.Callable[[], None]:
-        return functools.partial(self.run, parsed.model_type)
+    @classmethod
+    def _from_parsed_args(cls, parsed: argparse.Namespace, unparsed: list[str]):
+        config = super()._from_parsed_args(parsed, unparsed)
+        config.model_config_class = model_registry[parsed.model_type]
+        return config
+
+    def _validate(self):
+        assert self.model_config_class is not None
+        self.input.setup(self.model_config_class)
+        self.output.setup(self.model_config_class)
+        super()._validate()
 
     def _convert_model_partial(
         self,
@@ -98,7 +68,7 @@ class ConversionConfig(RunnableConfig):
         (output.path / "ok").open("w")
         logger.info(f"Done!")
 
-    def run(self, model_config_class: type["FastLLMModelConfig"] | str):
+    def run(self):
         # TODO: Set logging in tests
         logging.getLogger().setLevel(logging.INFO)
         self.to_logs()
@@ -111,14 +81,14 @@ class ConversionConfig(RunnableConfig):
                 f"Output path {self.output.path} already exists and has been processed. Skipping model conversion..."
             )
             return
-        if isinstance(model_config_class, str):
-            model_config_class = model_registry[model_config_class]
-        model_class = model_config_class.get_model_class()
+        model_class = self.model_config_class.get_model_class()
         if self.layers_per_step is None:
             self._convert_model_partial(model_class, self.output)
         else:
-            converter_class = model_config_class.get_handler_class(self.output.format)
+            converter_class = self.output.format.get_handler_class()
             # TODO: Support other types?
+            from fast_llm.engine.checkpoint.external import HuggingfaceStateDictCheckpointHandler
+
             assert issubclass(converter_class, HuggingfaceStateDictCheckpointHandler)
             logger.info(f">>> Loading model config")
             # Create a dummy version to determine the stage split.

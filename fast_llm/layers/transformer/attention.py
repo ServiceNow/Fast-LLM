@@ -76,8 +76,6 @@ class Attention(torch.nn.Module):
         self._debug_transformer = self._config.debug_transformer
         self._use_flash_attention = self._config.do_use_flash_attention(self._tensor_space.distributed_config)
 
-        self._triton_rotary = self._config.triton_rotary
-
         init_method_qkv = init_normal_(
             std=self._config.init_method_std_qkv,
             min_val=self._config.init_method_min_qkv,
@@ -92,9 +90,8 @@ class Attention(torch.nn.Module):
         self._kv_channels = self._tensor_space.get_tensor_dim(TransformerDimNames.kv_channels).size
         self._head_groups = self._tensor_space.get_tensor_dim(TransformerDimNames.head_groups).global_size
         self._local_head_groups = self._tensor_space.get_tensor_dim(TransformerDimNames.head_groups).size
-        self._heads_per_group = self._tensor_space.get_tensor_dim(TransformerDimNames.group_heads).global_size
-        local_heads_per_group = self._tensor_space.get_tensor_dim(TransformerDimNames.group_heads).size
-        self._local_heads = self._local_head_groups * local_heads_per_group
+        self._local_heads_per_group = self._tensor_space.get_tensor_dim(TransformerDimNames.group_heads).size
+        self._local_heads = self._local_head_groups * self._local_heads_per_group
         self._softmax_scale = self._kv_channels ** (-self._config.attention_softmax_scale_power)
 
         hidden_dim = self._tensor_space.get_tensor_dim(TransformerDimNames.hidden)
@@ -141,15 +138,15 @@ class Attention(torch.nn.Module):
             key = key.transpose(-1, -2)
         else:
             query = (
-                query.unflatten(-1, (self._local_head_groups, self._heads_per_group, self._kv_channels))
+                query.unflatten(-1, (self._local_head_groups, self._local_heads_per_group, self._kv_channels))
                 .transpose(1, 2)
-                .reshape(b * self._local_head_groups, sq * self._heads_per_group, self._kv_channels)
+                .reshape(b * self._local_head_groups, sq * self._local_heads_per_group, self._kv_channels)
             )
             key = key.unflatten(-1, (self._local_head_groups, self._kv_channels)).movedim(1, 3).flatten(0, 1)
             value = value.unflatten(-1, (self._local_head_groups, self._kv_channels)).transpose(1, 2).flatten(0, 1)
 
         attn_weights = torch.empty(
-            (b * self._local_head_groups, sq * self._heads_per_group, sk), device=query.device, dtype=query.dtype
+            (b * self._local_head_groups, sq * self._local_heads_per_group, sk), device=query.device, dtype=query.dtype
         )
         attn_weights = torch.baddbmm(
             attn_weights,
@@ -157,7 +154,7 @@ class Attention(torch.nn.Module):
             key,
             beta=0,
             alpha=self._softmax_scale / self._layer_index,
-        ).view(b, self._local_head_groups, sq, self._heads_per_group, sk)
+        ).view(b, self._local_head_groups, sq, self._local_heads_per_group, sk)
 
         attn_weights = attn_weights.to(torch.float32) * self._layer_index
         attn_weights = torch.where(mask, attn_weights, mask_value)
@@ -165,13 +162,15 @@ class Attention(torch.nn.Module):
 
         with set_generator(self._tensor_space.distributed.tp_generator):
             attn_weights = torch.dropout(attn_weights, self._config.attention_dropout, self.training)
-        attn_output = torch.bmm(attn_weights.view(b * self._local_head_groups, sq * self._heads_per_group, sk), value)
+        attn_output = torch.bmm(
+            attn_weights.view(b * self._local_head_groups, sq * self._local_heads_per_group, sk), value
+        )
 
         if self._local_head_groups == 1:
             return attn_output.view(b, sq, -1)
         else:
             return (
-                attn_output.view(b, self._local_head_groups, sq, self._heads_per_group, self._kv_channels)
+                attn_output.view(b, self._local_head_groups, sq, self._local_heads_per_group, self._kv_channels)
                 .transpose(1, 2)
                 .flatten(2)
             )
@@ -299,7 +298,7 @@ class Attention(torch.nn.Module):
         key = key.view(*key.shape[:2], self._local_head_groups, self._kv_channels)
         value = value.view(*value.shape[:2], self._local_head_groups, self._kv_channels)
 
-        if self._config.use_rotary_position_embeddings:
+        if self._config.rotary.enabled:
             if self._debug_transformer:
                 self._debug_log(query, "query_rotary_input", self._QUERY_DIMS, kwargs)
                 self._debug_log(
@@ -308,7 +307,7 @@ class Attention(torch.nn.Module):
                     self._KV_DIMS,
                     kwargs,
                 )
-            rotary_fn = triton_rotary_autograd_ if self._triton_rotary else apply_rotary_embeddings
+            rotary_fn = triton_rotary_autograd_ if self._config.rotary.triton else apply_rotary_embeddings
             query = rotary_fn(query, kwargs[TransformerKwargs.rotary_freq_q])
             key = rotary_fn(key, kwargs[TransformerKwargs.rotary_freq_k])
 

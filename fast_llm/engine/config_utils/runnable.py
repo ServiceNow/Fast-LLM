@@ -29,7 +29,7 @@ class RunnableConfig(Config):
             if not parsed.do_run:
                 return
             # Do here so we have a chance to finalize logging configuration before logging the config.
-            runnable = config._get_runnable(parsed)
+            runnable = config._get_runnable()
         finally:
             # We always want to show the config for debugging.
             config._show(parsed.verbose)
@@ -92,7 +92,7 @@ class RunnableConfig(Config):
     def configure_logging(self):
         configure_logging()
 
-    def _get_runnable(self, parsed: argparse.Namespace) -> typing.Callable[[], None]:
+    def _get_runnable(self) -> typing.Callable[[], None]:
         return self.run
 
     def run(self):

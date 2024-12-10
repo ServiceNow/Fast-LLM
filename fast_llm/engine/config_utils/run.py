@@ -23,7 +23,7 @@ class RunConfig(Config):
     tensor_logs: TensorLogsConfig = Field(
         default_factory=TensorLogsConfig, desc="Configuration for debug tensor logs.", hint=FieldHint.logging
     )
-    # TODO v0.2: Adjust (now only affects logging to file).
+    # TODO v0.3: Adjust (now only affects logging to file).
     structured_logs: bool = Field(
         default=True, desc="Configure logging to the Fast-LLM format.", hint=FieldHint.logging
     )
@@ -248,7 +248,7 @@ def is_main_rank():
     return DistributedConfig.default_rank == _MAIN_RANK
 
 
-def log_main_rank(*message, log_fn: typing.Union[BaseException, typing.Callable] = logger.info, join: str = ", "):
+def log_main_rank(*message, log_fn: typing.Union[type[BaseException], typing.Callable] = logger.info, join: str = ", "):
     if is_main_rank():
         log(*message, log_fn=log_fn, join=join)
 

@@ -113,6 +113,7 @@ class DistributedDimNames:
     pipeline = "pipeline"
     sequence_data = "sequence_data"
     batch_data = "batch_data"
+    tensor_and_sequence_data = "tensor_and_sequence_data"
 
 
 @config_class()
@@ -120,7 +121,7 @@ class DistributedConfig(Config):
     """
     Configuration for the distributed setup.
     Also include variables for global settings such as data types, random seeds, initialization parameters.
-    TODO v0.2: Move these unrelated variables elsewhere.
+    TODO v0.3: Move these unrelated variables elsewhere.
     TODO: Avoid hard-coding distributed dims (use derived class?)
     TODO: Separate distributed space from config?
     """
@@ -197,19 +198,19 @@ class DistributedConfig(Config):
         valid=check_field(Assert.gt, 0),
     )
     seed: int = Field(default=1234, desc="A seed for training.", hint=FieldHint.optional)
-    # TODO v0.2: Rename to compute_dtype (not just for training), move elsewhere
+    # TODO v0.3: Rename to compute_dtype (not just for training), move elsewhere
     training_dtype: DataType = Field(
         default=DataType.float32,
         desc="The data type used for the forward and backward passes.",
         hint=FieldHint.core,
     )
-    # TODO v0.2: move elsewhere
+    # TODO v0.3: move elsewhere
     optimization_dtype: DataType = Field(
         default=DataType.float32,
         desc="The data type used for the optimizer.",
         hint=FieldHint.expert,
     )
-    # TODO v0.2: move random state elsewhere
+    # TODO v0.3: move random state elsewhere
     # Extra seed parameters (can usually be left alone)
     dp_seed_shift: int = Field(
         default=_BIG_PRIMES[0], desc="Seed shift for extra randomness.", hint=FieldHint.optional
@@ -330,6 +331,19 @@ class DistributedConfig(Config):
                 parent=DistributedDimNames.data,
             )
         )
+        self.add_distributed_dim(
+            DistributedDim(
+                name=DistributedDimNames.tensor_and_sequence_data,
+                size=self.sequence_data_parallel * self.tensor_parallel,
+                rank=self.tensor_rank + self.sequence_data_rank * self.tensor_parallel,
+                id_=f"{self.batch_data_rank}_{self.pipeline_rank}",
+                parent=(
+                    DistributedDimNames.tensor
+                    if self.sequence_data_parallel == 1
+                    else DistributedDimNames.sequence_data if self.tensor_parallel == 1 else DistributedDimNames.world
+                ),
+            )
+        )
 
         super()._validate()
 
@@ -361,7 +375,7 @@ class DistributedConfig(Config):
         strict: bool = True,
         flat: bool = False,
     ):
-        # TODO v0.2: Remove backward compatibility fix
+        # TODO v0.3: Remove backward compatibility fix
         if "sequence_first" in default and strict:
             del default["sequence_first"]
         if "separate_init_generators" in default and strict:
