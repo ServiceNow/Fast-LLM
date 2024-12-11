@@ -99,13 +99,11 @@ There are 2 ways of instantiating our Llama-3.1-8B model. We could use a pretrai
             num_attention_heads: 32
             num_layers: 32
             rotary:
-              scaling_type: llama3
-            rotary_embedding_scale: -13.122363377404328  # (2)!
-            use_rotary_embeddings: true
+              type: llama3
+              theta: 500_000
       ```
 
       1.  Hidden-size/num-layers will be used to provide good defaults for weight initialization std.
-      2.  -ln(500_000)
 
       Configuring the model this way is a bit more verbose than using the pretrained configuration, but gives an idea of how to configure a Llama-3.1-8B-like model with Fast-LLM.
 
