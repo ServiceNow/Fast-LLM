@@ -18,8 +18,8 @@ copyright: Copyright 2024 ServiceNow, Inc.
 theme:
   name: material
   custom_dir: docs/overrides
-  logo: assets/images/logo.png
-  favicon: assets/images/logo.png
+  logo: assets/images/logo.svg
+  favicon: assets/images/logo.svg
   icon:
     repo: fontawesome/brands/github
   features:
@@ -58,15 +58,15 @@ theme:
         name: Switch to light mode
     - media: "(prefers-color-scheme: light)"
       scheme: default
-      primary: indigo
-      accent: indigo
+      primary: white
+      accent: white
       toggle:
         icon: material/toggle-switch
         name: Switch to dark mode
     - media: "(prefers-color-scheme: dark)"
       scheme: slate
       primary: black
-      accent: indigo
+      accent: white
       toggle:
         icon: material/toggle-switch-off
         name: Switch to system preference
