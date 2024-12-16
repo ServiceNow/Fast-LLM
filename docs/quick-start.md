@@ -214,7 +214,7 @@ Choose based on your goals for this tutorial.
         ```
 
         When asked for whether to use this as git credentials, answer in the affirmative.
-    
+
     ```
     git lfs install
     git clone https://huggingface.co/meta-llama/Llama-3.1-8B ./fast-llm-tutorial/pretrained-model
@@ -236,8 +236,8 @@ Create a configuration file for the dataset preparation. Copy the following cont
     saving_workers: 16
 
     dataset:
-      path: openwebtext
-      split: "train[:10000]"  # (2)!
+      path: stas/openwebtext-10k  # (2)!
+      split: "train"
       trust_remote_code: true
 
     tokenizer:
@@ -245,7 +245,7 @@ Create a configuration file for the dataset preparation. Copy the following cont
     ```
 
     1. Processing speed scales linearly with the number of CPUs.
-    2. We're [slicing](https://huggingface.co/docs/datasets/v1.11.0/splits.html) the dataset to the first 10K records of the OpenWebText dataset to speed up the process. If you want to use the full dataset, set the `split` to `train`.
+    2. This small dataset restricts to the first 10K records of the OpenWebText dataset to speed up the process. If you want to use the full dataset, replace with `openwebtext`.
 
 === "Big"
 
@@ -480,15 +480,15 @@ Save the following as `fast-llm-tutorial/train-config.yaml`:
 
     ```yaml
     training:
-      train_iters: 1000  # (1)!
+      train_iters: 100  # (1)!
       logs:
         interval: 10
       validation:
         iterations: 25
-        interval: 1000
+        interval: 100
       export:  # (2)!
         format: llama
-        interval: 1000
+        interval: 100
       wandb:  # (3)!
         project_name: fast-llm-tutorial
         group_name: Small
@@ -518,8 +518,8 @@ Save the following as `fast-llm-tutorial/train-config.yaml`:
       experiment_dir: fast-llm-tutorial/experiment
     ```
 
-    1.  For the small run, we'll stop after 1000 iterations.
-    2.  A Llama model will be saved in Hugging Face format to experiment directory at the end of the small run.
+    1.  For the small run, we'll stop after 100 iterations.
+    2.  The trained model will be saved in `Transformers` Llama format to `fast-llm-tutorial/experiment/export/llama/100` at the end of the small run. You can also save as  a `Fast-LLM` checkpoint by setting the `format` to `fast_llm`.
     3.  Entirely optional, but it's a good idea to track your training progress with Weights & Biases. Replace `null` with your own W&B entity name. If you don't want to use W&B, just ignore this section.
     3.  Adjust the number of sequences per GPU based on GPU memory. For SmolLM2-135M at 1024 sequenced length and a 80GB GPU, a `micro_batch_size` of 60 should work well.
     4.  Must be divisible by the number of GPUs and the `micro_batch_size`. At 1024 tokens per sequence, 480 corresponds to about 500,000 tokens per batch.
@@ -587,7 +587,7 @@ Save the following as `fast-llm-tutorial/train-config.yaml`:
     ```
 
     1.  Total number of training tokens will be approximately 210B: 100,000 iterations * 512 * 4096 tokens per batch.
-    2.  A Llama model will be saved in Hugging Face format to `~/results` directory every 20,000 iterations.
+    2.  A permanent model checkpoint in `Transformers` Llama format will be saved to `fast-llm-tutorial/experiment/export/llama/[iteration]/` every 20,000 iterations. You can also save as a `Fast-LLM` checkpoint by setting the `format` to `fast_llm`.
     3.  Entirely optional, but it's a good idea to track your training progress with Weights & Biases. Replace `null` with your own W&B entity name. If you don't want to use W&B, just ignore this section.
     4.  Adjust the number of sequences per GPU based on GPU memory. Considering a 4k token sequence length and 80GB GPUs, a `micro_batch_size` of 1 should work well.
     5.  Must be divisible by the number of GPUs and the `micro_batch_size`. At 4k tokens per sequence, 512 corresponds to about 2.1 million tokens per batch.
@@ -674,7 +674,7 @@ Alright, the big moment! Let's launch the training run.
                      --no_python \
                      fast-llm train gpt \
                      --config fast-llm-tutorial/train-config.yaml"
-    EOF 
+    EOF
     ```
 
 === "Kubeflow"
@@ -878,14 +878,14 @@ You can expect to see the following performance metrics in Fast-LLM's output:
 
     | Performance Metric                       | 8x V100-SXM2-32GB[^SmolLM2-V100] | 8x A100-SXM4-80GB[^SmolLM2-A100] | 8x H100-SXM5-80GB[^SmolLM2-H100] |
     |------------------------------------------|---------------------------------:|---------------------------------:|---------------------------------:|
-    | tokens/s/GPU                             | 16,700                           |                                  | 294,000                          |
-    | tflop/s (model)                          | 15.3                             |                                  | 268                              |
+    | tokens/s/GPU                             | 16,700                           | 149,000                          | 294,000                          |
+    | tflop/s (model)                          | 15.3                             | 137                              | 268                              |
     | peak tflop/s (theoretical)[^peak-tflops] | 125                              | 312                              | 990                              |
-    | utilization                              | 12.2%                            |                                  | 27.1%                            |
+    | utilization                              | 12.2%                            | 44%                              | 27%                              |
     | total training time                      | 68 minutes                       |                                  | 3.9 minutes                      |
 
     [^SmolLM2-V100]:
-        Precision was set to `fp16`, since `bf16` is not supported on V100 GPUs. 
+        Precision was set to `fp16`, since `bf16` is not supported on V100 GPUs.
         FlashAttention was disabled, as it is not supported on V100 GPUs.
         Micro-batch size was set to 12.
     [^SmolLM2-A100]:
@@ -908,7 +908,7 @@ You can expect to see the following performance metrics in Fast-LLM's output:
     | total training time                      |                                 |                                 | 180 hours                       |
 
     [^Llama-V100]:
-        Precision was set to `fp16`, since `bf16` is not supported on V100 GPUs. 
+        Precision was set to `fp16`, since `bf16` is not supported on V100 GPUs.
         FlashAttention was disabled, as it is not supported on V100 GPUs.
         Micro-batch size was set to 4.
     [^Llama-A100]:
@@ -926,7 +926,37 @@ If you included the W&B section in your configuration, you can also track your t
 
 ## 🎉 Final Thoughts
 
-And that's it! You've set up, prepped data, chosen a model, configured training, and launched a full training run with Fast-LLM. From here, feel free to tweak the model, try out larger datasets, or scale things up to larger clusters. The sky's the limit!
+And that's it! You've set up, prepped data, chosen a model, configured training, and launched a full training run with Fast-LLM. You can try out the saved model directly with Transformers.
+
+=== "Small"
+
+    ```python3
+    import transformers
+
+    model = transformers.AutoModelForCausalLM.from_pretrained("/app/fast-llm-tutorial/experiment/export/llama/100").cuda()
+    tokenizer = transformers.AutoTokenizer.from_pretrained("fast-llm-tutorial/pretrained-model/")
+
+    inputs = {k:v.cuda() for k,v in tokenizer("This is what the small model can do after fine-tuning for 100 steps:", return_tensors="pt").items()}
+    outputs=model.generate(**inputs, max_new_tokens=100)
+
+    print(tokenizer.decode(outputs[0]))
+    ```
+
+=== "Big"
+
+    ```python3
+    import transformers
+
+    model = transformers.AutoModelForCausalLM.from_pretrained("/app/fast-llm-tutorial/experiment/export/llama/100000").cuda()
+    tokenizer = transformers.AutoTokenizer.from_pretrained("fast-llm-tutorial/pretrained-model/")
+
+    inputs = {k:v.cuda() for k,v in tokenizer("This is what the big model can do after fine-tuning for 100K steps:", return_tensors="pt").items()}
+    outputs=model.generate(**inputs, max_new_tokens=100)
+
+    print(tokenizer.decode(outputs[0]))
+    ```
+
+From here, feel free to tweak the model, try out larger datasets, or scale things up to larger clusters. The sky's the limit!
 
 Happy training!
 
