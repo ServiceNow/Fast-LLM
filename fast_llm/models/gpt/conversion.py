@@ -299,9 +299,9 @@ class RopeScalingParamConverter(ParamConverter):
     def export_params(self, fast_llm_values):
         rope_type, *parameters = fast_llm_values
         if rope_type == RotaryEmbeddingType.default:
-            return None
+            return (None,)
         elif rope_type == RotaryEmbeddingType.llama3:
-            return {key: value for key, value in zip(self._HUGGINGFACE_NAMES, ("llama3",) + parameters, strict=True)}
+            return ({key: value for key, value in zip(self._HUGGINGFACE_NAMES, ("llama3", *parameters), strict=True)},)
         else:
             raise ValueError(f"Unsupported rotary scaling type: {rope_type}")
 
@@ -311,7 +311,7 @@ class RopeScalingParamConverter(ParamConverter):
             return (RotaryEmbeddingType.default,) + (DEFAULT,) * 4
         elif rope_type == RotaryEmbeddingType.llama3:
             # TODO: Is it safe to assume all values are provided?
-            return {self._HUGGINGFACE_NAMES[0]: "llama3", **{export_value[key] for key in self._HUGGINGFACE_NAMES[1:]}}
+            return ("llama3", *[export_value[key] for key in self._HUGGINGFACE_NAMES[1:]])
         else:
             raise ValueError(f"Unsupported rotary scaling type: {rope_type}")
 

@@ -238,10 +238,12 @@ class ExternalStateDictCheckpointHandler(StateDictCheckpointHandler):
         exported_config = {}
         for converter in cls._get_config_converters():
             try:
-                values = [
-                    converter.export_params(cls._get_fast_llm_attribute(config, fast_llm_name))
-                    for fast_llm_name in converter.fast_llm_names
-                ]
+                values = converter.export_params(
+                    tuple(
+                        cls._get_fast_llm_attribute(config, fast_llm_name)
+                        for fast_llm_name in converter.fast_llm_names
+                    )
+                )
                 for export_name, value in zip(converter.export_names, values, strict=True):
                     if value is not MISSING:
                         set_nested_dict_value(exported_config, export_name, value)
