@@ -123,15 +123,6 @@ class RotaryArchitectureConfig(BaseModelArchitectureConfig):
         return self.enabled and not self.triton
 
     def _validate(self):
-        # These happen during conversion.
-        if self.scale_factor is None:
-            self.scale_factor = 8.0
-        if self.low_frequency_factor is None:
-            self.low_frequency_factor = 1.0
-        if self.high_frequency_factor is None:
-            self.high_frequency_factor = 4.0
-        if self.original_context_length is None:
-            self.original_context_length = 8192
         super()._validate()
         if self.triton and not TritonConfig.TRITON_ENABLED:
             warnings.warn("Triton is disabled, but the triton rotary kernel will be used anyway.")
