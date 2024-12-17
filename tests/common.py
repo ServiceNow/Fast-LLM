@@ -30,6 +30,7 @@ TEST_RESULTS_PATH = pathlib.Path(os.environ.get("TEST_RESULTS_PATH", "/tmp/fast_
 FORCE_REUSE_RESULTS = int(os.environ.get("FORCE_REUSE_RESULTS", 0)) != 0
 REUSE_RESULTS = FORCE_REUSE_RESULTS or int(os.environ.get("REUSE_RESULTS", 0)) != 0
 _LOG_LEVEL = int(os.environ.get("LOG_LEVEL", 13))
+TEST_MODEL = os.environ.get("MODEL", "llama")
 
 ARTIFACT_PATH = "runs/0/artifacts"
 
@@ -111,14 +112,14 @@ CONFIG_SC2_MEGATRON = CONFIG_SC1_MEGATRON + [
 ]
 CONFIG_SC2_COMMON = CONFIG_SC2_FAST_LLM + ["model.distributed.training_dtype=bf16"]
 
-CONFIG_MISTRAL_MEGATRON = CONFIG_SC2_MEGATRON + [
+CONFIG_LLAMA_MEGATRON = CONFIG_SC2_MEGATRON + [
     "--swiglu",
     "--disable-bias-linear",
     "--normalization=RMSNorm",
     "--ffn-hidden-size=1024",
     "--untie-embeddings-and-output-weights",
 ]
-CONFIG_MISTRAL_FAST_LLM = CONFIG_SC2_FAST_LLM + [
+CONFIG_LLAMA_FAST_LLM = CONFIG_SC2_FAST_LLM + [
     "model.base_model.transformer.gated=True",
     "model.base_model.transformer.activation_type=silu",
     "model.base_model.transformer.add_linear_biases=False",
@@ -126,28 +127,24 @@ CONFIG_MISTRAL_FAST_LLM = CONFIG_SC2_FAST_LLM + [
     "model.base_model.transformer.ffn_hidden_size=1024",
     "model.base_model.tie_word_embeddings=False",
 ]
-CONFIG_MISTRAL_COMMON = CONFIG_MISTRAL_FAST_LLM + ["model.distributed.training_dtype=bf16"]
+CONFIG_LLAMA_COMMON = CONFIG_LLAMA_FAST_LLM + ["model.distributed.training_dtype=bf16"]
 
-CONFIG_MIXTRAL_MEGATRON = CONFIG_MISTRAL_MEGATRON + [
+# Megatron does not support Llama3-style Rotary Embeddings
+CONFIG_LLAMA3_MEGATRON = None
+CONFIG_LLAMA3_FAST_LLM = CONFIG_LLAMA_FAST_LLM + [
+    "model.base_model.transformer.rotary.type=llama3",
+]
+CONFIG_LLAMA3_COMMON = CONFIG_LLAMA3_FAST_LLM + ["model.distributed.training_dtype=bf16"]
+
+CONFIG_MIXTRAL_MEGATRON = CONFIG_LLAMA_MEGATRON + [
     "--num-experts=4",
     "--moe-router-topk=4",
 ]
-CONFIG_MIXTRAL_FAST_LLM = CONFIG_MISTRAL_FAST_LLM + [
+CONFIG_MIXTRAL_FAST_LLM = CONFIG_LLAMA_FAST_LLM + [
     "model.base_model.transformer.num_experts=4",
     "model.base_model.transformer.num_experts_per_token=4",
 ]
 CONFIG_MIXTRAL_COMMON = CONFIG_MIXTRAL_FAST_LLM + ["model.distributed.training_dtype=bf16"]
-
-CONFIG_LLAMA3_MEGATRON = None  # Megatron does not support Llama3-style Rotary Embeddings
-CONFIG_LLAMA3_FAST_LLM = CONFIG_SC2_FAST_LLM + [
-    "model.base_model.transformer.gated=True",
-    "model.base_model.transformer.activation_type=silu",
-    "model.base_model.transformer.add_linear_biases=False",
-    "model.base_model.transformer.normalization.type=rms_norm",
-    "model.base_model.transformer.rotary.type=llama3",
-    "model.base_model.tie_word_embeddings=False",
-]
-CONFIG_LLAMA3_COMMON = CONFIG_LLAMA3_FAST_LLM + ["model.distributed.training_dtype=bf16"]
 
 _CONFIGS = {
     "gpt2": ("gpt", CONFIG_GPT2_FAST_LLM, CONFIG_GPT2_MEGATRON, CONFIG_GPT2_COMMON, None),
@@ -159,11 +156,25 @@ _CONFIGS = {
         CONFIG_SC2_COMMON,
         Starcoder2GPTHuggingfaceCheckpointFormat,
     ),
+    "llama": (
+        "gpt",
+        CONFIG_LLAMA_FAST_LLM,
+        CONFIG_LLAMA_MEGATRON,
+        CONFIG_LLAMA_COMMON,
+        LlamaGPTHuggingfaceCheckpointFormat,
+    ),
+    "llama3": (
+        "gpt",
+        CONFIG_LLAMA3_FAST_LLM,
+        CONFIG_LLAMA3_MEGATRON,
+        CONFIG_LLAMA3_COMMON,
+        LlamaGPTHuggingfaceCheckpointFormat,
+    ),
     "mistral": (
         "gpt",
-        CONFIG_MISTRAL_FAST_LLM,
-        CONFIG_MISTRAL_MEGATRON,
-        CONFIG_MISTRAL_COMMON,
+        CONFIG_LLAMA_FAST_LLM,
+        CONFIG_LLAMA_MEGATRON,
+        CONFIG_LLAMA_COMMON,
         MistralGPTHuggingfaceCheckpointFormat,
     ),
     "mixtral": (
@@ -173,17 +184,8 @@ _CONFIGS = {
         CONFIG_MIXTRAL_COMMON,
         MixtralGPTHuggingfaceCheckpointFormat,
     ),
-    "llama3": (
-        "gpt",
-        CONFIG_LLAMA3_FAST_LLM,
-        CONFIG_LLAMA3_MEGATRON,
-        CONFIG_LLAMA3_COMMON,
-        LlamaGPTHuggingfaceCheckpointFormat,
-    ),
 }
 
-
-TEST_MODEL = os.environ.get("MODEL", "mistral")
 
 TEST_MODEL_TYPE, CONFIG_FAST_LLM, CONFIG_GPT2, CONFIG_COMMON, HUGGINGFACE_CHECKPOINT_FORMAT = _CONFIGS[TEST_MODEL]
 

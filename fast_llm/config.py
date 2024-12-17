@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 _AUTO_VALIDATE = True
 
 MISSING = Tag("<MISSING>")
+DEFAULT = Tag("<DEFAULT>")
 
 
 class NoAutoValidate:
@@ -347,6 +348,10 @@ class Config:
             if not field.init or field._field_type == dataclasses._FIELD_CLASSVAR:  # noqa
                 continue
             value = getattr(self, name)
+            if value is DEFAULT:
+                # Replace the value with its default.
+                # We still need to validate because some fields have invalid defaults.
+                value = field.default
             new_value = self._validate_nested(value, field.type, field.name, field.valid, errors, False)
             setattr(self, name, new_value)
         for name in getattr(self, "_unknown_fields", {}):
@@ -603,7 +608,9 @@ class Config:
                     field_value = field_value.__fast_llm_serialize__()
                 if isinstance(value, enum.Enum):
                     field_value = field_value.value
-                elif not isinstance(value, int | float | bool | str | None):
+                # Tag is not actually serializable, but needs to be kept as-is for config processing,
+                # and should be absent for valid configs.
+                elif not isinstance(value, int | float | bool | str | Tag | None):
                     field_value = str(field_value)
             if format_ == _ConfigDictFormat.tuple:
                 field_value = {(): field_value}
