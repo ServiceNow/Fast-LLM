@@ -9,6 +9,7 @@ import safetensors
 import torch
 
 from fast_llm import __version__
+from fast_llm.config import MISSING
 from fast_llm.engine.base_model.config import BaseModelArchitectureConfig
 from fast_llm.engine.checkpoint.config import (
     CheckpointLoadConfig,
@@ -24,65 +25,104 @@ from fast_llm.utils import Assert, get_nested_dict_value, set_nested_dict_value
 logger = logging.getLogger(__name__)
 
 
-@dataclasses.dataclass
-class ParamConverter:
-    fast_llm_name: tuple[str, ...] | None
-    export_name: tuple[str, ...] | str | None
+@dataclasses.dataclass(kw_only=True)
+class ParamConverter(abc.ABC):
+    fast_llm_names: tuple[tuple[str, ...], ...] = ()  # Array of fast-llm names, in nested (tuple) format.
+    export_names: tuple[tuple[str, ...], ...] = ()  # Array of export names, in nested (tuple) format.
 
-    def export_param(self, fast_llm_value):
-        return fast_llm_value
-
-    def import_param(self, export_value):
-        return export_value
-
-
-@dataclasses.dataclass
-class ConstantImportParamConverter(ParamConverter):
-    fast_llm_value: typing.Any
-
-    def export_param(self, fast_llm_value):
-        Assert.eq(fast_llm_value, self.fast_llm_value)
-
-    def import_param(self, export_value):
-        return self.fast_llm_value
-
-
-@dataclasses.dataclass
-class ConstantExportParamConverter(ParamConverter):
-    export_value: typing.Any
-
-    def export_param(self, fast_llm_value):
-        return self.export_value
-
-    def import_param(self, export_value):
-        Assert.eq(export_value, self.export_value)
-
-
-@dataclasses.dataclass
-class IgnoreImportParamConverter(ParamConverter):
-    ignore_export_value: typing.Any
-
-    def export_param(self, fast_llm_value):
+    @abc.abstractmethod
+    def export_params(self, fast_llm_values: tuple[typing.Any, ...]) -> tuple[typing.Any, ...]:
         pass
 
-    def import_param(self, export_value):
-        if export_value is not self.ignore_export_value:
+    @abc.abstractmethod
+    def import_params(self, export_values: tuple[typing.Any, ...]) -> tuple[typing.Any, ...]:
+        pass
+
+
+@dataclasses.dataclass(kw_only=True)
+class RenameParamConverter(ParamConverter):
+
+    def __post_init__(self):
+        Assert.eq(len(self.fast_llm_names), 1)
+        Assert.eq(len(self.export_names), 1)
+
+    def export_params(self, fast_llm_values):
+        return fast_llm_values
+
+    def import_params(self, export_values):
+        return export_values
+
+
+# def __repr__(self):
+#     return f"RenameParamConverter({'.'.join(self.fast_llm_names[0])} <--> {'.'.join(self.export_names[0])})"
+
+
+@dataclasses.dataclass(kw_only=True)
+class ConstantImportParamConverter(ParamConverter):
+    fast_llm_value: typing.Any = MISSING
+
+    def __post_init__(self):
+        Assert.eq(len(self.fast_llm_names), 1)
+        Assert.eq(len(self.export_names), 0)
+
+    def export_params(self, fast_llm_values):
+        Assert.eq(fast_llm_values[0], self.fast_llm_value)
+        return ()
+
+    def import_params(self, export_values):
+        return (self.fast_llm_value,)
+
+
+@dataclasses.dataclass(kw_only=True)
+class ConstantExportParamConverter(ParamConverter):
+    export_value: typing.Any = MISSING
+
+    def __post_init__(self):
+        Assert.eq(len(self.fast_llm_names), 0)
+        Assert.eq(len(self.export_names), 1)
+
+    def export_params(self, fast_llm_values):
+        return (self.export_value,)
+
+    def import_params(self, export_values):
+        Assert.eq(export_values[0], self.export_value)
+        return ()
+
+
+@dataclasses.dataclass(kw_only=True)
+class IgnoreImportParamConverter(ParamConverter):
+    ignore_export_value: typing.Any = MISSING
+
+    def __post_init__(self):
+        Assert.eq(len(self.fast_llm_names), 0)
+        Assert.eq(len(self.export_names), 1)
+
+    def export_params(self, fast_llm_values):
+        return (MISSING,)
+
+    def import_params(self, export_values):
+        if export_values[0] not in (self.ignore_export_value, MISSING):
             logger.warning(
-                f"The configuration parameter `{self.export_name}={export_value}` is ignored during conversion."
+                f"The configuration parameter `{self.export_names[0]}={export_values[0]}` is ignored during conversion."
                 f" If you intend to use it in Fast-LLM, make sure to set it explicitly in the model configuration."
             )
+        return ()
 
 
-@dataclasses.dataclass
+@dataclasses.dataclass(kw_only=True)
 class MappedConfigParamConverter(ParamConverter):
-    fast_llm_value: typing.Callable
-    export_value: typing.Callable
+    fast_llm_value: typing.Callable = lambda x: x
+    export_value: typing.Callable = lambda x: x
 
-    def export_param(self, fast_llm_value):
-        return self.export_value(fast_llm_value)
+    def __post_init__(self):
+        Assert.eq(len(self.fast_llm_names), 1)
+        Assert.eq(len(self.export_names), 1)
 
-    def import_param(self, export_value):
-        return self.fast_llm_value(export_value)
+    def export_params(self, fast_llm_values):
+        return (self.export_value(fast_llm_values[0]),)
+
+    def import_params(self, export_values):
+        return (self.fast_llm_value(export_values[0]),)
 
 
 class WeightConverter:
@@ -197,13 +237,18 @@ class ExternalStateDictCheckpointHandler(StateDictCheckpointHandler):
         # TODO v0.3: not used in this class
         exported_config = {}
         for converter in cls._get_config_converters():
-            value = converter.export_param(
-                None
-                if converter.fast_llm_name is None
-                else cls._get_fast_llm_attribute(config, converter.fast_llm_name)  # Noqa
-            )
-            if converter.export_name is not None:
-                set_nested_dict_value(exported_config, converter.export_name, value)
+            try:
+                values = converter.export_params(
+                    tuple(
+                        cls._get_fast_llm_attribute(config, fast_llm_name)
+                        for fast_llm_name in converter.fast_llm_names
+                    )
+                )
+                for export_name, value in zip(converter.export_names, values, strict=True):
+                    if value is not MISSING:
+                        set_nested_dict_value(exported_config, export_name, value)
+            except Exception as e:
+                raise RuntimeError(f"Config conversion failed for converter {converter}", *e.args)
 
         return exported_config  # Noqa
 
@@ -214,12 +259,25 @@ class ExternalStateDictCheckpointHandler(StateDictCheckpointHandler):
         kwargs = {}
         for converter in cls._get_config_converters():
             try:
-                value = None if converter.export_name is None else get_nested_dict_value(config, converter.export_name)
-            except KeyError:
-                value = None
-            value = converter.import_param(value)
-            if converter.fast_llm_name is not None:
-                kwargs[converter.fast_llm_name] = value
+                values = ()
+                for export_name in converter.export_names:
+                    try:
+                        value = get_nested_dict_value(config, export_name)
+                    except KeyError:
+                        value = MISSING
+                    values = values + (value,)
+                values = converter.import_params(values)
+                for fast_llm_name, value in zip(converter.fast_llm_names, values, strict=True):
+                    if value is MISSING:
+                        # Missing values need to be handled in dedicated converters,
+                        # because implicit / default values may not match.
+                        # TODO: Different behavior from other uses of MISSING. Use different tag?
+                        raise ValueError(f"Missing converted value for fast-llm parameter {fast_llm_name}")
+                    if fast_llm_name in kwargs:
+                        raise ValueError(f"Duplicate converted value for fast-llm parameter {fast_llm_name}")
+                    kwargs[fast_llm_name] = value
+            except Exception as e:
+                raise RuntimeError(f"Config conversion failed for converter {converter}", *e.args)
 
         config_class = cls._model_class.get_base_model_config_class()
         if architecture_only:
@@ -335,7 +393,11 @@ class HuggingfaceStateDictCheckpointHandler(ExternalStateDictCheckpointHandler, 
     @classmethod
     @abc.abstractmethod
     def _create_config_converters(cls) -> list[ParamConverter]:
-        return [ConstantExportParamConverter(None, "model_type", cls.get_huggingface_model_type())]
+        return [
+            ConstantExportParamConverter(
+                export_names=(("model_type",),), export_value=cls.get_huggingface_model_type()
+            )
+        ]
 
     @classmethod
     def _load_config(cls, directory: pathlib.Path | str) -> dict:
