@@ -25,6 +25,9 @@ from fast_llm.functional.triton.sparse_linear import output_sparse_matmul
 from fast_llm.tensor import param_get_and_unset_is_zero
 from triton import language as tl
 
+# Triton requires global variables to be annotated with `tl.constexpr`.
+_TritonActivationType: tl.constexpr = ActivationType
+
 
 @triton.jit
 def triton_mlp_activation_forward_kernel(
@@ -47,15 +50,15 @@ def triton_mlp_activation_forward_kernel(
 
     input_ = tl.load(input_ptr, mask=mask).to(tl.float32)
 
-    if activation_type == ActivationType.gelu:
+    if activation_type == _TritonActivationType.gelu.value:
         tanh_input = 0.79788456 * input_ * (1 + 0.044715 * input_ * input_)
         tanh = 1 - 2 / (1 + tl.exp(2 * tanh_input))
         out = input_ * 0.5 * (1.0 + tanh)
-    elif activation_type == ActivationType.silu:
+    elif activation_type == _TritonActivationType.silu.value:
         out = input_ / (1 + tl.exp(-input_))
-    elif activation_type == ActivationType.relu:
+    elif activation_type == _TritonActivationType.relu.value:
         out = tl.where(input_ > 0, input_, 0)
-    elif activation_type == ActivationType.squared_relu:
+    elif activation_type == _TritonActivationType.squared_relu:
         relu_out = tl.where(input_ > 0, input_, 0)
         out = relu_out * relu_out
     else:
@@ -95,23 +98,23 @@ def triton_mlp_activation_backward_kernel(
     input_ = tl.load(input_ptr, mask=mask).to(tl.float32)
     output_grad = tl.load(grad_output_ptr + output_offsets, mask=mask).to(tl.float32)
 
-    if activation_type == ActivationType.gelu:
+    if activation_type == _TritonActivationType.gelu:
         tanh_input = 0.79788456 * input_ * (1 + 0.044715 * input_ * input_)
         tanh = 1 - 2 / (1 + tl.exp(2 * tanh_input))
         grad = 0.5 * input_ * ((1 - tanh * tanh) * (0.79788456 + 0.1070322243 * input_ * input_)) + 0.5 * (1 + tanh)
         if gated or recompute:
             out = input_ * 0.5 * (1.0 + tanh)
-    elif activation_type == ActivationType.silu:
+    elif activation_type == _TritonActivationType.silu:
         exp = tl.exp(-input_)
         sigma = 1 / (1 + exp)
         grad = sigma * sigma + (1 + input_) / (2 + exp + 1 / exp)
         if gated or recompute:
             out = input_ * sigma
-    elif activation_type == ActivationType.relu:
+    elif activation_type == _TritonActivationType.relu:
         grad = tl.where(input_ > 0, 1, 0)
         if gated or recompute:
             out = tl.where(input_ > 0, input_, 0)
-    elif activation_type == ActivationType.squared_relu:
+    elif activation_type == _TritonActivationType.squared_relu:
         relu_out = tl.where(input_ > 0, input_, 0)
         grad = 2 * relu_out
         if gated or recompute:
@@ -148,7 +151,7 @@ def triton_mlp_activation_forward(
         input_,
         output,
         gated=gated,  # noqa
-        activation_type=activation_type,  # noqa
+        activation_type=activation_type.value,  # noqa
         n_cols=n_cols,  # noqa
         block_size=TritonConfig.POINTWISE_BLOCK_SIZE,
     )
