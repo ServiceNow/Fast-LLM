@@ -1,6 +1,6 @@
 <div align="center" style="margin-bottom: 1em;">
 
-<img width=50% src="docs/assets/images/logo.png" alt="Fast-LLM Logo"></img>
+<img width=50% src="docs/assets/images/logo.svg" alt="Fast-LLM"></img>
 
 [![Docker][ci-badge]][ci-workflow]
 [![Documentation][docs-badge]][docs-workflow]

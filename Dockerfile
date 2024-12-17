@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.7-labs
-FROM nvcr.io/nvidia/pytorch:24.07-py3
+FROM nvcr.io/nvidia/pytorch:24.11-py3
 
 # Install dependencies.
 RUN apt-get update \
@@ -20,9 +20,9 @@ RUN mkdir -m 777 /app/Megatron-LM /app/examples /app/fast_llm /app/tests /app/to
       /usr/local \
       /usr/local/bin \
       /usr/local/lib \
-      /usr/local/lib/python3.10 \
-      /usr/local/lib/python3.10/dist-packages \
-      /usr/local/lib/python3.10/dist-packages/__pycache__
+      /usr/local/lib/python3.12 \
+      /usr/local/lib/python3.12/dist-packages \
+      /usr/local/lib/python3.12/dist-packages/__pycache__
 
 # Copy dependency files with universal write permissions for all users.
 COPY --chmod=777 setup.py setup.cfg pyproject.toml ./
