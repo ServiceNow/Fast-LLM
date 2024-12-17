@@ -72,9 +72,6 @@ class ConstantImportParamConverter(ParamConverter):
     def import_params(self, export_values):
         return (self.fast_llm_value,)
 
-    # def __repr__(self):
-    #    return f"ConstantImportParamConverter({'.'.join(self.fast_llm_names[0])} = {self.fast_llm_value} <--> N.A.)"
-
 
 @dataclasses.dataclass(kw_only=True)
 class ConstantExportParamConverter(ParamConverter):
@@ -90,9 +87,6 @@ class ConstantExportParamConverter(ParamConverter):
     def import_params(self, export_values):
         Assert.eq(export_values[0], self.export_value)
         return ()
-
-    # def __repr__(self):
-    #    return f"ConstantExportParamConverter(N.A. <--> {'.'.join(self.export_names[0])} = {self.export_value})"
 
 
 @dataclasses.dataclass(kw_only=True)
@@ -114,9 +108,6 @@ class IgnoreImportParamConverter(ParamConverter):
             )
         return ()
 
-    # def __repr__(self):
-    #    return f"IgnoreImportParamConverter(N.A. <--> {'.'.join(self.export_names[0])} ?= {self.ignore_export_value})"
-
 
 @dataclasses.dataclass(kw_only=True)
 class MappedConfigParamConverter(ParamConverter):
@@ -132,9 +123,6 @@ class MappedConfigParamConverter(ParamConverter):
 
     def import_params(self, export_values):
         return (self.fast_llm_value(export_values[0]),)
-
-    # def __repr__(self):
-    #    return f"MappedConfigParamConverter({'.'.join(self.fast_llm_names[0])} <--> {'.'.join(self.export_names[0])})"
 
 
 class WeightConverter:
