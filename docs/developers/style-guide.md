@@ -53,7 +53,7 @@ This keeps identifier's origin explicit.
 * Avoid renaming with `as`, except for some (arbitrarily chosen) common ones: `numpy as np`, `triton.language as tl`.
 * Import first-party modules through specific identifiers (ex. `from fast_llm.module import method`, not `import fast_llm.module`). This facilitates the tracking of where those objects are used.
 * Always use absolute imports (ex. no `from .module import method`)
-* Include all explicitly-imported third-party module to `setup.cgf`.
+* Include all explicitly-imported third-party module to `setup.cfg`.
 Only add new requirements if they provide a substantial benefit,
 as we try to keep the requirements to a minimum.
 * Prefer file-level imports over imports inside methods, unless they significantly slow down the import process
