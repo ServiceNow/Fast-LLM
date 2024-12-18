@@ -73,7 +73,7 @@ As Fast-LLM evolves, we invite the community to contribute and help shape its fu
 -   **Feature Development:** Contribute new models, new training features, and new optimizations.
 -   **Documentation and Tutorials:** Make Fast-LLM more accessible by improving our documentation and writing practical guides.
 
-Fast-LLM is more than just software, it's a community. Get involved by exploring our [contribution guidelines](developers/contributing.md) and engaging with us on [GitHub Discussions](https://github.com/ServiceNow/Fast-LLM/discussions).
+Fast-LLM is more than just software, it's a community. Get involved by exploring our [contribution guidelines](contributing/contributing.md) and engaging with us on [GitHub Discussions](https://github.com/ServiceNow/Fast-LLM/discussions).
 
 ## Getting Started
 
