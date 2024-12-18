@@ -63,7 +63,7 @@ If an offending import is only required for a type hint, include it in a `if typ
 !!! warning "Configuration modules"
 
     Fast-LLM supports instantiation and validation of configurations with a barebone installation.
-    Because of this, modules that contain configuration classes (usually names `config.py`)
+    Because of this, modules that contain configuration classes (usually named `config.py`)
     should not include any top-level third-party import (except for those installed in the [barebone install](https://github.com/ServiceNow/Fast-LLM/blob/main/setup.cfg)),
     and the same applies for configuration initialization and validation methods.
     Third-party import may be included in other methods if needed.
