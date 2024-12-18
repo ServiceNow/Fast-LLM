@@ -13,7 +13,7 @@ As a general principle, **Fast-LLM prioritize code readability and maintainabili
 coding speed or individual programmer's preferences.
 Most of the style choices below are based on this principle.
 
-## Basic Style
+## 🎯 Basic Style
 
 Unless otherwise specified, Fast-LLM follows the [PEP 8](https://peps.python.org/pep-0008/) coding style.
 This style (and many other conventions) is enforced with automatic formatting through a [pre-commit](https://pre-commit.com/) git hook.
@@ -30,7 +30,7 @@ pre-commit install
     [isort](https://pycqa.github.io/isort/), [autoflake](https://github.com/PyCQA/autoflake), and a few other packages.
     See Fast-LLM's [pre-commit configuration](https://github.com/ServiceNow/Fast-LLM/blob/main/.pre-commit-config.yaml) for more details.
 
-## Naming Conventions
+## 📚 Naming Conventions
 
 Names should be as self-explanatory as possible, within reason.
 This includes python identifiers (classes, variables, methods, modules, etc.), file names and configuration parameters.
@@ -43,7 +43,7 @@ For example:
 Note that these conventions are enforced more strictly on user-facing names since they are more difficult to change,
 for example configuration parameters and the public interface of core classes and modules.
 
-## Imports
+## 🛬 Imports
 
 We use the following conventions for imports (other than those enforced by isort):
 * Import standard library and third party modules by module (ex. `import package.module`, not `from package.module import method`).
@@ -66,7 +66,7 @@ If an offending import is only required for a type hint, include it in a `if typ
     and the same applies for configuration initialization and validation methods.
     Third-party import may be included in other methods if needed.
 
-## Public and Private Interface
+## 🔓 Public and Private Interface
 
 Although good practices of object-oriented programming are generally ignored in python,
 Fast-LLM attempts to follow them to an extant, while avoiding unnecessary bloat:
@@ -76,7 +76,7 @@ As is customary in python, we make no distinction between the two and avoid the 
 * Use accessors sparingly through the @property decorator or equivalent,
 usually to define read-only public variables.
 
-## Type Hints
+## 💡 Type Hints
 
 Fast-LLM uses type hints for several reasons, including code readability, type checking in IDEs,
 and type validation for configurations:
@@ -85,7 +85,7 @@ Type hints for method outputs may be omitted if they can be easily inferred.
 * Prefer using type hints in private interfaces, especially if it improves readability and/or static type checking.
 * Use newer type hint formats when possible, ex. `typing.List -> list`, `typing.Union(A,B) -> A | B`.
 
-## Misc
+## 🗑️ Misc
 
 * Use `pathlib` rather than `os.path`.
 * The minimum python version is 3.12, and we encourage the use of modern python features when beneficial.
