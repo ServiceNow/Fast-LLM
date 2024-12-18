@@ -2,8 +2,6 @@
 title: Style Guide
 ---
 
-# Style Guide
-
 This section collects general coding style guidelines used in Fast-LLM.
 Following these will ensure a swift reviewing process and will help maintain consistency and readability.
 Note that while we try to enforce these principles,
@@ -19,6 +17,7 @@ Unless otherwise specified, Fast-LLM follows the [PEP 8](https://peps.python.org
 This style (and many other conventions) is enforced with automatic formatting through a [pre-commit](https://pre-commit.com/) git hook.
 
 Make sure these git hooks are installed by running
+
 ```bash
 pip install pre-commit
 pre-commit install
@@ -36,8 +35,10 @@ Names should be as self-explanatory as possible, within reason.
 This includes python identifiers (classes, variables, methods, modules, etc.), file names and configuration parameters.
 For example:
 
+* Use meaningful, self-descriptive identifier names (ex. `x -> loss`). This gives other users a better chance to understand the code.
+Abstract variable names such as `x` are however OK for generic methods where more descriptive names aren't appropriate (ex. `add(x, y)`).
 * Avoid abbreviations, especially domain-specific ones. Ex. `bs -> batch_size`.
-* Avoid meaningless variable names such as `x`, except for generic methods.
+This gives everyone a chance to understand the code, regardless of their prior knowledge.
 * Avoid redundancies especially for configuration parameters, ex. `data.data_type` -> `data.type`.
 * Avoid name parts that refer to the data type, ex. `num`. Use type hints instead.
 
@@ -49,9 +50,9 @@ for example configuration parameters and the public interface of core classes an
 We use the following conventions for imports (other than those enforced by isort):
 
 * Import standard library and third party modules by module (ex. `import package.module`, not `from package.module import method`).
-This keeps identifier's origin explicit.
+In addition to keeping the code consistent, this keeps identifier's origin explicit so anyone can tell where it came from with just a quick glance at the code. This is especially useful for identifiers that with otherwise ambiguous source (ex. `float32` may come from torch, numpy, triton, etc.; Fast-LLM's configuration scheme has many identifiers in common with `dataclasses`, `omegaconf` and `pydantic`)
 * Avoid renaming with `as`, except for some (arbitrarily chosen) common ones: `numpy as np`, `triton.language as tl`.
-* Import first-party modules through specific identifiers (ex. `from fast_llm.module import method`, not `import fast_llm.module`). This facilitates the tracking of where those objects are used.
+* Import first-party modules through specific identifiers (ex. `from fast_llm.module import method`, not `import fast_llm.module`). This keeps Fast-LLM identifiers to a manageable length and makes it easier to track what is used in a given file.
 * Always use absolute imports (ex. no `from .module import method`)
 * Include all explicitly-imported third-party module to `setup.cfg`.
 Only add new requirements if they provide a substantial benefit,
@@ -75,7 +76,9 @@ Fast-LLM attempts to follow them to an extent, while avoiding unnecessary bloat:
 
 * Mark private and protected variables with an underscore `_` prefix.
 As is customary in python, we make no distinction between the two and avoid the double-underscore `__` notation.
-* Keep public interfaces (methods and variables without underscore prefix) as lean as possible.
+* Keep public interfaces (methods and variables without underscore prefix) as lean as possible,
+i.e. mark everything as private/protected unless there is a clear need to make it public.
+We can always add to the public interface later, but removing from it is difficult.
 * Use accessors sparingly through the `@property` decorator or equivalent,
 usually to define read-only public variables.
 
@@ -91,5 +94,6 @@ Type hints for method outputs may be omitted if they can be easily inferred.
 
 ## 🗑️ Misc
 
+* Please add descriptions and comments as needed, especially for parts that would otherwise be difficult to understand.
 * Use `pathlib` rather than `os.path`.
-* The minimum python version is 3.12, and we encourage the use of modern python features when beneficial.
+* We encourage the use of modern python features when beneficial, up to the minimum python version (3.12).
