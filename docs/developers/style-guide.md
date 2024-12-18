@@ -71,7 +71,7 @@ If an offending import is only required for a type hint, include it in a `if typ
 ## 🔓 Public and Private Interface
 
 Although good practices of object-oriented programming are generally ignored in python,
-Fast-LLM attempts to follow them to an extant, while avoiding unnecessary bloat:
+Fast-LLM attempts to follow them to an extent, while avoiding unnecessary bloat:
 
 * Mark private and protected variables with an underscore `_` prefix.
 As is customary in python, we make no distinction between the two and avoid the double-underscore `__` notation.
