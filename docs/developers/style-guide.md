@@ -9,7 +9,7 @@ Following these will ensure a swift reviewing process and will help maintaining 
 Note that while we try to enforce these principles,
 exceptions may be allowed on a case-by-case basis, for example if they noticeably improve readability.
 
-As a general principle, **Fast-LLM prioritize code readability and maintainability** over conciseness,
+As a general principle, **Fast-LLM prioritizes code readability and maintainability** over conciseness,
 coding speed or individual programmer's preferences.
 Most of the style choices below are based on this principle.
 
