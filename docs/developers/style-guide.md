@@ -35,6 +35,7 @@ pre-commit install
 Names should be as self-explanatory as possible, within reason.
 This includes python identifiers (classes, variables, methods, modules, etc.), file names and configuration parameters.
 For example:
+
 * Avoid abbreviations, especially domain-specific ones. Ex. `bs -> batch_size`.
 * Avoid meaningless variable names such as `x`, except for generic methods.
 * Avoid redundancies especially for configuration parameters, ex. `data.data_type` -> `data.type`.
@@ -46,6 +47,7 @@ for example configuration parameters and the public interface of core classes an
 ## 🛬 Imports
 
 We use the following conventions for imports (other than those enforced by isort):
+
 * Import standard library and third party modules by module (ex. `import package.module`, not `from package.module import method`).
 This keeps identifier's origin explicit.
 * Avoid renaming with `as`, except for some (arbitrarily chosen) common ones: `numpy as np`, `triton.language as tl`.
@@ -70,6 +72,7 @@ If an offending import is only required for a type hint, include it in a `if typ
 
 Although good practices of object-oriented programming are generally ignored in python,
 Fast-LLM attempts to follow them to an extant, while avoiding unnecessary bloat:
+
 * Mark private and protected variables with an underscore `_` prefix.
 As is customary in python, we make no distinction between the two and avoid the double-underscore `__` notation.
 * Keep public interfaces (methods and variables without underscore prefix) as lean as possible.
@@ -80,6 +83,7 @@ usually to define read-only public variables.
 
 Fast-LLM uses type hints for several reasons, including code readability, type checking in IDEs,
 and type validation for configurations:
+
 * Always use type hints for the public interface of a classes and modules.
 Type hints for method outputs may be omitted if they can be easily inferred.
 * Prefer using type hints in private interfaces, especially if it improves readability and/or static type checking.
