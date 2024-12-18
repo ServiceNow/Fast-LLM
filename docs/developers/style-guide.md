@@ -76,7 +76,7 @@ Fast-LLM attempts to follow them to an extant, while avoiding unnecessary bloat:
 * Mark private and protected variables with an underscore `_` prefix.
 As is customary in python, we make no distinction between the two and avoid the double-underscore `__` notation.
 * Keep public interfaces (methods and variables without underscore prefix) as lean as possible.
-* Use accessors sparingly through the @property decorator or equivalent,
+* Use accessors sparingly through the `@property` decorator or equivalent,
 usually to define read-only public variables.
 
 ## 💡 Type Hints
