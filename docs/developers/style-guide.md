@@ -5,7 +5,7 @@ title: Style Guide
 # Style Guide
 
 This section collects general coding style guidelines used in Fast-LLM.
-Following these will ensure a swift reviewing process and will help maintaining consistency and readability.
+Following these will ensure a swift reviewing process and will help maintain consistency and readability.
 Note that while we try to enforce these principles,
 exceptions may be allowed on a case-by-case basis, for example if they noticeably improve readability.
 
