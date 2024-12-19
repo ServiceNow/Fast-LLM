@@ -10,9 +10,9 @@ To follow this guide, you'll need:
 
 -   **Hardware**: At least one NVIDIA GPU, preferably with Ampere architecture or newer. Note that this tutorial is designed for 80 GB A100s or H100 GPUs, and some adjustments are needed to run it with less memory or an earlier architecture.
 -   **Software**: Depending on your setup, you'll need one of the following:
-    -                                 **Docker**: If you're using the prebuilt Docker image on your local machine.
-    -                                 **Python 3.10**: If you're setting up a custom environment (virtual environment, bare-metal, etc.) on your local machine.
-    -                                 **Cluster Setup**: Access to a Docker-enabled Slurm cluster or to a Kubernetes cluster with Kubeflow if you're using those environments.
+    -                                   **Docker**: If you're using the prebuilt Docker image on your local machine.
+    -                                   **Python 3.10**: If you're setting up a custom environment (virtual environment, bare-metal, etc.) on your local machine.
+    -                                   **Cluster Setup**: Access to a Docker-enabled Slurm cluster or to a Kubernetes cluster with Kubeflow if you're using those environments.
 
 ## 🏗 Step 1: Initial Setup
 

@@ -28,12 +28,12 @@ If you're familiar with the codebase, consider adding a failing unit test to dem
 
 Before diving into code, [open an issue](https://github.com/ServiceNow/Fast-LLM/issues) to discuss your proposal. This is especially important if you're planning significant changes or adding new dependencies. Once your idea is approved, follow these steps:
 
-1. **Fork the Repository**: [Fork Fast-LLM](https://github.com/ServiceNow/Fast-LLM/fork) to your own GitHub account.
-2. **Clone Your Fork Locally**: Use `git clone` to bring the code to your local machine.
-3. **Create a New Branch**: Name your branch descriptively, such as `fix/training-memory-leak` or `feature/rope-scaling`.
-4. **Make Your Changes**: Work your magic! Don't forget to add or update tests, benchmarks, or configurations as needed.
-5. **Push to Your Fork**: Push the branch to your GitHub fork.
-6. **Open a Pull Request**: [Submit a pull request](https://github.com/ServiceNow/Fast-LLM/compare) to the `main` branch. Reference the original issue number and provide a brief summary of your changes.
+1.  **Fork the Repository**: [Fork Fast-LLM](https://github.com/ServiceNow/Fast-LLM/fork) to your own GitHub account.
+2.  **Clone Your Fork Locally**: Use `git clone` to bring the code to your local machine.
+3.  **Create a New Branch**: Name your branch descriptively, such as `fix/training-memory-leak` or `feature/rope-scaling`.
+4.  **Make Your Changes**: Work your magic! Don't forget to add or update tests, benchmarks, or configurations as needed.
+5.  **Push to Your Fork**: Push the branch to your GitHub fork.
+6.  **Open a Pull Request**: [Submit a pull request](https://github.com/ServiceNow/Fast-LLM/compare) to the `main` branch. Reference the original issue number and provide a brief summary of your changes.
 
 ## 🏆 Guidelines for a Successful Pull Request
 
