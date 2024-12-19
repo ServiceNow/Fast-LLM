@@ -7,16 +7,16 @@ assignees: jlamypoirier
 
 ---
 
-## 🐞 Describe the Bug
+# 🐞 Describe the Bug
 
 Provide a clear and concise description of the bug.
 
-## 🔄 Steps to Reproduce
+# 🔄 Steps to Reproduce
 
 Steps to reproduce the behavior:
 
-1.  **Get the relevant Fast-LLM version** (e.g., git commit hash or Docker image tag) that you encountered the issue with.
-2.  **Run the following command** (modify or redact as needed):
+1. **Get the relevant Fast-LLM version** (e.g., git commit hash or Docker image tag) that you encountered the issue with.
+2. **Run the following command** (modify or redact as needed):
 
     ```bash
     torchrun --rdzv_backend=static \
@@ -31,14 +31,14 @@ Steps to reproduce the behavior:
              --config /path/to/your/config.yaml
     ```
 
-3.  **Include relevant log excerpts** to help us diagnose the issue, with `NCCL_DEBUG=INFO` (or higher) enabled. Make sure the logs contain the full configuration of the run.
-4.  **Provide the configuration YAML** used for the Fast-LLM setup if logs are unavailable.
+3. **Include relevant log excerpts** to help us diagnose the issue, with `NCCL_DEBUG=INFO` (or higher) enabled. Make sure the logs contain the full configuration of the run.
+4. **Provide the configuration YAML** used for the Fast-LLM setup if logs are unavailable.
 
-## 🎯 Expected Behavior
+# 🎯 Expected Behavior
 
 Describe what you expected to happen.
 
-## 📜 Environment Information
+# 📜 Environment Information
 
 Run the following script in your environment and paste its output here:
 
@@ -105,10 +105,10 @@ fi
 echo "=== END OF ENVIRONMENT INFORMATION ==="
 ```
 
-## 📝 Additional Context
+# 📝 Additional Context
 
 Include any other information that may help us understand the issue, such as:
 
--                     Recent changes to the configuration or code.
--                     Whether the issue occurs consistently or intermittently.
--                     Any troubleshooting steps you have already tried.
+- Recent changes to the configuration or code.
+- Whether the issue occurs consistently or intermittently.
+- Any troubleshooting steps you have already tried.
