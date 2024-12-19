@@ -20,13 +20,20 @@ MD010:
 # MD013/line-length : Line length : https://github.com/DavidAnson/markdownlint/blob/v0.32.1/doc/md013.md
 MD013: false
 
+# Temporarily disabled because not automatically fixed.
 # MD030/list-marker-space : Spaces after list markers : https://github.com/DavidAnson/markdownlint/blob/v0.32.1/doc/md030.md
-MD030:
+MD030: false
   # Spaces for single-line unordered list items
-  ul_single: 3
+  # ul_single: 3
   # Spaces for single-line ordered list items
-  ol_single: 2
+  # ol_single: 2
   # Spaces for multi-line unordered list items
-  ul_multi: 3
+  # ul_multi: 3
   # Spaces for multi-line ordered list items
-  ol_multi: 2
+  # ol_multi: 2
+
+# Code block style (disable because of interactions with mkdocs note blocks)
+MD046: false
+
+# Link and image reference definitions (disable because of interactions with mkdocs footnotes)
+MD053: false

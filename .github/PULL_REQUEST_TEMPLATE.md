@@ -1,6 +1,6 @@
 # ✨ Description
 
-Please provide a brief summary of the changes, relevant motivation, and context.  
+Please provide a brief summary of the changes, relevant motivation, and context.
 Include any related issue numbers or links to discussions, and explain why this change is necessary.
 
 Closes # <!-- Insert issue number here, if applicable -->

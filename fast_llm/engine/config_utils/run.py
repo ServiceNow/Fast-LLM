@@ -248,7 +248,9 @@ def is_main_rank():
     return DistributedConfig.default_rank == _MAIN_RANK
 
 
-def log_main_rank(*message, log_fn: typing.Union[type[BaseException], typing.Callable] = logger.info, join: str = ", "):
+def log_main_rank(
+    *message, log_fn: typing.Union[type[BaseException], typing.Callable] = logger.info, join: str = ", "
+):
     if is_main_rank():
         log(*message, log_fn=log_fn, join=join)
 
