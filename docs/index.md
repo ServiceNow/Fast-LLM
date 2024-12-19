@@ -50,9 +50,9 @@ Fast-LLM offers all the capabilities you need to accelerate your LLM training an
 
 Fast-LLM powers the world's most advanced AI projects:
 
--   **NLP Research and Development:** Train state-of-the-art language models for natural language understanding, summarization, and conversational AI.
--   **Enterprise AI Solutions:** Accelerate time-to-market for AI products by reducing training costs and enabling faster iteration.
--   **Academic Collaborations:** Drive AI innovation with high-performance training capabilities that support cutting-edge research in machine learning.
+-                                 **NLP Research and Development:** Train state-of-the-art language models for natural language understanding, summarization, and conversational AI.
+-                                 **Enterprise AI Solutions:** Accelerate time-to-market for AI products by reducing training costs and enabling faster iteration.
+-                                 **Academic Collaborations:** Drive AI innovation with high-performance training capabilities that support cutting-edge research in machine learning.
 
 See how Fast-LLM has helped early adopters achieve faster results. [Explore use cases and success stories](success-stories/starcoder-2.md).
 
@@ -60,18 +60,18 @@ See how Fast-LLM has helped early adopters achieve faster results. [Explore use 
 
 Fast-LLM is designed to be the **go-to solution** for those training the most sophisticated language models. Our objectives include:
 
--   **Accelerating Training Workflows:** Deliver the fastest LLM training experience with optimized kernel efficiency, parallelism, and memory management.
--   **Supporting a Broad Range of Architectures:** Offer built-in support for all major language model architectures, with an architecture-agnostic approach that allows users to easily adapt the framework to emerging models.
--   **Enabling Seamless Integration and Deployment:** Integrate effortlessly into existing ML pipelines, including [HuggingFace Transformers](https://huggingface.co/transformers) and [Kubernetes](https://kubernetes.io)-based clusters.
--   **Advancing LLM Research and Production-Readiness:** Be suitable for both cutting-edge research and mission-critical production workloads.
+-                                 **Accelerating Training Workflows:** Deliver the fastest LLM training experience with optimized kernel efficiency, parallelism, and memory management.
+-                                 **Supporting a Broad Range of Architectures:** Offer built-in support for all major language model architectures, with an architecture-agnostic approach that allows users to easily adapt the framework to emerging models.
+-                                 **Enabling Seamless Integration and Deployment:** Integrate effortlessly into existing ML pipelines, including [HuggingFace Transformers](https://huggingface.co/transformers) and [Kubernetes](https://kubernetes.io)-based clusters.
+-                                 **Advancing LLM Research and Production-Readiness:** Be suitable for both cutting-edge research and mission-critical production workloads.
 
 ## Collaboration and Contribution
 
 As Fast-LLM evolves, we invite the community to contribute and help shape its future. We welcome:
 
--   **Testing and Bug Fixes:** Help us identify issues and improve stability.
--   **Feature Development:** Contribute new models, new training features, and new optimizations.
--   **Documentation and Tutorials:** Make Fast-LLM more accessible by improving our documentation and writing practical guides.
+-                                 **Testing and Bug Fixes:** Help us identify issues and improve stability.
+-                                 **Feature Development:** Contribute new models, new training features, and new optimizations.
+-                                 **Documentation and Tutorials:** Make Fast-LLM more accessible by improving our documentation and writing practical guides.
 
 Fast-LLM is more than just software, it's a community. Get involved by exploring our [contribution guidelines](developers/contributing.md) and engaging with us on [GitHub Discussions](https://github.com/ServiceNow/Fast-LLM/discussions).
 

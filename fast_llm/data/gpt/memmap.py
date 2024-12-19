@@ -7,7 +7,7 @@ import numpy as np
 from fast_llm.data.gpt.dataset import GPTIndexedDataset
 from fast_llm.data.preparator.gpt_memmap.config import MEMMAP_DTYPES, MEMMAP_DTYPES_INV, MEMMAP_INDEX_HEADER
 from fast_llm.engine.config_utils.data_type import DataType
-from fast_llm.utils import Assert, div, padded_cumsum
+from fast_llm.utils import Assert, div
 
 
 class GPTMemmapDataset(GPTIndexedDataset):

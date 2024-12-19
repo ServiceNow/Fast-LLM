@@ -11,9 +11,9 @@ For this guide, you would need:
 -   **Hardware**: Just a machine with CPUs will do. But having a large numbers of CPUs and nodes helps distribute the data preparation job and significantly speed things up.
 
 -   **Software**: Depending on your setup, you'll need one of the following:
-    -   **Docker**: If you're using the prebuilt Docker image on your local machine.
-    -   **Python 3.10**: If you're setting up a custom environment (virtual environment, bare-metal, etc.) on your local machine.
-    -   **Cluster Setup**: Access to a Docker-enabled Slurm cluster or to a Kubernetes cluster with Kubeflow if you're using those environments.
+    -                                 **Docker**: If you're using the prebuilt Docker image on your local machine.
+    -                                 **Python 3.10**: If you're setting up a custom environment (virtual environment, bare-metal, etc.) on your local machine.
+    -                                 **Cluster Setup**: Access to a Docker-enabled Slurm cluster or to a Kubernetes cluster with Kubeflow if you're using those environments.
 
 ## 📚 Step 1: Download the dataset from Huggingface
 
@@ -35,7 +35,7 @@ Let's create a folder called `hf_dataset` and download the-stack dataset from hu
 
 ```bash
 mkdir ./prep-stack-tutorial/hf_dataset
-while ! huggingface-cli download bigcode/the-stack --revision v1.2 --repo-type dataset --max_workers 64 --local-dir ./prep-stack-tutorial/hf_dataset; 
+while ! huggingface-cli download bigcode/the-stack --revision v1.2 --repo-type dataset --max_workers 64 --local-dir ./prep-stack-tutorial/hf_dataset;
 do sleep 1; done
 ```
 
@@ -60,7 +60,7 @@ And then download the tokenizer with this Python script:
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 model_id = "mistralai/Mistral-Nemo-Base-2407"
-tokenizer = AutoTokenizer.from_pretrained(model_id) 
+tokenizer = AutoTokenizer.from_pretrained(model_id)
 tokenizer.save_pretrained("./prep-stack-tutorial/checkpoints/Mistral-Nemo-Base-2407")
 ```
 
