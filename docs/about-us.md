@@ -27,7 +27,7 @@ At Fast-LLM, we adhere to a set of guiding principles that define our approach:
 
 Fast-LLM is led by the Foundation Models Lab at [ServiceNow Research](https://www.servicenow.com/research/), with development driven by a dedicated group of professionals who bring extensive expertise in AI, machine learning, and distributed systems. While the project direction is guided by the Foundation Models Lab, contributions come from a growing network of researchers, developers, and industry experts worldwide. Here are some of the key members leading the project:
 
--   [**Joel Lamy Poirier**](https://www.servicenow.com/research/author/joel-lamy-poirier.html) - Lead Developer and maintainer, ServiceNow Research: Joel spearheads the core development, ensuring that Fast-LLM delivers on its promise of speed and scalability.
+-   **Joel Lamy Poirier**](<https://www.servicenow.com/research/author/joel-lamy-poirier.html>) - Lead Developer and maintainer, ServiceNow Research: Joel spearheads the core development, ensuring that Fast-LLM delivers on its promise of speed and scalability.
 -   [**Sean Hughes**](https://www.servicenow.com/research/author/sean-hughes.html) - Ecosystem Director, ServiceNow Research: Sean focuses on building partnerships and open scientific collaborations to advance Fast-LLM's capabilities and reach.
 -   [**Torsten Scholak**](https://www.servicenow.com/research/author/torsten-scholak.html) - Research Lead, ServiceNow Research: Torsten leads our research efforts, driving the scientific innovations that keep Fast-LLM at the forefront of AI training.
 

@@ -45,8 +45,8 @@ Now, select the compute environment that matches your setup or preferred workflo
 
     If you prefer not to use the prebuilt Docker image or already have an environment you'd like to use (e.g., a custom Docker image, virtual environment, or bare-metal setup), follow these steps to install the necessary software and dependencies:
 
-    1.  **Ensure Python 3.10**:
-        Install Python 3.10 (or later) if it's not already available on your system. For a Python virtual environment, run:
+    1.  **Ensure Python 3.12**:
+        Install Python 3.12 (or later) if it's not already available on your system. For a Python virtual environment, run:
 
         ```bash
         python3.10 -m venv ./fast-llm-tutorial/venv
