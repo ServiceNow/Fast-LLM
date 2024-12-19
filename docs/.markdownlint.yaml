@@ -20,9 +20,6 @@ MD010:
 # MD013/line-length : Line length : https://github.com/DavidAnson/markdownlint/blob/v0.32.1/doc/md013.md
 MD013: false
 
-# MD024/no-duplicate-heading Multiple headings with the same content (disabled because we do it).
-MD024: false
-
 # Temporarily disabled because not automatically fixed.
 # MD030/list-marker-space : Spaces after list markers : https://github.com/DavidAnson/markdownlint/blob/v0.32.1/doc/md030.md
 MD030: false
@@ -37,6 +34,3 @@ MD030: false
 
 # Code block style (disable because of interactions with mkdocs note blocks)
 MD046: false
-
-# Link and image reference definitions (disable because of interactions with mkdocs footnotes)
-MD053: false
