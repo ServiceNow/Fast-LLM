@@ -34,3 +34,6 @@ MD030: false
 
 # Code block style (disable because of interactions with mkdocs note blocks)
 MD046: false
+
+# Link and image reference definitions (disable because of interactions with mkdocs footnotes)
+MD053: false

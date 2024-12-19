@@ -53,7 +53,7 @@ repos:
     hooks:
     -   id: markdownlint-cli2
         name: markdownlint
-        files: "docs/*.md"
+        files: "docs/"
         entry: markdownlint-cli2
         args: ["--fix"]
         language: node
