@@ -129,6 +129,6 @@ ex. if they return the input, an explicitly typed variable or nothing.
 
 ## 🗑️ Misc
 
-*                                 Please add descriptions and comments as needed, especially for parts that would otherwise be difficult to understand.
-*                                 Use `pathlib` rather than `os.path`.
-*                                 We encourage the use of modern python features when beneficial, up to the minimum python version (3.12).
+*   Please add descriptions and comments as needed, especially for parts that would otherwise be difficult to understand.
+*   Use `pathlib` rather than `os.path`.
+*   We encourage the use of modern python features when beneficial, up to the minimum python version (3.12).
