@@ -54,6 +54,6 @@ repos:
     -   id: markdownlint-cli2
         name: markdownlint
         entry: markdownlint-cli2
-        args: ["--fix"]
+        args: ["\"docs/**/*.md\", "--fix"]
         language: node
         types: [markdown]
