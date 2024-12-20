@@ -16,8 +16,8 @@ Want to keep up with the latest Fast-LLM updates and new opportunities to get in
 
 Fast-LLM thrives on collaboration, and we're excited to welcome new contributors! From fixing bugs to adding new features, every code contribution makes a difference. If you're just getting started, our [Good First Issues](https://github.com/ServiceNow/Fast-LLM/issues?q=is%3Aopen+is%3Aissue+label%3A%22good+first+issue%22) on GitHub are labeled to help newcomers find approachable tasks. To set up your development environment and get oriented with Fast-LLM, check out our **Developer's Corner** for everything you need:
 
--   [**Contributing**](developers/contributing.md) – for setup instructions and contributing guidelines
--   [**Best Practices**](developers/dev-practices.md) – for tips on writing clean, maintainable code
+-   [**Contributing**](contributing/contributing.md) – for setup instructions and contributing guidelines
+-   [**Best Practices**](contributing/dev-practices.md) – for tips on writing clean, maintainable code
 
 Here's a quick overview of the process:
 
@@ -26,7 +26,7 @@ Here's a quick overview of the process:
 3.  **Write Awesome Code**: Make your changes, document them, and follow our best practices.
 4.  **Open a Pull Request**: Submit a PR to showcase your work and get feedback from our team and the community.
 
-Explore our [Developer's Corner](developers/contributing.md) for everything you need to get started!
+Explore our [Developer's Corner](contributing/contributing.md) for everything you need to get started!
 
 ## 💡 Feature Requests & Ideas
 

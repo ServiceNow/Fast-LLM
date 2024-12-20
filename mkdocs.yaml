@@ -172,10 +172,16 @@ nav:
     - Continue training Llama 8B: recipes/continue-training-llama-8b.md
     - Upcycle Llama 3B to MoE: recipes/upcycle-llama-3b-to-moe.md
   - Reference:
-    - Configuration: reference/configuration.md
-  - Developers:
-    - Contributing: developers/contributing.md
-    - Style Guide: developers/style-guide.md
-    - Development Practices: developers/dev-practices.md
+    - User Guide:
+      - Configuration: user_guide/configuration.md
+    - Developer Guide:
+      - Configuration: developer_guide/configuration.md
+      - Model:
+        - Model: developer_guide/model.md
+        - Conversion: developer_guide/conversion.md
+  - Contributing:
+    - Contribution Guide: contributing/contributing.md
+    - Style Guide: contributing/style-guide.md
+    - Development Practices: contributing/dev-practices.md
   - About Us: about-us.md
   - Join Us: join-us.md
