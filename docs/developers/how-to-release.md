@@ -1,21 +1,41 @@
-# How to Release Fast-LLM
+# How to Release Fast-LLM: A Step-by-Step Guide
 
-This document provides a step-by-step guide for creating a new release of Fast-LLM. Follow these instructions to ensure a smooth and consistent release process.
+This document walks you through the process of creating a new release of Fast-LLM. We follow these steps to keep releasing smooth, consistent, and hassle-free.
 
 ## Release Policy
 
-1.  **Responsibility:** Only the maintainer is authorized to create and publish releases. This ensures consistency, quality, and accountability in the release process.
+1.  **Who's in Charge?** Only the maintainer is authorized to create and publish releases. This ensures consistency, quality, and accountability.
 
-2.  **Collaboration:** Contributors with write access can propose changes and prepare the repository for a release (e.g., ensuring tests pass, updating documentation). However, the final tagging and publishing of a release are the maintainer's responsibility.
+2.  **Teamwork Makes the Dream Work:** Contributors with write access can propose changes and prep the repository for a release (steps 1 and 2 below in the "Release Process" section). But tagging and publishing the release? That's the maintainer's job.
 
-3.  **Versioning:** Follow [Semantic Versioning](https://semver.org/) guidelines (e.g., `MAJOR.MINOR.PATCH`).
+3.  **Versioning Made Simple:** Fast-LLM sticks to [Semantic Versioning](https://semver.org/) (aka semver). Here's the gist:
+    -   **MAJOR versions** (like `1.0.0`) are for big, stable, feature-complete milestones. Since we're still in pre-1.0 territory, we don't have these yet.
+    -   **MINOR versions** (e.g., `0.2.0`) bring new features that play nice with existing ones, that don't break anything because of backward compatibility. MINOR releases are the main focus of our current development efforts. They're tied to [milestones](https://github.com/ServiceNow/Fast-LLM/milestones) and are released on a regular schedule.
+    -   **PATCH versions** (e.g., `0.2.1`) squash bugs and tweak small stuff. They don't introduce new functionality. These aren't tied to milestones and drop whenever needed to fix things.
+
+4.  **Milestones are for MINOR Releases:** Each [milestone](https://github.com/ServiceNow/Fast-LLM/milestones) corresponds to a MINOR version (`0.2.0`, `0.3.0`, etc.) and includes all issues and pull requests targeted for that release. Milestones have due dates and are used to track progress toward the next MINOR release. PATCH releases? Handled as individual issues or small groups of issues.
+
+5.  **All Roads Lead to `main`:** Active development happens on the `main` branch, whether it's for a MINOR or PATCH release. We don't do release branches, backport features, or support old versions. Stick with the latest release for stability. As a user, you are expected to use `main` for production unless you're ready to live on the edge.
 
 ## Release Process
 
-### 1. Update Version
+### 1. Get Ready to Release
 
-1.  Open the `__init__.py` file and update the `__version__` string to the new version number.
-2.  Update the `version` field in `setup.cfg` to match.
+Before tagging anything, make sure the repository is in tip-top shape:
+
+1.  Close or defer all issues in the current milestone.
+2.  Verify that all targeted pull requests are merged.
+3.  Double-check the repo:
+
+    -   All tests should pass.
+    -   The documentation should be up to date.
+    -   Pull requests should have appropriate labels for release notes.
+
+4.  Decide if unresolved bugs need fixing before the release.
+
+### 2. Update the Version
+
+1.  Update the version in **init**.py and setup.cfg:
 
     ```python
     # __init__.py
@@ -27,16 +47,16 @@ This document provides a step-by-step guide for creating a new release of Fast-L
     version = "0.2.0"  # Update this to the new version.
     ```
 
-3.  Commit the changes:
+2.  Commit the version bump:
 
     ```bash
     git add __init__.py setup.cfg
     git commit -m "Bump version to 0.2.0"
     ```
 
-### 2. Create a Git Tag
+### 3. Tag It
 
-1.  Create an annotated tag for the release:
+1.  Create a new Git tag:
 
     ```bash
     git tag -a v0.2.0 -m "Release version 0.2.0"
@@ -48,47 +68,48 @@ This document provides a step-by-step guide for creating a new release of Fast-L
     git push origin v0.2.0
     ```
 
-### 3. Draft a Release on GitHub
+### 4. Draft a Release on GitHub
 
-1.  Go to the repository on GitHub and click on the **Releases** tab.
-2.  Click **Draft a new release**.
-3.  Under **Tag version**, select the tag you just pushed (`v0.2.0`).
-4.  Use the **Generate release notes** button to automatically create release notes based on merged pull requests and commits.
-5.  Customize the release notes as needed:
+1.  Head to the [Releases section](https://github.com/ServiceNow/Fast-LLM/releases) in the Fast-LLM GitHub repository.
+2.  Click [Create a new release](https://github.com/ServiceNow/Fast-LLM/releases/new).
+3.  Under **Choose a tag**, select the tag you just pushed (e.g., `v0.2.0`).
+4.  Use GitHub's [automatic release note generation](https://docs.github.com/en/repositories/releasing-projects-on-github/automatically-generated-release-notes) feature by clicking **Generate release notes** to create release notes based on merged pull requests and commits since the last release.
+5.  Customize the release notes as needed by highlighting key changes and features.
+6.  Activate the **Create a discussion for this release** option to allow users to ask questions and provide feedback.
+7.  Click **Publish release** to make the release public.
 
-    -   Highlight new features, bug fixes, and other changes.
-    -   Group pull requests by categories such as "Features", "Bug Fixes", and "Documentation".
+### 5. Check the CI/CD Pipeline
 
-6.  Click **Publish release**.
+1.  Confirm all CI workflows for the tagged version are green (including tests, docker builds, documentation).
+2.  Verify that the release artifacts (e.g., Docker images) are available.
+3.  Ensure updated documentation is live.
 
-### 4. Verify CI/CD Pipeline
+### 6. Post-Release Checklist
 
-1.  Confirm that all Continuous Integration (CI) workflows have completed successfully (e.g., tests, builds).
-2.  If applicable, verify that the release artifacts (i.e., docker images) are available and accessible.
+1.  **Spread the Word:** Announce the release across Fast-LLM's communication channels, which includes the GitHub Discussions forum and the discussion thread for the release created in step 4.
+2.  **After the release is before the release:** Prep for the next version:
 
-### 5. Post-Release Checklist
+    -   Update the `__version__` string and `setup.cfg` to reflect the next development version (e.g., `0.2.1-dev`):
 
-1.  Announce the new release to the community.
-2.  Verify that the updated documentation (if any) is live.
-3.  Prepare for the next development cycle by:
+        ```python
+        # __init__.py
+        __version__ = "0.2.1-dev"
+        ```
 
-    -   Creating a new branch for the next version.
-    -   Updating the `__version__` string and `setup.cfg` to a development version (e.g., `0.2.1-dev`).
+        ```properties
+        # setup.cfg
+        version = "0.2.1-dev"
+        ```
 
-    ```python
-    # __init__.py
-    __version__ = "0.2.1-dev"
-    ```
+    -   Commit and push the changes:
 
-    ```properties
-    # setup.cfg
-    version = "0.2.1-dev"
-    ```
+        ```bash
+        git add __init__.py setup.cfg
+        git commit -m "Start development on version 0.2.1"
+        git push origin main
+        ```
 
-4.  Push changes to the repository:
+3.  Update milestones:
 
-   ```bash
-   git add __init__.py pyproject.toml
-   git commit -m "Start development on version 0.2.1"
-   git push origin main
-   ```
+    -   Close the milestone for the release (e.g., `0.2.0`).
+    -   Create a new milestone for the next MINOR release (e.g., `0.3.0`).
