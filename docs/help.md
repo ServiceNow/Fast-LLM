@@ -37,7 +37,7 @@ For more detailed solutions, check out our GitHub Issues page. Odds are someone'
 
 ## Reference 📚
 
-If you're the type who loves configurations and tweaking every detail, the [**Configuration Reference**](reference/configuration.md) is for you. It covers every config option you could imagine. From optimizer settings to batch sizes to distributed training parameters. It's all in there.
+If you're the type who loves configurations and tweaking every detail, the [**Configuration Reference**](user_guide/configuration.md) is for you. It covers every config option you could imagine. From optimizer settings to batch sizes to distributed training parameters. It's all in there.
 
 ---
 
