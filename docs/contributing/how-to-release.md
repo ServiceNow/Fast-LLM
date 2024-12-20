@@ -35,7 +35,7 @@ Before tagging anything, make sure the repository is in tip-top shape:
 
 ### 2. Update the Version
 
-1.  Update the version in **init**.py and setup.cfg:
+1.  Update the version in `__init__.py` and `setup.cfg`:
 
     ```python
     # __init__.py
