@@ -1,7 +1,6 @@
 import json
 import multiprocessing
 import pathlib
-import shutil
 
 import datasets
 import numpy as np
