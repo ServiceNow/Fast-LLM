@@ -25,6 +25,7 @@ since this is the most common use case.
 When creating a new checkpoint format, the first step is to subclass `CheckpointFormat`.
 This data structure holds important properties of the format, and makes them accessible at the configuration level.
 Some important entries include:
+
 *   `name`: A name for the format, as will appear for example in configuration files
 *   `support_optimizer`: Whether the optimizer state can be included in a checkpoint.
 *   `support_saving`, `support_loading`: This can be used to create read-only or write-only formats.
@@ -32,6 +33,7 @@ Some important entries include:
 The class should be imported lazily so the `CheckpointFormat` remains accessible by configurations.
 
 Here is a simple example:
+
 ```python
 class AwesomeCheckpointFormat(CheckpointFormat):
     name = "awesome_checkpoint"
@@ -46,6 +48,7 @@ class AwesomeCheckpointFormat(CheckpointFormat):
 
 Once the metadata class is created, we want to let the model know about it.
 We do this by adding it to the `checkpoint_formats` property of the model configuration class. For example:
+
 ```python
 @config_class()
 class AwesomeModelConfig(FastLLMModelConfig):
@@ -72,10 +75,10 @@ See the [Hugging Face implementation](https://github.com/ServiceNow/Fast-LLM/blo
 To perform the conversion, the checkpoint handler relies on a list of `ParamConverter` objects,
 which describe how individual parameters (or in some case multiple ones) should be converted.
 The `ParamConverter` base interface consists of four entries:
+
 *   `fast_llm_names: tuple[tuple[str, ...], ...]`:
 *   `export_names: tuple[tuple[str, ...], ...]`:
 *   `export_params(self, fast_llm_values: tuple[typing.Any, ...]) -> tuple[typing.Any, ...]`:
 *   `import_params(self, export_values: tuple[typing.Any, ...]) -> tuple[typing.Any, ...]`:
-
 
 ### State conversion

@@ -35,7 +35,7 @@ Let's create a folder called `hf_dataset` and download the-stack dataset from hu
 
 ```bash
 mkdir ./prep-stack-tutorial/hf_dataset
-while ! huggingface-cli download bigcode/the-stack --revision v1.2 --repo-type dataset --max_workers 64 --local-dir ./prep-stack-tutorial/hf_dataset; 
+while ! huggingface-cli download bigcode/the-stack --revision v1.2 --repo-type dataset --max_workers 64 --local-dir ./prep-stack-tutorial/hf_dataset;
 do sleep 1; done
 ```
 
@@ -60,7 +60,7 @@ And then download the tokenizer with this Python script:
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 model_id = "mistralai/Mistral-Nemo-Base-2407"
-tokenizer = AutoTokenizer.from_pretrained(model_id) 
+tokenizer = AutoTokenizer.from_pretrained(model_id)
 tokenizer.save_pretrained("./prep-stack-tutorial/checkpoints/Mistral-Nemo-Base-2407")
 ```
 
