@@ -1,5 +1,5 @@
 ---
-title: Configuration Reference
+title: Model Reference
 ---
 
 !!! warning
