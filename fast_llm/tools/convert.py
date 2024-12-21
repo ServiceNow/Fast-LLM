@@ -87,7 +87,7 @@ class ConversionConfig(RunnableConfig):
         else:
             converter_class = self.output.format.get_handler_class()
             # TODO: Support other types?
-            from fast_llm.engine.checkpoint.external import HuggingfaceStateDictCheckpointHandler
+            from fast_llm.engine.checkpoint.huggingface import HuggingfaceStateDictCheckpointHandler
 
             assert issubclass(converter_class, HuggingfaceStateDictCheckpointHandler)
             logger.info(f">>> Loading model config")
