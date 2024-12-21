@@ -6,8 +6,6 @@ This reference guide describes all there is to know about Fast-LLM's checkpoint 
 After reading this, you should be able to create your own `External` converter, in Hugging Face format or other.
 And if you are familiar with the rest of Fast-LLM, you will also be able to create an entirely custom converter.
 
-## Conversion and checkpointing basics
-
 Fast-LLM provides a simple and [fully customizable interface](https://github.com/ServiceNow/Fast-LLM/blob/main/fast_llm/engine/checkpoint/config.py) to save/load checkpoints and configurations.
 This same interface is used both by Fast-LLM official checkpoint formats (`distributed` and `fast-llm`),
 and by the checkpoint conversion interface.
@@ -260,8 +258,12 @@ pretrained:
   format: awesome_checkpoint
 ```
 
-### Customize the converter
+### External converters beyond Hugging Face
 
 !!! warning
+    Coming soon. Stay tuned for new updates!
 
+## Creating a custom checkpoint format
+
+!!! warning
     Coming soon. Stay tuned for new updates!
