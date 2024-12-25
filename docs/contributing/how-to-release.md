@@ -15,7 +15,7 @@ This document walks you through the process of creating a new release of Fast-LL
 
 4.  **Milestones are for MINOR Releases:** Each [milestone](https://github.com/ServiceNow/Fast-LLM/milestones) corresponds to a MINOR version (`0.2.0`, `0.3.0`, etc.) and includes all issues and pull requests targeted for that release. Milestones have due dates and are used to track progress toward the next MINOR release. PATCH releases? Handled as individual issues or small groups of issues.
 
-5.  **All Roads Lead to `main`:** Active development happens on the `main` branch, whether it's for a MINOR or PATCH release. We don't do release branches, backport features, or support old versions. Stick with the latest release for stability. As a user, you are expected to use `main` for production unless you're ready to live on the edge.
+5.  **All Roads Lead to `main`:** Active development happens on the `main` branch, whether it's for a MINOR or PATCH release. We don't do release branches, backport features, or support old versions. Stick with the latest release for stability. As a user, you are never expected to use `main` for production unless you're ready to live on the edge.
 
 ## Release Process
 
