@@ -1,4 +1,4 @@
-from fast_llm.data.gpt.data import GPTData
+from fast_llm.data.data.gpt.data import GPTData
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.models.custom.config import CustomDataConfig
 

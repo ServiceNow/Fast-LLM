@@ -1,6 +1,6 @@
 import logging
 
-from fast_llm.data.gpt.data import GPTData
+from fast_llm.data.data.gpt.data import GPTData
 from fast_llm.engine.distributed.config import PhaseType
 from fast_llm.engine.training.trainer import Trainer
 from fast_llm.models.gpt.config import GPTTrainerConfig

@@ -3,11 +3,11 @@ import math
 import numpy as np
 
 from fast_llm.core.distributed import safe_barrier
-from fast_llm.data.config import SampledDataset
-from fast_llm.data.fim import Fim
-from fast_llm.data.gpt.config import GPTSamplingConfig
-from fast_llm.data.gpt.data import GPTData
-from fast_llm.data.gpt.dataset import GPTIndexedDataset
+from fast_llm.data.data.gpt.config import GPTSamplingConfig
+from fast_llm.data.data.gpt.data import GPTData
+from fast_llm.data.dataset.abstract import SampledDataset
+from fast_llm.data.dataset.gpt.abstract import GPTIndexedDataset
+from fast_llm.data.dataset.gpt.fim.fim import Fim
 from fast_llm.engine.config_utils.run import log_main_rank
 from fast_llm.engine.distributed.config import MAX_SEED
 from fast_llm.utils import Assert
