@@ -1,6 +1,6 @@
 import numpy as np
 
-from fast_llm.data.config import FIM_MIDDLE, FIM_PAD, FIM_PREFIX, FIM_SUFFIX, FimConfig
+from fast_llm.data.dataset.gpt.fim.config import FIM_MIDDLE, FIM_PAD, FIM_PREFIX, FIM_SUFFIX, FimConfig
 from fast_llm.data.tokenizer import Tokenizer
 
 

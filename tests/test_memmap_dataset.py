@@ -4,7 +4,7 @@ import tempfile
 import numpy as np
 import pytest
 
-from fast_llm.data.gpt.memmap import GPTMemmapDataset
+from fast_llm.data.dataset.gpt.memmap import GPTMemmapDataset
 from fast_llm.data.preparator.gpt_memmap.config import MEMMAP_DTYPES
 
 

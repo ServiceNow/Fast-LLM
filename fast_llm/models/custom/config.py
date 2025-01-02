@@ -1,7 +1,7 @@
 import typing
 
 from fast_llm.config import FieldUpdate, config_class
-from fast_llm.data.gpt.config import GPTDataConfig
+from fast_llm.data.data.gpt.config import GPTDataConfig
 from fast_llm.models.gpt.config import (
     GPTArchitectureConfig,
     GPTBaseModelConfig,

@@ -3,7 +3,7 @@ import logging
 import pathlib
 
 from fast_llm.config import Field, config_class
-from fast_llm.data.gpt.memmap import GPTMemmapDataset
+from fast_llm.data.dataset.gpt.memmap import GPTMemmapDataset
 from fast_llm.engine.config_utils.runnable import RunnableConfig
 
 logger = logging.getLogger(__name__)
@@ -31,7 +31,7 @@ class ConcatenateDatasetConfig(RunnableConfig):
         for path in self.directory.glob("**/*.idx"):
             prefix = path.with_suffix("")
             logger.info(str(prefix))
-            dataset = GPTMemmapDataset(prefix)
+            dataset = GPTMemmapDataset("dataset", prefix)
             dataset_dict = {
                 "prefix": str(prefix.relative_to(self.directory)),
                 "num_documents": dataset.num_documents,

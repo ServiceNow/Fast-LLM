@@ -1,15 +1,23 @@
+import enum
+
 from fast_llm.config import Field, FieldHint, check_field, config_class
-from fast_llm.data.config import (
-    DataConfig,
-    DatasetSource,
-    FimConfig,
-    MultiprocessingContext,
-    SamplingConfig,
-    TokenizerConfig,
-    _validate_path,
-    _validate_split,
-)
+from fast_llm.data.config import MultiprocessingContext, TokenizerConfig, _validate_path, _validate_split
+from fast_llm.data.data.config import DataConfig, SamplingConfig
+from fast_llm.data.dataset.gpt.fim.config import FimConfig
 from fast_llm.utils import Assert
+
+
+class DatasetSource(str, enum.Enum):
+    """
+    An enum for the different ways to load datasets.
+    TODO: Reduce the diversity?
+    TODO: Is this specific to GPT data?
+    """
+
+    list = "list"
+    file = "file"
+    sample = "sample"
+    random = "random"
 
 
 @config_class()

@@ -3,11 +3,12 @@ import typing
 
 import numpy as np
 
-from fast_llm.data.config import SamplableDataset
-from fast_llm.data.gpt.config import GPTSamplingConfig
+from fast_llm.data.data.gpt.config import GPTSamplingConfig
+from fast_llm.data.dataset.abstract import SamplableDataset
 
 if typing.TYPE_CHECKING:
-    from fast_llm.data.gpt.data import GPTData
+    from fast_llm.data.data.gpt.data import GPTData
+    from fast_llm.data.dataset.gpt.sampled import GPTSampledIndexedDataset
 
 
 try:
@@ -44,14 +45,14 @@ class GPTIndexedDataset(SamplableDataset):
         return self.get_document_sizes().sum()
 
     @abc.abstractmethod
-    def get_document_sizes(self) -> "np.ndarray":
+    def get_document_sizes(self) -> np.ndarray:
         """
         The size of each document in the dataset.
         The resulting array could be very large, so this method should be called cautiously,
         and derived classes should try to avoid holding the whole array im memory.
         """
 
-    def sample(self, config: GPTSamplingConfig, data: "GPTData"):
-        from fast_llm.data.gpt.sampled import GPTSampledIndexedDataset
+    def sample(self, config: GPTSamplingConfig, data: "GPTData") -> "GPTSampledIndexedDataset":
+        from fast_llm.data.dataset.gpt.sampled import GPTSampledIndexedDataset
 
         return GPTSampledIndexedDataset(self, config, data)

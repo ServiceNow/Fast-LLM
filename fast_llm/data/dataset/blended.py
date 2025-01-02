@@ -6,12 +6,13 @@ import typing
 import numpy as np
 
 from fast_llm.core.distributed import safe_barrier
-from fast_llm.data.config import PhaseSplits, SampledDataset, SamplingConfig, SplitDataset
+from fast_llm.data.data.config import SamplingConfig
+from fast_llm.data.dataset.abstract import PhaseSplits, SampledDataset, SplitDataset
 from fast_llm.engine.config_utils.run import log_main_rank
 from fast_llm.utils import Assert, normalize_probabilities
 
 if typing.TYPE_CHECKING:
-    from fast_llm.data.gpt.data import GPTData
+    from fast_llm.data.data.gpt.data import GPTData
 
 try:
     from fast_llm.csrc.data import build_blending_indices  # noqa
