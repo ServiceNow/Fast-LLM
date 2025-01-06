@@ -1,18 +1,15 @@
 import logging
 import pathlib
 import time
-import typing
 
 import numpy as np
 
 from fast_llm.core.distributed import safe_barrier
+from fast_llm.data.data.abstract import Data
 from fast_llm.data.data.config import SamplingConfig
-from fast_llm.data.dataset.abstract import PhaseSplits, SampledDataset, SplitDataset
+from fast_llm.data.dataset.abstract import SampledDataset
 from fast_llm.engine.config_utils.run import log_main_rank
 from fast_llm.utils import Assert, normalize_probabilities
-
-if typing.TYPE_CHECKING:
-    from fast_llm.data.data.gpt.data import GPTData
 
 try:
     from fast_llm.csrc.data import build_blending_indices  # noqa
@@ -35,14 +32,16 @@ class BlendedDataset(SampledDataset):
     def __init__(
         self,
         name: str,
-        datasets_and_weights: list[tuple[SampledDataset, float]],
+        datasets: list[SampledDataset],
+        weights: list[float],
         sampling_config: SamplingConfig,
         # TODO: Generalize
-        data: "GPTData",
+        data: Data,
     ):
         self._name = name
-        assert len(datasets_and_weights) > 0
-        self._datasets, weights = zip(*datasets_and_weights)
+        assert len(datasets) > 0
+        Assert.eq(len(datasets), len(weights))
+        self._datasets = datasets
         self._weights = normalize_probabilities(weights)
         self._num_samples = sampling_config.num_samples
         self._data_sample_warn_time_ms = data.config.data_sample_warn_time_ms
@@ -71,32 +70,6 @@ class BlendedDataset(SampledDataset):
 
             safe_barrier(group, self._name)
             self._load_mappings(sampling_config.verbose)
-
-    @classmethod
-    def apply(
-        cls,
-        name: str,
-        datasets_and_weights: list[(SplitDataset[SampledDataset], float)],
-        sampling_configs: PhaseSplits[SamplingConfig],
-        data: "GPTData",
-    ):
-        Assert.leq(set(sampling_configs), set.union(*[set(dataset) for dataset, _ in datasets_and_weights]))
-        return SplitDataset[BlendedDataset](
-            name,
-            {
-                phase: BlendedDataset(
-                    f"{name}_{phase.value}",
-                    [
-                        (dataset[phase], weight)
-                        for dataset, weight in datasets_and_weights
-                        if phase in dataset and weight > 0
-                    ],
-                    sampling_config,
-                    data,
-                )
-                for phase, sampling_config in sampling_configs.items()
-            },
-        )
 
     def __getstate__(self):
         return (

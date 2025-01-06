@@ -58,7 +58,12 @@ CONFIG_BASE_FAST_LLM = [
     "training.num_workers=0",
     "batch.batch_size=8",
     "batch.sequence_length=512",
-    f"data.path={DATASET_PREFIX}",
+    "data.dataset.type=split",
+    "data.dataset.dataset.type=memmap",
+    f"data.dataset.dataset.path={DATASET_PREFIX}",
+    f"data.dataset.ratios.training=969",
+    f"data.dataset.ratios.validation=30",
+    f"data.dataset.ratios.test=1",
     "optimizer.learning_rate.base=0.0001",
 ]
 CONFIG_BASE_MEGATRON = [

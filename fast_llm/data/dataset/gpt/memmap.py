@@ -83,7 +83,7 @@ class GPTMemmapDataset(GPTIndexedDataset):
     def num_tokens(self) -> int:
         return div(self._bin_buffer_mmap.size, np.dtype(self._dtype).itemsize)
 
-    def get_document_sizes(self) -> "np.ndarray":
+    def get_document_sizes(self) -> np.ndarray:
         """
         The size of each document in the dataset.
         The resulting array could be very large, so this method should be called cautiously,

@@ -2,17 +2,16 @@ import typing
 
 import numpy as np
 
-from fast_llm.data.data.gpt.config import GPTSamplingConfig
 from fast_llm.data.dataset.abstract import SamplableDataset, SampledDataset
+from fast_llm.data.dataset.gpt.config import GPTSamplingConfig
 
 if typing.TYPE_CHECKING:
     from fast_llm.data.data.gpt.data import GPTData
 
 
-class DummyGPTDataset(SamplableDataset):
+class GPTDummyDataset(SamplableDataset):
     """
-    A dummy dataset that always returns the same sample, for debugging purposes.
-    The sample can be purely random, or read from a file to allow reproducing in other runs.
+    A dummy dataset that always returns the same random sample, for debugging purposes.
     """
 
     def __init__(self, name: str, sequence_length: int, vocab_size: int):
@@ -20,7 +19,7 @@ class DummyGPTDataset(SamplableDataset):
         self._name = name
 
     def sample(self, config: GPTSamplingConfig, data: "GPTData"):
-        return DummyGPTSampledDataset(self, config)
+        return GPTDummySampledDataset(self, config)
 
     def get(self):
         return self._dummy_sample
@@ -30,13 +29,8 @@ class DummyGPTDataset(SamplableDataset):
         return self._name
 
 
-class DummyGPTSampledDataset(SampledDataset):
-    """
-    A dummy dataset that always returns the same sample, for debugging purposes.
-    The sample can be purely random, or read from a file to allow reproducing in other runs.
-    """
-
-    def __init__(self, dataset: DummyGPTDataset, config: GPTSamplingConfig):
+class GPTDummySampledDataset(SampledDataset):
+    def __init__(self, dataset: GPTDummyDataset, config: GPTSamplingConfig):
         self._config = config
         self._dataset = dataset
 

@@ -3,8 +3,8 @@ import typing
 
 import numpy as np
 
-from fast_llm.data.data.gpt.config import GPTSamplingConfig
 from fast_llm.data.dataset.abstract import SamplableDataset
+from fast_llm.data.dataset.gpt.config import GPTSamplingConfig
 
 if typing.TYPE_CHECKING:
     from fast_llm.data.data.gpt.data import GPTData

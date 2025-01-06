@@ -1,27 +1,17 @@
-import enum
+import logging
 
 from fast_llm.config import Field, FieldHint, check_field, config_class
-from fast_llm.data.config import MultiprocessingContext, TokenizerConfig, _validate_path, _validate_split
-from fast_llm.data.data.config import DataConfig, SamplingConfig
+from fast_llm.data.config import MultiprocessingContext, TokenizerConfig
+from fast_llm.data.data.config import DataConfig
+from fast_llm.data.dataset.gpt.config import GPTLegacyConfig, GPTLegacyDatasetConfig, GPTSampledSplitDatasetConfig
 from fast_llm.data.dataset.gpt.fim.config import FimConfig
 from fast_llm.utils import Assert
 
-
-class DatasetSource(str, enum.Enum):
-    """
-    An enum for the different ways to load datasets.
-    TODO: Reduce the diversity?
-    TODO: Is this specific to GPT data?
-    """
-
-    list = "list"
-    file = "file"
-    sample = "sample"
-    random = "random"
+logger = logging.getLogger(__name__)
 
 
 @config_class()
-class GPTDataConfig(DataConfig):
+class GPTDataConfig(DataConfig, GPTLegacyConfig):
     """
     Configuration for the dataset(s), split and sampling.
     Currently hard-coded to a GPT dataset.
@@ -35,28 +25,15 @@ class GPTDataConfig(DataConfig):
         desc="Configuration for the tokenizer (for FIM).",
         hint=FieldHint.feature,
     )
+    dataset: GPTSampledSplitDatasetConfig = Field(
+        default=None,
+        desc="Configuration for the dataset(s).",
+        hint=FieldHint.core,
+    )
     fim: FimConfig = Field(
         default_factory=FimConfig,
         desc="Configuration for Fill In the Middle (FIM).",
         hint=FieldHint.feature,
-    )
-    # TODO: set default to [1,0,0]?
-    split: list[float] = Field(
-        default_factory=lambda: [969, 30, 1],
-        desc="Split ratio for train, valid and test datasets.",
-        hint=FieldHint.core,
-        valid=_validate_split,
-    )
-    format: DatasetSource = Field(
-        default=DatasetSource.list,
-        desc="Format for the dataset definition.",
-        hint=FieldHint.core,
-    )
-    path: list[str] = Field(
-        default_factory=list,
-        desc="Path or list of paths and weights.",
-        hint=FieldHint.core,
-        valid=_validate_path,
     )
     data_sample_warn_time_ms: float = Field(
         default=1000,
@@ -70,7 +47,11 @@ class GPTDataConfig(DataConfig):
         hint=FieldHint.expert,
     )
 
-
-@config_class
-class GPTSamplingConfig(SamplingConfig):
-    sequence_length: int = Field(default=None, desc="Number of token in each sample.")
+    def __post_init__(self):
+        if self.dataset is None:
+            logger.warning("Using the legacy dataset definition format." " Specify it through `data.dataset` instead.")
+            self.dataset = GPTLegacyDatasetConfig(
+                split=self.split,
+                format=self.format,
+                path=self.path,
+            )
