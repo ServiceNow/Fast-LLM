@@ -26,7 +26,7 @@ class GPTDataConfig(DataConfig, GPTLegacyConfig):
         hint=FieldHint.feature,
     )
     dataset: GPTSampledSplitDatasetConfig = Field(
-        default=None,
+        default_factory=GPTSampledSplitDatasetConfig,
         desc="Configuration for the dataset(s).",
         hint=FieldHint.core,
     )
@@ -47,11 +47,12 @@ class GPTDataConfig(DataConfig, GPTLegacyConfig):
         hint=FieldHint.expert,
     )
 
-    def __post_init__(self):
-        if self.dataset is None:
+    def _validate(self):
+        if self.dataset.type is None:
             logger.warning("Using the legacy dataset definition format." " Specify it through `data.dataset` instead.")
             self.dataset = GPTLegacyDatasetConfig(
-                split=self.split,
+                ratio=self.ratio,
                 format=self.format,
                 path=self.path,
             )
+        super()._validate()

@@ -1,20 +1,18 @@
+import functools
 import math
-import typing
 
-from fast_llm.config import Config, Field, FieldHint, config_class
+from fast_llm.config import Config, Field, FieldHint, check_field, config_class
 from fast_llm.data.data.abstract import Data
 from fast_llm.data.data.config import SamplingConfig
+from fast_llm.data.dataset.abstract import (
+    PhaseSplits,
+    SamplableDataset,
+    SamplableSplitDataset,
+    SampledDataset,
+    SampledSplitDataset,
+)
 from fast_llm.engine.distributed.config import PhaseType
 from fast_llm.utils import Assert
-
-if typing.TYPE_CHECKING:
-    from fast_llm.data.dataset.abstract import (
-        PhaseSplits,
-        SamplableDataset,
-        SamplableSplitDataset,
-        SampledDataset,
-        SampledSplitDataset,
-    )
 
 
 @config_class()
@@ -22,6 +20,7 @@ class DatasetConfig(Config):
     _abstract = True
 
 
+@config_class()
 class SampledSplitDatasetConfig(DatasetConfig):
 
     def build_split_sample(
@@ -43,6 +42,7 @@ class SampledSplitDatasetConfig(DatasetConfig):
         return True
 
 
+@config_class()
 class SampledDatasetConfig(SampledSplitDatasetConfig):
     """
     A sampled dataset containing a prepared list of samples to be indexed sequentially (as-is) during training.
@@ -70,6 +70,7 @@ class SampledDatasetConfig(SampledSplitDatasetConfig):
         return False
 
 
+@config_class()
 class SamplableSplitDatasetConfig(SampledSplitDatasetConfig):
 
     def build_split(
@@ -102,6 +103,7 @@ class SamplableSplitDatasetConfig(SampledSplitDatasetConfig):
         return True
 
 
+@config_class()
 class SamplableDatasetConfig(SampledDatasetConfig, SamplableSplitDatasetConfig):
     def build(self, data: Data) -> SamplableDataset:
         raise NotImplementedError()
@@ -135,10 +137,13 @@ class BlendedDatasetConfig(SampledDatasetConfig):
         hint=FieldHint.core,
     )
     datasets: list[SampledDatasetConfig] = Field(
+        default_factory=list,
         desc="The datasets to blend.",
         hint=FieldHint.core,
+        valid=check_field(functools.partial(Assert.custom, lambda x: len(x) > 0)),
     )
     weights: list[float] = Field(
+        default_factory=list,
         desc="The blending weight of each dataset.",
         hint=FieldHint.core,
     )

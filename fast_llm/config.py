@@ -287,7 +287,6 @@ class Config:
         In general this should not be overridden in derived classes,
         and all post-processing should be done in `_validate`
         """
-        self._check_abstract()
         self._validated = False
         if _AUTO_VALIDATE:
             self.validate()
@@ -343,6 +342,7 @@ class Config:
         Can be extended to add custom post-processing (typically before the super() call)
         and validation (typically after)
         """
+        self._check_abstract()
         errors = []
         for name, field in self.fields():
             if not field.init or field._field_type == dataclasses._FIELD_CLASSVAR:  # noqa
@@ -604,17 +604,12 @@ class Config:
         else:
             field_value = value
             if serializable:
-                if hasattr(value, "__fast_llm_serialize__"):
-                    field_value = field_value.__fast_llm_serialize__()
-                if isinstance(value, enum.Enum):
-                    field_value = field_value.value
-                # Tag is not actually serializable, but needs to be kept as-is for config processing,
-                # and should be absent for valid configs.
-                elif not isinstance(value, int | float | bool | str | Tag | None):
-                    field_value = str(field_value)
+                field_value = cls._serialize_value(value)
             if format_ == _ConfigDictFormat.tuple:
                 field_value = {(): field_value}
 
+        if serializable:
+            name = cls._serialize_value(name)
         if format_ == _ConfigDictFormat.tuple:
             args.update({(name,) + name_: value_ for name_, value_ in field_value.items()})
         elif format_ == _ConfigDictFormat.nested:
@@ -625,6 +620,19 @@ class Config:
                     args.append(field_value)
         else:
             raise NotImplementedError(format_)
+
+    @classmethod
+    def _serialize_value(cls, value):
+        value = value
+        if hasattr(value, "__fast_llm_serialize__"):
+            value = value.__fast_llm_serialize__()
+        if isinstance(value, enum.Enum):
+            value = value.value
+        # Tag is not actually serializable, but needs to be kept as-is for config processing,
+        # and should be absent for valid configs.
+        elif not isinstance(value, int | float | bool | str | Tag | None):
+            value = str(value)
+        return value
 
     def to_copy(
         self,
@@ -690,7 +698,6 @@ class Config:
         strict: bool = True,
         flat: bool = False,
     ):
-        cls._check_abstract()
         # TODO v0.3: Remove flat format
         out_arg_dict = {}
 
@@ -841,9 +848,11 @@ class Config:
     @classmethod
     def _check_abstract(cls):
         if cls._abstract:
-            raise RuntimeError(f"{cls.__name__} is abstract")
+            raise ValidationError(f"{cls.__name__} is abstract")
         if not cls.__class_validated__:
-            raise RuntimeError(f"{cls.__name__} hasn't been validated. Make sure to use the @config_class decorator.")
+            raise ValidationError(
+                f"{cls.__name__} hasn't been validated. Make sure to use the @config_class decorator."
+            )
 
     def __init_subclass__(cls):
         """

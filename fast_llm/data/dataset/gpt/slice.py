@@ -1,5 +1,6 @@
-from fast_llm.data.dataset.abstract import PhaseSplits, SamplableSplitDataset
+from fast_llm.data.dataset.abstract import SamplableSplitDataset
 from fast_llm.data.dataset.gpt.abstract import GPTIndexedDataset
+from fast_llm.engine.distributed.config import PhaseType
 from fast_llm.utils import Assert, normalize_probabilities, padded_cumsum
 
 
@@ -55,7 +56,7 @@ class GPTDatasetSlice(GPTIndexedDataset):
         return self._name
 
     @classmethod
-    def from_splits(cls, dataset: GPTIndexedDataset, phase_split: PhaseSplits[float]):
+    def from_splits(cls, dataset: GPTIndexedDataset, phase_split: dict[PhaseType, float]):
         """
         Create a set of GPT datasets from a MMapIndexedDataset,
         each containing approximately the requested proportion of the total tokens.

@@ -61,9 +61,9 @@ CONFIG_BASE_FAST_LLM = [
     "data.dataset.type=split",
     "data.dataset.dataset.type=memmap",
     f"data.dataset.dataset.path={DATASET_PREFIX}",
-    f"data.dataset.ratios.training=969",
-    f"data.dataset.ratios.validation=30",
-    f"data.dataset.ratios.test=1",
+    f"data.dataset.ratios.Training=969",
+    f"data.dataset.ratios.Validation=30",
+    f"data.dataset.ratios.Test=1",
     "optimizer.learning_rate.base=0.0001",
 ]
 CONFIG_BASE_MEGATRON = [

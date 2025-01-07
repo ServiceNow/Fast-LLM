@@ -1,9 +1,10 @@
 import enum
+import functools
 import json
 import pathlib
 import typing
 
-from fast_llm.config import Config, Field, FieldHint, FieldUpdate, config_class
+from fast_llm.config import Config, Field, FieldHint, FieldUpdate, check_field, config_class
 from fast_llm.data.data.config import SamplingConfig
 from fast_llm.data.dataset.abstract import PhaseSplits, SamplableSplitDataset, SampledSplitDataset
 from fast_llm.data.dataset.config import (
@@ -23,7 +24,6 @@ if typing.TYPE_CHECKING:
     from fast_llm.data.dataset.gpt.concatenated import GPTConcatenatedDataset
     from fast_llm.data.dataset.gpt.dummy import GPTDummyDataset
     from fast_llm.data.dataset.gpt.memmap import GPTMemmapDataset
-    from fast_llm.data.dataset.gpt.slice import GPTDatasetSlice
 
 
 @config_class
@@ -33,6 +33,7 @@ class GPTSamplingConfig(SamplingConfig):
 
 @config_class()
 class GPTDatasetConfig(DatasetConfig):
+    # TODO: Generalize dynamic types?
     _registry: typing.ClassVar[Registry[str, type["GPTDatasetConfig"]]] = Registry[str, type["GPTDatasetConfig"]](
         "gpt_dataset_class", {}
     )
@@ -43,44 +44,65 @@ class GPTDatasetConfig(DatasetConfig):
         hint=FieldHint.core,
     )
 
-    def __new__(cls, *args, **kwargs):
-        # Find and instantiate the actual class.
-        type_ = kwargs.get("type")
-        if type_ is not None:
-            actual_cls = GPTDatasetConfig._registry[type_]
+    def _validate(self):
+        if self.type is not None:
+            # Should be handled in `from_dict`, but can fail if instantiating directly.
+            Assert.eq(self.type, self.type_)
+        super()._validate()
+
+    @classmethod
+    def _from_dict(
+        cls,
+        default: dict[str, typing.Any],
+        strict: bool = True,
+        flat: bool = False,
+    ):
+        type_ = default.get("type")
+        if type_ is None:
+            actual_cls = cls
+        else:
+            actual_cls = cls._registry[type_]
             Assert.custom(issubclass, actual_cls, cls)
-            if actual_cls != cls:
-                return actual_cls(*args, **kwargs)
-        return super().__new__()
+        if actual_cls == cls:
+            return super()._from_dict(default, strict=strict, flat=flat)
+        else:
+            return actual_cls._from_dict(default, strict=strict, flat=flat)
 
     def __init_subclass__(cls, type_: str | None = None, **kwargs):
         if type_ is not None:
             GPTDatasetConfig._registry[type_] = cls
-        cls.type = type_
+        cls.type_ = type_
+        super().__init_subclass__()
 
 
+@config_class()
 class GPTSampledSplitDatasetConfig(SampledSplitDatasetConfig, GPTDatasetConfig):
     pass
 
 
+@config_class()
 class GPTSampledDatasetConfig(SampledDatasetConfig, GPTSampledSplitDatasetConfig):
     pass
 
 
+@config_class()
 class GPTSamplableSplitDatasetConfig(SamplableSplitDatasetConfig, GPTSampledSplitDatasetConfig):
     pass
 
 
+@config_class()
 class GPTSamplableDatasetConfig(SamplableDatasetConfig, GPTSampledDatasetConfig, GPTSamplableSplitDatasetConfig):
     pass
 
 
+@config_class()
 class GPTIndexedDatasetConfig(GPTSamplableDatasetConfig):
     def build(self, data: "GPTData") -> "GPTIndexedDataset":
         raise NotImplementedError()
 
 
-class GPTDummyDatasetConfig(GPTSamplableDatasetConfig):
+@config_class()
+class GPTDummyDatasetConfig(GPTSamplableDatasetConfig, type_="dummy"):
     name: str = Field(
         default="dummy",
         desc="The name of the dataset.",
@@ -92,10 +114,11 @@ class GPTDummyDatasetConfig(GPTSamplableDatasetConfig):
 
 
 @config_class()
-class GPTMemmapDatasetConfig(GPTDatasetConfig, SamplableDatasetConfig, type_="memmap"):
+class GPTMemmapDatasetConfig(GPTIndexedDatasetConfig, type_="memmap"):
     # Path -> (unsampled, unsplit)
     _abstract = False
     path: pathlib.Path = Field(
+        default=None,
         desc="The path to the dataset, excluding the `.bin` or `.idx` suffix.",
         hint=FieldHint.core,
     )
@@ -122,8 +145,10 @@ class GPTConcatenatedDatasetConfig(GPTDatasetConfig, SamplableDatasetConfig, typ
         hint=FieldHint.core,
     )
     datasets: list[GPTIndexedDatasetConfig] = Field(
+        default_factory=list,
         desc="The datasets to concatenate.",
         hint=FieldHint.core,
+        valid=check_field(functools.partial(Assert.custom, lambda x: len(x) > 0)),
     )
 
     def build(self, data: "GPTData") -> "GPTConcatenatedDataset":
@@ -133,7 +158,7 @@ class GPTConcatenatedDatasetConfig(GPTDatasetConfig, SamplableDatasetConfig, typ
 
 
 @config_class()
-class GPTSplitDatasetConfig(SamplableSplitDatasetConfig, type_="split"):
+class GPTSplitDatasetConfig(GPTSamplableSplitDatasetConfig, type_="split"):
     """
     Split a single dataset into multiple phases.
     Must be done before sampling.
@@ -143,15 +168,21 @@ class GPTSplitDatasetConfig(SamplableSplitDatasetConfig, type_="split"):
 
     _abstract = False
     dataset: GPTIndexedDatasetConfig = Field(
+        default=None,
         desc="The dataset to split.",
         hint=FieldHint.core,
     )
-    ratios: PhaseSplits[float] = Field(
+    ratios: dict[PhaseType, float] = Field(
+        default=None,
         desc="The split ratio for each phase",
         hint=FieldHint.core,
     )
 
-    def build(self, data: "GPTData") -> SamplableSplitDataset["GPTDatasetSlice"]:
+    def build_split(
+        self,
+        data: "GPTData",
+        default_phase: PhaseType = PhaseType.training,
+    ) -> SamplableSplitDataset:
         from fast_llm.data.dataset.gpt.slice import GPTDatasetSlice
 
         return GPTDatasetSlice.from_splits(self.dataset.build(data), self.ratios)
@@ -160,7 +191,7 @@ class GPTSplitDatasetConfig(SamplableSplitDatasetConfig, type_="split"):
 @config_class()
 class GPTBlendedDatasetConfig(BlendedDatasetConfig, GPTSampledDatasetConfig, type_="blended"):
     _abstract = False
-    datasets: list[GPTSampledDatasetConfig] = FieldUpdate()
+    datasets: list[GPTSampledDatasetConfig] = FieldUpdate(desc="UINGBRI")
 
 
 class LegacyDatasetSource(str, enum.Enum):
@@ -184,7 +215,18 @@ def _validate_path(value):
 
 @config_class()
 class GPTLegacyConfig(Config):
-    split: list[float] = Field(
+    @classmethod
+    def _from_dict(
+        cls,
+        default: dict[str, typing.Any],
+        strict: bool = True,
+        flat: bool = False,
+    ):
+        # TODO v0.3: Remove.
+        cls._handle_renamed_field(default, "split", "ratio")
+        return super()._from_dict(default, strict, flat)
+
+    ratio: list[float] = Field(
         default_factory=lambda: [969, 30, 1],
         desc="Split ratio for train, valid and test datasets.",
         hint=FieldHint.deprecated,
@@ -245,7 +287,11 @@ class GPTLegacyDatasetConfig(GPTSampledSplitDatasetConfig, GPTLegacyConfig, type
             dataset_configs = [
                 GPTSplitDatasetConfig(
                     dataset=GPTMemmapDatasetConfig(path=prefix),
-                    ratios=self.split,
+                    ratios={
+                        PhaseType.training: self.ratio[0],
+                        PhaseType.validation: self.ratio[1],
+                        PhaseType.test: self.ratio[2],
+                    },
                 )
                 for prefix in dataset_prefixes
             ]

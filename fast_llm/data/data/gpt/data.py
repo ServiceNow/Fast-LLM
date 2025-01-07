@@ -86,6 +86,7 @@ class GPTData(Data):
             }
         )
         self._datasets = self._config.dataset.build_split_sample(self, sampling_config)
+        self._is_setup = True
 
     @property
     def tokenizer(self):
