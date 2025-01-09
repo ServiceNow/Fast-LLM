@@ -168,7 +168,7 @@ class GPTConcatenatedDatasetConfig(GPTDatasetConfig, SamplableDatasetConfig, typ
     )
 
     def build(self, data: "GPTData") -> "GPTConcatenatedDataset":
-        from fast_llm.data.dataset.gpt.concatenated import GPTConcatenatedDataset
+        from fast_llm.data.dataset.gpt.indexed import GPTConcatenatedDataset
 
         return GPTConcatenatedDataset(self.name, [dataset.build(data) for dataset in self.datasets])
 
@@ -198,7 +198,9 @@ class GPTSplitDatasetConfig(GPTSamplableSplitDatasetConfig, type_="split"):
         self,
         data: "GPTData",
         default_phase: PhaseType = PhaseType.training,
-    ) -> SamplableSplitDataset:
+    ) -> "SamplableSplitDataset[GPTDatasetSlice]":
+        from fast_llm.data.dataset.gpt.indexed import GPTDatasetSlice
+
         return GPTDatasetSlice.from_splits(self.dataset.build(data), self.ratios)
 
 

@@ -75,7 +75,6 @@ class GPTMemmapDataset(GPTIndexedDataset):
     def name(self):
         return self._name
 
-    @property
     def __len__(self) -> int:
         return self._num_documents
 

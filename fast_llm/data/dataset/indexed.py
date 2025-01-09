@@ -52,15 +52,20 @@ class IndexedDatasetSlice(IndexedDataset):
         except Exception as e:
             raise AssertionError(f"Invalid document indices for dataset {name} with length {num_samples}") from e
 
-    def __getitem__(self, index: int):
+    def get(self, document: int, offset: int = 0, length: int | None = None):
         """
-        Get the sample (document) with the given index (in the split dataset).
+        Get the sample (document) with the given index (in the dataset slice),
+        optionally sub-sampled to a specific offset (starting point) and maximum length
+        (end = min(offset + length, sample_length).
         """
-        return self.get(index)
+        return self._dataset.get(document + self._begin, offset, length)
 
-    @property
     def __len__(self):
         return self._end - self._begin
+
+    @property
+    def name(self):
+        return self._name
 
     @classmethod
     def from_splits(cls, dataset: IndexedDataset, phase_split: dict[PhaseType, float]):
