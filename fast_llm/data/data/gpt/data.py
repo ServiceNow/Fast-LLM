@@ -1,10 +1,12 @@
 import logging
 import pathlib
+import time
 import warnings
 
 import torch
 import torch.utils.data
 
+from fast_llm.core.distributed import safe_barrier
 from fast_llm.data.data.abstract import Data
 from fast_llm.data.data.gpt.config import GPTDataConfig
 from fast_llm.data.dataset.abstract import PhaseSplits, SampledSplitDataset
@@ -48,6 +50,8 @@ class GPTData(Data):
         super().__init__(config, distributed_config)
         self._vocab_size = vocab_size
         self._max_sequence_length = max_sequence_length
+        self._sampling_rank = -1
+        self._sampling_time = None
 
     @property
     def vocab_size(self) -> int:
@@ -86,7 +90,19 @@ class GPTData(Data):
             }
         )
         self._datasets = self._config.dataset.build_split_sample(self, sampling_config)
+        safe_barrier(self._distributed.world_group, "build_split_sample")
         self._is_setup = True
+
+    def get_next_sampling_rank_and_verbose(self) -> tuple[int, bool]:
+        sampling_time = time.perf_counter()
+        verbose = self._sampling_time is None or sampling_time - self._sampling_time > 60
+        if verbose:
+            self._sampling_time = sampling_time
+        if self._config.distributed_data_sampling:
+            self._sampling_rank += 1
+            return self._sampling_rank % self._distributed_config.world_size, verbose
+        else:
+            return 0, verbose
 
     @property
     def tokenizer(self):

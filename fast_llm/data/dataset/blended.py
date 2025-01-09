@@ -4,7 +4,6 @@ import time
 
 import numpy as np
 
-from fast_llm.core.distributed import safe_barrier
 from fast_llm.data.data.abstract import Data
 from fast_llm.data.data.config import SamplingConfig
 from fast_llm.data.dataset.abstract import SampledDataset
@@ -48,9 +47,7 @@ class BlendedDataset(SampledDataset):
 
         if sampling_config.cache_directory is None:
             self._dataset_idx_filename, self._sample_idx_filename = None, None
-            self._dataset_index, self._sample_index = self._build_blending_indices(
-                sampling_config.verbose and len(self._datasets) <= 20
-            )
+            self._dataset_index, self._sample_index = self._build_blending_indices()
         else:
             group = data.distributed.world_group
             self._dataset_idx_filename = sampling_config.cache_directory / (self._name + "_blending_dataset_idx.npy")
@@ -61,15 +58,10 @@ class BlendedDataset(SampledDataset):
             if (group is None or group.rank() == 0) and not (
                 self._dataset_idx_filename.is_file() and self._sample_idx_filename.is_file()
             ):
-                dataset_index, sample_index = self._build_blending_indices(
-                    sampling_config.verbose and len(self._datasets) <= 20
-                )
+                dataset_index, sample_index = self._build_blending_indices()
                 sampling_config.cache_directory.mkdir(exist_ok=True, parents=True)
                 np.save(self._dataset_idx_filename, dataset_index)
                 np.save(self._sample_idx_filename, sample_index)
-
-            safe_barrier(group, self._name)
-            self._load_mappings(sampling_config.verbose)
 
     def __getstate__(self):
         return (
@@ -92,12 +84,13 @@ class BlendedDataset(SampledDataset):
         ) = state
         if isinstance(dataset_index, pathlib.Path):
             self._dataset_idx_filename, self._sample_idx_filename = dataset_index, sample_index
-            self._load_mappings(False)
         else:
             self._dataset_idx_filename, self._sample_idx_filename = None, None
             self._dataset_index, self._sample_index = dataset_index, sample_index
 
-    def _load_mappings(self, verbose):
+    def _load_mappings(self, verbose: bool = False):
+        if hasattr(self, "_dataset_index"):
+            return
         if verbose:
             log_main_rank(lambda: f" > loading blending dataset index mapping from {self._dataset_idx_filename}")
         self._dataset_index = np.load(self._dataset_idx_filename, mmap_mode="r")
@@ -108,7 +101,7 @@ class BlendedDataset(SampledDataset):
     def __len__(self):
         return self._num_samples
 
-    def _build_blending_indices(self, verbose: bool):
+    def _build_blending_indices(self):
         assert _extension_available, (
             "The C++ extension for dataset blending is missing." " Please make sure Fast-LLM is installed correctly."
         )
@@ -121,7 +114,8 @@ class BlendedDataset(SampledDataset):
             self._weights,
             len(self._datasets),
             self._num_samples,
-            verbose,
+            # TODO: Verbose option?
+            True,  # verbose
         )
         available_samples_per_dataset = np.array([len(dataset) for dataset in self._datasets])
         sampled_per_dataset = np.bincount(dataset_index)
@@ -141,6 +135,7 @@ class BlendedDataset(SampledDataset):
         return dataset_index, dataset_sample_index
 
     def __getitem__(self, idx):
+        self._load_mappings()
         start_time = time.perf_counter()
         dataset_index = self._dataset_index[idx]
         dataset = self._datasets[dataset_index]

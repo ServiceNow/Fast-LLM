@@ -41,6 +41,17 @@ class GPTDataConfig(DataConfig, GPTLegacyConfig):
         hint=FieldHint.feature,
         valid=check_field(Assert.gt, 0),
     )
+    shuffle_epochs: bool = Field(
+        default=True,
+        desc="Shuffle all epochs together. Adds extra randomness,"
+        " but makes it harder to change the training length after training is started.",
+        hint=FieldHint.feature,
+    )
+    distributed_data_sampling: bool = Field(
+        default=True,
+        desc="When possible, distribute data sampling across all available processes to speed it up.",
+        hint=FieldHint.performance,
+    )
     multiprocessing_context: MultiprocessingContext = Field(
         default=MultiprocessingContext.spawn,
         desc="Multiprocessing context. Do not touch.",

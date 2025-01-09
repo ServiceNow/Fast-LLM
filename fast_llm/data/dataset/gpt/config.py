@@ -20,9 +20,8 @@ from fast_llm.utils import Assert, Registry, normalize_probabilities
 
 if typing.TYPE_CHECKING:
     from fast_llm.data.data.gpt.data import GPTData
-    from fast_llm.data.dataset.gpt.abstract import GPTIndexedDataset
-    from fast_llm.data.dataset.gpt.concatenated import GPTConcatenatedDataset
     from fast_llm.data.dataset.gpt.dummy import GPTDummySampledDataset
+    from fast_llm.data.dataset.gpt.indexed import GPTConcatenatedDataset, GPTDatasetSlice, GPTIndexedDataset
     from fast_llm.data.dataset.gpt.memmap import GPTMemmapDataset
 
 
@@ -200,8 +199,6 @@ class GPTSplitDatasetConfig(GPTSamplableSplitDatasetConfig, type_="split"):
         data: "GPTData",
         default_phase: PhaseType = PhaseType.training,
     ) -> SamplableSplitDataset:
-        from fast_llm.data.dataset.gpt.slice import GPTDatasetSlice
-
         return GPTDatasetSlice.from_splits(self.dataset.build(data), self.ratios)
 
 
