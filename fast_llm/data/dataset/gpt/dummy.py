@@ -2,11 +2,11 @@ import typing
 
 import numpy as np
 
-from fast_llm.data.config import SamplableDataset, SampledDataset
-from fast_llm.data.gpt.config import GPTSamplingConfig
+from fast_llm.data.data.gpt.config import GPTSamplingConfig
+from fast_llm.data.dataset.abstract import SamplableDataset, SampledDataset
 
 if typing.TYPE_CHECKING:
-    from fast_llm.data.gpt.data import GPTData
+    from fast_llm.data.data.gpt.data import GPTData
 
 
 class DummyGPTDataset(SamplableDataset):

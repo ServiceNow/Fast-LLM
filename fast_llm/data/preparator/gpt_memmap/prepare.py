@@ -8,7 +8,7 @@ import torch.distributed
 import tqdm
 import transformers
 
-from fast_llm.data.gpt.memmap import GPTMemmapDataset
+from fast_llm.data.dataset.gpt.memmap import GPTMemmapDataset
 from fast_llm.data.preparator.config import DatasetPreparator
 from fast_llm.data.preparator.gpt_memmap.config import GPTMemmapDatasetPreparatorConfig
 from fast_llm.data.tokenizer import Tokenizer

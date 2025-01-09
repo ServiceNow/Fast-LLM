@@ -9,8 +9,8 @@ import typing
 import torch
 
 from fast_llm.core.distributed import safe_barrier
-from fast_llm.data.config import Data
-from fast_llm.data.gpt.data import GPTData
+from fast_llm.data.data.abstract import Data
+from fast_llm.data.data.gpt.data import GPTData
 from fast_llm.engine.config_utils.run import Run, is_main_rank, log_main_rank, log_pipeline_parallel_main_rank
 from fast_llm.engine.distributed.config import PhaseType
 from fast_llm.engine.distributed.distributed import Distributed

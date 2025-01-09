@@ -8,12 +8,13 @@ import warnings
 import torch
 import torch.utils.data
 
-from fast_llm.data.blended import BlendedDataset
-from fast_llm.data.config import CopySplitDataset, Data, DatasetSource, PhaseSplits, SampledSplitDataset
-from fast_llm.data.gpt.config import GPTDataConfig, GPTSamplingConfig
-from fast_llm.data.gpt.dummy import DummyGPTDataset
-from fast_llm.data.gpt.memmap import GPTMemmapDataset
-from fast_llm.data.gpt.slice import GPTDatasetSlice
+from fast_llm.data.data.abstract import Data
+from fast_llm.data.data.gpt.config import DatasetSource, GPTDataConfig, GPTSamplingConfig
+from fast_llm.data.dataset.abstract import CopySplitDataset, PhaseSplits, SampledSplitDataset
+from fast_llm.data.dataset.blended import BlendedDataset
+from fast_llm.data.dataset.gpt.dummy import DummyGPTDataset
+from fast_llm.data.dataset.gpt.memmap import GPTMemmapDataset
+from fast_llm.data.dataset.gpt.slice import GPTDatasetSlice
 from fast_llm.data.iterator import SampledDatasetIterator
 from fast_llm.data.tokenizer import Tokenizer
 from fast_llm.engine.config_utils.run import get_run, log_main_rank

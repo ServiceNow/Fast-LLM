@@ -10,7 +10,7 @@ import numpy as np
 import pytest
 import torch
 
-from fast_llm.data.gpt.memmap import GPTMemmapDataset
+from fast_llm.data.dataset.gpt.memmap import GPTMemmapDataset
 from fast_llm.models.gpt.config import (
     LlamaGPTHuggingfaceCheckpointFormat,
     MistralGPTHuggingfaceCheckpointFormat,

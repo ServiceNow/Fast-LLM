@@ -6,7 +6,7 @@ import subprocess
 import typing
 
 from fast_llm.config import Config, Field, FieldHint, FieldUpdate, check_field, config_class, skip_valid_if_none
-from fast_llm.data.config import DataConfig
+from fast_llm.data.data.config import DataConfig
 from fast_llm.engine.checkpoint.config import (
     CheckpointLoadConfig,
     CheckpointSaveConfig,

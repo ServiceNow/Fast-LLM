@@ -1,6 +1,6 @@
 import numpy as np
 
-from fast_llm.data.gpt.dataset import GPTIndexedDataset
+from fast_llm.data.dataset.gpt.abstract import GPTIndexedDataset
 from fast_llm.utils import padded_cumsum
 
 
@@ -18,13 +18,13 @@ class GPTConcatenatedDataset(GPTIndexedDataset):
         self._num_documents = sum(sizes)
 
     @property
-    def num_tokens(self):
+    def num_tokens(self) -> int:
         return sum(dataset.num_tokens for dataset in self._datasets)
 
-    def num_documents(self):
+    def num_documents(self) -> int:
         return sum(dataset.num_documents for dataset in self._datasets)
 
-    def get_document_sizes(self) -> "np.ndarray":
+    def get_document_sizes(self) -> np.ndarray:
         # TODO: This can be really big.
         return np.concatenate([dataset.get_document_sizes() for dataset in self._datasets])
 
@@ -38,5 +38,5 @@ class GPTConcatenatedDataset(GPTIndexedDataset):
         return self._datasets[dataset].get(document - self._dataset_splits[dataset], offset, length)
 
     @property
-    def name(self):
+    def name(self) -> str:
         return self._name
