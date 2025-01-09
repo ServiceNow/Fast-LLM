@@ -4,7 +4,7 @@ import typing
 
 import numpy as np
 
-from fast_llm.data.dataset.gpt.abstract import GPTIndexedDataset
+from fast_llm.data.dataset.gpt.indexed import GPTIndexedDataset
 from fast_llm.data.preparator.gpt_memmap.config import MEMMAP_DTYPES, MEMMAP_DTYPES_INV, MEMMAP_INDEX_HEADER
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.utils import Assert, div
@@ -76,7 +76,7 @@ class GPTMemmapDataset(GPTIndexedDataset):
         return self._name
 
     @property
-    def num_documents(self) -> int:
+    def __len__(self) -> int:
         return self._num_documents
 
     @property
