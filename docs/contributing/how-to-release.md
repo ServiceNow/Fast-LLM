@@ -10,12 +10,12 @@ This document walks you through the process of creating a new release of Fast-LL
 
 3.  **Versioning Made Simple:** Fast-LLM sticks to [Semantic Versioning](https://semver.org/) (aka semver). Here's the gist:
     -   **MAJOR versions** (like `1.0.0`) are for big, stable, feature-complete milestones. Since we're still in pre-1.0 territory, we don't have these yet.
-    -   **MINOR versions** (e.g., `0.2.0`) bring new features that play nice with existing ones, that don't break anything because of backward compatibility. MINOR releases are the main focus of our current development efforts. They're tied to [milestones](https://github.com/ServiceNow/Fast-LLM/milestones) and are released on a regular schedule.
-    -   **PATCH versions** (e.g., `0.2.1`) squash bugs and tweak small stuff. They don't introduce new functionality. These aren't tied to milestones and drop whenever needed to fix things.
+    -   **MINOR versions** (e.g., `0.2.0`) introduce new features and may include breaking changes, as we are in the pre-1.0 phase of development. While we strive for backward compatibility where feasible, breaking changes are acceptable until we reach 1.0.0. MINOR releases are the main focus of our current development efforts. They're tied to [milestones](https://github.com/ServiceNow/Fast-LLM/milestones) and are released on a regular schedule.
+    -   **PATCH versions** (e.g., `0.2.1`) squash bugs and include small, critical fixes without introducing new functionality. These releases are based on stable `main` commits and are the recommended choice for production-like use cases and important experiments. While we encourage internal and adventurous users to test `main`, PATCH releases ensure stability for users who need reliability.
 
 4.  **Milestones are for MINOR Releases:** Each [milestone](https://github.com/ServiceNow/Fast-LLM/milestones) corresponds to a MINOR version (`0.2.0`, `0.3.0`, etc.) and includes all issues and pull requests targeted for that release. Milestones have due dates and are used to track progress toward the next MINOR release. PATCH releases? Handled as individual issues or small groups of issues.
 
-5.  **All Roads Lead to `main`:** Active development happens on the `main` branch, whether it's for a MINOR or PATCH release. We don't do release branches, backport features, or support old versions. Stick with the latest release for stability. As a user, you are never expected to use `main` for production unless you're ready to live on the edge.
+5.  **All Roads Lead to `main`:** Active development happens on the `main` branch, which may include breaking changes. For production experiments or stability-critical use cases, use the latest PATCH or MINOR release. Internally, we encourage testing `main` to identify issues early, but important experiments should always use tagged releases to ensure reproducibility and compatibility.
 
 ## Release Process
 
@@ -23,7 +23,7 @@ This document walks you through the process of creating a new release of Fast-LL
 
 Before tagging anything, make sure the repository is in tip-top shape:
 
-1.  Close or defer all issues in the current milestone.
+1.  Close or defer all issues in the current milestone (where applicable).
 2.  Verify that all targeted pull requests are merged.
 3.  Double-check the repo:
 
