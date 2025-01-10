@@ -1,4 +1,5 @@
 import abc
+import pathlib
 import typing
 
 from fast_llm.data.data.config import DataConfig
@@ -12,15 +13,22 @@ if typing.TYPE_CHECKING:
 class Data(abc.ABC):
     _distributed: "Distributed"
     _samples_per_phase: dict[PhaseType, int]
+    _cache_directory: pathlib.Path | None
 
     def __init__(self, config: DataConfig, distributed_config: DistributedConfig) -> None:
         self._config = config
         self._distributed_config = distributed_config
 
     # TODO: Improve interface
-    def setup(self, distributed: "Distributed", samples_per_phase: dict[PhaseType, int]):
+    def setup(
+        self,
+        distributed: "Distributed",
+        samples_per_phase: dict[PhaseType, int],
+        cache_directory: pathlib.Path,
+    ):
         self._distributed = distributed
         self._samples_per_phase = samples_per_phase
+        self._cache_directory = cache_directory
 
     @property
     def config(self):

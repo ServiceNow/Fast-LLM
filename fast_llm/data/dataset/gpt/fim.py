@@ -1,18 +1,31 @@
 import numpy as np
 
-from fast_llm.data.dataset.gpt.fim.config import FIM_MIDDLE, FIM_PAD, FIM_PREFIX, FIM_SUFFIX, FimConfig
-from fast_llm.data.tokenizer import Tokenizer
+from fast_llm.data.dataset.abstract import SampledDataset
+from fast_llm.data.dataset.gpt.config import FimConfig, GPTSamplingConfig
+from fast_llm.engine.distributed.config import MAX_SEED
+
+FIM_PREFIX = "<fim_prefix>"
+FIM_MIDDLE = "<fim_middle>"
+FIM_PAD = "<fim_pad>"
+FIM_SUFFIX = "<fim_suffix>"
 
 
-class Fim:
+class FimDataset(SampledDataset):
     """
     An implementation of FIM (fill in the middle) post-processing of GPT datasets.
     Adapted from https://github.com/EleutherAI/gpt-neox/blob/FIM-clean/megatron/data/gpt2_dataset.py
     """
 
-    def __init__(self, config: FimConfig, tokenizer: Tokenizer):
-        self._config = config.validate()
-        self._tokenizer = tokenizer
+    def __init__(
+        self,
+        config: FimConfig,
+        dataset: SampledDataset,
+        sampling_config: GPTSamplingConfig,
+    ):
+        self._config = config
+        self._dataset = dataset
+        self._sampling_config = sampling_config
+        self._tokenizer = sampling_config.tokenizer
         self._suffix_tok_id, self._prefix_tok_id, self._middle_tok_id, self._pad_tok_id = (
             self._tokenizer.vocab[tok] for tok in [FIM_SUFFIX, FIM_PREFIX, FIM_MIDDLE, FIM_PAD]
         )
@@ -20,7 +33,20 @@ class Fim:
             self._tokenizer.vocab[self._config.split_sample] if self._config.split_sample is not None else None
         )
 
-    def __call__(self, sample, np_rng):
+    def __len__(self):
+        return len(self._dataset)
+
+    def __getitem__(self, idx):
+        sample = self._fim(
+            self._dataset[idx], np.random.RandomState(seed=(self._sampling_config.seed + idx) % MAX_SEED)
+        )
+        return sample
+
+    @property
+    def name(self):
+        return f"{self._dataset.name}_fim"
+
+    def _fim(self, sample, np_rng):
         # FIM
         # TODO: permute segments in sample_list, before concatenating.
         sample_len = sample.shape[0]

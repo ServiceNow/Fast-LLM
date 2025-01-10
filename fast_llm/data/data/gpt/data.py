@@ -9,9 +9,10 @@ from fast_llm.data.data.abstract import Data
 from fast_llm.data.data.gpt.config import GPTDataConfig
 from fast_llm.data.dataset.abstract import PhaseSplits, SampledSplitDataset
 from fast_llm.data.dataset.gpt.config import GPTSamplingConfig
+from fast_llm.data.dataset.monitor import DatasetMonitor
 from fast_llm.data.iterator import SampledDatasetIterator
 from fast_llm.data.tokenizer import Tokenizer
-from fast_llm.engine.config_utils.run import get_run, log_main_rank
+from fast_llm.engine.config_utils.run import log_main_rank
 from fast_llm.engine.distributed.config import DistributedConfig, PhaseType
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.engine.schedule.config import BatchConfig
@@ -31,7 +32,6 @@ class GPTData(Data):
     _config: GPTDataConfig
     _tokenizer: Tokenizer | None
     _distributed: Distributed
-    _cache_directory: pathlib.Path | None
     _is_setup: bool = False
 
     def __init__(
@@ -57,35 +57,47 @@ class GPTData(Data):
     def max_sequence_length(self) -> int:
         return self._max_sequence_length
 
-    def setup(self, distributed: Distributed, samples_per_phase: PhaseSplits[int]):
+    def setup(
+        self,
+        distributed: Distributed,
+        samples_per_phase: PhaseSplits[int],
+        cache_directory: pathlib.Path,
+    ):
         """
         Load the datasets, and prepare or load the samplings.
         This may take a while and a significant amount of cpu memory.
         """
-        super().setup(distributed, samples_per_phase)
-        run = get_run()
+        super().setup(distributed, samples_per_phase, cache_directory)
         log_main_rank(f"Preparing dataset. This may take several minutes.")
-        self._tokenizer = Tokenizer(self._config.tokenizer) if self._config.fim.rate > 0 else None
+        self._tokenizer = None if self._config.tokenizer.path is None else Tokenizer(self._config.tokenizer)
 
-        if run.experiment_directory is None:
+        if self._cache_directory is None:
+            # TODO: Avoid this
             warnings.warn(f"Using the dataset directory for the index cache.")
-            self._cache_directory = None
-        else:
-            self._cache_directory = run.experiment_directory / "dataset_cache"
         sampling_config = PhaseSplits[GPTSamplingConfig](
             {
                 phase: GPTSamplingConfig(
                     num_samples=samples_per_phase[phase],
-                    sequence_length=self._max_sequence_length,
                     seed=self._distributed_config.seed,
                     cache_directory=self._cache_directory,
                     verbose=True,
+                    distributed=distributed,
+                    sequence_length=self._max_sequence_length,
+                    vocab_size=self._vocab_size,
+                    tokenizer=self._tokenizer,
                 )
                 for phase, num_samples in samples_per_phase.items()
                 if num_samples > 0
             }
         )
-        self._datasets = self._config.dataset.build_split_sample(self, sampling_config)
+        datasets = self._config.dataset.build_split_sample(sampling_config)
+        self._datasets = SampledSplitDataset(
+            datasets.name,
+            {
+                phase: DatasetMonitor(dataset, self._config.data_sample_warn_time_ms)
+                for phase, dataset in datasets.items()
+            },
+        )
         self._is_setup = True
 
     @property

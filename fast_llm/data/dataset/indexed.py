@@ -2,9 +2,7 @@ import abc
 
 import numpy as np
 
-from fast_llm.data.data.abstract import Data
-from fast_llm.data.data.config import SamplingConfig
-from fast_llm.data.dataset.abstract import SamplableDataset, SamplableSplitDataset, SampledDataset
+from fast_llm.data.dataset.abstract import SamplableDataset, SamplableSplitDataset
 from fast_llm.engine.distributed.config import PhaseType
 from fast_llm.utils import Assert, normalize_probabilities, padded_cumsum
 
@@ -24,10 +22,6 @@ class IndexedDataset(SamplableDataset):
         """
         Number of samples in the dataset.
         """
-
-    @abc.abstractmethod
-    def sample(self, config: SamplingConfig, data: Data) -> SampledDataset:
-        pass
 
 
 class IndexedDatasetSlice(IndexedDataset):

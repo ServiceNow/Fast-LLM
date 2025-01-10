@@ -1,9 +1,10 @@
+import dataclasses
 import functools
 import math
+import pathlib
+import typing
 
 from fast_llm.config import Config, Field, FieldHint, check_field, config_class
-from fast_llm.data.data.abstract import Data
-from fast_llm.data.data.config import SamplingConfig
 from fast_llm.data.dataset.abstract import (
     PhaseSplits,
     SamplableDataset,
@@ -20,12 +21,20 @@ class DatasetConfig(Config):
     _abstract = True
 
 
+@dataclasses.dataclass
+class SamplingConfig:
+    num_samples: int = 1
+    seed: int = 0
+    cache_directory: pathlib.Path | None = None
+    verbose: bool = True
+    distributed: typing.Any = None
+
+
 @config_class()
 class SampledSplitDatasetConfig(DatasetConfig):
 
     def build_split_sample(
         self,
-        data: Data,
         config: PhaseSplits[SamplingConfig],
         default_phase: PhaseType = PhaseType.training,
     ) -> SampledSplitDataset:
@@ -49,16 +58,15 @@ class SampledDatasetConfig(SampledSplitDatasetConfig):
     (See `fast_llm.data.sampler.Sampler`.)
     """
 
-    def build_sample(self, data: Data, config: SamplingConfig) -> SampledDataset:
+    def build_sample(self, config: SamplingConfig) -> SampledDataset:
         raise NotImplementedError()
 
     def build_split_sample(
         self,
-        data: Data,
         config: PhaseSplits[SamplingConfig],
         default_phase: PhaseType = PhaseType.training,
     ) -> SampledSplitDataset:
-        dataset = self.build_sample(data, config[default_phase])
+        dataset = self.build_sample(config[default_phase])
         return SampledSplitDataset(dataset.name, {default_phase: dataset})
 
     @property
@@ -75,23 +83,20 @@ class SamplableSplitDatasetConfig(SampledSplitDatasetConfig):
 
     def build_split(
         self,
-        data: Data,
         default_phase: PhaseType = PhaseType.training,
     ) -> SamplableSplitDataset:
         raise NotImplementedError()
 
     def build_split_sample(
         self,
-        data: Data,
         config: PhaseSplits[SamplingConfig],
         default_phase: PhaseType = PhaseType.training,
     ) -> SampledSplitDataset:
-        split_dataset = self.build_split(data)
+        split_dataset = self.build_split(default_phase)
         # TODO: Name
-        # TODO: Arg order not matching with dataset
         return SampledSplitDataset(
             "dataset",
-            {phase: split_dataset[phase].sample(phase_config, data) for phase, phase_config in config.items()},
+            {phase: split_dataset[phase].sample(phase_config) for phase, phase_config in config.items()},
         )
 
     @property
@@ -105,18 +110,17 @@ class SamplableSplitDatasetConfig(SampledSplitDatasetConfig):
 
 @config_class()
 class SamplableDatasetConfig(SampledDatasetConfig, SamplableSplitDatasetConfig):
-    def build(self, data: Data) -> SamplableDataset:
+    def build(self) -> SamplableDataset:
         raise NotImplementedError()
 
-    def build_sample(self, data: Data, config: SamplingConfig) -> SampledDataset:
-        return self.build(data).sample(config, data)
+    def build_sample(self, config: SamplingConfig) -> SampledDataset:
+        return self.build().sample(config)
 
     def build_split(
         self,
-        data: Data,
         default_phase: PhaseType = PhaseType.training,
     ) -> SamplableSplitDataset:
-        dataset = self.build(data)
+        dataset = self.build()
         return SamplableSplitDataset(dataset.name, {default_phase: dataset})
 
     @property
@@ -157,7 +161,6 @@ class BlendedDatasetConfig(SampledDatasetConfig):
 
     def build_sample(
         self,
-        data: "Data",
         config: SamplingConfig,
     ) -> SampledDataset:
         from fast_llm.data.dataset.blended import BlendedDataset
@@ -167,7 +170,6 @@ class BlendedDatasetConfig(SampledDatasetConfig):
         # Build and sample the datasets.
         sampled_datasets = [
             dataset.build_sample(
-                data,
                 # Blending is deterministic and the error will never be higher than 1.
                 config.to_copy({"num_samples": math.ceil(weight * config.num_samples) + 1}),
             )
@@ -179,12 +181,10 @@ class BlendedDatasetConfig(SampledDatasetConfig):
             sampled_datasets,
             self.weights,
             config,
-            data,
         )
 
     def build_split_sample(
         self,
-        data: "Data",
         config: PhaseSplits[SamplingConfig],
         default_phase: PhaseType = PhaseType.training,
     ) -> SampledSplitDataset:
@@ -192,12 +192,11 @@ class BlendedDatasetConfig(SampledDatasetConfig):
 
         if not self.split:
             # Take the base class shortcut using build_sample if it's available.
-            return super().build_split_sample(data, config, default_phase)
+            return super().build_split_sample(config, default_phase)
 
         # Build, sample and split the datasets.
         sampled_datasets = [
             dataset.build_split_sample(
-                data,
                 # Blending is deterministic and the error will never be higher than 1.
                 PhaseSplits[SamplingConfig](
                     {
@@ -219,7 +218,6 @@ class BlendedDatasetConfig(SampledDatasetConfig):
                     [dataset[phase] for dataset in sampled_datasets],
                     self.weights,
                     phase_config,
-                    data,
                 )
                 for phase, phase_config in config.items()
             },

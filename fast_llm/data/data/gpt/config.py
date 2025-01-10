@@ -4,7 +4,6 @@ from fast_llm.config import Field, FieldHint, check_field, config_class
 from fast_llm.data.config import MultiprocessingContext, TokenizerConfig
 from fast_llm.data.data.config import DataConfig
 from fast_llm.data.dataset.gpt.config import GPTLegacyConfig, GPTLegacyDatasetConfig, GPTSampledSplitDatasetConfig
-from fast_llm.data.dataset.gpt.fim.config import FimConfig
 from fast_llm.utils import Assert
 
 logger = logging.getLogger(__name__)
@@ -29,11 +28,6 @@ class GPTDataConfig(DataConfig, GPTLegacyConfig):
         default_factory=GPTSampledSplitDatasetConfig,
         desc="Configuration for the dataset(s).",
         hint=FieldHint.core,
-    )
-    fim: FimConfig = Field(
-        default_factory=FimConfig,
-        desc="Configuration for Fill In the Middle (FIM).",
-        hint=FieldHint.feature,
     )
     data_sample_warn_time_ms: float = Field(
         default=1000,
