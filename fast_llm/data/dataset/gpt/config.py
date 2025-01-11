@@ -236,13 +236,9 @@ class FimConfig(Config):
     Configuration for FIM.
     """
 
-    dataset: GPTSampledDatasetConfig = Field(
-        default=None,
-        desc="The dataset to wrap with fim.",
-        hint=FieldHint.core,
-    )
     rate: float = Field(
-        default=0.5,
+        # TODO: Use meaningful default now that fim is a wrapper? (bad for legacy config)
+        default=0.0,
         desc="FIM rate for each sample.",
         hint=FieldHint.core,
         valid=check_field(Assert.in_range_incl, 0, 1),
@@ -428,5 +424,10 @@ class GPTLegacyDatasetConfig(GPTSampledSplitDatasetConfig, GPTLegacyConfig, type
                 if len(dataset_configs) > 1
                 else dataset_configs[0]
             )
+            if self.fim.rate > 0:
+                dataset_config = FimSampledDatasetConfig.from_dict(
+                    self.fim,
+                    {"dataset": dataset_config},
+                )
 
         return dataset_config.build_split_sample(config, default_phase)

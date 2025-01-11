@@ -1,8 +1,10 @@
 import abc
 import typing
 
-from fast_llm.data.dataset.config import SamplingConfig
 from fast_llm.engine.distributed.config import PhaseType
+
+if typing.TYPE_CHECKING:
+    from fast_llm.data.dataset.config import SamplingConfig
 
 
 class Dataset(abc.ABC):
@@ -43,7 +45,7 @@ class SampledDataset(Dataset):
 class SamplableDataset(Dataset):
 
     @abc.abstractmethod
-    def sample(self, config: SamplingConfig) -> SampledDataset:
+    def sample(self, config: "SamplingConfig") -> SampledDataset:
         pass
 
     def as_split(self, default_phase: PhaseType = PhaseType.training) -> "SplitDataset":
@@ -78,7 +80,7 @@ class SampledSplitDataset(SplitDataset[_SampledDatasetType], typing.Generic[_Sam
 
 
 class SamplableSplitDataset(SplitDataset[_SamplableDatasetType], typing.Generic[_SamplableDatasetType]):
-    def sample(self, sampling_configs: PhaseSplits[SamplingConfig]):
+    def sample(self, sampling_configs: "PhaseSplits[SamplingConfig]"):
         return SampledSplitDataset(
             f"{self.name}_sampled",
             {phase: self[phase].sample(sampling_config) for phase, sampling_config in sampling_configs.items()},

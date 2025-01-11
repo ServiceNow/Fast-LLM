@@ -17,6 +17,7 @@ def get_test_data(
     cache_directory: pathlib.Path | None = None,
     sequence_length: int = 512,
 ):
+    # TODO: Update
     distributed_config = DistributedConfig()
     distributed = Distributed(distributed_config, use_cpu=True)
     data = GPTData(GPTDataConfig.from_dict(config), distributed_config, TEST_VOCAB_SIZE, sequence_length)
@@ -33,10 +34,12 @@ def get_test_datasets(
     cache_directory: pathlib.Path | None = None,
     sequence_length: int = 512,
 ):
+    # TODO: Update
     return get_test_data({"dataset": config}, samples_per_phase, cache_directory, sequence_length)._datasets
 
 
 def test_dummy_dataset():
+    # TODO: Update
     datasets = get_test_datasets(
         {"type": "dummy"},
         {PhaseType.training: 7, PhaseType.test: 4},
@@ -51,6 +54,7 @@ def test_dummy_dataset():
 
 
 def test_memmap_dataset():
+    # TODO: Update
     get_test_dataset()
     dataset = get_test_datasets(
         {"type": "memmap", "path": DATASET_PREFIX},

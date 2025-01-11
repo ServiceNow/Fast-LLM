@@ -171,7 +171,7 @@ class BlendedDatasetConfig(SampledDatasetConfig):
         sampled_datasets = [
             dataset.build_sample(
                 # Blending is deterministic and the error will never be higher than 1.
-                config.to_copy({"num_samples": math.ceil(weight * config.num_samples) + 1}),
+                dataclasses.replace(config, num_samples=math.ceil(weight * config.num_samples) + 1),
             )
             for dataset, weight in zip(self.datasets, self.weights, strict=True)
         ]
@@ -200,7 +200,9 @@ class BlendedDatasetConfig(SampledDatasetConfig):
                 # Blending is deterministic and the error will never be higher than 1.
                 PhaseSplits[SamplingConfig](
                     {
-                        phase: phase_config.to_copy({"num_samples": math.ceil(weight * phase_config.num_samples) + 1})
+                        phase: dataclasses.replace(
+                            phase_config, num_samples=math.ceil(weight * phase_config.num_samples) + 1
+                        )
                         for phase, phase_config in config.items()
                     }
                 ),
