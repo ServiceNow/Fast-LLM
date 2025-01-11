@@ -5,15 +5,13 @@ import pathlib
 import typing
 
 from fast_llm.config import Config, Field, FieldHint, check_field, config_class
-from fast_llm.data.dataset.abstract import (
-    PhaseSplits,
-    SamplableDataset,
-    SamplableSplitDataset,
-    SampledDataset,
-    SampledSplitDataset,
-)
+from fast_llm.data.dataset.abstract import SamplableDataset, SampledDataset
 from fast_llm.engine.distributed.config import PhaseType
 from fast_llm.utils import Assert
+
+if typing.TYPE_CHECKING:
+    from fast_llm.data.dataset.indexed import ConcatenatedDataset, DatasetSlice, IndexedDataset
+    from fast_llm.engine.distributed.distributed import Distributed
 
 
 @config_class()
@@ -21,120 +19,118 @@ class DatasetConfig(Config):
     _abstract = True
 
 
-@dataclasses.dataclass
+@dataclasses.dataclass(kw_only=True)
 class SamplingConfig:
-    num_samples: int = 1
-    seed: int = 0
-    cache_directory: pathlib.Path | None = None
-    verbose: bool = True
-    distributed: typing.Any = None
+    # TODO: Have a separate configuration (subset?) for `build`?
+    num_samples: int
+    seed: int
+    cache_directory: pathlib.Path | None
+    verbose: bool
+    distributed: "Distributed"
+    phase: PhaseType
 
 
 @config_class()
-class SampledSplitDatasetConfig(DatasetConfig):
-
-    def build_split_sample(
-        self,
-        config: PhaseSplits[SamplingConfig],
-        default_phase: PhaseType = PhaseType.training,
-    ) -> SampledSplitDataset:
-        raise NotImplementedError()
-
-    @property
-    def sampled(self):
-        # Generally hard-coded, but some classes allow for more flexible values.
-        return True
-
-    @property
-    def split(self):
-        # Generally hard-coded, but some classes allow for more flexible values.
-        return True
-
-
-@config_class()
-class SampledDatasetConfig(SampledSplitDatasetConfig):
+class SampledDatasetConfig(DatasetConfig):
     """
     A sampled dataset containing a prepared list of samples to be indexed sequentially (as-is) during training.
     (See `fast_llm.data.sampler.Sampler`.)
     """
 
-    def build_sample(self, config: SamplingConfig) -> SampledDataset:
+    def build_and_sample(self, config: SamplingConfig) -> SampledDataset:
         raise NotImplementedError()
-
-    def build_split_sample(
-        self,
-        config: PhaseSplits[SamplingConfig],
-        default_phase: PhaseType = PhaseType.training,
-    ) -> SampledSplitDataset:
-        dataset = self.build_sample(config[default_phase])
-        return SampledSplitDataset(dataset.name, {default_phase: dataset})
-
-    @property
-    def sampled(self):
-        return True
-
-    @property
-    def split(self):
-        return False
 
 
 @config_class()
-class SamplableSplitDatasetConfig(SampledSplitDatasetConfig):
-
-    def build_split(
-        self,
-        default_phase: PhaseType = PhaseType.training,
-    ) -> SamplableSplitDataset:
-        raise NotImplementedError()
-
-    def build_split_sample(
-        self,
-        config: PhaseSplits[SamplingConfig],
-        default_phase: PhaseType = PhaseType.training,
-    ) -> SampledSplitDataset:
-        split_dataset = self.build_split(default_phase)
-        # TODO: Name
-        return SampledSplitDataset(
-            "dataset",
-            {phase: split_dataset[phase].sample(phase_config) for phase, phase_config in config.items()},
-        )
-
-    @property
-    def sampled(self):
-        return False
-
-    @property
-    def split(self):
-        return True
-
-
-@config_class()
-class SamplableDatasetConfig(SampledDatasetConfig, SamplableSplitDatasetConfig):
+class SamplableDatasetConfig(SampledDatasetConfig):
     def build(self) -> SamplableDataset:
         raise NotImplementedError()
 
-    def build_sample(self, config: SamplingConfig) -> SampledDataset:
+    def build_and_sample(self, config: SamplingConfig) -> SampledDataset:
         return self.build().sample(config)
 
-    def build_split(
-        self,
-        default_phase: PhaseType = PhaseType.training,
-    ) -> SamplableSplitDataset:
-        dataset = self.build()
-        return SamplableSplitDataset(dataset.name, {default_phase: dataset})
 
-    @property
-    def sampled(self):
-        return False
+@config_class()
+class IndexedDatasetConfig(SamplableDatasetConfig):
+    def build(self) -> "IndexedDataset":
+        raise NotImplementedError()
 
-    @property
-    def split(self):
-        return False
+
+@config_class()
+class ConcatenatedDatasetConfig(SamplableDatasetConfig):
+    """
+    Concatenate multiple indexed datasets as if they were one.
+    TODO: Make a post-sampling version? (staged training)
+    """
+
+    _abstract = False
+    name: str = Field(
+        default="concatenated",
+        desc="The name of the dataset.",
+        hint=FieldHint.core,
+    )
+    datasets: list[IndexedDatasetConfig] = Field(
+        default_factory=list,
+        desc="The datasets to concatenate.",
+        hint=FieldHint.core,
+        valid=check_field(functools.partial(Assert.custom, lambda x: len(x) > 0)),
+    )
+
+    def build(self) -> "ConcatenatedDataset":
+        from fast_llm.data.dataset.indexed import ConcatenatedDataset
+
+        return self._build(ConcatenatedDataset)
+
+    def _build[T: ConcatenatedDataset](self, cls: type[T]) -> T:
+        return cls(self.name, [dataset.build() for dataset in self.datasets])
+
+
+@config_class()
+class DatasetSliceConfig(SamplableDatasetConfig):
+    """
+    Use a fraction of an indexed dataset, specified by the range (begin, end).
+    Typically used to subsample a dataset, or to reserve part of the dataset for validation and/or testing.
+    Ex. use (0.0, 0.9) for train, (0.9, 1.0) for validation for a 90%-10% split.
+    TODO: This is suboptimal (duplication between train/test, unnecessary sub-datasets in the case of concatenation,
+        leads to higher resource usage than necessary; more open files?)
+    """
+
+    _abstract = False
+    dataset: IndexedDatasetConfig = Field(
+        default=None,
+        desc="The dataset to split.",
+        hint=FieldHint.core,
+    )
+    begin: float = Field(
+        default=0,
+        desc="The beginning of the dataset split, as a fraction of the total samples.",
+        hint=FieldHint.core,
+    )
+    end: float = Field(
+        default=1,
+        desc="The end of the dataset split, as a fraction of the total samples.",
+        hint=FieldHint.core,
+    )
+
+    def build(self) -> "DatasetSlice":
+        from fast_llm.data.dataset.indexed import DatasetSlice
+
+        return self._build(DatasetSlice)
+
+    def _build[T: DatasetSlice](self, cls: type[T]) -> T:
+        dataset = self.dataset.build()
+        size = len(dataset)
+        return cls(
+            f"{dataset.name}_{self.begin}_{self.end}",
+            dataset,
+            round(self.begin * size),
+            round(self.end * size),
+        )
 
 
 @config_class()
 class BlendedDatasetConfig(SampledDatasetConfig):
-    # [(?sampled, ?split)] -> (sampled, ?split)
+    _abstract = False
     name: str = Field(
         default="blended",
         desc="The name of the dataset.",
@@ -155,21 +151,15 @@ class BlendedDatasetConfig(SampledDatasetConfig):
     def __post_init__(self):
         Assert.eq(len(self.datasets), len(self.weights))
 
-    @property
-    def split(self):
-        return any(dataset.split for dataset in self.datasets)
-
-    def build_sample(
+    def build_and_sample(
         self,
         config: SamplingConfig,
     ) -> SampledDataset:
         from fast_llm.data.dataset.blended import BlendedDataset
 
-        assert not self.split
-
         # Build and sample the datasets.
         sampled_datasets = [
-            dataset.build_sample(
+            dataset.build_and_sample(
                 # Blending is deterministic and the error will never be higher than 1.
                 dataclasses.replace(config, num_samples=math.ceil(weight * config.num_samples) + 1),
             )
@@ -181,46 +171,4 @@ class BlendedDatasetConfig(SampledDatasetConfig):
             sampled_datasets,
             self.weights,
             config,
-        )
-
-    def build_split_sample(
-        self,
-        config: PhaseSplits[SamplingConfig],
-        default_phase: PhaseType = PhaseType.training,
-    ) -> SampledSplitDataset:
-        from fast_llm.data.dataset.blended import BlendedDataset
-
-        if not self.split:
-            # Take the base class shortcut using build_sample if it's available.
-            return super().build_split_sample(config, default_phase)
-
-        # Build, sample and split the datasets.
-        sampled_datasets = [
-            dataset.build_split_sample(
-                # Blending is deterministic and the error will never be higher than 1.
-                PhaseSplits[SamplingConfig](
-                    {
-                        phase: dataclasses.replace(
-                            phase_config, num_samples=math.ceil(weight * phase_config.num_samples) + 1
-                        )
-                        for phase, phase_config in config.items()
-                    }
-                ),
-                default_phase,
-            )
-            for dataset, weight in zip(self.datasets, self.weights, strict=True)
-        ]
-
-        # Blend the datasets for each phase.
-        return SampledSplitDataset[BlendedDataset](
-            self.name,
-            {
-                phase: BlendedDataset(
-                    f"{self.name}_{phase.value}",
-                    [dataset[phase] for dataset in sampled_datasets],
-                    self.weights,
-                    phase_config,
-                )
-                for phase, phase_config in config.items()
-            },
         )

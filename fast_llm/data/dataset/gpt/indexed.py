@@ -4,7 +4,7 @@ import typing
 import numpy as np
 
 from fast_llm.data.dataset.gpt.config import GPTSamplingConfig
-from fast_llm.data.dataset.indexed import ConcatenatedIndexedDataset, IndexedDataset, IndexedDatasetSlice
+from fast_llm.data.dataset.indexed import ConcatenatedDataset, DatasetSlice, IndexedDataset
 
 if typing.TYPE_CHECKING:
     from fast_llm.data.dataset.gpt.sampled import GPTSampledIndexedDataset
@@ -39,7 +39,7 @@ class GPTIndexedDataset(IndexedDataset):
         return GPTSampledIndexedDataset(self, config)
 
 
-class GPTDatasetSlice(IndexedDatasetSlice, GPTIndexedDataset):
+class GPTDatasetSlice(DatasetSlice, GPTIndexedDataset):
     """
     A GPT dataset, which reads samples from (a split of) a `MMapIndexedDataset` pointing to a GPT dataset.
     """
@@ -51,7 +51,7 @@ class GPTDatasetSlice(IndexedDatasetSlice, GPTIndexedDataset):
         return self._dataset.get_document_sizes()[self._begin : self._end]
 
 
-class GPTConcatenatedDataset(ConcatenatedIndexedDataset, GPTIndexedDataset):
+class GPTConcatenatedDataset(ConcatenatedDataset, GPTIndexedDataset):
     _datasets: list[GPTIndexedDataset]
 
     def get_document_sizes(self) -> np.ndarray:

@@ -13,7 +13,7 @@ class GPTDummyDataset(SamplableDataset):
         self._dummy_sample = np.random.randint(0, vocab_size, size=(sequence_length + 1,), dtype=np.int64)
         self._name = name
 
-    def sample(self, config: GPTSamplingConfig):
+    def sample(self, config: GPTSamplingConfig) -> "GPTDummySampledDataset":
         return GPTDummySampledDataset(self, config)
 
     def get(self):

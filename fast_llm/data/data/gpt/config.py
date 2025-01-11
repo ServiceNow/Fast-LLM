@@ -3,7 +3,8 @@ import logging
 from fast_llm.config import Field, FieldHint, check_field, config_class
 from fast_llm.data.config import MultiprocessingContext, TokenizerConfig
 from fast_llm.data.data.config import DataConfig
-from fast_llm.data.dataset.gpt.config import GPTLegacyConfig, GPTLegacyDatasetConfig, GPTSampledSplitDatasetConfig
+from fast_llm.data.dataset.gpt.config import GPTLegacyConfig, GPTLegacyDatasetConfig, GPTSampledDatasetConfig
+from fast_llm.engine.distributed.config import PhaseType
 from fast_llm.utils import Assert
 
 logger = logging.getLogger(__name__)
@@ -24,8 +25,9 @@ class GPTDataConfig(DataConfig, GPTLegacyConfig):
         desc="Configuration for the tokenizer (for FIM).",
         hint=FieldHint.feature,
     )
-    dataset: GPTSampledSplitDatasetConfig = Field(
-        default_factory=GPTSampledSplitDatasetConfig,
+    # TODO: Review field. Move closer to phase definition in training config?
+    datasets: dict[PhaseType, GPTSampledDatasetConfig] = Field(
+        default_factory=dict,
         desc="Configuration for the dataset(s).",
         hint=FieldHint.core,
     )
@@ -42,11 +44,12 @@ class GPTDataConfig(DataConfig, GPTLegacyConfig):
     )
 
     def _validate(self):
-        if self.dataset.type is None:
-            logger.warning("Using the legacy dataset definition format." " Specify it through `data.dataset` instead.")
-            self.dataset = GPTLegacyDatasetConfig(
-                ratio=self.ratio,
-                format=self.format,
-                path=self.path,
+        if not self.datasets:
+            logger.warning(
+                "Using the legacy dataset definition format." " Specify it through `data.datasets` instead."
             )
+            self.datasets = {
+                phase: GPTLegacyDatasetConfig.from_dict(self, strict=False)
+                for phase in (PhaseType.training, PhaseType.validation, PhaseType.test)
+            }
         super()._validate()

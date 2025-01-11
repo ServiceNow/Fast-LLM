@@ -1,36 +1,36 @@
 import dataclasses
 import enum
-import functools
 import json
 import pathlib
 import typing
 
 from fast_llm.config import Config, Field, FieldHint, FieldUpdate, check_field, config_class, skip_valid_if_none
-from fast_llm.data.dataset.abstract import PhaseSplits, SamplableSplitDataset, SampledDataset, SampledSplitDataset
+from fast_llm.data.dataset.abstract import SampledDataset
 from fast_llm.data.dataset.config import (
     BlendedDatasetConfig,
+    ConcatenatedDatasetConfig,
     DatasetConfig,
+    DatasetSliceConfig,
     SamplableDatasetConfig,
-    SamplableSplitDatasetConfig,
     SampledDatasetConfig,
-    SampledSplitDatasetConfig,
     SamplingConfig,
 )
 from fast_llm.engine.distributed.config import PhaseType
-from fast_llm.utils import Assert, Registry, normalize_probabilities
+from fast_llm.utils import Assert, Registry, normalize_probabilities, padded_cumsum
 
 if typing.TYPE_CHECKING:
     from fast_llm.data.dataset.gpt.dummy import GPTDummySampledDataset
     from fast_llm.data.dataset.gpt.indexed import GPTConcatenatedDataset, GPTDatasetSlice, GPTIndexedDataset
     from fast_llm.data.dataset.gpt.memmap import GPTMemmapDataset
+    from fast_llm.data.tokenizer import Tokenizer
 
 
 @dataclasses.dataclass
 class GPTSamplingConfig(SamplingConfig):
     # TODO: Sort these out
-    sequence_length: int | None = None
-    vocab_size: int | None = None
-    tokenizer: typing.Any = None
+    sequence_length: int
+    vocab_size: int
+    tokenizer: "Tokenizer"
 
 
 @config_class()
@@ -78,22 +78,12 @@ class GPTDatasetConfig(DatasetConfig):
 
 
 @config_class()
-class GPTSampledSplitDatasetConfig(SampledSplitDatasetConfig, GPTDatasetConfig):
+class GPTSampledDatasetConfig(SampledDatasetConfig, GPTDatasetConfig):
     pass
 
 
 @config_class()
-class GPTSampledDatasetConfig(SampledDatasetConfig, GPTSampledSplitDatasetConfig):
-    pass
-
-
-@config_class()
-class GPTSamplableSplitDatasetConfig(SamplableSplitDatasetConfig, GPTSampledSplitDatasetConfig):
-    pass
-
-
-@config_class()
-class GPTSamplableDatasetConfig(SamplableDatasetConfig, GPTSampledDatasetConfig, GPTSamplableSplitDatasetConfig):
+class GPTSamplableDatasetConfig(SamplableDatasetConfig, GPTSampledDatasetConfig):
     pass
 
 
@@ -104,8 +94,8 @@ class GPTIndexedDatasetConfig(GPTSamplableDatasetConfig):
 
 
 @config_class()
-class GPTDummyDatasetConfig(GPTSampledSplitDatasetConfig, type_="dummy"):
-    # NA -> (unsampled, unsplit)
+class GPTDummyDatasetConfig(GPTSampledDatasetConfig, type_="dummy"):
+    # TODO: Can't make it a samplable dataset because necessary info is in sampling config.
     _abstract = False
     name: str = Field(
         default="dummy",
@@ -113,27 +103,14 @@ class GPTDummyDatasetConfig(GPTSampledSplitDatasetConfig, type_="dummy"):
         hint=FieldHint.core,
     )
 
-    def build_split_sample(
-        self,
-        config: PhaseSplits[GPTSamplingConfig],
-        default_phase: PhaseType = PhaseType.training,
-    ) -> "SampledSplitDataset[GPTDummySampledDataset]":
-        from fast_llm.data.dataset.gpt.dummy import GPTDummyDataset, GPTDummySampledDataset
+    def build_and_sample(self, config: GPTSamplingConfig) -> "GPTDummySampledDataset":
+        from fast_llm.data.dataset.gpt.dummy import GPTDummyDataset
 
-        return SampledSplitDataset[GPTDummySampledDataset](
-            self.name,
-            {
-                phase: GPTDummyDataset(
-                    f"{self.name}_{phase.value}", phase_config.sequence_length, phase_config.vocab_size
-                ).sample(phase_config)
-                for phase, phase_config in config.items()
-            },
-        )
+        return GPTDummyDataset(self.name, config.sequence_length, config.vocab_size).sample(config)
 
 
 @config_class()
 class GPTMemmapDatasetConfig(GPTIndexedDatasetConfig, type_="memmap"):
-    # Path -> (unsampled, unsplit)
     _abstract = False
     path: pathlib.Path = Field(
         default=None,
@@ -148,61 +125,23 @@ class GPTMemmapDatasetConfig(GPTIndexedDatasetConfig, type_="memmap"):
 
 
 @config_class()
-class GPTConcatenatedDatasetConfig(GPTDatasetConfig, SamplableDatasetConfig, type_="concatenated"):
-    """
-    Concatenate multiple datasets as if they were one.
-    Must be done before sampling and splitting.
-    TODO: OK after sampling (staged training?) or splitting (Equal split for each sub-dataset, probably better?
-    [(unsampled, unsplit)] -> (unsampled, unsplit)
-    """
-
+class GPTConcatenatedDatasetConfig(ConcatenatedDatasetConfig, GPTIndexedDatasetConfig, type_="concatenated"):
     _abstract = False
-    name: str = Field(
-        default="concatenated",
-        desc="The name of the dataset.",
-        hint=FieldHint.core,
-    )
-    datasets: list[GPTIndexedDatasetConfig] = Field(
-        default_factory=list,
-        desc="The datasets to concatenate.",
-        hint=FieldHint.core,
-        valid=check_field(functools.partial(Assert.custom, lambda x: len(x) > 0)),
-    )
 
     def build(self) -> "GPTConcatenatedDataset":
         from fast_llm.data.dataset.gpt.indexed import GPTConcatenatedDataset
 
-        return GPTConcatenatedDataset(self.name, [dataset.build() for dataset in self.datasets])
+        return self._build(GPTConcatenatedDataset)
 
 
 @config_class()
-class GPTSplitDatasetConfig(GPTSamplableSplitDatasetConfig, type_="split"):
-    """
-    Split a single dataset into multiple phases.
-    Must be done before sampling.
-    TODO: Ok after sampling?
-    (unsampled, unsplit) -> (unsampled, split)
-    """
-
+class GPTDatasetSliceConfig(DatasetSliceConfig, GPTIndexedDatasetConfig, type_="slice"):
     _abstract = False
-    dataset: GPTIndexedDatasetConfig = Field(
-        default=None,
-        desc="The dataset to split.",
-        hint=FieldHint.core,
-    )
-    ratios: dict[PhaseType, float] = Field(
-        default=None,
-        desc="The split ratio for each phase",
-        hint=FieldHint.core,
-    )
 
-    def build_split(
-        self,
-        default_phase: PhaseType = PhaseType.training,
-    ) -> "SamplableSplitDataset[GPTDatasetSlice]":
+    def build(self) -> "GPTDatasetSlice":
         from fast_llm.data.dataset.gpt.indexed import GPTDatasetSlice
 
-        return GPTDatasetSlice.from_splits(self.dataset.build(), self.ratios)
+        return self._build(GPTDatasetSlice)
 
 
 @config_class()
@@ -290,43 +229,13 @@ class FimSampledDatasetConfig(GPTSampledDatasetConfig, FimConfig, type_="fim"):
         hint=FieldHint.core,
     )
 
-    @property
-    def split(self):
-        return self.dataset.split
-
-    def build_sample(
+    def build_and_sample(
         self,
         config: GPTSamplingConfig,
     ) -> SampledDataset:
         from fast_llm.data.dataset.gpt.fim import FimDataset
 
-        assert not self.split
-        return FimDataset(self, self.dataset.build_sample(config), config)
-
-    def build_split_sample(
-        self,
-        config: PhaseSplits[GPTSamplingConfig],
-        default_phase: PhaseType = PhaseType.training,
-    ) -> SampledSplitDataset:
-        from fast_llm.data.dataset.gpt.fim import FimDataset
-
-        if not self.split:
-            # Take the base class shortcut using build_sample if it's available.
-            return super().build_split_sample(config, default_phase)
-
-        # Build, sample and split the datasets.
-        sampled_datasets = self.dataset.build_split_sample(
-            # Blending is deterministic and the error will never be higher than 1.
-            PhaseSplits[SamplingConfig]({phase: phase_config for phase, phase_config in config.items()}),
-            default_phase,
-        )
-
-        # Blend the datasets for each phase.
-        return SampledSplitDataset[FimDataset](
-            # TODO: Name
-            "fim",
-            {phase: FimDataset(self, sampled_datasets[phase], phase_config) for phase, phase_config in config.items()},
-        )
+        return FimDataset(self, self.dataset.build_and_sample(config), config)
 
 
 @config_class()
@@ -367,18 +276,13 @@ class GPTLegacyConfig(Config):
 
 
 @config_class()
-class GPTLegacyDatasetConfig(GPTSampledSplitDatasetConfig, GPTLegacyConfig, type_="legacy"):
+class GPTLegacyDatasetConfig(GPTSampledDatasetConfig, GPTLegacyConfig, type_="legacy"):
     _abstract = False
 
-    def build_split_sample(
-        self,
-        config: PhaseSplits[GPTSamplingConfig],
-        default_phase: PhaseType = PhaseType.training,
-    ) -> SampledSplitDataset:
+    def build_and_sample(self, config: GPTSamplingConfig) -> SampledDataset:
 
         if self.format == LegacyDatasetSource.random:
             Assert.eq(len(self.path), 0)
-            # TODO: Multiple phase.
             dataset_config = GPTDummyDatasetConfig()
         else:
             if self.format == LegacyDatasetSource.file:
@@ -404,14 +308,19 @@ class GPTLegacyDatasetConfig(GPTSampledSplitDatasetConfig, GPTLegacyConfig, type
             else:
                 raise NotImplementedError(self.format)
 
+            phase_splits = padded_cumsum(self.ratio)
+            phase_index = {
+                PhaseType.training: 0,
+                PhaseType.validation: 1,
+                PhaseType.test: 2,
+            }[config.phase]
+
             dataset_configs = [
-                GPTSplitDatasetConfig(
+                GPTDatasetSliceConfig(
+                    # TODO: this duplicates memmap datasets for each phase.
                     dataset=GPTMemmapDatasetConfig(path=prefix),
-                    ratios={
-                        PhaseType.training: self.ratio[0],
-                        PhaseType.validation: self.ratio[1],
-                        PhaseType.test: self.ratio[2],
-                    },
+                    begin=phase_splits[phase_index],
+                    end=phase_splits[phase_index + 1],
                 )
                 for prefix in dataset_prefixes
             ]
@@ -430,4 +339,4 @@ class GPTLegacyDatasetConfig(GPTSampledSplitDatasetConfig, GPTLegacyConfig, type
                     {"dataset": dataset_config},
                 )
 
-        return dataset_config.build_split_sample(config, default_phase)
+        return dataset_config.build_and_sample(config)

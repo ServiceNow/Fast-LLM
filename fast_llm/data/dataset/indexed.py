@@ -2,9 +2,8 @@ import abc
 
 import numpy as np
 
-from fast_llm.data.dataset.abstract import SamplableDataset, SamplableSplitDataset
-from fast_llm.engine.distributed.config import PhaseType
-from fast_llm.utils import Assert, normalize_probabilities, padded_cumsum
+from fast_llm.data.dataset.abstract import SamplableDataset
+from fast_llm.utils import Assert, padded_cumsum
 
 
 class IndexedDataset(SamplableDataset):
@@ -24,7 +23,7 @@ class IndexedDataset(SamplableDataset):
         """
 
 
-class IndexedDatasetSlice(IndexedDataset):
+class DatasetSlice(IndexedDataset):
 
     def __init__(
         self,
@@ -61,24 +60,8 @@ class IndexedDatasetSlice(IndexedDataset):
     def name(self):
         return self._name
 
-    @classmethod
-    def from_splits(cls, dataset: IndexedDataset, phase_split: dict[PhaseType, float]):
-        """
-        Create a set of GPT datasets from a MMapIndexedDataset,
-        each containing approximately the requested proportion of the total tokens.
-        """
-        probabilities = normalize_probabilities(list(phase_split.values()))
-        splits = [round(x) for x in padded_cumsum(probabilities) * len(dataset)]
-        return SamplableSplitDataset[cls](
-            f"{dataset.name}_split",
-            {
-                phase: cls(f"{dataset.name}_{phase.value}", dataset, split_begin, split_end)
-                for phase, split_begin, split_end in zip(phase_split, splits[:-1], splits[1:])
-            },
-        )
 
-
-class ConcatenatedIndexedDataset(IndexedDataset):
+class ConcatenatedDataset[IndexedDatasetType: IndexedDataset](IndexedDataset):
 
     def __init__(
         self,

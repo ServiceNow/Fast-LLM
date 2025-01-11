@@ -7,7 +7,7 @@ import torch.utils.data
 
 from fast_llm.data.data.abstract import Data
 from fast_llm.data.data.gpt.config import GPTDataConfig
-from fast_llm.data.dataset.abstract import PhaseSplits, SampledSplitDataset
+from fast_llm.data.dataset.abstract import SampledDataset
 from fast_llm.data.dataset.gpt.config import GPTSamplingConfig
 from fast_llm.data.dataset.monitor import DatasetMonitor
 from fast_llm.data.iterator import SampledDatasetIterator
@@ -28,7 +28,7 @@ class GPTData(Data):
     TODO: Separate generic and GPT classes.
     """
 
-    _datasets: SampledSplitDataset
+    _datasets: dict[PhaseType, SampledDataset]
     _config: GPTDataConfig
     _tokenizer: Tokenizer | None
     _distributed: Distributed
@@ -60,7 +60,7 @@ class GPTData(Data):
     def setup(
         self,
         distributed: Distributed,
-        samples_per_phase: PhaseSplits[int],
+        samples_per_phase: dict[PhaseType, int],
         cache_directory: pathlib.Path,
     ):
         """
@@ -74,30 +74,25 @@ class GPTData(Data):
         if self._cache_directory is None:
             # TODO: Avoid this
             warnings.warn(f"Using the dataset directory for the index cache.")
-        sampling_config = PhaseSplits[GPTSamplingConfig](
-            {
-                phase: GPTSamplingConfig(
+
+        self._datasets = {}
+        for phase, num_samples in samples_per_phase.items():
+            if num_samples > 0:
+                # TODO: Do the check earlier.
+                assert phase in self._config.datasets
+                sampling_config = GPTSamplingConfig(
                     num_samples=samples_per_phase[phase],
                     seed=self._distributed_config.seed,
                     cache_directory=self._cache_directory,
                     verbose=True,
                     distributed=distributed,
+                    phase=phase,
                     sequence_length=self._max_sequence_length,
                     vocab_size=self._vocab_size,
                     tokenizer=self._tokenizer,
                 )
-                for phase, num_samples in samples_per_phase.items()
-                if num_samples > 0
-            }
-        )
-        datasets = self._config.dataset.build_split_sample(sampling_config)
-        self._datasets = SampledSplitDataset(
-            datasets.name,
-            {
-                phase: DatasetMonitor(dataset, self._config.data_sample_warn_time_ms)
-                for phase, dataset in datasets.items()
-            },
-        )
+                dataset = self._config.datasets[phase].build_and_sample(sampling_config)
+                self._datasets[phase] = DatasetMonitor(dataset, self._config.data_sample_warn_time_ms)
         self._is_setup = True
 
     @property
