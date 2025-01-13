@@ -4,6 +4,7 @@ import numpy as np
 
 from fast_llm.data.data.gpt.config import GPTDataConfig
 from fast_llm.data.data.gpt.data import GPTData
+from fast_llm.data.dataset.gpt.config import GPTDatasetConfig
 from fast_llm.engine.distributed.config import DistributedConfig, PhaseType
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.utils import Assert
@@ -27,7 +28,7 @@ def get_test_data(
 DATASET_CACHE = TEST_RESULTS_PATH / "dataset" / "cache"
 
 
-def get_test_datasets(
+def get_dataset(
     config: dict,
     samples_per_phase: dict[PhaseType, int],
     cache_directory: pathlib.Path | None = None,
@@ -39,6 +40,8 @@ def get_test_datasets(
 
 def test_dummy_dataset():
     # TODO: Update
+    dataset = GPTDatasetConfig.from_dict({"type": "dummy"})
+
     datasets = get_test_datasets(
         {"type": "dummy"},
         {PhaseType.training: 7, PhaseType.test: 4},
