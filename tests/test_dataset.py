@@ -4,7 +4,6 @@ import numpy as np
 
 from fast_llm.data.data.gpt.config import GPTDataConfig
 from fast_llm.data.data.gpt.data import GPTData
-from fast_llm.data.dataset.abstract import PhaseSplits
 from fast_llm.engine.distributed.config import DistributedConfig, PhaseType
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.utils import Assert

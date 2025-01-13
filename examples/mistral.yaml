@@ -11,8 +11,9 @@ batch:
   micro_batch_size: 1
   batch_size: 32
 data:
-  dataset:
-    type: dummy
+  datasets:
+    Training:
+      type: dummy
 optimizer:
   learning_rate:
     base: 1.0e-05
@@ -52,4 +53,4 @@ model:
     distributed_timeout: 3600
     seed: 984059
 run:
-  experiment_dir: mistral_4_nodes_benchmark
+  experiment_dir: mistral_example

@@ -11,6 +11,7 @@ from fast_llm.data.dataset.config import (
     ConcatenatedDatasetConfig,
     DatasetConfig,
     DatasetSliceConfig,
+    IndexedDatasetConfig,
     SamplableDatasetConfig,
     SampledDatasetConfig,
     SamplingConfig,
@@ -88,7 +89,7 @@ class GPTSamplableDatasetConfig(SamplableDatasetConfig, GPTSampledDatasetConfig)
 
 
 @config_class()
-class GPTIndexedDatasetConfig(GPTSamplableDatasetConfig):
+class GPTIndexedDatasetConfig(GPTSamplableDatasetConfig, IndexedDatasetConfig):
     def build(self) -> "GPTIndexedDataset":
         raise NotImplementedError()
 
@@ -127,6 +128,7 @@ class GPTMemmapDatasetConfig(GPTIndexedDatasetConfig, type_="memmap"):
 @config_class()
 class GPTConcatenatedDatasetConfig(ConcatenatedDatasetConfig, GPTIndexedDatasetConfig, type_="concatenated"):
     _abstract = False
+    datasets: list[GPTIndexedDatasetConfig] = FieldUpdate()
 
     def build(self) -> "GPTConcatenatedDataset":
         from fast_llm.data.dataset.gpt.indexed import GPTConcatenatedDataset
@@ -137,6 +139,7 @@ class GPTConcatenatedDatasetConfig(ConcatenatedDatasetConfig, GPTIndexedDatasetC
 @config_class()
 class GPTDatasetSliceConfig(DatasetSliceConfig, GPTIndexedDatasetConfig, type_="slice"):
     _abstract = False
+    dataset: GPTIndexedDatasetConfig = FieldUpdate()
 
     def build(self) -> "GPTDatasetSlice":
         from fast_llm.data.dataset.gpt.indexed import GPTDatasetSlice
