@@ -26,7 +26,7 @@ class GPTMemmapDatasetPreparator(DatasetPreparator):
         """
         Perform span-aware tokenization and return the tokenized input_ids along with token spans.
         """
-        char_spans = sample[self._config.dataset.spans_field]
+        char_spans = sample.get(self._config.dataset.spans_field, [])
         text = sample[self._config.dataset.field]
         input_ids = []
         token_spans = []
