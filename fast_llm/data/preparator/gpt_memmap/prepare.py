@@ -22,14 +22,37 @@ class GPTMemmapDatasetPreparator(DatasetPreparator):
     _tokenizer: Tokenizer
     _data_type: DataType
 
+    def _tokenize_with_spans(self, sample):
+        """
+        Perform span-aware tokenization and return the tokenized input_ids along with token spans.
+        """
+        char_spans = sample[self._config.dataset.spans_field]
+        text = sample[self._config.dataset.field]
+        input_ids = []
+        token_spans = []
+        char_pos = 0
+        for start, end in char_spans:
+            if char_pos < start:
+                curr_text = text[char_pos:start]
+                tokenized_text = self._tokenizer.tokenize(curr_text)
+                input_ids.extend(tokenized_text)
+            curr_text = text[start : end + 1]
+            tokenized_text = self._tokenizer.tokenize(curr_text)
+            input_ids.extend(tokenized_text)
+            token_spans.append((len(token_spans), len(token_spans) + len(tokenized_text) - 1))
+            char_pos = end + 1
+        if char_pos < len(text):
+            curr_text = text[char_pos:]
+            tokenized_text = self._tokenizer.tokenize(curr_text)
+            input_ids.extend(tokenized_text)
+        return np.array(input_ids, dtype=self._data_type.numpy), token_spans
+
     def _tokenize_batch(self, batch):
-        input_ids = [
-            np.array(self._tokenizer.tokenize(text), dtype=self._data_type.numpy)
-            for text in batch[self._config.dataset.field]
-        ]
+        input_ids, token_spans = zip(*[self._tokenize_with_spans(sample) for sample in batch])
         num_tokens = [len(x) for x in input_ids]
         return {
             "input_ids": input_ids,
+            "token_spans": token_spans,
             "num_tokens": num_tokens,
         }
 
@@ -126,6 +149,11 @@ class GPTMemmapDatasetPreparator(DatasetPreparator):
         )
         if self._config.dataset.field not in dataset.column_names:
             raise ValueError(f"Dataset does not have field '{self._config.dataset.field}'.")
+        if (
+            self._config.dataset.spans_field is not None
+            and self._config.dataset.spans_field not in dataset.column_names
+        ):
+            raise ValueError(f"Dataset does not have spans field '{self._config.dataset.spans_field}'.")
 
         # Tokenize the dataset in parallel
         tokenized_dataset = dataset.map(

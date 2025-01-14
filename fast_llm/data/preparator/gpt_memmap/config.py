@@ -44,6 +44,9 @@ class GPTHuggingfaceDatasetConfig(Config):
         desc="Field of the dataset to use.",
         hint=FieldHint.optional,
     )
+    spans_field: None | str = Field(
+        default=None, desc="Field containing character spans to mask for loss computation", hint=FieldHint.optional
+    )
     data_type: DataType | None = Field(
         default=None,
         desc="Data type of the dataset field."
