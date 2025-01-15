@@ -47,7 +47,7 @@ class GPTDatasetConfig(DatasetConfig):
         hint=FieldHint.core,
     )
 
-    def _validate(self):
+    def _validate(self) -> None:
         if self.type is not None:
             # Should be handled in `from_dict`, but can fail if instantiating directly.
             Assert.eq(self.type, self.type_)
@@ -59,7 +59,7 @@ class GPTDatasetConfig(DatasetConfig):
         default: dict[str, typing.Any],
         strict: bool = True,
         flat: bool = False,
-    ):
+    ) -> typing.Self:
         type_ = default.get("type")
         if type_ is None:
             actual_cls = cls
@@ -71,7 +71,7 @@ class GPTDatasetConfig(DatasetConfig):
         else:
             return actual_cls._from_dict(default, strict=strict, flat=flat)
 
-    def __init_subclass__(cls, type_: str | None = None, **kwargs):
+    def __init_subclass__(cls, type_: str | None = None, **kwargs) -> None:
         if type_ is not None:
             GPTDatasetConfig._registry[type_] = cls
         cls.type_ = type_
@@ -163,12 +163,12 @@ class LegacyDatasetSource(str, enum.Enum):
     random = "random"
 
 
-def _validate_split(value):
+def _validate_split(value: list[int]) -> list[int]:
     Assert.leq(len(value), 3)
     return value + [0] * (len(value) - 3)
 
 
-def _validate_path(value):
+def _validate_path(value: str | list[str]) -> list[str]:
     return [value] if isinstance(value, str) else value
 
 

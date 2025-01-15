@@ -12,7 +12,7 @@ class Dataset(abc.ABC):
 
     @property
     @abc.abstractmethod
-    def name(self):
+    def name(self) -> str:
         """
         A name for the dataset to facilitate identification and debugging.
         """
@@ -25,11 +25,11 @@ class SampledDataset(Dataset):
     """
 
     @abc.abstractmethod
-    def __getitem__(self, index: int):
+    def __getitem__(self, index: int) -> typing.Any:
         pass
 
     @abc.abstractmethod
-    def __len__(self):
+    def __len__(self) -> int:
         pass
 
 

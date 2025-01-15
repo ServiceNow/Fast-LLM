@@ -1,4 +1,6 @@
 import math
+import pathlib
+import typing
 
 import numpy as np
 
@@ -61,7 +63,7 @@ class GPTSampledIndexedDataset(SampledDataset):
         safe_barrier(group, self._indexed_dataset.name)
         self._load_mappings(sampling_config.verbose)
 
-    def _sample(self, sampling_config: GPTSamplingConfig):
+    def _sample(self, sampling_config: GPTSamplingConfig) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
         Create a `GPTSampledDataset` with the requested parameters.
         """
@@ -119,7 +121,7 @@ class GPTSampledIndexedDataset(SampledDataset):
         # TODO: The doc and sample idx are way bigger than needed when sampling for << 1 epoch.
         return doc_idx, sample_idx, shuffle_idx[: sampling_config.num_samples]
 
-    def __getstate__(self):
+    def __getstate__(self) -> tuple[GPTIndexedDataset, pathlib.Path, pathlib.Path, pathlib.Path]:
         return (
             self._indexed_dataset,
             self._doc_idx_filename,
@@ -127,7 +129,7 @@ class GPTSampledIndexedDataset(SampledDataset):
             self._shuffle_idx_filename,
         )
 
-    def __setstate__(self, state):
+    def __setstate__(self, state: tuple[GPTIndexedDataset, pathlib.Path, pathlib.Path, pathlib.Path]) -> None:
         (
             self._indexed_dataset,
             self._doc_idx_filename,
@@ -136,7 +138,7 @@ class GPTSampledIndexedDataset(SampledDataset):
         ) = state
         self._load_mappings(False)
 
-    def _load_mappings(self, verbose):
+    def _load_mappings(self, verbose: bool) -> None:
         if verbose:
             log_main_rank(lambda: f" > loading doc-idx mapping from {self._doc_idx_filename}")
         self._doc_idx = np.load(self._doc_idx_filename, mmap_mode="r")
@@ -149,12 +151,12 @@ class GPTSampledIndexedDataset(SampledDataset):
         if verbose:
             log_main_rank(lambda: f"  loaded dataset with {len(self)} samples.")
 
-    def __len__(self):
+    def __len__(self) -> int:
         # -1 is due to data structure used to retrieve the index:
         #    sample i --> [sample_idx[i], sample_idx[i+1])
         return self._shuffle_idx.shape[0]
 
-    def __getitem__(self, idx):
+    def __getitem__(self, idx: int) -> typing.Any:
         """
         Get the sample, (fixed-length sequence of tokens holding one or more complete or partial documents)
         with the requested sampling index.
@@ -180,5 +182,5 @@ class GPTSampledIndexedDataset(SampledDataset):
         return sample
 
     @property
-    def name(self):
+    def name(self) -> str:
         return self._indexed_dataset.name

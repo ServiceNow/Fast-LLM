@@ -1,5 +1,6 @@
 import logging
 import pathlib
+import typing
 
 import numpy as np
 
@@ -66,7 +67,7 @@ class BlendedDataset(SampledDataset):
             safe_barrier(group, self._name)
             self._load_mappings(sampling_config.verbose)
 
-    def __getstate__(self):
+    def __getstate__(self) -> tuple[typing.Any, ...]:
         return (
             self._datasets,
             self._name,
@@ -76,7 +77,7 @@ class BlendedDataset(SampledDataset):
             self._sample_index if self._sample_idx_filename is None else self._sample_idx_filename,
         )
 
-    def __setstate__(self, state):
+    def __setstate__(self, state: tuple[typing.Any, ...]):
         (
             self._datasets,
             self._name,
@@ -92,7 +93,7 @@ class BlendedDataset(SampledDataset):
             self._dataset_idx_filename, self._sample_idx_filename = None, None
             self._dataset_index, self._sample_index = dataset_index, sample_index
 
-    def _load_mappings(self, verbose):
+    def _load_mappings(self, verbose: bool) -> None:
         if verbose:
             log_main_rank(lambda: f" > loading blending dataset index mapping from {self._dataset_idx_filename}")
         self._dataset_index = np.load(self._dataset_idx_filename, mmap_mode="r")
@@ -100,10 +101,10 @@ class BlendedDataset(SampledDataset):
             log_main_rank(lambda: f" > loading blending dataset index mapping from {self._sample_idx_filename}")
         self._sample_index = np.load(self._sample_idx_filename, mmap_mode="r")
 
-    def __len__(self):
+    def __len__(self) -> int:
         return self._num_samples
 
-    def _build_blending_indices(self, verbose: bool):
+    def _build_blending_indices(self, verbose: bool) -> tuple[np.ndarray, np.ndarray]:
         assert _extension_available, (
             "The C++ extension for dataset blending is missing." " Please make sure Fast-LLM is installed correctly."
         )
@@ -135,7 +136,7 @@ class BlendedDataset(SampledDataset):
             )
         return dataset_index, dataset_sample_index
 
-    def __getitem__(self, idx):
+    def __getitem__(self, idx: int) -> typing.Any:
         return self._datasets[self._dataset_index[idx]][self._sample_index[idx]]
 
     @property

@@ -16,11 +16,11 @@ class GPTDummyDataset(SamplableDataset):
     def sample(self, config: GPTSamplingConfig) -> "GPTDummySampledDataset":
         return GPTDummySampledDataset(self, config)
 
-    def get(self):
+    def get(self) -> np.ndarray:
         return self._dummy_sample
 
     @property
-    def name(self):
+    def name(self) -> str:
         return self._name
 
 
@@ -29,12 +29,12 @@ class GPTDummySampledDataset(SampledDataset):
         self._config = config
         self._dataset = dataset
 
-    def __len__(self):
+    def __len__(self) -> int:
         return self._config.num_samples
 
-    def __getitem__(self, idx):
+    def __getitem__(self, idx) -> np.ndarray:
         return self._dataset.get()
 
     @property
-    def name(self):
+    def name(self) -> str:
         return self._dataset.name

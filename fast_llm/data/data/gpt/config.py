@@ -43,7 +43,7 @@ class GPTDataConfig(DataConfig, GPTLegacyConfig):
         hint=FieldHint.expert,
     )
 
-    def _validate(self):
+    def _validate(self) -> None:
         if not self.datasets:
             logger.warning(
                 "Using the legacy dataset definition format." " Specify it through `data.datasets` instead."

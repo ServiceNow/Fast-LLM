@@ -33,20 +33,20 @@ class FimDataset(SampledDataset):
             self._tokenizer.vocab[self._config.split_sample] if self._config.split_sample is not None else None
         )
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self._dataset)
 
-    def __getitem__(self, idx):
+    def __getitem__(self, idx: int) -> np.ndarray:
         sample = self._fim(
             self._dataset[idx], np.random.RandomState(seed=(self._sampling_config.seed + idx) % MAX_SEED)
         )
         return sample
 
     @property
-    def name(self):
+    def name(self) -> str:
         return f"{self._dataset.name}_fim"
 
-    def _fim(self, sample, np_rng):
+    def _fim(self, sample: np.ndarray, np_rng: np.random.RandomState) -> np.ndarray:
         # FIM
         # TODO: permute segments in sample_list, before concatenating.
         sample_len = sample.shape[0]
@@ -81,8 +81,9 @@ class FimDataset(SampledDataset):
             sample = np.concatenate([sample, np.full((-1 * diff), self._pad_tok_id)])
 
         assert sample.shape[0] == sample_len
+        return sample
 
-    def _fim_split_and_permute_sequence(self, sequence, np_rng):
+    def _fim_split_and_permute_sequence(self, sequence: np.ndarray, np_rng: np.random.RandomState) -> np.ndarray:
         """
         fragment_fim_rate: if set, apply fim with this rate to each fragment.
         """
@@ -116,10 +117,10 @@ class FimDataset(SampledDataset):
 
     def _fim_permute_sequence(
         self,
-        sequence,
-        np_rng,
-        rate,
-    ):
+        sequence: np.ndarray,
+        np_rng: np.random.RandomState,
+        rate: float,
+    ) -> np.ndarray:
         """
         Take in a sample (np array w/ size (0,chunklength)) and perform a FIM transformation on it.
         truncate_or_pad: if True, maintain the same sample length (if transform creates a few extra tokens, drop them).

@@ -148,7 +148,7 @@ class BlendedDatasetConfig(SampledDatasetConfig):
         hint=FieldHint.core,
     )
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         Assert.eq(len(self.datasets), len(self.weights))
 
     def build_and_sample(

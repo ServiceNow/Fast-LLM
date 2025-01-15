@@ -1,5 +1,6 @@
 import logging
 import pathlib
+import typing
 import warnings
 
 import torch
@@ -21,7 +22,7 @@ from fast_llm.utils import Assert
 logger = logging.getLogger(__name__)
 
 
-class GPTData(Data):
+class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
     """
     A global class for all dataset needs, including loading, splitting, sampling and iteration.
     Currently hard-coded to a GPT dataset.
@@ -29,7 +30,6 @@ class GPTData(Data):
     """
 
     _datasets: dict[PhaseType, SampledDataset]
-    _config: GPTDataConfig
     _tokenizer: Tokenizer | None
     _distributed: Distributed
     _is_setup: bool = False
@@ -59,10 +59,10 @@ class GPTData(Data):
 
     def setup(
         self,
-        distributed: Distributed,
+        distributed: "Distributed",
         samples_per_phase: dict[PhaseType, int],
         cache_directory: pathlib.Path,
-    ):
+    ) -> None:
         """
         Load the datasets, and prepare or load the samplings.
         This may take a while and a significant amount of cpu memory.
@@ -96,7 +96,7 @@ class GPTData(Data):
         self._is_setup = True
 
     @property
-    def tokenizer(self):
+    def tokenizer(self) -> Tokenizer:
         assert self._is_setup
         return self._tokenizer
 
@@ -108,7 +108,7 @@ class GPTData(Data):
         consumed_samples: int,
         num_workers: int,
         prefetch_factor: int | None = None,
-    ):
+    ) -> typing.Iterator[typing.Any]:
         assert self._is_setup
         Assert.incl(phase, self._datasets)
         Assert.in_range_incl(batch_config.sequence_length, 1, self._max_sequence_length)

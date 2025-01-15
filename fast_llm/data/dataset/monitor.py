@@ -1,5 +1,6 @@
 import logging
 import time
+import typing
 
 from fast_llm.data.dataset.abstract import SampledDataset
 
@@ -29,10 +30,10 @@ class DatasetMonitor(SampledDataset):
         self._dataset = dataset
         self._data_sample_warn_time_ms = data_sample_warn_time_ms
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self._dataset)
 
-    def __getitem__(self, idx):
+    def __getitem__(self, idx) -> typing.Any:
         start_time = time.perf_counter()
         try:
             sample = self._dataset[idx]
@@ -48,5 +49,5 @@ class DatasetMonitor(SampledDataset):
             raise
 
     @property
-    def name(self):
+    def name(self) -> str:
         return self._dataset.name

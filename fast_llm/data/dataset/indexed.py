@@ -1,4 +1,5 @@
 import abc
+import typing
 
 import numpy as np
 
@@ -13,7 +14,7 @@ class IndexedDataset(SamplableDataset):
     """
 
     @abc.abstractmethod
-    def get(self, index: int, *args, **kwargs):
+    def get(self, index: int, *args, **kwargs) -> typing.Any:
         pass
 
     @abc.abstractmethod
@@ -45,7 +46,7 @@ class DatasetSlice(IndexedDataset):
         except Exception as e:
             raise AssertionError(f"Invalid document indices for dataset {name} with length {num_samples}") from e
 
-    def get(self, document: int, offset: int = 0, length: int | None = None):
+    def get(self, document: int, offset: int = 0, length: int | None = None) -> typing.Any:
         """
         Get the sample (document) with the given index (in the dataset slice),
         optionally sub-sampled to a specific offset (starting point) and maximum length
@@ -53,11 +54,11 @@ class DatasetSlice(IndexedDataset):
         """
         return self._dataset.get(document + self._begin, offset, length)
 
-    def __len__(self):
+    def __len__(self) -> int:
         return self._end - self._begin
 
     @property
-    def name(self):
+    def name(self) -> str:
         return self._name
 
 
@@ -74,11 +75,11 @@ class ConcatenatedDataset[IndexedDatasetType: IndexedDataset](IndexedDataset):
         self._dataset_splits = padded_cumsum(sizes)
 
     def __len__(self) -> int:
-        return self._dataset_splits[-1]
+        return self._dataset_splits[-1].item()
 
     def get(self, index: int, *args, **kwargs):
         dataset = np.searchsorted(self._dataset_splits[1:], index, side="right")
-        return self._datasets[dataset].get(index - self._dataset_splits[dataset], *args, **kwargs)
+        return self._datasets[dataset].get(index - self._dataset_splits[dataset].item(), *args, **kwargs)
 
     @property
     def name(self) -> str:
