@@ -1,7 +1,10 @@
+import typing
+
 import torch
 from torch._C._distributed_c10d import ReduceOp  # noqa
 from torch.distributed import all_reduce
 
+from fast_llm.config import Configurable
 from fast_llm.core.ops import split_op
 from fast_llm.engine.base_model.base_model import Layer
 from fast_llm.engine.config_utils.tensor_space import DefaultDimNames, TensorDim, TensorSpace
@@ -24,18 +27,19 @@ from fast_llm.tensor import ParameterMeta, TensorMeta, init_normal_
 from fast_llm.utils import div
 
 
-class LanguageModelHead(Layer):
+class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[LanguageModelBaseConfig], Layer):
     """
     A language model head (GPT), which combines the final layer norm, logits and cross-entropy (if applicable).
     """
+
+    config_class: typing.ClassVar[type[LanguageModelBaseConfig]] = LanguageModelBaseConfig
 
     def __init__(
         self,
         config: LanguageModelBaseConfig,
         tensor_space: TensorSpace,
     ):
-        super().__init__()
-        config.validate()
+        super().__init__(config)
         self._debug_transformer = config.transformer.debug_transformer
         self._tie_word_embeddings = config.tie_word_embeddings
         self._tensor_space = tensor_space
@@ -81,7 +85,9 @@ class LanguageModelHead(Layer):
 
         self._forward = wrap_forward_backward(self._forward_backward, grad_is_context)
 
-    def forward(self, input_: torch.Tensor, kwargs: dict, losses: dict | None = None, metrics: dict | None = None):
+    def forward(
+        self, input_: torch.Tensor, kwargs: dict, losses: dict | None = None, metrics: dict | None = None
+    ) -> torch.Tensor:
         if isinstance(input_, TensorMeta):
             return TensorMeta.from_tensor_space(
                 (DefaultDimNames.scalar,),
@@ -100,7 +106,9 @@ class LanguageModelHead(Layer):
         # TODO: Return the model output when needed.
         return language_model_loss
 
-    def _forward_backward(self, input_: torch.Tensor, kwargs: dict, losses: dict | None = None):
+    def _forward_backward(
+        self, input_: torch.Tensor, kwargs: dict, losses: dict | None = None
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
         labels = kwargs[LanguageModelKwargs.labels].flatten() if LanguageModelKwargs.labels in kwargs else None
         if self._sequence_parallel_logits:
             labels = split_op(labels, self._tensor_space.distributed.tensor_group, 0)
@@ -132,7 +140,7 @@ class LanguageModelHead(Layer):
         grad_output: float,
         kwargs: dict,
         losses: dict | None = None,
-    ):
+    ) -> tuple[torch.Tensor | None, torch.Tensor | None]:
         if self._cross_entropy_splits is None or labels is None:
             loss, logit_input_grad = self._logits_cross_entropy_forward_backward(
                 input_, labels, weight, grad_output, kwargs, losses
@@ -177,7 +185,7 @@ class LanguageModelHead(Layer):
         grad_output: float,
         kwargs: dict,
         losses: dict | None = None,
-    ):
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
         logits, context = output_parallel_linear_forward(
             input_=input_,
             weight=weight,

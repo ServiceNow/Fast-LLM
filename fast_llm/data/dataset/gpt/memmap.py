@@ -22,7 +22,7 @@ class GPTMemmapDataset(GPTIndexedDataset):
     def __init__(self, name: str, prefix: pathlib.Path | str):
         self._init(name, prefix)
 
-    def _init(self, name: str, prefix: pathlib.Path | str):
+    def _init(self, name: str, prefix: pathlib.Path | str) -> None:
         super().__init__()
         self._name = name
         self._prefix = pathlib.Path(prefix)
@@ -51,10 +51,10 @@ class GPTMemmapDataset(GPTIndexedDataset):
         self._bin_buffer_mmap = np.memmap(self._prefix.with_suffix(".bin"), mode="r", order="C")
         self._bin_buffer = memoryview(self._bin_buffer_mmap)
 
-    def __getstate__(self):
+    def __getstate__(self) -> tuple[str, pathlib.Path]:
         return (self._name, self._prefix)
 
-    def __setstate__(self, state):
+    def __setstate__(self, state: tuple[str, pathlib.Path]):
         self._init(*state)
 
     def __del__(self):
@@ -63,7 +63,7 @@ class GPTMemmapDataset(GPTIndexedDataset):
         self._index_bin_buffer_mmap._mmap.close()  # noqa
         del self._index_bin_buffer_mmap
 
-    def get(self, idx, offset=0, length=None):
+    def get(self, idx, offset=0, length=None) -> np.ndarray:
         return np.frombuffer(
             self._bin_buffer,
             dtype=self._dtype,
@@ -72,10 +72,9 @@ class GPTMemmapDataset(GPTIndexedDataset):
         )
 
     @property
-    def name(self):
+    def name(self) -> str:
         return self._name
 
-    @property
     def __len__(self) -> int:
         return self._num_documents
 

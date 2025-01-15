@@ -40,15 +40,15 @@ class IntervalConfig(Config):
         valid=check_field(Assert.geq, 0),
     )
 
-    def _validate(self):
+    def _validate(self) -> None:
         if self.interval:
             self.offset %= self.interval
         super()._validate()
 
-    def enabled(self, iteration: int | None = None):
+    def enabled(self, iteration: int | None = None) -> bool:
         return self.interval and (iteration is None or (iteration - self.offset) % self.interval == 0)
 
-    def is_sub_interval(self, other: "IntervalConfig"):
+    def is_sub_interval(self, other: "IntervalConfig") -> bool:
         if not self.enabled():
             return True
         elif not other.enabled():
@@ -57,15 +57,15 @@ class IntervalConfig(Config):
             self.offset % other.interval
         )
 
-    def assert_sub_interval(self, other: "IntervalConfig"):
+    def assert_sub_interval(self, other: "IntervalConfig") -> None:
         assert self.is_sub_interval(other), f"{self} is not a sub-interval of {other}"
 
-    def get_count(self, iteration):
+    def get_count(self, iteration) -> int:
         # Number of times this interval was enabled after a given iteration.
         return (iteration - self.offset) // self.interval + 1 if self.enabled() else 0
 
 
-def _validate_script(value):
+def _validate_script(value: str | list[str]) -> list[str]:
     if isinstance(value, str):
         value = shlex.split(value)
     Assert.geq(len(value), 1)
@@ -86,7 +86,7 @@ class CallbackConfig(Config):
         hint=FieldHint.feature,
     )
 
-    def run(self):
+    def run(self) -> None:
         if self.script is not None:
             environment = os.environ.copy()
             environment.update(self.environment)
@@ -110,7 +110,7 @@ class WandbAlertConfig(IntervalConfig):
         hint=FieldHint.feature,
     )
 
-    def _validate(self):
+    def _validate(self) -> None:
         if self.status_updates is None:
             self.post_alerts = self.enabled()
         super()._validate()
@@ -184,10 +184,10 @@ class TrainingCheckpointBaseConfig(IntervalConfig):
     def get_save_directory(self, experiment_directory: pathlib.Path) -> pathlib.Path:
         pass
 
-    def get_save_config(self, path: pathlib.Path):
+    def get_save_config(self, path: pathlib.Path) -> CheckpointSaveConfig:
         raise NotImplementedError()
 
-    def to_delete(self, iterations: list[int]):
+    def to_delete(self, iterations: list[int]) -> list[int]:
         if not self.keep:
             return []
         # Ignore checkpoints that aren't supposed to be there.
@@ -216,7 +216,7 @@ class TrainingCheckpointConfig(TrainingCheckpointBaseConfig):
         new_path = experiment_directory / "checkpoint"
         return old_path if old_path.is_dir() and not new_path.is_dir() else new_path
 
-    def get_save_config(self, path: pathlib.Path):
+    def get_save_config(self, path: pathlib.Path) -> CheckpointSaveConfig:
         return CheckpointSaveConfig(
             path=path,
             format=DistributedCheckpointFormat,
@@ -224,7 +224,7 @@ class TrainingCheckpointConfig(TrainingCheckpointBaseConfig):
             optimizer_state=True,
         )
 
-    def get_load_config(self, path: pathlib.Path):
+    def get_load_config(self, path: pathlib.Path) -> CheckpointLoadConfig:
         return CheckpointLoadConfig(
             path=path,
             format=DistributedCheckpointFormat,
@@ -247,7 +247,7 @@ class TrainingExportConfig(TrainingCheckpointBaseConfig, CheckpointStateSaveConf
     def get_save_directory(self, experiment_directory: pathlib.Path) -> pathlib.Path:
         return experiment_directory / "export" / self.format.name
 
-    def get_save_config(self, path: pathlib.Path):
+    def get_save_config(self, path: pathlib.Path) -> CheckpointSaveConfig:
         return CheckpointSaveConfig.from_dict(self, {"path": path}, strict=False)
 
 
@@ -305,7 +305,7 @@ class TrainingConfig(Config):
         valid=skip_valid_if_none(check_field(Assert.gt, 0)),
     )
 
-    def _validate(self):
+    def _validate(self) -> None:
         super()._validate()
         self.shutdown.assert_sub_interval(self.checkpoint)
         self.wandb.alert.assert_sub_interval(self.logs)
@@ -344,24 +344,24 @@ class TrainerConfig(PretrainedFastLLMModelConfig, ExperimentConfig):
         hint=FieldHint.core,
     )
 
-    def _validate(self):
+    def _validate(self) -> None:
         self.training.export.setup(self.model)
         super()._validate()
         if self.run.experiment_dir is None:
             assert not self.training.checkpoint.enabled()
 
+    def _setup(self):
+        super()._setup()
+        self.batch.setup(self.model.distributed)
+
     @classmethod
     def get_trainer_class(cls) -> type["Trainer"]:
         raise NotImplementedError
 
-    def _setup(self):
-        super()._setup()
-        self.batch.setup(self.distributed)
-
     def _get_runnable(self) -> typing.Callable[[], None]:
         from fast_llm.engine.distributed.distributed import Distributed
 
-        distributed = Distributed(self.distributed)
+        distributed = Distributed(self.model.distributed)
         run = self.get_run(distributed)
         trainer = self.get_trainer_class()(config=self)
 

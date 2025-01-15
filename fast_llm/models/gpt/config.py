@@ -9,7 +9,9 @@ from fast_llm.layers.language_model.config import LanguageModelArchitectureConfi
 from fast_llm.models.gpt.megatron import set_megatron_distributed_seeds
 
 if typing.TYPE_CHECKING:
-    pass
+    from fast_llm.models.gpt.huggingface import HuggingfaceGPTModelForCausalLM
+    from fast_llm.models.gpt.model import GPTModel
+    from fast_llm.models.gpt.trainer import GPTTrainer
 
 
 class GPTHuggingfaceCheckpointFormat(CheckpointFormat):
@@ -49,10 +51,10 @@ class GPTArchitectureConfig(LanguageModelArchitectureConfig):
     @classmethod
     def _from_dict(
         cls,
-        default: dict,
+        default: dict[str, typing.Any],
         strict: bool = True,
         flat: bool = False,
-    ):
+    ) -> typing.Self:
         # TODO v0.3: Remove backward compatibility fix
         if "transposed_mlp_weight" in default:
             assert default.pop("transposed_mlp_weight")
@@ -71,10 +73,10 @@ class GPTBaseModelConfig(LanguageModelBaseConfig, GPTArchitectureConfig):
     @classmethod
     def _from_dict(
         cls,
-        default: dict,
+        default: dict[str, typing.Any],
         strict: bool = True,
         flat: bool = False,
-    ):
+    ) -> typing.Self:
         # TODO v0.3: Remove backward compatibility fix
         if "match_megatron" in default:
             assert "use_megatron_initialization" not in default
@@ -101,13 +103,13 @@ class GPTModelConfig(FastLLMModelConfig):
     )
 
     @classmethod
-    def get_model_class(cls):
+    def get_model_class(cls) -> type["GPTModel"]:
         from fast_llm.models.gpt.model import GPTModel
 
         return GPTModel
 
     @classmethod
-    def get_huggingface_model_class(cls):
+    def get_huggingface_model_class(cls) -> type["HuggingfaceGPTModelForCausalLM"]:
         from fast_llm.models.gpt.huggingface import HuggingfaceGPTModelForCausalLM
 
         return HuggingfaceGPTModelForCausalLM
@@ -121,19 +123,18 @@ class PretrainedGPTModelConfig(PretrainedFastLLMModelConfig):
 
 @config_class()
 class GPTTrainerConfig(PretrainedGPTModelConfig, TrainerConfig):
-
     data: GPTDataConfig = FieldUpdate(default_factory=GPTDataConfig)
 
-    def _setup(self):
-        super()._setup()
+    def _validate(self) -> None:
         if self.batch.sequence_length is None:
             # TODO: Drop this.
-            self.batch.sequence_length = self.base_model.max_position_embeddings
-        if self.base_model.use_megatron_initialization:
-            set_megatron_distributed_seeds(self.distributed)
+            self.batch.sequence_length = self.model.base_model.max_position_embeddings
+        if self.model.base_model.use_megatron_initialization:
+            set_megatron_distributed_seeds(self.model.distributed)
+        super()._validate()
 
     @classmethod
-    def get_trainer_class(cls):
+    def get_trainer_class(cls) -> type["GPTTrainer"]:
         from fast_llm.models.gpt.trainer import GPTTrainer
 
         return GPTTrainer

@@ -1,5 +1,8 @@
+import typing
+
 import torch
 
+from fast_llm.config import Configurable
 from fast_llm.core.distributed import set_generator
 from fast_llm.core.ops import reduce_forward, split
 from fast_llm.engine.base_model.base_model import Layer
@@ -12,12 +15,14 @@ from fast_llm.utils import Assert
 WORD_EMBEDDINGS_WEIGHT = "word_embeddings_weight"
 
 
-class LanguageModelEmbedding(Layer):
+class LanguageModelEmbedding[ConfigType: LanguageModelBaseConfig](Configurable[LanguageModelBaseConfig], Layer):
     """
     A language model embedding layer.
     Consists of word embeddings (tensor-parallel or sequence-tensor-parallel),
     together with optional absolute position embeddings and dropout.
     """
+
+    config_class: typing.ClassVar[type[LanguageModelBaseConfig]] = LanguageModelBaseConfig
 
     # Ensure the layer is on its own stage.
     layer_count: float = 1000.0
@@ -27,8 +32,7 @@ class LanguageModelEmbedding(Layer):
         config: LanguageModelBaseConfig,
         tensor_space: TensorSpace,
     ):
-        super().__init__()
-        config.validate()
+        super().__init__(config)
         self._distributed_config = tensor_space.distributed_config
         self._tensor_space = tensor_space
         self._residual_dtype = (
@@ -71,7 +75,7 @@ class LanguageModelEmbedding(Layer):
             )
 
     @torch.compile
-    def _forward(self, input_: torch.Tensor, position_ids: torch.Tensor | None):
+    def _forward(self, input_: torch.Tensor, position_ids: torch.Tensor | None) -> torch.Tensor:
         Assert.eq(position_ids is not None, self._use_absolute_position_embeddings)
         group = self._tensor_space.distributed.tensor_group
         if self._parallel_embeddings:
@@ -99,7 +103,13 @@ class LanguageModelEmbedding(Layer):
             embeddings = torch.dropout(embeddings, self._dropout_p, self.training)
         return embeddings.to(dtype=self._residual_dtype)
 
-    def forward(self, input_, kwargs, losses: dict | None = None, metrics: dict | None = None):
+    def forward(
+        self,
+        input_: torch.Tensor | TensorMeta,
+        kwargs: dict[str, typing.Any],
+        losses: dict[str, typing.Any] | None = None,
+        metrics: dict | None = None,
+    ) -> torch.Tensor:
         if isinstance(input_, TensorMeta):
             return TensorMeta.from_dims(
                 kwargs[TransformerKwargs.hidden_dims],

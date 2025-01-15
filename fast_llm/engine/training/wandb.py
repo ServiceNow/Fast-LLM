@@ -44,14 +44,14 @@ class Wandb:
         else:
             self._wandb = None
 
-    def log_metrics(self, completed_steps: int, metrics: dict[str, dict[str, float | int]]):
+    def log_metrics(self, completed_steps: int, metrics: dict[str, dict[str, float | int]]) -> None:
         # Note: metrics modified in-place
         if self._wandb is not None:
             import wandb
 
             wandb.log(metrics, step=completed_steps)  # noqa
 
-    def alert(self, title, text, level="INFO", wait=0.001):
+    def alert(self, title, text, level="INFO", wait=0.001) -> None:
         if self._wandb is not None and self._config.alert.post_alerts:
             pass
 
@@ -63,8 +63,9 @@ class Wandb:
                 wait_duration=wait,
             )
 
-    def __enter__(self):
+    def __enter__(self) -> "Wandb":
         self.alert(f"Run started!", "", "ERROR")
+        return self
 
     def __exit__(self, exc_type, exc_val: OSError, exc_tb):
         if exc_val:

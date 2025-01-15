@@ -75,7 +75,7 @@ def triton_adam(
     weight_decay: float,
     epsilon: float,
     use_triton=True,
-):
+) -> None:
     if not use_triton or (use_triton is None and TritonConfig.TRITON_ENABLED):
         if noop_flag.item() == 0:
             return adamw(

@@ -1,6 +1,8 @@
 import abc
+import pathlib
 import typing
 
+from fast_llm.config import Configurable
 from fast_llm.data.data.config import DataConfig
 from fast_llm.engine.distributed.config import DistributedConfig, PhaseType
 from fast_llm.engine.schedule.config import BatchConfig
@@ -9,22 +11,25 @@ if typing.TYPE_CHECKING:
     from fast_llm.engine.distributed.distributed import Distributed
 
 
-class Data(abc.ABC):
+class Data[ConfigType: DataConfig](Configurable[ConfigType], abc.ABC):
     _distributed: "Distributed"
     _samples_per_phase: dict[PhaseType, int]
+    _cache_directory: pathlib.Path | None
 
     def __init__(self, config: DataConfig, distributed_config: DistributedConfig) -> None:
-        self._config = config
+        super().__init__(config)
         self._distributed_config = distributed_config
 
     # TODO: Improve interface
-    def setup(self, distributed: "Distributed", samples_per_phase: dict[PhaseType, int]):
+    def setup(
+        self,
+        distributed: "Distributed",
+        samples_per_phase: dict[PhaseType, int],
+        cache_directory: pathlib.Path,
+    ) -> None:
         self._distributed = distributed
         self._samples_per_phase = samples_per_phase
-
-    @property
-    def config(self):
-        return self._config
+        self._cache_directory = cache_directory
 
     @property
     def distributed(self):
@@ -39,5 +44,5 @@ class Data(abc.ABC):
         consumed_samples: int,
         num_workers: int,
         prefetch_factor: int | None = None,
-    ):
+    ) -> typing.Iterator[typing.Any]:
         pass

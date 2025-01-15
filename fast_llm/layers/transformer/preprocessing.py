@@ -1,5 +1,6 @@
 import logging
 import math
+import typing
 
 import torch
 
@@ -45,7 +46,7 @@ def get_rotary_frequencies(
     kv_channels,
     *,
     device="cuda",
-):
+) -> torch.Tensor:
     # Calculate the complex frequencies (https://blog.eleuther.ai/rotary-embeddings/)
     # `exp(i * n * a) = cos(n * a) + i sin(n * a)`,
     # `a = theta ** - (2 * (channel // 2) / kv_channels)`,
@@ -85,7 +86,7 @@ class RotaryEmbeddingPreprocessor:
         self._scalar_dim = self._tensor_space.get_tensor_dim(DefaultDimNames.scalar)
         self._kv_channels_dim = self._tensor_space.get_tensor_dim(TransformerDimNames.kv_channels)
 
-    def create_tensors(self, sequence_length: int):
+    def create_tensors(self, sequence_length: int) -> None:
         if sequence_length <= self._tensor_cache_max_sequence_length:
             return
         self._tensor_cache_max_sequence_length = sequence_length
@@ -97,14 +98,14 @@ class RotaryEmbeddingPreprocessor:
             device=self._tensor_space.distributed.device,
         )
 
-    def preprocess(self, kwargs: dict):
+    def preprocess(self, kwargs: dict[str, typing.Any]) -> None:
         sequence_k = kwargs[TransformerKwargs.sequence_k_dim].size
         kwargs[TransformerKwargs.rotary_freq_q] = self._rotary_embedding_frequencies[
             :, sequence_k - kwargs[TransformerKwargs.sequence_q_dim].size : sequence_k
         ]
         kwargs[TransformerKwargs.rotary_freq_k] = self._rotary_embedding_frequencies[:, :sequence_k]
 
-    def preprocess_meta(self, kwargs: dict):
+    def preprocess_meta(self, kwargs: dict[str, typing.Any]) -> None:
         kwargs[TransformerKwargs.rotary_freq_q] = TensorMeta.from_dims(
             (
                 self._scalar_dim,
@@ -144,7 +145,7 @@ class BackupAttentionPreprocessor:
         assert not self._config.do_use_flash_attention(self._distributed_config)
         self._scalar_dim = self._tensor_space.get_tensor_dim(DefaultDimNames.scalar)
 
-    def create_tensors(self, sequence_length: int):
+    def create_tensors(self, sequence_length: int) -> None:
         if sequence_length <= self._tensor_cache_max_sequence_length:
             return
         self._tensor_cache_max_sequence_length = sequence_length
@@ -163,14 +164,14 @@ class BackupAttentionPreprocessor:
             device=self._tensor_space.distributed.device,
         )
 
-    def preprocess(self, kwargs: dict):
+    def preprocess(self, kwargs: dict[str, typing.Any]) -> None:
         sequence_k = kwargs[TransformerKwargs.sequence_k_dim].size
         kwargs[TransformerKwargs.attention_mask] = self._mask[
             None, None, sequence_k - kwargs[TransformerKwargs.sequence_q_dim].size : sequence_k, None, :sequence_k
         ]
         kwargs[TransformerKwargs.attention_mask_value] = self._mask_value
 
-    def preprocess_meta(self, kwargs: dict):
+    def preprocess_meta(self, kwargs: dict[str, typing.Any]) -> None:
         kwargs[TransformerKwargs.attention_mask] = TensorMeta.from_dims(
             (
                 self._scalar_dim,

@@ -97,7 +97,7 @@ class ConversionConfig(RunnableConfig):
                 mode=StageMode.off_device,
                 use_cpu=self.use_cpu,
             )
-            stages_per_step = math.ceil(self.layers_per_step / model._multi_stage_config.layers_per_stage)
+            stages_per_step = math.ceil(self.layers_per_step / model._config.multi_stage.layers_per_stage)
             num_stages = len(model.stages)
             step_paths = []
             for step_begin in range(0, num_stages, stages_per_step):

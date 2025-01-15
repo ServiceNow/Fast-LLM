@@ -47,19 +47,19 @@ class StageMode(str, enum.Enum):
     off_device = "off_device"
 
     @property
-    def support_forward(self):
+    def support_forward(self) -> bool:
         return self in (StageMode.training, StageMode.inference)
 
     @property
-    def support_backward(self):
+    def support_backward(self) -> bool:
         return self == StageMode.training
 
     @property
-    def support_training(self):
+    def support_training(self) -> bool:
         return self == StageMode.training
 
     @property
-    def on_device(self):
+    def on_device(self) -> bool:
         return self != StageMode.off_device
 
 
@@ -175,7 +175,7 @@ class MultiStageConfig(StageConfig):
     # Log the (input) gradients of each stage.
     # debug_stage_gradients: int = 0
 
-    def _validate(self):
+    def _validate(self) -> None:
         super()._validate()
         if self.zero_stage is not None:
             Assert.in_range_incl(self.zero_stage, 1, 3)
@@ -214,11 +214,11 @@ class FastLLMModelConfig(Config):
     )
 
     @classmethod
-    def __fast_llm_serialize__(cls):
+    def __fast_llm_serialize__(cls) -> str:
         return cls.model_name
 
     @classmethod
-    def get_checkpoint_format(cls, format: typing.Union[type[CheckpointFormat], str]) -> type[CheckpointFormat]:
+    def get_checkpoint_format(cls, format: type[CheckpointFormat] | str) -> type[CheckpointFormat]:
         if isinstance(format, type) and issubclass(format, CheckpointFormat):
             format_ = cls.get_checkpoint_format(format.name)
             Assert.is_(format, format_)
@@ -229,9 +229,7 @@ class FastLLMModelConfig(Config):
         raise ValueError(f"Checkpoint format {format} not supported for model {cls.model_name}")
 
     @classmethod
-    def get_checkpoint_handler_class(
-        cls, format: typing.Union[type[CheckpointFormat], str]
-    ) -> type[CheckpointHandler]:
+    def get_checkpoint_handler_class(cls, format: type[CheckpointFormat] | str) -> type[CheckpointHandler]:
         return cls.get_checkpoint_format(format).get_handler_class()
 
     @classmethod
@@ -250,8 +248,8 @@ class FastLLMModelConfig(Config):
     def from_pretrained(
         cls,
         pretrained: CheckpointLoadMetadataConfig,
-        default: "FastLLMModelConfig" = None,
-    ):
+        default: typing.Self | None = None,
+    ) -> typing.Self:
         # TODO: Add *updates?
         assert pretrained.path is not None
         metadata = cls.load_metadata(pretrained)
@@ -262,9 +260,9 @@ class FastLLMModelConfig(Config):
         cls,
         pretrained: CheckpointLoadMetadataConfig,
         metadata: "CheckpointMetadata",
-        default: "FastLLMModelConfig" = None,
+        default: typing.Self | None = None,
         updates: dict[str | tuple[str, ...], typing.Any] | None = None,
-    ):
+    ) -> typing.Self:
         # TODO: Standardize to *updates?
         # TODO v0.3: Update, remove support for older checkpoints.
         if metadata.fast_llm_version.major != 0 or metadata.fast_llm_version.minor not in (0, 1, 2):
@@ -301,7 +299,7 @@ class FastLLMModelConfig(Config):
         Assert.eq(metadata.model, cls)
         return metadata
 
-    def to_metadata(self, config: CheckpointSaveMetadataConfig, **kwargs):
+    def to_metadata(self, config: CheckpointSaveMetadataConfig, **kwargs) -> "CheckpointMetadata":
         return CheckpointMetadata(
             fast_llm_version=__version__,
             model=self.__class__,
@@ -315,6 +313,7 @@ class FastLLMModelConfig(Config):
 class PretrainedFastLLMModelConfig(Config):
     # TODO: Generalize data, schedule, logging, etc.
     _abstract = True
+    # This configs may be overridden with the pretrained config during validation, so we should be careful about accessing them before.
     model: FastLLMModelConfig = Field(
         default_factory=FastLLMModelConfig, desc="Configuration for the Fast-LLM model.", hint=FieldHint.core
     )
@@ -323,36 +322,8 @@ class PretrainedFastLLMModelConfig(Config):
         desc="Configuration for loading the configuration and state of a pretrained model.",
         hint=FieldHint.feature,
     )
-    # These configs may be overridden with the pretrained config during validation, so we should be careful about accessing them before.
-    _base_model: BaseModelConfig = Field(
-        init=False,
-        desc="Pointer to the base model configuration of the Fast-LLM model.",
-        hint=FieldHint.derived,
-    )
-    _multi_stage: MultiStageConfig = Field(
-        init=False,
-        desc="Pointer to the stage breakdown configuration of the Fast-LLM model.",
-        hint=FieldHint.derived,
-    )
-    _distributed: DistributedConfig = Field(
-        init=False,
-        desc="Pointer to the distributed configuration of the Fast-LLM model.",
-        hint=FieldHint.derived,
-    )
 
-    @property
-    def distributed(self):
-        return self._distributed
-
-    @property
-    def multi_stage(self):
-        return self._multi_stage
-
-    @property
-    def base_model(self):
-        return self._base_model
-
-    def _validate(self):
+    def _validate(self) -> None:
         assert self.model is not None
         self.pretrained.setup(self.model)
         self.pretrained.validate()
@@ -361,11 +332,9 @@ class PretrainedFastLLMModelConfig(Config):
         self._setup()
         super()._validate()
 
-    def _setup(self):
-        # Setup to run once the model is known, but before field validation
-        self._distributed = self.model.distributed
-        self._multi_stage = self.model.multi_stage
-        self._base_model = self.model.base_model
+    def _setup(self) -> None:
+        # An opportunity to do things once the actual model config is known, but before validating the config.
+        pass
 
 
 @config_class
@@ -405,7 +374,7 @@ class CheckpointMetadata(Config):
         hint=FieldHint.optional,
     )
 
-    def _validate(self):
+    def _validate(self) -> None:
         if isinstance(self.fast_llm_version, str):
             self.fast_llm_version = packaging.version.Version(self.fast_llm_version)
 
@@ -419,7 +388,7 @@ class CheckpointMetadata(Config):
         default: dict[str, typing.Any],
         strict: bool = True,
         flat: bool = False,
-    ):
+    ) -> typing.Self:
         # TODO v0.3: Remove backward compatibility.
         cls._handle_renamed_field(default, "checkpoint_type", "format")
         cls._handle_renamed_field(default, "checkpoint_version", "fast_llm_version")

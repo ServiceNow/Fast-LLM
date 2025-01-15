@@ -10,6 +10,11 @@ from fast_llm.models.gpt.config import (
     PretrainedGPTModelConfig,
 )
 
+if typing.TYPE_CHECKING:
+    from fast_llm.models.custom.huggingface import HuggingfaceCustomModelForCausalLM
+    from fast_llm.models.custom.model import CustomModel
+    from fast_llm.models.custom.trainer import CustomTrainer
+
 
 @config_class()
 class CustomDataConfig(GPTDataConfig):
@@ -36,13 +41,13 @@ class CustomModelConfig(GPTModelConfig):
     base_model: CustomBaseModelConfig = FieldUpdate(default_factory=CustomBaseModelConfig)
 
     @classmethod
-    def get_model_class(cls):
+    def get_model_class(cls) -> type["CustomModel"]:
         from fast_llm.models.custom.model import CustomModel
 
         return CustomModel
 
     @classmethod
-    def get_huggingface_model_class(cls):
+    def get_huggingface_model_class(cls) -> type["HuggingfaceCustomModelForCausalLM"]:
         from fast_llm.models.custom.huggingface import HuggingfaceCustomModelForCausalLM
 
         return HuggingfaceCustomModelForCausalLM
@@ -60,7 +65,7 @@ class CustomTrainerConfig(PretrainedCustomModelConfig, GPTTrainerConfig):
     data: CustomDataConfig = FieldUpdate(default_factory=CustomDataConfig)
 
     @classmethod
-    def get_trainer_class(cls):
+    def get_trainer_class(cls) -> type["CustomTrainer"]:
         from fast_llm.models.custom.trainer import CustomTrainer
 
         return CustomTrainer

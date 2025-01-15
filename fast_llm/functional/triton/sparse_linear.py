@@ -146,7 +146,7 @@ def dense_matmul(
     rhs: torch.Tensor,
     out: torch.Tensor | None = None,
     accumulate: bool = False,
-):
+) -> torch.Tensor:
     """
     Standard matrix multiplication.
     """
@@ -259,7 +259,7 @@ def output_sparse_matmul(
     sparse_map: SparseMap | None,
     out: torch.Tensor | None = None,
     accumulate: bool = False,
-):
+) -> torch.Tensor:
     """
     Output-sparse matrix multiplication with a sparse column dimension,
     i.e., with a mapping row_index -> sparse_index (obtained from expert_ends).
@@ -385,7 +385,7 @@ def input_inner_sparse_matmul(
     sparse_map: SparseMap | None,
     out: torch.Tensor | None = None,
     accumulate: bool = False,
-):
+) -> torch.Tensor:
     """
     Left-input-sparse matrix multiplication with a sparse inner dimension,
     i.e., with a mapping row_index -> sparse_index (obtained from expert_ends).
@@ -515,7 +515,7 @@ def input_row_sparse_matmul(
     sparse_map: SparseMap | None,
     out: torch.Tensor | None = None,
     accumulate: bool = False,
-):
+) -> torch.Tensor:
     """
     Left-input-sparse matrix multiplication with a sparse row dimension,
     i.e., with a mapping inner_index -> sparse_index.
@@ -564,18 +564,18 @@ def input_row_sparse_matmul(
 
 class OutputSparseLinear(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, lhs, rhs, sparse_map):  # noqa
+    def forward(ctx, lhs: torch.Tensor, rhs: torch.Tensor, sparse_map: SparseMap):  # noqa
         ctx.sparse_map = sparse_map
         ctx.save_for_backward(lhs, rhs)
         return output_sparse_matmul(lhs, rhs, sparse_map)
 
     @staticmethod
-    def backward(ctx, grad_out):  # noqa
+    def backward(ctx, grad_out: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, None]:  # noqa
         grad_out = grad_out.contiguous()
         lhs, rhs = ctx.saved_tensors
         grad_lhs = input_inner_sparse_matmul(grad_out, rhs.t(), ctx.sparse_map)
         grad_rhs = input_row_sparse_matmul(lhs.t(), grad_out, ctx.sparse_map).t()
-        return grad_lhs, grad_rhs, None, None
+        return grad_lhs, grad_rhs, None
 
 
 output_sparse_linear_autograd = OutputSparseLinear.apply
@@ -583,18 +583,18 @@ output_sparse_linear_autograd = OutputSparseLinear.apply
 
 class InputSparseLinear(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, lhs, rhs, sparse_map):  # noqa
+    def forward(ctx, lhs: torch.Tensor, rhs: torch.Tensor, sparse_map: SparseMap):  # noqa
         ctx.sparse_map = sparse_map
         ctx.save_for_backward(lhs, rhs)
         return input_inner_sparse_matmul(lhs, rhs, sparse_map)
 
     @staticmethod
-    def backward(ctx, grad_out):  # noqa
+    def backward(ctx, grad_out: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, None]:  # noqa
         grad_out = grad_out.contiguous()
         lhs, rhs = ctx.saved_tensors
         grad_lhs = output_sparse_matmul(grad_out, rhs.t(), ctx.sparse_map)
         grad_rhs = input_row_sparse_matmul(grad_out.t(), lhs, ctx.sparse_map)
-        return grad_lhs, grad_rhs, None, None
+        return grad_lhs, grad_rhs, None
 
 
 input_sparse_linear_autograd = InputSparseLinear.apply

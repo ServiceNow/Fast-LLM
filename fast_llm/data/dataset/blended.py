@@ -1,12 +1,12 @@
 import logging
 import pathlib
-import time
+import typing
 
 import numpy as np
 
-from fast_llm.data.data.abstract import Data
 from fast_llm.data.data.config import SamplingConfig
 from fast_llm.data.dataset.abstract import SampledDataset
+from fast_llm.data.dataset.config import SamplingConfig
 from fast_llm.engine.config_utils.run import log_main_rank
 from fast_llm.utils import Assert, normalize_probabilities
 
@@ -34,8 +34,6 @@ class BlendedDataset(SampledDataset):
         datasets: list[SampledDataset],
         weights: list[float],
         sampling_config: SamplingConfig,
-        # TODO: Generalize
-        data: Data,
     ):
         self._name = name
         assert len(datasets) > 0
@@ -43,13 +41,12 @@ class BlendedDataset(SampledDataset):
         self._datasets = datasets
         self._weights = normalize_probabilities(weights)
         self._num_samples = sampling_config.num_samples
-        self._data_sample_warn_time_ms = data.config.data_sample_warn_time_ms
 
         if sampling_config.cache_directory is None:
             self._dataset_idx_filename, self._sample_idx_filename = None, None
             self._dataset_index, self._sample_index = self._build_blending_indices()
         else:
-            group = data.distributed.world_group
+            group = sampling_config.distributed.world_group
             self._dataset_idx_filename = sampling_config.cache_directory / (self._name + "_blending_dataset_idx.npy")
             self._sample_idx_filename = sampling_config.cache_directory / (self._name + "_blending_sample_idx.npy")
 
@@ -63,7 +60,7 @@ class BlendedDataset(SampledDataset):
                 np.save(self._dataset_idx_filename, dataset_index)
                 np.save(self._sample_idx_filename, sample_index)
 
-    def __getstate__(self):
+    def __getstate__(self) -> tuple[typing.Any, ...]:
         return (
             self._datasets,
             self._name,
@@ -73,7 +70,7 @@ class BlendedDataset(SampledDataset):
             self._sample_index if self._sample_idx_filename is None else self._sample_idx_filename,
         )
 
-    def __setstate__(self, state):
+    def __setstate__(self, state: tuple[typing.Any, ...]):
         (
             self._datasets,
             self._name,
@@ -88,7 +85,7 @@ class BlendedDataset(SampledDataset):
             self._dataset_idx_filename, self._sample_idx_filename = None, None
             self._dataset_index, self._sample_index = dataset_index, sample_index
 
-    def _load_mappings(self, verbose: bool = False):
+    def _load_mappings(self, verbose: bool = False) -> None:
         if hasattr(self, "_dataset_index"):
             return
         if verbose:
@@ -98,10 +95,10 @@ class BlendedDataset(SampledDataset):
             log_main_rank(lambda: f" > loading blending dataset index mapping from {self._sample_idx_filename}")
         self._sample_index = np.load(self._sample_idx_filename, mmap_mode="r")
 
-    def __len__(self):
+    def __len__(self) -> int:
         return self._num_samples
 
-    def _build_blending_indices(self):
+    def _build_blending_indices(self, verbose: bool = False) -> tuple[np.ndarray, np.ndarray]:
         assert _extension_available, (
             "The C++ extension for dataset blending is missing." " Please make sure Fast-LLM is installed correctly."
         )
@@ -134,25 +131,8 @@ class BlendedDataset(SampledDataset):
             )
         return dataset_index, dataset_sample_index
 
-    def __getitem__(self, idx):
-        self._load_mappings()
-        start_time = time.perf_counter()
-        dataset_index = self._dataset_index[idx]
-        dataset = self._datasets[dataset_index]
-        sample_index = self._sample_index[idx]
-        try:
-            sample = dataset[sample_index]
-            sample_time = (time.perf_counter() - start_time) * 1000
-            if sample_time > self._data_sample_warn_time_ms:
-                logger.warning(
-                    f"Sample {sample_index} from dataset {dataset_index} ({dataset.name})"
-                    f" took {sample_time:,.2f} ms to load"
-                )
-            return sample
-
-        except Exception:
-            logger.error(f"Failed to get sample {sample_index} from dataset {dataset_index} ({dataset.name})")
-            raise
+    def __getitem__(self, idx: int) -> typing.Any:
+        return self._datasets[self._dataset_index[idx]][self._sample_index[idx].item()]
 
     @property
     def name(self):

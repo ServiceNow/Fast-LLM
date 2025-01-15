@@ -1,9 +1,8 @@
 import abc
 import typing
 
-from fast_llm.data.data.abstract import Data
-from fast_llm.data.data.config import DataConfig, SamplingConfig
-from fast_llm.engine.distributed.config import PhaseType
+if typing.TYPE_CHECKING:
+    from fast_llm.data.dataset.config import SamplingConfig
 
 
 class Dataset(abc.ABC):
@@ -13,14 +12,10 @@ class Dataset(abc.ABC):
 
     @property
     @abc.abstractmethod
-    def name(self):
+    def name(self) -> str:
         """
         A name for the dataset to facilitate identification and debugging.
         """
-
-    @abc.abstractmethod
-    def as_split(self, default_phase: PhaseType = PhaseType.training):
-        pass
 
 
 class SampledDataset(Dataset):
@@ -30,63 +25,16 @@ class SampledDataset(Dataset):
     """
 
     @abc.abstractmethod
-    def __getitem__(self, index: int):
+    def __getitem__(self, index: int) -> typing.Any:
         pass
 
     @abc.abstractmethod
-    def __len__(self):
+    def __len__(self) -> int:
         pass
-
-    def as_split(self, default_phase: PhaseType = PhaseType.training):
-        return SplitDataset(self.name, {default_phase: self})
 
 
 class SamplableDataset(Dataset):
-    # TODO: Move to dataset config?
-    _data_config_class: typing.ClassVar[type[DataConfig]]
 
-    def sample(self, config: SamplingConfig, data: Data) -> SampledDataset:
+    @abc.abstractmethod
+    def sample(self, config: "SamplingConfig") -> SampledDataset:
         pass
-
-    def as_split(self, default_phase: PhaseType = PhaseType.training) -> "SplitDataset":
-        return SplitDataset(self.name, {default_phase: self})
-
-
-_SplittableType = typing.TypeVar("_SplittableType")
-_DatasetType = typing.TypeVar("_DatasetType", bound=Dataset)
-_SampledDatasetType = typing.TypeVar("_SampledDatasetType", bound=SampledDataset)
-_SamplableDatasetType = typing.TypeVar("_SamplableDatasetType", bound=SamplableDataset)
-
-
-class PhaseSplits(dict[PhaseType, _SplittableType], typing.Generic[_SplittableType]):
-    pass
-
-
-class SplitDataset(Dataset, PhaseSplits[_DatasetType], typing.Generic[_DatasetType]):
-    def __init__(self, name: str, datasets: dict[PhaseType, _DatasetType]):
-        super().__init__(datasets)
-        self._name = name
-
-    def as_split(self, default_phase: PhaseType = PhaseType.training):
-        return self
-
-    @property
-    def name(self):
-        return self._name
-
-
-class SampledSplitDataset(SplitDataset[_SampledDatasetType], typing.Generic[_SampledDatasetType]):
-    pass
-
-
-class SamplableSplitDataset(SplitDataset[_SamplableDatasetType], typing.Generic[_SamplableDatasetType]):
-    def sample(self, sampling_configs: PhaseSplits[SamplingConfig], data: Data):
-        return SampledSplitDataset(
-            f"{self.name}_sampled",
-            {phase: self[phase].sample(sampling_config, data) for phase, sampling_config in sampling_configs.items()},
-        )
-
-
-class CopySplitDataset(SamplableSplitDataset):
-    def __init__(self, name: str, dataset: _SplittableType, phases: list[PhaseType]):
-        super().__init__(name, {phase: dataset for phase in phases})

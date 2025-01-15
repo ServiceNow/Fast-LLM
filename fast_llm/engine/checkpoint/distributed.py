@@ -28,20 +28,20 @@ class DistributedCheckpointHandler(CheckpointHandler):
     format: typing.ClassVar[type[CheckpointFormat]] = DistributedCheckpointFormat
 
     @classmethod
-    def load_metadata(cls, config: CheckpointLoadMetadataConfig):
+    def load_metadata(cls, config: CheckpointLoadMetadataConfig) -> CheckpointMetadata:
         return CheckpointMetadata.from_dict(yaml.safe_load((config.path / "metadata.yaml").open("r")))
 
-    def save(self, config: CheckpointSaveConfig, metadata: CheckpointMetadata):
+    def save(self, config: CheckpointSaveConfig, metadata: CheckpointMetadata) -> None:
         serialized_metadata = metadata.to_serialized()
-        if self._model.distributed_config.rank == 0:
+        if self._model.config.distributed.rank == 0:
             yaml.safe_dump(serialized_metadata, (config.path / "metadata.yaml").open("w"))
         safetensors.torch.save_file(
             tensors={"state_shard": self._model.state_shard[: self.get_num_shards(config)]},
-            filename=config.path / f"rank_{self._model.distributed_config.rank}.safetensors",
+            filename=config.path / f"rank_{self._model.config.distributed.rank}.safetensors",
             metadata=export_safetensors_metadata(serialized_metadata),
         )
 
-    def load(self, config: CheckpointLoadConfig, metadata: CheckpointMetadata):
+    def load(self, config: CheckpointLoadConfig, metadata: CheckpointMetadata) -> None:
         # TODO: More safety checks
         loaded_config_dict = config.to_copy({"load_config": ModelConfigType.fast_llm})
         loaded_config = self._model.config_class.from_metadata(loaded_config_dict, metadata)
@@ -50,7 +50,7 @@ class DistributedCheckpointHandler(CheckpointHandler):
         Assert.eq(metadata.shards[:num_shards], list(shard_names))
 
         same_format = (
-            loaded_config.to_serialized(verbose=None) == self._model.fast_llm_config.to_serialized(verbose=None)
+            loaded_config.to_serialized(verbose=None) == self._model.config.to_serialized(verbose=None)
             and config.optimizer_state
         )
         # Make sure all nodes agree on which loading scheme to use.
@@ -61,7 +61,7 @@ class DistributedCheckpointHandler(CheckpointHandler):
             log_main_rank("Checkpoint format matches, using fast load")
             # TODO: Add version without optimizer state?
             with safetensors.safe_open(
-                config.path / f"rank_{self._model.distributed_config.rank}.safetensors",
+                config.path / f"rank_{self._model.config.distributed.rank}.safetensors",
                 framework="pt",
                 device=str(self._model.distributed.device),
             ) as f:
@@ -69,7 +69,7 @@ class DistributedCheckpointHandler(CheckpointHandler):
                 self._model.state_shard[:num_shards].copy_(f.get_slice("state_shard")[:num_shards])
         else:
             log_main_rank("Checkpoint format doesn't match, using safe load")
-            self._model.base_model_config.compare_architecture(loaded_config.base_model, config.compare_log_fn)
+            self._model.config.base_model.compare_architecture(loaded_config.base_model, config.compare_log_fn)
             with SafeLoad(self._model, num_shards=num_shards) as context:
                 for rank in range(loaded_config.distributed.world_size):
                     loaded_model = self._model.__class__(

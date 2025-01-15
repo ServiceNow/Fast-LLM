@@ -3,9 +3,8 @@ import typing
 
 import numpy as np
 
-from fast_llm.data.data.gpt.data import GPTData
 from fast_llm.data.dataset.gpt.config import GPTSamplingConfig
-from fast_llm.data.dataset.indexed import ConcatenatedIndexedDataset, IndexedDataset, IndexedDatasetSlice
+from fast_llm.data.dataset.indexed import ConcatenatedDataset, DatasetSlice, IndexedDataset
 
 if typing.TYPE_CHECKING:
     from fast_llm.data.dataset.gpt.sampled import GPTSampledIndexedDataset
@@ -34,25 +33,25 @@ class GPTIndexedDataset(IndexedDataset):
         and derived classes should try to avoid holding the whole array im memory.
         """
 
-    def sample(self, config: GPTSamplingConfig, data: GPTData) -> "GPTSampledIndexedDataset":
+    def sample(self, config: GPTSamplingConfig) -> "GPTSampledIndexedDataset":
         from fast_llm.data.dataset.gpt.sampled import GPTSampledIndexedDataset
 
-        return GPTSampledIndexedDataset(self, config, data)
+        return GPTSampledIndexedDataset(self, config)
 
 
-class GPTDatasetSlice(IndexedDatasetSlice, GPTIndexedDataset):
+class GPTDatasetSlice(DatasetSlice, GPTIndexedDataset):
     """
     A GPT dataset, which reads samples from (a split of) a `MMapIndexedDataset` pointing to a GPT dataset.
     """
 
     _dataset: GPTIndexedDataset
 
-    def get_document_sizes(self):
+    def get_document_sizes(self) -> np.ndarray:
         # TODO: This can be really big.
         return self._dataset.get_document_sizes()[self._begin : self._end]
 
 
-class GPTConcatenatedDataset(ConcatenatedIndexedDataset, GPTIndexedDataset):
+class GPTConcatenatedDataset(ConcatenatedDataset, GPTIndexedDataset):
     _datasets: list[GPTIndexedDataset]
 
     def get_document_sizes(self) -> np.ndarray:

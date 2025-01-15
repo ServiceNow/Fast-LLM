@@ -4,6 +4,7 @@ import typing
 import torch
 import torch._dynamo  # noqa
 
+from fast_llm.config import Configurable
 from fast_llm.core.distributed import ProcessGroup, check_parallel_match
 from fast_llm.core.ops import gather_op
 from fast_llm.engine.base_model.base_model import BaseModel
@@ -20,7 +21,8 @@ from fast_llm.utils import Assert, clamp, div, padded_cumsum
 logger = logging.getLogger(__name__)
 
 
-class StageBase:
+class StageBase(Configurable[StageConfig]):
+    config_class: typing.ClassVar[type[StageConfig]] = StageConfig
     _meta_inputs: list[TensorMeta]
     _meta_outputs: list[TensorMeta]
     _distributed: Distributed
@@ -39,14 +41,14 @@ class StageBase:
     def __init__(
         self,
         *,
-        base_model: BaseModel,
         config: StageConfig,
+        base_model: BaseModel,
         distributed_config: DistributedConfig,
         begin: int,
         end: int,
         index: int,
     ):
-        self._config = config.validate()
+        super().__init__(config)
         self._distributed_config = distributed_config.validate()
 
         Assert.in_range(begin, 0, end)
@@ -112,56 +114,56 @@ class StageBase:
         )
 
     @property
-    def mode(self):
+    def mode(self) -> StageMode:
         assert self._is_setup
         return self._mode
 
     @property
-    def index(self):
+    def index(self) -> int:
         return self._index
 
     @property
-    def weight_shard_meta(self):
+    def weight_shard_meta(self) -> TensorMeta:
         return self._weight_shard_meta
 
     @property
-    def grad_shard_meta(self):
+    def grad_shard_meta(self) -> TensorMeta:
         return self._grad_shard_meta
 
     @property
-    def weight_buffer_meta(self):
+    def weight_buffer_meta(self) -> TensorMeta:
         return self._weight_buffer_meta
 
     @property
-    def grad_buffer_meta(self):
+    def grad_buffer_meta(self) -> TensorMeta:
         return self._grad_buffer_meta
 
     @property
-    def weight_shard(self):
+    def weight_shard(self) -> torch.Tensor:
         # TODO: Avoid this method (needed for tied weights broadcast)
         assert self._is_setup
         assert self._mode.support_forward
         return self._weight_shard
 
     @property
-    def grad_shard(self):
+    def grad_shard(self) -> torch.Tensor:
         # TODO: Avoid this method (needed for tied weights reduce)
         assert self._is_setup
         assert self._mode.support_backward
         return self._grad_shard
 
     @property
-    def parameter_count(self):
+    def parameter_count(self) -> int:
         return self._parameter_count
 
     @property
-    def parameter_names(self):
+    def parameter_names(self) -> list[str]:
         return list(self._parameter_index)
 
-    def get_parameter_meta(self, parameter_name: str):
+    def get_parameter_meta(self, parameter_name: str) -> ParameterMeta:
         return self._parameter_metas[self._parameter_index[parameter_name]]
 
-    def get_parameter_buffer(self, meta: ParameterMeta):
+    def get_parameter_buffer(self, meta: ParameterMeta) -> torch.nn.Parameter:
         assert self._is_setup
         assert self._mode.support_forward
         return self._parameter_buffers[self._parameter_index[meta.tensor_name]]
@@ -175,7 +177,7 @@ class StageBase:
         weight_buffer: torch.Tensor | None,
         grad_buffer: torch.Tensor | None,
         mode: StageMode = StageMode.training,
-    ):
+    ) -> None:
         assert not self._is_setup
         assert distributed.config is self._distributed_config
         self._is_setup = True
@@ -249,7 +251,7 @@ class StageBase:
 
             Assert.eq(i, len(self._parameter_metas))
 
-    def initialize_weights(self):
+    def initialize_weights(self) -> None:
         # TODO: Avoid all the _on_device checks
         assert self._is_setup
         with torch.no_grad():
@@ -297,7 +299,7 @@ class StageBase:
                     level=self._config.debug_param_init,
                 )
 
-    def reset_shard_pad(self, shard: torch.Tensor):
+    def reset_shard_pad(self, shard: torch.Tensor) -> int:
         assert self._is_setup
         assert self._mode.on_device
         # TODO: Needed?
@@ -309,7 +311,7 @@ class StageBase:
             return self._shard_pad
         return 0
 
-    def log_shard(self, name, shard, *, level, global_=None):
+    def log_shard(self, name, shard, *, level, global_=None) -> None:
         if global_ is None:
             global_ = self._config.debug_global_tensors
         parameters = self._split_buffer(self._reconstruct_from_shard(shard)) if global_ else self._split_shard(shard)
@@ -386,14 +388,14 @@ class StageBase:
 
         return param_groups, grads_for_norm
 
-    def check_tensor_parallel_synchronization(self):
+    def check_tensor_parallel_synchronization(self) -> None:
         # TODO: Option to check the optimizer state.
         for name, shard in zip(("grad", "weight"), (self.grad_shard, self.weight_shard)):
             for meta, shard_slice in zip(self._parameter_metas, self._split_shard(shard)):
                 if shard_slice.numel() > 0 and not meta.is_tensor_parallel:
                     check_parallel_match(shard_slice, self._distributed.tensor_group, f"{name} {meta.tensor_name}")
 
-    def _get_parameter_shard_indices_in_full_weight(self, name: str, device: torch.device):
+    def _get_parameter_shard_indices_in_full_weight(self, name: str, device: torch.device) -> torch.Tensor:
         """
         Create an index array for the global parameter, where each entry corresponds to the index
         where it is located in the shard if it exists, or -1 if it's not in the shard.
@@ -423,7 +425,7 @@ class StageBase:
         shards: list[torch.Tensor],
         loaded_shards: list[torch.Tensor],
         counter: torch.Tensor,
-    ):
+    ) -> None:
         """
         See MultiStage._load_partial.
         """
@@ -442,7 +444,9 @@ class StageBase:
                 shard[begin:end][overlap_mask] = loaded_shard[overlap_index_map_masked]
                 counter += overlap_count
 
-    def import_state_tensor(self, parameter_name: str, shard: torch.Tensor, tensor: torch.Tensor | SafeTensorSlice):
+    def import_state_tensor(
+        self, parameter_name: str, shard: torch.Tensor, tensor: torch.Tensor | SafeTensorSlice
+    ) -> int:
         """
         Given a global parameter tensor, set the associated slice of a local parameter shard.
         Return the size of the local slice.
@@ -455,7 +459,9 @@ class StageBase:
         shard[begin:end].copy_(tensor_shard)
         return end - begin
 
-    def _export_shard(self, shard: torch.Tensor, data_type: DataType | None = None):
+    def _export_shard(
+        self, shard: torch.Tensor, data_type: DataType | None = None
+    ) -> typing.Generator[tuple[str, torch.Tensor], None, None]:
         if data_type is not None:
             shard = shard.to(dtype=data_type.torch)
         tensors = self._split_buffer(self._reconstruct_from_shard(shard))
@@ -464,12 +470,14 @@ class StageBase:
                 tensors[param_index], distributed=self._distributed
             )[0]
 
-    def _parameter_range_in_shard(self, param_index: int):
+    def _parameter_range_in_shard(self, param_index: int) -> tuple[int, int]:
         begin = self._index_buffer_to_shard(self._parameter_begins_in_buffer[param_index])
         end = self._index_buffer_to_shard(self._parameter_ends_in_buffer[param_index])
         return begin, end
 
-    def _parameter_global_to_shard(self, global_param: torch.Tensor | SafeTensorSlice, param_index: int):
+    def _parameter_global_to_shard(
+        self, global_param: torch.Tensor | SafeTensorSlice, param_index: int
+    ) -> torch.Tensor:
         shard_param = self._parameter_metas[param_index].global_to_local(global_param).flatten()
         if self._fsdp_size > 1:
             shard_param = shard_param[
@@ -479,7 +487,7 @@ class StageBase:
             ]
         return shard_param
 
-    def _get_parameter_metas(self):
+    def _get_parameter_metas(self) -> list[ParameterMeta]:
         # Get all the stage parameters,
         # then separate the parameters with and without weight decay,
         # and squeeze the non-tensor parallel and sequence parallel ones in the middle.
@@ -503,19 +511,19 @@ class StageBase:
 
         return reordered_metas
 
-    def _index_buffer_to_shard(self, index: int, rank: int | None = None):
+    def _index_buffer_to_shard(self, index: int, rank: int | None = None) -> int:
         shard_begin = (self._fsdp_rank if rank is None else rank) * self._shard_size
         return clamp(index - shard_begin, 0, self._shard_size - self._shard_pad)
 
-    def _index_buffer_to_param(self, index: int, param_index: int):
+    def _index_buffer_to_param(self, index: int, param_index: int) -> int:
         return clamp(
             index - self._parameter_begins_in_buffer[param_index], 0, self._parameter_metas[param_index].numel()
         )
 
-    def _reconstruct_from_shard(self, local_shard, out=None):
+    def _reconstruct_from_shard(self, local_shard: torch.Tensor, out: torch.Tensor | None = None) -> torch.Tensor:
         return gather_op(local_shard, group=self._fsdp_group, dim=0, out=out)
 
-    def _split_buffer(self, buffer):
+    def _split_buffer(self, buffer: torch.Tensor) -> list[torch.Tensor]:
         # Split a buffer into appropriately shaped parameters.
         return [
             buffer[begin:end].view(meta.shape)
@@ -526,7 +534,7 @@ class StageBase:
             )
         ]
 
-    def _split_shard(self, shard):
+    def _split_shard(self, shard: torch.Tensor) -> list[torch.Tensor]:
         # Split a shard into flat (possibly empty) parameter slices.
         return [
             shard[self._index_buffer_to_shard(begin) : self._index_buffer_to_shard(end)]

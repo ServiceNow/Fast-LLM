@@ -87,7 +87,7 @@ class ProfilingConfig(Config):
         hint=FieldHint.logging,
     )
 
-    def _validate(self):
+    def _validate(self) -> None:
         if isinstance(self.ranks, str):
             # This happens with yaml serialization
             Assert.eq(self.ranks, "set()")
@@ -98,7 +98,7 @@ class ProfilingConfig(Config):
 
     def get_profiler(
         self, *, distributed_config: DistributedConfig | None = None, start_step: int = 0
-    ) -> typing.Union["torch.profiler.profile", NoProfiler]:
+    ) -> "torch.profiler.profile| NoProfiler":
         import torch
 
         activities = ([torch.profiler.ProfilerActivity.CPU] if self.cpu else []) + (
@@ -124,7 +124,7 @@ class ProfilingConfig(Config):
         )
 
 
-def get_trace_fn(config: ProfilingConfig, start_step: int = 0):
+def get_trace_fn(config: ProfilingConfig, start_step: int = 0) -> typing.Callable[["torch.profiler.profile"], None]:
     config.validate()
 
     def trace_fn(
@@ -222,7 +222,7 @@ _MISC_CUDA_OPS = (
 
 def build_trace_table(
     profiler: "torch.profiler.profile", *, cuda: bool = True, cpu: bool = False, column_width=80, header="Trace"
-):
+) -> str:
     var_name = f"self_{'cuda' if cuda else 'cpu'}_time_total"
     events = [evt for evt in profiler.profiler.function_events if getattr(evt, var_name) > 0]
     return _build_table(
@@ -236,7 +236,7 @@ def build_trace_table(
 
 def build_average_table(
     profiler: "torch.profiler.profile", *, cuda: bool = True, cpu: bool = False, column_width=80, header="Averages"
-):
+) -> str:
     var_name = f"self_{'cuda' if cuda else 'cpu'}_time_total"
     return _build_table(
         profiler.key_averages(),
@@ -259,7 +259,7 @@ def _build_table(
     spacing_size=2,
     exclude=None,
     filter_by=None,
-):
+) -> str:
     """Similar to the pytorch method, but more configurable."""
     if sort_by is not None:
         events = sorted(events, key=lambda evt: getattr(evt, sort_by), reverse=True)
@@ -346,19 +346,19 @@ def _build_table(
     return "\n".join(result)
 
 
-def _format_name(name, max_width):
+def _format_name(name: str, max_width: int) -> str:
     return name[: (max_width - 3)] + "..." if len(name) >= max_width - 3 else name
 
 
-def _format_time_us(time_us):
+def _format_time_us(time_us: float | int) -> str:
     return f"{time_us:,.0f} us"
 
 
-def _format_time_ms(time_us):
+def _format_time_ms(time_us: float | int) -> str:
     return f"{time_us/1e3:,.3f} ms"
 
 
-def _format_time_share(time_us, total_time_us):
+def _format_time_share(time_us: float | int, total_time_us: float | int) -> str:
     """Defines how to format time in FunctionEvent"""
     if total_time_us == 0:
         return "NaN"

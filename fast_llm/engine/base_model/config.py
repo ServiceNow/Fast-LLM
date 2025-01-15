@@ -15,10 +15,10 @@ class BaseModelArchitectureConfig(Config):
 
     _abstract = True
 
-    def setup_tensor_space(self, tensor_space: "TensorSpace"):
+    def setup_tensor_space(self, tensor_space: "TensorSpace") -> None:
         raise NotImplementedError()
 
-    def get_architecture(self):
+    def get_architecture[T: BaseModelArchitectureConfig](self: T) -> T:
         return self
 
     def compare_architecture(
@@ -38,5 +38,5 @@ class BaseModelConfig(BaseModelArchitectureConfig):
 
     architecture_class: typing.ClassVar[type[BaseModelArchitectureConfig]]
 
-    def get_architecture(self):
+    def get_architecture(self) -> BaseModelArchitectureConfig:
         return self.architecture_class.from_dict(self, strict=False)
