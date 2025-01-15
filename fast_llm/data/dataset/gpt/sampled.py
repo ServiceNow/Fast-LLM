@@ -1,15 +1,14 @@
 import logging
 import math
+import typing
 
 import numpy as np
 
 from fast_llm.data.data.gpt.data import GPTData
 from fast_llm.data.dataset.abstract import SampledDataset
 from fast_llm.data.dataset.gpt.config import GPTSamplingConfig
-from fast_llm.data.dataset.gpt.fim.fim import Fim
 from fast_llm.data.dataset.gpt.indexed import GPTIndexedDataset
 from fast_llm.engine.config_utils.run import log_main_rank
-from fast_llm.engine.distributed.config import MAX_SEED
 
 logger = logging.getLogger(__name__)
 
@@ -40,12 +39,6 @@ class GPTSampledIndexedDataset(SampledDataset):
         self._indexed_dataset = indexed_dataset
         self._sampling_config = sampling_config
         self._shuffle_epochs = data.config.shuffle_epochs
-
-        if data.config.fim.rate > 0:
-            assert data.tokenizer is not None
-            self._fim = Fim(data.config.fim, data.tokenizer)
-        else:
-            self._fim = None
 
         cache_prefix = f"{self.name}_ns_{self._sampling_config.num_samples}_sl_{self._sampling_config.sequence_length}_s_{self._sampling_config.seed}"
         # TODO: Any way to combine into a single file? (Memmap is harder)
@@ -198,12 +191,12 @@ class GPTSampledIndexedDataset(SampledDataset):
         if verbose:
             log_main_rank(lambda: f"  loaded dataset with {len(self)} samples.")
 
-    def __len__(self):
+    def __len__(self) -> int:
         # -1 is due to data structure used to retrieve the index:
         #    sample i --> [sample_idx[i], sample_idx[i+1])
         return self._shuffle_idx.shape[0]
 
-    def __getitem__(self, idx):
+    def __getitem__(self, idx: int) -> typing.Any:
         """
         Get the sample, (fixed-length sequence of tokens holding one or more complete or partial documents)
         with the requested sampling index.
@@ -254,11 +247,8 @@ class GPTSampledIndexedDataset(SampledDataset):
             sample_list,
             dtype=np.int64,
         )
-        if self._fim is not None:
-            sample = self._fim(sample, np.random.RandomState(seed=(self._sampling_config.seed + idx) % MAX_SEED))
-
         return sample
 
     @property
-    def name(self):
+    def name(self) -> str:
         return self._indexed_dataset.name
