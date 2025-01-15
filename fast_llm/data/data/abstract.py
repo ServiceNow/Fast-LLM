@@ -1,4 +1,5 @@
 import abc
+import typing
 
 from fast_llm.engine.distributed.config import PhaseType
 from fast_llm.engine.distributed.distributed import Distributed
@@ -20,5 +21,5 @@ class Data(abc.ABC):
         consumed_samples: int,
         num_workers: int,
         prefetch_factor: int | None = None,
-    ):
+    ) -> typing.Iterator[typing.Any]:
         pass

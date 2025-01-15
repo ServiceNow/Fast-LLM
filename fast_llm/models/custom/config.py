@@ -10,6 +10,11 @@ from fast_llm.models.gpt.config import (
     PretrainedGPTModelConfig,
 )
 
+if typing.TYPE_CHECKING:
+    from fast_llm.models.custom.huggingface import HuggingfaceCustomModelForCausalLM
+    from fast_llm.models.custom.model import CustomModel
+    from fast_llm.models.custom.trainer import CustomTrainer
+
 
 @config_class()
 class CustomDataConfig(GPTDataConfig):
@@ -30,37 +35,39 @@ class CustomBaseModelConfig(GPTBaseModelConfig, CustomArchitectureConfig):
 
 
 @config_class()
-class CustomModelConfig(GPTModelConfig):
+class CustomModelConfig[BaseModelConfigType: CustomBaseModelConfig](GPTModelConfig[BaseModelConfigType]):
     # TODO: Add custom model config parameters, if any (typically none).
     model_name: typing.ClassVar[str] = "gpt_custom"
     base_model: CustomBaseModelConfig = FieldUpdate(default_factory=CustomBaseModelConfig)
 
     @classmethod
-    def get_model_class(cls):
+    def get_model_class(cls) -> type["CustomModel"]:
         from fast_llm.models.custom.model import CustomModel
 
         return CustomModel
 
     @classmethod
-    def get_huggingface_model_class(cls):
+    def get_huggingface_model_class(cls) -> type["HuggingfaceCustomModelForCausalLM"]:
         from fast_llm.models.custom.huggingface import HuggingfaceCustomModelForCausalLM
 
         return HuggingfaceCustomModelForCausalLM
 
 
 @config_class()
-class PretrainedCustomModelConfig(PretrainedGPTModelConfig):
+class PretrainedCustomModelConfig[BaseModelConfigType: GPTModelConfig](PretrainedGPTModelConfig[BaseModelConfigType]):
     model: CustomModelConfig = FieldUpdate(default_factory=CustomModelConfig)
 
 
 @config_class()
-class CustomTrainerConfig(PretrainedCustomModelConfig, GPTTrainerConfig):
+class CustomTrainerConfig[BaseModelConfigType: GPTModelConfig](
+    PretrainedCustomModelConfig[BaseModelConfigType], GPTTrainerConfig[BaseModelConfigType]
+):
     # TODO: Add custom trainer config parameters, if any (typically none).
 
     data: CustomDataConfig = FieldUpdate(default_factory=CustomDataConfig)
 
     @classmethod
-    def get_trainer_class(cls):
+    def get_trainer_class(cls) -> type["CustomTrainer"]:
         from fast_llm.models.custom.trainer import CustomTrainer
 
         return CustomTrainer

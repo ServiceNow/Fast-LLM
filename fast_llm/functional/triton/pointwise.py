@@ -27,9 +27,9 @@ def triton_copy_kernel(
 
 
 def triton_copy(
-    input_,
-    out,
-):
+    input_: torch.Tensor,
+    out: torch.Tensor,
+) -> torch.Tensor:
     """
     A triton implementation of tensor copying (`torch.Tensor.copy_()`).
     """
@@ -62,7 +62,7 @@ def triton_fill_kernel(
 def triton_fill(
     input_: torch.Tensor,
     value: float | int,
-):
+) -> torch.Tensor:
     """
     A faster triton implementation of tensor copying (`torch.Tensor.fill_()`).
     """
@@ -100,10 +100,10 @@ def triton_add_kernel(
 
 
 def triton_add(
-    input_,
-    other,
+    input_: torch.Tensor,
+    other: torch.Tensor,
     out: torch.Tensor | None = None,
-):
+) -> torch.Tensor:
     """
     A faster triton implementation of tensor addition (`torch.Tensor.add()`).
     """

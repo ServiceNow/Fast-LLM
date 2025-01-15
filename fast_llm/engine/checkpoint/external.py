@@ -36,14 +36,14 @@ class ParamConverter(abc.ABC):
 @dataclasses.dataclass(kw_only=True)
 class RenameParamConverter(ParamConverter):
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         Assert.eq(len(self.fast_llm_names), 1)
         Assert.eq(len(self.export_names), 1)
 
-    def export_params(self, fast_llm_values):
+    def export_params(self, fast_llm_values: tuple[typing.Any, ...]) -> tuple[typing.Any, ...]:
         return fast_llm_values
 
-    def import_params(self, export_values):
+    def import_params(self, export_values: tuple[typing.Any, ...]) -> tuple[typing.Any, ...]:
         return export_values
 
 
@@ -59,11 +59,11 @@ class ConstantImportParamConverter(ParamConverter):
         Assert.eq(len(self.fast_llm_names), 1)
         Assert.eq(len(self.export_names), 0)
 
-    def export_params(self, fast_llm_values):
+    def export_params(self, fast_llm_values: tuple[typing.Any, ...]) -> tuple[typing.Any, ...]:
         Assert.eq(fast_llm_values[0], self.fast_llm_value)
         return ()
 
-    def import_params(self, export_values):
+    def import_params(self, export_values: tuple[typing.Any, ...]) -> tuple[typing.Any, ...]:
         return (self.fast_llm_value,)
 
 
@@ -75,10 +75,10 @@ class ConstantExportParamConverter(ParamConverter):
         Assert.eq(len(self.fast_llm_names), 0)
         Assert.eq(len(self.export_names), 1)
 
-    def export_params(self, fast_llm_values):
+    def export_params(self, fast_llm_values: tuple[typing.Any, ...]) -> tuple[typing.Any, ...]:
         return (self.export_value,)
 
-    def import_params(self, export_values):
+    def import_params(self, export_values: tuple[typing.Any, ...]) -> tuple[typing.Any, ...]:
         Assert.eq(export_values[0], self.export_value)
         return ()
 
@@ -91,7 +91,7 @@ class IgnoreImportParamConverter(ParamConverter):
         Assert.eq(len(self.fast_llm_names), 0)
         Assert.eq(len(self.export_names), 1)
 
-    def export_params(self, fast_llm_values):
+    def export_params(self, fast_llm_values: tuple[typing.Any, ...]) -> tuple[typing.Any, ...]:
         return (MISSING,)
 
     def import_params(self, export_values):
@@ -105,17 +105,17 @@ class IgnoreImportParamConverter(ParamConverter):
 
 @dataclasses.dataclass(kw_only=True)
 class MappedConfigParamConverter(ParamConverter):
-    fast_llm_value: typing.Callable = lambda x: x
-    export_value: typing.Callable = lambda x: x
+    fast_llm_value: typing.Callable[[typing.Any], typing.Any] = lambda x: x
+    export_value: typing.Callable[[typing.Any], typing.Any] = lambda x: x
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         Assert.eq(len(self.fast_llm_names), 1)
         Assert.eq(len(self.export_names), 1)
 
-    def export_params(self, fast_llm_values):
+    def export_params(self, fast_llm_values: tuple[typing.Any, ...]) -> tuple[typing.Any, ...]:
         return (self.export_value(fast_llm_values[0]),)
 
-    def import_params(self, export_values):
+    def import_params(self, export_values: tuple[typing.Any, ...]) -> tuple[typing.Any, ...]:
         return (self.fast_llm_value(export_values[0]),)
 
 
@@ -188,7 +188,7 @@ class ExternalStateDictCheckpointHandler(StateDictCheckpointHandler):
         super().__init__(model)
         Assert.custom(
             isinstance,
-            self._model.base_model_config,
+            self._model.config.base_model,
             self._model_class.get_base_model_config_class().architecture_class,
         )
         weight_converters = self._create_weight_converters()
@@ -202,7 +202,7 @@ class ExternalStateDictCheckpointHandler(StateDictCheckpointHandler):
         }
 
     @classmethod
-    def load_metadata(cls, config: CheckpointLoadMetadataConfig):
+    def load_metadata(cls, config: CheckpointLoadMetadataConfig) -> CheckpointMetadata:
         imported_model_config = cls._import_config(cls._load_config(config.path), True)
         return CheckpointMetadata(
             fast_llm_version=__version__,
@@ -319,7 +319,7 @@ class ExternalStateDictCheckpointHandler(StateDictCheckpointHandler):
         return cls._config_converters
 
     @staticmethod
-    def _get_fast_llm_attribute(config: BaseModelArchitectureConfig, name: str | tuple[str, ...]):
+    def _get_fast_llm_attribute(config: BaseModelArchitectureConfig, name: str | tuple[str, ...]) -> typing.Any:
         if isinstance(name, str):
             name = (name,)
         val = config
@@ -332,7 +332,7 @@ class AutoStateDictCheckpointHandler(ExternalStateDictCheckpointHandler, abc.ABC
     handler_map: dict[str, type[ExternalStateDictCheckpointHandler]]
 
     @classmethod
-    def get_handler_class(cls, format: str):
+    def get_handler_class(cls, format: str) -> type[ExternalStateDictCheckpointHandler]:
         if format in cls.handler_map:
             return cls.handler_map[format]
         elif format == "auto":
@@ -343,6 +343,8 @@ class AutoStateDictCheckpointHandler(ExternalStateDictCheckpointHandler, abc.ABC
     # TODO: load_metadata???
 
     @classmethod
-    def _import_config(cls, config: dict[str, typing.Any], architecture_only: bool = False):
+    def _import_config(
+        cls, config: dict[str, typing.Any], architecture_only: bool = False
+    ) -> BaseModelArchitectureConfig:
         # TODO: ???
         return cls.handler_map[config["model_type"]]._import_config(config, architecture_only)

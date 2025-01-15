@@ -25,7 +25,7 @@ class HuggingfaceModelConfig(transformers.PretrainedConfig):
         if self.torch_dtype is not None:
             assert self.torch_dtype == self.fast_llm_config.distributed.training_dtype.torch
 
-    def save_pretrained(self, save_directory: str | os.PathLike, push_to_hub: bool = False, **kwargs):
+    def save_pretrained(self, save_directory: str | os.PathLike, push_to_hub: bool = False, **kwargs) -> None:
         # Hack the method to save at the right place.
         # TODO: Implement the rest.
         _backup = transformers.configuration_utils.CONFIG_NAME
@@ -78,32 +78,27 @@ class HuggingfaceModelConfig(transformers.PretrainedConfig):
         )
 
         config_dict = {"fast_llm_config": fast_llm_config}
-        # TODO v0.3: ???
-        if "huggingface_config" in metadata:
-            assert "fast_llm_config" not in metadata["huggingface_config"]
-            config_dict.update(metadata.pop("huggingface_config"))
-
         return config_dict, kwargs
 
     @classmethod
-    def from_json_file(cls, json_file: str | os.PathLike):
+    def from_json_file(cls, json_file: str | os.PathLike) -> typing.Self:
         raise NotImplementedError()
 
-    def __eq__(self, other):
+    def __eq__(self, other) -> bool:
         # Not sure if elementwise equality is enough, taking a strict approach.
         return other is self
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, typing.Any]:
         out = super().to_dict()
         out["fast_llm_config"] = self.fast_llm_config.to_serialized(verbose=None)
         return out
 
-    def to_diff_dict(self) -> dict:
+    def to_diff_dict(self) -> dict[str, typing.Any]:
         out = super().to_diff_dict()
         out["fast_llm_config"] = self.fast_llm_config.to_serialized()
         return out
 
-    def to_json_file(self, json_file_path: str | os.PathLike, use_diff: bool = True):
+    def to_json_file(self, json_file_path: str | os.PathLike, use_diff: bool = True) -> None:
         raise NotImplementedError()
 
     def update(self, config_dict: dict):

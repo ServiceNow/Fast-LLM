@@ -1,4 +1,5 @@
 import logging
+import typing
 
 import torch
 
@@ -46,13 +47,15 @@ class TransformerLayer(Layer):
         )
 
     @torch.compile
-    def _bias_dropout_add(self, input_, bias, residual):
+    def _bias_dropout_add(
+        self, input_: torch.Tensor, bias: torch.Tensor | None, residual: torch.Tensor
+    ) -> torch.Tensor:
         if bias is not None:
             input_ = input_ + bias
         return residual + torch.dropout(input_, self._dropout_p, self.training)
 
     @property
-    def name(self):
+    def name(self) -> str:
         return f"Transformer layer {self._layer_index}"
 
     def _get_meta(self, tensor: torch.Tensor, name: str, kwargs: dict):
@@ -60,7 +63,7 @@ class TransformerLayer(Layer):
             kwargs[TransformerKwargs.hidden_dims], tensor_name=f"{self.name} {name}", dtype=tensor.dtype
         )
 
-    def _debug_log(self, tensor: torch.Tensor | None, name: str, kwargs: dict, *, bias=None):
+    def _debug_log(self, tensor: torch.Tensor | None, name: str, kwargs: dict[str, typing.Any], *, bias=None) -> None:
         if self._config.debug_transformer_memory:
             log_pipeline_parallel_main_rank(lambda: log_memory_usage(f"{self.name} {name}", str))
         if self._config.debug_transformer and tensor is not None:
@@ -80,7 +83,13 @@ class TransformerLayer(Layer):
                 distributed=self._tensor_space.distributed,
             )
 
-    def forward(self, input_: torch.Tensor, kwargs: dict, losses: dict | None = None, metrics: dict | None = None):
+    def forward(
+        self,
+        input_: torch.Tensor,
+        kwargs: dict[str, typing.Any],
+        losses: dict[str, typing.Any] | None = None,
+        metrics: dict[str, typing.Any] | None = None,
+    ) -> torch.Tensor:
         if isinstance(input_, TensorMeta):
             return self._get_meta(input_, "output", kwargs)
         generator = (

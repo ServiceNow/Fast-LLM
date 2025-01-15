@@ -7,9 +7,9 @@ training:
     iterations: null
   test_iters: 0
 batch:
-  sequence_length: 8192
-  micro_batch_size: 1
-  batch_size: 32
+  sequence_length: 4096
+  micro_batch_size: 2
+  batch_size: 64
 data:
   format: random
   split: [1, 0, 0]
@@ -27,18 +27,18 @@ model:
       normalization:
         type: rms_norm
         epsilon: 1.0e-05
+      rotary:
+        type: default
+        theta: 10000
       num_layers: 32
       hidden_size: 4096
       ffn_hidden_size: 14336
       num_attention_heads: 32
       head_groups: 8
       add_linear_biases: false
-      use_rotary_embeddings: true
       gated: true
       activation_type: silu
-      triton_rotary: true
       kv_channels: 128
-      rotary_embedding_scale: -9.210340371976184
       window_size: 4096
       init_method_std: 0.009021
       attention_dropout: 0.0
@@ -49,7 +49,6 @@ model:
     zero_stage: 2
   distributed:
     training_dtype: bf16
-    distributed_timeout: 3600
     seed: 984059
 run:
-  experiment_dir: mistral_4_nodes_benchmark
+  experiment_dir: mistral_example

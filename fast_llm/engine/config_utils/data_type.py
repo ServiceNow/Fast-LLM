@@ -92,7 +92,7 @@ _TORCH_DTYPE_MAP: dict[DataType, "torch.dtype"] = {}
 _TORCH_DTYPE_MAP_INV: dict["torch.dtype", DataType] = {}
 
 
-def _set_torch_dtype_map():
+def _set_torch_dtype_map() -> None:
     import torch
 
     global _TORCH_DTYPE_MAP, _TORCH_DTYPE_MAP_INV
@@ -115,7 +115,7 @@ _NUMPY_DTYPE_MAP: dict[DataType, "np.dtype"] = {}
 _NUMPY_DTYPE_MAP_INV: dict["np.dtype", DataType] = {}
 
 
-def _set_numpy_dtype_map():
+def _set_numpy_dtype_map() -> None:
     import numpy as np
 
     global _NUMPY_DTYPE_MAP, _NUMPY_DTYPE_MAP_INV
@@ -138,8 +138,8 @@ _TRITON_DTYPE_MAP: dict[DataType, "tl.dtype"] = {}
 _TRITON_DTYPE_MAP_INV: dict["tl.dtype", DataType] = {}
 
 
-def _set_triton_dtype_map():
-    from triton import language as tl
+def _set_triton_dtype_map() -> None:
+    import triton.language as tl
 
     global _TRITON_DTYPE_MAP, _TRITON_DTYPE_MAP_INV
 

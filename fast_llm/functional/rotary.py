@@ -3,11 +3,11 @@ import torch
 from fast_llm.utils import div
 
 
-def convert_rotary_complex_to_real(tensor: torch.Tensor, kv_channels: int, dim: int):
+def convert_rotary_complex_to_real(tensor: torch.Tensor, kv_channels: int, dim: int) -> torch.Tensor:
     return tensor.unflatten(dim, (-1, div(kv_channels, 2), 2)).movedim(dim + 1, dim + 2).flatten(dim, dim + 2)
 
 
-def convert_rotary_real_to_complex(tensor: torch.Tensor, kv_channels: int, dim: int):
+def convert_rotary_real_to_complex(tensor: torch.Tensor, kv_channels: int, dim: int) -> torch.Tensor:
     return tensor.unflatten(dim, (-1, 2, div(kv_channels, 2))).movedim(dim + 1, dim + 2).flatten(dim, dim + 2)
 
 

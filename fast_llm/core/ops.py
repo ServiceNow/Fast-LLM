@@ -8,6 +8,7 @@ import logging
 import torch
 import torch._dynamo  # noqa
 import torch.autograd
+from torch._C._distributed_c10d import Work
 
 from fast_llm.core.distributed import ProcessGroup, ReduceOp, all_gather_into_tensor, all_reduce, reduce_scatter_tensor
 from fast_llm.utils import Assert, div
@@ -15,7 +16,9 @@ from fast_llm.utils import Assert, div
 logger = logging.getLogger(__name__)
 
 
-def reduce_op(input_, group: ProcessGroup | None, *, op: ReduceOp = ReduceOp.SUM, async_op: bool = False):
+def reduce_op(
+    input_: torch.Tensor, group: ProcessGroup | None, *, op: ReduceOp = ReduceOp.SUM, async_op: bool = False
+) -> tuple[torch.Tensor, Work] | torch.Tensor:
     if group:
         handle = all_reduce(input_, group=group, async_op=async_op, op=op)
     else:
@@ -23,7 +26,7 @@ def reduce_op(input_, group: ProcessGroup | None, *, op: ReduceOp = ReduceOp.SUM
     return (input_, handle) if async_op else input_
 
 
-def split_op(input_, group: ProcessGroup | None, dim: int):
+def split_op(input_: torch.Tensor, group: ProcessGroup | None, dim: int) -> list[torch.Tensor]:
     """Split the tensor along its last dimension and keep the
     corresponding slice."""
     if group:
@@ -32,22 +35,22 @@ def split_op(input_, group: ProcessGroup | None, dim: int):
     return input_
 
 
-def insert_dim(shape, factor: int, dim: int):
+def insert_dim(shape: tuple[int, ...], factor: int, dim: int) -> tuple[int, ...]:
     """Insert the specified dimension into a shape"""
     return *shape[:dim], factor, *shape[dim:]
 
 
-def mult_dim(shape, factor: int, dim: int):
+def mult_dim(shape: tuple[int, ...], factor: int, dim: int) -> tuple[int, ...]:
     """Multiply the specified dimension in a shape"""
     return *shape[:dim], shape[dim] * factor, *shape[dim + 1 :]
 
 
-def div_dim(shape, factor: int, dim: int):
+def div_dim(shape: tuple[int, ...], factor: int, dim: int) -> tuple[int, ...]:
     """Divide the specified dimension in a shape"""
     return *shape[:dim], div(shape[dim], factor), *shape[dim + 1 :]
 
 
-def swap_mult_dim(tensor: torch.Tensor, factor: int, old_dim: int, new_dim: int):
+def swap_mult_dim(tensor: torch.Tensor, factor: int, old_dim: int, new_dim: int) -> torch.Tensor:
     """ "Split" a tensor along a specified dimension, then "concatenate" along another dimension."""
     base_shape = div_dim(tensor.shape, factor, old_dim)
     return (
@@ -57,7 +60,9 @@ def swap_mult_dim(tensor: torch.Tensor, factor: int, old_dim: int, new_dim: int)
     )
 
 
-def gather_op(input_, group: ProcessGroup | None, dim: int, async_op: bool = False, out=None):
+def gather_op(
+    input_: torch.Tensor, group: ProcessGroup | None, dim: int, async_op: bool = False, out=None
+) -> tuple[torch.Tensor, Work] | torch.Tensor:
     """Gather tensors and concatenate along the last dimension."""
     # Bypass the function if we are using only 1 GPU.
     if not group:
@@ -78,8 +83,13 @@ def gather_op(input_, group: ProcessGroup | None, dim: int, async_op: bool = Fal
 
 
 def reduce_scatter_op(
-    input_, group: ProcessGroup | None, *, op: ReduceOp = ReduceOp.SUM, dim: int = 0, async_op: bool = False
-):
+    input_: torch.Tensor,
+    group: ProcessGroup | None,
+    *,
+    op: ReduceOp = ReduceOp.SUM,
+    dim: int = 0,
+    async_op: bool = False,
+) -> tuple[torch.Tensor, Work] | torch.Tensor:
     """Reduce-scatter the input tensor across model parallel group."""
     # Bypass the function if we are using only 1 GPU.
     if not group:
@@ -96,16 +106,16 @@ class _ReduceBackward(torch.autograd.Function):
     """Pass the input to the model parallel region."""
 
     @staticmethod
-    def symbolic(graph, input_, group: ProcessGroup | None):  # noqa
+    def symbolic(graph, input_, group: ProcessGroup | None) -> torch.Tensor:  # noqa
         return input_
 
     @staticmethod
-    def forward(ctx, input_, group: ProcessGroup | None):  # noqa
+    def forward(ctx, input_, group: ProcessGroup | None) -> torch.Tensor:  # noqa
         ctx.group = group
         return input_
 
     @staticmethod
-    def backward(ctx, grad_output):  # noqa
+    def backward(ctx, grad_output) -> tuple[torch.Tensor | None, ...]:  # noqa
         return reduce_op(grad_output.contiguous(), ctx.group), None
 
 
@@ -113,15 +123,15 @@ class _ReduceForward(torch.autograd.Function):
     """All-reduce the input from the model parallel region."""
 
     @staticmethod
-    def symbolic(graph, input_, group: ProcessGroup | None):  # noqa
+    def symbolic(graph, input_: torch.Tensor, group: ProcessGroup | None) -> torch.Tensor:  # noqa
         return reduce_op(input_, group)
 
     @staticmethod
-    def forward(ctx, input_, group: ProcessGroup | None):  # noqa
+    def forward(ctx, input_: torch.Tensor, group: ProcessGroup | None) -> torch.Tensor:  # noqa
         return reduce_op(input_, group)
 
     @staticmethod
-    def backward(ctx, grad_output):  # noqa
+    def backward(ctx, grad_output: torch.Tensor) -> tuple[torch.Tensor | None, ...]:  # noqa
         return grad_output, None
 
 
@@ -129,17 +139,17 @@ class _Split(torch.autograd.Function):
     """Split the input and keep only the corresponding chuck to the rank."""
 
     @staticmethod
-    def symbolic(graph, input_, group: ProcessGroup | None, dim: int):  # noqa
+    def symbolic(graph, input_: torch.Tensor, group: ProcessGroup | None, dim: int) -> list[torch.Tensor]:  # noqa
         return split_op(input_, group, dim)
 
     @staticmethod
-    def forward(ctx, input_, group: ProcessGroup | None, dim: int):  # noqa
+    def forward(ctx, input_: torch.Tensor, group: ProcessGroup | None, dim: int) -> list[torch.Tensor]:  # noqa
         ctx.group = group
         ctx.dim = dim
         return split_op(input_, group, dim)
 
     @staticmethod
-    def backward(ctx, grad_output):  # noqa
+    def backward(ctx, grad_output: torch.Tensor) -> tuple[torch.Tensor | None, ...]:  # noqa
         return gather_op(grad_output, ctx.group, ctx.dim), None, None
 
 
@@ -147,18 +157,22 @@ class _Gather(torch.autograd.Function):
     """Gather the input from model parallel region and concatenate."""
 
     @staticmethod
-    def symbolic(graph, input_, group: ProcessGroup | None, dim: int, reduce_grads: bool):  # noqa
+    def symbolic(
+        graph, input_: torch.Tensor, group: ProcessGroup | None, dim: int, reduce_grads: bool
+    ) -> torch.Tensor:  # noqa
         return gather_op(input_, group, dim)
 
     @staticmethod
-    def forward(ctx, input_, group: ProcessGroup | None, dim: int, reduce_grads: bool):  # noqa
+    def forward(
+        ctx, input_: torch.Tensor, group: ProcessGroup | None, dim: int, reduce_grads: bool
+    ) -> torch.Tensor:  # noqa
         ctx.group = group
         ctx.dim = dim
         ctx.reduce_grads = reduce_grads
         return gather_op(input_, group, dim)
 
     @staticmethod
-    def backward(ctx, grad_output):  # noqa
+    def backward(ctx, grad_output: torch.Tensor) -> tuple[torch.Tensor | None, ...]:  # noqa
         return (reduce_scatter_op if ctx.reduce_grads else split_op)(grad_output, ctx.group, ctx.dim), None, None, None
 
 
@@ -166,17 +180,17 @@ class _ReduceScatter(torch.autograd.Function):
     """Reduce scatter the input from the model parallel region."""
 
     @staticmethod
-    def symbolic(graph, input_, group: ProcessGroup | None, dim: int):  # noqa
+    def symbolic(graph, input_: torch.Tensor, group: ProcessGroup | None, dim: int) -> torch.Tensor:  # noqa
         return reduce_scatter_op(input_, group, dim=dim)
 
     @staticmethod
-    def forward(ctx, input_, group: ProcessGroup | None, dim: int):  # noqa
+    def forward(ctx, input_: torch.Tensor, group: ProcessGroup | None, dim: int) -> torch.Tensor:  # noqa
         ctx.group = group
         ctx.dim = dim
         return reduce_scatter_op(input_, group, dim=dim)
 
     @staticmethod
-    def backward(ctx, grad_output):  # noqa
+    def backward(ctx, grad_output: torch.Tensor) -> tuple[torch.Tensor | None, ...]:  # noqa
         return gather_op(grad_output, ctx.group, ctx.dim), None, None
 
 
@@ -185,25 +199,25 @@ class _ReduceScatter(torch.autograd.Function):
 
 
 @torch._dynamo.disable  # noqa
-def reduce_forward(input_, group: ProcessGroup | None):
+def reduce_forward(input_: torch.Tensor, group: ProcessGroup | None) -> torch.Tensor:
     return _ReduceForward.apply(input_, group)
 
 
 @torch._dynamo.disable  # noqa
-def reduce_backward(input_, group: ProcessGroup | None):
+def reduce_backward(input_: torch.Tensor, group: ProcessGroup | None) -> torch.Tensor:
     return _ReduceBackward.apply(input_, group)
 
 
 @torch._dynamo.disable  # noqa
-def split(input_, group: ProcessGroup | None, dim: int):
+def split(input_: torch.Tensor, group: ProcessGroup | None, dim: int) -> list[torch.Tensor]:
     return _Split.apply(input_, group, dim)
 
 
 @torch._dynamo.disable  # noqa
-def gather(input_, group: ProcessGroup | None, dim: int, reduce_grads: bool = False):
+def gather(input_: torch.Tensor, group: ProcessGroup | None, dim: int, reduce_grads: bool = False) -> torch.Tensor:
     return _Gather.apply(input_, group, dim, reduce_grads)
 
 
 @torch._dynamo.disable  # noqa
-def reduce_scatter(input_, group: ProcessGroup | None, dim: int):
+def reduce_scatter(input_: torch.Tensor, group: ProcessGroup | None, dim: int) -> torch.Tensor:
     return _ReduceScatter.apply(input_, group, dim)

@@ -2,6 +2,7 @@ import logging
 import logging.config
 import math
 import pathlib
+import typing
 
 from fast_llm.config import Config, Field, FieldHint, check_field, config_class, skip_valid_if_none
 from fast_llm.utils import Assert
@@ -16,7 +17,7 @@ def configure_logging(
     rank: int = 0,
     world_size: int = 1,
     directory: pathlib.Path | str | None = None,
-):
+) -> None:
     rank_str = str(rank).zfill(math.ceil(math.log10(world_size)))
     format_ = f"{f'%(asctime)s ' if log_timestamps else ''}{'' if world_size==1 else f'[Rank {rank_str}] '}%(message)s"
     logging_config = {
@@ -77,19 +78,19 @@ class TensorLogsConfig(Config):
 
 class TensorLogs:
     # A global buffer for holding logged tensor stats.
-    _tensor_log_stats: list | None = None
+    _tensor_log_stats: list[dict[str, typing.Any]] | None = None
     config: TensorLogsConfig | None = None
 
     @classmethod
-    def reset(cls, config: TensorLogsConfig):
+    def reset(cls, config: TensorLogsConfig) -> None:
         cls.config = config
         cls._tensor_log_stats = [] if config.save else None
 
     @classmethod
-    def append(cls, stats):
+    def append(cls, stats: dict[str, typing.Any]) -> None:
         if cls._tensor_log_stats is not None:
             cls._tensor_log_stats.append(stats)
 
     @classmethod
-    def get(cls):
+    def get(cls) -> list[dict[str, typing.Any]] | None:
         return cls._tensor_log_stats

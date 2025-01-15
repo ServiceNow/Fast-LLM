@@ -8,6 +8,7 @@ import torch
 import torch.cuda
 import yaml
 
+from fast_llm.config import Configurable
 from fast_llm.core.distributed import all_reduce, recv, safe_barrier, send
 from fast_llm.engine.config_utils.run import get_run, log_pipeline_parallel_main_rank
 from fast_llm.engine.distributed.config import DistributedConfig
@@ -62,7 +63,7 @@ class BatchContext:
         )
 
 
-class ScheduleRunner:
+class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ScheduleConfig]):
     _is_setup: bool = False
     _compute_stream: torch.cuda.Stream
     _data_stream: torch.cuda.Stream
@@ -82,12 +83,11 @@ class ScheduleRunner:
     def __init__(
         self,
         *,
-        multi_stage: MultiStageModel,
         config: ScheduleConfig,
+        multi_stage: MultiStageModel,
         distributed_config: DistributedConfig,
     ):
-        super().__init__()
-        self._config = config
+        super().__init__(config)
         self._distributed_config = distributed_config
         self._multi_stage = multi_stage
         self._stages: list[Stage] = self._multi_stage.stages
@@ -95,7 +95,7 @@ class ScheduleRunner:
         self._num_stages = len(self._stages)
         self._loss_defs = {loss_def.name: loss_def for loss_def in self._multi_stage.base_model.loss_defs}
 
-    def setup(self, distributed: Distributed, optimizer: Optimizer | None = None):
+    def setup(self, distributed: Distributed, optimizer: Optimizer | None = None) -> None:
         assert not self._is_setup
         assert distributed.config is self._distributed_config
         self._is_setup = True
@@ -137,7 +137,7 @@ class ScheduleRunner:
         iteration: int = 1,
         return_metrics: bool = False,
         preprocessed: bool = False,
-    ):
+    ) -> tuple[dict[str, float | int], bool, dict[str, typing.Any] | None]:
         assert self._is_setup
         assert schedule._schedule_config is self._config  # Noqa
         if schedule.phase.is_training:
@@ -153,7 +153,7 @@ class ScheduleRunner:
         )
         context.data_iterator = self._preprocess_data(context, data_iterator, preprocessed)
 
-        if self._multi_stage.multi_stage_config.debug_activation_memory:
+        if self._multi_stage.config.multi_stage.debug_activation_memory:
             log_pipeline_parallel_main_rank(
                 lambda: log_memory_usage(f"Beginning of {context.phase.value} iteration {iteration}", str)
             )
@@ -186,7 +186,7 @@ class ScheduleRunner:
         # Prepare the batch
         self._record_event(context, EventType.get_batch, None)
 
-        if self._multi_stage.multi_stage_config.debug_activation_memory:
+        if self._multi_stage.config.multi_stage.debug_activation_memory:
             log_pipeline_parallel_main_rank(lambda: log_memory_usage(f"Beginning of the schedule steps", str))
 
         # Run the steps according to the schedule
@@ -203,7 +203,7 @@ class ScheduleRunner:
 
         assert context.done, context
 
-        if self._multi_stage.multi_stage_config.debug_activation_memory:
+        if self._multi_stage.config.multi_stage.debug_activation_memory:
             log_pipeline_parallel_main_rank(lambda: log_memory_usage(f"End of the schedule steps", str))
 
         # Synchronize streams
@@ -225,11 +225,11 @@ class ScheduleRunner:
                         main_stage.reduce_gradients()
                 # TODO: Overlap this? (not really useful for gpt)
                 all_reduce(main_stage.grad_shard, group=tied_parameter.group)
-                if self._multi_stage.multi_stage_config.debug_all_param_gradients:
+                if self._multi_stage.config.multi_stage.debug_all_param_gradients:
                     main_stage.log_shard(
                         name="gradient",
                         shard=main_stage.grad_shard,
-                        level=self._multi_stage.multi_stage_config.debug_all_param_gradients,
+                        level=self._multi_stage.config.multi_stage.debug_all_param_gradients,
                     )
 
         self._record_event(context, EventType.post_reduce, None)
@@ -239,19 +239,19 @@ class ScheduleRunner:
         #  (uncomment line in apex).
         update_successful = self._optimizer.step(metrics)
 
-        if self._multi_stage.multi_stage_config.debug_tensor_parallel and self._distributed.tensor_group is not None:
+        if self._multi_stage.config.multi_stage.debug_tensor_parallel and self._distributed.tensor_group is not None:
             for stage in self._stages_on_device:
                 stage.check_tensor_parallel_synchronization()
 
         if update_successful:
             for stage in self._stages_on_device:
                 stage.invalidate_buffer()
-        if self._multi_stage.multi_stage_config.debug_param_update:
+        if self._multi_stage.config.multi_stage.debug_param_update:
             for stage in self._stages_on_device:
                 stage.log_shard(
                     name="param",
                     shard=stage.weight_shard,
-                    level=self._multi_stage.multi_stage_config.debug_param_update,
+                    level=self._multi_stage.config.multi_stage.debug_param_update,
                 )
 
         self._record_event(context, EventType.optimizer, None)
@@ -261,7 +261,7 @@ class ScheduleRunner:
         if metrics is not None:
             metrics["loss_scale"] = self._optimizer.grad_scale
 
-        if self._multi_stage.multi_stage_config.debug_activation_memory:
+        if self._multi_stage.config.multi_stage.debug_activation_memory:
             log_pipeline_parallel_main_rank(
                 lambda: log_memory_usage(f"End of {context.phase.value} iteration {iteration}", str)
             )
@@ -289,7 +289,7 @@ class ScheduleRunner:
             for name, reduced_loss in reduced_losses.items()
         }
 
-    def _train_step(self, context: BatchContext, step: Step):
+    def _train_step(self, context: BatchContext, step: Step) -> None:
         if step.throttle_event is not None:
             step.throttle_event.record()
         if step.throttle_step is not None:
@@ -305,7 +305,9 @@ class ScheduleRunner:
         self._send(context, step, output)
         self._reduce(context, step)
 
-    def _preprocess_data(self, context: BatchContext, data_iterator: typing.Iterator, preprocessed: bool):
+    def _preprocess_data(
+        self, context: BatchContext, data_iterator: typing.Iterator, preprocessed: bool
+    ) -> typing.Generator[None, None, None]:
         batch_config = context.schedule.batch_config
         grad_output = (
             (1 if self._optimizer is None else self._optimizer.grad_scale)
@@ -348,7 +350,7 @@ class ScheduleRunner:
                 context.batch[data_index] = kwargs
                 yield
 
-    def _restore(self, context: BatchContext, step: Step):
+    def _restore(self, context: BatchContext, step: Step) -> None:
         if step.restore_launch:
             with torch.cuda.stream(self._data_stream):
                 self._sync_data_stream(context, step)
@@ -362,7 +364,7 @@ class ScheduleRunner:
             step.restore_event.wait()
             self._record_event(context, EventType.compute_wait_data, step)
 
-    def _recv(self, context: BatchContext, step: Step):
+    def _recv(self, context: BatchContext, step: Step) -> None:
         if step.recv_launch:
             with torch.cuda.stream(self._pipeline_stream):
                 for recv_step in step.recv_launch:
@@ -391,7 +393,7 @@ class ScheduleRunner:
             step.recv_event.wait()
             self._record_event(context, EventType.compute_wait_pipe, step)
 
-    def _forward(self, context: BatchContext, step: Step):
+    def _forward(self, context: BatchContext, step: Step) -> None:
         output, grad_context = self._stages[step.stage].forward(
             self._get_forward_input(context, step),
             context.batch[step.data_index],
@@ -403,7 +405,7 @@ class ScheduleRunner:
         self._record_compute(context, step)
         return output
 
-    def _backward(self, context: BatchContext, step: Step):
+    def _backward(self, context: BatchContext, step: Step) -> torch.Tensor:
         input_grad = self._stages[step.stage].backward(
             context.inputs.pop(step.global_index),
             context.contexts.pop(step.global_index),
@@ -411,7 +413,7 @@ class ScheduleRunner:
         self._record_compute(context, step)
         return input_grad
 
-    def _get_forward_input(self, context: BatchContext, step: Step):
+    def _get_forward_input(self, context: BatchContext, step: Step) -> torch.Tensor:
         if step.data_index not in context.batch:
             start_time = time.perf_counter()
 
@@ -423,7 +425,7 @@ class ScheduleRunner:
                 logger.warning(f"Data loading took {data_time:,.2f} ms")
         return context.inputs.pop(step.global_index).detach().requires_grad_(step.stage != 0)
 
-    def _send(self, context: BatchContext, step: Step, output: torch.Tensor):
+    def _send(self, context: BatchContext, step: Step, output: torch.Tensor) -> None:
         if step.next_step is not None:
             if step.next_step.recv_step is None:
                 context.inputs[step.next_step.global_index] = output
@@ -446,7 +448,7 @@ class ScheduleRunner:
                     self._send_event.record()
                     self._record_event(context, EventType.send, step)
 
-    def _reduce(self, context: BatchContext, step: Step):
+    def _reduce(self, context: BatchContext, step: Step) -> None:
         if step.reduce:
             with torch.cuda.stream(self._data_stream):
                 self._sync_data_stream(context, step)
@@ -459,7 +461,7 @@ class ScheduleRunner:
 
     def _record_event(
         self, context: BatchContext, type_: EventType, step: Step | None, stream: torch.cuda.Stream = None
-    ):
+    ) -> None:
         if not self._config.profile_schedule:
             return
         if stream is None:
@@ -469,7 +471,7 @@ class ScheduleRunner:
         cpu_time = time.perf_counter()
         context.profile.append((type_, step, event, self._streams[stream.stream_id], cpu_time))
 
-    def _handle_events(self, context: BatchContext):
+    def _handle_events(self, context: BatchContext) -> None:
         if not context.profile:
             return
         events = []
@@ -480,7 +482,7 @@ class ScheduleRunner:
             events.append((type_, step, stream, gpu_begin.elapsed_time(event) / 1000, cpu_time - cpu_begin))
         self._save_events(events, context)
 
-    def _save_events(self, events, context: BatchContext):
+    def _save_events(self, events, context: BatchContext) -> None:
         out = {
             "iteration": context.iteration,
             "phase": context.phase.value,
@@ -514,13 +516,13 @@ class ScheduleRunner:
             ),
         )
 
-    def _sync_data_stream(self, context: BatchContext, step: Step):
+    def _sync_data_stream(self, context: BatchContext, step: Step) -> None:
         if self._data_stream_needs_sync:
             self._compute_event.wait()
             self._data_stream_needs_sync = False
             self._record_event(context, EventType.data_wait_compute, step)
 
-    def _record_compute(self, context: BatchContext, step: Step):
+    def _record_compute(self, context: BatchContext, step: Step) -> None:
         self._compute_event.record()
         self._record_event(context, EventType.run, step)
         if self._config.data_overlap:
