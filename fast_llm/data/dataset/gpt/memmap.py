@@ -48,6 +48,25 @@ class GPTMemmapDataset(GPTIndexedDataset):
             offset=offset + self._document_sizes.nbytes,
         )
 
+        self._num_spans = np.frombuffer(
+            self._index_bin_buffer,
+            dtype=np.int32,
+            count=self._num_documents,
+            offset=offset + self._document_sizes.nbytes + self._pointers.nbytes,
+        )
+        spans = []
+        offset = offset + self._document_sizes.nbytes + self._pointers.nbytes + self._num_spans.nbytes
+        for n_spans in self._num_spans:
+            span = np.frombuffer(
+                self._index_bin_buffer,
+                dtype=np.int32,
+                count=n_spans * 2,
+                offset=offset,
+            ).reshape(-1, 2)
+            spans.append(span)
+            offset += span.nbytes
+        self._spans = spans
+
         self._bin_buffer_mmap = np.memmap(self._prefix.with_suffix(".bin"), mode="r", order="C")
         self._bin_buffer = memoryview(self._bin_buffer_mmap)
 
@@ -64,11 +83,14 @@ class GPTMemmapDataset(GPTIndexedDataset):
         del self._index_bin_buffer_mmap
 
     def get(self, idx, offset=0, length=None):
-        return np.frombuffer(
-            self._bin_buffer,
-            dtype=self._dtype,
-            count=self._document_sizes[idx] - offset if length is None else length,
-            offset=self._pointers[idx] + offset * np.dtype(self._dtype).itemsize,
+        return (
+            np.frombuffer(
+                self._bin_buffer,
+                dtype=self._dtype,
+                count=self._document_sizes[idx] - offset if length is None else length,
+                offset=self._pointers[idx] + offset * np.dtype(self._dtype).itemsize,
+            ),
+            self._spans[idx],
         )
 
     @property
@@ -92,20 +114,23 @@ class GPTMemmapDataset(GPTIndexedDataset):
         return self._document_sizes
 
     @classmethod
-    def write_dataset(cls, prefix: pathlib.Path | str, documents: typing.Iterable[np.ndarray]):
+    def write_dataset(cls, prefix: pathlib.Path | str, documents: typing.Iterable[tuple[np.ndarray, np.ndarray]]):
         # Initialize metadata
         dtype = None
         num_documents = 0
         lengths = []
         pointers = []
         offset = 0
+        # number of spans for each document
+        num_spans = []
+        spans = []
 
         prefix = pathlib.Path(prefix)
         prefix.parent.mkdir(parents=True, exist_ok=True)
 
         # Write the binary data file (.bin) lazily
         with prefix.with_suffix(".bin").open("wb") as bin_stream:
-            for document in documents:
+            for document, mask_spans in documents:
                 # Infer dtype from the first document
                 if dtype is None:
                     dtype = document.dtype
@@ -121,12 +146,16 @@ class GPTMemmapDataset(GPTIndexedDataset):
                 doc_length = len(document)
                 lengths.append(doc_length)
                 pointers.append(offset)
+                num_spans.append(len(mask_spans))
+                spans.append(mask_spans)
                 offset += doc_length * np.dtype(dtype).itemsize
                 num_documents += 1
 
         # Finalize metadata arrays
         lengths = np.array(lengths, dtype=np.int32)
         pointers = np.array(pointers, dtype=np.int64)
+        num_spans = np.array(num_spans, dtype=np.int32)
+        spans = np.vstack(spans, dtype=np.int32)
 
         # Write the index file (.idx)
         with prefix.with_suffix(".idx").open("wb") as idx_stream:
@@ -142,5 +171,9 @@ class GPTMemmapDataset(GPTIndexedDataset):
             idx_stream.write(lengths.tobytes(order="C"))
             # Sequence (document) begin offsets in the bin file
             idx_stream.write(pointers.tobytes(order="C"))
+            # Number of spans per document
+            idx_stream.write(num_spans.tobytes(order="C"))
+            # Span indices for each document
+            idx_stream.write(spans.tobytes(order="C"))
             # Document indices, unused but needed for compatibility with Megatron-LM
             idx_stream.write(np.arange(num_documents + 1, dtype=np.int64).tobytes(order="C"))

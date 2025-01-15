@@ -45,7 +45,7 @@ class GPTMemmapDatasetPreparator(DatasetPreparator):
             curr_text = text[char_pos:]
             tokenized_text = self._tokenizer.tokenize(curr_text)
             input_ids.extend(tokenized_text)
-        return np.array(input_ids, dtype=self._data_type.numpy), token_spans
+        return np.array(input_ids, dtype=self._data_type.numpy), np.array(token_spans, dtype=np.int32)
 
     def _tokenize_batch(self, batch):
         input_ids, token_spans = zip(*[self._tokenize_with_spans(sample) for sample in batch])
@@ -63,7 +63,9 @@ class GPTMemmapDatasetPreparator(DatasetPreparator):
 
         def _document_generator():
             for item in tqdm.tqdm(shard_dataset, desc=f"Saving shard {shard_idx}", unit="docs"):
-                yield np.array(item["input_ids"], dtype=self._data_type.numpy)
+                yield np.array(item["input_ids"], dtype=self._data_type.numpy), np.array(
+                    item["token_spans"], dtype=np.int32
+                )
 
         GPTMemmapDataset.write_dataset(prefix=shard_output_path, documents=_document_generator())
 
