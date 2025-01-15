@@ -4,12 +4,14 @@ import math
 import typing
 
 if typing.TYPE_CHECKING:
+    import numpy as np
+    import numpy.typing as npt
     import torch
 
 logger = logging.getLogger(__name__)
 
 
-def header(title: str | None = None, width: int = 60, fill_char: str = "-"):
+def header(title: str | None = None, width: int = 60, fill_char: str = "-") -> str:
     if title is None:
         return fill_char * width
     title_width = len(title) + 2
@@ -18,7 +20,7 @@ def header(title: str | None = None, width: int = 60, fill_char: str = "-"):
     return fill_char * left + f" {title} " + fill_char * right
 
 
-def get_type_name(type_):
+def get_type_name(type_: typing.Any) -> str:
     if isinstance(type_, type):
         module = type_.__module__
         return type_.__qualname__ if module == "builtins" else f"{module}.{type_.__qualname__}"
@@ -26,7 +28,7 @@ def get_type_name(type_):
     return type_
 
 
-def div(x, y):
+def div[T](x: T, y: T) -> T:
     """
     Ensure that numerator is divisible by the denominator and return
     the division value.
@@ -36,13 +38,13 @@ def div(x, y):
     return x // y
 
 
-def get_unique(values: typing.Iterable):
+def get_unique[T](values: typing.Iterable[T]) -> T:
     value = set(values)
     Assert.custom(lambda x: len(x) == 1, value)
     return value.pop()
 
 
-def format_number(x, prec=4, exp_threshold=3):
+def format_number(x: float | int, prec=4, exp_threshold=3) -> str:
     digits = 0 if x == 0 else math.log10(abs(x))
     if math.isfinite(digits) and -exp_threshold < math.floor(digits) < prec + exp_threshold:
         return f"{x:.{prec}f}"
@@ -50,18 +52,18 @@ def format_number(x, prec=4, exp_threshold=3):
         return f"{x:.{prec-1}e}"
 
 
-def padded_cumsum(x):
+def padded_cumsum(x: "npt.ArrayLike") -> "np.ndarray":
     import numpy as np
 
     y = np.hstack((0, x))
     return y.cumsum(out=y)
 
 
-def clamp(x, x_min, x_max):
+def clamp[T](x: T, x_min: T, x_max: T) -> T:
     return min(max(x, x_min), x_max)
 
 
-def rms_diff(x: "torch.Tensor", y: "torch.Tensor"):
+def rms_diff(x: "torch.Tensor", y: "torch.Tensor") -> "torch.Tensor":
     import torch
 
     return torch.norm(x - y, 2, dtype=torch.float32) / x.numel() ** 0.5  # noqa
@@ -71,7 +73,7 @@ class Tag:
     def __init__(self, value: str):
         self.value = value
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return self.value
 
 
@@ -175,38 +177,36 @@ class Assert:
         ), f"Assertion failed: not fn({', '.join(itertools.chain((str(x) for x in args),(f'{str(k)}={str(v)}' for k,v in kwargs.items())))})"
 
 
-_KeyType = typing.TypeVar("_KeyType")
-_ValueType = typing.TypeVar("_ValueType")
-
-
-class Registry(typing.Generic[_KeyType, _ValueType]):
-    def __init__(self, name: str, data: dict[_KeyType, _ValueType]):
+class Registry[KeyType, ValueType]:
+    def __init__(self, name: str, data: dict[KeyType, ValueType]):
         self._name = name
         self._data = data.copy()
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: KeyType) -> ValueType:
         if key not in self:
             raise KeyError(f"Entry {key} not found in {self._name} registry")
         return self._data[key]
 
-    def __setitem__(self, key, value):
+    def __setitem__(self, key: KeyType, value: ValueType):
         if key in self:
             raise KeyError(f"Entry {key} already in {self._name} registry")
         self._data[key] = value
 
-    def keys(self):
+    def keys(self) -> list[KeyType]:
         return list(self._data)
 
-    def __contains__(self, item):
+    def __contains__(self, item: ValueType) -> bool:
         return item in self._data
 
 
-class LazyRegistry(Registry):
-    def __getitem__(self, key):
+class LazyRegistry[KeyType, ValueType](Registry[KeyType, ValueType]):
+    def __getitem__(self, key: KeyType) -> ValueType:
         return super().__getitem__(key)()
 
 
-def log(*message, log_fn: typing.Union[type[BaseException], typing.Callable] = logger.info, join: str = ", "):
+def log[
+    T
+](*message: typing.Any, log_fn: type[BaseException] | typing.Callable[[str], T] = logger.info, join: str = ", ") -> T:
     message = join.join([str(m() if callable(m) else m) for m in message])
     logged = log_fn(message)
     if isinstance(logged, BaseException):
@@ -215,7 +215,7 @@ def log(*message, log_fn: typing.Union[type[BaseException], typing.Callable] = l
         return logged
 
 
-def normalize_probabilities(p: list[float]) -> list[float]:
+def normalize_probabilities(p: "npt.ArrayLike") -> list[float]:
     import numpy as np
 
     p = np.array(p)
@@ -225,29 +225,35 @@ def normalize_probabilities(p: list[float]) -> list[float]:
     return (p / p_sum).tolist()
 
 
-def set_nested_dict_value(d: dict, keys: str | tuple[str, ...], value):
-    if isinstance(keys, str):
-        d[keys] = value
-    else:
+def set_nested_dict_value[
+    KeyType, ValueType
+](d: dict[KeyType, ValueType], keys: KeyType | tuple[KeyType, ...], value: ValueType) -> None:
+    if isinstance(keys, tuple):
         for key in keys[:-1]:
             d = d.setdefault(key, {})
             assert isinstance(d, dict)
         d[keys[-1]] = value
-
-
-def get_nested_dict_value(d: dict, keys: str | tuple[str, ...]):
-    if isinstance(keys, str):
-        return d[keys]
     else:
+        d[keys] = value
+
+
+def get_nested_dict_value[
+    KeyType, ValueType
+](d: dict[KeyType, ValueType], keys: KeyType | tuple[KeyType, ...]) -> ValueType:
+    if isinstance(keys, tuple):
         for key in keys:
             d = d[key]
         return d
-
-
-def pop_nested_dict_value(d: dict, keys: str | tuple[str, ...]):
-    if isinstance(keys, str):
-        return d.pop(keys)
     else:
+        return d[keys]
+
+
+def pop_nested_dict_value[
+    KeyType, ValueType
+](d: dict[KeyType, ValueType], keys: KeyType | tuple[KeyType, ...]) -> ValueType:
+    if isinstance(keys, tuple):
         for key in keys[:-1]:
             d = d[key]
         return d.pop(keys[-1])
+    else:
+        return d.pop(keys)

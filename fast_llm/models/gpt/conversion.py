@@ -109,10 +109,6 @@ class CommonHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
     Common converter for llama-based huggingface models (llama, starcoder2, mistral, mixtral)
     """
 
-    @abc.abstractmethod
-    def _get_mlp_converters(self, fast_llm_prefix: str, hf_prefix: str):
-        pass
-
     @classmethod
     def _create_config_converters(cls) -> list[ParamConverter]:
         return super()._create_config_converters() + [
@@ -156,14 +152,18 @@ class CommonHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
             ),
         ]
 
+    @abc.abstractmethod
+    def _get_mlp_converters(self, fast_llm_prefix: str, hf_prefix: str) -> list[WeightConverter]:
+        pass
+
     def _create_weight_converters(self) -> list[WeightConverter]:
         converters = []
-        num_layers = self._model.base_model_config.transformer.num_layers
-        norm_bias: bool = self._model.base_model_config.transformer.normalization.type == NormalizationType.layer_norm
-        linear_bias: bool = self._model.base_model_config.transformer.add_linear_biases
+        num_layers = self._model.config.base_model.transformer.num_layers
+        norm_bias: bool = self._model.config.base_model.transformer.normalization.type == NormalizationType.layer_norm
+        linear_bias: bool = self._model.config.base_model.transformer.add_linear_biases
 
         # Embedding and output
-        if self._model.base_model_config.tie_word_embeddings:
+        if self._model.config.base_model.tie_word_embeddings:
             converters.append(WeightConverter("layers.0.word_embeddings_weight", "model.embed_tokens.weight"))
             converters.append(IgnoreWeightConverter((), "lm_head.weight"))
         else:
@@ -212,7 +212,7 @@ class CommonHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
         hf_prefix: str | tuple[str, ...],
         use_bias: bool,
         cls=WeightConverter,
-    ):
+    ) -> list[WeightConverter]:
         if isinstance(fast_llm_prefix, str):
             fast_llm_prefix = (fast_llm_prefix,)
         if isinstance(hf_prefix, str):
@@ -221,7 +221,7 @@ class CommonHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
             cls(
                 tuple(f"{prefix}.weight" for prefix in fast_llm_prefix),
                 tuple(f"{prefix}.weight" for prefix in hf_prefix),
-                self._model.base_model_config,
+                self._model.config.base_model,
             )
         ]
         if use_bias:
@@ -229,7 +229,7 @@ class CommonHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
                 cls(
                     tuple(f"{prefix}.bias" for prefix in fast_llm_prefix),
                     tuple(f"{prefix}.bias" for prefix in hf_prefix),
-                    self._model.base_model_config,
+                    self._model.config.base_model,
                 )
             )
         return converters
@@ -255,8 +255,8 @@ class Starcoder2HuggingfaceCheckpointHandler(CommonHuggingfaceCheckpointHandler)
             ConstantImportParamConverter(fast_llm_names=(("transformer", "add_linear_biases"),), fast_llm_value=True),
         ]
 
-    def _get_mlp_converters(self, fast_llm_prefix: str, hf_prefix: str):
-        linear_bias: bool = self._model.base_model_config.transformer.add_linear_biases
+    def _get_mlp_converters(self, fast_llm_prefix: str, hf_prefix: str) -> list[WeightConverter]:
+        linear_bias: bool = self._model.config.base_model.transformer.add_linear_biases
         return [
             *self._get_weight_and_bias_converters(
                 f"{fast_llm_prefix}.mlp.layer_1", f"{hf_prefix}.mlp.c_fc", linear_bias
@@ -296,7 +296,7 @@ class RopeScalingParamConverter(ParamConverter):
         Assert.eq(len(self.fast_llm_names), 5)
         Assert.eq(len(self.export_names), 1)
 
-    def export_params(self, fast_llm_values):
+    def export_params(self, fast_llm_values: tuple[typing.Any, ...]) -> tuple[typing.Any, ...]:
         rope_type, *parameters = fast_llm_values
         if rope_type == RotaryEmbeddingType.default:
             return (None,)
@@ -305,7 +305,7 @@ class RopeScalingParamConverter(ParamConverter):
         else:
             raise ValueError(f"Unsupported rotary scaling type: {rope_type}")
 
-    def import_params(self, export_values):
+    def import_params(self, export_values: tuple[typing.Any, ...]) -> tuple[typing.Any, ...]:
         (export_value,) = export_values
         if export_value is None or (rope_type := export_value[self._HUGGINGFACE_NAMES[0]]) == "default":
             return (RotaryEmbeddingType.default,) + (DEFAULT,) * 4
@@ -338,8 +338,8 @@ class LlamaHuggingfaceCheckpointHandler(CommonLlamaHuggingfaceCheckpointHandler)
             ),
         ]
 
-    def _get_mlp_converters(self, fast_llm_prefix: str, hf_prefix: str):
-        linear_bias: bool = self._model.base_model_config.transformer.add_linear_biases
+    def _get_mlp_converters(self, fast_llm_prefix: str, hf_prefix: str) -> list[WeightConverter]:
+        linear_bias: bool = self._model.config.base_model.transformer.add_linear_biases
         return [
             *self._get_weight_and_bias_converters(
                 f"{fast_llm_prefix}.mlp.layer_1",
@@ -369,7 +369,7 @@ class MistralHuggingfaceCheckpointHandler(CommonLlamaHuggingfaceCheckpointHandle
             IgnoreImportParamConverter(export_names=(("sliding_window",),), ignore_export_value=None),
         ]
 
-    def _get_mlp_converters(self, fast_llm_prefix: str, hf_prefix: str):
+    def _get_mlp_converters(self, fast_llm_prefix: str, hf_prefix: str) -> list[WeightConverter]:
         return [
             SplitWeightConverter(
                 f"{fast_llm_prefix}.mlp.layer_1.weight",
@@ -378,7 +378,7 @@ class MistralHuggingfaceCheckpointHandler(CommonLlamaHuggingfaceCheckpointHandle
             MLPLayer2Converter(
                 f"{fast_llm_prefix}.mlp.layer_2.weight",
                 f"{hf_prefix}.mlp.down_proj.weight",
-                self._model.base_model_config,
+                self._model.config.base_model,
             ),
         ]
 
@@ -405,8 +405,8 @@ class MixtralHuggingfaceCheckpointHandler(CommonLlamaHuggingfaceCheckpointHandle
             IgnoreImportParamConverter(export_names=(("sliding_window",),), ignore_export_value=None),
         ]
 
-    def _get_mlp_converters(self, fast_llm_prefix: str, hf_prefix: str):
-        num_experts = self._model.base_model_config.transformer.num_experts
+    def _get_mlp_converters(self, fast_llm_prefix: str, hf_prefix: str) -> list[WeightConverter]:
+        num_experts = self._model.config.base_model.transformer.num_experts
         return [
             WeightConverter(f"{fast_llm_prefix}.mlp.router.weight", f"{hf_prefix}.block_sparse_moe.gate.weight"),
             SplitWeightConverter(
@@ -420,7 +420,7 @@ class MixtralHuggingfaceCheckpointHandler(CommonLlamaHuggingfaceCheckpointHandle
             MLPLayer2Converter(
                 f"{fast_llm_prefix}.mlp.layer_2.weight",
                 tuple(f"{hf_prefix}.block_sparse_moe.experts.{i}.w2.weight" for i in range(num_experts)),
-                self._model.base_model_config,
+                self._model.config.base_model,
             ),
         ]
 

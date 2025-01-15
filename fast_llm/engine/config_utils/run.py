@@ -82,11 +82,11 @@ class ExperimentConfig(RunnableConfig):
         title: str | None = None,
         width: int = 60,
         fill_char: str = "-",
-    ):
+    ) -> None:
         if is_main_rank():
             return super()._show(verbose, log_fn=log_fn, title=title, width=width, fill_char=fill_char)
 
-    def configure_logging(self, directory: pathlib.Path | str | None = None):
+    def configure_logging(self, directory: pathlib.Path | str | None = None) -> None:
         configure_logging(
             log_timestamps=self.run.log_timestamps,
             enable_all_loggers=self.run.enable_all_loggers,
@@ -95,7 +95,7 @@ class ExperimentConfig(RunnableConfig):
             directory=directory,
         )
 
-    def get_run(self, distributed: "Distributed"):
+    def get_run(self, distributed: "Distributed") -> "Run":
         from fast_llm.functional.config import TritonConfig
 
         TritonConfig.TRITON_ENABLED = self.run.enable_triton_kernels
@@ -104,7 +104,7 @@ class ExperimentConfig(RunnableConfig):
         self._set_external_variables()
         return run
 
-    def _set_external_variables(self):
+    def _set_external_variables(self) -> None:
         import torch._dynamo
 
         # TODO: Find an alternative to get reliable tensor-parallel overlap.
@@ -175,22 +175,22 @@ class Run:
         )
 
     @property
-    def is_main_rank(self):
+    def is_main_rank(self) -> bool:
         return self._is_main_rank
 
     @property
-    def experiment_directory(self):
+    def experiment_directory(self) -> pathlib.Path | None:
         return self._experiment_directory
 
     @property
-    def experiment_name(self):
+    def experiment_name(self) -> str:
         return self._experiment_name
 
     @property
-    def _is_running(self):
+    def _is_running(self) -> bool:
         return _run == self
 
-    def save_logged_tensors(self, iteration: int | str):
+    def save_logged_tensors(self, iteration: int | str) -> None:
         import torch
 
         assert self._is_running
@@ -199,19 +199,19 @@ class Run:
             torch.save(tensor_stats, self.open_artifact(f"tensor_logs_{iteration}.pt", mode="wb"))
             TensorLogs.reset(self._config.tensor_logs)
 
-    def barrier(self, value: int | str = 1):
+    def barrier(self, value: int | str = 1) -> None:
         from fast_llm.core.distributed import safe_barrier
 
         safe_barrier(self._distributed.world_group, value)
 
-    def broadcast_int(self, value: int):
+    def broadcast_int(self, value: int) -> int:
         import torch
 
         from fast_llm.core.distributed import broadcast_scalar
 
         return broadcast_scalar(value, dtype=torch.int64, src=_MAIN_RANK, group=self._distributed.world_group)
 
-    def open_artifact(self, name: str, mode: str | None = "w", verbose=True):
+    def open_artifact(self, name: str, mode: str | None = "w", verbose=True) -> pathlib.Path | typing.IO:
         assert self._is_running
         if self._artifact_dir is None:
             # TODO: Open a file that writes to logger.info when possible?
@@ -244,30 +244,34 @@ def get_run() -> Run:
     return _run
 
 
-def is_main_rank():
+def is_main_rank() -> bool:
     return DistributedConfig.default_rank == _MAIN_RANK
 
 
-def log_main_rank(
-    *message, log_fn: typing.Union[type[BaseException], typing.Callable] = logger.info, join: str = ", "
-):
+def log_main_rank[
+    T
+](*message, log_fn: type[BaseException] | typing.Callable[[str], T] = logger.info, join: str = ", ") -> T:
     if is_main_rank():
-        log(*message, log_fn=log_fn, join=join)
+        return log(*message, log_fn=log_fn, join=join)
 
 
-def is_model_parallel_main_rank():
+def is_model_parallel_main_rank() -> bool:
     return is_main_rank() if _run is None else _run._is_model_parallel_main_rank  # Noqa
 
 
-def log_model_parallel_main_rank(*message, log_fn=logger.info):
+def log_model_parallel_main_rank[
+    T
+](*message, log_fn: type[BaseException] | typing.Callable[[str], T] = logger.info) -> T:
     if is_model_parallel_main_rank():
         return log(*message, log_fn=log_fn)
 
 
-def is_pipeline_parallel_main_rank():
+def is_pipeline_parallel_main_rank() -> bool:
     return is_main_rank() if _run is None else _run._is_pipeline_parallel_main_rank  # Noqa
 
 
-def log_pipeline_parallel_main_rank(*message, log_fn=logger.info):
+def log_pipeline_parallel_main_rank[
+    T
+](*message, log_fn: type[BaseException] | typing.Callable[[str], T] = logger.info) -> T:
     if is_pipeline_parallel_main_rank():
         return log(*message, log_fn=log_fn)

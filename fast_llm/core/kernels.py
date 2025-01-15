@@ -26,7 +26,7 @@ except ImportError:
     _flash_available = False
 
 
-def l2_norm(tensors: list[torch.Tensor], noop_flag: torch.Tensor):
+def l2_norm(tensors: list[torch.Tensor], noop_flag: torch.Tensor) -> torch.Tensor:
     assert _apex_available
     norm, _ = _multi_tensor_applier(
         _multi_tensor_l2norm,
@@ -37,7 +37,7 @@ def l2_norm(tensors: list[torch.Tensor], noop_flag: torch.Tensor):
     return norm
 
 
-def scale_(tensors: list[torch.Tensor], noop_flag: torch.Tensor, scale: torch.Tensor | float):
+def scale_(tensors: list[torch.Tensor], noop_flag: torch.Tensor, scale: torch.Tensor | float) -> None:
     assert _apex_available
     _multi_tensor_applier(
         _multi_tensor_scale,
@@ -60,7 +60,7 @@ def fused_adam(
     wd: float,
     eps: float,
     step: int,
-):
+) -> None:
     _multi_tensor_applier(
         _multi_tensor_adam,
         noop_flag,
@@ -86,7 +86,7 @@ def flash_attn(
     causal: bool = False,
     generator: torch.Generator | None,
     softmax_scale: float | None = None,
-):
+) -> torch.Tensor:
     assert _flash_available
     with set_generator(generator):
         return _flash_attn_func(

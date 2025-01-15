@@ -1,4 +1,5 @@
 import abc
+import typing
 
 import torch
 
@@ -30,7 +31,7 @@ def get_grad_scaler(config: GradientScalerConfig, distributed: Distributed) -> "
         return NoopGradScaler(distributed.device)
 
 
-def _merge_and_filter_groups(groups: list["ParamGroup"]):
+def _merge_and_filter_groups(groups: list["ParamGroup"]) -> list["ParamGroup"]:
     # Merge groups with the same name
     merged_groups = {}
     for group in groups:
@@ -66,7 +67,7 @@ class Optimizer:
         self._reduce_group = distributed.world_group
         self._lr_schedule = create_schedule_from_config(self._config.learning_rate)
 
-    def _clip_grad_norm(self):
+    def _clip_grad_norm(self) -> torch.Tensor:
         # TODO: Optimize this.
         grad_norm = l2_norm(self._grads_for_norm, self._noop_flag) if self._grads_for_norm else self._grad_norm.zero_()
         Assert.eq(grad_norm.dtype, torch.float32)
@@ -86,7 +87,7 @@ class Optimizer:
         return grad_norm
 
     @torch.no_grad()
-    def step(self, metrics: dict | None = None):
+    def step(self, metrics: dict | None = None) -> bool:
         for group in self._param_groups:
             for grad in group.grads:
                 self._grad_scaler.unscale_and_check_nans(grad)
@@ -123,24 +124,24 @@ class Optimizer:
         return update_successful
 
     @property
-    def grad_scale(self):
+    def grad_scale(self) -> float:
         return self._grad_scaler.scale
 
     @property
-    def optimizer_step(self):
+    def optimizer_step(self) -> int:
         return self._optimizer_step
 
-    def reset_state(self):
+    def reset_state(self) -> None:
         self._optimizer_step = 0
         self._grad_scaler.reset_state()
 
-    def save(self):
+    def save(self) -> dict[str, typing.Any]:
         return {
             "current_step": self._optimizer_step,
             "grad_scaler": self._grad_scaler.save(),
         }
 
-    def load(self, state, validate=True):
+    def load(self, state, validate=True) -> None:
         self._optimizer_step = state["current_step"]
         self._grad_scaler.load(state["grad_scaler"], validate=validate)
 
@@ -157,13 +158,13 @@ class GradScaler(abc.ABC):
     def scale(self) -> float:
         pass
 
-    def save(self):
+    def save(self) -> dict[str, typing.Any]:
         return {"type": self.__class__.__name__}
 
-    def reset_state(self):
+    def reset_state(self) -> None:
         pass
 
-    def load(self, state, validate=True):
+    def load(self, state, validate=True) -> None:
         if validate:
             Assert.eq(state["type"], self.__class__.__name__)
         self._noop_flag.zero_()
@@ -176,15 +177,12 @@ class GradScaler(abc.ABC):
     def update_successful(self) -> bool:
         pass
 
-    def unscale_and_check_nans(self, tensor: torch.Tensor):
+    def unscale_and_check_nans(self, tensor: torch.Tensor) -> None:
         pass
 
     def update(self, update_successful: bool) -> None:
         # TODO: Reset the flag for extra safety?
         pass
-
-    def state_dict(self) -> dict:  # noqa
-        return dict()
 
 
 class NoopGradScaler(GradScaler):
@@ -212,10 +210,10 @@ class VariableGradScaler(GradScaler):
     def scale(self) -> float:
         return self._scale
 
-    def reset_state(self):
+    def reset_state(self) -> None:
         self._set_scale(self._initial_scale)
 
-    def save(self):
+    def save(self) -> dict[str, typing.Any]:
         state = super().save()
         state["scale"] = self._scale
         return state
@@ -232,23 +230,23 @@ class VariableGradScaler(GradScaler):
             )
         return not self._noop_flag.item()
 
-    def _set_scale(self, value):
+    def _set_scale(self, value) -> None:
         log_main_rank(lambda: f"Setting loss scale to {value}")
         self._scale = value
         self._inv_scale.fill_(value**-1)
 
-    def unscale_and_check_nans(self, tensor: torch.Tensor):
+    def unscale_and_check_nans(self, tensor: torch.Tensor) -> None:
         # This is better than the torch._amp version which needs a float noop_flag and a tensor scale.
         scale_([tensor], self._noop_flag, self._scale**-1)
 
 
 class ConstantGradScaler(VariableGradScaler):
-    def load(self, state, validate=True):
+    def load(self, state, validate=True) -> None:
         if validate:
             Assert.eq(self._scale, state["scale"])
         super().load(state, validate=validate)
 
-    def _set_scale(self, value):
+    def _set_scale(self, value) -> None:
         assert not hasattr(self, "_scale")
         super()._set_scale(value)
 
@@ -276,13 +274,13 @@ class DynamicGradScaler(VariableGradScaler):
         self._growth_tracker = 0
         self._hysteresis_tracker = self.hysteresis
 
-    def save(self):
+    def save(self) -> dict[str, typing.Any]:
         state = super().save()
         state["growth"] = self._growth_tracker
         state["hysteresis"] = self._hysteresis_tracker
         return state
 
-    def load(self, state, validate=True):
+    def load(self, state, validate=True) -> None:
         super().load(state, validate=validate)
         self._growth_tracker = state["growth"]
         self._hysteresis_tracker = state["hysteresis"]

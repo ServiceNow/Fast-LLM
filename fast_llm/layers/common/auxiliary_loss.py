@@ -8,7 +8,7 @@ class AuxiliaryLoss(torch.autograd.Function):
         return scores
 
     @staticmethod
-    def backward(ctx, grad_output: torch.Tensor):  # noqa
+    def backward(ctx, grad_output: torch.Tensor) -> tuple[torch.Tensor | None, ...]:  # noqa
         return grad_output, ctx.grad, None
 
 

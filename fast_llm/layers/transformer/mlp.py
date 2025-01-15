@@ -1,3 +1,4 @@
+import typing
 from abc import ABC
 
 import torch
@@ -63,7 +64,13 @@ class MLP(MLPBase):
         Assert.eq(config.num_experts, 1)
         super().__init__(config, tensor_space, name)
 
-    def forward(self, input_: torch.Tensor, kwargs: dict, losses: dict | None = None, metrics: dict | None = None):
+    def forward(
+        self,
+        input_: torch.Tensor,
+        kwargs: dict[str, typing.Any],
+        losses: dict[str, typing.Any] | None = None,
+        metrics: dict[str, typing.Any] | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
         parallel_group = self._intermediate_dim.parallel_group
         return (
             mlp_autograd(

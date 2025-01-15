@@ -1,4 +1,5 @@
 import logging
+import typing
 
 import torch
 
@@ -58,7 +59,7 @@ class LinearBase(torch.nn.Module):
             self.bias = None
 
     @property
-    def transposed_weight(self):
+    def transposed_weight(self) -> bool:
         return self._transposed_weight
 
 
@@ -90,13 +91,15 @@ class Linear(LinearBase):
             lr_scale=lr_scale,
         )
 
-    def forward(self, input_):
+    def forward(self, input_: torch.Tensor) -> torch.Tensor:
         return linear_autograd(input_, weight=self.weight, bias=self.bias, transposed_weight=self._transposed_weight)
 
-    def forward_only(self, input_):
+    def forward_only(
+        self, input_: torch.Tensor
+    ) -> tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor, torch.Tensor, bool]]:
         return linear_forward(input_, weight=self.weight, bias=self.bias, transposed_weight=self._transposed_weight)
 
-    def backward(self, grad_output: torch.Tensor, context):  # noqa
+    def backward(self, grad_output: torch.Tensor, context) -> torch.Tensor:  # noqa
         return linear_backward(grad_output, context)
 
 
@@ -130,7 +133,7 @@ class OutputParallelLinear(LinearBase):
             lr_scale=lr_scale,
         )
 
-    def forward(self, input_):
+    def forward(self, input_: torch.Tensor) -> torch.Tensor:
         return output_parallel_linear_autograd(
             input_,
             weight=self.weight,
@@ -140,7 +143,7 @@ class OutputParallelLinear(LinearBase):
             transposed_weight=self._transposed_weight,
         )
 
-    def forward_only(self, input_):
+    def forward_only(self, input_) -> tuple[torch.Tensor, tuple[typing.Any, ...]]:
         return output_parallel_linear_forward(
             input_,
             weight=self.weight,
@@ -150,7 +153,7 @@ class OutputParallelLinear(LinearBase):
             transposed_weight=self._transposed_weight,
         )
 
-    def backward(self, grad_output: torch.Tensor, context):  # noqa
+    def backward(self, grad_output: torch.Tensor, context: tuple[typing.Any, ...]):  # noqa
         return output_parallel_linear_backward(grad_output, context)
 
 
@@ -186,7 +189,7 @@ class InputParallelLinear(LinearBase):
             lr_scale=lr_scale,
         )
 
-    def forward(self, input_):
+    def forward(self, input_: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor | None]:
         return input_parallel_linear_autograd(
             input_,
             weight=self.weight,
@@ -196,7 +199,7 @@ class InputParallelLinear(LinearBase):
             transposed_weight=self._transposed_weight,
         )
 
-    def forward_only(self, input_):
+    def forward_only(self, input_: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor | None, tuple[typing.Any, ...]]:
         output, context = input_parallel_linear_forward(
             input_,
             weight=self.weight,
@@ -207,5 +210,5 @@ class InputParallelLinear(LinearBase):
         )
         return output, self.bias if self._group else None, context
 
-    def backward(self, grad_output: torch.Tensor, context):  # noqa
+    def backward(self, grad_output: torch.Tensor, context: tuple[typing.Any, ...]) -> torch.Tensor:  # noqa
         return input_parallel_linear_backward(grad_output, context)

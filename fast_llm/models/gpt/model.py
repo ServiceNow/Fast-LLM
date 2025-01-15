@@ -1,8 +1,9 @@
 import logging
+import typing
 
 import torch
 
-from fast_llm.engine.base_model.base_model import BaseModel, LossDef
+from fast_llm.engine.base_model.base_model import BaseModel, Layer, LossDef
 from fast_llm.engine.config_utils.tensor_space import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames, PhaseType
 from fast_llm.engine.distributed.distributed import Distributed
@@ -28,19 +29,18 @@ from fast_llm.utils import Assert
 logger = logging.getLogger(__name__)
 
 
-class GPTBaseModel(BaseModel):
+class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
     """
     A transformer-based language model generalizing the GPT model architecture.
     """
 
+    config_class: typing.ClassVar[type[GPTBaseModelConfig]] = GPTBaseModelConfig
     _is_setup: bool = False
-    _config: GPTBaseModelConfig
     _rotary_embedding_frequencies: torch.Tensor
     _position_ids: torch.Tensor
     _mask: torch.Tensor
     _mask_value: torch.Tensor
     _tensor_cache_max_sequence_length: int = -1
-    config_cls = GPTBaseModelConfig
 
     def __init__(
         self,
@@ -64,7 +64,7 @@ class GPTBaseModel(BaseModel):
                 self._config.transformer, self._tensor_space
             )
 
-    def get_layers(self):
+    def get_layers(self) -> list[Layer]:
         return [
             LanguageModelEmbedding(self._config, self._tensor_space),
             *[
@@ -78,22 +78,24 @@ class GPTBaseModel(BaseModel):
             LanguageModelHead(self._config, self._tensor_space),
         ]
 
-    def setup(self, distributed: Distributed):
+    def setup(self, distributed: Distributed) -> None:
         assert not self._is_setup
         assert distributed.config is self._tensor_space.distributed_config
         self._tensor_space.setup(distributed)
         self._is_setup = True
 
-    def preprocess_meta(self, input_: BatchConfig | torch.Tensor, phase: PhaseType) -> list[tuple[TensorMeta, dict]]:
+    def preprocess_meta(
+        self, batch_meta: BatchConfig | torch.Tensor, phase: PhaseType
+    ) -> list[tuple[TensorMeta, dict]]:
         # TODO: How much of this is generalizable?
         # TODO: Use parallel/sequential dims, distinguish micro and full batch/sequence
 
-        if isinstance(input_, BatchConfig):
-            micro_batch_size = input_.micro_batch_size
-            sequence_length = input_.sequence_length
-            micro_sequence_length = input_.micro_sequence_length
+        if isinstance(batch_meta, BatchConfig):
+            micro_batch_size = batch_meta.micro_batch_size
+            sequence_length = batch_meta.sequence_length
+            micro_sequence_length = batch_meta.micro_sequence_length
         else:
-            micro_batch_size, sequence_length = input_.shape
+            micro_batch_size, sequence_length = batch_meta.shape
             if phase != PhaseType.inference:
                 sequence_length -= 1
             micro_sequence_length = sequence_length
@@ -101,8 +103,8 @@ class GPTBaseModel(BaseModel):
         batch_data = self._tensor_space.distributed_config.get_distributed_dim(DistributedDimNames.batch_data)
         batch_dim = TensorDim(TransformerDimNames.batch, micro_batch_size * batch_data.size, batch_data)
 
-        if isinstance(input_, BatchConfig):
-            micro_sequence_length = input_.micro_sequence_length
+        if isinstance(batch_meta, BatchConfig):
+            micro_sequence_length = batch_meta.micro_sequence_length
 
         if micro_sequence_length is None:
             micro_sequence_length = sequence_length
@@ -300,6 +302,6 @@ class GPTBaseModel(BaseModel):
         return loss_defs
 
 
-class GPTModel(FastLLMModel):
-    config_class = GPTModelConfig
-    base_model_class = GPTBaseModel
+class GPTModel[ConfigType: GPTModelConfig](FastLLMModel[ConfigType]):
+    config_class: typing.ClassVar[type[GPTModelConfig]] = GPTModelConfig
+    base_model_class: typing.ClassVar[type[GPTBaseModel]] = GPTBaseModel

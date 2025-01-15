@@ -8,9 +8,9 @@ import typing
 
 import torch
 
+from fast_llm.config import Configurable
 from fast_llm.core.distributed import safe_barrier
 from fast_llm.data.data.abstract import Data
-from fast_llm.data.data.gpt.data import GPTData
 from fast_llm.engine.config_utils.run import Run, is_main_rank, log_main_rank, log_pipeline_parallel_main_rank
 from fast_llm.engine.distributed.config import PhaseType
 from fast_llm.engine.distributed.distributed import Distributed
@@ -27,7 +27,7 @@ from fast_llm.utils import Assert
 logger = logging.getLogger(__name__)
 
 
-class Trainer(abc.ABC):
+class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
     config_class: typing.ClassVar[type[TrainerConfig]] = TrainerConfig
     model_class: typing.ClassVar[type[FastLLMModel]] = FastLLMModel
     # TODO: Generalize data, schedule, logging, etc.
@@ -40,9 +40,7 @@ class Trainer(abc.ABC):
     _completed_steps: int
 
     def __init__(self, config: TrainerConfig):
-        Assert.custom(isinstance, config, self.config_class)
-        config.validate()
-        self._config = config
+        super().__init__(config)
         self._data = self._get_data()
         log_main_rank("Creating model...")
         self._multi_stage = self.model_class(
@@ -51,9 +49,9 @@ class Trainer(abc.ABC):
         )
         phase: PhaseType
         self._runner = ScheduleRunner(
-            multi_stage=self._multi_stage,
             config=self._config.schedule,
-            distributed_config=self._config.distributed,
+            multi_stage=self._multi_stage,
+            distributed_config=self._config.model.distributed,
         )
         steps_per_split = {
             PhaseType.training: self._config.training.train_iters,
@@ -75,14 +73,14 @@ class Trainer(abc.ABC):
                 multi_stage=self._multi_stage,
                 batch_config=self._config.batch,
                 schedule_config=self._config.schedule,
-                distributed_config=self._config.distributed,
+                distributed_config=self._config.model.distributed,
                 phase=phase,
             )
             for phase in self._samples_per_split
         }
 
-    def setup(self, distributed: Distributed, run: Run):
-        assert distributed.config is self._config.distributed
+    def setup(self, distributed: Distributed, run: Run) -> None:
+        assert distributed.config is self._config.model.distributed
         assert not self._is_setup
         self._is_setup = True
         self._distributed = distributed
@@ -112,21 +110,15 @@ class Trainer(abc.ABC):
 
     @abc.abstractmethod
     def _get_data(self) -> Data:
-        return GPTData(
-            config=self._config.data,
-            distributed_config=self._config.distributed,
-            # TODO: `vocab_size` is not generic.
-            vocab_size=self._config.base_model.vocab_size,  # Noqa
-            max_sequence_length=self._config.batch.sequence_length,
-        )
+        pass
 
     @property
-    def _consumed_samples(self):
+    def _consumed_samples(self) -> int:
         assert self._is_setup
         return self._completed_steps * self._config.batch.batch_size
 
     @property
-    def _consumed_tokens(self):
+    def _consumed_tokens(self) -> int:
         assert self._is_setup
         return self._consumed_samples * self._config.batch.sequence_length
 
@@ -135,12 +127,12 @@ class Trainer(abc.ABC):
         # Number of validation steps performed before the current step
         return self._config.training.validation.get_iteration_count(self._completed_steps - 1)
 
-    def run(self):
+    def run(self) -> None:
         assert self._is_setup
         with self._wandb:
             self._run_training()
 
-    def _run_training(self):
+    def _run_training(self) -> None:
         self._prepare_training_state()
         log_main_rank("done with setup ...")
         log_pipeline_parallel_main_rank(lambda: log_memory_usage(f"After initial setup", str))
@@ -170,7 +162,7 @@ class Trainer(abc.ABC):
             # TODO: This may erase some metrics.
             self._wandb.log_metrics(self._completed_steps, metrics)
 
-    def _train(self):
+    def _train(self) -> tuple[bool, dict[PhaseType, dict[str, typing.Any]]]:
         # Tracking loss.
         advanced_iters = 0
         skipped_iters = 0
@@ -179,7 +171,7 @@ class Trainer(abc.ABC):
 
         # Profiling
         profiler = self._config.profiling.get_profiler(
-            distributed_config=self._config.distributed, start_step=self._completed_steps
+            distributed_config=self._config.model.distributed, start_step=self._completed_steps
         )
 
         train_iterator = self._get_data_iterator(
@@ -261,7 +253,7 @@ class Trainer(abc.ABC):
                             "hardware_tflops": hardware_tflops,
                             "tokens_per_sec_per_gpu": (
                                 (self._config.batch.sequence_length * self._config.batch.batch_size)
-                                / self._config.distributed.world_size
+                                / self._config.model.distributed.world_size
                                 / time_per_iteration
                             ),
                             "run": self._run.index,
@@ -357,7 +349,7 @@ class Trainer(abc.ABC):
             "hardware_tflops": hardware_tflops,
             "tokens_per_sec_per_gpu": (
                 (self._config.batch.sequence_length * self._config.batch.batch_size)
-                / self._config.distributed.world_size
+                / self._config.model.distributed.world_size
                 / time_per_iteration
             ),
             **get_memory_usage_mib(),
@@ -365,7 +357,9 @@ class Trainer(abc.ABC):
 
         return metrics
 
-    def _get_data_iterator(self, phase, completed_steps: int = 0, prefetch_factor: int | None = None):
+    def _get_data_iterator(
+        self, phase, completed_steps: int = 0, prefetch_factor: int | None = None
+    ) -> typing.Iterator[typing.Any]:
         return self._data.get_iterator(
             self._config.batch,
             phase,
@@ -374,7 +368,7 @@ class Trainer(abc.ABC):
             prefetch_factor=prefetch_factor,
         )
 
-    def _prepare_training_state(self):
+    def _prepare_training_state(self) -> None:
         # Setup the training state.
         if (last_iteration := self._get_last_checkpoint()) is None:
             if (path := self._config.pretrained.path) is not None and self._config.pretrained.model_weights:
@@ -398,7 +392,7 @@ class Trainer(abc.ABC):
 
     def _save_checkpoint(
         self, config: TrainingCheckpointBaseConfig, metrics: dict[PhaseType, dict[str, float | int]] | None
-    ):
+    ) -> None:
         # TODO v0.3: Move barrier, ok file to FastLLMModel
         checkpoint_base_directory = config.get_save_directory(self._run.experiment_directory)
         checkpoint_directory = checkpoint_base_directory / str(self._completed_steps)
@@ -437,7 +431,7 @@ class Trainer(abc.ABC):
 
             config.callback.run()
 
-    def _load_checkpoint(self, config: TrainingCheckpointConfig, iteration: int):
+    def _load_checkpoint(self, config: TrainingCheckpointConfig, iteration: int) -> None:
         checkpoint_directory = config.get_save_directory(self._run.experiment_directory) / str(iteration)
         Assert.custom(pathlib.Path.is_file, checkpoint_directory / "ok")
 
@@ -451,7 +445,7 @@ class Trainer(abc.ABC):
         # TODO v0.3: Move barrier, ok file to FastLLMModel
         self._run.barrier(f"load {config.save_name} {iteration} exit")
 
-    def _get_last_checkpoint(self):
+    def _get_last_checkpoint(self) -> int | None:
         if self._run.experiment_directory is None:
             return None
         checkpoint_base_directory = (

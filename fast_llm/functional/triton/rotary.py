@@ -65,7 +65,7 @@ def triton_rotary_(
     input_: torch.Tensor,
     frequencies: torch.Tensor,
     backward: bool = False,
-):
+) -> torch.Tensor:
     # TODO: Improve assumptions.
     # TODO: Make a transposed version to avoid contiguous call in key backward.
     # TODO: Improve block size heuristics.
@@ -92,11 +92,11 @@ def triton_rotary_(
     return input_
 
 
-def triton_rotary_forward_(input_: torch.Tensor, frequencies: torch.Tensor):
+def triton_rotary_forward_(input_: torch.Tensor, frequencies: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
     return triton_rotary_(input_, frequencies), frequencies
 
 
-def triton_rotary_backward_(grad_output: torch.Tensor, context: torch.Tensor):
+def triton_rotary_backward_(grad_output: torch.Tensor, context: torch.Tensor) -> torch.Tensor:
     # TODO: Make a transposed version to avoid contiguous call in key backward.
     if grad_output.stride(-1) != 1:
         grad_output = grad_output.contiguous()

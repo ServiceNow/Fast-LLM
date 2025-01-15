@@ -1,4 +1,5 @@
 import logging
+import typing
 
 import torch
 from torch.distributed import all_reduce, reduce_scatter_tensor
@@ -16,8 +17,8 @@ from fast_llm.utils import Assert
 logger = logging.getLogger(__name__)
 
 
-def _accumulate_grad_hook(buffer: torch.nn.Parameter, meta: ParameterMeta):
-    def hook(*args) -> None:  # noqa
+def _accumulate_grad_hook(buffer: torch.nn.Parameter, meta: ParameterMeta) -> typing.Callable[[tuple, tuple], None]:
+    def hook(grad_inputs, grad_outputs):  # noqa
         if buffer.grad is not None:
             if not meta.auto_grad_accumulation:
                 raise RuntimeError(f"Unexpected grad for parameter {meta.tensor_name}")
@@ -46,7 +47,7 @@ class Stage(StageBase):
         mode: StageMode = StageMode.training,
         is_tied_weight_copy: bool = False,
         weight_buffer_shared_with: list["Stage"],
-    ):
+    ) -> None:
         super().setup(
             distributed=distributed,
             weight_shard=weight_shard,
@@ -75,7 +76,7 @@ class Stage(StageBase):
                     # We keep a pointer to the AccumulateGrad object, otherwise it will be garbage collected.
                     self._accumulators.append(accumulator)
 
-    def forward_meta(self, input_: TensorMeta, kwargs: dict):
+    def forward_meta(self, input_: TensorMeta, kwargs: dict) -> TensorMeta:
         # Store the meta inputs and outputs, for debugging only.
         self._meta_inputs, self._meta_outputs = [], []
         # TODO: use layer.forward_meta
@@ -91,7 +92,7 @@ class Stage(StageBase):
 
     def forward(
         self, input_: torch.Tensor, kwargs: dict, losses: dict[str, list[torch.Tensor]], metrics: dict | None = None
-    ):
+    ) -> tuple[torch.Tensor | None, tuple[torch.Tensor | None, torch.Tensor | None]]:
         assert self._is_restored
         assert self._mode.support_forward
         output = input_
@@ -106,7 +107,9 @@ class Stage(StageBase):
             self._log_layer_forward(output, kwargs, i)
         return None if output is None else output.detach(), (input_, output)
 
-    def backward(self, output_grad: torch.Tensor, grad_context, metrics: dict | None = None):  # noqa
+    def backward(
+        self, output_grad: torch.Tensor, grad_context: tuple[torch.Tensor, torch.Tensor], metrics: dict | None = None
+    ) -> torch.Tensor:  # noqa
         # TODO: This context format wastes memory.
         # TODO: Allow non-autograd layers.
         assert self._mode.support_backward
@@ -114,7 +117,7 @@ class Stage(StageBase):
         output.backward(output_grad)
         return input_.grad
 
-    def restore_parameters(self):
+    def restore_parameters(self) -> None:
         assert self._is_setup
         assert self._mode.support_forward
         # TODO: Allow partial FSDP
@@ -126,7 +129,7 @@ class Stage(StageBase):
             for stage in self._weight_buffer_shared_with:
                 stage.invalidate_buffer()
 
-    def reset_gradients(self):
+    def reset_gradients(self) -> None:
         # TODO: Allow re-allocating the gradient every time.
         # TODO: Autograd will always increment gradient instead of setting the value (less efficient)
         #   Can this (and op below) be avoided? (Probably needs messing with autograd)
@@ -140,7 +143,7 @@ class Stage(StageBase):
             assert buffer.grad is None
             buffer.param_grad_is_zero = True
 
-    def reduce_gradients(self, accumulate=False):
+    def reduce_gradients(self, accumulate=False) -> None:
         # Just need to reduce the buffer, then copy (add) to actual grads.
         # Works fine as is but does not allow communication overlap by itself.
         # Reduction should only be done once per step, after the full backward pass is done for the stage.
@@ -148,9 +151,9 @@ class Stage(StageBase):
         assert self._is_restored
         assert self._mode.support_backward
         for buffer, meta in zip(self._parameter_buffers, self._parameter_metas):
-            if buffer.param_grad_is_zero:
+            if buffer.param_grad_is_zero:  # noqa
                 assert self.is_tied_weight_copy or meta.allow_no_grad, meta
-                triton_fill(buffer.grad_buffer, 0)
+                triton_fill(buffer.grad_buffer, 0)  # noqa
         if self._sequence_parallel_grads is not None and self._distributed.tensor_group:
             all_reduce(self._sequence_parallel_grads, group=self._distributed.tensor_group)
         if self._fsdp_size > 1:
@@ -184,10 +187,10 @@ class Stage(StageBase):
             )
 
     @property
-    def is_tied_weight_copy(self):
+    def is_tied_weight_copy(self) -> bool:
         return self._is_tied_weight_copy
 
-    def train(self, mode: bool = True):
+    def train(self, mode: bool = True) -> None:
         if mode:
             assert self._mode.support_backward
         if self._training != mode:
@@ -195,12 +198,12 @@ class Stage(StageBase):
                 layer.train(mode)
             self._training = mode
 
-    def invalidate_buffer(self):
+    def invalidate_buffer(self) -> None:
         # Buffer is no longer valid (Updated weights or overwritten by other stage)
         assert self._mode.support_forward
         self._is_restored = False
 
-    def _log_layer_forward(self, output, kwargs, i):
+    def _log_layer_forward(self, output: torch.Tensor, kwargs: dict[str, typing.Any], i: int) -> None:
         if (
             self._config.debug_tensor_parallel
             and self._distributed.tensor_group is not None
@@ -225,7 +228,7 @@ class Stage(StageBase):
         if self._config.debug_activation_memory:
             log_pipeline_parallel_main_rank(lambda: log_memory_usage(f"layer {self._layer_range[i]} fw", str))
 
-    def _log_layer_backward(self, input_, kwargs, i):
+    def _log_layer_backward(self, input_: torch.Tensor, kwargs: dict[str, typing.Any], i: int) -> None:
         if not input_.requires_grad:
             return
         if (

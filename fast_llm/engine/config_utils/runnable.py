@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 @config_class()
 class RunnableConfig(Config):
     @classmethod
-    def parse_and_run(cls, args=None):
+    def parse_and_run(cls, args=None) -> None:
         parsed, unparsed = cls._get_parser().parse_known_args(args)
         with NoAutoValidate():
             config: "RunnableConfig" = cls._from_parsed_args(parsed, unparsed)
@@ -36,7 +36,7 @@ class RunnableConfig(Config):
         runnable()
 
     @classmethod
-    def _get_parser(cls):
+    def _get_parser(cls) -> argparse.ArgumentParser:
         parser = argparse.ArgumentParser()
         parser.add_argument(
             "-v",
@@ -80,7 +80,7 @@ class RunnableConfig(Config):
         return parser
 
     @classmethod
-    def _from_parsed_args(cls, parsed: argparse.Namespace, unparsed: list[str]):
+    def _from_parsed_args(cls, parsed: argparse.Namespace, unparsed: list[str]) -> typing.Self:
         if parsed.hydra or parsed.hydra_path is not None or parsed.hydra_config is not None:
             default = cls._load_hydra(parsed, unparsed)
             updates = {}
@@ -89,29 +89,31 @@ class RunnableConfig(Config):
             updates = cls._parse_updates(unparsed)
         return cls.from_dict(default, updates)
 
-    def configure_logging(self):
+    def configure_logging(self) -> None:
         configure_logging()
 
     def _get_runnable(self) -> typing.Callable[[], None]:
         return self.run
 
-    def run(self):
+    def run(self) -> None:
         raise NotImplementedError()
 
-    def _show(
+    def _show[
+        T
+    ](
         self,
         verbose: int = FieldVerboseLevel.core,
         *,
-        log_fn=logger.info,
+        log_fn: typing.Callable[[str], T] = logger.info,
         title: str | None = None,
         width: int = 60,
         fill_char: str = "-",
-    ):
+    ) -> T:
         log_fn(f"Command run:\n{shlex.join(sys.argv)}")
-        self.to_logs(verbose=verbose, log_fn=log_fn, title=title, width=width, fill_char=fill_char)
+        return self.to_logs(verbose=verbose, log_fn=log_fn, title=title, width=width, fill_char=fill_char)
 
     @classmethod
-    def _load_hydra(cls, parsed: argparse.Namespace, unparsed: list[str]):
+    def _load_hydra(cls, parsed: argparse.Namespace, unparsed: list[str]) -> typing.Any:
         warnings.warn("Hydra support is experimental and may be modified or removed in the future")
         import hydra.core.config_store
         import omegaconf
@@ -137,7 +139,7 @@ class RunnableConfig(Config):
             return omegaconf.OmegaConf.to_object(cfg)
 
     @classmethod
-    def _load_default_config_dict(cls, parsed: argparse.Namespace):
+    def _load_default_config_dict(cls, parsed: argparse.Namespace) -> typing.Any:
         if parsed.config is None:
             return {}
         elif urllib.parse.urlparse(parsed.config).scheme == "https":
@@ -148,7 +150,7 @@ class RunnableConfig(Config):
             raise FileNotFoundError(parsed.config)
 
     @classmethod
-    def _load_url(cls, config_url: str, config_auth_token_file: pathlib.Path | None = None):
+    def _load_url(cls, config_url: str, config_auth_token_file: pathlib.Path | None = None) -> typing.Any:
         """
         Read a config from a URL, typically a config file hosted on GitHub.
         """
@@ -172,7 +174,7 @@ class RunnableConfig(Config):
             raise ValueError(f"Failed to fetch config from {config_url}: {response.status_code}, {reason}")
 
     @classmethod
-    def _parse_updates(cls, unparsed: list[str]):
+    def _parse_updates(cls, unparsed: list[str]) -> dict[str | tuple[str, ...], typing.Any]:
         updates: dict[str | tuple[str, ...], typing.Any] = {}
         errors = []
         for arg in unparsed:

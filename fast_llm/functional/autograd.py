@@ -9,7 +9,13 @@ import torch
 from fast_llm.utils import Assert
 
 
-def wrap_forward_backward(forward: typing.Callable, backward: typing.Callable):
+# TODO: Improve type hint (use protocol?)
+def wrap_forward_backward[
+    OutputType, ContextType
+](
+    forward: typing.Callable[..., tuple[OutputType, ContextType]],
+    backward: typing.Callable[[OutputType, ContextType], typing.Any],
+) -> typing.Callable[..., OutputType]:
     """
     Wrap a (`forward`, `backward`) pair into a differentiable pytorch function.
     Expected format is as follows:
@@ -49,5 +55,5 @@ def wrap_forward_backward(forward: typing.Callable, backward: typing.Callable):
     return call
 
 
-def grad_is_context(grad_output: torch.Tensor, context: torch.Tensor):  # noqa
+def grad_is_context(grad_output: torch.Tensor, context: torch.Tensor) -> torch.Tensor:  # noqa
     return context

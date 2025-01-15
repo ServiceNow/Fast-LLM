@@ -7,6 +7,7 @@ from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
     from fast_llm.engine.config_utils.tensor_space import TensorDim
+    from fast_llm.layers.common.normalization import LayerNorm, RMSNorm
 
 
 class NormalizationImplementation(str, enum.Enum):
@@ -57,7 +58,7 @@ class NormalizationArchitectureConfig(BaseModelArchitectureConfig):
         default: dict[str, typing.Any],
         strict: bool = True,
         flat: bool = False,
-    ):
+    ) -> typing.Self:
         # TODO v0.3: Remove.
         cls._handle_renamed_field(default, "normalization_type", "type")
         cls._handle_renamed_field(default, "layer_norm_eps", "epsilon")
@@ -80,7 +81,7 @@ class NormalizationConfig(NormalizationArchitectureConfig, BaseModelConfig):
         valid=check_field(Assert.geq, 0),
     )
 
-    def get_layer(self, hidden_dim: "TensorDim"):
+    def get_layer(self, hidden_dim: "TensorDim") -> "LayerNorm | RMSNorm":
         from fast_llm.layers.common.normalization import LayerNorm, RMSNorm
         from fast_llm.tensor import init_uniform_
 
@@ -110,7 +111,7 @@ class NormalizationConfig(NormalizationArchitectureConfig, BaseModelConfig):
         default: dict[str, typing.Any],
         strict: bool = True,
         flat: bool = False,
-    ):
+    ) -> typing.Self:
         cls._handle_renamed_field(default, "normalization_implementation", "implementation")
         cls._handle_renamed_field(default, "layer_norm_init_range", "initialization_range")
         return super()._from_dict(default, strict, flat)
