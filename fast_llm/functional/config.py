@@ -45,7 +45,7 @@ class ActivationType(str, enum.Enum):
     squared_relu = "squared_relu"
 
     @property
-    def activation_fn(self) -> typing.Callable[[torch.Tensor], torch.Tensor]:
+    def activation_fn(self) -> typing.Callable[["torch.Tensor"], "torch.Tensor"]:
         if not _ACTIVATION_FN_MAP:
             _set_activation_fn_map()
         return _ACTIVATION_FN_MAP[self]

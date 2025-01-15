@@ -194,7 +194,7 @@ SHARD_PAD_TO_MULTIPLE = 32
 
 
 @config_class()
-class FastLLMModelConfig[BaseModelConfigType: BaseModelConfig](Config):
+class FastLLMModelConfig(Config):
     _abstract = True
     checkpoint_formats: typing.ClassVar[tuple[type[CheckpointFormat], ...]] = (
         DistributedCheckpointFormat,
@@ -241,7 +241,7 @@ class FastLLMModelConfig[BaseModelConfigType: BaseModelConfig](Config):
         raise NotImplementedError
 
     @classmethod
-    def get_base_model_config_class(cls) -> type[BaseModelConfigType]:
+    def get_base_model_config_class(cls) -> type[BaseModelConfig]:
         return cls.get_field("base_model").type
 
     @classmethod
@@ -260,7 +260,7 @@ class FastLLMModelConfig[BaseModelConfigType: BaseModelConfig](Config):
         cls,
         pretrained: CheckpointLoadMetadataConfig,
         metadata: "CheckpointMetadata",
-        default: T | None = None,
+        default: typing.Self | None = None,
         updates: dict[str | tuple[str, ...], typing.Any] | None = None,
     ) -> typing.Self:
         # TODO: Standardize to *updates?
@@ -271,16 +271,16 @@ class FastLLMModelConfig[BaseModelConfigType: BaseModelConfig](Config):
         if not pretrained.load_config.load_architecture:
             assert default is not None
             config = default.to_copy()
-            config.base_model.compare_architecture(pretrained_config.model.base_model, pretrained.compare_log_fn)
+            config.base_model.compare_architecture(pretrained_config.base_model, pretrained.compare_log_fn)
         elif pretrained.load_config.load_fast_llm:
             config = pretrained_config
         else:
             with NoAutoValidate():
                 config = cls() if default is None else default.to_copy()
             if pretrained.load_config.load_base_model:
-                config.base_model = pretrained_config.model.base_model
+                config.base_model = pretrained_config.base_model
             else:
-                config.base_model = config.base_model.to_copy(pretrained_config.model.base_model.get_architecture())
+                config.base_model = config.base_model.to_copy(pretrained_config.base_model.get_architecture())
             config.validate()
 
         if updates:
@@ -310,7 +310,7 @@ class FastLLMModelConfig[BaseModelConfigType: BaseModelConfig](Config):
 
 
 @config_class()
-class PretrainedFastLLMModelConfig[BaseModelConfigType: BaseModelConfig](Config):
+class PretrainedFastLLMModelConfig(Config):
     # TODO: Generalize data, schedule, logging, etc.
     _abstract = True
     # This configs may be overridden with the pretrained config during validation, so we should be careful about accessing them before.
@@ -329,7 +329,12 @@ class PretrainedFastLLMModelConfig[BaseModelConfigType: BaseModelConfig](Config)
         self.pretrained.validate()
         if self.pretrained.path is not None:
             self.model = self.model.from_pretrained(self.pretrained, default=self.model)
+        self._setup()
         super()._validate()
+
+    def _setup(self) -> None:
+        # An opportunity to do things once the actual model config is known, but before validating the config.
+        pass
 
 
 @config_class

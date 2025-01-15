@@ -7,7 +7,6 @@ import typing
 
 from fast_llm.config import Config, Field, FieldHint, FieldUpdate, check_field, config_class, skip_valid_if_none
 from fast_llm.data.data.config import DataConfig
-from fast_llm.engine.base_model.config import BaseModelConfig
 from fast_llm.engine.checkpoint.config import (
     CheckpointLoadConfig,
     CheckpointSaveConfig,
@@ -313,9 +312,7 @@ class TrainingConfig(Config):
 
 
 @config_class()
-class TrainerConfig[BaseModelConfigType: BaseModelConfig](
-    PretrainedFastLLMModelConfig[BaseModelConfigType], ExperimentConfig
-):
+class TrainerConfig(PretrainedFastLLMModelConfig, ExperimentConfig):
     _abstract = True
     # TODO: Generalize data, schedule, logging, etc.
     training: TrainingConfig = Field(
@@ -353,12 +350,13 @@ class TrainerConfig[BaseModelConfigType: BaseModelConfig](
         if self.run.experiment_dir is None:
             assert not self.training.checkpoint.enabled()
 
+    def _setup(self):
+        super()._setup()
+        self.batch.setup(self.model.distributed)
+
     @classmethod
     def get_trainer_class(cls) -> type["Trainer"]:
         raise NotImplementedError
-
-    def _setup(self) -> None:
-        self.batch.setup(self.model.distributed)
 
     def _get_runnable(self) -> typing.Callable[[], None]:
         from fast_llm.engine.distributed.distributed import Distributed

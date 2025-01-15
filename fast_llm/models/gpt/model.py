@@ -80,7 +80,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
 
     def setup(self, distributed: Distributed) -> None:
         assert not self._is_setup
-        assert distributed.config is self._tensor_space.config.distributed
+        assert distributed.config is self._tensor_space.distributed_config
         self._tensor_space.setup(distributed)
         self._is_setup = True
 
@@ -100,7 +100,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                 sequence_length -= 1
             micro_sequence_length = sequence_length
 
-        batch_data = self._tensor_space.config.distributed.get_distributed_dim(DistributedDimNames.batch_data)
+        batch_data = self._tensor_space.distributed_config.get_distributed_dim(DistributedDimNames.batch_data)
         batch_dim = TensorDim(TransformerDimNames.batch, micro_batch_size * batch_data.size, batch_data)
 
         if isinstance(batch_meta, BatchConfig):
@@ -115,17 +115,17 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
         sequence_q_dim = TensorDim(
             TransformerDimNames.sequence_q,
             micro_sequence_length,
-            self._tensor_space.config.distributed.get_distributed_dim(DistributedDimNames.sequence_data),
+            self._tensor_space.distributed_config.get_distributed_dim(DistributedDimNames.sequence_data),
         )
         hidden_sequence_q_dim = (
             TensorDim(
                 TransformerDimNames.sequence_q_tp,
                 micro_sequence_length,
-                self._tensor_space.config.distributed.get_distributed_dim(
+                self._tensor_space.distributed_config.get_distributed_dim(
                     DistributedDimNames.tensor_and_sequence_data
                 ),
             )
-            if self._tensor_space.config.distributed.sequence_tensor_parallel
+            if self._tensor_space.distributed_config.sequence_tensor_parallel
             else sequence_q_dim
         )
 
@@ -153,7 +153,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
 
         preprocessed_meta = []
         for sequence_k_past in range(
-            sequence_q_dim.size * self._tensor_space.config.distributed.sequence_data_rank,
+            sequence_q_dim.size * self._tensor_space.distributed_config.sequence_data_rank,
             sequence_length,
             micro_sequence_length,
         ):

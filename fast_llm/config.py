@@ -910,6 +910,7 @@ class Configurable[ConfigType: Config]:
     def __init__(self, config: ConfigType, *args, **kwargs):
         Assert.custom(isinstance, config, self.config_class)
         self._config = config
+        # Handle multiple inheritance.
         super().__init__(*args, **kwargs)
 
     @property

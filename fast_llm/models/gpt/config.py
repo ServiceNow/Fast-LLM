@@ -90,7 +90,7 @@ class GPTBaseModelConfig(LanguageModelBaseConfig, GPTArchitectureConfig):
 
 
 @config_class()
-class GPTModelConfig[BaseModelConfigType: GPTBaseModelConfig](FastLLMModelConfig[BaseModelConfigType]):
+class GPTModelConfig(FastLLMModelConfig):
     _abstract = False
     model_name: typing.ClassVar[str] = "gpt"
     base_model: GPTBaseModelConfig = FieldUpdate(default_factory=GPTBaseModelConfig)
@@ -116,24 +116,22 @@ class GPTModelConfig[BaseModelConfigType: GPTBaseModelConfig](FastLLMModelConfig
 
 
 @config_class()
-class PretrainedGPTModelConfig[BaseModelConfigType: GPTModelConfig](PretrainedFastLLMModelConfig[BaseModelConfigType]):
+class PretrainedGPTModelConfig(PretrainedFastLLMModelConfig):
     _abstract = False
     model: GPTModelConfig = FieldUpdate(default_factory=GPTModelConfig)
 
 
 @config_class()
-class GPTTrainerConfig[BaseModelConfigType: GPTModelConfig](
-    PretrainedGPTModelConfig[GPTModelConfig], TrainerConfig[GPTModelConfig]
-):
+class GPTTrainerConfig(PretrainedGPTModelConfig, TrainerConfig):
     data: GPTDataConfig = FieldUpdate(default_factory=GPTDataConfig)
 
-    def _setup(self) -> None:
-        super()._setup()
+    def _validate(self) -> None:
         if self.batch.sequence_length is None:
             # TODO: Drop this.
             self.batch.sequence_length = self.model.base_model.max_position_embeddings
         if self.model.base_model.use_megatron_initialization:
             set_megatron_distributed_seeds(self.model.distributed)
+        super()._validate()
 
     @classmethod
     def get_trainer_class(cls) -> type["GPTTrainer"]:

@@ -13,7 +13,7 @@ if typing.TYPE_CHECKING:
 
 def get_init_megatron(
     meta: "ParameterMeta", config: TransformerConfig
-) -> typing.Callable[["torch.Tensor", "Distributed"], torch.Tensor]:
+) -> typing.Callable[["torch.Tensor", "Distributed"], "torch.Tensor"]:
     def init_megatron(tensor: "torch.Tensor", distributed: "Distributed"):
         Assert.eq(distributed.config.world_size, 1)
         if "bias" in meta.tensor_name:

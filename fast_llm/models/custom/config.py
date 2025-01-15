@@ -35,7 +35,7 @@ class CustomBaseModelConfig(GPTBaseModelConfig, CustomArchitectureConfig):
 
 
 @config_class()
-class CustomModelConfig[BaseModelConfigType: CustomBaseModelConfig](GPTModelConfig[BaseModelConfigType]):
+class CustomModelConfig(GPTModelConfig):
     # TODO: Add custom model config parameters, if any (typically none).
     model_name: typing.ClassVar[str] = "gpt_custom"
     base_model: CustomBaseModelConfig = FieldUpdate(default_factory=CustomBaseModelConfig)
@@ -54,14 +54,12 @@ class CustomModelConfig[BaseModelConfigType: CustomBaseModelConfig](GPTModelConf
 
 
 @config_class()
-class PretrainedCustomModelConfig[BaseModelConfigType: GPTModelConfig](PretrainedGPTModelConfig[BaseModelConfigType]):
+class PretrainedCustomModelConfig(PretrainedGPTModelConfig):
     model: CustomModelConfig = FieldUpdate(default_factory=CustomModelConfig)
 
 
 @config_class()
-class CustomTrainerConfig[BaseModelConfigType: GPTModelConfig](
-    PretrainedCustomModelConfig[BaseModelConfigType], GPTTrainerConfig[BaseModelConfigType]
-):
+class CustomTrainerConfig(PretrainedCustomModelConfig, GPTTrainerConfig):
     # TODO: Add custom trainer config parameters, if any (typically none).
 
     data: CustomDataConfig = FieldUpdate(default_factory=CustomDataConfig)

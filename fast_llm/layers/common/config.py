@@ -81,7 +81,7 @@ class NormalizationConfig(NormalizationArchitectureConfig, BaseModelConfig):
         valid=check_field(Assert.geq, 0),
     )
 
-    def get_layer(self, hidden_dim: "TensorDim") -> LayerNorm | RMSNorm:
+    def get_layer(self, hidden_dim: "TensorDim") -> "LayerNorm | RMSNorm":
         from fast_llm.layers.common.normalization import LayerNorm, RMSNorm
         from fast_llm.tensor import init_uniform_
 

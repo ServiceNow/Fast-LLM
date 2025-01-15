@@ -68,7 +68,17 @@ class LossDef:
     dtype: torch.dtype = torch.float32
 
 
-class BaseModel[ConfigType: BaseModelConfig](Configurable[ConfigType], Sequential):
+class SequentialLayers(Sequential, abc.ABC):
+    # Small class defined to fix the MRO of BaseModel.__init__
+    def __init__(self):
+        super().__init__(self.get_layers())
+
+    @abc.abstractmethod
+    def get_layers(self) -> list[Layer]:
+        pass
+
+
+class BaseModel[ConfigType: BaseModelConfig](Configurable[ConfigType], SequentialLayers, abc.ABC):
     config_class: typing.ClassVar[type[BaseModelConfig]] = BaseModelConfig
 
     def __init__(
@@ -79,7 +89,7 @@ class BaseModel[ConfigType: BaseModelConfig](Configurable[ConfigType], Sequentia
         self._tensor_space = TensorSpace(distributed_config)
         config.setup_tensor_space(self._tensor_space)
 
-        super().__init__(config, self.get_layers())
+        super().__init__(config)
 
         for key, value in self.named_parameters():
             Assert.custom(isinstance, value, ParameterMeta)

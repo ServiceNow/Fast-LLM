@@ -329,7 +329,7 @@ def test_run_converted_model():
         )
     )
     test_input = torch.randint(
-        0, model_ref.config.config.base_model.vocab_size, size=(4, 100), dtype=torch.int64, device="cuda"
+        0, model_ref.config.fast_llm_config.base_model.vocab_size, size=(4, 100), dtype=torch.int64, device="cuda"
     )
     output_ref = model_ref(test_input)
     model_from_fast_llm = TEST_MODEL_HF_CLS.from_pretrained(_CONVERT_PATH / "fast_llm_0")

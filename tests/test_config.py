@@ -48,6 +48,6 @@ def test_validate_convert_gpt_without_import():
 
 def test_validate_example_config():
     fast_llm_config_dict = yaml.safe_load(
-        (pathlib.Path(__file__).parents[1] / "examples" / "mistral-4-node-benchmark.yaml").read_text()
+        (pathlib.Path(__file__).parents[1] / "examples" / "mistral.yaml").read_text()
     )
     trainer_registry["gpt"].from_dict(fast_llm_config_dict)
