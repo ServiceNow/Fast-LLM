@@ -1,3 +1,5 @@
+import typing
+
 import torch
 
 from fast_llm.core.distributed import set_generator
@@ -26,13 +28,13 @@ class AttachGrad(torch.autograd.Function):
     """
 
     @staticmethod
-    def forward(ctx, x, y):  # noqa
+    def forward(ctx, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:  # noqa
         # TODO: can we do it without saving y? (We only need its grad)
         ctx.save_for_backward(y)
         return x
 
     @staticmethod
-    def backward(ctx, grad_output):  # noqa
+    def backward(ctx, grad_output: torch.Tensor) -> tuple[torch.Tensor, None]:  # noqa
         (y,) = ctx.saved_tensors
         grad = y.grad + grad_output
         return grad, None
@@ -128,7 +130,9 @@ class Attention(torch.nn.Module):
             lr_scale=self._config.attention_lr_scale,
         )
 
-    def _attn_fused(self, query, key, value, mask, mask_value):
+    def _attn_fused(
+        self, query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, mask: torch.Tensor, mask_value: torch.Tensor
+    ) -> torch.Tensor:
         # Backup attention (inefficient)
         b, sq, hidden = query.shape
         sk = key.size(1)
@@ -175,7 +179,9 @@ class Attention(torch.nn.Module):
                 .flatten(2)
             )
 
-    def _get_meta(self, input_, name, dim_names, kwargs):
+    def _get_meta(
+        self, input_: torch.Tensor, name: str, dim_names: tuple[str, ...], kwargs: dict[str, typing.Any]
+    ) -> TensorMeta:
         hidden_dims = {dim.name: dim for dim in kwargs[TransformerKwargs.hidden_dims]}
         return TensorMeta.from_dims(
             tuple(
@@ -186,7 +192,9 @@ class Attention(torch.nn.Module):
             dtype=input_.dtype,
         )
 
-    def _debug_log(self, tensor, name, dim_names, kwargs):
+    def _debug_log(
+        self, tensor: torch.Tensor, name: str, dim_names: tuple[str, ...], kwargs: dict[str, typing.Any]
+    ) -> None:
         # TODO: Local vs global
         Assert.gt(self._debug_transformer, 0)
         log_distributed_tensor(
@@ -205,7 +213,9 @@ class Attention(torch.nn.Module):
                 distributed=self._tensor_space.distributed,
             )
 
-    def _query_key_value_forward(self, input_: torch.Tensor, sequence_first: bool):
+    def _query_key_value_forward(
+        self, input_: torch.Tensor, sequence_first: bool
+    ) -> tuple[torch.Tensor, torch.Tensor, dict[str, typing.Any]]:
         key_value, key_value_context = self.key_value.forward_only(input_)
 
         handle = None
@@ -235,7 +245,9 @@ class Attention(torch.nn.Module):
         context = {"query": query_context, "key_value": key_value_context, "sequence_first": sequence_first}
         return query, key_value, context
 
-    def _query_key_value_backward(self, query_grad: torch.Tensor, key_grad: torch.Tensor, context: dict):
+    def _query_key_value_backward(
+        self, query_grad: torch.Tensor, key_grad: torch.Tensor, context: dict
+    ) -> torch.Tensor:
         # TODO: De-allocate qkv grads quicker.
         handle = None
 
@@ -262,7 +274,7 @@ class Attention(torch.nn.Module):
         input_grad.add_(self.key_value.backward(key_grad, context.pop("key_value")))
         return input_grad
 
-    def forward(self, input_: torch.Tensor, kwargs: dict):
+    def forward(self, input_: torch.Tensor, kwargs: dict[str, typing.Any]) -> tuple[torch.Tensor, torch.Tensor | None]:
         sequence_first = kwargs[TransformerKwargs.sequence_first]
         query, key_value = self._query_key_value(input_, sequence_first)
 

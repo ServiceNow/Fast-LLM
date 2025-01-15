@@ -5,6 +5,7 @@ from fast_llm.engine.distributed.config import DistributedConfig, DistributedDim
 from fast_llm.utils import Assert, div
 
 if typing.TYPE_CHECKING:
+    from fast_llm.core.distributed import ProcessGroup
     from fast_llm.engine.distributed.distributed import Distributed
 
 
@@ -16,7 +17,7 @@ class TensorDim:
         self._size = self._global_size if parallel_dim is None else div(global_size, parallel_dim.size)
         self._parallel_dim = parallel_dim
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return (
             f"TensorDim("
             f"name={self._name},"
@@ -27,39 +28,39 @@ class TensorDim:
         )
 
     @property
-    def name(self):
+    def name(self) -> str:
         return self._name
 
     @property
-    def size(self):
+    def size(self) -> int:
         return self._size
 
     @property
-    def expanded_shape(self):
+    def expanded_shape(self) -> tuple[int, ...]:
         return (self._size,)
 
     @property
-    def ndim(self):
+    def ndim(self) -> int:
         return 1
 
     @property
-    def global_size(self):
+    def global_size(self) -> int:
         return self._global_size
 
     @property
-    def global_expanded_shape(self):
+    def global_expanded_shape(self) -> tuple[int, ...]:
         return (self._size if self._parallel_dim is None else self._size * self._parallel_dim.size,)
 
     @property
-    def parallel_dim(self):
+    def parallel_dim(self) -> DistributedDim | None:
         return self._parallel_dim
 
     @property
-    def parallel_dim_index(self):
+    def parallel_dim_index(self) -> int | None:
         return None if self._parallel_dim is None else 0
 
     @property
-    def parallel_group(self):
+    def parallel_group(self) -> "ProcessGroup|None":
         return None if self._parallel_dim is None else self._parallel_dim.group
 
 
@@ -83,23 +84,23 @@ class CompositeTensorDim(TensorDim):
         )
 
     @property
-    def dims(self):
+    def dims(self) -> tuple[TensorDim, ...]:
         return self._dims
 
     @property
-    def ndim(self):
+    def ndim(self) -> int:
         return sum(dim.ndim for dim in self._dims)
 
     @property
-    def expanded_shape(self):
+    def expanded_shape(self) -> tuple[int, ...]:
         return sum((dim.expanded_shape for dim in self._dims), ())
 
     @property
-    def global_expanded_shape(self):
+    def global_expanded_shape(self) -> tuple[int, ...]:
         return sum((dim.global_expanded_shape for dim in self._dims), ())
 
     @property
-    def parallel_dim_index(self):
+    def parallel_dim_index(self) -> int | None:
         return self._parallel_dim_index
 
 
@@ -113,26 +114,26 @@ class TensorSpace:
     _distributed: "Distributed"
 
     def __init__(self, distributed_config: DistributedConfig):
-        self._distributed_config = distributed_config.validate()
+        self._distributed_config = distributed_config
         self._tensor_dims: dict[str, TensorDim] = {}
         self.add_tensor_dim(TensorDim(DefaultDimNames.scalar, 1))
 
-    def setup(self, distributed: "Distributed"):
+    def setup(self, distributed: "Distributed") -> None:
         assert distributed.config is self._distributed_config
         assert not self._is_setup
         self._is_setup = True
         self._distributed = distributed
 
     @property
-    def distributed_config(self):
+    def distributed_config(self) -> DistributedConfig:
         return self._distributed_config
 
     @property
-    def distributed(self):
+    def distributed(self) -> "Distributed":
         assert self._is_setup
         return self._distributed
 
-    def add_tensor_dim(self, dim: TensorDim):
+    def add_tensor_dim(self, dim: TensorDim) -> None:
         if isinstance(dim, CompositeTensorDim):
             for dim_ in dim.dims:
                 Assert.incl(dim_.name, self._tensor_dims)
@@ -145,5 +146,5 @@ class TensorSpace:
                 Assert.eq(dim.parallel_dim, self._distributed_config.distributed_dims[dim.parallel_dim.name])
             self._tensor_dims[dim.name] = dim
 
-    def get_tensor_dim(self, name: str):
+    def get_tensor_dim(self, name: str) -> TensorDim:
         return self._tensor_dims[name]

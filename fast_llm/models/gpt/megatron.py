@@ -11,7 +11,9 @@ if typing.TYPE_CHECKING:
     from fast_llm.tensor import ParameterMeta
 
 
-def get_init_megatron(meta: "ParameterMeta", config: TransformerConfig):
+def get_init_megatron(
+    meta: "ParameterMeta", config: TransformerConfig
+) -> typing.Callable[["torch.Tensor", "Distributed"], "torch.Tensor"]:
     def init_megatron(tensor: "torch.Tensor", distributed: "Distributed"):
         Assert.eq(distributed.config.world_size, 1)
         if "bias" in meta.tensor_name:
@@ -35,7 +37,7 @@ def get_init_megatron(meta: "ParameterMeta", config: TransformerConfig):
     return init_megatron
 
 
-def set_megatron_distributed_seeds(config: "DistributedConfig"):
+def set_megatron_distributed_seeds(config: "DistributedConfig") -> None:
     # Shifts are hard-coded in Megatron.
     # Note: Megatron doesn't separate init generators so post-init random (dropout) won't match.
     config.dp_seed_shift = 0
@@ -48,7 +50,7 @@ def set_megatron_distributed_seeds(config: "DistributedConfig"):
 
 def _init_attention_megatron(
     config: TransformerConfig, meta: "ParameterMeta", tensor: "torch.Tensor", distributed: "Distributed"
-):
+) -> "torch.Tensor":
     # Megatron combines q and kv and inverts the initialization order of qkv and dense layers.
     # It also always treats the tensors as tensor-parallel and uses a different rotary embedding format.
     assert meta.param_init_method is not None
@@ -99,7 +101,9 @@ def _init_attention_megatron(
     return tensor_
 
 
-def _init_position_embeddings_megatron(meta: "ParameterMeta", tensor: "torch.Tensor", distributed: "Distributed"):
+def _init_position_embeddings_megatron(
+    meta: "ParameterMeta", tensor: "torch.Tensor", distributed: "Distributed"
+) -> "torch.Tensor":
     import torch
 
     # Megatron initializes the position embeddings on cpu twice.
@@ -111,7 +115,7 @@ def _init_position_embeddings_megatron(meta: "ParameterMeta", tensor: "torch.Ten
 
 def _init_transposed_mlp_weight_megatron(
     config: TransformerConfig, meta: "ParameterMeta", tensor: "torch.Tensor", distributed: "Distributed"
-):
+) -> "torch.Tensor":
     import torch
 
     # Megatron never transposes the mlp layer 2 weight.
@@ -120,7 +124,9 @@ def _init_transposed_mlp_weight_megatron(
     return tensor_.view(meta.size(1), meta.size(0)).t()
 
 
-def _init_moe_router_megatron(meta: "ParameterMeta", tensor: "torch.Tensor", distributed: "Distributed"):
+def _init_moe_router_megatron(
+    meta: "ParameterMeta", tensor: "torch.Tensor", distributed: "Distributed"
+) -> "torch.Tensor":
     import torch
 
     # Megatron initializes the router on cpu.
@@ -133,7 +139,7 @@ def _init_moe_router_megatron(meta: "ParameterMeta", tensor: "torch.Tensor", dis
 
 def _init_moe_mlp_megatron(
     config: TransformerConfig, meta: "ParameterMeta", tensor: "torch.Tensor", distributed: "Distributed"
-):
+) -> "torch.Tensor":
     assert meta.param_init_method is not None
     generator = distributed.tp_init_generator if meta.is_tensor_parallel else distributed.pp_init_generator
     # self.param_init_method(self, tensor, generator)

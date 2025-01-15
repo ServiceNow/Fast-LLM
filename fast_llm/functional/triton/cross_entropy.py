@@ -53,11 +53,14 @@ def triton_cross_entropy_forward_backward_kernel(
     tl.store(grad_logits_ptr + col_offsets, grad_logits, mask=mask)
 
 
-def triton_cross_entropy_forward_backward(logits, target, grad_output: float, logits_scale_factor: float = 1.0):
+def triton_cross_entropy_forward_backward(
+    logits, target, grad_output: float | None, logits_scale_factor: float = 1.0
+) -> tuple[torch.Tensor, torch.Tensor]:
     """
     A fast triton implementation of cross-entropy, which combines the casting and forward and backward passes,
     all in a single kernel.
      Compared to a standard pytorch implementation, this reduces memory usage (of logits) by 3x and memory I/O by 5x.
+    TODO: Better handling of `grad_output = None`
     """
     assert TritonConfig.TRITON_ENABLED
     # TODO: Improve assumptions.
@@ -76,7 +79,7 @@ def triton_cross_entropy_forward_backward(logits, target, grad_output: float, lo
         target,
         grad_logits,
         losses,
-        grad_output / n_rows,
+        1 if grad_output is None else grad_output / n_rows,
         n_cols,
         logits.stride(0),
         grad_logits.stride(0),
@@ -84,4 +87,4 @@ def triton_cross_entropy_forward_backward(logits, target, grad_output: float, lo
         block_size=block_size,
         num_warps=num_warps,
     )
-    return losses.mean(), grad_logits
+    return losses.mean(), None if grad_output is None else grad_logits

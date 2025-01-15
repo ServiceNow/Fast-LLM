@@ -666,14 +666,12 @@ class Config:
         return get_type_name(cls)
 
     @classmethod
-    def from_dict[
-        T
-    ](
-        cls: type[T],
+    def from_dict(
+        cls,
         default: typing.Union["Config", dict[str, typing.Any]],
         *updates: typing.Union["Config", dict[str | tuple[str, ...], typing.Any]],
         strict: bool = True,
-    ) -> T:
+    ) -> typing.Self:
         if isinstance(default, Config):
             default = default._to_dict()
         for update in updates:
@@ -685,16 +683,21 @@ class Config:
         return cls._from_dict(default, strict)
 
     @classmethod
-    def from_flat_dict[
-        T
-    ](cls: type[T], default: dict[str, typing.Any], strict: bool = True,) -> T:
+    def from_flat_dict(
+        cls,
+        default: dict[str, typing.Any],
+        strict: bool = True,
+    ) -> typing.Self:
         # TODO v0.3: Remove flat format
         return cls._from_dict(default, strict, True)
 
     @classmethod
-    def _from_dict[
-        T
-    ](cls: type[T], default: dict[str, typing.Any], strict: bool = True, flat: bool = False,) -> T:
+    def _from_dict(
+        cls,
+        default: dict[str, typing.Any],
+        strict: bool = True,
+        flat: bool = False,
+    ) -> typing.Self:
         # TODO v0.3: Remove flat format
         out_arg_dict = {}
 
@@ -843,7 +846,7 @@ class Config:
             )
 
     @classmethod
-    def _check_abstract(cls):
+    def _check_abstract(cls) -> None:
         if cls._abstract:
             raise ValidationError(f"{cls.__name__} is abstract")
         if not cls.__class_validated__:
@@ -899,3 +902,17 @@ class Config:
                 else:
                     # dataclasses expects an annotation, so we use the one from the base class.
                     cls.__annotations__[name] = base_class_field.type
+
+
+class Configurable[ConfigType: Config]:
+    config_class: typing.ClassVar[type[Config]] = Config
+
+    def __init__(self, config: ConfigType, *args, **kwargs):
+        Assert.custom(isinstance, config, self.config_class)
+        self._config = config
+        # Handle multiple inheritance.
+        super().__init__(*args, **kwargs)
+
+    @property
+    def config(self) -> ConfigType:
+        return self._config

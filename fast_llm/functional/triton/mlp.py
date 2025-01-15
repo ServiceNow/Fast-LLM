@@ -1,4 +1,5 @@
 import math
+import typing
 
 import torch
 
@@ -191,7 +192,7 @@ def torch_mlp_activation(
     input_: torch.Tensor,
     gated: bool,
     activation_type: ActivationType,
-):
+) -> torch.Tensor:
     if gated:
         x1, x2 = input_.chunk(2, dim=-1)
         return activation_type.activation_fn(x1) * x2
@@ -214,7 +215,7 @@ def mlp_forward(
     recompute_level: MLPRecomputeLevel = MLPRecomputeLevel.none,
     transposed_layer_2_weight: bool = False,
     sparse_map: SparseMap | None = None,
-):
+) -> tuple[torch.Tensor, list[typing.Any] | None]:
     # Sparse copy
     input_shape = input_.shape
     intermediate_0 = input_ if sparse_map is None else copy_dense_to_sparse_forward(input_, sparse_map)[0]
@@ -289,7 +290,7 @@ def mlp_forward(
     return output, context
 
 
-def mlp_backward(grad_output: torch.Tensor, context: list):
+def mlp_backward(grad_output: torch.Tensor, context: list[typing.Any]) -> tuple[torch.Tensor, torch.Tensor]:
     (
         input_,
         scores,
@@ -390,7 +391,9 @@ class ChunkWeight(torch.autograd.Function):
     """
 
     @staticmethod
-    def forward(ctx, input_, weight: torch.Tensor, num_chunks: int):  # noqa
+    def forward(
+        ctx, input_: torch.Tensor, weight: torch.Tensor, num_chunks: int
+    ) -> tuple[torch.Tensor, list[torch.Tensor]]:  # noqa
         with torch.no_grad():
             weight_chunked = weight.chunk(num_chunks)
             grad_buffer_chunked = weight.grad_buffer.chunk(num_chunks)  # noqa
@@ -402,7 +405,7 @@ class ChunkWeight(torch.autograd.Function):
         return input_, weight_chunked  # OK?
 
     @staticmethod
-    def backward(ctx, grad_input: torch.Tensor, dummy):  # noqa
+    def backward(ctx, grad_input: torch.Tensor, dummy) -> tuple[torch.Tensor, None, None]:  # noqa
         for weight_chunk in ctx.weight_chunked:
             # Check for runaway grads.
             assert weight_chunk.grad is None
@@ -422,12 +425,14 @@ class ChunkWeightPost(torch.autograd.Function):
     """
 
     @staticmethod
-    def forward(ctx, input_, weight: torch.Tensor, weight_chunked: tuple[torch.Tensor]) -> torch.Tensor:  # noqa
+    def forward(
+        ctx, input_: torch.Tensor, weight: torch.Tensor, weight_chunked: tuple[torch.Tensor]
+    ) -> torch.Tensor:  # noqa
         ctx.weight, ctx.weight_chunked = weight, weight_chunked
         return input_
 
     @staticmethod
-    def backward(ctx, grad_input: torch.Tensor):  # noqa
+    def backward(ctx, grad_input: torch.Tensor) -> tuple[torch.Tensor, None, None]:  # noqa
         is_zero = param_get_and_unset_is_zero(ctx.weight)
         for weight_chunk in ctx.weight_chunked:
             weight_chunk.param_grad_is_zero = is_zero
@@ -450,7 +455,7 @@ def mlp_autograd_looped(
     sequence_parallel: bool,
     training: bool = True,
     recompute_level: MLPRecomputeLevel = MLPRecomputeLevel.none,
-):
+) -> torch.Tensor:
     # TODO: Needed?
     scores = scores.to(hidden_states.dtype)
     expert_mask = torch.nn.functional.one_hot(top_experts, num_classes=num_experts).permute(2, 1, 0)

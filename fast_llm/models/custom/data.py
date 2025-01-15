@@ -1,9 +1,10 @@
 import pathlib
+import typing
 
 from fast_llm.data.data.gpt.data import GPTData
-from fast_llm.data.dataset.abstract import PhaseSplits
-from fast_llm.engine.distributed.config import DistributedConfig
+from fast_llm.engine.distributed.config import DistributedConfig, PhaseType
 from fast_llm.engine.distributed.distributed import Distributed
+from fast_llm.engine.schedule.config import BatchConfig
 from fast_llm.models.custom.config import CustomDataConfig
 
 
@@ -22,7 +23,7 @@ class CustomData(GPTData):
     def setup(
         self,
         distributed: Distributed,
-        samples_per_phase: PhaseSplits[int],
+        samples_per_phase: dict[PhaseType, int],
         cache_directory: pathlib.Path,
     ):
         # TODO: Adjust or reimplement.
@@ -30,13 +31,13 @@ class CustomData(GPTData):
 
     def get_iterator(
         self,
-        batch_config,
-        phase,
+        batch_config: BatchConfig,
+        phase: PhaseType,
         *,
-        consumed_samples,
-        num_workers,
-        prefetch_factor=None,
-    ):
+        consumed_samples: int,
+        num_workers: int,
+        prefetch_factor: int | None = None,
+    ) -> typing.Iterator[typing.Any]:
         # TODO: Adjust or reimplement.
         return super().get_iterator(
             batch_config,

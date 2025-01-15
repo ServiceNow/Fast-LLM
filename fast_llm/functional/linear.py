@@ -2,6 +2,8 @@
 Forward and backward pass of linear layers.
 """
 
+import typing
+
 import torch
 
 from fast_llm.core.distributed import ProcessGroup
@@ -18,7 +20,7 @@ from fast_llm.functional.triton.sparse_linear import (
 from fast_llm.tensor import accumulate_gradient, param_get_and_unset_is_zero
 
 
-def maybe_transpose(tensor: torch.Tensor, transpose: bool):
+def maybe_transpose(tensor: torch.Tensor, transpose: bool) -> torch.Tensor:
     return tensor.t() if transpose else tensor
 
 
@@ -29,7 +31,7 @@ def update_linear_gradients(
     grad_output: torch.Tensor,
     transposed_weight: bool,
     sparse_map: SparseMap | None,
-):
+) -> None:
     """
     Calculate the weight and bias gradients for a linear layer.
     TODO: fused_dense_cuda fuses weight gradient with bias gradient, but not with grad accumulation.
@@ -67,7 +69,7 @@ def update_linear_gradients(
 
 def linear_forward(
     input_: torch.Tensor, weight: torch.Tensor, bias: torch.Tensor | None, transposed_weight: bool = False
-):
+) -> tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor, torch.Tensor, bool]]:
     # Matmul
     if TritonConfig.TRITON_LINEAR:
         assert bias is None
@@ -80,7 +82,9 @@ def linear_forward(
     return output, (input_, weight, bias, transposed_weight)
 
 
-def linear_backward(grad_output: torch.Tensor, context: tuple):
+def linear_backward(
+    grad_output: torch.Tensor, context: tuple[torch.Tensor, torch.Tensor, torch.Tensor, bool]
+) -> torch.Tensor:
     input_, weight, bias, transposed_weight = context
     weight_t = maybe_transpose(weight, transposed_weight)
 
@@ -103,7 +107,7 @@ def output_parallel_linear_forward(
     sequence_parallel: bool,
     transposed_weight: bool = False,
     sparse_map: SparseMap | None = None,
-):
+) -> tuple[torch.Tensor, tuple[typing.Any, ...]]:
     # Gather sequence-parallel slices (non-overlapped)
     input1 = gather_op(input_, group, dim=0) if sequence_parallel else input_
 
@@ -131,7 +135,7 @@ def output_parallel_linear_forward(
     )
 
 
-def output_parallel_linear_backward(grad_output: torch.Tensor, context: tuple):
+def output_parallel_linear_backward(grad_output: torch.Tensor, context: tuple[typing.Any, ...]) -> torch.Tensor:
     input_, weight, bias, group, sequence_parallel, transposed_weight, sparse_map = context
     weight_t = maybe_transpose(weight, transposed_weight)
 
@@ -170,7 +174,7 @@ def input_parallel_linear_forward(
     sequence_parallel: bool,
     transposed_weight: bool = False,
     sparse_map: SparseMap | None = None,
-):
+) -> tuple[torch.Tensor, tuple[typing.Any, ...]]:
     # Matmul
     if TritonConfig.TRITON_LINEAR or sparse_map is not None:
         assert bias is None
@@ -195,7 +199,7 @@ def input_parallel_linear_forward(
     )
 
 
-def input_parallel_linear_backward(grad_output: torch.Tensor, context: tuple):
+def input_parallel_linear_backward(grad_output: torch.Tensor, context: tuple[typing.Any, ...]) -> torch.Tensor:
     input_, weight, bias, group, sequence_parallel, transposed_weight, sparse_map = context
     weight_t = maybe_transpose(weight, transposed_weight)
 
@@ -232,7 +236,7 @@ def input_parallel_linear_autograd(
     sequence_parallel: bool,
     transposed_weight: bool = False,
     sparse_map: SparseMap | None = None,
-):
+) -> tuple[torch.Tensor, torch.Tensor | None]:
     # Autograd goes nuts it this goes in the function.
     return (
         _input_parallel_linear(

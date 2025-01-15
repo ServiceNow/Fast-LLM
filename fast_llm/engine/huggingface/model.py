@@ -26,7 +26,7 @@ class HuggingfacePreTrainedModel(transformers.PreTrainedModel):
 
     def __init__(self, config: HuggingfaceModelConfig, fast_llm_model: FastLLMModel, **kwargs):
         assert self.model_class.config_class is config.model_config_class
-        assert config.fast_llm_config is fast_llm_model.fast_llm_config
+        assert config.fast_llm_config is fast_llm_model.config
         assert isinstance(config, self.config_class)
         super().__init__(config, **kwargs)
         self._fast_llm_config = config.fast_llm_config
@@ -44,7 +44,7 @@ class HuggingfacePreTrainedModel(transformers.PreTrainedModel):
         self._batch_config.setup(self._distributed_config)
         self._batch_config.validate()
         self._runner = ScheduleRunner(
-            multi_stage=self._fast_llm_model, config=self._schedule_config, distributed_config=self._distributed_config
+            config=self._schedule_config, multi_stage=self._fast_llm_model, distributed_config=self._distributed_config
         )
         self._runner.setup(self._fast_llm_model.distributed)
         # TODO: Random state? (Distributed.set_step)
@@ -65,7 +65,7 @@ class HuggingfacePreTrainedModel(transformers.PreTrainedModel):
         *,
         mode: StageMode = StageMode.inference,
         **kwargs,
-    ):
+    ) -> typing.Self:
         # Pretrained config.
         if not isinstance(pretrained_model_name_or_path, CheckpointLoadConfig):
             pretrained_model_name_or_path = CheckpointLoadConfig(
@@ -82,9 +82,9 @@ class HuggingfacePreTrainedModel(transformers.PreTrainedModel):
         fast_llm_model = cls.model_class.from_pretrained(
             pretrained_model_name_or_path, config_updates=config_updates, mode=mode
         )
-        config = cls.config_class(fast_llm_model.fast_llm_config)
+        config = cls.config_class(fast_llm_model.config)
 
         return cls(config, fast_llm_model, **kwargs)
 
-    def _init_weights(self, module):
+    def _init_weights(self, module) -> None:
         raise NotImplementedError(module)

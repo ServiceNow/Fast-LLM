@@ -250,7 +250,7 @@ def test_load_pretrained_distributed_checkpoint():
         load_config=ModelConfigType.fast_llm,
     )
     model = TEST_MODEL_CLS.from_pretrained(pretrained_config_ref)
-    _compare_configs(config.base_model, model._base_model_config)
+    _compare_configs(config.base_model, model.config.base_model)
     weight_shard = safetensors.torch.load_file(
         _CKPT_PATH / "rank_0.safetensors", device=str(model._state_shard.device)
     )["state_shard"]
@@ -271,7 +271,7 @@ def test_load_converted_distributed_checkpoint():
     config = TEST_MODEL_CONFIG_CLS.from_pretrained(pretrained_config_ref)
     model = TEST_MODEL_CLS.from_pretrained(pretrained_config_0)
     config_1 = TEST_MODEL_CONFIG_CLS.from_pretrained(pretrained_config_1)
-    _compare_configs(config.base_model, model._base_model_config)
+    _compare_configs(config.base_model, model.config.base_model)
     _compare_configs(config.base_model, config_1.base_model)
     weight_shard = safetensors.torch.load_file(
         _CKPT_PATH / "rank_0.safetensors", device=str(model._state_shard.device)
@@ -287,7 +287,7 @@ def test_load_converted_fast_llm_checkpoint():
     config = TEST_MODEL_CONFIG_CLS.from_pretrained(pretrained_config_ref)
     model = TEST_MODEL_CLS.from_pretrained(pretrained_config_0)
     config_1 = TEST_MODEL_CONFIG_CLS.from_pretrained(pretrained_config_1)
-    _compare_configs(config.base_model, model._base_model_config)
+    _compare_configs(config.base_model, model.config.base_model)
     _compare_configs(config.base_model, config_1.base_model)
     weight_shard = safetensors.torch.load_file(
         _CKPT_PATH / "rank_0.safetensors", device=str(model._state_shard.device)
@@ -312,7 +312,7 @@ def test_load_converted_huggingface_checkpoint():
     config = TEST_MODEL_CONFIG_CLS.from_pretrained(pretrained_config_ref)
     model = TEST_MODEL_CLS.from_pretrained(pretrained_config_0, mode=StageMode.weights)
     config_1 = TEST_MODEL_CONFIG_CLS.from_pretrained(pretrained_config_1)
-    _compare_configs(config.base_model, model._base_model_config)
+    _compare_configs(config.base_model, model.config.base_model)
     _compare_configs(config.base_model, config_1.base_model)
     weight_shard = safetensors.torch.load_file(
         _CKPT_PATH / "rank_0.safetensors", device=str(model._state_shard.device)
@@ -453,7 +453,7 @@ def test_load_distributed_checkpoint_dp2():
     )
     config = TEST_MODEL_CONFIG_CLS.from_pretrained(pretrained_config_ref)
     model = TEST_MODEL_CLS.from_pretrained(pretrained_config_test, mode=StageMode.weights)
-    _compare_configs(config.base_model, model._base_model_config)
+    _compare_configs(config.base_model, model.config.base_model)
     weight_shard = safetensors.torch.load_file(
         _CKPT_PATH / "rank_0.safetensors", device=str(model._state_shard.device)
     )["state_shard"][:1]

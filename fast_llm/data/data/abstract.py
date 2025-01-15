@@ -47,5 +47,5 @@ class Data(abc.ABC):
         consumed_samples: int,
         num_workers: int,
         prefetch_factor: int | None = None,
-    ):
+    ) -> typing.Iterator[typing.Any]:
         pass

@@ -20,7 +20,7 @@ from fast_llm.utils import Assert
 
 class HuggingfaceStateDictCheckpointHandler(ExternalStateDictCheckpointHandler, abc.ABC):
 
-    def _save_serialized_metadata(self, config: CheckpointSaveMetadataConfig, metadata: dict, index: dict):
+    def _save_serialized_metadata(self, config: CheckpointSaveMetadataConfig, metadata: dict, index: dict) -> None:
         path = config.path / f"{self.base_file_name}.safetensors.index.json"
         logger.info(f"Saving index to {path}")
         # Save the index.
@@ -31,7 +31,7 @@ class HuggingfaceStateDictCheckpointHandler(ExternalStateDictCheckpointHandler, 
         )
 
     def _serialize_metadata(self, config: CheckpointSaveMetadataConfig, metadata: CheckpointMetadata) -> dict:
-        huggingface_config = self._export_config(self._model.base_model_config)
+        huggingface_config = self._export_config(self._model.config.base_model)
         self._save_config(config.path, huggingface_config)
         return {
             "fast_llm_metadata": metadata.to_serialized(),
@@ -39,13 +39,13 @@ class HuggingfaceStateDictCheckpointHandler(ExternalStateDictCheckpointHandler, 
             "format": "pt",
         }
 
-    def load(self, config: CheckpointLoadConfig, metadata: CheckpointMetadata):
+    def load(self, config: CheckpointLoadConfig, metadata: CheckpointMetadata) -> None:
         assert not config.optimizer_state
-        self._model.base_model_config.compare_architecture(metadata.config.base_model, config.compare_log_fn)
+        self._model.config.base_model.compare_architecture(metadata.config.base_model, config.compare_log_fn)
         super().load(config, metadata)
 
     @classmethod
-    def get_huggingface_model_type(self):
+    def get_huggingface_model_type(self) -> str:
         # We assume the two names match, but derived classes can make it different.
         return self.format.name
 
@@ -72,7 +72,7 @@ class HuggingfaceStateDictCheckpointHandler(ExternalStateDictCheckpointHandler, 
         return config
 
     @classmethod
-    def _save_config(cls, directory: pathlib.Path | str, config: dict[str, typing.Any]):
+    def _save_config(cls, directory: pathlib.Path | str, config: dict[str, typing.Any]) -> None:
         import transformers
 
         transformers.CONFIG_MAPPING[config["model_type"]].from_dict(config).save_pretrained(directory)
