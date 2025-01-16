@@ -49,7 +49,7 @@ Now, select the compute environment that matches your setup or preferred workflo
         Install Python 3.12 (or later) if it's not already available on your system. For a Python virtual environment, run:
 
         ```bash
-        python3.10 -m venv ./fast-llm-tutorial/venv
+        python3.12 -m venv ./fast-llm-tutorial/venv
         source ./fast-llm-tutorial/venv/bin/activate
         pip install --upgrade pip
         ```
@@ -202,11 +202,11 @@ Choose based on your goals for this tutorial.
 
 === "Big"
 
-    For the big configuration, we'll use a Llama model with 8B parameters. We'll grab the model from the Huggingface Hub and save it to our inputs folder.
+    For the big configuration, we'll use a Llama model with 8B parameters. We'll grab the model from the HuggingFace Hub and save it to our inputs folder.
 
     !!! note "Access Required"
 
-        Meta gates access to their Llama models. You need to request access to the model from Meta before you can download it at https://huggingface.co/meta-llama/Llama-3.1-8B. You'll need to authenticate with your Hugging Face account to download the model:
+        Meta gates access to their Llama models. You need to request access to the model from Meta before you can download it at https://huggingface.co/meta-llama/Llama-3.1-8B. You'll need to authenticate with your HuggingFace account to download the model:
 
         ```bash
         pip install huggingface_hub
