@@ -1,18 +1,31 @@
 import numpy as np
 
-from fast_llm.data.dataset.gpt.fim.config import FIM_MIDDLE, FIM_PAD, FIM_PREFIX, FIM_SUFFIX, FimConfig
-from fast_llm.data.tokenizer import Tokenizer
+from fast_llm.data.dataset.abstract import SampledDataset
+from fast_llm.data.dataset.gpt.config import FimConfig, GPTSamplingConfig
+from fast_llm.engine.distributed.config import MAX_SEED
+
+FIM_PREFIX = "<fim_prefix>"
+FIM_MIDDLE = "<fim_middle>"
+FIM_PAD = "<fim_pad>"
+FIM_SUFFIX = "<fim_suffix>"
 
 
-class Fim:
+class FimDataset(SampledDataset):
     """
     An implementation of FIM (fill in the middle) post-processing of GPT datasets.
     Adapted from https://github.com/EleutherAI/gpt-neox/blob/FIM-clean/megatron/data/gpt2_dataset.py
     """
 
-    def __init__(self, config: FimConfig, tokenizer: Tokenizer):
-        self._config = config.validate()
-        self._tokenizer = tokenizer
+    def __init__(
+        self,
+        config: FimConfig,
+        dataset: SampledDataset,
+        sampling_config: GPTSamplingConfig,
+    ):
+        self._config = config
+        self._dataset = dataset
+        self._sampling_config = sampling_config
+        self._tokenizer = sampling_config.tokenizer
         self._suffix_tok_id, self._prefix_tok_id, self._middle_tok_id, self._pad_tok_id = (
             self._tokenizer.vocab[tok] for tok in [FIM_SUFFIX, FIM_PREFIX, FIM_MIDDLE, FIM_PAD]
         )
@@ -20,7 +33,20 @@ class Fim:
             self._tokenizer.vocab[self._config.split_sample] if self._config.split_sample is not None else None
         )
 
-    def __call__(self, sample, np_rng):
+    def __len__(self) -> int:
+        return len(self._dataset)
+
+    def __getitem__(self, idx: int) -> np.ndarray:
+        sample = self._fim(
+            self._dataset[idx], np.random.RandomState(seed=(self._sampling_config.seed + idx) % MAX_SEED)
+        )
+        return sample
+
+    @property
+    def name(self) -> str:
+        return f"{self._dataset.name}_fim"
+
+    def _fim(self, sample: np.ndarray, np_rng: np.random.RandomState) -> np.ndarray:
         # FIM
         # TODO: permute segments in sample_list, before concatenating.
         sample_len = sample.shape[0]
@@ -55,8 +81,9 @@ class Fim:
             sample = np.concatenate([sample, np.full((-1 * diff), self._pad_tok_id)])
 
         assert sample.shape[0] == sample_len
+        return sample
 
-    def _fim_split_and_permute_sequence(self, sequence, np_rng):
+    def _fim_split_and_permute_sequence(self, sequence: np.ndarray, np_rng: np.random.RandomState) -> np.ndarray:
         """
         fragment_fim_rate: if set, apply fim with this rate to each fragment.
         """
@@ -90,10 +117,10 @@ class Fim:
 
     def _fim_permute_sequence(
         self,
-        sequence,
-        np_rng,
-        rate,
-    ):
+        sequence: np.ndarray,
+        np_rng: np.random.RandomState,
+        rate: float,
+    ) -> np.ndarray:
         """
         Take in a sample (np array w/ size (0,chunklength)) and perform a FIM transformation on it.
         truncate_or_pad: if True, maintain the same sample length (if transform creates a few extra tokens, drop them).

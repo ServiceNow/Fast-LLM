@@ -1,18 +1,14 @@
 import logging
 import pathlib
-import time
 import typing
 
 import numpy as np
 
 from fast_llm.core.distributed import safe_barrier
-from fast_llm.data.data.config import SamplingConfig
 from fast_llm.data.dataset.abstract import PhaseSplits, SampledDataset, SplitDataset
+from fast_llm.data.dataset.config import SamplingConfig
 from fast_llm.engine.config_utils.run import log_main_rank
 from fast_llm.utils import Assert, normalize_probabilities
-
-if typing.TYPE_CHECKING:
-    from fast_llm.data.data.gpt.data import GPTData
 
 try:
     from fast_llm.csrc.data import build_blending_indices  # noqa
@@ -20,6 +16,7 @@ try:
     _extension_available = True
 except ImportError:
     _extension_available = False
+
 
 logger = logging.getLogger(__name__)
 
@@ -35,17 +32,16 @@ class BlendedDataset(SampledDataset):
     def __init__(
         self,
         name: str,
-        datasets_and_weights: list[tuple[SampledDataset, float]],
+        datasets: list[SampledDataset],
+        weights: list[float],
         sampling_config: SamplingConfig,
-        # TODO: Generalize
-        data: "GPTData",
     ):
         self._name = name
-        assert len(datasets_and_weights) > 0
-        self._datasets, weights = zip(*datasets_and_weights)
+        assert len(datasets) > 0
+        Assert.eq(len(datasets), len(weights))
+        self._datasets = datasets
         self._weights = normalize_probabilities(weights)
         self._num_samples = sampling_config.num_samples
-        self._data_sample_warn_time_ms = data.config.data_sample_warn_time_ms
 
         if sampling_config.cache_directory is None:
             self._dataset_idx_filename, self._sample_idx_filename = None, None
@@ -53,7 +49,7 @@ class BlendedDataset(SampledDataset):
                 sampling_config.verbose and len(self._datasets) <= 20
             )
         else:
-            group = data.distributed.world_group
+            group = sampling_config.distributed.world_group
             self._dataset_idx_filename = sampling_config.cache_directory / (self._name + "_blending_dataset_idx.npy")
             self._sample_idx_filename = sampling_config.cache_directory / (self._name + "_blending_sample_idx.npy")
 
@@ -78,7 +74,6 @@ class BlendedDataset(SampledDataset):
         name: str,
         datasets_and_weights: list[(SplitDataset[SampledDataset], float)],
         sampling_configs: PhaseSplits[SamplingConfig],
-        data: "GPTData",
     ):
         Assert.leq(set(sampling_configs), set.union(*[set(dataset) for dataset, _ in datasets_and_weights]))
         return SplitDataset[BlendedDataset](
@@ -86,19 +81,15 @@ class BlendedDataset(SampledDataset):
             {
                 phase: BlendedDataset(
                     f"{name}_{phase.value}",
-                    [
-                        (dataset[phase], weight)
-                        for dataset, weight in datasets_and_weights
-                        if phase in dataset and weight > 0
-                    ],
+                    [dataset[phase] for dataset, weight in datasets_and_weights if phase in dataset and weight > 0],
+                    [weight for dataset, weight in datasets_and_weights if phase in dataset and weight > 0],
                     sampling_config,
-                    data,
                 )
                 for phase, sampling_config in sampling_configs.items()
             },
         )
 
-    def __getstate__(self):
+    def __getstate__(self) -> tuple[typing.Any, ...]:
         return (
             self._datasets,
             self._name,
@@ -108,7 +99,7 @@ class BlendedDataset(SampledDataset):
             self._sample_index if self._sample_idx_filename is None else self._sample_idx_filename,
         )
 
-    def __setstate__(self, state):
+    def __setstate__(self, state: tuple[typing.Any, ...]):
         (
             self._datasets,
             self._name,
@@ -124,7 +115,7 @@ class BlendedDataset(SampledDataset):
             self._dataset_idx_filename, self._sample_idx_filename = None, None
             self._dataset_index, self._sample_index = dataset_index, sample_index
 
-    def _load_mappings(self, verbose):
+    def _load_mappings(self, verbose: bool) -> None:
         if verbose:
             log_main_rank(lambda: f" > loading blending dataset index mapping from {self._dataset_idx_filename}")
         self._dataset_index = np.load(self._dataset_idx_filename, mmap_mode="r")
@@ -132,10 +123,10 @@ class BlendedDataset(SampledDataset):
             log_main_rank(lambda: f" > loading blending dataset index mapping from {self._sample_idx_filename}")
         self._sample_index = np.load(self._sample_idx_filename, mmap_mode="r")
 
-    def __len__(self):
+    def __len__(self) -> int:
         return self._num_samples
 
-    def _build_blending_indices(self, verbose: bool):
+    def _build_blending_indices(self, verbose: bool) -> tuple[np.ndarray, np.ndarray]:
         assert _extension_available, (
             "The C++ extension for dataset blending is missing." " Please make sure Fast-LLM is installed correctly."
         )
@@ -167,24 +158,8 @@ class BlendedDataset(SampledDataset):
             )
         return dataset_index, dataset_sample_index
 
-    def __getitem__(self, idx):
-        start_time = time.perf_counter()
-        dataset_index = self._dataset_index[idx]
-        dataset = self._datasets[dataset_index]
-        sample_index = self._sample_index[idx]
-        try:
-            sample = dataset[sample_index]
-            sample_time = (time.perf_counter() - start_time) * 1000
-            if sample_time > self._data_sample_warn_time_ms:
-                logger.warning(
-                    f"Sample {sample_index} from dataset {dataset_index} ({dataset.name})"
-                    f" took {sample_time:,.2f} ms to load"
-                )
-            return sample
-
-        except Exception:
-            logger.error(f"Failed to get sample {sample_index} from dataset {dataset_index} ({dataset.name})")
-            raise
+    def __getitem__(self, idx: int) -> typing.Any:
+        return self._datasets[self._dataset_index[idx]][self._sample_index[idx].item()]
 
     @property
     def name(self):

@@ -9,15 +9,18 @@ import torch
 import torch.utils.data
 
 from fast_llm.data.data.abstract import Data
-from fast_llm.data.data.gpt.config import DatasetSource, GPTDataConfig, GPTSamplingConfig
+from fast_llm.data.data.gpt.config import GPTDataConfig
 from fast_llm.data.dataset.abstract import CopySplitDataset, PhaseSplits, SampledSplitDataset
 from fast_llm.data.dataset.blended import BlendedDataset
-from fast_llm.data.dataset.gpt.dummy import DummyGPTDataset
+from fast_llm.data.dataset.gpt.config import DatasetSource, GPTSamplingConfig
+from fast_llm.data.dataset.gpt.dummy import GPTDummyDataset
+from fast_llm.data.dataset.gpt.fim import FimDataset
+from fast_llm.data.dataset.gpt.indexed import GPTDatasetSlice
 from fast_llm.data.dataset.gpt.memmap import GPTMemmapDataset
-from fast_llm.data.dataset.gpt.slice import GPTDatasetSlice
+from fast_llm.data.dataset.monitor import DatasetMonitor
 from fast_llm.data.iterator import SampledDatasetIterator
 from fast_llm.data.tokenizer import Tokenizer
-from fast_llm.engine.config_utils.run import get_run, log_main_rank
+from fast_llm.engine.config_utils.run import log_main_rank
 from fast_llm.engine.distributed.config import DistributedConfig, PhaseType
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.engine.schedule.config import BatchConfig
@@ -26,7 +29,7 @@ from fast_llm.utils import Assert, normalize_probabilities
 logger = logging.getLogger(__name__)
 
 
-class GPTData(Data):
+class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
     """
     A global class for all dataset needs, including loading, splitting, sampling and iteration.
     Currently hard-coded to a GPT dataset.
@@ -35,9 +38,6 @@ class GPTData(Data):
 
     _datasets: SampledSplitDataset
     _tokenizer: Tokenizer | None
-    _distributed: Distributed
-    _cache_directory: pathlib.Path | None
-    _samples_per_phase: dict[PhaseType, int]
     _phases: typing.ClassVar[tuple[PhaseType, ...]] = (PhaseType.training, PhaseType.validation, PhaseType.test)
     _is_setup: bool = False
 
@@ -52,8 +52,7 @@ class GPTData(Data):
         Create the data and gather some basic information on the dataset(s).
         Should be `setup` before use.
         """
-        self._config = config
-        self._distributed_config = distributed_config
+        super().__init__(config, distributed_config)
         self._vocab_size = vocab_size
         self._max_sequence_length = max_sequence_length
         Assert.eq(len(self._config.split), len(self._phases))
@@ -114,22 +113,25 @@ class GPTData(Data):
         }
         self._dataset_weights = {name: weight for name, weight in zip(dataset_names, dataset_weights)}
 
-    def setup(self, distributed: Distributed, samples_per_phase: dict[PhaseType, int]):
+    def setup(
+        self,
+        distributed: "Distributed",
+        samples_per_phase: dict[PhaseType, int],
+        cache_directory: pathlib.Path,
+    ) -> None:
         """
         Load the datasets, and prepare or load the samplings.
         This may take a while and a significant amount of cpu memory.
         """
-        run = get_run()
+        super().setup(distributed, samples_per_phase, cache_directory)
         Assert.leq(set(samples_per_phase), set(self._phase_split))
         log_main_rank(f"Preparing {self._num_datasets} datasets. This may take several minutes.")
         self._tokenizer = Tokenizer(self._config.tokenizer) if self._config.fim.rate > 0 else None
         self._distributed = distributed
         self._samples_per_phase = samples_per_phase
-        if run.experiment_directory is None:
+        if self._cache_directory is None:
+            # TODO: Avoid this
             warnings.warn(f"Using the dataset directory for the index cache.")
-            self._cache_directory = None
-        else:
-            self._cache_directory = run.experiment_directory / "dataset_cache"
 
         datasets_and_weights = []
         for i, (name, weight) in enumerate(self._dataset_weights.items()):
@@ -144,11 +146,11 @@ class GPTData(Data):
                     expected_samples
                     + 5 * math.sqrt(expected_samples * self._dataset_weights[name] * (1 - self._dataset_weights[name]))
                 )
+
             sampling_configs = PhaseSplits[GPTSamplingConfig](
                 {
                     phase: GPTSamplingConfig(
                         num_samples=dataset_samples_per_phase[phase],
-                        sequence_length=self._max_sequence_length,
                         seed=self._distributed_config.seed,
                         cache_directory=(
                             self._dataset_prefixes[name].parent
@@ -156,6 +158,10 @@ class GPTData(Data):
                             else self._cache_directory
                         ),
                         verbose=self._num_datasets <= 5,
+                        distributed=self._distributed,
+                        sequence_length=self._max_sequence_length,
+                        vocab_size=self._vocab_size,
+                        tokenizer=self._tokenizer,
                     )
                     for phase, num_samples in dataset_samples_per_phase.items()
                     if num_samples > 0
@@ -166,39 +172,40 @@ class GPTData(Data):
             )
 
         if len(datasets_and_weights) == 1:
-            self._datasets = datasets_and_weights[0][0]
+            datasets = datasets_and_weights[0][0]
         else:
-            self._datasets = BlendedDataset.apply(
+            datasets = BlendedDataset.apply(
                 "blended",
                 datasets_and_weights,
                 PhaseSplits[GPTSamplingConfig](
                     {
                         phase: GPTSamplingConfig(
                             num_samples=samples_per_phase,
-                            sequence_length=self._max_sequence_length,
                             seed=self._distributed_config.seed,
                             cache_directory=None if self._cache_directory is None else self._cache_directory,
                             verbose=self._num_datasets <= 5,
+                            distributed=self._distributed,
+                            sequence_length=self._max_sequence_length,
+                            vocab_size=self._vocab_size,
+                            tokenizer=self._tokenizer,
                         )
                         for phase, samples_per_phase in self._samples_per_phase.items()
                     }
                 ),
-                self,
             )
+        self._datasets = SampledSplitDataset[GPTDatasetSlice](
+            "monitor",
+            {
+                phase: DatasetMonitor(dataset, self._config.data_sample_warn_time_ms)
+                for phase, dataset in datasets.items()
+            },
+        )
         self._is_setup = True
 
     @property
-    def config(self):
-        return self._config
-
-    @property
-    def tokenizer(self):
+    def tokenizer(self) -> Tokenizer:
         assert self._is_setup
         return self._tokenizer
-
-    @property
-    def distributed(self):
-        return self._distributed
 
     def get_iterator(
         self,
@@ -208,7 +215,7 @@ class GPTData(Data):
         consumed_samples: int,
         num_workers: int,
         prefetch_factor: int | None = None,
-    ):
+    ) -> typing.Iterator[typing.Any]:
         assert self._is_setup
         Assert.incl(phase, self._datasets)
         Assert.in_range_incl(batch_config.sequence_length, 1, self._max_sequence_length)
@@ -231,13 +238,22 @@ class GPTData(Data):
         )
 
     def _build_and_sample_gpt_dataset(self, name: str, sampling_configs: PhaseSplits[GPTSamplingConfig]):
-        return GPTDatasetSlice.from_splits(
+        datasets = GPTDatasetSlice.from_splits(
             GPTMemmapDataset(name, self._dataset_prefixes[name]), self._phase_split
-        ).sample(sampling_configs, self)
+        ).sample(sampling_configs)
+        if self._config.fim.rate > 0:
+            datasets = SampledSplitDataset[GPTDatasetSlice](
+                "fim",
+                {
+                    phase: FimDataset(self.config.fim, dataset, sampling_configs[phase])
+                    for phase, dataset in datasets.items()
+                },
+            )
+        return datasets
 
     def _build_and_sample_dummy_dataset(self, name: str, sampling_configs: PhaseSplits[GPTSamplingConfig]):
         return CopySplitDataset(
             f"{name}_split",
-            DummyGPTDataset(name, self._max_sequence_length, self._vocab_size),
+            GPTDummyDataset(name),
             list(sampling_configs),
-        ).sample(sampling_configs, self)
+        ).sample(sampling_configs)

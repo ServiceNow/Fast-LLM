@@ -1,15 +1,14 @@
 import math
+import pathlib
+import typing
 
 import numpy as np
 
 from fast_llm.core.distributed import safe_barrier
-from fast_llm.data.data.gpt.config import GPTSamplingConfig
-from fast_llm.data.data.gpt.data import GPTData
 from fast_llm.data.dataset.abstract import SampledDataset
-from fast_llm.data.dataset.gpt.abstract import GPTIndexedDataset
-from fast_llm.data.dataset.gpt.fim.fim import Fim
+from fast_llm.data.dataset.gpt.config import GPTSamplingConfig
+from fast_llm.data.dataset.gpt.indexed import GPTIndexedDataset
 from fast_llm.engine.config_utils.run import log_main_rank
-from fast_llm.engine.distributed.config import MAX_SEED
 from fast_llm.utils import Assert
 
 try:
@@ -32,26 +31,20 @@ class GPTSampledIndexedDataset(SampledDataset):
         self,
         indexed_dataset: GPTIndexedDataset,
         sampling_config: GPTSamplingConfig,
-        data: GPTData,
     ):
         assert isinstance(sampling_config, GPTSamplingConfig)
-        assert isinstance(data, GPTData)
         self._indexed_dataset = indexed_dataset
-        self._sampling_config = sampling_config
 
-        if data.config.fim.rate > 0:
-            assert data.tokenizer is not None
-            self._fim = Fim(data.config.fim, data.tokenizer)
-        else:
-            self._fim = None
-
-        cache_prefix = f"{self.name}_ns_{self._sampling_config.num_samples}_sl_{self._sampling_config.sequence_length}_s_{self._sampling_config.seed}"
+        cache_prefix = (
+            f"{self.name}_ns_{sampling_config.num_samples}_sl_{sampling_config.sequence_length}"
+            f"_s_{sampling_config.seed}"
+        )
         # TODO: Any way to combine into a single file? (Memmap is harder)
-        self._doc_idx_filename = self._sampling_config.cache_directory / (cache_prefix + "_doc_idx.npy")
-        self._sample_idx_filename = self._sampling_config.cache_directory / (cache_prefix + "_sample_idx.npy")
-        self._shuffle_idx_filename = self._sampling_config.cache_directory / (cache_prefix + "_shuffle_idx.npy")
+        self._doc_idx_filename = sampling_config.cache_directory / (cache_prefix + "_doc_idx.npy")
+        self._sample_idx_filename = sampling_config.cache_directory / (cache_prefix + "_sample_idx.npy")
+        self._shuffle_idx_filename = sampling_config.cache_directory / (cache_prefix + "_shuffle_idx.npy")
 
-        group = data.distributed.world_group
+        group = sampling_config.distributed.world_group
         # Build the indexed mapping if it doesn't exist.
         # TODO: This only works if the dataset location is accessible by all job.
         if (group is None or group.rank() == 0) and not (
@@ -59,35 +52,33 @@ class GPTSampledIndexedDataset(SampledDataset):
             and self._sample_idx_filename.is_file()
             and self._shuffle_idx_filename.is_file()
         ):
-            if self._sampling_config.verbose:
+            if sampling_config.verbose:
                 log_main_rank(" > Building the index map on rank 0 ...")
-            doc_idx, sample_idx, shuffle_idx = self._sample()
-            self._sampling_config.cache_directory.mkdir(parents=True, exist_ok=True)
+            doc_idx, sample_idx, shuffle_idx = self._sample(sampling_config)
+            sampling_config.cache_directory.mkdir(parents=True, exist_ok=True)
             np.save(self._doc_idx_filename, doc_idx)
             np.save(self._sample_idx_filename, sample_idx)
             np.save(self._shuffle_idx_filename, shuffle_idx)
 
         safe_barrier(group, self._indexed_dataset.name)
-        self._load_mappings(self._sampling_config.verbose)
+        self._load_mappings(sampling_config.verbose)
 
-    def _sample(self):
+    def _sample(self, sampling_config: GPTSamplingConfig) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
         Create a `GPTSampledDataset` with the requested parameters.
         """
         document_sizes = self._indexed_dataset.get_document_sizes()
         num_documents = len(document_sizes)
         num_tokens = document_sizes.sum()
-        np_rng = np.random.RandomState(seed=self._sampling_config.seed)
+        np_rng = np.random.RandomState(seed=sampling_config.seed)
 
-        num_epochs = math.ceil(
-            (self._sampling_config.sequence_length * self._sampling_config.num_samples + 1) / num_tokens
-        )
+        num_epochs = math.ceil((sampling_config.sequence_length * sampling_config.num_samples + 1) / num_tokens)
         # For the last epoch, decide whether include the entire epoch
         # in the global shuffle or not.
         # Get the number of samples for the last epoch
-        main_epochs_samples = ((num_epochs - 1) * num_tokens - 1) // self._sampling_config.sequence_length
-        last_epoch_samples = self._sampling_config.num_samples - main_epochs_samples
-        samples_per_epoch = (num_tokens - 1) // self._sampling_config.sequence_length
+        main_epochs_samples = ((num_epochs - 1) * num_tokens - 1) // sampling_config.sequence_length
+        last_epoch_samples = sampling_config.num_samples - main_epochs_samples
+        samples_per_epoch = (num_tokens - 1) // sampling_config.sequence_length
         # If we have less than 80% of the samples for the last epoch, separate out the epoch and treat it differently.
         # Note: the 80% number is just based on common sense and can be adjusted if needed.
         separate_last_epoch = num_epochs > 1 and last_epoch_samples < 0.8 * samples_per_epoch
@@ -106,10 +97,10 @@ class GPTSampledIndexedDataset(SampledDataset):
         sample_idx = build_sample_idx(
             document_sizes,
             doc_idx,
-            self._sampling_config.sequence_length,
+            sampling_config.sequence_length,
             num_epochs,
             num_tokens,
-            self._sampling_config.verbose,
+            sampling_config.verbose,
         )
 
         # shuffle-idx.
@@ -126,33 +117,28 @@ class GPTSampledIndexedDataset(SampledDataset):
         else:
             np_rng.shuffle(shuffle_idx)
 
-        Assert.geq(len(shuffle_idx), self._sampling_config.num_samples)
+        Assert.geq(len(shuffle_idx), sampling_config.num_samples)
         # TODO: The doc and sample idx are way bigger than needed when sampling for << 1 epoch.
-        return doc_idx, sample_idx, shuffle_idx[: self._sampling_config.num_samples]
+        return doc_idx, sample_idx, shuffle_idx[: sampling_config.num_samples]
 
-    def __getstate__(self):
+    def __getstate__(self) -> tuple[GPTIndexedDataset, pathlib.Path, pathlib.Path, pathlib.Path]:
         return (
             self._indexed_dataset,
-            self._fim,
-            self._sampling_config.to_serialized(),
             self._doc_idx_filename,
             self._sample_idx_filename,
             self._shuffle_idx_filename,
         )
 
-    def __setstate__(self, state):
+    def __setstate__(self, state: tuple[GPTIndexedDataset, pathlib.Path, pathlib.Path, pathlib.Path]) -> None:
         (
             self._indexed_dataset,
-            self._fim,
-            sampling_config,
             self._doc_idx_filename,
             self._sample_idx_filename,
             self._shuffle_idx_filename,
         ) = state
-        self._sampling_config = GPTSamplingConfig.from_dict(sampling_config)
         self._load_mappings(False)
 
-    def _load_mappings(self, verbose):
+    def _load_mappings(self, verbose: bool) -> None:
         if verbose:
             log_main_rank(lambda: f" > loading doc-idx mapping from {self._doc_idx_filename}")
         self._doc_idx = np.load(self._doc_idx_filename, mmap_mode="r")
@@ -165,12 +151,12 @@ class GPTSampledIndexedDataset(SampledDataset):
         if verbose:
             log_main_rank(lambda: f"  loaded dataset with {len(self)} samples.")
 
-    def __len__(self):
+    def __len__(self) -> int:
         # -1 is due to data structure used to retrieve the index:
         #    sample i --> [sample_idx[i], sample_idx[i+1])
         return self._shuffle_idx.shape[0]
 
-    def __getitem__(self, idx):
+    def __getitem__(self, idx: int) -> typing.Any:
         """
         Get the sample, (fixed-length sequence of tokens holding one or more complete or partial documents)
         with the requested sampling index.
@@ -193,11 +179,8 @@ class GPTSampledIndexedDataset(SampledDataset):
             sample_list,
             dtype=np.int64,
         )
-        if self._fim is not None:
-            sample = self._fim(sample, np.random.RandomState(seed=(self._sampling_config.seed + idx) % MAX_SEED))
-
         return sample
 
     @property
-    def name(self):
+    def name(self) -> str:
         return self._indexed_dataset.name

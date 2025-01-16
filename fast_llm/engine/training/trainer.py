@@ -106,7 +106,11 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
 
         # Setup the datasets.
         log_main_rank("Preparing datasets...")
-        self._data.setup(distributed, self._samples_per_split)
+        self._data.setup(
+            distributed,
+            self._samples_per_split,
+            None if run.experiment_directory is None else run.experiment_directory / "dataset_cache",
+        )
 
     @abc.abstractmethod
     def _get_data(self) -> Data:

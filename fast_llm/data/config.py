@@ -12,15 +12,6 @@ class MultiprocessingContext(str, enum.Enum):
     spawn = "spawn"
 
 
-def _validate_split(value):
-    Assert.leq(len(value), 3)
-    return value + [0] * (len(value) - 3)
-
-
-def _validate_path(value):
-    return [value] if isinstance(value, str) else value
-
-
 TokenizerFromFile = "TokenizerFromFile"
 
 
