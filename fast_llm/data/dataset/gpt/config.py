@@ -9,7 +9,6 @@ from fast_llm.data.dataset.abstract import SampledDataset
 from fast_llm.data.dataset.config import (
     BlendedDatasetConfig,
     ConcatenatedDatasetConfig,
-    DatasetConfig,
     DatasetSliceConfig,
     IndexedDatasetConfig,
     SamplableDatasetConfig,
@@ -35,12 +34,13 @@ class GPTSamplingConfig(SamplingConfig):
 
 
 @config_class()
-class GPTDatasetConfig(DatasetConfig):
+class GPTSampledDatasetConfig(SampledDatasetConfig):
+
     # TODO: Generalize dynamic types?
-    _registry: typing.ClassVar[Registry[str, type["GPTDatasetConfig"]]] = Registry[str, type["GPTDatasetConfig"]](
-        "gpt_dataset_class", {}
-    )
-    type_: typing.ClassVar[type["GPTDatasetConfig"] | None] = None
+    _registry: typing.ClassVar[Registry[str, type["GPTSampledDatasetConfig"]]] = Registry[
+        str, type["GPTDatasetConfig"]
+    ]("gpt_dataset_class", {})
+    type_: typing.ClassVar[type["GPTSampledDatasetConfig"] | None] = None
     type: str | None = Field(
         default=None,
         desc="The type of dataset.",
@@ -73,14 +73,9 @@ class GPTDatasetConfig(DatasetConfig):
 
     def __init_subclass__(cls, type_: str | None = None, **kwargs) -> None:
         if type_ is not None:
-            GPTDatasetConfig._registry[type_] = cls
+            GPTSampledDatasetConfig._registry[type_] = cls
         cls.type_ = type_
         super().__init_subclass__()
-
-
-@config_class()
-class GPTSampledDatasetConfig(SampledDatasetConfig, GPTDatasetConfig):
-    pass
 
 
 @config_class()
