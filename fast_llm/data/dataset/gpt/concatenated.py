@@ -35,7 +35,7 @@ class GPTConcatenatedDataset(GPTIndexedDataset):
         (end = min(offset + length, sample_length).
         """
         dataset = np.searchsorted(self._dataset_splits[1:], document, side="right")
-        return self._datasets[dataset].get(document - self._dataset_splits[dataset], offset, length)
+        return self._datasets[dataset].get((document - self._dataset_splits[dataset]).item(), offset, length)
 
     @property
     def name(self) -> str:

@@ -3,11 +3,10 @@ import typing
 
 import numpy as np
 
-from fast_llm.data.data.gpt.config import GPTSamplingConfig
 from fast_llm.data.dataset.abstract import SamplableDataset
+from fast_llm.data.dataset.gpt.config import GPTSamplingConfig
 
 if typing.TYPE_CHECKING:
-    from fast_llm.data.data.gpt.data import GPTData
     from fast_llm.data.dataset.gpt.sampled import GPTSampledIndexedDataset
 
 
@@ -52,7 +51,7 @@ class GPTIndexedDataset(SamplableDataset):
         and derived classes should try to avoid holding the whole array im memory.
         """
 
-    def sample(self, config: GPTSamplingConfig, data: "GPTData") -> "GPTSampledIndexedDataset":
+    def sample(self, config: GPTSamplingConfig) -> "GPTSampledIndexedDataset":
         from fast_llm.data.dataset.gpt.sampled import GPTSampledIndexedDataset
 
-        return GPTSampledIndexedDataset(self, config, data)
+        return GPTSampledIndexedDataset(self, config)

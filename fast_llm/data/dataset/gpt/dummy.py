@@ -1,51 +1,38 @@
-import typing
-
 import numpy as np
 
-from fast_llm.data.data.gpt.config import GPTSamplingConfig
 from fast_llm.data.dataset.abstract import SamplableDataset, SampledDataset
-
-if typing.TYPE_CHECKING:
-    from fast_llm.data.data.gpt.data import GPTData
+from fast_llm.data.dataset.gpt.config import GPTSamplingConfig
 
 
-class DummyGPTDataset(SamplableDataset):
+class GPTDummyDataset(SamplableDataset):
     """
-    A dummy dataset that always returns the same sample, for debugging purposes.
-    The sample can be purely random, or read from a file to allow reproducing in other runs.
+    A dummy dataset that always returns the same random sample, for debugging purposes.
     """
 
-    def __init__(self, name: str, sequence_length: int, vocab_size: int):
-        self._dummy_sample = np.random.randint(0, vocab_size, size=(sequence_length + 1,), dtype=np.int64)
+    def __init__(self, name: str):
         self._name = name
 
-    def sample(self, config: GPTSamplingConfig, data: "GPTData"):
-        return DummyGPTSampledDataset(self, config)
-
-    def get(self):
-        return self._dummy_sample
+    def sample(self, config: GPTSamplingConfig) -> "GPTDummySampledDataset":
+        return GPTDummySampledDataset(f"{self.name}_sampled", config)
 
     @property
-    def name(self):
+    def name(self) -> str:
         return self._name
 
 
-class DummyGPTSampledDataset(SampledDataset):
-    """
-    A dummy dataset that always returns the same sample, for debugging purposes.
-    The sample can be purely random, or read from a file to allow reproducing in other runs.
-    """
-
-    def __init__(self, dataset: DummyGPTDataset, config: GPTSamplingConfig):
+class GPTDummySampledDataset(SampledDataset):
+    def __init__(self, name: str, config: GPTSamplingConfig):
+        self._name = name
         self._config = config
-        self._dataset = dataset
 
-    def __len__(self):
+    def __len__(self) -> int:
         return self._config.num_samples
 
-    def __getitem__(self, idx):
-        return self._dataset.get()
+    def __getitem__(self, idx) -> np.ndarray:
+        return np.random.RandomState(self._config.seed + 4857643).randint(
+            0, self._config.vocab_size, size=(self._config.sequence_length + 1,), dtype=np.int64
+        )
 
     @property
-    def name(self):
-        return self._dataset.name
+    def name(self) -> str:
+        return self._name

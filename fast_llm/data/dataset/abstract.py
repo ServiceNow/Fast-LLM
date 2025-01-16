@@ -1,8 +1,8 @@
 import abc
 import typing
 
-from fast_llm.data.data.abstract import Data
-from fast_llm.data.data.config import DataConfig, SamplingConfig
+from fast_llm.data.data.config import DataConfig
+from fast_llm.data.dataset.config import SamplingConfig
 from fast_llm.engine.distributed.config import PhaseType
 
 
@@ -13,7 +13,7 @@ class Dataset(abc.ABC):
 
     @property
     @abc.abstractmethod
-    def name(self):
+    def name(self) -> str:
         """
         A name for the dataset to facilitate identification and debugging.
         """
@@ -30,11 +30,11 @@ class SampledDataset(Dataset):
     """
 
     @abc.abstractmethod
-    def __getitem__(self, index: int):
+    def __getitem__(self, index: int) -> typing.Any:
         pass
 
     @abc.abstractmethod
-    def __len__(self):
+    def __len__(self) -> int:
         pass
 
     def as_split(self, default_phase: PhaseType = PhaseType.training):
@@ -45,7 +45,8 @@ class SamplableDataset(Dataset):
     # TODO: Move to dataset config?
     _data_config_class: typing.ClassVar[type[DataConfig]]
 
-    def sample(self, config: SamplingConfig, data: Data) -> SampledDataset:
+    @abc.abstractmethod
+    def sample(self, config: SamplingConfig) -> SampledDataset:
         pass
 
     def as_split(self, default_phase: PhaseType = PhaseType.training) -> "SplitDataset":
@@ -80,10 +81,10 @@ class SampledSplitDataset(SplitDataset[_SampledDatasetType], typing.Generic[_Sam
 
 
 class SamplableSplitDataset(SplitDataset[_SamplableDatasetType], typing.Generic[_SamplableDatasetType]):
-    def sample(self, sampling_configs: PhaseSplits[SamplingConfig], data: Data):
+    def sample(self, sampling_configs: PhaseSplits[SamplingConfig]):
         return SampledSplitDataset(
             f"{self.name}_sampled",
-            {phase: self[phase].sample(sampling_config, data) for phase, sampling_config in sampling_configs.items()},
+            {phase: self[phase].sample(sampling_config) for phase, sampling_config in sampling_configs.items()},
         )
 
 

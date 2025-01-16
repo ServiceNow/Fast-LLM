@@ -1,16 +1,39 @@
 import abc
+import pathlib
 import typing
 
-from fast_llm.engine.distributed.config import PhaseType
-from fast_llm.engine.distributed.distributed import Distributed
+from fast_llm.config import Configurable
+from fast_llm.data.data.config import DataConfig
+from fast_llm.engine.distributed.config import DistributedConfig, PhaseType
 from fast_llm.engine.schedule.config import BatchConfig
 
+if typing.TYPE_CHECKING:
+    from fast_llm.engine.distributed.distributed import Distributed
 
-class Data(abc.ABC):
+
+class Data[ConfigType: DataConfig](Configurable[ConfigType], abc.ABC):
+    _distributed: "Distributed"
+    _samples_per_phase: dict[PhaseType, int]
+    _cache_directory: pathlib.Path | None
+
+    def __init__(self, config: DataConfig, distributed_config: DistributedConfig) -> None:
+        super().__init__(config)
+        self._distributed_config = distributed_config
+
     # TODO: Improve interface
-    @abc.abstractmethod
-    def setup(self, distributed: Distributed, samples_per_phase: dict[PhaseType, int]):
-        pass
+    def setup(
+        self,
+        distributed: "Distributed",
+        samples_per_phase: dict[PhaseType, int],
+        cache_directory: pathlib.Path,
+    ) -> None:
+        self._distributed = distributed
+        self._samples_per_phase = samples_per_phase
+        self._cache_directory = cache_directory
+
+    @property
+    def distributed(self):
+        return self._distributed
 
     @abc.abstractmethod
     def get_iterator(

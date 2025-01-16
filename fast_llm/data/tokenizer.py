@@ -1,3 +1,5 @@
+import numpy as np
+import torch
 from transformers import PreTrainedTokenizerFast
 
 from fast_llm.data.config import TokenizerConfig
@@ -11,7 +13,7 @@ class Tokenizer:
 
     def __init__(self, config: TokenizerConfig):
         log_main_rank(f"> loading tokenizer from {config.path} ...")
-        self.tokenizer = PreTrainedTokenizerFast.from_pretrained(
+        self.tokenizer: PreTrainedTokenizerFast = PreTrainedTokenizerFast.from_pretrained(
             pretrained_model_name_or_path=config.path, errors="replace", max_len=None
         )
         if self.tokenizer.eos_token_id is None:
@@ -20,21 +22,21 @@ class Tokenizer:
         self._inv_vocab = {v: k for k, v in self.vocab.items()}
 
     @property
-    def vocab_size(self):
+    def vocab_size(self) -> int:
         return len(self.tokenizer)
 
     @property
-    def vocab(self):
+    def vocab(self) -> dict[str, int]:
         return self.tokenizer.vocab
 
     @property
-    def inv_vocab(self):
+    def inv_vocab(self) -> dict[int, str]:
         return self._inv_vocab
 
-    def tokenize(self, text: str):
+    def tokenize(self, text: str) -> list[int]:
         return self.tokenizer.encode(text)
 
-    def detokenize(self, token_ids):
+    def detokenize(self, token_ids: int | list[int] | np.ndarray | torch.Tensor) -> str:
         return self.tokenizer.decode(token_ids)
 
     @property
