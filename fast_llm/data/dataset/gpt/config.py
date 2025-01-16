@@ -148,25 +148,6 @@ class GPTBlendedDatasetConfig(BlendedDatasetConfig, GPTSampledDatasetConfig, typ
     datasets: list[GPTSampledDatasetConfig] = FieldUpdate()
 
 
-class LegacyDatasetSource(str, enum.Enum):
-    """
-    An enum for the different ways to load datasets.
-    """
-
-    list = "list"
-    file = "file"
-    random = "random"
-
-
-def _validate_split(value: list[int]) -> list[int]:
-    Assert.leq(len(value), 3)
-    return value + [0] * (len(value) - 3)
-
-
-def _validate_path(value: str | list[str]) -> list[str]:
-    return [value] if isinstance(value, str) else value
-
-
 @config_class()
 class FimConfig(Config):
     """
@@ -234,6 +215,25 @@ class FimSampledDatasetConfig(GPTSampledDatasetConfig, FimConfig, type_="fim"):
         from fast_llm.data.dataset.gpt.fim import FimDataset
 
         return FimDataset(self, self.dataset.build_and_sample(config), config)
+
+
+class LegacyDatasetSource(str, enum.Enum):
+    """
+    An enum for the different ways to load datasets.
+    """
+
+    list = "list"
+    file = "file"
+    random = "random"
+
+
+def _validate_split(value: list[int]) -> list[int]:
+    Assert.leq(len(value), 3)
+    return value + [0] * (len(value) - 3)
+
+
+def _validate_path(value: str | list[str]) -> list[str]:
+    return [value] if isinstance(value, str) else value
 
 
 @config_class()

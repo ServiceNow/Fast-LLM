@@ -49,14 +49,6 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
         self._vocab_size = vocab_size
         self._max_sequence_length = max_sequence_length
 
-    @property
-    def vocab_size(self) -> int:
-        return self._vocab_size
-
-    @property
-    def max_sequence_length(self) -> int:
-        return self._max_sequence_length
-
     def setup(
         self,
         distributed: "Distributed",
