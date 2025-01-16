@@ -29,7 +29,7 @@ class GPTMemmapDataset(GPTIndexedDataset):
 
         with self._prefix.with_suffix(".idx").open("rb") as stream:
             Assert.eq(stream.read(9), MEMMAP_INDEX_HEADER)
-            Assert.eq(struct.unpack("<Q", stream.read(8))[0], 1)
+            self._version = struct.unpack("<Q", stream.read(8))[0]
 
             self._dtype = MEMMAP_DTYPES[struct.unpack("<B", stream.read(1))[0]].numpy
             self._num_documents = struct.unpack("<Q", stream.read(8))[0]
@@ -48,24 +48,32 @@ class GPTMemmapDataset(GPTIndexedDataset):
             offset=offset + self._document_sizes.nbytes,
         )
 
-        self._num_spans = np.frombuffer(
-            self._index_bin_buffer,
-            dtype=np.int32,
-            count=self._num_documents,
-            offset=offset + self._document_sizes.nbytes + self._pointers.nbytes,
-        )
-        spans = []
-        offset = offset + self._document_sizes.nbytes + self._pointers.nbytes + self._num_spans.nbytes
-        for n_spans in self._num_spans:
-            span = np.frombuffer(
+        # Spans are introduced in version 2. Datasets tokenized with version 1 do not contain span information and
+        # compute loss on all tokens by default
+        if self._version == 1:
+            self._num_spans = 0
+            self._spans = []
+        elif self._version == 2:
+            self._num_spans = np.frombuffer(
                 self._index_bin_buffer,
                 dtype=np.int32,
-                count=n_spans * 2,
-                offset=offset,
-            ).reshape(-1, 2)
-            spans.append(span)
-            offset += span.nbytes
-        self._spans = spans
+                count=self._num_documents,
+                offset=offset + self._document_sizes.nbytes + self._pointers.nbytes,
+            )
+            spans = []
+            offset = offset + self._document_sizes.nbytes + self._pointers.nbytes + self._num_spans.nbytes
+            for n_spans in self._num_spans:
+                span = np.frombuffer(
+                    self._index_bin_buffer,
+                    dtype=np.int32,
+                    count=n_spans * 2,
+                    offset=offset,
+                ).reshape(-1, 2)
+                spans.append(span)
+                offset += span.nbytes
+            self._spans = spans
+        else:
+            raise ValueError(f"Unsupported version for gpt_memmap dataset: {self._version}.")
 
         self._bin_buffer_mmap = np.memmap(self._prefix.with_suffix(".bin"), mode="r", order="C")
         self._bin_buffer = memoryview(self._bin_buffer_mmap)
@@ -160,7 +168,9 @@ class GPTMemmapDataset(GPTIndexedDataset):
         # Write the index file (.idx)
         with prefix.with_suffix(".idx").open("wb") as idx_stream:
             idx_stream.write(MEMMAP_INDEX_HEADER)
-            idx_stream.write(struct.pack("<Q", 1))  # Version
+            # Indicates the version
+            # Version 2 adds number of spans and spans to the index file.
+            idx_stream.write(struct.pack("<Q", 2))
             # Data type
             idx_stream.write(struct.pack("<B", MEMMAP_DTYPES_INV[DataType.from_numpy(dtype.type)]))
             # "Number of sequences", same as documents in our case
