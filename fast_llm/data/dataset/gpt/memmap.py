@@ -1,3 +1,4 @@
+import dataclasses
 import pathlib
 import struct
 import typing
@@ -8,6 +9,12 @@ from fast_llm.data.dataset.gpt.abstract import GPTIndexedDataset
 from fast_llm.data.preparator.gpt_memmap.config import MEMMAP_DTYPES, MEMMAP_DTYPES_INV, MEMMAP_INDEX_HEADER
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.utils import Assert, div
+
+
+@dataclasses.dataclass
+class GPTMemmapDocument:
+    text: np.ndarray
+    spans: np.ndarray
 
 
 class GPTMemmapDataset(GPTIndexedDataset):
@@ -122,7 +129,7 @@ class GPTMemmapDataset(GPTIndexedDataset):
         return self._document_sizes
 
     @classmethod
-    def write_dataset(cls, prefix: pathlib.Path | str, documents: typing.Iterable[tuple[np.ndarray, np.ndarray]]):
+    def write_dataset(cls, prefix: pathlib.Path | str, documents: typing.Iterable[GPTMemmapDocument]):
         # Initialize metadata
         dtype = None
         num_documents = 0
@@ -138,24 +145,24 @@ class GPTMemmapDataset(GPTIndexedDataset):
 
         # Write the binary data file (.bin) lazily
         with prefix.with_suffix(".bin").open("wb") as bin_stream:
-            for document, mask_spans in documents:
+            for document in documents:
                 # Infer dtype from the first document
                 if dtype is None:
-                    dtype = document.dtype
+                    dtype = document.text.dtype
                     assert dtype is not None, "Document dtype could not be inferred from the data."
 
                 # Ensure all documents have the same dtype
-                assert document.dtype == dtype, f"Expected dtype {dtype}, got {document.dtype}."
+                assert document.text.dtype == dtype, f"Expected dtype {dtype}, got {document.text.dtype}."
 
                 # Write document to binary file
-                bin_stream.write(document.tobytes(order="C"))
+                bin_stream.write(document.text.tobytes(order="C"))
 
                 # Update metadata
-                doc_length = len(document)
+                doc_length = len(document.text)
                 lengths.append(doc_length)
                 pointers.append(offset)
-                num_spans.append(len(mask_spans))
-                spans.append(mask_spans)
+                num_spans.append(len(document.spans))
+                spans.append(document.spans)
                 offset += doc_length * np.dtype(dtype).itemsize
                 num_documents += 1
 
