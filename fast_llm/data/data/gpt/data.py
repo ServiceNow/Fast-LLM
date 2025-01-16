@@ -193,7 +193,7 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
                     }
                 ),
             )
-        datasets = SampledSplitDataset[GPTDatasetSlice](
+        self._datasets = SampledSplitDataset[GPTDatasetSlice](
             "monitor",
             {
                 phase: DatasetMonitor(dataset, self._config.data_sample_warn_time_ms)
