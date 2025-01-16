@@ -30,7 +30,7 @@ class GPTIndexedDataset(SamplableDataset):
         pass
 
     @property
-    def num_documents(self) -> int:
+    def __len__(self) -> int:
         """
         Number of documents in the dataset.
         Can be calculated from document sizes but may be overridden if there is a better method.
@@ -74,7 +74,7 @@ class GPTDatasetSlice(GPTIndexedDataset):
         self._name = name
         self._dataset = dataset
         self._begin = 0 if begin is None else begin
-        dataset_documents = dataset.num_documents
+        dataset_documents = len(dataset)
         self._end = dataset_documents if end is None else end
 
         # Checks
@@ -99,7 +99,7 @@ class GPTDatasetSlice(GPTIndexedDataset):
         return self._dataset.get(document + self._begin, offset, length)
 
     @property
-    def num_documents(self):
+    def __len__(self):
         return self._end - self._begin
 
     def get_document_sizes(self):
@@ -117,7 +117,7 @@ class GPTDatasetSlice(GPTIndexedDataset):
         each containing approximately the requested proportion of the total tokens.
         """
         probabilities = normalize_probabilities(list(phase_split.values()))
-        splits = [round(x) for x in padded_cumsum(probabilities) * dataset.num_documents]
+        splits = [round(x) for x in padded_cumsum(probabilities) * len(dataset)]
         return SamplableSplitDataset[GPTDatasetSlice](
             f"{dataset.name}_split",
             {
@@ -136,7 +136,7 @@ class GPTConcatenatedDataset(GPTIndexedDataset):
     ):
         self._name = name
         self._datasets = datasets
-        sizes = [dataset.num_documents for dataset in self._datasets]
+        sizes = [len(dataset) for dataset in self._datasets]
         self._dataset_splits = padded_cumsum(sizes)
         self._num_documents = sum(sizes)
 
@@ -144,8 +144,8 @@ class GPTConcatenatedDataset(GPTIndexedDataset):
     def num_tokens(self) -> int:
         return sum(dataset.num_tokens for dataset in self._datasets)
 
-    def num_documents(self) -> int:
-        return sum(dataset.num_documents for dataset in self._datasets)
+    def __len__(self) -> int:
+        return sum(len(dataset) for dataset in self._datasets)
 
     def get_document_sizes(self) -> np.ndarray:
         # TODO: This can be really big.
