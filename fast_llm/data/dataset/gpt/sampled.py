@@ -6,8 +6,8 @@ import numpy as np
 
 from fast_llm.core.distributed import safe_barrier
 from fast_llm.data.dataset.abstract import SampledDataset
-from fast_llm.data.dataset.gpt.abstract import GPTIndexedDataset
 from fast_llm.data.dataset.gpt.config import GPTSamplingConfig
+from fast_llm.data.dataset.gpt.indexed import GPTIndexedDataset
 from fast_llm.engine.config_utils.run import log_main_rank
 from fast_llm.utils import Assert
 
