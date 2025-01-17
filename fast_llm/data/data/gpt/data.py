@@ -31,7 +31,6 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
 
     _datasets: dict[PhaseType, SampledDataset]
     _tokenizer: Tokenizer | None
-    _distributed: Distributed
     _is_setup: bool = False
 
     def __init__(
@@ -76,7 +75,6 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
                     num_samples=samples_per_phase[phase],
                     seed=self._distributed_config.seed,
                     cache_directory=self._cache_directory,
-                    verbose=True,
                     distributed=distributed,
                     phase=phase,
                     sequence_length=self._max_sequence_length,

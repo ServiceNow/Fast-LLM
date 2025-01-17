@@ -52,8 +52,7 @@ class GPTSampledIndexedDataset(SampledDataset):
             and self._sample_idx_filename.is_file()
             and self._shuffle_idx_filename.is_file()
         ):
-            if sampling_config.verbose:
-                log_main_rank(" > Building the index map on rank 0 ...")
+            log_main_rank(" > Building the index map on rank 0 ...")
             doc_idx, sample_idx, shuffle_idx = self._sample(sampling_config)
             sampling_config.cache_directory.mkdir(parents=True, exist_ok=True)
             np.save(self._doc_idx_filename, doc_idx)
@@ -61,7 +60,7 @@ class GPTSampledIndexedDataset(SampledDataset):
             np.save(self._shuffle_idx_filename, shuffle_idx)
 
         safe_barrier(group, self._indexed_dataset.name)
-        self._load_mappings(sampling_config.verbose)
+        self._load_mappings(True)
 
     def _sample(self, sampling_config: GPTSamplingConfig) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
@@ -100,7 +99,7 @@ class GPTSampledIndexedDataset(SampledDataset):
             sampling_config.sequence_length,
             num_epochs,
             num_tokens,
-            sampling_config.verbose,
+            True,
         )
 
         # shuffle-idx.

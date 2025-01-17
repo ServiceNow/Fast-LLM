@@ -44,9 +44,7 @@ class BlendedDataset(SampledDataset):
 
         if sampling_config.cache_directory is None:
             self._dataset_idx_filename, self._sample_idx_filename = None, None
-            self._dataset_index, self._sample_index = self._build_blending_indices(
-                sampling_config.verbose and len(self._datasets) <= 20
-            )
+            self._dataset_index, self._sample_index = self._build_blending_indices(len(self._datasets) <= 20)
         else:
             group = sampling_config.distributed.world_group
             self._dataset_idx_filename = sampling_config.cache_directory / (self._name + "_blending_dataset_idx.npy")
@@ -57,15 +55,13 @@ class BlendedDataset(SampledDataset):
             if (group is None or group.rank() == 0) and not (
                 self._dataset_idx_filename.is_file() and self._sample_idx_filename.is_file()
             ):
-                dataset_index, sample_index = self._build_blending_indices(
-                    sampling_config.verbose and len(self._datasets) <= 20
-                )
+                dataset_index, sample_index = self._build_blending_indices(len(self._datasets) <= 20)
                 sampling_config.cache_directory.mkdir(exist_ok=True, parents=True)
                 np.save(self._dataset_idx_filename, dataset_index)
                 np.save(self._sample_idx_filename, sample_index)
 
             safe_barrier(group, self._name)
-            self._load_mappings(sampling_config.verbose)
+            self._load_mappings(True)
 
     def __getstate__(self) -> tuple[typing.Any, ...]:
         return (

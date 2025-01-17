@@ -238,18 +238,7 @@ def _validate_path(value: str | list[str]) -> list[str]:
 
 @config_class()
 class GPTLegacyConfig(Config):
-    @classmethod
-    def _from_dict(
-        cls,
-        default: dict[str, typing.Any],
-        strict: bool = True,
-        flat: bool = False,
-    ):
-        # TODO v0.3: Remove.
-        cls._handle_renamed_field(default, "split", "ratio")
-        return super()._from_dict(default, strict, flat)
-
-    ratio: list[float] = Field(
+    split: list[float] = Field(
         default_factory=lambda: [969, 30, 1],
         desc="Split ratio for train, valid and test datasets.",
         hint=FieldHint.deprecated,

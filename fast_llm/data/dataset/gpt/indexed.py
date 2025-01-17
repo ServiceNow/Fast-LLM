@@ -15,16 +15,6 @@ class GPTIndexedDataset(IndexedDataset):
     A GPT dataset containing a list of samples.
     """
 
-    # def get(self, index: int, offset: int = 0, length: int | None = None):
-    #    pass
-
-    # def __len__(self) -> int:
-    #    """
-    #    Number of documents in the dataset.
-    #    Can be calculated from document sizes but may be overridden if there is a better method.
-    #    """
-    #    return len(self.get_document_sizes())
-
     @abc.abstractmethod
     def get_document_sizes(self) -> np.ndarray:
         """

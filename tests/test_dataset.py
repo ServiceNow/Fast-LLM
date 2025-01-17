@@ -35,7 +35,6 @@ def get_sampling_config(
         num_samples=num_samples,
         seed=seed,
         cache_directory=cache_directory,
-        verbose=verbose,
         distributed=distributed,
         phase=phase,
         sequence_length=sequence_length,

@@ -25,7 +25,6 @@ class SamplingConfig:
     num_samples: int
     seed: int
     cache_directory: pathlib.Path | None
-    verbose: bool
     distributed: "Distributed"
     phase: PhaseType
 
