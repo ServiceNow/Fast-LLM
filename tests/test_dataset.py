@@ -23,7 +23,7 @@ DATASET_CACHE = TEST_RESULTS_PATH / "dataset" / "cache"
 def get_sampling_config(
     num_samples: int,
     *,
-    seed: int = 95733,
+    seed: int = 54983,
     cache_directory: pathlib.Path | None = None,
     distributed: Distributed = Distributed(DistributedConfig(), use_cpu=True),
     sequence_length: int = 512,
@@ -141,7 +141,7 @@ def test_gpt_blended():
         "blended",
         [
             GPTMemmapDataset("memmap", DATASET_PREFIX).sample(get_sampling_config(5, sequence_length=5)),
-            GPTDummyDataset("dummy").sample(get_sampling_config(3, sequence_length=5, seed=150516)),
+            GPTDummyDataset("dummy").sample(get_sampling_config(3, sequence_length=5, seed=109766)),
         ],
         [0.6, 0.4],
         get_sampling_config(8, sequence_length=5),
