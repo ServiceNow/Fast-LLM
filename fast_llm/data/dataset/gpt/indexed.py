@@ -28,7 +28,7 @@ class GPTIndexedDataset(IndexedDataset):
         return GPTSampledIndexedDataset(self, config)
 
 
-class GPTDatasetSlice(DatasetSlice, GPTIndexedDataset):
+class GPTDatasetSlice[IndexedDatasetType: GPTIndexedDataset](DatasetSlice[IndexedDatasetType], GPTIndexedDataset):
     """
     A GPT dataset, which reads samples from (a split of) a `MMapIndexedDataset` pointing to a GPT dataset.
     """
@@ -56,7 +56,9 @@ class GPTDatasetSlice(DatasetSlice, GPTIndexedDataset):
         )
 
 
-class GPTConcatenatedDataset(ConcatenatedDataset, GPTIndexedDataset):
+class GPTConcatenatedDataset[IndexedDatasetType: GPTIndexedDataset](
+    ConcatenatedDataset[IndexedDatasetType], GPTIndexedDataset
+):
     _datasets: list[GPTIndexedDataset]
 
     def get_document_sizes(self) -> np.ndarray:

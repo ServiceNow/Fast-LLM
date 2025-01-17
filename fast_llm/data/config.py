@@ -1,4 +1,5 @@
 import enum
+import pathlib
 
 from fast_llm.config import Config, Field, FieldHint, check_field, config_class
 from fast_llm.utils import Assert
@@ -28,7 +29,7 @@ class TokenizerConfig(Config):
         hint=FieldHint.deprecated,
         valid=check_field(Assert.eq, TokenizerFromFile),
     )
-    path: str | None = Field(
+    path: pathlib.Path | None = Field(
         default=None,
         desc="Path to the tokenizer file.",
         hint=FieldHint.core,

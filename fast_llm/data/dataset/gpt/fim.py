@@ -10,7 +10,7 @@ FIM_PAD = "<fim_pad>"
 FIM_SUFFIX = "<fim_suffix>"
 
 
-class FimDataset(SampledDataset):
+class GPTFimDataset(SampledDataset):
     """
     An implementation of FIM (fill in the middle) post-processing of GPT datasets.
     Adapted from https://github.com/EleutherAI/gpt-neox/blob/FIM-clean/megatron/data/gpt2_dataset.py

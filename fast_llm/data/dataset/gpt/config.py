@@ -68,6 +68,26 @@ class FimConfig(Config):
         desc="TODO.",
         hint=FieldHint.feature,
     )
+    prefix_token: str = Field(
+        default="<fim_prefix>",
+        desc="TODO.",
+        hint=FieldHint.feature,
+    )
+    middle_token: str = Field(
+        default="<fim_middle>",
+        desc="TODO.",
+        hint=FieldHint.feature,
+    )
+    pad_token: str = Field(
+        default="<fim_pad>",
+        desc="TODO.",
+        hint=FieldHint.feature,
+    )
+    suffix_token: str = Field(
+        default="<fim_suffix>",
+        desc="TODO.",
+        hint=FieldHint.feature,
+    )
 
     def _validate(self):
         super()._validate()

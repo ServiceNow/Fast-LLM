@@ -14,7 +14,7 @@ from fast_llm.data.dataset.abstract import CopySplitDataset, PhaseSplits, Sample
 from fast_llm.data.dataset.blended import BlendedDataset
 from fast_llm.data.dataset.gpt.config import DatasetSource, GPTSamplingConfig
 from fast_llm.data.dataset.gpt.dummy import GPTDummyDataset
-from fast_llm.data.dataset.gpt.fim import FimDataset
+from fast_llm.data.dataset.gpt.fim import GPTFimDataset
 from fast_llm.data.dataset.gpt.indexed import GPTDatasetSlice
 from fast_llm.data.dataset.gpt.memmap import GPTMemmapDataset
 from fast_llm.data.dataset.monitor import DatasetMonitor
@@ -245,7 +245,7 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
             datasets = SampledSplitDataset[GPTDatasetSlice](
                 "fim",
                 {
-                    phase: FimDataset(self.config.fim, dataset, sampling_configs[phase])
+                    phase: GPTFimDataset(self.config.fim, dataset, sampling_configs[phase])
                     for phase, dataset in datasets.items()
                 },
             )
