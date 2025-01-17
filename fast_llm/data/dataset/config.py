@@ -139,15 +139,19 @@ class BlendedDatasetConfig(SampledDatasetConfig):
         default_factory=list,
         desc="The datasets to blend.",
         hint=FieldHint.core,
-        valid=check_field(functools.partial(Assert.custom, lambda x: len(x) > 0)),
     )
     weights: list[float] = Field(
         default_factory=list,
         desc="The blending weight of each dataset.",
         hint=FieldHint.core,
     )
+    seed_shift: int = Field(
+        default=54783, desc="Shift the seed for each sub-dataset for extra randomness.", hint=FieldHint.feature
+    )
 
-    def __post_init__(self) -> None:
+    def _validate(self) -> None:
+        super()._validate()
+        Assert.geq(len(self.datasets), 2)
         Assert.eq(len(self.datasets), len(self.weights))
 
     def build_and_sample(
@@ -157,12 +161,17 @@ class BlendedDatasetConfig(SampledDatasetConfig):
         from fast_llm.data.dataset.blended import BlendedDataset
 
         # Build and sample the datasets.
+        # TODO: Vary the seed?
         sampled_datasets = [
             dataset.build_and_sample(
                 # Blending is deterministic and the error will never be higher than 1.
-                dataclasses.replace(config, num_samples=math.ceil(weight * config.num_samples) + 1),
+                dataclasses.replace(
+                    config,
+                    num_samples=math.ceil(weight * config.num_samples) + 1,
+                    seed=config.seed + i * self.seed_shift,
+                ),
             )
-            for dataset, weight in zip(self.datasets, self.weights, strict=True)
+            for i, (dataset, weight) in enumerate(zip(self.datasets, self.weights, strict=True))
         ]
         # Blend the datasets.
         return BlendedDataset(

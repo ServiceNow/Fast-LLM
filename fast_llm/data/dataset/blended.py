@@ -133,7 +133,7 @@ class BlendedDataset(SampledDataset):
         return dataset_index, dataset_sample_index
 
     def __getitem__(self, idx: int) -> typing.Any:
-        return self._datasets[self._dataset_index[idx]][self._sample_index[idx]]
+        return self._datasets[self._dataset_index[idx]][self._sample_index[idx].item()]
 
     @property
     def name(self):

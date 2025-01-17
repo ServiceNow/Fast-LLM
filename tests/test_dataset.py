@@ -4,10 +4,13 @@ import typing
 import numpy
 import numpy as np
 
+from fast_llm.data.config import TokenizerConfig
 from fast_llm.data.dataset.gpt.config import (
+    GPTBlendedDatasetConfig,
     GPTConcatenatedDatasetConfig,
     GPTDatasetSliceConfig,
     GPTDummyDatasetConfig,
+    GPTFimSampledDatasetConfig,
     GPTMemmapDatasetConfig,
     GPTSampledDatasetConfig,
     GPTSamplingConfig,
@@ -16,7 +19,7 @@ from fast_llm.data.tokenizer import Tokenizer
 from fast_llm.engine.distributed.config import DistributedConfig, PhaseType
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.utils import Assert
-from tests.common import DATASET_PREFIX, TEST_RESULTS_PATH, TEST_VOCAB_SIZE, get_test_dataset
+from tests.common import DATASET_PREFIX, TEST_RESULTS_PATH, TEST_VOCAB_SIZE, TOKENIZER_PATH, get_test_dataset
 
 DATASET_CACHE = TEST_RESULTS_PATH / "dataset" / "cache"
 
@@ -80,7 +83,7 @@ _MEMMAP_DATASET_EXPECTED_SAMPLES = {
 }
 
 
-def test_gpt_memmap_dataset():
+def test_gpt_memmap():
     # Make sure the memmap dataset works and check for unintended changes in behavior.
     get_test_dataset()
     dataset = _get_dataset_config({"type": "memmap", "path": DATASET_PREFIX}, GPTMemmapDatasetConfig).build()
@@ -92,7 +95,7 @@ def test_gpt_memmap_dataset():
         Assert.all_equal(dataset.get(i), np.array(sample, dtype=numpy.uint16))
 
 
-def test_gpt_dataset_concatenate():
+def test_gpt_concatenate():
     # Make sure the dataset concatenation works and check for unintended changes in behavior.
     get_test_dataset()
     dataset = _get_dataset_config(
@@ -112,7 +115,7 @@ def test_gpt_dataset_concatenate():
             Assert.all_equal(dataset.get(begin + i), np.array(sample, dtype=numpy.uint16))
 
 
-def test_gpt_dataset_slice():
+def test_gpt_slice():
     # Make sure dataset splitting works and check for unintended changes in behavior.
     get_test_dataset()
     # samples[9:18]
@@ -127,14 +130,15 @@ def test_gpt_dataset_slice():
         Assert.all_equal(dataset.get(i - 9), np.array(sample, dtype=numpy.uint16))
 
 
-def test_gpt_indexed_dataset_sampling():
+def test_gpt_sampling():
     # Make sure the memmap dataset works and check for unintended changes in behavior.
     get_test_dataset()
     sampled = _get_dataset_config({"type": "memmap", "path": DATASET_PREFIX}, GPTMemmapDatasetConfig).build_and_sample(
         get_sampling_config(8, sequence_length=5)
     )
+    Assert.eq(len(sampled), 8)
     Assert.all_equal(
-        np.stack([sampled[i] for i in range(5)]),
+        np.stack([sampled[i] for i in range(8)]),
         np.array(
             [
                 [1725, 74, 207, 1635, 4440, 2774],
@@ -142,6 +146,82 @@ def test_gpt_indexed_dataset_sampling():
                 [374, 7534, 87, 1073, 79, 480],
                 [8008, 498, 71, 727, 80, 315],
                 [2210, 8179, 73, 2582, 897, 1178],
+                [409, 5091, 328, 1378, 5483, 88],
+                [83, 4457, 3316, 333, 489, 317],
+                [330, 155, 2449, 1136, 1106, 5370],
+            ]
+        ),
+    )
+
+
+def test_gpt_blended():
+    # Make sure dataset blending works and check for unintended changes in behavior.
+
+    get_test_dataset()
+    sampled = _get_dataset_config(
+        {
+            "type": "blended",
+            "datasets": [
+                {"type": "memmap", "path": DATASET_PREFIX},
+                {"type": "dummy"},
+            ],
+            "weights": [0.6, 0.4],
+        },
+        GPTBlendedDatasetConfig,
+    ).build_and_sample(get_sampling_config(8, sequence_length=5))
+    Assert.eq(len(sampled), 8)
+    print("AAAAA", [sampled[i].tolist() for i in range(8)])
+    Assert.all_equal(
+        np.stack([sampled[i] for i in range(8)]),
+        np.array(
+            [
+                [1725, 74, 207, 1635, 4440, 2774],
+                [5291, 3692, 4158, 503, 2201, 2587],
+                [359, 489, 4266, 2052, 5351, 80],
+                [5558, 4833, 2889, 7476, 1588, 226],
+                [374, 7534, 87, 1073, 79, 480],
+                [8008, 498, 71, 727, 80, 315],
+                [786, 3161, 8179, 2300, 6160, 2531],
+                [2210, 8179, 73, 2582, 897, 1178],
+            ]
+        ),
+    )
+
+
+def test_gpt_fim():
+    # Make sure the FIM wrapper works in a simple case and check for unintended changes in behavior.
+    get_test_dataset()
+    # The test tokenizer doesn't have fim tokens, so we work around it.
+    sampled = _get_dataset_config(
+        {
+            "type": "fim",
+            "rate": 0.5,
+            "prefix_token": "w",
+            "middle_token": "x",
+            "pad_token": "y",
+            "suffix_token": "z",
+            "dataset": {"type": "memmap", "path": DATASET_PREFIX},
+        },
+        GPTFimSampledDatasetConfig,
+    ).build_and_sample(
+        get_sampling_config(
+            8, sequence_length=5, tokenizer=Tokenizer(TokenizerConfig.from_dict({"path": TOKENIZER_PATH}))
+        )
+    )
+    Assert.eq(len(sampled), 8)
+    # TODO: Does this output make sense?
+    Assert.all_equal(
+        np.stack([sampled[i] for i in range(8)]),
+        np.array(
+            [
+                [1725, 74, 207, 1635, 4440, 2774],
+                [359, 489, 4266, 2052, 5351, 80],
+                [86, 89, 22255, 1073, 79, 480],
+                [8008, 498, 71, 727, 80, 315],
+                [2210, 8179, 73, 2582, 897, 1178],
+                [86, 89, 88, 87, 409, 70],
+                [86, 83, 744, 89, 64, 333],
+                [86, 89, 1461, 87, 330, 7876],
             ]
         ),
     )

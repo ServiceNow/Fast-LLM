@@ -193,13 +193,35 @@ class FimConfig(Config):
         desc="TODO.",
         hint=FieldHint.feature,
     )
+    prefix_token: str = Field(
+        default="<fim_prefix>",
+        desc="TODO.",
+        hint=FieldHint.feature,
+    )
+    middle_token: str = Field(
+        default="<fim_middle>",
+        desc="TODO.",
+        hint=FieldHint.feature,
+    )
+    pad_token: str = Field(
+        default="<fim_pad>",
+        desc="TODO.",
+        hint=FieldHint.feature,
+    )
+    suffix_token: str = Field(
+        default="<fim_suffix>",
+        desc="TODO.",
+        hint=FieldHint.feature,
+    )
 
 
 @config_class()
-class FimSampledDatasetConfig(GPTSampledDatasetConfig, FimConfig, type_="fim"):
+class GPTFimSampledDatasetConfig(GPTSampledDatasetConfig, FimConfig, type_="fim"):
     """
     Configuration for FIM.
     """
+
+    _abstract = False
 
     dataset: GPTSampledDatasetConfig = Field(
         default=None,
@@ -294,7 +316,7 @@ class GPTLegacyDatasetConfig(GPTSampledDatasetConfig, GPTLegacyConfig, type_="le
             else:
                 raise NotImplementedError(self.format)
 
-            phase_splits = padded_cumsum(self.ratio)
+            phase_splits = padded_cumsum(self.split)
             phase_index = {
                 PhaseType.training: 0,
                 PhaseType.validation: 1,
@@ -315,12 +337,13 @@ class GPTLegacyDatasetConfig(GPTSampledDatasetConfig, GPTLegacyConfig, type_="le
                     name="blended",
                     datasets=dataset_configs,
                     weights=dataset_weights,
+                    seed_shift=0,
                 )
                 if len(dataset_configs) > 1
                 else dataset_configs[0]
             )
             if self.fim.rate > 0:
-                dataset_config = FimSampledDatasetConfig.from_dict(
+                dataset_config = GPTFimSampledDatasetConfig.from_dict(
                     self.fim,
                     {"dataset": dataset_config},
                 )
