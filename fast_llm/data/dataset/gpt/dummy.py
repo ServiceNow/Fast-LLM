@@ -29,7 +29,7 @@ class GPTDummySampledDataset(SampledDataset):
         return self._config.num_samples
 
     def __getitem__(self, idx) -> np.ndarray:
-        return np.random.RandomState(self._config.seed + 4857643).randint(
+        return np.random.RandomState(self._config.seed + 48576439 + 74593 * idx).randint(
             0, self._config.vocab_size, size=(self._config.sequence_length + 1,), dtype=np.int64
         )
 

@@ -40,6 +40,7 @@ DATASET_PREFIX = TEST_RESULTS_PATH / "dataset" / "common"
 TEST_VOCAB_SIZE = 8192
 # Random lowercase: 80.7% (3.1% each); space: 18.6%; doc end: 0.6%
 TEST_CHARACTERS = (string.ascii_lowercase) * 5 + " " * 30 + "\n"
+TEST_DATASET_TOKENS = 1000000
 
 CONFIG_BASE_FAST_LLM = [
     "training.logs.interval=1",
@@ -209,7 +210,11 @@ requires_cuda = pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA i
 
 
 def get_test_dataset(
-    prefix=DATASET_PREFIX, seed=1234, num_tokens=1000000, characters=TEST_CHARACTERS, vocab_size=TEST_VOCAB_SIZE
+    prefix=DATASET_PREFIX,
+    seed=1234,
+    num_tokens=TEST_DATASET_TOKENS,
+    characters=TEST_CHARACTERS,
+    vocab_size=TEST_VOCAB_SIZE,
 ):
     if not TOKENIZER_FILE.is_file():
         import transformers

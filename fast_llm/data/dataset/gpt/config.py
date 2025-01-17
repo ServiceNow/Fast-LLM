@@ -19,7 +19,7 @@ from fast_llm.engine.distributed.config import PhaseType
 from fast_llm.utils import Assert, Registry, normalize_probabilities, padded_cumsum
 
 if typing.TYPE_CHECKING:
-    from fast_llm.data.dataset.gpt.dummy import GPTDummySampledDataset
+    from fast_llm.data.dataset.gpt.dummy import GPTDummyDataset
     from fast_llm.data.dataset.gpt.indexed import GPTConcatenatedDataset, GPTDatasetSlice, GPTIndexedDataset
     from fast_llm.data.dataset.gpt.memmap import GPTMemmapDataset
     from fast_llm.data.tokenizer import Tokenizer
@@ -90,8 +90,7 @@ class GPTIndexedDatasetConfig(GPTSamplableDatasetConfig, IndexedDatasetConfig):
 
 
 @config_class()
-class GPTDummyDatasetConfig(GPTSampledDatasetConfig, type_="dummy"):
-    # TODO: Can't make it a samplable dataset because necessary info is in sampling config.
+class GPTDummyDatasetConfig(GPTSamplableDatasetConfig, type_="dummy"):
     _abstract = False
     name: str = Field(
         default="dummy",
@@ -99,10 +98,10 @@ class GPTDummyDatasetConfig(GPTSampledDatasetConfig, type_="dummy"):
         hint=FieldHint.core,
     )
 
-    def build_and_sample(self, config: GPTSamplingConfig) -> "GPTDummySampledDataset":
+    def build(self) -> "GPTDummyDataset":
         from fast_llm.data.dataset.gpt.dummy import GPTDummyDataset
 
-        return GPTDummyDataset(self.name, config.sequence_length, config.vocab_size).sample(config)
+        return GPTDummyDataset(self.name)
 
 
 @config_class()
