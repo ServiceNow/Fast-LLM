@@ -94,19 +94,6 @@ class FimConfig(Config):
         Assert.in_range_incl(self.rate, 0, 1)
 
 
-class DatasetSource(str, enum.Enum):
-    """
-    An enum for the different ways to load datasets.
-    TODO: Reduce the diversity?
-    TODO: Is this specific to GPT data?
-    """
-
-    list = "list"
-    file = "file"
-    sample = "sample"
-    random = "random"
-
-
 class LegacyDatasetSource(str, enum.Enum):
     """
     An enum for the different ways to load datasets.
