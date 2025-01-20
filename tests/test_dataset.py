@@ -530,7 +530,7 @@ def test_gpt_fim_data():
     )
 
 
-def test_gpt_fim_legacy_data():
+def test_gpt_fim_data_legacy():
     _, samples = get_test_data_and_samples(
         {
             "format": "list",
