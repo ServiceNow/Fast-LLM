@@ -13,10 +13,10 @@ from fast_llm.data.data.gpt.config import GPTDataConfig
 from fast_llm.data.dataset.abstract import CopySplitDataset, PhaseSplits, SampledSplitDataset
 from fast_llm.data.dataset.blended import BlendedDataset
 from fast_llm.data.dataset.gpt.config import GPTSamplingConfig, LegacyDatasetSource
-from fast_llm.data.dataset.gpt.dummy import GPTRandomDataset
 from fast_llm.data.dataset.gpt.fim import GPTFimDataset
 from fast_llm.data.dataset.gpt.indexed import GPTDatasetSlice
 from fast_llm.data.dataset.gpt.memmap import GPTMemmapDataset
+from fast_llm.data.dataset.gpt.random import GPTRandomDataset
 from fast_llm.data.dataset.monitor import DatasetMonitor
 from fast_llm.data.iterator import SampledDatasetIterator
 from fast_llm.data.tokenizer import Tokenizer

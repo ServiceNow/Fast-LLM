@@ -11,10 +11,10 @@ from fast_llm.data.data.gpt.data import GPTData
 from fast_llm.data.dataset.abstract import PhaseSplits
 from fast_llm.data.dataset.blended import BlendedDataset
 from fast_llm.data.dataset.gpt.config import FimConfig, GPTSamplingConfig
-from fast_llm.data.dataset.gpt.dummy import GPTRandomDataset
 from fast_llm.data.dataset.gpt.fim import GPTFimDataset
 from fast_llm.data.dataset.gpt.indexed import GPTConcatenatedDataset, GPTDatasetSlice, GPTIndexedDataset
 from fast_llm.data.dataset.gpt.memmap import GPTMemmapDataset
+from fast_llm.data.dataset.gpt.random import GPTRandomDataset
 from fast_llm.data.tokenizer import Tokenizer
 from fast_llm.engine.distributed.config import DistributedConfig, PhaseType
 from fast_llm.engine.distributed.distributed import Distributed
