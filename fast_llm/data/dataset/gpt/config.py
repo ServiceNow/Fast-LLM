@@ -19,9 +19,9 @@ from fast_llm.engine.distributed.config import PhaseType
 from fast_llm.utils import Assert, Registry, normalize_probabilities, padded_cumsum
 
 if typing.TYPE_CHECKING:
-    from fast_llm.data.dataset.gpt.dummy import GPTRandomDataset
     from fast_llm.data.dataset.gpt.indexed import GPTConcatenatedDataset, GPTDatasetSlice, GPTIndexedDataset
     from fast_llm.data.dataset.gpt.memmap import GPTMemmapDataset
+    from fast_llm.data.dataset.gpt.random import GPTRandomDataset
     from fast_llm.data.tokenizer import Tokenizer
 
 
@@ -99,7 +99,7 @@ class GPTRandomDatasetConfig(GPTSamplableDatasetConfig, type_="random"):
     )
 
     def build(self) -> "GPTRandomDataset":
-        from fast_llm.data.dataset.gpt.dummy import GPTRandomDataset
+        from fast_llm.data.dataset.gpt.random import GPTRandomDataset
 
         return GPTRandomDataset(self.name)
 
