@@ -14,11 +14,6 @@ if typing.TYPE_CHECKING:
     from fast_llm.engine.distributed.distributed import Distributed
 
 
-@config_class()
-class DatasetConfig(Config):
-    _abstract = True
-
-
 @dataclasses.dataclass(kw_only=True)
 class SamplingConfig:
     # TODO: Have a separate configuration (subset?) for `build`?
@@ -27,6 +22,11 @@ class SamplingConfig:
     cache_directory: pathlib.Path | None
     distributed: "Distributed"
     phase: PhaseType
+
+
+@config_class()
+class DatasetConfig(Config):
+    _abstract = True
 
 
 @config_class()

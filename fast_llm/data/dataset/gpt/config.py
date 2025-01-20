@@ -19,7 +19,7 @@ from fast_llm.engine.distributed.config import PhaseType
 from fast_llm.utils import Assert, Registry, normalize_probabilities, padded_cumsum
 
 if typing.TYPE_CHECKING:
-    from fast_llm.data.dataset.gpt.dummy import GPTDummyDataset
+    from fast_llm.data.dataset.gpt.dummy import GPTRandomDataset
     from fast_llm.data.dataset.gpt.indexed import GPTConcatenatedDataset, GPTDatasetSlice, GPTIndexedDataset
     from fast_llm.data.dataset.gpt.memmap import GPTMemmapDataset
     from fast_llm.data.tokenizer import Tokenizer
@@ -90,7 +90,7 @@ class GPTIndexedDatasetConfig(GPTSamplableDatasetConfig, IndexedDatasetConfig):
 
 
 @config_class()
-class GPTDummyDatasetConfig(GPTSamplableDatasetConfig, type_="dummy"):
+class GPTRandomDatasetConfig(GPTSamplableDatasetConfig, type_="random"):
     _abstract = False
     name: str = Field(
         default="dummy",
@@ -98,10 +98,10 @@ class GPTDummyDatasetConfig(GPTSamplableDatasetConfig, type_="dummy"):
         hint=FieldHint.core,
     )
 
-    def build(self) -> "GPTDummyDataset":
-        from fast_llm.data.dataset.gpt.dummy import GPTDummyDataset
+    def build(self) -> "GPTRandomDataset":
+        from fast_llm.data.dataset.gpt.dummy import GPTRandomDataset
 
-        return GPTDummyDataset(self.name)
+        return GPTRandomDataset(self.name)
 
 
 @config_class()
@@ -233,9 +233,9 @@ class GPTFimSampledDatasetConfig(GPTSampledDatasetConfig, FimConfig, type_="fim"
         self,
         config: GPTSamplingConfig,
     ) -> SampledDataset:
-        from fast_llm.data.dataset.gpt.fim import FimDataset
+        from fast_llm.data.dataset.gpt.fim import GPTFimDataset
 
-        return FimDataset(self, self.dataset.build_and_sample(config), config)
+        return GPTFimDataset(self, self.dataset.build_and_sample(config), config)
 
 
 class LegacyDatasetSource(str, enum.Enum):
@@ -291,7 +291,7 @@ class GPTLegacyDatasetConfig(GPTSampledDatasetConfig, GPTLegacyConfig, type_="le
 
         if self.format == LegacyDatasetSource.random:
             Assert.eq(len(self.path), 0)
-            dataset_config = GPTDummyDatasetConfig()
+            dataset_config = GPTRandomDatasetConfig()
         else:
             if self.format == LegacyDatasetSource.file:
                 Assert.eq(len(self.path), 1)

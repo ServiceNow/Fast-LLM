@@ -11,10 +11,6 @@ if typing.TYPE_CHECKING:
 
 
 class GPTIndexedDataset(IndexedDataset):
-    """
-    A GPT dataset containing a list of samples.
-    """
-
     @abc.abstractmethod
     def get_document_sizes(self) -> np.ndarray:
         """
@@ -29,7 +25,7 @@ class GPTIndexedDataset(IndexedDataset):
         return GPTSampledIndexedDataset(self, config)
 
 
-class GPTDatasetSlice(DatasetSlice, GPTIndexedDataset):
+class GPTDatasetSlice[IndexedDatasetType: GPTIndexedDataset](DatasetSlice[IndexedDatasetType], GPTIndexedDataset):
     """
     A GPT dataset, which reads samples from (a split of) a `MMapIndexedDataset` pointing to a GPT dataset.
     """
@@ -41,7 +37,9 @@ class GPTDatasetSlice(DatasetSlice, GPTIndexedDataset):
         return self._dataset.get_document_sizes()[self._begin : self._end]
 
 
-class GPTConcatenatedDataset(ConcatenatedDataset, GPTIndexedDataset):
+class GPTConcatenatedDataset[IndexedDatasetType: GPTIndexedDataset](
+    ConcatenatedDataset[IndexedDatasetType], GPTIndexedDataset
+):
     _datasets: list[GPTIndexedDataset]
 
     def get_document_sizes(self) -> np.ndarray:

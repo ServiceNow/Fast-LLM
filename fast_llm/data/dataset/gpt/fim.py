@@ -5,7 +5,7 @@ from fast_llm.data.dataset.gpt.config import FimConfig, GPTSamplingConfig
 from fast_llm.engine.distributed.config import MAX_SEED
 
 
-class FimDataset(SampledDataset):
+class GPTFimDataset(SampledDataset):
     """
     An implementation of FIM (fill in the middle) post-processing of GPT datasets.
     Adapted from https://github.com/EleutherAI/gpt-neox/blob/FIM-clean/megatron/data/gpt2_dataset.py

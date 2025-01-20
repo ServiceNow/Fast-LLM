@@ -4,7 +4,7 @@ from fast_llm.data.dataset.abstract import SamplableDataset, SampledDataset
 from fast_llm.data.dataset.gpt.config import GPTSamplingConfig
 
 
-class GPTDummyDataset(SamplableDataset):
+class GPTRandomDataset(SamplableDataset):
     """
     A dummy dataset that always returns the same random sample, for debugging purposes.
     """
@@ -12,15 +12,15 @@ class GPTDummyDataset(SamplableDataset):
     def __init__(self, name: str):
         self._name = name
 
-    def sample(self, config: GPTSamplingConfig) -> "GPTDummySampledDataset":
-        return GPTDummySampledDataset(f"{self.name}_sampled", config)
+    def sample(self, config: GPTSamplingConfig) -> "GPTRandomSampledDataset":
+        return GPTRandomSampledDataset(f"{self.name}_sampled", config)
 
     @property
     def name(self) -> str:
         return self._name
 
 
-class GPTDummySampledDataset(SampledDataset):
+class GPTRandomSampledDataset(SampledDataset):
     def __init__(self, name: str, config: GPTSamplingConfig):
         self._name = name
         self._config = config

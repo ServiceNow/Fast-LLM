@@ -24,7 +24,7 @@ class IndexedDataset(SamplableDataset):
         """
 
 
-class DatasetSlice(IndexedDataset):
+class DatasetSlice[IndexedDatasetType: IndexedDataset](IndexedDataset):
 
     def __init__(
         self,
