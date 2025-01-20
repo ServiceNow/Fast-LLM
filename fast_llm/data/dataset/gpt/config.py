@@ -40,7 +40,7 @@ class GPTSampledDatasetConfig(SampledDatasetConfig):
     _registry: typing.ClassVar[Registry[str, type["GPTSampledDatasetConfig"]]] = Registry[
         str, type["GPTDatasetConfig"]
     ]("gpt_dataset_class", {})
-    type_: typing.ClassVar[type["GPTSampledDatasetConfig"] | None] = None
+    type_: typing.ClassVar[str | None] = None
     type: str | None = Field(
         default=None,
         desc="The type of dataset.",
@@ -51,6 +51,7 @@ class GPTSampledDatasetConfig(SampledDatasetConfig):
         if self.type is not None:
             # Should be handled in `from_dict`, but can fail if instantiating directly.
             Assert.eq(self.type, self.type_)
+        Assert.eq(self.type, self.__class__.type_)
         super()._validate()
 
     @classmethod
@@ -71,10 +72,17 @@ class GPTSampledDatasetConfig(SampledDatasetConfig):
         else:
             return actual_cls._from_dict(default, strict=strict, flat=flat)
 
-    def __init_subclass__(cls, type_: str | None = None, **kwargs) -> None:
-        if type_ is not None:
-            GPTSampledDatasetConfig._registry[type_] = cls
-        cls.type_ = type_
+    def __init_subclass__(cls) -> None:
+        if cls._abstract and cls.type_ is not None:
+            # Abstract classes should not have a `type_`
+            raise ValueError(f"Abstract class {cls.__name__} has type = {cls.type_}, expected None.")
+        if cls.type_ is not None:
+            if cls.type_ in cls._registry:
+                raise ValueError(
+                    f"Registry {cls._registry.name} already contains type {cls.type_}."
+                    f" Make sure all classes either have a unique or `None` type."
+                )
+            GPTSampledDatasetConfig._registry[cls.type_] = cls
         super().__init_subclass__()
 
 
@@ -90,8 +98,9 @@ class GPTIndexedDatasetConfig(GPTSamplableDatasetConfig, IndexedDatasetConfig):
 
 
 @config_class()
-class GPTRandomDatasetConfig(GPTSamplableDatasetConfig, type_="random"):
-    _abstract = False
+class GPTRandomDatasetConfig(GPTSamplableDatasetConfig):
+    _abstract: typing.ClassVar[bool] = False
+    type_: typing.ClassVar[str | None] = "random"
     name: str = Field(
         default="dummy",
         desc="The name of the dataset.",
@@ -105,8 +114,9 @@ class GPTRandomDatasetConfig(GPTSamplableDatasetConfig, type_="random"):
 
 
 @config_class()
-class GPTMemmapDatasetConfig(GPTIndexedDatasetConfig, type_="memmap"):
-    _abstract = False
+class GPTMemmapDatasetConfig(GPTIndexedDatasetConfig):
+    _abstract: typing.ClassVar[bool] = False
+    type_: typing.ClassVar[str | None] = "memmap"
     path: pathlib.Path = Field(
         default=None,
         desc="The path to the dataset, excluding the `.bin` or `.idx` suffix.",
@@ -120,8 +130,9 @@ class GPTMemmapDatasetConfig(GPTIndexedDatasetConfig, type_="memmap"):
 
 
 @config_class()
-class GPTConcatenatedDatasetConfig(ConcatenatedDatasetConfig, GPTIndexedDatasetConfig, type_="concatenated"):
-    _abstract = False
+class GPTConcatenatedDatasetConfig(ConcatenatedDatasetConfig, GPTIndexedDatasetConfig):
+    _abstract: typing.ClassVar[bool] = False
+    type_: typing.ClassVar[str | None] = "concatenated"
     datasets: list[GPTIndexedDatasetConfig] = FieldUpdate()
 
     def build(self) -> "GPTConcatenatedDataset":
@@ -131,8 +142,9 @@ class GPTConcatenatedDatasetConfig(ConcatenatedDatasetConfig, GPTIndexedDatasetC
 
 
 @config_class()
-class GPTDatasetSliceConfig(DatasetSliceConfig, GPTIndexedDatasetConfig, type_="slice"):
-    _abstract = False
+class GPTDatasetSliceConfig(DatasetSliceConfig, GPTIndexedDatasetConfig):
+    _abstract: typing.ClassVar[bool] = False
+    type_: typing.ClassVar[str | None] = "slice"
     dataset: GPTIndexedDatasetConfig = FieldUpdate()
 
     def build(self) -> "GPTDatasetSlice":
@@ -142,8 +154,9 @@ class GPTDatasetSliceConfig(DatasetSliceConfig, GPTIndexedDatasetConfig, type_="
 
 
 @config_class()
-class GPTBlendedDatasetConfig(BlendedDatasetConfig, GPTSampledDatasetConfig, type_="blended"):
-    _abstract = False
+class GPTBlendedDatasetConfig(BlendedDatasetConfig, GPTSampledDatasetConfig):
+    _abstract: typing.ClassVar[bool] = False
+    type_: typing.ClassVar[str | None] = "blended"
     datasets: list[GPTSampledDatasetConfig] = FieldUpdate()
 
 
@@ -216,12 +229,13 @@ class FimConfig(Config):
 
 
 @config_class()
-class GPTFimSampledDatasetConfig(GPTSampledDatasetConfig, FimConfig, type_="fim"):
+class GPTFimSampledDatasetConfig(GPTSampledDatasetConfig, FimConfig):
     """
     Configuration for FIM.
     """
 
-    _abstract = False
+    _abstract: typing.ClassVar[bool] = False
+    type_: typing.ClassVar[str | None] = "fim"
 
     dataset: GPTSampledDatasetConfig = Field(
         default=None,
@@ -284,8 +298,9 @@ class GPTLegacyConfig(Config):
 
 
 @config_class()
-class GPTLegacyDatasetConfig(GPTSampledDatasetConfig, GPTLegacyConfig, type_="legacy"):
-    _abstract = False
+class GPTLegacyDatasetConfig(GPTSampledDatasetConfig, GPTLegacyConfig):
+    _abstract: typing.ClassVar[bool] = False
+    type_: typing.ClassVar[str | None] = "legacy"
 
     def build_and_sample(self, config: GPTSamplingConfig) -> SampledDataset:
 

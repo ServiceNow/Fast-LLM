@@ -26,7 +26,7 @@ class SamplingConfig:
 
 @config_class()
 class DatasetConfig(Config):
-    _abstract = True
+    _abstract: typing.ClassVar[bool] = True
 
 
 @config_class()
