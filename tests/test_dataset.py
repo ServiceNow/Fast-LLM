@@ -387,6 +387,7 @@ def test_gpt_blended():
                 {"type": "memmap", "path": DATASET_PREFIX_MIX_1},
             ],
             "weights": [0.75, 0.25],
+            "seed_shift": 0,
         },
         GPTBlendedDatasetConfig,
     ).build_and_sample(get_sampling_config(8, sequence_length=5))
@@ -410,6 +411,7 @@ def test_gpt_blended_data():
                         {"type": "memmap", "path": DATASET_PREFIX_MIX_1},
                     ],
                     "weights": [0.75, 0.25],
+                    "seed_shift": 0,
                 }
             }
         },
