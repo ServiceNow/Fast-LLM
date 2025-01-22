@@ -21,6 +21,8 @@ class GPTFimDataset(SampledDataset):
         self._dataset = dataset
         self._sampling_config = sampling_config
         self._tokenizer = sampling_config.tokenizer
+        if self._tokenizer is None:
+            raise ValueError("Fim requires a tokenizer")
         self._suffix_tok_id, self._prefix_tok_id, self._middle_tok_id, self._pad_tok_id = (
             self._tokenizer.vocab[tok]
             for tok in [config.suffix_token, config.prefix_token, config.middle_token, config.pad_token]

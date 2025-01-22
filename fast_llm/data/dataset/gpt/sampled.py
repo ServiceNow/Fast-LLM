@@ -138,7 +138,7 @@ class GPTSampledIndexedDataset(SampledDataset):
         if hasattr(self, "_doc_idx_filename"):
             return (
                 self._indexed_dataset,
-                self._doc_idx,
+                self._doc_idx_filename,
                 self._sample_idx_filename,
                 self._shuffle_idx_filename,
             )

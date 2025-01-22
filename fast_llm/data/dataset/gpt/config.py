@@ -48,9 +48,9 @@ class GPTSampledDatasetConfig(SampledDatasetConfig):
     )
 
     def _validate(self) -> None:
-        if self.type is not None:
-            # Should be handled in `from_dict`, but can fail if instantiating directly.
-            Assert.eq(self.type, self.type_)
+        if self.type is None:
+            self.type = self.type_
+        # Should be handled in `from_dict`, but can fail if instantiating directly.
         Assert.eq(self.type, self.__class__.type_)
         super()._validate()
 

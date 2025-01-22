@@ -198,17 +198,17 @@ def test_gpt_sampled_data():
     )
     Assert.all_equal(
         np.stack(samples[PhaseType.training]),
-        np.array(RANDOM_DATASET_EXPECTED_SAMPLES),
+        np.array(GPT_SAMPLED_EXPECTED_SAMPLES),
     )
 
 
 def test_gpt_sampled_data_legacy():
     _, samples = get_test_data_and_samples(
-        {"format": "list", "path": [DATASET_PREFIX], "split": [1]}, {PhaseType.training: 8}, sequence_length=5
+        {"format": "list", "path": [DATASET_PREFIX], "split": [1, 0, 0]}, {PhaseType.training: 8}, sequence_length=5
     )
     Assert.all_equal(
         np.stack(samples[PhaseType.training]),
-        np.array(RANDOM_DATASET_EXPECTED_SAMPLES),
+        np.array(GPT_SAMPLED_EXPECTED_SAMPLES),
     )
 
 
@@ -238,7 +238,7 @@ def test_gpt_concatenate():
         begin = i * MEMMAP_DATASET_EXPECTED_LENGTH
         Assert.all_equal([len(dataset.get(begin + i)) for i in range(100)], sizes[begin : begin + 100])
         for i, sample in MEMMAP_DATASET_EXPECTED_SAMPLES.items():
-            Assert.all_equal(dataset.get(begin + i), np.array(sample, dtype=numpy.uint16))
+            Assert.all_equal(dataset.get(begin + i), np.array(sample, dtype=np.uint16))
     sampled = dataset.sample(get_sampling_config(8, sequence_length=5))
     Assert.eq(len(sampled), 8)
     Assert.all_equal(
@@ -262,7 +262,7 @@ def test_gpt_concatenate_data():
     )
     Assert.all_equal(
         np.stack(samples[PhaseType.training]),
-        np.array(RANDOM_DATASET_EXPECTED_SAMPLES),
+        np.array(GPT_CONCATENATED_EXPECTED_SAMPLES),
     )
 
 
@@ -344,6 +344,7 @@ def test_gpt_slice_data():
 
 
 def test_gpt_slice_data_legacy():
+    get_test_dataset()
     _, samples = get_test_data_and_samples(
         {"format": "list", "path": [str(DATASET_PREFIX)], "split": [0.0015, 0.0015, 0.997]},
         {PhaseType.training: 4, PhaseType.validation: 8, PhaseType.test: 5},
@@ -374,10 +375,14 @@ GPT_BLENDED_EXPECTED_SAMPLES = [
 def test_gpt_blended():
     # Make sure dataset blending works and check for unintended changes in behavior.
     get_test_dataset()
+    get_test_dataset_1()
     sampled = _get_dataset_config(
         {
             "type": "blended",
-            "datasets": [{"type": "memmap", "path": DATASET_PREFIX} for _ in range(2)],
+            "datasets": [
+                {"type": "memmap", "path": DATASET_PREFIX},
+                {"type": "memmap", "path": DATASET_PREFIX_MIX_1},
+            ],
             "weights": [0.75, 0.25],
         },
         GPTBlendedDatasetConfig,
@@ -390,12 +395,17 @@ def test_gpt_blended():
 
 
 def test_gpt_blended_data():
+    get_test_dataset()
+    get_test_dataset_1()
     _, samples = get_test_data_and_samples(
         {
             "datasets": {
                 "Training": {
                     "type": "blended",
-                    "datasets": [{"type": "memmap", "path": DATASET_PREFIX} for _ in range(2)],
+                    "datasets": [
+                        {"type": "memmap", "path": DATASET_PREFIX},
+                        {"type": "memmap", "path": DATASET_PREFIX_MIX_1},
+                    ],
                     "weights": [0.75, 0.25],
                 }
             }
@@ -409,9 +419,15 @@ def test_gpt_blended_data():
     )
 
 
-def test_gpt_blended_legacy_data():
+def test_gpt_blended_data_legacy():
+    get_test_dataset()
+    get_test_dataset_1()
     _, samples = get_test_data_and_samples(
-        {"format": "list", "path": [0.75, DATASET_PREFIX, 0.25, DATASET_PREFIX]},
+        {
+            "format": "list",
+            "path": [0.75, str(DATASET_PREFIX), 0.25, str(DATASET_PREFIX_MIX_1)],
+            "split": [1, 0, 0],
+        },
         {PhaseType.training: 8},
         sequence_length=5,
     )
@@ -526,7 +542,8 @@ def test_gpt_fim_data():
                     "pad_token": "y",
                     "suffix_token": "z",
                 }
-            }
+            },
+            "tokenizer": {"path": TOKENIZER_PATH},
         },
         {PhaseType.training: 8},
         sequence_length=5,
@@ -544,6 +561,7 @@ def test_gpt_fim_data_legacy():
             "path": [str(DATASET_PREFIX)],
             "fim": {"rate": 0.5, "prefix_token": "w", "middle_token": "x", "pad_token": "y", "suffix_token": "z"},
             "tokenizer": {"path": TOKENIZER_PATH},
+            "split": [1, 0, 0],
         },
         {PhaseType.training: 8},
         sequence_length=5,
