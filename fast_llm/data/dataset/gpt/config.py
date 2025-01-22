@@ -3,6 +3,7 @@ import enum
 import json
 import pathlib
 import typing
+import warnings
 
 from fast_llm.config import Config, Field, FieldHint, FieldUpdate, check_field, config_class, skip_valid_if_none
 from fast_llm.data.dataset.abstract import SampledDataset
@@ -65,6 +66,10 @@ class GPTSampledDatasetConfig(SampledDatasetConfig):
         if type_ is None:
             actual_cls = cls
         else:
+            if type_ not in cls._registry:
+                raise ValueError(
+                    f"Unknown {cls._registry.name} type {type_}." f" Available types: {list(cls._registry.keys())}"
+                )
             actual_cls = cls._registry[type_]
             Assert.custom(issubclass, actual_cls, cls)
         if actual_cls == cls:
@@ -158,6 +163,41 @@ class GPTBlendedDatasetConfig(BlendedDatasetConfig, GPTSampledDatasetConfig):
     _abstract: typing.ClassVar[bool] = False
     type_: typing.ClassVar[str | None] = "blended"
     datasets: list[GPTSampledDatasetConfig] = FieldUpdate()
+
+
+@config_class()
+class GPTComposedDatasetConfig(GPTIndexedDatasetConfig):
+    _abstract: typing.ClassVar[bool] = False
+    type_: typing.ClassVar[str | None] = "composed"
+    path: pathlib.Path = Field(
+        default=None,
+        desc="The path to a dataset directory.",
+        hint=FieldHint.core,
+    )
+
+    def build(self) -> "GPTConcatenatedDataset":
+        pass
+
+        assert self.path.is_dir()
+        index_path = self.path / "index.txt"
+
+        if index_path.is_file():
+            prefixes = [self.path / line for line in self.path.open("r").readlines()]
+        else:
+            warnings.warn(
+                f"The dataset path {self.path} points to a directory."
+                " The dataset will be indexed automatically, which may be unsafe."
+                " We recommend using an index file instead."
+            )
+            prefixes = [
+                path.with_suffix("")
+                for path in self.path.iterdir()
+                if path.suffix == ".idx" and path.is_file() and path.with_suffix(".bin").is_file()
+            ]
+        dataset_config = GPTConcatenatedDatasetConfig.from_dict(
+            {"datasets": [{"type": "memmap", "path": prefix} for prefix in prefixes]}
+        )
+        return dataset_config.build()
 
 
 @config_class()
