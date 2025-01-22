@@ -4,13 +4,8 @@ from fast_llm.data.dataset.abstract import SampledDataset
 from fast_llm.data.dataset.gpt.config import FimConfig, GPTSamplingConfig
 from fast_llm.engine.distributed.config import MAX_SEED
 
-FIM_PREFIX = "<fim_prefix>"
-FIM_MIDDLE = "<fim_middle>"
-FIM_PAD = "<fim_pad>"
-FIM_SUFFIX = "<fim_suffix>"
 
-
-class FimDataset(SampledDataset):
+class GPTFimDataset(SampledDataset):
     """
     An implementation of FIM (fill in the middle) post-processing of GPT datasets.
     Adapted from https://github.com/EleutherAI/gpt-neox/blob/FIM-clean/megatron/data/gpt2_dataset.py
@@ -27,7 +22,8 @@ class FimDataset(SampledDataset):
         self._sampling_config = sampling_config
         self._tokenizer = sampling_config.tokenizer
         self._suffix_tok_id, self._prefix_tok_id, self._middle_tok_id, self._pad_tok_id = (
-            self._tokenizer.vocab[tok] for tok in [FIM_SUFFIX, FIM_PREFIX, FIM_MIDDLE, FIM_PAD]
+            self._tokenizer.vocab[tok]
+            for tok in [config.suffix_token, config.prefix_token, config.middle_token, config.pad_token]
         )
         self.fim_split_sample = (
             self._tokenizer.vocab[self._config.split_sample] if self._config.split_sample is not None else None

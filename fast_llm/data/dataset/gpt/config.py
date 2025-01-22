@@ -68,23 +68,30 @@ class FimConfig(Config):
         desc="TODO.",
         hint=FieldHint.feature,
     )
+    prefix_token: str = Field(
+        default="<fim_prefix>",
+        desc="TODO.",
+        hint=FieldHint.feature,
+    )
+    middle_token: str = Field(
+        default="<fim_middle>",
+        desc="TODO.",
+        hint=FieldHint.feature,
+    )
+    pad_token: str = Field(
+        default="<fim_pad>",
+        desc="TODO.",
+        hint=FieldHint.feature,
+    )
+    suffix_token: str = Field(
+        default="<fim_suffix>",
+        desc="TODO.",
+        hint=FieldHint.feature,
+    )
 
     def _validate(self):
         super()._validate()
         Assert.in_range_incl(self.rate, 0, 1)
-
-
-class DatasetSource(str, enum.Enum):
-    """
-    An enum for the different ways to load datasets.
-    TODO: Reduce the diversity?
-    TODO: Is this specific to GPT data?
-    """
-
-    list = "list"
-    file = "file"
-    sample = "sample"
-    random = "random"
 
 
 class LegacyDatasetSource(str, enum.Enum):

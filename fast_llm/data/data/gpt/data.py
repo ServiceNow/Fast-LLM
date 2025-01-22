@@ -12,11 +12,11 @@ from fast_llm.data.data.abstract import Data
 from fast_llm.data.data.gpt.config import GPTDataConfig
 from fast_llm.data.dataset.abstract import CopySplitDataset, PhaseSplits, SampledSplitDataset
 from fast_llm.data.dataset.blended import BlendedDataset
-from fast_llm.data.dataset.gpt.config import DatasetSource, GPTSamplingConfig
-from fast_llm.data.dataset.gpt.dummy import GPTDummyDataset
-from fast_llm.data.dataset.gpt.fim import FimDataset
+from fast_llm.data.dataset.gpt.config import GPTSamplingConfig, LegacyDatasetSource
+from fast_llm.data.dataset.gpt.fim import GPTFimDataset
 from fast_llm.data.dataset.gpt.indexed import GPTDatasetSlice
 from fast_llm.data.dataset.gpt.memmap import GPTMemmapDataset
+from fast_llm.data.dataset.gpt.random import GPTRandomDataset
 from fast_llm.data.dataset.monitor import DatasetMonitor
 from fast_llm.data.iterator import SampledDatasetIterator
 from fast_llm.data.tokenizer import Tokenizer
@@ -63,7 +63,7 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
         }
 
         data_base_path = None
-        if self._config.format == DatasetSource.file:
+        if self._config.format == LegacyDatasetSource.file:
             Assert.eq(len(self._config.path), 1)
             data_path = pathlib.Path(self._config.path[0])
             dataset_defs = json.load(data_path.open("r"))
@@ -73,7 +73,7 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
                 [dataset_def["weight"] for dataset_def in dataset_defs["datasets"]]
             )
             self._build_and_sample_dataset = self._build_and_sample_gpt_dataset
-        elif self._config.format == DatasetSource.list:
+        elif self._config.format == LegacyDatasetSource.list:
             Assert.geq(len(self._config.path), 1)
             if len(self._config.path) == 1:
                 dataset_prefixes, dataset_weights = [self._config.path[0].strip()], [1.0]
@@ -83,11 +83,7 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
                 assert len(dataset_prefixes) == len(set(dataset_prefixes))
                 dataset_weights = normalize_probabilities([float(x) for x in self._config.path[::2]])
             self._build_and_sample_dataset = self._build_and_sample_gpt_dataset
-        elif self._config.format == DatasetSource.sample:
-            Assert.eq(len(self._config.path), 1)
-            dataset_prefixes, dataset_weights = [self._config.path[0].strip()], [1.0]
-            self._build_and_sample_dataset = self._build_and_sample_dummy_dataset
-        elif self._config.format == DatasetSource.random:
+        elif self._config.format == LegacyDatasetSource.random:
             Assert.eq(len(self._config.path), 0)
             dataset_prefixes, dataset_weights = [None], [1.0]
             self._build_and_sample_dataset = self._build_and_sample_dummy_dataset
@@ -245,7 +241,7 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
             datasets = SampledSplitDataset[GPTDatasetSlice](
                 "fim",
                 {
-                    phase: FimDataset(self.config.fim, dataset, sampling_configs[phase])
+                    phase: GPTFimDataset(self.config.fim, dataset, sampling_configs[phase])
                     for phase, dataset in datasets.items()
                 },
             )
@@ -254,6 +250,6 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
     def _build_and_sample_dummy_dataset(self, name: str, sampling_configs: PhaseSplits[GPTSamplingConfig]):
         return CopySplitDataset(
             f"{name}_split",
-            GPTDummyDataset(name),
+            GPTRandomDataset(name),
             list(sampling_configs),
         ).sample(sampling_configs)

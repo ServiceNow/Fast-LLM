@@ -1,3 +1,4 @@
+import logging
 import math
 import pathlib
 import typing
@@ -18,6 +19,8 @@ try:
 except ImportError:
     _extension_available = False
 
+logger = logging.getLogger(__name__)
+
 
 class GPTSampledIndexedDataset(SampledDataset):
     """
@@ -35,33 +38,41 @@ class GPTSampledIndexedDataset(SampledDataset):
         assert isinstance(sampling_config, GPTSamplingConfig)
         self._indexed_dataset = indexed_dataset
 
-        cache_prefix = (
-            f"{self.name}_ns_{sampling_config.num_samples}_sl_{sampling_config.sequence_length}"
-            f"_s_{sampling_config.seed}"
-        )
-        # TODO: Any way to combine into a single file? (Memmap is harder)
-        self._doc_idx_filename = sampling_config.cache_directory / (cache_prefix + "_doc_idx.npy")
-        self._sample_idx_filename = sampling_config.cache_directory / (cache_prefix + "_sample_idx.npy")
-        self._shuffle_idx_filename = sampling_config.cache_directory / (cache_prefix + "_shuffle_idx.npy")
-
         group = sampling_config.distributed.world_group
-        # Build the indexed mapping if it doesn't exist.
-        # TODO: This only works if the dataset location is accessible by all job.
-        if (group is None or group.rank() == 0) and not (
-            self._doc_idx_filename.is_file()
-            and self._sample_idx_filename.is_file()
-            and self._shuffle_idx_filename.is_file()
-        ):
-            if sampling_config.verbose:
+
+        if sampling_config.cache_directory is None:
+            log_main_rank(
+                " > No dataset cache directory provided, building the index map on all ranks."
+                "This may be very inefficient...",
+                log_fn=logger.warning,
+            )
+            self._doc_idx, self._sample_idx, self._shuffle_idx = self._sample(sampling_config)
+        else:
+            cache_prefix = (
+                f"{self.name}_ns_{sampling_config.num_samples}_sl_{sampling_config.sequence_length}"
+                f"_s_{sampling_config.seed}"
+            )
+            # TODO: Any way to combine into a single file? (Memmap is harder)
+            self._doc_idx_filename = sampling_config.cache_directory / (cache_prefix + "_doc_idx.npy")
+            self._sample_idx_filename = sampling_config.cache_directory / (cache_prefix + "_sample_idx.npy")
+            self._shuffle_idx_filename = sampling_config.cache_directory / (cache_prefix + "_shuffle_idx.npy")
+
+            # Build the indexed mapping if it doesn't exist.
+            # TODO: This only works if the dataset location is accessible by all job.
+            if (group is None or group.rank() == 0) and not (
+                self._doc_idx_filename.is_file()
+                and self._sample_idx_filename.is_file()
+                and self._shuffle_idx_filename.is_file()
+            ):
                 log_main_rank(" > Building the index map on rank 0 ...")
-            doc_idx, sample_idx, shuffle_idx = self._sample(sampling_config)
-            sampling_config.cache_directory.mkdir(parents=True, exist_ok=True)
-            np.save(self._doc_idx_filename, doc_idx)
-            np.save(self._sample_idx_filename, sample_idx)
-            np.save(self._shuffle_idx_filename, shuffle_idx)
+                doc_idx, sample_idx, shuffle_idx = self._sample(sampling_config)
+                sampling_config.cache_directory.mkdir(parents=True, exist_ok=True)
+                np.save(self._doc_idx_filename, doc_idx)
+                np.save(self._sample_idx_filename, sample_idx)
+                np.save(self._shuffle_idx_filename, shuffle_idx)
 
         safe_barrier(group, self._indexed_dataset.name)
-        self._load_mappings(sampling_config.verbose)
+        self._load_mappings(True)
 
     def _sample(self, sampling_config: GPTSamplingConfig) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
@@ -100,7 +111,7 @@ class GPTSampledIndexedDataset(SampledDataset):
             sampling_config.sequence_length,
             num_epochs,
             num_tokens,
-            sampling_config.verbose,
+            True,
         )
 
         # shuffle-idx.
@@ -121,24 +132,44 @@ class GPTSampledIndexedDataset(SampledDataset):
         # TODO: The doc and sample idx are way bigger than needed when sampling for << 1 epoch.
         return doc_idx, sample_idx, shuffle_idx[: sampling_config.num_samples]
 
-    def __getstate__(self) -> tuple[GPTIndexedDataset, pathlib.Path, pathlib.Path, pathlib.Path]:
-        return (
-            self._indexed_dataset,
-            self._doc_idx_filename,
-            self._sample_idx_filename,
-            self._shuffle_idx_filename,
-        )
+    def __getstate__(
+        self,
+    ) -> tuple[GPTIndexedDataset, pathlib.Path | np.ndarray, pathlib.Path | np.ndarray, pathlib.Path | np.ndarray]:
+        if hasattr(self, "_doc_idx_filename"):
+            return (
+                self._indexed_dataset,
+                self._doc_idx_filename,
+                self._sample_idx_filename,
+                self._shuffle_idx_filename,
+            )
+        else:
+            return (
+                self._indexed_dataset,
+                self._doc_idx,
+                self._sample_idx,
+                self._shuffle_idx,
+            )
 
     def __setstate__(self, state: tuple[GPTIndexedDataset, pathlib.Path, pathlib.Path, pathlib.Path]) -> None:
-        (
-            self._indexed_dataset,
-            self._doc_idx_filename,
-            self._sample_idx_filename,
-            self._shuffle_idx_filename,
-        ) = state
+        if isinstance(state[1], pathlib.Path):
+            (
+                self._indexed_dataset,
+                self._doc_idx_filename,
+                self._sample_idx_filename,
+                self._shuffle_idx_filename,
+            ) = state
+        else:
+            (
+                self._indexed_dataset,
+                self._doc_idx,
+                self._sample_idx,
+                self._shuffle_idx,
+            ) = state
         self._load_mappings(False)
 
     def _load_mappings(self, verbose: bool) -> None:
+        if hasattr(self, "_doc_idx"):
+            return
         if verbose:
             log_main_rank(lambda: f" > loading doc-idx mapping from {self._doc_idx_filename}")
         self._doc_idx = np.load(self._doc_idx_filename, mmap_mode="r")
@@ -169,7 +200,7 @@ class GPTSampledIndexedDataset(SampledDataset):
         doc_l, offset_l = self._sample_idx[shuffled_idx + 1]
         sample_list = [
             self._indexed_dataset.get(
-                self._doc_idx[doc],
+                self._doc_idx[doc].item(),
                 offset=(doc == doc_f) * offset_f,
                 length=offset_l + 1 - (doc == doc_f) * offset_f if doc == doc_l else None,
             )
