@@ -20,6 +20,7 @@ class SamplingConfig:
     num_samples: int
     seed: int
     cache_directory: pathlib.Path | None
+    # TODO: This prevents the sampling config from being pickled in multiprocessing.
     distributed: "Distributed"
     phase: PhaseType
 
