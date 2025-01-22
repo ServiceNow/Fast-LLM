@@ -274,10 +274,6 @@ GPT_SLICE_EXPECTED_TRAINING_SAMPLES = [
     [359, 489, 4266, 2052, 5351, 80],
     [374, 7534, 87, 1073, 79, 480],
     [8008, 498, 71, 727, 80, 315],
-    [2210, 8179, 73, 2582, 897, 1178],
-    [409, 5091, 328, 1378, 5483, 88],
-    [83, 4457, 3316, 333, 489, 317],
-    [330, 155, 2449, 1136, 1106, 5370],
 ]
 GPT_SLICE_EXPECTED_VALIDATION_SAMPLES = [
     [1725, 74, 207, 1635, 4440, 2774],
@@ -316,33 +312,36 @@ def test_gpt_slice_data():
     _, samples = get_test_data_and_samples(
         {
             "datasets": {
-                "Training": {"type": "split", "dataset": {"type": "memmap", "path": DATASET_PREFIX}},
-                "begin": 0,
-                "end": 0.0015,
+                "Training": {
+                    "type": "slice",
+                    "dataset": {"type": "memmap", "path": DATASET_PREFIX},
+                    "begin": 0,
+                    "end": 0.0015,
+                },
                 "Validation": {
-                    "type": "split",
+                    "type": "slice",
                     "dataset": {"type": "memmap", "path": DATASET_PREFIX},
                     "begin": 0.0015,
                     "end": 0.003,
                 },
                 "Test": {
-                    "type": "split",
+                    "type": "slice",
                     "dataset": {"type": "memmap", "path": DATASET_PREFIX},
                     "begin": 0.003,
                     "end": 1,
                 },
             }
         },
-        {PhaseType.training: 8},
+        {PhaseType.training: 4, PhaseType.validation: 8, PhaseType.test: 5},
         sequence_length=5,
-    )
-    Assert.all_equal(
-        np.stack(samples[PhaseType.training]),
-        np.array(GPT_SLICE_EXPECTED_TRAINING_SAMPLES),
     )
     Assert.all_equal(
         np.stack(samples[PhaseType.validation]),
         np.array(GPT_SLICE_EXPECTED_VALIDATION_SAMPLES),
+    )
+    Assert.all_equal(
+        np.stack(samples[PhaseType.training]),
+        np.array(GPT_SLICE_EXPECTED_TRAINING_SAMPLES),
     )
 
 
@@ -354,12 +353,12 @@ def test_gpt_slice_data_legacy():
         sequence_length=5,
     )
     Assert.all_equal(
-        np.stack(samples[PhaseType.training]),
-        np.array(GPT_SLICE_EXPECTED_TRAINING_SAMPLES),
-    )
-    Assert.all_equal(
         np.stack(samples[PhaseType.validation]),
         np.array(GPT_SLICE_EXPECTED_VALIDATION_SAMPLES),
+    )
+    Assert.all_equal(
+        np.stack(samples[PhaseType.training]),
+        np.array(GPT_SLICE_EXPECTED_TRAINING_SAMPLES),
     )
 
 
@@ -435,7 +434,7 @@ def test_gpt_blended_data_legacy():
         sequence_length=5,
     )
     Assert.all_equal(
-        np.stack(samples[PhaseType.validation]),
+        np.stack(samples[PhaseType.training]),
         np.array(GPT_BLENDED_EXPECTED_SAMPLES),
     )
 
@@ -488,7 +487,7 @@ def test_gpt_blended_mixed_data():
         sequence_length=5,
     )
     Assert.all_equal(
-        np.stack(samples[PhaseType.validation]),
+        np.stack(samples[PhaseType.training]),
         np.array(GPT_BLENDED_MIXED_EXPECTED_SAMPLES),
     )
 
@@ -552,7 +551,7 @@ def test_gpt_fim_data():
         sequence_length=5,
     )
     Assert.all_equal(
-        np.stack(samples[PhaseType.validation]),
+        np.stack(samples[PhaseType.training]),
         np.array(GPT_FIM_EXPECTED_SAMPLES),
     )
 
