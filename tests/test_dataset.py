@@ -365,11 +365,11 @@ def test_gpt_slice_data_legacy():
 
 GPT_BLENDED_EXPECTED_SAMPLES = [
     [1725, 74, 207, 1635, 4440, 2774],
-    [328, 80, 263, 890, 1797, 88],
+    [2066, 207, 6436, 2360, 2210, 6633],
     [359, 489, 4266, 2052, 5351, 80],
     [374, 7534, 87, 1073, 79, 480],
     [8008, 498, 71, 727, 80, 315],
-    [1852, 71, 776, 7878, 7390, 80],
+    [555, 3042, 83, 207, 498, 3373],
     [2210, 8179, 73, 2582, 897, 1178],
     [409, 5091, 328, 1378, 5483, 88],
 ]
@@ -387,11 +387,11 @@ def test_gpt_blended():
                 {"type": "memmap", "path": DATASET_PREFIX_MIX_1},
             ],
             "weights": [0.75, 0.25],
-            "seed_shift": 0,
         },
         GPTBlendedDatasetConfig,
     ).build_and_sample(get_sampling_config(8, sequence_length=5))
     Assert.eq(len(sampled), 8)
+    print(np.stack([sampled[i] for i in range(8)]).tolist())
     Assert.all_equal(
         np.stack([sampled[i] for i in range(8)]),
         np.array(GPT_BLENDED_EXPECTED_SAMPLES),
@@ -411,7 +411,6 @@ def test_gpt_blended_data():
                         {"type": "memmap", "path": DATASET_PREFIX_MIX_1},
                     ],
                     "weights": [0.75, 0.25],
-                    "seed_shift": 0,
                 }
             }
         },
@@ -422,6 +421,18 @@ def test_gpt_blended_data():
         np.stack(samples[PhaseType.training]),
         np.array(GPT_BLENDED_EXPECTED_SAMPLES),
     )
+
+
+GPT_BLENDED_LEGACY_EXPECTED_SAMPLES = [
+    [1725, 74, 207, 1635, 4440, 2774],
+    [328, 80, 263, 890, 1797, 88],
+    [359, 489, 4266, 2052, 5351, 80],
+    [374, 7534, 87, 1073, 79, 480],
+    [8008, 498, 71, 727, 80, 315],
+    [1852, 71, 776, 7878, 7390, 80],
+    [2210, 8179, 73, 2582, 897, 1178],
+    [409, 5091, 328, 1378, 5483, 88],
+]
 
 
 def test_gpt_blended_data_legacy():
@@ -438,18 +449,18 @@ def test_gpt_blended_data_legacy():
     )
     Assert.all_equal(
         np.stack(samples[PhaseType.training]),
-        np.array(GPT_BLENDED_EXPECTED_SAMPLES),
+        np.array(GPT_BLENDED_LEGACY_EXPECTED_SAMPLES),
     )
 
 
 GPT_BLENDED_MIXED_EXPECTED_SAMPLES = [
     [1725, 74, 207, 1635, 4440, 2774],
-    [5291, 3692, 4158, 503, 2201, 2587],
+    [916, 6683, 7685, 1277, 5106, 378],
     [359, 489, 4266, 2052, 5351, 80],
-    [5558, 4833, 2889, 7476, 1588, 226],
+    [3359, 6803, 780, 4561, 669, 7878],
     [374, 7534, 87, 1073, 79, 480],
     [8008, 498, 71, 727, 80, 315],
-    [786, 3161, 8179, 2300, 6160, 2531],
+    [6920, 2218, 2921, 3963, 7606, 6904],
     [2210, 8179, 73, 2582, 897, 1178],
 ]
 
@@ -467,8 +478,9 @@ def test_gpt_blended_mixed():
             "weights": [0.6, 0.4],
         },
         GPTBlendedDatasetConfig,
-    ).build_and_sample(get_sampling_config(8, sequence_length=5, seed=109766))
+    ).build_and_sample(get_sampling_config(8, sequence_length=5))
     Assert.eq(len(sampled), 8)
+    print(np.stack([sampled[i] for i in range(8)]).tolist())
     Assert.all_equal(
         np.stack([sampled[i] for i in range(8)]),
         np.array(GPT_BLENDED_MIXED_EXPECTED_SAMPLES),

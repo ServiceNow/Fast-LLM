@@ -352,7 +352,7 @@ class GPTLegacyDatasetConfig(GPTSampledDatasetConfig, GPTLegacyConfig):
                     name="blended",
                     datasets=dataset_configs,
                     weights=dataset_weights,
-                    seed_shift=0,
+                    legacy=True,
                 )
                 if len(dataset_configs) > 1
                 else dataset_configs[0]

@@ -145,8 +145,10 @@ class BlendedDatasetConfig(SampledDatasetConfig):
         desc="The blending weight of each dataset.",
         hint=FieldHint.core,
     )
-    seed_shift: int = Field(
-        default=54783, desc="Shift the seed for each sub-dataset for extra randomness.", hint=FieldHint.feature
+    legacy: bool = Field(
+        default=False,
+        desc="Use the legacy formulas for sub-dataset seeds and sample sizes.",
+        hint=FieldHint.deprecated,
     )
 
     def _validate(self) -> None:
@@ -162,13 +164,20 @@ class BlendedDatasetConfig(SampledDatasetConfig):
 
         # Build and sample the datasets.
         # TODO: Vary the seed?
+        # Add 5 times the standard deviation (of a binomial distribution)
+        # so the probability of sampling more than this amount during blending is negligible.
+
         sampled_datasets = [
             dataset.build_and_sample(
                 # Blending is deterministic and the error will never be higher than 1.
                 dataclasses.replace(
                     config,
-                    num_samples=math.ceil(weight * config.num_samples) + 1,
-                    seed=config.seed + i * self.seed_shift,
+                    num_samples=(
+                        math.ceil(weight * (config.num_samples + 5 * (config.num_samples * (1 - weight)) ** 0.5))
+                        if self.legacy
+                        else math.ceil(weight * config.num_samples) + 1
+                    ),
+                    seed=config.seed + i * (0 if self.legacy else 697),
                 ),
             )
             for i, (dataset, weight) in enumerate(zip(self.datasets, self.weights, strict=True))
