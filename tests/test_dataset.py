@@ -1,4 +1,5 @@
 import pathlib
+import typing
 
 import numpy as np
 import pytest
@@ -7,13 +8,16 @@ from fast_llm.config import NoAutoValidate
 from fast_llm.data.config import TokenizerConfig
 from fast_llm.data.data.gpt.config import GPTDataConfig
 from fast_llm.data.data.gpt.data import GPTData
-from fast_llm.data.dataset.abstract import PhaseSplits
-from fast_llm.data.dataset.blended import BlendedDataset
-from fast_llm.data.dataset.gpt.config import FimConfig, GPTSamplingConfig
-from fast_llm.data.dataset.gpt.fim import GPTFimDataset
-from fast_llm.data.dataset.gpt.indexed import GPTConcatenatedDataset, GPTDatasetSlice, GPTIndexedDataset
-from fast_llm.data.dataset.gpt.memmap import GPTMemmapDataset
-from fast_llm.data.dataset.gpt.random import GPTRandomDataset
+from fast_llm.data.dataset.gpt.config import (
+    GPTBlendedDatasetConfig,
+    GPTConcatenatedDatasetConfig,
+    GPTDatasetSliceConfig,
+    GPTFimSampledDatasetConfig,
+    GPTMemmapDatasetConfig,
+    GPTRandomDatasetConfig,
+    GPTSampledDatasetConfig,
+    GPTSamplingConfig,
+)
 from fast_llm.data.tokenizer import Tokenizer
 from fast_llm.engine.distributed.config import DistributedConfig, PhaseType
 from fast_llm.engine.distributed.distributed import Distributed
@@ -30,6 +34,7 @@ def get_sampling_config(
     seed: int = 54983,
     cache_directory: pathlib.Path | None = None,
     distributed: Distributed = Distributed(DistributedConfig(), use_cpu=True),
+    phase=PhaseType.training,
     sequence_length: int = 512,
     vocab_size=TEST_VOCAB_SIZE,
     tokenizer: Tokenizer | None = None,
@@ -40,11 +45,17 @@ def get_sampling_config(
         seed=seed,
         cache_directory=cache_directory,
         distributed=distributed,
+        phase=phase,
         sequence_length=sequence_length,
         vocab_size=vocab_size,
         tokenizer=tokenizer,
-        verbose=True,
     )
+
+
+def _get_dataset_config[T: GPTSampledDatasetConfig](config: dict[str, typing.Any], cls: type[T]) -> T:
+    dataset_config = GPTSampledDatasetConfig.from_dict(config)
+    Assert.custom(isinstance, dataset_config, cls)
+    return typing.cast(cls, dataset_config)
 
 
 def get_test_data_and_samples(
@@ -58,7 +69,7 @@ def get_test_data_and_samples(
     distributed_config = DistributedConfig(seed=seed)
     distributed = Distributed(distributed_config, use_cpu=True)
     data = GPTData(GPTDataConfig.from_dict(config), distributed_config, vocab_size, sequence_length)
-    data.setup(distributed, PhaseSplits[int](samples_per_phase), cache_directory)
+    data.setup(distributed, samples_per_phase, cache_directory)
     with NoAutoValidate():
         batch_config = BatchConfig(batch_size=1, sequence_length=sequence_length)
     batch_config.setup(distributed_config)
@@ -87,7 +98,9 @@ RANDOM_DATASET_EXPECTED_SAMPLES = [
 
 def test_gpt_random_dataset():
     # Make sure the random dataset works and check for unintended changes in behavior.
-    sampled = GPTRandomDataset("random").sample(get_sampling_config(4, sequence_length=7))
+    sampled = _get_dataset_config({"type": "random"}, GPTRandomDatasetConfig).build_and_sample(
+        get_sampling_config(4, sequence_length=7)
+    )
     Assert.eq(len(sampled), 4)
     Assert.all_equal(
         np.stack([sampled[i] for i in range(4)]),
@@ -95,7 +108,25 @@ def test_gpt_random_dataset():
     )
 
 
-def test_gpt_random_legacy_data():
+def test_gpt_random_data():
+    _, samples = get_test_data_and_samples(
+        {
+            "datasets": {
+                "Training": {
+                    "type": "random",
+                }
+            }
+        },
+        {PhaseType.training: 4},
+        sequence_length=7,
+    )
+    Assert.all_equal(
+        np.stack(samples[PhaseType.training]),
+        np.array(RANDOM_DATASET_EXPECTED_SAMPLES),
+    )
+
+
+def test_gpt_random_data_legacy():
     _, samples = get_test_data_and_samples({"format": "random"}, {PhaseType.training: 4}, sequence_length=7)
     Assert.all_equal(
         np.stack(samples[PhaseType.training]),
@@ -118,7 +149,7 @@ MEMMAP_DATASET_EXPECTED_SAMPLES = {
 def test_gpt_memmap(cache_directory):
     # Make sure the memmap dataset works and check for unintended changes in behavior.
     get_test_dataset()
-    dataset = GPTMemmapDataset("memmap", DATASET_PREFIX)
+    dataset = _get_dataset_config({"type": "memmap", "path": DATASET_PREFIX}, GPTMemmapDatasetConfig).build()
     Assert.eq(len(dataset), MEMMAP_DATASET_EXPECTED_LENGTH)
     sizes = dataset.get_document_sizes()
     Assert.eq(sizes.sum(), MEMMAP_DATASET_EXPECTED_TOKENS)
@@ -142,7 +173,9 @@ GPT_SAMPLED_EXPECTED_SAMPLES = [
 def test_gpt_sampled():
     # Make sure the memmap dataset works and check for unintended changes in behavior.
     get_test_dataset()
-    sampled = GPTMemmapDataset("memmap", DATASET_PREFIX).sample(get_sampling_config(8, sequence_length=5))
+    sampled = _get_dataset_config({"type": "memmap", "path": DATASET_PREFIX}, GPTMemmapDatasetConfig).build_and_sample(
+        get_sampling_config(8, sequence_length=5)
+    )
     Assert.eq(len(sampled), 8)
     Assert.all_equal(
         np.stack([sampled[i] for i in range(8)]),
@@ -150,14 +183,32 @@ def test_gpt_sampled():
     )
 
 
-def test_gpt_sampled_legacy_data():
+def test_gpt_sampled_data():
     get_test_dataset()
+    _, samples = get_test_data_and_samples(
+        {
+            "datasets": {
+                "Training": {
+                    "type": "memmap",
+                    "path": DATASET_PREFIX,
+                }
+            }
+        },
+        {PhaseType.training: 8},
+        sequence_length=5,
+    )
+    Assert.all_equal(
+        np.stack(samples[PhaseType.training]),
+        np.array(GPT_SAMPLED_EXPECTED_SAMPLES),
+    )
+
+
+def test_gpt_sampled_data_legacy():
     _, samples = get_test_data_and_samples(
         {"format": "list", "path": [str(DATASET_PREFIX)], "split": [1, 0, 0]},
         {PhaseType.training: 8},
         sequence_length=5,
     )
-
     Assert.all_equal(
         np.stack(samples[PhaseType.training]),
         np.array(GPT_SAMPLED_EXPECTED_SAMPLES),
@@ -179,9 +230,10 @@ GPT_CONCATENATED_EXPECTED_SAMPLES = [
 def test_gpt_concatenate():
     # Make sure the dataset concatenation works and check for unintended changes in behavior.
     get_test_dataset()
-    dataset = GPTConcatenatedDataset[GPTIndexedDataset](
-        "concatenated", [GPTMemmapDataset("memmap", DATASET_PREFIX) for _ in range(3)]
-    )
+    dataset = _get_dataset_config(
+        {"type": "concatenated", "datasets": [{"type": "memmap", "path": DATASET_PREFIX} for _ in range(3)]},
+        GPTConcatenatedDatasetConfig,
+    ).build()
     Assert.eq(len(dataset), 3 * MEMMAP_DATASET_EXPECTED_LENGTH)
     sizes = dataset.get_document_sizes()
     Assert.eq(sizes.sum(), 3 * MEMMAP_DATASET_EXPECTED_TOKENS)
@@ -198,7 +250,33 @@ def test_gpt_concatenate():
     )
 
 
-GPT_SLICE_EXPECTED_SAMPLES = [
+def test_gpt_concatenate_data():
+    _, samples = get_test_data_and_samples(
+        {
+            "datasets": {
+                "Training": {
+                    "type": "concatenated",
+                    "datasets": [{"type": "memmap", "path": DATASET_PREFIX} for _ in range(3)],
+                }
+            }
+        },
+        {PhaseType.training: 8},
+        sequence_length=5,
+    )
+    Assert.all_equal(
+        np.stack(samples[PhaseType.training]),
+        np.array(GPT_CONCATENATED_EXPECTED_SAMPLES),
+    )
+
+
+GPT_SLICE_EXPECTED_TRAINING_SAMPLES = [
+    [2625, 76, 2625, 2639, 74, 243],
+    [207, 481, 5546, 74, 414, 498],
+    [74, 333, 1963, 310, 5337, 3628],
+    [79, 2361, 80, 2012, 84, 480],
+]
+
+GPT_SLICE_EXPECTED_VALIDATION_SAMPLES = [
     [2352, 3687, 2311, 4900, 542, 3732],
     [2551, 5283, 900, 3140, 328, 68],
     [7979, 2283, 329, 727, 2740, 2818],
@@ -214,7 +292,10 @@ def test_gpt_slice():
     # Make sure dataset splitting works and check for unintended changes in behavior.
     get_test_dataset()
     # samples[9:18]
-    dataset = GPTDatasetSlice("slice", GPTMemmapDataset("memmap", DATASET_PREFIX), 9, 18)
+    dataset = _get_dataset_config(
+        {"type": "slice", "dataset": {"type": "memmap", "path": DATASET_PREFIX}, "begin": 0.0015, "end": 0.003},
+        GPTDatasetSliceConfig,
+    ).build()
     Assert.eq(len(dataset), 9)
     sizes = dataset.get_document_sizes()
     Assert.all_equal([len(dataset.get(i)) for i in range(9)], sizes[:9])
@@ -224,11 +305,48 @@ def test_gpt_slice():
     Assert.eq(len(sampled), 8)
     Assert.all_equal(
         np.stack([sampled[i] for i in range(8)]),
-        np.array(GPT_SLICE_EXPECTED_SAMPLES),
+        np.array(GPT_SLICE_EXPECTED_VALIDATION_SAMPLES),
     )
 
 
-def test_gpt_slice_legacy_data():
+def test_gpt_slice_data():
+    _, samples = get_test_data_and_samples(
+        {
+            "datasets": {
+                "Training": {
+                    "type": "slice",
+                    "dataset": {"type": "memmap", "path": DATASET_PREFIX},
+                    "begin": 0,
+                    "end": 0.0015,
+                },
+                "Validation": {
+                    "type": "slice",
+                    "dataset": {"type": "memmap", "path": DATASET_PREFIX},
+                    "begin": 0.0015,
+                    "end": 0.003,
+                },
+                "Test": {
+                    "type": "slice",
+                    "dataset": {"type": "memmap", "path": DATASET_PREFIX},
+                    "begin": 0.003,
+                    "end": 1,
+                },
+            }
+        },
+        {PhaseType.training: 4, PhaseType.validation: 8, PhaseType.test: 5},
+        sequence_length=5,
+    )
+    Assert.all_equal(
+        np.stack(samples[PhaseType.validation]),
+        np.array(GPT_SLICE_EXPECTED_VALIDATION_SAMPLES),
+    )
+    Assert.all_equal(
+        np.stack(samples[PhaseType.training]),
+        np.array(GPT_SLICE_EXPECTED_TRAINING_SAMPLES),
+    )
+
+
+def test_gpt_slice_data_legacy():
     get_test_dataset()
     _, samples = get_test_data_and_samples(
         {"format": "list", "path": [str(DATASET_PREFIX)], "split": [0.0015, 0.0015, 0.997]},
@@ -237,11 +355,75 @@ def test_gpt_slice_legacy_data():
     )
     Assert.all_equal(
         np.stack(samples[PhaseType.validation]),
-        np.array(GPT_SLICE_EXPECTED_SAMPLES),
+        np.array(GPT_SLICE_EXPECTED_VALIDATION_SAMPLES),
+    )
+    Assert.all_equal(
+        np.stack(samples[PhaseType.training]),
+        np.array(GPT_SLICE_EXPECTED_TRAINING_SAMPLES),
     )
 
 
 GPT_BLENDED_EXPECTED_SAMPLES = [
+    [1725, 74, 207, 1635, 4440, 2774],
+    [2066, 207, 6436, 2360, 2210, 6633],
+    [359, 489, 4266, 2052, 5351, 80],
+    [374, 7534, 87, 1073, 79, 480],
+    [8008, 498, 71, 727, 80, 315],
+    [555, 3042, 83, 207, 498, 3373],
+    [2210, 8179, 73, 2582, 897, 1178],
+    [409, 5091, 328, 1378, 5483, 88],
+]
+
+
+def test_gpt_blended():
+    # Make sure dataset blending works and check for unintended changes in behavior.
+    get_test_dataset()
+    get_test_dataset_1()
+    sampled = _get_dataset_config(
+        {
+            "type": "blended",
+            "datasets": [
+                {"type": "memmap", "path": DATASET_PREFIX},
+                {"type": "memmap", "path": DATASET_PREFIX_MIX_1},
+            ],
+            "weights": [0.75, 0.25],
+        },
+        GPTBlendedDatasetConfig,
+    ).build_and_sample(get_sampling_config(8, sequence_length=5))
+    Assert.eq(len(sampled), 8)
+    print(np.stack([sampled[i] for i in range(8)]).tolist())
+    Assert.all_equal(
+        np.stack([sampled[i] for i in range(8)]),
+        np.array(GPT_BLENDED_EXPECTED_SAMPLES),
+    )
+
+
+def test_gpt_blended_data():
+    get_test_dataset()
+    get_test_dataset_1()
+    _, samples = get_test_data_and_samples(
+        {
+            "datasets": {
+                "Training": {
+                    "type": "blended",
+                    "datasets": [
+                        {"type": "memmap", "path": DATASET_PREFIX},
+                        {"type": "memmap", "path": DATASET_PREFIX_MIX_1},
+                    ],
+                    "weights": [0.75, 0.25],
+                }
+            }
+        },
+        {PhaseType.training: 8},
+        sequence_length=5,
+    )
+    Assert.all_equal(
+        np.stack(samples[PhaseType.training]),
+        np.array(GPT_BLENDED_EXPECTED_SAMPLES),
+    )
+
+
+GPT_BLENDED_LEGACY_EXPECTED_SAMPLES = [
     [1725, 74, 207, 1635, 4440, 2774],
     [328, 80, 263, 890, 1797, 88],
     [359, 489, 4266, 2052, 5351, 80],
@@ -253,27 +435,7 @@ GPT_BLENDED_EXPECTED_SAMPLES = [
 ]
 
 
-def test_gpt_blended():
-    # Make sure dataset blending works and check for unintended changes in behavior.
-    get_test_dataset()
-    get_test_dataset_1()
-    sampled = BlendedDataset(
-        "blended",
-        [
-            GPTMemmapDataset("memmap", DATASET_PREFIX).sample(get_sampling_config(12, sequence_length=5)),
-            GPTMemmapDataset("memmap", DATASET_PREFIX_MIX_1).sample(get_sampling_config(6, sequence_length=5)),
-        ],
-        [0.75, 0.25],
-        get_sampling_config(8, sequence_length=5),
-    )
-    Assert.eq(len(sampled), 8)
-    Assert.all_equal(
-        np.stack([sampled[i] for i in range(8)]),
-        np.array(GPT_BLENDED_EXPECTED_SAMPLES),
-    )
-
-
-def test_gpt_blended_legacy_data():
+def test_gpt_blended_data_legacy():
     get_test_dataset()
     get_test_dataset_1()
     _, samples = get_test_data_and_samples(
@@ -287,18 +449,18 @@ def test_gpt_blended_legacy_data():
     )
     Assert.all_equal(
         np.stack(samples[PhaseType.training]),
-        np.array(GPT_BLENDED_EXPECTED_SAMPLES),
+        np.array(GPT_BLENDED_LEGACY_EXPECTED_SAMPLES),
     )
 
 
 GPT_BLENDED_MIXED_EXPECTED_SAMPLES = [
     [1725, 74, 207, 1635, 4440, 2774],
-    [5291, 3692, 4158, 503, 2201, 2587],
+    [916, 6683, 7685, 1277, 5106, 378],
     [359, 489, 4266, 2052, 5351, 80],
-    [5558, 4833, 2889, 7476, 1588, 226],
+    [3359, 6803, 780, 4561, 669, 7878],
     [374, 7534, 87, 1073, 79, 480],
     [8008, 498, 71, 727, 80, 315],
-    [786, 3161, 8179, 2300, 6160, 2531],
+    [6920, 2218, 2921, 3963, 7606, 6904],
     [2210, 8179, 73, 2582, 897, 1178],
 ]
 
@@ -306,18 +468,41 @@ GPT_BLENDED_MIXED_EXPECTED_SAMPLES = [
 def test_gpt_blended_mixed():
     # Make sure dataset blending works and check for unintended changes in behavior.
     get_test_dataset()
-    sampled = BlendedDataset(
-        "blended",
-        [
-            GPTMemmapDataset("memmap", DATASET_PREFIX).sample(get_sampling_config(5, sequence_length=5)),
-            GPTRandomDataset("random").sample(get_sampling_config(3, sequence_length=5, seed=109766)),
-        ],
-        [0.6, 0.4],
-        get_sampling_config(8, sequence_length=5),
-    )
+    sampled = _get_dataset_config(
+        {
+            "type": "blended",
+            "datasets": [
+                {"type": "memmap", "path": DATASET_PREFIX},
+                {"type": "random"},
+            ],
+            "weights": [0.6, 0.4],
+        },
+        GPTBlendedDatasetConfig,
+    ).build_and_sample(get_sampling_config(8, sequence_length=5))
     Assert.eq(len(sampled), 8)
+    print(np.stack([sampled[i] for i in range(8)]).tolist())
     Assert.all_equal(
         np.stack([sampled[i] for i in range(8)]),
+        np.array(GPT_BLENDED_MIXED_EXPECTED_SAMPLES),
+    )
+
+
+def test_gpt_blended_mixed_data():
+    _, samples = get_test_data_and_samples(
+        {
+            "datasets": {
+                "Training": {
+                    "type": "blended",
+                    "datasets": [{"type": "memmap", "path": DATASET_PREFIX}, {"type": "random"}],
+                    "weights": [0.6, 0.4],
+                }
+            }
+        },
+        {PhaseType.training: 8},
+        sequence_length=5,
+    )
+    Assert.all_equal(
+        np.stack(samples[PhaseType.training]),
         np.array(GPT_BLENDED_MIXED_EXPECTED_SAMPLES),
     )
 
@@ -341,11 +526,18 @@ def test_gpt_fim():
     sampling_config = get_sampling_config(
         8, sequence_length=5, tokenizer=Tokenizer(TokenizerConfig.from_dict({"path": TOKENIZER_PATH}))
     )
-    sampled = GPTFimDataset(
-        FimConfig(rate=0.5, prefix_token="w", middle_token="x", pad_token="y", suffix_token="z"),
-        GPTMemmapDataset("memmap", DATASET_PREFIX).sample(sampling_config),
-        sampling_config,
-    )
+    sampled = _get_dataset_config(
+        {
+            "type": "fim",
+            "dataset": {"type": "memmap", "path": DATASET_PREFIX},
+            "rate": 0.5,
+            "prefix_token": "w",
+            "middle_token": "x",
+            "pad_token": "y",
+            "suffix_token": "z",
+        },
+        GPTFimSampledDatasetConfig,
+    ).build_and_sample(sampling_config)
     Assert.eq(len(sampled), 8)
     # TODO: Does this output make sense?
     Assert.all_equal(
@@ -354,13 +546,39 @@ def test_gpt_fim():
     )
 
 
-def test_gpt_fim_legacy_data():
+def test_gpt_fim_data():
+    _, samples = get_test_data_and_samples(
+        {
+            "datasets": {
+                "Training": {
+                    "type": "fim",
+                    "dataset": {"type": "memmap", "path": DATASET_PREFIX},
+                    "rate": 0.5,
+                    "prefix_token": "w",
+                    "middle_token": "x",
+                    "pad_token": "y",
+                    "suffix_token": "z",
+                }
+            },
+            "tokenizer": {"path": TOKENIZER_PATH},
+        },
+        {PhaseType.training: 8},
+        sequence_length=5,
+    )
+    Assert.all_equal(
+        np.stack(samples[PhaseType.training]),
+        np.array(GPT_FIM_EXPECTED_SAMPLES),
+    )
+
+
+def test_gpt_fim_data_legacy():
     _, samples = get_test_data_and_samples(
         {
             "format": "list",
             "path": [str(DATASET_PREFIX)],
             "fim": {"rate": 0.5, "prefix_token": "w", "middle_token": "x", "pad_token": "y", "suffix_token": "z"},
             "tokenizer": {"path": TOKENIZER_PATH},
+            "split": [1, 0, 0],
         },
         {PhaseType.training: 8},
         sequence_length=5,

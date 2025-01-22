@@ -5,7 +5,7 @@ import typing
 import numpy as np
 
 from fast_llm.core.distributed import safe_barrier
-from fast_llm.data.dataset.abstract import PhaseSplits, SampledDataset, SplitDataset
+from fast_llm.data.dataset.abstract import SampledDataset
 from fast_llm.data.dataset.config import SamplingConfig
 from fast_llm.engine.config_utils.run import log_main_rank
 from fast_llm.utils import Assert, normalize_probabilities
@@ -16,7 +16,6 @@ try:
     _extension_available = True
 except ImportError:
     _extension_available = False
-
 
 logger = logging.getLogger(__name__)
 
@@ -45,9 +44,7 @@ class BlendedDataset(SampledDataset):
 
         if sampling_config.cache_directory is None:
             self._dataset_idx_filename, self._sample_idx_filename = None, None
-            self._dataset_index, self._sample_index = self._build_blending_indices(
-                sampling_config.verbose and len(self._datasets) <= 20
-            )
+            self._dataset_index, self._sample_index = self._build_blending_indices(len(self._datasets) <= 20)
         else:
             group = sampling_config.distributed.world_group
             self._dataset_idx_filename = sampling_config.cache_directory / (self._name + "_blending_dataset_idx.npy")
@@ -58,36 +55,13 @@ class BlendedDataset(SampledDataset):
             if (group is None or group.rank() == 0) and not (
                 self._dataset_idx_filename.is_file() and self._sample_idx_filename.is_file()
             ):
-                dataset_index, sample_index = self._build_blending_indices(
-                    sampling_config.verbose and len(self._datasets) <= 20
-                )
+                dataset_index, sample_index = self._build_blending_indices(len(self._datasets) <= 20)
                 sampling_config.cache_directory.mkdir(exist_ok=True, parents=True)
                 np.save(self._dataset_idx_filename, dataset_index)
                 np.save(self._sample_idx_filename, sample_index)
 
             safe_barrier(group, self._name)
-            self._load_mappings(sampling_config.verbose)
-
-    @classmethod
-    def apply(
-        cls,
-        name: str,
-        datasets_and_weights: list[(SplitDataset[SampledDataset], float)],
-        sampling_configs: PhaseSplits[SamplingConfig],
-    ):
-        Assert.leq(set(sampling_configs), set.union(*[set(dataset) for dataset, _ in datasets_and_weights]))
-        return SplitDataset[BlendedDataset](
-            name,
-            {
-                phase: BlendedDataset(
-                    f"{name}_{phase.value}",
-                    [dataset[phase] for dataset, weight in datasets_and_weights if phase in dataset and weight > 0],
-                    [weight for dataset, weight in datasets_and_weights if phase in dataset and weight > 0],
-                    sampling_config,
-                )
-                for phase, sampling_config in sampling_configs.items()
-            },
-        )
+            self._load_mappings(True)
 
     def __getstate__(self) -> tuple[typing.Any, ...]:
         return (

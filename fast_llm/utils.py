@@ -203,8 +203,12 @@ class Registry[KeyType, ValueType]:
     def keys(self) -> list[KeyType]:
         return list(self._data)
 
-    def __contains__(self, item: ValueType) -> bool:
-        return item in self._data
+    def __contains__(self, key: KeyType) -> bool:
+        return key in self._data
+
+    @property
+    def name(self) -> str:
+        return self._name
 
 
 class LazyRegistry[KeyType, ValueType](Registry[KeyType, ValueType]):
