@@ -19,7 +19,7 @@ class GPTFimDataset(SampledDataset):
     ):
         self._config = config
         self._dataset = dataset
-        self._sampling_config = sampling_config
+        self._seed = sampling_config.seed
         self._tokenizer = sampling_config.tokenizer
         if self._tokenizer is None:
             raise ValueError("Fim requires a tokenizer")
@@ -35,9 +35,7 @@ class GPTFimDataset(SampledDataset):
         return len(self._dataset)
 
     def __getitem__(self, idx: int) -> np.ndarray:
-        sample = self._fim(
-            self._dataset[idx], np.random.RandomState(seed=(self._sampling_config.seed + idx) % MAX_SEED)
-        )
+        sample = self._fim(self._dataset[idx], np.random.RandomState(seed=(self._seed + idx) % MAX_SEED))
         return sample
 
     @property

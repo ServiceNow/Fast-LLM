@@ -391,7 +391,6 @@ def test_gpt_blended():
         GPTBlendedDatasetConfig,
     ).build_and_sample(get_sampling_config(8, sequence_length=5))
     Assert.eq(len(sampled), 8)
-    print(np.stack([sampled[i] for i in range(8)]).tolist())
     Assert.all_equal(
         np.stack([sampled[i] for i in range(8)]),
         np.array(GPT_BLENDED_EXPECTED_SAMPLES),
@@ -480,7 +479,6 @@ def test_gpt_blended_mixed():
         GPTBlendedDatasetConfig,
     ).build_and_sample(get_sampling_config(8, sequence_length=5))
     Assert.eq(len(sampled), 8)
-    print(np.stack([sampled[i] for i in range(8)]).tolist())
     Assert.all_equal(
         np.stack([sampled[i] for i in range(8)]),
         np.array(GPT_BLENDED_MIXED_EXPECTED_SAMPLES),
