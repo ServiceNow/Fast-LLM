@@ -61,11 +61,12 @@ def _get_dataset_config[T: GPTSampledDatasetConfig](config: dict[str, typing.Any
 def get_test_data_and_samples(
     config: dict,
     samples_per_phase: dict[PhaseType, int],
+    seed: int = 54983,
     cache_directory: pathlib.Path | None = None,
     sequence_length: int = 512,
     vocab_size=TEST_VOCAB_SIZE,
 ):
-    distributed_config = DistributedConfig()
+    distributed_config = DistributedConfig(seed=seed)
     distributed = Distributed(distributed_config, use_cpu=True)
     data = GPTData(GPTDataConfig.from_dict(config), distributed_config, vocab_size, sequence_length)
     data.setup(distributed, samples_per_phase, cache_directory)
@@ -74,10 +75,17 @@ def get_test_data_and_samples(
     batch_config.setup(distributed_config)
     batch_config.validate()
     samples = {
-        phase: [sample for sample in data.get_iterator(batch_config, phase, consumed_samples=0, num_workers=0)]
+        phase: [batch[0] for batch in data.get_iterator(batch_config, phase, consumed_samples=0, num_workers=0)]
         for phase, samples in samples_per_phase.items()
     }
     return data, samples
+
+
+DATASET_PREFIX_MIX_1 = DATASET_PREFIX.with_name("blended_mix_1")
+
+
+def get_test_dataset_1():
+    return get_test_dataset(prefix=DATASET_PREFIX_MIX_1, seed=2345)
 
 
 RANDOM_DATASET_EXPECTED_SAMPLES = [
@@ -541,6 +549,6 @@ def test_gpt_fim_data_legacy():
         sequence_length=5,
     )
     Assert.all_equal(
-        np.stack(samples[PhaseType.validation]),
+        np.stack(samples[PhaseType.training]),
         np.array(GPT_FIM_EXPECTED_SAMPLES),
     )
