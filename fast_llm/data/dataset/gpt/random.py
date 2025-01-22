@@ -13,7 +13,7 @@ class GPTRandomDataset(SamplableDataset):
         self._name = name
 
     def sample(self, config: GPTSamplingConfig) -> "GPTRandomSampledDataset":
-        return GPTRandomSampledDataset(f"{self.name}_sampled", config)
+        return GPTRandomSampledDataset(config, f"{self.name}_sampled")
 
     @property
     def name(self) -> str:
@@ -21,7 +21,7 @@ class GPTRandomDataset(SamplableDataset):
 
 
 class GPTRandomSampledDataset(SampledDataset):
-    def __init__(self, name: str, config: GPTSamplingConfig):
+    def __init__(self, config: GPTSamplingConfig, name: str):
         self._name = name
         self._config = config
 

@@ -37,6 +37,8 @@ class GPTSampledIndexedDataset(SampledDataset):
     ):
         assert isinstance(sampling_config, GPTSamplingConfig)
         self._indexed_dataset = indexed_dataset
+        print("IOUHWIUOGNBWGIN", sampling_config.seed, sampling_config)
+        self._sampling_config = sampling_config
 
         group = sampling_config.distributed.world_group
 
