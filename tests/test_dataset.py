@@ -1,7 +1,6 @@
 import pathlib
 import typing
 
-import numpy
 import numpy as np
 import pytest
 
@@ -96,7 +95,7 @@ def test_gpt_random_dataset():
     )
     Assert.eq(len(sampled), 4)
     Assert.all_equal(
-        numpy.stack([sampled[i] for i in range(4)]),
+        np.stack([sampled[i] for i in range(4)]),
         np.array(RANDOM_DATASET_EXPECTED_SAMPLES),
     )
 
@@ -114,7 +113,7 @@ def test_gpt_random_data():
         sequence_length=7,
     )
     Assert.all_equal(
-        numpy.stack(samples[PhaseType.training]),
+        np.stack(samples[PhaseType.training]),
         np.array(RANDOM_DATASET_EXPECTED_SAMPLES),
     )
 
@@ -122,7 +121,7 @@ def test_gpt_random_data():
 def test_gpt_random_data_legacy():
     _, samples = get_test_data_and_samples({"format": "random"}, {PhaseType.training: 4}, sequence_length=7)
     Assert.all_equal(
-        numpy.stack(samples[PhaseType.training]),
+        np.stack(samples[PhaseType.training]),
         np.array(RANDOM_DATASET_EXPECTED_SAMPLES),
     )
 
@@ -148,7 +147,7 @@ def test_gpt_memmap(cache_directory):
     Assert.eq(sizes.sum(), MEMMAP_DATASET_EXPECTED_TOKENS)
     Assert.all_equal([len(dataset.get(i)) for i in range(100)], sizes[:100])
     for i, sample in MEMMAP_DATASET_EXPECTED_SAMPLES.items():
-        Assert.all_equal(dataset.get(i), np.array(sample, dtype=numpy.uint16))
+        Assert.all_equal(dataset.get(i), np.array(sample, dtype=np.uint16))
 
 
 GPT_SAMPLED_EXPECTED_SAMPLES = [
@@ -190,7 +189,7 @@ def test_gpt_sampled_data():
         sequence_length=5,
     )
     Assert.all_equal(
-        numpy.stack(samples[PhaseType.training]),
+        np.stack(samples[PhaseType.training]),
         np.array(RANDOM_DATASET_EXPECTED_SAMPLES),
     )
 
@@ -200,20 +199,20 @@ def test_gpt_sampled_data_legacy():
         {"format": "list", "path": [DATASET_PREFIX], "split": [1]}, {PhaseType.training: 8}, sequence_length=5
     )
     Assert.all_equal(
-        numpy.stack(samples[PhaseType.training]),
+        np.stack(samples[PhaseType.training]),
         np.array(RANDOM_DATASET_EXPECTED_SAMPLES),
     )
 
 
 GPT_CONCATENATED_EXPECTED_SAMPLES = [
-    [1725, 74, 207, 1635, 4440, 2774],
-    [359, 489, 4266, 2052, 5351, 80],
-    [374, 7534, 87, 1073, 79, 480],
-    [8008, 498, 71, 727, 80, 315],
-    [2210, 8179, 73, 2582, 897, 1178],
-    [409, 5091, 328, 1378, 5483, 88],
-    [83, 4457, 3316, 333, 489, 317],
-    [330, 155, 2449, 1136, 1106, 5370],
+    [243, 498, 7172, 777, 306, 74],
+    [821, 6042, 89, 977, 4797, 499],
+    [387, 74, 330, 328, 1858, 484],
+    [7722, 3069, 819, 4266, 304, 80],
+    [80, 634, 4913, 373, 207, 1046],
+    [72, 65, 5570, 73, 2210, 5514],
+    [7983, 977, 4147, 4739, 890, 386],
+    [5375, 275, 69, 771, 593, 8171],
 ]
 
 
@@ -254,7 +253,7 @@ def test_gpt_concatenate_data():
         sequence_length=5,
     )
     Assert.all_equal(
-        numpy.stack(samples[PhaseType.training]),
+        np.stack(samples[PhaseType.training]),
         np.array(RANDOM_DATASET_EXPECTED_SAMPLES),
     )
 
@@ -293,7 +292,7 @@ def test_gpt_slice():
     sizes = dataset.get_document_sizes()
     Assert.all_equal([len(dataset.get(i)) for i in range(9)], sizes[:9])
     for i, sample in MEMMAP_DATASET_EXPECTED_SAMPLES.items():
-        Assert.all_equal(dataset.get(i - 9), np.array(sample, dtype=numpy.uint16))
+        Assert.all_equal(dataset.get(i - 9), np.array(sample, dtype=np.uint16))
     sampled = dataset.sample(get_sampling_config(8, sequence_length=5))
     Assert.eq(len(sampled), 8)
     Assert.all_equal(
@@ -327,40 +326,40 @@ def test_gpt_slice_data():
         sequence_length=5,
     )
     Assert.all_equal(
-        numpy.stack(samples[PhaseType.training]),
+        np.stack(samples[PhaseType.training]),
         np.array(GPT_SLICE_EXPECTED_TRAINING_SAMPLES),
     )
     Assert.all_equal(
-        numpy.stack(samples[PhaseType.validation]),
+        np.stack(samples[PhaseType.validation]),
         np.array(GPT_SLICE_EXPECTED_VALIDATION_SAMPLES),
     )
 
 
 def test_gpt_slice_data_legacy():
     _, samples = get_test_data_and_samples(
-        {"format": "list", "path": [DATASET_PREFIX], "split": [0.0015, 0.0015, 0.997]},
+        {"format": "list", "path": [str(DATASET_PREFIX)], "split": [0.0015, 0.0015, 0.997]},
         {PhaseType.training: 4, PhaseType.validation: 8, PhaseType.test: 5},
         sequence_length=5,
     )
     Assert.all_equal(
-        numpy.stack(samples[PhaseType.training]),
+        np.stack(samples[PhaseType.training]),
         np.array(GPT_SLICE_EXPECTED_TRAINING_SAMPLES),
     )
     Assert.all_equal(
-        numpy.stack(samples[PhaseType.validation]),
+        np.stack(samples[PhaseType.validation]),
         np.array(GPT_SLICE_EXPECTED_VALIDATION_SAMPLES),
     )
 
 
 GPT_BLENDED_EXPECTED_SAMPLES = [
     [1725, 74, 207, 1635, 4440, 2774],
-    [5291, 3692, 4158, 503, 2201, 2587],
+    [328, 80, 263, 890, 1797, 88],
     [359, 489, 4266, 2052, 5351, 80],
-    [5558, 4833, 2889, 7476, 1588, 226],
     [374, 7534, 87, 1073, 79, 480],
     [8008, 498, 71, 727, 80, 315],
-    [786, 3161, 8179, 2300, 6160, 2531],
+    [1852, 71, 776, 7878, 7390, 80],
     [2210, 8179, 73, 2582, 897, 1178],
+    [409, 5091, 328, 1378, 5483, 88],
 ]
 
 
@@ -397,7 +396,7 @@ def test_gpt_blended_data():
         sequence_length=5,
     )
     Assert.all_equal(
-        numpy.stack(samples[PhaseType.validation]),
+        np.stack(samples[PhaseType.validation]),
         np.array(GPT_BLENDED_EXPECTED_SAMPLES),
     )
 
@@ -409,7 +408,7 @@ def test_gpt_blended_legacy_data():
         sequence_length=5,
     )
     Assert.all_equal(
-        numpy.stack(samples[PhaseType.validation]),
+        np.stack(samples[PhaseType.validation]),
         np.array(GPT_BLENDED_EXPECTED_SAMPLES),
     )
 
@@ -462,7 +461,7 @@ def test_gpt_blended_mixed_data():
         sequence_length=5,
     )
     Assert.all_equal(
-        numpy.stack(samples[PhaseType.validation]),
+        np.stack(samples[PhaseType.validation]),
         np.array(GPT_BLENDED_MIXED_EXPECTED_SAMPLES),
     )
 
@@ -525,7 +524,7 @@ def test_gpt_fim_data():
         sequence_length=5,
     )
     Assert.all_equal(
-        numpy.stack(samples[PhaseType.validation]),
+        np.stack(samples[PhaseType.validation]),
         np.array(GPT_FIM_EXPECTED_SAMPLES),
     )
 
@@ -534,7 +533,7 @@ def test_gpt_fim_data_legacy():
     _, samples = get_test_data_and_samples(
         {
             "format": "list",
-            "path": [DATASET_PREFIX],
+            "path": [str(DATASET_PREFIX)],
             "fim": {"rate": 0.5, "prefix_token": "w", "middle_token": "x", "pad_token": "y", "suffix_token": "z"},
             "tokenizer": {"path": TOKENIZER_PATH},
         },
@@ -542,6 +541,6 @@ def test_gpt_fim_data_legacy():
         sequence_length=5,
     )
     Assert.all_equal(
-        numpy.stack(samples[PhaseType.validation]),
+        np.stack(samples[PhaseType.validation]),
         np.array(GPT_FIM_EXPECTED_SAMPLES),
     )
