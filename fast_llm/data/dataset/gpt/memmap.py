@@ -58,10 +58,12 @@ class GPTMemmapDataset(GPTIndexedDataset):
         self._init(*state)
 
     def __del__(self):
-        self._bin_buffer_mmap._mmap.close()  # noqa
-        del self._bin_buffer_mmap
-        self._index_bin_buffer_mmap._mmap.close()  # noqa
-        del self._index_bin_buffer_mmap
+        if hasattr(self, "_bin_buffer_mmap"):
+            self._bin_buffer_mmap._mmap.close()  # noqa
+            del self._bin_buffer_mmap
+        if hasattr(self, "_index_bin_buffer"):
+            self._index_bin_buffer_mmap._mmap.close()  # noqa
+            del self._index_bin_buffer_mmap
 
     def get(self, idx, offset=0, length=None) -> np.ndarray:
         return np.frombuffer(

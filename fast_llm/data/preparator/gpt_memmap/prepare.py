@@ -168,7 +168,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
 
         # Create an index file on rank 0
         index_file = self._config.output_path / "index.txt"
-        index_file.open("w").write("\n".join(dataset_dict["prefix"] for dataset_dict in dataset_dicts))
+        index_file.open("w").writelines([dataset_dict["prefix"] + "\n" for dataset_dict in dataset_dicts])
 
         # Finalize distributed processing
         if self._config.distributed.world_size > 1:

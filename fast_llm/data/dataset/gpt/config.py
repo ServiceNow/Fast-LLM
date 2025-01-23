@@ -182,7 +182,7 @@ class GPTComposedDatasetConfig(GPTIndexedDatasetConfig):
         index_path = self.path / "index.txt"
 
         if index_path.is_file():
-            prefixes = [self.path / line for line in self.path.open("r").readlines()]
+            prefixes = [self.path / line.strip() for line in index_path.open("r").readlines()]
         else:
             warnings.warn(
                 f"The dataset path {self.path} points to a directory."
