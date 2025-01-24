@@ -101,8 +101,6 @@ class GPTSampledIndexedDataset(SampledDataset):
             "The C++ extension for dataset sampling is missing." " Please make sure Fast-LLM is installed correctly."
         )
 
-        # TODO: This samples more than necessary
-        #     (reducing would introduce behavior change because of difference in shuffling).
         sample_idx = build_sample_idx(
             document_sizes,
             doc_idx,
