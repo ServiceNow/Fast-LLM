@@ -29,6 +29,7 @@ class SafeLoad:
         self._distributed = self._model.distributed
         self._num_shards = num_shards
         self._self_shard = self._model.state_shard[: self._num_shards]
+        self._timeout = timeout
 
     def __enter__(self) -> "SafeLoad":
         self._loaded = 0
@@ -146,7 +147,7 @@ class SafeLoad:
                 counter_tensor = torch.tensor(
                     [counter or 0 for counter in counter_per_parameter.values()], dtype=torch.int64
                 ).to(self._distributed.device)
-                add_ephemeral_timeout()
+                add_ephemeral_timeout(self._distributed.world_group, self._timeout)
                 all_reduce(counter_tensor, group=self._distributed.world_group)
                 counter_per_parameter = {
                     parameter_name: counter
