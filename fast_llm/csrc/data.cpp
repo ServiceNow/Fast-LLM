@@ -104,9 +104,7 @@ void build_blending_indices(py::array_t<int16_t>& dataset_index,
 py::array build_sample_idx(const py::array_t<int32_t>& sizes_,
 			   const py::array_t<int32_t>& doc_idx_,
 			   const int32_t seq_length,
-			   const int32_t num_epochs,
-			   const int64_t tokens_per_epoch,
-			   const bool verbose) {
+			   const int64_t num_samples) {
     /* Sample index (sample_idx) is used for gpt2 like dataset for which
        the documents are flattened and the samples are built based on this
        1-D flatten array. It is a 2D array with sizes [number-of-samples + 1, 2]
@@ -115,28 +113,13 @@ py::array build_sample_idx(const py::array_t<int32_t>& sizes_,
 
     // Consistency checks.
     assert(seq_length > 1);
-    assert(num_epochs > 0);
-    assert(tokens_per_epoch > 1);
 
     // Remove bound checks.
     auto sizes = sizes_.unchecked<1>();
     auto doc_idx = doc_idx_.unchecked<1>();
 
     // Mapping and it's length (1D).
-    int64_t num_samples = (num_epochs * tokens_per_epoch - 1) / seq_length;
     int32_t* sample_idx = new int32_t[2*(num_samples+1)];
-
-    if (verbose) {
-      cout << "    using:" << endl << std::flush;
-      cout << "     number of documents:       " <<
-        doc_idx_.shape(0) / num_epochs << endl << std::flush;
-      cout << "     number of epochs:          " << num_epochs <<
-        endl << std::flush;
-      cout << "     sequence length:           " << seq_length <<
-        endl << std::flush;
-      cout << "     total number of samples:   " << num_samples <<
-        endl << std::flush;
-    }
 
     // Index into sample_idx.
     int64_t sample_index = 0;
@@ -152,7 +135,7 @@ py::array build_sample_idx(const py::array_t<int32_t>& sizes_,
     while (sample_index <= num_samples) {
         // Start with a fresh sequence.
       int32_t remaining_seq_length = seq_length + 1;
-      while (remaining_seq_length != 0) {
+      while (remaining_seq_length > 0) {
             // Get the document length.
 	auto doc_id = doc_idx[doc_idx_index];
 	auto doc_length = sizes[doc_id] - doc_offset;
@@ -164,7 +147,6 @@ py::array build_sample_idx(const py::array_t<int32_t>& sizes_,
 	// `_num_epochs` calculations.
 	if (remaining_seq_length <= 0) {
 	  doc_offset += (remaining_seq_length + doc_length - 1);
-	  remaining_seq_length = 0;
 	} else {
 	  // Otherwise, start from the beginning of the next document.
 	  ++doc_idx_index;

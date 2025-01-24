@@ -179,6 +179,12 @@ class CheckpointPathConfigBase(CheckpointConfigBase):
         desc="Location of the checkpoint.",
         hint=FieldHint.core,
     )
+    timeout: float | None = Field(
+        default=None,
+        desc="Custom timeout for lengthy operations.",
+        hint=FieldHint.optional,
+        valid=check_field(Assert.gt, 0),
+    )
 
 
 @config_class()
@@ -248,5 +254,5 @@ class CheckpointHandler(abc.ABC):
     def get_num_shards(self, config: CheckpointStateConfigBase) -> int:
         return len(self._model.state_shard_names) if config.optimizer_state else 1
 
-    def get_shard_names(self, config: CheckpointStateConfigBase) -> tuple[str]:
+    def get_shard_names(self, config: CheckpointStateConfigBase) -> tuple[str, ...]:
         return self._model.state_shard_names if config.optimizer_state else self._model.state_shard_names[:1]

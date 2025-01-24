@@ -82,7 +82,6 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
     def setup(self, distributed: Distributed, run: Run) -> None:
         assert distributed.config is self._config.model.distributed
         assert not self._is_setup
-        self._is_setup = True
         self._distributed = distributed
         self._run = run
         self._wandb = Wandb(self._config.training.wandb, self._run, self._config)
@@ -110,7 +109,9 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
             distributed,
             self._samples_per_split,
             None if run.experiment_directory is None else run.experiment_directory / "dataset_cache",
+            timeout=self._config.training.timeout,
         )
+        self._is_setup = True
 
     @abc.abstractmethod
     def _get_data(self) -> Data:
@@ -336,7 +337,10 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
                 total_losses[name] += value
             self._run.save_logged_tensors(f"{phase}_{self._completed_steps}_{iter_}")
 
-        safe_barrier(self._distributed.world_group, f"{phase.value} end")
+        safe_barrier(
+            self._distributed.world_group,
+            f"{phase.value} end",
+        )
         end_time = time.perf_counter()
         time_per_iteration = (end_time - begin_time) / num_iters
         model_tflops, hardware_tflops = self.get_tflops(phase, time_per_iteration)
@@ -406,7 +410,7 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
             logger.info(f"Saving {config.save_name} at iteration {self._completed_steps}")
             checkpoint_directory.mkdir(exist_ok=False, parents=True)
         # Barrier to ensure the directory is created correctly (and didn't exist before).
-        self._run.barrier(f"{config.save_name} {self._completed_steps} enter")
+        safe_barrier(self._distributed.world_group, f"{config.save_name} {self._completed_steps} enter")
 
         metadata = {
             "optimizer": self._optimizer.save(),
@@ -417,7 +421,11 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
         self._multi_stage.save_checkpoint(config.get_save_config(checkpoint_directory), metadata)
 
         # Barrier to ensure everyone is done.
-        self._run.barrier(f"{config.save_name} {self._completed_steps} exit")
+        safe_barrier(
+            self._distributed.world_group,
+            f"{config.save_name} {self._completed_steps} exit",
+            timeout=self._config.training.timeout,
+        )
         # Mark the checkpoint as complete.
         if self._run.is_main_rank:
             (checkpoint_directory / "ok").open("w")
@@ -447,7 +455,11 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
         else:
             self._completed_steps = metadata["completed_steps"]
         # TODO v0.3: Move barrier, ok file to FastLLMModel
-        self._run.barrier(f"load {config.save_name} {iteration} exit")
+        safe_barrier(
+            self._distributed.world_group,
+            f"load {config.save_name} {iteration} exit",
+            timeout=self._config.training.timeout,
+        )
 
     def _get_last_checkpoint(self) -> int | None:
         if self._run.experiment_directory is None:

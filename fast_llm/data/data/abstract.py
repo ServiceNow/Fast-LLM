@@ -26,6 +26,7 @@ class Data[ConfigType: DataConfig](Configurable[ConfigType], abc.ABC):
         distributed: "Distributed",
         samples_per_phase: dict[PhaseType, int],
         cache_directory: pathlib.Path,
+        timeout: float | None = None,
     ) -> None:
         self._distributed = distributed
         self._samples_per_phase = samples_per_phase

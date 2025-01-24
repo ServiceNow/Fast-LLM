@@ -44,7 +44,7 @@ class Distributed[ConfigType: DistributedConfig](Configurable[ConfigType]):
             self.device = torch.device(self._config.local_rank)
             torch.cuda.set_device(self.device)
 
-        timeout = datetime.timedelta(seconds=self._config.distributed_timeout)
+        timeout = datetime.timedelta(seconds=self._config.timeout)
 
         # We bypass `torch.distributed.init_process_group` which makes things way more complicated for no reason.
 
@@ -139,7 +139,7 @@ class Distributed[ConfigType: DistributedConfig](Configurable[ConfigType]):
                 torch.distributed.PrefixStore(prefix + "/", self.store),
                 distributed_dim.rank,
                 distributed_dim.size,
-                datetime.timedelta(seconds=self._config.distributed_timeout),
+                datetime.timedelta(seconds=self._config.timeout),
             )
         self._process_groups[distributed_dim.name] = group
         distributed_dim.setup(group)

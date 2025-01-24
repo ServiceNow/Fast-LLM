@@ -7,6 +7,7 @@ Todo: Move all core methods elsewhere (functional?).
 """
 
 import contextlib
+import datetime
 import logging
 import typing
 
@@ -23,6 +24,12 @@ from torch.distributed import (  # noqa
 )
 
 logger = logging.getLogger(__name__)
+
+
+def add_ephemeral_timeout(group: ProcessGroup, timeout: float | None = None) -> None:
+    if timeout is not None:
+        # TODO: Only works for nccl?
+        group._add_ephemeral_timeout(datetime.timedelta(seconds=timeout))
 
 
 def broadcast(tensor: torch.Tensor, src: int, group: ProcessGroup, async_op=False) -> Work | None:
@@ -53,9 +60,10 @@ def check_parallel_match(tensor: torch.Tensor, group: ProcessGroup | None, name:
         )
 
 
-def safe_barrier(group: ProcessGroup | None, value: int | str = 1) -> None:
+def safe_barrier(group: ProcessGroup | None, value: int | str = 1, timeout: float | None = None) -> None:
     if group:
         hashed = hash(value) % 2**32
+        add_ephemeral_timeout(group, timeout)
         out = allreduce_scalar(hashed, dtype=torch.int64, group=group)
         if out != hashed * group.size():
             raise RuntimeError(f"Desync detected for barrier {value} ({out}!={hashed*group.size()})")
@@ -80,12 +88,14 @@ def broadcast_scalar(
     dtype: torch.dtype = torch.float64,
     group: torch.distributed.ProcessGroup | None = None,
     src: int = 0,
+    timeout: float | None = None,
 ) -> float | int:
     if not group:
         return value
     tensor = torch.empty([1], dtype=dtype, device=torch.device(torch.cuda.current_device()))
     if group.rank() == src:
         tensor.fill_(value)
+    add_ephemeral_timeout(group, timeout)
     broadcast(tensor, src, group)
     return tensor.item()
 
