@@ -44,8 +44,6 @@ class Distributed[ConfigType: DistributedConfig](Configurable[ConfigType]):
             self.device = torch.device(self._config.local_rank)
             torch.cuda.set_device(self.device)
 
-        timeout = datetime.timedelta(seconds=self._config.timeout)
-
         # We bypass `torch.distributed.init_process_group` which makes things way more complicated for no reason.
 
         # TODO: Allow other init methods?
@@ -53,7 +51,12 @@ class Distributed[ConfigType: DistributedConfig](Configurable[ConfigType]):
         if self._config.world_size > 1:
             self._config.log_first_rank("Initializing TCP store.")
             self.store, _, _ = next(
-                torch.distributed.rendezvous("env://", self._config.rank, self._config.world_size, timeout=timeout)
+                torch.distributed.rendezvous(
+                    "env://",
+                    self._config.rank,
+                    self._config.world_size,
+                    timeout=datetime.timedelta(seconds=self._config.timeout),
+                )
             )
         self._process_groups = {}
         for name, distributed_dim in self._config.distributed_dims.items():

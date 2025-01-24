@@ -315,7 +315,8 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
 
                 if self._config.training.export.enabled(None if done else self._completed_steps):
                     self._save_checkpoint(self._config.training.export, metrics)
-
+            # The profiler calls the trace_fn at the end and this could lead to
+            profiler.step()
         return done, metrics
 
     def _evaluate(
