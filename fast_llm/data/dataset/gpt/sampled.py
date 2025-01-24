@@ -115,9 +115,10 @@ class GPTSampledIndexedDataset(SampledDataset):
         # shuffle-idx.
         # -1 is due to data structure used to retrieve the index:
         #    sample i --> [sample_idx[i], sample_idx[i+1])
+        total_size = sample_idx.shape[0] - 1
         # TODO: Isn't the dataset already shuffled above?
         shuffle_idx = np.arange(
-            0, self._num_samples, dtype=np.int64 if self._num_samples >= (np.iinfo(np.uint32).max - 1) else np.uint32
+            0, total_size, dtype=np.int64 if total_size >= (np.iinfo(np.uint32).max - 1) else np.uint32
         )
         if separate_last_epoch:
             np_rng.shuffle(shuffle_idx[:main_epochs_samples])
