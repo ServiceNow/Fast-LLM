@@ -101,6 +101,8 @@ class GPTSampledIndexedDataset(SampledDataset):
             "The C++ extension for dataset sampling is missing." " Please make sure Fast-LLM is installed correctly."
         )
 
+        # TODO: This samples more than necessary
+        #     (reducing would introduce behavior change because of difference in shuffling).
         sample_idx = build_sample_idx(
             document_sizes,
             doc_idx,
@@ -109,7 +111,6 @@ class GPTSampledIndexedDataset(SampledDataset):
             num_tokens,
             True,
         )
-        assert sample_idx.shape == (self._num_samples + 1, 2)
 
         # shuffle-idx.
         # -1 is due to data structure used to retrieve the index:
@@ -126,7 +127,7 @@ class GPTSampledIndexedDataset(SampledDataset):
 
         Assert.geq(len(shuffle_idx), self._num_samples)
         # TODO: The doc and sample idx are way bigger than needed when sampling for << 1 epoch.
-        return doc_idx, sample_idx, shuffle_idx[: self._num_samples]
+        return doc_idx, sample_idx[: self._num_samples], shuffle_idx[: self._num_samples]
 
     def __getstate__(
         self,
