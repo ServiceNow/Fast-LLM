@@ -105,7 +105,9 @@ class GPTSampledIndexedDataset(SampledDataset):
             document_sizes,
             doc_idx,
             self._sequence_length,
-            self._num_samples,
+            num_epochs,
+            num_tokens,
+            True,
         )
         assert sample_idx.shape == (self._num_samples + 1, 2)
 
