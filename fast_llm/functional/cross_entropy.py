@@ -9,8 +9,12 @@ from fast_llm.utils import Assert
 
 
 def torch_cross_entropy_forward_backward(
-    logits, target, grad_output, logits_scale_factor: float = 1.0, ignore_index=-100
-):
+    logits: torch.Tensor,
+    target: torch.Tensor,
+    grad_output: float | None,
+    logits_scale_factor: float = 1.0,
+    ignore_index=-100,
+) -> tuple[torch.Tensor, torch.Tensor | None]:
     """
     A wrapper for the pytorch implementation of cross-entropy.
     The cross-entropy kernels themselves are well-optimized, but the need for explicit casting
@@ -21,15 +25,23 @@ def torch_cross_entropy_forward_backward(
         logits_ = logits.float().detach().requires_grad_()
         if logits_scale_factor != 1.0:
             logits_ *= logits_scale_factor
-        loss = torch.nn.functional.cross_entropy(logits_, target, ignore_index=ignore_index).mean()
-        loss.backward(torch.full_like(loss, grad_output))
+        if grad_output is None:
+            loss = None
+        else:
+            loss = torch.nn.functional.cross_entropy(logits_, target, ignore_index=ignore_index).mean()
+            loss.backward(torch.full_like(loss, grad_output))
+            loss.detach_()
     return loss.detach(), logits_.grad.detach().to(logits.dtype)
 
 
 @torch.compile
 def fused_cross_entropy_forward_backward(
-    logits, target, grad_output: float | None, logits_scale_factor: float = 1.0, ignore_index=-100
-):
+    logits: torch.Tensor,
+    target: torch.Tensor,
+    grad_output: float | None,
+    logits_scale_factor: float = 1.0,
+    ignore_index: int = -100,
+) -> tuple[torch.Tensor, torch.Tensor | None]:
     """
     A fused implementation of cross-entropy with torch compile.
     It is an improvement over the pytorch implementation because of the fused casting, both in speed and memory,
@@ -68,7 +80,7 @@ def fused_cross_entropy_forward_backward(
 @torch.compile
 def parallel_cross_entropy_forward_backward(
     logits, target, grad_output: float | None, group: ProcessGroup, logits_scale_factor: float = 1.0, ignore_index=-100
-):
+) -> tuple[torch.Tensor, torch.Tensor | None]:
     """
     A fused implementation of cross-entropy with torch compile, with support for tensor parallelism.
     Comes with a noticeable overhead, but reduces memory usage.
@@ -130,7 +142,7 @@ def cross_entropy_forward_backward(
     group: ProcessGroup | None,
     implementation: CrossEntropyImpl = CrossEntropyImpl.fused,
     logits_scale_factor: float = 1.0,
-):
+) -> tuple[torch.Tensor, torch.Tensor | None]:
     """
     Select the appropriate implementation of cross-entropy.
     The triton implementation from the triton submodule is the fastest and recommended one.

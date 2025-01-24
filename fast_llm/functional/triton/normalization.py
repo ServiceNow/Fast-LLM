@@ -1,3 +1,5 @@
+import typing
+
 import torch
 
 import triton
@@ -170,7 +172,7 @@ def triton_normalization_forward(
     eps: float,
     training: bool,
     zero_centered: bool,
-):
+) -> tuple[torch.Tensor, list[typing.Any]] | None:
     assert weight.shape == input_.shape[-1:]
     if bias is not None:
         assert weight.shape == bias.shape
@@ -204,7 +206,7 @@ def triton_normalization_forward(
     return output, context
 
 
-def triton_normalization_backward(grad_output: torch.Tensor, context: list):
+def triton_normalization_backward(grad_output: torch.Tensor, context: list[typing.Any]) -> torch.Tensor:
     output, weight, bias, inv_var, eps, zero_centered = context
     # We delete the context to prevent a memory leak
     context.clear()
@@ -280,7 +282,7 @@ triton_normalization_autograd = wrap_forward_backward(triton_normalization_forwa
 
 
 @torch.compile
-def rms_norm(input_: torch.Tensor, weight: torch.Tensor, eps: float):
+def rms_norm(input_: torch.Tensor, weight: torch.Tensor, eps: float) -> torch.Tensor:
     # TODO: Backward pass is extremely slow.
     input_dtype = input_.dtype
     input_ = input_.to(torch.float32)

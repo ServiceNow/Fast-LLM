@@ -10,7 +10,7 @@ from fast_llm.engine.base_model.base_model import LossDef
 from fast_llm.engine.config_utils.logging import TensorLogs
 from fast_llm.engine.distributed.config import PhaseType
 from fast_llm.tensor import TensorMeta
-from fast_llm.utils import format_number
+from fast_llm.utils import format_number, log
 
 if typing.TYPE_CHECKING:
     from fast_llm.core.distributed import ProcessGroup
@@ -101,7 +101,7 @@ _METRIC_FORMATS = {
 }
 
 
-def format_metrics(metrics: dict[str, float | int], loss_defs: list[LossDef], phase: PhaseType):
+def format_metrics(metrics: dict[str, float | int], loss_defs: list[LossDef], phase: PhaseType) -> str:
     # TODO: Improve, add flexibility.
     metrics = {key: _FORMAT_MAP[key](value) if key in _FORMAT_MAP else value for key, value in metrics.items()}
 
@@ -118,15 +118,17 @@ def format_metrics(metrics: dict[str, float | int], loss_defs: list[LossDef], ph
 
 
 @torch._dynamo.disable  # noqa
-def log_tensor(
+def log_tensor[
+    T
+](
     name: str,
     tensor: torch.Tensor,
     *,
     scale: float = 1.0,
     level: int = 2,
     storage: bool = False,
-    log_fn: typing.Callable[[str], typing.Any] | None = logger.info,
-):
+    log_fn: type[BaseException] | typing.Callable[[str], T] | None = logger.info,
+) -> (T | None):
     if level < 1:
         return
     save_stats = TensorLogs.config.save
@@ -138,7 +140,7 @@ def log_tensor(
         ("dtype", dtype, 9),
         ("device", tensor.device, 7),
     ]
-    stats = dict(
+    stats: dict[str, typing.Any] = dict(
         name=name,
         shape=list(shape),
         dtype=dtype,
@@ -204,12 +206,14 @@ def log_tensor(
         prefix = "" if prefix is None else f" {prefix}="
         len_ += col_len + len(prefix) + 1
         out = f"{f'{out}{prefix}{str(val)}':{len_}s}"
-    if TensorLogs.config.show:
-        return log_fn(out)
+    if TensorLogs.config.show and log_fn is not None:
+        return log(out, log_fn=log_fn)
 
 
 @torch._dynamo.disable  # noqa
-def log_grad(
+def log_grad[
+    T
+](
     name: str,
     tensor: torch.Tensor,
     *,
@@ -217,8 +221,8 @@ def log_grad(
     level: int = 2,
     storage: bool = False,
     grad_fn: typing.Callable[[torch.Tensor], torch.Tensor] | None = None,
-    log_fn: typing.Callable[[str], typing.Any] | None = logger.info,
-):
+    log_fn: type[BaseException] | typing.Callable[[str], T] | None = logger.info,
+) -> None:
     tensor.register_hook(
         lambda grad: log_tensor(
             name,
@@ -232,7 +236,9 @@ def log_grad(
 
 
 @torch._dynamo.disable  # noqa
-def log_distributed_tensor(
+def log_distributed_tensor[
+    T
+](
     name: str,
     tensor: torch.Tensor,
     *,
@@ -242,9 +248,9 @@ def log_distributed_tensor(
     distributed: "Distributed",
     duplicate_groups: tuple[typing.Optional["ProcessGroup"], ...] = (),
     global_: bool = True,
-    log_fn: typing.Callable[[str], typing.Any] | None = logger.info,
+    log_fn: type[BaseException] | typing.Callable[[str], T] | None = logger.info,
     meta: TensorMeta,
-):
+) -> (T | None):
     if level <= 0:
         return
     if global_:
@@ -265,7 +271,9 @@ def log_distributed_tensor(
 
 
 @torch._dynamo.disable  # noqa
-def log_distributed_grad(
+def log_distributed_grad[
+    T
+](
     name: str,
     tensor: torch.Tensor,
     *,
@@ -276,9 +284,9 @@ def log_distributed_grad(
     duplicate_groups: tuple[typing.Optional["ProcessGroup"], ...] = (),
     grad_fn: typing.Callable[[torch.Tensor], torch.Tensor] | None = None,
     global_: bool = True,
-    log_fn: typing.Callable[[str], None] | None = logger.info,
+    log_fn: type[BaseException] | typing.Callable[[str], T] | None = logger.info,
     meta: TensorMeta,
-):
+) -> (T | None):
     if level <= 0:
         return
     tensor.register_hook(
@@ -298,21 +306,23 @@ def log_distributed_grad(
 
 
 @torch._dynamo.disable  # noqa
-def log_generator(
+def log_generator[
+    T
+](
     name,
     generator: torch.Tensor | torch.Generator | None = None,
-    log_fn: typing.Callable[[str], typing.Any] | None = logger.info,
+    log_fn: type[BaseException] | typing.Callable[[str], T] = logger.info,
 ):
     if generator is None:
         generator = torch.cuda.default_generators[torch.cuda.current_device()]
     tensor = generator.get_state() if isinstance(generator, torch.Generator) else generator
-    return log_fn(f"{name} {tensor.view(dtype=torch.int64)[-8:].tolist()}")
+    return log(f"{name} {tensor.view(dtype=torch.int64)[-8:].tolist()}", log_fn=log_fn)
 
 
 _global_max_reserved = 0
 
 
-def get_memory_usage_mib(reset_stats: bool = True, relative_to: dict[str, int] | None = None):
+def get_memory_usage_mib(reset_stats: bool = True, relative_to: dict[str, int] | None = None) -> dict[str, float]:
     global _global_max_reserved
     max_reserved = torch.cuda.max_memory_reserved() / 2**20
     _global_max_reserved = max(max_reserved, _global_max_reserved)
@@ -330,16 +340,18 @@ def get_memory_usage_mib(reset_stats: bool = True, relative_to: dict[str, int] |
     return out
 
 
-def log_memory_usage(
+def log_memory_usage[
+    T
+](
     header: str | None = None,
-    log_fn: typing.Callable[[str], typing.Any] | None = logger.info,
+    log_fn: type[BaseException] | typing.Callable[[str], T] = logger.info,
     reset_stats: bool = True,
     stats: dict[str, int] | None = None,
     relative_to: dict[str, int] | None = None,
-):
+) -> T:
     if stats is None:
         stats = get_memory_usage_mib(reset_stats, relative_to)
     formatted = _MEMORY_METRIC_FORMAT.format(**stats)
     if header is not None:
         formatted = f"{header}: {formatted}"
-    return log_fn(formatted)
+    return log(formatted, log_fn=log_fn)

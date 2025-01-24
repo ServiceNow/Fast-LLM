@@ -1,9 +1,12 @@
 import datetime
 import logging
+import typing
 
 import torch
 import torch.distributed
 
+from fast_llm.config import Configurable
+from fast_llm.core.distributed import ProcessGroup
 from fast_llm.engine.distributed.config import (
     MAX_SEED,
     DistributedConfig,
@@ -16,7 +19,7 @@ from fast_llm.utils import Assert
 logger = logging.getLogger(__name__)
 
 
-class Distributed:
+class Distributed[ConfigType: DistributedConfig](Configurable[ConfigType]):
     """
     A distributed instance holding pointers to the various process groups.
     Also handle global random seeds and generators.
@@ -26,8 +29,10 @@ class Distributed:
     TODO: Clarify cpu support.
     """
 
+    config_class: typing.ClassVar[type[DistributedConfig]] = DistributedConfig
+
     def __init__(self, config: DistributedConfig, use_cpu: bool = False):
-        self._config = config.validate()
+        super().__init__(config)
         self._use_cpu = use_cpu
 
         if self._use_cpu:
@@ -102,11 +107,7 @@ class Distributed:
 
         self.set_step(0, PhaseType.training)
 
-    @property
-    def config(self):
-        return self._config
-
-    def add_group(self, distributed_dim: DistributedDim):
+    def add_group(self, distributed_dim: DistributedDim) -> ProcessGroup | None:
         """
         Add a process group from its definition.
         The group name (`dim`) must be unique within a distributed instance,
@@ -144,7 +145,7 @@ class Distributed:
         distributed_dim.setup(group)
         return group
 
-    def set_step(self, step: int, phase: PhaseType):
+    def set_step(self, step: int, phase: PhaseType) -> None:
         """
         Reseed pytorch for a given training step.
         TODO v0.3: Move unrelated content elsewhere.

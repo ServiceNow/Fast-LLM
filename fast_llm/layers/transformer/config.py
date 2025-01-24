@@ -114,15 +114,15 @@ class RotaryArchitectureConfig(BaseModelArchitectureConfig):
     )
 
     @property
-    def enabled(self):
+    def enabled(self) -> bool:
         return self.type != RotaryEmbeddingType.none
 
     @property
-    def complex_format(self):
+    def complex_format(self) -> bool:
         # TODO: Make a backup implementation that doesn't affect the layout.
         return self.enabled and not self.triton
 
-    def _validate(self):
+    def _validate(self) -> None:
         super()._validate()
         if self.triton and not TritonConfig.TRITON_ENABLED:
             warnings.warn("Triton is disabled, but the triton rotary kernel will be used anyway.")
@@ -218,7 +218,7 @@ class TransformerArchitectureConfig(BaseModelArchitectureConfig):
         hint=FieldHint.feature,
     )
 
-    def _validate(self):
+    def _validate(self) -> None:
         if self.ffn_hidden_size is None:
             self.ffn_hidden_size = 4 * self.hidden_size
         if self.kv_channels is None:
@@ -241,7 +241,7 @@ class TransformerArchitectureConfig(BaseModelArchitectureConfig):
         default: dict[str, typing.Any],
         strict: bool = True,
         flat: bool = False,
-    ):
+    ) -> typing.Self:
         # TODO v0.x: Remove backward compatibility.
         cls._handle_renamed_field(
             default,
@@ -253,7 +253,7 @@ class TransformerArchitectureConfig(BaseModelArchitectureConfig):
         cls._handle_renamed_field(default, "triton_rotary", ("rotary", "triton"))
         return super()._from_dict(default, strict, flat)
 
-    def setup_tensor_space(self, tensor_space: TensorSpace):
+    def setup_tensor_space(self, tensor_space: TensorSpace) -> None:
         tensor = tensor_space.distributed_config.get_distributed_dim(DistributedDimNames.tensor)
 
         # Hidden dimension
@@ -505,7 +505,7 @@ class TransformerConfig(TransformerArchitectureConfig, BaseModelConfig):
         hint=FieldHint.expert,
     )
 
-    def _validate(self):
+    def _validate(self) -> None:
         if self.init_method_std is None:
             self.init_method_std = self.hidden_size**-0.5
         if self.init_method_std_qkv is None:
@@ -554,5 +554,5 @@ class TransformerConfig(TransformerArchitectureConfig, BaseModelConfig):
             if scale is not None:
                 Assert.geq(scale, 0)
 
-    def do_use_flash_attention(self, distributed_config: DistributedConfig):
+    def do_use_flash_attention(self, distributed_config: DistributedConfig) -> bool:
         return self.use_flash_attention and distributed_config.training_dtype in (DataType.float16, DataType.bfloat16)

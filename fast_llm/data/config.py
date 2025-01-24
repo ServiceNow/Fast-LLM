@@ -1,4 +1,5 @@
 import enum
+import pathlib
 
 from fast_llm.config import Config, Field, FieldHint, check_field, config_class
 from fast_llm.utils import Assert
@@ -10,15 +11,6 @@ class MultiprocessingContext(str, enum.Enum):
     fork = "fork"
     # Safe but much slower.
     spawn = "spawn"
-
-
-def _validate_split(value):
-    Assert.leq(len(value), 3)
-    return value + [0] * (len(value) - 3)
-
-
-def _validate_path(value):
-    return [value] if isinstance(value, str) else value
 
 
 TokenizerFromFile = "TokenizerFromFile"
@@ -37,7 +29,7 @@ class TokenizerConfig(Config):
         hint=FieldHint.deprecated,
         valid=check_field(Assert.eq, TokenizerFromFile),
     )
-    path: str | None = Field(
+    path: pathlib.Path | None = Field(
         default=None,
         desc="Path to the tokenizer file.",
         hint=FieldHint.core,

@@ -12,6 +12,7 @@ import torch.utils.data
 from fast_llm.engine.distributed.config import DistributedConfig, PhaseType
 from fast_llm.engine.multi_stage.multi_stage import MultiStageModel
 from fast_llm.engine.schedule.config import BatchConfig, ScheduleConfig, StepType
+from fast_llm.tensor import TensorMeta
 from fast_llm.utils import Assert
 
 logger = logging.getLogger(__name__)
@@ -69,30 +70,30 @@ class Step:
     meta_kwargs: dict | None = None
 
     @property
-    def micro_sequence(self):
+    def micro_sequence(self) -> int:
         return self.data_index % self.config.num_micro_sequences
 
     @property
-    def micro_batch(self):
+    def micro_batch(self) -> int:
         return self.data_index // self.config.num_micro_sequences
 
     @property
-    def depth_first_micro_batch(self):
+    def depth_first_micro_batch(self) -> int:
         return self.micro_batch % self.config.depth_first_micro_batches
 
     @property
-    def breadth_first_micro_batch(self):
+    def breadth_first_micro_batch(self) -> int:
         return self.micro_batch // self.config.depth_first_micro_batches
 
     @property
-    def map_index(self):
+    def map_index(self) -> tuple[StepType, int, int]:
         return (
             self.type_,
             self.stage,
             self.data_index,
         )
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         misc = ""
         if self.start is not None and self.compute_end is not None:
             misc += f", time = ({self.start}, {self.compute_end})"
@@ -110,7 +111,7 @@ class Step:
             f" ms={self.micro_sequence}{misc})"
         )
 
-    def get_stage_index(self, num_stages):
+    def get_stage_index(self, num_stages) -> int:
         return self.stage if self.type_ == StepType.forward else 2 * num_stages - 1 - self.stage
 
 
@@ -160,20 +161,20 @@ class Schedule(abc.ABC):
         return self._phase
 
     @property
-    def batch_config(self):
+    def batch_config(self) -> BatchConfig:
         return self._batch_config
 
     @property
-    def preprocessed_meta(self):
+    def preprocessed_meta(self) -> list[tuple[TensorMeta, dict]]:
         return self._preprocessed_meta
 
-    def iterate(self, pipeline_rank: int | None = None):
+    def iterate(self, pipeline_rank: int | None = None) -> typing.Iterator[Step]:
         return iter(self._steps if pipeline_rank is None else self._device_steps[pipeline_rank])
 
-    def __iter__(self):
+    def __iter__(self) -> typing.Iterator[Step]:
         return self.iterate(self._distributed.pipeline_rank)
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return "Schedule with steps:\n" + "\n".join(
             [
                 f"  rank {i}:\n    " + "\n    ".join([str(step) for step in device_step])
@@ -186,10 +187,10 @@ class Schedule(abc.ABC):
         type_: StepType,
         stage: int,
         data_index: int,
-    ):
+    ) -> Step:
         return self._step_map[(type_, stage, data_index)]
 
-    def _create_index(self):
+    def _create_index(self) -> None:
         self._device_steps: list[list[Step]] = [[] for _ in range(self._distributed.pipeline_parallel)]
         self._step_map = {}
         for i, step in enumerate(self._steps):
@@ -260,7 +261,7 @@ class Schedule(abc.ABC):
                 Assert.lt(step.prev_step.global_index, step.global_index)
                 Assert.is_(step.prev_step.next_step, step)
 
-    def _setup_restore_steps(self, weight_buffer_indices: dict[int, int]):
+    def _setup_restore_steps(self, weight_buffer_indices: dict[int, int]) -> None:
         for rank, device_steps in enumerate(self._device_steps):
             if rank != self._distributed.pipeline_rank:
                 # TODO: Make restore schedule for all ranks (need all buffer indices)
@@ -278,7 +279,7 @@ class Schedule(abc.ABC):
                     buffer_contents[buffer_index] = step.stage
                 buffer_last_used[buffer_index] = step.local_index
 
-    def _setup_reduce_steps(self, grad_buffer_indices: dict[int, int]):
+    def _setup_reduce_steps(self, grad_buffer_indices: dict[int, int]) -> None:
         if not self._is_training:
             return
         for rank, device_steps in enumerate(self._device_steps):
@@ -304,7 +305,7 @@ class Schedule(abc.ABC):
             for stage, count in enumerate(reduction_count):
                 assert (count > 0) == (stage % self._distributed.pipeline_parallel == self._distributed.pipeline_rank)
 
-    def _setup_timeline(self):
+    def _setup_timeline(self) -> None:
         # TODO: Include network time
         idx = [0] * self._distributed.pipeline_parallel
         done = False
@@ -329,7 +330,7 @@ class Schedule(abc.ABC):
         # Ensure a valid timeline was found.
         Assert.eq(idx, [len(device_steps) for device_steps in self._device_steps])
 
-    def _setup_send_recv_steps(self):
+    def _setup_send_recv_steps(self) -> None:
         ends = [np.array([step.end for step in device_steps]) for device_steps in self._device_steps]
         for send_rank, device_steps in enumerate(self._device_steps):
             for send_step in device_steps:
@@ -366,7 +367,7 @@ class Schedule(abc.ABC):
                     if self._schedule_config.pipeline_overlap:
                         recv_step.recv_event = torch.cuda.Event()
 
-    def _validate_send_recv_steps(self):
+    def _validate_send_recv_steps(self) -> None:
         times = [0.0] * self._distributed.pipeline_parallel
         idx = [0] * self._distributed.pipeline_parallel
         recv_idx = [0] * self._distributed.pipeline_parallel
@@ -433,7 +434,7 @@ class Schedule(abc.ABC):
             )
             raise RuntimeError(f"Cannot find valid timeline for {self}, \nStatuses:{msg}")
 
-    def _setup_throttle_steps(self):
+    def _setup_throttle_steps(self) -> None:
         if not self._schedule_config.throttle_cpu:
             return
         for device_steps in self._device_steps:
@@ -443,7 +444,7 @@ class Schedule(abc.ABC):
                     throttle_step.throttle_event = torch.cuda.Event()
                     step.throttle_step = throttle_step
 
-    def _setup_metas(self):
+    def _setup_metas(self) -> None:
         for step in self._steps:
             if step.type_ == StepType.forward:
                 if step.prev_step is None:
@@ -456,10 +457,12 @@ class Schedule(abc.ABC):
                     step.next_step.meta_input = step.meta_output
                     step.next_step.meta_kwargs = step.meta_kwargs
 
-    def get_data_index(self, micro_batch: int, micro_sequence: int):
+    def get_data_index(self, micro_batch: int, micro_sequence: int) -> int:
         return micro_batch * self._batch_config.num_micro_sequences + micro_sequence
 
-    def get_data_index_split(self, breadth_first_micro_batch: int, depth_first_micro_batch: int, micro_sequence: int):
+    def get_data_index_split(
+        self, breadth_first_micro_batch: int, depth_first_micro_batch: int, micro_sequence: int
+    ) -> int:
         return self.get_data_index(
             breadth_first_micro_batch * self._batch_config.depth_first_micro_batches + depth_first_micro_batch,
             micro_sequence,

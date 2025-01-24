@@ -1,6 +1,7 @@
 import json
 import multiprocessing
 import pathlib
+import typing
 
 import datasets
 import numpy as np
@@ -15,14 +16,13 @@ from fast_llm.data.tokenizer import Tokenizer
 from fast_llm.engine.config_utils.data_type import DataType
 
 
-class GPTMemmapDatasetPreparator(DatasetPreparator):
-    _config: GPTMemmapDatasetPreparatorConfig
-    config_class = GPTMemmapDatasetPreparatorConfig
+class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](DatasetPreparator[ConfigType]):
+    config_class: typing.ClassVar[type[GPTMemmapDatasetPreparatorConfig]] = GPTMemmapDatasetPreparatorConfig
 
     _tokenizer: Tokenizer
     _data_type: DataType
 
-    def _tokenize_with_spans(self, text, char_spans):
+    def _tokenize_with_spans(self, text: str, char_spans: list[tuple[int, int]]) -> tuple[np.ndarray, np.ndarray]:
         """
         Perform span-aware tokenization and return the tokenized input_ids along with token spans.
         """
@@ -48,7 +48,7 @@ class GPTMemmapDatasetPreparator(DatasetPreparator):
             input_ids.extend(tokenized_text)
         return np.array(input_ids, dtype=self._data_type.numpy), np.array(token_spans, dtype=np.int32).reshape(-1, 2)
 
-    def _tokenize_batch(self, batch):
+    def _tokenize_batch(self, batch: dict[str, list[typing.Any]]) -> dict[str, list[typing.Any]]:
         input_ids, token_spans = map(
             list,
             zip(
@@ -67,7 +67,7 @@ class GPTMemmapDatasetPreparator(DatasetPreparator):
             "num_tokens": num_tokens,
         }
 
-    def _save_shard(self, args) -> dict:
+    def _save_shard(self, args: tuple[int, datasets.Dataset]) -> dict[str, typing.Any]:
         shard_idx, shard_dataset = args
         prefix = f"shard_{self._config.distributed.rank}_{shard_idx}"
         shard_output_path = self._config.output_path / prefix
@@ -99,7 +99,7 @@ class GPTMemmapDatasetPreparator(DatasetPreparator):
         assert isinstance(dataset, datasets.Dataset)
         return dataset
 
-    def run(self):
+    def run(self) -> None:
         # Set transformers logging verbosity
         transformers.logging.set_verbosity_error()
 

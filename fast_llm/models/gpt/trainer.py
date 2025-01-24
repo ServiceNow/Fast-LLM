@@ -1,4 +1,5 @@
 import logging
+import typing
 
 from fast_llm.data.data.gpt.data import GPTData
 from fast_llm.engine.distributed.config import PhaseType
@@ -9,17 +10,15 @@ from fast_llm.models.gpt.model import GPTModel
 logger = logging.getLogger(__name__)
 
 
-class GPTTrainer(Trainer):
-    _abstract = False
-    _config: GPTTrainerConfig
-    config_class = GPTTrainerConfig
-    model_class = GPTModel
+class GPTTrainer[ConfigType: GPTTrainerConfig](Trainer[ConfigType]):
+    config_class: typing.ClassVar[type[GPTTrainerConfig]] = GPTTrainerConfig
+    model_class: typing.ClassVar[type[GPTModel]] = GPTModel
 
-    def _get_data(self):
+    def _get_data(self) -> GPTData:
         return GPTData(
             config=self._config.data,
-            distributed_config=self._config.distributed,
-            vocab_size=self._config.base_model.vocab_size,
+            distributed_config=self._config.model.distributed,
+            vocab_size=self._config.model.base_model.vocab_size,
             max_sequence_length=self._config.batch.sequence_length,
         )
 
@@ -27,7 +26,7 @@ class GPTTrainer(Trainer):
         # TODO: Do in model, automate/generalize, get other stats
         """Get tflop/s/GPU from global-batch-size and elapsed-time"""
         checkpoint_activations_factor = 3 if phase == PhaseType.training else 1
-        transformer_config = self._config.base_model.transformer
+        transformer_config = self._config.model.base_model.transformer
         sequence_length = self._config.batch.sequence_length
 
         tokens = self._config.batch.batch_size * sequence_length
@@ -49,7 +48,7 @@ class GPTTrainer(Trainer):
         )
 
         # LM-head
-        flops_per_iteration += 6 * tokens * transformer_config.hidden_size * self._config.base_model.vocab_size
+        flops_per_iteration += 6 * tokens * transformer_config.hidden_size * self._config.model.base_model.vocab_size
 
         # Attention-matrix computation
         attn_flops_base = transformer_flops_base * transformer_config.projection_size
@@ -69,5 +68,5 @@ class GPTTrainer(Trainer):
 
         # Partial recomputation (normal is 2 ops * ckpt_factor = 6, adding 1 for recomputing Q x K)
         hardware_flops = flops_per_iteration + 7 / 6 * attn_flops
-        ratio = elapsed_time_per_iteration * self._config.distributed.world_size * 1e12
+        ratio = elapsed_time_per_iteration * self._config.model.distributed.world_size * 1e12
         return model_tflops / ratio, hardware_flops / ratio

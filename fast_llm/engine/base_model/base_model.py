@@ -5,7 +5,8 @@ import typing
 import torch
 import torch.nn
 
-from fast_llm.engine.base_model.config import BaseModelConfig
+from fast_llm.config import Configurable
+from fast_llm.engine.base_model.config import BaseModelArchitectureConfig, BaseModelConfig
 from fast_llm.engine.config_utils.tensor_space import TensorSpace
 from fast_llm.engine.distributed.config import DistributedConfig, PhaseType
 from fast_llm.engine.distributed.distributed import Distributed
@@ -67,20 +68,28 @@ class LossDef:
     dtype: torch.dtype = torch.float32
 
 
-class BaseModel(Sequential):
-    config_cls: typing.ClassVar[type[BaseModelConfig]]
+class SequentialLayers(Sequential, abc.ABC):
+    # Small class defined to fix the MRO of BaseModel.__init__
+    def __init__(self):
+        super().__init__(self.get_layers())
+
+    @abc.abstractmethod
+    def get_layers(self) -> list[Layer]:
+        pass
+
+
+class BaseModel[ConfigType: BaseModelConfig](Configurable[ConfigType], SequentialLayers, abc.ABC):
+    config_class: typing.ClassVar[type[BaseModelConfig]] = BaseModelConfig
 
     def __init__(
         self,
         config: BaseModelConfig,
         distributed_config: DistributedConfig,
     ):
-        Assert.custom(isinstance, config, self.config_cls)
-        self._config = config.validate()
         self._tensor_space = TensorSpace(distributed_config)
-        self._config.setup_tensor_space(self._tensor_space)
+        config.setup_tensor_space(self._tensor_space)
 
-        super().__init__(self.get_layers())
+        super().__init__(config)
 
         for key, value in self.named_parameters():
             Assert.custom(isinstance, value, ParameterMeta)
@@ -88,25 +97,25 @@ class BaseModel(Sequential):
             value.tensor_name = key
 
     @classmethod
-    def architecture_cls(cls):
-        return cls.config_cls.architecture_class
+    def architecture_cls(cls) -> type[BaseModelArchitectureConfig]:
+        return cls.config_class.architecture_class
 
     @abc.abstractmethod
-    def get_layers(self):
+    def get_layers(self) -> list[Layer]:
         pass
 
     @abc.abstractmethod
-    def setup(self, distributed: Distributed):
+    def setup(self, distributed: Distributed) -> None:
         pass
 
     @abc.abstractmethod
-    def preprocess_meta(self, batch_meta, phase: PhaseType) -> list[tuple[TensorMeta, dict]]:
+    def preprocess_meta(self, batch_meta: typing.Any, phase: PhaseType) -> list[tuple[TensorMeta, dict]]:
         pass
 
     @abc.abstractmethod
     def preprocess(
         self,
-        batch,
+        batch: typing.Any,
         preprocessed_meta: list[tuple[TensorMeta, dict]] | None = None,
         *,
         phase: PhaseType,

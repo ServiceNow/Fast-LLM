@@ -58,12 +58,12 @@ class LanguageModelArchitectureConfig(BaseModelArchitectureConfig):
         default=True, desc="Tie the output weights (logits) with the vocabulary embedding.", hint=FieldHint.core
     )
 
-    def _validate(self):
+    def _validate(self) -> None:
         if self.use_position_embeddings is None:
             self.use_position_embeddings = not self.transformer.rotary.enabled
         super()._validate()
 
-    def setup_tensor_space(self, tensor_space: TensorSpace):
+    def setup_tensor_space(self, tensor_space: TensorSpace) -> None:
         self.transformer.setup_tensor_space(tensor_space)
         tensor = tensor_space.distributed_config.get_distributed_dim(DistributedDimNames.tensor)
 
@@ -74,12 +74,12 @@ class LanguageModelArchitectureConfig(BaseModelArchitectureConfig):
         tensor_space.add_tensor_dim(TensorDim(LanguageModelDimNames.vocab_tp, self.vocab_size, tensor))
 
     @property
-    def num_absolute_position_embeddings(self):
+    def num_absolute_position_embeddings(self) -> int:
         # TODO: Rename from max embeddings.
         return self.max_position_embeddings if self.use_absolute_position_embeddings else None
 
     @property
-    def use_absolute_position_embeddings(self):
+    def use_absolute_position_embeddings(self) -> int:
         # TODO: Set through num embeddings instead instead.
         return self.use_position_embeddings
 
@@ -88,7 +88,7 @@ class LanguageModelArchitectureConfig(BaseModelArchitectureConfig):
         cls,
         default: dict[str, typing.Any],
         strict: bool = True,
-    ):
+    ) -> typing.Self:
         # The backward compatibility fix in `NormalizationArchitectureConfig`
         # won't work for older checkpoints saved with a flat config.
         # TODO v0.3: Remove flat format
@@ -174,7 +174,7 @@ class LanguageModelBaseConfig(LanguageModelArchitectureConfig, BaseModelConfig):
         valid=check_field(Assert.geq, 0),
     )
 
-    def _validate(self):
+    def _validate(self) -> None:
         if self.transformer.init_method_std is None:
             self.transformer.init_method_std = self.transformer.hidden_size**-0.5
         if self.init_method_std_embed is None:

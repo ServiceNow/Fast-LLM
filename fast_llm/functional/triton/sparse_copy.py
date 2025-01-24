@@ -46,7 +46,7 @@ def copy_dense_to_sparse_kernel(
         tl.store(output_ptr + sparse_row * num_columns + offsets, out_scaled, mask=mask)
 
 
-def copy_dense_to_sparse(input_: torch.Tensor, scores: torch.Tensor | None, sparse_map: SparseMap):
+def copy_dense_to_sparse(input_: torch.Tensor, scores: torch.Tensor | None, sparse_map: SparseMap) -> torch.Tensor:
     # output[sparse_row[dense_row, :]] = input_[dense_row, None] * (score[dense_row, :] or 1)
     hidden_size = input_.size(1)
     # A worst-case static shape.
@@ -87,7 +87,7 @@ def copy_sparse_to_dense_kernel(
     tl.store(output_ptr + dense_row * num_columns + offsets, out, mask=mask)
 
 
-def copy_sparse_to_dense(input_: torch.Tensor, scores: torch.Tensor | None, sparse_map: SparseMap):
+def copy_sparse_to_dense(input_: torch.Tensor, scores: torch.Tensor | None, sparse_map: SparseMap) -> torch.Tensor:
     # output[dense_row] = (input_[sparse_row[dense_row, :]] * (score[dense_row, :] or 1).sum(1)
     hidden_size = input_.size(1)
     out = input_.new_empty((sparse_map.num_rows_dense, hidden_size))
@@ -145,7 +145,9 @@ def copy_sparse_to_dense_grad_score_kernel(
     tl.store(grad_scores_ptr + dense_row * num_experts_per_token + top_index, tl.sum(grad_scores))
 
 
-def copy_sparse_to_dense_grad_score(input_: torch.Tensor, grad_output: torch.Tensor, sparse_map: SparseMap):
+def copy_sparse_to_dense_grad_score(
+    input_: torch.Tensor, grad_output: torch.Tensor, sparse_map: SparseMap
+) -> torch.Tensor:
     # grad_scores[dense_row, top_index] = (input_[sparse_row[dense_row, top_index]]*grad_output[dense_row]).sum()
     out = input_.new_empty(sparse_map.num_rows_dense, sparse_map.num_experts_per_token)
     copy_sparse_to_dense_grad_score_kernel[(sparse_map.num_rows_dense, sparse_map.num_experts_per_token)](
@@ -160,11 +162,15 @@ def copy_sparse_to_dense_grad_score(input_: torch.Tensor, grad_output: torch.Ten
     return out
 
 
-def copy_dense_to_sparse_forward(input_: torch.Tensor, sparse_map: SparseMap):
+def copy_dense_to_sparse_forward(
+    input_: torch.Tensor, sparse_map: SparseMap
+) -> tuple[torch.Tensor, tuple[SparseMap, tuple[int, ...]]]:
     return copy_dense_to_sparse(input_.flatten(0, -2), None, sparse_map), (sparse_map, input_.shape)
 
 
-def copy_dense_to_sparse_backward(grad_output: torch.Tensor, context: tuple):
+def copy_dense_to_sparse_backward(
+    grad_output: torch.Tensor, context: tuple[SparseMap, tuple[int, ...]]
+) -> torch.Tensor:
     sparse_map, input_shape = context
     return copy_sparse_to_dense(grad_output.contiguous(), None, sparse_map).view(input_shape)
 
@@ -172,11 +178,13 @@ def copy_dense_to_sparse_backward(grad_output: torch.Tensor, context: tuple):
 copy_dense_to_sparse_autograd = wrap_forward_backward(copy_dense_to_sparse_forward, copy_dense_to_sparse_backward)
 
 
-def copy_sparse_to_dense_forward(input_: torch.Tensor, scores: torch.Tensor, sparse_map: SparseMap):
+def copy_sparse_to_dense_forward(
+    input_: torch.Tensor, scores: torch.Tensor, sparse_map: SparseMap
+) -> tuple[torch.Tensor, tuple[SparseMap, torch.Tensor, torch.Tensor]]:
     return copy_sparse_to_dense(input_, scores, sparse_map), (sparse_map, input_, scores)
 
 
-def copy_sparse_to_dense_backward(grad_output: torch.Tensor, context: tuple):
+def copy_sparse_to_dense_backward(grad_output: torch.Tensor, context: tuple[SparseMap, torch.Tensor, torch.Tensor]):
     sparse_map, input_, scores = context
     grad_input = copy_dense_to_sparse(grad_output, scores, sparse_map)
     grad_scores = copy_sparse_to_dense_grad_score(input_, grad_output, sparse_map)
@@ -269,7 +277,7 @@ def sparse_map_pytorch(
     top_experts: torch.Tensor,
     num_experts: int,
     pad_to_multiple: int = MAX_DROPLESS_BLOCK_SIZE_ROW,
-):
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     expert_counts = torch.bincount(top_experts.flatten(), minlength=num_experts)
     assert expert_counts.numel() == num_experts
     padded_expert_counts = (expert_counts + pad_to_multiple - 1) // pad_to_multiple * pad_to_multiple
@@ -290,7 +298,7 @@ def get_sparse_map(
     pad_to_multiple: int = MAX_DROPLESS_BLOCK_SIZE_ROW,
     block_size=TritonConfig.POINTWISE_BLOCK_SIZE,
     use_triton: bool | None = None,
-):
+) -> SparseMap:
     num_rows_dense, num_experts_per_token = top_experts.shape
     num_rows_unpadded = num_rows_dense * num_experts_per_token
     max_rows = (num_rows_unpadded + num_experts * pad_to_multiple) // pad_to_multiple * pad_to_multiple
