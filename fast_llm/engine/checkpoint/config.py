@@ -7,7 +7,7 @@ import typing
 
 import yaml
 
-from fast_llm.config import Config, Field, FieldHint, FieldUpdate, check_field, config_class
+from fast_llm.config import Config, Field, FieldHint, FieldUpdate, check_field, config_class, skip_valid_if_none
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.utils import Assert
 
@@ -183,7 +183,7 @@ class CheckpointPathConfigBase(CheckpointConfigBase):
         default=None,
         desc="Custom timeout for lengthy operations.",
         hint=FieldHint.optional,
-        valid=check_field(Assert.gt, 0),
+        valid=skip_valid_if_none(check_field(Assert.gt, 0)),
     )
 
 

@@ -418,7 +418,9 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
         }
         if metrics is not None:
             metadata["metrics"] = {key.value: value for key, value in metrics.items()}
-        self._multi_stage.save_checkpoint(config.get_save_config(checkpoint_directory), metadata)
+        self._multi_stage.save_checkpoint(
+            config.get_save_config(checkpoint_directory, timeout=self._config.training.timeout), metadata
+        )
 
         # Barrier to ensure everyone is done.
         safe_barrier(
@@ -447,7 +449,9 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
         checkpoint_directory = config.get_save_directory(self._run.experiment_directory) / str(iteration)
         Assert.custom(pathlib.Path.is_file, checkpoint_directory / "ok")
 
-        metadata = self._multi_stage.load_checkpoint(config.get_load_config(checkpoint_directory))
+        metadata = self._multi_stage.load_checkpoint(
+            config.get_load_config(checkpoint_directory, timeout=self._config.training.timeout)
+        )
         self._optimizer.load(metadata["optimizer"])
         if "schedules" in metadata:
             # Backward compatibility.

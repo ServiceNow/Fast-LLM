@@ -312,7 +312,7 @@ class TrainingConfig(Config):
         desc="Timeout for lengthy operations such as checkpoint saving and loading,"
         " and dataset preparation and sampling.",
         hint=FieldHint.feature,
-        valid=check_field(Assert.gt, 0),
+        valid=skip_valid_if_none(check_field(Assert.gt, 0)),
     )
 
     def _validate(self) -> None:
