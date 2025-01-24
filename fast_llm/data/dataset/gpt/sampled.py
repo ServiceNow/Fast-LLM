@@ -1,3 +1,4 @@
+import dataclasses
 import math
 
 import numpy as np
@@ -18,6 +19,12 @@ try:
     _extension_available = True
 except ImportError:
     _extension_available = False
+
+
+@dataclasses.dataclass
+class GPTSample:
+    ids: np.ndarray
+    spans: np.ndarray
 
 
 class GPTSampledIndexedDataset(SampledDataset):
@@ -189,14 +196,21 @@ class GPTSampledIndexedDataset(SampledDataset):
             )
             for doc in range(doc_f, doc_l + 1)
         ]
-        sample = np.concatenate(
-            sample_list,
-            dtype=np.int64,
-        )
+
+        sample_ids = []
+        sample_spans = []
+        span_offset = 0
+        for ids, spans in sample_list:
+            sample_ids.extend(ids)
+            for span in spans:
+                sample_spans.append([span[0] + span_offset, span[1] + span_offset])
+            span_offset += len(ids)
+        sample_ids = np.array(sample_ids, dtype=np.int64)
+        sample_spans = np.array(sample_spans, dtype=np.int32).reshape(-1, 2)
         if self._fim is not None:
             sample = self._fim(sample, np.random.RandomState(seed=(self._sampling_config.seed + idx) % MAX_SEED))
 
-        return sample
+        return GPTSample(ids=sample_ids, spans=sample_spans)
 
     @property
     def name(self):

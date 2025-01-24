@@ -2,6 +2,7 @@ import logging
 
 import torch
 
+from fast_llm.data.data.gpt.data import GPTDataBatch
 from fast_llm.engine.base_model.base_model import BaseModel, LossDef
 from fast_llm.engine.config_utils.tensor_space import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames, PhaseType
@@ -182,7 +183,7 @@ class GPTBaseModel(BaseModel):
 
     def preprocess(
         self,
-        batch: torch.Tensor,
+        batch: GPTDataBatch,
         preprocessed_meta: list[tuple[TensorMeta, dict]] | None = None,
         *,
         phase: PhaseType,
@@ -200,14 +201,14 @@ class GPTBaseModel(BaseModel):
         sequence_first = common_kwargs[TransformerKwargs.sequence_first]
         sequence_length = common_kwargs[TransformerKwargs.sequence_length]
 
-        batch = batch.to(
+        batch.ids = batch.ids.to(
             device=self._tensor_space.distributed.device,
             dtype=torch.int64,
             non_blocking=True,
         )
         if sequence_first:
             # Move the sequence dimension first to make sequence parallel ops more efficient.
-            batch = batch.transpose(0, 1).contiguous()
+            batch.ids = batch.ids.transpose(0, 1).contiguous()
 
         if self._config.use_absolute_position_embeddings:
             self._position_embedding_preprocessor.create_tensors(sequence_length)
@@ -221,10 +222,10 @@ class GPTBaseModel(BaseModel):
         for i, (tokens_meta, kwargs_meta) in enumerate(preprocessed_meta):
             sequence_k = kwargs_meta[TransformerKwargs.sequence_k_dim].size
             if sequence_first:
-                tokens = batch[sequence_k - sequence_q : sequence_k]
+                tokens = batch.ids[sequence_k - sequence_q : sequence_k]
             else:
                 # TODO: Avoid multiple contiguous calls?
-                tokens = batch[:, sequence_k - sequence_q : sequence_k].contiguous()
+                tokens = batch.ids[:, sequence_k - sequence_q : sequence_k].contiguous()
 
             # TODO: Add pasts/presents to meta input?
             # Use lists as pointers so `past_key_values` is populated during the previous micro_sequence.
@@ -237,10 +238,19 @@ class GPTBaseModel(BaseModel):
             }
             if phase != PhaseType.inference:
                 if sequence_first:
-                    labels = batch[sequence_k - sequence_q + 1 : sequence_k + 1]
+                    labels = batch.ids[sequence_k - sequence_q + 1 : sequence_k + 1]
                 else:
                     # TODO: Avoid multiple contiguous calls?
-                    labels = batch[:, sequence_k - sequence_q + 1 : sequence_k + 1].contiguous()
+                    labels = batch.ids[:, sequence_k - sequence_q + 1 : sequence_k + 1].contiguous()
+                    # We set label indices to -100 for masked spans, inline with ignore_index in torch.nn.CrossEntropyLoss
+                    # TODO: take ignore_index from config
+                    for i, spans_i in enumerate(batch.spans):
+                        mask_indices = (
+                            torch.cat([torch.arange(s - 1, e) for s, e in spans_i])
+                            if len(spans_i)
+                            else torch.tensor([], dtype=torch.int64)
+                        )
+                        labels[i, mask_indices] = -100
                 kwargs[LanguageModelKwargs.labels] = labels
             if self._config.use_absolute_position_embeddings:
                 self._position_embedding_preprocessor.preprocess(kwargs)

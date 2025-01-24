@@ -1,3 +1,4 @@
+import dataclasses
 import json
 import logging
 import math
@@ -5,6 +6,7 @@ import pathlib
 import typing
 import warnings
 
+import numpy as np
 import torch
 import torch.utils.data
 
@@ -24,6 +26,19 @@ from fast_llm.engine.schedule.config import BatchConfig
 from fast_llm.utils import Assert, normalize_probabilities
 
 logger = logging.getLogger(__name__)
+
+
+@dataclasses.dataclass
+class GPTDataBatch:
+    ids: torch.Tensor
+    spans: torch.Tensor
+
+
+def gpt_data_collate_fn(batch):
+    stacked_ids = np.stack([sample.ids for sample in batch])
+    # stacked_spans = np.stack([sample.spans for sample in batch])
+    stacked_spans = [torch.from_numpy(sample.spans) for sample in batch]
+    return GPTDataBatch(ids=torch.from_numpy(stacked_ids), spans=stacked_spans)
 
 
 class GPTData(Data):
@@ -226,6 +241,7 @@ class GPTData(Data):
                 num_workers=num_workers,
                 prefetch_factor=prefetch_factor,
                 pin_memory=True,
+                collate_fn=gpt_data_collate_fn,
                 multiprocessing_context=self._config.multiprocessing_context.value if num_workers > 0 else None,
             )
         )

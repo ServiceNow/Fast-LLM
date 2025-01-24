@@ -58,8 +58,8 @@ class GPTMemmapDataset(GPTIndexedDataset):
         # Spans are introduced in version 2. Datasets tokenized with version 1 do not contain span information and
         # compute loss on all tokens by default
         if self._version == 1:
-            self._num_spans = 0
-            self._spans = []
+            self._num_spans = np.zeros(self._num_documents, dtype=np.int32)
+            self._spans = [np.array([], dtype=np.int32).reshape(-1, 2)] * self._num_documents
         elif self._version == 2:
             self._num_spans = np.frombuffer(
                 self._index_bin_buffer,
@@ -98,15 +98,17 @@ class GPTMemmapDataset(GPTIndexedDataset):
         del self._index_bin_buffer_mmap
 
     def get(self, idx, offset=0, length=None):
-        return (
-            np.frombuffer(
-                self._bin_buffer,
-                dtype=self._dtype,
-                count=self._document_sizes[idx] - offset if length is None else length,
-                offset=self._pointers[idx] + offset * np.dtype(self._dtype).itemsize,
-            ),
-            self._spans[idx],
+        ids = np.frombuffer(
+            self._bin_buffer,
+            dtype=self._dtype,
+            count=self._document_sizes[idx] - offset if length is None else length,
+            offset=self._pointers[idx] + offset * np.dtype(self._dtype).itemsize,
         )
+        spans = []
+        for span in self._spans[idx]:
+            if span[0] < offset + len(ids) and span[1] >= offset:
+                spans.append([max(span[0], offset) - offset, min(span[1], offset + len(ids) - 1) - offset])
+        return (ids, np.array(spans, dtype=np.int32).reshape(-1, 2))
 
     @property
     def name(self):
