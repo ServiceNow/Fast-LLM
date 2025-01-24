@@ -127,7 +127,7 @@ class GPTSampledIndexedDataset(SampledDataset):
 
         Assert.geq(len(shuffle_idx), self._num_samples)
         # TODO: The doc and sample idx are way bigger than needed when sampling for << 1 epoch.
-        return doc_idx, sample_idx[: self._num_samples], shuffle_idx[: self._num_samples]
+        return doc_idx, sample_idx, shuffle_idx[: self._num_samples]
 
     def __getstate__(
         self,
