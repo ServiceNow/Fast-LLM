@@ -33,11 +33,11 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
         for start, end in char_spans:
             if char_pos < start:
                 curr_text = text[char_pos:start]
-                tokenized_text = self._tokenizer.tokenize(curr_text, add_special_tokens=beginning_of_text)
+                tokenized_text = self._tokenizer.tokenize(curr_text, add_bos_token=beginning_of_text)
                 beginning_of_text = False
                 input_ids.extend(tokenized_text)
             curr_text = text[start : end + 1]
-            tokenized_text = self._tokenizer.tokenize(curr_text, add_special_tokens=beginning_of_text)
+            tokenized_text = self._tokenizer.tokenize(curr_text, add_bos_token=beginning_of_text)
             beginning_of_text = False
             token_spans.append((len(input_ids), len(input_ids) + len(tokenized_text) - 1))
             input_ids.extend(tokenized_text)

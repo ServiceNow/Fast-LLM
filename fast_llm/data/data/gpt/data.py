@@ -12,6 +12,7 @@ from fast_llm.data.data.abstract import Data
 from fast_llm.data.data.gpt.config import GPTDataConfig
 from fast_llm.data.dataset.abstract import SampledDataset
 from fast_llm.data.dataset.gpt.config import GPTSamplingConfig
+from fast_llm.data.dataset.gpt.sampled import GPTSample
 from fast_llm.data.dataset.monitor import DatasetMonitor
 from fast_llm.data.iterator import SampledDatasetIterator
 from fast_llm.data.tokenizer import Tokenizer
@@ -30,7 +31,7 @@ class GPTDataBatch:
     spans: torch.Tensor
 
 
-def gpt_data_collate_fn(batch):
+def gpt_data_collate_fn(batch: list[GPTSample]) -> GPTDataBatch:
     stacked_ids = np.stack([sample.ids for sample in batch])
     # stacked_spans = np.stack([sample.spans for sample in batch])
     stacked_spans = [torch.from_numpy(sample.spans) for sample in batch]

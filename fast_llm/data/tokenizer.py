@@ -33,8 +33,23 @@ class Tokenizer:
     def inv_vocab(self) -> dict[int, str]:
         return self._inv_vocab
 
-    def tokenize(self, text: str, add_special_tokens: bool = True) -> list[int]:
-        return self.tokenizer.encode(text, add_special_tokens=add_special_tokens)
+    def tokenize(
+        self,
+        text: str,
+        add_special_tokens: bool = True,
+        add_bos_token: bool | None = None,
+        add_eos_token: bool | None = None,
+    ) -> list[int]:
+        # add_special_tokens will use the default tokenizer behaviour.
+        # If add_bos_token or add_eos_token is set, we use them and ignore add_special_tokens.
+        if add_bos_token is not None or add_eos_token is not None:
+            return (
+                ([self.tokenizer.bos_token_id] if add_bos_token and self.tokenizer.bos_token_id else [])
+                + self.tokenizer.encode(text, add_special_tokens=False)
+                + ([self.tokenizer.eos_token_id] if add_eos_token else [])
+            )
+        else:
+            return self.tokenizer.encode(text, add_special_tokens=add_special_tokens)
 
     def detokenize(self, token_ids: int | list[int] | np.ndarray | torch.Tensor) -> str:
         return self.tokenizer.decode(token_ids)
