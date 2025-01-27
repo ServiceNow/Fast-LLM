@@ -166,9 +166,9 @@ class GPTBlendedDatasetConfig(BlendedDatasetConfig, GPTSampledDatasetConfig):
 
 
 @config_class()
-class GPTComposedDatasetConfig(GPTIndexedDatasetConfig):
+class GPTConcatenatedMemmapConfig(GPTIndexedDatasetConfig):
     _abstract: typing.ClassVar[bool] = False
-    type_: typing.ClassVar[str | None] = "composed"
+    type_: typing.ClassVar[str | None] = "concatenated_memmap"
     path: pathlib.Path = Field(
         default=None,
         desc="The path to a dataset directory.",

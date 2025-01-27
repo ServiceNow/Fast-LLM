@@ -10,8 +10,8 @@ from fast_llm.data.data.gpt.config import GPTDataConfig
 from fast_llm.data.data.gpt.data import GPTData
 from fast_llm.data.dataset.gpt.config import (
     GPTBlendedDatasetConfig,
-    GPTComposedDatasetConfig,
     GPTConcatenatedDatasetConfig,
+    GPTConcatenatedMemmapConfig,
     GPTDatasetSliceConfig,
     GPTFimSampledDatasetConfig,
     GPTMemmapDatasetConfig,
@@ -30,7 +30,7 @@ from tests.common import (
     DATASET_SAMPLING_CACHE,
     TEST_VOCAB_SIZE,
     TOKENIZER_PATH,
-    get_test_composed_dataset,
+    get_test_concatenated_memmap_dataset,
     get_test_dataset,
 )
 
@@ -89,15 +89,15 @@ def get_test_data_and_samples(
 
 
 _DATASET_PREFIX_MIX_1 = DATASET_PREFIX.with_name("blended_mix_1")
-_DATASET_PREFIX_MIX_COMPOSED = DATASET_CACHE / "composed"
+_DATASET_PREFIX_MIX_CONCATENATED_MEMMAP = DATASET_CACHE / "concatenated_memmap"
 
 
 def _get_test_dataset_mix_1():
     return get_test_dataset(prefix=_DATASET_PREFIX_MIX_1, seed=2345)
 
 
-def _get_test_dataset_composed():
-    return get_test_composed_dataset(_DATASET_PREFIX_MIX_COMPOSED, 4)
+def _get_test_dataset_concatenated_memmap():
+    return get_test_concatenated_memmap_dataset(_DATASET_PREFIX_MIX_CONCATENATED_MEMMAP, 4)
 
 
 RANDOM_DATASET_EXPECTED_SAMPLES = [
@@ -402,11 +402,11 @@ GPT_COMPOSED_EXPECTED_SAMPLES = [
 
 def test_gpt_compose():
     # Make sure dataset splitting works and check for unintended changes in behavior.
-    _get_test_dataset_composed()
+    _get_test_dataset_concatenated_memmap()
     # samples[9:18]
     dataset = _get_dataset_config(
-        {"type": "composed", "path": _DATASET_PREFIX_MIX_COMPOSED},
-        GPTComposedDatasetConfig,
+        {"type": "concatenated_memmap", "path": _DATASET_PREFIX_MIX_CONCATENATED_MEMMAP},
+        GPTConcatenatedMemmapConfig,
     ).build()
     Assert.eq(len(dataset), COMPOSED_DATASET_EXPECTED_LENGTH)
     sizes = dataset.get_document_sizes()
@@ -424,13 +424,13 @@ def test_gpt_compose():
 
 
 def test_gpt_composed_data():
-    _get_test_dataset_composed()
+    _get_test_dataset_concatenated_memmap()
     _, samples = get_test_data_and_samples(
         {
             "datasets": {
                 "Training": {
                     "type": "composed",
-                    "path": _DATASET_PREFIX_MIX_COMPOSED,
+                    "path": _DATASET_PREFIX_MIX_CONCATENATED_MEMMAP,
                 }
             }
         },

@@ -235,7 +235,7 @@ def get_test_dataset(
         GPTMemmapDataset.write_dataset(prefix, documents)
 
 
-def get_test_composed_dataset(
+def get_test_concatenated_memmap_dataset(
     path: pathlib.Path,
     num_files: int,
     seed: int = 1234,
