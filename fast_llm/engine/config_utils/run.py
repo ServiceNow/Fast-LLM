@@ -199,11 +199,6 @@ class Run:
             torch.save(tensor_stats, self.open_artifact(f"tensor_logs_{iteration}.pt", mode="wb"))
             TensorLogs.reset(self._config.tensor_logs)
 
-    def barrier(self, value: int | str = 1) -> None:
-        from fast_llm.core.distributed import safe_barrier
-
-        safe_barrier(self._distributed.world_group, value)
-
     def broadcast_int(self, value: int) -> int:
         import torch
 

@@ -4,6 +4,7 @@ import math
 import torch
 from torch.distributed import all_reduce
 
+from fast_llm.core.distributed import add_ephemeral_timeout
 from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
 from fast_llm.functional.triton.pointwise import triton_fill
 from fast_llm.utils import Assert
@@ -23,11 +24,12 @@ class SafeLoad:
     In case of failure, it will attempt to find out as precisely as possible where the problem comes from.
     """
 
-    def __init__(self, model: "FastLLMModel", *, num_shards: int):
+    def __init__(self, model: "FastLLMModel", *, num_shards: int, timeout: float | None = None):
         self._model = model
         self._distributed = self._model.distributed
         self._num_shards = num_shards
         self._self_shard = self._model.state_shard[: self._num_shards]
+        self._timeout = timeout
 
     def __enter__(self) -> "SafeLoad":
         self._loaded = 0
@@ -145,6 +147,7 @@ class SafeLoad:
                 counter_tensor = torch.tensor(
                     [counter or 0 for counter in counter_per_parameter.values()], dtype=torch.int64
                 ).to(self._distributed.device)
+                add_ephemeral_timeout(self._distributed.world_group, self._timeout)
                 all_reduce(counter_tensor, group=self._distributed.world_group)
                 counter_per_parameter = {
                     parameter_name: counter

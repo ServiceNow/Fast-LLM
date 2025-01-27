@@ -7,6 +7,7 @@ Todo: Move all core methods elsewhere (functional?).
 """
 
 import contextlib
+import datetime
 import logging
 import typing
 
@@ -25,12 +26,21 @@ from torch.distributed import (  # noqa
 logger = logging.getLogger(__name__)
 
 
-def broadcast(tensor: torch.Tensor, src: int, group: ProcessGroup, async_op=False) -> Work | None:
+def add_ephemeral_timeout(group: ProcessGroup, timeout: float | None = None) -> None:
+    if group is not None and timeout is not None:
+        # TODO: Only works for nccl?
+        group._add_ephemeral_timeout(datetime.timedelta(seconds=timeout))
+
+
+def broadcast(
+    tensor: torch.Tensor, src: int, group: ProcessGroup, async_op=False, timeout: float | None = None
+) -> Work | None:
     """Same as torch.distributed.broadcast, but without the complication of going through the global rank."""
     assert group is not None
     opts = torch.distributed.BroadcastOptions()
     opts.rootRank = src
     opts.rootTensor = 0
+    add_ephemeral_timeout(group, timeout)
     work = group.broadcast([tensor], opts)
     if async_op:
         return work
@@ -53,10 +63,10 @@ def check_parallel_match(tensor: torch.Tensor, group: ProcessGroup | None, name:
         )
 
 
-def safe_barrier(group: ProcessGroup | None, value: int | str = 1) -> None:
+def safe_barrier(group: ProcessGroup | None, value: int | str = 1, timeout: float | None = None) -> None:
     if group:
         hashed = hash(value) % 2**32
-        out = allreduce_scalar(hashed, dtype=torch.int64, group=group)
+        out = allreduce_scalar(hashed, dtype=torch.int64, group=group, timeout=timeout)
         if out != hashed * group.size():
             raise RuntimeError(f"Desync detected for barrier {value} ({out}!={hashed*group.size()})")
 
@@ -66,9 +76,11 @@ def allreduce_scalar(
     dtype: torch.dtype = torch.float64,
     group: torch.distributed.ProcessGroup | None = None,
     op=ReduceOp.SUM,
+    timeout: float | None = None,
 ) -> float | int:
     if group:
         value = torch.full([1], value, dtype=dtype, device=torch.cuda.current_device())
+        add_ephemeral_timeout(group, timeout)
         torch.distributed.all_reduce(value, op=op, group=group)
         return value.item()
     else:
@@ -80,13 +92,14 @@ def broadcast_scalar(
     dtype: torch.dtype = torch.float64,
     group: torch.distributed.ProcessGroup | None = None,
     src: int = 0,
+    timeout: float | None = None,
 ) -> float | int:
     if not group:
         return value
     tensor = torch.empty([1], dtype=dtype, device=torch.device(torch.cuda.current_device()))
     if group.rank() == src:
         tensor.fill_(value)
-    broadcast(tensor, src, group)
+    broadcast(tensor, src, group, timeout=timeout)
     return tensor.item()
 
 
