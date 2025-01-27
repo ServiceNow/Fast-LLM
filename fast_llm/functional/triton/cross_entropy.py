@@ -1,7 +1,7 @@
 import torch
-
 import triton
 import triton.language as tl
+
 from fast_llm.functional.config import TritonConfig
 
 
@@ -9,6 +9,7 @@ from fast_llm.functional.config import TritonConfig
 def triton_cross_entropy_forward_backward_kernel(
     logits_ptr,
     labels_ptr,
+    loss_mask_ptr,
     grad_logits_ptr,
     losses_ptr,
     grad_losses,
@@ -54,7 +55,11 @@ def triton_cross_entropy_forward_backward_kernel(
 
 
 def triton_cross_entropy_forward_backward(
-    logits, target, grad_output: float | None, logits_scale_factor: float = 1.0
+    logits: torch.Tensor,
+    target: torch.Tensor,
+    loss_mask: torch.Tensor,
+    grad_output: float | None,
+    logits_scale_factor: float = 1.0,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """
     A fast triton implementation of cross-entropy, which combines the casting and forward and backward passes,
@@ -77,6 +82,7 @@ def triton_cross_entropy_forward_backward(
     triton_cross_entropy_forward_backward_kernel[(n_rows,)](
         logits,
         target,
+        loss_mask,
         grad_logits,
         losses,
         1 if grad_output is None else grad_output / n_rows,
@@ -87,4 +93,6 @@ def triton_cross_entropy_forward_backward(
         block_size=block_size,
         num_warps=num_warps,
     )
-    return losses.mean(), None if grad_output is None else grad_logits
+    full_grad_logits = torch.zeros((loss_mask.size(0), *logits.shape[1:]), dtype=logits.dtype, device=logits.device)
+    full_grad_logits.index_put_((loss_mask,), grad_logits)
+    return losses.mean(), None if grad_output is None else full_grad_logits
