@@ -11,6 +11,7 @@ from fast_llm.data.data.gpt.data import GPTData
 from fast_llm.data.dataset.gpt.config import (
     GPTBlendedDatasetConfig,
     GPTConcatenatedDatasetConfig,
+    GPTConcatenatedMemmapConfig,
     GPTDatasetSliceConfig,
     GPTFimSampledDatasetConfig,
     GPTMemmapDatasetConfig,
@@ -23,9 +24,15 @@ from fast_llm.engine.distributed.config import DistributedConfig, PhaseType
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.engine.schedule.config import BatchConfig
 from fast_llm.utils import Assert
-from tests.common import DATASET_PREFIX, TEST_RESULTS_PATH, TEST_VOCAB_SIZE, TOKENIZER_PATH, get_test_dataset
-
-DATASET_CACHE = TEST_RESULTS_PATH / "dataset" / "cache"
+from tests.common import (
+    DATASET_CACHE,
+    DATASET_PREFIX,
+    DATASET_SAMPLING_CACHE,
+    TEST_VOCAB_SIZE,
+    TOKENIZER_PATH,
+    get_test_concatenated_memmap_dataset,
+    get_test_dataset,
+)
 
 
 def get_sampling_config(
@@ -81,11 +88,16 @@ def get_test_data_and_samples(
     return data, samples
 
 
-DATASET_PREFIX_MIX_1 = DATASET_PREFIX.with_name("blended_mix_1")
+_DATASET_PREFIX_MIX_1 = DATASET_PREFIX.with_name("blended_mix_1")
+_DATASET_PREFIX_MIX_CONCATENATED_MEMMAP = DATASET_CACHE / "concatenated_memmap"
 
 
-def get_test_dataset_1():
-    return get_test_dataset(prefix=DATASET_PREFIX_MIX_1, seed=2345)
+def _get_test_dataset_mix_1():
+    return get_test_dataset(prefix=_DATASET_PREFIX_MIX_1, seed=2345)
+
+
+def _get_test_dataset_concatenated_memmap():
+    return get_test_concatenated_memmap_dataset(_DATASET_PREFIX_MIX_CONCATENATED_MEMMAP, 4)
 
 
 RANDOM_DATASET_EXPECTED_SAMPLES = [
@@ -145,7 +157,7 @@ MEMMAP_DATASET_EXPECTED_SAMPLES = {
 }
 
 
-@pytest.mark.parametrize("cache_directory", (None, pathlib.Path(DATASET_CACHE) / "test_memmap"))
+@pytest.mark.parametrize("cache_directory", (None, pathlib.Path(DATASET_SAMPLING_CACHE) / "test_memmap"))
 def test_gpt_memmap(cache_directory):
     # Make sure the memmap dataset works and check for unintended changes in behavior.
     get_test_dataset()
@@ -363,6 +375,74 @@ def test_gpt_slice_data_legacy():
     )
 
 
+COMPOSED_DATASET_EXPECTED_LENGTH = 24806
+COMPOSED_DATASET_EXPECTED_TOKENS = 2033639
+
+COMPOSED_DATASET_EXPECTED_SAMPLES = {
+    **MEMMAP_DATASET_EXPECTED_SAMPLES,
+    6930: [65, 2327],
+    11962: [7078, 2713, 1431],
+    15958: [207],
+    19362: [69],
+    24098: [555, 668, 70],
+}
+
+
+GPT_COMPOSED_EXPECTED_SAMPLES = [
+    [1411, 819, 6791, 7022, 285, 249],
+    [329, 328, 512, 1985, 3069, 7838],
+    [5158, 1023, 8171, 798, 1431, 313],
+    [1073, 3917, 275, 480, 74, 1752],
+    [207, 317, 269, 6662, 4357, 498],
+    [74, 310, 277, 7091, 668, 367],
+    [7828, 480, 89, 116, 4604, 69],
+    [79, 6042, 577, 225, 207, 207],
+]
+
+
+def test_gpt_compose():
+    # Make sure dataset splitting works and check for unintended changes in behavior.
+    _get_test_dataset_concatenated_memmap()
+    # samples[9:18]
+    dataset = _get_dataset_config(
+        {"type": "concatenated_memmap", "path": _DATASET_PREFIX_MIX_CONCATENATED_MEMMAP},
+        GPTConcatenatedMemmapConfig,
+    ).build()
+    Assert.eq(len(dataset), COMPOSED_DATASET_EXPECTED_LENGTH)
+    sizes = dataset.get_document_sizes()
+    Assert.eq(sizes.sum(), COMPOSED_DATASET_EXPECTED_TOKENS)
+    Assert.all_equal([len(dataset.get(i)) for i in range(0, len(dataset), 20)], sizes[::20])
+    for i, sample in COMPOSED_DATASET_EXPECTED_SAMPLES.items():
+        Assert.all_equal(dataset.get(i), np.array(sample, dtype=np.uint16))
+    sampled = dataset.sample(get_sampling_config(8, sequence_length=5))
+    Assert.eq(len(sampled), 8)
+    print(np.stack([sampled[i] for i in range(8)]).tolist())
+    Assert.all_equal(
+        np.stack([sampled[i] for i in range(8)]),
+        np.array(GPT_COMPOSED_EXPECTED_SAMPLES),
+    )
+
+
+def test_gpt_composed_data():
+    _get_test_dataset_concatenated_memmap()
+    _, samples = get_test_data_and_samples(
+        {
+            "datasets": {
+                "Training": {
+                    "type": "composed",
+                    "path": _DATASET_PREFIX_MIX_CONCATENATED_MEMMAP,
+                }
+            }
+        },
+        {PhaseType.training: 8},
+        sequence_length=5,
+    )
+    Assert.all_equal(
+        np.stack(samples[PhaseType.training]),
+        np.array(GPT_COMPOSED_EXPECTED_SAMPLES),
+    )
+
+
 GPT_BLENDED_EXPECTED_SAMPLES = [
     [1725, 74, 207, 1635, 4440, 2774],
     [2066, 207, 6436, 2360, 2210, 6633],
@@ -378,13 +458,13 @@ GPT_BLENDED_EXPECTED_SAMPLES = [
 def test_gpt_blended():
     # Make sure dataset blending works and check for unintended changes in behavior.
     get_test_dataset()
-    get_test_dataset_1()
+    _get_test_dataset_mix_1()
     sampled = _get_dataset_config(
         {
             "type": "blended",
             "datasets": [
                 {"type": "memmap", "path": DATASET_PREFIX},
-                {"type": "memmap", "path": DATASET_PREFIX_MIX_1},
+                {"type": "memmap", "path": _DATASET_PREFIX_MIX_1},
             ],
             "weights": [0.75, 0.25],
         },
@@ -399,7 +479,7 @@ def test_gpt_blended():
 
 def test_gpt_blended_data():
     get_test_dataset()
-    get_test_dataset_1()
+    _get_test_dataset_mix_1()
     _, samples = get_test_data_and_samples(
         {
             "datasets": {
@@ -407,7 +487,7 @@ def test_gpt_blended_data():
                     "type": "blended",
                     "datasets": [
                         {"type": "memmap", "path": DATASET_PREFIX},
-                        {"type": "memmap", "path": DATASET_PREFIX_MIX_1},
+                        {"type": "memmap", "path": _DATASET_PREFIX_MIX_1},
                     ],
                     "weights": [0.75, 0.25],
                 }
@@ -436,11 +516,11 @@ GPT_BLENDED_LEGACY_EXPECTED_SAMPLES = [
 
 def test_gpt_blended_data_legacy():
     get_test_dataset()
-    get_test_dataset_1()
+    _get_test_dataset_mix_1()
     _, samples = get_test_data_and_samples(
         {
             "format": "list",
-            "path": ["0.75", str(DATASET_PREFIX), "0.25", str(DATASET_PREFIX_MIX_1)],
+            "path": ["0.75", str(DATASET_PREFIX), "0.25", str(_DATASET_PREFIX_MIX_1)],
             "split": [1, 0, 0],
         },
         {PhaseType.training: 8},

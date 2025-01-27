@@ -35,7 +35,9 @@ ARTIFACT_PATH = "runs/0/artifacts"
 
 TOKENIZER_PATH = TEST_RESULTS_PATH / "tokenizer" / "common"
 TOKENIZER_FILE = TOKENIZER_PATH / "tokenizer.json"
-DATASET_PREFIX = TEST_RESULTS_PATH / "dataset" / "common"
+DATASET_CACHE = TEST_RESULTS_PATH / "dataset"
+DATASET_PREFIX = DATASET_CACHE / "common"
+DATASET_SAMPLING_CACHE = TEST_RESULTS_PATH / "dataset" / "cache"
 
 TEST_VOCAB_SIZE = 8192
 # Random lowercase: 80.7% (3.1% each); space: 18.6%; doc end: 0.6%
@@ -210,11 +212,11 @@ requires_cuda = pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA i
 
 
 def get_test_dataset(
-    prefix=DATASET_PREFIX,
-    seed=1234,
-    num_tokens=TEST_DATASET_TOKENS,
-    characters=TEST_CHARACTERS,
-    vocab_size=TEST_VOCAB_SIZE,
+    prefix: pathlib.Path = DATASET_PREFIX,
+    seed: int = 1234,
+    num_tokens: int = TEST_DATASET_TOKENS,
+    characters: str = TEST_CHARACTERS,
+    vocab_size: int = TEST_VOCAB_SIZE,
 ):
     if not TOKENIZER_FILE.is_file():
         import transformers
@@ -231,6 +233,28 @@ def get_test_dataset(
             np.array(tokenizer(document)["input_ids"], dtype=np.uint16) % vocab_size for document in documents
         ]
         GPTMemmapDataset.write_dataset(prefix, documents)
+
+
+def get_test_concatenated_memmap_dataset(
+    path: pathlib.Path,
+    num_files: int,
+    seed: int = 1234,
+    num_tokens: int = TEST_DATASET_TOKENS,
+    characters: str = TEST_CHARACTERS,
+    vocab_size: int = TEST_VOCAB_SIZE,
+    seed_shift: int = 55,
+):
+    index_file = path / "index.txt"
+    if not index_file.is_file():
+        for i in range(num_files):
+            get_test_dataset(
+                prefix=path / f"dataset_{i}",
+                seed=seed + i * seed_shift,
+                num_tokens=num_tokens,
+                characters=characters,
+                vocab_size=vocab_size,
+            )
+        index_file.open("w").writelines([str(path / f"dataset_{i}") + "\n" for i in range(num_files)])
 
 
 def run_test_script(

@@ -186,6 +186,7 @@ class Assert:
 
 
 class Registry[KeyType, ValueType]:
+    # TODO: Inherit from dict instead?
     def __init__(self, name: str, data: dict[KeyType, ValueType]):
         self._name = name
         self._data = data.copy()
@@ -205,6 +206,15 @@ class Registry[KeyType, ValueType]:
 
     def __contains__(self, key: KeyType) -> bool:
         return key in self._data
+
+    def __iter__(self) -> typing.Iterator[KeyType]:
+        return iter(self._data)
+
+    def __len__(self) -> int:
+        return len(self._data)
+
+    def items(self):
+        return self._data.items()
 
     @property
     def name(self) -> str:
