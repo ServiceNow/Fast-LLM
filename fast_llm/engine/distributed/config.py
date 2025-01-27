@@ -191,7 +191,7 @@ class DistributedConfig(Config):
         desc="Prioritize the pipeline groups for placement of nearby ranks over data groups.",
         hint=FieldHint.expert,
     )
-    distributed_timeout: float = Field(
+    timeout: float = Field(
         default=60,
         desc="Timeout for distributed operations.",
         hint=FieldHint.optional,
@@ -382,4 +382,5 @@ class DistributedConfig(Config):
             del default["sequence_first"]
         if "separate_init_generators" in default and strict:
             del default["separate_init_generators"]
+        cls._handle_renamed_field(default, "distributed_timeout", "timeout")
         return super()._from_dict(default, strict, flat)

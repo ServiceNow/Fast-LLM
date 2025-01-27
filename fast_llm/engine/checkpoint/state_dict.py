@@ -72,7 +72,7 @@ class StateDictCheckpointHandler(CheckpointHandler):
         return metadata.to_serialized()
 
     def load(self, config: CheckpointLoadConfig, metadata: CheckpointMetadata) -> None:
-        with SafeLoad(self._model, num_shards=self.get_num_shards(config)) as context:
+        with SafeLoad(self._model, num_shards=self.get_num_shards(config), timeout=config.timeout) as context:
             # The tensor mapping may not be one-to-one. `convert_state_dict` pops all tensors from
             #   `state_dict` that are ready for conversion,
             #   and return a dict containing the converted tensors(s).
@@ -222,7 +222,7 @@ class StateDictSaver:
             yaml.dump(
                 self._index, (self._config.path / f"index_{self._distributed_config.pipeline_rank}.yaml").open("w")
             )
-            safe_barrier(self._distributed.pipeline_group, "save state dict")
+            safe_barrier(self._distributed.pipeline_group, "save state dict", timeout=self._config.timeout)
             self._index = {}
             if self._distributed_config.pipeline_rank == 0:
                 for rank in range(self._distributed_config.pipeline_parallel):

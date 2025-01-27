@@ -6,6 +6,7 @@ import warnings
 import torch
 import torch.utils.data
 
+from fast_llm.core.distributed import safe_barrier
 from fast_llm.data.data.abstract import Data
 from fast_llm.data.data.gpt.config import GPTDataConfig
 from fast_llm.data.dataset.abstract import SampledDataset
@@ -53,6 +54,7 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
         distributed: "Distributed",
         samples_per_phase: dict[PhaseType, int],
         cache_directory: pathlib.Path,
+        timeout: float | None = None,
     ) -> None:
         """
         Load the datasets, and prepare or load the samplings.
@@ -83,6 +85,8 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
                 )
                 dataset = self._config.datasets[phase].build_and_sample(sampling_config)
                 self._datasets[phase] = DatasetMonitor(dataset, self._config.data_sample_warn_time_ms)
+
+        safe_barrier(self._distributed.world_group, "data_preparation", timeout)
         self._is_setup = True
 
     @property

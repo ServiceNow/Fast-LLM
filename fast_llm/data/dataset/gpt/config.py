@@ -2,6 +2,7 @@ import dataclasses
 import enum
 import json
 import pathlib
+import time
 import typing
 
 from fast_llm.config import Config, Field, FieldHint, FieldUpdate, check_field, config_class, skip_valid_if_none
@@ -21,7 +22,7 @@ from fast_llm.utils import Assert, Registry, normalize_probabilities, padded_cum
 if typing.TYPE_CHECKING:
     from fast_llm.data.dataset.gpt.indexed import GPTConcatenatedDataset, GPTDatasetSlice, GPTIndexedDataset
     from fast_llm.data.dataset.gpt.memmap import GPTMemmapDataset
-    from fast_llm.data.dataset.gpt.random import GPTRandomDataset
+    from fast_llm.data.dataset.gpt.random import GPTRandomDataset, GPTRandomSampledDataset
     from fast_llm.data.tokenizer import Tokenizer
 
 
@@ -364,3 +365,25 @@ class GPTLegacyDatasetConfig(GPTSampledDatasetConfig, GPTLegacyConfig):
                 )
 
         return dataset_config.build_and_sample(config)
+
+
+@config_class()
+class GPTTestSlowDatasetConfig(GPTSampledDatasetConfig):
+    """
+    A mock dataset that mimics a slow dataset creation on one rank, which may trigger a timeout.
+    """
+
+    # TODO: This belongs to a testing plugin.
+    _abstract: typing.ClassVar[bool] = False
+    type_: typing.ClassVar[str | None] = "test_slow"
+    sleep: float = Field(
+        default=1,
+        desc="Sleep time during build, in seconds.",
+        hint=FieldHint.core,
+    )
+
+    def build_and_sample(self, config: SamplingConfig) -> "GPTRandomSampledDataset":
+        assert config.distributed.config.world_size > 1
+        if config.distributed.config.rank == 0:
+            time.sleep(self.sleep)
+        return GPTRandomDatasetConfig().build_and_sample(config)
