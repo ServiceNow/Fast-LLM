@@ -65,21 +65,22 @@ class Tokenizer:
         for start, end in char_spans:
             if char_pos < start:
                 curr_text = text[char_pos:start]
-                tokenized_text = self.tokenize(curr_text, beginning_of_text=beginning_of_text)
+                tokenized_text = self.tokenize(curr_text, beginning_of_text=beginning_of_text, end_of_text=False)
                 beginning_of_text = False
                 input_ids.extend(tokenized_text)
             curr_text = text[start : end + 1]
-            tokenized_text = self.tokenize(curr_text, beginning_of_text=beginning_of_text)
+            if end >= len(text) - 1:
+                tokenized_text = self.tokenize(curr_text, beginning_of_text=beginning_of_text, end_of_text=True)
+            else:
+                tokenized_text = self.tokenize(curr_text, beginning_of_text=beginning_of_text, end_of_text=False)
             beginning_of_text = False
             token_spans.append((len(input_ids), len(input_ids) + len(tokenized_text) - 1))
             input_ids.extend(tokenized_text)
             char_pos = end + 1
         if char_pos < len(text):
             curr_text = text[char_pos:]
-            tokenized_text = self.tokenize(curr_text)
+            tokenized_text = self.tokenize(curr_text, beginning_of_text=beginning_of_text, end_of_text=True)
             input_ids.extend(tokenized_text)
-        if self.special_tokens_mode in [SpecialTokensMode.eos_only, SpecialTokensMode.bos_eos]:
-            input_ids.append(self.eod_id)
         return input_ids, token_spans
 
     def detokenize(self, token_ids: int | list[int] | np.ndarray | torch.Tensor) -> str:

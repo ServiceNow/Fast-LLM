@@ -46,6 +46,8 @@ class GPTFimDataset(SampledDataset):
     def _fim(self, sample: GPTSample, np_rng: np.random.RandomState) -> GPTSample:
         # FIM
         # TODO: permute segments in sample_list, before concatenating.
+        if self._config.rate > 0.0 and sample.spans.size > 0:
+            raise NotImplementedError("FIM is currently not compatible with loss masking.")
         sample_len = sample.ids.shape[0]
         eod = self._tokenizer.eod
         segment_breaks = np.argwhere(sample.ids == eod)  # split sample by document

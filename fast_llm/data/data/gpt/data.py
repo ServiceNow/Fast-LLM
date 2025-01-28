@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 @dataclasses.dataclass
 class GPTDataBatch:
     ids: torch.Tensor
-    spans: torch.Tensor
+    spans: list[torch.Tensor]
 
 
 def gpt_data_collate_fn(batch: list[GPTSample]) -> GPTDataBatch:
