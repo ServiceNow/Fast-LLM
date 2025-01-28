@@ -502,18 +502,19 @@ def test_gpt_slice_data_legacy():
 
 COMPOSED_DATASET_EXPECTED_LENGTH = 24806
 COMPOSED_DATASET_EXPECTED_TOKENS = 2033639
+COMPOSED_DATASET_EXPECTED_SPANS = 37008
 
 COMPOSED_DATASET_EXPECTED_SAMPLES = {
     **MEMMAP_DATASET_EXPECTED_SAMPLES,
-    6930: [65, 2327],
-    11962: [7078, 2713, 1431],
-    15958: [207],
-    19362: [69],
-    24098: [555, 668, 70],
+    6930: ([65, 2327], [[0, 0], [1, 1]]),
+    11962: ([7078, 2713, 1431], [[2, 2]]),
+    15958: ([207], [[0, 0]]),
+    19362: ([69], [[0, 0]]),
+    24098: ([555, 668, 70], [[1, 2]]),
 }
 
 
-GPT_COMPOSED_EXPECTED_SAMPLES = [
+GPT_COMPOSED_EXPECTED_SAMPLES_IDS = [
     [1411, 819, 6791, 7022, 285, 249],
     [329, 328, 512, 1985, 3069, 7838],
     [5158, 1023, 8171, 798, 1431, 313],
@@ -522,6 +523,17 @@ GPT_COMPOSED_EXPECTED_SAMPLES = [
     [74, 310, 277, 7091, 668, 367],
     [7828, 480, 89, 116, 4604, 69],
     [79, 6042, 577, 225, 207, 207],
+]
+
+GPT_COMPOSED_EXPECTED_SAMPLES_SPANS = [
+    [],
+    [],
+    [[0, 5]],
+    [],
+    [],
+    [],
+    [],
+    [],
 ]
 
 
@@ -534,17 +546,27 @@ def test_gpt_compose():
         GPTConcatenatedMemmapConfig,
     ).build()
     Assert.eq(len(dataset), COMPOSED_DATASET_EXPECTED_LENGTH)
-    sizes = dataset.get_document_sizes()
-    Assert.eq(sizes.sum(), COMPOSED_DATASET_EXPECTED_TOKENS)
-    Assert.all_equal([len(dataset.get(i)) for i in range(0, len(dataset), 20)], sizes[::20])
+    doc_sizes = dataset.get_document_sizes()
+    span_sizes = dataset.get_span_sizes()
+    Assert.eq(doc_sizes.sum(), COMPOSED_DATASET_EXPECTED_TOKENS)
+    Assert.eq(span_sizes.sum(), COMPOSED_DATASET_EXPECTED_SPANS)
+    Assert.all_equal([len(dataset.get(i).ids) for i in range(0, len(dataset), 20)], doc_sizes[::20])
+    Assert.all_equal([len(dataset.get(i).spans) for i in range(0, len(dataset), 20)], span_sizes[::20])
     for i, sample in COMPOSED_DATASET_EXPECTED_SAMPLES.items():
-        Assert.all_equal(dataset.get(i), np.array(sample, dtype=np.uint16))
+        Assert.all_equal(dataset.get(i).ids, np.array(sample[0], dtype=np.uint16))
+        Assert.all_equal(dataset.get(i).spans, np.array(sample[1], dtype=np.int32).reshape(-1, 2))
     sampled = dataset.sample(get_sampling_config(8, sequence_length=5))
     Assert.eq(len(sampled), 8)
-    print(np.stack([sampled[i] for i in range(8)]).tolist())
+    print(np.stack([sampled[i].ids for i in range(8)]).tolist())
     Assert.all_equal(
-        np.stack([sampled[i] for i in range(8)]),
-        np.array(GPT_COMPOSED_EXPECTED_SAMPLES),
+        np.stack([sampled[i].ids for i in range(8)]),
+        np.array(GPT_COMPOSED_EXPECTED_SAMPLES_IDS),
+    )
+    Assert.all_equal(
+        np.vstack([sampled[i].spans for i in range(8)]),
+        np.vstack(
+            [np.array(x, dtype=sampled[0].spans.dtype).reshape(-1, 2) for x in GPT_COMPOSED_EXPECTED_SAMPLES_SPANS]
+        ),
     )
 
 
@@ -563,8 +585,12 @@ def test_gpt_composed_data():
         sequence_length=5,
     )
     Assert.all_equal(
-        np.stack(samples[PhaseType.training]),
-        np.array(GPT_COMPOSED_EXPECTED_SAMPLES),
+        np.stack([batch.ids[0] for batch in samples[PhaseType.training]]),
+        np.array(GPT_COMPOSED_EXPECTED_SAMPLES_IDS),
+    )
+    Assert.all_equal(
+        np.vstack([batch.spans[0] for batch in samples[PhaseType.training]]),
+        np.vstack([np.array(x, dtype=np.int32).reshape(-1, 2) for x in GPT_COMPOSED_EXPECTED_SAMPLES_SPANS]),
     )
 
 
