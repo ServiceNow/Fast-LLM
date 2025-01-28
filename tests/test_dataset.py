@@ -824,7 +824,11 @@ def test_gpt_fim():
     get_test_dataset()
     # The test tokenizer doesn't have fim tokens, so we work around it.
     sampling_config = get_sampling_config(
-        8, sequence_length=5, tokenizer=Tokenizer(TokenizerConfig.from_dict({"path": TOKENIZER_PATH}))
+        8,
+        sequence_length=5,
+        tokenizer=Tokenizer(
+            TokenizerConfig.from_dict({"path": TOKENIZER_PATH, "special_tokens_mode": "tokenizer_default"})
+        ),
     )
     sampled = _get_dataset_config(
         {
@@ -864,7 +868,7 @@ def test_gpt_fim_data():
                     "suffix_token": "z",
                 }
             },
-            "tokenizer": {"path": TOKENIZER_PATH},
+            "tokenizer": {"path": TOKENIZER_PATH, "special_tokens_mode": "tokenizer_default"},
         },
         {PhaseType.training: 8},
         sequence_length=5,
@@ -885,7 +889,7 @@ def test_gpt_fim_data_legacy():
             "format": "list",
             "path": [str(DATASET_PREFIX)],
             "fim": {"rate": 0.5, "prefix_token": "w", "middle_token": "x", "pad_token": "y", "suffix_token": "z"},
-            "tokenizer": {"path": TOKENIZER_PATH},
+            "tokenizer": {"path": TOKENIZER_PATH, "special_tokens_mode": "tokenizer_default"},
             "split": [1, 0, 0],
         },
         {PhaseType.training: 8},

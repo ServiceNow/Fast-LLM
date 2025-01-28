@@ -151,9 +151,11 @@ class GPTFimDataset(SampledDataset):
         middle = contents[boundaries[0] : boundaries[1]]
         suffix = contents[boundaries[1] :]
 
-        prefix = np.array([*self._tokenizer.tokenize(prefix)], dtype=np.int64)
-        middle = np.array([*self._tokenizer.tokenize(middle)], dtype=np.int64)
-        suffix = np.array([*self._tokenizer.tokenize(suffix)], dtype=np.int64)
+        prefix = np.array([*self._tokenizer.tokenize(prefix, end_of_text=False)], dtype=np.int64)
+        middle = np.array(
+            [*self._tokenizer.tokenize(middle, beginning_of_text=False, end_of_text=False)], dtype=np.int64
+        )
+        suffix = np.array([*self._tokenizer.tokenize(suffix, beginning_of_text=False)], dtype=np.int64)
 
         # here we truncate each given segment to fit the same length as it was before
         # A consequence is that we never reach the end of a file?
