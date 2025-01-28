@@ -36,6 +36,9 @@ class GPTDatasetSlice[IndexedDatasetType: GPTIndexedDataset](DatasetSlice[Indexe
         # TODO: This can be really big.
         return self._dataset.get_document_sizes()[self._begin : self._end]
 
+    def get_span_sizes(self) -> np.ndarray:
+        return self._dataset.get_span_sizes()[self._begin : self._end]
+
 
 class GPTConcatenatedDataset[IndexedDatasetType: GPTIndexedDataset](
     ConcatenatedDataset[IndexedDatasetType], GPTIndexedDataset
@@ -45,3 +48,6 @@ class GPTConcatenatedDataset[IndexedDatasetType: GPTIndexedDataset](
     def get_document_sizes(self) -> np.ndarray:
         # TODO: This can be really big.
         return np.concatenate([dataset.get_document_sizes() for dataset in self._datasets])
+
+    def get_span_sizes(self) -> np.ndarray:
+        return np.concatenate([dataset.get_span_sizes() for dataset in self._datasets])

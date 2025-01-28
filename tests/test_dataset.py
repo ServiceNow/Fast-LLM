@@ -186,7 +186,7 @@ def test_gpt_memmap(cache_directory):
         Assert.all_equal(ds_sample.spans, np.array(sample[1], dtype=np.int32).reshape(-1, 2))
 
 
-GPT_SAMPLED_EXPECTED_SAMPLES = [
+GPT_SAMPLED_EXPECTED_SAMPLES_IDS = [
     [1725, 74, 207, 1635, 4440, 2774],
     [359, 489, 4266, 2052, 5351, 80],
     [374, 7534, 87, 1073, 79, 480],
@@ -195,6 +195,17 @@ GPT_SAMPLED_EXPECTED_SAMPLES = [
     [409, 5091, 328, 1378, 5483, 88],
     [83, 4457, 3316, 333, 489, 317],
     [330, 155, 2449, 1136, 1106, 5370],
+]
+
+GPT_SAMPLED_EXPECTED_SAMPLES_SPANS = [
+    [[0, 5]],
+    [[0, 2]],
+    [],
+    [],
+    [],
+    [[0, 5]],
+    [],
+    [],
 ]
 
 
@@ -206,8 +217,14 @@ def test_gpt_sampled():
     )
     Assert.eq(len(sampled), 8)
     Assert.all_equal(
-        np.stack([sampled[i] for i in range(8)]),
-        np.array(GPT_SAMPLED_EXPECTED_SAMPLES),
+        np.stack([sampled[i].ids for i in range(8)]),
+        np.array(GPT_SAMPLED_EXPECTED_SAMPLES_IDS),
+    )
+    Assert.all_equal(
+        np.vstack([sampled[i].spans for i in range(8)]),
+        np.vstack(
+            [np.array(x, dtype=sampled[0].spans.dtype).reshape(-1, 2) for x in GPT_SAMPLED_EXPECTED_SAMPLES_SPANS]
+        ),
     )
 
 
@@ -226,8 +243,12 @@ def test_gpt_sampled_data():
         sequence_length=5,
     )
     Assert.all_equal(
-        np.stack(samples[PhaseType.training]),
-        np.array(GPT_SAMPLED_EXPECTED_SAMPLES),
+        np.stack([batch.ids[0] for batch in samples[PhaseType.training]]),
+        np.array(GPT_SAMPLED_EXPECTED_SAMPLES_IDS),
+    )
+    Assert.all_equal(
+        np.vstack([batch.spans[0] for batch in samples[PhaseType.training]]),
+        np.vstack([np.array(x, dtype=np.int32).reshape(-1, 2) for x in GPT_SAMPLED_EXPECTED_SAMPLES_SPANS]),
     )
 
 
@@ -238,12 +259,16 @@ def test_gpt_sampled_data_legacy():
         sequence_length=5,
     )
     Assert.all_equal(
-        np.stack(samples[PhaseType.training]),
-        np.array(GPT_SAMPLED_EXPECTED_SAMPLES),
+        np.stack([batch.ids[0] for batch in samples[PhaseType.training]]),
+        np.array(GPT_SAMPLED_EXPECTED_SAMPLES_IDS),
+    )
+    Assert.all_equal(
+        np.vstack([batch.spans[0] for batch in samples[PhaseType.training]]),
+        np.vstack([np.array(x, dtype=np.int32).reshape(-1, 2) for x in GPT_SAMPLED_EXPECTED_SAMPLES_SPANS]),
     )
 
 
-GPT_CONCATENATED_EXPECTED_SAMPLES = [
+GPT_CONCATENATED_EXPECTED_SAMPLES_IDS = [
     [243, 498, 7172, 777, 306, 74],
     [821, 6042, 89, 977, 4797, 499],
     [387, 74, 330, 328, 1858, 484],
@@ -255,6 +280,18 @@ GPT_CONCATENATED_EXPECTED_SAMPLES = [
 ]
 
 
+GPT_CONCATENATED_EXPECTED_SAMPLES_SPANS = [
+    [[0, 5]],
+    [],
+    [],
+    [[0, 5]],
+    [],
+    [[0, 0]],
+    [],
+    [],
+]
+
+
 def test_gpt_concatenate():
     # Make sure the dataset concatenation works and check for unintended changes in behavior.
     get_test_dataset()
@@ -263,18 +300,28 @@ def test_gpt_concatenate():
         GPTConcatenatedDatasetConfig,
     ).build()
     Assert.eq(len(dataset), 3 * MEMMAP_DATASET_EXPECTED_LENGTH)
-    sizes = dataset.get_document_sizes()
-    Assert.eq(sizes.sum(), 3 * MEMMAP_DATASET_EXPECTED_TOKENS)
+    doc_sizes = dataset.get_document_sizes()
+    span_sizes = dataset.get_span_sizes()
+    Assert.eq(doc_sizes.sum(), 3 * MEMMAP_DATASET_EXPECTED_TOKENS)
+    Assert.eq(span_sizes.sum(), 3 * MEMMAP_DATASET_EXPECTED_SPANS)
     for i in range(3):
         begin = i * MEMMAP_DATASET_EXPECTED_LENGTH
-        Assert.all_equal([len(dataset.get(begin + i)) for i in range(100)], sizes[begin : begin + 100])
+        Assert.all_equal([len(dataset.get(begin + i).ids) for i in range(100)], doc_sizes[begin : begin + 100])
+        Assert.all_equal([len(dataset.get(begin + i).spans) for i in range(100)], span_sizes[begin : begin + 100])
         for i, sample in MEMMAP_DATASET_EXPECTED_SAMPLES.items():
-            Assert.all_equal(dataset.get(begin + i), np.array(sample, dtype=np.uint16))
+            Assert.all_equal(dataset.get(begin + i).ids, np.array(sample[0], dtype=np.uint16))
+            Assert.all_equal(dataset.get(begin + i).spans, np.array(sample[1], dtype=np.int32).reshape(-1, 2))
     sampled = dataset.sample(get_sampling_config(8, sequence_length=5))
     Assert.eq(len(sampled), 8)
     Assert.all_equal(
-        np.stack([sampled[i] for i in range(8)]),
-        np.array(GPT_CONCATENATED_EXPECTED_SAMPLES),
+        np.stack([sampled[i].ids for i in range(8)]),
+        np.array(GPT_CONCATENATED_EXPECTED_SAMPLES_IDS),
+    )
+    Assert.all_equal(
+        np.vstack([sampled[i].spans for i in range(8)]),
+        np.vstack(
+            [np.array(x, dtype=sampled[0].spans.dtype).reshape(-1, 2) for x in GPT_CONCATENATED_EXPECTED_SAMPLES_SPANS]
+        ),
     )
 
 
@@ -292,19 +339,30 @@ def test_gpt_concatenate_data():
         sequence_length=5,
     )
     Assert.all_equal(
-        np.stack(samples[PhaseType.training]),
-        np.array(GPT_CONCATENATED_EXPECTED_SAMPLES),
+        np.stack([batch.ids[0] for batch in samples[PhaseType.training]]),
+        np.array(GPT_CONCATENATED_EXPECTED_SAMPLES_IDS),
+    )
+    Assert.all_equal(
+        np.vstack([batch.spans[0] for batch in samples[PhaseType.training]]),
+        np.vstack([np.array(x, dtype=np.int32).reshape(-1, 2) for x in GPT_CONCATENATED_EXPECTED_SAMPLES_SPANS]),
     )
 
 
-GPT_SLICE_EXPECTED_TRAINING_SAMPLES = [
+GPT_SLICE_EXPECTED_TRAINING_SAMPLES_IDS = [
     [2625, 76, 2625, 2639, 74, 243],
     [207, 481, 5546, 74, 414, 498],
     [74, 333, 1963, 310, 5337, 3628],
     [79, 2361, 80, 2012, 84, 480],
 ]
 
-GPT_SLICE_EXPECTED_VALIDATION_SAMPLES = [
+GPT_SLICE_EXPECTED_TRAINING_SAMPLES_SPANS = [
+    [],
+    [],
+    [[0, 2]],
+    [],
+]
+
+GPT_SLICE_EXPECTED_VALIDATION_SAMPLES_IDS = [
     [2352, 3687, 2311, 4900, 542, 3732],
     [2551, 5283, 900, 3140, 328, 68],
     [7979, 2283, 329, 727, 2740, 2818],
@@ -313,6 +371,17 @@ GPT_SLICE_EXPECTED_VALIDATION_SAMPLES = [
     [95, 6641, 207, 279, 2304, 602],
     [89, 4446, 947, 293, 947, 1544],
     [243, 3712, 86, 476, 80, 2547],
+]
+
+GPT_SLICE_EXPECTED_VALIDATION_SAMPLES_SPANS = [
+    [],
+    [],
+    [[0, 5]],
+    [[0, 3]],
+    [],
+    [],
+    [],
+    [],
 ]
 
 
@@ -325,15 +394,27 @@ def test_gpt_slice():
         GPTDatasetSliceConfig,
     ).build()
     Assert.eq(len(dataset), 9)
-    sizes = dataset.get_document_sizes()
-    Assert.all_equal([len(dataset.get(i)) for i in range(9)], sizes[:9])
+    doc_sizes = dataset.get_document_sizes()
+    span_sizes = dataset.get_span_sizes()
+    Assert.all_equal([len(dataset.get(i).ids) for i in range(9)], doc_sizes[:9])
+    Assert.all_equal([len(dataset.get(i).spans) for i in range(9)], span_sizes[:9])
     for i, sample in MEMMAP_DATASET_EXPECTED_SAMPLES.items():
-        Assert.all_equal(dataset.get(i - 9), np.array(sample, dtype=np.uint16))
+        Assert.all_equal(dataset.get(i - 9).ids, np.array(sample[0], dtype=np.uint16))
+        Assert.all_equal(dataset.get(i - 9).spans, np.array(sample[1], dtype=np.int32).reshape(-1, 2))
     sampled = dataset.sample(get_sampling_config(8, sequence_length=5))
     Assert.eq(len(sampled), 8)
     Assert.all_equal(
-        np.stack([sampled[i] for i in range(8)]),
-        np.array(GPT_SLICE_EXPECTED_VALIDATION_SAMPLES),
+        np.stack([sampled[i].ids for i in range(8)]),
+        np.array(GPT_SLICE_EXPECTED_VALIDATION_SAMPLES_IDS),
+    )
+    Assert.all_equal(
+        np.vstack([sampled[i].spans for i in range(8)]),
+        np.vstack(
+            [
+                np.array(x, dtype=sampled[0].spans.dtype).reshape(-1, 2)
+                for x in GPT_SLICE_EXPECTED_VALIDATION_SAMPLES_SPANS
+            ]
+        ),
     )
 
 
@@ -365,12 +446,20 @@ def test_gpt_slice_data():
         sequence_length=5,
     )
     Assert.all_equal(
-        np.stack(samples[PhaseType.validation]),
-        np.array(GPT_SLICE_EXPECTED_VALIDATION_SAMPLES),
+        np.stack([batch.ids[0] for batch in samples[PhaseType.validation]]),
+        np.array(GPT_SLICE_EXPECTED_VALIDATION_SAMPLES_IDS),
     )
     Assert.all_equal(
-        np.stack(samples[PhaseType.training]),
-        np.array(GPT_SLICE_EXPECTED_TRAINING_SAMPLES),
+        np.vstack([batch.spans[0] for batch in samples[PhaseType.validation]]),
+        np.vstack([np.array(x, dtype=np.int32).reshape(-1, 2) for x in GPT_SLICE_EXPECTED_VALIDATION_SAMPLES_SPANS]),
+    )
+    Assert.all_equal(
+        np.stack([batch.ids[0] for batch in samples[PhaseType.training]]),
+        np.array(GPT_SLICE_EXPECTED_TRAINING_SAMPLES_IDS),
+    )
+    Assert.all_equal(
+        np.vstack([batch.spans[0] for batch in samples[PhaseType.training]]),
+        np.vstack([np.array(x, dtype=np.int32).reshape(-1, 2) for x in GPT_SLICE_EXPECTED_TRAINING_SAMPLES_SPANS]),
     )
 
 
@@ -382,12 +471,20 @@ def test_gpt_slice_data_legacy():
         sequence_length=5,
     )
     Assert.all_equal(
-        np.stack(samples[PhaseType.validation]),
-        np.array(GPT_SLICE_EXPECTED_VALIDATION_SAMPLES),
+        np.stack([batch.ids[0] for batch in samples[PhaseType.validation]]),
+        np.array(GPT_SLICE_EXPECTED_VALIDATION_SAMPLES_IDS),
     )
     Assert.all_equal(
-        np.stack(samples[PhaseType.training]),
-        np.array(GPT_SLICE_EXPECTED_TRAINING_SAMPLES),
+        np.vstack([batch.spans[0] for batch in samples[PhaseType.validation]]),
+        np.vstack([np.array(x, dtype=np.int32).reshape(-1, 2) for x in GPT_SLICE_EXPECTED_VALIDATION_SAMPLES_SPANS]),
+    )
+    Assert.all_equal(
+        np.stack([batch.ids[0] for batch in samples[PhaseType.training]]),
+        np.array(GPT_SLICE_EXPECTED_TRAINING_SAMPLES_IDS),
+    )
+    Assert.all_equal(
+        np.vstack([batch.spans[0] for batch in samples[PhaseType.training]]),
+        np.vstack([np.array(x, dtype=np.int32).reshape(-1, 2) for x in GPT_SLICE_EXPECTED_TRAINING_SAMPLES_SPANS]),
     )
 
 
@@ -400,6 +497,17 @@ GPT_BLENDED_EXPECTED_SAMPLES = [
     [555, 3042, 83, 207, 498, 3373],
     [2210, 8179, 73, 2582, 897, 1178],
     [409, 5091, 328, 1378, 5483, 88],
+]
+
+GPT_BLENDED_EXPECTED_SAMPLES_SPANS = [
+    [[0, 5]],
+    [[1, 5]],
+    [[0, 2]],
+    [],
+    [],
+    [],
+    [],
+    [[0, 5]],
 ]
 
 
@@ -420,8 +528,14 @@ def test_gpt_blended():
     ).build_and_sample(get_sampling_config(8, sequence_length=5))
     Assert.eq(len(sampled), 8)
     Assert.all_equal(
-        np.stack([sampled[i] for i in range(8)]),
+        np.stack([sampled[i].ids for i in range(8)]),
         np.array(GPT_BLENDED_EXPECTED_SAMPLES),
+    )
+    Assert.all_equal(
+        np.vstack([sampled[i].spans for i in range(8)]),
+        np.vstack(
+            [np.array(x, dtype=sampled[0].spans.dtype).reshape(-1, 2) for x in GPT_BLENDED_EXPECTED_SAMPLES_SPANS]
+        ),
     )
 
 
@@ -445,12 +559,16 @@ def test_gpt_blended_data():
         sequence_length=5,
     )
     Assert.all_equal(
-        np.stack(samples[PhaseType.training]),
+        np.stack([batch.ids[0] for batch in samples[PhaseType.training]]),
         np.array(GPT_BLENDED_EXPECTED_SAMPLES),
+    )
+    Assert.all_equal(
+        np.vstack([batch.spans[0] for batch in samples[PhaseType.training]]),
+        np.vstack([np.array(x, dtype=np.int32).reshape(-1, 2) for x in GPT_BLENDED_EXPECTED_SAMPLES_SPANS]),
     )
 
 
-GPT_BLENDED_LEGACY_EXPECTED_SAMPLES = [
+GPT_BLENDED_LEGACY_EXPECTED_SAMPLES_IDS = [
     [1725, 74, 207, 1635, 4440, 2774],
     [328, 80, 263, 890, 1797, 88],
     [359, 489, 4266, 2052, 5351, 80],
@@ -459,6 +577,17 @@ GPT_BLENDED_LEGACY_EXPECTED_SAMPLES = [
     [1852, 71, 776, 7878, 7390, 80],
     [2210, 8179, 73, 2582, 897, 1178],
     [409, 5091, 328, 1378, 5483, 88],
+]
+
+GPT_BLENDED_LEGACY_EXPECTED_SAMPLES_SPANS = [
+    [[0, 5]],
+    [],
+    [[0, 2]],
+    [],
+    [],
+    [],
+    [],
+    [[0, 5]],
 ]
 
 
@@ -475,12 +604,16 @@ def test_gpt_blended_data_legacy():
         sequence_length=5,
     )
     Assert.all_equal(
-        np.stack(samples[PhaseType.training]),
-        np.array(GPT_BLENDED_LEGACY_EXPECTED_SAMPLES),
+        np.stack([batch.ids[0] for batch in samples[PhaseType.training]]),
+        np.array(GPT_BLENDED_LEGACY_EXPECTED_SAMPLES_IDS),
+    )
+    Assert.all_equal(
+        np.vstack([batch.spans[0] for batch in samples[PhaseType.training]]),
+        np.vstack([np.array(x, dtype=np.int32).reshape(-1, 2) for x in GPT_BLENDED_LEGACY_EXPECTED_SAMPLES_SPANS]),
     )
 
 
-GPT_BLENDED_MIXED_EXPECTED_SAMPLES = [
+GPT_BLENDED_MIXED_EXPECTED_SAMPLES_IDS = [
     [1725, 74, 207, 1635, 4440, 2774],
     [916, 6683, 7685, 1277, 5106, 378],
     [359, 489, 4266, 2052, 5351, 80],
@@ -489,6 +622,17 @@ GPT_BLENDED_MIXED_EXPECTED_SAMPLES = [
     [8008, 498, 71, 727, 80, 315],
     [6920, 2218, 2921, 3963, 7606, 6904],
     [2210, 8179, 73, 2582, 897, 1178],
+]
+
+GPT_BLENDED_MIXED_EXPECTED_SAMPLES_SPANS = [
+    [[0, 5]],
+    [],
+    [[0, 2]],
+    [],
+    [],
+    [],
+    [],
+    [],
 ]
 
 
@@ -508,8 +652,17 @@ def test_gpt_blended_mixed():
     ).build_and_sample(get_sampling_config(8, sequence_length=5))
     Assert.eq(len(sampled), 8)
     Assert.all_equal(
-        np.stack([sampled[i] for i in range(8)]),
-        np.array(GPT_BLENDED_MIXED_EXPECTED_SAMPLES),
+        np.stack([sampled[i].ids for i in range(8)]),
+        np.array(GPT_BLENDED_MIXED_EXPECTED_SAMPLES_IDS),
+    )
+    Assert.all_equal(
+        np.vstack([sampled[i].spans for i in range(8)]),
+        np.vstack(
+            [
+                np.array(x, dtype=sampled[0].spans.dtype).reshape(-1, 2)
+                for x in GPT_BLENDED_MIXED_EXPECTED_SAMPLES_SPANS
+            ]
+        ),
     )
 
 
@@ -528,12 +681,16 @@ def test_gpt_blended_mixed_data():
         sequence_length=5,
     )
     Assert.all_equal(
-        np.stack(samples[PhaseType.training]),
-        np.array(GPT_BLENDED_MIXED_EXPECTED_SAMPLES),
+        np.stack([batch.ids[0] for batch in samples[PhaseType.training]]),
+        np.array(GPT_BLENDED_MIXED_EXPECTED_SAMPLES_IDS),
+    )
+    Assert.all_equal(
+        np.vstack([batch.spans[0] for batch in samples[PhaseType.training]]),
+        np.vstack([np.array(x, dtype=np.int32).reshape(-1, 2) for x in GPT_BLENDED_MIXED_EXPECTED_SAMPLES_SPANS]),
     )
 
 
-GPT_FIM_EXPECTED_SAMPLES = [
+GPT_FIM_EXPECTED_SAMPLES_IDS = [
     [1725, 74, 207, 1635, 4440, 2774],
     [359, 489, 4266, 2052, 5351, 80],
     [86, 89, 22255, 1073, 79, 480],
@@ -542,6 +699,17 @@ GPT_FIM_EXPECTED_SAMPLES = [
     [86, 89, 88, 87, 409, 70],
     [86, 83, 744, 89, 64, 333],
     [86, 89, 1461, 87, 330, 7876],
+]
+
+GPT_FIM_EXPECTED_SAMPLES_SPANS = [
+    [[0, 5]],
+    [[0, 2]],
+    [],
+    [],
+    [],
+    [[0, 5]],
+    [],
+    [],
 ]
 
 
@@ -567,8 +735,12 @@ def test_gpt_fim():
     Assert.eq(len(sampled), 8)
     # TODO: Does this output make sense?
     Assert.all_equal(
-        np.stack([sampled[i] for i in range(8)]),
-        np.array(GPT_FIM_EXPECTED_SAMPLES),
+        np.stack([sampled[i].ids for i in range(8)]),
+        np.array(GPT_FIM_EXPECTED_SAMPLES_IDS),
+    )
+    Assert.all_equal(
+        np.vstack([sampled[i].spans for i in range(8)]),
+        np.vstack([np.array(x, dtype=sampled[0].spans.dtype).reshape(-1, 2) for x in GPT_FIM_EXPECTED_SAMPLES_SPANS]),
     )
 
 
@@ -592,8 +764,12 @@ def test_gpt_fim_data():
         sequence_length=5,
     )
     Assert.all_equal(
-        np.stack(samples[PhaseType.training]),
-        np.array(GPT_FIM_EXPECTED_SAMPLES),
+        np.stack([batch.ids[0] for batch in samples[PhaseType.training]]),
+        np.array(GPT_FIM_EXPECTED_SAMPLES_IDS),
+    )
+    Assert.all_equal(
+        np.vstack([batch.spans[0] for batch in samples[PhaseType.training]]),
+        np.vstack([np.array(x, dtype=np.int32).reshape(-1, 2) for x in GPT_FIM_EXPECTED_SAMPLES_SPANS]),
     )
 
 
@@ -610,6 +786,10 @@ def test_gpt_fim_data_legacy():
         sequence_length=5,
     )
     Assert.all_equal(
-        np.stack(samples[PhaseType.training]),
-        np.array(GPT_FIM_EXPECTED_SAMPLES),
+        np.stack([batch.ids[0] for batch in samples[PhaseType.training]]),
+        np.array(GPT_FIM_EXPECTED_SAMPLES_IDS),
+    )
+    Assert.all_equal(
+        np.vstack([batch.spans[0] for batch in samples[PhaseType.training]]),
+        np.vstack([np.array(x, dtype=np.int32).reshape(-1, 2) for x in GPT_FIM_EXPECTED_SAMPLES_SPANS]),
     )
