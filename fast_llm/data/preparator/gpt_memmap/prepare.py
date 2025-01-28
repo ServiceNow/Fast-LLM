@@ -22,41 +22,21 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
     _tokenizer: Tokenizer
     _data_type: DataType
 
-    def _tokenize_with_spans(self, text: str, char_spans: list[tuple[int, int]]) -> tuple[np.ndarray, np.ndarray]:
-        """
-        Perform span-aware tokenization and return the tokenized input_ids along with token spans.
-        """
-        input_ids = []
-        token_spans = []
-        char_pos = 0
-        beginning_of_text = True
-        for start, end in char_spans:
-            if char_pos < start:
-                curr_text = text[char_pos:start]
-                tokenized_text = self._tokenizer.tokenize(curr_text, add_bos_token=beginning_of_text)
-                beginning_of_text = False
-                input_ids.extend(tokenized_text)
-            curr_text = text[start : end + 1]
-            tokenized_text = self._tokenizer.tokenize(curr_text, add_bos_token=beginning_of_text)
-            beginning_of_text = False
-            token_spans.append((len(input_ids), len(input_ids) + len(tokenized_text) - 1))
-            input_ids.extend(tokenized_text)
-            char_pos = end + 1
-        if char_pos < len(text):
-            curr_text = text[char_pos:]
-            tokenized_text = self._tokenizer.tokenize(curr_text)
-            input_ids.extend(tokenized_text)
-        return np.array(input_ids, dtype=self._data_type.numpy), np.array(token_spans, dtype=np.int32).reshape(-1, 2)
-
     def _tokenize_batch(self, batch: dict[str, list[typing.Any]]) -> dict[str, list[typing.Any]]:
         input_ids, token_spans = map(
             list,
             zip(
                 *[
-                    self._tokenize_with_spans(text, char_spans)
-                    for text, char_spans in zip(
-                        batch[self._config.dataset.field], batch[self._config.dataset.spans_field]
+                    (
+                        np.array(input_ids, dtype=self._data_type.numpy),
+                        np.array(token_spans, dtype=np.int32).reshape(-1, 2),
                     )
+                    for input_ids, token_spans in [
+                        self._tokenizer.tokenize_with_spans(text, char_spans)
+                        for text, char_spans in zip(
+                            batch[self._config.dataset.field], batch[self._config.dataset.spans_field]
+                        )
+                    ]
                 ]
             ),
         )

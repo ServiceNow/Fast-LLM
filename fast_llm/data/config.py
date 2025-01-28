@@ -16,6 +16,13 @@ class MultiprocessingContext(str, enum.Enum):
 TokenizerFromFile = "TokenizerFromFile"
 
 
+class SpecialTokensMode(str, enum.Enum):
+    tokenizer_default = "tokenizer_default"
+    bos_only = "bos_only"
+    eos_only = "eos_only"
+    bos_eos = "bos_eos"
+
+
 @config_class()
 class TokenizerConfig(Config):
     """
@@ -32,5 +39,10 @@ class TokenizerConfig(Config):
     path: pathlib.Path | None = Field(
         default=None,
         desc="Path to the tokenizer file.",
+        hint=FieldHint.core,
+    )
+    special_tokens_mode: SpecialTokensMode = Field(
+        default=SpecialTokensMode.bos_only,
+        desc="Special tokens configuration.",
         hint=FieldHint.core,
     )
