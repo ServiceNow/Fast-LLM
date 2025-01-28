@@ -184,7 +184,7 @@ class TrainingCheckpointBaseConfig(IntervalConfig):
     def get_save_directory(self, experiment_directory: pathlib.Path) -> pathlib.Path:
         pass
 
-    def get_save_config(self, path: pathlib.Path) -> CheckpointSaveConfig:
+    def get_save_config(self, path: pathlib.Path, timeout: float | None) -> CheckpointSaveConfig:
         raise NotImplementedError()
 
     def to_delete(self, iterations: list[int]) -> list[int]:
@@ -216,20 +216,22 @@ class TrainingCheckpointConfig(TrainingCheckpointBaseConfig):
         new_path = experiment_directory / "checkpoint"
         return old_path if old_path.is_dir() and not new_path.is_dir() else new_path
 
-    def get_save_config(self, path: pathlib.Path) -> CheckpointSaveConfig:
+    def get_save_config(self, path: pathlib.Path, timeout: float | None) -> CheckpointSaveConfig:
         return CheckpointSaveConfig(
             path=path,
             format=DistributedCheckpointFormat,
             model_weights=True,
             optimizer_state=True,
+            timeout=timeout,
         )
 
-    def get_load_config(self, path: pathlib.Path) -> CheckpointLoadConfig:
+    def get_load_config(self, path: pathlib.Path, timeout: float | None) -> CheckpointLoadConfig:
         return CheckpointLoadConfig(
             path=path,
             format=DistributedCheckpointFormat,
             model_weights=True,
             optimizer_state=True,
+            timeout=timeout,
         )
 
 
@@ -247,8 +249,8 @@ class TrainingExportConfig(TrainingCheckpointBaseConfig, CheckpointStateSaveConf
     def get_save_directory(self, experiment_directory: pathlib.Path) -> pathlib.Path:
         return experiment_directory / "export" / self.format.name
 
-    def get_save_config(self, path: pathlib.Path) -> CheckpointSaveConfig:
-        return CheckpointSaveConfig.from_dict(self, {"path": path}, strict=False)
+    def get_save_config(self, path: pathlib.Path, timeout: float | None) -> CheckpointSaveConfig:
+        return CheckpointSaveConfig.from_dict(self, {"path": path, "timeout": timeout}, strict=False)
 
 
 @config_class()
@@ -302,6 +304,14 @@ class TrainingConfig(Config):
         default=None,
         desc="Prefetch factor for the data loaders, i.e., number of micro-batches that each worker may prepare in advance.",
         hint=FieldHint.performance,
+        valid=skip_valid_if_none(check_field(Assert.gt, 0)),
+    )
+
+    timeout: float | None = Field(
+        default=3600,
+        desc="Timeout for lengthy operations such as checkpoint saving and loading,"
+        " and dataset preparation and sampling.",
+        hint=FieldHint.feature,
         valid=skip_valid_if_none(check_field(Assert.gt, 0)),
     )
 

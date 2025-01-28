@@ -13,7 +13,7 @@ batch:
 data:
   datasets:
     Training:
-      type: dummy
+      type: random
 optimizer:
   learning_rate:
     base: 1.0e-05
