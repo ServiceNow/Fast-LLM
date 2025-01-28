@@ -2,7 +2,9 @@ import dataclasses
 import enum
 import json
 import pathlib
+import time
 import typing
+import warnings
 
 from fast_llm.config import Config, Field, FieldHint, FieldUpdate, check_field, config_class, skip_valid_if_none
 from fast_llm.data.dataset.abstract import SampledDataset
@@ -21,7 +23,7 @@ from fast_llm.utils import Assert, Registry, normalize_probabilities, padded_cum
 if typing.TYPE_CHECKING:
     from fast_llm.data.dataset.gpt.indexed import GPTConcatenatedDataset, GPTDatasetSlice, GPTIndexedDataset
     from fast_llm.data.dataset.gpt.memmap import GPTMemmapDataset
-    from fast_llm.data.dataset.gpt.random import GPTRandomDataset
+    from fast_llm.data.dataset.gpt.random import GPTRandomDataset, GPTRandomSampledDataset
     from fast_llm.data.tokenizer import Tokenizer
 
 
@@ -65,6 +67,10 @@ class GPTSampledDatasetConfig(SampledDatasetConfig):
         if type_ is None:
             actual_cls = cls
         else:
+            if type_ not in cls._registry:
+                raise ValueError(
+                    f"Unknown {cls._registry.name} type {type_}." f" Available types: {list(cls._registry.keys())}"
+                )
             actual_cls = cls._registry[type_]
             Assert.custom(issubclass, actual_cls, cls)
         if actual_cls == cls:
@@ -158,6 +164,41 @@ class GPTBlendedDatasetConfig(BlendedDatasetConfig, GPTSampledDatasetConfig):
     _abstract: typing.ClassVar[bool] = False
     type_: typing.ClassVar[str | None] = "blended"
     datasets: list[GPTSampledDatasetConfig] = FieldUpdate()
+
+
+@config_class()
+class GPTConcatenatedMemmapConfig(GPTIndexedDatasetConfig):
+    _abstract: typing.ClassVar[bool] = False
+    type_: typing.ClassVar[str | None] = "concatenated_memmap"
+    path: pathlib.Path = Field(
+        default=None,
+        desc="The path to a dataset directory.",
+        hint=FieldHint.core,
+    )
+
+    def build(self) -> "GPTConcatenatedDataset":
+        pass
+
+        assert self.path.is_dir()
+        index_path = self.path / "index.txt"
+
+        if index_path.is_file():
+            prefixes = [self.path / line.strip() for line in index_path.open("r").readlines()]
+        else:
+            warnings.warn(
+                f"The dataset path {self.path} points to a directory."
+                " The dataset will be indexed automatically, which may be unsafe."
+                " We recommend using an index file instead."
+            )
+            prefixes = [
+                path.with_suffix("")
+                for path in self.path.iterdir()
+                if path.suffix == ".idx" and path.is_file() and path.with_suffix(".bin").is_file()
+            ]
+        dataset_config = GPTConcatenatedDatasetConfig.from_dict(
+            {"datasets": [{"type": "memmap", "path": prefix} for prefix in prefixes]}
+        )
+        return dataset_config.build()
 
 
 @config_class()
@@ -364,3 +405,25 @@ class GPTLegacyDatasetConfig(GPTSampledDatasetConfig, GPTLegacyConfig):
                 )
 
         return dataset_config.build_and_sample(config)
+
+
+@config_class()
+class GPTTestSlowDatasetConfig(GPTSampledDatasetConfig):
+    """
+    A mock dataset that mimics a slow dataset creation on one rank, which may trigger a timeout.
+    """
+
+    # TODO: This belongs to a testing plugin.
+    _abstract: typing.ClassVar[bool] = False
+    type_: typing.ClassVar[str | None] = "test_slow"
+    sleep: float = Field(
+        default=1,
+        desc="Sleep time during build, in seconds.",
+        hint=FieldHint.core,
+    )
+
+    def build_and_sample(self, config: SamplingConfig) -> "GPTRandomSampledDataset":
+        assert config.distributed.config.world_size > 1
+        if config.distributed.config.rank == 0:
+            time.sleep(self.sleep)
+        return GPTRandomDatasetConfig().build_and_sample(config)
