@@ -159,11 +159,12 @@ def test_gpt_random_data_legacy():
 # Most documents are too long to write here, we test a few known short ones.
 MEMMAP_DATASET_EXPECTED_LENGTH = 6153
 MEMMAP_DATASET_EXPECTED_TOKENS = 508327
+MEMMAP_DATASET_EXPECTED_SPANS = 9138
 MEMMAP_DATASET_EXPECTED_SAMPLES = {
-    9: [],
-    10: [80, 85, 4295, 4182, 489, 727, 84, 698, 1197, 583],
-    13: [78, 727, 74, 317, 1358, 89],
-    15: [78],
+    9: ([], []),
+    10: ([80, 85, 4295, 4182, 489, 727, 84, 698, 1197, 583], [[4, 6], [8, 9]]),
+    13: ([78, 727, 74, 317, 1358, 89], []),
+    15: ([78], [[0, 0]]),
 }
 
 
@@ -173,11 +174,16 @@ def test_gpt_memmap(cache_directory):
     get_test_dataset()
     dataset = _get_dataset_config({"type": "memmap", "path": DATASET_PREFIX}, GPTMemmapDatasetConfig).build()
     Assert.eq(len(dataset), MEMMAP_DATASET_EXPECTED_LENGTH)
-    sizes = dataset.get_document_sizes()
-    Assert.eq(sizes.sum(), MEMMAP_DATASET_EXPECTED_TOKENS)
-    Assert.all_equal([len(dataset.get(i)) for i in range(100)], sizes[:100])
+    doc_sizes = dataset.get_document_sizes()
+    span_sizes = dataset.get_span_sizes()
+    Assert.eq(doc_sizes.sum(), MEMMAP_DATASET_EXPECTED_TOKENS)
+    Assert.eq(span_sizes.sum(), MEMMAP_DATASET_EXPECTED_SPANS)
+    Assert.all_equal([len(dataset.get(i).ids) for i in range(100)], doc_sizes[:100])
+    Assert.all_equal([len(dataset.get(i).spans) for i in range(100)], span_sizes[:100])
     for i, sample in MEMMAP_DATASET_EXPECTED_SAMPLES.items():
-        Assert.all_equal(dataset.get(i), np.array(sample, dtype=np.uint16))
+        ds_sample = dataset.get(i)
+        Assert.all_equal(ds_sample.ids, np.array(sample[0], dtype=np.uint16))
+        Assert.all_equal(ds_sample.spans, np.array(sample[1], dtype=np.int32).reshape(-1, 2))
 
 
 GPT_SAMPLED_EXPECTED_SAMPLES = [

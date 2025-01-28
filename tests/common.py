@@ -10,7 +10,7 @@ import numpy as np
 import pytest
 import torch
 
-from fast_llm.data.dataset.gpt.memmap import GPTMemmapDataset
+from fast_llm.data.dataset.gpt.memmap import GPTMemmapDataset, GPTMemmapDocument
 from fast_llm.models.gpt.config import (
     LlamaGPTHuggingfaceCheckpointFormat,
     MistralGPTHuggingfaceCheckpointFormat,
@@ -230,6 +230,19 @@ def get_test_dataset(
         documents = [
             np.array(tokenizer(document)["input_ids"], dtype=np.uint16) % vocab_size for document in documents
         ]
+        for idx, doc in enumerate(documents):
+            doc_seed = seed + idx
+            n_spans = random.Random(doc_seed).randint(0, 5)
+            spans = []
+            prev_end = -1
+            for _ in range(n_spans):
+                if prev_end >= len(doc) - 1:
+                    break
+                start = random.Random(doc_seed).randint(prev_end + 1, len(doc) - 1)
+                end = random.Random(doc_seed).randint(start, len(doc) - 1)
+                spans.append([start, end])
+                prev_end = end
+            documents[idx] = GPTMemmapDocument(doc, np.array(spans, dtype=np.int32).reshape(-1, 2))
         GPTMemmapDataset.write_dataset(prefix, documents)
 
 

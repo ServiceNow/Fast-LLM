@@ -41,12 +41,12 @@ class GPTRandomSampledDataset(SampledDataset):
         spans = []
         prev_end = -1
         for _ in range(n_spans):
+            if prev_end >= len(ids) - 1:
+                break
             start = np.random.RandomState(np_seed).randint(prev_end + 1, len(ids))
             end = np.random.RandomState(np_seed).randint(start, len(ids))
             spans.append([start, end])
             prev_end = end
-            if prev_end >= len(ids) - 1:
-                break
         return GPTSample(ids=ids, spans=np.array(spans, dtype=np.int32).reshape(-1, 2))
 
     @property
