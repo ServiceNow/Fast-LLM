@@ -22,15 +22,15 @@ def test_gpt_memmap_dataset(dtype):
         GPTMemmapDataset.write_dataset(prefix=prefix, documents=documents)
         dataset = GPTMemmapDataset(name="foo", prefix=prefix)
         for i, document in enumerate(documents):
-            memmap_document, memmap_spans = dataset.get(i)
+            memmap_sample = dataset.get(i)
             assert np.array_equal(
-                memmap_document, document.text, equal_nan=True
+                memmap_sample.ids, document.text, equal_nan=True
             ), f"Mismatch for document {i}: {document.text} != {dataset.get(i)}."
             if len(document.spans) > 0:
                 assert np.array_equal(
-                    memmap_spans, document.spans, equal_nan=True
+                    memmap_sample.spans, document.spans, equal_nan=True
                 ), f"Mismatch for non-empty spans {i}: {document.spans} != {dataset.get(i)}."
             else:
                 assert np.array_equal(
-                    memmap_spans.flatten(), document.spans.flatten(), equal_nan=True
+                    memmap_sample.spans.flatten(), document.spans.flatten(), equal_nan=True
                 ), f"Mismatch for empty spans {i}: {document.spans} != {dataset.get(i)}."
