@@ -14,20 +14,20 @@ if typing.TYPE_CHECKING:
     from fast_llm.engine.distributed.distributed import Distributed
 
 
-@config_class()
-class DatasetConfig(Config):
-    _abstract = True
-
-
 @dataclasses.dataclass(kw_only=True)
 class SamplingConfig:
     # TODO: Have a separate configuration (subset?) for `build`?
     num_samples: int
     seed: int
     cache_directory: pathlib.Path | None
-    verbose: bool
+    # TODO: This prevents the sampling config from being pickled in multiprocessing.
     distributed: "Distributed"
     phase: PhaseType
+
+
+@config_class()
+class DatasetConfig(Config):
+    _abstract: typing.ClassVar[bool] = True
 
 
 @config_class()
@@ -140,15 +140,21 @@ class BlendedDatasetConfig(SampledDatasetConfig):
         default_factory=list,
         desc="The datasets to blend.",
         hint=FieldHint.core,
-        valid=check_field(functools.partial(Assert.custom, lambda x: len(x) > 0)),
     )
     weights: list[float] = Field(
         default_factory=list,
         desc="The blending weight of each dataset.",
         hint=FieldHint.core,
     )
+    legacy: bool = Field(
+        default=False,
+        desc="Use the legacy formulas for sub-dataset seeds and sample sizes.",
+        hint=FieldHint.deprecated,
+    )
 
-    def __post_init__(self) -> None:
+    def _validate(self) -> None:
+        super()._validate()
+        Assert.geq(len(self.datasets), 2)
         Assert.eq(len(self.datasets), len(self.weights))
 
     def build_and_sample(
@@ -158,12 +164,24 @@ class BlendedDatasetConfig(SampledDatasetConfig):
         from fast_llm.data.dataset.blended import BlendedDataset
 
         # Build and sample the datasets.
+        # TODO: Vary the seed?
+        # Add 5 times the standard deviation (of a binomial distribution)
+        # so the probability of sampling more than this amount during blending is negligible.
+
         sampled_datasets = [
             dataset.build_and_sample(
                 # Blending is deterministic and the error will never be higher than 1.
-                dataclasses.replace(config, num_samples=math.ceil(weight * config.num_samples) + 1),
+                dataclasses.replace(
+                    config,
+                    num_samples=(
+                        math.ceil(weight * (config.num_samples + 5 * (config.num_samples * (1 - weight)) ** 0.5))
+                        if self.legacy
+                        else math.ceil(weight * config.num_samples) + 1
+                    ),
+                    seed=config.seed + i * (0 if self.legacy else 697),
+                ),
             )
-            for dataset, weight in zip(self.datasets, self.weights, strict=True)
+            for i, (dataset, weight) in enumerate(zip(self.datasets, self.weights, strict=True))
         ]
         # Blend the datasets.
         return BlendedDataset(
