@@ -2,6 +2,7 @@ import numpy as np
 
 from fast_llm.data.dataset.abstract import SamplableDataset, SampledDataset
 from fast_llm.data.dataset.gpt.config import GPTSamplingConfig
+from fast_llm.data.dataset.gpt.sampled import GPTSample
 
 
 class GPTRandomDataset(SamplableDataset):
@@ -31,10 +32,22 @@ class GPTRandomSampledDataset(SampledDataset):
     def __len__(self) -> int:
         return self._num_samples
 
-    def __getitem__(self, idx) -> np.ndarray:
-        return np.random.RandomState(self._seed + 48576439 + 74593 * idx).randint(
+    def __getitem__(self, idx) -> GPTSample:
+        np_seed = self._seed + 48576439 + 74593 * idx
+        ids = np.random.RandomState(np_seed).randint(
             0, self._vocab_size, size=(self._sequence_length + 1,), dtype=np.int64
         )
+        n_spans = np.random.RandomState(np_seed).randint(0, 3)
+        spans = []
+        prev_end = -1
+        for _ in range(n_spans):
+            start = np.random.RandomState(np_seed).randint(prev_end + 1, len(ids))
+            end = np.random.RandomState(np_seed).randint(start, len(ids))
+            spans.append([start, end])
+            prev_end = end
+            if prev_end >= len(ids) - 1:
+                break
+        return GPTSample(ids=ids, spans=np.array(spans, dtype=np.int32).reshape(-1, 2))
 
     @property
     def name(self) -> str:

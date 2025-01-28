@@ -75,8 +75,8 @@ def get_test_data_and_samples(
     batch_config.setup(distributed_config)
     batch_config.validate()
     samples = {
-        phase: [batch[0] for batch in data.get_iterator(batch_config, phase, consumed_samples=0, num_workers=0)]
-        for phase, samples in samples_per_phase.items()
+        phase: list(data.get_iterator(batch_config, phase, consumed_samples=0, num_workers=0))
+        for phase, n_samples in samples_per_phase.items()
     }
     return data, samples
 
@@ -88,11 +88,17 @@ def get_test_dataset_1():
     return get_test_dataset(prefix=DATASET_PREFIX_MIX_1, seed=2345)
 
 
-RANDOM_DATASET_EXPECTED_SAMPLES = [
+RANDOM_DATASET_EXPECTED_SAMPLES_IDS = [
     [3954, 4105, 6766, 859, 5494, 1675, 1303, 6913],
     [1654, 5701, 32, 1662, 7053, 3487, 1861, 1502],
     [5409, 6240, 5504, 7458, 7667, 3955, 3151, 3912],
     [5640, 6131, 7750, 2699, 1349, 2585, 7113, 6981],
+]
+RANDOM_DATASET_EXPECTED_SAMPLES_SPANS = [
+    [[2, 4], [7, 7]],
+    [[6, 6], [7, 7]],
+    [[1, 2]],
+    [],
 ]
 
 
@@ -102,9 +108,17 @@ def test_gpt_random_dataset():
         get_sampling_config(4, sequence_length=7)
     )
     Assert.eq(len(sampled), 4)
+    sampled_ids = np.stack([sampled[i].ids for i in range(4)])
+    sampled_spans = np.vstack([sampled[i].spans for i in range(4)])
     Assert.all_equal(
-        np.stack([sampled[i] for i in range(4)]),
-        np.array(RANDOM_DATASET_EXPECTED_SAMPLES),
+        sampled_ids,
+        np.stack(RANDOM_DATASET_EXPECTED_SAMPLES_IDS),
+    )
+    Assert.all_equal(
+        sampled_spans,
+        np.vstack(
+            [np.array(x, dtype=sampled_spans.dtype).reshape(-1, 2) for x in RANDOM_DATASET_EXPECTED_SAMPLES_SPANS]
+        ),
     )
 
 
@@ -121,16 +135,24 @@ def test_gpt_random_data():
         sequence_length=7,
     )
     Assert.all_equal(
-        np.stack(samples[PhaseType.training]),
-        np.array(RANDOM_DATASET_EXPECTED_SAMPLES),
+        np.stack([batch.ids[0] for batch in samples[PhaseType.training]]),
+        np.array(RANDOM_DATASET_EXPECTED_SAMPLES_IDS),
+    )
+    Assert.all_equal(
+        np.vstack([batch.spans[0] for batch in samples[PhaseType.training]]),
+        np.vstack([np.array(x, dtype=np.int32).reshape(-1, 2) for x in RANDOM_DATASET_EXPECTED_SAMPLES_SPANS]),
     )
 
 
 def test_gpt_random_data_legacy():
     _, samples = get_test_data_and_samples({"format": "random"}, {PhaseType.training: 4}, sequence_length=7)
     Assert.all_equal(
-        np.stack(samples[PhaseType.training]),
-        np.array(RANDOM_DATASET_EXPECTED_SAMPLES),
+        np.stack([batch.ids[0] for batch in samples[PhaseType.training]]),
+        np.array(RANDOM_DATASET_EXPECTED_SAMPLES_IDS),
+    )
+    Assert.all_equal(
+        np.vstack([batch.spans[0] for batch in samples[PhaseType.training]]),
+        np.vstack([np.array(x, dtype=np.int32).reshape(-1, 2) for x in RANDOM_DATASET_EXPECTED_SAMPLES_SPANS]),
     )
 
 
