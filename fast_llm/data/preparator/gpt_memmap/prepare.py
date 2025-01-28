@@ -166,6 +166,10 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
             output_file = self._config.output_path / "fast_llm_dataset.json"
             json.dump({"datasets": dataset_dicts}, output_file.open("w"))
 
+        # Create an index file on rank 0
+        index_file = self._config.output_path / "index.txt"
+        index_file.open("w").writelines([dataset_dict["prefix"] + "\n" for dataset_dict in dataset_dicts])
+
         # Finalize distributed processing
         if self._config.distributed.world_size > 1:
             torch.distributed.barrier()

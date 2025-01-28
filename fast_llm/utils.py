@@ -144,6 +144,10 @@ class Assert:
     def all_equal(x, y):
         import torch
 
+        # Make it work for numpy arrays.
+        x = torch.as_tensor(x)
+        y = torch.as_tensor(y)
+
         neq = x != y
         if neq.any().item():  # noqa
             index = torch.where(neq)  # noqa
@@ -156,9 +160,13 @@ class Assert:
     def all_different(x, y):
         import torch
 
+        # Make it work for numpy arrays.
+        x = torch.as_tensor(x)
+        y = torch.as_tensor(y)
+
         eq = x == y
         if eq.any().item():  # noqa
-            index = torch.where(eq)  # noqa
+            index = torch.where(torch.as_tensor(eq))  # noqa
             raise AssertionError(
                 f"Tensors have {index[0].numel()} unexpected matching entries out of "
                 f"{x.numel()}: {x[index]} != {y[index]} at index {torch.stack(index, -1)}"
@@ -178,6 +186,7 @@ class Assert:
 
 
 class Registry[KeyType, ValueType]:
+    # TODO: Inherit from dict instead?
     def __init__(self, name: str, data: dict[KeyType, ValueType]):
         self._name = name
         self._data = data.copy()
@@ -195,8 +204,21 @@ class Registry[KeyType, ValueType]:
     def keys(self) -> list[KeyType]:
         return list(self._data)
 
-    def __contains__(self, item: ValueType) -> bool:
-        return item in self._data
+    def __contains__(self, key: KeyType) -> bool:
+        return key in self._data
+
+    def __iter__(self) -> typing.Iterator[KeyType]:
+        return iter(self._data)
+
+    def __len__(self) -> int:
+        return len(self._data)
+
+    def items(self):
+        return self._data.items()
+
+    @property
+    def name(self) -> str:
+        return self._name
 
 
 class LazyRegistry[KeyType, ValueType](Registry[KeyType, ValueType]):
