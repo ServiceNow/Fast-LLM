@@ -4,10 +4,8 @@ import typing
 
 import numpy as np
 
-from fast_llm.data.data.config import SamplingConfig
 from fast_llm.data.dataset.abstract import SampledDataset
 from fast_llm.data.dataset.config import SamplingConfig
-from fast_llm.engine.config_utils.run import log_main_rank
 from fast_llm.utils import Assert, normalize_probabilities
 
 try:
@@ -85,20 +83,16 @@ class BlendedDataset(SampledDataset):
             self._dataset_idx_filename, self._sample_idx_filename = None, None
             self._dataset_index, self._sample_index = dataset_index, sample_index
 
-    def _load_mappings(self, verbose: bool = False) -> None:
-        if hasattr(self, "_dataset_index"):
+    def _load_mappings(self) -> None:
+        if hasattr(self, "_dataset_index") and hasattr(self, "_sample_index"):
             return
-        if verbose:
-            log_main_rank(lambda: f" > loading blending dataset index mapping from {self._dataset_idx_filename}")
         self._dataset_index = np.load(self._dataset_idx_filename, mmap_mode="r")
-        if verbose:
-            log_main_rank(lambda: f" > loading blending dataset index mapping from {self._sample_idx_filename}")
         self._sample_index = np.load(self._sample_idx_filename, mmap_mode="r")
 
     def __len__(self) -> int:
         return self._num_samples
 
-    def _build_blending_indices(self, verbose: bool = False) -> tuple[np.ndarray, np.ndarray]:
+    def _build_blending_indices(self) -> tuple[np.ndarray, np.ndarray]:
         assert _extension_available, (
             "The C++ extension for dataset blending is missing." " Please make sure Fast-LLM is installed correctly."
         )
@@ -111,8 +105,7 @@ class BlendedDataset(SampledDataset):
             self._weights,
             len(self._datasets),
             self._num_samples,
-            # TODO: Verbose option?
-            True,  # verbose
+            True,  # Verbose
         )
         available_samples_per_dataset = np.array([len(dataset) for dataset in self._datasets])
         sampled_per_dataset = np.bincount(dataset_index)
@@ -132,6 +125,7 @@ class BlendedDataset(SampledDataset):
         return dataset_index, dataset_sample_index
 
     def __getitem__(self, idx: int) -> typing.Any:
+        self._load_mappings()
         return self._datasets[self._dataset_index[idx]][self._sample_index[idx].item()]
 
     @property
