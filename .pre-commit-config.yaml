@@ -31,7 +31,7 @@ repos:
         - app/scripts/utility/shell.py
         - --remove-duplicate-keys
 -   repo: https://github.com/pycqa/isort
-    rev: 6.0.0
+    rev: 5.13.2
     hooks:
     -   id: isort
         name: isort (python)
@@ -49,7 +49,7 @@ repos:
             - "--config"
             - "./pyproject.toml"
 -   repo: https://github.com/DavidAnson/markdownlint-cli2
-    rev: v0.17.2
+    rev: v0.16.0
     hooks:
     -   id: markdownlint-cli2
         name: markdownlint
