@@ -203,14 +203,14 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
         sequence_first = common_kwargs[TransformerKwargs.sequence_first]
         sequence_length = common_kwargs[TransformerKwargs.sequence_length]
 
-        batch.ids = batch.ids.to(
+        batch.token_ids = batch.token_ids.to(
             device=self._tensor_space.distributed.device,
             dtype=torch.int64,
             non_blocking=True,
         )
         if sequence_first:
             # Move the sequence dimension first to make sequence parallel ops more efficient.
-            batch.ids = batch.ids.transpose(0, 1).contiguous()
+            batch.token_ids = batch.token_ids.transpose(0, 1).contiguous()
 
         if self._config.use_absolute_position_embeddings:
             self._position_embedding_preprocessor.create_tensors(sequence_length)
@@ -224,10 +224,10 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
         for i, (tokens_meta, kwargs_meta) in enumerate(preprocessed_meta):
             sequence_k = kwargs_meta[TransformerKwargs.sequence_k_dim].size
             if sequence_first:
-                tokens = batch.ids[sequence_k - sequence_q : sequence_k]
+                tokens = batch.token_ids[sequence_k - sequence_q : sequence_k]
             else:
                 # TODO: Avoid multiple contiguous calls?
-                tokens = batch.ids[:, sequence_k - sequence_q : sequence_k].contiguous()
+                tokens = batch.token_ids[:, sequence_k - sequence_q : sequence_k].contiguous()
 
             # TODO: Add pasts/presents to meta input?
             # Use lists as pointers so `past_key_values` is populated during the previous micro_sequence.
@@ -240,13 +240,13 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             }
             if phase != PhaseType.inference:
                 if sequence_first:
-                    labels = batch.ids[sequence_k - sequence_q + 1 : sequence_k + 1]
+                    labels = batch.token_ids[sequence_k - sequence_q + 1 : sequence_k + 1]
                 else:
                     # TODO: Avoid multiple contiguous calls?
-                    labels = batch.ids[:, sequence_k - sequence_q + 1 : sequence_k + 1].contiguous()
+                    labels = batch.token_ids[:, sequence_k - sequence_q + 1 : sequence_k + 1].contiguous()
                     # We set label indices to -100 for masked spans, inline with ignore_index in torch.nn.CrossEntropyLoss
                     # TODO: take ignore_index from config
-                    for i, spans_i in enumerate(batch.spans):
+                    for i, spans_i in enumerate(batch.ignore_loss_spans):
                         mask_indices = (
                             torch.cat([torch.arange(s - 1, e) for s, e in spans_i])
                             if len(spans_i)

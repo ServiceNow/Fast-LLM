@@ -46,11 +46,11 @@ class GPTFimDataset(SampledDataset):
     def _fim(self, sample: GPTSample, np_rng: np.random.RandomState) -> GPTSample:
         # FIM
         # TODO: permute segments in sample_list, before concatenating.
-        if self._config.rate > 0.0 and sample.spans.size > 0:
+        if self._config.rate > 0.0 and sample.ignore_loss_spans.size > 0:
             raise NotImplementedError("FIM is currently not compatible with loss masking.")
-        sample_len = sample.ids.shape[0]
+        sample_len = sample.token_ids.shape[0]
         eod = self._tokenizer.eod
-        segment_breaks = np.argwhere(sample.ids == eod)  # split sample by document
+        segment_breaks = np.argwhere(sample.token_ids == eod)  # split sample by document
 
         if segment_breaks.shape != (0, 1):  # then there is an EOD token in this example
             curr_start_position = 0
@@ -60,26 +60,26 @@ class GPTFimDataset(SampledDataset):
                 # Only permute non-empty segments.
                 if loc - curr_start_position > 0:
                     # permute {prefix, suffix, middle} or {suffix, prefix, middle}
-                    permuted = self._fim_split_and_permute_sequence(sample.ids[curr_start_position:loc], np_rng)
+                    permuted = self._fim_split_and_permute_sequence(sample.token_ids[curr_start_position:loc], np_rng)
                     new_samples += [permuted, [eod]]
 
                 curr_start_position = loc + 1  # jump over the EOD token
             # Permute the segment after the last EOD
-            permuted = self._fim_split_and_permute_sequence(sample.ids[curr_start_position:], np_rng)
+            permuted = self._fim_split_and_permute_sequence(sample.token_ids[curr_start_position:], np_rng)
             new_samples.append(permuted)
 
-            sample.ids = np.concatenate(new_samples)
+            sample.token_ids = np.concatenate(new_samples)
         else:
-            sample.ids = self._fim_split_and_permute_sequence(sample.ids, np_rng)
+            sample.token_ids = self._fim_split_and_permute_sequence(sample.token_ids, np_rng)
 
         # Truncate or pad sequence to max-length
-        diff = sample.ids.shape[0] - sample_len
+        diff = sample.token_ids.shape[0] - sample_len
         if diff > 0:  # too long
-            sample.ids = sample.ids[:sample_len]
+            sample.token_ids = sample.token_ids[:sample_len]
         elif diff < 0:  # too short
-            sample.ids = np.concatenate([sample.ids, np.full((-1 * diff), self._pad_tok_id)])
+            sample.token_ids = np.concatenate([sample.token_ids, np.full((-1 * diff), self._pad_tok_id)])
 
-        assert sample.ids.shape[0] == sample_len
+        assert sample.token_ids.shape[0] == sample_len
         return sample
 
     def _fim_split_and_permute_sequence(self, sequence: np.ndarray, np_rng: np.random.RandomState) -> np.ndarray:

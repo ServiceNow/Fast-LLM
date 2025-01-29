@@ -1,4 +1,3 @@
-import dataclasses
 import pathlib
 import struct
 import typing
@@ -6,21 +5,10 @@ import typing
 import numpy as np
 
 from fast_llm.data.dataset.gpt.indexed import GPTIndexedDataset
+from fast_llm.data.dataset.gpt.sampled import GPTSample
 from fast_llm.data.preparator.gpt_memmap.config import MEMMAP_DTYPES, MEMMAP_DTYPES_INV, MEMMAP_INDEX_HEADER
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.utils import Assert, div
-
-
-@dataclasses.dataclass
-class GPTMemmapDocument:
-    text: np.ndarray
-    spans: np.ndarray
-
-
-@dataclasses.dataclass
-class GPTMemmapSample:
-    ids: np.ndarray
-    spans: np.ndarray
 
 
 class GPTMemmapDataset(GPTIndexedDataset):
@@ -105,7 +93,7 @@ class GPTMemmapDataset(GPTIndexedDataset):
             self._index_bin_buffer_mmap._mmap.close()  # noqa
             del self._index_bin_buffer_mmap
 
-    def get(self, idx, offset=0, length=None) -> GPTMemmapSample:
+    def get(self, idx, offset=0, length=None) -> GPTSample:
         ids = np.frombuffer(
             self._bin_buffer,
             dtype=self._dtype,
@@ -117,7 +105,7 @@ class GPTMemmapDataset(GPTIndexedDataset):
             if span[0] < offset + len(ids) and span[1] >= offset:
                 spans.append([max(span[0], offset) - offset, min(span[1], offset + len(ids) - 1) - offset])
         # return (ids, np.array(spans, dtype=np.int32).reshape(-1, 2))
-        return GPTMemmapSample(ids=ids, spans=np.array(spans, dtype=np.int32).reshape(-1, 2))
+        return GPTSample(token_ids=ids, ignore_loss_spans=np.array(spans, dtype=np.int32).reshape(-1, 2))
 
     @property
     def name(self) -> str:
@@ -147,7 +135,7 @@ class GPTMemmapDataset(GPTIndexedDataset):
         return self._num_spans
 
     @classmethod
-    def write_dataset(cls, prefix: pathlib.Path | str, documents: typing.Iterable[GPTMemmapDocument]):
+    def write_dataset(cls, prefix: pathlib.Path | str, documents: typing.Iterable[GPTSample]):
         # Initialize metadata
         dtype = None
         num_documents = 0
@@ -166,21 +154,21 @@ class GPTMemmapDataset(GPTIndexedDataset):
             for document in documents:
                 # Infer dtype from the first document
                 if dtype is None:
-                    dtype = document.text.dtype
+                    dtype = document.token_ids.dtype
                     assert dtype is not None, "Document dtype could not be inferred from the data."
 
                 # Ensure all documents have the same dtype
-                assert document.text.dtype == dtype, f"Expected dtype {dtype}, got {document.text.dtype}."
+                assert document.token_ids.dtype == dtype, f"Expected dtype {dtype}, got {document.token_ids.dtype}."
 
                 # Write document to binary file
-                bin_stream.write(document.text.tobytes(order="C"))
+                bin_stream.write(document.token_ids.tobytes(order="C"))
 
                 # Update metadata
-                doc_length = len(document.text)
+                doc_length = len(document.token_ids)
                 lengths.append(doc_length)
                 pointers.append(offset)
-                num_spans.append(len(document.spans))
-                spans.append(document.spans)
+                num_spans.append(len(document.ignore_loss_spans))
+                spans.append(document.ignore_loss_spans)
                 offset += doc_length * np.dtype(dtype).itemsize
                 num_documents += 1
 

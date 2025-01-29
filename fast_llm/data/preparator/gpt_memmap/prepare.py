@@ -9,7 +9,8 @@ import torch.distributed
 import tqdm
 import transformers
 
-from fast_llm.data.dataset.gpt.memmap import GPTMemmapDataset, GPTMemmapDocument
+from fast_llm.data.dataset.gpt.memmap import GPTMemmapDataset
+from fast_llm.data.dataset.gpt.sampled import GPTSample
 from fast_llm.data.preparator.config import DatasetPreparator
 from fast_llm.data.preparator.gpt_memmap.config import GPTMemmapDatasetPreparatorConfig
 from fast_llm.data.tokenizer import Tokenizer
@@ -54,7 +55,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
 
         def _document_generator():
             for item in tqdm.tqdm(shard_dataset, desc=f"Saving shard {shard_idx}", unit="docs"):
-                yield GPTMemmapDocument(
+                yield GPTSample(
                     np.array(item["input_ids"], dtype=self._data_type.numpy),
                     np.array(item["token_spans"], dtype=np.int32).reshape(-1, 2),
                 )

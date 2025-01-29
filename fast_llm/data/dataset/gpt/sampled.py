@@ -24,8 +24,8 @@ logger = logging.getLogger(__name__)
 
 @dataclasses.dataclass
 class GPTSample:
-    ids: np.ndarray
-    spans: np.ndarray
+    token_ids: np.ndarray
+    ignore_loss_spans: np.ndarray
 
 
 class GPTSampledIndexedDataset(SampledDataset):
@@ -204,14 +204,14 @@ class GPTSampledIndexedDataset(SampledDataset):
         sample_spans = []
         span_offset = 0
         for sample in sample_list:
-            sample_ids.extend(sample.ids)
-            for span in sample.spans:
+            sample_ids.extend(sample.token_ids)
+            for span in sample.ignore_loss_spans:
                 sample_spans.append([span[0] + span_offset, span[1] + span_offset])
-            span_offset += len(sample.ids)
+            span_offset += len(sample.token_ids)
         sample_ids = np.array(sample_ids, dtype=np.int64)
         sample_spans = np.array(sample_spans, dtype=np.int32).reshape(-1, 2)
 
-        return GPTSample(ids=sample_ids, spans=sample_spans)
+        return GPTSample(token_ids=sample_ids, ignore_loss_spans=sample_spans)
 
     @property
     def name(self) -> str:

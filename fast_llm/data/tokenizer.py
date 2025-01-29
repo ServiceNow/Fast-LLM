@@ -16,7 +16,7 @@ class Tokenizer:
         self.tokenizer: PreTrainedTokenizerFast = PreTrainedTokenizerFast.from_pretrained(
             pretrained_model_name_or_path=config.path, errors="replace", max_len=None
         )
-        self.special_tokens_mode = config.special_tokens_mode
+        self.sequence_delimiters = config.sequence_delimiters
         if self.tokenizer.eos_token_id is None:
             raise ValueError("Tokenizer does not have an EOS token.")
         self.eod_id = self.tokenizer.eos_token_id
@@ -36,19 +36,19 @@ class Tokenizer:
         return self._inv_vocab
 
     def tokenize(self, text: str, beginning_of_text=True, end_of_text=True) -> list[int]:
-        if self.special_tokens_mode == SequenceDelimiters.eos_only:
+        if self.sequence_delimiters == SequenceDelimiters.eos_only:
             return self.tokenizer.encode(text, add_special_tokens=False) + ([self.eod_id] if end_of_text else [])
-        elif self.special_tokens_mode == SequenceDelimiters.bos_only:
+        elif self.sequence_delimiters == SequenceDelimiters.bos_only:
             return ([self.bod_id] if (self.bod_id is not None and beginning_of_text) else []) + self.tokenizer.encode(
                 text, add_special_tokens=False
             )
-        elif self.special_tokens_mode == SequenceDelimiters.bos_eos:
+        elif self.sequence_delimiters == SequenceDelimiters.bos_eos:
             return (
                 ([self.bod_id] if (self.bod_id is not None and beginning_of_text) else [])
                 + self.tokenizer.encode(text, add_special_tokens=False)
                 + ([self.eod_id] if end_of_text else [])
             )
-        elif self.special_tokens_mode == SequenceDelimiters.no_delimiters:
+        elif self.sequence_delimiters == SequenceDelimiters.no_delimiters:
             return self.tokenizer.encode(text, add_special_tokens=False)
         else:
             # TODO: How do we handle when beginning_of_text=False or end_of_text=False?
