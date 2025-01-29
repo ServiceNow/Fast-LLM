@@ -37,37 +37,42 @@ class BlendedDataset(SampledDataset):
 
     def __getitem__(self, idx: int) -> typing.Any:
         """
-        Blending is typically done in one of the following way (ex. in Megatron datasets):
+        Blending is typically done in one of the following iterative way (ex. in Megatron datasets):
         ```python
         dataset_index=np.zeros(num_samples)
         sample_index=np.zeros(num_samples)
-        samples_per_dataset=np.zeros(len(weights))
+        sampled=np.zeros(len(weights))
         for idx in range(num_samples):
-            error = weights * idx - samples_per_dataset
+            error = weights * (idx + 1) - sampled
             dataset_index_ = np.argmax(error)
-            dataset_index[idx] =dataset_index_
-            sample_index[idx] =samples_per_dataset[dataset_index_]
-            samples_per_dataset[dataset_index_] +=1
+            dataset_index[idx] = dataset_index_
+            sample_index[idx] = sampled[dataset_index_]
+            sampled[dataset_index_] +=1
         ```
-        Here we provide an implementation which allows computing values on the fly instead pre-computing them all.
+        I.e. it iteratively picks samples to minimize the error `weights * sum(sampled) - sampled`.
+        This implementation computes values on the fly instead of pre-computing them all.
         """
-        # We have target sampling amount in floating point,
-        # and we want to find a set of integers as close as possible to this value.
-        # First, we determine the target prior to the present sample.
-        target = self._weights * idx
-        # Then we determine a lower bound for the number previous samples from each dataset by rounding down the target.
+        # We find the number of samples taken from each dataset prior to this point.
+        sampled = self._get_sampled(idx)
+        # Then get the present sample.
+        dataset_index = self._get_next_dataset(idx, sampled)
+        return self._datasets[dataset_index][sampled[dataset_index]]
+
+    def _get_sampled(self, num_samples: int):
+        # First we determine a lower bound.
         # This is indeed a lower bound because a lower value for one dataset would involve more sampling below,
-        # and it would be from that dataset because it would have the highest error,
-        # i.e., the dataset would have to be sampled again before `idx`.
-        sampled = np.floor(target).astype(int)
-        # Then we calculate the error between the target and lower bound, which we'll try to minimize below.
-        error = target - sampled
-        # Now we're ready to start sampling, and since we calculated a lower bound,
-        # we may need to sample a few more until we reach the current sample,
-        # each time by taking the dataset with the highest error (argmax).
-        # By construction each dataset will be sampled at most once, so
-        dataset_index = error.argsort(stable=True)[::-1][idx - sampled.sum()].item()
-        return self._datasets[dataset_index.item()][sampled[dataset_index].item()]
+        # and it would be from that same dataset because it would have the highest error,
+        sampled = np.floor(self._weights * num_samples).astype(int)
+        # Then we sample until we reach the target number of samples.
+        # This may not match the actual sampling order, but the final value of `sampled` is correct.
+        for idx in range(sampled.sum(), num_samples):
+            dataset_index = self._get_next_dataset(idx, sampled)
+            sampled[dataset_index] += 1
+        return sampled
+
+    def _get_next_dataset(self, idx, sampled):
+        # The next sample is the one with the highest error.
+        return (self._weights * (idx + 1) - sampled).argmax()
 
     @property
     def name(self):
