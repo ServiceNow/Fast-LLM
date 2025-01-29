@@ -401,7 +401,7 @@ GPT_COMPOSED_EXPECTED_SAMPLES = [
 ]
 
 
-def test_gpt_compose():
+def test_gpt_concatenated_memmap():
     # Make sure dataset splitting works and check for unintended changes in behavior.
     _get_test_dataset_concatenated_memmap()
     # samples[9:18]
@@ -424,13 +424,13 @@ def test_gpt_compose():
     )
 
 
-def test_gpt_composed_data():
+def test_gpt_concatenated_memmap_data():
     _get_test_dataset_concatenated_memmap()
     _, samples = get_test_data_and_samples(
         {
             "datasets": {
                 "Training": {
-                    "type": "composed",
+                    "type": "concatenated_memmap",
                     "path": _DATASET_PREFIX_MIX_CONCATENATED_MEMMAP,
                 }
             }
@@ -442,18 +442,6 @@ def test_gpt_composed_data():
         np.stack(samples[PhaseType.training]),
         np.array(GPT_COMPOSED_EXPECTED_SAMPLES),
     )
-
-
-GPT_BLENDED_EXPECTED_SAMPLES = [
-    [1725, 74, 207, 1635, 4440, 2774],
-    [2066, 207, 6436, 2360, 2210, 6633],
-    [359, 489, 4266, 2052, 5351, 80],
-    [374, 7534, 87, 1073, 79, 480],
-    [8008, 498, 71, 727, 80, 315],
-    [555, 3042, 83, 207, 498, 3373],
-    [2210, 8179, 73, 2582, 897, 1178],
-    [409, 5091, 328, 1378, 5483, 88],
-]
 
 
 def _get_blending_alt(probs: list[float], num_samples: int) -> tuple[np.ndarray, np.ndarray]:
@@ -521,6 +509,18 @@ def test_blending(probs):
     Assert.all_equal(samples, samples_alt)
 
 
+GPT_BLENDED_EXPECTED_SAMPLES = [
+    [1725, 74, 207, 1635, 4440, 2774],
+    [359, 489, 4266, 2052, 5351, 80],
+    [2066, 207, 6436, 2360, 2210, 6633],
+    [374, 7534, 87, 1073, 79, 480],
+    [8008, 498, 71, 727, 80, 315],
+    [2210, 8179, 73, 2582, 897, 1178],
+    [555, 3042, 83, 207, 498, 3373],
+    [409, 5091, 328, 1378, 5483, 88],
+]
+
+
 def test_gpt_blended():
     # Make sure dataset blending works and check for unintended changes in behavior.
     get_test_dataset()
@@ -570,12 +570,12 @@ def test_gpt_blended_data():
 
 GPT_BLENDED_LEGACY_EXPECTED_SAMPLES = [
     [1725, 74, 207, 1635, 4440, 2774],
-    [328, 80, 263, 890, 1797, 88],
     [359, 489, 4266, 2052, 5351, 80],
+    [328, 80, 263, 890, 1797, 88],
     [374, 7534, 87, 1073, 79, 480],
     [8008, 498, 71, 727, 80, 315],
-    [1852, 71, 776, 7878, 7390, 80],
     [2210, 8179, 73, 2582, 897, 1178],
+    [1852, 71, 776, 7878, 7390, 80],
     [409, 5091, 328, 1378, 5483, 88],
 ]
 
