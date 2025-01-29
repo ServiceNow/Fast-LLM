@@ -2,7 +2,7 @@ import numpy as np
 import torch
 from transformers import PreTrainedTokenizerFast
 
-from fast_llm.data.config import SpecialTokensMode, TokenizerConfig
+from fast_llm.data.config import SequenceDelimiters, TokenizerConfig
 from fast_llm.engine.config_utils.run import log_main_rank
 
 
@@ -36,18 +36,20 @@ class Tokenizer:
         return self._inv_vocab
 
     def tokenize(self, text: str, beginning_of_text=True, end_of_text=True) -> list[int]:
-        if self.special_tokens_mode == SpecialTokensMode.eos_only:
+        if self.special_tokens_mode == SequenceDelimiters.eos_only:
             return self.tokenizer.encode(text, add_special_tokens=False) + ([self.eod_id] if end_of_text else [])
-        elif self.special_tokens_mode == SpecialTokensMode.bos_only:
+        elif self.special_tokens_mode == SequenceDelimiters.bos_only:
             return ([self.bod_id] if (self.bod_id is not None and beginning_of_text) else []) + self.tokenizer.encode(
                 text, add_special_tokens=False
             )
-        elif self.special_tokens_mode == SpecialTokensMode.bos_eos:
+        elif self.special_tokens_mode == SequenceDelimiters.bos_eos:
             return (
                 ([self.bod_id] if (self.bod_id is not None and beginning_of_text) else [])
                 + self.tokenizer.encode(text, add_special_tokens=False)
                 + ([self.eod_id] if end_of_text else [])
             )
+        elif self.special_tokens_mode == SequenceDelimiters.no_delimiters:
+            return self.tokenizer.encode(text, add_special_tokens=False)
         else:
             # TODO: How do we handle when beginning_of_text=False or end_of_text=False?
             return self.tokenizer.encode(text)
