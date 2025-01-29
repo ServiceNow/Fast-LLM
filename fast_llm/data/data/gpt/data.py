@@ -27,16 +27,16 @@ logger = logging.getLogger(__name__)
 
 
 @dataclasses.dataclass
-class GPTDataBatch:
+class GPTBatch:
     ids: torch.Tensor
     spans: list[torch.Tensor]
 
 
-def gpt_data_collate_fn(batch: list[GPTSample]) -> GPTDataBatch:
+def gpt_data_collate_fn(batch: list[GPTSample]) -> GPTBatch:
     stacked_ids = np.stack([sample.ids for sample in batch])
     # stacked_spans = np.stack([sample.spans for sample in batch])
     stacked_spans = [torch.from_numpy(sample.spans) for sample in batch]
-    return GPTDataBatch(ids=torch.from_numpy(stacked_ids), spans=stacked_spans)
+    return GPTBatch(ids=torch.from_numpy(stacked_ids), spans=stacked_spans)
 
 
 class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):

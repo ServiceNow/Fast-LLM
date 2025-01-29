@@ -3,7 +3,7 @@ import typing
 
 import torch
 
-from fast_llm.data.data.gpt.data import GPTDataBatch
+from fast_llm.data.data.gpt.data import GPTBatch
 from fast_llm.engine.base_model.base_model import BaseModel, Layer, LossDef
 from fast_llm.engine.config_utils.tensor_space import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames, PhaseType
@@ -185,7 +185,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
 
     def preprocess(
         self,
-        batch: GPTDataBatch,
+        batch: GPTBatch,
         preprocessed_meta: list[tuple[TensorMeta, dict]] | None = None,
         *,
         phase: PhaseType,
