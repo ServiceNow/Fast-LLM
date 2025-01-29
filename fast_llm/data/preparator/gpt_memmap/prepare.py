@@ -55,6 +55,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
         dataset = datasets.load_dataset(
             path=self._config.dataset.path,
             name=self._config.dataset.config_name,
+            data_dir=self._config.dataset.data_dir,
             split=self._config.dataset.split,
             num_proc=self._config.loading_workers,
             trust_remote_code=self._config.dataset.trust_remote_code,
