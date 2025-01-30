@@ -11,6 +11,7 @@ import pytest
 import torch
 
 from fast_llm.data.dataset.gpt.memmap import GPTMemmapDataset
+from fast_llm.data.dataset.gpt.sampled import GPTSample
 from fast_llm.models.gpt.config import (
     LlamaGPTHuggingfaceCheckpointFormat,
     MistralGPTHuggingfaceCheckpointFormat,
@@ -230,7 +231,8 @@ def get_test_dataset(
         tokenizer = transformers.AutoTokenizer.from_pretrained(TOKENIZER_PATH)
 
         documents = [
-            np.array(tokenizer(document)["input_ids"], dtype=np.uint16) % vocab_size for document in documents
+            GPTSample(np.array(tokenizer(document)["input_ids"], dtype=np.uint16) % vocab_size)
+            for document in documents
         ]
         GPTMemmapDataset.write_dataset(prefix, documents)
 
