@@ -253,13 +253,13 @@ def test_gpt_concatenate():
     Assert.eq(sizes.sum(), 3 * MEMMAP_DATASET_EXPECTED_TOKENS)
     for i in range(3):
         begin = i * MEMMAP_DATASET_EXPECTED_LENGTH
-        Assert.all_equal([len(dataset.get(begin + i)) for i in range(100)], sizes[begin : begin + 100])
+        Assert.all_equal([len(dataset.get(begin + i).token_ids) for i in range(100)], sizes[begin : begin + 100])
         for i, sample in MEMMAP_DATASET_EXPECTED_SAMPLES.items():
-            Assert.all_equal(dataset.get(begin + i), np.array(sample, dtype=np.uint16))
+            Assert.all_equal(dataset.get(begin + i).token_ids, np.array(sample, dtype=np.uint16))
     sampled = dataset.sample(get_sampling_config(8, sequence_length=5))
     Assert.eq(len(sampled), 8)
     Assert.all_equal(
-        np.stack([sampled[i].token_Ids for i in range(8)]),
+        np.stack([sampled[i].token_ids for i in range(8)]),
         np.array(GPT_CONCATENATED_EXPECTED_SAMPLES),
     )
 
@@ -312,9 +312,9 @@ def test_gpt_slice():
     ).build()
     Assert.eq(len(dataset), 9)
     sizes = dataset.get_document_sizes()
-    Assert.all_equal([len(dataset.get(i)) for i in range(9)], sizes[:9])
+    Assert.all_equal([len(dataset.get(i).token_ids) for i in range(9)], sizes[:9])
     for i, sample in MEMMAP_DATASET_EXPECTED_SAMPLES.items():
-        Assert.all_equal(dataset.get(i - 9), np.array(sample, dtype=np.uint16))
+        Assert.all_equal(dataset.get(i - 9).token_ids, np.array(sample, dtype=np.uint16))
     sampled = dataset.sample(get_sampling_config(8, sequence_length=5))
     Assert.eq(len(sampled), 8)
     Assert.all_equal(
@@ -413,9 +413,9 @@ def test_gpt_compose():
     Assert.eq(len(dataset), COMPOSED_DATASET_EXPECTED_LENGTH)
     sizes = dataset.get_document_sizes()
     Assert.eq(sizes.sum(), COMPOSED_DATASET_EXPECTED_TOKENS)
-    Assert.all_equal([len(dataset.get(i)) for i in range(0, len(dataset), 20)], sizes[::20])
+    Assert.all_equal([len(dataset.get(i).token_ids) for i in range(0, len(dataset), 20)], sizes[::20])
     for i, sample in COMPOSED_DATASET_EXPECTED_SAMPLES.items():
-        Assert.all_equal(dataset.get(i), np.array(sample, dtype=np.uint16))
+        Assert.all_equal(dataset.get(i).token_ids, np.array(sample, dtype=np.uint16))
     sampled = dataset.sample(get_sampling_config(8, sequence_length=5))
     Assert.eq(len(sampled), 8)
     print(np.stack([sampled[i].token_ids for i in range(8)]).tolist())

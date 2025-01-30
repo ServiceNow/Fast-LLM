@@ -43,7 +43,7 @@ class TokenizerConfig(Config):
         hint=FieldHint.core,
     )
     sequence_delimiters: SequenceDelimiters = Field(
-        default=SequenceDelimiters.bos_only,
+        default=SequenceDelimiters.tokenizer_default,
         desc="Boundary tokens (bos/eos) to use for tokenizing sequences",
         hint=FieldHint.core,
     )

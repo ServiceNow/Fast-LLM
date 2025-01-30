@@ -212,7 +212,7 @@ class GPTSampledIndexedDataset(SampledDataset):
             sample_ids = np.array(sample_ids, dtype=np.int64)
             sample_spans = np.array(sample_spans, dtype=np.int32).reshape(-1, 2)
         else:
-            sample_ids = np.concatenate([sample.token_ids for sample in sample_list])
+            sample_ids = np.concatenate([sample.token_ids for sample in sample_list], dtype=np.int64)
             sample_spans = None
 
         return GPTSample(token_ids=sample_ids, loss_masking_spans=sample_spans)
