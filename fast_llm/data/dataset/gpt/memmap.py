@@ -121,14 +121,6 @@ class GPTMemmapDataset(GPTIndexedDataset):
         """
         return self._document_sizes
 
-    def get_span_sizes(self) -> np.ndarray:
-        """
-        The number of spans in each document in the dataset.
-        The resulting array could be very large, so this method should be called cautiously,
-        and derived classes should try to avoid holding the whole array im memory.
-        """
-        return self._num_spans
-
     @classmethod
     def write_dataset(cls, prefix: pathlib.Path | str, documents: typing.Iterable[GPTSample]):
         # Initialize metadata
