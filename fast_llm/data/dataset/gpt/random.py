@@ -47,7 +47,7 @@ class GPTRandomSampledDataset(SampledDataset):
             end = np.random.RandomState(np_seed).randint(start, len(ids))
             spans.append([start, end])
             prev_end = end
-        return GPTSample(token_ids=ids, ignore_loss_spans=np.array(spans, dtype=np.int32).reshape(-1, 2))
+        return GPTSample(token_ids=ids, loss_masking_spans=np.array(spans, dtype=np.int32).reshape(-1, 2))
 
     @property
     def name(self) -> str:

@@ -20,17 +20,22 @@ class GPTMemmapDataset(GPTIndexedDataset):
     See https://github.com/NVIDIA/Megatron-LM?tab=readme-ov-file#data-preprocessing for more details.
     """
 
-    def __init__(self, name: str, prefix: pathlib.Path | str):
-        self._init(name, prefix)
+    def __init__(self, name: str, prefix: pathlib.Path | str, use_loss_masking_spans: bool = False):
+        self._init(name, prefix, use_loss_masking_spans)
 
-    def _init(self, name: str, prefix: pathlib.Path | str) -> None:
+    def _init(self, name: str, prefix: pathlib.Path | str, use_loss_masking_spans: bool = False) -> None:
         super().__init__()
         self._name = name
         self._prefix = pathlib.Path(prefix)
+        self._read_spans = False
 
         with self._prefix.with_suffix(".idx").open("rb") as stream:
             Assert.eq(stream.read(9), MEMMAP_INDEX_HEADER)
             self._version = struct.unpack("<Q", stream.read(8))[0]
+            assert self._version in [1, 2], f"Unsupported version for gpt_memmap dataset: {self._version}."
+            if self._version == 2:
+                self._has_spans = struct.unpack("<B", stream.read(1))[0]
+                self._read_spans = use_loss_masking_spans and self._has_spans and self._version == 2
 
             self._dtype = MEMMAP_DTYPES[struct.unpack("<B", stream.read(1))[0]].numpy
             self._num_documents = struct.unpack("<Q", stream.read(8))[0]
@@ -49,32 +54,15 @@ class GPTMemmapDataset(GPTIndexedDataset):
             offset=offset + self._document_sizes.nbytes,
         )
 
-        # Spans are introduced in version 2. Datasets tokenized with version 1 do not contain span information and
-        # compute loss on all tokens by default
-        if self._version == 1:
-            self._num_spans = np.zeros(self._num_documents, dtype=np.int32)
-            self._spans = [np.array([], dtype=np.int32).reshape(-1, 2)] * self._num_documents
-        elif self._version == 2:
+        if self._read_spans:
             self._num_spans = np.frombuffer(
                 self._index_bin_buffer,
                 dtype=np.int32,
                 count=self._num_documents,
                 offset=offset + self._document_sizes.nbytes + self._pointers.nbytes,
             )
-            spans = []
-            offset = offset + self._document_sizes.nbytes + self._pointers.nbytes + self._num_spans.nbytes
-            for n_spans in self._num_spans:
-                span = np.frombuffer(
-                    self._index_bin_buffer,
-                    dtype=np.int32,
-                    count=n_spans * 2,
-                    offset=offset,
-                ).reshape(-1, 2)
-                spans.append(span)
-                offset += span.nbytes
-            self._spans = spans
-        else:
-            raise ValueError(f"Unsupported version for gpt_memmap dataset: {self._version}.")
+            self._span_offset = offset + self._document_sizes.nbytes + self._pointers.nbytes + self._num_spans.nbytes
+            self._num_spans_cumsum = np.cumsum(self._num_spans, dtype=np.int64)
 
         self._bin_buffer_mmap = np.memmap(self._prefix.with_suffix(".bin"), mode="r", order="C")
         self._bin_buffer = memoryview(self._bin_buffer_mmap)
@@ -94,17 +82,25 @@ class GPTMemmapDataset(GPTIndexedDataset):
             del self._index_bin_buffer_mmap
 
     def get(self, idx, offset=0, length=None) -> GPTSample:
-        ids = np.frombuffer(
+        token_ids = np.frombuffer(
             self._bin_buffer,
             dtype=self._dtype,
             count=self._document_sizes[idx] - offset if length is None else length,
             offset=self._pointers[idx] + offset * np.dtype(self._dtype).itemsize,
         )
-        spans = []
-        for span in self._spans[idx]:
-            if span[0] < offset + len(ids) and span[1] >= offset:
-                spans.append([max(span[0], offset) - offset, min(span[1], offset + len(ids) - 1) - offset])
-        return GPTSample(token_ids=ids, ignore_loss_spans=np.array(spans, dtype=np.int32).reshape(-1, 2))
+        spans = None
+        if self._read_spans:
+            spans = np.frombuffer(
+                self._index_bin_buffer,
+                dtype=np.int32,
+                count=self._num_spans[idx] * 2,
+                offset=self._span_offset + self._num_spans_cumsum[idx] * 2 * np.dtype(np.int32).itemsize,
+            ).reshape(-1, 2)
+            # adjust the spans for the offset and length
+            spans = spans[(spans[:, 0] < offset + len(token_ids)) & (spans[:, 1] >= offset)]
+            spans[:, 0] = np.maximum(spans[:, 0], offset) - offset
+            spans[:, 1] = np.minimum(spans[:, 1], offset + len(token_ids) - 1) - offset
+        return GPTSample(token_ids=token_ids, loss_masking_spans=spans)
 
     @property
     def name(self) -> str:
@@ -166,9 +162,9 @@ class GPTMemmapDataset(GPTIndexedDataset):
                 doc_length = len(document.token_ids)
                 lengths.append(doc_length)
                 pointers.append(offset)
-                if document.ignore_loss_spans is not None:
-                    num_spans.append(len(document.ignore_loss_spans))
-                    spans.append(document.ignore_loss_spans)
+                if document.loss_masking_spans is not None:
+                    num_spans.append(len(document.loss_masking_spans))
+                    spans.append(document.loss_masking_spans)
                 offset += doc_length * np.dtype(dtype).itemsize
                 num_documents += 1
 

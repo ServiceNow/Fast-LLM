@@ -29,13 +29,15 @@ logger = logging.getLogger(__name__)
 @dataclasses.dataclass
 class GPTBatch:
     token_ids: torch.Tensor
-    ignore_loss_spans: list[torch.Tensor]
+    loss_masking_spans: list[torch.Tensor]
 
 
 def gpt_data_collate_fn(batch: list[GPTSample]) -> GPTBatch:
     stacked_ids = np.stack([sample.token_ids for sample in batch])
-    stacked_spans = [torch.from_numpy(sample.ignore_loss_spans) for sample in batch]
-    return GPTBatch(token_ids=torch.from_numpy(stacked_ids), ignore_loss_spans=stacked_spans)
+    stacked_spans = None
+    if batch[0].loss_masking_spans is not None:
+        stacked_spans = [torch.from_numpy(sample.loss_masking_spans) for sample in batch]
+    return GPTBatch(token_ids=torch.from_numpy(stacked_ids), loss_masking_spans=stacked_spans)
 
 
 class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
@@ -97,6 +99,7 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
                     sequence_length=self._max_sequence_length,
                     vocab_size=self._vocab_size,
                     tokenizer=self._tokenizer,
+                    use_loss_masking_spans=self._config.use_loss_masking_spans,
                 )
                 dataset = self._config.datasets[phase].build_and_sample(sampling_config)
                 self._datasets[phase] = DatasetMonitor(dataset, self._config.data_sample_warn_time_ms)

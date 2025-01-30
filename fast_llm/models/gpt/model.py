@@ -246,13 +246,14 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                     labels = batch.token_ids[:, sequence_k - sequence_q + 1 : sequence_k + 1].contiguous()
                     # We set label indices to -100 for masked spans, inline with ignore_index in torch.nn.CrossEntropyLoss
                     # TODO: take ignore_index from config
-                    for i, spans_i in enumerate(batch.ignore_loss_spans):
-                        mask_indices = (
-                            torch.cat([torch.arange(s - 1, e) for s, e in spans_i])
-                            if len(spans_i)
-                            else torch.tensor([], dtype=torch.int64)
-                        )
-                        labels[i, mask_indices] = -100
+                    if batch.loss_masking_spans is not None:
+                        for i, spans_i in enumerate(batch.loss_masking_spans):
+                            mask_indices = (
+                                torch.cat([torch.arange(s - 1, e) for s, e in spans_i])
+                                if len(spans_i)
+                                else torch.tensor([], dtype=torch.int64)
+                            )
+                            labels[i, mask_indices] = -100
                 kwargs[LanguageModelKwargs.labels] = labels
             if self._config.use_absolute_position_embeddings:
                 self._position_embedding_preprocessor.preprocess(kwargs)

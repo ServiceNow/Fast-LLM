@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 @dataclasses.dataclass
 class GPTSample:
     token_ids: np.ndarray
-    ignore_loss_spans: np.ndarray | None = None
+    loss_masking_spans: np.ndarray | None = None
 
 
 class GPTSampledIndexedDataset(SampledDataset):
@@ -200,18 +200,22 @@ class GPTSampledIndexedDataset(SampledDataset):
             for doc in range(doc_f, doc_l + 1)
         ]
 
-        sample_ids = []
-        sample_spans = []
-        span_offset = 0
-        for sample in sample_list:
-            sample_ids.extend(sample.token_ids)
-            for span in sample.ignore_loss_spans:
-                sample_spans.append([span[0] + span_offset, span[1] + span_offset])
-            span_offset += len(sample.token_ids)
-        sample_ids = np.array(sample_ids, dtype=np.int64)
-        sample_spans = np.array(sample_spans, dtype=np.int32).reshape(-1, 2)
+        if sample_list[0].loss_masking_spans is not None:
+            sample_ids = []
+            sample_spans = []
+            span_offset = 0
+            for sample in sample_list:
+                sample_ids.extend(sample.token_ids)
+                for span in sample.loss_masking_spans:
+                    sample_spans.append([span[0] + span_offset, span[1] + span_offset])
+                span_offset += len(sample.token_ids)
+            sample_ids = np.array(sample_ids, dtype=np.int64)
+            sample_spans = np.array(sample_spans, dtype=np.int32).reshape(-1, 2)
+        else:
+            sample_ids = np.concatenate([sample.token_ids for sample in sample_list])
+            sample_spans = None
 
-        return GPTSample(token_ids=sample_ids, ignore_loss_spans=sample_spans)
+        return GPTSample(token_ids=sample_ids, loss_masking_spans=sample_spans)
 
     @property
     def name(self) -> str:
