@@ -60,6 +60,7 @@ def triton_cross_entropy_forward_backward(
     grad_output: float | None,
     logits_scale_factor: float = 1.0,
     ignore_index: int = -100,
+    apply_loss_mask: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """
     A fast triton implementation of cross-entropy, which combines the casting and forward and backward passes,
