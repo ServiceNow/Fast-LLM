@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 @dataclasses.dataclass
 class GPTSample:
     token_ids: np.ndarray
-    ignore_loss_spans: np.ndarray
+    ignore_loss_spans: np.ndarray | None = None
 
 
 class GPTSampledIndexedDataset(SampledDataset):

@@ -104,7 +104,6 @@ class GPTMemmapDataset(GPTIndexedDataset):
         for span in self._spans[idx]:
             if span[0] < offset + len(ids) and span[1] >= offset:
                 spans.append([max(span[0], offset) - offset, min(span[1], offset + len(ids) - 1) - offset])
-        # return (ids, np.array(spans, dtype=np.int32).reshape(-1, 2))
         return GPTSample(token_ids=ids, ignore_loss_spans=np.array(spans, dtype=np.int32).reshape(-1, 2))
 
     @property
@@ -167,8 +166,9 @@ class GPTMemmapDataset(GPTIndexedDataset):
                 doc_length = len(document.token_ids)
                 lengths.append(doc_length)
                 pointers.append(offset)
-                num_spans.append(len(document.ignore_loss_spans))
-                spans.append(document.ignore_loss_spans)
+                if document.ignore_loss_spans is not None:
+                    num_spans.append(len(document.ignore_loss_spans))
+                    spans.append(document.ignore_loss_spans)
                 offset += doc_length * np.dtype(dtype).itemsize
                 num_documents += 1
 
@@ -176,14 +176,19 @@ class GPTMemmapDataset(GPTIndexedDataset):
         lengths = np.array(lengths, dtype=np.int32)
         pointers = np.array(pointers, dtype=np.int64)
         num_spans = np.array(num_spans, dtype=np.int32)
-        spans = np.vstack(spans, dtype=np.int32)
+        if len(spans) > 0:
+            spans = np.vstack(spans, dtype=np.int32)
+        else:
+            spans = np.array(spans, dtype=np.int32)
 
         # Write the index file (.idx)
         with prefix.with_suffix(".idx").open("wb") as idx_stream:
             idx_stream.write(MEMMAP_INDEX_HEADER)
             # Indicates the version
-            # Version 2 adds number of spans and spans to the index file.
+            # Version 2 optionally adds loss-masking spans
             idx_stream.write(struct.pack("<Q", 2))
+            # Flag to indicate whether loss-masking spans are present
+            idx_stream.write(struct.pack("<B", 1 if spans.size > 0 else 0))
             # Data type
             idx_stream.write(struct.pack("<B", MEMMAP_DTYPES_INV[DataType.from_numpy(dtype.type)]))
             # "Number of sequences", same as documents in our case

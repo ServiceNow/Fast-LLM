@@ -24,6 +24,17 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
     _data_type: DataType
 
     def _tokenize_batch(self, batch: dict[str, list[typing.Any]]) -> dict[str, list[typing.Any]]:
+        input_ids = [
+            np.array(self._tokenizer.tokenize(text), dtype=self._data_type.numpy)
+            for text in batch[self._config.dataset.field]
+        ]
+        num_tokens = [len(x) for x in input_ids]
+        return {
+            "input_ids": input_ids,
+            "num_tokens": num_tokens,
+        }
+
+    def _tokenize_batch_with_spans(self, batch: dict[str, list[typing.Any]]) -> dict[str, list[typing.Any]]:
         input_ids, token_spans = map(
             list,
             zip(
@@ -54,11 +65,15 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
         shard_output_path = self._config.output_path / prefix
 
         def _document_generator():
-            for item in tqdm.tqdm(shard_dataset, desc=f"Saving shard {shard_idx}", unit="docs"):
-                yield GPTSample(
-                    np.array(item["input_ids"], dtype=self._data_type.numpy),
-                    np.array(item["token_spans"], dtype=np.int32).reshape(-1, 2),
-                )
+            if "token_spans" in shard_dataset.column_names and self._config.dataset.spans_field is not None:
+                for item in tqdm.tqdm(shard_dataset, desc=f"Saving shard {shard_idx}", unit="docs"):
+                    yield GPTSample(
+                        np.array(item["input_ids"], dtype=self._data_type.numpy),
+                        np.array(item["token_spans"], dtype=np.int32).reshape(-1, 2),
+                    )
+            else:
+                for item in tqdm.tqdm(shard_dataset, desc=f"Saving shard {shard_idx}", unit="docs"):
+                    yield GPTSample(np.array(item["input_ids"], dtype=self._data_type.numpy))
 
         GPTMemmapDataset.write_dataset(prefix=shard_output_path, documents=_document_generator())
 
@@ -144,15 +159,16 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
         )
         if self._config.dataset.field not in dataset.column_names:
             raise ValueError(f"Dataset does not have field '{self._config.dataset.field}'.")
-        if (
-            self._config.dataset.spans_field is not None
-            and self._config.dataset.spans_field not in dataset.column_names
-        ):
-            raise ValueError(f"Dataset does not have spans field '{self._config.dataset.spans_field}'.")
+        if self._config.dataset.spans_field is not None:
+            if self._config.dataset.spans_field not in dataset.column_names:
+                raise ValueError(f"Dataset does not have spans field '{self._config.dataset.spans_field}'.")
+            tokenize_fn = self._tokenize_batch_with_spans
+        else:
+            tokenize_fn = self._tokenize_batch
 
         # Tokenize the dataset in parallel
         tokenized_dataset = dataset.map(
-            self._tokenize_batch,
+            tokenize_fn,
             batched=True,
             num_proc=self._config.tokenize_workers,
             desc="Tokenizing batches",
