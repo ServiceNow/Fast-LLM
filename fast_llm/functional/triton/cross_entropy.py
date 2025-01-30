@@ -17,6 +17,7 @@ def triton_cross_entropy_forward_backward_kernel(
     grad_logits_stride_0,
     logits_scale_factor: tl.constexpr,
     block_size: tl.constexpr,
+    ignore_index: tl.constexpr,
 ):
     # TODO: Int64 ptr only if needed?
     block_idx = tl.program_id(0).to(tl.int64)
@@ -35,7 +36,7 @@ def triton_cross_entropy_forward_backward_kernel(
     label_idx = tl.load(labels_ptr + block_idx)
 
     label_logits = tl.load(logits_ptr + label_idx).to(tl.float32)
-    if label_idx < 0:
+    if label_idx < 0 or label_idx == ignore_index:
         loss = 0.0
     else:
         loss = tl.log(sum_exp_logits) + max_logits - label_logits
@@ -47,7 +48,7 @@ def triton_cross_entropy_forward_backward_kernel(
     exp_logits = exp_logits / sum_exp_logits
     if logits_scale_factor != 1.0:
         exp_logits *= logits_scale_factor
-    if label_idx < 0:
+    if label_idx < 0 or label_idx == ignore_index:
         grad_losses = 0.0
     grad_logits = grad_losses * tl.where(col_offsets == label_idx, exp_logits - 1.0, exp_logits)
     tl.store(grad_logits_ptr + col_offsets, grad_logits, mask=mask)
@@ -56,9 +57,9 @@ def triton_cross_entropy_forward_backward_kernel(
 def triton_cross_entropy_forward_backward(
     logits: torch.Tensor,
     target: torch.Tensor,
-    loss_mask: torch.Tensor,
     grad_output: float | None,
     logits_scale_factor: float = 1.0,
+    ignore_index: int = -100,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """
     A fast triton implementation of cross-entropy, which combines the casting and forward and backward passes,
@@ -90,5 +91,6 @@ def triton_cross_entropy_forward_backward(
         logits_scale_factor,
         block_size=block_size,
         num_warps=num_warps,
+        ignore_index=ignore_index,
     )
     return losses.mean(), None if grad_output is None else grad_logits
