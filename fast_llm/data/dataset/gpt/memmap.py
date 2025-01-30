@@ -62,7 +62,7 @@ class GPTMemmapDataset(GPTIndexedDataset):
                 offset=offset + self._document_sizes.nbytes + self._pointers.nbytes,
             )
             self._span_offset = offset + self._document_sizes.nbytes + self._pointers.nbytes + self._num_spans.nbytes
-            self._num_spans_cumsum = np.cumsum(self._num_spans, dtype=np.int64)
+            self._num_spans_cumsum = np.r_[0, np.cumsum(self._num_spans[:-1], dtype=np.int64)]
 
         self._bin_buffer_mmap = np.memmap(self._prefix.with_suffix(".bin"), mode="r", order="C")
         self._bin_buffer = memoryview(self._bin_buffer_mmap)

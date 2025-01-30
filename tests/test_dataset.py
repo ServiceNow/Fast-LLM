@@ -32,6 +32,7 @@ from tests.common import (
     TOKENIZER_PATH,
     get_test_concatenated_memmap_dataset,
     get_test_dataset,
+    get_test_dataset_with_spans,
 )
 
 
@@ -45,6 +46,7 @@ def get_sampling_config(
     sequence_length: int = 512,
     vocab_size=TEST_VOCAB_SIZE,
     tokenizer: Tokenizer | None = None,
+    use_loss_masking_spans=False,
 ) -> GPTSamplingConfig:
     # Config with convenient defaults.
     return GPTSamplingConfig(
@@ -56,6 +58,7 @@ def get_sampling_config(
         sequence_length=sequence_length,
         vocab_size=vocab_size,
         tokenizer=tokenizer,
+        use_loss_masking_spans=use_loss_masking_spans,
     )
 
 
@@ -667,3 +670,28 @@ def test_gpt_fim_data_legacy():
         np.stack(samples[PhaseType.training]),
         np.array(GPT_FIM_EXPECTED_SAMPLES),
     )
+
+
+_DATASET_PREFIX_SPANS = DATASET_PREFIX.with_name("with_spans")
+
+SPANS_DATASET_EXPECTED_SAMPLES = {
+    9: ([], []),
+    10: ([80, 85, 4295, 4182, 489, 727, 84, 698, 1197, 583], [[4, 6], [8, 9]]),
+    13: ([78, 727, 74, 317, 1358, 89], []),
+    15: ([78], [[0, 0]]),
+}
+
+
+def test_gpt_data_with_spans():
+    get_test_dataset_with_spans(prefix=_DATASET_PREFIX_SPANS)
+    dataset = _get_dataset_config(
+        {
+            "type": "memmap",
+            "path": _DATASET_PREFIX_SPANS,
+            "use_loss_masking_spans": True,
+        },
+        GPTMemmapDatasetConfig,
+    ).build()
+    for i, sample in SPANS_DATASET_EXPECTED_SAMPLES.items():
+        Assert.all_equal(np.array(sample[0], dtype=np.uint16), dataset.get(i).token_ids)
+        Assert.all_equal(np.array(sample[1]).reshape(-1, 2), dataset.get(i).loss_masking_spans)
