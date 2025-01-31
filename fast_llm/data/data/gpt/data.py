@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 @dataclasses.dataclass
 class GPTBatch:
     token_ids: torch.Tensor
-    loss_masking_spans: list[torch.Tensor]
+    loss_masking_spans: list[torch.Tensor] | None
 
 
 def gpt_data_collate_fn(batch: list[GPTSample]) -> GPTBatch:
