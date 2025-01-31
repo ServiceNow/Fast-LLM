@@ -15,7 +15,9 @@ from fast_llm.data.dataset.config import (
     IndexedDatasetConfig,
     SamplableDatasetConfig,
     SampledDatasetConfig,
+    SampledDatasetUpdateConfig,
     SamplingConfig,
+    SamplingData,
 )
 from fast_llm.engine.distributed.config import PhaseType
 from fast_llm.utils import Assert, Registry, normalize_probabilities, padded_cumsum
@@ -23,12 +25,18 @@ from fast_llm.utils import Assert, Registry, normalize_probabilities, padded_cum
 if typing.TYPE_CHECKING:
     from fast_llm.data.dataset.gpt.indexed import GPTConcatenatedDataset, GPTDatasetSlice, GPTIndexedDataset
     from fast_llm.data.dataset.gpt.memmap import GPTMemmapDataset
-    from fast_llm.data.dataset.gpt.random import GPTRandomDataset, GPTRandomSampledDataset
+    from fast_llm.data.dataset.gpt.random import GPTRandomDataset
     from fast_llm.data.tokenizer import Tokenizer
 
 
-@dataclasses.dataclass
+@config_class()
 class GPTSamplingConfig(SamplingConfig):
+    pass
+
+
+@dataclasses.dataclass
+class GPTSamplingData(SamplingData):
+    config: GPTSamplingConfig
     # TODO: Sort these out
     sequence_length: int
     vocab_size: int
@@ -160,6 +168,17 @@ class GPTDatasetSliceConfig(DatasetSliceConfig, GPTIndexedDatasetConfig):
 
 
 @config_class()
+class GPTSampledDatasetUpdateConfig(SampledDatasetUpdateConfig):
+    """
+    Wrap a dataset to explicitly sample from it and optionally update its configuration parameters.
+    Only explicitly set parameters (not None) will be updated, other will still be taken from `build_and_sample`'s argument.
+    """
+
+    type_: typing.ClassVar[str | None] = "sampled"
+    sampling: GPTSamplingConfig = FieldUpdate(default_factory=GPTSamplingConfig)
+
+
+@config_class()
 class GPTBlendedDatasetConfig(BlendedDatasetConfig, GPTSampledDatasetConfig):
     _abstract: typing.ClassVar[bool] = False
     type_: typing.ClassVar[str | None] = "blended"
@@ -286,11 +305,11 @@ class GPTFimSampledDatasetConfig(GPTSampledDatasetConfig, FimConfig):
 
     def build_and_sample(
         self,
-        config: GPTSamplingConfig,
+        sampling: GPTSamplingData,
     ) -> SampledDataset:
         from fast_llm.data.dataset.gpt.fim import GPTFimDataset
 
-        return GPTFimDataset(self, self.dataset.build_and_sample(config), config)
+        return GPTFimDataset(self, self.dataset.build_and_sample(sampling), sampling)
 
 
 class LegacyDatasetSource(str, enum.Enum):
@@ -343,7 +362,7 @@ class GPTLegacyDatasetConfig(GPTSampledDatasetConfig, GPTLegacyConfig):
     _abstract: typing.ClassVar[bool] = False
     type_: typing.ClassVar[str | None] = "legacy"
 
-    def build_and_sample(self, config: GPTSamplingConfig) -> SampledDataset:
+    def build_and_sample(self, sampling: GPTSamplingData) -> SampledDataset:
 
         if self.format == LegacyDatasetSource.random:
             Assert.eq(len(self.path), 0)
@@ -377,34 +396,43 @@ class GPTLegacyDatasetConfig(GPTSampledDatasetConfig, GPTLegacyConfig):
                 PhaseType.training: 0,
                 PhaseType.validation: 1,
                 PhaseType.test: 2,
-            }[config.phase]
+            }[sampling.phase]
 
             dataset_configs = [
-                GPTDatasetSliceConfig(
+                {
+                    "type": slice,
                     # TODO: this duplicates memmap datasets for each phase.
-                    dataset=GPTMemmapDatasetConfig(path=prefix),
-                    begin=phase_splits[phase_index],
-                    end=phase_splits[phase_index + 1],
-                )
+                    "dataset": {"type": "memmap", "path": prefix},
+                    "begin": phase_splits[phase_index],
+                    "end": phase_splits[phase_index + 1],
+                }
                 for prefix in dataset_prefixes
             ]
             dataset_config = (
-                GPTBlendedDatasetConfig(
-                    name="blended",
-                    datasets=dataset_configs,
-                    weights=dataset_weights,
-                    legacy=True,
-                )
+                {
+                    "type": "blended",
+                    "name": "blended",
+                    "datasets": dataset_configs,
+                    "weights": dataset_weights,
+                    "legacy": True,
+                }
                 if len(dataset_configs) > 1
                 else dataset_configs[0]
             )
             if self.fim.rate > 0:
-                dataset_config = GPTFimSampledDatasetConfig.from_dict(
-                    self.fim,
-                    {"dataset": dataset_config},
-                )
+                dataset_config = {
+                    "type": "fim",
+                    "dataset": dataset_config,
+                    **self.fim.to_serialized(),
+                }
+            # Legacy sampling config
+            dataset_config = {
+                "type": "sampled",
+                "dataset": dataset_config,
+                "sampling": {"seed": sampling.distributed.config.seed},
+            }
 
-        return dataset_config.build_and_sample(config)
+        return GPTSampledDatasetConfig.from_dict(dataset_config).build_and_sample(sampling)
 
 
 @config_class()
@@ -422,8 +450,8 @@ class GPTTestSlowDatasetConfig(GPTSampledDatasetConfig):
         hint=FieldHint.core,
     )
 
-    def build_and_sample(self, config: SamplingConfig) -> "GPTRandomSampledDataset":
-        assert config.distributed.config.world_size > 1
-        if config.distributed.config.rank == 0:
+    def build_and_sample(self, sampling: SamplingData) -> SampledDataset:
+        assert sampling.distributed.config.world_size > 1
+        if sampling.distributed.config.rank == 0:
             time.sleep(self.sleep)
-        return GPTRandomDatasetConfig().build_and_sample(config)
+        return GPTRandomDatasetConfig().build_and_sample(sampling)
