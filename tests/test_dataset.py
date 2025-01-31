@@ -18,7 +18,7 @@ from fast_llm.data.dataset.gpt.config import (
     GPTMemmapDatasetConfig,
     GPTRandomDatasetConfig,
     GPTSampledDatasetConfig,
-    GPTSamplingData,
+    GPTSamplingConfig,
 )
 from fast_llm.data.tokenizer import Tokenizer
 from fast_llm.engine.distributed.config import DistributedConfig, PhaseType
@@ -46,9 +46,9 @@ def get_sampling_config(
     sequence_length: int = 512,
     vocab_size=TEST_VOCAB_SIZE,
     tokenizer: Tokenizer | None = None,
-) -> GPTSamplingData:
+) -> GPTSamplingConfig:
     # Config with convenient defaults.
-    return GPTSamplingData(
+    return GPTSamplingConfig(
         num_samples=num_samples,
         seed=seed,
         cache_directory=cache_directory,

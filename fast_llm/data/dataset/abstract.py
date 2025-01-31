@@ -2,7 +2,7 @@ import abc
 import typing
 
 if typing.TYPE_CHECKING:
-    from fast_llm.data.dataset.config import SamplingData
+    from fast_llm.data.dataset.config import SamplingConfig
 
 
 class Dataset(abc.ABC):
@@ -36,5 +36,5 @@ class SampledDataset(Dataset):
 class SamplableDataset(Dataset):
 
     @abc.abstractmethod
-    def sample(self, config: "SamplingData") -> SampledDataset:
+    def sample(self, config: "SamplingConfig") -> SampledDataset:
         pass

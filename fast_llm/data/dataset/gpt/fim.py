@@ -1,7 +1,7 @@
 import numpy as np
 
 from fast_llm.data.dataset.abstract import SampledDataset
-from fast_llm.data.dataset.gpt.config import FimConfig, GPTSamplingData
+from fast_llm.data.dataset.gpt.config import FimConfig, GPTSamplingConfig
 from fast_llm.engine.distributed.config import MAX_SEED
 
 
@@ -15,12 +15,12 @@ class GPTFimDataset(SampledDataset):
         self,
         config: FimConfig,
         dataset: SampledDataset,
-        sampling: GPTSamplingData,
+        sampling_config: GPTSamplingConfig,
     ):
         self._config = config
         self._dataset = dataset
-        self._seed = sampling.config.seed
-        self._tokenizer = sampling.tokenizer
+        self._seed = sampling_config.seed
+        self._tokenizer = sampling_config.tokenizer
         if self._tokenizer is None:
             raise ValueError("Fim requires a tokenizer")
         self._suffix_tok_id, self._prefix_tok_id, self._middle_tok_id, self._pad_tok_id = (
