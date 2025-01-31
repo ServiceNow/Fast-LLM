@@ -3,7 +3,7 @@ import typing
 
 import numpy as np
 
-from fast_llm.data.dataset.gpt.config import GPTSamplingConfig
+from fast_llm.data.dataset.gpt.config import GPTSamplingData
 from fast_llm.data.dataset.indexed import ConcatenatedDataset, DatasetSlice, IndexedDataset
 
 if typing.TYPE_CHECKING:
@@ -19,10 +19,10 @@ class GPTIndexedDataset(IndexedDataset):
         and derived classes should try to avoid holding the whole array im memory.
         """
 
-    def sample(self, config: GPTSamplingConfig) -> "GPTSampledIndexedDataset":
+    def sample(self, sampling: GPTSamplingData) -> "GPTSampledIndexedDataset":
         from fast_llm.data.dataset.gpt.sampled import GPTSampledIndexedDataset
 
-        return GPTSampledIndexedDataset(self, config)
+        return GPTSampledIndexedDataset(self, sampling)
 
 
 class GPTDatasetSlice[IndexedDatasetType: GPTIndexedDataset](DatasetSlice[IndexedDatasetType], GPTIndexedDataset):

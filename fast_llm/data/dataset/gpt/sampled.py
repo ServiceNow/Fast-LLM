@@ -6,7 +6,7 @@ import typing
 import numpy as np
 
 from fast_llm.data.dataset.abstract import SampledDataset
-from fast_llm.data.dataset.gpt.config import GPTSamplingConfig
+from fast_llm.data.dataset.gpt.config import GPTSamplingData
 from fast_llm.data.dataset.gpt.indexed import GPTIndexedDataset
 from fast_llm.engine.config_utils.run import log_main_rank
 from fast_llm.utils import Assert
@@ -32,15 +32,15 @@ class GPTSampledIndexedDataset(SampledDataset):
     def __init__(
         self,
         indexed_dataset: GPTIndexedDataset,
-        sampling_config: GPTSamplingConfig,
+        sampling: GPTSamplingData,
     ):
-        assert isinstance(sampling_config, GPTSamplingConfig)
+        assert isinstance(sampling, GPTSamplingData)
         self._indexed_dataset = indexed_dataset
-        self._num_samples = sampling_config.num_samples
-        self._sequence_length = sampling_config.sequence_length
-        self._seed = sampling_config.seed
+        self._num_samples = sampling.num_samples
+        self._sequence_length = sampling.sequence_length
+        self._seed = sampling.config.seed
 
-        if sampling_config.cache_directory is None:
+        if sampling.cache_directory is None:
             log_main_rank(
                 " > No dataset cache directory provided, building the index map on all ranks."
                 "This may be very inefficient...",
@@ -50,14 +50,14 @@ class GPTSampledIndexedDataset(SampledDataset):
         else:
             cache_prefix = f"{self.name}_ns_{self._num_samples}_sl_{self._sequence_length}" f"_s_{self._seed}"
             # TODO: Any way to combine into a single file? (Memmap is harder)
-            self._doc_idx_filename = sampling_config.cache_directory / (cache_prefix + "_doc_idx.npy")
-            self._sample_idx_filename = sampling_config.cache_directory / (cache_prefix + "_sample_idx.npy")
-            self._shuffle_idx_filename = sampling_config.cache_directory / (cache_prefix + "_shuffle_idx.npy")
+            self._doc_idx_filename = sampling.cache_directory / (cache_prefix + "_doc_idx.npy")
+            self._sample_idx_filename = sampling.cache_directory / (cache_prefix + "_sample_idx.npy")
+            self._shuffle_idx_filename = sampling.cache_directory / (cache_prefix + "_shuffle_idx.npy")
 
             # Build the indexed mapping if it doesn't exist.
             # TODO: This only works if the dataset location is accessible by all job.
             if (
-                sampling_config.distributed.world_group is None or sampling_config.distributed.world_group.rank() == 0
+                sampling.distributed.world_group is None or sampling.distributed.world_group.rank() == 0
             ) and not (
                 self._doc_idx_filename.is_file()
                 and self._sample_idx_filename.is_file()
@@ -65,7 +65,7 @@ class GPTSampledIndexedDataset(SampledDataset):
             ):
                 log_main_rank(" > Building the index map on rank 0 ...")
                 doc_idx, sample_idx, shuffle_idx = self._sample()
-                sampling_config.cache_directory.mkdir(parents=True, exist_ok=True)
+                sampling.cache_directory.mkdir(parents=True, exist_ok=True)
                 np.save(self._doc_idx_filename, doc_idx)
                 np.save(self._sample_idx_filename, sample_idx)
                 np.save(self._shuffle_idx_filename, shuffle_idx)
