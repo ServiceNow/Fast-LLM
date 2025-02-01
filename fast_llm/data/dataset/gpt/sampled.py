@@ -100,31 +100,16 @@ class GPTSampledIndexedDataset(SampledDataset):
             None if base_path is None else base_path.with_name(base_path.name + "_token_cumsum_unshuffled.npy")
         )
 
-        if sampling.cache_directory is None:
-            log_main_rank(
-                " > No dataset cache directory provided, sampling on all ranks." "This may be very inefficient...",
-                log_fn=logger.warning,
-            )
-            self._doc_idx, self._sample_idx, self._shuffle_idx = self._sample()
-        else:
-            cache_prefix = f"{self.name}_ns_{self._num_samples}_sl_{self._sequence_length}" f"_s_{self._config.seed}"
-            self._doc_idx = MemmapArray(sampling.cache_directory / (cache_prefix + "_doc_idx.npy"))
-            self._sample_idx = MemmapArray(sampling.cache_directory / (cache_prefix + "_sample_idx.npy"))
-            self._shuffle_idx = MemmapArray(sampling.cache_directory / (cache_prefix + "_shuffle_idx.npy"))
+        # Build the indexed mapping if it doesn't exist.
+        if base_path is None or (
+            sampling.distributed.config.rank == sampling.get_next_rank()
+            and not (self._doc_idx.exists())
+            and self._sample_idx.exists()
+            and self._shuffle_idx.exists()
+        ):
+            self._sample()
 
-            # Build the indexed mapping if it doesn't exist.
-            # TODO: This only works if the dataset location is accessible by all job.
-            if sampling.distributed.config.rank == sampling.get_next_rank() and not (
-                self._doc_idx.exists() and self._sample_idx.exists() and self._shuffle_idx.exists()
-            ):
-                logger.info(f" > Sampling dataset {self._indexed_dataset.name} ...")
-                doc_idx, sample_idx, shuffle_idx = self._sample()
-                sampling.cache_directory.mkdir(parents=True, exist_ok=True)
-                self._doc_idx.save(doc_idx)
-                self._sample_idx.save(sample_idx)
-                self._shuffle_idx.save(shuffle_idx)
-
-    def _sample(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    def _sample(self) -> None:
         """
         Create a `GPTSampledDataset` with the requested parameters.
         """
@@ -346,16 +331,13 @@ class LegacyGPTSampledIndexedDataset(SampledDataset):
             and self._sample_idx.exists()
             and self._shuffle_idx.exists()
         ):
-            logger.info(f" > Sampling dataset {self._indexed_dataset.name} ...")
-            doc_idx, sample_idx, shuffle_idx = self._sample()
-            self._doc_idx.save(doc_idx)
-            self._sample_idx.save(sample_idx)
-            self._shuffle_idx.save(shuffle_idx)
+            self._sample()
 
-    def _sample(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    def _sample(self) -> None:
         """
         Create a `GPTSampledDataset` with the requested parameters.
         """
+        logger.info(f" > Sampling dataset {self._indexed_dataset.name} ...")
         document_sizes = self._indexed_dataset.get_document_sizes()
         num_documents = len(document_sizes)
         num_tokens = document_sizes.sum()
@@ -387,11 +369,7 @@ class LegacyGPTSampledIndexedDataset(SampledDataset):
             True,
         )
 
-        # shuffle-idx.
-        # -1 is due to data structure used to retrieve the index:
-        #    sample i --> [sample_idx[i], sample_idx[i+1])
         total_size = sample_idx.shape[0] - 1
-        # TODO: Isn't the dataset already shuffled above?
         shuffle_idx = np.arange(
             0, total_size, dtype=np.int64 if total_size >= (np.iinfo(np.uint32).max - 1) else np.uint32
         )
@@ -402,8 +380,9 @@ class LegacyGPTSampledIndexedDataset(SampledDataset):
             np_rng.shuffle(shuffle_idx)
 
         Assert.geq(len(shuffle_idx), self._num_samples)
-        # TODO: The doc and sample idx are way bigger than needed when sampling for << 1 epoch.
-        return doc_idx, sample_idx, shuffle_idx[: self._num_samples]
+        self._doc_idx.save(doc_idx)
+        self._sample_idx.save(sample_idx)
+        self._shuffle_idx.save(shuffle_idx[: self._num_samples])
 
     def __len__(self) -> int:
         return self._num_samples
