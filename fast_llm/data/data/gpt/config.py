@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 @config_class()
 class GPTSamplingDefaultConfig(SamplingDefaultConfig, GPTSamplingConfig):
-    pass
+    gpu: bool = FieldUpdate(default=True)
 
 
 @config_class()

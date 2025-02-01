@@ -29,9 +29,32 @@ if typing.TYPE_CHECKING:
     from fast_llm.data.tokenizer import Tokenizer
 
 
+class ShufflingType(str, enum.Enum):
+    # Shuffle all epochs together. Not extendable.
+    full = "full"
+    # Shuffle all epochs separately. Default mode, recommended if the dataset doesn't come pre-shuffled.
+    epoch = "epoch"
+    # Shuffle all epochs except the first one. Recommended for pre-shuffled datasets, especially big ones.
+    skip_first_epoch = "skip_first_epoch"
+    # Disable shuffling entirely.
+    disabled = "disabled"
+    legacy = "legacy"
+
+
 @config_class()
 class GPTSamplingConfig(SamplingConfig):
-    pass
+    gpu: bool | None = Field(
+        default=None,
+        desc="Enable fast sampling on GPU."
+        " Note that random sampling works differently on GPU,"
+        " so the sample won't match the CPU equivalent.",
+        hint=FieldHint.feature,
+    )
+    shuffle: ShufflingType | None = Field(
+        default=None,
+        desc="Shuffling strategy.",
+        hint=FieldHint.feature,
+    )
 
 
 @dataclasses.dataclass
@@ -429,7 +452,10 @@ class GPTLegacyDatasetConfig(GPTSampledDatasetConfig, GPTLegacyConfig):
             dataset_config = {
                 "type": "sampled",
                 "dataset": dataset_config,
-                "sampling": {"seed": sampling.distributed.config.seed},
+                "sampling": {
+                    "seed": sampling.distributed.config.seed,
+                    "shuffle": "legacy",
+                },
             }
 
         return GPTSampledDatasetConfig.from_dict(dataset_config).build_and_sample(sampling)

@@ -1,5 +1,6 @@
 import dataclasses
 import functools
+import itertools
 import math
 import pathlib
 import typing
@@ -40,11 +41,17 @@ class SamplingData:
     # TODO: This prevents the sampling config from being pickled in multiprocessing.
     distributed: "Distributed"
     phase: PhaseType
+    # Using a mutable rather than an int so it's shared with all copies made with `update`.
+    _rank_counter: typing.Iterator[int] = itertools.count
 
     def update(self, config: SamplingConfig, **kwargs):
         if config_updates := config.updates:
             kwargs["config"] = self.config.to_copy(config_updates)
         return dataclasses.replace(self, **kwargs) if kwargs else self
+
+    def get_next_rank(self) -> int:
+        # Counter that loops over ranks to try to distribute workloads evenly between ranks.
+        return next(self._rank_counter()) % self.distributed.config.world_size
 
 
 @config_class()

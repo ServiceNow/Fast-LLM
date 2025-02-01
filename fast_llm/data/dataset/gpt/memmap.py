@@ -92,6 +92,9 @@ class GPTMemmapDataset(GPTIndexedDataset):
         """
         return self._document_sizes
 
+    def get_document_size(self, index: int) -> int:
+        return self._document_sizes[index].item()
+
     @classmethod
     def write_dataset(cls, prefix: pathlib.Path | str, documents: typing.Iterable[np.ndarray]):
         # Initialize metadata
