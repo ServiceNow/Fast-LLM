@@ -143,6 +143,10 @@ class CommonHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
                 export_names=(("intermediate_size",),),
             ),
             RenameParamConverter(
+                fast_llm_names=(("transformer", "kv_channels"),),
+                export_names=(("head_dim"),),
+            ),
+            RenameParamConverter(
                 fast_llm_names=(("vocab_size",),),
                 export_names=(("vocab_size",),),
             ),
