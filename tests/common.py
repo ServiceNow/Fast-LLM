@@ -11,6 +11,7 @@ import pytest
 import torch
 
 from fast_llm.data.dataset.gpt.memmap import GPTMemmapDataset
+from fast_llm.data.dataset.gpt.sampled import GPTSample
 from fast_llm.models.gpt.config import (
     LlamaGPTHuggingfaceCheckpointFormat,
     MistralGPTHuggingfaceCheckpointFormat,
@@ -230,7 +231,8 @@ def get_test_dataset(
         tokenizer = transformers.AutoTokenizer.from_pretrained(TOKENIZER_PATH)
 
         documents = [
-            np.array(tokenizer(document)["input_ids"], dtype=np.uint16) % vocab_size for document in documents
+            GPTSample(np.array(tokenizer(document)["input_ids"], dtype=np.uint16) % vocab_size)
+            for document in documents
         ]
         GPTMemmapDataset.write_dataset(prefix, documents)
 
@@ -255,6 +257,41 @@ def get_test_concatenated_memmap_dataset(
                 vocab_size=vocab_size,
             )
         index_file.open("w").writelines([str(path / f"dataset_{i}") + "\n" for i in range(num_files)])
+
+
+def get_test_dataset_with_spans(
+    prefix: pathlib.Path = DATASET_PREFIX,
+    seed: int = 1234,
+    num_tokens: int = TEST_DATASET_TOKENS,
+    characters: str = TEST_CHARACTERS,
+    vocab_size: int = TEST_VOCAB_SIZE,
+):
+    if not TOKENIZER_FILE.is_file():
+        import transformers
+
+        transformers.AutoTokenizer.from_pretrained("bigcode/santacoder").save_pretrained(TOKENIZER_PATH)
+
+    if not (prefix.with_suffix(".idx").is_file() and prefix.with_suffix(".bin").is_file()):
+        import transformers
+
+        documents = "".join(random.Random(seed).choices(characters, k=num_tokens)).splitlines()
+        tokenizer = transformers.AutoTokenizer.from_pretrained(TOKENIZER_PATH)
+        for idx, doc in enumerate(documents):
+            doc = np.array(tokenizer(doc)["input_ids"], dtype=np.uint16) % vocab_size
+            doc_seed = seed + idx
+            n_spans = random.Random(doc_seed).randint(0, 5)
+            spans = []
+            prev_end = -1
+            for _ in range(n_spans):
+                if prev_end >= len(doc) - 1:
+                    break
+                start = random.Random(doc_seed).randint(prev_end + 1, len(doc) - 1)
+                end = random.Random(doc_seed).randint(start, len(doc) - 1)
+                spans.append([start, end])
+                prev_end = end
+            documents[idx] = GPTSample(doc, np.array(spans, dtype=np.int32).reshape(-1, 2))
+
+        GPTMemmapDataset.write_dataset(prefix, documents)
 
 
 def run_test_script(

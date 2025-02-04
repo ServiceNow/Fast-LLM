@@ -33,6 +33,7 @@ from tests.common import (
     TOKENIZER_PATH,
     get_test_concatenated_memmap_dataset,
     get_test_dataset,
+    get_test_dataset_with_spans,
 )
 
 
@@ -46,6 +47,7 @@ def get_sampling_config(
     sequence_length: int = 512,
     vocab_size=TEST_VOCAB_SIZE,
     tokenizer: Tokenizer | None = None,
+    use_loss_masking_spans=False,
 ) -> GPTSamplingConfig:
     # Config with convenient defaults.
     return GPTSamplingConfig(
@@ -57,6 +59,7 @@ def get_sampling_config(
         sequence_length=sequence_length,
         vocab_size=vocab_size,
         tokenizer=tokenizer,
+        use_loss_masking_spans=use_loss_masking_spans,
     )
 
 
@@ -83,7 +86,9 @@ def get_test_data_and_samples(
     batch_config.setup(distributed_config)
     batch_config.validate()
     samples = {
-        phase: [batch[0] for batch in data.get_iterator(batch_config, phase, consumed_samples=0, num_workers=0)]
+        phase: [
+            batch.token_ids[0] for batch in data.get_iterator(batch_config, phase, consumed_samples=0, num_workers=0)
+        ]
         for phase, samples in samples_per_phase.items()
     }
     return data, samples
@@ -116,7 +121,7 @@ def test_gpt_random_dataset():
     )
     Assert.eq(len(sampled), 4)
     Assert.all_equal(
-        np.stack([sampled[i] for i in range(4)]),
+        np.stack([sampled[i].token_ids for i in range(4)]),
         np.array(RANDOM_DATASET_EXPECTED_SAMPLES),
     )
 
@@ -166,9 +171,9 @@ def test_gpt_memmap(cache_directory):
     Assert.eq(len(dataset), MEMMAP_DATASET_EXPECTED_LENGTH)
     sizes = dataset.get_document_sizes()
     Assert.eq(sizes.sum(), MEMMAP_DATASET_EXPECTED_TOKENS)
-    Assert.all_equal([len(dataset.get(i)) for i in range(100)], sizes[:100])
+    Assert.all_equal([len(dataset.get(i).token_ids) for i in range(100)], sizes[:100])
     for i, sample in MEMMAP_DATASET_EXPECTED_SAMPLES.items():
-        Assert.all_equal(dataset.get(i), np.array(sample, dtype=np.uint16))
+        Assert.all_equal(dataset.get(i).token_ids, np.array(sample, dtype=np.uint16))
 
 
 GPT_SAMPLED_EXPECTED_SAMPLES = [
@@ -191,7 +196,7 @@ def test_gpt_sampled():
     )
     Assert.eq(len(sampled), 8)
     Assert.all_equal(
-        np.stack([sampled[i] for i in range(8)]),
+        np.stack([sampled[i].token_ids for i in range(8)]),
         np.array(GPT_SAMPLED_EXPECTED_SAMPLES),
     )
 
@@ -252,13 +257,13 @@ def test_gpt_concatenate():
     Assert.eq(sizes.sum(), 3 * MEMMAP_DATASET_EXPECTED_TOKENS)
     for i in range(3):
         begin = i * MEMMAP_DATASET_EXPECTED_LENGTH
-        Assert.all_equal([len(dataset.get(begin + i)) for i in range(100)], sizes[begin : begin + 100])
+        Assert.all_equal([len(dataset.get(begin + i).token_ids) for i in range(100)], sizes[begin : begin + 100])
         for i, sample in MEMMAP_DATASET_EXPECTED_SAMPLES.items():
-            Assert.all_equal(dataset.get(begin + i), np.array(sample, dtype=np.uint16))
+            Assert.all_equal(dataset.get(begin + i).token_ids, np.array(sample, dtype=np.uint16))
     sampled = dataset.sample(get_sampling_config(8, sequence_length=5))
     Assert.eq(len(sampled), 8)
     Assert.all_equal(
-        np.stack([sampled[i] for i in range(8)]),
+        np.stack([sampled[i].token_ids for i in range(8)]),
         np.array(GPT_CONCATENATED_EXPECTED_SAMPLES),
     )
 
@@ -311,13 +316,13 @@ def test_gpt_slice():
     ).build()
     Assert.eq(len(dataset), 9)
     sizes = dataset.get_document_sizes()
-    Assert.all_equal([len(dataset.get(i)) for i in range(9)], sizes[:9])
+    Assert.all_equal([len(dataset.get(i).token_ids) for i in range(9)], sizes[:9])
     for i, sample in MEMMAP_DATASET_EXPECTED_SAMPLES.items():
-        Assert.all_equal(dataset.get(i - 9), np.array(sample, dtype=np.uint16))
+        Assert.all_equal(dataset.get(i - 9).token_ids, np.array(sample, dtype=np.uint16))
     sampled = dataset.sample(get_sampling_config(8, sequence_length=5))
     Assert.eq(len(sampled), 8)
     Assert.all_equal(
-        np.stack([sampled[i] for i in range(8)]),
+        np.stack([sampled[i].token_ids for i in range(8)]),
         np.array(GPT_SLICE_EXPECTED_VALIDATION_SAMPLES),
     )
 
@@ -412,14 +417,14 @@ def test_gpt_concatenated_memmap():
     Assert.eq(len(dataset), COMPOSED_DATASET_EXPECTED_LENGTH)
     sizes = dataset.get_document_sizes()
     Assert.eq(sizes.sum(), COMPOSED_DATASET_EXPECTED_TOKENS)
-    Assert.all_equal([len(dataset.get(i)) for i in range(0, len(dataset), 20)], sizes[::20])
+    Assert.all_equal([len(dataset.get(i).token_ids) for i in range(0, len(dataset), 20)], sizes[::20])
     for i, sample in COMPOSED_DATASET_EXPECTED_SAMPLES.items():
-        Assert.all_equal(dataset.get(i), np.array(sample, dtype=np.uint16))
+        Assert.all_equal(dataset.get(i).token_ids, np.array(sample, dtype=np.uint16))
     sampled = dataset.sample(get_sampling_config(8, sequence_length=5))
     Assert.eq(len(sampled), 8)
-    print(np.stack([sampled[i] for i in range(8)]).tolist())
+    print(np.stack([sampled[i].token_ids for i in range(8)]).tolist())
     Assert.all_equal(
-        np.stack([sampled[i] for i in range(8)]),
+        np.stack([sampled[i].token_ids for i in range(8)]),
         np.array(GPT_COMPOSED_EXPECTED_SAMPLES),
     )
 
@@ -538,7 +543,7 @@ def test_gpt_blended():
     ).build_and_sample(get_sampling_config(8, sequence_length=5))
     Assert.eq(len(sampled), 8)
     Assert.all_equal(
-        np.stack([sampled[i] for i in range(8)]),
+        np.stack([sampled[i].token_ids for i in range(8)]),
         np.array(GPT_BLENDED_EXPECTED_SAMPLES),
     )
 
@@ -626,7 +631,7 @@ def test_gpt_blended_mixed():
     ).build_and_sample(get_sampling_config(8, sequence_length=5))
     Assert.eq(len(sampled), 8)
     Assert.all_equal(
-        np.stack([sampled[i] for i in range(8)]),
+        np.stack([sampled[i].token_ids for i in range(8)]),
         np.array(GPT_BLENDED_MIXED_EXPECTED_SAMPLES),
     )
 
@@ -685,7 +690,7 @@ def test_gpt_fim():
     Assert.eq(len(sampled), 8)
     # TODO: Does this output make sense?
     Assert.all_equal(
-        np.stack([sampled[i] for i in range(8)]),
+        np.stack([sampled[i].token_ids for i in range(8)]),
         np.array(GPT_FIM_EXPECTED_SAMPLES),
     )
 
@@ -731,3 +736,28 @@ def test_gpt_fim_data_legacy():
         np.stack(samples[PhaseType.training]),
         np.array(GPT_FIM_EXPECTED_SAMPLES),
     )
+
+
+_DATASET_PREFIX_SPANS = DATASET_PREFIX.with_name("with_spans")
+
+SPANS_DATASET_EXPECTED_SAMPLES = {
+    9: ([], []),
+    10: ([80, 85, 4295, 4182, 489, 727, 84, 698, 1197, 583], [[4, 6], [8, 9]]),
+    13: ([78, 727, 74, 317, 1358, 89], []),
+    15: ([78], [[0, 0]]),
+}
+
+
+def test_gpt_data_with_spans():
+    get_test_dataset_with_spans(prefix=_DATASET_PREFIX_SPANS)
+    dataset = _get_dataset_config(
+        {
+            "type": "memmap",
+            "path": _DATASET_PREFIX_SPANS,
+            "use_loss_masking_spans": True,
+        },
+        GPTMemmapDatasetConfig,
+    ).build()
+    for i, sample in SPANS_DATASET_EXPECTED_SAMPLES.items():
+        Assert.all_equal(np.array(sample[0], dtype=np.uint16), dataset.get(i).token_ids)
+        Assert.all_equal(np.array(sample[1]).reshape(-1, 2), dataset.get(i).loss_masking_spans)

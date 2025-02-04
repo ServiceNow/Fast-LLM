@@ -1,3 +1,4 @@
+import dataclasses
 import logging
 import math
 import pathlib
@@ -21,12 +22,17 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
+@dataclasses.dataclass
+class GPTSample:
+    token_ids: np.ndarray
+    loss_masking_spans: np.ndarray | None = None
+
+
 class GPTSampledIndexedDataset(SampledDataset):
     """
     A GPT dataset augmented with a sampling, i.e.,
     a pre-computed, shuffled list of samples to be indexed sequentially (as-is) during training.
     The sampling exactly matches Megatron-LM with matching parameters.
-    Supports optional post-processing with FIM.
     """
 
     def __init__(
@@ -193,11 +199,23 @@ class GPTSampledIndexedDataset(SampledDataset):
             )
             for doc in range(doc_f, doc_l + 1)
         ]
-        sample = np.concatenate(
-            sample_list,
-            dtype=np.int64,
-        )
-        return sample
+
+        if sample_list[0].loss_masking_spans is not None:
+            sample_ids = []
+            sample_spans = []
+            span_offset = 0
+            for sample in sample_list:
+                sample_ids.extend(sample.token_ids)
+                for span in sample.loss_masking_spans:
+                    sample_spans.append([span[0] + span_offset, span[1] + span_offset])
+                span_offset += len(sample.token_ids)
+            sample_ids = np.array(sample_ids, dtype=np.int64)
+            sample_spans = np.array(sample_spans, dtype=np.int32).reshape(-1, 2)
+        else:
+            sample_ids = np.concatenate([sample.token_ids for sample in sample_list], dtype=np.int64)
+            sample_spans = None
+
+        return GPTSample(token_ids=sample_ids, loss_masking_spans=sample_spans)
 
     @property
     def name(self) -> str:

@@ -2,6 +2,7 @@ import numpy as np
 
 from fast_llm.data.dataset.abstract import SampledDataset
 from fast_llm.data.dataset.gpt.config import FimConfig, GPTSamplingConfig
+from fast_llm.data.dataset.gpt.sampled import GPTSample
 from fast_llm.engine.distributed.config import MAX_SEED
 
 
@@ -42,12 +43,14 @@ class GPTFimDataset(SampledDataset):
     def name(self) -> str:
         return f"{self._dataset.name}_fim"
 
-    def _fim(self, sample: np.ndarray, np_rng: np.random.RandomState) -> np.ndarray:
+    def _fim(self, sample: GPTSample, np_rng: np.random.RandomState) -> GPTSample:
         # FIM
         # TODO: permute segments in sample_list, before concatenating.
-        sample_len = sample.shape[0]
+        if self._config.rate > 0.0 and sample.loss_masking_spans is not None:
+            raise NotImplementedError("FIM is currently not compatible with loss masking.")
+        sample_len = sample.token_ids.shape[0]
         eod = self._tokenizer.eod
-        segment_breaks = np.argwhere(sample == eod)  # split sample by document
+        segment_breaks = np.argwhere(sample.token_ids == eod)  # split sample by document
 
         if segment_breaks.shape != (0, 1):  # then there is an EOD token in this example
             curr_start_position = 0
@@ -57,26 +60,26 @@ class GPTFimDataset(SampledDataset):
                 # Only permute non-empty segments.
                 if loc - curr_start_position > 0:
                     # permute {prefix, suffix, middle} or {suffix, prefix, middle}
-                    permuted = self._fim_split_and_permute_sequence(sample[curr_start_position:loc], np_rng)
+                    permuted = self._fim_split_and_permute_sequence(sample.token_ids[curr_start_position:loc], np_rng)
                     new_samples += [permuted, [eod]]
 
                 curr_start_position = loc + 1  # jump over the EOD token
             # Permute the segment after the last EOD
-            permuted = self._fim_split_and_permute_sequence(sample[curr_start_position:], np_rng)
+            permuted = self._fim_split_and_permute_sequence(sample.token_ids[curr_start_position:], np_rng)
             new_samples.append(permuted)
 
-            sample = np.concatenate(new_samples)
+            sample.token_ids = np.concatenate(new_samples)
         else:
-            sample = self._fim_split_and_permute_sequence(sample, np_rng)
+            sample.token_ids = self._fim_split_and_permute_sequence(sample.token_ids, np_rng)
 
         # Truncate or pad sequence to max-length
-        diff = sample.shape[0] - sample_len
+        diff = sample.token_ids.shape[0] - sample_len
         if diff > 0:  # too long
-            sample = sample[:sample_len]
+            sample.token_ids = sample.token_ids[:sample_len]
         elif diff < 0:  # too short
-            sample = np.concatenate([sample, np.full((-1 * diff), self._pad_tok_id)])
+            sample.token_ids = np.concatenate([sample.token_ids, np.full((-1 * diff), self._pad_tok_id)])
 
-        assert sample.shape[0] == sample_len
+        assert sample.token_ids.shape[0] == sample_len
         return sample
 
     def _fim_split_and_permute_sequence(self, sequence: np.ndarray, np_rng: np.random.RandomState) -> np.ndarray:
@@ -150,9 +153,11 @@ class GPTFimDataset(SampledDataset):
         middle = contents[boundaries[0] : boundaries[1]]
         suffix = contents[boundaries[1] :]
 
-        prefix = np.array([*self._tokenizer.tokenize(prefix)], dtype=np.int64)
-        middle = np.array([*self._tokenizer.tokenize(middle)], dtype=np.int64)
-        suffix = np.array([*self._tokenizer.tokenize(suffix)], dtype=np.int64)
+        prefix = np.array([*self._tokenizer.tokenize(prefix, end_of_text=False)], dtype=np.int64)
+        middle = np.array(
+            [*self._tokenizer.tokenize(middle, beginning_of_text=False, end_of_text=False)], dtype=np.int64
+        )
+        suffix = np.array([*self._tokenizer.tokenize(suffix, beginning_of_text=False)], dtype=np.int64)
 
         # here we truncate each given segment to fit the same length as it was before
         # A consequence is that we never reach the end of a file?

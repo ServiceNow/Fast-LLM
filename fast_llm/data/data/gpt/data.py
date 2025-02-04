@@ -1,8 +1,10 @@
+import dataclasses
 import logging
 import pathlib
 import typing
 import warnings
 
+import numpy as np
 import torch
 import torch.utils.data
 
@@ -11,6 +13,7 @@ from fast_llm.data.data.abstract import Data
 from fast_llm.data.data.gpt.config import GPTDataConfig
 from fast_llm.data.dataset.abstract import SampledDataset
 from fast_llm.data.dataset.gpt.config import GPTSamplingConfig
+from fast_llm.data.dataset.gpt.sampled import GPTSample
 from fast_llm.data.dataset.monitor import DatasetMonitor
 from fast_llm.data.iterator import SampledDatasetIterator
 from fast_llm.data.tokenizer import Tokenizer
@@ -21,6 +24,20 @@ from fast_llm.engine.schedule.config import BatchConfig
 from fast_llm.utils import Assert
 
 logger = logging.getLogger(__name__)
+
+
+@dataclasses.dataclass
+class GPTBatch:
+    token_ids: torch.Tensor
+    loss_masking_spans: list[torch.Tensor] | None
+
+
+def gpt_data_collate_fn(batch: list[GPTSample]) -> GPTBatch:
+    stacked_ids = np.stack([sample.token_ids for sample in batch])
+    stacked_spans = None
+    if batch[0].loss_masking_spans is not None:
+        stacked_spans = [torch.from_numpy(sample.loss_masking_spans) for sample in batch]
+    return GPTBatch(token_ids=torch.from_numpy(stacked_ids), loss_masking_spans=stacked_spans)
 
 
 class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
@@ -82,6 +99,7 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
                     sequence_length=self._max_sequence_length,
                     vocab_size=self._vocab_size,
                     tokenizer=self._tokenizer,
+                    use_loss_masking_spans=self._config.use_loss_masking_spans,
                 )
                 dataset = self._config.datasets[phase].build_and_sample(sampling_config)
                 self._datasets[phase] = DatasetMonitor(dataset, self._config.data_sample_warn_time_ms)
@@ -120,6 +138,7 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
                 num_workers=num_workers,
                 prefetch_factor=prefetch_factor,
                 pin_memory=True,
+                collate_fn=gpt_data_collate_fn,
                 multiprocessing_context=self._config.multiprocessing_context.value if num_workers > 0 else None,
             )
         )
