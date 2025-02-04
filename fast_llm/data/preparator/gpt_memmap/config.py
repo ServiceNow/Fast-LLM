@@ -36,9 +36,14 @@ class GPTHuggingfaceDatasetConfig(Config):
         desc="Specific configuration name for the dataset.",
         hint=FieldHint.optional,
     )
-    data_dir: None | str = Field(
+    data_directory: None | str = Field(
         default=None,
         desc="data_dir argument passed to `load_dataset`",
+        hint=FieldHint.optional,
+    )
+    data_files: None | str | list[str] = Field(
+        default=None,
+        desc="data_files argument passed to `load_dataset`",
         hint=FieldHint.optional,
     )
     split: str = Field(
