@@ -1,5 +1,6 @@
 import json
 import multiprocessing
+import os
 import pathlib
 import typing
 
@@ -63,6 +64,9 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
         return dataset
 
     def run(self) -> None:
+        # Set Hugging Face API token
+        if "HUGGINGFACE_API_KEY_PATH" in os.environ:
+            os.environ["HF_TOKEN"] = pathlib.Path(os.environ["HUGGINGFACE_API_KEY_PATH"]).open("r").read().strip()
         # Set transformers logging verbosity
         transformers.logging.set_verbosity_error()
 
