@@ -143,10 +143,6 @@ class CommonHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
                 export_names=(("intermediate_size",),),
             ),
             RenameParamConverter(
-                fast_llm_names=(("transformer", "kv_channels"),),
-                export_names=(("head_dim"),),
-            ),
-            RenameParamConverter(
                 fast_llm_names=(("vocab_size",),),
                 export_names=(("vocab_size",),),
             ),
@@ -280,6 +276,10 @@ class CommonLlamaHuggingfaceCheckpointHandler(CommonHuggingfaceCheckpointHandler
             ),
             RenameParamConverter(
                 fast_llm_names=(("transformer", "normalization", "epsilon"),), export_names=(("rms_norm_eps",),)
+            ),
+            RenameParamConverter(
+                fast_llm_names=(("transformer", "kv_channels"),),
+                export_names=(("head_dim"),),
             ),
             ConstantImportParamConverter(fast_llm_names=(("transformer", "gated"),), fast_llm_value=True),
             ConstantImportParamConverter(fast_llm_names=(("transformer", "add_linear_biases"),), fast_llm_value=False),
