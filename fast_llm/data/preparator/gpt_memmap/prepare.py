@@ -65,8 +65,8 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
 
     def run(self) -> None:
         # Set Hugging Face API token
+        print(f"Loading Hugging Face API key from {os.environ['HUGGINGFACE_API_KEY_PATH']}")
         if "HUGGINGFACE_API_KEY_PATH" in os.environ:
-            print(f"Loading Hugging Face API key from {os.environ['HUGGINGFACE_API_KEY_PATH']}")
             os.environ["HF_TOKEN"] = pathlib.Path(os.environ["HUGGINGFACE_API_KEY_PATH"]).open("r").read().strip()
         # Set transformers logging verbosity
         transformers.logging.set_verbosity_error()
