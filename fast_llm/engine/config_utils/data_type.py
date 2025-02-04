@@ -6,7 +6,6 @@ from fast_llm.utils import Assert
 if typing.TYPE_CHECKING:
     import numpy as np
     import torch
-
     from triton import language as tl
 
 
@@ -156,3 +155,14 @@ def _set_triton_dtype_map() -> None:
     }
 
     _TRITON_DTYPE_MAP_INV = {y: x for x, y in _TRITON_DTYPE_MAP.items() if y is not None}
+
+
+def get_unsigned_integer_type(max_size: int) -> DataType:
+    if max_size < 2**8:
+        return DataType.uint8
+    elif max_size < 2**15:
+        return DataType.int16
+    elif max_size < 2**31:
+        return DataType.int32
+    else:
+        return DataType.int64

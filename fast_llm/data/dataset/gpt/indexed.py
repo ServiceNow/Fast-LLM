@@ -3,7 +3,7 @@ import typing
 
 import numpy as np
 
-from fast_llm.data.dataset.gpt.config import GPTSamplingConfig
+from fast_llm.data.dataset.gpt.config import GPTSamplingData, ShufflingType
 from fast_llm.data.dataset.indexed import ConcatenatedDataset, DatasetSlice, IndexedDataset
 
 if typing.TYPE_CHECKING:
@@ -19,10 +19,20 @@ class GPTIndexedDataset(IndexedDataset):
         and derived classes should try to avoid holding the whole array im memory.
         """
 
-    def sample(self, config: GPTSamplingConfig) -> "GPTSampledIndexedDataset":
-        from fast_llm.data.dataset.gpt.sampled import GPTSampledIndexedDataset
+    @abc.abstractmethod
+    def get_document_size(self, index: int) -> int:
+        """
+        The size of a document in the dataset.
+        """
 
-        return GPTSampledIndexedDataset(self, config)
+    def sample(self, sampling: GPTSamplingData) -> "GPTSampledIndexedDataset":
+        from fast_llm.data.dataset.gpt.sampled import GPTSampledIndexedDataset, LegacyGPTSampledIndexedDataset
+
+        return (
+            LegacyGPTSampledIndexedDataset(self, sampling)
+            if sampling.config.shuffle == ShufflingType.legacy
+            else GPTSampledIndexedDataset(self, sampling)
+        )
 
 
 class GPTDatasetSlice[IndexedDatasetType: GPTIndexedDataset](DatasetSlice[IndexedDatasetType], GPTIndexedDataset):
@@ -36,6 +46,9 @@ class GPTDatasetSlice[IndexedDatasetType: GPTIndexedDataset](DatasetSlice[Indexe
         # TODO: This can be really big.
         return self._dataset.get_document_sizes()[self._begin : self._end]
 
+    def get_document_size(self, index: int) -> int:
+        return self._dataset.get_document_size(self._begin + index)
+
 
 class GPTConcatenatedDataset[IndexedDatasetType: GPTIndexedDataset](
     ConcatenatedDataset[IndexedDatasetType], GPTIndexedDataset
@@ -45,3 +58,7 @@ class GPTConcatenatedDataset[IndexedDatasetType: GPTIndexedDataset](
     def get_document_sizes(self) -> np.ndarray:
         # TODO: This can be really big.
         return np.concatenate([dataset.get_document_sizes() for dataset in self._datasets])
+
+    def get_document_size(self, index: int) -> int:
+        dataset = np.searchsorted(self._dataset_splits[1:], index, side="right")
+        return self._datasets[dataset].get_document_size(index - self._dataset_splits[dataset].item())
