@@ -38,7 +38,7 @@ def gpt_data_collate_fn(batch: list[GPTSample], use_loss_masking_spans: bool) ->
     stacked_spans = None
     if use_loss_masking_spans:
         stacked_spans = [torch.from_numpy(sample.loss_masking_spans) for sample in batch]
-    return GPTBatch(token_ids=torch.from_numpy(stacked_ids), loss_masking_spans=None)
+    return GPTBatch(token_ids=torch.from_numpy(stacked_ids), loss_masking_spans=stacked_spans)
 
 
 class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
