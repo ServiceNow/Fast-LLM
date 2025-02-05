@@ -53,8 +53,6 @@ def fused_cross_entropy_forward_backward(
     # Way faster and more memory-efficient than the pytorch version.
     if apply_loss_mask:
         loss_mask = target != ignore_index
-        target = target[loss_mask]
-        logits = logits[loss_mask]
     target = target.unsqueeze(1)
     logits_norm = logits.sub(torch.max(logits, dim=-1)[0].unsqueeze(dim=-1)).float()
     if logits_scale_factor != 1.0:
@@ -77,9 +75,11 @@ def fused_cross_entropy_forward_backward(
         else:
             grad = exp_logits.to(logits.dtype)
 
-    loss = sum_exp_logits.log().sub(logits_norm.gather(1, target).squeeze(1)).mean()
+    per_sample_loss = sum_exp_logits.log().sub(logits_norm.gather(1, target).squeeze(1))
+    if apply_loss_mask:
+        per_sample_loss *= loss_mask
 
-    return loss, grad
+    return per_sample_loss.mean(), grad
 
 
 @torch.compile
@@ -100,8 +100,6 @@ def parallel_cross_entropy_forward_backward(
     # TODO: Optimize, overlap/combine reductions
     if apply_loss_mask:
         loss_mask = target != ignore_index
-        target = target[loss_mask]
-        logits = logits[loss_mask]
     target = target.unsqueeze(1)
 
     logits_max = torch.max(logits, dim=-1)[0]
@@ -137,9 +135,11 @@ def parallel_cross_entropy_forward_backward(
 
     predicted_logits = (target_mask * logits_norm.gather(1, target)).squeeze(1)
     all_reduce(predicted_logits, op=ReduceOp.SUM, group=group)
-    loss = sum_exp_logits.log().sub(predicted_logits).mean()
+    per_sample_loss = sum_exp_logits.log().sub(predicted_logits)
+    if apply_loss_mask:
+        per_sample_loss *= loss_mask
 
-    return loss, grad
+    return per_sample_loss.mean(), grad
 
 
 _CROSS_ENTROPY_IMPLEMENTATIONS = {
