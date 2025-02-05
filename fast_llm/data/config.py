@@ -16,14 +16,6 @@ class MultiprocessingContext(str, enum.Enum):
 TokenizerFromFile = "TokenizerFromFile"
 
 
-class SequenceDelimiters(str, enum.Enum):
-    tokenizer_default = "tokenizer_default"
-    bos_only = "bos_only"
-    eos_only = "eos_only"
-    bos_eos = "bos_eos"
-    no_delimiters = "no_delimiters"
-
-
 @config_class()
 class TokenizerConfig(Config):
     """
@@ -40,10 +32,5 @@ class TokenizerConfig(Config):
     path: pathlib.Path | None = Field(
         default=None,
         desc="Path to the tokenizer file.",
-        hint=FieldHint.core,
-    )
-    sequence_delimiters: SequenceDelimiters = Field(
-        default=SequenceDelimiters.tokenizer_default,
-        desc="Boundary tokens (bos/eos) to use for tokenizing sequences",
         hint=FieldHint.core,
     )

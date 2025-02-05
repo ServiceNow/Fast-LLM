@@ -129,16 +129,11 @@ class GPTMemmapDatasetConfig(GPTIndexedDatasetConfig):
         desc="The path to the dataset, excluding the `.bin` or `.idx` suffix.",
         hint=FieldHint.core,
     )
-    use_loss_masking_spans: bool = Field(
-        default=False,
-        desc="Read and use loss masking spans from the dataset, if present.",
-        hint=FieldHint.feature,
-    )
 
     def build(self) -> "GPTMemmapDataset":
         from fast_llm.data.dataset.gpt.memmap import GPTMemmapDataset
 
-        return GPTMemmapDataset(str(self.path).replace("/", "__"), self.path, self.use_loss_masking_spans)
+        return GPTMemmapDataset(str(self.path).replace("/", "__"), self.path)
 
 
 @config_class()
@@ -388,7 +383,7 @@ class GPTLegacyDatasetConfig(GPTSampledDatasetConfig, GPTLegacyConfig):
             dataset_configs = [
                 GPTDatasetSliceConfig(
                     # TODO: this duplicates memmap datasets for each phase.
-                    dataset=GPTMemmapDatasetConfig(path=prefix, use_loss_masking_spans=config.use_loss_masking_spans),
+                    dataset=GPTMemmapDatasetConfig(path=prefix),
                     begin=phase_splits[phase_index],
                     end=phase_splits[phase_index + 1],
                 )

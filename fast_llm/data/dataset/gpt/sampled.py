@@ -45,6 +45,7 @@ class GPTSampledIndexedDataset(SampledDataset):
         self._num_samples = sampling_config.num_samples
         self._sequence_length = sampling_config.sequence_length
         self._seed = sampling_config.seed
+        self._use_loss_masking_spans = sampling_config.use_loss_masking_spans
 
         if sampling_config.cache_directory is None:
             log_main_rank(
@@ -136,13 +137,16 @@ class GPTSampledIndexedDataset(SampledDataset):
 
     def __getstate__(
         self,
-    ) -> tuple[GPTIndexedDataset, pathlib.Path | np.ndarray, pathlib.Path | np.ndarray, pathlib.Path | np.ndarray]:
+    ) -> tuple[
+        GPTIndexedDataset, pathlib.Path | np.ndarray, pathlib.Path | np.ndarray, pathlib.Path | np.ndarray | bool
+    ]:
         if hasattr(self, "_doc_idx_filename"):
             return (
                 self._indexed_dataset,
                 self._doc_idx_filename,
                 self._sample_idx_filename,
                 self._shuffle_idx_filename,
+                self._use_loss_masking_spans,
             )
         else:
             return (
@@ -150,15 +154,17 @@ class GPTSampledIndexedDataset(SampledDataset):
                 self._doc_idx,
                 self._sample_idx,
                 self._shuffle_idx,
+                self._use_loss_masking_spans,
             )
 
-    def __setstate__(self, state: tuple[GPTIndexedDataset, pathlib.Path, pathlib.Path, pathlib.Path]) -> None:
+    def __setstate__(self, state: tuple[GPTIndexedDataset, pathlib.Path, pathlib.Path, pathlib.Path, bool]) -> None:
         if isinstance(state[1], pathlib.Path):
             (
                 self._indexed_dataset,
                 self._doc_idx_filename,
                 self._sample_idx_filename,
                 self._shuffle_idx_filename,
+                self._use_loss_masking_spans,
             ) = state
         else:
             (
@@ -166,6 +172,7 @@ class GPTSampledIndexedDataset(SampledDataset):
                 self._doc_idx,
                 self._sample_idx,
                 self._shuffle_idx,
+                self._use_loss_masking_spans,
             ) = state
 
     def _load_mappings(self) -> None:
@@ -196,11 +203,12 @@ class GPTSampledIndexedDataset(SampledDataset):
                 self._doc_idx[doc].item(),
                 offset=(doc == doc_f) * offset_f,
                 length=offset_l + 1 - (doc == doc_f) * offset_f if doc == doc_l else None,
+                use_loss_masking_spans=self._use_loss_masking_spans,
             )
             for doc in range(doc_f, doc_l + 1)
         ]
 
-        if sample_list[0].loss_masking_spans is not None:
+        if self._use_loss_masking_spans:
             sample_ids = []
             sample_spans = []
             span_offset = 0

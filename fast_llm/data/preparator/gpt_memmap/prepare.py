@@ -46,7 +46,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
                     for input_ids, token_spans in [
                         self._tokenizer.tokenize_with_spans(text, char_spans)
                         for text, char_spans in zip(
-                            batch[self._config.dataset.field], batch[self._config.dataset.spans_field]
+                            batch[self._config.dataset.field], batch[self._config.dataset.loss_masking_spans]
                         )
                     ]
                 ]
@@ -65,7 +65,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
         shard_output_path = self._config.output_path / prefix
 
         def _document_generator():
-            if "token_spans" in shard_dataset.column_names and self._config.dataset.spans_field is not None:
+            if "token_spans" in shard_dataset.column_names and self._config.dataset.loss_masking_spans is not None:
                 for item in tqdm.tqdm(shard_dataset, desc=f"Saving shard {shard_idx}", unit="docs"):
                     yield GPTSample(
                         np.array(item["input_ids"], dtype=self._data_type.numpy),
@@ -159,9 +159,9 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
         )
         if self._config.dataset.field not in dataset.column_names:
             raise ValueError(f"Dataset does not have field '{self._config.dataset.field}'.")
-        if self._config.dataset.spans_field is not None:
-            if self._config.dataset.spans_field not in dataset.column_names:
-                raise ValueError(f"Dataset does not have spans field '{self._config.dataset.spans_field}'.")
+        if self._config.dataset.loss_masking_spans is not None:
+            if self._config.dataset.loss_masking_spans not in dataset.column_names:
+                raise ValueError(f"Dataset does not have spans field '{self._config.dataset.loss_masking_spans}'.")
             tokenize_fn = self._tokenize_batch_with_spans
         else:
             tokenize_fn = self._tokenize_batch

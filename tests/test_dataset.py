@@ -754,10 +754,11 @@ def test_gpt_data_with_spans():
         {
             "type": "memmap",
             "path": _DATASET_PREFIX_SPANS,
-            "use_loss_masking_spans": True,
         },
         GPTMemmapDatasetConfig,
     ).build()
     for i, sample in SPANS_DATASET_EXPECTED_SAMPLES.items():
-        Assert.all_equal(np.array(sample[0], dtype=np.uint16), dataset.get(i).token_ids)
-        Assert.all_equal(np.array(sample[1]).reshape(-1, 2), dataset.get(i).loss_masking_spans)
+        Assert.all_equal(np.array(sample[0], dtype=np.uint16), dataset.get(i, use_loss_masking_spans=True).token_ids)
+        Assert.all_equal(
+            np.array(sample[1]).reshape(-1, 2), dataset.get(i, use_loss_masking_spans=True).loss_masking_spans
+        )
