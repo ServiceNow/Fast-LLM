@@ -53,6 +53,8 @@ def fused_cross_entropy_forward_backward(
     # Way faster and more memory-efficient than the pytorch version.
     if apply_loss_mask:
         loss_mask = target != ignore_index
+        # ignore_index can go out of bounds, so clamp targets after getting the mask
+        target = target.clamp(min=0, max=logits.size(-1) - 1)
     target = target.unsqueeze(1)
     logits_norm = logits.sub(torch.max(logits, dim=-1)[0].unsqueeze(dim=-1)).float()
     if logits_scale_factor != 1.0:
