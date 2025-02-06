@@ -72,10 +72,12 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
         return dataset
 
     def _get_croissant_metadata(self):
-        url = f"https://huggingface.co/api/datasets/{self._config.dataset.path}/croissant"
-
+        # Use HF hub functionality to get api token from logged in state
+        # or set HF_TOKEN or HF_TOKEN_PATH env vars
         token = HfFolder.get_token()
         try:
+            # Retrieve the dataset metadata in croissant format
+            url = f"https://huggingface.co/api/datasets/{self._config.dataset.path}/croissant"
             if token is None:
                 response = requests.get(url)
             else:
@@ -100,7 +102,9 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
     def _save_croissant_metadata(self):
         dataset_path = pathlib.Path(self._config.dataset.path)
         dst_croissant_file = pathlib.Path(self._config.output_path) / "croissant.json"
+
         if dataset_path.is_dir():
+            # If the dataset is local, check if it has the metadata file and copy it
             croissant_file = dataset_path / "croissant.json"
             if croissant_file.is_file():
                 shutil.copy(croissant_file, dst_croissant_file)
@@ -108,6 +112,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
                 logger.warning(f"Source local dataset {self._config.dataset.path} does not have croissant file")
                 return
         else:
+            # If the dataset is on HF hub, retrieve the metadata if provided and save it
             data = self._get_croissant_metadata()
             if data is None:
                 return
