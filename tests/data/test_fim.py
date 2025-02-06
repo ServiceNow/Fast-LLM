@@ -1,14 +1,16 @@
-import numpy as np
-
 from fast_llm.data.config import TokenizerConfig
 from fast_llm.data.dataset.gpt.config import GPTFimSampledDatasetConfig
 from fast_llm.data.tokenizer import Tokenizer
 from fast_llm.engine.distributed.config import PhaseType
-from fast_llm.utils import Assert
 from tests.common import DATASET_PREFIX, TOKENIZER_PATH, get_test_dataset
-from tests.data.common import get_dataset_config, get_sampling_data, get_test_data_and_samples
+from tests.data.common import (
+    compare_sampled_dataset,
+    get_dataset_config,
+    get_sampling_data,
+    get_test_data_and_compare_samples,
+)
 
-GPT_FIM_EXPECTED_SAMPLES = [
+GPT_FIM_SAMPLES = [
     [1725, 74, 207, 1635, 4440, 2774],
     [359, 489, 4266, 2052, 5351, 80],
     [86, 89, 22255, 1073, 79, 480],
@@ -39,16 +41,11 @@ def test_gpt_fim():
         },
         GPTFimSampledDatasetConfig,
     ).build_and_sample(sampling_config)
-    Assert.eq(len(sampled), 8)
-    # TODO: Does this output make sense?
-    Assert.all_equal(
-        np.stack([sampled[i] for i in range(8)]),
-        np.array(GPT_FIM_EXPECTED_SAMPLES),
-    )
+    compare_sampled_dataset(sampled, GPT_FIM_SAMPLES)
 
 
 def test_gpt_fim_data():
-    _, samples = get_test_data_and_samples(
+    get_test_data_and_compare_samples(
         {
             "datasets": {
                 "Training": {
@@ -65,15 +62,12 @@ def test_gpt_fim_data():
         },
         {PhaseType.training: 8},
         sequence_length=5,
-    )
-    Assert.all_equal(
-        np.stack(samples[PhaseType.training]),
-        np.array(GPT_FIM_EXPECTED_SAMPLES),
+        expected_samples={PhaseType.training: GPT_FIM_SAMPLES},
     )
 
 
 def test_gpt_fim_data_legacy():
-    _, samples = get_test_data_and_samples(
+    get_test_data_and_compare_samples(
         {
             "format": "list",
             "path": [str(DATASET_PREFIX)],
@@ -83,8 +77,5 @@ def test_gpt_fim_data_legacy():
         },
         {PhaseType.training: 8},
         sequence_length=5,
-    )
-    Assert.all_equal(
-        np.stack(samples[PhaseType.training]),
-        np.array(GPT_FIM_EXPECTED_SAMPLES),
+        expected_samples={PhaseType.training: GPT_FIM_SAMPLES},
     )

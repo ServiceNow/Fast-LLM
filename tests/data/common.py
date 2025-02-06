@@ -2,11 +2,14 @@ import pathlib
 import typing
 
 import numpy as np
+import torch
 
 from fast_llm.config import NoAutoValidate
 from fast_llm.data.data.gpt.config import GPTDataConfig, GPTSamplingDefaultConfig
 from fast_llm.data.data.gpt.data import GPTData
+from fast_llm.data.dataset.abstract import SampledDataset
 from fast_llm.data.dataset.gpt.config import GPTSampledDatasetConfig, GPTSamplingData, ShufflingType
+from fast_llm.data.dataset.gpt.indexed import GPTIndexedDataset
 from fast_llm.data.dataset.gpt.sampled import GPTSampledIndexedDataset
 from fast_llm.data.tokenizer import Tokenizer
 from fast_llm.engine.distributed.config import DistributedConfig, PhaseType
@@ -52,15 +55,16 @@ def get_dataset_config[T: GPTSampledDatasetConfig](config: dict[str, typing.Any]
     return typing.cast(cls, dataset_config)
 
 
-def get_test_data_and_samples(
+def get_test_data_and_compare_samples(
     config: dict,
     samples_per_phase: dict[PhaseType, int],
+    *,
     seed: int = 54983,
     cache_directory: pathlib.Path | None = None,
     sequence_length: int = 512,
     vocab_size=TEST_VOCAB_SIZE,
-    expected_samples=None,
-):
+    expected_samples: dict[PhaseType, list[list[int]]],
+) -> GPTData:
     distributed_config = DistributedConfig(seed=seed)
     distributed = Distributed(distributed_config, use_cpu=True)
     data = GPTData(GPTDataConfig.from_dict(config), distributed_config, vocab_size, sequence_length)
@@ -70,48 +74,62 @@ def get_test_data_and_samples(
     batch_config.setup(distributed_config)
     batch_config.validate()
     samples = {
-        phase: [batch[0] for batch in data.get_iterator(batch_config, phase, consumed_samples=0, num_workers=0)]
+        phase: torch.stack(
+            [batch[0] for batch in data.get_iterator(batch_config, phase, consumed_samples=0, num_workers=0)]
+        )
         for phase, samples in samples_per_phase.items()
     }
-    if expected_samples:
-        for phase, expected_samples_ in expected_samples.items():
-            Assert.all_equal(
-                np.stack(samples[phase]),
-                np.array(expected_samples_),
-            )
-    return data, samples
+    for phase, expected_samples_ in expected_samples.items():
+        Assert.all_equal(samples[phase], expected_samples_)
+    return data
 
 
-def _check_sampling(self: GPTSampledIndexedDataset, expected_samples):
+def compare_indexed_dataset(
+    dataset: GPTIndexedDataset, length: int, num_tokens: int, expected_samples: dict[int, list[int]]
+) -> None:
+    Assert.eq(len(dataset), length)
+    sizes = dataset.get_document_sizes()
+    Assert.eq(sizes.sum(), num_tokens)
+    Assert.all_equal([len(dataset.get(i)) for i in range(min(len(dataset), 100))], sizes[: min(len(dataset), 100)])
+    for i, expected_sample in expected_samples.items():
+        Assert.all_equal(dataset.get(i), np.array(expected_sample, dtype=np.uint16))
+
+
+def compare_sampled_dataset(sampled: SampledDataset, expected_samples: list[list[int]]) -> None:
+    Assert.eq(len(sampled), len(expected_samples))
+    Assert.all_equal([sampled[i] for i in range(len(expected_samples))], expected_samples)
+
+
+def validate_indexed_dataset_sampling(
+    sampled: GPTSampledIndexedDataset, expected_samples: list[list[int]] | None = None
+):
     """
     Compare `GPTSampledIndexedDataset` sampling against a more basic approach
     """
-    num_tokens = self._num_samples * self._sequence_length + 1
-    all_tokens = np.full(self._num_samples * self._sequence_length + 1, -1, dtype=np.int64)
-    unshuffled_epochs = div(self._unshuffled_documents, self._documents_per_epoch)
+    num_tokens = sampled._num_samples * sampled._sequence_length + 1
+    all_tokens = np.full(sampled._num_samples * sampled._sequence_length + 1, -1, dtype=np.int64)
+    unshuffled_epochs = div(sampled._unshuffled_documents, sampled._documents_per_epoch)
     document_sampling = np.concatenate(
         (
-            np.tile(np.arange(self._documents_per_epoch, dtype=self._document_shuffling), unshuffled_epochs),
-            self._document_shuffling,
+            np.tile(np.arange(sampled._documents_per_epoch, dtype=sampled._document_shuffling), unshuffled_epochs),
+            sampled._document_shuffling,
         )
     )
     seen_tokens = 0
     for document_index in document_sampling:
-        document = self._indexed_dataset.get(document_index)
+        document = sampled._indexed_dataset.get(document_index)
         all_tokens[seen_tokens : seen_tokens + len(document)] = document[: num_tokens - seen_tokens - len(document)]
         seen_tokens += len(document)
         if seen_tokens >= num_tokens:
             break
 
-    samples = [self[index] for index in range(len(self))]
+    samples = [sampled[index] for index in range(len(sampled))]
     Assert.all_equal(
         [
-            all_tokens[index * self._sequence_length : (index + 1) * self._sequence_length + 1]
-            for index in range(self._num_samples)
+            all_tokens[index * sampled._sequence_length : (index + 1) * sampled._sequence_length + 1]
+            for index in range(sampled._num_samples)
         ],
         samples,
     )
-
-    if expected_samples:
-        Assert.eq(len(self), len(expected_samples))
-        Assert.all_equal(samples, expected_samples)
+    if expected_samples is not None:
+        compare_sampled_dataset(sampled, expected_samples)

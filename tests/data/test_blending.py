@@ -7,7 +7,12 @@ from fast_llm.data.dataset.gpt.config import GPTBlendedDatasetConfig
 from fast_llm.engine.distributed.config import PhaseType
 from fast_llm.utils import Assert, normalize_probabilities
 from tests.common import DATASET_PREFIX, get_test_dataset
-from tests.data.common import get_dataset_config, get_sampling_data, get_test_data_and_samples
+from tests.data.common import (
+    compare_sampled_dataset,
+    get_dataset_config,
+    get_sampling_data,
+    get_test_data_and_compare_samples,
+)
 
 _DATASET_PREFIX_MIX_1 = DATASET_PREFIX.with_name("blended_mix_1")
 
@@ -30,7 +35,7 @@ def _get_blending_alt(probs: list[float], num_samples: int) -> tuple[np.ndarray,
     return dataset_index, sample_index
 
 
-GPT_BLENDED_EXPECTED_SAMPLES = [
+GPT_BLENDED_SAMPLES = [
     [1725, 74, 207, 1635, 4440, 2774],
     [359, 489, 4266, 2052, 5351, 80],
     [2066, 207, 6436, 2360, 2210, 6633],
@@ -41,7 +46,7 @@ GPT_BLENDED_EXPECTED_SAMPLES = [
     [409, 5091, 328, 1378, 5483, 88],
 ]
 
-GPT_BLENDED_LEGACY_EXPECTED_SAMPLES = [
+GPT_BLENDED_LEGACY_SAMPLES = [
     [1725, 74, 207, 1635, 4440, 2774],
     [359, 489, 4266, 2052, 5351, 80],
     [328, 80, 263, 890, 1797, 88],
@@ -52,7 +57,7 @@ GPT_BLENDED_LEGACY_EXPECTED_SAMPLES = [
     [409, 5091, 328, 1378, 5483, 88],
 ]
 
-GPT_BLENDED_MIXED_EXPECTED_SAMPLES = [
+GPT_BLENDED_MIXED_SAMPLES = [
     [1725, 74, 207, 1635, 4440, 2774],
     [916, 6683, 7685, 1277, 5106, 378],
     [359, 489, 4266, 2052, 5351, 80],
@@ -130,17 +135,13 @@ def test_gpt_blended():
         },
         GPTBlendedDatasetConfig,
     ).build_and_sample(get_sampling_data(8, sequence_length=5))
-    Assert.eq(len(sampled), 8)
-    Assert.all_equal(
-        np.stack([sampled[i] for i in range(8)]),
-        np.array(GPT_BLENDED_EXPECTED_SAMPLES),
-    )
+    compare_sampled_dataset(sampled, GPT_BLENDED_SAMPLES)
 
 
 def test_gpt_blended_data():
     get_test_dataset()
     _get_test_dataset_mix_1()
-    _, samples = get_test_data_and_samples(
+    get_test_data_and_compare_samples(
         {
             "datasets": {
                 "Training": {
@@ -155,17 +156,14 @@ def test_gpt_blended_data():
         },
         {PhaseType.training: 8},
         sequence_length=5,
-    )
-    Assert.all_equal(
-        np.stack(samples[PhaseType.training]),
-        np.array(GPT_BLENDED_EXPECTED_SAMPLES),
+        expected_samples={PhaseType.training: GPT_BLENDED_SAMPLES},
     )
 
 
 def test_gpt_blended_data_legacy():
     get_test_dataset()
     _get_test_dataset_mix_1()
-    _, samples = get_test_data_and_samples(
+    get_test_data_and_compare_samples(
         {
             "format": "list",
             "path": ["0.75", str(DATASET_PREFIX), "0.25", str(_DATASET_PREFIX_MIX_1)],
@@ -173,10 +171,7 @@ def test_gpt_blended_data_legacy():
         },
         {PhaseType.training: 8},
         sequence_length=5,
-    )
-    Assert.all_equal(
-        np.stack(samples[PhaseType.training]),
-        np.array(GPT_BLENDED_LEGACY_EXPECTED_SAMPLES),
+        expected_samples={PhaseType.training: GPT_BLENDED_LEGACY_SAMPLES},
     )
 
 
@@ -194,15 +189,11 @@ def test_gpt_blended_mixed():
         },
         GPTBlendedDatasetConfig,
     ).build_and_sample(get_sampling_data(8, sequence_length=5))
-    Assert.eq(len(sampled), 8)
-    Assert.all_equal(
-        np.stack([sampled[i] for i in range(8)]),
-        np.array(GPT_BLENDED_MIXED_EXPECTED_SAMPLES),
-    )
+    compare_sampled_dataset(sampled, GPT_BLENDED_MIXED_SAMPLES)
 
 
 def test_gpt_blended_mixed_data():
-    _, samples = get_test_data_and_samples(
+    get_test_data_and_compare_samples(
         {
             "datasets": {
                 "Training": {
@@ -214,8 +205,5 @@ def test_gpt_blended_mixed_data():
         },
         {PhaseType.training: 8},
         sequence_length=5,
-    )
-    Assert.all_equal(
-        np.stack(samples[PhaseType.training]),
-        np.array(GPT_BLENDED_MIXED_EXPECTED_SAMPLES),
+        expected_samples={PhaseType.training: GPT_BLENDED_MIXED_SAMPLES},
     )
