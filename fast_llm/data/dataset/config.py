@@ -229,7 +229,7 @@ class BlendedDatasetConfig(SampledDatasetConfig):
                         if self.legacy
                         else math.ceil(weight * sampling.num_samples) + 1
                     ),
-                    seed=sampling.config.seed + i * (0 if self.legacy else 697),
+                    config=sampling.config.to_copy({"seed": sampling.config.seed + i * (0 if self.legacy else 697)}),
                 ),
             )
             for i, (dataset, weight) in enumerate(zip(self.datasets, self.weights, strict=True))

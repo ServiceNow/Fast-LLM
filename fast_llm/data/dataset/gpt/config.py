@@ -191,14 +191,10 @@ class GPTDatasetSliceConfig(DatasetSliceConfig, GPTIndexedDatasetConfig):
 
 
 @config_class()
-class GPTSampledDatasetUpdateConfig(SampledDatasetUpdateConfig):
-    """
-    Wrap a dataset to explicitly sample from it and optionally update its configuration parameters.
-    Only explicitly set parameters (not None) will be updated, other will still be taken from `build_and_sample`'s argument.
-    """
-
+class GPTSampledDatasetUpdateConfig(SampledDatasetUpdateConfig, GPTSampledDatasetConfig):
     type_: typing.ClassVar[str | None] = "sampled"
     sampling: GPTSamplingConfig = FieldUpdate(default_factory=GPTSamplingConfig)
+    dataset: GPTSampledDatasetConfig = FieldUpdate(default_factory=GPTSampledDatasetConfig)
 
 
 @config_class()
@@ -423,7 +419,7 @@ class GPTLegacyDatasetConfig(GPTSampledDatasetConfig, GPTLegacyConfig):
 
             dataset_configs = [
                 {
-                    "type": slice,
+                    "type": "slice",
                     # TODO: this duplicates memmap datasets for each phase.
                     "dataset": {"type": "memmap", "path": prefix},
                     "begin": phase_splits[phase_index],

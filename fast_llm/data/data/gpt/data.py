@@ -75,7 +75,7 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
                 assert phase in self._config.datasets
                 sampling = GPTSamplingData(
                     num_samples=samples_per_phase[phase],
-                    seed=self._distributed_config.seed,
+                    config=self._config.sampling,
                     cache_directory=self._cache_directory,
                     distributed=distributed,
                     phase=phase,

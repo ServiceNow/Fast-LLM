@@ -8,6 +8,7 @@ from fast_llm.data.dataset.gpt.config import (
     GPTLegacyDatasetConfig,
     GPTSampledDatasetConfig,
     GPTSamplingConfig,
+    ShufflingType,
 )
 from fast_llm.engine.distributed.config import PhaseType
 from fast_llm.utils import Assert
@@ -18,6 +19,7 @@ logger = logging.getLogger(__name__)
 @config_class()
 class GPTSamplingDefaultConfig(SamplingDefaultConfig, GPTSamplingConfig):
     gpu: bool = FieldUpdate(default=True)
+    shuffle: ShufflingType = FieldUpdate(default=ShufflingType.epoch)
 
 
 @config_class()
