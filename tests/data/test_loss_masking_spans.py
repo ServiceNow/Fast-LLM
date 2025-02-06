@@ -1,7 +1,7 @@
-from tests.common import DATASET_PREFIX, get_test_dataset_with_spans
-from tests.data.common import get_dataset_config, compare_indexed_dataset_with_spans
-from tests.data.test_memmap import MEMMAP_DATASET_LENGTH, MEMMAP_DATASET_TOKENS
 from fast_llm.data.dataset.gpt.config import GPTMemmapDatasetConfig
+from tests.common import DATASET_PREFIX, get_test_dataset_with_spans
+from tests.data.common import compare_indexed_dataset_with_spans, get_dataset_config
+from tests.data.test_memmap import MEMMAP_DATASET_LENGTH, MEMMAP_DATASET_TOKENS
 
 _DATASET_PREFIX_SPANS = DATASET_PREFIX.with_name("with_spans")
 
@@ -22,7 +22,9 @@ def test_gpt_data_with_spans():
         },
         GPTMemmapDatasetConfig,
     ).build()
-    compare_indexed_dataset_with_spans(dataset, MEMMAP_DATASET_LENGTH, MEMMAP_DATASET_TOKENS, SPANS_DATASET_EXPECTED_SAMPLES)
+    compare_indexed_dataset_with_spans(
+        dataset, MEMMAP_DATASET_LENGTH, MEMMAP_DATASET_TOKENS, SPANS_DATASET_EXPECTED_SAMPLES
+    )
     # for i, sample in SPANS_DATASET_EXPECTED_SAMPLES.items():
     #     Assert.all_equal(np.array(sample[0], dtype=np.uint16), dataset.get(i, use_loss_masking_spans=True).token_ids)
     #     Assert.all_equal(
