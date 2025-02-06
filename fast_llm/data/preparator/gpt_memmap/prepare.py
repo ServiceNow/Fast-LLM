@@ -1,6 +1,9 @@
 import json
+import logging
 import multiprocessing
 import pathlib
+import requests
+import shutil
 import typing
 
 import datasets
@@ -9,11 +12,15 @@ import torch.distributed
 import tqdm
 import transformers
 
+from huggingface_hub import HfFolder
+
 from fast_llm.data.dataset.gpt.memmap import GPTMemmapDataset
 from fast_llm.data.preparator.config import DatasetPreparator
 from fast_llm.data.preparator.gpt_memmap.config import GPTMemmapDatasetPreparatorConfig
 from fast_llm.data.tokenizer import Tokenizer
 from fast_llm.engine.config_utils.data_type import DataType
+
+logger = logging.getLogger(__name__)
 
 
 class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](DatasetPreparator[ConfigType]):
@@ -63,6 +70,49 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
         )
         assert isinstance(dataset, datasets.Dataset)
         return dataset
+
+    def _get_croissant_metadata(self):
+        url = f"https://huggingface.co/api/datasets/{self._config.dataset.path}/croissant"
+
+        token = HfFolder.get_token()
+        try:
+            if token is None:
+                response = requests.get(url)
+            else:
+                response = requests.get(url, headers={"Authorization": f"Bearer {token}"})
+
+            if response.status_code != 200:
+                logger.warning(
+                    f"Failed to get croissant metadata, status_code: {response.status_code}, body: {response.text}"
+                )
+                return None
+
+            data = response.json()
+        except Exception as e:
+            logger.warning(f"Failed to get croissant metadata, {e}")
+            return None
+        if "error" in data:
+            logger.warning(f"Failed to get croissant metadata, error: {data['error']}")
+            return None
+
+        return data
+
+    def _save_croissant_metadata(self):
+        dataset_path = pathlib.Path(self._config.dataset.path)
+        dst_croissant_file = pathlib.Path(self._config.output_path) / "croissant.json"
+        if dataset_path.is_dir():
+            croissant_file = dataset_path / "croissant.json"
+            if croissant_file.is_file():
+                shutil.copy(croissant_file, dst_croissant_file)
+            else:
+                logger.warning(f"Source local dataset {self._config.dataset.path} does not have croissant file")
+                return
+        else:
+            data = self._get_croissant_metadata()
+            if data is None:
+                return
+            with dst_croissant_file.open("wt") as f:
+                json.dump(data, f)
 
     def run(self) -> None:
         # Set transformers logging verbosity
@@ -167,6 +217,8 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
                 dataset_dict["weight"] = float(dataset_dict["num_tokens"]) / float(total_tokens)
             output_file = self._config.output_path / "fast_llm_dataset.json"
             json.dump({"datasets": dataset_dicts}, output_file.open("w"))
+
+            self._save_croissant_metadata()
 
         # Create an index file on rank 0
         index_file = self._config.output_path / "index.txt"
