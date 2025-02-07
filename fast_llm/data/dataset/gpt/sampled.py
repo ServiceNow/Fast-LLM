@@ -267,6 +267,7 @@ class GPTSampledIndexedDataset(SampledDataset):
         with the requested sampling index.
         The returned sample is ready to be concatenated, then fed to a `GPTModel` (see `GPTModel.preprocess`).
         """
+        self._lazy_load()
         token_start = index * self._sequence_length
         token_end = token_start + self._sequence_length + 1
 
