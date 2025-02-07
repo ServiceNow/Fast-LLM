@@ -48,9 +48,9 @@ def fused_cross_entropy_forward_backward(
     """
     # Do the forward and backward passes all at once, and fused with dtype conversion.
     # Way faster and more memory-efficient than the pytorch version.
-    loss_mask = target < 0
+    loss_mask = target >= 0
     # Ignore_index can go out of bounds, so set masked values to zero.
-    target = target.unsqueeze(1) * loss_mask
+    target = (target * loss_mask).unsqueeze(1)
     logits_norm = logits.sub(torch.max(logits, dim=-1)[0].unsqueeze(dim=-1)).float()
     if logits_scale_factor != 1.0:
         logits_norm *= logits_scale_factor
@@ -88,7 +88,7 @@ def parallel_cross_entropy_forward_backward(
     """
     # TODO: Compiled version incorrect for some inputs (32 bit indexing issue?).
     # TODO: Optimize, overlap/combine reductions
-    loss_mask = target < 0
+    loss_mask = target >= 0
     target = target.unsqueeze(1)
 
     logits_max = torch.max(logits, dim=-1)[0]
