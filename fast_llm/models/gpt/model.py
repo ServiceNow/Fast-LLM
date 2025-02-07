@@ -196,7 +196,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
         assert self._is_setup
 
         if preprocessed_meta is None:
-            preprocessed_meta = self.preprocess_meta(batch, phase)
+            preprocessed_meta = self.preprocess_meta(batch.token_ids, phase)
 
         _, common_kwargs = preprocessed_meta[0]
         sequence_q = common_kwargs[TransformerKwargs.sequence_q_dim].size
