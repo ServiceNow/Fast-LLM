@@ -83,8 +83,6 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
             else:
                 self._cross_entropy_impl = CrossEntropyImpl.fused
 
-        self._apply_loss_mask = config.apply_loss_mask
-
         self._forward = wrap_forward_backward(self._forward_backward, grad_is_context)
 
     def forward(
@@ -245,7 +243,6 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
             grad_output=grad_output,
             implementation=self._cross_entropy_impl,
             logits_scale_factor=self._logits_scale_factor,
-            apply_loss_mask=self._apply_loss_mask,
         )
         # TODO: de-allocate earlier.
         del logits

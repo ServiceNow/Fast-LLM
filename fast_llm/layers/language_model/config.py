@@ -173,11 +173,6 @@ class LanguageModelBaseConfig(LanguageModelArchitectureConfig, BaseModelConfig):
         hint=FieldHint.feature,
         valid=check_field(Assert.geq, 0),
     )
-    apply_loss_mask: bool = Field(
-        default=False,
-        desc="Enable loss-masking for cross-entropy computation",
-        hint=FieldHint.feature,
-    )
 
     def _validate(self) -> None:
         if self.transformer.init_method_std is None:

@@ -150,11 +150,7 @@ def cross_entropy_forward_backward(
     if group:
         Assert.eq(implementation, CrossEntropyImpl.fused)
         return parallel_cross_entropy_forward_backward(
-            logits,
-            target,
-            grad_output,
-            group,
-            logits_scale_factor=logits_scale_factor,
+            logits, target, grad_output, group, logits_scale_factor=logits_scale_factor
         )
     else:
         return _CROSS_ENTROPY_IMPLEMENTATIONS[implementation](
