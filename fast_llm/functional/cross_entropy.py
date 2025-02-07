@@ -154,8 +154,5 @@ def cross_entropy_forward_backward(
         )
     else:
         return _CROSS_ENTROPY_IMPLEMENTATIONS[implementation](
-            logits,
-            target,
-            grad_output,
-            logits_scale_factor=logits_scale_factor,
+            logits, target, grad_output, logits_scale_factor=logits_scale_factor
         )
