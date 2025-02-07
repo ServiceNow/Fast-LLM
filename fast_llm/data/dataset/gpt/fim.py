@@ -2,6 +2,7 @@ import numpy as np
 
 from fast_llm.data.dataset.abstract import SampledDataset
 from fast_llm.data.dataset.gpt.config import FimConfig, GPTSamplingConfig
+from fast_llm.data.dataset.gpt.sampled import GPTSample
 from fast_llm.engine.distributed.config import MAX_SEED
 
 
@@ -17,6 +18,8 @@ class GPTFimDataset(SampledDataset):
         dataset: SampledDataset,
         sampling_config: GPTSamplingConfig,
     ):
+        if sampling_config.use_loss_masking_spans:
+            raise NotImplementedError("FIM is currently not compatible with loss masking.")
         self._config = config
         self._dataset = dataset
         self._seed = sampling_config.seed
@@ -35,8 +38,10 @@ class GPTFimDataset(SampledDataset):
         return len(self._dataset)
 
     def __getitem__(self, idx: int) -> np.ndarray:
-        sample = self._fim(self._dataset[idx], np.random.RandomState(seed=(self._seed + idx) % MAX_SEED))
-        return sample
+        fim_token_ids = self._fim(
+            self._dataset[idx].token_ids, np.random.RandomState(seed=(self._seed + idx) % MAX_SEED)
+        )
+        return GPTSample(fim_token_ids)
 
     @property
     def name(self) -> str:
@@ -150,9 +155,9 @@ class GPTFimDataset(SampledDataset):
         middle = contents[boundaries[0] : boundaries[1]]
         suffix = contents[boundaries[1] :]
 
-        prefix = np.array([*self._tokenizer.tokenize(prefix)], dtype=np.int64)
-        middle = np.array([*self._tokenizer.tokenize(middle)], dtype=np.int64)
-        suffix = np.array([*self._tokenizer.tokenize(suffix)], dtype=np.int64)
+        prefix = np.array([*self._tokenizer.tokenize(prefix, end=False)], dtype=np.int64)
+        middle = np.array([*self._tokenizer.tokenize(middle, begin=False, end=False)], dtype=np.int64)
+        suffix = np.array([*self._tokenizer.tokenize(suffix, begin=False)], dtype=np.int64)
 
         # here we truncate each given segment to fit the same length as it was before
         # A consequence is that we never reach the end of a file?

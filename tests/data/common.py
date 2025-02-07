@@ -68,7 +68,7 @@ def get_test_data_and_compare_samples(
     batch_config.validate()
     samples = {
         phase: torch.stack(
-            [batch[0] for batch in data.get_iterator(batch_config, phase, consumed_samples=0, num_workers=0)]
+            [batch.token_ids[0] for batch in data.get_iterator(batch_config, phase, consumed_samples=0, num_workers=0)]
         )
         for phase, samples in samples_per_phase.items()
     }
@@ -78,16 +78,27 @@ def get_test_data_and_compare_samples(
 
 
 def compare_indexed_dataset(
-    dataset: GPTIndexedDataset, length: int, num_tokens: int, samples: dict[int, list[int]]
+    dataset: GPTIndexedDataset,
+    length: int,
+    num_tokens: int,
+    samples: dict[int, list[int]],
+    loss_masking_spans: dict[int, list[int]] | None = None,
 ) -> None:
     Assert.eq(len(dataset), length)
     sizes = dataset.get_document_sizes()
     Assert.eq(sizes.sum(), num_tokens)
-    Assert.all_equal([len(dataset.get(i)) for i in range(min(len(dataset), 100))], sizes[: min(len(dataset), 100)])
+    Assert.all_equal(
+        [len(dataset.get(i).token_ids) for i in range(min(len(dataset), 100))], sizes[: min(len(dataset), 100)]
+    )
     for i, sample in samples.items():
-        Assert.all_equal(dataset.get(i), np.array(sample, dtype=np.uint16))
+        dataset_sample = dataset.get(i, use_loss_masking_spans=loss_masking_spans is not None)
+        Assert.all_equal(dataset_sample.token_ids, np.array(sample, dtype=np.uint16))
+        if loss_masking_spans:
+            Assert.all_equal(
+                dataset_sample.loss_masking_spans, np.array(loss_masking_spans[i], dtype=np.int32).reshape(-1, 2)
+            )
 
 
 def compare_sampled_dataset(sampled: SampledDataset, expected_samples: list[list[int]]) -> None:
     Assert.eq(len(sampled), len(expected_samples))
-    Assert.all_equal([sampled[i] for i in range(len(expected_samples))], expected_samples)
+    Assert.all_equal([sampled[i].token_ids for i in range(len(expected_samples))], expected_samples)

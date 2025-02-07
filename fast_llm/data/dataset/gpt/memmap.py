@@ -5,6 +5,7 @@ import typing
 import numpy as np
 
 from fast_llm.data.dataset.gpt.indexed import GPTIndexedDataset
+from fast_llm.data.dataset.gpt.sampled import GPTSample
 from fast_llm.data.preparator.gpt_memmap.config import MEMMAP_DTYPES, MEMMAP_DTYPES_INV, MEMMAP_INDEX_HEADER
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.utils import Assert, div
@@ -26,10 +27,14 @@ class GPTMemmapDataset(GPTIndexedDataset):
         super().__init__()
         self._name = name
         self._prefix = pathlib.Path(prefix)
+        self._has_spans = 0
 
         with self._prefix.with_suffix(".idx").open("rb") as stream:
             Assert.eq(stream.read(9), MEMMAP_INDEX_HEADER)
-            Assert.eq(struct.unpack("<Q", stream.read(8))[0], 1)
+            self._version = struct.unpack("<Q", stream.read(8))[0]
+            assert self._version in [1, 2], f"Unsupported version for gpt_memmap dataset: {self._version}."
+            if self._version == 2:
+                self._has_spans = struct.unpack("<B", stream.read(1))[0]
 
             self._dtype = MEMMAP_DTYPES[struct.unpack("<B", stream.read(1))[0]].numpy
             self._num_documents = struct.unpack("<Q", stream.read(8))[0]
@@ -48,6 +53,27 @@ class GPTMemmapDataset(GPTIndexedDataset):
             offset=offset + self._document_sizes.nbytes,
         )
 
+        self._spans = None
+        if self._has_spans and self._version == 2:
+            self._spans = []
+            self._num_spans = np.frombuffer(
+                self._index_bin_buffer,
+                dtype=np.int32,
+                count=self._num_documents,
+                offset=offset + self._document_sizes.nbytes + self._pointers.nbytes,
+            )
+            span_offset = offset + self._document_sizes.nbytes + self._pointers.nbytes + self._num_spans.nbytes
+            self._num_spans_cumsum = np.r_[0, np.cumsum(self._num_spans[:-1], dtype=np.int64)]
+            for idx in range(self._num_documents):
+                self._spans.append(
+                    np.frombuffer(
+                        self._index_bin_buffer,
+                        dtype=np.int32,
+                        count=self._num_spans[idx] * 2,
+                        offset=span_offset + self._num_spans_cumsum[idx] * 2 * np.dtype(np.int32).itemsize,
+                    ).reshape(-1, 2)
+                )
+
         self._bin_buffer_mmap = np.memmap(self._prefix.with_suffix(".bin"), mode="r", order="C")
         self._bin_buffer = memoryview(self._bin_buffer_mmap)
 
@@ -65,13 +91,25 @@ class GPTMemmapDataset(GPTIndexedDataset):
             self._index_bin_buffer_mmap._mmap.close()  # noqa
             del self._index_bin_buffer_mmap
 
-    def get(self, idx, offset=0, length=None) -> np.ndarray:
-        return np.frombuffer(
+    def get(
+        self, idx: int, offset: int = 0, length: int | None = None, use_loss_masking_spans: bool = False
+    ) -> GPTSample:
+        token_ids = np.frombuffer(
             self._bin_buffer,
             dtype=self._dtype,
             count=self._document_sizes[idx] - offset if length is None else length,
             offset=self._pointers[idx] + offset * np.dtype(self._dtype).itemsize,
         )
+        sample_spans = None
+        if use_loss_masking_spans and self._spans is not None:
+            sample_spans = self._spans[idx]
+            # adjust the spans for the offset and length
+            sample_spans = sample_spans[
+                (sample_spans[:, 0] < offset + len(token_ids)) & (sample_spans[:, 1] >= offset)
+            ]
+            sample_spans[:, 0] = np.maximum(sample_spans[:, 0], offset) - offset
+            sample_spans[:, 1] = np.minimum(sample_spans[:, 1], offset + len(token_ids) - 1) - offset
+        return GPTSample(token_ids=token_ids, loss_masking_spans=sample_spans)
 
     @property
     def name(self) -> str:
@@ -93,13 +131,16 @@ class GPTMemmapDataset(GPTIndexedDataset):
         return self._document_sizes
 
     @classmethod
-    def write_dataset(cls, prefix: pathlib.Path | str, documents: typing.Iterable[np.ndarray]):
+    def write_dataset(cls, prefix: pathlib.Path | str, documents: typing.Iterable[GPTSample]):
         # Initialize metadata
         dtype = None
         num_documents = 0
         lengths = []
         pointers = []
         offset = 0
+        # number of spans for each document
+        num_spans = []
+        spans = []
 
         prefix = pathlib.Path(prefix)
         prefix.parent.mkdir(parents=True, exist_ok=True)
@@ -109,30 +150,42 @@ class GPTMemmapDataset(GPTIndexedDataset):
             for document in documents:
                 # Infer dtype from the first document
                 if dtype is None:
-                    dtype = document.dtype
+                    dtype = document.token_ids.dtype
                     assert dtype is not None, "Document dtype could not be inferred from the data."
 
                 # Ensure all documents have the same dtype
-                assert document.dtype == dtype, f"Expected dtype {dtype}, got {document.dtype}."
+                assert document.token_ids.dtype == dtype, f"Expected dtype {dtype}, got {document.token_ids.dtype}."
 
                 # Write document to binary file
-                bin_stream.write(document.tobytes(order="C"))
+                bin_stream.write(document.token_ids.tobytes(order="C"))
 
                 # Update metadata
-                doc_length = len(document)
+                doc_length = len(document.token_ids)
                 lengths.append(doc_length)
                 pointers.append(offset)
+                if document.loss_masking_spans is not None:
+                    num_spans.append(len(document.loss_masking_spans))
+                    spans.append(document.loss_masking_spans)
                 offset += doc_length * np.dtype(dtype).itemsize
                 num_documents += 1
 
         # Finalize metadata arrays
         lengths = np.array(lengths, dtype=np.int32)
         pointers = np.array(pointers, dtype=np.int64)
+        num_spans = np.array(num_spans, dtype=np.int32)
+        if len(spans) > 0:
+            spans = np.vstack(spans, dtype=np.int32)
+        else:
+            spans = np.array(spans, dtype=np.int32)
 
         # Write the index file (.idx)
         with prefix.with_suffix(".idx").open("wb") as idx_stream:
             idx_stream.write(MEMMAP_INDEX_HEADER)
-            idx_stream.write(struct.pack("<Q", 1))  # Version
+            # Indicates the version
+            # Version 2 optionally adds loss-masking spans
+            idx_stream.write(struct.pack("<Q", 2))
+            # Flag to indicate whether loss-masking spans are present
+            idx_stream.write(struct.pack("<B", 1 if spans.size > 0 else 0))
             # Data type
             idx_stream.write(struct.pack("<B", MEMMAP_DTYPES_INV[DataType.from_numpy(dtype.type)]))
             # "Number of sequences", same as documents in our case
@@ -143,5 +196,9 @@ class GPTMemmapDataset(GPTIndexedDataset):
             idx_stream.write(lengths.tobytes(order="C"))
             # Sequence (document) begin offsets in the bin file
             idx_stream.write(pointers.tobytes(order="C"))
+            # Number of spans per document
+            idx_stream.write(num_spans.tobytes(order="C"))
+            # Span indices for each document
+            idx_stream.write(spans.tobytes(order="C"))
             # Document indices, unused but needed for compatibility with Megatron-LM
             idx_stream.write(np.arange(num_documents + 1, dtype=np.int64).tobytes(order="C"))
