@@ -41,3 +41,27 @@ def test_gpt_memmap(cache_directory):
     get_test_dataset()
     dataset = get_dataset_config({"type": "memmap", "path": DATASET_PREFIX}, GPTMemmapDatasetConfig).build()
     compare_indexed_dataset(dataset, MEMMAP_DATASET_LENGTH, MEMMAP_DATASET_TOKENS, MEMMAP_DATASET_SAMPLES)
+
+
+MEMMAP_DATASET_SPANS = {
+    9: [],
+    10: [[0, 4], [6, 8]],
+    13: [[1, 2]],
+    15: [],
+}
+
+_DATASET_PREFIX_SPANS = DATASET_PREFIX.with_name("with_spans")
+
+
+def test_gpt_data_with_spans():
+    get_test_dataset(prefix=DATASET_PREFIX.with_name("with_spans"), max_spans=5)
+    dataset = get_dataset_config(
+        {
+            "type": "memmap",
+            "path": _DATASET_PREFIX_SPANS,
+        },
+        GPTMemmapDatasetConfig,
+    ).build()
+    compare_indexed_dataset(
+        dataset, MEMMAP_DATASET_LENGTH, MEMMAP_DATASET_TOKENS, MEMMAP_DATASET_SAMPLES, MEMMAP_DATASET_SPANS
+    )

@@ -218,6 +218,7 @@ def get_test_dataset(
     num_tokens: int = TEST_DATASET_TOKENS,
     characters: str = TEST_CHARACTERS,
     vocab_size: int = TEST_VOCAB_SIZE,
+    max_spans: int = 0,
 ):
     if not TOKENIZER_FILE.is_file():
         import transformers
@@ -227,14 +228,20 @@ def get_test_dataset(
     if not (prefix.with_suffix(".idx").is_file() and prefix.with_suffix(".bin").is_file()):
         import transformers
 
-        documents = "".join(random.Random(seed).choices(characters, k=num_tokens)).splitlines()
+        texts = "".join(random.Random(seed).choices(characters, k=num_tokens)).splitlines()
         tokenizer = transformers.AutoTokenizer.from_pretrained(TOKENIZER_PATH)
 
-        documents = [
-            GPTSample(np.array(tokenizer(document)["input_ids"], dtype=np.uint16) % vocab_size)
-            for document in documents
+        samples = [
+            GPTSample(np.array(tokenizer(document)["input_ids"], dtype=np.uint16) % vocab_size) for document in texts
         ]
-        GPTMemmapDataset.write_dataset(prefix, documents)
+        if max_spans > 0:
+            lengths = np.array([max(len(sample.token_ids), 1) for sample in samples])
+            spans = np.sort(np.random.RandomState(seed + 3847).randint(0, lengths[:, None], [len(samples), max_spans]))
+            for sample, span in zip(samples, spans):
+                span = np.unique(span)
+                sample.loss_masking_spans = span[: len(span) // 2 * 2].reshape(-1, 2)
+
+        GPTMemmapDataset.write_dataset(prefix, samples)
 
 
 def get_test_concatenated_memmap_dataset(
@@ -257,41 +264,6 @@ def get_test_concatenated_memmap_dataset(
                 vocab_size=vocab_size,
             )
         index_file.open("w").writelines([str(path / f"dataset_{i}") + "\n" for i in range(num_files)])
-
-
-def get_test_dataset_with_spans(
-    prefix: pathlib.Path = DATASET_PREFIX,
-    seed: int = 1234,
-    num_tokens: int = TEST_DATASET_TOKENS,
-    characters: str = TEST_CHARACTERS,
-    vocab_size: int = TEST_VOCAB_SIZE,
-):
-    if not TOKENIZER_FILE.is_file():
-        import transformers
-
-        transformers.AutoTokenizer.from_pretrained("bigcode/santacoder").save_pretrained(TOKENIZER_PATH)
-
-    if not (prefix.with_suffix(".idx").is_file() and prefix.with_suffix(".bin").is_file()):
-        import transformers
-
-        documents = "".join(random.Random(seed).choices(characters, k=num_tokens)).splitlines()
-        tokenizer = transformers.AutoTokenizer.from_pretrained(TOKENIZER_PATH)
-        for idx, doc in enumerate(documents):
-            doc = np.array(tokenizer(doc)["input_ids"], dtype=np.uint16) % vocab_size
-            doc_seed = seed + idx
-            n_spans = random.Random(doc_seed).randint(0, 5)
-            spans = []
-            prev_end = -1
-            for _ in range(n_spans):
-                if prev_end >= len(doc) - 1:
-                    break
-                start = random.Random(doc_seed).randint(prev_end + 1, len(doc) - 1)
-                end = random.Random(doc_seed).randint(start, len(doc) - 1)
-                spans.append([start, end])
-                prev_end = end
-            documents[idx] = GPTSample(doc, np.array(spans, dtype=np.int32).reshape(-1, 2))
-
-        GPTMemmapDataset.write_dataset(prefix, documents)
 
 
 def run_test_script(

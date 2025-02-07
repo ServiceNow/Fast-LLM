@@ -78,7 +78,11 @@ def get_test_data_and_compare_samples(
 
 
 def compare_indexed_dataset(
-    dataset: GPTIndexedDataset, length: int, num_tokens: int, samples: dict[int, list[int]]
+    dataset: GPTIndexedDataset,
+    length: int,
+    num_tokens: int,
+    samples: dict[int, list[int]],
+    loss_masking_spans: dict[int, list[int]] | None = None,
 ) -> None:
     Assert.eq(len(dataset), length)
     sizes = dataset.get_document_sizes()
@@ -87,26 +91,14 @@ def compare_indexed_dataset(
         [len(dataset.get(i).token_ids) for i in range(min(len(dataset), 100))], sizes[: min(len(dataset), 100)]
     )
     for i, sample in samples.items():
-        Assert.all_equal(dataset.get(i).token_ids, np.array(sample, dtype=np.uint16))
+        dataset_sample = dataset.get(i, use_loss_masking_spans=loss_masking_spans is not None)
+        Assert.all_equal(dataset_sample.token_ids, np.array(sample, dtype=np.uint16))
+        if loss_masking_spans:
+            Assert.all_equal(
+                dataset_sample.loss_masking_spans, np.array(loss_masking_spans[i], dtype=np.int32).reshape(-1, 2)
+            )
 
 
 def compare_sampled_dataset(sampled: SampledDataset, expected_samples: list[list[int]]) -> None:
     Assert.eq(len(sampled), len(expected_samples))
     Assert.all_equal([sampled[i].token_ids for i in range(len(expected_samples))], expected_samples)
-
-
-def compare_indexed_dataset_with_spans(
-    dataset: GPTIndexedDataset, length: int, num_tokens: int, samples: dict[int, tuple[list[int], list[list[int]]]]
-):
-    Assert.eq(len(dataset), length)
-    sizes = dataset.get_document_sizes()
-    Assert.eq(sizes.sum(), num_tokens)
-    Assert.all_equal(
-        [len(dataset.get(i).token_ids) for i in range(min(len(dataset), 100))], sizes[: min(len(dataset), 100)]
-    )
-    for i, sample in samples.items():
-        Assert.all_equal(dataset.get(i).token_ids, np.array(sample[0], dtype=np.uint16))
-        Assert.all_equal(
-            dataset.get(i, use_loss_masking_spans=True).loss_masking_spans,
-            np.array(sample[1], dtype=np.int32).reshape(-1, 2),
-        )
