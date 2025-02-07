@@ -11,6 +11,17 @@ from tests.data.common import (
 )
 
 GPT_FIM_SAMPLES = [
+    [4709, 819, 79, 207, 277, 1790],
+    [1790, 80, 6506, 1735, 542, 88],
+    [86, 89, 7876, 80, 87, 88],
+    [80, 207, 567, 498, 89, 207],
+    [207, 4700, 549, 79, 417, 3036],
+    [86, 89, 1178, 87, 70, 747],
+    [86, 1178, 64, 89, 900, 317],
+    [86, 89, 542, 395, 89, 554],
+]
+
+GPT_FIM_SAMPLES_LEGACY = [
     [1725, 74, 207, 1635, 4440, 2774],
     [359, 489, 4266, 2052, 5351, 80],
     [86, 89, 22255, 1073, 79, 480],
@@ -77,5 +88,6 @@ def test_gpt_fim_data_legacy():
         },
         {PhaseType.training: 8},
         sequence_length=5,
-        expected_samples={PhaseType.training: GPT_FIM_SAMPLES},
+        expected_samples={PhaseType.training: GPT_FIM_SAMPLES_LEGACY},
+        legacy=True,
     )

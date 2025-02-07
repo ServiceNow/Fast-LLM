@@ -209,53 +209,54 @@ class GPTSampledIndexedDataset(SampledDataset):
         # The starting point `(document[idx], token[idx])` corresponds to the `(idx * sequence_length)` th token, i.e.
         # `document_sizes[all_document_index][:document[idx]].sum() + token[idx] == idx * sequence_length`.
         # This can be computed quickly provided we know a (partial) sum close to `(idx * sequence_length)`.
-        # So it is enough to pre-compute `document_sizes[all_document_index].cumsum()[::TOKEN_CUMSUM_RATE]`.
+        # So it is enough to pre-compute the (zero-padded) token cumsum at regular intervals `TOKEN_CUMSUM_RATE`.
         # Using `TOKEN_CUMSUM_RATE > 1` reduces pre-computation overhead at the cost of runtime computation.
+        # Equivalent to `torch.hstack((0, document_sizes[all_document_index].cumsum()[::TOKEN_CUMSUM_RATE]))`
         if shuffled_epochs > 0:
-            # Equivalent to `document_sizes[all_document_index].cumsum()[::TOKEN_CUMSUM_RATE]`
-            token_cumsum_shuffled = (
-                # Torch indexing only works with int32 or int64
+            token_cumsum_shuffled = self._get_token_cumsum(
                 document_sizes[
+                    # Torch indexing only works with int32 or int64
                     document_shuffling.to(
                         dtype=torch.int64 if document_shuffling.dtype == torch.int64 else torch.int32
                     )
-                ][: document_shuffling.numel() - document_shuffling.numel() % TOKEN_CUMSUM_RATE]
-                .view(-1, TOKEN_CUMSUM_RATE)
-                .sum(1)
-                .cumsum(0, dtype=get_unsigned_integer_type(tokens_per_epoch * num_epochs).torch)
+                ],
+                offset=unshuffled_epochs * tokens_per_epoch,
+                dtype=get_unsigned_integer_type(tokens_per_epoch * num_epochs).torch,
             )
-            if unshuffled_epochs > 0:
-                token_cumsum_shuffled.add_(unshuffled_epochs * tokens_per_epoch)
-            # Crop surplus samples from the incomplete last epoch.
-            crop = torch.clamp_min_(
-                torch.searchsorted(token_cumsum_shuffled, self._num_samples * self._sequence_length, side="right") - 1,
-                0,
-            )
-            self._token_cumsum_shuffled.save(token_cumsum_shuffled[:crop].numpy(force=self._config.gpu))
+            self._token_cumsum_shuffled.save(token_cumsum_shuffled.numpy(force=self._config.gpu))
             self._document_shuffling.save(
-                document_shuffling[: (crop + 1) * TOKEN_CUMSUM_RATE].numpy(force=self._config.gpu)
+                document_shuffling[: (token_cumsum_shuffled.numel() + 1) * TOKEN_CUMSUM_RATE].numpy(
+                    force=self._config.gpu
+                )
             )
             # Free memory
             del token_cumsum_shuffled
             del document_shuffling
 
-        if shuffled_epochs < num_epochs:
-            token_cumsum_unshuffled = (
-                document_sizes[: document_sizes.numel() - document_sizes.numel() % TOKEN_CUMSUM_RATE]
-                .view(-1, TOKEN_CUMSUM_RATE)
-                .sum(1)
-                .cumsum(0, dtype=get_unsigned_integer_type(tokens_per_epoch * num_epochs).torch)
+        if unshuffled_epochs > 0:
+            token_cumsum_unshuffled = self._get_token_cumsum(
+                document_sizes, offset=0, dtype=get_unsigned_integer_type(tokens_per_epoch * num_epochs).torch
             )
-            if shuffled_epochs == 0:
-                crop = torch.clamp_min_(
-                    torch.searchsorted(
-                        token_cumsum_unshuffled, self._num_samples * self._sequence_length, side="right"
-                    )
-                    - 1,
-                    0,
-                )
-                token_cumsum_unshuffled = token_cumsum_unshuffled[:crop]
             self._token_cumsum_unshuffled.save(token_cumsum_unshuffled.numpy(force=self._config.gpu))
+
+    def _get_token_cumsum(self, sizes: torch.Tensor, offset: int, dtype: torch.dtype) -> torch.Tensor:
+        # Create the output tensor.
+        out = sizes.new_empty(sizes.numel() // TOKEN_CUMSUM_RATE + 1, dtype=dtype)
+        # Get partial sums for regular intervals, excluding the last incomplete interval.
+        torch.sum(
+            sizes[: sizes.numel() - sizes.numel() % TOKEN_CUMSUM_RATE].view(-1, TOKEN_CUMSUM_RATE), dim=1, out=out[1:]
+        )
+        # Pad with the begin offset
+        out[0] = offset
+        # Calculate the cumsum.
+        out.cumsum_(0)
+        # Crop unnecessary entries.
+        return out[
+            : torch.clamp_min_(
+                torch.searchsorted(out, self._num_samples * self._sequence_length, side="right"),
+                0,
+            )
+        ]
 
     def __len__(self) -> int:
         return self._num_samples
@@ -271,26 +272,27 @@ class GPTSampledIndexedDataset(SampledDataset):
 
         if token_start < self._unshuffled_tokens:
             token_start_array = self._token_cumsum_unshuffled.array
-            token_start_document_index = 0
+            token_start_array_document_offset = 0
         else:
             token_start_array = self._token_cumsum_shuffled.array
-            token_start_document_index = self._unshuffled_documents
+            token_start_array_document_offset = self._unshuffled_documents
 
-        # Find the rightmost location `token_start_cumsum_index` in `token_cumsum` with `token_cumsum[token_start_cumsum_index] <= token_start`
-        token_start_cumsum_index = np.searchsorted(token_start_array, token_start, side="right").item() - 1
-        if token_start_cumsum_index < 0:
-            document_sampling_index, token_count = token_start_document_index, 0
-        else:
-            document_sampling_index = token_start_cumsum_index * TOKEN_CUMSUM_RATE + token_start_document_index
-            token_count = token_start_array[token_start_cumsum_index]
-
-        sample_list = []
         print("AAAAA")
         print("idx", index)
         print("token_start", token_start)
         print("token_end", token_end)
         print("self._unshuffled_documents", self._unshuffled_documents)
         print("self._document_index.shape", self._document_shuffling.array.shape)
+
+        # Find the rightmost location `token_start_cumsum_index` in `token_cumsum` with `token_cumsum[token_start_cumsum_index] <= token_start`
+        token_start_cumsum_index = np.searchsorted(token_start_array, token_start, side="right").item() - 1
+
+        print("token_start_cumsum_index", token_start_cumsum_index)
+
+        document_sampling_index = token_start_cumsum_index * TOKEN_CUMSUM_RATE + token_start_array_document_offset
+        token_count = token_start_array[token_start_cumsum_index]
+
+        sample_list = []
         while token_count < token_end:
             print("CCCCC")
             print("document_sampling_index", document_sampling_index)
@@ -308,11 +310,15 @@ class GPTSampledIndexedDataset(SampledDataset):
             if token_count + document_size >= token_start:
                 # Determine which part of the document belong to the sample, and add it to the list.
                 token_start_index_in_document = max(token_start - token_count, 0)
-                length = min(token_end - token_count - token_start_index_in_document, document_size)
+                token_end_index_in_document = min(token_end - token_count, document_size)
                 print("token_start_index_in_document", token_start_index_in_document)
-                print("length", length)
+                print("token_end_index_in_document", token_end_index_in_document)
                 sample_list.append(
-                    self._indexed_dataset.get(document_index, offset=token_start_index_in_document, length=length)
+                    self._indexed_dataset.get(
+                        document_index,
+                        offset=token_start_index_in_document,
+                        length=token_end_index_in_document - token_start_index_in_document,
+                    )
                 )
             # Go to the next document.
             document_sampling_index += 1
@@ -466,6 +472,7 @@ class LegacyGPTSampledIndexedDataset(SampledDataset):
             sample_list,
             dtype=np.int64,
         )
+        Assert.eq(len(sample), self._sequence_length + 1)
         return sample
 
     @property

@@ -44,4 +44,5 @@ def test_gpt_random_data_legacy():
         {PhaseType.training: 4},
         sequence_length=7,
         expected_samples={PhaseType.training: RANDOM_DATASET_EXPECTED_SAMPLES},
+        legacy=True,
     )

@@ -60,19 +60,31 @@ def get_test_data_and_compare_samples(
     samples_per_phase: dict[PhaseType, int],
     *,
     seed: int = 54983,
+    gpu: bool = False,
+    shuffle: ShufflingType = ShufflingType.epoch,
     cache_directory: pathlib.Path | None = None,
     sequence_length: int = 512,
     vocab_size=TEST_VOCAB_SIZE,
     expected_samples: dict[PhaseType, list[list[int]]],
+    legacy: bool = False,
 ) -> GPTData:
-    distributed_config = DistributedConfig(seed=seed)
+    distributed_config = DistributedConfig(seed=seed if legacy else 87522)
     distributed = Distributed(distributed_config, use_cpu=True)
+    assert "sampling" not in config
+    config["sampling"] = GPTSamplingDefaultConfig(
+        seed=87522 if legacy else seed,
+        gpu=gpu,
+        shuffle=shuffle,
+    )
     data = GPTData(GPTDataConfig.from_dict(config), distributed_config, vocab_size, sequence_length)
     data.setup(distributed, samples_per_phase, cache_directory)
     with NoAutoValidate():
         batch_config = BatchConfig(batch_size=1, sequence_length=sequence_length)
     batch_config.setup(distributed_config)
     batch_config.validate()
+    # pprint.pprint(
+    #        [batch.tolist() for batch in data.get_iterator(batch_config, PhaseType.test, consumed_samples=0, num_workers=0)]
+    # )
     samples = {
         phase: torch.stack(
             [batch[0] for batch in data.get_iterator(batch_config, phase, consumed_samples=0, num_workers=0)]
@@ -80,6 +92,7 @@ def get_test_data_and_compare_samples(
         for phase, samples in samples_per_phase.items()
     }
     for phase, expected_samples_ in expected_samples.items():
+        print("AAAA", phase, samples[phase].tolist())
         Assert.all_equal(samples[phase], expected_samples_)
     return data
 
@@ -95,8 +108,9 @@ def compare_indexed_dataset(
         Assert.all_equal(dataset.get(i), np.array(expected_sample, dtype=np.uint16))
 
 
-def compare_sampled_dataset(sampled: SampledDataset, expected_samples: list[list[int]]) -> None:
+def compare_sampled_dataset(sampled: SampledDataset, expected_samples: list[list[int] | np.ndarray]) -> None:
     Assert.eq(len(sampled), len(expected_samples))
+    print("AAAA", [sampled[i].tolist() for i in range(len(expected_samples))])
     Assert.all_equal([sampled[i] for i in range(len(expected_samples))], expected_samples)
 
 
@@ -109,10 +123,14 @@ def validate_indexed_dataset_sampling(
     num_tokens = sampled._num_samples * sampled._sequence_length + 1
     all_tokens = np.full(sampled._num_samples * sampled._sequence_length + 1, -1, dtype=np.int64)
     unshuffled_epochs = div(sampled._unshuffled_documents, sampled._documents_per_epoch)
+
     document_sampling = np.concatenate(
         (
-            np.tile(np.arange(sampled._documents_per_epoch, dtype=sampled._document_shuffling), unshuffled_epochs),
-            sampled._document_shuffling,
+            np.tile(
+                np.arange(sampled._documents_per_epoch, dtype=sampled._document_shuffling.array.dtype),
+                unshuffled_epochs,
+            ),
+            sampled._document_shuffling.array,
         )
     )
     seen_tokens = 0
@@ -123,13 +141,12 @@ def validate_indexed_dataset_sampling(
         if seen_tokens >= num_tokens:
             break
 
-    samples = [sampled[index] for index in range(len(sampled))]
-    Assert.all_equal(
+    compare_sampled_dataset(
+        sampled,
         [
             all_tokens[index * sampled._sequence_length : (index + 1) * sampled._sequence_length + 1]
             for index in range(sampled._num_samples)
         ],
-        samples,
     )
     if expected_samples is not None:
         compare_sampled_dataset(sampled, expected_samples)
