@@ -374,9 +374,7 @@ class LegacyGPTSampledIndexedDataset(SampledDataset):
         # Build the indexed mapping if it doesn't exist.
         if base_path is None or (
             sampling.distributed.config.rank == sampling.get_next_rank()
-            and not (self._doc_idx.exists())
-            and self._sample_idx.exists()
-            and self._shuffle_idx.exists()
+            and not (self._doc_idx.exists() and self._sample_idx.exists() and self._shuffle_idx.exists())
         ):
             self._sample()
 
