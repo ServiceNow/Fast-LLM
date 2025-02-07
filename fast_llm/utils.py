@@ -294,6 +294,13 @@ class InvalidObject:
     def __getattr__(self, item):
         raise self._error
 
+    def __getitem__(self, item):
+
+        raise self._error
+
+    def __setitem__(self, key, value):
+        raise self._error
+
     def __call__(self, *args, **kwargs):
         raise self._error
 
@@ -303,13 +310,14 @@ def try_decorate(get_decorator: Callable) -> Callable:
     Try to decorate an object, but ignore the error until the object is actualy used.
     """
 
-    def new_decorator(x=None, **kwargs):
+    def new_decorator(*args, **kwargs):
         try:
-            return get_decorator()(x, **kwargs)
+            return get_decorator()(*args, **kwargs)
         except Exception as e:
+            raise
             out = InvalidObject(e)
             if x is None:
-                return lambda *args, **kwargs: out
+                return lambda *args_, **kwargs_: out
             return out
 
     return new_decorator
