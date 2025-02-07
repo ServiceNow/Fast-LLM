@@ -2,6 +2,7 @@ import numpy as np
 
 from fast_llm.data.dataset.abstract import SamplableDataset, SampledDataset
 from fast_llm.data.dataset.gpt.config import GPTSamplingConfig
+from fast_llm.data.dataset.gpt.sampled import GPTSample
 
 
 class GPTRandomDataset(SamplableDataset):
@@ -32,8 +33,10 @@ class GPTRandomSampledDataset(SampledDataset):
         return self._num_samples
 
     def __getitem__(self, idx) -> np.ndarray:
-        return np.random.RandomState(self._seed + 48576439 + 74593 * idx).randint(
-            0, self._vocab_size, size=(self._sequence_length + 1,), dtype=np.int64
+        return GPTSample(
+            np.random.RandomState(self._seed + 48576439 + 74593 * idx).randint(
+                0, self._vocab_size, size=(self._sequence_length + 1,), dtype=np.int64
+            )
         )
 
     @property

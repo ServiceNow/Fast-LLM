@@ -10,6 +10,7 @@ import tqdm
 import transformers
 
 from fast_llm.data.dataset.gpt.memmap import GPTMemmapDataset
+from fast_llm.data.dataset.gpt.sampled import GPTSample
 from fast_llm.data.preparator.config import DatasetPreparator
 from fast_llm.data.preparator.gpt_memmap.config import GPTMemmapDatasetPreparatorConfig
 from fast_llm.data.tokenizer import Tokenizer
@@ -33,14 +34,46 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
             "num_tokens": num_tokens,
         }
 
+    def _tokenize_batch_with_spans(self, batch: dict[str, list[typing.Any]]) -> dict[str, list[typing.Any]]:
+        input_ids, token_spans = map(
+            list,
+            zip(
+                *[
+                    (
+                        np.array(input_ids, dtype=self._data_type.numpy),
+                        np.array(token_spans, dtype=np.int32).reshape(-1, 2),
+                    )
+                    for input_ids, token_spans in [
+                        self._tokenizer.tokenize_with_spans(text, char_spans)
+                        for text, char_spans in zip(
+                            batch[self._config.dataset.field], batch[self._config.dataset.loss_masking_spans]
+                        )
+                    ]
+                ]
+            ),
+        )
+        num_tokens = [len(x) for x in input_ids]
+        return {
+            "input_ids": input_ids,
+            "token_spans": token_spans,
+            "num_tokens": num_tokens,
+        }
+
     def _save_shard(self, args: tuple[int, datasets.Dataset]) -> dict[str, typing.Any]:
         shard_idx, shard_dataset = args
         prefix = f"shard_{self._config.distributed.rank}_{shard_idx}"
         shard_output_path = self._config.output_path / prefix
 
         def _document_generator():
-            for item in tqdm.tqdm(shard_dataset, desc=f"Saving shard {shard_idx}", unit="docs"):
-                yield np.array(item["input_ids"], dtype=self._data_type.numpy)
+            if "token_spans" in shard_dataset.column_names and self._config.dataset.loss_masking_spans is not None:
+                for item in tqdm.tqdm(shard_dataset, desc=f"Saving shard {shard_idx}", unit="docs"):
+                    yield GPTSample(
+                        np.array(item["input_ids"], dtype=self._data_type.numpy),
+                        np.array(item["token_spans"], dtype=np.int32).reshape(-1, 2),
+                    )
+            else:
+                for item in tqdm.tqdm(shard_dataset, desc=f"Saving shard {shard_idx}", unit="docs"):
+                    yield GPTSample(np.array(item["input_ids"], dtype=self._data_type.numpy))
 
         GPTMemmapDataset.write_dataset(prefix=shard_output_path, documents=_document_generator())
 
@@ -128,10 +161,16 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
         )
         if self._config.dataset.field not in dataset.column_names:
             raise ValueError(f"Dataset does not have field '{self._config.dataset.field}'.")
+        if self._config.dataset.loss_masking_spans is not None:
+            if self._config.dataset.loss_masking_spans not in dataset.column_names:
+                raise ValueError(f"Dataset does not have spans field '{self._config.dataset.loss_masking_spans}'.")
+            tokenize_fn = self._tokenize_batch_with_spans
+        else:
+            tokenize_fn = self._tokenize_batch
 
         # Tokenize the dataset in parallel
         tokenized_dataset = dataset.map(
-            self._tokenize_batch,
+            tokenize_fn,
             batched=True,
             num_proc=self._config.tokenize_workers,
             desc="Tokenizing batches",

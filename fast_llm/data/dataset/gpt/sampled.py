@@ -1,3 +1,4 @@
+import dataclasses
 import logging
 import math
 import pathlib
@@ -21,12 +22,17 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
+@dataclasses.dataclass
+class GPTSample:
+    token_ids: np.ndarray
+    loss_masking_spans: np.ndarray | None = None
+
+
 class GPTSampledIndexedDataset(SampledDataset):
     """
     A GPT dataset augmented with a sampling, i.e.,
     a pre-computed, shuffled list of samples to be indexed sequentially (as-is) during training.
     The sampling exactly matches Megatron-LM with matching parameters.
-    Supports optional post-processing with FIM.
     """
 
     def __init__(
@@ -39,6 +45,7 @@ class GPTSampledIndexedDataset(SampledDataset):
         self._num_samples = sampling_config.num_samples
         self._sequence_length = sampling_config.sequence_length
         self._seed = sampling_config.seed
+        self._use_loss_masking_spans = sampling_config.use_loss_masking_spans
 
         if sampling_config.cache_directory is None:
             log_main_rank(
@@ -130,13 +137,16 @@ class GPTSampledIndexedDataset(SampledDataset):
 
     def __getstate__(
         self,
-    ) -> tuple[GPTIndexedDataset, pathlib.Path | np.ndarray, pathlib.Path | np.ndarray, pathlib.Path | np.ndarray]:
+    ) -> tuple[
+        GPTIndexedDataset, pathlib.Path | np.ndarray, pathlib.Path | np.ndarray, pathlib.Path | np.ndarray | bool
+    ]:
         if hasattr(self, "_doc_idx_filename"):
             return (
                 self._indexed_dataset,
                 self._doc_idx_filename,
                 self._sample_idx_filename,
                 self._shuffle_idx_filename,
+                self._use_loss_masking_spans,
             )
         else:
             return (
@@ -144,15 +154,17 @@ class GPTSampledIndexedDataset(SampledDataset):
                 self._doc_idx,
                 self._sample_idx,
                 self._shuffle_idx,
+                self._use_loss_masking_spans,
             )
 
-    def __setstate__(self, state: tuple[GPTIndexedDataset, pathlib.Path, pathlib.Path, pathlib.Path]) -> None:
+    def __setstate__(self, state: tuple[GPTIndexedDataset, pathlib.Path, pathlib.Path, pathlib.Path, bool]) -> None:
         if isinstance(state[1], pathlib.Path):
             (
                 self._indexed_dataset,
                 self._doc_idx_filename,
                 self._sample_idx_filename,
                 self._shuffle_idx_filename,
+                self._use_loss_masking_spans,
             ) = state
         else:
             (
@@ -160,6 +172,7 @@ class GPTSampledIndexedDataset(SampledDataset):
                 self._doc_idx,
                 self._sample_idx,
                 self._shuffle_idx,
+                self._use_loss_masking_spans,
             ) = state
 
     def _load_mappings(self) -> None:
@@ -190,14 +203,27 @@ class GPTSampledIndexedDataset(SampledDataset):
                 self._doc_idx[doc].item(),
                 offset=(doc == doc_f) * offset_f,
                 length=offset_l + 1 - (doc == doc_f) * offset_f if doc == doc_l else None,
+                use_loss_masking_spans=self._use_loss_masking_spans,
             )
             for doc in range(doc_f, doc_l + 1)
         ]
-        sample = np.concatenate(
-            sample_list,
-            dtype=np.int64,
-        )
-        return sample
+
+        if self._use_loss_masking_spans:
+            sample_ids = []
+            sample_spans = []
+            span_offset = 0
+            for sample in sample_list:
+                sample_ids.extend(sample.token_ids)
+                for span in sample.loss_masking_spans:
+                    sample_spans.append([span[0] + span_offset, span[1] + span_offset])
+                span_offset += len(sample.token_ids)
+            sample_ids = np.array(sample_ids, dtype=np.int64)
+            sample_spans = np.array(sample_spans, dtype=np.int32).reshape(-1, 2)
+        else:
+            sample_ids = np.concatenate([sample.token_ids for sample in sample_list], dtype=np.int64)
+            sample_spans = None
+
+        return GPTSample(token_ids=sample_ids, loss_masking_spans=sample_spans)
 
     @property
     def name(self) -> str:

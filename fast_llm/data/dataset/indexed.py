@@ -46,13 +46,15 @@ class DatasetSlice[IndexedDatasetType: IndexedDataset](IndexedDataset):
         except Exception as e:
             raise AssertionError(f"Invalid document indices for dataset {name} with length {num_samples}") from e
 
-    def get(self, document: int, offset: int = 0, length: int | None = None) -> typing.Any:
+    def get(
+        self, document: int, offset: int = 0, length: int | None = None, use_loss_masking_spans: bool = False
+    ) -> typing.Any:
         """
         Get the sample (document) with the given index (in the dataset slice),
         optionally sub-sampled to a specific offset (starting point) and maximum length
         (end = min(offset + length, sample_length).
         """
-        return self._dataset.get(document + self._begin, offset, length)
+        return self._dataset.get(document + self._begin, offset, length, use_loss_masking_spans)
 
     def __len__(self) -> int:
         return self._end - self._begin
