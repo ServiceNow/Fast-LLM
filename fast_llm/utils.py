@@ -314,7 +314,6 @@ def try_decorate(get_decorator: Callable) -> Callable:
         try:
             return get_decorator()(*args, **kwargs)
         except Exception as e:
-            raise
             out = InvalidObject(e)
             if x is None:
                 return lambda *args_, **kwargs_: out
