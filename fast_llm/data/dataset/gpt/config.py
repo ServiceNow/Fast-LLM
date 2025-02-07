@@ -444,15 +444,15 @@ class GPTLegacyDatasetConfig(GPTSampledDatasetConfig, GPTLegacyConfig):
                     "dataset": dataset_config,
                     **self.fim.to_serialized(),
                 }
-            # Legacy sampling config
-            dataset_config = {
-                "type": "sampled",
-                "dataset": dataset_config,
-                "sampling": {
-                    "seed": sampling.distributed.config.seed,
-                    "shuffle": "legacy",
-                },
-            }
+        # Legacy sampling config
+        dataset_config = {
+            "type": "sampled",
+            "dataset": dataset_config,
+            "sampling": {
+                "seed": sampling.distributed.config.seed,
+                "shuffle": "legacy",
+            },
+        }
 
         return GPTSampledDatasetConfig.from_dict(dataset_config).build_and_sample(sampling)
 

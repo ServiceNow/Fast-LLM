@@ -146,7 +146,6 @@ class GPTSampledIndexedDataset(SampledDataset):
             "sequence_length": self._sequence_length,
             "config": self._config.to_serialized(),
         }
-        print("IUHBIUHNBURNBHIU", yaml.dump(yaml_data))
         self._load_yaml_data(yaml_data)
         if self._yaml_path is not None:
             if self._yaml_path.is_file():
@@ -154,6 +153,7 @@ class GPTSampledIndexedDataset(SampledDataset):
                 # Dataset is already sampled, skip.
                 return
             else:
+                self._yaml_path.parent.mkdir(parents=True, exist_ok=True)
                 yaml.safe_dump(yaml_data, self._yaml_path.open("w"))
 
         if shuffled_documents > 1e8:
@@ -277,26 +277,14 @@ class GPTSampledIndexedDataset(SampledDataset):
             token_start_array = self._token_cumsum_shuffled.array
             token_start_array_document_offset = self._unshuffled_documents
 
-        print("AAAAA")
-        print("idx", index)
-        print("token_start", token_start)
-        print("token_end", token_end)
-        print("self._unshuffled_documents", self._unshuffled_documents)
-        print("self._document_index.shape", self._document_shuffling.array.shape)
-
         # Find the rightmost location `token_start_cumsum_index` in `token_cumsum` with `token_cumsum[token_start_cumsum_index] <= token_start`
         token_start_cumsum_index = np.searchsorted(token_start_array, token_start, side="right").item() - 1
-
-        print("token_start_cumsum_index", token_start_cumsum_index)
 
         document_sampling_index = token_start_cumsum_index * TOKEN_CUMSUM_RATE + token_start_array_document_offset
         token_count = token_start_array[token_start_cumsum_index]
 
         sample_list = []
         while token_count < token_end:
-            print("CCCCC")
-            print("document_sampling_index", document_sampling_index)
-            print("token_count", token_count)
             # Find the document index in the dataset.
             if document_sampling_index < self._unshuffled_documents:
                 document_index = document_sampling_index % self._documents_per_epoch
@@ -304,15 +292,11 @@ class GPTSampledIndexedDataset(SampledDataset):
                 document_index = self._document_shuffling[document_sampling_index - self._unshuffled_documents].item()
 
             document_size = self._indexed_dataset.get_document_size(document_index)
-            print("document_index", document_index)
-            print("document_size", document_size)
             # Determine if the document belongs to the requested sample.
             if token_count + document_size >= token_start:
                 # Determine which part of the document belong to the sample, and add it to the list.
                 token_start_index_in_document = max(token_start - token_count, 0)
                 token_end_index_in_document = min(token_end - token_count, document_size)
-                print("token_start_index_in_document", token_start_index_in_document)
-                print("token_end_index_in_document", token_end_index_in_document)
                 sample_list.append(
                     self._indexed_dataset.get(
                         document_index,
@@ -328,6 +312,7 @@ class GPTSampledIndexedDataset(SampledDataset):
             sample_list,
             dtype=np.int64,
         )
+        assert len(sample) == self._sequence_length + 1, sample_list
         return sample
 
     @property

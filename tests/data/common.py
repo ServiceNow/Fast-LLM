@@ -82,9 +82,6 @@ def get_test_data_and_compare_samples(
         batch_config = BatchConfig(batch_size=1, sequence_length=sequence_length)
     batch_config.setup(distributed_config)
     batch_config.validate()
-    # pprint.pprint(
-    #        [batch.tolist() for batch in data.get_iterator(batch_config, PhaseType.test, consumed_samples=0, num_workers=0)]
-    # )
     samples = {
         phase: torch.stack(
             [batch[0] for batch in data.get_iterator(batch_config, phase, consumed_samples=0, num_workers=0)]
@@ -92,7 +89,6 @@ def get_test_data_and_compare_samples(
         for phase, samples in samples_per_phase.items()
     }
     for phase, expected_samples_ in expected_samples.items():
-        print("AAAA", phase, samples[phase].tolist())
         Assert.all_equal(samples[phase], expected_samples_)
     return data
 
@@ -110,7 +106,6 @@ def compare_indexed_dataset(
 
 def compare_sampled_dataset(sampled: SampledDataset, expected_samples: list[list[int] | np.ndarray]) -> None:
     Assert.eq(len(sampled), len(expected_samples))
-    print("AAAA", [sampled[i].tolist() for i in range(len(expected_samples))])
     Assert.all_equal([sampled[i] for i in range(len(expected_samples))], expected_samples)
 
 
@@ -124,29 +119,33 @@ def validate_indexed_dataset_sampling(
     all_tokens = np.full(sampled._num_samples * sampled._sequence_length + 1, -1, dtype=np.int64)
     unshuffled_epochs = div(sampled._unshuffled_documents, sampled._documents_per_epoch)
 
-    document_sampling = np.concatenate(
-        (
-            np.tile(
-                np.arange(sampled._documents_per_epoch, dtype=sampled._document_shuffling.array.dtype),
-                unshuffled_epochs,
-            ),
-            sampled._document_shuffling.array,
-        )
+    document_sampling = np.tile(
+        np.arange(sampled._documents_per_epoch, dtype=np.int64),
+        unshuffled_epochs,
     )
+    if sampled._document_shuffling.exists():
+        document_sampling = np.concatenate(
+            (
+                document_sampling,
+                sampled._document_shuffling.array,
+            )
+        )
     seen_tokens = 0
     for document_index in document_sampling:
         document = sampled._indexed_dataset.get(document_index)
-        all_tokens[seen_tokens : seen_tokens + len(document)] = document[: num_tokens - seen_tokens - len(document)]
+
+        all_tokens[seen_tokens : seen_tokens + len(document)] = document[: num_tokens - seen_tokens]
         seen_tokens += len(document)
         if seen_tokens >= num_tokens:
             break
 
-    compare_sampled_dataset(
-        sampled,
-        [
-            all_tokens[index * sampled._sequence_length : (index + 1) * sampled._sequence_length + 1]
-            for index in range(sampled._num_samples)
-        ],
-    )
+    validate_samples = [
+        all_tokens[index * sampled._sequence_length : (index + 1) * sampled._sequence_length + 1]
+        for index in range(sampled._num_samples)
+    ]
+    samples = [sampled[i] for i in range(len(sampled))]
+
+    Assert.all_equal(samples, validate_samples)
     if expected_samples is not None:
-        compare_sampled_dataset(sampled, expected_samples)
+        Assert.all_equal(samples, expected_samples)
+    return samples

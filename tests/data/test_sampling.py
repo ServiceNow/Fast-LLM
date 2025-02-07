@@ -1,5 +1,12 @@
-from fast_llm.data.dataset.gpt.config import GPTMemmapDatasetConfig
+import typing
+
+import numpy as np
+import pytest
+
+from fast_llm.data.dataset.gpt.config import GPTMemmapDatasetConfig, ShufflingType
+from fast_llm.data.dataset.gpt.indexed import GPTIndexedDataset
 from fast_llm.engine.distributed.config import PhaseType
+from fast_llm.utils import Assert
 from tests.common import DATASET_PREFIX, get_test_dataset
 from tests.data.common import (
     get_dataset_config,
@@ -64,3 +71,54 @@ def test_gpt_sampled_data_legacy():
         expected_samples={PhaseType.training: GPT_MEMMAP_SAMPLES_LEGACY},
         legacy=True,
     )
+
+
+class SimpleGPTIndexedDataset(GPTIndexedDataset):
+    # TODO: worth adding to the main codebase?
+    def __init__(self, samples):
+        self._samples = samples
+
+    def get(self, index: int, offset=0, length=None) -> typing.Any:
+        if length is None:
+            length = len(self._samples[index])
+        return np.array(self._samples[index][offset : offset + length], dtype=np.int64)
+
+    def __len__(self) -> int:
+        return len(self._samples)
+
+    def get_document_sizes(self) -> np.ndarray:
+        return np.array([self.get_document_size(index) for index in range(len(self))], dtype=np.int64)
+
+    def get_document_size(self, index: int) -> int:
+        return len(self._samples[index])
+
+    def name(self) -> str:
+        return "dataset"
+
+
+TEST_DATASET = SimpleGPTIndexedDataset(
+    [
+        [0, 1, 2, 3],
+        [4],
+        [5, 6, 7],
+        [8, 9, 10, 11, 12],
+        [13, 14, 15, 16, 17, 18],
+        [19, 20, 21, 22, 23, 24, 25, 26, 27, 28],
+    ]
+)
+
+
+@pytest.mark.parametrize("seed", (0, 32, 88))
+@pytest.mark.parametrize(
+    "shuffle", (ShufflingType.full, ShufflingType.epoch, ShufflingType.skip_first_epoch, ShufflingType.disabled)
+)
+def test_gpt_sample(seed, shuffle):
+    previous_samples = None
+    # Loop instead of parametrizing for the check below.
+    for num_samples in (20, 10, 6, 5, 2, 1):
+        sampled = TEST_DATASET.sample(get_sampling_data(num_samples, sequence_length=5, seed=seed, shuffle=shuffle))
+        samples = validate_indexed_dataset_sampling(sampled)
+        if previous_samples is not None and shuffle != ShufflingType.full:
+            # Check that the sequence is independent of `num_sample`.
+            Assert.all_equal(samples, previous_samples[: len(samples)])
+        previous_samples = samples
