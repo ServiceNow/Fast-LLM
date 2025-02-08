@@ -1,24 +1,23 @@
 import torch
 
-import triton
 from fast_llm.functional.autograd import wrap_forward_backward
 from fast_llm.functional.config import TritonConfig
+from fast_llm.functional.triton import tl, tl_constexpr, triton, triton_jit
 from fast_llm.utils import div
-from triton import language as tl
 
 
-@triton.jit
+@triton_jit()
 def triton_rotary_kernel(
     input_ptr,
     frequencies_ptr,
     stride_0,
     stride_1,
     stride_2,
-    rotary_dim: tl.constexpr,
-    num_heads: tl.constexpr,
-    rotary_block_size: tl.constexpr,
-    head_block_size: tl.constexpr,
-    backward: tl.constexpr,
+    rotary_dim: tl_constexpr,
+    num_heads: tl_constexpr,
+    rotary_block_size: tl_constexpr,
+    head_block_size: tl_constexpr,
+    backward: tl_constexpr,
 ):
     # TODO: Int64 ptr if needed?
     pid_0 = tl.program_id(axis=0)

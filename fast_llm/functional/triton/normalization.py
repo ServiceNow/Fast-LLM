@@ -2,14 +2,13 @@ import typing
 
 import torch
 
-import triton
-import triton.language as tl
 from fast_llm.functional.autograd import wrap_forward_backward
 from fast_llm.functional.config import TritonConfig
+from fast_llm.functional.triton import tl, tl_constexpr, triton, triton_jit
 from fast_llm.tensor import param_get_and_unset_is_zero
 
 
-@triton.jit
+@triton_jit()
 def triton_normalization_forward_kernel(
     input_ptr,
     output_ptr,
@@ -18,9 +17,9 @@ def triton_normalization_forward_kernel(
     inv_var_ptr,
     n_cols,
     eps,
-    has_bias: tl.constexpr,
-    zero_centered: tl.constexpr,
-    block_size: tl.constexpr,
+    has_bias: tl_constexpr,
+    zero_centered: tl_constexpr,
+    block_size: tl_constexpr,
 ):
     # Program dimensions
     row = tl.program_id(0).to(tl.int64)
@@ -56,7 +55,7 @@ def triton_normalization_forward_kernel(
     tl.store(output_ptr + offsets, output, mask=mask)
 
 
-@triton.jit
+@triton_jit()
 def triton_normalization_backward_kernel_1(
     grad_input_ptr,
     grad_output_ptr,
@@ -68,10 +67,10 @@ def triton_normalization_backward_kernel_1(
     inv_var_ptr,
     n_cols,
     n_rows,
-    has_bias: tl.constexpr,
-    zero_centered: tl.constexpr,
-    block_size: tl.constexpr,
-    block_size_row: tl.constexpr,
+    has_bias: tl_constexpr,
+    zero_centered: tl_constexpr,
+    block_size: tl_constexpr,
+    block_size_row: tl_constexpr,
 ):
     # row_start = tl.program_id(0)*block_size_row
     rows = tl.program_id(0) * block_size_row + tl.arange(0, block_size_row)[:, None]
@@ -123,7 +122,7 @@ def triton_normalization_backward_kernel_1(
         tl.store(grad_bias_partial_ptr, grad_bias_partial, mask=col_mask)  # noqa
 
 
-@triton.jit
+@triton_jit()
 def triton_normalization_backward_kernel_2(
     grad_weight_partial_ptr,
     grad_bias_partial_ptr,
@@ -131,10 +130,10 @@ def triton_normalization_backward_kernel_2(
     grad_bias_ptr,
     m,  # GROUP_SIZE_M
     n_cols,  # number of columns
-    has_bias: tl.constexpr,
-    accumulate_grad: tl.constexpr,
-    block_size_m: tl.constexpr,
-    block_size_n: tl.constexpr,
+    has_bias: tl_constexpr,
+    accumulate_grad: tl_constexpr,
+    block_size_m: tl_constexpr,
+    block_size_n: tl_constexpr,
 ):
     pid = tl.program_id(0)
     cols = pid * block_size_n + tl.arange(0, block_size_n)

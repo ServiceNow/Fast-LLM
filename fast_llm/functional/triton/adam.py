@@ -7,12 +7,11 @@ Simpler and faster than the apex implementation, but doesn't have a multi-tensor
 import torch
 from torch.optim.adamw import adamw  # noqa
 
-import triton
 from fast_llm.functional.config import TritonConfig
-from triton import language as tl
+from fast_llm.functional.triton import tl, tl_constexpr, triton, triton_jit
 
 
-@triton.jit
+@triton_jit()
 def triton_adam_kernel(
     params_ptr,
     grads_ptr,
@@ -26,8 +25,8 @@ def triton_adam_kernel(
     bias_correction,  # (1 - beta2 ** step)**0.5
     decay_factor,  # (1 - lr * weight_decay)
     epsilon,
-    numel: tl.constexpr,
-    block_size: tl.constexpr,
+    numel: tl_constexpr,
+    block_size: tl_constexpr,
 ):
     noop_flag = tl.load(noop_flag_ptr)
     # TODO: Does location matter?

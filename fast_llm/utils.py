@@ -2,6 +2,7 @@ import itertools
 import logging
 import math
 import typing
+from typing import Callable
 
 if typing.TYPE_CHECKING:
     import numpy as np
@@ -279,3 +280,45 @@ def pop_nested_dict_value[
         return d.pop(keys[-1])
     else:
         return d.pop(keys)
+
+
+class InvalidObject:
+    """
+    Store an error and raise it if accessed.
+    Intended for missing optional imports, so that the actual import error is raised on access.
+    """
+
+    def __init__(self, error: Exception):
+        self._error = error.__class__(*error.args)
+
+    def __getattr__(self, item):
+        raise self._error
+
+    def __getitem__(self, item):
+
+        raise self._error
+
+    def __setitem__(self, key, value):
+        raise self._error
+
+    def __call__(self, *args, **kwargs):
+        raise self._error
+
+
+def try_decorate(get_decorator: Callable, _return_decorator: bool = True) -> Callable:
+    """
+    Try to decorate an object, but ignore the error until the object is actualy used.
+    The wrapped decorator should always be instantiated before calling,
+    i.e.. called as `@decorator()` rather than `@decorator`.
+    """
+
+    def new_decorator(*args, **kwargs):
+        try:
+            out = get_decorator()(*args, **kwargs)
+        except Exception as e:
+            out = InvalidObject(e)
+        if _return_decorator:
+            return try_decorate(lambda: out, _return_decorator=False)
+        return out
+
+    return new_decorator
