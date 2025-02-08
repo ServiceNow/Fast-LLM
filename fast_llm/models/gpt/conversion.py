@@ -290,10 +290,13 @@ class RopeScalingParamConverter(ParamConverter):
         "low_freq_factor",
         "high_freq_factor",
         "original_max_position_embeddings",
+        "attention_factor",
+        "beta_fast",
+        "beta_slow",
     )
 
     def __post_init__(self):
-        Assert.eq(len(self.fast_llm_names), 5)
+        Assert.eq(len(self.fast_llm_names), 8)
         Assert.eq(len(self.export_names), 1)
 
     def export_params(self, fast_llm_values: tuple[typing.Any, ...]) -> tuple[typing.Any, ...]:
@@ -302,6 +305,8 @@ class RopeScalingParamConverter(ParamConverter):
             return (None,)
         elif rope_type == RotaryEmbeddingType.llama3:
             return ({key: value for key, value in zip(self._HUGGINGFACE_NAMES, ("llama3", *parameters), strict=True)},)
+        elif rope_type == RotaryEmbeddingType.yarn:
+            return ({key: value for key, value in zip(self._HUGGINGFACE_NAMES, ("yarn", *parameters), strict=True)},)
         else:
             raise ValueError(f"Unsupported rotary scaling type: {rope_type}")
 
@@ -312,6 +317,8 @@ class RopeScalingParamConverter(ParamConverter):
         elif rope_type == RotaryEmbeddingType.llama3:
             # TODO: Is it safe to assume all values are provided?
             return ("llama3", *[export_value[key] for key in self._HUGGINGFACE_NAMES[1:]])
+        elif rope_type == RotaryEmbeddingType.yarn:
+            return ("yarn", *[export_value[key] for key in self._HUGGINGFACE_NAMES[1:]])
         else:
             raise ValueError(f"Unsupported rotary scaling type: {rope_type}")
 
@@ -333,6 +340,9 @@ class LlamaHuggingfaceCheckpointHandler(CommonLlamaHuggingfaceCheckpointHandler)
                     ("transformer", "rotary", "low_frequency_factor"),
                     ("transformer", "rotary", "high_frequency_factor"),
                     ("transformer", "rotary", "original_context_length"),
+                    ("transformer", "rotary", "attention_factor"),
+                    ("transformer", "rotary", "beta_fast"),
+                    ("transformer", "rotary", "beta_slow"),
                 ),
                 export_names=(("rope_scaling",),),
             ),
