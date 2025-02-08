@@ -305,12 +305,11 @@ class InvalidObject:
         raise self._error
 
 
-def try_decorate(get_decorator: Callable, return_decorator: bool = False) -> Callable:
+def try_decorate(get_decorator: Callable, _return_decorator: bool = True) -> Callable:
     """
     Try to decorate an object, but ignore the error until the object is actualy used.
-    Set `return_decorator=True` if the decorator takes arguments,
-    ex. called as `@decorator(*args, **kwargs)` rather than `@decorate`.
-    TODO: Support both cases at once?
+    The wrapped decorator should always be instantiated before calling,
+    i.e.. called as `@decorator()` rather than `@decorator`.
     """
 
     def new_decorator(*args, **kwargs):
@@ -318,8 +317,8 @@ def try_decorate(get_decorator: Callable, return_decorator: bool = False) -> Cal
             out = get_decorator()(*args, **kwargs)
         except Exception as e:
             out = InvalidObject(e)
-        if return_decorator:
-            return try_decorate(lambda: out)
+        if _return_decorator:
+            return try_decorate(lambda: out, _return_decorator=False)
         return out
 
     return new_decorator

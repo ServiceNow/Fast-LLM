@@ -11,7 +11,7 @@ from fast_llm.functional.config import TritonConfig
 from fast_llm.functional.triton import tl, tl_constexpr, triton, triton_jit
 
 
-@triton_jit
+@triton_jit()
 def triton_adam_kernel(
     params_ptr,
     grads_ptr,

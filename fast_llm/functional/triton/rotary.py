@@ -6,7 +6,7 @@ from fast_llm.functional.triton import tl, tl_constexpr, triton, triton_jit
 from fast_llm.utils import div
 
 
-@triton_jit
+@triton_jit()
 def triton_rotary_kernel(
     input_ptr,
     frequencies_ptr,

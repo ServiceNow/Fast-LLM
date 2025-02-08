@@ -4,7 +4,7 @@ from fast_llm.functional.config import TritonConfig
 from fast_llm.functional.triton import tl, tl_constexpr, triton, triton_jit
 
 
-@triton_jit
+@triton_jit()
 def triton_cross_entropy_forward_backward_kernel(
     logits_ptr,
     labels_ptr,

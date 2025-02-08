@@ -29,7 +29,7 @@ from fast_llm.tensor import param_get_and_unset_is_zero
 _TritonActivationType: tl_constexpr = ActivationType
 
 
-@triton_jit
+@triton_jit()
 def triton_mlp_activation_forward_kernel(
     input_ptr,
     output_ptr,
@@ -71,7 +71,7 @@ def triton_mlp_activation_forward_kernel(
     tl.store(output_ptr + output_offsets, out, mask=mask)
 
 
-@triton_jit
+@triton_jit()
 def triton_mlp_activation_backward_kernel(
     grad_output_ptr,
     grad_input_ptr,

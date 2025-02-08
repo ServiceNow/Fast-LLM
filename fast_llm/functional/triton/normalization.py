@@ -8,7 +8,7 @@ from fast_llm.functional.triton import tl, tl_constexpr, triton, triton_jit
 from fast_llm.tensor import param_get_and_unset_is_zero
 
 
-@triton_jit
+@triton_jit()
 def triton_normalization_forward_kernel(
     input_ptr,
     output_ptr,
@@ -55,7 +55,7 @@ def triton_normalization_forward_kernel(
     tl.store(output_ptr + offsets, output, mask=mask)
 
 
-@triton_jit
+@triton_jit()
 def triton_normalization_backward_kernel_1(
     grad_input_ptr,
     grad_output_ptr,
@@ -122,7 +122,7 @@ def triton_normalization_backward_kernel_1(
         tl.store(grad_bias_partial_ptr, grad_bias_partial, mask=col_mask)  # noqa
 
 
-@triton_jit
+@triton_jit()
 def triton_normalization_backward_kernel_2(
     grad_weight_partial_ptr,
     grad_bias_partial_ptr,

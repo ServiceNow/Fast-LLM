@@ -20,7 +20,7 @@ class SparseMap:
     num_experts_per_token: int
 
 
-@triton_jit
+@triton_jit()
 def copy_dense_to_sparse_kernel(
     input_ptr,
     output_ptr,
@@ -62,7 +62,7 @@ def copy_dense_to_sparse(input_: torch.Tensor, scores: torch.Tensor | None, spar
     return out
 
 
-@triton_jit
+@triton_jit()
 def copy_sparse_to_dense_kernel(
     input_ptr,
     output_ptr,
@@ -104,7 +104,7 @@ def copy_sparse_to_dense(input_: torch.Tensor, scores: torch.Tensor | None, spar
     return out
 
 
-@triton_jit
+@triton_jit()
 def copy_sparse_to_dense_grad_score_kernel(
     input_ptr,
     grad_output_ptr,
@@ -193,7 +193,7 @@ def copy_sparse_to_dense_backward(grad_output: torch.Tensor, context: tuple[Spar
 copy_sparse_to_dense_autograd = wrap_forward_backward(copy_sparse_to_dense_forward, copy_sparse_to_dense_backward)
 
 
-@triton_jit
+@triton_jit()
 def sparse_map_kernel(
     top_experts_ptr,
     expert_ends_ptr,

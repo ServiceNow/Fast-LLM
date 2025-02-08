@@ -52,7 +52,7 @@ autotune_configs = [
     configs=autotune_configs,
     key=["row_dim", "col_dim", "inner_dim"],
 )
-@triton_jit
+@triton_jit()
 def dense_matmul_kernel(
     lhs_ptr,
     rhs_ptr,
@@ -182,7 +182,7 @@ def dense_matmul(
     # Excluding `row_dim` because it causes the compile time to skyrocket.
     key=["col_sparse_dim", "inner_dim", "sparse_dim"],
 )
-@triton_jit
+@triton_jit()
 def output_sparse_matmul_kernel(
     lhs_ptr,
     rhs_ptr,
@@ -306,7 +306,7 @@ def output_sparse_matmul(
     # Excluding `row_dim` because it causes the compile time to skyrocket.
     key=["col_dim", "inner_sparse_dim", "sparse_dim"],
 )
-@triton_jit
+@triton_jit()
 def input_inner_sparse_matmul_kernel(
     lhs_ptr,
     rhs_ptr,
@@ -432,7 +432,7 @@ def input_inner_sparse_matmul(
     # Excluding `inner_dim` because it causes the compile time to skyrocket.
     key=["row_dense_dim", "row_sparse_dim", "col_dim"],
 )
-@triton_jit
+@triton_jit()
 def input_row_sparse_matmul_kernel(
     lhs_ptr,
     rhs_ptr,
