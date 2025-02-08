@@ -85,9 +85,9 @@ def apply_yarn_scaling(config: RotaryConfig, frequencies: torch.Tensor, kv_chann
     inv_freq_extrapolation = frequencies
     inv_freq_interpolation = frequencies / factor
 
-    # TODO: max_position_embeddings or original_max_position_embeddings?
+    # TODO: max_position_embeddings or original_context_length?
     # see https://huggingface.co/deepseek-ai/DeepSeek-V3/blob/main/modeling_deepseek.py#L304
-    low, high = find_correction_range(config.beta_fast, config.beta_slow, dim, base, max_position_embeddings)
+    low, high = find_correction_range(config.beta_fast, config.beta_slow, dim, base, config.original_context_length)
 
     # Get n-dimensional rotational scaling corrected for extrapolation
     inv_freq_extrapolation_factor = 1 - linear_ramp_factor(low, high, dim // 2).float().to(frequencies.device)

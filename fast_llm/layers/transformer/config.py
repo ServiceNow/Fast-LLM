@@ -111,7 +111,7 @@ class RotaryArchitectureConfig(BaseModelArchitectureConfig):
         default=4.0, desc="High frequency factor for llama3-type scaling.", hint=FieldHint.feature
     )
     original_context_length: int = Field(
-        default=8192, desc="Original context length for llama3-type scaling.", hint=FieldHint.feature
+        default=8192, desc="Original context length for llama3/yarn-type scaling.", hint=FieldHint.feature
     )
     attention_factor: None | float = Field(
         default=None,
