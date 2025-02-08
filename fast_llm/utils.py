@@ -308,15 +308,18 @@ class InvalidObject:
 def try_decorate(get_decorator: Callable, return_decorator: bool = False) -> Callable:
     """
     Try to decorate an object, but ignore the error until the object is actualy used.
+    Set `return_decorator=True` if the decorator takes arguments,
+    ex. called as `@decorator(*args, **kwargs)` rather than `@decorate`.
+    TODO: Support both cases at once?
     """
 
     def new_decorator(*args, **kwargs):
         try:
-            return get_decorator()(*args, **kwargs)
+            out = get_decorator()(*args, **kwargs)
         except Exception as e:
             out = InvalidObject(e)
-            if return_decorator:
-                return lambda *args, **kwargs: out
-            return out
+        if return_decorator:
+            return try_decorate(lambda: out)
+        return out
 
     return new_decorator
