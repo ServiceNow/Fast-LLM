@@ -13,4 +13,4 @@ except ImportError as e:
     TritonConfig = lambda *args, **kwargs: None
 
 triton_jit = try_decorate(lambda: triton.jit)
-triton_autotune = try_decorate(lambda: triton.autotune)
+triton_autotune = try_decorate(lambda: triton.autotune, return_decorator=True)
