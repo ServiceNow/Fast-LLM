@@ -64,6 +64,7 @@ class GPTSamplingData(SamplingData):
     sequence_length: int
     vocab_size: int
     tokenizer: "Tokenizer"
+    use_loss_masking_spans: bool = False
 
 
 @config_class()
