@@ -119,6 +119,8 @@ def get_rotary_frequencies(
         frequencies, attention_scaling = apply_llama3_scaling(config, frequencies)
     elif config.type == RotaryEmbeddingType.yarn:
         frequencies, attention_scaling = apply_yarn_scaling(config, frequencies, kv_channels, sequence_length)
+    else:
+        attention_scaling = 1.0
     angles = torch.outer(positions, frequencies)
     frequencies = torch.polar(torch.ones_like(angles), angles)[None, :, None, :].to(torch.complex64)
     if not config.complex_format:
