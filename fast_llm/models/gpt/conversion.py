@@ -313,7 +313,7 @@ class RopeScalingParamConverter(ParamConverter):
     def import_params(self, export_values: tuple[typing.Any, ...]) -> tuple[typing.Any, ...]:
         (export_value,) = export_values
         if export_value is None or (rope_type := export_value[self._HUGGINGFACE_NAMES[0]]) == "default":
-            return (RotaryEmbeddingType.default,) + (DEFAULT,) * 4
+            return (RotaryEmbeddingType.default,) + (DEFAULT,) * 7
         elif rope_type == RotaryEmbeddingType.llama3:
             # TODO: Is it safe to assume all values are provided?
             return ("llama3", *[export_value[key] for key in self._HUGGINGFACE_NAMES[1:]])
