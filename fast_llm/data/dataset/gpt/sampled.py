@@ -1,3 +1,4 @@
+import dataclasses
 import logging
 import math
 import pathlib
@@ -23,6 +24,12 @@ except ImportError:
     _extension_available = False
 
 logger = logging.getLogger(__name__)
+
+
+@dataclasses.dataclass
+class GPTSample:
+    token_ids: np.ndarray
+    loss_masking_spans: np.ndarray | None = None
 
 
 class MemmapArray:
@@ -284,7 +291,8 @@ class GPTSampledIndexedDataset(SampledDataset):
         document_sampling_index = token_start_cumsum_index * TOKEN_CUMSUM_RATE + token_start_array_document_offset
         token_count = token_start_array[token_start_cumsum_index]
 
-        sample_list = []
+        token_ids = []
+        loss_masking_spans = []
         while token_count < token_end:
             # Find the document index in the dataset.
             if document_sampling_index < self._unshuffled_documents:
@@ -298,23 +306,30 @@ class GPTSampledIndexedDataset(SampledDataset):
                 # Determine which part of the document belong to the sample, and add it to the list.
                 token_start_index_in_document = max(token_start - token_count, 0)
                 token_end_index_in_document = min(token_end - token_count, document_size)
-                sample_list.append(
-                    self._indexed_dataset.get(
-                        document_index,
-                        offset=token_start_index_in_document,
-                        length=token_end_index_in_document - token_start_index_in_document,
-                    )
+                sample = self._indexed_dataset.get(
+                    document_index,
+                    offset=token_start_index_in_document,
+                    length=token_end_index_in_document - token_start_index_in_document,
+                    use_loss_masking_spans=self._config.use_loss_masking_spans,
                 )
+                token_ids.append(sample.token_ids)
+                if self._config.use_loss_masking_spans:
+                    for loss_masking_span in sample.loss_masking_spans:
+                        span = np.clip(loss_masking_span + token_count - token_start, 0, self._sequence_length + 1)
+                        if span[1] > span[0]:
+                            loss_masking_spans.append(span)
+
             # Go to the next document.
             document_sampling_index += 1
             token_count += document_size
 
-        sample = np.concatenate(
-            sample_list,
-            dtype=np.int64,
+        token_ids = np.concatenate(token_ids, dtype=np.int64)
+        loss_masking_spans = (
+            np.stack(loss_masking_spans, dtype=np.int32) if self._config.use_loss_masking_spans else None
         )
-        assert len(sample) == self._sequence_length + 1, sample_list
-        return sample
+        Assert.eq(len(token_ids), self._sequence_length + 1)
+
+        return GPTSample(token_ids=token_ids, loss_masking_spans=loss_masking_spans)
 
     @property
     def name(self) -> str:
@@ -449,15 +464,24 @@ class LegacyGPTSampledIndexedDataset(SampledDataset):
                 self._doc_idx[doc].item(),
                 offset=(doc == doc_f) * offset_f,
                 length=offset_l + 1 - (doc == doc_f) * offset_f if doc == doc_l else None,
+                use_loss_masking_spans=self._config.use_loss_masking_spans,
             )
             for doc in range(doc_f, doc_l + 1)
         ]
-        sample = np.concatenate(
-            sample_list,
-            dtype=np.int64,
-        )
-        Assert.eq(len(sample), self._sequence_length + 1)
-        return sample
+        token_ids = np.concatenate([sample.token_ids for sample in sample_list], dtype=np.int64)
+        Assert.eq(len(token_ids), self._sequence_length + 1)
+
+        if self._config.use_loss_masking_spans:
+            spans = []
+            offset = 0
+            for sample in sample_list:
+                for span in sample.loss_masking_spans:
+                    spans.append(span + offset)
+                offset += len(sample.token_ids)
+            spans = np.stack(spans, dtype=np.int32)
+        else:
+            spans = None
+        return GPTSample(token_ids=token_ids, loss_masking_spans=spans)
 
     @property
     def name(self) -> str:

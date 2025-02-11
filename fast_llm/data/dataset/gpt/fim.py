@@ -18,7 +18,7 @@ class GPTFimDataset(SampledDataset):
         dataset: SampledDataset,
         sampling: GPTSamplingData,
     ):
-        if sampling_config.use_loss_masking_spans:
+        if sampling.config.use_loss_masking_spans:
             raise NotImplementedError("FIM is currently not compatible with loss masking.")
         self._config = config
         self._dataset = dataset

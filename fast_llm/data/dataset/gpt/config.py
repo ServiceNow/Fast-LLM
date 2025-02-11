@@ -50,6 +50,11 @@ class GPTSamplingConfig(SamplingConfig):
         " so the sample won't match the CPU equivalent.",
         hint=FieldHint.feature,
     )
+    use_loss_masking_spans: bool | None = Field(
+        default=None,
+        desc="Read loss masking spans from the dataset.",
+        hint=FieldHint.feature,
+    )
     shuffle: ShufflingType | None = Field(
         default=None,
         desc="Shuffling strategy.",
@@ -64,7 +69,6 @@ class GPTSamplingData(SamplingData):
     sequence_length: int
     vocab_size: int
     tokenizer: "Tokenizer"
-    use_loss_masking_spans: bool = False
 
 
 @config_class()

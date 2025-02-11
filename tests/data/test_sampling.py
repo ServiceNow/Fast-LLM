@@ -5,6 +5,7 @@ import pytest
 
 from fast_llm.data.dataset.gpt.config import GPTMemmapDatasetConfig, ShufflingType
 from fast_llm.data.dataset.gpt.indexed import GPTIndexedDataset
+from fast_llm.data.dataset.gpt.sampled import GPTSample
 from fast_llm.engine.distributed.config import PhaseType
 from fast_llm.utils import Assert
 from tests.common import DATASET_PREFIX, get_test_dataset
@@ -78,10 +79,13 @@ class SimpleGPTIndexedDataset(GPTIndexedDataset):
     def __init__(self, samples):
         self._samples = samples
 
-    def get(self, index: int, offset=0, length=None) -> typing.Any:
+    def get(self, index: int, offset=0, length=None, use_loss_masking_spans: bool = False) -> typing.Any:
         if length is None:
             length = len(self._samples[index])
-        return np.array(self._samples[index][offset : offset + length], dtype=np.int64)
+        assert not use_loss_masking_spans
+        return GPTSample(
+            token_ids=np.array(self._samples[index][offset : offset + length], dtype=np.int64), loss_masking_spans=None
+        )
 
     def __len__(self) -> int:
         return len(self._samples)

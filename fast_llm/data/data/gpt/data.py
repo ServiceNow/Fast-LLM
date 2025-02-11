@@ -100,7 +100,6 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
                     sequence_length=self._max_sequence_length,
                     vocab_size=self._vocab_size,
                     tokenizer=self._tokenizer,
-                    use_loss_masking_spans=self._config.use_loss_masking_spans,
                 )
                 dataset = self._config.datasets[phase].build_and_sample(sampling)
                 self._datasets[phase] = DatasetMonitor(dataset, self._config.data_sample_warn_time_ms)
