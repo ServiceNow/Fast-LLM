@@ -3,10 +3,10 @@ from fast_llm.engine.distributed.config import PhaseType
 from tests.common import DATASET_CACHE, get_test_concatenated_memmap_dataset
 from tests.data.common import (
     compare_indexed_dataset,
-    compare_sampled_dataset,
     get_dataset_config,
-    get_sampling_config,
+    get_sampling_data,
     get_test_data_and_compare_samples,
+    validate_indexed_dataset_sampling,
 )
 from tests.data.test_memmap import MEMMAP_DATASET_SAMPLES
 
@@ -28,14 +28,14 @@ CONCATENATED_MEMMAP_DATASET_SAMPLES = {
     24098: [555, 668, 70],
 }
 CONCATENATED_MEMMAP_SAMPLES = [
-    [1411, 819, 6791, 7022, 285, 249],
-    [329, 328, 512, 1985, 3069, 7838],
-    [5158, 1023, 8171, 798, 1431, 313],
-    [1073, 3917, 275, 480, 74, 1752],
-    [207, 317, 269, 6662, 4357, 498],
-    [74, 310, 277, 7091, 668, 367],
-    [7828, 480, 89, 116, 4604, 69],
-    [79, 6042, 577, 225, 207, 207],
+    [7554, 80, 5970, 87, 477, 4119],
+    [4119, 6506, 74, 447, 87, 277],
+    [277, 320, 2597, 4117, 301, 727],
+    [727, 330, 3067, 2740, 81, 417],
+    [417, 1486, 542, 248, 540, 1364],
+    [1364, 7072, 2516, 2455, 79, 207],
+    [207, 727, 2204, 2379, 540, 1322],
+    [1322, 365, 2009, 72, 489, 1886],
 ]
 
 
@@ -53,8 +53,8 @@ def test_gpt_concatenated_memmap():
         CONCATENATED_MEMMAP_DATASET_TOKENS,
         CONCATENATED_MEMMAP_DATASET_SAMPLES,
     )
-    sampled = dataset.sample(get_sampling_config(8, sequence_length=5))
-    compare_sampled_dataset(sampled, CONCATENATED_MEMMAP_SAMPLES)
+    sampled = dataset.sample(get_sampling_data(8, sequence_length=5))
+    validate_indexed_dataset_sampling(sampled, CONCATENATED_MEMMAP_SAMPLES)
 
 
 def test_gpt_concatenated_memmap_data():

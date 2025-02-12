@@ -3,7 +3,7 @@ from fast_llm.engine.distributed.config import PhaseType
 from tests.data.common import (
     compare_sampled_dataset,
     get_dataset_config,
-    get_sampling_config,
+    get_sampling_data,
     get_test_data_and_compare_samples,
 )
 
@@ -18,7 +18,7 @@ RANDOM_DATASET_EXPECTED_SAMPLES = [
 def test_gpt_random_dataset():
     # Make sure the random dataset works and check for unintended changes in behavior.
     sampled = get_dataset_config({"type": "random"}, GPTRandomDatasetConfig).build_and_sample(
-        get_sampling_config(4, sequence_length=7)
+        get_sampling_data(4, sequence_length=7)
     )
     compare_sampled_dataset(sampled, RANDOM_DATASET_EXPECTED_SAMPLES)
 
@@ -44,4 +44,5 @@ def test_gpt_random_data_legacy():
         {PhaseType.training: 4},
         sequence_length=7,
         expected_samples={PhaseType.training: RANDOM_DATASET_EXPECTED_SAMPLES},
+        legacy=True,
     )

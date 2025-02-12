@@ -145,7 +145,7 @@ class Assert:
     def all_equal(x, y):
         import torch
 
-        # Make it work for numpy arrays.
+        # Make it work for lists and numpy arrays.
         x = torch.as_tensor(x)
         y = torch.as_tensor(y)
 

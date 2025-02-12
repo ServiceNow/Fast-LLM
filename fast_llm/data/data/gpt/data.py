@@ -13,7 +13,7 @@ from fast_llm.core.distributed import safe_barrier
 from fast_llm.data.data.abstract import Data
 from fast_llm.data.data.gpt.config import GPTDataConfig
 from fast_llm.data.dataset.abstract import SampledDataset
-from fast_llm.data.dataset.gpt.config import GPTSamplingConfig
+from fast_llm.data.dataset.gpt.config import GPTSamplingData
 from fast_llm.data.dataset.gpt.sampled import GPTSample
 from fast_llm.data.dataset.monitor import DatasetMonitor
 from fast_llm.data.iterator import SampledDatasetIterator
@@ -91,18 +91,17 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
             if num_samples > 0:
                 # TODO: Do the check earlier.
                 assert phase in self._config.datasets
-                sampling_config = GPTSamplingConfig(
+                sampling = GPTSamplingData(
                     num_samples=samples_per_phase[phase],
-                    seed=self._distributed_config.seed,
+                    config=self._config.sampling,
                     cache_directory=self._cache_directory,
                     distributed=distributed,
                     phase=phase,
                     sequence_length=self._max_sequence_length,
                     vocab_size=self._vocab_size,
                     tokenizer=self._tokenizer,
-                    use_loss_masking_spans=self._config.use_loss_masking_spans,
                 )
-                dataset = self._config.datasets[phase].build_and_sample(sampling_config)
+                dataset = self._config.datasets[phase].build_and_sample(sampling)
                 self._datasets[phase] = DatasetMonitor(dataset, self._config.data_sample_warn_time_ms)
 
         safe_barrier(self._distributed.world_group, "data_preparation", timeout)

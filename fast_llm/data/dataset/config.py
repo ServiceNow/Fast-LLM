@@ -1,10 +1,11 @@
 import dataclasses
 import functools
+import itertools
 import math
 import pathlib
 import typing
 
-from fast_llm.config import Config, Field, FieldHint, check_field, config_class
+from fast_llm.config import Config, Field, FieldHint, FieldVerboseLevel, check_field, config_class
 from fast_llm.data.dataset.abstract import SamplableDataset, SampledDataset
 from fast_llm.engine.distributed.config import PhaseType
 from fast_llm.utils import Assert
@@ -14,15 +15,43 @@ if typing.TYPE_CHECKING:
     from fast_llm.engine.distributed.distributed import Distributed
 
 
+@config_class()
+class SamplingConfig(Config):
+    seed: int | None = Field(
+        default=None,
+        desc="Seed for random sampling.",
+        hint=FieldHint.feature,
+    )
+
+    @property
+    def updates(self) -> dict[str, typing.Any]:
+        return {
+            key: value
+            for key, value in self.to_serialized(verbose=FieldVerboseLevel.everything).items()
+            if value is not None
+        }
+
+
 @dataclasses.dataclass(kw_only=True)
-class SamplingConfig:
+class SamplingData:
     # TODO: Have a separate configuration (subset?) for `build`?
+    config: SamplingConfig
     num_samples: int
-    seed: int
     cache_directory: pathlib.Path | None
     # TODO: This prevents the sampling config from being pickled in multiprocessing.
     distributed: "Distributed"
     phase: PhaseType
+    # Using a mutable rather than an int so it's shared with all copies made with `update`.
+    _rank_counter: typing.Iterator[int] = itertools.count
+
+    def update(self, config: SamplingConfig, **kwargs):
+        if config_updates := config.updates:
+            kwargs["config"] = self.config.to_copy(config_updates)
+        return dataclasses.replace(self, **kwargs) if kwargs else self
+
+    def get_next_rank(self) -> int:
+        # Counter that loops over ranks to try to distribute workloads evenly between ranks.
+        return next(self._rank_counter()) % self.distributed.config.world_size
 
 
 @config_class()
@@ -34,10 +63,9 @@ class DatasetConfig(Config):
 class SampledDatasetConfig(DatasetConfig):
     """
     A sampled dataset containing a prepared list of samples to be indexed sequentially (as-is) during training.
-    (See `fast_llm.data.sampler.Sampler`.)
     """
 
-    def build_and_sample(self, config: SamplingConfig) -> SampledDataset:
+    def build_and_sample(self, sampling: SamplingData) -> SampledDataset:
         raise NotImplementedError()
 
 
@@ -46,13 +74,13 @@ class SamplableDatasetConfig(SampledDatasetConfig):
     def build(self) -> SamplableDataset:
         raise NotImplementedError()
 
-    def build_and_sample(self, config: SamplingConfig) -> SampledDataset:
-        return self.build().sample(config)
+    def build_and_sample(self, sampling: SamplingData) -> SampledDataset:
+        return self.build().sample(sampling)
 
 
 @config_class()
 class IndexedDatasetConfig(SamplableDatasetConfig):
-    def build(self) -> "IndexedDataset":
+    def _build(self) -> "IndexedDataset":
         raise NotImplementedError()
 
 
@@ -129,6 +157,29 @@ class DatasetSliceConfig(SamplableDatasetConfig):
 
 
 @config_class()
+class SampledDatasetUpdateConfig(SampledDatasetConfig):
+    """
+    Wrap a dataset to explicitly sample from it and optionally update its configuration parameters.
+    Only explicitly set parameters (not None) will be updated, other will still be taken from `build_and_sample`'s argument.
+    """
+
+    _abstract = False
+    sampling: SamplingConfig = Field(
+        default_factory=SamplingConfig,
+        desc="Optional override to sampling configuration parameters.",
+        hint=FieldHint.core,
+    )
+    dataset: SampledDatasetConfig = Field(
+        default_factory=SampledDatasetConfig,
+        desc="The dataset to sample from.",
+        hint=FieldHint.core,
+    )
+
+    def build_and_sample(self, data: SamplingData) -> SampledDataset:
+        return self.dataset.build_and_sample(data.update(self.sampling))
+
+
+@config_class()
 class BlendedDatasetConfig(SampledDatasetConfig):
     _abstract = False
     name: str = Field(
@@ -159,7 +210,7 @@ class BlendedDatasetConfig(SampledDatasetConfig):
 
     def build_and_sample(
         self,
-        config: SamplingConfig,
+        sampling: SamplingData,
     ) -> SampledDataset:
         from fast_llm.data.dataset.blended import BlendedDataset
 
@@ -172,13 +223,13 @@ class BlendedDatasetConfig(SampledDatasetConfig):
             dataset.build_and_sample(
                 # Blending is deterministic and the error will never be higher than 1.
                 dataclasses.replace(
-                    config,
+                    sampling,
                     num_samples=(
-                        math.ceil(weight * (config.num_samples + 5 * (config.num_samples * (1 - weight)) ** 0.5))
+                        math.ceil(weight * (sampling.num_samples + 5 * (sampling.num_samples * (1 - weight)) ** 0.5))
                         if self.legacy
-                        else math.ceil(weight * config.num_samples) + 1
+                        else math.ceil(weight * sampling.num_samples) + 1
                     ),
-                    seed=config.seed + i * (0 if self.legacy else 697),
+                    config=sampling.config.to_copy({"seed": sampling.config.seed + i * (0 if self.legacy else 697)}),
                 ),
             )
             for i, (dataset, weight) in enumerate(zip(self.datasets, self.weights, strict=True))
@@ -188,5 +239,5 @@ class BlendedDatasetConfig(SampledDatasetConfig):
             self.name,
             sampled_datasets,
             self.weights,
-            config,
+            sampling,
         )

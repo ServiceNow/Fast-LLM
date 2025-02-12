@@ -5,20 +5,20 @@ from tests.data.common import (
     compare_indexed_dataset,
     compare_sampled_dataset,
     get_dataset_config,
-    get_sampling_config,
+    get_sampling_data,
     get_test_data_and_compare_samples,
 )
 from tests.data.test_memmap import MEMMAP_DATASET_LENGTH, MEMMAP_DATASET_SAMPLES, MEMMAP_DATASET_TOKENS
 
 GPT_CONCATENATED_SAMPLES = [
-    [243, 498, 7172, 777, 306, 74],
-    [821, 6042, 89, 977, 4797, 499],
-    [387, 74, 330, 328, 1858, 484],
-    [7722, 3069, 819, 4266, 304, 80],
-    [80, 634, 4913, 373, 207, 1046],
-    [72, 65, 5570, 73, 2210, 5514],
-    [7983, 977, 4147, 4739, 890, 386],
-    [5375, 275, 69, 771, 593, 8171],
+    [4709, 819, 79, 207, 277, 1790],
+    [1790, 80, 6506, 1735, 542, 88],
+    [88, 4302, 269, 2794, 119, 80],
+    [80, 207, 567, 498, 89, 207],
+    [207, 4700, 549, 79, 417, 3036],
+    [3036, 253, 207, 2968, 4536, 1178],
+    [1178, 3291, 317, 277, 2679, 89],
+    [89, 542, 395, 583, 684, 554],
 ]
 
 
@@ -35,7 +35,7 @@ def test_gpt_concatenate():
         3 * MEMMAP_DATASET_TOKENS,
         {j * MEMMAP_DATASET_LENGTH + i: sample for j in range(3) for i, sample in MEMMAP_DATASET_SAMPLES.items()},
     )
-    sampled = dataset.sample(get_sampling_config(8, sequence_length=5))
+    sampled = dataset.sample(get_sampling_data(8, sequence_length=5))
     compare_sampled_dataset(sampled, GPT_CONCATENATED_SAMPLES)
 
 
