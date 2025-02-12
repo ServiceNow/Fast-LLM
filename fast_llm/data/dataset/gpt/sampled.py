@@ -26,6 +26,7 @@ logger = logging.getLogger(__name__)
 class GPTSample:
     token_ids: np.ndarray
     loss_masking_spans: np.ndarray | None = None
+    position_ids: np.ndarray | None = None
 
 
 class GPTSampledIndexedDataset(SampledDataset):
@@ -46,6 +47,7 @@ class GPTSampledIndexedDataset(SampledDataset):
         self._sequence_length = sampling_config.sequence_length
         self._seed = sampling_config.seed
         self._use_loss_masking_spans = sampling_config.use_loss_masking_spans
+        self._per_document_positions = sampling_config.per_document_positions
 
         if sampling_config.cache_directory is None:
             log_main_rank(
@@ -147,6 +149,7 @@ class GPTSampledIndexedDataset(SampledDataset):
                 self._sample_idx_filename,
                 self._shuffle_idx_filename,
                 self._use_loss_masking_spans,
+                self._per_document_positions,
             )
         else:
             return (
@@ -155,6 +158,7 @@ class GPTSampledIndexedDataset(SampledDataset):
                 self._sample_idx,
                 self._shuffle_idx,
                 self._use_loss_masking_spans,
+                self._per_document_positions,
             )
 
     def __setstate__(self, state: tuple[GPTIndexedDataset, pathlib.Path, pathlib.Path, pathlib.Path, bool]) -> None:
@@ -165,6 +169,7 @@ class GPTSampledIndexedDataset(SampledDataset):
                 self._sample_idx_filename,
                 self._shuffle_idx_filename,
                 self._use_loss_masking_spans,
+                self._per_document_positions,
             ) = state
         else:
             (
@@ -173,6 +178,7 @@ class GPTSampledIndexedDataset(SampledDataset):
                 self._sample_idx,
                 self._shuffle_idx,
                 self._use_loss_masking_spans,
+                self._per_document_positions,
             ) = state
 
     def _load_mappings(self) -> None:
@@ -223,7 +229,12 @@ class GPTSampledIndexedDataset(SampledDataset):
             sample_ids = np.concatenate([sample.token_ids for sample in sample_list], dtype=np.int64)
             sample_spans = None
 
-        return GPTSample(token_ids=sample_ids, loss_masking_spans=sample_spans)
+        if self._per_document_positions:
+            position_ids = np.concatenate([np.arange(len(sample.token_ids), dtype=np.int32) for sample in sample_list])
+        else:
+            position_ids = None
+
+        return GPTSample(token_ids=sample_ids, loss_masking_spans=sample_spans, position_ids=position_ids)
 
     @property
     def name(self) -> str:

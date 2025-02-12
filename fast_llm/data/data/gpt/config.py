@@ -47,6 +47,11 @@ class GPTDataConfig(DataConfig, GPTLegacyConfig):
         desc="Read and use loss masking spans from the dataset, if present.",
         hint=FieldHint.feature,
     )
+    per_document_positions: bool = Field(
+        default=False,
+        desc="Create separate position ids for each document in a sequence, instead of global position ids for a sequence.",
+        hint=FieldHint.feature,
+    )
 
     def _validate(self) -> None:
         if not self.datasets:

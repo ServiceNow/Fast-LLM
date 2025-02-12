@@ -34,6 +34,7 @@ class GPTSamplingConfig(SamplingConfig):
     vocab_size: int
     tokenizer: "Tokenizer"
     use_loss_masking_spans: bool = False
+    per_document_positions: bool = False
 
 
 @config_class()

@@ -41,9 +41,14 @@ class PositionEmbeddingPreprocessor:
 
     def preprocess(self, kwargs: dict[str, typing.Any]) -> None:
         sequence_k = kwargs[TransformerKwargs.sequence_k_dim].size
-        kwargs[LanguageModelKwargs.position_ids] = self._position_ids[
-            sequence_k - kwargs[TransformerKwargs.sequence_q_dim].size : sequence_k
-        ].unsqueeze(int(kwargs[TransformerKwargs.sequence_first]))
+        if self._config.transformer.prevent_cross_document_attention:
+            kwargs[LanguageModelKwargs.position_ids] = kwargs[LanguageModelKwargs.position_ids][
+                sequence_k - kwargs[TransformerKwargs.sequence_q_dim].size : sequence_k
+            ].unsqueeze(int(kwargs[TransformerKwargs.sequence_first]))
+        else:
+            kwargs[LanguageModelKwargs.position_ids] = self._position_ids[
+                sequence_k - kwargs[TransformerKwargs.sequence_q_dim].size : sequence_k
+            ].unsqueeze(int(kwargs[TransformerKwargs.sequence_first]))
 
     def preprocess_meta(self, kwargs: dict[str, typing.Any]) -> None:
         # Position embeddings will be broadcast.

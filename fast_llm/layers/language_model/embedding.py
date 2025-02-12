@@ -76,7 +76,6 @@ class LanguageModelEmbedding[ConfigType: LanguageModelBaseConfig](Configurable[L
 
     @torch.compile
     def _forward(self, input_: torch.Tensor, position_ids: torch.Tensor | None) -> torch.Tensor:
-        Assert.eq(position_ids is not None, self._use_absolute_position_embeddings)
         group = self._tensor_space.distributed.tensor_group
         if self._parallel_embeddings:
             input_mask = (input_ >= self._vocab_start_index) * (input_ < self._vocab_end_index)

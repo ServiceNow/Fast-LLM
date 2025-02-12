@@ -31,14 +31,22 @@ logger = logging.getLogger(__name__)
 class GPTBatch:
     token_ids: torch.Tensor
     loss_masking_spans: list[torch.Tensor] | None = None
+    position_ids: torch.Tensor | None = None
 
 
-def gpt_data_collate_fn(batch: list[GPTSample], use_loss_masking_spans: bool) -> GPTBatch:
+def gpt_data_collate_fn(
+    batch: list[GPTSample], use_loss_masking_spans: bool, per_document_positions: bool
+) -> GPTBatch:
     stacked_ids = np.stack([sample.token_ids for sample in batch])
     stacked_spans = None
+    stacked_positions = None
     if use_loss_masking_spans:
         stacked_spans = [torch.from_numpy(sample.loss_masking_spans) for sample in batch]
-    return GPTBatch(token_ids=torch.from_numpy(stacked_ids), loss_masking_spans=stacked_spans)
+    if per_document_positions:
+        stacked_positions = torch.from_numpy(np.stack([sample.position_ids for sample in batch]))
+    return GPTBatch(
+        token_ids=torch.from_numpy(stacked_ids), loss_masking_spans=stacked_spans, position_ids=stacked_positions
+    )
 
 
 class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
@@ -101,6 +109,7 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
                     vocab_size=self._vocab_size,
                     tokenizer=self._tokenizer,
                     use_loss_masking_spans=self._config.use_loss_masking_spans,
+                    per_document_positions=self._config.per_document_positions,
                 )
                 dataset = self._config.datasets[phase].build_and_sample(sampling_config)
                 self._datasets[phase] = DatasetMonitor(dataset, self._config.data_sample_warn_time_ms)
@@ -139,7 +148,11 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
                 num_workers=num_workers,
                 prefetch_factor=prefetch_factor,
                 pin_memory=True,
-                collate_fn=partial(gpt_data_collate_fn, use_loss_masking_spans=self._config.use_loss_masking_spans),
+                collate_fn=partial(
+                    gpt_data_collate_fn,
+                    use_loss_masking_spans=self._config.use_loss_masking_spans,
+                    per_document_positions=self._config.per_document_positions,
+                ),
                 multiprocessing_context=self._config.multiprocessing_context.value if num_workers > 0 else None,
             )
         )
