@@ -80,6 +80,7 @@ class RotaryEmbeddingType(str, enum.Enum):
     none = "none"
     default = "default"
     llama3 = "llama3"
+    yarn = "yarn"
 
 
 @config_class()
@@ -110,7 +111,22 @@ class RotaryArchitectureConfig(BaseModelArchitectureConfig):
         default=4.0, desc="High frequency factor for llama3-type scaling.", hint=FieldHint.feature
     )
     original_context_length: int = Field(
-        default=8192, desc="Original context length for llama3-type scaling.", hint=FieldHint.feature
+        default=8192, desc="Original context length for llama3/yarn-type scaling.", hint=FieldHint.feature
+    )
+    attention_factor: None | float = Field(
+        default=None,
+        desc="Attention factor for yarn-type scaling.",
+        hint=FieldHint.feature,
+    )
+    beta_fast: float = Field(
+        default=32.,
+        desc="Beta-fast for yarn-type scaling.",
+        hint=FieldHint.feature,
+    )
+    beta_slow: float = Field(
+        default=1.,
+        desc="Beta-slow for yarn-type scaling.",
+        hint=FieldHint.feature,
     )
 
     @property
