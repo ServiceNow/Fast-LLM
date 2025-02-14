@@ -2,12 +2,13 @@ import json
 import logging
 import multiprocessing
 import pathlib
-import requests
 import shutil
 import typing
 
 import datasets
+import huggingface_hub
 import numpy as np
+import requests
 import torch.distributed
 import tqdm
 import transformers
@@ -18,7 +19,6 @@ from fast_llm.data.preparator.config import DatasetPreparator
 from fast_llm.data.preparator.gpt_memmap.config import GPTMemmapDatasetPreparatorConfig
 from fast_llm.data.tokenizer import Tokenizer
 from fast_llm.engine.config_utils.data_type import DataType
-from fast_llm.ext_utils.hf_auth import hf_auth_get_token
 
 logger = logging.getLogger(__name__)
 
@@ -104,7 +104,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
         return dataset
 
     def _get_croissant_metadata(self):
-        token = hf_auth_get_token()
+        token = huggingface_hub.HfFolder.get_token()
         try:
             # Retrieve the dataset metadata in croissant format
             url = f"https://huggingface.co/api/datasets/{self._config.dataset.path}/croissant"
