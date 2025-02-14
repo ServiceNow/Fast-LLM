@@ -1,47 +1,46 @@
 import torch
 
-import triton
-import triton.language as tl
+from fast_llm.functional.triton import TritonConfig, tl, tl_constexpr, triton, triton_autotune, triton_jit
 from fast_llm.functional.triton.sparse_copy import SparseMap
 from fast_llm.utils import Assert, div
 
 autotune_configs = [
-    triton.Config(
+    TritonConfig(
         {"block_size_row": 128, "block_size_col": 256, "block_size_inner": 64, "group_size_row": 8},
         num_stages=3,
         num_warps=8,
     ),
-    triton.Config(
+    TritonConfig(
         {"block_size_row": 64, "block_size_col": 256, "block_size_inner": 32, "group_size_row": 8},
         num_stages=4,
         num_warps=4,
     ),
-    triton.Config(
+    TritonConfig(
         {"block_size_row": 128, "block_size_col": 128, "block_size_inner": 32, "group_size_row": 8},
         num_stages=4,
         num_warps=4,
     ),
-    triton.Config(
+    TritonConfig(
         {"block_size_row": 128, "block_size_col": 64, "block_size_inner": 32, "group_size_row": 8},
         num_stages=4,
         num_warps=4,
     ),
-    triton.Config(
+    TritonConfig(
         {"block_size_row": 64, "block_size_col": 128, "block_size_inner": 32, "group_size_row": 8},
         num_stages=4,
         num_warps=4,
     ),
-    triton.Config(
+    TritonConfig(
         {"block_size_row": 128, "block_size_col": 32, "block_size_inner": 32, "group_size_row": 8},
         num_stages=4,
         num_warps=4,
     ),
-    triton.Config(
+    TritonConfig(
         {"block_size_row": 64, "block_size_col": 32, "block_size_inner": 32, "group_size_row": 8},
         num_stages=5,
         num_warps=2,
     ),
-    triton.Config(
+    TritonConfig(
         {"block_size_row": 32, "block_size_col": 64, "block_size_inner": 32, "group_size_row": 8},
         num_stages=5,
         num_warps=2,
@@ -49,30 +48,30 @@ autotune_configs = [
 ]
 
 
-@triton.autotune(
+@triton_autotune(
     configs=autotune_configs,
     key=["row_dim", "col_dim", "inner_dim"],
 )
-@triton.jit
+@triton_jit()
 def dense_matmul_kernel(
     lhs_ptr,
     rhs_ptr,
     out_ptr,
-    row_dim: tl.constexpr,
-    col_dim: tl.constexpr,
-    inner_dim: tl.constexpr,
-    lhs_stride_row: tl.constexpr,
-    lhs_stride_inner: tl.constexpr,
-    rhs_stride_inner: tl.constexpr,
-    rhs_stride_col: tl.constexpr,
-    out_stride_row: tl.constexpr,
-    out_stride_col: tl.constexpr,
-    accumulate: tl.constexpr,
-    masked: tl.constexpr,
-    block_size_row: tl.constexpr,
-    block_size_col: tl.constexpr,
-    block_size_inner: tl.constexpr,
-    group_size_row: tl.constexpr,
+    row_dim: tl_constexpr,
+    col_dim: tl_constexpr,
+    inner_dim: tl_constexpr,
+    lhs_stride_row: tl_constexpr,
+    lhs_stride_inner: tl_constexpr,
+    rhs_stride_inner: tl_constexpr,
+    rhs_stride_col: tl_constexpr,
+    out_stride_row: tl_constexpr,
+    out_stride_col: tl_constexpr,
+    accumulate: tl_constexpr,
+    masked: tl_constexpr,
+    block_size_row: tl_constexpr,
+    block_size_col: tl_constexpr,
+    block_size_inner: tl_constexpr,
+    group_size_row: tl_constexpr,
 ):
     # Safety checks
     # TODO: Any better way to handle optional masking?
@@ -178,33 +177,33 @@ def dense_matmul(
     return out
 
 
-@triton.autotune(
+@triton_autotune(
     configs=autotune_configs,
     # Excluding `row_dim` because it causes the compile time to skyrocket.
     key=["col_sparse_dim", "inner_dim", "sparse_dim"],
 )
-@triton.jit
+@triton_jit()
 def output_sparse_matmul_kernel(
     lhs_ptr,
     rhs_ptr,
     out_ptr,
     expert_ends_ptr,
-    row_dim: tl.constexpr,
-    col_sparse_dim: tl.constexpr,
-    inner_dim: tl.constexpr,
-    sparse_dim: tl.constexpr,
-    padded_sparse_dim: tl.constexpr,
-    lhs_stride_row: tl.constexpr,
-    lhs_stride_inner: tl.constexpr,
-    rhs_stride_inner: tl.constexpr,
-    rhs_stride_col: tl.constexpr,
-    out_stride_row: tl.constexpr,
-    out_stride_col: tl.constexpr,
-    accumulate: tl.constexpr,
-    block_size_row: tl.constexpr,
-    block_size_col: tl.constexpr,
-    block_size_inner: tl.constexpr,
-    group_size_row: tl.constexpr,
+    row_dim: tl_constexpr,
+    col_sparse_dim: tl_constexpr,
+    inner_dim: tl_constexpr,
+    sparse_dim: tl_constexpr,
+    padded_sparse_dim: tl_constexpr,
+    lhs_stride_row: tl_constexpr,
+    lhs_stride_inner: tl_constexpr,
+    rhs_stride_inner: tl_constexpr,
+    rhs_stride_col: tl_constexpr,
+    out_stride_row: tl_constexpr,
+    out_stride_col: tl_constexpr,
+    accumulate: tl_constexpr,
+    block_size_row: tl_constexpr,
+    block_size_col: tl_constexpr,
+    block_size_inner: tl_constexpr,
+    group_size_row: tl_constexpr,
 ):
     # Safety checks
     tl.static_assert(row_dim % block_size_row == 0)
@@ -302,33 +301,33 @@ def output_sparse_matmul(
     return out
 
 
-@triton.autotune(
+@triton_autotune(
     configs=autotune_configs,
     # Excluding `row_dim` because it causes the compile time to skyrocket.
     key=["col_dim", "inner_sparse_dim", "sparse_dim"],
 )
-@triton.jit
+@triton_jit()
 def input_inner_sparse_matmul_kernel(
     lhs_ptr,
     rhs_ptr,
     out_ptr,
     expert_ends_ptr,
-    row_dim: tl.constexpr,
-    col_dim: tl.constexpr,
-    inner_sparse_dim: tl.constexpr,
-    sparse_dim: tl.constexpr,
-    padded_sparse_dim: tl.constexpr,
-    lhs_stride_row: tl.constexpr,
-    lhs_stride_inner: tl.constexpr,
-    rhs_stride_inner: tl.constexpr,
-    rhs_stride_col: tl.constexpr,
-    out_stride_row: tl.constexpr,
-    out_stride_col: tl.constexpr,
-    accumulate: tl.constexpr,
-    block_size_row: tl.constexpr,
-    block_size_col: tl.constexpr,
-    block_size_inner: tl.constexpr,
-    group_size_row: tl.constexpr,
+    row_dim: tl_constexpr,
+    col_dim: tl_constexpr,
+    inner_sparse_dim: tl_constexpr,
+    sparse_dim: tl_constexpr,
+    padded_sparse_dim: tl_constexpr,
+    lhs_stride_row: tl_constexpr,
+    lhs_stride_inner: tl_constexpr,
+    rhs_stride_inner: tl_constexpr,
+    rhs_stride_col: tl_constexpr,
+    out_stride_row: tl_constexpr,
+    out_stride_col: tl_constexpr,
+    accumulate: tl_constexpr,
+    block_size_row: tl_constexpr,
+    block_size_col: tl_constexpr,
+    block_size_inner: tl_constexpr,
+    group_size_row: tl_constexpr,
 ):
     # Safety checks
     tl.static_assert(row_dim % block_size_row == 0)
@@ -428,33 +427,33 @@ def input_inner_sparse_matmul(
     return out
 
 
-@triton.autotune(
+@triton_autotune(
     configs=autotune_configs,
     # Excluding `inner_dim` because it causes the compile time to skyrocket.
     key=["row_dense_dim", "row_sparse_dim", "col_dim"],
 )
-@triton.jit
+@triton_jit()
 def input_row_sparse_matmul_kernel(
     lhs_ptr,
     rhs_ptr,
     out_ptr,
     expert_ends_ptr,
     expert_pad_begins_ptr,
-    row_dense_dim: tl.constexpr,
-    row_sparse_dim: tl.constexpr,
-    col_dim: tl.constexpr,
-    inner_dim: tl.constexpr,
-    lhs_stride_row: tl.constexpr,
-    lhs_stride_inner: tl.constexpr,
-    rhs_stride_inner: tl.constexpr,
-    rhs_stride_col: tl.constexpr,
-    out_stride_row: tl.constexpr,
-    out_stride_col: tl.constexpr,
-    accumulate: tl.constexpr,
-    block_size_row: tl.constexpr,
-    block_size_col: tl.constexpr,
-    block_size_inner: tl.constexpr,
-    group_size_row: tl.constexpr,
+    row_dense_dim: tl_constexpr,
+    row_sparse_dim: tl_constexpr,
+    col_dim: tl_constexpr,
+    inner_dim: tl_constexpr,
+    lhs_stride_row: tl_constexpr,
+    lhs_stride_inner: tl_constexpr,
+    rhs_stride_inner: tl_constexpr,
+    rhs_stride_col: tl_constexpr,
+    out_stride_row: tl_constexpr,
+    out_stride_col: tl_constexpr,
+    accumulate: tl_constexpr,
+    block_size_row: tl_constexpr,
+    block_size_col: tl_constexpr,
+    block_size_inner: tl_constexpr,
+    group_size_row: tl_constexpr,
 ):
     # Safety checks
     tl.static_assert(row_sparse_dim % block_size_row == 0)

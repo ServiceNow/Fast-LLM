@@ -6,6 +6,7 @@ import pytest
 
 from fast_llm.data.dataset.gpt.config import GPTMemmapDatasetConfig
 from fast_llm.data.dataset.gpt.memmap import GPTMemmapDataset
+from fast_llm.data.dataset.gpt.sampled import GPTSample
 from fast_llm.data.preparator.gpt_memmap.config import MEMMAP_DTYPES
 from tests.common import DATASET_PREFIX, DATASET_SAMPLING_CACHE, get_test_dataset
 from tests.data.common import compare_indexed_dataset, get_dataset_config
@@ -13,14 +14,14 @@ from tests.data.common import compare_indexed_dataset, get_dataset_config
 
 @pytest.mark.parametrize("dtype", MEMMAP_DTYPES.values())
 def test_write_memmap_dataset(dtype):
-    documents = [np.random.randint(1000, size=np.random.randint(1, 100)).astype(dtype) for _ in range(100)]
+    documents = [GPTSample(np.random.randint(1000, size=np.random.randint(1, 100)).astype(dtype)) for _ in range(100)]
     with tempfile.TemporaryDirectory() as temp_dir:
         prefix = pathlib.Path(temp_dir)
         GPTMemmapDataset.write_dataset(prefix=prefix, documents=documents)
         dataset = GPTMemmapDataset(name="foo", prefix=prefix)
         for i, document in enumerate(documents):
             assert np.array_equal(
-                dataset.get(i), document, equal_nan=True
+                dataset.get(i).token_ids, document.token_ids, equal_nan=True
             ), f"Mismatch for document {i}: {document} != {dataset.get(i)}."
 
 
@@ -40,3 +41,27 @@ def test_gpt_memmap(cache_directory):
     get_test_dataset()
     dataset = get_dataset_config({"type": "memmap", "path": DATASET_PREFIX}, GPTMemmapDatasetConfig).build()
     compare_indexed_dataset(dataset, MEMMAP_DATASET_LENGTH, MEMMAP_DATASET_TOKENS, MEMMAP_DATASET_SAMPLES)
+
+
+MEMMAP_DATASET_SPANS = {
+    9: [],
+    10: [[0, 4], [6, 8]],
+    13: [[1, 2]],
+    15: [],
+}
+
+_DATASET_PREFIX_SPANS = DATASET_PREFIX.with_name("with_spans")
+
+
+def test_gpt_data_with_spans():
+    get_test_dataset(prefix=DATASET_PREFIX.with_name("with_spans"), max_spans=5)
+    dataset = get_dataset_config(
+        {
+            "type": "memmap",
+            "path": _DATASET_PREFIX_SPANS,
+        },
+        GPTMemmapDatasetConfig,
+    ).build()
+    compare_indexed_dataset(
+        dataset, MEMMAP_DATASET_LENGTH, MEMMAP_DATASET_TOKENS, MEMMAP_DATASET_SAMPLES, MEMMAP_DATASET_SPANS
+    )

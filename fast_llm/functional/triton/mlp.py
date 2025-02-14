@@ -3,7 +3,6 @@ import typing
 
 import torch
 
-import triton
 from fast_llm.core.distributed import ProcessGroup
 from fast_llm.core.ops import gather_op
 from fast_llm.functional.autograd import wrap_forward_backward
@@ -15,6 +14,7 @@ from fast_llm.functional.linear import (
     output_parallel_linear_forward,
     update_linear_gradients,
 )
+from fast_llm.functional.triton import tl, tl_constexpr, triton_jit
 from fast_llm.functional.triton.sparse_copy import (
     SparseMap,
     copy_dense_to_sparse_backward,
@@ -24,20 +24,19 @@ from fast_llm.functional.triton.sparse_copy import (
 )
 from fast_llm.functional.triton.sparse_linear import output_sparse_matmul
 from fast_llm.tensor import param_get_and_unset_is_zero
-from triton import language as tl
 
-# Triton requires global variables to be annotated with `tl.constexpr`.
-_TritonActivationType: tl.constexpr = ActivationType
+# Triton requires global variables to be annotated with `constexpr`.
+_TritonActivationType: tl_constexpr = ActivationType
 
 
-@triton.jit
+@triton_jit()
 def triton_mlp_activation_forward_kernel(
     input_ptr,
     output_ptr,
-    gated: tl.constexpr,
-    activation_type: tl.constexpr,
-    n_cols: tl.constexpr,
-    block_size: tl.constexpr,
+    gated: tl_constexpr,
+    activation_type: tl_constexpr,
+    n_cols: tl_constexpr,
+    block_size: tl_constexpr,
 ):
     # TODO: Int64 ptr only if needed?
     row_idx = tl.program_id(0).to(tl.int64)
@@ -72,17 +71,17 @@ def triton_mlp_activation_forward_kernel(
     tl.store(output_ptr + output_offsets, out, mask=mask)
 
 
-@triton.jit
+@triton_jit()
 def triton_mlp_activation_backward_kernel(
     grad_output_ptr,
     grad_input_ptr,
     input_ptr,
     output_ptr,
-    gated: tl.constexpr,
-    activation_type: tl.constexpr,
-    recompute: tl.constexpr,
-    n_cols: tl.constexpr,
-    block_size: tl.constexpr,
+    gated: tl_constexpr,
+    activation_type: tl_constexpr,
+    recompute: tl_constexpr,
+    n_cols: tl_constexpr,
+    block_size: tl_constexpr,
 ):
     # TODO: Int64 ptr only if needed?
     row_idx = tl.program_id(0).to(tl.int64)

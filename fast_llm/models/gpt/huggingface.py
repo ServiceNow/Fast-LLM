@@ -4,6 +4,7 @@ import random
 import torch
 import transformers.modeling_outputs
 
+from fast_llm.data.data.gpt.data import GPTBatch
 from fast_llm.engine.distributed.config import PhaseType
 from fast_llm.engine.huggingface.config import HuggingfaceModelConfig
 from fast_llm.engine.huggingface.model import HuggingfacePreTrainedModel
@@ -66,7 +67,9 @@ class HuggingfaceGPTModelForCausalLM(HuggingfacePreTrainedModel):
 
         # Iteration serves as a random seed, using random module because it's not seeded by Fast LLM
         iteration = random.randint(0, 2**32)
-        batch = self._fast_llm_model.base_model.preprocess(input_ids, phase=PhaseType.inference, iteration=iteration)
+        batch = self._fast_llm_model.base_model.preprocess(
+            GPTBatch(input_ids), phase=PhaseType.inference, iteration=iteration
+        )
         ((_, kwargs),) = batch
 
         if past_key_values is not None:
