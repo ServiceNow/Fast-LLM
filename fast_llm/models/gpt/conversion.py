@@ -319,10 +319,9 @@ class RopeScalingParamConverter(ParamConverter):
         if export_value is None or (rope_type := export_value[self._HUGGINGFACE_NAMES[0]]) == "default":
             return (RotaryEmbeddingType.default,) + (DEFAULT,) * 7
         elif rope_type == RotaryEmbeddingType.llama3:
-            # TODO: Is it safe to assume all values are provided?
-            return ("llama3", *[export_value[key] for key in self._HUGGINGFACE_NAMES[1:]])
+            return ("llama3", *[export_value.get(key, DEFAULT) for key in self._HUGGINGFACE_NAMES[1:]])
         elif rope_type == RotaryEmbeddingType.yarn:
-            return ("yarn", *[export_value[key] for key in self._HUGGINGFACE_NAMES[1:]])
+            return ("yarn", *[export_value.get(key, DEFAULT) for key in self._HUGGINGFACE_NAMES[1:]])
         else:
             raise ValueError(f"Unsupported rotary scaling type: {rope_type}")
 
