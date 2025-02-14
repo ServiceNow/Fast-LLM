@@ -11,8 +11,9 @@ batch:
   micro_batch_size: 2
   batch_size: 64
 data:
-  format: random
-  split: [1, 0, 0]
+  datasets:
+    Training:
+      type: random
 optimizer:
   learning_rate:
     base: 1.0e-05

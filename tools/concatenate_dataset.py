@@ -34,7 +34,7 @@ class ConcatenateDatasetConfig(RunnableConfig):
             dataset = GPTMemmapDataset("dataset", prefix)
             dataset_dict = {
                 "prefix": str(prefix.relative_to(self.directory)),
-                "num_documents": dataset.num_documents,
+                "num_documents": len(dataset),
                 "num_tokens": dataset.num_tokens,
             }
             if self.min_tokens is not None and dataset_dict["num_tokens"] < self.min_tokens:

@@ -11,13 +11,13 @@ import pytest
 import torch
 
 from fast_llm.data.dataset.gpt.memmap import GPTMemmapDataset
+from fast_llm.data.dataset.gpt.sampled import GPTSample
 from fast_llm.models.gpt.config import (
     LlamaGPTHuggingfaceCheckpointFormat,
     MistralGPTHuggingfaceCheckpointFormat,
     MixtralGPTHuggingfaceCheckpointFormat,
     Starcoder2GPTHuggingfaceCheckpointFormat,
 )
-from fast_llm.models.gpt.huggingface import HuggingfaceGPTModelForCausalLM
 from fast_llm.tools.train import CliTrainingConfig
 from tests.compare_tensor_logs import CompareConfig, compare_tensor_logs
 
@@ -34,10 +34,16 @@ TEST_MODEL = os.environ.get("MODEL", "llama")
 
 ARTIFACT_PATH = "runs/0/artifacts"
 
-TOKENIZER_PATH = TEST_RESULTS_PATH / "data" / "tokenizer"
+TOKENIZER_PATH = TEST_RESULTS_PATH / "tokenizer" / "common"
 TOKENIZER_FILE = TOKENIZER_PATH / "tokenizer.json"
-DATASET_PREFIX = TEST_RESULTS_PATH / "data" / "dataset/data"
+DATASET_CACHE = TEST_RESULTS_PATH / "dataset"
+DATASET_PREFIX = DATASET_CACHE / "common"
+DATASET_SAMPLING_CACHE = TEST_RESULTS_PATH / "dataset" / "cache"
 
+TEST_VOCAB_SIZE = 8192
+# Random lowercase: 80.7% (3.1% each); space: 18.6%; doc end: 0.6%
+TEST_CHARACTERS = (string.ascii_lowercase) * 5 + " " * 30 + "\n"
+TEST_DATASET_TOKENS = 1000000
 
 CONFIG_BASE_FAST_LLM = [
     "training.logs.interval=1",
@@ -47,7 +53,7 @@ CONFIG_BASE_FAST_LLM = [
     "model.base_model.transformer.hidden_size=256",
     "model.base_model.transformer.num_attention_heads=8",
     "model.base_model.transformer.init_method_std=0.022",
-    "model.base_model.vocab_size=8192",
+    f"model.base_model.vocab_size={TEST_VOCAB_SIZE}",
     f"model.multi_stage.debug_param_init={_LOG_LEVEL}",
     f"model.multi_stage.debug_layer_outputs={_LOG_LEVEL}",
     f"model.multi_stage.debug_layer_gradients={_LOG_LEVEL}",
@@ -58,7 +64,20 @@ CONFIG_BASE_FAST_LLM = [
     "training.num_workers=0",
     "batch.batch_size=8",
     "batch.sequence_length=512",
-    f"data.path={DATASET_PREFIX}",
+    "data.datasets.Training.type=slice",
+    "data.datasets.Training.end=0.969",
+    "data.datasets.Training.dataset.type=memmap",
+    f"data.datasets.Training.dataset.path={DATASET_PREFIX}",
+    "data.datasets.Validation.type=slice",
+    "data.datasets.Validation.begin=0.969",
+    "data.datasets.Validation.end=0.999",
+    "data.datasets.Validation.dataset.type=memmap",
+    f"data.datasets.Validation.dataset.path={DATASET_PREFIX}",
+    "data.datasets.Test.type=slice",
+    "data.datasets.Test.begin=0.999",
+    "data.datasets.Test.end=1",
+    "data.datasets.Test.dataset.type=memmap",
+    f"data.datasets.Test.dataset.path={DATASET_PREFIX}",
     "optimizer.learning_rate.base=0.0001",
 ]
 CONFIG_BASE_MEGATRON = [
@@ -84,7 +103,7 @@ CONFIG_BASE_MEGATRON = [
     "--valid-num-workers=0",
     "--tokenizer-type=NullTokenizer",
     # Megatron messes with the vocab size, so we have to subtract 1.
-    "--vocab-size=8191",
+    f"--vocab-size={TEST_VOCAB_SIZE-1}",
     f"--data-path={DATASET_PREFIX}",
     "--lr-decay-style=constant",
     # Initialization is set up to match MCore models (MCore inverts self-attn qkv and dense layers compared to original Megatron)
@@ -148,7 +167,7 @@ CONFIG_MIXTRAL_COMMON = CONFIG_MIXTRAL_FAST_LLM + ["model.distributed.training_d
 
 _CONFIGS = {
     "gpt2": ("gpt", CONFIG_GPT2_FAST_LLM, CONFIG_GPT2_MEGATRON, CONFIG_GPT2_COMMON, None),
-    "sc1": ("gpt", HuggingfaceGPTModelForCausalLM, CONFIG_SC1_FAST_LLM, CONFIG_SC1_MEGATRON, CONFIG_SC1_COMMON, None),
+    "sc1": ("gpt", CONFIG_SC1_FAST_LLM, CONFIG_SC1_MEGATRON, CONFIG_SC1_COMMON, None),
     "starcoder2": (
         "gpt",
         CONFIG_SC2_FAST_LLM,
@@ -193,21 +212,58 @@ TEST_MODEL_TYPE, CONFIG_FAST_LLM, CONFIG_GPT2, CONFIG_COMMON, HUGGINGFACE_CHECKP
 requires_cuda = pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is not available")
 
 
-def get_test_data():
+def get_test_dataset(
+    prefix: pathlib.Path = DATASET_PREFIX,
+    seed: int = 1234,
+    num_tokens: int = TEST_DATASET_TOKENS,
+    characters: str = TEST_CHARACTERS,
+    vocab_size: int = TEST_VOCAB_SIZE,
+    max_spans: int = 0,
+):
     if not TOKENIZER_FILE.is_file():
         import transformers
 
         transformers.AutoTokenizer.from_pretrained("bigcode/santacoder").save_pretrained(TOKENIZER_PATH)
 
-    if not (DATASET_PREFIX.with_suffix(".idx").is_file() and DATASET_PREFIX.with_suffix(".bin").is_file()):
+    if not (prefix.with_suffix(".idx").is_file() and prefix.with_suffix(".bin").is_file()):
         import transformers
 
-        characters = (string.ascii_lowercase) * 5 + " " * 30 + "\n"
-        documents = "".join(random.Random(1234).choices(characters, k=1000000)).splitlines()
+        texts = "".join(random.Random(seed).choices(characters, k=num_tokens)).splitlines()
         tokenizer = transformers.AutoTokenizer.from_pretrained(TOKENIZER_PATH)
 
-        documents = [np.array(tokenizer(document)["input_ids"], dtype=np.uint16) % 8192 for document in documents]
-        GPTMemmapDataset.write_dataset(DATASET_PREFIX, documents)
+        samples = [
+            GPTSample(np.array(tokenizer(document)["input_ids"], dtype=np.uint16) % vocab_size) for document in texts
+        ]
+        if max_spans > 0:
+            lengths = np.array([max(len(sample.token_ids), 1) for sample in samples])
+            spans = np.sort(np.random.RandomState(seed + 3847).randint(0, lengths[:, None], [len(samples), max_spans]))
+            for sample, span in zip(samples, spans):
+                span = np.unique(span)
+                sample.loss_masking_spans = span[: len(span) // 2 * 2].reshape(-1, 2)
+
+        GPTMemmapDataset.write_dataset(prefix, samples)
+
+
+def get_test_concatenated_memmap_dataset(
+    path: pathlib.Path,
+    num_files: int,
+    seed: int = 1234,
+    num_tokens: int = TEST_DATASET_TOKENS,
+    characters: str = TEST_CHARACTERS,
+    vocab_size: int = TEST_VOCAB_SIZE,
+    seed_shift: int = 55,
+):
+    index_file = path / "index.txt"
+    if not index_file.is_file():
+        for i in range(num_files):
+            get_test_dataset(
+                prefix=path / f"dataset_{i}",
+                seed=seed + i * seed_shift,
+                num_tokens=num_tokens,
+                characters=characters,
+                vocab_size=vocab_size,
+            )
+        index_file.open("w").writelines([str(path / f"dataset_{i}") + "\n" for i in range(num_files)])
 
 
 def run_test_script(
@@ -264,7 +320,7 @@ def run_test_script(
     if skip:
         print("Reusing existing run.")
     else:
-        get_test_data()
+        get_test_dataset()
         if num_gpus == 1 and not is_megatron:
             CliTrainingConfig.parse_and_run(script)
         else:

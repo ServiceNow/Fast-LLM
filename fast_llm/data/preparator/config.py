@@ -1,9 +1,8 @@
 import abc
 import typing
 
-from fast_llm.config import config_class
+from fast_llm.config import Configurable, config_class
 from fast_llm.engine.config_utils.runnable import RunnableConfig
-from fast_llm.utils import Assert
 
 
 @config_class()
@@ -19,14 +18,8 @@ class DatasetPreparatorConfig(RunnableConfig):
         return dataset_preparator.run
 
 
-class DatasetPreparator(abc.ABC):
-    _config: DatasetPreparatorConfig
+class DatasetPreparator[ConfigType: DatasetPreparatorConfig](Configurable[ConfigType], abc.ABC):
     config_class: typing.ClassVar[type[DatasetPreparatorConfig]] = DatasetPreparatorConfig
-
-    def __init__(self, config: DatasetPreparatorConfig) -> None:
-        Assert.custom(isinstance, config, self.config_class)
-        config.validate()
-        self._config = config
 
     @abc.abstractmethod
     def run(self) -> None:
