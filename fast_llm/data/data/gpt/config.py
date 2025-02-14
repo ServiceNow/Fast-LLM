@@ -1,27 +1,30 @@
-import enum
+import logging
 
-from fast_llm.config import Field, FieldHint, check_field, config_class
-from fast_llm.data.config import MultiprocessingContext, TokenizerConfig, _validate_path, _validate_split
-from fast_llm.data.data.config import DataConfig, SamplingConfig
-from fast_llm.data.dataset.gpt.fim.config import FimConfig
+from fast_llm.config import Field, FieldHint, FieldUpdate, check_field, config_class
+from fast_llm.data.config import MultiprocessingContext, TokenizerConfig
+from fast_llm.data.data.config import DataConfig, SamplingDefaultConfig
+from fast_llm.data.dataset.gpt.config import (
+    GPTLegacyConfig,
+    GPTLegacyDatasetConfig,
+    GPTSampledDatasetConfig,
+    GPTSamplingConfig,
+    ShufflingType,
+)
+from fast_llm.engine.distributed.config import PhaseType
 from fast_llm.utils import Assert
 
-
-class DatasetSource(str, enum.Enum):
-    """
-    An enum for the different ways to load datasets.
-    TODO: Reduce the diversity?
-    TODO: Is this specific to GPT data?
-    """
-
-    list = "list"
-    file = "file"
-    sample = "sample"
-    random = "random"
+logger = logging.getLogger(__name__)
 
 
 @config_class()
-class GPTDataConfig(DataConfig):
+class GPTSamplingDefaultConfig(SamplingDefaultConfig, GPTSamplingConfig):
+    gpu: bool = FieldUpdate(default=True)
+    use_loss_masking_spans: bool = FieldUpdate(default=False)
+    shuffle: ShufflingType = FieldUpdate(default=ShufflingType.epoch)
+
+
+@config_class()
+class GPTDataConfig(DataConfig, GPTLegacyConfig):
     """
     Configuration for the dataset(s), split and sampling.
     Currently hard-coded to a GPT dataset.
@@ -35,29 +38,13 @@ class GPTDataConfig(DataConfig):
         desc="Configuration for the tokenizer (for FIM).",
         hint=FieldHint.feature,
     )
-    fim: FimConfig = Field(
-        default_factory=FimConfig,
-        desc="Configuration for Fill In the Middle (FIM).",
-        hint=FieldHint.feature,
-    )
-    # TODO: set default to [1,0,0]?
-    split: list[float] = Field(
-        default_factory=lambda: [969, 30, 1],
-        desc="Split ratio for train, valid and test datasets.",
-        hint=FieldHint.core,
-        valid=_validate_split,
-    )
-    format: DatasetSource = Field(
-        default=DatasetSource.list,
-        desc="Format for the dataset definition.",
+    # TODO: Review field. Move closer to phase definition in training config?
+    datasets: dict[PhaseType, GPTSampledDatasetConfig] = Field(
+        default_factory=dict,
+        desc="Configuration for the dataset(s).",
         hint=FieldHint.core,
     )
-    path: list[str] = Field(
-        default_factory=list,
-        desc="Path or list of paths and weights.",
-        hint=FieldHint.core,
-        valid=_validate_path,
-    )
+    sampling: GPTSamplingDefaultConfig = FieldUpdate(default_factory=GPTSamplingDefaultConfig)
     data_sample_warn_time_ms: float = Field(
         default=1000,
         desc="Warn if a sample takes too long to load.",
@@ -69,8 +56,19 @@ class GPTDataConfig(DataConfig):
         desc="Multiprocessing context. Do not touch.",
         hint=FieldHint.expert,
     )
+    use_loss_masking_spans: bool = Field(
+        default=False,
+        desc="Read and use loss masking spans from the dataset, if present.",
+        hint=FieldHint.feature,
+    )
 
-
-@config_class
-class GPTSamplingConfig(SamplingConfig):
-    sequence_length: int = Field(default=None, desc="Number of token in each sample.")
+    def _validate(self) -> None:
+        if not self.datasets:
+            logger.warning(
+                "Using the legacy dataset definition format." " Specify it through `data.datasets` instead."
+            )
+            self.datasets = {
+                phase: GPTLegacyDatasetConfig.from_dict(self, strict=False)
+                for phase in (PhaseType.training, PhaseType.validation, PhaseType.test)
+            }
+        super()._validate()

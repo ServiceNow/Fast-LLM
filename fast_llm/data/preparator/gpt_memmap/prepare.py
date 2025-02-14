@@ -1,6 +1,7 @@
 import json
 import multiprocessing
 import pathlib
+import typing
 
 import datasets
 import numpy as np
@@ -9,20 +10,20 @@ import tqdm
 import transformers
 
 from fast_llm.data.dataset.gpt.memmap import GPTMemmapDataset
+from fast_llm.data.dataset.gpt.sampled import GPTSample
 from fast_llm.data.preparator.config import DatasetPreparator
 from fast_llm.data.preparator.gpt_memmap.config import GPTMemmapDatasetPreparatorConfig
 from fast_llm.data.tokenizer import Tokenizer
 from fast_llm.engine.config_utils.data_type import DataType
 
 
-class GPTMemmapDatasetPreparator(DatasetPreparator):
-    _config: GPTMemmapDatasetPreparatorConfig
-    config_class = GPTMemmapDatasetPreparatorConfig
+class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](DatasetPreparator[ConfigType]):
+    config_class: typing.ClassVar[type[GPTMemmapDatasetPreparatorConfig]] = GPTMemmapDatasetPreparatorConfig
 
     _tokenizer: Tokenizer
     _data_type: DataType
 
-    def _tokenize_batch(self, batch):
+    def _tokenize_batch(self, batch: dict[str, list[typing.Any]]) -> dict[str, list[typing.Any]]:
         input_ids = [
             np.array(self._tokenizer.tokenize(text), dtype=self._data_type.numpy)
             for text in batch[self._config.dataset.field]
@@ -33,14 +34,46 @@ class GPTMemmapDatasetPreparator(DatasetPreparator):
             "num_tokens": num_tokens,
         }
 
-    def _save_shard(self, args) -> dict:
+    def _tokenize_batch_with_spans(self, batch: dict[str, list[typing.Any]]) -> dict[str, list[typing.Any]]:
+        input_ids, token_spans = map(
+            list,
+            zip(
+                *[
+                    (
+                        np.array(input_ids, dtype=self._data_type.numpy),
+                        np.array(token_spans, dtype=np.int32).reshape(-1, 2),
+                    )
+                    for input_ids, token_spans in [
+                        self._tokenizer.tokenize_with_spans(text, char_spans)
+                        for text, char_spans in zip(
+                            batch[self._config.dataset.field], batch[self._config.dataset.loss_masking_spans]
+                        )
+                    ]
+                ]
+            ),
+        )
+        num_tokens = [len(x) for x in input_ids]
+        return {
+            "input_ids": input_ids,
+            "token_spans": token_spans,
+            "num_tokens": num_tokens,
+        }
+
+    def _save_shard(self, args: tuple[int, datasets.Dataset]) -> dict[str, typing.Any]:
         shard_idx, shard_dataset = args
         prefix = f"shard_{self._config.distributed.rank}_{shard_idx}"
         shard_output_path = self._config.output_path / prefix
 
         def _document_generator():
-            for item in tqdm.tqdm(shard_dataset, desc=f"Saving shard {shard_idx}", unit="docs"):
-                yield np.array(item["input_ids"], dtype=self._data_type.numpy)
+            if "token_spans" in shard_dataset.column_names and self._config.dataset.loss_masking_spans is not None:
+                for item in tqdm.tqdm(shard_dataset, desc=f"Saving shard {shard_idx}", unit="docs"):
+                    yield GPTSample(
+                        np.array(item["input_ids"], dtype=self._data_type.numpy),
+                        np.array(item["token_spans"], dtype=np.int32).reshape(-1, 2),
+                    )
+            else:
+                for item in tqdm.tqdm(shard_dataset, desc=f"Saving shard {shard_idx}", unit="docs"):
+                    yield GPTSample(np.array(item["input_ids"], dtype=self._data_type.numpy))
 
         GPTMemmapDataset.write_dataset(prefix=shard_output_path, documents=_document_generator())
 
@@ -55,6 +88,8 @@ class GPTMemmapDatasetPreparator(DatasetPreparator):
         dataset = datasets.load_dataset(
             path=self._config.dataset.path,
             name=self._config.dataset.config_name,
+            data_dir=self._config.dataset.data_directory,
+            data_files=self._config.dataset.data_files,
             split=self._config.dataset.split,
             num_proc=self._config.loading_workers,
             trust_remote_code=self._config.dataset.trust_remote_code,
@@ -62,7 +97,7 @@ class GPTMemmapDatasetPreparator(DatasetPreparator):
         assert isinstance(dataset, datasets.Dataset)
         return dataset
 
-    def run(self):
+    def run(self) -> None:
         # Set transformers logging verbosity
         transformers.logging.set_verbosity_error()
 
@@ -126,10 +161,16 @@ class GPTMemmapDatasetPreparator(DatasetPreparator):
         )
         if self._config.dataset.field not in dataset.column_names:
             raise ValueError(f"Dataset does not have field '{self._config.dataset.field}'.")
+        if self._config.dataset.loss_masking_spans is not None:
+            if self._config.dataset.loss_masking_spans not in dataset.column_names:
+                raise ValueError(f"Dataset does not have spans field '{self._config.dataset.loss_masking_spans}'.")
+            tokenize_fn = self._tokenize_batch_with_spans
+        else:
+            tokenize_fn = self._tokenize_batch
 
         # Tokenize the dataset in parallel
         tokenized_dataset = dataset.map(
-            self._tokenize_batch,
+            tokenize_fn,
             batched=True,
             num_proc=self._config.tokenize_workers,
             desc="Tokenizing batches",
@@ -165,6 +206,10 @@ class GPTMemmapDatasetPreparator(DatasetPreparator):
                 dataset_dict["weight"] = float(dataset_dict["num_tokens"]) / float(total_tokens)
             output_file = self._config.output_path / "fast_llm_dataset.json"
             json.dump({"datasets": dataset_dicts}, output_file.open("w"))
+
+        # Create an index file on rank 0
+        index_file = self._config.output_path / "index.txt"
+        index_file.open("w").writelines([dataset_dict["prefix"] + "\n" for dataset_dict in dataset_dicts])
 
         # Finalize distributed processing
         if self._config.distributed.world_size > 1:

@@ -2,6 +2,7 @@ import itertools
 import logging
 import math
 import typing
+from typing import Callable
 
 if typing.TYPE_CHECKING:
     import numpy as np
@@ -144,6 +145,10 @@ class Assert:
     def all_equal(x, y):
         import torch
 
+        # Make it work for lists and numpy arrays.
+        x = torch.as_tensor(x)
+        y = torch.as_tensor(y)
+
         neq = x != y
         if neq.any().item():  # noqa
             index = torch.where(neq)  # noqa
@@ -156,9 +161,13 @@ class Assert:
     def all_different(x, y):
         import torch
 
+        # Make it work for numpy arrays.
+        x = torch.as_tensor(x)
+        y = torch.as_tensor(y)
+
         eq = x == y
         if eq.any().item():  # noqa
-            index = torch.where(eq)  # noqa
+            index = torch.where(torch.as_tensor(eq))  # noqa
             raise AssertionError(
                 f"Tensors have {index[0].numel()} unexpected matching entries out of "
                 f"{x.numel()}: {x[index]} != {y[index]} at index {torch.stack(index, -1)}"
@@ -178,6 +187,7 @@ class Assert:
 
 
 class Registry[KeyType, ValueType]:
+    # TODO: Inherit from dict instead?
     def __init__(self, name: str, data: dict[KeyType, ValueType]):
         self._name = name
         self._data = data.copy()
@@ -195,8 +205,21 @@ class Registry[KeyType, ValueType]:
     def keys(self) -> list[KeyType]:
         return list(self._data)
 
-    def __contains__(self, item: ValueType) -> bool:
-        return item in self._data
+    def __contains__(self, key: KeyType) -> bool:
+        return key in self._data
+
+    def __iter__(self) -> typing.Iterator[KeyType]:
+        return iter(self._data)
+
+    def __len__(self) -> int:
+        return len(self._data)
+
+    def items(self):
+        return self._data.items()
+
+    @property
+    def name(self) -> str:
+        return self._name
 
 
 class LazyRegistry[KeyType, ValueType](Registry[KeyType, ValueType]):
@@ -257,3 +280,45 @@ def pop_nested_dict_value[
         return d.pop(keys[-1])
     else:
         return d.pop(keys)
+
+
+class InvalidObject:
+    """
+    Store an error and raise it if accessed.
+    Intended for missing optional imports, so that the actual import error is raised on access.
+    """
+
+    def __init__(self, error: Exception):
+        self._error = error.__class__(*error.args)
+
+    def __getattr__(self, item):
+        raise self._error
+
+    def __getitem__(self, item):
+
+        raise self._error
+
+    def __setitem__(self, key, value):
+        raise self._error
+
+    def __call__(self, *args, **kwargs):
+        raise self._error
+
+
+def try_decorate(get_decorator: Callable, _return_decorator: bool = True) -> Callable:
+    """
+    Try to decorate an object, but ignore the error until the object is actualy used.
+    The wrapped decorator should always be instantiated before calling,
+    i.e.. called as `@decorator()` rather than `@decorator`.
+    """
+
+    def new_decorator(*args, **kwargs):
+        try:
+            out = get_decorator()(*args, **kwargs)
+        except Exception as e:
+            out = InvalidObject(e)
+        if _return_decorator:
+            return try_decorate(lambda: out, _return_decorator=False)
+        return out
+
+    return new_decorator

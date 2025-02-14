@@ -9,12 +9,16 @@ from fast_llm.utils import Assert
 
 
 def torch_cross_entropy_forward_backward(
-    logits: torch.Tensor, target: torch.Tensor, grad_output: float | None, logits_scale_factor: float = 1.0
+    logits: torch.Tensor,
+    target: torch.Tensor,
+    grad_output: float | None,
+    logits_scale_factor: float = 1.0,
 ) -> tuple[torch.Tensor, torch.Tensor | None]:
     """
     A wrapper for the pytorch implementation of cross-entropy.
     The cross-entropy kernels themselves are well-optimized, but the need for explicit casting
     and separate forward and backward kernels lead to poor performance.
+    TODO: loss masking only works for this method if the masking index is set to -100.
     """
     # Torch compile doesn't understand this.
     with torch.enable_grad():
@@ -32,7 +36,10 @@ def torch_cross_entropy_forward_backward(
 
 @torch.compile
 def fused_cross_entropy_forward_backward(
-    logits: torch.Tensor, target: torch.Tensor, grad_output: float | None, logits_scale_factor: float = 1.0
+    logits: torch.Tensor,
+    target: torch.Tensor,
+    grad_output: float | None,
+    logits_scale_factor: float = 1.0,
 ) -> tuple[torch.Tensor, torch.Tensor | None]:
     """
     A fused implementation of cross-entropy with torch compile.
@@ -41,7 +48,9 @@ def fused_cross_entropy_forward_backward(
     """
     # Do the forward and backward passes all at once, and fused with dtype conversion.
     # Way faster and more memory-efficient than the pytorch version.
-    target = target.unsqueeze(1)
+    loss_mask = target >= 0
+    # Ignore_index can go out of bounds, so set masked values to zero.
+    target = (target * loss_mask).unsqueeze(1)
     logits_norm = logits.sub(torch.max(logits, dim=-1)[0].unsqueeze(dim=-1)).float()
     if logits_scale_factor != 1.0:
         logits_norm *= logits_scale_factor
@@ -58,16 +67,20 @@ def fused_cross_entropy_forward_backward(
         if logits_scale_factor != 1.0:
             exp_logits *= logits_scale_factor
 
-        grad = exp_logits.to(logits.dtype)
+        grad = torch.where(loss_mask.unsqueeze(1), exp_logits.to(logits.dtype), 0)
 
-    loss = sum_exp_logits.log().sub(logits_norm.gather(1, target).squeeze(1)).mean()
+    per_sample_loss = sum_exp_logits.log().sub(logits_norm.gather(1, target).squeeze(1)) * loss_mask
 
-    return loss, grad
+    return per_sample_loss.mean(), grad
 
 
 @torch.compile
 def parallel_cross_entropy_forward_backward(
-    logits, target, grad_output: float | None, group: ProcessGroup, logits_scale_factor: float = 1.0
+    logits: torch.Tensor,
+    target: torch.Tensor,
+    grad_output: float | None,
+    group: ProcessGroup,
+    logits_scale_factor: float = 1.0,
 ) -> tuple[torch.Tensor, torch.Tensor | None]:
     """
     A fused implementation of cross-entropy with torch compile, with support for tensor parallelism.
@@ -75,6 +88,7 @@ def parallel_cross_entropy_forward_backward(
     """
     # TODO: Compiled version incorrect for some inputs (32 bit indexing issue?).
     # TODO: Optimize, overlap/combine reductions
+    loss_mask = target >= 0
     target = target.unsqueeze(1)
 
     logits_max = torch.max(logits, dim=-1)[0]
@@ -103,13 +117,13 @@ def parallel_cross_entropy_forward_backward(
         if logits_scale_factor != 1.0:
             exp_logits2 *= logits_scale_factor
 
-        grad = exp_logits2.to(logits.dtype)
+        grad = torch.where(loss_mask.unsqueeze(1), exp_logits2.to(logits.dtype), 0)
 
     predicted_logits = (target_mask * logits_norm.gather(1, target)).squeeze(1)
     all_reduce(predicted_logits, op=ReduceOp.SUM, group=group)
-    loss = sum_exp_logits.log().sub(predicted_logits).mean()
+    per_sample_loss = sum_exp_logits.log().sub(predicted_logits) * loss_mask
 
-    return loss, grad
+    return per_sample_loss.mean(), grad
 
 
 _CROSS_ENTROPY_IMPLEMENTATIONS = {

@@ -143,10 +143,11 @@ def get_trace_fn(config: ProfilingConfig, start_step: int = 0) -> typing.Callabl
                     column_width=config.table_width,
                     header=f"Trace for step {step}",
                 )
-                if config.log:
-                    logger.info(table)
-                else:
-                    run.open_artifact(f"profile_trace_step_{step}").write(table)
+                if table:
+                    if config.log:
+                        logger.info(table)
+                    else:
+                        run.open_artifact(f"profile_trace_step_{step}").write(table)
 
             if config.averages:
                 table = build_average_table(
@@ -156,13 +157,16 @@ def get_trace_fn(config: ProfilingConfig, start_step: int = 0) -> typing.Callabl
                     column_width=config.table_width,
                     header=f"Averages for step {step}",
                 )
-                if config.log:
-                    logger.info(table)
-                else:
-                    run.open_artifact(f"profile_averages_step_{step}").write(table)
+                if table:
+                    if config.log:
+                        logger.info(table)
+                    else:
+                        run.open_artifact(f"profile_averages_step_{step}").write(table)
 
             if config.export:
-                profiler.export_chrome_trace(str(run.open_artifact(f"profile_chrome_step_{step}", mode=None)))
+                # Suppress empty profile, mainly the annoying one at the end.
+                if _get_events(profiler, cuda=config.cuda):
+                    profiler.export_chrome_trace(str(run.open_artifact(f"profile_chrome_step_{step}", mode=None)))
 
             # Store results for future use.
             profiler.bc_profile_result = profiler.profiler.function_events
@@ -195,7 +199,7 @@ _COLUMN_HEADERS = {
     "input_shapes": "Input Shapes",
     "source_loc": "Source Location",
     "node_id": "Node ID",
-    "total_flops": "Total xflops",
+    "total_flops": "Total tflops",
 }
 
 _CPU_TRACE_COLUMNS = {"name", "cpu_self", "cpu_total", "start_time", "end_time"}
@@ -220,13 +224,17 @@ _MISC_CUDA_OPS = (
 )
 
 
+def _get_events(profiler: "torch.profiler.profile", *, cuda: bool = True):
+    var_name = f"self_{'device' if cuda else 'cpu'}_time_total"
+    return [evt for evt in profiler.profiler.function_events if getattr(evt, var_name) > 0]
+
+
 def build_trace_table(
     profiler: "torch.profiler.profile", *, cuda: bool = True, cpu: bool = False, column_width=80, header="Trace"
 ) -> str:
-    var_name = f"self_{'cuda' if cuda else 'cpu'}_time_total"
-    events = [evt for evt in profiler.profiler.function_events if getattr(evt, var_name) > 0]
+    var_name = f"self_{'device' if cuda else 'cpu'}_time_total"
     return _build_table(
-        events,
+        _get_events(profiler, cuda=cuda),
         (_CPU_TRACE_COLUMNS if cpu else set()) | (_CUDA_TRACE_COLUMNS if cuda else set()),
         name_column_width=column_width,
         filter_by=None if cuda and cpu else var_name,
@@ -289,7 +297,9 @@ def _build_table(
     result = []
 
     sum_self_cpu_time_total = sum(event.self_cpu_time_total for event in events)
-    sum_self_cuda_time_total = sum(event.self_cuda_time_total for event in events)  # if evt.device_type == DeviceType.
+    sum_self_device_time_total = sum(
+        event.self_device_time_total for event in events
+    )  # if evt.device_type == DeviceType.
 
     if header is not None:
         result.extend(["=" * line_length, header])
@@ -321,9 +331,9 @@ def _build_table(
         if "cpu_avg" in columns:
             row_values.append(_format_time_us(evt.cpu_time))
         if "cuda" in columns:
-            row_values.append(_format_time_us(evt.self_cuda_time_total))
+            row_values.append(_format_time_us(evt.self_device_time_total))
         if "cuda_percent" in columns:
-            row_values.append(_format_time_share(evt.self_cuda_time_total, sum_self_cuda_time_total))
+            row_values.append(_format_time_share(evt.self_device_time_total, self_device_time_total))
         if "cuda_total" in columns:
             row_values.append(_format_time_us(evt.cuda_time_total))
         if "cuda_avg" in columns:
@@ -340,8 +350,8 @@ def _build_table(
     result.append(header_sep)
     if sum_self_cpu_time_total > 0:
         result.append(f"CPU time total: {_format_time_ms(sum_self_cpu_time_total)}")
-    if sum_self_cuda_time_total > 0:
-        result.append(f"CUDA time total: {_format_time_ms(sum_self_cuda_time_total)}")
+    if sum_self_device_time_total > 0:
+        result.append(f"CUDA time total: {_format_time_ms(sum_self_device_time_total)}")
     result.append("")
     return "\n".join(result)
 

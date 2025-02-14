@@ -5,7 +5,7 @@ import safetensors.torch
 import torch
 import yaml
 
-from fast_llm.core.distributed import broadcast_scalar, safe_barrier
+from fast_llm.core.distributed import broadcast_scalar
 from fast_llm.engine.checkpoint.config import (
     CheckpointFormat,
     CheckpointHandler,
@@ -70,7 +70,7 @@ class DistributedCheckpointHandler(CheckpointHandler):
         else:
             log_main_rank("Checkpoint format doesn't match, using safe load")
             self._model.config.base_model.compare_architecture(loaded_config.base_model, config.compare_log_fn)
-            with SafeLoad(self._model, num_shards=num_shards) as context:
+            with SafeLoad(self._model, num_shards=num_shards, timeout=config.timeout) as context:
                 for rank in range(loaded_config.distributed.world_size):
                     loaded_model = self._model.__class__(
                         loaded_config.to_copy({("distributed", "rank"): rank}),
@@ -79,7 +79,6 @@ class DistributedCheckpointHandler(CheckpointHandler):
                     )
                     path = config.path / f"rank_{rank}.safetensors"
                     log_main_rank(f"Loading from {path}")
-                    safe_barrier(self._model.distributed.world_group, f"load {path}")
                     # TODO: skip shards without overlap.
                     with safetensors.safe_open(path, framework="pt", device=str(self._model.distributed.device)) as f:
                         # TODO: Use self_shard

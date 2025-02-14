@@ -8,6 +8,8 @@ from fast_llm.data.preparator.config import DatasetPreparatorConfig
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.utils import Assert
 
+if typing.TYPE_CHECKING:
+    from fast_llm.data.preparator.gpt_memmap.prepare import GPTMemmapDatasetPreparator
 MEMMAP_DTYPES = {
     1: DataType.uint8,
     2: DataType.int8,
@@ -34,6 +36,16 @@ class GPTHuggingfaceDatasetConfig(Config):
         desc="Specific configuration name for the dataset.",
         hint=FieldHint.optional,
     )
+    data_directory: None | str = Field(
+        default=None,
+        desc="data_dir argument passed to `load_dataset`",
+        hint=FieldHint.optional,
+    )
+    data_files: None | str | list[str] = Field(
+        default=None,
+        desc="data_files argument passed to `load_dataset`",
+        hint=FieldHint.optional,
+    )
     split: str = Field(
         default="train",
         desc="Split of the dataset to use.",
@@ -43,6 +55,9 @@ class GPTHuggingfaceDatasetConfig(Config):
         default="text",
         desc="Field of the dataset to use.",
         hint=FieldHint.optional,
+    )
+    loss_masking_spans: None | str = Field(
+        default=None, desc="Field containing character spans to mask for loss computation", hint=FieldHint.optional
     )
     data_type: DataType | None = Field(
         default=None,
@@ -86,7 +101,7 @@ class DatasetPreparatorDistributedConfig(Config):
         hint=FieldHint.optional,
     )
 
-    def _validate(self):
+    def _validate(self) -> None:
         if self.world_size is None:
             self.world_size = self.default_world_size
         if self.rank is None:
@@ -144,14 +159,14 @@ class GPTMemmapDatasetPreparatorConfig(DatasetPreparatorConfig):
         hint=FieldHint.feature,
     )
 
-    def _validate(self):
+    def _validate(self) -> None:
         assert self.tokenizer.path is not None
         if self.dataset.data_type is not None:
             Assert.incl(DataType.from_numpy(self.dataset.data_type.numpy), MEMMAP_DTYPES_INV)
         super()._validate()
 
     @classmethod
-    def get_dataset_preparator_class(cls):
+    def get_dataset_preparator_class(cls) -> type["GPTMemmapDatasetPreparator"]:
         from fast_llm.data.preparator.gpt_memmap.prepare import GPTMemmapDatasetPreparator
 
         return GPTMemmapDatasetPreparator
