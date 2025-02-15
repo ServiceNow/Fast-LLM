@@ -221,7 +221,7 @@ class GPTBlendedDatasetConfig(BlendedDatasetConfig, GPTSampledDatasetConfig):
 
 
 @config_class()
-class GPTDatasetFromFile(GPTSamplableDatasetConfig):
+class GPTDatasetFromFileConfig(GPTSamplableDatasetConfig):
     _abstract: typing.ClassVar[bool] = False
     type_: typing.ClassVar[str | None] = "file"
     path: pathlib.Path = Field(
@@ -236,7 +236,7 @@ class GPTDatasetFromFile(GPTSamplableDatasetConfig):
 
     def build(self) -> SamplableDataset:
         config = self._load_config()
-        assert isinstance(config, GPTConcatenatedDatasetConfig)
+        assert isinstance(config, GPTSamplableDatasetConfig)
         return config.build()
 
     def _load_config(self):

@@ -9,6 +9,7 @@ import sys
 import numpy as np
 import pytest
 import torch
+import yaml
 
 from fast_llm.data.dataset.gpt.memmap import GPTMemmapDataset
 from fast_llm.data.dataset.gpt.sampled import GPTSample
@@ -225,7 +226,11 @@ def get_test_dataset(
 
         transformers.AutoTokenizer.from_pretrained("bigcode/santacoder").save_pretrained(TOKENIZER_PATH)
 
-    if not (prefix.with_suffix(".idx").is_file() and prefix.with_suffix(".bin").is_file()):
+    if not (
+        prefix.with_suffix(".idx").is_file()
+        and prefix.with_suffix(".bin").is_file()
+        and prefix.parent.joinpath("fast_llm_config.yaml").is_file()
+    ):
         import transformers
 
         texts = "".join(random.Random(seed).choices(characters, k=num_tokens)).splitlines()
@@ -242,28 +247,9 @@ def get_test_dataset(
                 sample.loss_masking_spans = span[: len(span) // 2 * 2].reshape(-1, 2)
 
         GPTMemmapDataset.write_dataset(prefix, samples)
-
-
-def get_test_concatenated_memmap_dataset(
-    path: pathlib.Path,
-    num_files: int,
-    seed: int = 1234,
-    num_tokens: int = TEST_DATASET_TOKENS,
-    characters: str = TEST_CHARACTERS,
-    vocab_size: int = TEST_VOCAB_SIZE,
-    seed_shift: int = 55,
-):
-    index_file = path / "index.txt"
-    if not index_file.is_file():
-        for i in range(num_files):
-            get_test_dataset(
-                prefix=path / f"dataset_{i}",
-                seed=seed + i * seed_shift,
-                num_tokens=num_tokens,
-                characters=characters,
-                vocab_size=vocab_size,
-            )
-        index_file.open("w").writelines([str(path / f"dataset_{i}") + "\n" for i in range(num_files)])
+        yaml.safe_dump(
+            {"type": "memmap", "path": prefix.name}, prefix.parent.joinpath("fast_llm_config.yaml").open("w")
+        )
 
 
 def run_test_script(

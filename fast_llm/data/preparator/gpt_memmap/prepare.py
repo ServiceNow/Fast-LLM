@@ -253,11 +253,15 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
 
         if self._config.distributed.rank == 0:
             # Create a config file on rank 0
-            dataset_config = {
-                "type": "blended",
-                "datasets": [dataset_dict for dataset_dict in dataset_dicts],
-                "weights": [dataset_dict["num_tokens"] for dataset_dict in dataset_dicts],
-            }
+            dataset_config = (
+                dataset_dicts[0]
+                if len(dataset_dicts) == 1
+                else {
+                    "type": "blended",
+                    "datasets": [dataset_dict for dataset_dict in dataset_dicts],
+                    "weights": [dataset_dict["num_tokens"] for dataset_dict in dataset_dicts],
+                }
+            )
             yaml.safe_dump(dataset_config, (self._config.output_path / "fast_llm_config.yaml").open("w"))
 
             # Legacy dataset format
