@@ -12,6 +12,7 @@ import requests
 import torch.distributed
 import tqdm
 import transformers
+import yaml
 
 from fast_llm.data.dataset.gpt.memmap import GPTMemmapDataset
 from fast_llm.data.dataset.gpt.sampled import GPTSample
@@ -84,7 +85,8 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
         GPTMemmapDataset.write_dataset(prefix=shard_output_path, documents=_document_generator())
 
         dataset_dict = {
-            "prefix": prefix,
+            "type": "memmap",
+            "path": prefix,
             "num_documents": len(shard_dataset),  # Use the length of the shard dataset directly
             "num_tokens": sum(len(doc["input_ids"]) for doc in shard_dataset),
         }
@@ -249,19 +251,17 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
             else:
                 torch.distributed.gather_object(dataset_dicts, [], dst=0)
 
-        # Create a metadata file on rank 0
         if self._config.distributed.rank == 0:
-            total_tokens = sum(dataset_dict["num_tokens"] for dataset_dict in dataset_dicts)
-            for dataset_dict in dataset_dicts:
-                dataset_dict["weight"] = float(dataset_dict["num_tokens"]) / float(total_tokens)
-            output_file = self._config.output_path / "fast_llm_dataset.json"
-            json.dump({"datasets": dataset_dicts}, output_file.open("w"))
+            # Create a config file on rank 0
+            dataset_config = {
+                "type": "blended",
+                "datasets": [dataset_dict for dataset_dict in dataset_dicts],
+                "weights": [dataset_dict["num_tokens"] for dataset_dict in dataset_dicts],
+            }
+            yaml.safe_dump(dataset_config, (self._config.output_path / "fast_llm_config.yaml").open("w"))
 
+            # Save metadata on rank 0
             self._save_croissant_metadata()
-
-            # Create an index file on rank 0
-            index_file = self._config.output_path / "index.txt"
-            index_file.open("w").writelines([dataset_dict["prefix"] + "\n" for dataset_dict in dataset_dicts])
 
         # Finalize distributed processing
         if self._config.distributed.world_size > 1:

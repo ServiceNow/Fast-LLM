@@ -1,4 +1,3 @@
-from fast_llm.data.dataset.gpt.config import GPTConcatenatedMemmapConfig
 from fast_llm.engine.distributed.config import PhaseType
 from tests.common import DATASET_CACHE, get_test_concatenated_memmap_dataset
 from tests.data.common import (
