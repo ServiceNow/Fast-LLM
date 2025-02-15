@@ -260,6 +260,15 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
             }
             yaml.safe_dump(dataset_config, (self._config.output_path / "fast_llm_config.yaml").open("w"))
 
+            # Legacy dataset format
+            # TODO v0.3: Update docs/tutorial, then remove.
+            dataset_config = {
+                "type": "blended",
+                "datasets": [dataset_dict for dataset_dict in dataset_dicts],
+                "weights": [dataset_dict["num_tokens"] for dataset_dict in dataset_dicts],
+            }
+            yaml.safe_dump(dataset_config, (self._config.output_path / "fast_llm_config.yaml").open("w"))
+
             # Save metadata on rank 0
             self._save_croissant_metadata()
 
