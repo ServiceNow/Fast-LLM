@@ -260,14 +260,12 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
                 for split_name, split_config in self._split_and_blend_dataset_configs(
                     dataset_configs, self._config.splits
                 ).items():
-                    yaml.safe_dump(
-                        split_config, self._config.output_path.joinpath(f"fast_llm_config_{split_name}.yaml").open("w")
+                    self._save_dataset_config(
+                        split_config, self._config.output_path / f"fast_llm_config_{split_name}.yaml"
                     )
-
             else:
-                yaml.safe_dump(
-                    self._blend_dataset_configs(dataset_configs),
-                    self._config.output_path.joinpath(f"fast_llm_config.yaml").open("w"),
+                self._save_dataset_config(
+                    self._blend_dataset_configs(dataset_configs), self._config.output_path / f"fast_llm_config.yaml"
                 )
 
             # Save metadata on rank 0
@@ -290,6 +288,14 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
         ]
 
     @classmethod
+    def _save_dataset_config(cls, dataset_config: GPTIndexedDatasetConfig, output_path: pathlib.Path) -> None:
+        logger.info(f"Saving config to {output_path}")
+        yaml.safe_dump(
+            dataset_config.to_serialized(),
+            output_path.open("w"),
+        )
+
+    @classmethod
     def _blend_dataset_configs(cls, dataset_configs: list[GPTIndexedDatasetConfig]) -> GPTIndexedDatasetConfig:
         if len(dataset_configs) == 1:
             return dataset_configs[0]
@@ -305,9 +311,9 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
     def _split_and_blend_dataset_configs(
         cls, dataset_configs: list[GPTIndexedDatasetConfig], splits: dict[str, int | float]
     ):
-        split_cumsum = padded_cumsum(normalize_probabilities(list(splits.values()), return_array=True))
-        dataset_probabilities = normalize_probabilities(cls._get_weights(dataset_configs), return_array=True)
-        dataset_cumsums = padded_cumsum(dataset_probabilities)
+        split_cumsum = padded_cumsum(normalize_probabilities(list(splits.values()), return_array=True)).tolist()
+        dataset_probabilities = normalize_probabilities(cls._get_weights(dataset_configs))
+        dataset_cumsums = padded_cumsum(dataset_probabilities).tolist()
         dataset_splits = {}
         for split_index, split_name in enumerate(splits):
             datasets_in_split = []

@@ -158,7 +158,7 @@ class GPTMemmapDatasetPreparatorConfig(DatasetPreparatorConfig):
         desc="Configuration for the tokenizer.",
         hint=FieldHint.feature,
     )
-    splits: dict[str, int] | None = Field(
+    splits: dict[str, float] | None = Field(
         default=None,
         desc="Split the output dataset into multiple ones (ex, train/valid/test) with the specified ratios."
         " Does not shuffle samples.",
