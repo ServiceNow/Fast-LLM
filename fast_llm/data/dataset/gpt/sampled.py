@@ -154,10 +154,20 @@ class GPTSampledIndexedDataset(SampledDataset):
             "config": self._config.to_serialized(),
         }
         self._load_yaml_data(yaml_data)
+
         if self._yaml_path is not None:
             if self._yaml_path.is_file():
-                Assert.eq(yaml.safe_load(self._yaml_path.open("r")), yaml_data)
+                loaded_yaml_data = yaml.safe_load(self._yaml_path.open("r"))
+                if loaded_yaml_data != yaml_data:
+                    raise RuntimeError(
+                        f"Invalid dataset cache for dataset {self.name}."
+                        " If this is due to an intended configuration change,"
+                        " please delete the cache before continuing."
+                        f"\nCurrent config:\n{yaml.safe_dump(yaml_data)}"
+                        f"\nCached config:\n{yaml.safe_dump(loaded_yaml_data)}"
+                    )
                 # Dataset is already sampled, skip.
+                logger.info(f"Using existing sampling for dataset {self.name}")
                 return
             else:
                 self._yaml_path.parent.mkdir(parents=True, exist_ok=True)

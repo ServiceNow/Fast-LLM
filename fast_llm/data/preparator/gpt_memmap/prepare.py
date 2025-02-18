@@ -20,8 +20,43 @@ from fast_llm.data.preparator.config import DatasetPreparator
 from fast_llm.data.preparator.gpt_memmap.config import GPTMemmapDatasetPreparatorConfig
 from fast_llm.data.tokenizer import Tokenizer
 from fast_llm.engine.config_utils.data_type import DataType
+from fast_llm.utils import normalize_probabilities, padded_cumsum
 
 logger = logging.getLogger(__name__)
+
+
+def _split_memmap_dataset(splits: dict[str, int | float], dataset_dicts: list[dict], weights: list[int | float]):
+    split_cumsum = padded_cumsum(normalize_probabilities(list(splits.values()), return_array=True))
+    dataset_probabilities = normalize_probabilities(weights, return_array=True)
+    dataset_cumsums = padded_cumsum(dataset_probabilities)
+    dataset_index = 0
+    split_index = 0
+    dataset_splits = {split_name: [] for split_name in splits}
+    # for split_index, split_name in enumerate(self._config.splits):
+    #    dataset_split=[]
+    split_names = list(dataset_splits)
+    while split_index < len(splits):
+        split_begin_in_dataset = max(
+            (split_cumsum[split_index] - dataset_cumsums[dataset_index]) / dataset_probabilities[dataset_index], 0
+        )
+        split_end_in_dataset = min(
+            (split_cumsum[split_index + 1] - dataset_cumsums[dataset_index]) / dataset_probabilities[dataset_index], 1
+        )
+        dataset_splits[split_names[split_index]].append(
+            dataset_dicts[dataset_index]
+            if split_begin_in_dataset == 0 and split_end_in_dataset == 1
+            else {
+                "type": "slice",
+                "dataset": dataset_dicts[dataset_index],
+                "begin": split_begin_in_dataset,
+                "end": split_end_in_dataset,
+            }
+        )
+        if dataset_cumsums[dataset_index + 1] >= split_cumsum[split_index]:
+            split_index += 1
+        else:
+            dataset_index += 1
+    return dataset_splits
 
 
 class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](DatasetPreparator[ConfigType]):
@@ -252,7 +287,22 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
                 torch.distributed.gather_object(dataset_dicts, [], dst=0)
 
         if self._config.distributed.rank == 0:
-            # Create a config file on rank 0
+            # Create the config file(s) on rank 0
+            if self._config.splits:
+                for split_name, dataset_dicts_ in _split_memmap_dataset(
+                    self._config.splits, dataset_dicts, num_tokens
+                ).items():
+                    self._save_dataset_config(
+                        self._config.output_path / f"fast_llm_config_{split_name}.yaml", dataset_dicts_, num_tokens
+                    )
+
+            else:
+                self._save_dataset_config(
+                    self._config.output_path / "fast_llm_config.yaml",
+                    dataset_dicts,
+                    [dataset_dict["num_tokens"] for dataset_dict in dataset_dicts],
+                )
+
             dataset_config = (
                 dataset_dicts[0]
                 if len(dataset_dicts) == 1
@@ -264,15 +314,6 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
             )
             yaml.safe_dump(dataset_config, (self._config.output_path / "fast_llm_config.yaml").open("w"))
 
-            # Legacy dataset format
-            # TODO v0.3: Update docs/tutorial, then remove.
-            dataset_config = {
-                "type": "blended",
-                "datasets": [dataset_dict for dataset_dict in dataset_dicts],
-                "weights": [dataset_dict["num_tokens"] for dataset_dict in dataset_dicts],
-            }
-            yaml.safe_dump(dataset_config, (self._config.output_path / "fast_llm_config.yaml").open("w"))
-
             # Save metadata on rank 0
             self._save_croissant_metadata()
 
@@ -280,3 +321,24 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
         if self._config.distributed.world_size > 1:
             torch.distributed.barrier()
             torch.distributed.destroy_process_group()
+
+    def _save_dataset_config(self, path: pathlib.Path, dataset_dicts: list[dict], num_tokens: list[int]) -> None:
+        dataset_config = (
+            dataset_dicts[0]
+            if len(dataset_dicts) == 1
+            else {
+                "type": "blended",
+                "datasets": [dataset_dict for dataset_dict in dataset_dicts],
+                "weights": num_tokens,
+            }
+        )
+        yaml.safe_dump(dataset_config, (self._config.output_path / "fast_llm_config.yaml").open("w"))
+
+        # Legacy dataset format
+        # TODO v0.3: Update docs/tutorial, then remove.
+        dataset_config = {
+            "type": "blended",
+            "datasets": [dataset_dict for dataset_dict in dataset_dicts],
+            "weights": num_tokens,
+        }
+        yaml.safe_dump(dataset_config, path.open("w"))
