@@ -238,7 +238,7 @@ def log[
         return logged
 
 
-def normalize_probabilities(p: "npt.ArrayLike", return_array: bool = False) -> list[float] | np.ndarray:
+def normalize_probabilities(p: "npt.ArrayLike", return_array: bool = False) -> "list[float] | np.ndarray":
     import numpy as np
 
     p = np.array(p)
