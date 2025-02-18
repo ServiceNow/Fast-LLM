@@ -26,6 +26,6 @@ assignees: ''
 
 # 🛠️ **Project Management**
 - [ ] **Assign the project to the Fast-LLM project.**
-- [ ] **Set the estimated effort field (in days) in the GitHub project.**
-- [ ] **Use GitHub labels to categorize the PR size (Small/Medium/Large).**
+- [ ] **Set the `Estimate` field (in days) in the GitHub project.**
+- [ ] **Use the `Size` field to categorize the PR size (Small/Medium/Large).**
 - [ ] **Assign an owner when opening the issue.**  
