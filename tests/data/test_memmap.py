@@ -3,7 +3,7 @@ import pathlib
 import pytest
 
 from fast_llm.data.dataset.gpt.config import GPTMemmapDatasetConfig
-from tests.common import DATASET_PREFIX, DATASET_SAMPLING_CACHE, get_test_dataset
+from tests.common import DATASET_CACHE, DATASET_PREFIX, DATASET_SAMPLING_CACHE, get_test_dataset
 from tests.data.common import compare_indexed_dataset, get_dataset_config
 
 MEMMAP_DATASET_LENGTH = 6153
@@ -31,11 +31,11 @@ MEMMAP_DATASET_SPANS = {
     15: [],
 }
 
-_DATASET_PREFIX_SPANS = DATASET_PREFIX.with_name("with_spans")
+_DATASET_PREFIX_SPANS = DATASET_CACHE / "with_spans" / "dataset"
 
 
 def test_gpt_data_with_spans():
-    get_test_dataset(prefix=DATASET_PREFIX.with_name("with_spans"), max_spans=5)
+    get_test_dataset(prefix=_DATASET_PREFIX_SPANS, max_spans=5)
     dataset = get_dataset_config(
         {
             "type": "memmap",
