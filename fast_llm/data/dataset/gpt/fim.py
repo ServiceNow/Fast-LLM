@@ -1,7 +1,7 @@
 import numpy as np
 
 from fast_llm.data.dataset.abstract import SampledDataset
-from fast_llm.data.dataset.gpt.config import FimConfig, GPTSamplingConfig
+from fast_llm.data.dataset.gpt.config import FimConfig, GPTSamplingData
 from fast_llm.data.dataset.gpt.sampled import GPTSample
 from fast_llm.engine.distributed.config import MAX_SEED
 
@@ -16,14 +16,14 @@ class GPTFimDataset(SampledDataset):
         self,
         config: FimConfig,
         dataset: SampledDataset,
-        sampling_config: GPTSamplingConfig,
+        sampling: GPTSamplingData,
     ):
-        if sampling_config.use_loss_masking_spans:
+        if sampling.config.use_loss_masking_spans:
             raise NotImplementedError("FIM is currently not compatible with loss masking.")
         self._config = config
         self._dataset = dataset
-        self._seed = sampling_config.seed
-        self._tokenizer = sampling_config.tokenizer
+        self._seed = sampling.config.seed
+        self._tokenizer = sampling.tokenizer
         if self._tokenizer is None:
             raise ValueError("Fim requires a tokenizer")
         self._suffix_tok_id, self._prefix_tok_id, self._middle_tok_id, self._pad_tok_id = (

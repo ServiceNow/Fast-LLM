@@ -1,11 +1,10 @@
 import torch
-import triton
-import triton.language as tl
 
 from fast_llm.functional.config import TritonConfig
+from fast_llm.functional.triton import tl, tl_constexpr, triton, triton_jit
 
 
-@triton.jit
+@triton_jit()
 def triton_cross_entropy_forward_backward_kernel(
     logits_ptr,
     labels_ptr,
@@ -15,8 +14,8 @@ def triton_cross_entropy_forward_backward_kernel(
     n_cols,
     logits_stride_0,
     grad_logits_stride_0,
-    logits_scale_factor: tl.constexpr,
-    block_size: tl.constexpr,
+    logits_scale_factor: tl_constexpr,
+    block_size: tl_constexpr,
 ):
     # TODO: Int64 ptr only if needed?
     block_idx = tl.program_id(0).to(tl.int64)

@@ -2,11 +2,10 @@ import dataclasses
 
 import torch
 
-import triton
-import triton.language as tl
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.functional.autograd import wrap_forward_backward
 from fast_llm.functional.config import MAX_DROPLESS_BLOCK_SIZE_ROW, TritonConfig
+from fast_llm.functional.triton import tl, tl_constexpr, triton, triton_jit
 
 
 @dataclasses.dataclass()
@@ -21,15 +20,15 @@ class SparseMap:
     num_experts_per_token: int
 
 
-@triton.jit
+@triton_jit()
 def copy_dense_to_sparse_kernel(
     input_ptr,
     output_ptr,
     scores_ptr,
     sparse_rows_ptr,
-    num_columns: tl.constexpr,
-    num_experts_per_token: tl.constexpr,
-    block_size: tl.constexpr,
+    num_columns: tl_constexpr,
+    num_experts_per_token: tl_constexpr,
+    block_size: tl_constexpr,
 ):
     dense_row = tl.program_id(0)
     offsets = tl.arange(0, block_size) + block_size * tl.program_id(1)
@@ -63,15 +62,15 @@ def copy_dense_to_sparse(input_: torch.Tensor, scores: torch.Tensor | None, spar
     return out
 
 
-@triton.jit
+@triton_jit()
 def copy_sparse_to_dense_kernel(
     input_ptr,
     output_ptr,
     scores_ptr,
     sparse_rows_ptr,
-    num_columns: tl.constexpr,
-    num_experts_per_token: tl.constexpr,
-    block_size: tl.constexpr,
+    num_columns: tl_constexpr,
+    num_experts_per_token: tl_constexpr,
+    block_size: tl_constexpr,
 ):
     dense_row = tl.program_id(0)
     offsets = tl.arange(0, block_size) + block_size * tl.program_id(1)
@@ -105,15 +104,15 @@ def copy_sparse_to_dense(input_: torch.Tensor, scores: torch.Tensor | None, spar
     return out
 
 
-@triton.jit
+@triton_jit()
 def copy_sparse_to_dense_grad_score_kernel(
     input_ptr,
     grad_output_ptr,
     grad_scores_ptr,
     sparse_rows_ptr,
-    num_columns: tl.constexpr,
-    num_experts_per_token: tl.constexpr,
-    block_size: tl.constexpr,
+    num_columns: tl_constexpr,
+    num_experts_per_token: tl_constexpr,
+    block_size: tl_constexpr,
 ):
     dense_row = tl.program_id(0)
     top_index = tl.program_id(1)
@@ -194,18 +193,18 @@ def copy_sparse_to_dense_backward(grad_output: torch.Tensor, context: tuple[Spar
 copy_sparse_to_dense_autograd = wrap_forward_backward(copy_sparse_to_dense_forward, copy_sparse_to_dense_backward)
 
 
-@triton.jit
+@triton_jit()
 def sparse_map_kernel(
     top_experts_ptr,
     expert_ends_ptr,
     expert_pad_begins_ptr,
     sparse_rows_ptr,
-    num_sparse_rows: tl.constexpr,
-    num_experts: tl.constexpr,
-    pad_to_multiple: tl.constexpr,
-    block_size: tl.constexpr,
-    block_size_expert: tl.constexpr,
-    dtype: tl.constexpr,
+    num_sparse_rows: tl_constexpr,
+    num_experts: tl_constexpr,
+    pad_to_multiple: tl_constexpr,
+    block_size: tl_constexpr,
+    block_size_expert: tl_constexpr,
+    dtype: tl_constexpr,
 ):
     """
     Since the methods we want (histogram, argsort) are not readily available in triton,

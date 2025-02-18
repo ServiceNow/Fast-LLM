@@ -10,7 +10,7 @@ from tests.common import DATASET_PREFIX, get_test_dataset
 from tests.data.common import (
     compare_sampled_dataset,
     get_dataset_config,
-    get_sampling_config,
+    get_sampling_data,
     get_test_data_and_compare_samples,
 )
 
@@ -36,14 +36,14 @@ def _get_blending_alt(probs: list[float], num_samples: int) -> tuple[np.ndarray,
 
 
 GPT_BLENDED_SAMPLES = [
-    [1725, 74, 207, 1635, 4440, 2774],
-    [359, 489, 4266, 2052, 5351, 80],
-    [2066, 207, 6436, 2360, 2210, 6633],
-    [374, 7534, 87, 1073, 79, 480],
-    [8008, 498, 71, 727, 80, 315],
-    [2210, 8179, 73, 2582, 897, 1178],
-    [555, 3042, 83, 207, 498, 3373],
-    [409, 5091, 328, 1378, 5483, 88],
+    [4709, 819, 79, 207, 277, 1790],
+    [1790, 80, 6506, 1735, 542, 88],
+    [4628, 7392, 920, 79, 1322, 387],
+    [88, 4302, 269, 2794, 119, 80],
+    [80, 207, 567, 498, 89, 207],
+    [207, 4700, 549, 79, 417, 3036],
+    [387, 4224, 87, 2713, 423, 324],
+    [3036, 253, 207, 2968, 4536, 1178],
 ]
 
 GPT_BLENDED_LEGACY_SAMPLES = [
@@ -58,14 +58,14 @@ GPT_BLENDED_LEGACY_SAMPLES = [
 ]
 
 GPT_BLENDED_MIXED_SAMPLES = [
-    [1725, 74, 207, 1635, 4440, 2774],
+    [4709, 819, 79, 207, 277, 1790],
     [916, 6683, 7685, 1277, 5106, 378],
-    [359, 489, 4266, 2052, 5351, 80],
+    [1790, 80, 6506, 1735, 542, 88],
     [3359, 6803, 780, 4561, 669, 7878],
-    [374, 7534, 87, 1073, 79, 480],
-    [8008, 498, 71, 727, 80, 315],
+    [88, 4302, 269, 2794, 119, 80],
+    [80, 207, 567, 498, 89, 207],
     [6920, 2218, 2921, 3963, 7606, 6904],
-    [2210, 8179, 73, 2582, 897, 1178],
+    [207, 4700, 549, 79, 417, 3036],
 ]
 
 
@@ -100,7 +100,7 @@ def test_blending(probs):
         # Use a list of integers as a mock dataset, encoding both indexes in the sample.
         [list(range(i * num_samples, (i + 1) * num_samples)) for i, _ in enumerate(probs)],  # noqa
         probs,
-        get_sampling_config(num_samples),
+        get_sampling_data(num_samples),
     )
     probs = normalize_probabilities(probs)
     samples = np.array([dataset[i] for i in range(num_samples)])
@@ -134,7 +134,7 @@ def test_gpt_blended():
             "weights": [0.75, 0.25],
         },
         GPTBlendedDatasetConfig,
-    ).build_and_sample(get_sampling_config(8, sequence_length=5))
+    ).build_and_sample(get_sampling_data(8, sequence_length=5))
     compare_sampled_dataset(sampled, GPT_BLENDED_SAMPLES)
 
 
@@ -172,6 +172,7 @@ def test_gpt_blended_data_legacy():
         {PhaseType.training: 8},
         sequence_length=5,
         expected_samples={PhaseType.training: GPT_BLENDED_LEGACY_SAMPLES},
+        legacy=True,
     )
 
 
@@ -188,7 +189,7 @@ def test_gpt_blended_mixed():
             "weights": [0.6, 0.4],
         },
         GPTBlendedDatasetConfig,
-    ).build_and_sample(get_sampling_config(8, sequence_length=5))
+    ).build_and_sample(get_sampling_data(8, sequence_length=5))
     compare_sampled_dataset(sampled, GPT_BLENDED_MIXED_SAMPLES)
 
 
