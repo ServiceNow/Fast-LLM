@@ -252,6 +252,28 @@ def get_test_dataset(
         )
 
 
+def get_test_concatenated_memmap_dataset(
+    path: pathlib.Path,
+    num_files: int,
+    seed: int = 1234,
+    num_tokens: int = TEST_DATASET_TOKENS,
+    characters: str = TEST_CHARACTERS,
+    vocab_size: int = TEST_VOCAB_SIZE,
+    seed_shift: int = 55,
+):
+    index_file = path / "index.txt"
+    if not index_file.is_file():
+        for i in range(num_files):
+            get_test_dataset(
+                prefix=path / f"dataset_{i}",
+                seed=seed + i * seed_shift,
+                num_tokens=num_tokens,
+                characters=characters,
+                vocab_size=vocab_size,
+            )
+        index_file.open("w").writelines([str(path / f"dataset_{i}") + "\n" for i in range(num_files)])
+
+
 def run_test_script(
     name: str,
     script: list[str],

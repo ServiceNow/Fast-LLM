@@ -4,6 +4,7 @@ import json
 import pathlib
 import time
 import typing
+import warnings
 
 import yaml
 
@@ -257,6 +258,45 @@ class GPTDatasetFromFileConfig(GPTSamplableDatasetConfig):
             for value in config:
                 self._convert_paths(value)
         return config
+
+
+@config_class()
+class GPTConcatenatedMemmapConfig(GPTIndexedDatasetConfig):
+    # TODO v0.3: Remove.
+    _abstract: typing.ClassVar[bool] = False
+    type_: typing.ClassVar[str | None] = "concatenated_memmap"
+    path: pathlib.Path = Field(
+        default=None,
+        desc="The path to a dataset directory.",
+        hint=FieldHint.core,
+    )
+
+    def _validate(self) -> None:
+        warnings.warn("`concatenated_memmap` dataset is deprecated. Use `file` instead.", DeprecationWarning)
+        super()._validate()
+
+    def build(self) -> "GPTConcatenatedDataset":
+
+        assert self.path.is_dir()
+        index_path = self.path / "index.txt"
+
+        if index_path.is_file():
+            prefixes = [self.path / line.strip() for line in index_path.open("r").readlines()]
+        else:
+            warnings.warn(
+                f"The dataset path {self.path} points to a directory."
+                " The dataset will be indexed automatically, which may be unsafe."
+                " We recommend using an index file instead."
+            )
+            prefixes = [
+                path.with_suffix("")
+                for path in self.path.iterdir()
+                if path.suffix == ".idx" and path.is_file() and path.with_suffix(".bin").is_file()
+            ]
+        dataset_config = GPTConcatenatedDatasetConfig.from_dict(
+            {"datasets": [{"type": "memmap", "path": prefix} for prefix in prefixes]}
+        )
+        return dataset_config.build()
 
 
 @config_class()
