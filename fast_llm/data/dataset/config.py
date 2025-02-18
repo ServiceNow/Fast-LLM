@@ -8,7 +8,7 @@ import typing
 from fast_llm.config import Config, Field, FieldHint, FieldVerboseLevel, check_field, config_class
 from fast_llm.data.dataset.abstract import SamplableDataset, SampledDataset
 from fast_llm.engine.distributed.config import PhaseType
-from fast_llm.utils import Assert
+from fast_llm.utils import Assert, normalize_probabilities
 
 if typing.TYPE_CHECKING:
     from fast_llm.data.dataset.indexed import ConcatenatedDataset, DatasetSlice, IndexedDataset
@@ -204,6 +204,8 @@ class BlendedDatasetConfig(SampledDatasetConfig):
     )
 
     def _validate(self) -> None:
+        # TODO: nprmalize!
+        self.weights = normalize_probabilities(self.weights)
         super()._validate()
         Assert.geq(len(self.datasets), 2)
         Assert.eq(len(self.datasets), len(self.weights))
@@ -219,21 +221,26 @@ class BlendedDatasetConfig(SampledDatasetConfig):
         # Add 5 times the standard deviation (of a binomial distribution)
         # so the probability of sampling more than this amount during blending is negligible.
 
-        sampled_datasets = [
-            dataset.build_and_sample(
+        sampled_datasets = []
+        for i, (dataset, weight) in enumerate(zip(self.datasets, self.weights, strict=True)):
+            print(f"Building dataset {i} with weight {weight}, type {dataset.type}")
+            if hasattr(dataset, 'datasets'):
+                print(f"[DATSET DEBUG] Dataset {i} has datasets: {len(dataset.datasets)} datasets")
+            else:
+                print(f"[DATSET DEBUG] Dataset {i} has no datasets, has path {dataset.path}")
+            sampled_dataset = dataset.build_and_sample(
                 # Blending is deterministic and the error will never be higher than 1.
                 dataclasses.replace(
-                    sampling,
-                    num_samples=(
-                        math.ceil(weight * (sampling.num_samples + 5 * (sampling.num_samples * (1 - weight)) ** 0.5))
-                        if self.legacy
-                        else math.ceil(weight * sampling.num_samples) + 1
-                    ),
-                    config=sampling.config.to_copy({"seed": sampling.config.seed + i * (0 if self.legacy else 697)}),
+                sampling,
+                num_samples=(
+                    math.ceil(weight * (sampling.num_samples + 5 * (sampling.num_samples * (1 - weight)) ** 0.5))
+                    if self.legacy
+                    else math.ceil(weight * sampling.num_samples) + 1
                 ),
+                config=sampling.config.to_copy({"seed": sampling.config.seed + i * (0 if self.legacy else 697)}),
+            ),
             )
-            for i, (dataset, weight) in enumerate(zip(self.datasets, self.weights, strict=True))
-        ]
+            sampled_datasets.append(sampled_dataset)
         # Blend the datasets.
         return BlendedDataset(
             self.name,
