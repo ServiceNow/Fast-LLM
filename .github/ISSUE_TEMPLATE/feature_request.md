@@ -1,33 +1,33 @@
 ---
 name: Feature request
-about: Suggest an idea for Fast-LLM
-title: "[feat] Brief description of the feature"
+about: Propose a **practical, high-impact** improvement to Fast-LLM
+title: "Brief description of the feature"
 labels: enhancement
 assignees: ''
 
 ---
 
-# 🧐 Problem Description
+# 🎯 **Goal (What & Why)**
+> **Clearly state the purpose of this feature.**  
+> _(Example: Add FP8 support using torchao to improve training throughput by 1.5x.)_
 
-Is your feature request related to a specific problem? Please describe it clearly.
-For example: "I'm always frustrated when [...]"
+# 🚀 **Execution Plan**
+> _(This section may start as an incomplete draft but must be defined before implementation begins.)_ 
 
-# 💡 Proposed Solution
+### **Step 1: What is the smallest working version?**
+> _(Describe the simplest way to implement this feature with minimal effort.)_  
 
-Describe the solution you would like to see.
-Be as specific as possible about how it would work or be implemented.
+### **Step 2: What additional optimizations are possible (but optional)?**  
+> _(List potential refinements that can be added in later PRs if needed.)_  
 
-# 🔄 Alternatives Considered
+# 📌 **Acceptance Criteria** (Must-Haves for Completion)
+* The feature must be **functional and tested**.  
+* The implementation must be **documented in practical terms**.  
+* The PR must include a **performance/impact summary**.  
+* **No refactors unless directly necessary** for feature completion.  
 
-Have you considered any alternative solutions or approaches?
-If so, please describe them and explain why they might not be ideal.
-
-# 📈 Potential Benefits
-
-Explain how this feature could benefit Fast-LLM users.
-Consider how it might improve performance, usability, scalability, etc.
-
-# 📝 Additional Context
-
-Add any other context or information that could help us understand the feature request better.
-If applicable, provide links to relevant references or examples.
+# 🛠️ **Project Management**
+- [ ] **Assign the project to the Fast-LLM project.**
+- [ ] **Set the `Estimate` field (in days) in the GitHub project.**
+- [ ] **Use the `Size` field to categorize the PR size (Small/Medium/Large).**
+- [ ] **Assign an owner when opening the issue.**  
