@@ -20,10 +20,16 @@ class GPTMemmapDataset(GPTIndexedDataset):
     See https://github.com/NVIDIA/Megatron-LM?tab=readme-ov-file#data-preprocessing for more details.
     """
 
-    def __init__(self, name: str, prefix: pathlib.Path | str):
-        self._init(name, prefix)
+    def __init__(
+        self,
+        name: str,
+        prefix: pathlib.Path | str,
+        num_documents: int | None = None,
+        num_tokens: int | None = None,
+    ):
+        self._init(name, prefix, num_documents, num_tokens)
 
-    def _init(self, name: str, prefix: pathlib.Path | str) -> None:
+    def _init(self, name: str, prefix: pathlib.Path | str, num_documents: int | None, num_tokens: int | None) -> None:
         super().__init__()
         self._name = name
         self._prefix = pathlib.Path(prefix)
@@ -40,6 +46,9 @@ class GPTMemmapDataset(GPTIndexedDataset):
             self._num_documents = struct.unpack("<Q", stream.read(8))[0]
             _ = struct.unpack("<Q", stream.read(8))[0]
             offset = stream.tell()
+
+        if num_documents is not None:
+            assert self._num_documents == num_documents
 
         self._index_bin_buffer_mmap = np.memmap(self._prefix.with_suffix(".idx"), mode="r", order="C")
         self._index_bin_buffer = memoryview(self._index_bin_buffer_mmap)
@@ -77,10 +86,14 @@ class GPTMemmapDataset(GPTIndexedDataset):
         self._bin_buffer_mmap = np.memmap(self._prefix.with_suffix(".bin"), mode="r", order="C")
         self._bin_buffer = memoryview(self._bin_buffer_mmap)
 
-    def __getstate__(self) -> tuple[str, pathlib.Path]:
-        return (self._name, self._prefix)
+        self._num_tokens = div(self._bin_buffer_mmap.size, np.dtype(self._dtype).itemsize)
+        if num_tokens is not None:
+            assert self._num_tokens == num_tokens
 
-    def __setstate__(self, state: tuple[str, pathlib.Path]):
+    def __getstate__(self) -> tuple[str, pathlib.Path, int | None, int | None]:
+        return (self._name, self._prefix, self._num_documents, self._num_tokens)
+
+    def __setstate__(self, state: tuple[str, pathlib.Path, int | None, int | None]):
         self._init(*state)
 
     def __del__(self):
@@ -120,7 +133,7 @@ class GPTMemmapDataset(GPTIndexedDataset):
 
     @property
     def num_tokens(self) -> int:
-        return div(self._bin_buffer_mmap.size, np.dtype(self._dtype).itemsize)
+        return self._num_tokens
 
     def get_document_sizes(self) -> np.ndarray:
         """
