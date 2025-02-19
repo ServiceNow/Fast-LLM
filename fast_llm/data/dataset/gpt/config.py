@@ -60,6 +60,11 @@ class GPTSamplingConfig(SamplingConfig):
         desc="Shuffling strategy.",
         hint=FieldHint.feature,
     )
+    per_document_positions: bool | None = Field(
+        default=None,
+        desc="Use per-document positions.",
+        hint=FieldHint.feature,
+    )
 
 
 @dataclasses.dataclass

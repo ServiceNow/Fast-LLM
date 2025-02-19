@@ -87,8 +87,6 @@ class GPTSampledIndexedDataset(SampledDataset):
         self._indexed_dataset = indexed_dataset
         self._num_samples = sampling.num_samples
         self._sequence_length = sampling.sequence_length
-        self._use_loss_masking_spans = sampling.use_loss_masking_spans
-        self._per_document_positions = sampling.per_document_positions
         self._config = sampling.config
         self._device = torch.device("cuda" if self._config.gpu else "cpu")
 
@@ -330,9 +328,14 @@ class GPTSampledIndexedDataset(SampledDataset):
         loss_masking_spans = (
             np.stack(loss_masking_spans, dtype=np.int32) if self._config.use_loss_masking_spans else None
         )
+        position_ids = (
+            np.concatenate([np.arange(len(sample.token_ids), dtype=np.int32) for sample in token_ids])
+            if self._config.per_document_positions
+            else None
+        )
         Assert.eq(len(token_ids), self._sequence_length + 1)
 
-        return GPTSample(token_ids=token_ids, loss_masking_spans=loss_masking_spans)
+        return GPTSample(token_ids=token_ids, loss_masking_spans=loss_masking_spans, position_ids=position_ids)
 
     @property
     def name(self) -> str:
@@ -484,7 +487,13 @@ class LegacyGPTSampledIndexedDataset(SampledDataset):
             spans = np.stack(spans, dtype=np.int32)
         else:
             spans = None
-        return GPTSample(token_ids=token_ids, loss_masking_spans=spans)
+        if self._config.per_document_positions:
+            position_ids = np.concatenate(
+                [np.arange(len(sample.token_ids), dtype=np.int32) for sample in sample_list]
+            )[:-1]
+        else:
+            position_ids = None
+        return GPTSample(token_ids=token_ids, loss_masking_spans=spans, position_ids=position_ids)
 
     @property
     def name(self) -> str:

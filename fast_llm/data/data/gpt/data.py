@@ -108,8 +108,6 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
                     sequence_length=self._max_sequence_length,
                     vocab_size=self._vocab_size,
                     tokenizer=self._tokenizer,
-                    use_loss_masking_spans=self._config.use_loss_masking_spans,
-                    per_document_positions=self._config.per_document_positions,
                 )
                 dataset = self._config.datasets[phase].build_and_sample(sampling)
                 self._datasets[phase] = DatasetMonitor(dataset, self._config.data_sample_warn_time_ms)
@@ -150,8 +148,8 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
                 pin_memory=True,
                 collate_fn=partial(
                     gpt_data_collate_fn,
-                    use_loss_masking_spans=self._config.use_loss_masking_spans,
-                    per_document_positions=self._config.per_document_positions,
+                    use_loss_masking_spans=self._config.sampling.use_loss_masking_spans,
+                    per_document_positions=self._config.sampling.per_document_positions,
                 ),
                 multiprocessing_context=self._config.multiprocessing_context.value if num_workers > 0 else None,
             )

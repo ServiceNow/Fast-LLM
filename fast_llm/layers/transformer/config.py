@@ -422,7 +422,7 @@ class TransformerConfig(TransformerArchitectureConfig, BaseModelConfig):
         default=True, desc="Enable Flash Attention if possible.", hint=FieldHint.optional
     )
     prevent_cross_document_attention: bool = Field(
-        default=True,
+        default=False,
         desc="Prevent documents in the same sequence from paying attention to each other.",
         hint=FieldHint.feature,
     )

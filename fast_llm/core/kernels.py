@@ -93,11 +93,13 @@ def flash_attn(
     assert _flash_available
     with set_generator(generator):
         if prevent_cross_document_attention:
+            out_dims = query.size()
             query, key, value, indices_q, cu_seq_lens, max_seq_lens = prepare_fa2_from_position_ids(
                 query, key, value, position_ids
             )
             cu_seqlens_q, cu_seqlens_k = cu_seq_lens
             max_seqlen_in_batch_q, max_seqlen_in_batch_k = max_seq_lens
+
             return _flash_attn_varlen_func(
                 query,
                 key,
@@ -110,7 +112,7 @@ def flash_attn(
                 window_size=(-1, -1) if window_size is None else (window_size - 1, 0),
                 causal=causal,
                 softmax_scale=softmax_scale,
-            )
+            ).view(*out_dims)
         else:
             return _flash_attn_func(
                 query,
@@ -152,6 +154,9 @@ def prepare_fa2_from_position_ids(query, key, value, position_ids):
         (max_seqlen_in_batch_q, max_seqlen_in_batch_k) (`Tuple[int]`):
             Maximum sequence length in batch (`max_seqlen_in_batch_q` for the target sequence i.e. query, `max_seqlen_in_batch_k` for the source sequence i.e. key/value).
     """
+    # Debugging:
+    if not torch.all((position_ids >= 0) & (position_ids < query.size(1))):
+        raise ValueError("position_ids contains invalid indices")
     query = query.view(-1, query.size(-2), query.size(-1))
     key = key.view(-1, key.size(-2), key.size(-1))
     value = value.view(-1, value.size(-2), value.size(-1))
