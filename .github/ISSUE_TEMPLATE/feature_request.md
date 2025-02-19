@@ -12,7 +12,9 @@ assignees: ''
 > _(Example: Add FP8 support using torchao to improve training throughput by 1.5x.)_
 
 # 🚀 **Execution Plan**
-### **Step 1: What is the smallest working version?**  
+> _(This section may start as an incomplete draft but must be defined before implementation begins.)_ 
+
+### **Step 1: What is the smallest working version?**
 > _(Describe the simplest way to implement this feature with minimal effort.)_  
 
 ### **Step 2: What additional optimizations are possible (but optional)?**  
