@@ -323,13 +323,24 @@ class Attention(torch.nn.Module):
             query = rotary_fn(query, kwargs[TransformerKwargs.rotary_freq_q])
             key = rotary_fn(key, kwargs[TransformerKwargs.rotary_freq_k])
 
+        
+        # NOTE: This is a temporal solution for qwen 2.X
+        # https://github.com/huggingface/transformers/blob/5e2183f344911aa82aba0b83778a4f196cff378e/src/transformers/models/qwen2/modular_qwen2.py#L71
+        # TODO: make universal per layer config
+        window_size = self._config.window_size
+        if (
+            self._config.max_window_layers is not None
+            and self._layer_index < self._config.max_window_layers
+        ):
+            window_size = None
+      
         if self._use_flash_attention:
             input_ = flash_attn(
                 query,
                 key,
                 value,
                 dropout_p=self._config.attention_dropout if self.training else 0.0,
-                window_size=self._config.window_size,
+                window_size=window_size,
                 causal=True,
                 generator=self._tensor_space.distributed.tp_generator,
                 softmax_scale=self._softmax_scale,

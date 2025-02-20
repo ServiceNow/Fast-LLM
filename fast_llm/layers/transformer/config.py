@@ -443,6 +443,12 @@ class TransformerConfig(TransformerArchitectureConfig, BaseModelConfig):
         hint=FieldHint.feature,
         valid=skip_valid_if_none(check_field(Assert.geq, 0)),
     )
+    max_window_layers: int | None = Field(
+        default=None,
+        desc="The number of layers that use SWA (Sliding Window Attention). The bottom layers use SWA while the top use full attention.",
+        hint=FieldHint.optional,
+        valid=skip_valid_if_none(check_field(Assert.geq, 0)),
+    )
     # normalization_implementation: NormalizationImplementation = NormalizationImplementation.auto
     mlp_recompute_level: MLPRecomputeLevel = Field(
         default=MLPRecomputeLevel.none,
