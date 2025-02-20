@@ -577,4 +577,10 @@ class TransformerConfig(TransformerArchitectureConfig, BaseModelConfig):
                 Assert.geq(scale, 0)
 
     def do_use_flash_attention(self, distributed_config: DistributedConfig) -> bool:
-        return self.use_flash_attention and distributed_config.training_dtype in (DataType.float16, DataType.bfloat16)
+        use_flash_attention =  self.use_flash_attention and distributed_config.training_dtype in (DataType.float16, DataType.bfloat16)
+        
+        # Config parameter `window_size` only can be used with flash attention
+        if not use_flash_attention:
+            Assert.is_(self.window_size, None)
+
+        return use_flash_attention
