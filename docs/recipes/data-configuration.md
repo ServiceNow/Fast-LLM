@@ -45,7 +45,7 @@ data:
 ```
 
 !!! note "Dataset wrappers"
-    The `blended` dataset wrapper is one example of the many dataset wrappers available in fast-llm. Such wrappers may be nested (almost) arbitrarily to generate the dataset scheme that fits your needs. Fast-LLM will use the `type` argument to dynamically select the appropriate configuration class(es). With some effort ou can even create your own wrapper!
+    The `blended` dataset wrapper is one example of the many dataset wrappers available in fast-llm. Such wrappers may be nested (almost) arbitrarily to generate the dataset scheme that fits your needs. Fast-LLM will use the `type` argument to dynamically select the appropriate configuration class(es). With some effort you can even create your own wrapper!
 
 ## Example 2: Configure shuffling
 
