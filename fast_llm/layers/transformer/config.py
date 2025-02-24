@@ -1,6 +1,8 @@
 import enum
+import itertools
 import logging
 import math
+import re
 import typing
 import warnings
 
@@ -149,6 +151,14 @@ class RotaryConfig(RotaryArchitectureConfig, BaseModelConfig):
     pass
 
 
+class TransformerSubLayerKeys(str, enum.Enum):
+    attn_query = "layers.self_attn.query"
+    attn_key_value = "layers.self_attn.key_value"
+    attn_dense = "layers.self_attn.dense"
+    mlp_layer1 = "layers.mlp.layer_1"
+    mlp_layer2 = "layers.mlp.layer_2"
+
+
 @config_class()
 class TransformerArchitectureConfig(BaseModelArchitectureConfig):
     _abstract = False
@@ -174,7 +184,11 @@ class TransformerArchitectureConfig(BaseModelArchitectureConfig):
         hint=FieldHint.core,
         valid=check_field(Assert.gt, 0),
     )
-    add_linear_biases: bool = Field(default=True, desc="Add biases to all dense layers.", hint=FieldHint.core)
+    add_linear_biases: bool | dict[TransformerSubLayerKeys, str] = Field(
+        default=True,
+        desc="Add biases to all or selected dense layers. Accepted values: True, False, or a dict with keys from TransformerSubLayerKeys and values as '*' or index ranges.",
+        hint=FieldHint.core,
+    )
     ffn_hidden_size: int = Field(
         default=None,
         desc="Hidden dimension of the MLP intermediate state. Default: 4 * hidden_size.",
@@ -234,6 +248,10 @@ class TransformerArchitectureConfig(BaseModelArchitectureConfig):
         hint=FieldHint.feature,
     )
 
+    _parsed_add_linear_biases: bool | dict[TransformerSubLayerKeys, set[int] | str] = Field(
+        default=None, init=False, repr=False
+    )
+
     def _validate(self) -> None:
         if self.ffn_hidden_size is None:
             self.ffn_hidden_size = 4 * self.hidden_size
@@ -243,13 +261,69 @@ class TransformerArchitectureConfig(BaseModelArchitectureConfig):
             self.activation_type = ActivationType.silu if self.gated else ActivationType.gelu
         self.projection_size = self.num_attention_heads * self.kv_channels
         self.num_unshared_experts = self.num_experts - self.num_shared_experts
+
+        # Validate before parent validate to have assertion error on invalid key for TransformerSubLayerKeys
+        self._validate_add_linear_biases()
+        self._parse_add_linear_biases()
+
         super()._validate()
+
         if not TritonConfig.TRITON_ENABLED:
             warnings.warn("Triton is disabled, but triton rotary kernel will be used anyway.")
 
         Assert.leq(self.num_shared_experts, self.num_experts)
         Assert.leq(self.num_shared_experts + self.num_experts_per_token, self.num_experts)
         Assert.multiple(self.num_attention_heads, self.head_groups)
+
+    def _validate_add_linear_biases(self) -> None:
+        """Validate the `add_linear_biases` parameter."""
+        if isinstance(self.add_linear_biases, dict):
+            Assert.gt(len(self.add_linear_biases), 0)
+            for key, value in self.add_linear_biases.items():
+                Assert.incl(key, TransformerSubLayerKeys)  # Assert valid sublayer key
+                Assert.custom(
+                    lambda val: val == "*" or re.match(r"^\d+(:\d+(:\d+)?)?(,\s*\d+(:\d+(:\d+)?)?)*$", val),
+                    value,
+                )  # Assert valid range format
+
+    def _parse_add_linear_biases(self) -> bool | dict[TransformerSubLayerKeys, set[int] | str]:
+        """Parse `add_linear_biases` and store the result for quick lookup."""
+        if isinstance(self.add_linear_biases, bool):
+            self._parsed_add_linear_biases = self.add_linear_biases
+            return
+
+        parsed = {}
+        for key, value in self.add_linear_biases.items():
+            parsed[key] = self._parse_indices(value)
+        self._parsed_add_linear_biases = parsed
+
+    def _parse_indices(self, indices_str: str) -> set[int]:
+        """Parse layer indices from a string like '1:10:2, 20, 30' or '*'."""
+        indices = []
+        # Layers are numbered from 1 as 0 layer is embedding layer in Fast-LLM
+        if indices_str == "*":
+            indices.extend(range(1, self.num_layers + 1))
+        else:
+            for part in indices_str.split(","):
+                part = part.strip()
+                if ":" in part:
+                    parts = list(map(int, part.split(":")))
+                    start, stop = parts[0] + 1, parts[1] + 1
+                    step = parts[2] if len(parts) == 3 else 1
+                    indices.extend(range(start, stop, step))
+                else:
+                    indices.append(int(part) + 1)
+        return set(itertools.chain(indices))
+
+    def should_add_linear_bias(self, layer_index: int, sublayer_key: TransformerSubLayerKeys) -> bool:
+        """Check if linear bias should be added for a given layer and sublayer."""
+        if isinstance(self._parsed_add_linear_biases, bool):
+            return self._parsed_add_linear_biases
+
+        if sublayer_key in self._parsed_add_linear_biases:
+            return layer_index in self._parsed_add_linear_biases[sublayer_key]
+
+        return False
 
     @classmethod
     def _from_dict(

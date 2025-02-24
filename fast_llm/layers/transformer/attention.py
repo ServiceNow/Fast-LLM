@@ -10,7 +10,12 @@ from fast_llm.functional.autograd import wrap_forward_backward
 from fast_llm.functional.rotary import apply_rotary_embeddings
 from fast_llm.functional.triton.rotary import triton_rotary_autograd_
 from fast_llm.layers.common.linear import InputParallelLinear, OutputParallelLinear
-from fast_llm.layers.transformer.config import TransformerConfig, TransformerDimNames, TransformerKwargs
+from fast_llm.layers.transformer.config import (
+    TransformerConfig,
+    TransformerDimNames,
+    TransformerKwargs,
+    TransformerSubLayerKeys,
+)
 from fast_llm.logging import log_distributed_grad, log_distributed_tensor
 from fast_llm.tensor import TensorMeta, init_normal_, init_zeros_
 from fast_llm.utils import Assert
@@ -102,7 +107,7 @@ class Attention(torch.nn.Module):
         self.query = OutputParallelLinear(
             hidden_dim,
             self._tensor_space.get_tensor_dim(TransformerDimNames.composite_query),
-            bias=self._config.add_linear_biases,
+            bias=self._config.should_add_linear_bias(self._layer_index, TransformerSubLayerKeys.attn_query),
             weight_init_method=init_method_qkv,
             bias_init_method=init_method_qkv if self._config.random_bias_init else init_zeros_,
             sequence_parallel=self._sequence_parallel,
@@ -111,7 +116,7 @@ class Attention(torch.nn.Module):
         self.key_value = OutputParallelLinear(
             hidden_dim,
             self._tensor_space.get_tensor_dim(TransformerDimNames.composite_key_value),
-            bias=self._config.add_linear_biases,
+            bias=self._config.should_add_linear_bias(self._layer_index, TransformerSubLayerKeys.attn_key_value),
             weight_init_method=init_method_qkv,
             bias_init_method=init_method_qkv if self._config.random_bias_init else init_zeros_,
             sequence_parallel=self._sequence_parallel,
@@ -123,7 +128,7 @@ class Attention(torch.nn.Module):
         self.dense = InputParallelLinear(
             self._tensor_space.get_tensor_dim(TransformerDimNames.composite_dense),
             hidden_dim,
-            bias=self._config.add_linear_biases,
+            bias=self._config.should_add_linear_bias(self._layer_index, TransformerSubLayerKeys.attn_dense),
             weight_init_method=init_method_std_attn_proj,
             bias_init_method=init_method_std_attn_proj if self._config.random_bias_init else init_zeros_,
             sequence_parallel=self._sequence_parallel,

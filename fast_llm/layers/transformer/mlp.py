@@ -8,15 +8,16 @@ from fast_llm.engine.config_utils.tensor_space import TensorSpace
 from fast_llm.functional.config import TritonConfig
 from fast_llm.functional.triton.mlp import mlp_autograd, torch_mlp_activation, triton_mlp_activation_autograd
 from fast_llm.layers.common.linear import LinearBase
-from fast_llm.layers.transformer.config import TransformerConfig, TransformerDimNames
+from fast_llm.layers.transformer.config import TransformerConfig, TransformerDimNames, TransformerSubLayerKeys
 from fast_llm.tensor import init_normal_, init_zeros_
 from fast_llm.utils import Assert
 
 
 class MLPBase(Layer, ABC):
-    def __init__(self, config: TransformerConfig, tensor_space: TensorSpace, name: str = "mlp"):
+    def __init__(self, config: TransformerConfig, tensor_space: TensorSpace, layer_index: int, name: str = "mlp"):
         super().__init__()
         self._name = name
+        self._layer_index = layer_index
 
         init_method_1 = init_normal_(
             std=config.init_method_std_mlp_1,
@@ -42,7 +43,7 @@ class MLPBase(Layer, ABC):
         self.layer_1 = LinearBase(
             hidden_dim,
             tensor_space.get_tensor_dim(TransformerDimNames.composite_gated_expert_mlp),
-            bias=config.add_linear_biases,
+            bias=config.should_add_linear_bias(self._layer_index, TransformerSubLayerKeys.mlp_layer1),
             weight_init_method=init_method_1,
             bias_init_method=init_method_1 if config.random_bias_init else init_zeros_,
             lr_scale=tuple(config.mlp_lr_scale),
@@ -50,7 +51,7 @@ class MLPBase(Layer, ABC):
         self.layer_2 = LinearBase(
             self._intermediate_dim,
             hidden_dim,
-            bias=config.add_linear_biases,
+            bias=config.should_add_linear_bias(self._layer_index, TransformerSubLayerKeys.mlp_layer2),
             weight_init_method=init_method_2,
             bias_init_method=init_method_2 if config.random_bias_init else init_zeros_,
             auto_bias_grad_accumulation=tensor_space.distributed_config.tensor_parallel > 1,
@@ -60,9 +61,9 @@ class MLPBase(Layer, ABC):
 
 
 class MLP(MLPBase):
-    def __init__(self, config: TransformerConfig, tensor_space: TensorSpace, name: str = "mlp"):
+    def __init__(self, config: TransformerConfig, tensor_space: TensorSpace, layer_index: int, name: str = "mlp"):
         Assert.eq(config.num_experts, 1)
-        super().__init__(config, tensor_space, name)
+        super().__init__(config, tensor_space, layer_index, name)
 
     def forward(
         self,
