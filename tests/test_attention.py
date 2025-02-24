@@ -1,6 +1,8 @@
 import unittest.mock
 from fast_llm.layers.transformer.attention import Attention
 from fast_llm.layers.transformer.config import TransformerConfig
+from fast_llm.engine.distributed.config import DistributedConfig
+from fast_llm.engine.config_utils.tensor_space import TensorSpace
 
 
 def test_decide_window_size():
@@ -20,3 +22,17 @@ def test_decide_window_size():
     # Arrange - Case 3: max_window_layers is None (always return window_size)
     attention._config = TransformerConfig(window_size=512, max_window_layers=None)
     assert attention._decide_window_size() == 512
+
+
+def test_attention_constructor():
+    transformer_conf = TransformerConfig(
+        num_layers=2, 
+        num_attention_heads=2,
+        hidden_size=16,
+    )
+    distributed_config = DistributedConfig()
+    tensor_space = TensorSpace(distributed_config=distributed_config)
+    transformer_conf.setup_tensor_space(tensor_space)
+
+    Attention(transformer_conf, tensor_space, 1)
+
