@@ -1,8 +1,6 @@
 import enum
-import itertools
 import logging
 import math
-import re
 import typing
 import warnings
 
@@ -121,12 +119,12 @@ class RotaryArchitectureConfig(BaseModelArchitectureConfig):
         hint=FieldHint.feature,
     )
     beta_fast: float = Field(
-        default=32.,
+        default=32.0,
         desc="Beta-fast for yarn-type scaling.",
         hint=FieldHint.feature,
     )
     beta_slow: float = Field(
-        default=1.,
+        default=1.0,
         desc="Beta-slow for yarn-type scaling.",
         hint=FieldHint.feature,
     )
@@ -280,7 +278,7 @@ class TransformerArchitectureConfig(BaseModelArchitectureConfig):
         if self.add_linear_biases == AddLinearBiasChoices.nowhere:
             return False
         return True
-    
+
     @property
     def add_attn_dense_bias(self) -> bool:
         if isinstance(self.add_linear_biases, bool):
@@ -615,8 +613,11 @@ class TransformerConfig(TransformerArchitectureConfig, BaseModelConfig):
                 Assert.geq(scale, 0)
 
     def do_use_flash_attention(self, distributed_config: DistributedConfig) -> bool:
-        use_flash_attention =  self.use_flash_attention and distributed_config.training_dtype in (DataType.float16, DataType.bfloat16)
-        
+        use_flash_attention = self.use_flash_attention and distributed_config.training_dtype in (
+            DataType.float16,
+            DataType.bfloat16,
+        )
+
         # Config parameter `window_size` only can be used with flash attention
         if not use_flash_attention:
             Assert.is_(self.window_size, None)
