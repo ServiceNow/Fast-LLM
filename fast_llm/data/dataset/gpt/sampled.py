@@ -328,11 +328,13 @@ class GPTSampledIndexedDataset(SampledDataset):
         loss_masking_spans = (
             np.stack(loss_masking_spans, dtype=np.int32) if self._config.use_loss_masking_spans else None
         )
-        position_ids = (
-            np.concatenate([np.arange(len(sample.token_ids), dtype=np.int32) for sample in token_ids])
-            if self._config.per_document_positions
-            else None
-        )
+        if self._config.per_document_positions:
+            start_indices = np.where(token_ids == self._indexed_dataset.tokenizer.bod_id)[0][:-1]
+            position_ids = np.arange(len(token_ids), dtype=np.int32)
+            for idx in start_indices:
+                position_ids[idx:] -= position_ids[idx]
+        else:
+            position_ids = None
         Assert.eq(len(token_ids), self._sequence_length + 1)
 
         return GPTSample(token_ids=token_ids, loss_masking_spans=loss_masking_spans, position_ids=position_ids)
@@ -393,13 +395,31 @@ class LegacyGPTSampledIndexedDataset(SampledDataset):
         self._shuffle_idx = MemmapArray(
             None if base_path is None else base_path.with_name(base_path.name + "_shuffle_idx.npy")
         )
+        if self.config.prevent_doc_truncation:
+            if base_path is None or (
+                sampling.distributed.config.rank == sampling.get_next_rank() and not (self._doc_idx.exists())
+            ):
+                self._sample_with_padding()
+        else:
+            # Build the indexed mapping if it doesn't exist.
+            if base_path is None or (
+                sampling.distributed.config.rank == sampling.get_next_rank()
+                and not (self._doc_idx.exists() and self._sample_idx.exists() and self._shuffle_idx.exists())
+            ):
+                self._sample()
 
-        # Build the indexed mapping if it doesn't exist.
-        if base_path is None or (
-            sampling.distributed.config.rank == sampling.get_next_rank()
-            and not (self._doc_idx.exists() and self._sample_idx.exists() and self._shuffle_idx.exists())
-        ):
-            self._sample()
+    def _sample_with_padding(self) -> None:
+        # TODO: have a separate flow for sampling with padding i.e., calculate epochs using number of documents instead of tokens. No need to call build_sample_idx
+        # TODO: shuffle the document_idx. num_epochs will be num_samples / num_documents
+        # TODO: Use -100 as the padding id for masking loss
+        document_sizes = self._indexed_dataset.get_document_sizes()
+        num_documents = len(document_sizes)
+        np_rng = np.random.RandomState(seed=self._config.seed)
+        num_epochs = math.ceil(self._num_samples / num_documents)
+        doc_idx = np.tile(np.arange(num_documents, dtype=np.int32), num_epochs)
+        # TODO: separate_last_epoch optimization
+        np_rng.shuffle(doc_idx)
+        self._doc_idx.save(doc_idx)
 
     def _sample(self) -> None:
         """
@@ -461,21 +481,33 @@ class LegacyGPTSampledIndexedDataset(SampledDataset):
         with the requested sampling index.
         The returned sample is ready to be concatenated, then fed to a `GPTModel` (see `GPTModel.preprocess`).
         """
-        # Get the shuffled index.
-        shuffled_idx = self._shuffle_idx[idx]
-        # Start and end documents and offsets.
-        doc_f, offset_f = self._sample_idx[shuffled_idx]
-        doc_l, offset_l = self._sample_idx[shuffled_idx + 1]
-        sample_list = [
-            self._indexed_dataset.get(
-                self._doc_idx[doc].item(),
-                offset=(doc == doc_f) * offset_f,
-                length=offset_l + 1 - (doc == doc_f) * offset_f if doc == doc_l else None,
-                use_loss_masking_spans=self._config.use_loss_masking_spans,
+        if self.config.prevent_doc_truncation:
+            doc_idx = self._doc_idx[idx]
+            sample_list = [
+                self._indexed_dataset.get(
+                    doc_idx, offset=0, length=None, use_loss_masking_spans=self._config.use_loss_masking_spans
+                )
+            ]
+            token_ids = np.concatenate([sample.token_ids for sample in sample_list], dtype=np.int64)
+            token_ids = np.concatenate(
+                [sample.token_ids, np.tile([-100], self._sequence_length + 1 - len(sample.token_ids))], dtype=np.int64
             )
-            for doc in range(doc_f, doc_l + 1)
-        ]
-        token_ids = np.concatenate([sample.token_ids for sample in sample_list], dtype=np.int64)
+        else:
+            # Get the shuffled index.
+            shuffled_idx = self._shuffle_idx[idx]
+            # Start and end documents and offsets.
+            doc_f, offset_f = self._sample_idx[shuffled_idx]
+            doc_l, offset_l = self._sample_idx[shuffled_idx + 1]
+            sample_list = [
+                self._indexed_dataset.get(
+                    self._doc_idx[doc].item(),
+                    offset=(doc == doc_f) * offset_f,
+                    length=offset_l + 1 - (doc == doc_f) * offset_f if doc == doc_l else None,
+                    use_loss_masking_spans=self._config.use_loss_masking_spans,
+                )
+                for doc in range(doc_f, doc_l + 1)
+            ]
+            token_ids = np.concatenate([sample.token_ids for sample in sample_list], dtype=np.int64)
         Assert.eq(len(token_ids), self._sequence_length + 1)
 
         if self._config.use_loss_masking_spans:
