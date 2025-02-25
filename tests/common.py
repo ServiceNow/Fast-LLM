@@ -14,6 +14,7 @@ from fast_llm.data.dataset.gpt.memmap import GPTMemmapDataset
 from fast_llm.data.dataset.gpt.sampled import GPTSample
 from fast_llm.models.gpt.config import (
     LlamaGPTHuggingfaceCheckpointFormat,
+    Qwen2GPTHuggingfaceCheckpointFormat,
     MistralGPTHuggingfaceCheckpointFormat,
     MixtralGPTHuggingfaceCheckpointFormat,
     Starcoder2GPTHuggingfaceCheckpointFormat,
@@ -155,6 +156,11 @@ CONFIG_LLAMA3_FAST_LLM = CONFIG_LLAMA_FAST_LLM + [
 ]
 CONFIG_LLAMA3_COMMON = CONFIG_LLAMA3_FAST_LLM + ["model.distributed.training_dtype=bf16"]
 
+# Megatron does not support Llama3-style Rotary Embeddings
+CONFIG_QWEN2_MEGATRON = None
+CONFIG_QWEN2_FAST_LLM = CONFIG_LLAMA_FAST_LLM
+CONFIG_QWEN2_COMMON = CONFIG_QWEN2_FAST_LLM + ["model.distributed.training_dtype=bf16"]
+
 CONFIG_MIXTRAL_MEGATRON = CONFIG_LLAMA_MEGATRON + [
     "--num-experts=4",
     "--moe-router-topk=4",
@@ -188,6 +194,13 @@ _CONFIGS = {
         CONFIG_LLAMA3_MEGATRON,
         CONFIG_LLAMA3_COMMON,
         LlamaGPTHuggingfaceCheckpointFormat,
+    ),
+    "qwen2": (
+        "gpt",
+        CONFIG_QWEN2_FAST_LLM,
+        CONFIG_QWEN2_MEGATRON,
+        CONFIG_QWEN2_COMMON,
+        Qwen2GPTHuggingfaceCheckpointFormat,
     ),
     "mistral": (
         "gpt",

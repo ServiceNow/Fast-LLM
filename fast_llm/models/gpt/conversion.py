@@ -28,6 +28,7 @@ from fast_llm.models.gpt.config import (
     GPTArchitectureConfig,
     GPTModelConfig,
     LlamaGPTHuggingfaceCheckpointFormat,
+    Qwen2GPTHuggingfaceCheckpointFormat,
     MistralGPTHuggingfaceCheckpointFormat,
     MixtralGPTHuggingfaceCheckpointFormat,
     Starcoder2GPTHuggingfaceCheckpointFormat,
@@ -367,6 +368,47 @@ class LlamaHuggingfaceCheckpointHandler(CommonLlamaHuggingfaceCheckpointHandler)
                 MLPLayer2Converter,
             ),
         ]
+    
+class Qwen2HuggingfaceCheckpointHandler(CommonLlamaHuggingfaceCheckpointHandler):
+    format: typing.ClassVar[type[CheckpointFormat]] = Qwen2GPTHuggingfaceCheckpointFormat
+
+    @classmethod
+    def _create_config_converters(cls) -> list[ParamConverter]:
+        return super()._create_config_converters() + [
+            ConstantExportParamConverter(export_names=(("architectures",),), export_value=["Qwen2ForCausalLM"]),
+            # TODO: Llama supports biases
+            ConstantExportParamConverter(export_names=(("attention_bias",),), export_value=False),
+            ConstantExportParamConverter(export_names=(("mlp_bias",),), export_value=False),
+            RopeScalingParamConverter(
+                fast_llm_names=(
+                    ("transformer", "rotary", "type"),
+                    ("transformer", "rotary", "scale_factor"),
+                    ("transformer", "rotary", "low_frequency_factor"),
+                    ("transformer", "rotary", "high_frequency_factor"),
+                    ("transformer", "rotary", "original_context_length"),
+                    ("transformer", "rotary", "attention_factor"),
+                    ("transformer", "rotary", "beta_fast"),
+                    ("transformer", "rotary", "beta_slow"),
+                ),
+                export_names=(("rope_scaling",),),
+            ),
+        ]
+
+    def _get_mlp_converters(self, fast_llm_prefix: str, hf_prefix: str) -> list[WeightConverter]:
+        return [
+            *self._get_weight_and_bias_converters(
+                f"{fast_llm_prefix}.mlp.layer_1",
+                (f"{hf_prefix}.mlp.gate_proj", f"{hf_prefix}.mlp.up_proj"),
+                False,
+                SplitWeightConverter,
+            ),
+            *self._get_weight_and_bias_converters(
+                f"{fast_llm_prefix}.mlp.layer_2",
+                f"{hf_prefix}.mlp.down_proj",
+                False,
+                MLPLayer2Converter,
+            ),
+        ]
 
 
 class MistralHuggingfaceCheckpointHandler(CommonLlamaHuggingfaceCheckpointHandler):
@@ -445,6 +487,7 @@ class AutoGPTHuggingfaceCheckpointHandler(
     handler_map = {
         Starcoder2GPTHuggingfaceCheckpointFormat.name: Starcoder2HuggingfaceCheckpointHandler,
         LlamaGPTHuggingfaceCheckpointFormat.name: LlamaHuggingfaceCheckpointHandler,
+        Qwen2GPTHuggingfaceCheckpointFormat.name: Qwen2HuggingfaceCheckpointHandler,
         MistralGPTHuggingfaceCheckpointFormat.name: MistralHuggingfaceCheckpointHandler,
         MixtralGPTHuggingfaceCheckpointFormat.name: MixtralHuggingfaceCheckpointHandler,
     }
