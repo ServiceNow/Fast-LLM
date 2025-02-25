@@ -283,6 +283,19 @@ class CommonLlamaHuggingfaceCheckpointHandler(CommonHuggingfaceCheckpointHandler
             ),
             ConstantImportParamConverter(fast_llm_names=(("transformer", "gated"),), fast_llm_value=True),
             ConstantImportParamConverter(fast_llm_names=(("transformer", "add_linear_biases"),), fast_llm_value=False),
+            RopeScalingParamConverter(
+                fast_llm_names=(
+                    ("transformer", "rotary", "type"),
+                    ("transformer", "rotary", "scale_factor"),
+                    ("transformer", "rotary", "low_frequency_factor"),
+                    ("transformer", "rotary", "high_frequency_factor"),
+                    ("transformer", "rotary", "original_context_length"),
+                    ("transformer", "rotary", "attention_factor"),
+                    ("transformer", "rotary", "beta_fast"),
+                    ("transformer", "rotary", "beta_slow"),
+                ),
+                export_names=(("rope_scaling",),),
+            ),
         ]
 
 
@@ -336,19 +349,6 @@ class LlamaHuggingfaceCheckpointHandler(CommonLlamaHuggingfaceCheckpointHandler)
             # TODO: Llama supports biases
             ConstantExportParamConverter(export_names=(("attention_bias",),), export_value=False),
             ConstantExportParamConverter(export_names=(("mlp_bias",),), export_value=False),
-            RopeScalingParamConverter(
-                fast_llm_names=(
-                    ("transformer", "rotary", "type"),
-                    ("transformer", "rotary", "scale_factor"),
-                    ("transformer", "rotary", "low_frequency_factor"),
-                    ("transformer", "rotary", "high_frequency_factor"),
-                    ("transformer", "rotary", "original_context_length"),
-                    ("transformer", "rotary", "attention_factor"),
-                    ("transformer", "rotary", "beta_fast"),
-                    ("transformer", "rotary", "beta_slow"),
-                ),
-                export_names=(("rope_scaling",),),
-            ),
         ]
 
     def _get_mlp_converters(self, fast_llm_prefix: str, hf_prefix: str) -> list[WeightConverter]:
@@ -376,9 +376,6 @@ class MistralHuggingfaceCheckpointHandler(CommonLlamaHuggingfaceCheckpointHandle
     def _create_config_converters(cls) -> list[ParamConverter]:
         return super()._create_config_converters() + [
             ConstantExportParamConverter(export_names=(("architectures",),), export_value=["MistralForCausalLM"]),
-            ConstantImportParamConverter(
-                fast_llm_names=(("transformer", "rotary", "type"),), fast_llm_value=RotaryEmbeddingType.default
-            ),
             IgnoreImportParamConverter(export_names=(("sliding_window",),), ignore_export_value=None),
         ]
 
@@ -403,9 +400,6 @@ class MixtralHuggingfaceCheckpointHandler(CommonLlamaHuggingfaceCheckpointHandle
     def _create_config_converters(cls) -> list[ParamConverter]:
         return super()._create_config_converters() + [
             ConstantExportParamConverter(export_names=(("architectures",),), export_value=["MixtralForCausalLM"]),
-            ConstantImportParamConverter(
-                fast_llm_names=(("transformer", "rotary", "type"),), fast_llm_value=RotaryEmbeddingType.default
-            ),
             ConstantImportParamConverter(
                 fast_llm_names=(("transformer", "expert_routing_type"),), fast_llm_value=RoutingType.topk
             ),
