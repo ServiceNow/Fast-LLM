@@ -43,7 +43,7 @@ class TransformerLayer(Layer):
         self.self_attn = Attention(self._config, self._tensor_space, layer_index)
 
         self.mlp = (MixtureOfExpertMLP if self._config.num_experts > 1 else MLP)(
-            self._config, self._tensor_space, self._layer_index, f"{self.name} mlp"
+            self._config, self._tensor_space, f"{self.name} mlp"
         )
 
     @torch.compile

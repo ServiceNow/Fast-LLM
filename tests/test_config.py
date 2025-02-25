@@ -8,11 +8,11 @@ import yaml
 from fast_llm.layers.transformer.config import (
     TransformerConfig,
     TransformerArchitectureConfig,
-    TransformerSubLayerKeys,
+    AddLinearBiasChoices,
 )
-from fast_llm.utils import Assert
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.engine.config_utils.data_type import DataType
+from fast_llm.config import ValidationError
 
 from fast_llm.models.auto import trainer_registry
 
@@ -90,94 +90,52 @@ def test_do_use_flash_attention():
         config.do_use_flash_attention(mock_distributed_config)
 
 
-@pytest.fixture
-def config_with_true_biases():
-    """Fixture for TransformerArchitectureConfig with True add_linear_biases."""
-    return TransformerArchitectureConfig(add_linear_biases=True)
+def test_add_linear_biases_valid_values():
+    # Valid boolean values
+    assert TransformerArchitectureConfig(add_linear_biases=True).add_linear_biases is True
+    assert TransformerArchitectureConfig(add_linear_biases=False).add_linear_biases is False
 
-
-@pytest.fixture
-def config_with_false_biases():
-    """Fixture for TransformerArchitectureConfig with False add_linear_biases."""
-    return TransformerArchitectureConfig(add_linear_biases=False)
-
-
-@pytest.fixture
-def config_with_dict_biases():
-    """Fixture for TransformerArchitectureConfig with dict add_linear_biases."""
-    return TransformerArchitectureConfig(
-        num_layers = 10, 
-        add_linear_biases={
-            "layers.self_attn.query": "*",
-            "layers.mlp.layer_1": "1:10:3, 9",
-            "layers.mlp.layer_2": "5:7",
-        }
+    # Valid enum values
+    assert TransformerArchitectureConfig(add_linear_biases="nowhere").add_linear_biases == AddLinearBiasChoices.nowhere
+    assert (
+        TransformerArchitectureConfig(add_linear_biases="everywhere").add_linear_biases
+        == AddLinearBiasChoices.everywhere
+    )
+    assert (
+        TransformerArchitectureConfig(add_linear_biases="only_attn_qkv").add_linear_biases == AddLinearBiasChoices.only_attn_qkv
     )
 
 
-def test_add_linear_biases_bool_true(config_with_true_biases):
-    """Test case for add_linear_biases set to True (default)."""
-    assert config_with_true_biases._parsed_add_linear_biases == True
+def test_add_linear_biases_invalid_values():
+    with pytest.raises(ValidationError):
+        TransformerArchitectureConfig(add_linear_biases="invalid_value")
+
+    with pytest.raises(ValidationError):
+        TransformerArchitectureConfig(add_linear_biases=123)
+
+    with pytest.raises(ValidationError):
+        TransformerArchitectureConfig(add_linear_biases=None)
 
 
-def test_add_linear_biases_bool_false(config_with_false_biases):
-    """Test case for add_linear_biases set to False."""
-    assert config_with_false_biases._parsed_add_linear_biases == False
+def test_add_mlp_bias():
+    assert TransformerArchitectureConfig(add_linear_biases=True).add_mlp_bias is True
+    assert TransformerArchitectureConfig(add_linear_biases=False).add_mlp_bias is False
+    assert TransformerArchitectureConfig(add_linear_biases=AddLinearBiasChoices.everywhere).add_mlp_bias is True
+    assert TransformerArchitectureConfig(add_linear_biases=AddLinearBiasChoices.nowhere).add_mlp_bias is False
+    assert TransformerArchitectureConfig(add_linear_biases=AddLinearBiasChoices.only_attn_qkv).add_mlp_bias is False
 
 
-def test_add_linear_biases_dict_valid(config_with_dict_biases):
-    """Test case for add_linear_biases with valid dictionary."""
-    assert config_with_dict_biases._parsed_add_linear_biases == {
-        TransformerSubLayerKeys.attn_query: {1, 2, 3, 4, 5, 6, 7, 8, 9, 10},
-        TransformerSubLayerKeys.mlp_layer1: {2, 5, 8, 10},
-        TransformerSubLayerKeys.mlp_layer2: {6, 7},
-    }
+def test_add_attn_qkv_bias():
+    assert TransformerArchitectureConfig(add_linear_biases=True).add_attn_qkv_bias is True
+    assert TransformerArchitectureConfig(add_linear_biases=False).add_attn_qkv_bias is False
+    assert TransformerArchitectureConfig(add_linear_biases=AddLinearBiasChoices.everywhere).add_attn_qkv_bias is True
+    assert TransformerArchitectureConfig(add_linear_biases=AddLinearBiasChoices.nowhere).add_attn_qkv_bias is False
+    assert TransformerArchitectureConfig(add_linear_biases=AddLinearBiasChoices.only_attn_qkv).add_attn_qkv_bias is True
 
 
-def test_invalid_key_in_dict():
-    """Test case where an invalid key is provided in add_linear_biases dictionary."""
-    with pytest.raises(AssertionError):
-        # Using an invalid key in the dictionary.
-        TransformerArchitectureConfig(add_linear_biases={"invalid_key": "*"})
-
-
-def test_invalid_range_format():
-    """Test case where invalid range format is provided."""
-    with pytest.raises(AssertionError):
-        TransformerArchitectureConfig(add_linear_biases={TransformerSubLayerKeys.mlp_layer1: "1:10:3, abc"})
-
-
-def test_empty_add_linear_biases():
-    """Test case for empty add_linear_biases dictionary."""
-    with pytest.raises(AssertionError):  # Expecting AssertionError for invalid empty dictionary
-        TransformerArchitectureConfig(add_linear_biases={})
-
-
-def test_should_add_linear_bias_for_layer_and_sublayer(config_with_dict_biases):
-    """Test case for should_add_linear_bias based on layer index and sublayer key."""
-
-    # Layer 1 and sublayer mlp_layer1
-    assert config_with_dict_biases.should_add_linear_bias(1, TransformerSubLayerKeys.mlp_layer1) == False
-
-    # Layer 2 and sublayer mlp_layer1
-    assert config_with_dict_biases.should_add_linear_bias(2, TransformerSubLayerKeys.mlp_layer1) == True
-
-    # Layer 9 and sublayer mlp_layer1
-    assert config_with_dict_biases.should_add_linear_bias(9, TransformerSubLayerKeys.mlp_layer1) == False
-
-    # Layer 6 and sublayer mlp_layer2
-    assert config_with_dict_biases.should_add_linear_bias(6, TransformerSubLayerKeys.mlp_layer2) == True
-
-    # Layer 5 and sublayer attn_query
-    assert config_with_dict_biases.should_add_linear_bias(5, TransformerSubLayerKeys.attn_query) == True
-
-
-def test_should_add_linear_bias_for_bool_true(config_with_true_biases):
-    """Test case for add_linear_biases set to True (should always return True)."""
-    assert config_with_true_biases.should_add_linear_bias(10, TransformerSubLayerKeys.mlp_layer1) == True
-
-
-def test_should_add_linear_bias_for_bool_false(config_with_false_biases):
-    """Test case for add_linear_biases set to False (should always return False)."""
-    assert config_with_false_biases.should_add_linear_bias(10, TransformerSubLayerKeys.mlp_layer1) == False
-
+def test_add_attn_dense_bias():
+    assert TransformerArchitectureConfig(add_linear_biases=True).add_attn_dense_bias is True
+    assert TransformerArchitectureConfig(add_linear_biases=False).add_attn_dense_bias is False
+    assert TransformerArchitectureConfig(add_linear_biases=AddLinearBiasChoices.everywhere).add_attn_dense_bias is True
+    assert TransformerArchitectureConfig(add_linear_biases=AddLinearBiasChoices.nowhere).add_attn_dense_bias is False
+    assert TransformerArchitectureConfig(add_linear_biases=AddLinearBiasChoices.only_attn_qkv).add_attn_dense_bias is False
