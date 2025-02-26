@@ -5,10 +5,12 @@ import tempfile
 import numpy as np
 import pytest
 
+from fast_llm.data.dataset.gpt.config import GPTIndexedDatasetConfig
 from fast_llm.data.dataset.gpt.memmap import GPTMemmapDataset
 from fast_llm.data.dataset.gpt.sampled import GPTSample
 from fast_llm.data.preparator.gpt_memmap.config import MEMMAP_DTYPES, GPTMemmapDatasetPreparatorConfig
 from fast_llm.data.preparator.gpt_memmap.prepare import GPTMemmapDatasetPreparator
+from fast_llm.utils import Assert
 
 
 def get_preparator(output_path: str, dataset_path_name: str) -> GPTMemmapDatasetPreparator:
@@ -71,3 +73,96 @@ def test_absent_metadata_local():
     ):
         get_preparator(local_folder, dataset_folder)._save_croissant_metadata()
         assert not (pathlib.Path(local_folder) / "croissant.json").is_file()
+
+
+DATASET_DICT_0 = {
+    "type": "mock_memmap",
+    "num_documents": 500,
+    "num_tokens_per_document": 300,
+}
+DATASET_DICT_1 = {
+    "type": "mock_memmap",
+    "num_documents": 1500,
+    "num_tokens_per_document": 100,
+}
+
+
+def test_split_dataset():
+    dataset_config_0 = GPTIndexedDatasetConfig.from_dict(DATASET_DICT_0.copy())
+    config = GPTMemmapDatasetPreparator._split_and_blend_dataset_configs(
+        [dataset_config_0],
+        {"training": 3, "validation": 1},
+    )
+    config = {key: value.to_serialized() for key, value in config.items()}
+
+    Assert.eq(
+        config,
+        {
+            "training": {
+                "type": "slice",
+                "dataset": dataset_config_0.to_serialized(),
+                "begin": 0,
+                "end": 0.75,
+            },
+            "validation": {
+                "type": "slice",
+                "dataset": dataset_config_0.to_serialized(),
+                "begin": 0.75,
+                "end": 1,
+            },
+        },
+    )
+
+
+def test_split_datasets_0():
+    dataset_config_0 = GPTIndexedDatasetConfig.from_dict(DATASET_DICT_0.copy())
+    dataset_config_1 = GPTIndexedDatasetConfig.from_dict(DATASET_DICT_1.copy())
+    config = GPTMemmapDatasetPreparator._split_and_blend_dataset_configs(
+        [dataset_config_0, dataset_config_1],
+        {"training": 1, "validation": 1},
+    )
+    config = {key: value.to_serialized() for key, value in config.items()}
+
+    Assert.eq(
+        config,
+        {
+            "training": dataset_config_0.to_serialized(),
+            "validation": dataset_config_1.to_serialized(),
+        },
+    )
+
+
+def test_split_datasets_1():
+    dataset_config_0 = GPTIndexedDatasetConfig.from_dict(DATASET_DICT_0.copy())
+    dataset_config_1 = GPTIndexedDatasetConfig.from_dict(DATASET_DICT_1.copy())
+    config = GPTMemmapDatasetPreparator._split_and_blend_dataset_configs(
+        [dataset_config_0, dataset_config_1],
+        {"training": 3, "validation": 1},
+    )
+    config = {key: value.to_serialized() for key, value in config.items()}
+
+    Assert.eq(
+        config,
+        {
+            "training": {
+                "type": "blended",
+                "name": "blended",
+                "datasets": [
+                    dataset_config_0.to_serialized(),
+                    {
+                        "type": "slice",
+                        "dataset": dataset_config_1.to_serialized(),
+                        "begin": 0,
+                        "end": 0.5,
+                    },
+                ],
+                "weights": [2 / 3, 1 / 3],
+            },
+            "validation": {
+                "type": "slice",
+                "dataset": dataset_config_1.to_serialized(),
+                "begin": 0.5,
+                "end": 1,
+            },
+        },
+    )

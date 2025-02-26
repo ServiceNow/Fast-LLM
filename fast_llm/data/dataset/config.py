@@ -216,9 +216,6 @@ class BlendedDatasetConfig(SampledDatasetConfig):
         from fast_llm.data.dataset.blended import BlendedDataset
 
         # Build and sample the datasets.
-        # TODO: Vary the seed?
-        # Add 5 times the standard deviation (of a binomial distribution)
-        # so the probability of sampling more than this amount during blending is negligible.
 
         sampled_datasets = [
             dataset.build_and_sample(
@@ -230,6 +227,7 @@ class BlendedDatasetConfig(SampledDatasetConfig):
                         if self.legacy
                         else math.ceil(weight * sampling.num_samples) + 1
                     ),
+                    # TODO: Seed may not be unique for nested blended datasets.
                     config=sampling.config.to_copy({"seed": sampling.config.seed + i * (0 if self.legacy else 697)}),
                 ),
             )

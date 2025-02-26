@@ -238,14 +238,15 @@ def log[
         return logged
 
 
-def normalize_probabilities(p: "npt.ArrayLike") -> list[float]:
+def normalize_probabilities(p: "npt.ArrayLike", return_array: bool = False) -> "list[float] | np.ndarray":
     import numpy as np
 
     p = np.array(p)
     Assert.custom(lambda x: np.all(x >= 0), p)
     p_sum = p.sum()
     Assert.gt(p_sum, 0)
-    return (p / p_sum).tolist()
+    out = p / p_sum
+    return out if return_array else out.tolist()
 
 
 def set_nested_dict_value[

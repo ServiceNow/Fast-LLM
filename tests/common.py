@@ -9,6 +9,7 @@ import sys
 import numpy as np
 import pytest
 import torch
+import yaml
 
 from fast_llm.data.dataset.gpt.memmap import GPTMemmapDataset
 from fast_llm.data.dataset.gpt.sampled import GPTSample
@@ -37,7 +38,7 @@ ARTIFACT_PATH = "runs/0/artifacts"
 TOKENIZER_PATH = TEST_RESULTS_PATH / "tokenizer" / "common"
 TOKENIZER_FILE = TOKENIZER_PATH / "tokenizer.json"
 DATASET_CACHE = TEST_RESULTS_PATH / "dataset"
-DATASET_PREFIX = DATASET_CACHE / "common"
+DATASET_PREFIX = DATASET_CACHE / "common" / "dataset"
 DATASET_SAMPLING_CACHE = TEST_RESULTS_PATH / "dataset" / "cache"
 
 TEST_VOCAB_SIZE = 8192
@@ -252,7 +253,11 @@ def get_test_dataset(
 
         transformers.AutoTokenizer.from_pretrained("bigcode/santacoder").save_pretrained(TOKENIZER_PATH)
 
-    if not (prefix.with_suffix(".idx").is_file() and prefix.with_suffix(".bin").is_file()):
+    if not (
+        prefix.with_suffix(".idx").is_file()
+        and prefix.with_suffix(".bin").is_file()
+        and prefix.parent.joinpath("fast_llm_config.yaml").is_file()
+    ):
         import transformers
 
         texts = "".join(random.Random(seed).choices(characters, k=num_tokens)).splitlines()
@@ -269,6 +274,9 @@ def get_test_dataset(
                 sample.loss_masking_spans = span[: len(span) // 2 * 2].reshape(-1, 2)
 
         GPTMemmapDataset.write_dataset(prefix, samples)
+        yaml.safe_dump(
+            {"type": "memmap", "path": prefix.name}, prefix.parent.joinpath("fast_llm_config.yaml").open("w")
+        )
 
 
 def get_test_concatenated_memmap_dataset(

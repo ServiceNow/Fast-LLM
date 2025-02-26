@@ -12,13 +12,21 @@ import requests
 import torch.distributed
 import tqdm
 import transformers
+import yaml
 
+from fast_llm.data.dataset.gpt.config import (
+    GPTBlendedDatasetConfig,
+    GPTDatasetSliceConfig,
+    GPTIndexedDatasetConfig,
+    GPTMemmapDatasetConfig,
+)
 from fast_llm.data.dataset.gpt.memmap import GPTMemmapDataset
 from fast_llm.data.dataset.gpt.sampled import GPTSample
 from fast_llm.data.preparator.config import DatasetPreparator
 from fast_llm.data.preparator.gpt_memmap.config import GPTMemmapDatasetPreparatorConfig
 from fast_llm.data.tokenizer import Tokenizer
-from fast_llm.engine.config_utils.data_type import DataType
+from fast_llm.engine.config_utils.data_type import DataType, get_unsigned_integer_type
+from fast_llm.utils import Assert, normalize_probabilities, padded_cumsum
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +73,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
             "num_tokens": num_tokens,
         }
 
-    def _save_shard(self, args: tuple[int, datasets.Dataset]) -> dict[str, typing.Any]:
+    def _save_shard(self, args: tuple[int, datasets.Dataset]) -> GPTMemmapDatasetConfig:
         shard_idx, shard_dataset = args
         prefix = f"shard_{self._config.distributed.rank}_{shard_idx}"
         shard_output_path = self._config.output_path / prefix
@@ -83,12 +91,14 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
 
         GPTMemmapDataset.write_dataset(prefix=shard_output_path, documents=_document_generator())
 
-        dataset_dict = {
-            "prefix": prefix,
-            "num_documents": len(shard_dataset),  # Use the length of the shard dataset directly
-            "num_tokens": sum(len(doc["input_ids"]) for doc in shard_dataset),
-        }
-        return dataset_dict
+        return GPTMemmapDatasetConfig.from_dict(
+            {
+                "type": "memmap",
+                "path": prefix,
+                "num_documents": len(shard_dataset),  # Use the length of the shard dataset directly
+                "num_tokens": sum(len(doc["input_ids"]) for doc in shard_dataset),
+            }
+        )
 
     def _load_dataset(self) -> datasets.Dataset:
         dataset = datasets.load_dataset(
@@ -158,20 +168,12 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
         # Load tokenizer
         self._tokenizer = Tokenizer(config=self._config.tokenizer)
 
-        # Set data type if not provided
-        if self._config.dataset.data_type is None:
-            # Decide the datatype based on the tokenizer vocabulary size
-            vocab_size = self._tokenizer.vocab_size
-            if vocab_size <= np.iinfo(np.int16).max:
-                self._data_type = DataType.int16
-            # elif vocab_size <= np.iinfo(np.uint16).max:
-            #     self._data_type = DataType.uint16  # Not supported by Fast-LLM's DataType
-            elif vocab_size <= np.iinfo(np.int32).max:
-                self._data_type = DataType.int32
-            else:
-                raise ValueError(f"Tokenizer vocabulary size {vocab_size} is too large. This is likely an error.")
-        else:
-            self._data_type = self._config.dataset.data_type
+        # Decide the datatype based on the tokenizer vocabulary size
+        self._data_type = (
+            get_unsigned_integer_type(self._tokenizer.vocab_size)
+            if self._config.dataset.data_type is None
+            else self._config.dataset.data_type
+        )
 
         # Initialize distributed processing
         if self._config.distributed.world_size > 1:
@@ -238,32 +240,130 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
 
         # Use multiprocessing to save each shard in parallel on all ranks
         with multiprocessing.Pool(processes=self._config.saving_workers) as pool:
-            dataset_dicts = pool.map(self._save_shard, shards)
+            dataset_configs = pool.map(self._save_shard, shards)
 
         # Gather dataset_dicts from all ranks to rank 0
         if self._config.distributed.world_size > 1:
             if self._config.distributed.rank == 0:
-                all_dataset_dicts = [None] * self._config.distributed.world_size
-                torch.distributed.gather_object(dataset_dicts, all_dataset_dicts, dst=0)
-                dataset_dicts = [item for sublist in all_dataset_dicts for item in sublist]
+                all_dataset_configs = [None] * self._config.distributed.world_size
+                torch.distributed.gather_object(dataset_configs, all_dataset_configs, dst=0)
+                dataset_configs = [item for sublist in all_dataset_configs for item in sublist]
             else:
-                torch.distributed.gather_object(dataset_dicts, [], dst=0)
+                torch.distributed.gather_object(dataset_configs, [], dst=0)
 
-        # Create a metadata file on rank 0
         if self._config.distributed.rank == 0:
-            total_tokens = sum(dataset_dict["num_tokens"] for dataset_dict in dataset_dicts)
-            for dataset_dict in dataset_dicts:
-                dataset_dict["weight"] = float(dataset_dict["num_tokens"]) / float(total_tokens)
-            output_file = self._config.output_path / "fast_llm_dataset.json"
-            json.dump({"datasets": dataset_dicts}, output_file.open("w"))
+            # Create the config file(s) on rank 0
+            if self._config.splits:
+                for split_name, split_config in self._split_and_blend_dataset_configs(
+                    dataset_configs, self._config.splits
+                ).items():
+                    self._save_dataset_config(
+                        split_config, self._config.output_path / f"fast_llm_config_{split_name}.yaml"
+                    )
+            else:
+                self._save_dataset_config(
+                    self._blend_dataset_configs(dataset_configs), self._config.output_path / f"fast_llm_config.yaml"
+                )
 
+            # Save metadata on rank 0
             self._save_croissant_metadata()
-
-            # Create an index file on rank 0
-            index_file = self._config.output_path / "index.txt"
-            index_file.open("w").writelines([dataset_dict["prefix"] + "\n" for dataset_dict in dataset_dicts])
 
         # Finalize distributed processing
         if self._config.distributed.world_size > 1:
             torch.distributed.barrier()
             torch.distributed.destroy_process_group()
+
+    @classmethod
+    def _save_dataset_config(cls, dataset_config: GPTIndexedDatasetConfig, output_path: pathlib.Path) -> None:
+        logger.info(f"Saving config to {output_path}")
+        yaml.safe_dump(
+            dataset_config.to_serialized(),
+            output_path.open("w"),
+        )
+
+    @classmethod
+    def _blend_dataset_configs(cls, dataset_configs: list[GPTMemmapDatasetConfig]) -> GPTIndexedDatasetConfig:
+        if len(dataset_configs) == 1:
+            return dataset_configs[0]
+        return GPTIndexedDatasetConfig.from_dict(
+            {
+                "type": "blended",
+                "datasets": dataset_configs,
+                "weights": [dataset_config.num_tokens for dataset_config in dataset_configs],
+            }
+        )
+
+    @classmethod
+    def _split_and_blend_dataset_configs(
+        cls, dataset_configs: list[GPTMemmapDatasetConfig], splits: dict[str, int | float]
+    ) -> dict[str, GPTIndexedDatasetConfig]:
+        split_cumsum = padded_cumsum(normalize_probabilities(list(splits.values()), return_array=True)).tolist()
+        dataset_sizes = [dataset_config.num_tokens for dataset_config in dataset_configs]
+        dataset_probabilities = normalize_probabilities(dataset_sizes)
+        dataset_cumsums = padded_cumsum(dataset_probabilities).tolist()
+        dataset_splits = {}
+
+        for split_index, split_name in enumerate(splits):
+            datasets_in_split = []
+            dataset_tokens_in_split = []
+            for dataset_index, dataset_config in enumerate(dataset_configs):
+                split_begin_in_dataset = max(
+                    (split_cumsum[split_index] - dataset_cumsums[dataset_index])
+                    / dataset_probabilities[dataset_index],
+                    0,
+                )
+                split_end_in_dataset = min(
+                    (split_cumsum[split_index + 1] - dataset_cumsums[dataset_index])
+                    / dataset_probabilities[dataset_index],
+                    1,
+                )
+                if split_begin_in_dataset == 0 and split_end_in_dataset == 1:
+                    # All the dataset belongs to the split.
+                    datasets_in_split.append(dataset_configs[dataset_index])
+                    dataset_tokens_in_split.append(dataset_sizes[dataset_index])
+                elif split_end_in_dataset > split_begin_in_dataset:
+                    # Part of the dataset belongs to the split.
+                    sizes_cumsum = dataset_config.build().get_document_sizes().cumsum()
+                    Assert.eq(sizes_cumsum[-1], dataset_config.num_tokens)
+                    begin_index = _get_nearest_split(sizes_cumsum, split_begin_in_dataset * dataset_config.num_tokens)
+                    end_index = _get_nearest_split(sizes_cumsum, split_end_in_dataset * dataset_config.num_tokens)
+                    if end_index > begin_index:
+                        datasets_in_split.append(
+                            GPTDatasetSliceConfig.from_dict(
+                                {
+                                    "type": "slice",
+                                    "dataset": dataset_configs[dataset_index],
+                                    "begin": begin_index / dataset_config.num_documents,
+                                    "end": end_index / dataset_config.num_documents,
+                                }
+                            )
+                        )
+                        dataset_tokens_in_split.append(
+                            sizes_cumsum[end_index - 1].item()
+                            - (sizes_cumsum[begin_index - 1].item() if begin_index > 0 else 0)
+                        )
+
+                # [else] None of the dataset belongs to the split.
+
+            if len(datasets_in_split) == 0:
+                # This is a big problem, but we don't want to crash the whole run.
+                logger.error(f"Datasets split {split_name} is empty!")
+            elif len(datasets_in_split) == 1:
+                dataset_splits[split_name] = datasets_in_split[0]
+            else:
+                dataset_splits[split_name] = GPTBlendedDatasetConfig.from_dict(
+                    {
+                        "type": "blended",
+                        "datasets": datasets_in_split,
+                        "weights": dataset_tokens_in_split,
+                    }
+                )
+
+        return dataset_splits
+
+
+def _get_nearest_split(cumsum: np.ndarray, value: float) -> int:
+    left = cumsum.searchsorted(value, side="right")
+    if left == len(cumsum):
+        return left.item()
+    return left + 1 if (value - cumsum[left]) / (cumsum[left + 1] - cumsum[left]) > 0.5 else left
