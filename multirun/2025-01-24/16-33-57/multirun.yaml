@@ -1,0 +1,446 @@
+hydra:
+  run:
+    dir: outputs/${now:%Y-%m-%d}/${now:%H-%M-%S}
+  sweep:
+    dir: multirun/${now:%Y-%m-%d}/${now:%H-%M-%S}
+    subdir: ${hydra.job.num}
+  launcher:
+    __running_remotely__: false
+    dry_run: false
+    _target_: hydra_plugins.fml_launcher.toolkit.ToolkitLauncher
+  sweeper:
+    _target_: hydra._internal.core_plugins.basic_sweeper.BasicSweeper
+    max_batch_size: null
+    params: null
+  help:
+    app_name: ${hydra.job.name}
+    header: '${hydra.help.app_name} is powered by Hydra.
+
+      '
+    footer: 'Powered by Hydra (https://hydra.cc)
+
+      Use --hydra-help to view Hydra specific help
+
+      '
+    template: '${hydra.help.header}
+
+      == Configuration groups ==
+
+      Compose your configuration from those groups (group=option)
+
+
+      $APP_CONFIG_GROUPS
+
+
+      == Config ==
+
+      Override anything in the config (foo.bar=value)
+
+
+      $CONFIG
+
+
+      ${hydra.help.footer}
+
+      '
+  hydra_help:
+    template: 'Hydra (${hydra.runtime.version})
+
+      See https://hydra.cc for more info.
+
+
+      == Flags ==
+
+      $FLAGS_HELP
+
+
+      == Configuration groups ==
+
+      Compose your configuration from those groups (For example, append hydra/job_logging=disabled
+      to command line)
+
+
+      $HYDRA_CONFIG_GROUPS
+
+
+      Use ''--cfg hydra'' to Show the Hydra config.
+
+      '
+    hydra_help: ???
+  hydra_logging:
+    version: 1
+    formatters:
+      simple:
+        format: '[%(asctime)s][HYDRA] %(message)s'
+    handlers:
+      console:
+        class: logging.StreamHandler
+        formatter: simple
+        stream: ext://sys.stdout
+    root:
+      level: INFO
+      handlers:
+      - console
+    loggers:
+      logging_example:
+        level: DEBUG
+    disable_existing_loggers: false
+  job_logging:
+    version: 1
+    formatters:
+      simple:
+        format: '[%(asctime)s][%(name)s][%(levelname)s] - %(message)s'
+    handlers:
+      console:
+        class: logging.StreamHandler
+        formatter: simple
+        stream: ext://sys.stdout
+      file:
+        class: logging.FileHandler
+        formatter: simple
+        filename: ${hydra.runtime.output_dir}/${hydra.job.name}.log
+    root:
+      level: INFO
+      handlers:
+      - console
+      - file
+    disable_existing_loggers: false
+  env: {}
+  mode: MULTIRUN
+  searchpath: []
+  callbacks: {}
+  output_subdir: .hydra
+  overrides:
+    hydra:
+    - hydra/launcher=toolkit
+    - hydra.verbose=fml
+    - hydra.mode=MULTIRUN
+    task:
+    - +interactive=fast_llm_git
+    - cmd.duration=40000
+    - job.account=snow.nlx_llm_demo
+    - job.base_image.build.checkout_target=main
+  job:
+    name: __main__
+    chdir: null
+    override_dirname: +interactive=fast_llm_git,cmd.duration=40000,job.account=snow.nlx_llm_demo,job.base_image.build.checkout_target=main
+    id: ???
+    num: ???
+    config_name: base_config
+    env_set: {}
+    env_copy: []
+    config:
+      override_dirname:
+        kv_sep: '='
+        item_sep: ','
+        exclude_keys: []
+  runtime:
+    version: 1.3.2
+    version_base: '1.3'
+    cwd: /Users/mahdi.sheikholeslami/repos/Fast-LLM
+    config_sources:
+    - path: hydra.conf
+      schema: pkg
+      provider: hydra
+    - path: /Users/mahdi.sheikholeslami/repos/fml-ops/fml/conf
+      schema: file
+      provider: main
+    - path: ''
+      schema: structured
+      provider: schema
+    output_dir: ???
+    choices:
+      interactive: fast_llm_git
+      job/base_image/build: git
+      job: interactive
+      job/lambdalabs: pytorch_gpu_single_node
+      job/base_image: custom_built
+      cmd: launch_interactive
+      fast_llm: gpt
+      fast_llm/run: base
+      fast_llm/pretrained: base
+      fast_llm/model: gpt
+      fast_llm/model/distributed: base
+      fast_llm/model/multi_stage: base
+      fast_llm/model/base_model: gpt
+      fast_llm/model/base_model/transformer: base
+      fast_llm/model/base_model/transformer/normalization: base
+      fast_llm/optimizer: base
+      fast_llm/optimizer/learning_rate: base
+      fast_llm/profiling: base
+      fast_llm/data: base
+      fast_llm/data/fim: base
+      fast_llm/data/tokenizer: base
+      fast_llm/schedule: base
+      fast_llm/batch: base
+      fast_llm/training: base
+      hydra/env: default
+      hydra/callbacks: null
+      hydra/job_logging: default
+      hydra/hydra_logging: default
+      hydra/hydra_help: default
+      hydra/help: default
+      hydra/sweeper: basic
+      hydra/launcher: toolkit
+      hydra/output: default
+  verbose: fml
+fast_llm:
+  training:
+    train_iters: ???
+    num_workers: 8
+    logs:
+      interval: 100
+    wandb:
+      entity_name: tscholak
+  batch: {}
+  schedule: {}
+  data:
+    tokenizer: {}
+    fim: {}
+    format: file
+    path: ???
+  profiling: {}
+  optimizer:
+    learning_rate: {}
+  model:
+    base_model:
+      transformer:
+        normalization: {}
+    multi_stage: {}
+    distributed:
+      training_dtype: bf16
+      distributed_timeout: 3600
+      seed: 984059
+  pretrained: {}
+  run: {}
+cmd:
+  kind: launch_interactive
+  command:
+  - sleep
+  - ${cmd.duration}
+  duration: 40000
+data_ids:
+  datasets: 084c8fcf-c8e2-419a-955c-397f4dca756f
+  checkpoints: f855b1f6-91f2-460b-8194-dd4d032f5274
+  workspace: f855b1f6-91f2-460b-8194-dd4d032f5274
+  keys: 32d7ef70-0c3c-461a-88d3-15fffec989d3
+  transformers_cache: 84ce3c6f-898a-40c7-937a-c1ac9ff710f9
+  shared: ???
+  evaluations: 1cf9f513-f5bc-4b64-ac6e-5c91614a0654
+  home: ???
+extra:
+  token_url:
+    docker.io: https://auth.${job.base_image.registry}/token?service=registry.docker.io&scope=repository:${job.base_image.repository}:pull
+    ghcr.io: https://${job.base_image.registry}/token?scope=repository:${job.base_image.repository}:pull
+    registry.toolkit-sp.yul201.service-now.com: https://${job.base_image.registry}/token?scope=repository:${job.base_image.repository}:pull
+    registry.console.elementai.com: https://${job.base_image.registry}/token?scope=repository:${job.base_image.repository}:pull
+  manifest_url:
+    docker.io: https://registry-1.${job.base_image.registry}/v2/${job.base_image.repository}/manifests/${job.base_image.version_tag}
+    ghcr.io: https://${job.base_image.registry}/v2/${job.base_image.repository}/manifests/${job.base_image.version_tag}
+    registry.toolkit-sp.yul201.service-now.com: https://${job.base_image.registry}/v2/${job.base_image.repository}/manifests/${job.base_image.version_tag}
+    registry.console.elementai.com: https://${job.base_image.registry}/v2/${job.base_image.repository}/manifests/${job.base_image.version_tag}
+  toolkit_env:
+  - HOME=/home/fast_llm
+  - PYTHONHASHSEED=0
+  - WANDB_API_KEY_PATH=/mnt/keys/.wandb_api_key
+  - TORCH_NCCL_ASYNC_ERROR_HANDLING=1
+  - HF_HOME=/mnt/hf_home
+  kube_env:
+  - name: HOME
+    value: /home/fast_llm
+  - name: PYTHONHASHSEED
+    value: '0'
+  - name: WANDB_API_KEY_PATH
+    value: /mnt/keys/.wandb_api_key
+  - name: TORCH_NCCL_ASYNC_ERROR_HANDLING
+    value: '1'
+  - name: HF_HOME
+    value: /mnt/hf_home
+  toolkit_mounts:
+  - ${data_ids.datasets}:/mnt/datasets:ro
+  - ${data_ids.checkpoints}:/mnt/checkpoints:rw
+  - ${data_ids.workspace}:/mnt/workspace:rw
+  - ${data_ids.keys}:/mnt/keys:ro
+  - ${data_ids.transformers_cache}:/mnt/hf_home:rw
+  - ${data_ids.evaluations}:/mnt/evaluations:rw
+  kube_mounts:
+  - mountPath: /mnt/datasets
+    name: fml-ops-datasets
+  - mountPath: /mnt/checkpoints
+    name: fml-ops-checkpoints
+  - mountPath: /mnt/workspace
+    name: fml-ops-workspace
+  - mountPath: /mnt/keys
+    name: fml-ops-keys
+  - mountPath: /mnt/hf_home
+    name: fml-ops-hf-home
+  - mountPath: /dev/shm
+    name: dshm
+  kube_volumes:
+  - name: fml-ops-datasets
+    persistentVolumeClaim:
+      claimName: pvc-fml-ops-datasets
+  - name: fml-ops-checkpoints
+    persistentVolumeClaim:
+      claimName: pvc-fml-ops-checkpoints
+  - name: fml-ops-workspace
+    persistentVolumeClaim:
+      claimName: pvc-fml-ops-workspace
+  - name: fml-ops-keys
+    persistentVolumeClaim:
+      claimName: pvc-fml-ops-keys
+  - name: fml-ops-hf-home
+    persistentVolumeClaim:
+      claimName: pvc-fml-ops-hf-home
+  - name: dshm
+    emptyDir:
+      medium: Memory
+      sizeLimit: ${job.memory_per_node}Gi
+  pytorch_gpu_container:
+    name: pytorch
+    image: ${job.image.tag}
+    resources:
+      limits:
+        nvidia.com/gpu: ${job.gpus_per_node}
+        rdma/rdma_shared_device_a: 1
+        memory: ${job.memory_per_node}Gi
+        cpu: ${job.cpus_per_node}
+      requests:
+        nvidia.com/gpu: ${job.gpus_per_node}
+        rdma/rdma_shared_device_a: 1
+        memory: ${job.memory_per_node}Gi
+        cpu: ${job.cpus_per_node}
+    command: ${job.full_command}
+    env: ${extra.kube_env}
+    securityContext:
+      capabilities:
+        add:
+        - IPC_LOCK
+    volumeMounts: ${extra.kube_mounts}
+  pytorch_gpu_template:
+    spec:
+      tolerations:
+      - key: nvidia.com/gpu
+        value: 'true'
+        operator: Equal
+        effect: NoSchedule
+      containers:
+      - ${extra.pytorch_gpu_container}
+      volumes: ${extra.kube_volumes}
+      imagePullSecrets: ${job.lambdalabs.image_pull_secrets}
+job:
+  id: ${.id_base}/${.run_id}
+  id_base: ${job.base_image.name}_interactive
+  run_id: ???
+  project_name: ???
+  project_version: v1
+  experiment_name: ???
+  nodes: 1
+  cpus_per_node: 100
+  memory_per_node: 1800
+  gpus_per_node: 8
+  dry_run: false
+  sync_up:
+  - source_dir: .
+    target_dir: .
+    include: []
+    exclude: []
+    commit_sha: ???
+    branch: ???
+    origin: ???
+  - source_dir: plugins/fml_launcher
+    target_dir: plugins/fml_launcher
+    include: []
+    exclude: []
+    commit_sha: ???
+    branch: ???
+    origin: ???
+  local_command_base: null
+  command_base: null
+  full_command: ???
+  base_image:
+    kind: custom_built
+    registry: ???
+    repository: ${.account}/${.name}
+    version_tag: ???
+    tag: ${.registry}/${.repository}:${.version_tag}
+    manifest_url: ${extra.manifest_url[${job.base_image.registry}]}
+    token_url: ${extra.token_url[${job.base_image.registry}]}
+    manifest_token: ???
+    account: ???
+    name: fast_llm
+    build:
+      kind: git
+      dockerfile: Dockerfile
+      platform: linux/amd64
+      secret: .env
+      remote_url: git@github.com:ServiceNow/Fast-LLM.git
+      checkout_target: main
+  image:
+    registry: ???
+    account: ???
+    name: fml_ops
+    tag: ${.registry}/${.account}/${.name}:${format_for_docker_tag:${job.id}}
+    platform: linux/amd64
+    in_docker_app_dir: /hydra_toolkit_launcher_app
+    dockerfile: 'FROM ${job.base_image.tag}
+
+
+      RUN pip install  hydra-core requests
+
+
+      WORKDIR ${.in_docker_app_dir}
+
+
+      COPY . ${.in_docker_app_dir}
+
+
+      ENV HYDRA_DOCKER_ARGS=''hydra.sweep.dir="/mnt/workspace/tmp/multirun/${job.id}"''
+
+
+
+      RUN pip install -e ${job.sync_up[0].target_dir}
+
+      RUN pip install ${job.sync_up[1].target_dir}
+
+      '
+    secret: .env
+  account: snow.nlx_llm_demo
+  toolkit:
+    spec:
+      command: ${job.full_command}
+      name: ${format_for_toolkit:${job.id}}
+      data: ${extra.toolkit_mounts}
+      environmentVars: ${extra.toolkit_env}
+      image: ${job.image.tag}
+      resources:
+        cpu: ${job.cpus_per_node}
+        mem: ${job.memory_per_node}
+        gpu: ${job.gpus_per_node}
+      options:
+        infiniband: true
+      isProcessAgent: false
+      preemptable: true
+      maxRunTime: 0
+  lambdalabs:
+    spec:
+      apiVersion: kubeflow.org/v1
+      kind: PyTorchJob
+      metadata:
+        name: ${format_for_kubernetes:${job.experiment_name}-${job.run_id}}
+      spec:
+        nprocPerNode: ${force_string:${job.gpus_per_node}}
+        pytorchReplicaSpecs:
+          Master:
+            replicas: 1
+            restartPolicy: Never
+            template: ${extra.pytorch_gpu_template}
+    image_pull_secrets: ???
+  config_persistence:
+    commit_sha: ???
+    file: ${job.id}.yaml
+    repo_name: ServiceNow/fml-ops
+    file_url: https://api.github.com/repos/${.repo_name}/contents/${.file}?ref=${.commit_sha}
+    repo_url: git@github.com:${.repo_name}.git
+    branch: fml_launcher_configs
+    config_auth_token_file: /mnt/keys/.github_token

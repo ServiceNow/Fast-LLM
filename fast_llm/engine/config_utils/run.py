@@ -158,7 +158,6 @@ class Run:
                 (self._experiment_directory / "runs" / str(run)).mkdir()
                 yaml.safe_dump(config_dict, (self._experiment_directory / "config.yaml").open("w"))
                 # Dumping a verbose version of the config
-                # TODO: use a verbose config instead of current config_dict
                 yaml.safe_dump(config_dict_verbose, (self._experiment_directory / "config_verbose.yaml").open("w"))
             else:
                 run = 0
