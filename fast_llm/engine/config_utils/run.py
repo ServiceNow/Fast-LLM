@@ -148,6 +148,7 @@ class Run:
             self._distributed_config.data_rank == 0 and self._distributed_config.tensor_rank == 0
         )
         config_dict = config.to_serialized()
+        config_dict_verbose = config.to_serialized(verbose=FieldVerboseLevel.performance)
 
         if self._config.experiment_dir is not None:
             self._experiment_directory = self._config.experiment_dir.resolve()
@@ -156,6 +157,8 @@ class Run:
                 run = len(list((self._experiment_directory / "runs").iterdir()))
                 (self._experiment_directory / "runs" / str(run)).mkdir()
                 yaml.safe_dump(config_dict, (self._experiment_directory / "config.yaml").open("w"))
+                # Dumping a verbose version of the config
+                yaml.safe_dump(config_dict_verbose, (self._experiment_directory / "config_verbose.yaml").open("w"))
             else:
                 run = 0
             # Make sure all the workers agree on the run. This also acts as a barrier.
