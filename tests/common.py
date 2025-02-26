@@ -155,6 +155,14 @@ CONFIG_LLAMA3_FAST_LLM = CONFIG_LLAMA_FAST_LLM + [
 ]
 CONFIG_LLAMA3_COMMON = CONFIG_LLAMA3_FAST_LLM + ["model.distributed.training_dtype=bf16"]
 
+# Yarn-style Rotary Embeddings
+CONFIG_LLAMA_YARN_MEGATRON = None
+CONFIG_LLAMA_YARN_FAST_LLM = CONFIG_LLAMA_FAST_LLM + [
+    "model.base_model.transformer.rotary.type=yarn",
+]
+CONFIG_LLAMA_YARN_COMMON = CONFIG_LLAMA_YARN_FAST_LLM + ["model.distributed.training_dtype=bf16"]
+
+
 CONFIG_MIXTRAL_MEGATRON = CONFIG_LLAMA_MEGATRON + [
     "--num-experts=4",
     "--moe-router-topk=4",
@@ -164,6 +172,11 @@ CONFIG_MIXTRAL_FAST_LLM = CONFIG_LLAMA_FAST_LLM + [
     "model.base_model.transformer.num_experts_per_token=4",
 ]
 CONFIG_MIXTRAL_COMMON = CONFIG_MIXTRAL_FAST_LLM + ["model.distributed.training_dtype=bf16"]
+CONFIG_MIXTRAL_YARN_MEGATRON = None
+CONFIG_MIXTRAL_YARN_FAST_LLM = CONFIG_MIXTRAL_FAST_LLM + [
+    "model.base_model.transformer.rotary.type=yarn",
+]
+CONFIG_MIXTRAL_YARN_COMMON = CONFIG_MIXTRAL_YARN_FAST_LLM + ["model.distributed.training_dtype=bf16"]
 
 _CONFIGS = {
     "gpt2": ("gpt", CONFIG_GPT2_FAST_LLM, CONFIG_GPT2_MEGATRON, CONFIG_GPT2_COMMON, None),
@@ -189,6 +202,13 @@ _CONFIGS = {
         CONFIG_LLAMA3_COMMON,
         LlamaGPTHuggingfaceCheckpointFormat,
     ),
+    "llama-yarn": (
+        "gpt",
+        CONFIG_LLAMA_YARN_FAST_LLM,
+        CONFIG_LLAMA_YARN_MEGATRON,
+        CONFIG_LLAMA_YARN_COMMON,
+        LlamaGPTHuggingfaceCheckpointFormat,
+    ),
     "mistral": (
         "gpt",
         CONFIG_LLAMA_FAST_LLM,
@@ -201,6 +221,13 @@ _CONFIGS = {
         CONFIG_MIXTRAL_FAST_LLM,
         CONFIG_MIXTRAL_MEGATRON,
         CONFIG_MIXTRAL_COMMON,
+        MixtralGPTHuggingfaceCheckpointFormat,
+    ),
+    "mixtral-yarn": (
+        "gpt",
+        CONFIG_MIXTRAL_YARN_FAST_LLM,
+        CONFIG_MIXTRAL_YARN_MEGATRON,
+        CONFIG_MIXTRAL_YARN_COMMON,
         MixtralGPTHuggingfaceCheckpointFormat,
     ),
 }
