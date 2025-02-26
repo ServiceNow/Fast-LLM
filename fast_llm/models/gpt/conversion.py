@@ -408,7 +408,7 @@ class Qwen2SlidingWindowParamConverter(ParamConverter):
         Assert.eq(len(self.export_names), 2)
 
     def export_params(self, fast_llm_values: tuple[typing.Any, ...]) -> tuple[typing.Any, ...]:
-        window_size= fast_llm_values
+        window_size, = fast_llm_values
         if window_size is None:
             return (False, 4096) # default value in HF Qwen2 config
         return (True, window_size)
@@ -416,8 +416,8 @@ class Qwen2SlidingWindowParamConverter(ParamConverter):
     def import_params(self, export_values: tuple[typing.Any, ...]) -> tuple[typing.Any, ...]:
         use_sliding_window, sliding_window  = export_values
         if use_sliding_window:
-            return sliding_window
-        return None
+            return sliding_window,
+        return None,
 
 
 class Qwen2HuggingfaceCheckpointHandler(CommonHuggingfaceCheckpointHandler):
