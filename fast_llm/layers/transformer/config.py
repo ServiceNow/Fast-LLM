@@ -119,12 +119,12 @@ class RotaryArchitectureConfig(BaseModelArchitectureConfig):
         hint=FieldHint.feature,
     )
     beta_fast: float = Field(
-        default=32.,
+        default=32.0,
         desc="Beta-fast for yarn-type scaling.",
         hint=FieldHint.feature,
     )
     beta_slow: float = Field(
-        default=1.,
+        default=1.0,
         desc="Beta-slow for yarn-type scaling.",
         hint=FieldHint.feature,
     )
@@ -147,6 +147,12 @@ class RotaryArchitectureConfig(BaseModelArchitectureConfig):
 @config_class()
 class RotaryConfig(RotaryArchitectureConfig, BaseModelConfig):
     pass
+
+
+class AddLinearBiasChoices(str, enum.Enum):
+    nowhere = "nowhere"
+    everywhere = "everywhere"
+    only_attn_qkv = "only_attn_qkv"
 
 
 @config_class()
@@ -174,7 +180,11 @@ class TransformerArchitectureConfig(BaseModelArchitectureConfig):
         hint=FieldHint.core,
         valid=check_field(Assert.gt, 0),
     )
-    add_linear_biases: bool = Field(default=True, desc="Add biases to all dense layers.", hint=FieldHint.core)
+    add_linear_biases: bool | AddLinearBiasChoices = Field(
+        default=True,
+        desc="Add biases to all, none or Q, K, V layers. Accepted values: True, False, or AddLinearBiasChoices.",
+        hint=FieldHint.core,
+    )
     ffn_hidden_size: int = Field(
         default=None,
         desc="Hidden dimension of the MLP intermediate state. Default: 4 * hidden_size.",
@@ -243,13 +253,39 @@ class TransformerArchitectureConfig(BaseModelArchitectureConfig):
             self.activation_type = ActivationType.silu if self.gated else ActivationType.gelu
         self.projection_size = self.num_attention_heads * self.kv_channels
         self.num_unshared_experts = self.num_experts - self.num_shared_experts
+
         super()._validate()
+
         if not TritonConfig.TRITON_ENABLED:
             warnings.warn("Triton is disabled, but triton rotary kernel will be used anyway.")
 
         Assert.leq(self.num_shared_experts, self.num_experts)
         Assert.leq(self.num_shared_experts + self.num_experts_per_token, self.num_experts)
         Assert.multiple(self.num_attention_heads, self.head_groups)
+
+    @property
+    def add_mlp_bias(self) -> bool:
+        if isinstance(self.add_linear_biases, bool):
+            return self.add_linear_biases
+        if self.add_linear_biases == AddLinearBiasChoices.everywhere:
+            return True
+        return False
+
+    @property
+    def add_attn_qkv_bias(self) -> bool:
+        if isinstance(self.add_linear_biases, bool):
+            return self.add_linear_biases
+        if self.add_linear_biases == AddLinearBiasChoices.nowhere:
+            return False
+        return True
+
+    @property
+    def add_attn_dense_bias(self) -> bool:
+        if isinstance(self.add_linear_biases, bool):
+            return self.add_linear_biases
+        if self.add_linear_biases == AddLinearBiasChoices.everywhere:
+            return True
+        return False
 
     @classmethod
     def _from_dict(
@@ -577,8 +613,11 @@ class TransformerConfig(TransformerArchitectureConfig, BaseModelConfig):
                 Assert.geq(scale, 0)
 
     def do_use_flash_attention(self, distributed_config: DistributedConfig) -> bool:
-        use_flash_attention =  self.use_flash_attention and distributed_config.training_dtype in (DataType.float16, DataType.bfloat16)
-        
+        use_flash_attention = self.use_flash_attention and distributed_config.training_dtype in (
+            DataType.float16,
+            DataType.bfloat16,
+        )
+
         # Config parameter `window_size` only can be used with flash attention
         if not use_flash_attention:
             Assert.is_(self.window_size, None)
