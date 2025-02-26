@@ -221,6 +221,7 @@ _CONFIGS = {
         CONFIG_QWEN2_MEGATRON,
         CONFIG_QWEN2_COMMON,
         Qwen2GPTHuggingfaceCheckpointFormat,
+    ),
     "llama-yarn": (
         "gpt",
         CONFIG_LLAMA_YARN_FAST_LLM,
