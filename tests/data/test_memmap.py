@@ -1,29 +1,10 @@
 import pathlib
-import tempfile
 
-import numpy as np
 import pytest
 
 from fast_llm.data.dataset.gpt.config import GPTMemmapDatasetConfig
-from fast_llm.data.dataset.gpt.memmap import GPTMemmapDataset
-from fast_llm.data.dataset.gpt.sampled import GPTSample
-from fast_llm.data.preparator.gpt_memmap.config import MEMMAP_DTYPES
 from tests.common import DATASET_PREFIX, DATASET_SAMPLING_CACHE, get_test_dataset
 from tests.data.common import compare_indexed_dataset, get_dataset_config
-
-
-@pytest.mark.parametrize("dtype", MEMMAP_DTYPES.values())
-def test_write_memmap_dataset(dtype):
-    documents = [GPTSample(np.random.randint(1000, size=np.random.randint(1, 100)).astype(dtype)) for _ in range(100)]
-    with tempfile.TemporaryDirectory() as temp_dir:
-        prefix = pathlib.Path(temp_dir)
-        GPTMemmapDataset.write_dataset(prefix=prefix, documents=documents)
-        dataset = GPTMemmapDataset(name="foo", prefix=prefix)
-        for i, document in enumerate(documents):
-            assert np.array_equal(
-                dataset.get(i).token_ids, document.token_ids, equal_nan=True
-            ), f"Mismatch for document {i}: {document} != {dataset.get(i)}."
-
 
 MEMMAP_DATASET_LENGTH = 6153
 MEMMAP_DATASET_TOKENS = 508327

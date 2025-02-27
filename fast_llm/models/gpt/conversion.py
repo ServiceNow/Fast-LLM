@@ -283,6 +283,19 @@ class CommonLlamaHuggingfaceCheckpointHandler(CommonHuggingfaceCheckpointHandler
             ),
             ConstantImportParamConverter(fast_llm_names=(("transformer", "gated"),), fast_llm_value=True),
             ConstantImportParamConverter(fast_llm_names=(("transformer", "add_linear_biases"),), fast_llm_value=False),
+            RopeScalingParamConverter(
+                fast_llm_names=(
+                    ("transformer", "rotary", "type"),
+                    ("transformer", "rotary", "scale_factor"),
+                    ("transformer", "rotary", "low_frequency_factor"),
+                    ("transformer", "rotary", "high_frequency_factor"),
+                    ("transformer", "rotary", "original_context_length"),
+                    ("transformer", "rotary", "attention_factor"),
+                    ("transformer", "rotary", "beta_fast"),
+                    ("transformer", "rotary", "beta_slow"),
+                ),
+                export_names=(("rope_scaling",),),
+            ),
         ]
 
 
@@ -294,10 +307,13 @@ class RopeScalingParamConverter(ParamConverter):
         "low_freq_factor",
         "high_freq_factor",
         "original_max_position_embeddings",
+        "attention_factor",
+        "beta_fast",
+        "beta_slow",
     )
 
     def __post_init__(self):
-        Assert.eq(len(self.fast_llm_names), 5)
+        Assert.eq(len(self.fast_llm_names), 8)
         Assert.eq(len(self.export_names), 1)
 
     def export_params(self, fast_llm_values: tuple[typing.Any, ...]) -> tuple[typing.Any, ...]:
@@ -306,16 +322,19 @@ class RopeScalingParamConverter(ParamConverter):
             return (None,)
         elif rope_type == RotaryEmbeddingType.llama3:
             return ({key: value for key, value in zip(self._HUGGINGFACE_NAMES, ("llama3", *parameters), strict=True)},)
+        elif rope_type == RotaryEmbeddingType.yarn:
+            return ({key: value for key, value in zip(self._HUGGINGFACE_NAMES, ("yarn", *parameters), strict=True)},)
         else:
             raise ValueError(f"Unsupported rotary scaling type: {rope_type}")
 
     def import_params(self, export_values: tuple[typing.Any, ...]) -> tuple[typing.Any, ...]:
         (export_value,) = export_values
         if export_value is None or (rope_type := export_value[self._HUGGINGFACE_NAMES[0]]) == "default":
-            return (RotaryEmbeddingType.default,) + (DEFAULT,) * 4
+            return (RotaryEmbeddingType.default,) + (DEFAULT,) * 7
         elif rope_type == RotaryEmbeddingType.llama3:
-            # TODO: Is it safe to assume all values are provided?
-            return ("llama3", *[export_value[key] for key in self._HUGGINGFACE_NAMES[1:]])
+            return ("llama3", *[export_value.get(key, DEFAULT) for key in self._HUGGINGFACE_NAMES[1:]])
+        elif rope_type == RotaryEmbeddingType.yarn:
+            return ("yarn", *[export_value.get(key, DEFAULT) for key in self._HUGGINGFACE_NAMES[1:]])
         else:
             raise ValueError(f"Unsupported rotary scaling type: {rope_type}")
 
@@ -330,16 +349,6 @@ class LlamaHuggingfaceCheckpointHandler(CommonLlamaHuggingfaceCheckpointHandler)
             # TODO: Llama supports biases
             ConstantExportParamConverter(export_names=(("attention_bias",),), export_value=False),
             ConstantExportParamConverter(export_names=(("mlp_bias",),), export_value=False),
-            RopeScalingParamConverter(
-                fast_llm_names=(
-                    ("transformer", "rotary", "type"),
-                    ("transformer", "rotary", "scale_factor"),
-                    ("transformer", "rotary", "low_frequency_factor"),
-                    ("transformer", "rotary", "high_frequency_factor"),
-                    ("transformer", "rotary", "original_context_length"),
-                ),
-                export_names=(("rope_scaling",),),
-            ),
         ]
 
     def _get_mlp_converters(self, fast_llm_prefix: str, hf_prefix: str) -> list[WeightConverter]:
@@ -367,9 +376,6 @@ class MistralHuggingfaceCheckpointHandler(CommonLlamaHuggingfaceCheckpointHandle
     def _create_config_converters(cls) -> list[ParamConverter]:
         return super()._create_config_converters() + [
             ConstantExportParamConverter(export_names=(("architectures",),), export_value=["MistralForCausalLM"]),
-            ConstantImportParamConverter(
-                fast_llm_names=(("transformer", "rotary", "type"),), fast_llm_value=RotaryEmbeddingType.default
-            ),
             IgnoreImportParamConverter(export_names=(("sliding_window",),), ignore_export_value=None),
         ]
 
@@ -394,9 +400,6 @@ class MixtralHuggingfaceCheckpointHandler(CommonLlamaHuggingfaceCheckpointHandle
     def _create_config_converters(cls) -> list[ParamConverter]:
         return super()._create_config_converters() + [
             ConstantExportParamConverter(export_names=(("architectures",),), export_value=["MixtralForCausalLM"]),
-            ConstantImportParamConverter(
-                fast_llm_names=(("transformer", "rotary", "type"),), fast_llm_value=RotaryEmbeddingType.default
-            ),
             ConstantImportParamConverter(
                 fast_llm_names=(("transformer", "expert_routing_type"),), fast_llm_value=RoutingType.topk
             ),
