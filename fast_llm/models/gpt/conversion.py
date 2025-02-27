@@ -1,10 +1,11 @@
 import abc
 import dataclasses
+import logging
 import typing
 
 import torch
 
-from fast_llm.config import DEFAULT
+from fast_llm.config import DEFAULT, MISSING
 from fast_llm.engine.checkpoint.config import CheckpointFormat
 from fast_llm.engine.checkpoint.external import (
     AutoStateDictCheckpointHandler,
@@ -39,6 +40,8 @@ from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
     pass
+
+logger = logging.getLogger(__name__)
 
 
 class QueryWeightConverter(WeightConverter):
@@ -402,22 +405,25 @@ class LlamaHuggingfaceCheckpointHandler(CommonLlamaHuggingfaceCheckpointHandler)
 
 
 @dataclasses.dataclass
-class Qwen2SlidingWindowParamConverter(ParamConverter):
+class IgnoreImportQwen2SlidingWindowParamsConverter(ParamConverter):
     def __post_init__(self):
-        Assert.eq(len(self.fast_llm_names), 1)
-        Assert.eq(len(self.export_names), 2)
+        Assert.eq(len(self.fast_llm_names), 0)
+        Assert.eq(len(self.export_names), 0)
+        self.export_names = (("use_sliding_window",), ("sliding_window",), ("max_window_layers",))
 
     def export_params(self, fast_llm_values: tuple[typing.Any, ...]) -> tuple[typing.Any, ...]:
-        window_size, = fast_llm_values
-        if window_size is None:
-            return (False, 4096) # default value in HF Qwen2 config
-        return (True, window_size)
+        return (MISSING, MISSING, MISSING)
 
     def import_params(self, export_values: tuple[typing.Any, ...]) -> tuple[typing.Any, ...]:
-        use_sliding_window, sliding_window  = export_values
-        if use_sliding_window:
-            return sliding_window,
-        return None,
+        # Default value for use_sliding_window in Qwen2 HF config is False
+        if export_values[0] != MISSING and export_values[0] == True:
+            logger.warning(
+                f"The configuration parameters `{self.export_names[0]}={export_values[0]}`,"
+                f" `{self.export_names[1]}={export_values[1]}`, `{self.export_names[2]}={export_values[2]}`"
+                f" are ignored during conversion."
+                f" If you intend to use them in Fast-LLM, make sure to set them explicitly in the model configuration."
+            )
+        return ()
 
 
 class Qwen2HuggingfaceCheckpointHandler(CommonHuggingfaceCheckpointHandler):
@@ -450,16 +456,7 @@ class Qwen2HuggingfaceCheckpointHandler(CommonHuggingfaceCheckpointHandler):
                 ),
                 export_names=(("rope_scaling",),),
             ),
-            Qwen2SlidingWindowParamConverter(fast_llm_names=(("transformer", "window_size"),), export_names=(("use_sliding_window"), ("sliding_window"))),
-            RenameParamConverter(
-                fast_llm_names=(
-                    (
-                        "transformer",
-                        "max_window_layers",
-                    ),
-                ),
-                export_names=(("max_window_layers",),),
-            ),
+            IgnoreImportQwen2SlidingWindowParamsConverter(),
         ]
 
     def _get_mlp_converters(self, fast_llm_prefix: str, hf_prefix: str) -> list[WeightConverter]:
@@ -478,6 +475,7 @@ class Qwen2HuggingfaceCheckpointHandler(CommonHuggingfaceCheckpointHandler):
                 MLPLayer2Converter,
             ),
         ]
+
 
 """
 x vocab_size=151936,
