@@ -24,7 +24,7 @@ from fast_llm.engine.multi_stage.config import FastLLMModelConfig
 from fast_llm.functional.config import ActivationType
 from fast_llm.functional.rotary import convert_rotary_complex_to_real, convert_rotary_real_to_complex
 from fast_llm.layers.common.config import NormalizationType
-from fast_llm.layers.transformer.config import RotaryEmbeddingType, RoutingType, AddLinearBiasChoices
+from fast_llm.layers.transformer.config import RotaryEmbeddingType, RoutingType, TransformerConfig
 from fast_llm.models.gpt.config import (
     GPTArchitectureConfig,
     GPTModelConfig,
@@ -160,29 +160,6 @@ class CommonHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
     def _get_mlp_converters(self, fast_llm_prefix: str, hf_prefix: str) -> list[WeightConverter]:
         pass
 
-    @staticmethod
-    def _add_mlp_bias(add_linear_biases: bool | AddLinearBiasChoices) -> bool:
-        if isinstance(add_linear_biases, bool):
-            return add_linear_biases
-        if add_linear_biases == AddLinearBiasChoices.everywhere:
-            return True
-        return False
-
-    @staticmethod
-    def _add_attn_qkv_bias(add_linear_biases: bool | AddLinearBiasChoices) -> bool:
-        if isinstance(add_linear_biases, bool):
-            return add_linear_biases
-        if add_linear_biases == AddLinearBiasChoices.nowhere:
-            return False
-        return True
-
-    @staticmethod
-    def _add_attn_dense_bias(add_linear_biases: bool | AddLinearBiasChoices) -> bool:
-        if isinstance(add_linear_biases, bool):
-            return add_linear_biases
-        if add_linear_biases == AddLinearBiasChoices.everywhere:
-            return True
-        return False
 
     def _create_weight_converters(
         self,
@@ -190,7 +167,7 @@ class CommonHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
         converters = []
         num_layers = self._model.config.base_model.transformer.num_layers
         norm_bias: bool = self._model.config.base_model.transformer.normalization.type == NormalizationType.layer_norm
-        linear_bias: bool | AddLinearBiasChoices = self._model.config.base_model.transformer.add_linear_biases
+        transformer_config: TransformerConfig = self._model.config.base_model.transformer
 
         # Embedding and output
         if self._model.config.base_model.tie_word_embeddings:
@@ -210,19 +187,19 @@ class CommonHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
             converters += self._get_weight_and_bias_converters(
                 f"layers.{i+1}.self_attn.query",
                 f"model.layers.{i}.self_attn.q_proj",
-                self._add_attn_qkv_bias(linear_bias),
+                transformer_config.add_attn_qkv_bias,
                 QueryWeightConverter,
             )
             converters += self._get_weight_and_bias_converters(
                 f"layers.{i+1}.self_attn.key_value",
                 (f"model.layers.{i}.self_attn.k_proj", f"model.layers.{i}.self_attn.v_proj"),
-                self._add_attn_qkv_bias(linear_bias),
+                transformer_config.add_attn_qkv_bias,
                 KeyValueWeightConverter,
             )
             converters += self._get_weight_and_bias_converters(
                 f"layers.{i+1}.self_attn.dense",
                 f"model.layers.{i}.self_attn.o_proj",
-                self._add_attn_dense_bias(linear_bias),
+                transformer_config.add_attn_dense_bias,
             )
 
             # Norm
@@ -288,15 +265,15 @@ class Starcoder2HuggingfaceCheckpointHandler(CommonHuggingfaceCheckpointHandler)
         ]
 
     def _get_mlp_converters(self, fast_llm_prefix: str, hf_prefix: str) -> list[WeightConverter]:
-        linear_bias: bool | AddLinearBiasChoices = self._model.config.base_model.transformer.add_linear_biases
+        transformer_config: TransformerConfig = self._model.config.base_model.transformer
         return [
             *self._get_weight_and_bias_converters(
-                f"{fast_llm_prefix}.mlp.layer_1", f"{hf_prefix}.mlp.c_fc", self._add_mlp_bias(linear_bias)
+                f"{fast_llm_prefix}.mlp.layer_1", f"{hf_prefix}.mlp.c_fc", transformer_config.add_mlp_bias
             ),
             *self._get_weight_and_bias_converters(
                 f"{fast_llm_prefix}.mlp.layer_2",
                 f"{hf_prefix}.mlp.c_proj",
-                self._add_mlp_bias(linear_bias),
+                transformer_config.add_mlp_bias,
                 MLPLayer2Converter,
             ),
         ]
@@ -387,18 +364,18 @@ class LlamaHuggingfaceCheckpointHandler(CommonLlamaHuggingfaceCheckpointHandler)
         ]
 
     def _get_mlp_converters(self, fast_llm_prefix: str, hf_prefix: str) -> list[WeightConverter]:
-        linear_bias: bool | AddLinearBiasChoices = self._model.config.base_model.transformer.add_linear_biases
+        transformer_config: TransformerConfig = self._model.config.base_model.transformer
         return [
             *self._get_weight_and_bias_converters(
                 f"{fast_llm_prefix}.mlp.layer_1",
                 (f"{hf_prefix}.mlp.gate_proj", f"{hf_prefix}.mlp.up_proj"),
-                self._add_mlp_bias(linear_bias),
+                transformer_config.add_mlp_bias,
                 SplitWeightConverter,
             ),
             *self._get_weight_and_bias_converters(
                 f"{fast_llm_prefix}.mlp.layer_2",
                 f"{hf_prefix}.mlp.down_proj",
-                self._add_mlp_bias(linear_bias),
+                transformer_config.add_mlp_bias,
                 MLPLayer2Converter,
             ),
         ]
@@ -460,43 +437,21 @@ class Qwen2HuggingfaceCheckpointHandler(CommonHuggingfaceCheckpointHandler):
         ]
 
     def _get_mlp_converters(self, fast_llm_prefix: str, hf_prefix: str) -> list[WeightConverter]:
-        linear_bias: bool | AddLinearBiasChoices = self._model.config.base_model.transformer.add_linear_biases
+        transformer_config: TransformerConfig = self._model.config.base_model.transformer
         return [
             *self._get_weight_and_bias_converters(
                 f"{fast_llm_prefix}.mlp.layer_1",
                 (f"{hf_prefix}.mlp.gate_proj", f"{hf_prefix}.mlp.up_proj"),
-                self._add_mlp_bias(linear_bias),
+                transformer_config.add_mlp_bias,
                 SplitWeightConverter,
             ),
             *self._get_weight_and_bias_converters(
                 f"{fast_llm_prefix}.mlp.layer_2",
                 f"{hf_prefix}.mlp.down_proj",
-                self._add_mlp_bias(linear_bias),
+                transformer_config.add_mlp_bias,
                 MLPLayer2Converter,
             ),
         ]
-
-
-"""
-x vocab_size=151936,
-x hidden_size=4096,
-x intermediate_size=22016,
-x num_hidden_layers=32,
-x num_attention_heads=32,
-x num_key_value_heads=32,
-x hidden_act="silu",
-max_position_embeddings=32768,
-initializer_range=0.02,
-x rms_norm_eps=1e-6,
-use_cache=True,
-x tie_word_embeddings=False,
-x rope_theta=10000.0,
-x rope_scaling=None,
-x use_sliding_window=False,
-x sliding_window=4096,
-x max_window_layers=28,
-attention_dropout=0.0,
-"""
 
 
 class MistralHuggingfaceCheckpointHandler(CommonLlamaHuggingfaceCheckpointHandler):
