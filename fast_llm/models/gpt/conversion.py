@@ -1,10 +1,11 @@
 import abc
 import dataclasses
+import logging
 import typing
 
 import torch
 
-from fast_llm.config import DEFAULT
+from fast_llm.config import DEFAULT, MISSING
 from fast_llm.engine.checkpoint.config import CheckpointFormat
 from fast_llm.engine.checkpoint.external import (
     AutoStateDictCheckpointHandler,
@@ -23,11 +24,12 @@ from fast_llm.engine.multi_stage.config import FastLLMModelConfig
 from fast_llm.functional.config import ActivationType
 from fast_llm.functional.rotary import convert_rotary_complex_to_real, convert_rotary_real_to_complex
 from fast_llm.layers.common.config import NormalizationType
-from fast_llm.layers.transformer.config import RotaryEmbeddingType, RoutingType
+from fast_llm.layers.transformer.config import RotaryEmbeddingType, RoutingType, TransformerConfig
 from fast_llm.models.gpt.config import (
     GPTArchitectureConfig,
     GPTModelConfig,
     LlamaGPTHuggingfaceCheckpointFormat,
+    Qwen2GPTHuggingfaceCheckpointFormat,
     MistralGPTHuggingfaceCheckpointFormat,
     MixtralGPTHuggingfaceCheckpointFormat,
     Starcoder2GPTHuggingfaceCheckpointFormat,
@@ -38,6 +40,8 @@ from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
     pass
+
+logger = logging.getLogger(__name__)
 
 
 class QueryWeightConverter(WeightConverter):
@@ -156,11 +160,14 @@ class CommonHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
     def _get_mlp_converters(self, fast_llm_prefix: str, hf_prefix: str) -> list[WeightConverter]:
         pass
 
-    def _create_weight_converters(self) -> list[WeightConverter]:
+
+    def _create_weight_converters(
+        self,
+    ) -> list[WeightConverter]:
         converters = []
         num_layers = self._model.config.base_model.transformer.num_layers
         norm_bias: bool = self._model.config.base_model.transformer.normalization.type == NormalizationType.layer_norm
-        linear_bias: bool = self._model.config.base_model.transformer.add_linear_biases
+        transformer_config: TransformerConfig = self._model.config.base_model.transformer
 
         # Embedding and output
         if self._model.config.base_model.tie_word_embeddings:
@@ -180,17 +187,19 @@ class CommonHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
             converters += self._get_weight_and_bias_converters(
                 f"layers.{i+1}.self_attn.query",
                 f"model.layers.{i}.self_attn.q_proj",
-                linear_bias,
+                transformer_config.add_attn_qkv_bias,
                 QueryWeightConverter,
             )
             converters += self._get_weight_and_bias_converters(
                 f"layers.{i+1}.self_attn.key_value",
                 (f"model.layers.{i}.self_attn.k_proj", f"model.layers.{i}.self_attn.v_proj"),
-                linear_bias,
+                transformer_config.add_attn_qkv_bias,
                 KeyValueWeightConverter,
             )
             converters += self._get_weight_and_bias_converters(
-                f"layers.{i+1}.self_attn.dense", f"model.layers.{i}.self_attn.o_proj", linear_bias
+                f"layers.{i+1}.self_attn.dense",
+                f"model.layers.{i}.self_attn.o_proj",
+                transformer_config.add_attn_dense_bias,
             )
 
             # Norm
@@ -256,13 +265,16 @@ class Starcoder2HuggingfaceCheckpointHandler(CommonHuggingfaceCheckpointHandler)
         ]
 
     def _get_mlp_converters(self, fast_llm_prefix: str, hf_prefix: str) -> list[WeightConverter]:
-        linear_bias: bool = self._model.config.base_model.transformer.add_linear_biases
+        transformer_config: TransformerConfig = self._model.config.base_model.transformer
         return [
             *self._get_weight_and_bias_converters(
-                f"{fast_llm_prefix}.mlp.layer_1", f"{hf_prefix}.mlp.c_fc", linear_bias
+                f"{fast_llm_prefix}.mlp.layer_1", f"{hf_prefix}.mlp.c_fc", transformer_config.add_mlp_bias
             ),
             *self._get_weight_and_bias_converters(
-                f"{fast_llm_prefix}.mlp.layer_2", f"{hf_prefix}.mlp.c_proj", linear_bias, MLPLayer2Converter
+                f"{fast_llm_prefix}.mlp.layer_2",
+                f"{hf_prefix}.mlp.c_proj",
+                transformer_config.add_mlp_bias,
+                MLPLayer2Converter,
             ),
         ]
 
@@ -352,18 +364,91 @@ class LlamaHuggingfaceCheckpointHandler(CommonLlamaHuggingfaceCheckpointHandler)
         ]
 
     def _get_mlp_converters(self, fast_llm_prefix: str, hf_prefix: str) -> list[WeightConverter]:
-        linear_bias: bool = self._model.config.base_model.transformer.add_linear_biases
+        transformer_config: TransformerConfig = self._model.config.base_model.transformer
         return [
             *self._get_weight_and_bias_converters(
                 f"{fast_llm_prefix}.mlp.layer_1",
                 (f"{hf_prefix}.mlp.gate_proj", f"{hf_prefix}.mlp.up_proj"),
-                linear_bias,
+                transformer_config.add_mlp_bias,
                 SplitWeightConverter,
             ),
             *self._get_weight_and_bias_converters(
                 f"{fast_llm_prefix}.mlp.layer_2",
                 f"{hf_prefix}.mlp.down_proj",
-                linear_bias,
+                transformer_config.add_mlp_bias,
+                MLPLayer2Converter,
+            ),
+        ]
+
+
+@dataclasses.dataclass
+class IgnoreImportQwen2SlidingWindowParamsConverter(ParamConverter):
+    def __post_init__(self):
+        Assert.eq(len(self.fast_llm_names), 0)
+        Assert.eq(len(self.export_names), 0)
+        self.export_names = (("use_sliding_window",), ("sliding_window",), ("max_window_layers",))
+
+    def export_params(self, fast_llm_values: tuple[typing.Any, ...]) -> tuple[typing.Any, ...]:
+        return (MISSING, MISSING, MISSING)
+
+    def import_params(self, export_values: tuple[typing.Any, ...]) -> tuple[typing.Any, ...]:
+        # Default value for use_sliding_window in Qwen2 HF config is False
+        if export_values[0] != MISSING and export_values[0] == True:
+            logger.warning(
+                f"The configuration parameters `{self.export_names[0]}={export_values[0]}`,"
+                f" `{self.export_names[1]}={export_values[1]}`, `{self.export_names[2]}={export_values[2]}`"
+                f" are ignored during conversion."
+                f" If you intend to use them in Fast-LLM, make sure to set them explicitly in the model configuration."
+            )
+        return ()
+
+
+class Qwen2HuggingfaceCheckpointHandler(CommonHuggingfaceCheckpointHandler):
+    format: typing.ClassVar[type[CheckpointFormat]] = Qwen2GPTHuggingfaceCheckpointFormat
+
+    @classmethod
+    def _create_config_converters(cls) -> list[ParamConverter]:
+        return super()._create_config_converters() + [
+            ConstantExportParamConverter(export_names=(("architectures",),), export_value=["Qwen2ForCausalLM"]),
+            ConstantImportParamConverter(
+                fast_llm_names=(("transformer", "normalization", "type"),), fast_llm_value=NormalizationType.rms_norm
+            ),
+            RenameParamConverter(
+                fast_llm_names=(("transformer", "normalization", "epsilon"),), export_names=(("rms_norm_eps",),)
+            ),
+            ConstantImportParamConverter(fast_llm_names=(("transformer", "gated"),), fast_llm_value=True),
+            ConstantImportParamConverter(
+                fast_llm_names=(("transformer", "add_linear_biases"),), fast_llm_value="only_attn_qkv"
+            ),
+            RopeScalingParamConverter(
+                fast_llm_names=(
+                    ("transformer", "rotary", "type"),
+                    ("transformer", "rotary", "scale_factor"),
+                    ("transformer", "rotary", "low_frequency_factor"),
+                    ("transformer", "rotary", "high_frequency_factor"),
+                    ("transformer", "rotary", "original_context_length"),
+                    ("transformer", "rotary", "attention_factor"),
+                    ("transformer", "rotary", "beta_fast"),
+                    ("transformer", "rotary", "beta_slow"),
+                ),
+                export_names=(("rope_scaling",),),
+            ),
+            IgnoreImportQwen2SlidingWindowParamsConverter(),
+        ]
+
+    def _get_mlp_converters(self, fast_llm_prefix: str, hf_prefix: str) -> list[WeightConverter]:
+        transformer_config: TransformerConfig = self._model.config.base_model.transformer
+        return [
+            *self._get_weight_and_bias_converters(
+                f"{fast_llm_prefix}.mlp.layer_1",
+                (f"{hf_prefix}.mlp.gate_proj", f"{hf_prefix}.mlp.up_proj"),
+                transformer_config.add_mlp_bias,
+                SplitWeightConverter,
+            ),
+            *self._get_weight_and_bias_converters(
+                f"{fast_llm_prefix}.mlp.layer_2",
+                f"{hf_prefix}.mlp.down_proj",
+                transformer_config.add_mlp_bias,
                 MLPLayer2Converter,
             ),
         ]
@@ -439,6 +524,7 @@ class AutoGPTHuggingfaceCheckpointHandler(
     handler_map = {
         Starcoder2GPTHuggingfaceCheckpointFormat.name: Starcoder2HuggingfaceCheckpointHandler,
         LlamaGPTHuggingfaceCheckpointFormat.name: LlamaHuggingfaceCheckpointHandler,
+        Qwen2GPTHuggingfaceCheckpointFormat.name: Qwen2HuggingfaceCheckpointHandler,
         MistralGPTHuggingfaceCheckpointFormat.name: MistralHuggingfaceCheckpointHandler,
         MixtralGPTHuggingfaceCheckpointFormat.name: MixtralHuggingfaceCheckpointHandler,
     }
