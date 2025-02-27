@@ -395,7 +395,7 @@ class LegacyGPTSampledIndexedDataset(SampledDataset):
         self._shuffle_idx = MemmapArray(
             None if base_path is None else base_path.with_name(base_path.name + "_shuffle_idx.npy")
         )
-        if self.config.prevent_doc_truncation:
+        if self._config.prevent_doc_truncation:
             if base_path is None or (
                 sampling.distributed.config.rank == sampling.get_next_rank() and not (self._doc_idx.exists())
             ):
@@ -481,7 +481,7 @@ class LegacyGPTSampledIndexedDataset(SampledDataset):
         with the requested sampling index.
         The returned sample is ready to be concatenated, then fed to a `GPTModel` (see `GPTModel.preprocess`).
         """
-        if self.config.prevent_doc_truncation:
+        if self._config.prevent_doc_truncation:
             doc_idx = self._doc_idx[idx]
             sample_list = [
                 self._indexed_dataset.get(
