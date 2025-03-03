@@ -70,7 +70,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             LanguageModelEmbedding(self._config, self._tensor_space),
             *[
                 TransformerLayer(
-                    self._config.transformer,
+                    self._config.layers.get_layer_config(i),
                     self._tensor_space,
                     layer_index=i + 1,
                 )

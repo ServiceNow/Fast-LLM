@@ -1,6 +1,6 @@
 import typing
 
-from fast_llm.config import Field, FieldHint, FieldUpdate, check_field, config_class, skip_valid_if_none
+from fast_llm.config import Config, Field, FieldHint, FieldUpdate, check_field, config_class, skip_valid_if_none
 from fast_llm.engine.base_model.config import BaseModelArchitectureConfig, BaseModelConfig
 from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
 from fast_llm.engine.distributed.config import DistributedDimNames
@@ -99,6 +99,61 @@ class LanguageModelArchitectureConfig(BaseModelArchitectureConfig):
 
 
 @config_class()
+class SliceConfig(Config):
+    begin: int = 0
+    end: int | None = None
+    step: int = 1
+
+    def in_range(self, index) -> bool:
+        return (
+            index >= self.begin and (self.end is None or index <= self.end) and ((index - self.begin) % self.step == 0)
+        )
+
+
+@config_class()
+class TransformerLayerConfig(Config):
+    layer_ranges: list[SliceConfig] = Field(
+        default_factory=SliceConfig,
+        desc="Layer range.",
+        hint=FieldHint.core,
+    )
+    updates: dict[str, typing.Any] = Field(
+        default_factory=dict,
+    )
+    config: TransformerConfig = Field(init=False)
+
+    def setup(self, default: TransformerConfig) -> None:
+        self.config = TransformerConfig.from_dict(default, self.updates)
+
+    def _validate(self) -> None:
+        assert hasattr(self, "config")
+        assert len(self.layer_ranges) > 0
+
+    def in_range(self, index) -> bool:
+        return any(layer_range.in_range(index) for layer_range in self.layer_ranges)
+
+
+@config_class()
+class TransformerLayersConfig(Config):
+    layers: list[TransformerLayerConfig] = Field(default_factory=list)
+    default: TransformerConfig = Field(init=False)
+
+    def setup(self, default: TransformerConfig) -> None:
+        self.default = default
+        for layer in self.layers:
+            layer.setup(default)
+
+    def _validate(self) -> None:
+        assert hasattr(self, "default")
+
+    def get_layer_config(self, index: int) -> TransformerConfig:
+        for layer in self.layers:
+            if layer.in_range(index):
+                return layer.config
+        return self.default
+
+
+@config_class()
 class LanguageModelBaseConfig(LanguageModelArchitectureConfig, BaseModelConfig):
     """
     A configuration class for defining the full model configuration of a transformer model.
@@ -112,6 +167,7 @@ class LanguageModelBaseConfig(LanguageModelArchitectureConfig, BaseModelConfig):
     architecture_class = LanguageModelArchitectureConfig
 
     transformer: TransformerConfig = FieldUpdate(default_factory=TransformerConfig)
+    layers: TransformerLayersConfig = Field(default_factory=TransformerLayersConfig)
     init_method_std_embed: float = Field(
         default=None,
         desc="Initialization scale for the vocabulary embedding and output weights (logits).",
@@ -175,6 +231,7 @@ class LanguageModelBaseConfig(LanguageModelArchitectureConfig, BaseModelConfig):
     )
 
     def _validate(self) -> None:
+        self.layers.setup(self.transformer)
         if self.transformer.init_method_std is None:
             self.transformer.init_method_std = self.transformer.hidden_size**-0.5
         if self.init_method_std_embed is None:
