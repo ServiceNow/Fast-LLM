@@ -10,7 +10,11 @@ from fast_llm.functional.autograd import wrap_forward_backward
 from fast_llm.functional.rotary import apply_rotary_embeddings
 from fast_llm.functional.triton.rotary import triton_rotary_autograd_
 from fast_llm.layers.common.linear import InputParallelLinear, OutputParallelLinear
-from fast_llm.layers.transformer.config import TransformerConfig, TransformerDimNames, TransformerKwargs
+from fast_llm.layers.transformer.config import (
+    TransformerConfig,
+    TransformerDimNames,
+    TransformerKwargs,
+)
 from fast_llm.logging import log_distributed_grad, log_distributed_tensor
 from fast_llm.tensor import TensorMeta, init_normal_, init_zeros_
 from fast_llm.utils import Assert
@@ -102,7 +106,7 @@ class Attention(torch.nn.Module):
         self.query = OutputParallelLinear(
             hidden_dim,
             self._tensor_space.get_tensor_dim(TransformerDimNames.composite_query),
-            bias=self._config.add_linear_biases,
+            bias=self._config.add_attn_qkv_bias,
             weight_init_method=init_method_qkv,
             bias_init_method=init_method_qkv if self._config.random_bias_init else init_zeros_,
             sequence_parallel=self._sequence_parallel,
@@ -111,7 +115,7 @@ class Attention(torch.nn.Module):
         self.key_value = OutputParallelLinear(
             hidden_dim,
             self._tensor_space.get_tensor_dim(TransformerDimNames.composite_key_value),
-            bias=self._config.add_linear_biases,
+            bias=self._config.add_attn_qkv_bias,
             weight_init_method=init_method_qkv,
             bias_init_method=init_method_qkv if self._config.random_bias_init else init_zeros_,
             sequence_parallel=self._sequence_parallel,
@@ -123,7 +127,7 @@ class Attention(torch.nn.Module):
         self.dense = InputParallelLinear(
             self._tensor_space.get_tensor_dim(TransformerDimNames.composite_dense),
             hidden_dim,
-            bias=self._config.add_linear_biases,
+            bias=self._config.add_attn_dense_bias,
             weight_init_method=init_method_std_attn_proj,
             bias_init_method=init_method_std_attn_proj if self._config.random_bias_init else init_zeros_,
             sequence_parallel=self._sequence_parallel,
@@ -274,6 +278,16 @@ class Attention(torch.nn.Module):
         input_grad.add_(self.key_value.backward(key_grad, context.pop("key_value")))
         return input_grad
 
+    def _decide_window_size(self) -> int | None:
+        # NOTE: This is a temporal solution for qwen 2.X
+        # https://github.com/huggingface/transformers/blob/5e2183f344911aa82aba0b83778a4f196cff378e/src/transformers/models/qwen2/modular_qwen2.py#L71
+        # TODO: make universal per layer config
+        window_size = self._config.window_size
+        if self._config.max_window_layers is not None and self._layer_index < self._config.max_window_layers:
+            window_size = None
+
+        return window_size
+
     def forward(self, input_: torch.Tensor, kwargs: dict[str, typing.Any]) -> tuple[torch.Tensor, torch.Tensor | None]:
         sequence_first = kwargs[TransformerKwargs.sequence_first]
         query, key_value = self._query_key_value(input_, sequence_first)
@@ -323,13 +337,15 @@ class Attention(torch.nn.Module):
             query = rotary_fn(query, kwargs[TransformerKwargs.rotary_freq_q])
             key = rotary_fn(key, kwargs[TransformerKwargs.rotary_freq_k])
 
+        window_size = self._decide_window_size()
+
         if self._use_flash_attention:
             input_ = flash_attn(
                 query,
                 key,
                 value,
                 dropout_p=self._config.attention_dropout if self.training else 0.0,
-                window_size=self._config.window_size,
+                window_size=window_size,
                 causal=True,
                 generator=self._tensor_space.distributed.tp_generator,
                 softmax_scale=self._softmax_scale,
