@@ -37,7 +37,7 @@ class LanguageModelArchitectureConfig(BaseModelArchitectureConfig):
     #    desc="Configuration for the transformer architecture.",
     #    hint=FieldHint.core,
     # )
-    layers: TransformerConfig = Field(default_factory=TransformerArchitectureConfig)
+    layers: TransformerArchitectureConfig = Field(default_factory=TransformerArchitectureConfig)
     max_position_embeddings: int = Field(
         default=2048,
         desc="Number of absolute position embeddings, if applicable.",

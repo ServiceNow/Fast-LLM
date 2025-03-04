@@ -53,7 +53,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
         if self._config.use_megatron_initialization:
             for param in self.parameters():
                 Assert.custom(isinstance, param, ParameterMeta)
-                param.init_parameter = get_init_megatron(param, self._config.transformer)  # Noqa
+                param.init_parameter = get_init_megatron(param, self._config.layers.default)  # Noqa
         if self._config.use_absolute_position_embeddings:
             self._position_embedding_preprocessor = PositionEmbeddingPreprocessor(self._config, self._tensor_space)
         if self._config.layers.default.rotary.enabled:
