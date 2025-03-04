@@ -6,8 +6,10 @@ import time
 import typing
 import warnings
 
+import yaml
+
 from fast_llm.config import Config, Field, FieldHint, FieldUpdate, check_field, config_class, skip_valid_if_none
-from fast_llm.data.dataset.abstract import SampledDataset
+from fast_llm.data.dataset.abstract import SamplableDataset, SampledDataset
 from fast_llm.data.dataset.config import (
     BlendedDatasetConfig,
     ConcatenatedDatasetConfig,
@@ -164,11 +166,21 @@ class GPTMemmapDatasetConfig(GPTIndexedDatasetConfig):
         desc="The path to the dataset, excluding the `.bin` or `.idx` suffix.",
         hint=FieldHint.core,
     )
+    num_documents: int | None = Field(
+        default=None,
+        desc="Expected number of documents in the dataset.",
+        hint=FieldHint.optional,
+    )
+    num_tokens: int | None = Field(
+        default=None,
+        desc="Expected number of tokens in the dataset.",
+        hint=FieldHint.optional,
+    )
 
     def build(self) -> "GPTMemmapDataset":
         from fast_llm.data.dataset.gpt.memmap import GPTMemmapDataset
 
-        return GPTMemmapDataset(str(self.path).replace("/", "__"), self.path)
+        return GPTMemmapDataset(str(self.path).replace("/", "__"), self.path, self.num_documents, self.num_tokens)
 
 
 @config_class()
@@ -210,7 +222,47 @@ class GPTBlendedDatasetConfig(BlendedDatasetConfig, GPTSampledDatasetConfig):
 
 
 @config_class()
+class GPTDatasetFromFileConfig(GPTSamplableDatasetConfig):
+    _abstract: typing.ClassVar[bool] = False
+    type_: typing.ClassVar[str | None] = "file"
+    path: pathlib.Path = Field(
+        default=None,
+        desc="The path to a dataset config file.",
+        hint=FieldHint.core,
+    )
+
+    def build_and_sample(self, sampling: SamplingData) -> SampledDataset:
+        config = self._load_config()
+        return config.build_and_sample(sampling)
+
+    def build(self) -> SamplableDataset:
+        config = self._load_config()
+        assert isinstance(config, GPTSamplableDatasetConfig)
+        return config.build()
+
+    def _load_config(self):
+        assert self.path.is_file()
+        return GPTSampledDatasetConfig.from_dict(self._convert_paths(yaml.safe_load(self.path.open("r"))))
+
+    def _convert_paths(self, config):
+        # Recursively convert paths relative to `self.path.parent` to make them relative to cwd.
+        # Assuming all path are in a field named "path"
+        # TODO: Find a more generic way
+        if isinstance(config, dict):
+            for key, value in config.items():
+                self._convert_paths(value)
+            if "path" in config:
+                assert isinstance(config["path"], (str, pathlib.Path))
+                config["path"] = self.path.parent / config["path"]
+        elif isinstance(config, list):
+            for value in config:
+                self._convert_paths(value)
+        return config
+
+
+@config_class()
 class GPTConcatenatedMemmapConfig(GPTIndexedDatasetConfig):
+    # TODO v0.3: Remove.
     _abstract: typing.ClassVar[bool] = False
     type_: typing.ClassVar[str | None] = "concatenated_memmap"
     path: pathlib.Path = Field(
@@ -219,8 +271,11 @@ class GPTConcatenatedMemmapConfig(GPTIndexedDatasetConfig):
         hint=FieldHint.core,
     )
 
+    def _validate(self) -> None:
+        warnings.warn("`concatenated_memmap` dataset is deprecated. Use `file` instead.", DeprecationWarning)
+        super()._validate()
+
     def build(self) -> "GPTConcatenatedDataset":
-        pass
 
         assert self.path.is_dir()
         index_path = self.path / "index.txt"
