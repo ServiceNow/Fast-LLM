@@ -14,6 +14,7 @@ from fast_llm.data.dataset.gpt.memmap import GPTMemmapDataset
 from fast_llm.data.dataset.gpt.sampled import GPTSample
 from fast_llm.models.gpt.config import (
     LlamaGPTHuggingfaceCheckpointFormat,
+    Qwen2GPTHuggingfaceCheckpointFormat,
     MistralGPTHuggingfaceCheckpointFormat,
     MixtralGPTHuggingfaceCheckpointFormat,
     Starcoder2GPTHuggingfaceCheckpointFormat,
@@ -155,6 +156,18 @@ CONFIG_LLAMA3_FAST_LLM = CONFIG_LLAMA_FAST_LLM + [
 ]
 CONFIG_LLAMA3_COMMON = CONFIG_LLAMA3_FAST_LLM + ["model.distributed.training_dtype=bf16"]
 
+# Megatron does not support per sub layer biases
+CONFIG_QWEN2_MEGATRON = None
+CONFIG_QWEN2_FAST_LLM = CONFIG_SC2_FAST_LLM + [
+    "model.base_model.transformer.gated=True",
+    "model.base_model.transformer.activation_type=silu",
+    "model.base_model.transformer.add_linear_biases=only_attn_qkv",
+    "model.base_model.transformer.normalization.type=rms_norm",
+    "model.base_model.transformer.ffn_hidden_size=1024",
+    "model.base_model.tie_word_embeddings=False",
+]
+CONFIG_QWEN2_COMMON = CONFIG_QWEN2_FAST_LLM + ["model.distributed.training_dtype=bf16"]
+
 # Yarn-style Rotary Embeddings
 CONFIG_LLAMA_YARN_MEGATRON = None
 CONFIG_LLAMA_YARN_FAST_LLM = CONFIG_LLAMA_FAST_LLM + [
@@ -201,6 +214,13 @@ _CONFIGS = {
         CONFIG_LLAMA3_MEGATRON,
         CONFIG_LLAMA3_COMMON,
         LlamaGPTHuggingfaceCheckpointFormat,
+    ),
+    "qwen2": (
+        "gpt",
+        CONFIG_QWEN2_FAST_LLM,
+        CONFIG_QWEN2_MEGATRON,
+        CONFIG_QWEN2_COMMON,
+        Qwen2GPTHuggingfaceCheckpointFormat,
     ),
     "llama-yarn": (
         "gpt",
