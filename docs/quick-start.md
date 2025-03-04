@@ -224,7 +224,8 @@ Choose based on your goals for this tutorial.
 
 For this tutorial, we'll use text from the [OpenWebText](https://skylion007.github.io/OpenWebTextCorpus/) dataset. This dataset is a free approximation of the WebText data OpenAI used for GPT-2, and it's perfect for our test run!
 
-Create a configuration file for the dataset preparation. Copy the following content:
+Create a configuration file for the dataset preparation.
+Save the following as `./fast-llm-tutorial/prepare-config.yaml``:
 
 === "Small"
 
@@ -242,10 +243,15 @@ Create a configuration file for the dataset preparation. Copy the following cont
 
     tokenizer:
       path: fast-llm-tutorial/pretrained-model
+
+    splits:  # (3)!
+      training: 0.9
+      validation: 0.1
     ```
 
     1. Processing speed scales linearly with the number of CPUs.
     2. This small dataset restricts to the first 10K records of the OpenWebText dataset to speed up the process. If you want to use the full dataset, replace with `openwebtext`.
+    3.  90% train, 10% validation. These settings need to be adjusted based on the size of your dataset.
 
 === "Big"
 
@@ -263,11 +269,14 @@ Create a configuration file for the dataset preparation. Copy the following cont
 
     tokenizer:
       path: fast-llm-tutorial/pretrained-model
+
+    splits:  # (2)!
+      training: 0.99
+      validation: 0.01
     ```
 
     1. Processing speed scales linearly with the number of CPUs.
-
-Save it as `./fast-llm-tutorial/prepare-config.yaml`.
+    2.  99% train, 1% validation. These settings need to be adjusted based on the size of your dataset.
 
 Fast-LLM ships with a `prepare` command that will download and preprocess the dataset for you.
 
@@ -498,22 +507,26 @@ Save the following as `fast-llm-tutorial/train-config.yaml`:
       sequence_length: 1024
       batch_size: 480  # (5)!
     data:
-      format: file
-      path: fast-llm-tutorial/dataset/fast_llm_dataset.json  # (6)!
-      split: [9, 1, 0]  # (7)!
+      datasets:
+        Training:
+          type: file
+          path: fast-llm-tutorial/dataset/fast_llm_config_training.yaml  # (6)!
+        Validation:
+          type: file
+          path: fast-llm-tutorial/dataset/fast_llm_config_validation.yaml  # (6)!
     optimizer:
       learning_rate:
         base: 6.0e-04
     pretrained:
-      format: llama  # (8)!
+      format: llama  # (7)!
       path: fast-llm-tutorial/pretrained-model
-      model_weights: no  # (9)!
+      model_weights: no  # (8)!
     model:
       base_model:
         transformer:
-          use_flash_attention: yes  # (10)!
+          use_flash_attention: yes  # (9)!
       distributed:
-        training_dtype: bf16  # (11)!
+        training_dtype: bf16  # (10)!
     run:
       experiment_dir: fast-llm-tutorial/experiment
     ```
@@ -521,10 +534,9 @@ Save the following as `fast-llm-tutorial/train-config.yaml`:
     1.  For the small run, we'll stop after 100 iterations.
     2.  The trained model will be saved in `Transformers` Llama format to `fast-llm-tutorial/experiment/export/llama/100` at the end of the small run. You can also save as  a `Fast-LLM` checkpoint by setting the `format` to `fast_llm`.
     3.  Entirely optional, but it's a good idea to track your training progress with Weights & Biases. Replace `null` with your own W&B entity name. If you don't want to use W&B, just ignore this section.
-    3.  Adjust the number of sequences per GPU based on GPU memory. For SmolLM2-135M at 1024 sequenced length and a 80GB GPU, a `micro_batch_size` of 60 should work well.
-    4.  Must be divisible by the number of GPUs and the `micro_batch_size`. At 1024 tokens per sequence, 480 corresponds to about 500,000 tokens per batch.
-    5.  Location of the dataset metadata file generated in Step 4.
-    6.  90% train, 10% validation, 0% test. These settings need to be adjusted based on the size of your dataset.
+    4.  Adjust the number of sequences per GPU based on GPU memory. For SmolLM2-135M at 1024 sequenced length and a 80GB GPU, a `micro_batch_size` of 60 should work well.
+    5.  Must be divisible by the number of GPUs and the `micro_batch_size`. At 1024 tokens per sequence, 480 corresponds to about 500,000 tokens per batch.
+    6.  Location of the dataset metadata files generated in Step 4.
     7.  Format of the pretrained model. Since SmolLM is a Llama model, we set this to `llama`.
     8.  We'll train SmolLM2-135M from scratch. You can set to `yes` to continue training from a checkpoint (if you put one in the model directory).
     9.  By default, Fast-LLM uses FlashAttention for faster training. If you're using Volta GPUs, set this to `no`.
@@ -556,32 +568,36 @@ Save the following as `fast-llm-tutorial/train-config.yaml`:
       sequence_length: 4096
       batch_size: 512  # (5)!
     data:
-      format: file
-      path: fast-llm-tutorial/dataset/fast_llm_dataset.json  # (6)!
-      split: [99, 1, 0]  # (7)!
-    optimizer:  # (8)!
+      datasets:
+        Training:
+          type: file
+          path: fast-llm-tutorial/dataset/fast_llm_config_training.yaml  # (6)!
+        Validation:
+          type: file
+          path: fast-llm-tutorial/dataset/fast_llm_config_validation.yaml  # (6)!
+    optimizer:  # (7)!
       weight_decay: 0.1
       beta_1: 0.9
       beta_2: 0.95
-      learning_rate:  # (9)!
+      learning_rate:  # (8)!
         base: 6.0e-04
         minimum: 6.0e-05
         decay_style: cosine
         decay_iterations: 100_000
         warmup_iterations: 2000
     pretrained:
-      format: llama  # (10)!
+      format: llama  # (9)!
       path: fast-llm-tutorial/pretrained-model
-      model_weights: yes  # (11)!
+      model_weights: yes  # (10)!
     model:
       base_model:
         transformer:
-          use_flash_attention: yes  # (12)!
-        cross_entropy_impl: fused  # (13)!
+          use_flash_attention: yes  # (11)!
+        cross_entropy_impl: fused  # (12)!
       multi_stage:
-        zero_stage: 2  # (14)!
+        zero_stage: 2  # (13)!
       distributed:
-        training_dtype: bf16  # (15)!
+        training_dtype: bf16  # (14)!
     run:
       experiment_dir: fast-llm-tutorial/experiment
     ```
@@ -592,15 +608,14 @@ Save the following as `fast-llm-tutorial/train-config.yaml`:
     4.  Adjust the number of sequences per GPU based on GPU memory. Considering a 4k token sequence length and 80GB GPUs, a `micro_batch_size` of 1 should work well.
     5.  Must be divisible by the number of GPUs and the `micro_batch_size`. At 4k tokens per sequence, 512 corresponds to about 2.1 million tokens per batch.
     6.  Location of the dataset metadata file generated in Step 4.
-    7.  99% train, 1% validation, 0% test. These settings need to be adjusted based on the size of your dataset. If you're using a smaller dataset, you need to increase the validation split.
-    8.  These are good default optimizer settings for training models.
-    9.  We are using a cosine decay schedule with linear warmup. After reaching the peak learning rate `base` at `warmup_iterations`, the learning rate will decay to `minimum` at `decay_iterations`, following a cosine curve. The minimum learning rate should be 1/10th of the base learning rate per Chinchilla.
-    10.  Format of the pretrained model. Since it's a Llama model, we set this to `llama`.
-    11.  We want to continue training Llama-3.1-8B from a checkpoint. If you're training from scratch, set this to `no`.
-    12.  By default, Fast-LLM uses FlashAttention for faster training. If you're using Volta GPUs, set this to `no`.
-    13.  Configure Fast-LLM to use the fused cross-entropy loss implementation rather than the default Triton implementation for models with a large vocabulary size such as Llama-3.1-8B. This avoids issues with block size limitations in our current Triton code.
-    14.  We are using ZeRO stage 2 for this tutorial. You can set this to `1`, `2`, or `3` for ZeRO-1, ZeRO-2, or ZeRO-3, respectively.
-    15.  `bf16` (bfloat16, or Brain Floating Point 16) is supported on Ampere GPUs and higher. On Volta GPUs, use `fp16` (half-precision floating point) for training instead of `bf16`.
+    7.  These are good default optimizer settings for training models.
+    8.  We are using a cosine decay schedule with linear warmup. After reaching the peak learning rate `base` at `warmup_iterations`, the learning rate will decay to `minimum` at `decay_iterations`, following a cosine curve. The minimum learning rate should be 1/10th of the base learning rate per Chinchilla.
+    9.  Format of the pretrained model. Since it's a Llama model, we set this to `llama`.
+    10.  We want to continue training Llama-3.1-8B from a checkpoint. If you're training from scratch, set this to `no`.
+    11.  By default, Fast-LLM uses FlashAttention for faster training. If you're using Volta GPUs, set this to `no`.
+    12.  Configure Fast-LLM to use the fused cross-entropy loss implementation rather than the default Triton implementation for models with a large vocabulary size such as Llama-3.1-8B. This avoids issues with block size limitations in our current Triton code.
+    13.  We are using ZeRO stage 2 for this tutorial. You can set this to `1`, `2`, or `3` for ZeRO-1, ZeRO-2, or ZeRO-3, respectively.
+    14.  `bf16` (bfloat16, or Brain Floating Point 16) is supported on Ampere GPUs and higher. On Volta GPUs, use `fp16` (half-precision floating point) for training instead of `bf16`.
 
 ## 🔑 (Optional) Step 6: Add Your Weights & Biases API Key
 

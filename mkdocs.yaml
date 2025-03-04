@@ -167,7 +167,8 @@ nav:
       - StarCoder 2: success-stories/starcoder-2.md
     - License: license.md
   - Recipes:
-    - Data Preparation: recipes/data-preparation.md
+    - Prepare a dataset: recipes/data-preparation.md
+    - Configure a dataset: recipes/data-configuration.md
     - Train Llama 8B from scratch: recipes/train-llama-8b.md
     - Continue training Llama 8B: recipes/continue-training-llama-8b.md
     - Upcycle Llama 3B to MoE: recipes/upcycle-llama-3b-to-moe.md
