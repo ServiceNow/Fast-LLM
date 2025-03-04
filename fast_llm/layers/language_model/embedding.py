@@ -37,13 +37,13 @@ class LanguageModelEmbedding[ConfigType: LanguageModelBaseConfig](Configurable[L
         self._tensor_space = tensor_space
         self._residual_dtype = (
             self._distributed_config.optimization_dtype
-            if config.transformer.full_precision_residual
+            if config.layers.default.full_precision_residual
             else self._distributed_config.training_dtype
         ).torch
         self._group_size = self._distributed_config.tensor_parallel
         self._sequence_parallel = self._distributed_config.sequence_tensor_parallel
         self._parallel_embeddings = tensor_space.distributed_config.tensor_parallel > 1 and config.parallel_embeddings
-        self._dropout_p = config.transformer.hidden_dropout
+        self._dropout_p = config.layers.default.hidden_dropout
         self._use_absolute_position_embeddings = config.use_absolute_position_embeddings
 
         hidden_dim = tensor_space.get_tensor_dim(TransformerDimNames.hidden)

@@ -9,9 +9,9 @@ from fast_llm.functional.rotary import convert_rotary_complex_to_real
 from fast_llm.layers.transformer.config import (
     RotaryConfig,
     RotaryEmbeddingType,
-    TransformerConfig,
     TransformerDimNames,
     TransformerKwargs,
+    TransformerLayerConfig,
 )
 from fast_llm.tensor import TensorMeta
 
@@ -49,7 +49,6 @@ def apply_yarn_scaling(config: RotaryConfig, frequencies: torch.Tensor, kv_chann
     base = config.theta
     partial_rotary_factor = 1.0
     dim = int(kv_channels * partial_rotary_factor)
-    max_position_embeddings = sequence_length
     factor = config.scale_factor
 
     attention_factor = config.attention_factor
@@ -75,7 +74,6 @@ def apply_yarn_scaling(config: RotaryConfig, frequencies: torch.Tensor, kv_chann
         ramp_func = torch.clamp(linear_func, 0, 1)
         return ramp_func
 
-
     # Note on variable naming: "interpolation" comes from the original technique, where we interpolate the position IDs
     # to expand the possible context length. In other words, interpolation = apply scaling factor.
     # pos_freqs = base ** (torch.arange(0, dim, 2).float().to(frequencies.device) / dim)
@@ -97,7 +95,6 @@ def apply_yarn_scaling(config: RotaryConfig, frequencies: torch.Tensor, kv_chann
     )
 
     return inv_freq, attention_factor
-
 
 
 def get_rotary_frequencies(
@@ -202,7 +199,7 @@ class BackupAttentionPreprocessor:
 
     def __init__(
         self,
-        config: TransformerConfig,
+        config: TransformerLayerConfig,
         tensor_space: TensorSpace,
     ):
         self._config = config

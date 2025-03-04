@@ -26,7 +26,7 @@ class GPTTrainer[ConfigType: GPTTrainerConfig](Trainer[ConfigType]):
         # TODO: Do in model, automate/generalize, get other stats
         """Get tflop/s/GPU from global-batch-size and elapsed-time"""
         checkpoint_activations_factor = 3 if phase == PhaseType.training else 1
-        transformer_config = self._config.model.base_model.transformer
+        transformer_config = self._config.model.base_model.layers.default
         sequence_length = self._config.batch.sequence_length
 
         tokens = self._config.batch.batch_size * sequence_length

@@ -40,7 +40,7 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
         tensor_space: TensorSpace,
     ):
         super().__init__(config)
-        self._debug_transformer = config.transformer.debug_transformer
+        self._debug_transformer = config.layers.default.debug_transformer
         self._tie_word_embeddings = config.tie_word_embeddings
         self._tensor_space = tensor_space
 
@@ -56,7 +56,7 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
 
         hidden_dim = self._tensor_space.get_tensor_dim(TransformerDimNames.hidden)
 
-        self.final_norm = config.transformer.normalization.get_layer(hidden_dim)
+        self.final_norm = config.layers.default.normalization.get_layer(hidden_dim)
         self._logits_scale_factor = config.logits_scale_factor
         self._z_loss_factor = config.logit_z_loss
 

@@ -1,6 +1,6 @@
 import typing
 
-from fast_llm.config import Config, Field, FieldHint, FieldUpdate, check_field, config_class, skip_valid_if_none
+from fast_llm.config import Field, FieldHint, FieldUpdate, check_field, config_class, skip_valid_if_none
 from fast_llm.engine.base_model.config import BaseModelArchitectureConfig, BaseModelConfig
 from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
 from fast_llm.engine.distributed.config import DistributedDimNames
@@ -32,11 +32,12 @@ class LanguageModelKwargs:
 
 @config_class()
 class LanguageModelArchitectureConfig(BaseModelArchitectureConfig):
-    transformer: TransformerArchitectureConfig = Field(
-        default_factory=TransformerArchitectureConfig,
-        desc="Configuration for the transformer architecture.",
-        hint=FieldHint.core,
-    )
+    # transformer: TransformerLayerArchitectureConfig = Field(
+    #    default_factory=TransformerLayerArchitectureConfig,
+    #    desc="Configuration for the transformer architecture.",
+    #    hint=FieldHint.core,
+    # )
+    layers: TransformerConfig = Field(default_factory=TransformerArchitectureConfig)
     max_position_embeddings: int = Field(
         default=2048,
         desc="Number of absolute position embeddings, if applicable.",
@@ -60,11 +61,12 @@ class LanguageModelArchitectureConfig(BaseModelArchitectureConfig):
 
     def _validate(self) -> None:
         if self.use_position_embeddings is None:
-            self.use_position_embeddings = not self.transformer.rotary.enabled
+            self.use_position_embeddings = not self.layers.default.rotary.enabled
         super()._validate()
 
     def setup_tensor_space(self, tensor_space: TensorSpace) -> None:
-        self.transformer.setup_tensor_space(tensor_space)
+        assert self._validated
+        self.layers.setup_tensor_space(tensor_space)
         tensor = tensor_space.distributed_config.get_distributed_dim(DistributedDimNames.tensor)
 
         # Embedding dimensions
@@ -97,60 +99,16 @@ class LanguageModelArchitectureConfig(BaseModelArchitectureConfig):
         cls._handle_renamed_field(default, "zero_centered_normalization", "zero_centered")
         return super().from_flat_dict(default, strict)
 
-
-@config_class()
-class SliceConfig(Config):
-    begin: int = 0
-    end: int | None = None
-    step: int = 1
-
-    def in_range(self, index) -> bool:
-        return (
-            index >= self.begin and (self.end is None or index <= self.end) and ((index - self.begin) % self.step == 0)
-        )
-
-
-@config_class()
-class TransformerLayerConfig(Config):
-    layer_ranges: list[SliceConfig] = Field(
-        default_factory=SliceConfig,
-        desc="Layer range.",
-        hint=FieldHint.core,
-    )
-    updates: dict[str, typing.Any] = Field(
-        default_factory=dict,
-    )
-    config: TransformerConfig = Field(init=False)
-
-    def setup(self, default: TransformerConfig) -> None:
-        self.config = TransformerConfig.from_dict(default, self.updates)
-
-    def _validate(self) -> None:
-        assert hasattr(self, "config")
-        assert len(self.layer_ranges) > 0
-
-    def in_range(self, index) -> bool:
-        return any(layer_range.in_range(index) for layer_range in self.layer_ranges)
-
-
-@config_class()
-class TransformerLayersConfig(Config):
-    layers: list[TransformerLayerConfig] = Field(default_factory=list)
-    default: TransformerConfig = Field(init=False)
-
-    def setup(self, default: TransformerConfig) -> None:
-        self.default = default
-        for layer in self.layers:
-            layer.setup(default)
-
-    def _validate(self) -> None:
-        assert hasattr(self, "default")
-
-    def get_layer_config(self, index: int) -> TransformerConfig:
-        for layer in self.layers:
-            if layer.in_range(index):
-                return layer.config
-        return self.default
+    @classmethod
+    def _from_dict(
+        cls,
+        default: dict[str, typing.Any],
+        strict: bool = True,
+        flat: bool = False,
+    ) -> typing.Self:
+        # TODO v0.x: Remove backward compatibility.
+        cls._handle_renamed_field(default, "transformer", ("layers", "default"))
+        return super()._from_dict(default, strict, flat)
 
 
 @config_class()
@@ -166,8 +124,8 @@ class LanguageModelBaseConfig(LanguageModelArchitectureConfig, BaseModelConfig):
 
     architecture_class = LanguageModelArchitectureConfig
 
-    transformer: TransformerConfig = FieldUpdate(default_factory=TransformerConfig)
-    layers: TransformerLayersConfig = Field(default_factory=TransformerLayersConfig)
+    # transformer: TransformerLayerConfig = FieldUpdate(default_factory=TransformerLayerConfig)
+    layers: TransformerConfig = FieldUpdate(default_factory=TransformerConfig)
     init_method_std_embed: float = Field(
         default=None,
         desc="Initialization scale for the vocabulary embedding and output weights (logits).",
@@ -231,15 +189,14 @@ class LanguageModelBaseConfig(LanguageModelArchitectureConfig, BaseModelConfig):
     )
 
     def _validate(self) -> None:
-        self.layers.setup(self.transformer)
-        if self.transformer.init_method_std is None:
-            self.transformer.init_method_std = self.transformer.hidden_size**-0.5
+        if self.layers.default.init_method_std is None:
+            self.layers.default.init_method_std = self.layers.default.hidden_size**-0.5
         if self.init_method_std_embed is None:
-            self.init_method_std_embed = self.transformer.init_method_std
+            self.init_method_std_embed = self.layers.default.init_method_std
         if self.init_method_max_embed is None:
-            self.init_method_max_embed = self.transformer.init_method_max
+            self.init_method_max_embed = self.layers.default.init_method_max
         if self.init_method_min_embed is None:
-            self.init_method_min_embed = self.transformer.init_method_min
+            self.init_method_min_embed = self.layers.default.init_method_min
         if self.init_method_max_embed is not None and self.init_method_min_embed is not None:
             Assert.leq(self.init_method_min_embed, self.init_method_max_embed)
         super()._validate()

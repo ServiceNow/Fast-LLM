@@ -8,13 +8,13 @@ from fast_llm.engine.config_utils.tensor_space import TensorSpace
 from fast_llm.functional.config import TritonConfig
 from fast_llm.functional.triton.mlp import mlp_autograd, torch_mlp_activation, triton_mlp_activation_autograd
 from fast_llm.layers.common.linear import LinearBase
-from fast_llm.layers.transformer.config import TransformerConfig, TransformerDimNames
+from fast_llm.layers.transformer.config import TransformerDimNames, TransformerLayerConfig
 from fast_llm.tensor import init_normal_, init_zeros_
 from fast_llm.utils import Assert
 
 
 class MLPBase(Layer, ABC):
-    def __init__(self, config: TransformerConfig, tensor_space: TensorSpace, name: str = "mlp"):
+    def __init__(self, config: TransformerLayerConfig, tensor_space: TensorSpace, name: str = "mlp"):
         super().__init__()
         self._name = name
 
@@ -60,7 +60,7 @@ class MLPBase(Layer, ABC):
 
 
 class MLP(MLPBase):
-    def __init__(self, config: TransformerConfig, tensor_space: TensorSpace, name: str = "mlp"):
+    def __init__(self, config: TransformerLayerConfig, tensor_space: TensorSpace, name: str = "mlp"):
         Assert.eq(config.num_experts, 1)
         super().__init__(config, tensor_space, name)
 

@@ -48,16 +48,16 @@ class QueryWeightConverter(WeightConverter):
         self, weight: tuple[torch.Tensor | SafeTensorSlice, ...]
     ) -> tuple[torch.Tensor | SafeTensorSlice, ...]:
         (query,) = weight
-        if self._config.transformer.rotary.complex_format:
-            query = convert_rotary_complex_to_real(query[:], self._config.transformer.kv_channels, 0)
+        if self._config.layers.default.rotary.complex_format:
+            query = convert_rotary_complex_to_real(query[:], self._config.layers.default.kv_channels, 0)
         return (query,)
 
     def import_weight(
         self, weight: tuple[torch.Tensor | SafeTensorSlice, ...]
     ) -> tuple[torch.Tensor | SafeTensorSlice, ...]:
         (query,) = weight
-        if self._config.transformer.rotary.complex_format:
-            query = convert_rotary_real_to_complex(query[:], self._config.transformer.kv_channels, 0)
+        if self._config.layers.default.rotary.complex_format:
+            query = convert_rotary_real_to_complex(query[:], self._config.layers.default.kv_channels, 0)
         return (query,)
 
 
@@ -70,16 +70,16 @@ class KeyValueWeightConverter(WeightConverter):
     ) -> tuple[torch.Tensor | SafeTensorSlice, ...]:
         (key_value,) = weight
         key, value = key_value[:].chunk(2)
-        if self._config.transformer.rotary.complex_format:
-            key = convert_rotary_complex_to_real(key, self._config.transformer.kv_channels, 0)
+        if self._config.layers.default.rotary.complex_format:
+            key = convert_rotary_complex_to_real(key, self._config.layers.default.kv_channels, 0)
         return key, value
 
     def import_weight(
         self, weight: tuple[torch.Tensor | SafeTensorSlice, ...]
     ) -> tuple[torch.Tensor | SafeTensorSlice, ...]:
         key, value = weight
-        if self._config.transformer.rotary.complex_format:
-            key = convert_rotary_real_to_complex(key[:], self._config.transformer.kv_channels, 0)
+        if self._config.layers.default.rotary.complex_format:
+            key = convert_rotary_real_to_complex(key[:], self._config.layers.default.kv_channels, 0)
         key_value = torch.cat([key[:], value[:]])
         return (key_value,)
 
@@ -158,9 +158,11 @@ class CommonHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
 
     def _create_weight_converters(self) -> list[WeightConverter]:
         converters = []
-        num_layers = self._model.config.base_model.transformer.num_layers
-        norm_bias: bool = self._model.config.base_model.transformer.normalization.type == NormalizationType.layer_norm
-        linear_bias: bool = self._model.config.base_model.transformer.add_linear_biases
+        num_layers = self._model.config.base_model.layers.default.num_layers
+        norm_bias: bool = (
+            self._model.config.base_model.layers.default.normalization.type == NormalizationType.layer_norm
+        )
+        linear_bias: bool = self._model.config.base_model.layers.default.add_linear_biases
 
         # Embedding and output
         if self._model.config.base_model.tie_word_embeddings:
@@ -256,7 +258,7 @@ class Starcoder2HuggingfaceCheckpointHandler(CommonHuggingfaceCheckpointHandler)
         ]
 
     def _get_mlp_converters(self, fast_llm_prefix: str, hf_prefix: str) -> list[WeightConverter]:
-        linear_bias: bool = self._model.config.base_model.transformer.add_linear_biases
+        linear_bias: bool = self._model.config.base_model.layers.default.add_linear_biases
         return [
             *self._get_weight_and_bias_converters(
                 f"{fast_llm_prefix}.mlp.layer_1", f"{hf_prefix}.mlp.c_fc", linear_bias
@@ -352,7 +354,7 @@ class LlamaHuggingfaceCheckpointHandler(CommonLlamaHuggingfaceCheckpointHandler)
         ]
 
     def _get_mlp_converters(self, fast_llm_prefix: str, hf_prefix: str) -> list[WeightConverter]:
-        linear_bias: bool = self._model.config.base_model.transformer.add_linear_biases
+        linear_bias: bool = self._model.config.base_model.layers.default.add_linear_biases
         return [
             *self._get_weight_and_bias_converters(
                 f"{fast_llm_prefix}.mlp.layer_1",
@@ -413,7 +415,7 @@ class MixtralHuggingfaceCheckpointHandler(CommonLlamaHuggingfaceCheckpointHandle
         ]
 
     def _get_mlp_converters(self, fast_llm_prefix: str, hf_prefix: str) -> list[WeightConverter]:
-        num_experts = self._model.config.base_model.transformer.num_experts
+        num_experts = self._model.config.base_model.layers.default.num_experts
         return [
             WeightConverter(f"{fast_llm_prefix}.mlp.router.weight", f"{hf_prefix}.block_sparse_moe.gate.weight"),
             SplitWeightConverter(

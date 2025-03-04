@@ -113,10 +113,12 @@ class TensorSpace:
     _is_setup: bool = False
     _distributed: "Distributed"
 
-    def __init__(self, distributed_config: DistributedConfig):
+    def __init__(self, distributed_config: DistributedConfig, _parent: "TensorSpace|None" = None):
         self._distributed_config = distributed_config
         self._tensor_dims: dict[str, TensorDim] = {}
         self.add_tensor_dim(TensorDim(DefaultDimNames.scalar, 1))
+        self._parent = _parent
+        self._sub_spaces: dict[str, TensorSpace] = {}
 
     def setup(self, distributed: "Distributed") -> None:
         assert distributed.config is self._distributed_config
@@ -146,5 +148,17 @@ class TensorSpace:
                 Assert.eq(dim.parallel_dim, self._distributed_config.distributed_dims[dim.parallel_dim.name])
             self._tensor_dims[dim.name] = dim
 
+    def add_sub_space(self, name: str) -> "TensorSpace":
+        self._sub_spaces[name] = TensorSpace(self._distributed_config, _parent=self)
+        return self._sub_spaces[name]
+
+    def get_sub_space(self, name: str) -> "TensorSpace":
+        return self._sub_spaces[name]
+
     def get_tensor_dim(self, name: str) -> TensorDim:
-        return self._tensor_dims[name]
+        if name in self._tensor_dims:
+            return self._tensor_dims[name]
+        elif self._parent is not None:
+            return self._parent.get_tensor_dim(name)
+        else:
+            raise KeyError(name)

@@ -733,6 +733,7 @@ class Config:
             if strict and default:
                 out._unknown_fields = default.copy()
         if _AUTO_VALIDATE:
+            print("WKIUEFNW", out.to_serialized())
             out.validate()
         return out
 

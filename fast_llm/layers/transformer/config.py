@@ -4,7 +4,7 @@ import math
 import typing
 import warnings
 
-from fast_llm.config import Field, FieldHint, FieldUpdate, check_field, config_class, skip_valid_if_none
+from fast_llm.config import Config, Field, FieldHint, FieldUpdate, check_field, config_class, skip_valid_if_none
 from fast_llm.engine.base_model.config import BaseModelArchitectureConfig, BaseModelConfig
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.engine.config_utils.tensor_space import CompositeTensorDim, TensorDim, TensorSpace
@@ -156,7 +156,7 @@ class AddLinearBiasChoices(str, enum.Enum):
 
 
 @config_class()
-class TransformerArchitectureConfig(BaseModelArchitectureConfig):
+class TransformerLayerArchitectureConfig(BaseModelArchitectureConfig):
     _abstract = False
     normalization: NormalizationArchitectureConfig = Field(
         default_factory=NormalizationArchitectureConfig,
@@ -306,6 +306,7 @@ class TransformerArchitectureConfig(BaseModelArchitectureConfig):
         return super()._from_dict(default, strict, flat)
 
     def setup_tensor_space(self, tensor_space: TensorSpace) -> None:
+        assert self._validated
         tensor = tensor_space.distributed_config.get_distributed_dim(DistributedDimNames.tensor)
 
         # Hidden dimension
@@ -367,7 +368,7 @@ class TransformerArchitectureConfig(BaseModelArchitectureConfig):
 
 
 @config_class()
-class TransformerConfig(TransformerArchitectureConfig, BaseModelConfig):
+class TransformerLayerConfig(TransformerLayerArchitectureConfig, BaseModelConfig):
     normalization: NormalizationConfig = FieldUpdate(default_factory=NormalizationConfig)
     rotary: RotaryConfig = FieldUpdate(default_factory=RotaryConfig)
     # Default: hidden_size**-0.5
@@ -623,3 +624,85 @@ class TransformerConfig(TransformerArchitectureConfig, BaseModelConfig):
             Assert.is_(self.window_size, None)
 
         return use_flash_attention
+
+
+@config_class()
+class SliceConfig(Config):
+    begin: int = Field(default=0)
+    end: int | None = Field(default=None)
+    step: int = Field(default=1)
+
+    def in_range(self, index) -> bool:
+        return (
+            index >= self.begin and (self.end is None or index <= self.end) and ((index - self.begin) % self.step == 0)
+        )
+
+
+@config_class()
+class TransformerLayerRangeArchitectureConfig(BaseModelArchitectureConfig):
+    _abstract = False
+    layer_ranges: list[SliceConfig] = Field(
+        default_factory=SliceConfig,
+        desc="Layer range.",
+        hint=FieldHint.core,
+    )
+    updates: dict[str, typing.Any] = Field(
+        default_factory=dict,
+    )
+    config: TransformerLayerArchitectureConfig = Field(init=False)
+
+    def setup(self, default: TransformerLayerArchitectureConfig) -> None:
+        self.config = TransformerLayerArchitectureConfig.from_dict(default, self.updates)
+
+    def _validate(self) -> None:
+        assert hasattr(self, "config")
+        assert len(self.layer_ranges) > 0
+        self.config.validate()
+
+    def in_range(self, index) -> bool:
+        return any(layer_range.in_range(index) for layer_range in self.layer_ranges)
+
+
+@config_class()
+class TransformerLayerRangeConfig(TransformerLayerRangeArchitectureConfig, BaseModelConfig):
+    pass
+
+
+@config_class()
+class TransformerArchitectureConfig(BaseModelArchitectureConfig):
+    _abstract = False
+    layers: list[TransformerLayerRangeArchitectureConfig] = Field(default_factory=list)
+    default: TransformerLayerArchitectureConfig = Field(default_factory=TransformerLayerArchitectureConfig)
+
+    def _validate(self) -> None:
+        for layer in self.layers:
+            layer.setup(self.default)
+            # TODO: Improve this?
+            Assert.eq(layer.config.hidden_size, self.default.hidden_size)
+            Assert.eq(layer.config.num_layers, self.default.num_layers)
+        super()._validate()
+
+    def get_layer_config_and_tensor_space(
+        self, index: int, tensor_space: TensorSpace
+    ) -> tuple[TransformerLayerArchitectureConfig, TensorSpace]:
+        for i, layer in enumerate(self.layers):
+            if layer.in_range(index):
+                return layer.config, tensor_space.get_sub_space(f"transformer_layers_{i}")
+        return self.default, tensor_space
+
+    def setup_tensor_space(self, tensor_space: TensorSpace) -> None:
+        assert self._validated
+        self.default.setup_tensor_space(tensor_space)
+        for i, layer in enumerate(self.layers):
+            layer.config.setup_tensor_space(tensor_space.add_sub_space(f"transformer_layers_{i}"))
+
+
+@config_class()
+class TransformerConfig(TransformerArchitectureConfig, BaseModelConfig):
+    layers: list[TransformerLayerRangeConfig] = FieldUpdate()
+    default: TransformerLayerConfig = FieldUpdate(default_factory=TransformerLayerConfig)
+
+    def get_layer_config_and_tensor_space(
+        self, index: int, tensor_space: TensorSpace
+    ) -> tuple[TransformerLayerConfig, TensorSpace]:
+        return super().get_layer_config_and_tensor_space(index, tensor_space)
