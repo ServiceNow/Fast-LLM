@@ -9,11 +9,13 @@ import sys
 import numpy as np
 import pytest
 import torch
+import yaml
 
 from fast_llm.data.dataset.gpt.memmap import GPTMemmapDataset
 from fast_llm.data.dataset.gpt.sampled import GPTSample
 from fast_llm.models.gpt.config import (
     LlamaGPTHuggingfaceCheckpointFormat,
+    Qwen2GPTHuggingfaceCheckpointFormat,
     MistralGPTHuggingfaceCheckpointFormat,
     MixtralGPTHuggingfaceCheckpointFormat,
     Starcoder2GPTHuggingfaceCheckpointFormat,
@@ -37,7 +39,7 @@ ARTIFACT_PATH = "runs/0/artifacts"
 TOKENIZER_PATH = TEST_RESULTS_PATH / "tokenizer" / "common"
 TOKENIZER_FILE = TOKENIZER_PATH / "tokenizer.json"
 DATASET_CACHE = TEST_RESULTS_PATH / "dataset"
-DATASET_PREFIX = DATASET_CACHE / "common"
+DATASET_PREFIX = DATASET_CACHE / "common" / "dataset"
 DATASET_SAMPLING_CACHE = TEST_RESULTS_PATH / "dataset" / "cache"
 
 TEST_VOCAB_SIZE = 8192
@@ -155,6 +157,18 @@ CONFIG_LLAMA3_FAST_LLM = CONFIG_LLAMA_FAST_LLM + [
 ]
 CONFIG_LLAMA3_COMMON = CONFIG_LLAMA3_FAST_LLM + ["model.distributed.training_dtype=bf16"]
 
+# Megatron does not support per sub layer biases
+CONFIG_QWEN2_MEGATRON = None
+CONFIG_QWEN2_FAST_LLM = CONFIG_SC2_FAST_LLM + [
+    "model.base_model.transformer.gated=True",
+    "model.base_model.transformer.activation_type=silu",
+    "model.base_model.transformer.add_linear_biases=only_attn_qkv",
+    "model.base_model.transformer.normalization.type=rms_norm",
+    "model.base_model.transformer.ffn_hidden_size=1024",
+    "model.base_model.tie_word_embeddings=False",
+]
+CONFIG_QWEN2_COMMON = CONFIG_QWEN2_FAST_LLM + ["model.distributed.training_dtype=bf16"]
+
 # Yarn-style Rotary Embeddings
 CONFIG_LLAMA_YARN_MEGATRON = None
 CONFIG_LLAMA_YARN_FAST_LLM = CONFIG_LLAMA_FAST_LLM + [
@@ -201,6 +215,13 @@ _CONFIGS = {
         CONFIG_LLAMA3_MEGATRON,
         CONFIG_LLAMA3_COMMON,
         LlamaGPTHuggingfaceCheckpointFormat,
+    ),
+    "qwen2": (
+        "gpt",
+        CONFIG_QWEN2_FAST_LLM,
+        CONFIG_QWEN2_MEGATRON,
+        CONFIG_QWEN2_COMMON,
+        Qwen2GPTHuggingfaceCheckpointFormat,
     ),
     "llama-yarn": (
         "gpt",
@@ -252,7 +273,11 @@ def get_test_dataset(
 
         transformers.AutoTokenizer.from_pretrained("bigcode/santacoder").save_pretrained(TOKENIZER_PATH)
 
-    if not (prefix.with_suffix(".idx").is_file() and prefix.with_suffix(".bin").is_file()):
+    if not (
+        prefix.with_suffix(".idx").is_file()
+        and prefix.with_suffix(".bin").is_file()
+        and prefix.parent.joinpath("fast_llm_config.yaml").is_file()
+    ):
         import transformers
 
         texts = "".join(random.Random(seed).choices(characters, k=num_tokens)).splitlines()
@@ -269,6 +294,9 @@ def get_test_dataset(
                 sample.loss_masking_spans = span[: len(span) // 2 * 2].reshape(-1, 2)
 
         GPTMemmapDataset.write_dataset(prefix, samples)
+        yaml.safe_dump(
+            {"type": "memmap", "path": prefix.name}, prefix.parent.joinpath("fast_llm_config.yaml").open("w")
+        )
 
 
 def get_test_concatenated_memmap_dataset(

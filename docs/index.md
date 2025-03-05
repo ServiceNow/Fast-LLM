@@ -6,7 +6,7 @@ hide:
 
 Introducing **Fast-LLM**, the cutting-edge open-source library built for training large language models (LLMs) with **unmatched speed, scalability, and cost-efficiency**. Developed by [ServiceNow Research](https://www.servicenow.com/research/)'s Foundation Models Lab, Fast-LLM is engineered to meet the rigorous demands of professional AI researchers, AI/ML engineers, academic and industrial research institutions, and enterprise product development teams pushing the limits of generative AI. **Achieve groundbreaking research and high-stakes production goals faster with Fast-LLM.**
 
-[Start your journey with Fast-LLM](quick-start.md) and explore the future of LLM training. Dive into [real-world use cases](recipes/train-llama-8b.md) to see how Fast-LLM can elevate your training workflows.
+[Start your journey with Fast-LLM](quick-start.md) and explore the future of LLM training. Dive into [real-world use cases](recipes/train.md) to see how Fast-LLM can elevate your training workflows.
 
 ## Why Fast-LLM?
 
