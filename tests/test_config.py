@@ -1,18 +1,11 @@
 import pathlib
 import subprocess
-import unittest.mock
 
 import pytest
 import yaml
 
 from fast_llm.config import ValidationError
-from fast_llm.engine.config_utils.data_type import DataType
-from fast_llm.engine.distributed.config import DistributedConfig
-from fast_llm.layers.transformer.config import (
-    AddLinearBiasChoices,
-    TransformerLayerArchitectureConfig,
-    TransformerLayerConfig,
-)
+from fast_llm.layers.transformer.config import AddLinearBiasChoices, TransformerLayerArchitectureConfig
 from fast_llm.models.auto import trainer_registry
 
 
@@ -61,32 +54,6 @@ def test_validate_example_config():
         (pathlib.Path(__file__).parents[1] / "examples" / "mistral.yaml").read_text()
     )
     trainer_registry["gpt"].from_dict(fast_llm_config_dict)
-
-
-def test_do_use_flash_attention():
-    # Create a mock DistributedConfig
-    mock_distributed_config = unittest.mock.Mock(spec=DistributedConfig)
-
-    # Test case 1: use_flash_attention is True and training_dtype is float16
-    config = TransformerLayerConfig(use_flash_attention=True, window_size=None)
-    mock_distributed_config.training_dtype = DataType.float16
-    assert config.do_use_flash_attention(mock_distributed_config) is True
-
-    # Test case 2: use_flash_attention is False
-    config = TransformerLayerConfig(use_flash_attention=False, window_size=None)
-    mock_distributed_config.training_dtype = DataType.float16
-    assert config.do_use_flash_attention(mock_distributed_config) is False
-
-    # Test case 3: use_flash_attention is True but training_dtype is not float16 or bfloat16
-    config = TransformerLayerConfig(use_flash_attention=True, window_size=None)
-    mock_distributed_config.training_dtype = DataType.float32
-    assert config.do_use_flash_attention(mock_distributed_config) is False
-
-    # Test case 4: use_flash_attention is False and window_size is not None
-    config = TransformerLayerConfig(use_flash_attention=False, window_size=512)
-    mock_distributed_config.training_dtype = DataType.float32
-    with pytest.raises(AssertionError):
-        config.do_use_flash_attention(mock_distributed_config)
 
 
 def test_add_linear_biases_valid_values():

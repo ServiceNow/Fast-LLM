@@ -618,30 +618,49 @@ class TransformerLayerConfig(TransformerLayerArchitectureConfig, BaseModelConfig
             DataType.bfloat16,
         )
 
-        # Config parameter `window_size` only can be used with flash attention
         if not use_flash_attention:
-            Assert.is_(self.window_size, None)
+            assert self.max_window_layers is None
 
         return use_flash_attention
 
 
 @config_class()
-class SliceConfig(Config):
-    begin: int = Field(default=0)
-    end: int | None = Field(default=None)
-    step: int = Field(default=1)
+class RangeConfig(Config):
+    """
+    A configuration that defines a range of values, to be used for example in python `slice` or `range`.
+    """
+
+    # TODO: Not specific to transformers, move elsewhere?
+    begin: int = Field(
+        default=0,
+        desc="The beginning of the range.",
+        hint=FieldHint.optional,
+    )
+    end: int | None = Field(
+        default=None,
+        desc="The end of the range (excluded).",
+        hint=FieldHint.optional,
+    )
+    step: int = Field(
+        default=1,
+        desc="The step for the range.",
+        hint=FieldHint.optional,
+    )
 
     def in_range(self, index) -> bool:
+        """
+        Checks whether `index` is in `range(begin, end, step)`.
+        """
         return (
-            index >= self.begin and (self.end is None or index <= self.end) and ((index - self.begin) % self.step == 0)
+            index >= self.begin and (self.end is None or index < self.end) and ((index - self.begin) % self.step == 0)
         )
 
 
 @config_class()
 class TransformerLayerRangeArchitectureConfig(BaseModelArchitectureConfig):
     _abstract = False
-    layer_ranges: list[SliceConfig] = Field(
-        default_factory=SliceConfig,
+    layer_ranges: list[RangeConfig] = Field(
+        default_factory=RangeConfig,
         desc="Layer range.",
         hint=FieldHint.core,
     )
@@ -651,7 +670,10 @@ class TransformerLayerRangeArchitectureConfig(BaseModelArchitectureConfig):
     config: TransformerLayerArchitectureConfig = Field(init=False)
 
     def setup(self, default: TransformerLayerArchitectureConfig) -> None:
-        self.config = TransformerLayerArchitectureConfig.from_dict(default, self.updates)
+        # Create the full config from the default and updates.
+        # We use `default.from_dict` so we also have the appropriate class in `TransformerLayerRangeConfig`.
+        # For the architecture class we need to set `strict=False` because of possible non-architecture parameters.
+        self.config = default.from_dict(default, self.updates, strict=True)  # isinstance(self, BaseModelConfig))
 
     def _validate(self) -> None:
         assert hasattr(self, "config")
@@ -705,10 +727,12 @@ class TransformerConfig(TransformerArchitectureConfig, BaseModelConfig):
     default: TransformerLayerConfig = FieldUpdate(default_factory=TransformerLayerConfig)
 
     def _validate(self) -> None:
+        super()._validate()
         for layer in self.layers:
             # Hidden layers must match
             Assert.eq(layer.config.full_precision_residual, self.default.full_precision_residual)
-        super()._validate()
+        if self.layers:
+            warnings.warn("Variable layer configuration is experimental. Use with caution.")
 
     def get_layer_config_and_tensor_space(
         self, index: int, tensor_space: TensorSpace

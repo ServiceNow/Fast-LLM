@@ -204,7 +204,7 @@ class BackupAttentionPreprocessor:
     ):
         self._tensor_space = tensor_space
         self._distributed_config = self._tensor_space.distributed_config
-        all_configs = [config.default] + config.layers
+        all_configs = [config.default] + [layer.config for layer in config.layers]
         self._enabled = not all(
             layer_config.do_use_flash_attention(self._distributed_config) for layer_config in all_configs
         )
