@@ -6,7 +6,7 @@ Follow this guide to train a Llama-3.1 or Qwen 2.5 7B like model from scratch!
 
 
 # Preliminary steps
-- [Quick Start](quick-start.md)
+- [Quick Start](../quick-start.md)
 - [Data preparation](data-preparation.md)
 
 
@@ -105,7 +105,7 @@ Let's start from the following training configuration:
 This configuration will not work because it misses important arguments to define model architecture.
 There are 2 ways of instantiating our a model.
 
-We could use a pretrained model config. This step is similar to what is done in the [Quick Start guide](quick-start.md).
+We could use a pretrained model config. This step is similar to what is done in the [Quick Start guide](../quick-start.md).
 First download the model configuration:
 === "Llama 3.1 8B"
     ```bash
