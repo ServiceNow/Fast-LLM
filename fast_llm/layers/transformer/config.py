@@ -664,7 +664,7 @@ class TransformerLayerRangeArchitectureConfig(BaseModelArchitectureConfig):
 
 @config_class()
 class TransformerLayerRangeConfig(TransformerLayerRangeArchitectureConfig, BaseModelConfig):
-    config: TransformerLayerConfig = FieldUpdate(init=False)
+    config: TransformerLayerConfig = FieldUpdate()
 
 
 @config_class()

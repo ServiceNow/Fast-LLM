@@ -49,7 +49,6 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
         distributed_config: DistributedConfig,
     ):
         super().__init__(config, distributed_config)
-        self._use_flash_attention = self._config.layers.default.do_use_flash_attention(distributed_config)
         if self._config.use_megatron_initialization:
             for param in self.parameters():
                 Assert.custom(isinstance, param, ParameterMeta)
@@ -60,9 +59,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             self._rotary_embedding_preprocessor = RotaryEmbeddingPreprocessor(
                 self._config.layers.default.rotary, self._tensor_space
             )
-        self._backup_attention_preprocessor = BackupAttentionPreprocessor(
-            self._config.layers.default, self._tensor_space
-        )
+        self._backup_attention_preprocessor = BackupAttentionPreprocessor(self._config.layers, self._tensor_space)
 
     def get_layers(self) -> list[Layer]:
         return [

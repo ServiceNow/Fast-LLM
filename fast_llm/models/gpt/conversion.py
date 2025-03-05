@@ -116,6 +116,8 @@ class CommonHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
     @classmethod
     def _create_config_converters(cls) -> list[ParamConverter]:
         return super()._create_config_converters() + [
+            # Variable layer config not supported.
+            ConstantImportParamConverter(fast_llm_names=(("layers", "layers"),), fast_llm_value=[]),
             ConstantImportParamConverter(fast_llm_names=(("use_position_embeddings",),), fast_llm_value=False),
             RenameParamConverter(
                 fast_llm_names=(("layers", "default", "rotary", "theta"),), export_names=(("rope_theta",),)
