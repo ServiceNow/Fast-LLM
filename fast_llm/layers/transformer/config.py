@@ -306,7 +306,6 @@ class TransformerLayerArchitectureConfig(BaseModelArchitectureConfig):
         return super()._from_dict(default, strict, flat)
 
     def setup_tensor_space(self, tensor_space: TensorSpace) -> None:
-        assert self._validated
         tensor = tensor_space.distributed_config.get_distributed_dim(DistributedDimNames.tensor)
 
         # Hidden dimension
@@ -665,7 +664,7 @@ class TransformerLayerRangeArchitectureConfig(BaseModelArchitectureConfig):
 
 @config_class()
 class TransformerLayerRangeConfig(TransformerLayerRangeArchitectureConfig, BaseModelConfig):
-    pass
+    config: TransformerLayerConfig = FieldUpdate(init=False)
 
 
 @config_class()
@@ -677,9 +676,12 @@ class TransformerArchitectureConfig(BaseModelArchitectureConfig):
     def _validate(self) -> None:
         for layer in self.layers:
             layer.setup(self.default)
-            # TODO: Improve this?
+            # Hidden layers must match
             Assert.eq(layer.config.hidden_size, self.default.hidden_size)
+            # TODO: Move elsewhere? Kept here because used in a few places like default initialization.
             Assert.eq(layer.config.num_layers, self.default.num_layers)
+            # TODO: Rotary preprocessor doesn't support variations across layers.
+            Assert.eq(layer.config.rotary.to_serialized(), self.default.rotary.to_serialized())
         super()._validate()
 
     def get_layer_config_and_tensor_space(
@@ -701,6 +703,12 @@ class TransformerArchitectureConfig(BaseModelArchitectureConfig):
 class TransformerConfig(TransformerArchitectureConfig, BaseModelConfig):
     layers: list[TransformerLayerRangeConfig] = FieldUpdate()
     default: TransformerLayerConfig = FieldUpdate(default_factory=TransformerLayerConfig)
+
+    def _validate(self) -> None:
+        for layer in self.layers:
+            # Hidden layers must match
+            Assert.eq(layer.config.full_precision_residual, self.default.full_precision_residual)
+        super()._validate()
 
     def get_layer_config_and_tensor_space(
         self, index: int, tensor_space: TensorSpace

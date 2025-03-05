@@ -60,20 +60,19 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             self._rotary_embedding_preprocessor = RotaryEmbeddingPreprocessor(
                 self._config.layers.default.rotary, self._tensor_space
             )
-        if not self._use_flash_attention:
-            self._backup_attention_preprocessor = BackupAttentionPreprocessor(
-                self._config.layers.default, self._tensor_space
-            )
+        self._backup_attention_preprocessor = BackupAttentionPreprocessor(
+            self._config.layers.default, self._tensor_space
+        )
 
     def get_layers(self) -> list[Layer]:
         return [
             LanguageModelEmbedding(self._config, self._tensor_space),
             *[
                 TransformerLayer(
-                    *self._config.layers.get_layer_config_and_tensor_space(i, self._tensor_space),
-                    layer_index=i + 1,
+                    *self._config.layers.get_layer_config_and_tensor_space(layer_index, self._tensor_space),
+                    layer_index=layer_index,
                 )
-                for i in range(self._config.layers.default.num_layers)
+                for layer_index in range(self._config.layers.default.num_layers)
             ],
             LanguageModelHead(self._config, self._tensor_space),
         ]
@@ -176,8 +175,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                 self._position_embedding_preprocessor.preprocess_meta(kwargs)
             if self._config.layers.default.rotary.enabled:
                 self._rotary_embedding_preprocessor.preprocess_meta(kwargs)
-            if not self._use_flash_attention:
-                self._backup_attention_preprocessor.preprocess_meta(kwargs)
+            self._backup_attention_preprocessor.preprocess_meta(kwargs)
             preprocessed_meta.append((tokens, kwargs))
 
         return preprocessed_meta
@@ -215,8 +213,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             self._position_embedding_preprocessor.create_tensors(sequence_length)
         if self._config.layers.default.rotary.enabled:
             self._rotary_embedding_preprocessor.create_tensors(sequence_length)
-        if not self._use_flash_attention:
-            self._backup_attention_preprocessor.create_tensors(sequence_length)
+        self._backup_attention_preprocessor.create_tensors(sequence_length)
 
         preprocessed = []
         presents = None
@@ -258,8 +255,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                 self._position_embedding_preprocessor.preprocess(kwargs)
             if self._config.layers.default.rotary.enabled:
                 self._rotary_embedding_preprocessor.preprocess(kwargs)
-            if not self._use_flash_attention:
-                self._backup_attention_preprocessor.preprocess(kwargs)
+            self._backup_attention_preprocessor.preprocess(kwargs)
             preprocessed.append((tokens, kwargs))
 
         return preprocessed

@@ -32,11 +32,6 @@ class LanguageModelKwargs:
 
 @config_class()
 class LanguageModelArchitectureConfig(BaseModelArchitectureConfig):
-    # transformer: TransformerLayerArchitectureConfig = Field(
-    #    default_factory=TransformerLayerArchitectureConfig,
-    #    desc="Configuration for the transformer architecture.",
-    #    hint=FieldHint.core,
-    # )
     layers: TransformerArchitectureConfig = Field(default_factory=TransformerArchitectureConfig)
     max_position_embeddings: int = Field(
         default=2048,
@@ -65,7 +60,6 @@ class LanguageModelArchitectureConfig(BaseModelArchitectureConfig):
         super()._validate()
 
     def setup_tensor_space(self, tensor_space: TensorSpace) -> None:
-        assert self._validated
         self.layers.setup_tensor_space(tensor_space)
         tensor = tensor_space.distributed_config.get_distributed_dim(DistributedDimNames.tensor)
 
@@ -124,7 +118,6 @@ class LanguageModelBaseConfig(LanguageModelArchitectureConfig, BaseModelConfig):
 
     architecture_class = LanguageModelArchitectureConfig
 
-    # transformer: TransformerLayerConfig = FieldUpdate(default_factory=TransformerLayerConfig)
     layers: TransformerConfig = FieldUpdate(default_factory=TransformerConfig)
     init_method_std_embed: float = Field(
         default=None,
