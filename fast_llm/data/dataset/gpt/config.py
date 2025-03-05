@@ -67,11 +67,6 @@ class GPTSamplingConfig(SamplingConfig):
         desc="Use per-document positions.",
         hint=FieldHint.feature,
     )
-    prevent_doc_truncation: bool | None = Field(
-        default=None,
-        desc="Prevent document truncation.",
-        hint=FieldHint.feature,
-    )
 
 
 @dataclasses.dataclass
