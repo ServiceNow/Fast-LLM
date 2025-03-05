@@ -7,6 +7,7 @@ import numpy as np
 import torch
 from torch._C._distributed_c10d import ProcessGroup
 
+from fast_llm.config import Configurable
 from fast_llm.engine.base_model.base_model import BaseModel
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.engine.config_utils.run import log_main_rank, log_model_parallel_main_rank
@@ -22,7 +23,9 @@ from fast_llm.utils import Assert, get_unique
 logger = logging.getLogger(__name__)
 
 
-class MultiStageModel:
+class MultiStageModel[ConfigType: FastLLMModelConfig](Configurable[ConfigType]):
+    config_class: typing.ClassVar[type[FastLLMModelConfig]] = FastLLMModelConfig
+    base_model_class: typing.ClassVar[type[BaseModel]] = BaseModel
     _is_setup: bool = False
     _state_shard: torch.Tensor
     _weight_shard: torch.Tensor
@@ -30,8 +33,6 @@ class MultiStageModel:
     _optimizer_shard: torch.Tensor
     _distributed: Distributed
     _mode: StageMode
-    config_class: typing.ClassVar[type[FastLLMModelConfig]] = FastLLMModelConfig
-    base_model_class: typing.ClassVar[type[BaseModel]] = BaseModel
 
     def __init__(
         self,
@@ -42,11 +43,8 @@ class MultiStageModel:
         # A filter to create only a subset of the stages. Used for model conversion.
         stage_filter: set | None = None,
     ):
-        self._config = config
-        self._base_model_config = self._config.base_model
-        self._multi_stage_config = self._config.multi_stage
-        self._distributed_config = self._config.distributed
-        self._base_model = self.base_model_class(self._base_model_config, self._distributed_config)
+        super().__init__(config)
+        self._base_model = self.base_model_class(self._config.base_model, self._config.distributed)
         self._training = None
         self._verbose = verbose
         self._stage_filter = stage_filter
@@ -58,15 +56,15 @@ class MultiStageModel:
             log_main_rank(lambda: f"  Splitting the model into {self._num_stages} stages...")
         Assert.geq(
             self._num_stages,
-            self._distributed_config.pipeline_parallel * self._multi_stage_config.stages_per_pipeline_stage,
+            self._config.distributed.pipeline_parallel * self._config.multi_stage.stages_per_pipeline_stage,
         )
 
         # Create the stages.
         self._stages = [
             Stage(
+                config=self._config.multi_stage,
                 base_model=self._base_model,
-                config=self._multi_stage_config,
-                distributed_config=self._distributed_config,
+                distributed_config=self._config.distributed,
                 begin=stage_splits[i],
                 end=stage_splits[i + 1],
                 index=i,
@@ -86,14 +84,14 @@ class MultiStageModel:
 
         # Determine which stages belong to this pipeline rank.
         self._stage_pipeline_ranks = {
-            stage_index: (stage_index // self._multi_stage_config.stages_per_pipeline_stage)
-            % self._distributed_config.pipeline_parallel
+            stage_index: (stage_index // self._config.multi_stage.stages_per_pipeline_stage)
+            % self._config.distributed.pipeline_parallel
             for stage_index in (range(self._num_stages))
         }
         self._stages_owned = {
             stage_index: self._stages[stage_index]
             for stage_index, stage_rank in self._stage_pipeline_ranks.items()
-            if stage_rank == self._distributed_config.pipeline_rank
+            if stage_rank == self._config.distributed.pipeline_rank
         }
 
         # Set up tied weights.
@@ -149,7 +147,7 @@ class MultiStageModel:
         # Pre-compute buffer specs.
         # TODO: Reduce code duplication.
         self._weight_buffer_contents, self._weight_buffer_indices = self._get_buffer_placement(
-            self._multi_stage_config.num_weight_buffers
+            self._config.multi_stage.num_weight_buffers
         )
         if self._verbose:
             log_model_parallel_main_rank(f"Weight buffer placement:\n{self._weight_buffer_indices}")
@@ -165,7 +163,7 @@ class MultiStageModel:
         )
 
         self._grad_buffer_contents, self._grad_buffer_indices = self._get_buffer_placement(
-            self._multi_stage_config.num_grad_buffers
+            self._config.multi_stage.num_grad_buffers
         )
         if self._verbose:
             log_model_parallel_main_rank(f"Grad buffer placement:\n{self._grad_buffer_indices}")
@@ -185,10 +183,10 @@ class MultiStageModel:
                 "Bfloat16 gradient accumulation and reduction is not recommended. (use --full_precision_gradients=1)"
             )
 
-    def setup(self, distributed: Distributed, mode: StageMode = StageMode.training):
+    def setup(self, distributed: Distributed, mode: StageMode = StageMode.training) -> None:
         # TODO: More checks?
         stage: Stage
-        assert distributed.config is self._distributed_config
+        assert distributed.config is self._config.distributed
         assert not self._is_setup
         self._is_setup = True
         self._distributed = distributed
@@ -289,7 +287,9 @@ class MultiStageModel:
 
         self.train(self._mode.support_backward)
 
-    def get_param_groups(self, param_group_cls: type[ParamGroup] = ParamGroup):
+    def get_param_groups(
+        self, param_group_cls: type[ParamGroup] = ParamGroup
+    ) -> tuple[list[ParamGroup], list[torch.Tensor]]:
         assert self._is_setup
         assert self._mode.support_training
         # Setup the optimizer param groups.
@@ -312,109 +312,95 @@ class MultiStageModel:
         return param_groups, grads_for_norm
 
     @property
-    def state_shard_meta(self):
+    def state_shard_meta(self) -> TensorMeta:
         return self._state_shard_meta
 
     @property
-    def support_forward(self):
+    def support_forward(self) -> bool:
         assert self._is_setup
         return self._mode.support_forward and self._stage_filter is None
 
     @property
-    def support_backward(self):
+    def support_backward(self) -> bool:
         assert self._is_setup
         return self._mode.support_backward and self._stage_filter is None
 
     @property
-    def support_training(self):
+    def support_training(self) -> bool:
         assert self._is_setup
         return self._mode.support_training and self._stage_filter is None
 
     @property
-    def base_model(self):
+    def base_model(self) -> BaseModel:
         return self._base_model
 
     @property
-    def stages(self):
+    def stages(self) -> list[Stage]:
         return self._stages
 
     @property
-    def state_shard(self):
+    def state_shard(self) -> torch.Tensor:
         return self._state_shard
 
     @property
-    def num_shards(self):
+    def num_shards(self) -> int:
         return len(self._state_shard_names) + 1
 
     @property
-    def num_state_shards(self):
+    def num_state_shards(self) -> int:
         return len(self._state_shard_names)
 
     @property
-    def stages_on_device(self):
+    def stages_on_device(self) -> dict[int, Stage]:
         return self._stages_on_device
 
     @property
-    def fast_llm_config(self):
-        return self._config
-
-    @property
-    def base_model_config(self):
-        return self._base_model_config
-
-    @property
-    def multi_stage_config(self):
-        return self._multi_stage_config
-
-    @property
-    def distributed_config(self):
-        return self._distributed_config
-
-    @property
-    def tied_parameters(self):
+    def tied_parameters(self) -> dict[str, "TiedParameter"]:
         return self._tied_parameters
 
     @property
-    def weight_buffer_indices(self):
+    def weight_buffer_indices(self) -> dict[int, int]:
         return self._weight_buffer_indices
 
     @property
-    def grad_buffer_indices(self):
+    def grad_buffer_indices(self) -> dict[int, int]:
         return self._grad_buffer_indices
 
     @property
-    def state_shard_names(self):
+    def state_shard_names(self) -> tuple[str, ...]:
         return self._state_shard_names
 
     @property
-    def stage_shard_sizes(self):
+    def stage_shard_sizes(self) -> list[int]:
         return self._stage_shard_sizes
 
     @property
-    def parameter_names(self):
+    def parameter_names(self) -> list[str]:
         return list(self._parameter_stages)
 
-    def get_parameter_stage(self, parameter_name: str):
+    def get_parameter_stage(self, parameter_name: str) -> Stage:
         return self._stages[self._parameter_stages[parameter_name]]
 
-    def is_parameter_on_device(self, parameter_name: str):
+    def is_parameter_on_device(self, parameter_name: str) -> bool:
         return self._parameter_stages[parameter_name] in self._stages_on_device
 
     @property
-    def distributed(self):
+    def distributed(self) -> Distributed:
         return self._distributed
 
-    def invalidate_buffers(self):
+    def invalidate_buffers(self) -> None:
         for stage in self._stages_on_device.values():
             stage.invalidate_buffer()
 
-    def train(self, mode: bool = True):
+    def train(self, mode: bool = True) -> None:
         if self._training != mode:
             for stage in self._stages_on_device.values():
                 stage.train(mode)
             self._training = mode
 
-    def get_state_tensor_iterator(self, shard_names: list[str], data_type: DataType | None = None):
+    def get_state_tensor_iterator(
+        self, shard_names: list[str], data_type: DataType | None = None
+    ) -> typing.Generator[tuple[str, str, torch.Tensor], None, None]:
         for i, shard_name in enumerate(shard_names):
             shard_split = self._state_shard[i].split(self._stage_shard_sizes, 0)
             for stage, shard in zip(self._stages_on_device.values(), shard_split):
@@ -435,21 +421,21 @@ class MultiStageModel:
         ]
         return self.get_parameter_stage(parameter_name).import_state_tensor(parameter_name, stage_shard, tensor)
 
-    def _split_into_stages(self):
+    def _split_into_stages(self) -> list[int]:
         # Create stages (greedy split, could do better).
         stage_splits = [0]
         layer_counter, last_counter = 0, 0
         for i, layer in enumerate(self._base_model):
             layer_counter += layer.layer_count  # noqa
             if (
-                layer_counter >= last_counter + self._multi_stage_config.layers_per_stage
+                layer_counter >= last_counter + self._config.multi_stage.layers_per_stage
                 or i == len(self._base_model) - 1
             ):
                 stage_splits.append(i + 1)
                 last_counter = layer_counter
         return stage_splits
 
-    def _get_buffer_placement(self, num_shared_buffers: int | None):
+    def _get_buffer_placement(self, num_shared_buffers: int | None) -> tuple[list[set[int]], dict[int, int]]:
         num_shared_buffers = num_shared_buffers or self._num_stages
         buffer_contents: list[set[int]] = [set() for _ in range(num_shared_buffers)]
         local_stage_index = 0
@@ -467,7 +453,7 @@ class MultiStageModel:
         }
         return buffer_contents, buffer_indices
 
-    def _get_tied_parameters(self, stage_ends):
+    def _get_tied_parameters(self, stage_ends) -> dict[str, "TiedParameter"]:
         tied_parameters = {}
         for name, (meta, layer_indexes) in self._base_model.get_tied_weights().items():
             Assert.eq(list(layer_indexes), sorted(layer_indexes))
@@ -479,7 +465,7 @@ class MultiStageModel:
                 name=name,
                 meta=meta,
                 all_ranks=all_ranks,
-                on_device=self._distributed_config.pipeline_rank in all_ranks,
+                on_device=self._config.distributed.pipeline_rank in all_ranks,
                 main_stage=stage_indexes[0],
             )
         return tied_parameters
@@ -498,7 +484,7 @@ class TiedParameter:
     # The index of the main stage.
     main_stage: int
 
-    def setup(self, distributed: Distributed):
+    def setup(self, distributed: Distributed) -> None:
         assert not hasattr(self, "group")
         # Setup the tied parameter process groups
         if len(self.all_ranks) > 1 and self.on_device:

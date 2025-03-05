@@ -22,15 +22,15 @@ class MLPRecomputeLevel(str, enum.Enum):
     full = "full"
 
     @property
-    def recompute_layer_1(self):
+    def recompute_layer_1(self) -> bool:
         return self == MLPRecomputeLevel.full
 
     @property
-    def recompute_activation(self):
+    def recompute_activation(self) -> bool:
         return self != MLPRecomputeLevel.none
 
     @property
-    def recompute_sparse_input(self):
+    def recompute_sparse_input(self) -> bool:
         return self in (MLPRecomputeLevel.full, MLPRecomputeLevel.activation_and_input)
 
 
@@ -45,21 +45,21 @@ class ActivationType(str, enum.Enum):
     squared_relu = "squared_relu"
 
     @property
-    def activation_fn(self):
+    def activation_fn(self) -> typing.Callable[["torch.Tensor"], "torch.Tensor"]:
         if not _ACTIVATION_FN_MAP:
             _set_activation_fn_map()
         return _ACTIVATION_FN_MAP[self]
 
     @property
-    def hf_name(self):
+    def hf_name(self) -> str:
         return _ACTIVATION_HF_NAMES[self]
 
     @classmethod
-    def from_hf_name(cls, hf_name) -> "ActivationType":
+    def from_hf_name(cls, hf_name) -> typing.Self:
         return _ACTIVATION_HF_NAMES_INV[hf_name]
 
 
-def _set_activation_fn_map():
+def _set_activation_fn_map() -> None:
     import torch
     import torch.nn
 

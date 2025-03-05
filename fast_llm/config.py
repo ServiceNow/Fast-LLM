@@ -9,7 +9,7 @@ import warnings
 
 import yaml
 
-from fast_llm.utils import Assert, Tag, get_type_name, header, log
+from fast_llm.utils import Assert, Tag, get_type_name, header, log, pop_nested_dict_value, set_nested_dict_value
 
 logger = logging.getLogger(__name__)
 
@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 _AUTO_VALIDATE = True
 
 MISSING = Tag("<MISSING>")
+DEFAULT = Tag("<DEFAULT>")
 
 
 class NoAutoValidate:
@@ -36,7 +37,7 @@ class NoAutoValidate:
 
 
 class _ConfigDictFormat(str, enum.Enum):
-    # TODO v0.2: delete class
+    # TODO v0.3: delete class
     flat = "flat"
     nested = "nested"
     tuple = "tuple"
@@ -286,12 +287,11 @@ class Config:
         In general this should not be overridden in derived classes,
         and all post-processing should be done in `_validate`
         """
-        self._check_abstract()
         self._validated = False
         if _AUTO_VALIDATE:
             self.validate()
 
-    def __setattr__(self, key, value):
+    def __setattr__(self, key: str, value: typing.Any) -> None:
         """
         Make the class read-only after validation.
         """
@@ -307,7 +307,7 @@ class Config:
             )
         super().__setattr__(key, value)
 
-    def __delattr__(self, key):
+    def __delattr__(self, key: str) -> None:
         """
         Make the class read-only after validation.
         """
@@ -318,7 +318,7 @@ class Config:
             )
         super().__delattr__(key)
 
-    def validate(self, *, _is_validating=False):
+    def validate[T](self: T, *, _is_validating: bool = False) -> T:
         """
         Validate a class and mark it as read-only
         This should not be overridden in derived classes.
@@ -334,7 +334,7 @@ class Config:
             self._validated = True
         return self
 
-    def _validate(self):
+    def _validate(self) -> None:
         """
         Verify that the type hints are respected,
         and fix some know entries compatible with the type hint (ex. `int -> float`, `str -> pathlib.Path`)
@@ -342,11 +342,16 @@ class Config:
         Can be extended to add custom post-processing (typically before the super() call)
         and validation (typically after)
         """
+        self._check_abstract()
         errors = []
         for name, field in self.fields():
             if not field.init or field._field_type == dataclasses._FIELD_CLASSVAR:  # noqa
                 continue
             value = getattr(self, name)
+            if value is DEFAULT:
+                # Replace the value with its default.
+                # We still need to validate because some fields have invalid defaults.
+                value = field.default
             new_value = self._validate_nested(value, field.type, field.name, field.valid, errors, False)
             setattr(self, name, new_value)
         for name in getattr(self, "_unknown_fields", {}):
@@ -517,7 +522,7 @@ class Config:
         return cls.__dataclass_fields__.items()  # noqa
 
     @classmethod
-    def get_field(cls, name) -> Field:
+    def get_field(cls, name: str) -> Field:
         return cls.__dataclass_fields__[name]  # noqa
 
     def _to_dict(
@@ -526,7 +531,7 @@ class Config:
         all_fields: bool = False,
         format_: _ConfigDictFormat = _ConfigDictFormat.nested,
         serializable: bool = False,
-    ):
+    ) -> dict[str, typing.Any]:
         """
         Serialize the config to a dict that can (generally) be used to reconstruct an identical `Config`.
         When not flat, the dict includes a `__class__` entry which allows support for derived classes.
@@ -556,12 +561,12 @@ class Config:
         args: dict | list,
         name: str | None,
         field: Field | None,
-        value,
+        value: typing.Any,
         verbose: int | None = None,
         all_fields: bool = False,
         format_: _ConfigDictFormat = _ConfigDictFormat.nested,
         serializable: bool = False,
-    ):
+    ) -> None:
         if (
             field is not None
             and (not field.init or field._field_type == dataclasses._FIELD_CLASSVAR)
@@ -599,15 +604,12 @@ class Config:
         else:
             field_value = value
             if serializable:
-                if hasattr(value, "__fast_llm_serialize__"):
-                    field_value = field_value.__fast_llm_serialize__()
-                if isinstance(value, enum.Enum):
-                    field_value = field_value.value
-                elif not isinstance(value, int | float | bool | str | None):
-                    field_value = str(field_value)
+                field_value = cls._serialize_value(value)
             if format_ == _ConfigDictFormat.tuple:
                 field_value = {(): field_value}
 
+        if serializable:
+            name = cls._serialize_value(name)
         if format_ == _ConfigDictFormat.tuple:
             args.update({(name,) + name_: value_ for name_, value_ in field_value.items()})
         elif format_ == _ConfigDictFormat.nested:
@@ -619,24 +621,37 @@ class Config:
         else:
             raise NotImplementedError(format_)
 
-    def to_copy(
-        self,
-        *updates: typing.Union["Config", dict[str | tuple[str, ...], typing.Any]],
-        strict: bool = True,
-    ):
+    @classmethod
+    def _serialize_value(cls, value: typing.Any) -> int | float | bool | str | None:
+        value = value
+        if hasattr(value, "__fast_llm_serialize__"):
+            value = value.__fast_llm_serialize__()
+        if isinstance(value, enum.Enum):
+            value = value.value
+        # Tag is not actually serializable, but needs to be kept as-is for config processing,
+        # and should be absent for valid configs.
+        elif not isinstance(value, int | float | bool | str | Tag | None):
+            value = str(value)
+        return value
+
+    def to_copy[
+        T
+    ](self: T, *updates: typing.Union["Config", dict[str | tuple[str, ...], typing.Any]], strict: bool = True,) -> T:
         return self.from_dict(self, *updates, strict=strict)
 
-    def to_serialized(self, verbose: int | None = FieldVerboseLevel.core):
+    def to_serialized(self, verbose: int | None = FieldVerboseLevel.core) -> dict[str, typing.Any]:
         return self._to_dict(verbose=verbose, format_=_ConfigDictFormat.nested, serializable=True)
 
-    def to_logs(
+    def to_logs[
+        T
+    ](
         self,
         verbose: int | None = FieldVerboseLevel.core,
-        log_fn=logger.info,
+        log_fn: typing.Callable[[str], T] = logger.info,
         title: str | None = None,
         width: int = 80,
         fill_char: str = "-",
-    ):
+    ) -> T:
         arg_dict = self.to_serialized(verbose=verbose)
         if title is None:
             title = self._get_class_name()
@@ -647,7 +662,7 @@ class Config:
         )
 
     @classmethod
-    def _get_class_name(cls):
+    def _get_class_name(cls) -> str:
         return get_type_name(cls)
 
     @classmethod
@@ -656,22 +671,14 @@ class Config:
         default: typing.Union["Config", dict[str, typing.Any]],
         *updates: typing.Union["Config", dict[str | tuple[str, ...], typing.Any]],
         strict: bool = True,
-    ):
+    ) -> typing.Self:
         if isinstance(default, Config):
             default = default._to_dict()
         for update in updates:
             if isinstance(update, Config):
                 update = update._to_dict(format_=_ConfigDictFormat.tuple)
             for keys, value in update.items():
-                if isinstance(keys, str):
-                    default[keys] = value
-                else:
-                    dict_to_update = default
-                    for key in keys[:-1]:
-                        if key not in dict_to_update:
-                            dict_to_update[key] = {}
-                        dict_to_update = dict_to_update[key]
-                    dict_to_update[keys[-1]] = value
+                set_nested_dict_value(default, keys, value)
 
         return cls._from_dict(default, strict)
 
@@ -680,8 +687,8 @@ class Config:
         cls,
         default: dict[str, typing.Any],
         strict: bool = True,
-    ):
-        # TODO v0.2: Remove flat format
+    ) -> typing.Self:
+        # TODO v0.3: Remove flat format
         return cls._from_dict(default, strict, True)
 
     @classmethod
@@ -690,12 +697,11 @@ class Config:
         default: dict[str, typing.Any],
         strict: bool = True,
         flat: bool = False,
-    ):
-        cls._check_abstract()
-        # TODO v0.2: Remove flat format
+    ) -> typing.Self:
+        # TODO v0.3: Remove flat format
         out_arg_dict = {}
 
-        # TODO v0.2: Remove backward compatibility fix
+        # TODO v0.3: Remove backward compatibility fix
         if "__class__" in default:
             del default["__class__"]
 
@@ -802,12 +808,21 @@ class Config:
         return {key: cls._from_dict_nested(value_, args[1], strict) for key, value_ in value.items()}
 
     @classmethod
-    def _handle_renamed_field(cls, default: dict[str, typing.Any], old_name: str, new_name: str):
+    def _handle_renamed_field(
+        cls,
+        default: dict[str, typing.Any],
+        old_name: str | tuple[str, ...],
+        new_name: str | tuple[str, ...],
+        fn: typing.Callable | None = None,
+    ) -> None:
         if old_name in default:
             warnings.warn(f"Field `{old_name}` is deprecated in class {get_type_name(cls)}, use `{new_name}` instead.")
-            default[new_name] = default.pop(old_name)
+            value = pop_nested_dict_value(default, old_name)
+            if fn is not None:
+                value = fn(value)
+            set_nested_dict_value(default, new_name, value)
 
-    def compare(self, other: "Config", log_fn: typing.Union[BaseException, typing.Callable] = ValueError):
+    def compare(self, other: "Config", log_fn: typing.Union[type[BaseException], typing.Callable] = ValueError):
         # TODO: Check classes?
         self_dict = self._to_dict(format_=_ConfigDictFormat.tuple, serializable=True)
         other_dict = other._to_dict(format_=_ConfigDictFormat.tuple, serializable=True)
@@ -824,18 +839,20 @@ class Config:
             log(
                 f"Config diff:\n  "
                 + "\n  ".join(
-                    f"{''.join(key)}`: `{self_value}` != `{other_value}`"
+                    f"{'.'.join(key)}`: `{self_value}` != `{other_value}`"
                     for key, (self_value, other_value) in diff.items()
                 ),
                 log_fn=log_fn,
             )
 
     @classmethod
-    def _check_abstract(cls):
+    def _check_abstract(cls) -> None:
         if cls._abstract:
-            raise RuntimeError(f"{cls.__name__} is abstract")
+            raise ValidationError(f"{cls.__name__} is abstract")
         if not cls.__class_validated__:
-            raise RuntimeError(f"{cls.__name__} hasn't been validated. Make sure to use the @config_class decorator.")
+            raise ValidationError(
+                f"{cls.__name__} hasn't been validated. Make sure to use the @config_class decorator."
+            )
 
     def __init_subclass__(cls):
         """
@@ -885,3 +902,17 @@ class Config:
                 else:
                     # dataclasses expects an annotation, so we use the one from the base class.
                     cls.__annotations__[name] = base_class_field.type
+
+
+class Configurable[ConfigType: Config]:
+    config_class: typing.ClassVar[type[Config]] = Config
+
+    def __init__(self, config: ConfigType, *args, **kwargs):
+        Assert.custom(isinstance, config, self.config_class)
+        self._config = config
+        # Handle multiple inheritance.
+        super().__init__(*args, **kwargs)
+
+    @property
+    def config(self) -> ConfigType:
+        return self._config

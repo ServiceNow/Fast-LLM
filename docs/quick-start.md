@@ -45,11 +45,11 @@ Now, select the compute environment that matches your setup or preferred workflo
 
     If you prefer not to use the prebuilt Docker image or already have an environment you'd like to use (e.g., a custom Docker image, virtual environment, or bare-metal setup), follow these steps to install the necessary software and dependencies:
 
-    1.  **Ensure Python 3.10**:
-        Install Python 3.10 (or later) if it's not already available on your system. For a Python virtual environment, run:
+    1.  **Ensure Python 3.12**:
+        Install Python 3.12 (or later) if it's not already available on your system. For a Python virtual environment, run:
 
         ```bash
-        python3.10 -m venv ./fast-llm-tutorial/venv
+        python3.12 -m venv ./fast-llm-tutorial/venv
         source ./fast-llm-tutorial/venv/bin/activate
         pip install --upgrade pip
         ```
@@ -202,11 +202,11 @@ Choose based on your goals for this tutorial.
 
 === "Big"
 
-    For the big configuration, we'll use a Llama model with 8B parameters. We'll grab the model from the Huggingface Hub and save it to our inputs folder.
+    For the big configuration, we'll use a Llama model with 8B parameters. We'll grab the model from the HuggingFace Hub and save it to our inputs folder.
 
     !!! note "Access Required"
 
-        Meta gates access to their Llama models. You need to request access to the model from Meta before you can download it at https://huggingface.co/meta-llama/Llama-3.1-8B. You'll need to authenticate with your Hugging Face account to download the model:
+        Meta gates access to their Llama models. You need to request access to the model from Meta before you can download it at https://huggingface.co/meta-llama/Llama-3.1-8B. You'll need to authenticate with your HuggingFace account to download the model:
 
         ```bash
         pip install huggingface_hub
@@ -214,7 +214,7 @@ Choose based on your goals for this tutorial.
         ```
 
         When asked for whether to use this as git credentials, answer in the affirmative.
-    
+
     ```
     git lfs install
     git clone https://huggingface.co/meta-llama/Llama-3.1-8B ./fast-llm-tutorial/pretrained-model
@@ -224,7 +224,8 @@ Choose based on your goals for this tutorial.
 
 For this tutorial, we'll use text from the [OpenWebText](https://skylion007.github.io/OpenWebTextCorpus/) dataset. This dataset is a free approximation of the WebText data OpenAI used for GPT-2, and it's perfect for our test run!
 
-Create a configuration file for the dataset preparation. Copy the following content:
+Create a configuration file for the dataset preparation.
+Save the following as `./fast-llm-tutorial/prepare-config.yaml``:
 
 === "Small"
 
@@ -236,16 +237,21 @@ Create a configuration file for the dataset preparation. Copy the following cont
     saving_workers: 16
 
     dataset:
-      path: openwebtext
-      split: "train[:10000]"  # (2)!
+      path: stas/openwebtext-10k  # (2)!
+      split: "train"
       trust_remote_code: true
 
     tokenizer:
       path: fast-llm-tutorial/pretrained-model
+
+    splits:  # (3)!
+      training: 0.9
+      validation: 0.1
     ```
 
     1. Processing speed scales linearly with the number of CPUs.
-    2. We're [slicing](https://huggingface.co/docs/datasets/v1.11.0/splits.html) the dataset to the first 10K records of the OpenWebText dataset to speed up the process. If you want to use the full dataset, set the `split` to `train`.
+    2. This small dataset restricts to the first 10K records of the OpenWebText dataset to speed up the process. If you want to use the full dataset, replace with `openwebtext`.
+    3.  90% train, 10% validation. These settings need to be adjusted based on the size of your dataset.
 
 === "Big"
 
@@ -263,11 +269,14 @@ Create a configuration file for the dataset preparation. Copy the following cont
 
     tokenizer:
       path: fast-llm-tutorial/pretrained-model
+
+    splits:  # (2)!
+      training: 0.99
+      validation: 0.01
     ```
 
     1. Processing speed scales linearly with the number of CPUs.
-
-Save it as `./fast-llm-tutorial/prepare-config.yaml`.
+    2.  99% train, 1% validation. These settings need to be adjusted based on the size of your dataset.
 
 Fast-LLM ships with a `prepare` command that will download and preprocess the dataset for you.
 
@@ -314,10 +323,10 @@ Fast-LLM ships with a `prepare` command that will download and preprocess the da
         bash -c "
             torchrun --rdzv_backend=static \
                      --rdzv_id=0 \
-                     --rdzv_endpoint=${MASTER_ADDR}:${MASTER_PORT} \
-                     --node_rank=\$SLURM_NODEID \
-                     --nproc_per_node=\$SLURM_NTASKS_PER_NODE \
-                     --nnodes=\$SLURM_NNODES:\$SLURM_NNODES \
+                     --rdzv_endpoint=\${MASTER_ADDR}:\${MASTER_PORT} \
+                     --node_rank=\\$SLURM_NODEID \
+                     --nproc_per_node=\\$SLURM_NTASKS_PER_NODE \
+                     --nnodes=\\$SLURM_NNODES:\\$SLURM_NNODES \
                      --max_restarts=0 \
                      --rdzv_conf=timeout=3600 \
                      --no_python \
@@ -352,6 +361,11 @@ Fast-LLM ships with a `prepare` command that will download and preprocess the da
           restartPolicy: Never
           template:
             spec:
+              tolerations:
+                - key: nvidia.com/gpu
+                  value: "true"
+                  operator: Equal
+                  effect: NoSchedule
               containers:
                 - name: pytorch
                   image: ghcr.io/servicenow/fast-llm:latest
@@ -368,10 +382,10 @@ Fast-LLM ships with a `prepare` command that will download and preprocess the da
                     - |
                       torchrun --rdzv_backend=static \
                                --rdzv_id=0 \
-                               --rdzv_endpoint=${MASTER_ADDR}:${MASTER_PORT} \
-                               --node_rank=${RANK} \
-                               --nproc_per_node=${PET_NPROC_PER_NODE} \
-                               --nnodes=${PET_NNODES}:${PET_NNODES} \
+                               --rdzv_endpoint=\${MASTER_ADDR}:\${MASTER_PORT} \
+                               --node_rank=\${RANK} \
+                               --nproc_per_node=\${PET_NPROC_PER_NODE} \
+                               --nnodes=\${PET_NNODES}:\${PET_NNODES} \
                                --max_restarts=0 \
                                --rdzv_conf=timeout=3600 \
                                --no_python \
@@ -402,6 +416,11 @@ Fast-LLM ships with a `prepare` command that will download and preprocess the da
           restartPolicy: Never
           template:
             spec:
+              tolerations:
+                - key: nvidia.com/gpu
+                  value: "true"
+                  operator: Equal
+                  effect: NoSchedule
               containers:
                 - name: pytorch
                   image: ghcr.io/servicenow/fast-llm:latest
@@ -418,10 +437,10 @@ Fast-LLM ships with a `prepare` command that will download and preprocess the da
                     - |
                       torchrun --rdzv_backend=static \
                                --rdzv_id=0 \
-                               --rdzv_endpoint=${MASTER_ADDR}:${MASTER_PORT} \
-                               --node_rank=${RANK} \
-                               --nproc_per_node=${PET_NPROC_PER_NODE} \
-                               --nnodes=${PET_NNODES}:${PET_NNODES} \
+                               --rdzv_endpoint=\${MASTER_ADDR}:\${MASTER_PORT} \
+                               --node_rank=\${RANK} \
+                               --nproc_per_node=\${PET_NPROC_PER_NODE} \
+                               --nnodes=\${PET_NNODES}:\${PET_NNODES} \
                                --max_restarts=0 \
                                --rdzv_conf=timeout=3600 \
                                --no_python \
@@ -470,15 +489,15 @@ Save the following as `fast-llm-tutorial/train-config.yaml`:
 
     ```yaml
     training:
-      train_iters: 1000  # (1)!
+      train_iters: 100  # (1)!
       logs:
         interval: 10
       validation:
         iterations: 25
-        interval: 1000
+        interval: 100
       export:  # (2)!
         format: llama
-        interval: 1000
+        interval: 100
       wandb:  # (3)!
         project_name: fast-llm-tutorial
         group_name: Small
@@ -488,33 +507,36 @@ Save the following as `fast-llm-tutorial/train-config.yaml`:
       sequence_length: 1024
       batch_size: 480  # (5)!
     data:
-      format: file
-      path: fast-llm-tutorial/dataset/fast_llm_dataset.json  # (6)!
-      split: [9, 1, 0]  # (7)!
+      datasets:
+        Training:
+          type: file
+          path: fast-llm-tutorial/dataset/fast_llm_config_training.yaml  # (6)!
+        Validation:
+          type: file
+          path: fast-llm-tutorial/dataset/fast_llm_config_validation.yaml  # (6)!
     optimizer:
       learning_rate:
         base: 6.0e-04
     pretrained:
-      format: llama  # (8)!
+      format: llama  # (7)!
       path: fast-llm-tutorial/pretrained-model
-      model_weights: no  # (9)!
+      model_weights: no  # (8)!
     model:
       base_model:
         transformer:
-          use_flash_attention: yes  # (10)!
+          use_flash_attention: yes  # (9)!
       distributed:
-        training_dtype: bf16  # (11)!
+        training_dtype: bf16  # (10)!
     run:
       experiment_dir: fast-llm-tutorial/experiment
     ```
 
-    1.  For the small run, we'll stop after 1000 iterations.
-    2.  A Llama model will be saved in Hugging Face format to experiment directory at the end of the small run.
+    1.  For the small run, we'll stop after 100 iterations.
+    2.  The trained model will be saved in `Transformers` Llama format to `fast-llm-tutorial/experiment/export/llama/100` at the end of the small run. You can also save as  a `Fast-LLM` checkpoint by setting the `format` to `fast_llm`.
     3.  Entirely optional, but it's a good idea to track your training progress with Weights & Biases. Replace `null` with your own W&B entity name. If you don't want to use W&B, just ignore this section.
-    3.  Adjust the number of sequences per GPU based on GPU memory. For SmolLM2-135M at 1024 sequenced length and a 80GB GPU, a `micro_batch_size` of 60 should work well.
-    4.  Must be divisible by the number of GPUs and the `micro_batch_size`. At 1024 tokens per sequence, 480 corresponds to about 500,000 tokens per batch.
-    5.  Location of the dataset metadata file generated in Step 4.
-    6.  90% train, 10% validation, 0% test. These settings need to be adjusted based on the size of your dataset.
+    4.  Adjust the number of sequences per GPU based on GPU memory. For SmolLM2-135M at 1024 sequenced length and a 80GB GPU, a `micro_batch_size` of 60 should work well.
+    5.  Must be divisible by the number of GPUs and the `micro_batch_size`. At 1024 tokens per sequence, 480 corresponds to about 500,000 tokens per batch.
+    6.  Location of the dataset metadata files generated in Step 4.
     7.  Format of the pretrained model. Since SmolLM is a Llama model, we set this to `llama`.
     8.  We'll train SmolLM2-135M from scratch. You can set to `yes` to continue training from a checkpoint (if you put one in the model directory).
     9.  By default, Fast-LLM uses FlashAttention for faster training. If you're using Volta GPUs, set this to `no`.
@@ -542,55 +564,58 @@ Save the following as `fast-llm-tutorial/train-config.yaml`:
         group_name: Big
         entity_name: null
     batch:
-      micro_batch_size: 1  # (4)!
+      micro_batch_size: 2  # (4)!
       sequence_length: 4096
-      batch_size: 480  # (5)!
+      batch_size: 512  # (5)!
     data:
-      format: file
-      path: fast-llm-tutorial/dataset/fast_llm_dataset.json  # (6)!
-      split: [99, 1, 0]  # (7)!
-    optimizer:  # (8)!
+      datasets:
+        Training:
+          type: file
+          path: fast-llm-tutorial/dataset/fast_llm_config_training.yaml  # (6)!
+        Validation:
+          type: file
+          path: fast-llm-tutorial/dataset/fast_llm_config_validation.yaml  # (6)!
+    optimizer:  # (7)!
       weight_decay: 0.1
       beta_1: 0.9
       beta_2: 0.95
-      learning_rate:  # (9)!
+      learning_rate:  # (8)!
         base: 6.0e-04
         minimum: 6.0e-05
         decay_style: cosine
         decay_iterations: 100_000
         warmup_iterations: 2000
     pretrained:
-      format: llama  # (10)!
+      format: llama  # (9)!
       path: fast-llm-tutorial/pretrained-model
-      model_weights: yes  # (11)!
+      model_weights: yes  # (10)!
     model:
       base_model:
         transformer:
-          use_flash_attention: yes  # (12)!
-        cross_entropy_impl: fused  # (13)!
+          use_flash_attention: yes  # (11)!
+        cross_entropy_impl: fused  # (12)!
       multi_stage:
-        zero_stage: 2  # (14)!
+        zero_stage: 2  # (13)!
       distributed:
-        training_dtype: bf16  # (15)!
+        training_dtype: bf16  # (14)!
     run:
       experiment_dir: fast-llm-tutorial/experiment
     ```
 
-    1.  Total number of training tokens will be approximately 200B: 100,000 iterations * 480 * 4096 tokens per batch.
-    2.  A Llama model will be saved in Hugging Face format to `~/results` directory every 20,000 iterations.
+    1.  Total number of training tokens will be approximately 210B: 100,000 iterations * 512 * 4096 tokens per batch.
+    2.  A permanent model checkpoint in `Transformers` Llama format will be saved to `fast-llm-tutorial/experiment/export/llama/[iteration]/` every 20,000 iterations. You can also save as a `Fast-LLM` checkpoint by setting the `format` to `fast_llm`.
     3.  Entirely optional, but it's a good idea to track your training progress with Weights & Biases. Replace `null` with your own W&B entity name. If you don't want to use W&B, just ignore this section.
     4.  Adjust the number of sequences per GPU based on GPU memory. Considering a 4k token sequence length and 80GB GPUs, a `micro_batch_size` of 1 should work well.
-    5.  Must be divisible by the number of GPUs and the `micro_batch_size`. At 4k tokens per sequence, 480 corresponds to about 2 million tokens per batch.
+    5.  Must be divisible by the number of GPUs and the `micro_batch_size`. At 4k tokens per sequence, 512 corresponds to about 2.1 million tokens per batch.
     6.  Location of the dataset metadata file generated in Step 4.
-    7.  99% train, 1% validation, 0% test. These settings need to be adjusted based on the size of your dataset. If you're using a smaller dataset, you need to increase the validation split.
-    8.  These are good default optimizer settings for training models.
-    9.  We are using a cosine decay schedule with linear warmup. After reaching the peak learning rate `base` at `warmup_iterations`, the learning rate will decay to `minimum` at `decay_iterations`, following a cosine curve. The minimum learning rate should be 1/10th of the base learning rate per Chinchilla.
-    10.  Format of the pretrained model. Since it's a Llama model, we set this to `llama`.
-    11.  We want to continue training Llama-3.1-8B from a checkpoint. If you're training from scratch, set this to `no`.
-    12.  By default, Fast-LLM uses FlashAttention for faster training. If you're using Volta GPUs, set this to `no`.
-    13.  Configure Fast-LLM to use the fused cross-entropy loss implementation rather than the default Triton implementation for models with a large vocabulary size such as Llama-3.1-8B. This avoids issues with block size limitations in our current Triton code.
-    14.  We are using ZeRO stage 2 for this tutorial. You can set this to `1`, `2`, or `3` for ZeRO-1, ZeRO-2, or ZeRO-3, respectively.
-    15.  `bf16` (bfloat16, or Brain Floating Point 16) is supported on Ampere GPUs and higher. On Volta GPUs, use `fp16` (half-precision floating point) for training instead of `bf16`.
+    7.  These are good default optimizer settings for training models.
+    8.  We are using a cosine decay schedule with linear warmup. After reaching the peak learning rate `base` at `warmup_iterations`, the learning rate will decay to `minimum` at `decay_iterations`, following a cosine curve. The minimum learning rate should be 1/10th of the base learning rate per Chinchilla.
+    9.  Format of the pretrained model. Since it's a Llama model, we set this to `llama`.
+    10.  We want to continue training Llama-3.1-8B from a checkpoint. If you're training from scratch, set this to `no`.
+    11.  By default, Fast-LLM uses FlashAttention for faster training. If you're using Volta GPUs, set this to `no`.
+    12.  Configure Fast-LLM to use the fused cross-entropy loss implementation rather than the default Triton implementation for models with a large vocabulary size such as Llama-3.1-8B. This avoids issues with block size limitations in our current Triton code.
+    13.  We are using ZeRO stage 2 for this tutorial. You can set this to `1`, `2`, or `3` for ZeRO-1, ZeRO-2, or ZeRO-3, respectively.
+    14.  `bf16` (bfloat16, or Brain Floating Point 16) is supported on Ampere GPUs and higher. On Volta GPUs, use `fp16` (half-precision floating point) for training instead of `bf16`.
 
 ## 🔑 (Optional) Step 6: Add Your Weights & Biases API Key
 
@@ -650,21 +675,21 @@ Alright, the big moment! Let's launch the training run.
         --container-image="ghcr.io/servicenow/fast-llm:latest" \
         --container-mounts="$(pwd)/fast-llm-tutorial:/app/fast-llm-tutorial" \
         --container-env="PYTHONHASHSEED,WANDB_API_KEY_PATH,TORCH_NCCL_ASYNC_ERROR_HANDLING,NCCL_DEBUG" \
-        --gpus-per-node=$SLURM_GPUS_PER_NODE \
-        --ntasks-per-node=$SLURM_NTASKS_PER_NODE \
+        --gpus-per-node=\$SLURM_GPUS_PER_NODE \
+        --ntasks-per-node=\$SLURM_NTASKS_PER_NODE \
         bash -c "
             torchrun --rdzv_backend=static \
                      --rdzv_id=0 \
-                     --rdzv_endpoint=${MASTER_ADDR}:${MASTER_PORT} \
-                     --node_rank=\$SLURM_NODEID \
-                     --nproc_per_node=\$SLURM_GPUS_PER_NODE \
-                     --nnodes=\$SLURM_NNODES \
+                     --rdzv_endpoint=\${MASTER_ADDR}:\${MASTER_PORT} \
+                     --node_rank=\\$SLURM_NODEID \
+                     --nproc_per_node=\\$SLURM_GPUS_PER_NODE \
+                     --nnodes=\\$SLURM_NNODES \
                      --max_restarts=0 \
                      --rdzv_conf=timeout=3600 \
                      --no_python \
                      fast-llm train gpt \
                      --config fast-llm-tutorial/train-config.yaml"
-    EOF 
+    EOF
     ```
 
 === "Kubeflow"
@@ -715,10 +740,10 @@ Alright, the big moment! Let's launch the training run.
                     - -c
                     - |
                       torchrun --rdzv_backend=static \
-                               --rdzv_endpoint=${MASTER_ADDR}:${MASTER_PORT} \
-                               --node_rank=${RANK} \
-                               --nproc_per_node=${PET_NPROC_PER_NODE} \
-                               --nnodes=${PET_NNODES} \
+                               --rdzv_endpoint=\${MASTER_ADDR}:\${MASTER_PORT} \
+                               --node_rank=\${RANK} \
+                               --nproc_per_node=\${PET_NPROC_PER_NODE} \
+                               --nnodes=\${PET_NNODES} \
                                --max_restarts=0 \
                                --rdzv_conf=timeout=3600 \
                                --no_python \
@@ -739,11 +764,11 @@ Alright, the big moment! Let's launch the training run.
                         - IPC_LOCK
                   volumeMounts:
                     - mountPath: /app/fast-llm-tutorial
-                      name: fast-llm-inputs
+                      name: fast-llm-tutorial
                     - mountPath: /dev/shm
                       name: dshm
               volumes:
-                - name: fast-llm-inputs
+                - name: fast-llm-tutorial
                   persistentVolumeClaim:
                     claimName: pvc-fast-llm-tutorial
                 - name: dshm
@@ -779,10 +804,10 @@ Alright, the big moment! Let's launch the training run.
                     - -c
                     - |
                       torchrun --rdzv_backend=static \
-                               --rdzv_endpoint=${MASTER_ADDR}:${MASTER_PORT} \
-                               --node_rank=${RANK} \
-                               --nproc_per_node=${PET_NPROC_PER_NODE} \
-                               --nnodes=${PET_NNODES} \
+                               --rdzv_endpoint=\${MASTER_ADDR}:\${MASTER_PORT} \
+                               --node_rank=\${RANK} \
+                               --nproc_per_node=\${PET_NPROC_PER_NODE} \
+                               --nnodes=\${PET_NNODES} \
                                --max_restarts=0 \
                                --rdzv_conf=timeout=3600 \
                                --no_python \
@@ -803,11 +828,11 @@ Alright, the big moment! Let's launch the training run.
                         - IPC_LOCK
                   volumeMounts:
                     - mountPath: /app/fast-llm-tutorial
-                      name: fast-llm-inputs
+                      name: fast-llm-tutorial
                     - mountPath: /dev/shm
                       name: dshm
               volumes:
-                - name: fast-llm-inputs
+                - name: fast-llm-tutorial
                   persistentVolumeClaim:
                     claimName: pvc-fast-llm-tutorial
                 - name: dshm
@@ -868,14 +893,14 @@ You can expect to see the following performance metrics in Fast-LLM's output:
 
     | Performance Metric                       | 8x V100-SXM2-32GB[^SmolLM2-V100] | 8x A100-SXM4-80GB[^SmolLM2-A100] | 8x H100-SXM5-80GB[^SmolLM2-H100] |
     |------------------------------------------|---------------------------------:|---------------------------------:|---------------------------------:|
-    | tokens/s/GPU                             | 16,700                           |                                  | 294,000                          |
-    | tflop/s (model)                          | 15.3                             |                                  | 268                              |
+    | tokens/s/GPU                             | 16,700                           | 149,000                          | 294,000                          |
+    | tflop/s (model)                          | 15.3                             | 137                              | 268                              |
     | peak tflop/s (theoretical)[^peak-tflops] | 125                              | 312                              | 990                              |
-    | utilization                              | 12.2%                            |                                  | 27.1%                            |
+    | utilization                              | 12.2%                            | 44%                              | 27%                              |
     | total training time                      | 68 minutes                       |                                  | 3.9 minutes                      |
 
     [^SmolLM2-V100]:
-        Precision was set to `fp16`, since `bf16` is not supported on V100 GPUs. 
+        Precision was set to `fp16`, since `bf16` is not supported on V100 GPUs.
         FlashAttention was disabled, as it is not supported on V100 GPUs.
         Micro-batch size was set to 12.
     [^SmolLM2-A100]:
@@ -891,14 +916,14 @@ You can expect to see the following performance metrics in Fast-LLM's output:
 
     | Performance Metric                       | 32x V100-SXM2-32GB[^Llama-V100] | 32x A100-SXM4-80GB[^Llama-A100] | 32x H100-SXM5-80GB[^Llama-H100] |
     |------------------------------------------|--------------------------------:|--------------------------------:|--------------------------------:|
-    | tokens/s/GPU                             |                                 |                                 | 9,220                           |
-    | tflop/s (model)                          |                                 |                                 | 445                             |
+    | tokens/s/GPU                             |                                 |                                 | 10,100                          |
+    | tflop/s (model)                          |                                 |                                 | 487                             |
     | peak tflop/s (theoretical)[^peak-tflops] | 125                             | 312                             | 990                             |
-    | utilization                              |                                 |                                 | 45.0%                           |
-    | total training time                      |                                 |                                 | 7.7 days                        |
+    | utilization                              |                                 |                                 | 49.2%                           |
+    | total training time                      |                                 |                                 | 180 hours                       |
 
     [^Llama-V100]:
-        Precision was set to `fp16`, since `bf16` is not supported on V100 GPUs. 
+        Precision was set to `fp16`, since `bf16` is not supported on V100 GPUs.
         FlashAttention was disabled, as it is not supported on V100 GPUs.
         Micro-batch size was set to 4.
     [^Llama-A100]:
@@ -909,14 +934,44 @@ You can expect to see the following performance metrics in Fast-LLM's output:
     [^Llama-H100]:
         Precision was set to `bf16`.
         FlashAttention was enabled.
-        Micro-batch size was set to 1.
+        Micro-batch size was set to 2.
         ZeRO stage 2 was used.
 
 If you included the W&B section in your configuration, you can also track your training progress on the Weights & Biases dashboard as well. Follow the link in the console output to view your training run.
 
 ## 🎉 Final Thoughts
 
-And that's it! You've set up, prepped data, chosen a model, configured training, and launched a full training run with Fast-LLM. From here, feel free to tweak the model, try out larger datasets, or scale things up to larger clusters. The sky's the limit!
+And that's it! You've set up, prepped data, chosen a model, configured training, and launched a full training run with Fast-LLM. You can try out the saved model directly with Transformers.
+
+=== "Small"
+
+    ```python3
+    import transformers
+
+    model = transformers.AutoModelForCausalLM.from_pretrained("/app/fast-llm-tutorial/experiment/export/llama/100").cuda()
+    tokenizer = transformers.AutoTokenizer.from_pretrained("fast-llm-tutorial/pretrained-model/")
+
+    inputs = {k:v.cuda() for k,v in tokenizer("This is what the small model can do after fine-tuning for 100 steps:", return_tensors="pt").items()}
+    outputs=model.generate(**inputs, max_new_tokens=100)
+
+    print(tokenizer.decode(outputs[0]))
+    ```
+
+=== "Big"
+
+    ```python3
+    import transformers
+
+    model = transformers.AutoModelForCausalLM.from_pretrained("/app/fast-llm-tutorial/experiment/export/llama/100000").cuda()
+    tokenizer = transformers.AutoTokenizer.from_pretrained("fast-llm-tutorial/pretrained-model/")
+
+    inputs = {k:v.cuda() for k,v in tokenizer("This is what the big model can do after fine-tuning for 100K steps:", return_tensors="pt").items()}
+    outputs=model.generate(**inputs, max_new_tokens=100)
+
+    print(tokenizer.decode(outputs[0]))
+    ```
+
+From here, feel free to tweak the model, try out larger datasets, or scale things up to larger clusters. The sky's the limit!
 
 Happy training!
 

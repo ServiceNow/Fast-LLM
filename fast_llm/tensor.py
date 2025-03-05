@@ -12,7 +12,7 @@ from fast_llm.utils import Assert
 
 
 class _SafeTensorSliceMeta(type):
-    def __instancecheck__(self, instance):
+    def __instancecheck__(self, instance) -> bool:
         # Good enough for our purpose.
         return not isinstance(instance, torch.Tensor)
 
@@ -33,7 +33,7 @@ class SafeTensorSlice(metaclass=_SafeTensorSliceMeta):
         pass
 
 
-def validate_tensor(tensor: torch.Tensor, other: torch.Tensor, device: torch.device | None = None):
+def validate_tensor(tensor: torch.Tensor, other: torch.Tensor, device: torch.device | None = None) -> torch.Tensor:
     Assert.custom(isinstance, tensor, torch.Tensor)
     Assert.eq(tensor.shape, other.shape)
     Assert.eq(tensor.dtype, other.dtype)
@@ -86,7 +86,7 @@ class TensorMeta(torch.Tensor):
         )
 
     @property
-    def is_tensor_parallel(self):
+    def is_tensor_parallel(self) -> bool:
         # TODO: Avoid hard-coded assumptions on tensor parallel.
         return any(
             dim.parallel_dim is not None and dim.parallel_dim.name == DistributedDimNames.tensor for dim in self.dims
@@ -104,8 +104,8 @@ class TensorMeta(torch.Tensor):
         *,
         tensor_name: str = "",
         dtype: torch.dtype = torch.float32,
-        **kwargs,
-    ):
+        **kwargs: typing.Any,
+    ) -> typing.Self:
         return cls(
             torch.empty(
                 [dim.size for dim in dims],
@@ -126,8 +126,8 @@ class TensorMeta(torch.Tensor):
         tensor_name: str = "",
         dtype: torch.dtype = torch.float32,
         reductions: tuple[tuple[str, ReduceOp], ...] = (),
-        **kwargs,
-    ):
+        **kwargs: typing.Any,
+    ) -> typing.Self:
         dims = tuple(tensor_space.get_tensor_dim(dim_name) for dim_name in dim_names)
         if reductions:
             # kwarg not available for ParameterMeta, so we only provide if necessary.
@@ -137,7 +137,7 @@ class TensorMeta(torch.Tensor):
         return cls.from_dims(dims, tensor_name=tensor_name, dtype=dtype, **kwargs)
 
     @property
-    def global_shape(self):
+    def global_shape(self) -> torch.Size:
         return torch.Size([dim.global_size for dim in self.dims])
 
     def local_to_global(
@@ -145,7 +145,7 @@ class TensorMeta(torch.Tensor):
         tensor: torch.Tensor,
         *,
         distributed: Distributed,
-    ):
+    ) -> tuple[torch.Tensor, ...]:
         # Tensors are always either split or duplicated in the tensor-parallel direction.
         # TODO: Avoid hard-coded assumptions on duplication
         is_first_rank = distributed.config.tensor_rank == 0
@@ -169,7 +169,7 @@ class TensorMeta(torch.Tensor):
     def global_to_local(
         self,
         tensor: torch.Tensor | SafeTensorSlice,
-    ):
+    ) -> torch.Tensor:
         """
         Recover the tensor-parallel slice of a tensor. Support lazy-loaded safetensor slices.
         """
@@ -194,10 +194,10 @@ class TensorMeta(torch.Tensor):
         return torch.Tensor.__torch_function__(func, types, args, kwargs)
 
     @property
-    def memory_usage(self):
+    def memory_usage(self) -> int:
         return self.numel() * self.element_size()
 
-    def validate(self, tensor: torch.Tensor, device: torch.device | None = None):
+    def validate(self, tensor: torch.Tensor, device: torch.device | None = None) -> torch.Tensor:
         return validate_tensor(tensor, self, device)
 
 
@@ -257,12 +257,12 @@ class ParameterMeta(TensorMeta):
             dims=dims,
         )
 
-    def __repr__(self, *, tensor_contents=()):
+    def __repr__(self, *, tensor_contents=()) -> str:
         return super().__repr__(
             tensor_contents=(f"wd={self.param_weight_decay}", f"lr_scale={self.lr_scale}", *tensor_contents)
         )
 
-    def init_parameter(self, tensor: torch.Tensor, distributed: Distributed):
+    def init_parameter(self, tensor: torch.Tensor, distributed: Distributed) -> None:
         assert self.param_init_method is not None
         if distributed.config.tensor_parallel == 1 or distributed.config.reproducible_init:
             generator = distributed.pp_init_generator
@@ -270,7 +270,7 @@ class ParameterMeta(TensorMeta):
             generator = distributed.tp_init_generator if self.is_tensor_parallel else distributed.pp_init_generator
         self.param_init_method(self, tensor, generator)
 
-    def save(self):
+    def save(self) -> dict[str, typing.Any]:
         return {
             "name": self.tensor_name,
             "dim_names": self.dim_names,
@@ -283,25 +283,25 @@ class ParameterMeta(TensorMeta):
             "lr_scale": self.lr_scale,
         }
 
-    def load(self, state):
+    def load(self, state: dict[str, typing.Any]) -> None:
         current = self.save()
         Assert.eq(state, current)
 
 
-def param_get_and_unset_is_zero(param: torch.Tensor):
+def param_get_and_unset_is_zero(param: torch.Tensor) -> bool:
     is_zero = param.param_grad_is_zero
     param.param_grad_is_zero = False
     return is_zero
 
 
-def accumulate_gradient(param: torch.Tensor, grad: torch.Tensor):
+def accumulate_gradient(param: torch.Tensor, grad: torch.Tensor) -> None:
     if param_get_and_unset_is_zero(param):
         triton_copy(grad, param.grad_buffer)  # noqa
     else:
         triton_add(grad, param.grad_buffer, out=param.grad_buffer)  # noqa
 
 
-def init_fill_(value):
+def init_fill_(value) -> typing.Callable[[ParameterMeta, torch.Tensor, torch.Generator], torch.Tensor]:
     def init_(meta: ParameterMeta, tensor: torch.Tensor, generator: torch.Generator):  # noqa
         return tensor.fill_(value)
 
@@ -312,7 +312,9 @@ init_zeros_ = init_fill_(0.0)
 init_ones_ = init_fill_(1.0)
 
 
-def init_normal_(mean=0.0, std=1.0, min_val=None, max_val=None):
+def init_normal_(
+    mean=0.0, std=1.0, min_val=None, max_val=None
+) -> typing.Callable[[ParameterMeta, torch.Tensor, torch.Generator], torch.Tensor]:
     def init_(meta: ParameterMeta, tensor: torch.Tensor, generator: torch.Generator):  # noqa
         tensor = tensor.normal_(mean, std, generator=generator)
         if min_val is not None or max_val is not None:
@@ -323,7 +325,9 @@ def init_normal_(mean=0.0, std=1.0, min_val=None, max_val=None):
     return init_
 
 
-def init_uniform_(low=0.0, high=1.0, min_val=None, max_val=None):
+def init_uniform_(
+    low=0.0, high=1.0, min_val=None, max_val=None
+) -> typing.Callable[[ParameterMeta, torch.Tensor, torch.Generator], torch.Tensor]:
     def init_(meta: ParameterMeta, tensor: torch.Tensor, generator: torch.Generator):  # noqa
         tensor = tensor.uniform_(low, high, generator=generator)
         if min_val is not None or max_val is not None:

@@ -87,7 +87,7 @@ class ProfilingConfig(Config):
         hint=FieldHint.logging,
     )
 
-    def _validate(self):
+    def _validate(self) -> None:
         if isinstance(self.ranks, str):
             # This happens with yaml serialization
             Assert.eq(self.ranks, "set()")
@@ -98,7 +98,7 @@ class ProfilingConfig(Config):
 
     def get_profiler(
         self, *, distributed_config: DistributedConfig | None = None, start_step: int = 0
-    ) -> typing.Union["torch.profiler.profile", NoProfiler]:
+    ) -> "torch.profiler.profile| NoProfiler":
         import torch
 
         activities = ([torch.profiler.ProfilerActivity.CPU] if self.cpu else []) + (
@@ -124,7 +124,7 @@ class ProfilingConfig(Config):
         )
 
 
-def get_trace_fn(config: ProfilingConfig, start_step: int = 0):
+def get_trace_fn(config: ProfilingConfig, start_step: int = 0) -> typing.Callable[["torch.profiler.profile"], None]:
     config.validate()
 
     def trace_fn(
@@ -143,10 +143,11 @@ def get_trace_fn(config: ProfilingConfig, start_step: int = 0):
                     column_width=config.table_width,
                     header=f"Trace for step {step}",
                 )
-                if config.log:
-                    logger.info(table)
-                else:
-                    run.open_artifact(f"profile_trace_step_{step}").write(table)
+                if table:
+                    if config.log:
+                        logger.info(table)
+                    else:
+                        run.open_artifact(f"profile_trace_step_{step}").write(table)
 
             if config.averages:
                 table = build_average_table(
@@ -156,13 +157,16 @@ def get_trace_fn(config: ProfilingConfig, start_step: int = 0):
                     column_width=config.table_width,
                     header=f"Averages for step {step}",
                 )
-                if config.log:
-                    logger.info(table)
-                else:
-                    run.open_artifact(f"profile_averages_step_{step}").write(table)
+                if table:
+                    if config.log:
+                        logger.info(table)
+                    else:
+                        run.open_artifact(f"profile_averages_step_{step}").write(table)
 
             if config.export:
-                profiler.export_chrome_trace(str(run.open_artifact(f"profile_chrome_step_{step}", mode=None)))
+                # Suppress empty profile, mainly the annoying one at the end.
+                if _get_events(profiler, cuda=config.cuda):
+                    profiler.export_chrome_trace(str(run.open_artifact(f"profile_chrome_step_{step}", mode=None)))
 
             # Store results for future use.
             profiler.bc_profile_result = profiler.profiler.function_events
@@ -195,7 +199,7 @@ _COLUMN_HEADERS = {
     "input_shapes": "Input Shapes",
     "source_loc": "Source Location",
     "node_id": "Node ID",
-    "total_flops": "Total xflops",
+    "total_flops": "Total tflops",
 }
 
 _CPU_TRACE_COLUMNS = {"name", "cpu_self", "cpu_total", "start_time", "end_time"}
@@ -220,13 +224,17 @@ _MISC_CUDA_OPS = (
 )
 
 
+def _get_events(profiler: "torch.profiler.profile", *, cuda: bool = True):
+    var_name = f"self_{'device' if cuda else 'cpu'}_time_total"
+    return [evt for evt in profiler.profiler.function_events if getattr(evt, var_name) > 0]
+
+
 def build_trace_table(
     profiler: "torch.profiler.profile", *, cuda: bool = True, cpu: bool = False, column_width=80, header="Trace"
-):
-    var_name = f"self_{'cuda' if cuda else 'cpu'}_time_total"
-    events = [evt for evt in profiler.profiler.function_events if getattr(evt, var_name) > 0]
+) -> str:
+    var_name = f"self_{'device' if cuda else 'cpu'}_time_total"
     return _build_table(
-        events,
+        _get_events(profiler, cuda=cuda),
         (_CPU_TRACE_COLUMNS if cpu else set()) | (_CUDA_TRACE_COLUMNS if cuda else set()),
         name_column_width=column_width,
         filter_by=None if cuda and cpu else var_name,
@@ -236,7 +244,7 @@ def build_trace_table(
 
 def build_average_table(
     profiler: "torch.profiler.profile", *, cuda: bool = True, cpu: bool = False, column_width=80, header="Averages"
-):
+) -> str:
     var_name = f"self_{'cuda' if cuda else 'cpu'}_time_total"
     return _build_table(
         profiler.key_averages(),
@@ -259,7 +267,7 @@ def _build_table(
     spacing_size=2,
     exclude=None,
     filter_by=None,
-):
+) -> str:
     """Similar to the pytorch method, but more configurable."""
     if sort_by is not None:
         events = sorted(events, key=lambda evt: getattr(evt, sort_by), reverse=True)
@@ -289,7 +297,9 @@ def _build_table(
     result = []
 
     sum_self_cpu_time_total = sum(event.self_cpu_time_total for event in events)
-    sum_self_cuda_time_total = sum(event.self_cuda_time_total for event in events)  # if evt.device_type == DeviceType.
+    sum_self_device_time_total = sum(
+        event.self_device_time_total for event in events
+    )  # if evt.device_type == DeviceType.
 
     if header is not None:
         result.extend(["=" * line_length, header])
@@ -321,9 +331,9 @@ def _build_table(
         if "cpu_avg" in columns:
             row_values.append(_format_time_us(evt.cpu_time))
         if "cuda" in columns:
-            row_values.append(_format_time_us(evt.self_cuda_time_total))
+            row_values.append(_format_time_us(evt.self_device_time_total))
         if "cuda_percent" in columns:
-            row_values.append(_format_time_share(evt.self_cuda_time_total, sum_self_cuda_time_total))
+            row_values.append(_format_time_share(evt.self_device_time_total, self_device_time_total))
         if "cuda_total" in columns:
             row_values.append(_format_time_us(evt.cuda_time_total))
         if "cuda_avg" in columns:
@@ -340,25 +350,25 @@ def _build_table(
     result.append(header_sep)
     if sum_self_cpu_time_total > 0:
         result.append(f"CPU time total: {_format_time_ms(sum_self_cpu_time_total)}")
-    if sum_self_cuda_time_total > 0:
-        result.append(f"CUDA time total: {_format_time_ms(sum_self_cuda_time_total)}")
+    if sum_self_device_time_total > 0:
+        result.append(f"CUDA time total: {_format_time_ms(sum_self_device_time_total)}")
     result.append("")
     return "\n".join(result)
 
 
-def _format_name(name, max_width):
+def _format_name(name: str, max_width: int) -> str:
     return name[: (max_width - 3)] + "..." if len(name) >= max_width - 3 else name
 
 
-def _format_time_us(time_us):
+def _format_time_us(time_us: float | int) -> str:
     return f"{time_us:,.0f} us"
 
 
-def _format_time_ms(time_us):
+def _format_time_ms(time_us: float | int) -> str:
     return f"{time_us/1e3:,.3f} ms"
 
 
-def _format_time_share(time_us, total_time_us):
+def _format_time_share(time_us: float | int, total_time_us: float | int) -> str:
     """Defines how to format time in FunctionEvent"""
     if total_time_us == 0:
         return "NaN"

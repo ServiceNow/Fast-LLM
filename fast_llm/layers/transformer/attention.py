@@ -1,3 +1,5 @@
+import typing
+
 import torch
 
 from fast_llm.core.distributed import set_generator
@@ -8,7 +10,11 @@ from fast_llm.functional.autograd import wrap_forward_backward
 from fast_llm.functional.rotary import apply_rotary_embeddings
 from fast_llm.functional.triton.rotary import triton_rotary_autograd_
 from fast_llm.layers.common.linear import InputParallelLinear, OutputParallelLinear
-from fast_llm.layers.transformer.config import TransformerConfig, TransformerDimNames, TransformerKwargs
+from fast_llm.layers.transformer.config import (
+    TransformerConfig,
+    TransformerDimNames,
+    TransformerKwargs,
+)
 from fast_llm.logging import log_distributed_grad, log_distributed_tensor
 from fast_llm.tensor import TensorMeta, init_normal_, init_zeros_
 from fast_llm.utils import Assert
@@ -26,13 +32,13 @@ class AttachGrad(torch.autograd.Function):
     """
 
     @staticmethod
-    def forward(ctx, x, y):  # noqa
+    def forward(ctx, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:  # noqa
         # TODO: can we do it without saving y? (We only need its grad)
         ctx.save_for_backward(y)
         return x
 
     @staticmethod
-    def backward(ctx, grad_output):  # noqa
+    def backward(ctx, grad_output: torch.Tensor) -> tuple[torch.Tensor, None]:  # noqa
         (y,) = ctx.saved_tensors
         grad = y.grad + grad_output
         return grad, None
@@ -76,8 +82,6 @@ class Attention(torch.nn.Module):
         self._debug_transformer = self._config.debug_transformer
         self._use_flash_attention = self._config.do_use_flash_attention(self._tensor_space.distributed_config)
 
-        self._triton_rotary = self._config.triton_rotary
-
         init_method_qkv = init_normal_(
             std=self._config.init_method_std_qkv,
             min_val=self._config.init_method_min_qkv,
@@ -92,9 +96,8 @@ class Attention(torch.nn.Module):
         self._kv_channels = self._tensor_space.get_tensor_dim(TransformerDimNames.kv_channels).size
         self._head_groups = self._tensor_space.get_tensor_dim(TransformerDimNames.head_groups).global_size
         self._local_head_groups = self._tensor_space.get_tensor_dim(TransformerDimNames.head_groups).size
-        self._heads_per_group = self._tensor_space.get_tensor_dim(TransformerDimNames.group_heads).global_size
-        local_heads_per_group = self._tensor_space.get_tensor_dim(TransformerDimNames.group_heads).size
-        self._local_heads = self._local_head_groups * local_heads_per_group
+        self._local_heads_per_group = self._tensor_space.get_tensor_dim(TransformerDimNames.group_heads).size
+        self._local_heads = self._local_head_groups * self._local_heads_per_group
         self._softmax_scale = self._kv_channels ** (-self._config.attention_softmax_scale_power)
 
         hidden_dim = self._tensor_space.get_tensor_dim(TransformerDimNames.hidden)
@@ -103,7 +106,7 @@ class Attention(torch.nn.Module):
         self.query = OutputParallelLinear(
             hidden_dim,
             self._tensor_space.get_tensor_dim(TransformerDimNames.composite_query),
-            bias=self._config.add_linear_biases,
+            bias=self._config.add_attn_qkv_bias,
             weight_init_method=init_method_qkv,
             bias_init_method=init_method_qkv if self._config.random_bias_init else init_zeros_,
             sequence_parallel=self._sequence_parallel,
@@ -112,7 +115,7 @@ class Attention(torch.nn.Module):
         self.key_value = OutputParallelLinear(
             hidden_dim,
             self._tensor_space.get_tensor_dim(TransformerDimNames.composite_key_value),
-            bias=self._config.add_linear_biases,
+            bias=self._config.add_attn_qkv_bias,
             weight_init_method=init_method_qkv,
             bias_init_method=init_method_qkv if self._config.random_bias_init else init_zeros_,
             sequence_parallel=self._sequence_parallel,
@@ -124,14 +127,16 @@ class Attention(torch.nn.Module):
         self.dense = InputParallelLinear(
             self._tensor_space.get_tensor_dim(TransformerDimNames.composite_dense),
             hidden_dim,
-            bias=self._config.add_linear_biases,
+            bias=self._config.add_attn_dense_bias,
             weight_init_method=init_method_std_attn_proj,
             bias_init_method=init_method_std_attn_proj if self._config.random_bias_init else init_zeros_,
             sequence_parallel=self._sequence_parallel,
             lr_scale=self._config.attention_lr_scale,
         )
 
-    def _attn_fused(self, query, key, value, mask, mask_value):
+    def _attn_fused(
+        self, query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, mask: torch.Tensor, mask_value: torch.Tensor
+    ) -> torch.Tensor:
         # Backup attention (inefficient)
         b, sq, hidden = query.shape
         sk = key.size(1)
@@ -141,15 +146,15 @@ class Attention(torch.nn.Module):
             key = key.transpose(-1, -2)
         else:
             query = (
-                query.unflatten(-1, (self._local_head_groups, self._heads_per_group, self._kv_channels))
+                query.unflatten(-1, (self._local_head_groups, self._local_heads_per_group, self._kv_channels))
                 .transpose(1, 2)
-                .reshape(b * self._local_head_groups, sq * self._heads_per_group, self._kv_channels)
+                .reshape(b * self._local_head_groups, sq * self._local_heads_per_group, self._kv_channels)
             )
             key = key.unflatten(-1, (self._local_head_groups, self._kv_channels)).movedim(1, 3).flatten(0, 1)
             value = value.unflatten(-1, (self._local_head_groups, self._kv_channels)).transpose(1, 2).flatten(0, 1)
 
         attn_weights = torch.empty(
-            (b * self._local_head_groups, sq * self._heads_per_group, sk), device=query.device, dtype=query.dtype
+            (b * self._local_head_groups, sq * self._local_heads_per_group, sk), device=query.device, dtype=query.dtype
         )
         attn_weights = torch.baddbmm(
             attn_weights,
@@ -157,7 +162,7 @@ class Attention(torch.nn.Module):
             key,
             beta=0,
             alpha=self._softmax_scale / self._layer_index,
-        ).view(b, self._local_head_groups, sq, self._heads_per_group, sk)
+        ).view(b, self._local_head_groups, sq, self._local_heads_per_group, sk)
 
         attn_weights = attn_weights.to(torch.float32) * self._layer_index
         attn_weights = torch.where(mask, attn_weights, mask_value)
@@ -165,18 +170,22 @@ class Attention(torch.nn.Module):
 
         with set_generator(self._tensor_space.distributed.tp_generator):
             attn_weights = torch.dropout(attn_weights, self._config.attention_dropout, self.training)
-        attn_output = torch.bmm(attn_weights.view(b * self._local_head_groups, sq * self._heads_per_group, sk), value)
+        attn_output = torch.bmm(
+            attn_weights.view(b * self._local_head_groups, sq * self._local_heads_per_group, sk), value
+        )
 
         if self._local_head_groups == 1:
             return attn_output.view(b, sq, -1)
         else:
             return (
-                attn_output.view(b, self._local_head_groups, sq, self._heads_per_group, self._kv_channels)
+                attn_output.view(b, self._local_head_groups, sq, self._local_heads_per_group, self._kv_channels)
                 .transpose(1, 2)
                 .flatten(2)
             )
 
-    def _get_meta(self, input_, name, dim_names, kwargs):
+    def _get_meta(
+        self, input_: torch.Tensor, name: str, dim_names: tuple[str, ...], kwargs: dict[str, typing.Any]
+    ) -> TensorMeta:
         hidden_dims = {dim.name: dim for dim in kwargs[TransformerKwargs.hidden_dims]}
         return TensorMeta.from_dims(
             tuple(
@@ -187,7 +196,9 @@ class Attention(torch.nn.Module):
             dtype=input_.dtype,
         )
 
-    def _debug_log(self, tensor, name, dim_names, kwargs):
+    def _debug_log(
+        self, tensor: torch.Tensor, name: str, dim_names: tuple[str, ...], kwargs: dict[str, typing.Any]
+    ) -> None:
         # TODO: Local vs global
         Assert.gt(self._debug_transformer, 0)
         log_distributed_tensor(
@@ -206,7 +217,9 @@ class Attention(torch.nn.Module):
                 distributed=self._tensor_space.distributed,
             )
 
-    def _query_key_value_forward(self, input_: torch.Tensor, sequence_first: bool):
+    def _query_key_value_forward(
+        self, input_: torch.Tensor, sequence_first: bool
+    ) -> tuple[torch.Tensor, torch.Tensor, dict[str, typing.Any]]:
         key_value, key_value_context = self.key_value.forward_only(input_)
 
         handle = None
@@ -236,7 +249,9 @@ class Attention(torch.nn.Module):
         context = {"query": query_context, "key_value": key_value_context, "sequence_first": sequence_first}
         return query, key_value, context
 
-    def _query_key_value_backward(self, query_grad: torch.Tensor, key_grad: torch.Tensor, context: dict):
+    def _query_key_value_backward(
+        self, query_grad: torch.Tensor, key_grad: torch.Tensor, context: dict
+    ) -> torch.Tensor:
         # TODO: De-allocate qkv grads quicker.
         handle = None
 
@@ -263,7 +278,17 @@ class Attention(torch.nn.Module):
         input_grad.add_(self.key_value.backward(key_grad, context.pop("key_value")))
         return input_grad
 
-    def forward(self, input_: torch.Tensor, kwargs: dict):
+    def _decide_window_size(self) -> int | None:
+        # NOTE: This is a temporal solution for qwen 2.X
+        # https://github.com/huggingface/transformers/blob/5e2183f344911aa82aba0b83778a4f196cff378e/src/transformers/models/qwen2/modular_qwen2.py#L71
+        # TODO: make universal per layer config
+        window_size = self._config.window_size
+        if self._config.max_window_layers is not None and self._layer_index < self._config.max_window_layers:
+            window_size = None
+
+        return window_size
+
+    def forward(self, input_: torch.Tensor, kwargs: dict[str, typing.Any]) -> tuple[torch.Tensor, torch.Tensor | None]:
         sequence_first = kwargs[TransformerKwargs.sequence_first]
         query, key_value = self._query_key_value(input_, sequence_first)
 
@@ -299,7 +324,7 @@ class Attention(torch.nn.Module):
         key = key.view(*key.shape[:2], self._local_head_groups, self._kv_channels)
         value = value.view(*value.shape[:2], self._local_head_groups, self._kv_channels)
 
-        if self._config.use_rotary_position_embeddings:
+        if self._config.rotary.enabled:
             if self._debug_transformer:
                 self._debug_log(query, "query_rotary_input", self._QUERY_DIMS, kwargs)
                 self._debug_log(
@@ -308,9 +333,11 @@ class Attention(torch.nn.Module):
                     self._KV_DIMS,
                     kwargs,
                 )
-            rotary_fn = triton_rotary_autograd_ if self._triton_rotary else apply_rotary_embeddings
+            rotary_fn = triton_rotary_autograd_ if self._config.rotary.triton else apply_rotary_embeddings
             query = rotary_fn(query, kwargs[TransformerKwargs.rotary_freq_q])
             key = rotary_fn(key, kwargs[TransformerKwargs.rotary_freq_k])
+
+        window_size = self._decide_window_size()
 
         if self._use_flash_attention:
             input_ = flash_attn(
@@ -318,7 +345,7 @@ class Attention(torch.nn.Module):
                 key,
                 value,
                 dropout_p=self._config.attention_dropout if self.training else 0.0,
-                window_size=self._config.window_size,
+                window_size=window_size,
                 causal=True,
                 generator=self._tensor_space.distributed.tp_generator,
                 softmax_scale=self._softmax_scale,

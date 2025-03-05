@@ -1,6 +1,7 @@
 import enum
 import logging
 import math
+import typing
 import warnings
 
 from fast_llm.config import Field, FieldHint, FieldUpdate, check_field, config_class, skip_valid_if_none
@@ -75,6 +76,85 @@ class TransformerLossNames:
     router_z_loss = "router_z_loss"
 
 
+class RotaryEmbeddingType(str, enum.Enum):
+    none = "none"
+    default = "default"
+    llama3 = "llama3"
+    yarn = "yarn"
+
+
+@config_class()
+class RotaryArchitectureConfig(BaseModelArchitectureConfig):
+    _abstract = False
+    type: RotaryEmbeddingType = Field(
+        default=RotaryEmbeddingType.none,
+        desc="The type of rotary embedding to use. Choices: none, default, llama3.",
+        hint=FieldHint.feature,
+    )
+    theta: float = Field(
+        default=10000,
+        desc="Scale for the rotary positional embeddings",
+        hint=FieldHint.feature,
+    )
+    # TODO: Make a backup implementation that doesn't affect the layout.
+    triton: bool = Field(
+        default=True,
+        desc="Enable the triton implementation of the rotary embeddings. Affects the model layout.",
+        hint=FieldHint.deprecated,
+    )
+    # TODO: These are not really architecture parameters, but we want to import them from huggingface.
+    scale_factor: float = Field(default=8.0, desc="Scaling factor for llama3-type scaling.", hint=FieldHint.feature)
+    low_frequency_factor: float = Field(
+        default=1.0, desc="Low frequency factor for llama3-type scaling.", hint=FieldHint.feature
+    )
+    high_frequency_factor: float = Field(
+        default=4.0, desc="High frequency factor for llama3-type scaling.", hint=FieldHint.feature
+    )
+    original_context_length: int = Field(
+        default=8192, desc="Original context length for llama3/yarn-type scaling.", hint=FieldHint.feature
+    )
+    attention_factor: None | float = Field(
+        default=None,
+        desc="Attention factor for yarn-type scaling.",
+        hint=FieldHint.feature,
+    )
+    beta_fast: float = Field(
+        default=32.0,
+        desc="Beta-fast for yarn-type scaling.",
+        hint=FieldHint.feature,
+    )
+    beta_slow: float = Field(
+        default=1.0,
+        desc="Beta-slow for yarn-type scaling.",
+        hint=FieldHint.feature,
+    )
+
+    @property
+    def enabled(self) -> bool:
+        return self.type != RotaryEmbeddingType.none
+
+    @property
+    def complex_format(self) -> bool:
+        # TODO: Make a backup implementation that doesn't affect the layout.
+        return self.enabled and not self.triton
+
+    def _validate(self) -> None:
+        super()._validate()
+        if self.triton and not TritonConfig.TRITON_ENABLED:
+            warnings.warn("Triton is disabled, but the triton rotary kernel will be used anyway.")
+
+
+@config_class()
+class RotaryConfig(RotaryArchitectureConfig, BaseModelConfig):
+    pass
+
+
+class AddLinearBiasChoices(str, enum.Enum):
+    nowhere = "nowhere"
+    everywhere = "everywhere"
+    only_attn_qkv = "only_attn_qkv"
+
+
 @config_class()
 class TransformerArchitectureConfig(BaseModelArchitectureConfig):
     _abstract = False
@@ -100,7 +180,11 @@ class TransformerArchitectureConfig(BaseModelArchitectureConfig):
         hint=FieldHint.core,
         valid=check_field(Assert.gt, 0),
     )
-    add_linear_biases: bool = Field(default=True, desc="Add biases to all dense layers.", hint=FieldHint.core)
+    add_linear_biases: bool | AddLinearBiasChoices = Field(
+        default=True,
+        desc="Add biases to all, none or Q, K, V layers. Accepted values: True, False, or AddLinearBiasChoices.",
+        hint=FieldHint.core,
+    )
     ffn_hidden_size: int = Field(
         default=None,
         desc="Hidden dimension of the MLP intermediate state. Default: 4 * hidden_size.",
@@ -119,12 +203,9 @@ class TransformerArchitectureConfig(BaseModelArchitectureConfig):
         hint=FieldHint.core,
         valid=check_field(Assert.gt, 0),
     )
-    use_rotary_embeddings: bool = Field(
-        default=False, desc="Enable rotary positional embeddings.", hint=FieldHint.feature
-    )
-    rotary_embedding_scale: float = Field(
-        default=-math.log(10000),
-        desc="Scale for the rotary positional embeddings. Default: -math.log(10000) = -9.210",
+    rotary: RotaryArchitectureConfig = Field(
+        default_factory=RotaryArchitectureConfig,
+        desc="Configuration for the rotary positional embeddings.",
         hint=FieldHint.feature,
     )
     gated: bool = Field(default=False, desc="Enable gated MLP.", hint=FieldHint.feature)
@@ -132,11 +213,6 @@ class TransformerArchitectureConfig(BaseModelArchitectureConfig):
         default=None,
         desc="The MLP intermediate activation type. Default: SiLU for gated MLP, GeLU otherwise.",
         hint=FieldHint.core,
-    )
-    triton_rotary: bool = Field(
-        default=True,
-        desc="Enable the triton implementation of the rotary embeddings. Affects the model layout.",
-        hint=FieldHint.deprecated,
     )
     num_experts: int = Field(
         default=1,
@@ -168,7 +244,7 @@ class TransformerArchitectureConfig(BaseModelArchitectureConfig):
         hint=FieldHint.feature,
     )
 
-    def _validate(self):
+    def _validate(self) -> None:
         if self.ffn_hidden_size is None:
             self.ffn_hidden_size = 4 * self.hidden_size
         if self.kv_channels is None:
@@ -177,7 +253,9 @@ class TransformerArchitectureConfig(BaseModelArchitectureConfig):
             self.activation_type = ActivationType.silu if self.gated else ActivationType.gelu
         self.projection_size = self.num_attention_heads * self.kv_channels
         self.num_unshared_experts = self.num_experts - self.num_shared_experts
+
         super()._validate()
+
         if not TritonConfig.TRITON_ENABLED:
             warnings.warn("Triton is disabled, but triton rotary kernel will be used anyway.")
 
@@ -185,7 +263,49 @@ class TransformerArchitectureConfig(BaseModelArchitectureConfig):
         Assert.leq(self.num_shared_experts + self.num_experts_per_token, self.num_experts)
         Assert.multiple(self.num_attention_heads, self.head_groups)
 
-    def setup_tensor_space(self, tensor_space: TensorSpace):
+    @property
+    def add_mlp_bias(self) -> bool:
+        if isinstance(self.add_linear_biases, bool):
+            return self.add_linear_biases
+        if self.add_linear_biases == AddLinearBiasChoices.everywhere:
+            return True
+        return False
+
+    @property
+    def add_attn_qkv_bias(self) -> bool:
+        if isinstance(self.add_linear_biases, bool):
+            return self.add_linear_biases
+        if self.add_linear_biases == AddLinearBiasChoices.nowhere:
+            return False
+        return True
+
+    @property
+    def add_attn_dense_bias(self) -> bool:
+        if isinstance(self.add_linear_biases, bool):
+            return self.add_linear_biases
+        if self.add_linear_biases == AddLinearBiasChoices.everywhere:
+            return True
+        return False
+
+    @classmethod
+    def _from_dict(
+        cls,
+        default: dict[str, typing.Any],
+        strict: bool = True,
+        flat: bool = False,
+    ) -> typing.Self:
+        # TODO v0.x: Remove backward compatibility.
+        cls._handle_renamed_field(
+            default,
+            "use_rotary_embeddings",
+            ("rotary", "type"),
+            lambda x: RotaryEmbeddingType.default if x else RotaryEmbeddingType.none,
+        )
+        cls._handle_renamed_field(default, "rotary_embedding_scale", ("rotary", "theta"), lambda x: math.exp(-x))
+        cls._handle_renamed_field(default, "triton_rotary", ("rotary", "triton"))
+        return super()._from_dict(default, strict, flat)
+
+    def setup_tensor_space(self, tensor_space: TensorSpace) -> None:
         tensor = tensor_space.distributed_config.get_distributed_dim(DistributedDimNames.tensor)
 
         # Hidden dimension
@@ -245,24 +365,11 @@ class TransformerArchitectureConfig(BaseModelArchitectureConfig):
                 )
             )
 
-    @property
-    def complex_rotary_embeddings(self):
-        return self.use_rotary_position_embeddings and not self.triton_rotary
-
-    @property
-    def rotary_position_embedding_scale(self):
-        # TODO: Set through rotary theta instead.
-        return self.rotary_embedding_scale if self.use_rotary_position_embeddings else None
-
-    @property
-    def use_rotary_position_embeddings(self):
-        # TODO: Set through rotary theta instead.
-        return self.use_rotary_embeddings
-
 
 @config_class()
 class TransformerConfig(TransformerArchitectureConfig, BaseModelConfig):
     normalization: NormalizationConfig = FieldUpdate(default_factory=NormalizationConfig)
+    rotary: RotaryConfig = FieldUpdate(default_factory=RotaryConfig)
     # Default: hidden_size**-0.5
     # TODO: Allow custom initialization (InitializationConfig?)
     init_method_std: float = Field(
@@ -372,6 +479,12 @@ class TransformerConfig(TransformerArchitectureConfig, BaseModelConfig):
         hint=FieldHint.feature,
         valid=skip_valid_if_none(check_field(Assert.geq, 0)),
     )
+    max_window_layers: int | None = Field(
+        default=None,
+        desc="The number of layers that use SWA (Sliding Window Attention). The bottom layers use SWA while the top use full attention.",
+        hint=FieldHint.optional,
+        valid=skip_valid_if_none(check_field(Assert.geq, 0)),
+    )
     # normalization_implementation: NormalizationImplementation = NormalizationImplementation.auto
     mlp_recompute_level: MLPRecomputeLevel = Field(
         default=MLPRecomputeLevel.none,
@@ -450,7 +563,7 @@ class TransformerConfig(TransformerArchitectureConfig, BaseModelConfig):
         hint=FieldHint.expert,
     )
 
-    def _validate(self):
+    def _validate(self) -> None:
         if self.init_method_std is None:
             self.init_method_std = self.hidden_size**-0.5
         if self.init_method_std_qkv is None:
@@ -492,8 +605,6 @@ class TransformerConfig(TransformerArchitectureConfig, BaseModelConfig):
         if self.init_method_min_mlp_2 is not None and self.init_method_max_mlp_2 is not None:
             Assert.leq(self.init_method_min_mlp_2, self.init_method_max_mlp_2)
         super()._validate()
-        if self.triton_rotary and not TritonConfig.TRITON_ENABLED:
-            warnings.warn("Triton is disabled, but triton rotary kernel will be used anyway.")
         Assert.geq(self.attention_dropout, 0)
         Assert.geq(self.hidden_dropout, 0)
         Assert.incl(len(self.mlp_lr_scale), (1, self.num_experts))
@@ -501,5 +612,14 @@ class TransformerConfig(TransformerArchitectureConfig, BaseModelConfig):
             if scale is not None:
                 Assert.geq(scale, 0)
 
-    def do_use_flash_attention(self, distributed_config: DistributedConfig):
-        return self.use_flash_attention and distributed_config.training_dtype in (DataType.float16, DataType.bfloat16)
+    def do_use_flash_attention(self, distributed_config: DistributedConfig) -> bool:
+        use_flash_attention = self.use_flash_attention and distributed_config.training_dtype in (
+            DataType.float16,
+            DataType.bfloat16,
+        )
+
+        # Config parameter `window_size` only can be used with flash attention
+        if not use_flash_attention:
+            Assert.is_(self.window_size, None)
+
+        return use_flash_attention

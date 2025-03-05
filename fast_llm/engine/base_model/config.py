@@ -15,16 +15,16 @@ class BaseModelArchitectureConfig(Config):
 
     _abstract = True
 
-    def setup_tensor_space(self, tensor_space: "TensorSpace"):
+    def setup_tensor_space(self, tensor_space: "TensorSpace") -> None:
         raise NotImplementedError()
 
-    def get_architecture(self):
+    def get_architecture[T: BaseModelArchitectureConfig](self: T) -> T:
         return self
 
     def compare_architecture(
         self,
         model_config: "BaseModelArchitectureConfig",
-        log_fn: typing.Union[BaseException, typing.Callable] = ValueError,
+        log_fn: typing.Union[type[BaseException], typing.Callable] = ValueError,
     ):
         return self.get_architecture().compare(model_config.get_architecture(), log_fn)
 
@@ -38,5 +38,5 @@ class BaseModelConfig(BaseModelArchitectureConfig):
 
     architecture_class: typing.ClassVar[type[BaseModelArchitectureConfig]]
 
-    def get_architecture(self):
+    def get_architecture(self) -> BaseModelArchitectureConfig:
         return self.architecture_class.from_dict(self, strict=False)

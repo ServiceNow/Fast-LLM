@@ -1,21 +1,21 @@
+import typing
+
 from fast_llm.models.custom.config import CustomTrainerConfig
 from fast_llm.models.custom.data import CustomData
 from fast_llm.models.custom.model import CustomModel
 from fast_llm.models.gpt.trainer import GPTTrainer
 
 
-class CustomTrainer(GPTTrainer):
+class CustomTrainer[ConfigType: CustomTrainerConfig](GPTTrainer[ConfigType]):
     # TODO: Implement changes in the training loop (or tflops computation), if any (typically none).
-    _abstract = False
-    _config: CustomTrainerConfig
-    config_class = CustomTrainerConfig
-    model_class = CustomModel
+    config_class: typing.ClassVar[type[CustomTrainerConfig]] = CustomTrainerConfig
+    model_class: typing.ClassVar[type[CustomModel]] = CustomModel
 
     def _get_data(self):
         # TODO: Adjust signature if needed.
         return CustomData(
             config=self._config.data,
-            distributed_config=self._config.distributed,
-            vocab_size=self._config.base_model.vocab_size,
+            distributed_config=self._config.model.distributed,
+            vocab_size=self._config.model.base_model.vocab_size,
             max_sequence_length=self._config.batch.sequence_length,
         )

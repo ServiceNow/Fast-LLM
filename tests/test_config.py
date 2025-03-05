@@ -1,7 +1,18 @@
 import pathlib
+import pytest
 import subprocess
-
+import unittest.mock
 import yaml
+
+
+from fast_llm.layers.transformer.config import (
+    TransformerConfig,
+    TransformerArchitectureConfig,
+    AddLinearBiasChoices,
+)
+from fast_llm.engine.distributed.config import DistributedConfig
+from fast_llm.engine.config_utils.data_type import DataType
+from fast_llm.config import ValidationError
 
 from fast_llm.models.auto import trainer_registry
 
@@ -48,6 +59,83 @@ def test_validate_convert_gpt_without_import():
 
 def test_validate_example_config():
     fast_llm_config_dict = yaml.safe_load(
-        (pathlib.Path(__file__).parents[1] / "examples" / "mistral-4-node-benchmark.yaml").read_text()
+        (pathlib.Path(__file__).parents[1] / "examples" / "mistral.yaml").read_text()
     )
     trainer_registry["gpt"].from_dict(fast_llm_config_dict)
+
+
+def test_do_use_flash_attention():
+    # Create a mock DistributedConfig
+    mock_distributed_config = unittest.mock.Mock(spec=DistributedConfig)
+
+    # Test case 1: use_flash_attention is True and training_dtype is float16
+    config = TransformerConfig(use_flash_attention=True, window_size=None)
+    mock_distributed_config.training_dtype = DataType.float16
+    assert config.do_use_flash_attention(mock_distributed_config) is True
+
+    # Test case 2: use_flash_attention is False
+    config = TransformerConfig(use_flash_attention=False, window_size=None)
+    mock_distributed_config.training_dtype = DataType.float16
+    assert config.do_use_flash_attention(mock_distributed_config) is False
+
+    # Test case 3: use_flash_attention is True but training_dtype is not float16 or bfloat16
+    config = TransformerConfig(use_flash_attention=True, window_size=None)
+    mock_distributed_config.training_dtype = DataType.float32
+    assert config.do_use_flash_attention(mock_distributed_config) is False
+
+    # Test case 4: use_flash_attention is False and window_size is not None
+    config = TransformerConfig(use_flash_attention=False, window_size=512)
+    mock_distributed_config.training_dtype = DataType.float32
+    with pytest.raises(AssertionError):
+        config.do_use_flash_attention(mock_distributed_config)
+
+
+def test_add_linear_biases_valid_values():
+    # Valid boolean values
+    assert TransformerArchitectureConfig(add_linear_biases=True).add_linear_biases is True
+    assert TransformerArchitectureConfig(add_linear_biases=False).add_linear_biases is False
+
+    # Valid enum values
+    assert TransformerArchitectureConfig(add_linear_biases="nowhere").add_linear_biases == AddLinearBiasChoices.nowhere
+    assert (
+        TransformerArchitectureConfig(add_linear_biases="everywhere").add_linear_biases
+        == AddLinearBiasChoices.everywhere
+    )
+    assert (
+        TransformerArchitectureConfig(add_linear_biases="only_attn_qkv").add_linear_biases == AddLinearBiasChoices.only_attn_qkv
+    )
+
+
+def test_add_linear_biases_invalid_values():
+    with pytest.raises(ValidationError):
+        TransformerArchitectureConfig(add_linear_biases="invalid_value")
+
+    with pytest.raises(ValidationError):
+        TransformerArchitectureConfig(add_linear_biases=123)
+
+    with pytest.raises(ValidationError):
+        TransformerArchitectureConfig(add_linear_biases=None)
+
+
+def test_add_mlp_bias():
+    assert TransformerArchitectureConfig(add_linear_biases=True).add_mlp_bias is True
+    assert TransformerArchitectureConfig(add_linear_biases=False).add_mlp_bias is False
+    assert TransformerArchitectureConfig(add_linear_biases=AddLinearBiasChoices.everywhere).add_mlp_bias is True
+    assert TransformerArchitectureConfig(add_linear_biases=AddLinearBiasChoices.nowhere).add_mlp_bias is False
+    assert TransformerArchitectureConfig(add_linear_biases=AddLinearBiasChoices.only_attn_qkv).add_mlp_bias is False
+
+
+def test_add_attn_qkv_bias():
+    assert TransformerArchitectureConfig(add_linear_biases=True).add_attn_qkv_bias is True
+    assert TransformerArchitectureConfig(add_linear_biases=False).add_attn_qkv_bias is False
+    assert TransformerArchitectureConfig(add_linear_biases=AddLinearBiasChoices.everywhere).add_attn_qkv_bias is True
+    assert TransformerArchitectureConfig(add_linear_biases=AddLinearBiasChoices.nowhere).add_attn_qkv_bias is False
+    assert TransformerArchitectureConfig(add_linear_biases=AddLinearBiasChoices.only_attn_qkv).add_attn_qkv_bias is True
+
+
+def test_add_attn_dense_bias():
+    assert TransformerArchitectureConfig(add_linear_biases=True).add_attn_dense_bias is True
+    assert TransformerArchitectureConfig(add_linear_biases=False).add_attn_dense_bias is False
+    assert TransformerArchitectureConfig(add_linear_biases=AddLinearBiasChoices.everywhere).add_attn_dense_bias is True
+    assert TransformerArchitectureConfig(add_linear_biases=AddLinearBiasChoices.nowhere).add_attn_dense_bias is False
+    assert TransformerArchitectureConfig(add_linear_biases=AddLinearBiasChoices.only_attn_qkv).add_attn_dense_bias is False

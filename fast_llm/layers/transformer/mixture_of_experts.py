@@ -1,4 +1,5 @@
 import logging
+import typing
 import warnings
 
 import torch
@@ -76,7 +77,9 @@ class MixtureOfExpertMLP(MLPBase):
         self._mlp_forward = self._forward_dropless if dropless_moe else self._forward_looped
         self._dynamic_shape = config.dropless_dynamic_shape
 
-    def forward(self, input_: torch.Tensor, kwargs: dict, losses: dict | None = None, metrics: dict | None = None):
+    def forward(
+        self, input_: torch.Tensor, kwargs: dict, losses: dict | None = None, metrics: dict | None = None
+    ) -> torch.Tensor:
         hidden_states = input_.flatten(0, -2)
         logits = self.router(hidden_states)
         if self._debug_mode:
@@ -115,7 +118,9 @@ class MixtureOfExpertMLP(MLPBase):
 
         return self._mlp_forward(hidden_states, scores, top_experts).view_as(input_), None  # noqa
 
-    def _forward_dropless(self, hidden_states: torch.Tensor, scores: torch.Tensor, top_experts: torch.Tensor):
+    def _forward_dropless(
+        self, hidden_states: torch.Tensor, scores: torch.Tensor, top_experts: torch.Tensor
+    ) -> torch.Tensor:
         # Compute token counts and the sparse mapping (dense_row, top_index) -> sparse_row.
         sparse_map = get_sparse_map(top_experts, self._num_experts, dynamic_shape=self._dynamic_shape)
 
@@ -137,7 +142,9 @@ class MixtureOfExpertMLP(MLPBase):
             sparse_map=sparse_map,
         )
 
-    def _forward_looped(self, hidden_states: torch.Tensor, scores: torch.Tensor, top_experts: torch.Tensor):
+    def _forward_looped(
+        self, hidden_states: torch.Tensor, scores: torch.Tensor, top_experts: torch.Tensor
+    ) -> torch.Tensor:
         return mlp_autograd_looped(
             hidden_states,
             scores,
@@ -216,9 +223,9 @@ class MixtureOfExpertMLP(MLPBase):
         tensor: torch.Tensor | None,
         name: str,
         dim_name: str,
-        kwargs: dict,
+        kwargs: dict[str, typing.Any],
         global_: bool = True,
-    ):
+    ) -> None:
         if self._config.debug_transformer_memory:
             log_pipeline_parallel_main_rank(lambda: log_memory_usage(f"{self._name} {name}", str))
         if self._config.debug_transformer and tensor is not None:
@@ -243,7 +250,7 @@ class MixtureOfExpertMLP(MLPBase):
                     global_=global_,
                 )
 
-    def _get_meta(self, tensor: torch.Tensor, name: str, dim_name: str, kwargs: dict):
+    def _get_meta(self, tensor: torch.Tensor, name: str, dim_name: str, kwargs: dict[str, typing.Any]) -> TensorMeta:
         return TensorMeta.from_dims(
             kwargs[TransformerKwargs.hidden_dims][:-1] + (self._tensor_space.get_tensor_dim(dim_name),),
             tensor_name=f"{self._name} {name}",

@@ -4,22 +4,23 @@ import enum
 import logging
 import pathlib
 import typing
-import warnings
 
 import yaml
 
-from fast_llm.config import Config, Field, FieldHint, FieldUpdate, check_field, config_class
+from fast_llm.config import Config, Field, FieldHint, FieldUpdate, check_field, config_class, skip_valid_if_none
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
+    from fast_llm.engine.checkpoint.distributed import DistributedCheckpointHandler
+    from fast_llm.engine.checkpoint.state_dict import FastLLMCheckpointHandler
     from fast_llm.engine.multi_stage.config import CheckpointMetadata, FastLLMModelConfig
     from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
 
 logger = logging.getLogger(__name__)
 
 
-def export_safetensors_metadata(metadata):
+def export_safetensors_metadata(metadata: dict[str, typing.Any]) -> dict[str, str]:
     """
     Safetensor only accepts string entries, so we convert to string explicitly.
     We use yaml rather than json because json requires explicit quotation marks on strings, which breaks things.
@@ -33,7 +34,7 @@ def export_safetensors_metadata(metadata):
     }
 
 
-def import_safetensors_metadata(metadata):
+def import_safetensors_metadata(metadata: dict[str, str]) -> dict[str, typing.Any]:
     return {key: yaml.safe_load(value) for key, value in metadata.items()}
 
 
@@ -51,17 +52,17 @@ class CheckpointFormat(abc.ABC):
         pass
 
     @classmethod
-    def __fast_llm_serialize__(cls):
+    def __fast_llm_serialize__(cls) -> str:
         return cls.name
 
 
 class DistributedCheckpointFormat(CheckpointFormat):
-    # TODO v0.2: Add `enforce_version_match`
+    # TODO v0.3: Add `enforce_version_match`
     name: typing.ClassVar[str] = "distributed"
     enforce_architecture_match: typing.ClassVar[bool] = True
 
     @classmethod
-    def get_handler_class(cls):
+    def get_handler_class(cls) -> type["DistributedCheckpointHandler"]:
         from fast_llm.engine.checkpoint.distributed import DistributedCheckpointHandler
 
         return DistributedCheckpointHandler
@@ -71,7 +72,7 @@ class FastLLMCheckpointFormat(CheckpointFormat):
     name: typing.ClassVar[str] = "fast_llm"
 
     @classmethod
-    def get_handler_class(cls):
+    def get_handler_class(cls) -> type["FastLLMCheckpointHandler"]:
         from fast_llm.engine.checkpoint.state_dict import FastLLMCheckpointHandler
 
         return FastLLMCheckpointHandler
@@ -84,15 +85,15 @@ class ModelConfigType(str, enum.Enum):
     fast_llm = "fast_llm"
 
     @property
-    def load_architecture(self):
+    def load_architecture(self) -> bool:
         return self != ModelConfigType.none
 
     @property
-    def load_base_model(self):
+    def load_base_model(self) -> bool:
         return self in (ModelConfigType.model, ModelConfigType.fast_llm)
 
     @property
-    def load_fast_llm(self):
+    def load_fast_llm(self) -> bool:
         return self == ModelConfigType.fast_llm
 
 
@@ -107,39 +108,18 @@ class CheckpointConfigBase(Config):
         hint=FieldHint.core,
     )
 
-    def _validate(self):
+    def _validate(self) -> None:
         if not isinstance(self.format, type) or not issubclass(self.format, CheckpointFormat):
             # Would break anyway, but this makes the error more explicit.
             raise ValueError("Please call `setup` first to set the checkpoint format.")
         super()._validate()
 
-    def setup(self, model_config: typing.Union["FastLLMModelConfig", type["FastLLMModelConfig"]]):
+    def setup(self, model_config: "FastLLMModelConfig| type[FastLLMModelConfig]") -> None:
         format = model_config.get_checkpoint_format(self.format)
         if self._validated:
             Assert.eq(self.format, format)
         else:
             self.format = format
-
-    @classmethod
-    def _from_dict(
-        cls,
-        default: dict[str, typing.Any],
-        strict: bool = True,
-        flat: bool = False,
-    ):
-        # TODO v0.2: Remove.
-        cls._handle_renamed_field(default, "imported_type", "model_type")
-        if "model_type" in default:
-            warnings.warn(
-                "`CheckpointConfigBase.model_type` is deprecated."
-                " Instead, use the model name directly as the checkpoint format."
-            )
-            if default.get("format", None) in ("huggingface", "external"):
-                default["format"] = default.get("model_type")
-                if default["format"] is None:
-                    default["format"] = "auto"
-            del default["model_type"]
-        return super()._from_dict(default, strict, flat)
 
 
 @config_class()
@@ -155,7 +135,7 @@ class CheckpointStateConfigBase(CheckpointConfigBase):
         default: dict[str, typing.Any],
         strict: bool = True,
         flat: bool = False,
-    ):
+    ) -> typing.Self:
         cls._handle_renamed_field(default, "load_weights", "model_weights")
         cls._handle_renamed_field(default, "load_optimizer", "optimizer_state")
         return super()._from_dict(default, strict, flat)
@@ -182,7 +162,7 @@ class CheckpointStateSaveConfigBase(CheckpointSaveConfigBase, CheckpointStateCon
     model_weights: bool = FieldUpdate(desc="Save the model weights.")
     optimizer_state: bool = FieldUpdate(desc="Save the optimizer state. Default: save if supported by the `format`.")
 
-    def _validate(self):
+    def _validate(self) -> None:
         if self.optimizer_state is None:
             # TODO: Make sure it's a type
             self.optimizer_state = self.format.support_optimizer
@@ -198,6 +178,12 @@ class CheckpointPathConfigBase(CheckpointConfigBase):
         default=None,
         desc="Location of the checkpoint.",
         hint=FieldHint.core,
+    )
+    timeout: float | None = Field(
+        default=None,
+        desc="Custom timeout for lengthy operations.",
+        hint=FieldHint.optional,
+        valid=skip_valid_if_none(check_field(Assert.gt, 0)),
     )
 
 
@@ -221,7 +207,7 @@ class CheckpointLoadMetadataConfig(CheckpointPathConfigBase):
         hint=FieldHint.core,
     )
 
-    def _validate(self):
+    def _validate(self) -> None:
         super()._validate()
         if self.format.enforce_architecture_match:
             assert self.load_config.load_architecture
@@ -238,7 +224,7 @@ class CheckpointLoadConfig(CheckpointLoadMetadataConfig, CheckpointStateConfigBa
     model_weights: bool = FieldUpdate(desc="Load the model weights.")
     optimizer_state: bool = FieldUpdate(default=False, desc="Load the optimizer state.")
 
-    def _validate(self):
+    def _validate(self) -> None:
         super()._validate()
         if self.optimizer_state:
             assert self.format.support_optimizer
@@ -265,8 +251,8 @@ class CheckpointHandler(abc.ABC):
     def load(self, config: CheckpointLoadConfig, metadata: "CheckpointMetadata"):
         pass
 
-    def get_num_shards(self, config: CheckpointStateConfigBase):
+    def get_num_shards(self, config: CheckpointStateConfigBase) -> int:
         return len(self._model.state_shard_names) if config.optimizer_state else 1
 
-    def get_shard_names(self, config: CheckpointStateConfigBase):
+    def get_shard_names(self, config: CheckpointStateConfigBase) -> tuple[str, ...]:
         return self._model.state_shard_names if config.optimizer_state else self._model.state_shard_names[:1]

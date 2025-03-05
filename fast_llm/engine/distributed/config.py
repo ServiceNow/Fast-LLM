@@ -5,7 +5,7 @@ import typing
 
 from fast_llm.config import Config, Field, FieldHint, check_field, config_class
 from fast_llm.engine.config_utils.data_type import DataType
-from fast_llm.utils import Assert, div
+from fast_llm.utils import Assert, div, log
 
 if typing.TYPE_CHECKING:
     from fast_llm.core.distributed import ProcessGroup
@@ -56,7 +56,7 @@ class DistributedDim:
     """
 
     _is_setup: bool = False
-    _group: typing.Optional["ProcessGroup"]
+    _group: "ProcessGroup|None"
 
     def __init__(self, name: str, size: int = 1, rank: int = 0, id_: str | None = None, parent: str | None = None):
         self._name = name
@@ -66,36 +66,36 @@ class DistributedDim:
         self._parent = parent
 
     @property
-    def name(self):
+    def name(self) -> str:
         return self._name
 
     @property
-    def size(self):
+    def size(self) -> int:
         return self._size
 
     @property
-    def rank(self):
+    def rank(self) -> int:
         return self._rank
 
     @property
-    def id(self):
+    def id(self) -> str | None:
         return self._id
 
     @property
-    def parent(self):
+    def parent(self) -> str | None:
         return self._parent
 
     @property
-    def group(self):
+    def group(self) -> "ProcessGroup|None":
         assert self._is_setup
         return self._group
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return (
             f"DistributedDim(name={self.name}, size={self.size}, rank={self.rank}, id={self.id}, parent={self.parent})"
         )
 
-    def setup(self, group: typing.Optional["ProcessGroup"]):
+    def setup(self, group: "ProcessGroup|None"):
         assert not self._is_setup
         self._is_setup = True
         Assert.eq(group is None, self.size == 1)
@@ -113,6 +113,7 @@ class DistributedDimNames:
     pipeline = "pipeline"
     sequence_data = "sequence_data"
     batch_data = "batch_data"
+    tensor_and_sequence_data = "tensor_and_sequence_data"
 
 
 @config_class()
@@ -120,7 +121,7 @@ class DistributedConfig(Config):
     """
     Configuration for the distributed setup.
     Also include variables for global settings such as data types, random seeds, initialization parameters.
-    TODO v0.2: Move these unrelated variables elsewhere.
+    TODO v0.3: Move these unrelated variables elsewhere.
     TODO: Avoid hard-coding distributed dims (use derived class?)
     TODO: Separate distributed space from config?
     """
@@ -190,26 +191,26 @@ class DistributedConfig(Config):
         desc="Prioritize the pipeline groups for placement of nearby ranks over data groups.",
         hint=FieldHint.expert,
     )
-    distributed_timeout: float = Field(
+    timeout: float = Field(
         default=60,
         desc="Timeout for distributed operations.",
         hint=FieldHint.optional,
         valid=check_field(Assert.gt, 0),
     )
     seed: int = Field(default=1234, desc="A seed for training.", hint=FieldHint.optional)
-    # TODO v0.2: Rename to compute_dtype (not just for training), move elsewhere
+    # TODO v0.3: Rename to compute_dtype (not just for training), move elsewhere
     training_dtype: DataType = Field(
         default=DataType.float32,
         desc="The data type used for the forward and backward passes.",
         hint=FieldHint.core,
     )
-    # TODO v0.2: move elsewhere
+    # TODO v0.3: move elsewhere
     optimization_dtype: DataType = Field(
         default=DataType.float32,
         desc="The data type used for the optimizer.",
         hint=FieldHint.expert,
     )
-    # TODO v0.2: move random state elsewhere
+    # TODO v0.3: move random state elsewhere
     # Extra seed parameters (can usually be left alone)
     dp_seed_shift: int = Field(
         default=_BIG_PRIMES[0], desc="Seed shift for extra randomness.", hint=FieldHint.optional
@@ -251,7 +252,7 @@ class DistributedConfig(Config):
         hint=FieldHint.testing,
     )
 
-    def _validate(self):
+    def _validate(self) -> None:
         if self.world_size is None:
             self.world_size = self.default_world_size
         if self.rank is None:
@@ -330,13 +331,26 @@ class DistributedConfig(Config):
                 parent=DistributedDimNames.data,
             )
         )
+        self.add_distributed_dim(
+            DistributedDim(
+                name=DistributedDimNames.tensor_and_sequence_data,
+                size=self.sequence_data_parallel * self.tensor_parallel,
+                rank=self.tensor_rank + self.sequence_data_rank * self.tensor_parallel,
+                id_=f"{self.batch_data_rank}_{self.pipeline_rank}",
+                parent=(
+                    DistributedDimNames.tensor
+                    if self.sequence_data_parallel == 1
+                    else DistributedDimNames.sequence_data if self.tensor_parallel == 1 else DistributedDimNames.world
+                ),
+            )
+        )
 
         super()._validate()
 
         Assert.in_range(self.rank, 0, self.world_size)
         Assert.in_range(self.local_rank, 0, self.local_world_size)
 
-    def add_distributed_dim(self, distributed_dim: DistributedDim):
+    def add_distributed_dim(self, distributed_dim: DistributedDim) -> None:
         if distributed_dim.name in self.distributed_dims:
             Assert.eq(distributed_dim, self.distributed_dims[distributed_dim.name])
         else:
@@ -344,26 +358,29 @@ class DistributedConfig(Config):
                 assert distributed_dim.parent in self.distributed_dims
             self.distributed_dims[distributed_dim.name] = distributed_dim
 
-    def get_distributed_dim(self, name: str):
+    def get_distributed_dim(self, name: str) -> DistributedDim:
         return self.distributed_dims[name]
 
-    def _log_on_rank(self, *message, rank: int | None = None, log_fn=logger.info):
+    def _log_on_rank[
+        T
+    ](self, *message, rank: int | None = None, log_fn: type[BaseException] | typing.Callable[[str], T] = logger.info):
         if rank is None or self.rank == rank:
-            log_fn(", ".join([str(m) for m in message]))
+            return log(*message, log_fn=log_fn)
 
-    def log_first_rank(self, *message, log_fn=logger.info):
+    def log_first_rank[T](self, *message, log_fn: type[BaseException] | typing.Callable[[str], T] = logger.info):
         return self._log_on_rank(*message, rank=0, log_fn=log_fn)
 
     @classmethod
     def _from_dict(
         cls,
-        default: dict,
+        default: dict[str, typing.Any],
         strict: bool = True,
         flat: bool = False,
-    ):
-        # TODO v0.2: Remove backward compatibility fix
+    ) -> typing.Self:
+        # TODO v0.3: Remove backward compatibility fix
         if "sequence_first" in default and strict:
             del default["sequence_first"]
         if "separate_init_generators" in default and strict:
             del default["separate_init_generators"]
+        cls._handle_renamed_field(default, "distributed_timeout", "timeout")
         return super()._from_dict(default, strict, flat)

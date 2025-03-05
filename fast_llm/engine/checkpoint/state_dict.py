@@ -1,5 +1,4 @@
 import abc
-import json
 import logging
 import typing
 
@@ -31,7 +30,7 @@ logger = logging.getLogger(__name__)
 class StateDictCheckpointHandler(CheckpointHandler):
     base_file_name: typing.ClassVar[str] = "model"
 
-    def save(self, config: CheckpointSaveConfig, metadata: CheckpointMetadata):
+    def save(self, config: CheckpointSaveConfig, metadata: CheckpointMetadata) -> None:
         serialized_metadata = self._serialize_metadata(config, metadata)
         saver = StateDictSaver(
             config,
@@ -60,18 +59,20 @@ class StateDictCheckpointHandler(CheckpointHandler):
             assert not shard_state_dict, (shard_name, list(state_dict))
 
         index = saver.finalize()
-        if self._model.distributed_config.rank == 0:
+        if self._model.config.distributed.rank == 0:
             self._save_serialized_metadata(config, serialized_metadata, index)
 
     @abc.abstractmethod
-    def _save_serialized_metadata(self, config: CheckpointSaveMetadataConfig, metadata: dict, index: dict):
+    def _save_serialized_metadata(self, config: CheckpointSaveMetadataConfig, metadata: dict, index: dict) -> None:
         pass
 
-    def _serialize_metadata(self, config: CheckpointSaveMetadataConfig, metadata: CheckpointMetadata) -> dict:
+    def _serialize_metadata(
+        self, config: CheckpointSaveMetadataConfig, metadata: CheckpointMetadata
+    ) -> dict[str, typing.Any]:
         return metadata.to_serialized()
 
-    def load(self, config: CheckpointLoadConfig, metadata: CheckpointMetadata):
-        with SafeLoad(self._model, num_shards=self.get_num_shards(config)) as context:
+    def load(self, config: CheckpointLoadConfig, metadata: CheckpointMetadata) -> None:
+        with SafeLoad(self._model, num_shards=self.get_num_shards(config), timeout=config.timeout) as context:
             # The tensor mapping may not be one-to-one. `convert_state_dict` pops all tensors from
             #   `state_dict` that are ready for conversion,
             #   and return a dict containing the converted tensors(s).
@@ -113,21 +114,14 @@ class FastLLMCheckpointHandler(StateDictCheckpointHandler):
     format: typing.ClassVar[type[CheckpointFormat]] = FastLLMCheckpointFormat
 
     @classmethod
-    def load_metadata(cls, config: CheckpointLoadMetadataConfig):
-        # TODO v0.2: Remove backward compatibility.
-        old_path = config.path / "state_dict.safetensors.index.json"
-        if old_path.is_file():
-            logger.warning(f"Loading metadata from {old_path} (deprecated format)")
-            serialized_metadata = json.load((config.path / "state_dict.safetensors.index.json").open("r"))
-            metadata = CheckpointMetadata.from_dict(serialized_metadata)["metadata"]
-            metadata.metadata["index"] = serialized_metadata["weight_map"]
-        else:
-            path = config.path / f"metadata.yaml"
-            logger.warning(f"Loading metadata from {path}")
-            metadata = CheckpointMetadata.from_dict(yaml.safe_load(path.open("r")))
-        return metadata
+    def load_metadata(cls, config: CheckpointLoadMetadataConfig) -> CheckpointMetadata:
+        path = config.path / f"metadata.yaml"
+        logger.warning(f"Loading metadata from {path}")
+        return CheckpointMetadata.from_dict(yaml.safe_load(path.open("r")))
 
-    def _save_serialized_metadata(self, config: CheckpointSaveMetadataConfig, serialized_metadata: dict, index: dict):
+    def _save_serialized_metadata(
+        self, config: CheckpointSaveMetadataConfig, serialized_metadata: dict, index: dict
+    ) -> None:
         path = config.path / f"metadata.yaml"
         logger.info(f"Saving metadata to {path}")
         if "metadata" not in serialized_metadata:
@@ -190,14 +184,14 @@ class StateDictSaver:
         self._tensors = {}
         self._index = {}
 
-    def add_tensor(self, name: str, tensor: torch.Tensor):
+    def add_tensor(self, name: str, tensor: torch.Tensor) -> None:
         assert name not in self._tensors
         self._tensors[name] = tensor
         self._parameter_count += tensor.numel()
         if self._parameter_count >= self._config.parameters_per_file:
             self._save_next_file()
 
-    def finalize(self):
+    def finalize(self) -> dict[str, str]:
         if self._tensors:
             # Save the last file.
             self._save_next_file()
@@ -205,7 +199,7 @@ class StateDictSaver:
         self._merge_index()
         return self._index
 
-    def _save_next_file(self):
+    def _save_next_file(self) -> None:
         file_name = f"{self.base_file_name}_{self._file_count}.safetensors"
         if self._do_save:
             logger.info(f"Saving tensors to {self._config.path / file_name}")
@@ -221,14 +215,14 @@ class StateDictSaver:
         self._parameter_count = 0
         self._tensors = {}
 
-    def _merge_index(self):
+    def _merge_index(self) -> None:
         if self._do_save and self._distributed_config.pipeline_parallel != 1:
             # Combine the indexes from all pipeline ranks.
             logger.info(f"Merging pipeline-parallel indexes.")
             yaml.dump(
                 self._index, (self._config.path / f"index_{self._distributed_config.pipeline_rank}.yaml").open("w")
             )
-            safe_barrier(self._distributed.pipeline_group, "save state dict")
+            safe_barrier(self._distributed.pipeline_group, "save state dict", timeout=self._config.timeout)
             self._index = {}
             if self._distributed_config.pipeline_rank == 0:
                 for rank in range(self._distributed_config.pipeline_parallel):

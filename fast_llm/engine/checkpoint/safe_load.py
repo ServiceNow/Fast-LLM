@@ -4,6 +4,7 @@ import math
 import torch
 from torch.distributed import all_reduce
 
+from fast_llm.core.distributed import add_ephemeral_timeout
 from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
 from fast_llm.functional.triton.pointwise import triton_fill
 from fast_llm.utils import Assert
@@ -23,13 +24,14 @@ class SafeLoad:
     In case of failure, it will attempt to find out as precisely as possible where the problem comes from.
     """
 
-    def __init__(self, model: "FastLLMModel", *, num_shards: int):
+    def __init__(self, model: "FastLLMModel", *, num_shards: int, timeout: float | None = None):
         self._model = model
         self._distributed = self._model.distributed
         self._num_shards = num_shards
         self._self_shard = self._model.state_shard[: self._num_shards]
+        self._timeout = timeout
 
-    def __enter__(self):
+    def __enter__(self) -> "SafeLoad":
         self._loaded = 0
         self._loaded_parameters = {}
         # Track the number of loaded entries.
@@ -46,7 +48,7 @@ class SafeLoad:
         if not exc_type:
             self._validate()
 
-    def mark_as_loaded(self, count: int, parameter: tuple[str, str] | None = None):
+    def mark_as_loaded(self, count: int, parameter: tuple[str, str] | None = None) -> None:
         self._loaded += count
         if parameter is not None:
             parameter_name, shard_name = parameter
@@ -55,7 +57,7 @@ class SafeLoad:
             Assert.not_incl(parameter_name, self._loaded_parameters[shard_name])
             self._loaded_parameters[shard_name][parameter_name] = count
 
-    def _validate(self):
+    def _validate(self) -> None:
         errors = []
         self._check_counter(errors)
         self._check_missing(errors)
@@ -67,13 +69,13 @@ class SafeLoad:
             raise RuntimeError("Model loading validation failed. See logs for details.")
         logger.info(f"{self._loaded:,} state entries loaded successfully")
 
-    def _check_counter(self, errors: list[str]):
+    def _check_counter(self, errors: list[str]) -> None:
         to_load = self._self_shard.numel()
         if self._loaded != to_load:
             # Ensure the right amount of weights is loaded.
             errors.append(f"Loaded a total of {self._loaded:,}, state entries, expected {to_load:,}")
 
-    def _check_missing(self, errors: list[str]):
+    def _check_missing(self, errors: list[str]) -> None:
         # Ensure the loaded weights have a 1-1 mapping by looking for nans.
         missing = self._self_shard.new_zeros([], dtype=torch.int64)
         # Count nans in slices of 100M parameters to limit memory usage.
@@ -123,7 +125,7 @@ class SafeLoad:
                     f"Incorrect local breakdown of missing state entries (expected {local_missing:,}, got {local_total:,})"
                 )
 
-    def _check_parameters(self, errors: list[str]):
+    def _check_parameters(self, errors: list[str]) -> None:
         loaded_shard_names = set(self._loaded_parameters)
         shard_names = set(self._model.state_shard_names[: self._num_shards])
         if loaded_shard_names != shard_names:
@@ -145,6 +147,7 @@ class SafeLoad:
                 counter_tensor = torch.tensor(
                     [counter or 0 for counter in counter_per_parameter.values()], dtype=torch.int64
                 ).to(self._distributed.device)
+                add_ephemeral_timeout(self._distributed.world_group, self._timeout)
                 all_reduce(counter_tensor, group=self._distributed.world_group)
                 counter_per_parameter = {
                     parameter_name: counter

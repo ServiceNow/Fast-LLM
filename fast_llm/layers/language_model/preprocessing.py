@@ -1,4 +1,5 @@
 import logging
+import typing
 
 import torch
 
@@ -28,7 +29,7 @@ class PositionEmbeddingPreprocessor:
         self._distributed_config = self._tensor_space.distributed_config
         self._scalar_dim = self._tensor_space.get_tensor_dim(DefaultDimNames.scalar)
 
-    def create_tensors(self, sequence_length: int):
+    def create_tensors(self, sequence_length: int) -> None:
         if sequence_length <= self._tensor_cache_max_sequence_length:
             return
         self._tensor_cache_max_sequence_length = sequence_length
@@ -38,13 +39,13 @@ class PositionEmbeddingPreprocessor:
             0, sequence_length, device=self._tensor_space.distributed.device, dtype=torch.int64
         )
 
-    def preprocess(self, kwargs: dict):
+    def preprocess(self, kwargs: dict[str, typing.Any]) -> None:
         sequence_k = kwargs[TransformerKwargs.sequence_k_dim].size
         kwargs[LanguageModelKwargs.position_ids] = self._position_ids[
             sequence_k - kwargs[TransformerKwargs.sequence_q_dim].size : sequence_k
         ].unsqueeze(int(kwargs[TransformerKwargs.sequence_first]))
 
-    def preprocess_meta(self, kwargs: dict):
+    def preprocess_meta(self, kwargs: dict[str, typing.Any]) -> None:
         # Position embeddings will be broadcast.
         sequence_q_dim = kwargs[TransformerKwargs.sequence_q_dim]
         kwargs[LanguageModelKwargs.position_ids] = TensorMeta.from_dims(

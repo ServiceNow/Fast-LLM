@@ -59,7 +59,9 @@ class FastLayerNorm(torch.autograd.Function):
     """
 
     @staticmethod
-    def forward(ctx, input_, normalized_shape, weight, bias, eps):  # noqa
+    def forward(
+        ctx, input_: torch.Tensor, normalized_shape: torch.Size, weight: torch.Tensor, bias: torch.Tensor, eps: float
+    ) -> torch.Tensor:  # noqa
         assert _fast_normalization_available
         Assert.incl(normalized_shape.numel(), _PERSIST_LN_SIZES)
         output, _, inv_var = fast_layer_norm.ln_fwd(input_, weight, bias, eps)
@@ -67,7 +69,7 @@ class FastLayerNorm(torch.autograd.Function):
         return output
 
     @staticmethod
-    def backward(ctx, grad_output):  # noqa
+    def backward(ctx, grad_output: torch.Tensor) -> tuple[torch.Tensor, None, None, None, None]:  # noqa
         output, weight, bias, inv_var = ctx.saved_tensors
         grad_input, grad_weight, grad_bias, _, _ = fast_layer_norm.ln_bwd(
             grad_output, output, None, inv_var, weight, bias, True
@@ -85,7 +87,9 @@ class FusedLayerNorm(torch.autograd.Function):
     """
 
     @staticmethod
-    def forward(ctx, input_, normalized_shape, weight, bias, eps):  # noqa
+    def forward(
+        ctx, input_: torch.Tensor, normalized_shape: torch.Size, weight: torch.Tensor, bias: torch.Tensor, eps: float
+    ) -> torch.Tensor:  # noqa
         assert _fused_normalization_available
         ctx.eps = eps
         ctx.normalized_shape = normalized_shape
@@ -94,7 +98,7 @@ class FusedLayerNorm(torch.autograd.Function):
         return output
 
     @staticmethod
-    def backward(ctx, grad_output):  # noqa
+    def backward(ctx, grad_output: torch.Tensor) -> tuple[torch.Tensor, None, None, None, None]:  # noqa
         output, weight, bias, inv_var = ctx.saved_tensors
         grad_input, grad_weight, grad_bias = fused_layer_norm_cuda.backward_affine(
             grad_output, None, inv_var, output, ctx.normalized_shape, weight, bias, ctx.eps, True
@@ -106,7 +110,9 @@ class FusedLayerNorm(torch.autograd.Function):
 
 class FusedRMSNorm(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, input_, normalized_shape, weight, eps):  # noqa
+    def forward(
+        ctx, input_: torch.Tensor, normalized_shape: torch.Size, weight: torch.Tensor, eps: float
+    ) -> torch.Tensor:  # noqa
         assert _fused_normalization_available
         ctx.eps = eps
         ctx.normalized_shape = normalized_shape
@@ -115,7 +121,7 @@ class FusedRMSNorm(torch.autograd.Function):
         return output
 
     @staticmethod
-    def backward(ctx, grad_output):  # noqa
+    def backward(ctx, grad_output: torch.Tensor) -> tuple[torch.Tensor, None, None, None]:  # noqa
         output, weight, inv_var = ctx.saved_tensors
         grad_input, grad_weight = fused_layer_norm_cuda.rms_backward_affine(
             grad_output.contiguous(), inv_var, output, ctx.normalized_shape, weight, ctx.eps, True
@@ -185,21 +191,21 @@ class LayerNorm(torch.nn.Module):
         )
         self.normalized_shape = self.weight.shape
 
-    def forward(self, input_):
+    def forward(self, input_: torch.Tensor) -> torch.Tensor:
         return self._forward(input_.view(-1, *self.normalized_shape)).view_as(input_)
 
-    def _forward_triton(self, input_):
+    def _forward_triton(self, input_: torch.Tensor) -> torch.Tensor:
         return triton_normalization_autograd(
             input_, self.weight, self.bias, self._eps, self.training, self._zero_centered
         )
 
-    def _forward_fast(self, input_):
+    def _forward_fast(self, input_: torch.Tensor) -> torch.Tensor:
         return FastLayerNorm.apply(input_, self.normalized_shape, self.weight, self.bias, self._eps)
 
-    def _forward_fused(self, input_):
+    def _forward_fused(self, input_: torch.Tensor) -> torch.Tensor:
         return FusedLayerNorm.apply(input_, self.normalized_shape, self.weight, self.bias, self._eps)
 
-    def _forward_torch(self, input_):
+    def _forward_torch(self, input_: torch.Tensor) -> torch.Tensor:
         return torch.nn.functional.layer_norm(input_, self.normalized_shape, self.weight, self.bias, self._eps)
 
 
@@ -252,14 +258,14 @@ class RMSNorm(torch.nn.Module):
         )
         self.normalized_shape = self.weight.shape
 
-    def forward(self, input_):
+    def forward(self, input_: torch.Tensor) -> torch.Tensor:
         return self._forward(input_.view(-1, *self.normalized_shape)).view_as(input_)
 
-    def _forward_triton(self, input_):
+    def _forward_triton(self, input_: torch.Tensor) -> torch.Tensor:
         return triton_normalization_autograd(input_, self.weight, None, self._eps, self.training, self._zero_centered)
 
-    def _forward_fused(self, input_):
+    def _forward_fused(self, input_: torch.Tensor) -> torch.Tensor:
         return FusedRMSNorm.apply(input_, self.normalized_shape, self.weight, self._eps)
 
-    def _forward_torch(self, input_):
+    def _forward_torch(self, input_: torch.Tensor) -> torch.Tensor:
         return rms_norm(input_, self.weight, self._eps)

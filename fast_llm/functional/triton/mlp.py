@@ -1,8 +1,8 @@
 import math
+import typing
 
 import torch
 
-import triton
 from fast_llm.core.distributed import ProcessGroup
 from fast_llm.core.ops import gather_op
 from fast_llm.functional.autograd import wrap_forward_backward
@@ -14,6 +14,7 @@ from fast_llm.functional.linear import (
     output_parallel_linear_forward,
     update_linear_gradients,
 )
+from fast_llm.functional.triton import tl, tl_constexpr, triton_jit
 from fast_llm.functional.triton.sparse_copy import (
     SparseMap,
     copy_dense_to_sparse_backward,
@@ -23,17 +24,19 @@ from fast_llm.functional.triton.sparse_copy import (
 )
 from fast_llm.functional.triton.sparse_linear import output_sparse_matmul
 from fast_llm.tensor import param_get_and_unset_is_zero
-from triton import language as tl
+
+# Triton requires global variables to be annotated with `constexpr`.
+_TritonActivationType: tl_constexpr = ActivationType
 
 
-@triton.jit
+@triton_jit()
 def triton_mlp_activation_forward_kernel(
     input_ptr,
     output_ptr,
-    gated: tl.constexpr,
-    activation_type: tl.constexpr,
-    n_cols: tl.constexpr,
-    block_size: tl.constexpr,
+    gated: tl_constexpr,
+    activation_type: tl_constexpr,
+    n_cols: tl_constexpr,
+    block_size: tl_constexpr,
 ):
     # TODO: Int64 ptr only if needed?
     row_idx = tl.program_id(0).to(tl.int64)
@@ -47,15 +50,15 @@ def triton_mlp_activation_forward_kernel(
 
     input_ = tl.load(input_ptr, mask=mask).to(tl.float32)
 
-    if activation_type == ActivationType.gelu:
+    if activation_type == _TritonActivationType.gelu.value:
         tanh_input = 0.79788456 * input_ * (1 + 0.044715 * input_ * input_)
         tanh = 1 - 2 / (1 + tl.exp(2 * tanh_input))
         out = input_ * 0.5 * (1.0 + tanh)
-    elif activation_type == ActivationType.silu:
+    elif activation_type == _TritonActivationType.silu.value:
         out = input_ / (1 + tl.exp(-input_))
-    elif activation_type == ActivationType.relu:
+    elif activation_type == _TritonActivationType.relu.value:
         out = tl.where(input_ > 0, input_, 0)
-    elif activation_type == ActivationType.squared_relu:
+    elif activation_type == _TritonActivationType.squared_relu:
         relu_out = tl.where(input_ > 0, input_, 0)
         out = relu_out * relu_out
     else:
@@ -68,17 +71,17 @@ def triton_mlp_activation_forward_kernel(
     tl.store(output_ptr + output_offsets, out, mask=mask)
 
 
-@triton.jit
+@triton_jit()
 def triton_mlp_activation_backward_kernel(
     grad_output_ptr,
     grad_input_ptr,
     input_ptr,
     output_ptr,
-    gated: tl.constexpr,
-    activation_type: tl.constexpr,
-    recompute: tl.constexpr,
-    n_cols: tl.constexpr,
-    block_size: tl.constexpr,
+    gated: tl_constexpr,
+    activation_type: tl_constexpr,
+    recompute: tl_constexpr,
+    n_cols: tl_constexpr,
+    block_size: tl_constexpr,
 ):
     # TODO: Int64 ptr only if needed?
     row_idx = tl.program_id(0).to(tl.int64)
@@ -95,23 +98,23 @@ def triton_mlp_activation_backward_kernel(
     input_ = tl.load(input_ptr, mask=mask).to(tl.float32)
     output_grad = tl.load(grad_output_ptr + output_offsets, mask=mask).to(tl.float32)
 
-    if activation_type == ActivationType.gelu:
+    if activation_type == _TritonActivationType.gelu:
         tanh_input = 0.79788456 * input_ * (1 + 0.044715 * input_ * input_)
         tanh = 1 - 2 / (1 + tl.exp(2 * tanh_input))
         grad = 0.5 * input_ * ((1 - tanh * tanh) * (0.79788456 + 0.1070322243 * input_ * input_)) + 0.5 * (1 + tanh)
         if gated or recompute:
             out = input_ * 0.5 * (1.0 + tanh)
-    elif activation_type == ActivationType.silu:
+    elif activation_type == _TritonActivationType.silu:
         exp = tl.exp(-input_)
         sigma = 1 / (1 + exp)
         grad = sigma * sigma + (1 + input_) / (2 + exp + 1 / exp)
         if gated or recompute:
             out = input_ * sigma
-    elif activation_type == ActivationType.relu:
+    elif activation_type == _TritonActivationType.relu:
         grad = tl.where(input_ > 0, 1, 0)
         if gated or recompute:
             out = tl.where(input_ > 0, input_, 0)
-    elif activation_type == ActivationType.squared_relu:
+    elif activation_type == _TritonActivationType.squared_relu:
         relu_out = tl.where(input_ > 0, input_, 0)
         grad = 2 * relu_out
         if gated or recompute:
@@ -148,7 +151,7 @@ def triton_mlp_activation_forward(
         input_,
         output,
         gated=gated,  # noqa
-        activation_type=activation_type,  # noqa
+        activation_type=activation_type.value,  # noqa
         n_cols=n_cols,  # noqa
         block_size=TritonConfig.POINTWISE_BLOCK_SIZE,
     )
@@ -188,7 +191,7 @@ def torch_mlp_activation(
     input_: torch.Tensor,
     gated: bool,
     activation_type: ActivationType,
-):
+) -> torch.Tensor:
     if gated:
         x1, x2 = input_.chunk(2, dim=-1)
         return activation_type.activation_fn(x1) * x2
@@ -211,7 +214,7 @@ def mlp_forward(
     recompute_level: MLPRecomputeLevel = MLPRecomputeLevel.none,
     transposed_layer_2_weight: bool = False,
     sparse_map: SparseMap | None = None,
-):
+) -> tuple[torch.Tensor, list[typing.Any] | None]:
     # Sparse copy
     input_shape = input_.shape
     intermediate_0 = input_ if sparse_map is None else copy_dense_to_sparse_forward(input_, sparse_map)[0]
@@ -286,7 +289,7 @@ def mlp_forward(
     return output, context
 
 
-def mlp_backward(grad_output: torch.Tensor, context: list):
+def mlp_backward(grad_output: torch.Tensor, context: list[typing.Any]) -> tuple[torch.Tensor, torch.Tensor]:
     (
         input_,
         scores,
@@ -387,7 +390,9 @@ class ChunkWeight(torch.autograd.Function):
     """
 
     @staticmethod
-    def forward(ctx, input_, weight: torch.Tensor, num_chunks: int):  # noqa
+    def forward(
+        ctx, input_: torch.Tensor, weight: torch.Tensor, num_chunks: int
+    ) -> tuple[torch.Tensor, list[torch.Tensor]]:  # noqa
         with torch.no_grad():
             weight_chunked = weight.chunk(num_chunks)
             grad_buffer_chunked = weight.grad_buffer.chunk(num_chunks)  # noqa
@@ -399,7 +404,7 @@ class ChunkWeight(torch.autograd.Function):
         return input_, weight_chunked  # OK?
 
     @staticmethod
-    def backward(ctx, grad_input: torch.Tensor, dummy):  # noqa
+    def backward(ctx, grad_input: torch.Tensor, dummy) -> tuple[torch.Tensor, None, None]:  # noqa
         for weight_chunk in ctx.weight_chunked:
             # Check for runaway grads.
             assert weight_chunk.grad is None
@@ -419,12 +424,14 @@ class ChunkWeightPost(torch.autograd.Function):
     """
 
     @staticmethod
-    def forward(ctx, input_, weight: torch.Tensor, weight_chunked: tuple[torch.Tensor]) -> torch.Tensor:  # noqa
+    def forward(
+        ctx, input_: torch.Tensor, weight: torch.Tensor, weight_chunked: tuple[torch.Tensor]
+    ) -> torch.Tensor:  # noqa
         ctx.weight, ctx.weight_chunked = weight, weight_chunked
         return input_
 
     @staticmethod
-    def backward(ctx, grad_input: torch.Tensor):  # noqa
+    def backward(ctx, grad_input: torch.Tensor) -> tuple[torch.Tensor, None, None]:  # noqa
         is_zero = param_get_and_unset_is_zero(ctx.weight)
         for weight_chunk in ctx.weight_chunked:
             weight_chunk.param_grad_is_zero = is_zero
@@ -447,7 +454,7 @@ def mlp_autograd_looped(
     sequence_parallel: bool,
     training: bool = True,
     recompute_level: MLPRecomputeLevel = MLPRecomputeLevel.none,
-):
+) -> torch.Tensor:
     # TODO: Needed?
     scores = scores.to(hidden_states.dtype)
     expert_mask = torch.nn.functional.one_hot(top_experts, num_classes=num_experts).permute(2, 1, 0)

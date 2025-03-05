@@ -5,18 +5,17 @@ These triton kernels tend to be much faster than their pytorch equivalent (obser
 
 import torch
 
-import triton
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.functional.config import TritonConfig
-from triton import language as tl
+from fast_llm.functional.triton import tl, tl_constexpr, triton, triton_jit
 
 
-@triton.jit
+@triton_jit()
 def triton_copy_kernel(
     input_ptr,
     out_ptr,
-    numel: tl.constexpr,
-    block_size: tl.constexpr,
+    numel: tl_constexpr,
+    block_size: tl_constexpr,
 ):
     # TODO: Int64 ptr only if needed?
     block_start = tl.program_id(axis=0).to(tl.int64) * block_size
@@ -27,9 +26,9 @@ def triton_copy_kernel(
 
 
 def triton_copy(
-    input_,
-    out,
-):
+    input_: torch.Tensor,
+    out: torch.Tensor,
+) -> torch.Tensor:
     """
     A triton implementation of tensor copying (`torch.Tensor.copy_()`).
     """
@@ -44,13 +43,13 @@ def triton_copy(
     return out
 
 
-@triton.jit
+@triton_jit()
 def triton_fill_kernel(
     input_ptr,
-    value: tl.constexpr,
-    numel: tl.constexpr,
-    dtype: tl.constexpr,
-    block_size: tl.constexpr,
+    value: tl_constexpr,
+    numel: tl_constexpr,
+    dtype: tl_constexpr,
+    block_size: tl_constexpr,
 ):
     # TODO: Int64 ptr only if needed?
     block_start = tl.program_id(axis=0).to(tl.int64) * block_size
@@ -62,7 +61,7 @@ def triton_fill_kernel(
 def triton_fill(
     input_: torch.Tensor,
     value: float | int,
-):
+) -> torch.Tensor:
     """
     A faster triton implementation of tensor copying (`torch.Tensor.fill_()`).
     """
@@ -82,13 +81,13 @@ def triton_fill(
     return input_
 
 
-@triton.jit
+@triton_jit()
 def triton_add_kernel(
     input_ptr,
     other_ptr,
     out_ptr,
-    numel: tl.constexpr,
-    block_size: tl.constexpr,
+    numel: tl_constexpr,
+    block_size: tl_constexpr,
 ):
     # TODO: Int64 ptr only if needed?
     block_start = tl.program_id(axis=0).to(tl.int64) * block_size
@@ -100,10 +99,10 @@ def triton_add_kernel(
 
 
 def triton_add(
-    input_,
-    other,
+    input_: torch.Tensor,
+    other: torch.Tensor,
     out: torch.Tensor | None = None,
-):
+) -> torch.Tensor:
     """
     A faster triton implementation of tensor addition (`torch.Tensor.add()`).
     """

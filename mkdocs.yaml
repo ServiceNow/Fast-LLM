@@ -12,14 +12,14 @@ repo_url: https://github.com/ServiceNow/Fast-LLM
 edit_uri: edit/main/docs/
 
 # Copyright
-copyright: Copyright 2024 ServiceNow, Inc.
+copyright: Copyright 2024-2025 ServiceNow, Inc.
 
 # Configuration
 theme:
   name: material
   custom_dir: docs/overrides
-  logo: assets/images/logo.png
-  favicon: assets/images/logo.png
+  logo: assets/images/logo.svg
+  favicon: assets/images/logo.svg
   icon:
     repo: fontawesome/brands/github
   features:
@@ -58,15 +58,15 @@ theme:
         name: Switch to light mode
     - media: "(prefers-color-scheme: light)"
       scheme: default
-      primary: indigo
-      accent: indigo
+      primary: white
+      accent: white
       toggle:
         icon: material/toggle-switch
         name: Switch to dark mode
     - media: "(prefers-color-scheme: dark)"
       scheme: slate
       primary: black
-      accent: indigo
+      accent: white
       toggle:
         icon: material/toggle-switch-off
         name: Switch to system preference
@@ -167,15 +167,22 @@ nav:
       - StarCoder 2: success-stories/starcoder-2.md
     - License: license.md
   - Recipes:
-    - Data Preparation: recipes/data-preparation.md
+    - Prepare a dataset: recipes/data-preparation.md
+    - Configure a dataset: recipes/data-configuration.md
     - Train Llama 8B from scratch: recipes/train-llama-8b.md
     - Continue training Llama 8B: recipes/continue-training-llama-8b.md
     - Upcycle Llama 3B to MoE: recipes/upcycle-llama-3b-to-moe.md
   - Reference:
-    - Configuration: reference/configuration.md
-  - Developers:
-    - Contributing: developers/contributing.md
-    - Style Guide: developers/style-guide.md
-    - Development Practices: developers/dev-practices.md
+    - User Guide:
+      - Configuration: user_guide/configuration.md
+    - Developer Guide:
+      - Configuration: developer_guide/configuration.md
+      - Model:
+        - Model: developer_guide/model.md
+        - Conversion: developer_guide/conversion.md
+  - Contributing:
+    - Contribution Guide: contributing/contributing.md
+    - Style Guide: contributing/style-guide.md
+    - Development Practices: contributing/dev-practices.md
   - About Us: about-us.md
   - Join Us: join-us.md

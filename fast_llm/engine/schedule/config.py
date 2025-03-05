@@ -67,18 +67,18 @@ class BatchConfig(Config):
         hint=FieldHint.setup,
     )
 
-    def setup(self, distributed_config: DistributedConfig):
+    def setup(self, distributed_config: DistributedConfig) -> None:
         self._distributed = distributed_config
 
     @property
-    def num_inputs(self):
+    def num_inputs(self) -> int:
         return self.sequential_micro_batches * self.num_micro_sequences
 
     @property
-    def _is_setup(self):
+    def _is_setup(self) -> bool:
         return hasattr(self, "_distributed")
 
-    def _validate(self):
+    def _validate(self) -> None:
         # Use the distributed properties to determine the batch size and its breakdown.
         # Requires post-processed distributed config args
         if self.batch_size is None or self.micro_batch_size is None:

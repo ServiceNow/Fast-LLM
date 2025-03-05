@@ -12,14 +12,15 @@ from fast_llm.utils import Assert
 logger = logging.getLogger(__name__)
 
 
-class FastLLMModel(MultiStageModel):
+class FastLLMModel[ConfigType: FastLLMModelConfig](MultiStageModel[ConfigType]):
+    config_class: typing.ClassVar[type[FastLLMModelConfig]] = FastLLMModelConfig
     _is_loaded: bool = False
 
     def save_checkpoint(
         self,
         config: CheckpointSaveConfig,
         extra_metadata: dict | None = None,
-    ):
+    ) -> None:
         # TODO: Handle barriers, ok file, mkdir, etc. here
         converter = config.format.get_handler_class()(self)
         fast_llm_metadata = self._config.to_metadata(
@@ -29,7 +30,7 @@ class FastLLMModel(MultiStageModel):
         )
         converter.save(config, fast_llm_metadata)
 
-    def load_checkpoint(self, config: CheckpointLoadConfig):
+    def load_checkpoint(self, config: CheckpointLoadConfig) -> dict[str, typing.Any]:
         # TODO: Simplify branching.
         # TODO: Test with more distributed configs.
         # TODO: Safety checks
@@ -52,11 +53,11 @@ class FastLLMModel(MultiStageModel):
         mode: StageMode = StageMode.training,
         use_cpu: bool = False,
         stage_filter: set | None = None,
-    ):
+    ) -> typing.Self:
         metadata = cls.config_class.load_metadata(pretrained_config)
         config = cls.config_class.from_metadata(pretrained_config, metadata, default_config, config_updates)
         if mode.support_training:
-            # TODO v0.2: Make metadata.shards mandatory?
+            # TODO v0.3: Make metadata.shards mandatory?
             if metadata.shards:
                 if optimizer_state_names is None:
                     optimizer_state_names = metadata.shards[1:]
@@ -84,16 +85,18 @@ class FastLLMModel(MultiStageModel):
                     model.initialize_weights()
         return model
 
-    def initialize_weights(self):
+    def initialize_weights(self, timeout: float | None = None) -> None:
         assert self._is_setup
         for stage in self._stages:
             stage.initialize_weights()
         for name, tied_parameter in self._tied_parameters.items():
             if tied_parameter.group is not None:
-                broadcast(self._stages[tied_parameter.main_stage].weight_shard, 0, tied_parameter.group)
+                broadcast(
+                    self._stages[tied_parameter.main_stage].weight_shard, 0, tied_parameter.group, timeout=timeout
+                )
         self._finalize_load(reset_optimizer=True)
 
-    def _finalize_load(self, reset_optimizer: bool = True):
+    def _finalize_load(self, reset_optimizer: bool = True) -> None:
         if reset_optimizer:
             triton_fill(self._state_shard[1:], 0.0)
         if self._mode.support_forward:

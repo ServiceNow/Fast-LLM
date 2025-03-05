@@ -1,24 +1,23 @@
 import torch
 
-import triton
 from fast_llm.functional.autograd import wrap_forward_backward
 from fast_llm.functional.config import TritonConfig
+from fast_llm.functional.triton import tl, tl_constexpr, triton, triton_jit
 from fast_llm.utils import div
-from triton import language as tl
 
 
-@triton.jit
+@triton_jit()
 def triton_rotary_kernel(
     input_ptr,
     frequencies_ptr,
     stride_0,
     stride_1,
     stride_2,
-    rotary_dim: tl.constexpr,
-    num_heads: tl.constexpr,
-    rotary_block_size: tl.constexpr,
-    head_block_size: tl.constexpr,
-    backward: tl.constexpr,
+    rotary_dim: tl_constexpr,
+    num_heads: tl_constexpr,
+    rotary_block_size: tl_constexpr,
+    head_block_size: tl_constexpr,
+    backward: tl_constexpr,
 ):
     # TODO: Int64 ptr if needed?
     pid_0 = tl.program_id(axis=0)
@@ -65,7 +64,7 @@ def triton_rotary_(
     input_: torch.Tensor,
     frequencies: torch.Tensor,
     backward: bool = False,
-):
+) -> torch.Tensor:
     # TODO: Improve assumptions.
     # TODO: Make a transposed version to avoid contiguous call in key backward.
     # TODO: Improve block size heuristics.
@@ -92,11 +91,11 @@ def triton_rotary_(
     return input_
 
 
-def triton_rotary_forward_(input_: torch.Tensor, frequencies: torch.Tensor):
+def triton_rotary_forward_(input_: torch.Tensor, frequencies: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
     return triton_rotary_(input_, frequencies), frequencies
 
 
-def triton_rotary_backward_(grad_output: torch.Tensor, context: torch.Tensor):
+def triton_rotary_backward_(grad_output: torch.Tensor, context: torch.Tensor) -> torch.Tensor:
     # TODO: Make a transposed version to avoid contiguous call in key backward.
     if grad_output.stride(-1) != 1:
         grad_output = grad_output.contiguous()

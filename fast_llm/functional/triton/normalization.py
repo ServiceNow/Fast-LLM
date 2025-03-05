@@ -1,13 +1,14 @@
+import typing
+
 import torch
 
-import triton
-import triton.language as tl
 from fast_llm.functional.autograd import wrap_forward_backward
 from fast_llm.functional.config import TritonConfig
+from fast_llm.functional.triton import tl, tl_constexpr, triton, triton_jit
 from fast_llm.tensor import param_get_and_unset_is_zero
 
 
-@triton.jit
+@triton_jit()
 def triton_normalization_forward_kernel(
     input_ptr,
     output_ptr,
@@ -16,9 +17,9 @@ def triton_normalization_forward_kernel(
     inv_var_ptr,
     n_cols,
     eps,
-    has_bias: tl.constexpr,
-    zero_centered: tl.constexpr,
-    block_size: tl.constexpr,
+    has_bias: tl_constexpr,
+    zero_centered: tl_constexpr,
+    block_size: tl_constexpr,
 ):
     # Program dimensions
     row = tl.program_id(0).to(tl.int64)
@@ -54,7 +55,7 @@ def triton_normalization_forward_kernel(
     tl.store(output_ptr + offsets, output, mask=mask)
 
 
-@triton.jit
+@triton_jit()
 def triton_normalization_backward_kernel_1(
     grad_input_ptr,
     grad_output_ptr,
@@ -66,10 +67,10 @@ def triton_normalization_backward_kernel_1(
     inv_var_ptr,
     n_cols,
     n_rows,
-    has_bias: tl.constexpr,
-    zero_centered: tl.constexpr,
-    block_size: tl.constexpr,
-    block_size_row: tl.constexpr,
+    has_bias: tl_constexpr,
+    zero_centered: tl_constexpr,
+    block_size: tl_constexpr,
+    block_size_row: tl_constexpr,
 ):
     # row_start = tl.program_id(0)*block_size_row
     rows = tl.program_id(0) * block_size_row + tl.arange(0, block_size_row)[:, None]
@@ -121,7 +122,7 @@ def triton_normalization_backward_kernel_1(
         tl.store(grad_bias_partial_ptr, grad_bias_partial, mask=col_mask)  # noqa
 
 
-@triton.jit
+@triton_jit()
 def triton_normalization_backward_kernel_2(
     grad_weight_partial_ptr,
     grad_bias_partial_ptr,
@@ -129,10 +130,10 @@ def triton_normalization_backward_kernel_2(
     grad_bias_ptr,
     m,  # GROUP_SIZE_M
     n_cols,  # number of columns
-    has_bias: tl.constexpr,
-    accumulate_grad: tl.constexpr,
-    block_size_m: tl.constexpr,
-    block_size_n: tl.constexpr,
+    has_bias: tl_constexpr,
+    accumulate_grad: tl_constexpr,
+    block_size_m: tl_constexpr,
+    block_size_n: tl_constexpr,
 ):
     pid = tl.program_id(0)
     cols = pid * block_size_n + tl.arange(0, block_size_n)
@@ -170,7 +171,7 @@ def triton_normalization_forward(
     eps: float,
     training: bool,
     zero_centered: bool,
-):
+) -> tuple[torch.Tensor, list[typing.Any]] | None:
     assert weight.shape == input_.shape[-1:]
     if bias is not None:
         assert weight.shape == bias.shape
@@ -204,7 +205,7 @@ def triton_normalization_forward(
     return output, context
 
 
-def triton_normalization_backward(grad_output: torch.Tensor, context: list):
+def triton_normalization_backward(grad_output: torch.Tensor, context: list[typing.Any]) -> torch.Tensor:
     output, weight, bias, inv_var, eps, zero_centered = context
     # We delete the context to prevent a memory leak
     context.clear()
@@ -280,7 +281,7 @@ triton_normalization_autograd = wrap_forward_backward(triton_normalization_forwa
 
 
 @torch.compile
-def rms_norm(input_: torch.Tensor, weight: torch.Tensor, eps: float):
+def rms_norm(input_: torch.Tensor, weight: torch.Tensor, eps: float) -> torch.Tensor:
     # TODO: Backward pass is extremely slow.
     input_dtype = input_.dtype
     input_ = input_.to(torch.float32)
