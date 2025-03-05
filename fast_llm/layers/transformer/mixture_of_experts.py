@@ -13,9 +13,9 @@ from fast_llm.layers.common.auxiliary_loss import AuxiliaryLoss, z_loss
 from fast_llm.layers.common.linear import Linear
 from fast_llm.layers.transformer.config import (
     RoutingType,
-    TransformerConfig,
     TransformerDimNames,
     TransformerKwargs,
+    TransformerLayerConfig,
     TransformerLossNames,
 )
 from fast_llm.layers.transformer.mlp import MLPBase
@@ -40,7 +40,7 @@ class MixtureOfExpertMLP(MLPBase):
 
     _group: ProcessGroup
 
-    def __init__(self, config: TransformerConfig, tensor_space: TensorSpace, name: str = "mlp"):
+    def __init__(self, config: TransformerLayerConfig, tensor_space: TensorSpace, name: str = "mlp"):
         Assert.gt(config.num_experts, 1)
         # TODO: Implement?
         assert not config.add_linear_biases, "Biases not supported for MoE."

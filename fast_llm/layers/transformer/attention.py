@@ -10,11 +10,7 @@ from fast_llm.functional.autograd import wrap_forward_backward
 from fast_llm.functional.rotary import apply_rotary_embeddings
 from fast_llm.functional.triton.rotary import triton_rotary_autograd_
 from fast_llm.layers.common.linear import InputParallelLinear, OutputParallelLinear
-from fast_llm.layers.transformer.config import (
-    TransformerConfig,
-    TransformerDimNames,
-    TransformerKwargs,
-)
+from fast_llm.layers.transformer.config import TransformerDimNames, TransformerKwargs, TransformerLayerConfig
 from fast_llm.logging import log_distributed_grad, log_distributed_tensor
 from fast_llm.tensor import TensorMeta, init_normal_, init_zeros_
 from fast_llm.utils import Assert
@@ -69,14 +65,14 @@ class Attention(torch.nn.Module):
 
     def __init__(
         self,
-        config: TransformerConfig,
+        config: TransformerLayerConfig,
         tensor_space: TensorSpace,
         layer_index,
     ):
         super().__init__()
         self._config = config
         self._tensor_space = tensor_space
-        Assert.in_range_incl(layer_index, 1, self._config.num_layers)
+        Assert.in_range(layer_index, 0, self._config.num_layers)
         self._layer_index = layer_index
         self._sequence_parallel = self._tensor_space.distributed_config.sequence_tensor_parallel
         self._debug_transformer = self._config.debug_transformer
@@ -161,10 +157,10 @@ class Attention(torch.nn.Module):
             query,
             key,
             beta=0,
-            alpha=self._softmax_scale / self._layer_index,
+            alpha=self._softmax_scale / (self._layer_index + 1),
         ).view(b, self._local_head_groups, sq, self._local_heads_per_group, sk)
 
-        attn_weights = attn_weights.to(torch.float32) * self._layer_index
+        attn_weights = attn_weights.to(torch.float32) * (self._layer_index + 1)
         attn_weights = torch.where(mask, attn_weights, mask_value)
         attn_weights = torch.nn.functional.softmax(attn_weights, dim=-1).to(query.dtype)
 

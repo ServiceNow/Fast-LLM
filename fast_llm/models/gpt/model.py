@@ -49,32 +49,27 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
         distributed_config: DistributedConfig,
     ):
         super().__init__(config, distributed_config)
-        self._use_flash_attention = self._config.transformer.do_use_flash_attention(distributed_config)
         if self._config.use_megatron_initialization:
             for param in self.parameters():
                 Assert.custom(isinstance, param, ParameterMeta)
-                param.init_parameter = get_init_megatron(param, self._config.transformer)  # Noqa
+                param.init_parameter = get_init_megatron(param, self._config.layers.default)  # Noqa
         if self._config.use_absolute_position_embeddings:
             self._position_embedding_preprocessor = PositionEmbeddingPreprocessor(self._config, self._tensor_space)
-        if self._config.transformer.rotary.enabled:
+        if self._config.layers.default.rotary.enabled:
             self._rotary_embedding_preprocessor = RotaryEmbeddingPreprocessor(
-                self._config.transformer.rotary, self._tensor_space
+                self._config.layers.default.rotary, self._tensor_space
             )
-        if not self._use_flash_attention:
-            self._backup_attention_preprocessor = BackupAttentionPreprocessor(
-                self._config.transformer, self._tensor_space
-            )
+        self._backup_attention_preprocessor = BackupAttentionPreprocessor(self._config.layers, self._tensor_space)
 
     def get_layers(self) -> list[Layer]:
         return [
             LanguageModelEmbedding(self._config, self._tensor_space),
             *[
                 TransformerLayer(
-                    self._config.transformer,
-                    self._tensor_space,
-                    layer_index=i + 1,
+                    *self._config.layers.get_layer_config_and_tensor_space(layer_index, self._tensor_space),
+                    layer_index=layer_index,
                 )
-                for i in range(self._config.transformer.num_layers)
+                for layer_index in range(self._config.layers.default.num_layers)
             ],
             LanguageModelHead(self._config, self._tensor_space),
         ]
@@ -175,10 +170,9 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                 )
             if self._config.use_absolute_position_embeddings:
                 self._position_embedding_preprocessor.preprocess_meta(kwargs)
-            if self._config.transformer.rotary.enabled:
+            if self._config.layers.default.rotary.enabled:
                 self._rotary_embedding_preprocessor.preprocess_meta(kwargs)
-            if not self._use_flash_attention:
-                self._backup_attention_preprocessor.preprocess_meta(kwargs)
+            self._backup_attention_preprocessor.preprocess_meta(kwargs)
             preprocessed_meta.append((tokens, kwargs))
 
         return preprocessed_meta
@@ -214,10 +208,9 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
 
         if self._config.use_absolute_position_embeddings:
             self._position_embedding_preprocessor.create_tensors(sequence_length)
-        if self._config.transformer.rotary.enabled:
+        if self._config.layers.default.rotary.enabled:
             self._rotary_embedding_preprocessor.create_tensors(sequence_length)
-        if not self._use_flash_attention:
-            self._backup_attention_preprocessor.create_tensors(sequence_length)
+        self._backup_attention_preprocessor.create_tensors(sequence_length)
 
         preprocessed = []
         presents = None
@@ -257,10 +250,9 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                 kwargs[LanguageModelKwargs.labels] = labels
             if self._config.use_absolute_position_embeddings:
                 self._position_embedding_preprocessor.preprocess(kwargs)
-            if self._config.transformer.rotary.enabled:
+            if self._config.layers.default.rotary.enabled:
                 self._rotary_embedding_preprocessor.preprocess(kwargs)
-            if not self._use_flash_attention:
-                self._backup_attention_preprocessor.preprocess(kwargs)
+            self._backup_attention_preprocessor.preprocess(kwargs)
             preprocessed.append((tokens, kwargs))
 
         return preprocessed
@@ -290,22 +282,22 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             LossDef(name=LanguageModelLossNames.language_model_loss, formatted_name="language model loss", count=1)
         ]
         if (
-            self._config.transformer.num_experts > 1
-            and self._config.transformer.expert_routing_type == RoutingType.topk
+            self._config.layers.default.num_experts > 1
+            and self._config.layers.default.expert_routing_type == RoutingType.topk
         ):
             loss_defs.append(
                 LossDef(
                     name=TransformerLossNames.load_balancing_loss,
                     formatted_name="load balancing loss",
-                    count=self._config.transformer.num_layers,
+                    count=self._config.layers.default.num_layers,
                 )
             )
-            if self._config.transformer.expert_z_loss_coefficient:
+            if self._config.layers.default.expert_z_loss_coefficient:
                 loss_defs.append(
                     LossDef(
                         name=TransformerLossNames.router_z_loss,
                         formatted_name="router z loss",
-                        count=self._config.transformer.num_layers,
+                        count=self._config.layers.default.num_layers,
                     )
                 )
         if self._config.logit_z_loss:

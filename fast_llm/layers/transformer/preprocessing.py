@@ -18,7 +18,7 @@ from fast_llm.tensor import TensorMeta
 logger = logging.getLogger(__name__)
 
 
-def apply_llama3_scaling(config: RotaryConfig, frequencies: torch.Tensor) -> torch.Tensor:
+def apply_llama3_scaling(config: RotaryConfig, frequencies: torch.Tensor) -> tuple[torch.Tensor, float]:
     """
     Llama3 scaling: https://github.com/meta-llama/llama-models/blob/baf7b01b6e62bc7126c7b558d2b67d4533142680/models/llama3/reference_impl/model.py#L45-L67
     """
@@ -40,7 +40,7 @@ def apply_llama3_scaling(config: RotaryConfig, frequencies: torch.Tensor) -> tor
     return torch.tensor(new_frequencies, dtype=frequencies.dtype, device=frequencies.device), 1.0
 
 
-def apply_yarn_scaling(config: RotaryConfig, frequencies: torch.Tensor, kv_channels, sequence_length) -> torch.Tensor:
+def apply_yarn_scaling(config: RotaryConfig, frequencies: torch.Tensor, kv_channels) -> tuple[torch.Tensor, float]:
     """
     Yarn scaling:
     https://github.com/huggingface/transformers/blob/006d9249ec0270ff6c4d3840979d23fe94bdc763/src/transformers/modeling_rope_utils.py#L163
@@ -49,7 +49,6 @@ def apply_yarn_scaling(config: RotaryConfig, frequencies: torch.Tensor, kv_chann
     base = config.theta
     partial_rotary_factor = 1.0
     dim = int(kv_channels * partial_rotary_factor)
-    max_position_embeddings = sequence_length
     factor = config.scale_factor
 
     attention_factor = config.attention_factor
@@ -75,7 +74,6 @@ def apply_yarn_scaling(config: RotaryConfig, frequencies: torch.Tensor, kv_chann
         ramp_func = torch.clamp(linear_func, 0, 1)
         return ramp_func
 
-
     # Note on variable naming: "interpolation" comes from the original technique, where we interpolate the position IDs
     # to expand the possible context length. In other words, interpolation = apply scaling factor.
     # pos_freqs = base ** (torch.arange(0, dim, 2).float().to(frequencies.device) / dim)
@@ -99,7 +97,6 @@ def apply_yarn_scaling(config: RotaryConfig, frequencies: torch.Tensor, kv_chann
     return inv_freq, attention_factor
 
 
-
 def get_rotary_frequencies(
     config: RotaryConfig,
     sequence_length,
@@ -118,7 +115,7 @@ def get_rotary_frequencies(
     if config.type == RotaryEmbeddingType.llama3:
         frequencies, attention_scaling = apply_llama3_scaling(config, frequencies)
     elif config.type == RotaryEmbeddingType.yarn:
-        frequencies, attention_scaling = apply_yarn_scaling(config, frequencies, kv_channels, sequence_length)
+        frequencies, attention_scaling = apply_yarn_scaling(config, frequencies, kv_channels)
     else:
         attention_scaling = 1.0
     angles = torch.outer(positions, frequencies)
@@ -205,13 +202,23 @@ class BackupAttentionPreprocessor:
         config: TransformerConfig,
         tensor_space: TensorSpace,
     ):
-        self._config = config
         self._tensor_space = tensor_space
         self._distributed_config = self._tensor_space.distributed_config
-        assert not self._config.do_use_flash_attention(self._distributed_config)
+        all_configs = [config.default] + [layer.config for layer in config.layers]
+        self._enabled = not all(
+            layer_config.do_use_flash_attention(self._distributed_config) for layer_config in all_configs
+        )
+        if self._enabled:
+            window_sizes = {layer_config.window_size for layer_config in all_configs}
+            if len(window_sizes) != 1:
+                raise ValueError("Variable window size not supported for backup attention.")
+            self._window_size = window_sizes.pop()
+
         self._scalar_dim = self._tensor_space.get_tensor_dim(DefaultDimNames.scalar)
 
     def create_tensors(self, sequence_length: int) -> None:
+        if not self._enabled:
+            return
         if sequence_length <= self._tensor_cache_max_sequence_length:
             return
         self._tensor_cache_max_sequence_length = sequence_length
@@ -221,8 +228,8 @@ class BackupAttentionPreprocessor:
             dtype=torch.bool,
             device=self._tensor_space.distributed.device,
         ).tril_()
-        if self._config.window_size is not None:
-            self._mask.triu_(-self._config.window_size + 1)
+        if self._window_size is not None:
+            self._mask.triu_(-self._window_size + 1)
         self._mask_value = torch.full(
             [],
             torch.finfo(self._distributed_config.training_dtype.torch).min,
@@ -231,6 +238,8 @@ class BackupAttentionPreprocessor:
         )
 
     def preprocess(self, kwargs: dict[str, typing.Any]) -> None:
+        if not self._enabled:
+            return
         sequence_k = kwargs[TransformerKwargs.sequence_k_dim].size
         kwargs[TransformerKwargs.attention_mask] = self._mask[
             None, None, sequence_k - kwargs[TransformerKwargs.sequence_q_dim].size : sequence_k, None, :sequence_k
@@ -238,6 +247,8 @@ class BackupAttentionPreprocessor:
         kwargs[TransformerKwargs.attention_mask_value] = self._mask_value
 
     def preprocess_meta(self, kwargs: dict[str, typing.Any]) -> None:
+        if not self._enabled:
+            return
         kwargs[TransformerKwargs.attention_mask] = TensorMeta.from_dims(
             (
                 self._scalar_dim,
