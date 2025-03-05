@@ -11,7 +11,7 @@ We already saw an example dataset configuration in the [quick-start guide](../qu
 3. Defining a fast-llm data configuration that use those datasets:
 
     ```yaml
-   data:
+    data:
       datasets:
         Training:
           type: file
@@ -19,7 +19,7 @@ We already saw an example dataset configuration in the [quick-start guide](../qu
         Validation:
           type: file
           path: fast-llm-tutorial/dataset/fast_llm_config_validation.yaml
-   ```
+    ```
 
 4. Running `fast-llm training` with said configuration.
 
@@ -170,6 +170,7 @@ data:
 
 !!! note "Configure from file"
     If a dataset configuration is especially complex and makes the dataset configuration excessively big, or is reused across many experiments, you may want to save it to a yaml file and refer to it un the config using a `file` dataset. This can be used to reduce the present example to
+    
     ```yaml
     data:
       datasets:
@@ -181,5 +182,6 @@ data:
           path: path/to/validation_dataset_config.yaml
       sampling:
         shuffle: skip_first_epoch
-     ```
-     In fact, all the elementary datasets from file we've been using so far are of this format, and consist of more elementary `memmap` datasets optionally wrapped with `blended` and/or `slice` wrappers.
+    ```
+
+    In fact, all the elementary datasets from file we've been using so far are of this format, and consist of more elementary `memmap` datasets optionally wrapped with `blended` and/or `slice` wrappers.
