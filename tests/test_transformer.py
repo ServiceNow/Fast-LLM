@@ -16,12 +16,14 @@ def test_variable_window_size():
                         {
                             # Layers 5, 6 and 7
                             "layer_ranges": [{"begin": 5, "end": None}],
-                            "updates": {"window_size": None, "normalization": {"epsilon": 1}},
+                            # Update normalization epsilon, keep rms norm.
+                            "updates": {"window_size": None, "normalization/epsilon": 1},
                         },
                         {
                             # Layers 0, 3 and 5, but 5 already covered above so excluded.
                             "layer_ranges": [{"begin": 0, "end": 1}, {"begin": 3, "end": 6, "step": 2}],
-                            "updates": {"window_size": 512, "ffn_hidden_size": 64},
+                            # Override the whole normalization, type reverts back to default (layer_norm)
+                            "updates": {"window_size": 512, "ffn_hidden_size": 64, "normalization": {"epsilon": 1}},
                         },
                     ],
                 }
@@ -32,8 +34,20 @@ def test_variable_window_size():
     Assert.eq(
         [layer._config.window_size for layer in model.layers[1:-1]], [512, 1024, 1024, 512, 1024, None, None, None]
     )
-    Assert.eq([layer._config.normalization.type for layer in model.layers[1:-1]], [NormalizationType.rms_norm] * 8)
-    Assert.eq([layer._config.normalization.epsilon for layer in model.layers[1:-1]], [1e-5] * 5 + [1] * 3)
+    Assert.eq(
+        [layer._config.normalization.type for layer in model.layers[1:-1]],
+        [
+            NormalizationType.layer_norm,
+            NormalizationType.rms_norm,
+            NormalizationType.rms_norm,
+            NormalizationType.layer_norm,
+            NormalizationType.rms_norm,
+            NormalizationType.rms_norm,
+            NormalizationType.rms_norm,
+            NormalizationType.rms_norm,
+        ],
+    )
+    Assert.eq([layer._config.normalization.epsilon for layer in model.layers[1:-1]], [1, 1e-5, 1e-5, 1, 1e-5, 1, 1, 1])
     Assert.eq(
         [layer._config.ffn_hidden_size for layer in model.layers[1:-1]], [64, 4096, 4096, 64, 4096, 4096, 4096, 4096]
     )

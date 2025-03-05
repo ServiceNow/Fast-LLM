@@ -4,7 +4,16 @@ import math
 import typing
 import warnings
 
-from fast_llm.config import Config, Field, FieldHint, FieldUpdate, check_field, config_class, skip_valid_if_none
+from fast_llm.config import (
+    Config,
+    Field,
+    FieldHint,
+    FieldUpdate,
+    check_field,
+    config_class,
+    process_field,
+    skip_valid_if_none,
+)
 from fast_llm.engine.base_model.config import BaseModelArchitectureConfig, BaseModelConfig
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.engine.config_utils.tensor_space import CompositeTensorDim, TensorDim, TensorSpace
@@ -656,6 +665,10 @@ class RangeConfig(Config):
         )
 
 
+def process_config_updates(updates: dict[str | tuple[str, ...], typing.Any]) -> dict[tuple[str, ...], typing.Any]:
+    return {(tuple(key.split("/")) if isinstance(key, str) else key): value for (key, value) in updates.items()}
+
+
 @config_class()
 class TransformerLayerRangeArchitectureConfig(BaseModelArchitectureConfig):
     _abstract = False
@@ -664,20 +677,24 @@ class TransformerLayerRangeArchitectureConfig(BaseModelArchitectureConfig):
         desc="Layer range.",
         hint=FieldHint.core,
     )
-    updates: dict[str, typing.Any] = Field(
-        default_factory=dict,
+    updates: dict[tuple[str, ...], typing.Any] = Field(
+        default_factory=dict, valid=process_field(process_config_updates)
     )
     config: TransformerLayerArchitectureConfig = Field(init=False)
+    _default: TransformerLayerArchitectureConfig = Field(init=False)
 
     def setup(self, default: TransformerLayerArchitectureConfig) -> None:
+        assert not hasattr(self, "_default")
+        self._default = default
+
+    def _validate(self) -> None:
+        assert hasattr(self, "_default")
+        assert len(self.layer_ranges) > 0
+        super()._validate()
         # Create the full config from the default and updates.
         # We use `default.from_dict` so we also have the appropriate class in `TransformerLayerRangeConfig`.
         # For the architecture class we need to set `strict=False` because of possible non-architecture parameters.
-        self.config = default.from_dict(default, self.updates, strict=True)  # isinstance(self, BaseModelConfig))
-
-    def _validate(self) -> None:
-        assert hasattr(self, "config")
-        assert len(self.layer_ranges) > 0
+        self.config = self._default.from_dict(self._default, self.updates, strict=isinstance(self, BaseModelConfig))
         self.config.validate()
 
     def in_range(self, index) -> bool:
@@ -687,6 +704,7 @@ class TransformerLayerRangeArchitectureConfig(BaseModelArchitectureConfig):
 @config_class()
 class TransformerLayerRangeConfig(TransformerLayerRangeArchitectureConfig, BaseModelConfig):
     config: TransformerLayerConfig = FieldUpdate()
+    _default: TransformerLayerConfig = FieldUpdate()
 
 
 @config_class()
@@ -698,13 +716,14 @@ class TransformerArchitectureConfig(BaseModelArchitectureConfig):
     def _validate(self) -> None:
         for layer in self.layers:
             layer.setup(self.default)
+        super()._validate()
+        for layer in self.layers:
             # Hidden layers must match
             Assert.eq(layer.config.hidden_size, self.default.hidden_size)
             # TODO: Move elsewhere? Kept here because used in a few places like default initialization.
             Assert.eq(layer.config.num_layers, self.default.num_layers)
             # TODO: Rotary preprocessor doesn't support variations across layers.
             Assert.eq(layer.config.rotary.to_serialized(), self.default.rotary.to_serialized())
-        super()._validate()
 
     def get_layer_config_and_tensor_space(
         self, index: int, tensor_space: TensorSpace
