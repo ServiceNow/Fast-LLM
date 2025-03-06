@@ -49,7 +49,6 @@ def apply_yarn_scaling(config: RotaryConfig, frequencies: torch.Tensor, kv_chann
     base = config.theta
     partial_rotary_factor = 1.0
     dim = int(kv_channels * partial_rotary_factor)
-    max_position_embeddings = sequence_length
     factor = config.scale_factor
 
     attention_factor = config.attention_factor
@@ -75,7 +74,6 @@ def apply_yarn_scaling(config: RotaryConfig, frequencies: torch.Tensor, kv_chann
         ramp_func = torch.clamp(linear_func, 0, 1)
         return ramp_func
 
-
     # Note on variable naming: "interpolation" comes from the original technique, where we interpolate the position IDs
     # to expand the possible context length. In other words, interpolation = apply scaling factor.
     # pos_freqs = base ** (torch.arange(0, dim, 2).float().to(frequencies.device) / dim)
@@ -97,7 +95,6 @@ def apply_yarn_scaling(config: RotaryConfig, frequencies: torch.Tensor, kv_chann
     )
 
     return inv_freq, attention_factor
-
 
 
 def get_rotary_frequencies(
@@ -221,6 +218,7 @@ class BackupAttentionPreprocessor:
             dtype=torch.bool,
             device=self._tensor_space.distributed.device,
         ).tril_()
+
         if self._config.window_size is not None:
             self._mask.triu_(-self._config.window_size + 1)
         self._mask_value = torch.full(
@@ -235,6 +233,12 @@ class BackupAttentionPreprocessor:
         kwargs[TransformerKwargs.attention_mask] = self._mask[
             None, None, sequence_k - kwargs[TransformerKwargs.sequence_q_dim].size : sequence_k, None, :sequence_k
         ]
+        if self._config.prevent_cross_document_attention:
+            seq_ids = (kwargs[TransformerKwargs.position_ids] == 0).cumsum(dim=1) - 1
+            document_mask = seq_ids[:, None, :] == seq_ids[:, :, None]
+            kwargs[TransformerKwargs.attention_mask] = (
+                kwargs[TransformerKwargs.attention_mask] & document_mask[:, None, :, None, :]
+            )
         kwargs[TransformerKwargs.attention_mask_value] = self._mask_value
 
     def preprocess_meta(self, kwargs: dict[str, typing.Any]) -> None:

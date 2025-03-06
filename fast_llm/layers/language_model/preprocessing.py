@@ -42,9 +42,8 @@ class PositionEmbeddingPreprocessor:
     def preprocess(self, kwargs: dict[str, typing.Any]) -> None:
         sequence_k = kwargs[TransformerKwargs.sequence_k_dim].size
         if self._config.transformer.prevent_cross_document_attention:
-            kwargs[LanguageModelKwargs.position_ids] = kwargs[LanguageModelKwargs.position_ids][
-                sequence_k - kwargs[TransformerKwargs.sequence_q_dim].size : sequence_k
-            ].unsqueeze(int(kwargs[TransformerKwargs.sequence_first]))
+            if kwargs[TransformerKwargs.sequence_first]:
+                kwargs[LanguageModelKwargs.position_ids] = kwargs[LanguageModelKwargs.position_ids].transpose(0, 1)
         else:
             kwargs[LanguageModelKwargs.position_ids] = self._position_ids[
                 sequence_k - kwargs[TransformerKwargs.sequence_q_dim].size : sequence_k

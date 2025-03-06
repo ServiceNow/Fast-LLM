@@ -208,6 +208,12 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             dtype=torch.int64,
             non_blocking=True,
         )
+        if batch.position_ids is not None:
+            kwargs[LanguageModelKwargs.position_ids] = batch.position_ids[:, sequence_k - sequence_q : sequence_k].to(
+                device=self._tensor_space.distributed.device,
+                dtype=torch.int32,
+                non_blocking=True,
+            )
         if sequence_first:
             # Move the sequence dimension first to make sequence parallel ops more efficient.
             batch.token_ids = batch.token_ids.transpose(0, 1).contiguous()
@@ -255,14 +261,6 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                             )
                             labels[i, mask_indices] = -100
                 kwargs[LanguageModelKwargs.labels] = labels
-                if batch.position_ids is not None:
-                    kwargs[LanguageModelKwargs.position_ids] = batch.position_ids[
-                        :, sequence_k - sequence_q : sequence_k
-                    ].to(
-                        device=self._tensor_space.distributed.device,
-                        dtype=torch.int32,
-                        non_blocking=True,
-                    )
             if self._config.use_absolute_position_embeddings:
                 self._position_embedding_preprocessor.preprocess(kwargs)
             if self._config.transformer.rotary.enabled:
