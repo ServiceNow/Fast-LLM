@@ -256,7 +256,9 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                             labels[i, mask_indices] = -100
                 kwargs[LanguageModelKwargs.labels] = labels
                 if batch.position_ids is not None:
-                    kwargs[LanguageModelKwargs.position_ids] = batch.position_ids.to(
+                    kwargs[LanguageModelKwargs.position_ids] = batch.position_ids[
+                        :, sequence_k - sequence_q : sequence_k
+                    ].to(
                         device=self._tensor_space.distributed.device,
                         dtype=torch.int32,
                         non_blocking=True,

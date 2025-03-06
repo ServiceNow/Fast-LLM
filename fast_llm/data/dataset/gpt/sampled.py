@@ -499,9 +499,6 @@ class LegacyGPTSampledIndexedDataset(SampledDataset):
         else:
             spans = None
         if self._config.per_document_positions:
-            # position_ids = np.concatenate(
-            #     [np.arange(len(sample.token_ids), dtype=np.int32) for sample in sample_list]
-            # )[:-1]
             start_indices = np.where(token_ids == self._tokenizer.bod_id)[0][:-1]
             position_ids = np.arange(len(token_ids) - 1, dtype=np.int32)
             for idx in start_indices:
