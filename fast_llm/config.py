@@ -125,6 +125,8 @@ class Field(dataclasses.Field):
         # Should raise an Exception in case of failure, and return the validated value.
         # Run before the default validation (type check).
         valid: typing.Optional[typing.Callable[[typing.Any], typing.Any]] = None,
+        # Option to skip (postpone) instantiation of a `Config` field.
+        auto_instantiate: bool = True,
         default=dataclasses.MISSING,
         default_factory=dataclasses.MISSING,
         init: bool = True,
@@ -152,6 +154,7 @@ class Field(dataclasses.Field):
         self.doc = doc
         self.hint = hint
         self.valid = valid
+        self.auto_instantiate = auto_instantiate
 
 
 class FieldUpdate(dict):
@@ -263,6 +266,10 @@ def config_class(cls=None):
 
     # We're called as @config_class without parens.
     return wrap(cls)
+
+
+# A marker to prevent auto instantiation of a config.
+NoAutoInstantiate = object()
 
 
 @dataclasses.dataclass()
@@ -712,10 +719,16 @@ class Config:
                     continue
                 if flat:
                     if isinstance(field.type, type) and issubclass(field.type, Config):
-                        if flat:
-                            out_arg_dict[name] = field.type._from_dict(default, False, True)
+                        assert isinstance(field.default_factory, type) and issubclass(
+                            field.default_factory, field.type
+                        )
+                        if field.auto_instantiate:
+                            if flat:
+                                out_arg_dict[name] = field.default_factory._from_dict(default, False, True)
+                            else:
+                                out_arg_dict[name] = field.default_factory._from_dict(default.pop(name, {}), strict)
                         else:
-                            out_arg_dict[name] = field.type._from_dict(default.pop(name, {}), strict)
+                            out_arg_dict[name] = default.pop(name, {})
                     elif name in default:
                         out_arg_dict[name] = default.pop(name)
                 else:

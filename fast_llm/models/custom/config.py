@@ -55,7 +55,7 @@ class CustomModelConfig(GPTModelConfig):
 
 @config_class()
 class PretrainedCustomModelConfig(PretrainedGPTModelConfig):
-    model: CustomModelConfig = FieldUpdate(default_factory=CustomModelConfig)
+    model: CustomModelConfig = FieldUpdate()
 
 
 @config_class()
