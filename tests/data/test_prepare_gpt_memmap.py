@@ -166,7 +166,3 @@ def test_split_datasets_1():
             },
         },
     )
-
-
-if __name__ == "__main__":
-    test_load_metadata_from_hub()
