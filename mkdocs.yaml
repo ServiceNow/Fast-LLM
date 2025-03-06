@@ -169,8 +169,8 @@ nav:
   - Recipes:
     - Prepare a dataset: recipes/data-preparation.md
     - Configure a dataset: recipes/data-configuration.md
-    - Train Llama 8B from scratch: recipes/train-llama-8b.md
-    - Continue training Llama 8B: recipes/continue-training-llama-8b.md
+    - Train a model from scratch: recipes/train.md
+    - Continue training a model: recipes/continue-training.md
     - Upcycle Llama 3B to MoE: recipes/upcycle-llama-3b-to-moe.md
   - Reference:
     - User Guide:
