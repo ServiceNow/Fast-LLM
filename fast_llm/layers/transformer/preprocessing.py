@@ -6,6 +6,7 @@ import torch
 
 from fast_llm.engine.config_utils.tensor_space import DefaultDimNames, TensorDim, TensorSpace
 from fast_llm.functional.rotary import convert_rotary_complex_to_real
+from fast_llm.layers.language_model.config import LanguageModelKwargs
 from fast_llm.layers.transformer.config import (
     RotaryConfig,
     RotaryEmbeddingType,
@@ -234,10 +235,14 @@ class BackupAttentionPreprocessor:
             None, None, sequence_k - kwargs[TransformerKwargs.sequence_q_dim].size : sequence_k, None, :sequence_k
         ]
         if self._config.prevent_cross_document_attention:
-            seq_ids = (kwargs[TransformerKwargs.position_ids] == 0).cumsum(dim=1) - 1
+            kwargs[LanguageModelKwargs.position_ids]
+            seq_ids = (kwargs[LanguageModelKwargs.position_ids] == 0).cumsum(dim=1) - 1
             document_mask = seq_ids[:, None, :] == seq_ids[:, :, None]
             kwargs[TransformerKwargs.attention_mask] = (
-                kwargs[TransformerKwargs.attention_mask] & document_mask[:, None, :, None, :]
+                kwargs[TransformerKwargs.attention_mask]
+                & document_mask[
+                    :, None, sequence_k - kwargs[TransformerKwargs.sequence_q_dim].size : sequence_k, None, :sequence_k
+                ]
             )
         kwargs[TransformerKwargs.attention_mask_value] = self._mask_value
 

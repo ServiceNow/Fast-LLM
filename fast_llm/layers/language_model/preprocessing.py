@@ -37,17 +37,10 @@ class PositionEmbeddingPreprocessor:
         Assert.leq(sequence_length, self._config.num_absolute_position_embeddings)
         self._position_ids = torch.arange(
             0, sequence_length, device=self._tensor_space.distributed.device, dtype=torch.int64
-        )
+        ).unsqueeze(0)
 
     def preprocess(self, kwargs: dict[str, typing.Any]) -> None:
-        sequence_k = kwargs[TransformerKwargs.sequence_k_dim].size
-        if self._config.transformer.prevent_cross_document_attention:
-            if kwargs[TransformerKwargs.sequence_first]:
-                kwargs[LanguageModelKwargs.position_ids] = kwargs[LanguageModelKwargs.position_ids].transpose(0, 1)
-        else:
-            kwargs[LanguageModelKwargs.position_ids] = self._position_ids[
-                sequence_k - kwargs[TransformerKwargs.sequence_q_dim].size : sequence_k
-            ].unsqueeze(int(kwargs[TransformerKwargs.sequence_first]))
+        kwargs[LanguageModelKwargs.position_ids] = kwargs.get(LanguageModelKwargs.position_ids, self._position_ids)
 
     def preprocess_meta(self, kwargs: dict[str, typing.Any]) -> None:
         # Position embeddings will be broadcast.

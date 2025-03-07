@@ -10,7 +10,6 @@ from fast_llm.functional.autograd import wrap_forward_backward
 from fast_llm.functional.rotary import apply_rotary_embeddings
 from fast_llm.functional.triton.rotary import triton_rotary_autograd_
 from fast_llm.layers.common.linear import InputParallelLinear, OutputParallelLinear
-from fast_llm.layers.language_model.config import LanguageModelKwargs
 from fast_llm.layers.transformer.config import TransformerConfig, TransformerDimNames, TransformerKwargs
 from fast_llm.logging import log_distributed_grad, log_distributed_tensor
 from fast_llm.tensor import TensorMeta, init_normal_, init_zeros_
@@ -346,7 +345,10 @@ class Attention(torch.nn.Module):
                 causal=True,
                 generator=self._tensor_space.distributed.tp_generator,
                 softmax_scale=self._softmax_scale,
-                position_ids=kwargs.get(LanguageModelKwargs.position_ids, None),
+                cu_seqlens_q=kwargs.get(TransformerKwargs.cu_seqlens_q, None),
+                cu_seqlens_k=kwargs.get(TransformerKwargs.cu_seqlens_k, None),
+                max_seqlen_q=kwargs.get(TransformerKwargs.max_seqlen_q, None),
+                max_seqlen_k=kwargs.get(TransformerKwargs.max_seqlen_k, None),
                 prevent_cross_document_attention=self._config.prevent_cross_document_attention,
             )  # .flatten(-2)
             input_ = input_.flatten(-2)

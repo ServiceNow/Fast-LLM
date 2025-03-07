@@ -209,7 +209,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             non_blocking=True,
         )
         if batch.position_ids is not None:
-            kwargs[LanguageModelKwargs.position_ids] = batch.position_ids[:, sequence_k - sequence_q : sequence_k].to(
+            kwargs_meta[LanguageModelKwargs.position_ids] = batch.position_ids.to(
                 device=self._tensor_space.distributed.device,
                 dtype=torch.int32,
                 non_blocking=True,
@@ -234,7 +234,23 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             else:
                 # TODO: Avoid multiple contiguous calls?
                 tokens = batch.token_ids[:, sequence_k - sequence_q : sequence_k].contiguous()
-
+            if batch.position_ids is not None:
+                position_ids_q = kwargs_meta[LanguageModelKwargs.position_ids][
+                    sequence_k - sequence_q : sequence_k
+                ].flatten()
+                position_ids_k = kwargs_meta[LanguageModelKwargs.position_ids][:sequence_k].flatten()
+                indices_q = torch.arange(position_ids_q.size(0), device=position_ids_q.device, dtype=torch.int32)
+                indices_k = torch.arange(position_ids_k.size(0), device=position_ids_k.device, dtype=torch.int32)
+                kwargs_meta[TransformerKwargs.cu_seqlens_q] = torch.cat(
+                    indices_q[position_ids_q == 0],
+                    torch.tensor(position_ids_q.size(), device=position_ids_q.device, dtype=torch.int32),
+                )
+                kwargs_meta[TransformerKwargs.cu_seqlens_k] = torch.cat(
+                    indices_k[position_ids_k == 0],
+                    torch.tensor(position_ids_k.size(), device=position_ids_k.device, dtype=torch.int32),
+                )
+                kwargs_meta[TransformerKwargs.max_length_q] = position_ids_q.max()
+                kwargs_meta[TransformerKwargs.max_length_k] = position_ids_k.max()
             # TODO: Add pasts/presents to meta input?
             # Use lists as pointers so `past_key_values` is populated during the previous micro_sequence.
             pasts = presents

@@ -10,7 +10,6 @@ from fast_llm.engine.config_utils.tensor_space import TensorSpace
 from fast_llm.layers.language_model.config import LanguageModelBaseConfig, LanguageModelDimNames, LanguageModelKwargs
 from fast_llm.layers.transformer.config import TransformerDimNames, TransformerKwargs
 from fast_llm.tensor import ParameterMeta, TensorMeta, init_normal_
-from fast_llm.utils import Assert
 
 WORD_EMBEDDINGS_WEIGHT = "word_embeddings_weight"
 
@@ -115,4 +114,10 @@ class LanguageModelEmbedding[ConfigType: LanguageModelBaseConfig](Configurable[L
                 tensor_name="Embedding output",
                 dtype=self._residual_dtype,
             )
-        return self._forward(input_, kwargs.get(LanguageModelKwargs.position_ids))
+        sequence_k = kwargs[TransformerKwargs.sequence_k_dim].size
+        position_ids = kwargs.get(LanguageModelKwargs.position_ids)[
+            sequence_k - kwargs[TransformerKwargs.sequence_q_dim].size : sequence_k
+        ]
+        if kwargs[TransformerKwargs.sequence_first]:
+            position_ids = position_ids.transpose(0, 1)
+        return self._forward(input_, position_ids)
