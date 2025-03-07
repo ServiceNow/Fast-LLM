@@ -5,7 +5,6 @@ from fast_llm.engine.base_model.config import BaseModelArchitectureConfig, BaseM
 from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
 from fast_llm.engine.distributed.config import DistributedDimNames
 from fast_llm.functional.config import CrossEntropyImpl
-from fast_llm.layers.language_model import multi_token_prediction_head
 from fast_llm.layers.transformer.config import TransformerArchitectureConfig, TransformerConfig
 from fast_llm.utils import Assert
 
