@@ -208,6 +208,12 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             dtype=torch.int64,
             non_blocking=True,
         )
+        if batch.position_ids is not None:
+            batch.position_ids = batch.position_ids.to(
+                device=self._tensor_space.distributed.device,
+                dtype=torch.int32,
+                non_blocking=True,
+            )
         if sequence_first:
             # Move the sequence dimension first to make sequence parallel ops more efficient.
             batch.token_ids = batch.token_ids.transpose(0, 1).contiguous()
@@ -229,15 +235,9 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                 # TODO: Avoid multiple contiguous calls?
                 tokens = batch.token_ids[:, sequence_k - sequence_q : sequence_k].contiguous()
             if batch.position_ids is not None:
-                kwargs_meta[LanguageModelKwargs.position_ids] = batch.position_ids.to(
-                    device=self._tensor_space.distributed.device,
-                    dtype=torch.int32,
-                    non_blocking=True,
-                )
-                position_ids_q = kwargs_meta[LanguageModelKwargs.position_ids][
-                    :, sequence_k - sequence_q : sequence_k
-                ].flatten()
-                position_ids_k = kwargs_meta[LanguageModelKwargs.position_ids][:, :sequence_k].flatten()
+                kwargs_meta[LanguageModelKwargs.position_ids] = batch.position_ids
+                position_ids_q = batch.position_ids[:, sequence_k - sequence_q : sequence_k].flatten()
+                position_ids_k = batch.position_ids[:, :sequence_k].flatten()
                 indices_q = torch.arange(position_ids_q.size(0), device=position_ids_q.device, dtype=torch.int32)
                 indices_k = torch.arange(position_ids_k.size(0), device=position_ids_k.device, dtype=torch.int32)
                 kwargs_meta[TransformerKwargs.cu_seqlens_q] = torch.cat(
