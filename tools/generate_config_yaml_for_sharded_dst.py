@@ -7,6 +7,10 @@ from fast_llm.data.dataset.gpt.config import GPTMemmapDatasetConfig
 from fast_llm.config import Config, Field, config_class, FieldHint
 import argparse
 
+'''
+This script is intended to be used only for creation of fast_llm_config.yaml files for sharded datasets encoded with older version of the prepare command.
+'''
+
 def read_dataset_shard_config(shard_path):
     """
     Read a dataset shard from the given path.
@@ -69,7 +73,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Generate config YAML for sharded datasets")
     parser.add_argument("--prepare_config", type=str, required=False, default=None, #"/home/toolkit/dev/Fast-LLM/.vscode/prepare_dst.yaml",
                         help="Path to the prepare config YAML file")
-    parser.add_argument("--dataset_path", type=str, required=False, default="/home/toolkit/dev/fast-llm-tutorial/dataset",
+    parser.add_argument("--dataset_path", type=str, required=False, default="/mnt/datasets/tokenized/Mistral-Nemo-Base-2407/FineWeb2/deu_Latn/",
                         help="Path to the dataset path")
     args = parser.parse_args()
 

@@ -36,3 +36,6 @@ devenv.*
 
 # direnv
 .direnv
+
+# private folders
+__*
