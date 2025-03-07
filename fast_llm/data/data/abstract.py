@@ -47,3 +47,20 @@ class Data[ConfigType: DataConfig](Configurable[ConfigType], abc.ABC):
         prefetch_factor: int | None = None,
     ) -> typing.Iterator[typing.Any]:
         pass
+
+    @abc.abstractmethod
+    def get_validation_dataset_iterator(
+        self,
+        batch_config: BatchConfig,
+        validation_dataset_name: str,
+        *,
+        consumed_samples: int,
+        num_workers: int,
+        prefetch_factor: int | None = None,
+    ) -> typing.Iterator[typing.Any]:
+        pass
+
+    @abc.abstractmethod
+    @property
+    def validation_dataset_names(self) -> typing.Iterable[str]:
+        pass
