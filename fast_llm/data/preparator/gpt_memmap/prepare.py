@@ -243,6 +243,9 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
         with multiprocessing.Pool(processes=self._config.saving_workers) as pool:
             dataset_configs = pool.map(self._save_shard, shards)
 
+        self.generate_config_yaml_for_sharded_dst(dataset_configs)
+
+    def generate_config_yaml_for_sharded_dst(self, dataset_configs: list[GPTMemmapDatasetConfig]) -> None:
         # Gather dataset_dicts from all ranks to rank 0
         if self._config.distributed.world_size > 1:
             if self._config.distributed.rank == 0:
