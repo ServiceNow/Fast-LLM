@@ -184,7 +184,7 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
             self._completed_steps,
             self._config.training.prefetch_factor,
         )
-        valid_iterator = None
+        valid_iterators = {name: None for name in self._data.validation_dataset_names}
 
         log_main_rank("Training ...")
 
@@ -290,19 +290,33 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
                 if PhaseType.validation in self._samples_per_split and (
                     done or self._config.training.validation.enabled(self._completed_steps)
                 ):
-                    if valid_iterator is None:
-                        valid_iterator = self._get_data_iterator(
-                            PhaseType.validation, self._completed_validation_steps
+                    formatted_metrics = []
+                    for validation_dataset_name in self._data.validation_dataset_names:
+                        if valid_iterators[validation_dataset_name] is None:
+                            valid_iterators[validation_dataset_name] = self._get_validation_data_iterator(
+                                validation_dataset_name, self._completed_validation_steps
+                            )
+                        # TODO: formatting metric category as Validation.validation_dataset_name
+                        #       maybe format each metric with validation_dataset_name prefix instead?
+                        # TODO: setting performance metrics per validation dataset
+                        #       maybe to set aggregate performance metrics for all validation datasets?
+                        metrics[f"{PhaseType.validation}.{validation_dataset_name}"] = self._evaluate(
+                            data_iterator=valid_iterators[validation_dataset_name],
+                            phase=PhaseType.validation,
+                            num_iters=self._config.training.validation.iterations,
+                            begin_iter=self._completed_validation_steps,
+                            sub_dataset_name=validation_dataset_name
                         )
-                    metrics[PhaseType.validation] = self._evaluate(
-                        data_iterator=valid_iterator,
-                        phase=PhaseType.validation,
-                        num_iters=self._config.training.validation.iterations,
-                        begin_iter=self._completed_validation_steps,
-                    )
-                    formatted_metrics = format_metrics(
-                        metrics[PhaseType.validation], self._loss_defs, PhaseType.validation
-                    )
+                        formatted_metrics.append(
+                            format_metrics(
+                                metrics[PhaseType.validation],
+                                self._loss_defs,
+                                PhaseType.validation,
+                                sub_dataset_name=validation_dataset_name,
+                            )
+                        )
+
+                    formatted_metrics = "\n".join(formatted_metrics)
                     log_main_rank(formatted_metrics)
                     if self._config.training.wandb.alert.enabled(self._completed_steps):
                         self._wandb.alert("Validation results", formatted_metrics, "INFO")
@@ -326,8 +340,10 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
         phase: PhaseType,
         num_iters: int,
         begin_iter: int = 0,
+        sub_dataset_name: str | None = None,
     ) -> dict[str, float | int]:
-        safe_barrier(self._distributed.world_group, f"{phase.value} begin")
+        full_phase_name = phase.value if sub_dataset_name is None else f"{phase.value}_{sub_dataset_name}"
+        safe_barrier(self._distributed.world_group, f"{full_phase_name} begin")
         begin_time = time.perf_counter()
         total_losses = {loss_def.name: 0.0 for loss_def in self._loss_defs}
         for iter_ in range(num_iters):
@@ -336,11 +352,11 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
             )
             for name, value in iter_losses.items():
                 total_losses[name] += value
-            self._run.save_logged_tensors(f"{phase}_{self._completed_steps}_{iter_}")
+            self._run.save_logged_tensors(f"{full_phase_name}_{self._completed_steps}_{iter_}")
 
         safe_barrier(
             self._distributed.world_group,
-            f"{phase.value} end",
+            f"{full_phase_name} end",
         )
         end_time = time.perf_counter()
         time_per_iteration = (end_time - begin_time) / num_iters
@@ -372,6 +388,17 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
         return self._data.get_iterator(
             self._config.batch,
             phase,
+            consumed_samples=completed_steps * self._config.batch.batch_size,
+            num_workers=self._config.training.num_workers,
+            prefetch_factor=prefetch_factor,
+        )
+
+    def _get_validation_data_iterator(
+        self, validation_dataset_name, completed_steps: int = 0, prefetch_factor: int | None = None
+    ) -> typing.Iterator[typing.Any]:
+        return self._data.get_validation_dataset_iterator(
+            self._config.batch,
+            validation_dataset_name,
             consumed_samples=completed_steps * self._config.batch.batch_size,
             num_workers=self._config.training.num_workers,
             prefetch_factor=prefetch_factor,
