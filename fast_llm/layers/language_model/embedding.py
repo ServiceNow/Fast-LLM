@@ -114,10 +114,12 @@ class LanguageModelEmbedding[ConfigType: LanguageModelBaseConfig](Configurable[L
                 tensor_name="Embedding output",
                 dtype=self._residual_dtype,
             )
-        sequence_k = kwargs[TransformerKwargs.sequence_k_dim].size
-        position_ids = kwargs.get(LanguageModelKwargs.position_ids)[
-            sequence_k - kwargs[TransformerKwargs.sequence_q_dim].size : sequence_k
-        ]
-        if kwargs[TransformerKwargs.sequence_first]:
-            position_ids = position_ids.transpose(0, 1)
+        position_ids = kwargs.get(LanguageModelKwargs.position_ids, None)
+        if position_ids is not None:
+            sequence_k = kwargs[TransformerKwargs.sequence_k_dim].size
+            position_ids = kwargs.get(LanguageModelKwargs.position_ids)[
+                sequence_k - kwargs[TransformerKwargs.sequence_q_dim].size : sequence_k
+            ]
+            if kwargs[TransformerKwargs.sequence_first]:
+                position_ids = position_ids.transpose(0, 1)
         return self._forward(input_, position_ids)
