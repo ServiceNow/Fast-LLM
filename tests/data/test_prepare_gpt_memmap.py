@@ -11,6 +11,7 @@ from fast_llm.data.dataset.gpt.sampled import GPTSample
 from fast_llm.data.preparator.gpt_memmap.config import MEMMAP_DTYPES, GPTMemmapDatasetPreparatorConfig
 from fast_llm.data.preparator.gpt_memmap.prepare import GPTMemmapDatasetPreparator
 from fast_llm.utils import Assert
+from tests.data.common import MockGPTMemmapDatasetConfig  # Noqa
 
 
 def get_preparator(output_path: str, dataset_path_name: str) -> GPTMemmapDatasetPreparator:
@@ -92,6 +93,7 @@ def test_split_dataset():
     config = GPTMemmapDatasetPreparator._split_and_blend_dataset_configs(
         [dataset_config_0],
         {"training": 3, "validation": 1},
+        pathlib.Path("."),
     )
     config = {key: value.to_serialized() for key, value in config.items()}
 
@@ -120,6 +122,7 @@ def test_split_datasets_0():
     config = GPTMemmapDatasetPreparator._split_and_blend_dataset_configs(
         [dataset_config_0, dataset_config_1],
         {"training": 1, "validation": 1},
+        pathlib.Path("."),
     )
     config = {key: value.to_serialized() for key, value in config.items()}
 
@@ -136,8 +139,7 @@ def test_split_datasets_1():
     dataset_config_0 = GPTIndexedDatasetConfig.from_dict(DATASET_DICT_0.copy())
     dataset_config_1 = GPTIndexedDatasetConfig.from_dict(DATASET_DICT_1.copy())
     config = GPTMemmapDatasetPreparator._split_and_blend_dataset_configs(
-        [dataset_config_0, dataset_config_1],
-        {"training": 3, "validation": 1},
+        [dataset_config_0, dataset_config_1], {"training": 3, "validation": 1}, pathlib.Path(".")
     )
     config = {key: value.to_serialized() for key, value in config.items()}
 
