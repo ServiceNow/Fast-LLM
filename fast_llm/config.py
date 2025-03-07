@@ -888,6 +888,7 @@ class Config:
                         valid=value.pop("valid", base_class_field.valid),
                         default=value.pop("default", base_class_field.default),
                         default_factory=value.pop("default_factory", base_class_field.default_factory),
+                        init=value.pop("init", base_class_field.init),
                         repr=value.pop("repr", base_class_field.repr),
                         hash=value.pop("hash", base_class_field.hash),
                         compare=value.pop("compare", base_class_field.compare),

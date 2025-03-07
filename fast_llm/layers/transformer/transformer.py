@@ -8,7 +8,7 @@ from fast_llm.engine.base_model.base_model import Layer
 from fast_llm.engine.config_utils.run import log_pipeline_parallel_main_rank
 from fast_llm.engine.config_utils.tensor_space import TensorSpace
 from fast_llm.layers.transformer.attention import Attention
-from fast_llm.layers.transformer.config import TransformerConfig, TransformerDimNames, TransformerKwargs
+from fast_llm.layers.transformer.config import TransformerDimNames, TransformerKwargs, TransformerLayerConfig
 from fast_llm.layers.transformer.mixture_of_experts import MixtureOfExpertMLP
 from fast_llm.layers.transformer.mlp import MLP
 from fast_llm.logging import log_distributed_grad, log_distributed_tensor, log_memory_usage
@@ -24,7 +24,7 @@ class TransformerLayer(Layer):
 
     def __init__(
         self,
-        config: TransformerConfig,
+        config: TransformerLayerConfig,
         tensor_space: TensorSpace,
         layer_index: int,
     ):
