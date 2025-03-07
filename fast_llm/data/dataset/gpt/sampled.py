@@ -30,6 +30,7 @@ logger = logging.getLogger(__name__)
 class GPTSample:
     token_ids: np.ndarray
     loss_masking_spans: np.ndarray | None = None
+    position_ids: np.ndarray | None = None
 
 
 class MemmapArray:
@@ -337,9 +338,14 @@ class GPTSampledIndexedDataset(SampledDataset):
         loss_masking_spans = (
             np.stack(loss_masking_spans, dtype=np.int32) if self._config.use_loss_masking_spans else None
         )
+        position_ids = (
+            np.concatenate([np.arange(len(sample.token_ids), dtype=np.int32) for sample in token_ids])
+            if self._config.per_document_positions
+            else None
+        )
         Assert.eq(len(token_ids), self._sequence_length + 1)
 
-        return GPTSample(token_ids=token_ids, loss_masking_spans=loss_masking_spans)
+        return GPTSample(token_ids=token_ids, loss_masking_spans=loss_masking_spans, position_ids=position_ids)
 
     @property
     def name(self) -> str:
@@ -373,6 +379,7 @@ class LegacyGPTSampledIndexedDataset(SampledDataset):
         self._num_samples = sampling.num_samples
         self._sequence_length = sampling.sequence_length
         self._config = sampling.config
+        self._tokenizer = sampling.tokenizer
 
         if sampling.cache_directory is None:
             log_main_rank(
@@ -491,7 +498,14 @@ class LegacyGPTSampledIndexedDataset(SampledDataset):
             spans = np.stack(spans, dtype=np.int32)
         else:
             spans = None
-        return GPTSample(token_ids=token_ids, loss_masking_spans=spans)
+        if self._config.per_document_positions:
+            start_indices = np.where(token_ids == self._tokenizer.bod_id)[0][:-1]
+            position_ids = np.arange(len(token_ids) - 1, dtype=np.int32)
+            for idx in start_indices:
+                position_ids[idx:] -= position_ids[idx]
+        else:
+            position_ids = None
+        return GPTSample(token_ids=token_ids, loss_masking_spans=spans, position_ids=position_ids)
 
     @property
     def name(self) -> str:

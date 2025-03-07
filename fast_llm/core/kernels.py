@@ -20,6 +20,7 @@ except ImportError:
 
 try:
     from flash_attn.flash_attn_interface import flash_attn_func as _flash_attn_func  # noqa
+    from flash_attn.flash_attn_interface import flash_attn_varlen_func as _flash_attn_varlen_func
 
     _flash_available = True
 except ImportError:
@@ -86,15 +87,40 @@ def flash_attn(
     causal: bool = False,
     generator: torch.Generator | None,
     softmax_scale: float | None = None,
+    cu_seqlens_q: torch.Tensor | None = None,
+    cu_seqlens_k: torch.Tensor | None = None,
+    max_seqlen_q: int | None = None,
+    max_seqlen_k: int | None = None,
+    prevent_cross_document_attention: bool = False,
 ) -> torch.Tensor:
     assert _flash_available
     with set_generator(generator):
-        return _flash_attn_func(
-            query,
-            key,
-            value,
-            window_size=(-1, -1) if window_size is None else (window_size - 1, 0),
-            dropout_p=dropout_p,
-            causal=causal,
-            softmax_scale=softmax_scale,
-        )
+        if prevent_cross_document_attention:
+            out_dims = query.size()
+            query = query.view(-1, query.size(-2), query.size(-1))
+            key = key.view(-1, key.size(-2), key.size(-1))
+            value = value.view(-1, value.size(-2), value.size(-1))
+
+            return _flash_attn_varlen_func(
+                query,
+                key,
+                value,
+                cu_seqlens_q=cu_seqlens_q,
+                cu_seqlens_k=cu_seqlens_k,
+                max_seqlen_q=max_seqlen_q,
+                max_seqlen_k=max_seqlen_k,
+                dropout_p=dropout_p,
+                window_size=(-1, -1) if window_size is None else (window_size - 1, 0),
+                causal=causal,
+                softmax_scale=softmax_scale,
+            ).view(*out_dims)
+        else:
+            return _flash_attn_func(
+                query,
+                key,
+                value,
+                window_size=(-1, -1) if window_size is None else (window_size - 1, 0),
+                dropout_p=dropout_p,
+                causal=causal,
+                softmax_scale=softmax_scale,
+            )
