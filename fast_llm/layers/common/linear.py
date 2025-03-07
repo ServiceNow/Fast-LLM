@@ -3,7 +3,9 @@ import typing
 
 import torch
 
+from fast_llm.engine.base_model.base_model import SimpleFastLLMModule
 from fast_llm.engine.config_utils.tensor_space import TensorDim
+from fast_llm.functional.autograd import wrap_forward_backward
 from fast_llm.functional.linear import (
     input_parallel_linear_autograd,
     input_parallel_linear_backward,
@@ -20,7 +22,7 @@ from fast_llm.tensor import ParameterMeta, init_zeros_
 logger = logging.getLogger(__name__)
 
 
-class LinearBase(torch.nn.Module):
+class LinearBase(SimpleFastLLMModule):
     """
     A base module for linear layers holding weights and biases.
     """
@@ -41,6 +43,8 @@ class LinearBase(torch.nn.Module):
         self._transposed_weight = transposed_weight
         self._in_dim = in_dim
         self._out_dim = out_dim
+        self._lr_scale = lr_scale
+        self._weight_init_method = weight_init_method
         self.weight = ParameterMeta.from_dims(
             (self._in_dim, self._out_dim) if self._transposed_weight else (self._out_dim, self._in_dim),
             init_method=weight_init_method,
@@ -57,10 +61,17 @@ class LinearBase(torch.nn.Module):
             )
         else:
             self.bias = None
+        self._forward = wrap_forward_backward(self.forward_only, self.backward)
 
     @property
     def transposed_weight(self) -> bool:
         return self._transposed_weight
+
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
+        return self._forward(input)
+
+    def backward(self, input: torch.Tensor) -> torch.Tensor:
+        pass
 
 
 class Linear(LinearBase):
