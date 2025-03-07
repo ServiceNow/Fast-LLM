@@ -42,7 +42,9 @@ def update_linear_gradients(
     input_ = input_.flatten(0, -2)
     lhs, rhs = (input_.t(), grad_output) if transposed_weight else (grad_output.t(), input_)
 
-    if TritonConfig.TRITON_LINEAR or sparse_map is not None:
+    if not weight.requires_grad:
+        pass
+    elif TritonConfig.TRITON_LINEAR or sparse_map is not None:
         # This assumes the transposed_weight is True for input_sparse, False for output_sparse.
         input_row_sparse_matmul(
             lhs,
@@ -63,7 +65,7 @@ def update_linear_gradients(
         )
     else:
         accumulate_gradient(weight, torch.mm(lhs, rhs))
-    if bias is not None:
+    if bias is not None and bias.requires_grad:
         accumulate_gradient(bias, grad_output.sum(dim=0))
 
 

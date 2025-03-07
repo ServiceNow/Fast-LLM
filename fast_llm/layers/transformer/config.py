@@ -10,7 +10,12 @@ from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.engine.config_utils.tensor_space import CompositeTensorDim, TensorDim, TensorSpace
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
 from fast_llm.functional.config import ActivationType, MLPRecomputeLevel, TritonConfig
-from fast_llm.layers.common.config import NormalizationArchitectureConfig, NormalizationConfig
+from fast_llm.layers.common.config import (
+    NormalizationArchitectureConfig,
+    NormalizationConfig,
+    PeftArchitectureConfig,
+    PeftConfig,
+)
 from fast_llm.utils import Assert, div
 
 logger = logging.getLogger(__name__)
@@ -161,6 +166,11 @@ class TransformerArchitectureConfig(BaseModelArchitectureConfig):
     normalization: NormalizationArchitectureConfig = Field(
         default_factory=NormalizationArchitectureConfig,
         desc="Configuration for the normalization layers architecture.",
+        hint=FieldHint.core,
+    )
+    peft: PeftArchitectureConfig = Field(
+        default_factory=PeftArchitectureConfig,
+        desc="Configuration for the parameter-efficient fine tuning.",
         hint=FieldHint.core,
     )
     num_layers: int = Field(
@@ -370,6 +380,7 @@ class TransformerArchitectureConfig(BaseModelArchitectureConfig):
 class TransformerConfig(TransformerArchitectureConfig, BaseModelConfig):
     normalization: NormalizationConfig = FieldUpdate(default_factory=NormalizationConfig)
     rotary: RotaryConfig = FieldUpdate(default_factory=RotaryConfig)
+    peft: PeftConfig = FieldUpdate(default_factory=PeftConfig)
     # Default: hidden_size**-0.5
     # TODO: Allow custom initialization (InitializationConfig?)
     init_method_std: float = Field(

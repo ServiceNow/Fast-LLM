@@ -14,17 +14,71 @@ from fast_llm.tensor import ParameterMeta, TensorMeta
 from fast_llm.utils import Assert
 
 
-class Module(torch.nn.Module, abc.ABC):
-    """ """
-
-    def forward(self, input_, kwargs):
+class FastLLMModule(torch.nn.Module, abc.ABC):
+    def forward(self, *args, **kwargs):
         """
         Run a forward pass for the module, with autograd support.
         """
         raise NotImplementedError()
 
+    def forward_only(self, *args, **kwargs) -> tuple[typing.Any, typing.Any]:
+        """
+        Run only the forward pass, and return the output and context for backward.
+        """
+        raise NotImplementedError()
 
-class Layer(Module):
+    def backward(self, *grad_outputs: torch.Tensor, context: typing.Any) -> tuple[torch.Tensor, ...]:
+        """
+        Run the full backward pass using the output grads and the context, and return the input grads.
+        Parameter gradients should be accumulated directly in their gradient buffer rather than returned.
+        """
+        raise NotImplementedError()
+
+    def backward_input(self, *grad_outputs: torch.Tensor, context: typing.Any) -> tuple[torch.Tensor, ...]:
+        """
+        Run the backward pass using the output grads and the context, and return the input grads.
+        Parameter gradients should be accumulated directly in their gradient buffer rather than returned.
+        """
+        raise NotImplementedError()
+
+    def backward_parameters(self, *grad_outputs: torch.Tensor, context: typing.Any) -> None:
+        """
+        Run the backward pass using the output grads and the context, and return the input grads.
+        Parameter gradients should be accumulated directly in their gradient buffer rather than returned.
+        """
+        raise NotImplementedError()
+
+
+class SimpleFastLLMModule(FastLLMModule):
+    """
+    A simple module with a single input and output.
+    """
+
+    def forward(self, input_) -> tuple[torch.Tensor, typing.Any]:
+        """
+        Run a forward pass for the module, with autograd support.
+        """
+        raise NotImplementedError()
+
+    def forward_only(self, input_) -> tuple[torch.Tensor, typing.Any]:
+        # If there is no custom implementation, revert back to autograd.
+        input_ = input_.detach().requires_grad_()
+        output = self.forward(input_)
+        return output.detach(), (input_, output)
+
+    def backward(self, grad_output: torch.Tensor, context: typing.Any) -> torch.Tensor:
+        input_, output = context
+        output.backward(grad_output)
+        return input_.grad
+
+    def backward_input(self, grad_output: torch.Tensor, context: typing.Any) -> torch.Tensor:
+        raise NotImplementedError()
+
+    def backward_parameters(self, grad_output: torch.Tensor, context: typing.Any) -> None:
+        raise NotImplementedError()
+
+
+class Layer(FastLLMModule):
     # Weight used to determine the stage size
     layer_count: float = 1.0
 
