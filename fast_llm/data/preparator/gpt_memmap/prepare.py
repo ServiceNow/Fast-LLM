@@ -19,6 +19,7 @@ from fast_llm.data.dataset.gpt.config import (
     GPTDatasetSliceConfig,
     GPTIndexedDatasetConfig,
     GPTMemmapDatasetConfig,
+    GPTSampledDatasetConfig,
 )
 from fast_llm.data.dataset.gpt.memmap import GPTMemmapDataset
 from fast_llm.data.dataset.gpt.sampled import GPTSample
@@ -255,7 +256,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
             # Create the config file(s) on rank 0
             if self._config.splits:
                 for split_name, split_config in self._split_and_blend_dataset_configs(
-                    dataset_configs, self._config.splits
+                    dataset_configs, self._config.splits, self._config.output_path
                 ).items():
                     self._save_dataset_config(
                         split_config, self._config.output_path / f"fast_llm_config_{split_name}.yaml"
@@ -285,7 +286,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
     def _blend_dataset_configs(cls, dataset_configs: list[GPTMemmapDatasetConfig]) -> GPTIndexedDatasetConfig:
         if len(dataset_configs) == 1:
             return dataset_configs[0]
-        return GPTIndexedDatasetConfig.from_dict(
+        return GPTSampledDatasetConfig.from_dict(
             {
                 "type": "blended",
                 "datasets": dataset_configs,
@@ -295,8 +296,8 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
 
     @classmethod
     def _split_and_blend_dataset_configs(
-        cls, dataset_configs: list[GPTMemmapDatasetConfig], splits: dict[str, int | float]
-    ) -> dict[str, GPTIndexedDatasetConfig]:
+        cls, dataset_configs: list[GPTMemmapDatasetConfig], splits: dict[str, int | float], output_path: pathlib.Path
+    ) -> dict[str, GPTSampledDatasetConfig]:
         split_cumsum = padded_cumsum(normalize_probabilities(list(splits.values()), return_array=True)).tolist()
         dataset_sizes = [dataset_config.num_tokens for dataset_config in dataset_configs]
         dataset_probabilities = normalize_probabilities(dataset_sizes)
@@ -323,7 +324,9 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
                     dataset_tokens_in_split.append(dataset_sizes[dataset_index])
                 elif split_end_in_dataset > split_begin_in_dataset:
                     # Part of the dataset belongs to the split.
-                    sizes_cumsum = dataset_config.build().get_document_sizes().cumsum()
+                    # TODO: Somehow getting a segfault when merging two lines below (numpy bug?).
+                    dataset = dataset_config.to_copy({"path": output_path / dataset_config.path}).build()
+                    sizes_cumsum = dataset.get_document_sizes().cumsum()
                     Assert.eq(sizes_cumsum[-1], dataset_config.num_tokens)
                     begin_index = _get_nearest_split(sizes_cumsum, split_begin_in_dataset * dataset_config.num_tokens)
                     end_index = _get_nearest_split(sizes_cumsum, split_end_in_dataset * dataset_config.num_tokens)
@@ -366,4 +369,4 @@ def _get_nearest_split(cumsum: np.ndarray, value: float) -> int:
     left = cumsum.searchsorted(value, side="right")
     if left == len(cumsum):
         return left.item()
-    return left + 1 if (value - cumsum[left]) / (cumsum[left + 1] - cumsum[left]) > 0.5 else left
+    return left.item() + 1 if (value - cumsum[left]) / (cumsum[left + 1] - cumsum[left]) > 0.5 else left.item()
