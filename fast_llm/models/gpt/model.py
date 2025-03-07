@@ -12,7 +12,8 @@ from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
 from fast_llm.engine.schedule.config import BatchConfig
 from fast_llm.layers.language_model.config import LanguageModelKwargs, LanguageModelLossNames
 from fast_llm.layers.language_model.embedding import WORD_EMBEDDINGS_WEIGHT, LanguageModelEmbedding
-from fast_llm.layers.language_model.head import LanguageModelHead
+from fast_llm.layers.language_model.head import OUTPUT_WEIGHTS, LanguageModelHead
+from fast_llm.layers.language_model.multi_token_prediction_head import MultiTokenPredictionTransformerLayer, MultiTokenPredictionLanguageModelHead
 from fast_llm.layers.language_model.preprocessing import PositionEmbeddingPreprocessor
 from fast_llm.layers.transformer.config import (
     RoutingType,
@@ -64,6 +65,30 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             self._backup_attention_preprocessor = BackupAttentionPreprocessor(
                 self._config.transformer, self._tensor_space
             )
+    
+    def get_language_model_layers(self) -> list[Layer]:
+        if self._config.num_multi_token_prediction_heads:
+            return [
+                layer
+                for i in range(self._config.num_multi_token_prediction_heads)
+                for layer in [
+                    MultiTokenPredictionTransformerLayer(
+                        self._config.transformer,
+                        self._tensor_space,
+                        # TODO MTP: which index?
+                        layer_index=self._config.transformer.num_layers,
+                    ),
+                    MultiTokenPredictionLanguageModelHead(
+                        self._config,
+                        self._tensor_space,
+                        multi_token_prediction_index=i,
+                    ),
+                ]
+            ]
+        else:
+            return [
+                LanguageModelHead(self._config, self._tensor_space),
+            ]
 
     def get_layers(self) -> list[Layer]:
         return [
@@ -76,7 +101,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                 )
                 for i in range(self._config.transformer.num_layers)
             ],
-            LanguageModelHead(self._config, self._tensor_space),
+            *self.get_language_model_layers(),
         ]
 
     def setup(self, distributed: Distributed) -> None:
@@ -275,14 +300,34 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
 
     @property
     def model_head(self) -> LanguageModelHead:
-        return self.layers[-1]
+        if self._config.num_multi_token_prediction_heads:
+            return self.layers[self.model_head_indices[0]]
+        else:
+            return self.layers[-1]
+    
+    @property
+    def model_head_indices(self) -> list[int]:
+        if self._config.num_multi_token_prediction_heads:
+            return sorted([len(self) - 1 - 2 * i for i in range(self._config.num_multi_token_prediction_heads)])
+        else:
+            return [len(self) - 1]
 
     def get_tied_weights(self) -> dict[str, tuple[ParameterMeta, tuple[int, ...]]]:
-        return (
-            {WORD_EMBEDDINGS_WEIGHT: (self.embedding.word_embeddings_weight, (0, len(self) - 1))}
-            if self._config.tie_word_embeddings
-            else {}
-        )
+        if self._config.tie_word_embeddings:
+            return {
+                WORD_EMBEDDINGS_WEIGHT: (
+                    self.embedding.word_embeddings_weight,
+                    (0, *self.model_head_indices),)
+            }
+        elif self._config.num_multi_token_prediction_heads:
+            return {
+                OUTPUT_WEIGHTS: (
+                    self.model_head.output_weights,
+                    tuple(self.model_head_indices),
+                )
+            }
+        else:
+            return {}
 
     @property
     def loss_defs(self) -> list[LossDef]:

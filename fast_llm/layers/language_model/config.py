@@ -5,6 +5,7 @@ from fast_llm.engine.base_model.config import BaseModelArchitectureConfig, BaseM
 from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
 from fast_llm.engine.distributed.config import DistributedDimNames
 from fast_llm.functional.config import CrossEntropyImpl
+from fast_llm.layers.language_model import multi_token_prediction_head
 from fast_llm.layers.transformer.config import TransformerArchitectureConfig, TransformerConfig
 from fast_llm.utils import Assert
 
@@ -21,6 +22,10 @@ class LanguageModelDimNames:
 class LanguageModelLossNames:
     language_model_loss = "language_model_loss"
     z_loss = "z_loss"
+
+    @classmethod
+    def multi_token_prediction_loss(cls, index: int) -> str:
+        return f"multi_token_prediction_loss_{index}"
 
 
 class LanguageModelKwargs:
@@ -172,6 +177,12 @@ class LanguageModelBaseConfig(LanguageModelArchitectureConfig, BaseModelConfig):
         " Since we are mupltiplying the output logits, under muP the scale factor should be < 1.0.",
         hint=FieldHint.feature,
         valid=check_field(Assert.geq, 0),
+    )
+    num_multi_token_prediction_heads: int | None = Field(
+        default=None,
+        desc="Number of multi-token prediction heads.",
+        hint=FieldHint.feature,
+        valid=skip_valid_if_none(check_field(Assert.gt, 0)),
     )
 
     def _validate(self) -> None:

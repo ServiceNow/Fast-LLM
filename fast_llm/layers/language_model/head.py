@@ -26,6 +26,7 @@ from fast_llm.logging import log_distributed_tensor
 from fast_llm.tensor import ParameterMeta, TensorMeta, init_normal_
 from fast_llm.utils import div
 
+OUTPUT_WEIGHTS = "output_weights"
 
 class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[LanguageModelBaseConfig], Layer):
     """
@@ -56,12 +57,13 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
 
         hidden_dim = self._tensor_space.get_tensor_dim(TransformerDimNames.hidden)
 
+        self.loss_name = LanguageModelLossNames.language_model_loss
         self.final_norm = config.transformer.normalization.get_layer(hidden_dim)
         self._logits_scale_factor = config.logits_scale_factor
         self._z_loss_factor = config.logit_z_loss
 
         # untie embedding weights
-        if not self._tie_word_embeddings:
+        if self._should_init_output_weights():
             vocab_dim = self._tensor_space.get_tensor_dim(
                 LanguageModelDimNames.vocab_tp if self._parallel_embeddings else LanguageModelDimNames.vocab
             )
@@ -84,7 +86,10 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
                 self._cross_entropy_impl = CrossEntropyImpl.fused
 
         self._forward = wrap_forward_backward(self._forward_backward, grad_is_context)
-
+    
+    def _should_init_output_weights(self) -> bool:
+        return not self._tie_word_embeddings
+        
     def forward(
         self, input_: torch.Tensor, kwargs: dict, losses: dict | None = None, metrics: dict | None = None
     ) -> torch.Tensor:
@@ -102,7 +107,7 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
         # TODO: Skip cross-entropy backward if not needed.
         language_model_loss = self._forward(input_, kwargs, losses)
         if language_model_loss is not None:
-            losses[LanguageModelLossNames.language_model_loss].append(language_model_loss)
+            losses[self.loss_name].append(language_model_loss)
         # TODO: Return the model output when needed.
         return language_model_loss
 
@@ -121,7 +126,7 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
             self._group_size if self._sequence_parallel_logits else 1
         )
 
-        output_weights = kwargs[WORD_EMBEDDINGS_WEIGHT] if self._tie_word_embeddings else self.output_weights
+        output_weights = self._get_output_weights(kwargs)
         loss, ln_output_grad = self._logits_cross_entropy_forward_backward_split(
             ln_output.detach(), labels, output_weights, grad_output, kwargs, losses
         )
@@ -131,6 +136,9 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
             return loss, input_.grad
         else:
             return loss, None
+    
+    def _get_output_weights(self, kwargs: dict) -> torch.Tensor:
+        return kwargs[WORD_EMBEDDINGS_WEIGHT] if self._tie_word_embeddings else self.output_weights
 
     def _logits_cross_entropy_forward_backward_split(
         self,
