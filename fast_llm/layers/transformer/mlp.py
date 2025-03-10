@@ -20,7 +20,7 @@ from fast_llm.functional.triton.sparse_copy import (
     copy_sparse_to_dense_forward,
 )
 from fast_llm.layers.common.linear import LinearBase, LinearContext, LinearLike
-from fast_llm.layers.transformer.config import TransformerConfig, TransformerDimNames
+from fast_llm.layers.transformer.config import TransformerConfig, TransformerDimNames, TransformerLinearLayerName
 from fast_llm.tensor import init_normal_, init_zeros_
 from fast_llm.utils import Assert
 
@@ -71,7 +71,8 @@ class MLPBase(Layer):
                 weight_init_method=init_method_1,
                 bias_init_method=init_method_1 if config.random_bias_init else init_zeros_,
                 lr_scale=tuple(config.mlp_lr_scale),
-            )
+            ),
+            TransformerLinearLayerName.mlp_1,
         )
         self.layer_2: LinearLike = self._config.peft.apply_linear(
             LinearBase(
@@ -83,7 +84,8 @@ class MLPBase(Layer):
                 auto_bias_grad_accumulation=tensor_space.distributed_config.tensor_parallel > 1,
                 transposed_weight=True,
                 lr_scale=tuple(config.mlp_lr_scale),
-            )
+            ),
+            TransformerLinearLayerName.mlp_2,
         )
 
     def forward_only(

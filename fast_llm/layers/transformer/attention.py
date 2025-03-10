@@ -11,7 +11,12 @@ from fast_llm.functional.autograd import wrap_forward_backward
 from fast_llm.functional.rotary import apply_rotary_embeddings
 from fast_llm.functional.triton.rotary import triton_rotary_autograd_
 from fast_llm.layers.common.linear import InputParallelLinear, OutputParallelLinear
-from fast_llm.layers.transformer.config import TransformerConfig, TransformerDimNames, TransformerKwargs
+from fast_llm.layers.transformer.config import (
+    TransformerConfig,
+    TransformerDimNames,
+    TransformerKwargs,
+    TransformerLinearLayerName,
+)
 from fast_llm.logging import log_distributed_grad, log_distributed_tensor
 from fast_llm.tensor import TensorMeta, init_normal_, init_zeros_
 from fast_llm.utils import Assert
@@ -109,7 +114,8 @@ class Attention(FastLLMModule):
                 bias_init_method=init_method_qkv if self._config.random_bias_init else init_zeros_,
                 sequence_parallel=self._sequence_parallel,
                 lr_scale=self._config.attention_lr_scale,
-            )
+            ),
+            TransformerLinearLayerName.query,
         )
         self.key_value = self._config.peft.apply_linear(
             OutputParallelLinear(
@@ -120,7 +126,8 @@ class Attention(FastLLMModule):
                 bias_init_method=init_method_qkv if self._config.random_bias_init else init_zeros_,
                 sequence_parallel=self._sequence_parallel,
                 lr_scale=self._config.attention_lr_scale,
-            )
+            ),
+            TransformerLinearLayerName.key_value,
         )
         self._query_key_value = wrap_forward_backward(self._query_key_value_forward, self._query_key_value_backward)
 
@@ -134,7 +141,8 @@ class Attention(FastLLMModule):
                 bias_init_method=init_method_std_attn_proj if self._config.random_bias_init else init_zeros_,
                 sequence_parallel=self._sequence_parallel,
                 lr_scale=self._config.attention_lr_scale,
-            )
+            ),
+            TransformerLinearLayerName.dense,
         )
 
     def _attn_fused(

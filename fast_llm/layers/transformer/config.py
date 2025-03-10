@@ -19,6 +19,9 @@ from fast_llm.layers.common.config import (
 )
 from fast_llm.utils import Assert, div
 
+if typing.TYPE_CHECKING:
+    from fast_llm.layers.common.linear import LinearBase, LinearLike
+
 logger = logging.getLogger(__name__)
 
 
@@ -159,6 +162,35 @@ class AddLinearBiasChoices(str, enum.Enum):
     nowhere = "nowhere"
     everywhere = "everywhere"
     only_attn_qkv = "only_attn_qkv"
+
+
+class TransformerLinearLayerName(str, enum.Enum):
+    # TODO: Use this to replace AddLinearBiasChoices.
+    query = "query"
+    key_value = "key_value"
+    dense = "dense"
+    mlp_1 = "mlp_1"
+    mlp_2 = "mlp_2"
+
+
+@config_class()
+class TransformerPeftConfig(PeftConfig):
+    layers: list[TransformerLinearLayerName] | None = Field(
+        default=None,
+        desc="The layers on which to apply LoRA.",
+        hint=FieldHint.feature,
+    )
+    freeze_others: bool = Field(
+        default=True,
+        desc="Whether to freeze other layers during training.",
+    )
+
+    def apply_linear(self, linear: "LinearBase", layer_type: TransformerLinearLayerName | None = None) -> "LinearLike":
+        if layer_type is None or self.layers is None or layer_type in self.layers:
+            return super().apply_linear(linear)
+        elif self.freeze_others:
+            linear.weight.requires_grad = False
+        return linear
 
 
 @config_class()
@@ -381,7 +413,7 @@ class TransformerArchitectureConfig(BaseModelArchitectureConfig):
 class TransformerConfig(TransformerArchitectureConfig, BaseModelConfig):
     normalization: NormalizationConfig = FieldUpdate(default_factory=NormalizationConfig)
     rotary: RotaryConfig = FieldUpdate(default_factory=RotaryConfig)
-    peft: PeftConfig = FieldUpdate(default_factory=PeftConfig)
+    peft: TransformerPeftConfig = FieldUpdate(default_factory=PeftConfig)
     # Default: hidden_size**-0.5
     # TODO: Allow custom initialization (InitializationConfig?)
     init_method_std: float = Field(
@@ -620,8 +652,15 @@ class TransformerConfig(TransformerArchitectureConfig, BaseModelConfig):
         Assert.geq(self.attention_dropout, 0)
         Assert.geq(self.hidden_dropout, 0)
         Assert.incl(len(self.mlp_lr_scale), (1, self.num_experts))
-        if self.peft.type != PeftType.none and self.mlp_recompute_level != MLPRecomputeLevel.none:
-            raise ValueError("Activation recomputation not supported with Peft.")
+        if self.peft.type != PeftType.none and (
+            self.peft.layers is None
+            or TransformerLinearLayerName.mlp_1 in self.peft.layers
+            or TransformerLinearLayerName.mlp_2 in self.peft.layers
+        ):
+            if self.mlp_recompute_level != MLPRecomputeLevel.none:
+                raise ValueError("Activation recomputation not supported with Peft.")
+            if self.num_experts > 1:
+                raise ValueError("Mixture of experts not supported with Peft.")
         for scale in self.mlp_lr_scale:
             if scale is not None:
                 Assert.geq(scale, 0)
