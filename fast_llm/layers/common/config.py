@@ -3,12 +3,11 @@ import typing
 
 from fast_llm.config import Field, FieldHint, check_field, config_class
 from fast_llm.engine.base_model.config import BaseModelArchitectureConfig, BaseModelConfig
-from fast_llm.layers.common.linear import LinearBase
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
-    from fast_llm.engine.base_model.base_model import SimpleFastLLMModule
     from fast_llm.engine.config_utils.tensor_space import TensorDim
+    from fast_llm.layers.common.linear import LinearBase, LinearLike
     from fast_llm.layers.common.normalization import LayerNorm, RMSNorm
 
 
@@ -155,11 +154,11 @@ class PeftConfig(PeftArchitectureConfig, BaseModelConfig):
         hint=FieldHint.stability,
     )
 
-    def apply_linear(self, linear: LinearBase) -> "SimpleFastLLMModule":
+    def apply_linear(self, linear: "LinearBase") -> "LinearLike":
         if self.type == PeftType.none:
             return linear
         elif self.type == PeftType.lora:
-            from fast_llm.layers.common.lora import LoRALinear
+            from fast_llm.layers.common.peft import LoRALinear
 
             # TODO: Init method?
             return LoRALinear(

@@ -15,6 +15,7 @@ from fast_llm.layers.common.config import (
     NormalizationConfig,
     PeftArchitectureConfig,
     PeftConfig,
+    PeftType,
 )
 from fast_llm.utils import Assert, div
 
@@ -619,6 +620,8 @@ class TransformerConfig(TransformerArchitectureConfig, BaseModelConfig):
         Assert.geq(self.attention_dropout, 0)
         Assert.geq(self.hidden_dropout, 0)
         Assert.incl(len(self.mlp_lr_scale), (1, self.num_experts))
+        if self.peft.type != PeftType.none and self.mlp_recompute_level != MLPRecomputeLevel.none:
+            raise ValueError("Activation recomputation not supported with Peft.")
         for scale in self.mlp_lr_scale:
             if scale is not None:
                 Assert.geq(scale, 0)

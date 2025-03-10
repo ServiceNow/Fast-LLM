@@ -9,17 +9,26 @@ from fast_llm.engine.base_model.base_model import FastLLMModule
 from fast_llm.engine.config_utils.tensor_space import TensorDim
 from fast_llm.functional.autograd import wrap_forward_backward
 from fast_llm.functional.config import TritonConfig
-from fast_llm.functional.linear import maybe_transpose, update_linear_gradients
 from fast_llm.functional.triton.sparse_copy import SparseMap
-from fast_llm.functional.triton.sparse_linear import dense_matmul, input_inner_sparse_matmul, output_sparse_matmul
-from fast_llm.tensor import ParameterMeta, init_zeros_
+from fast_llm.functional.triton.sparse_linear import (
+    dense_matmul,
+    input_inner_sparse_matmul,
+    input_row_sparse_matmul,
+    output_sparse_matmul,
+)
+from fast_llm.tensor import ParameterMeta, accumulate_gradient, init_zeros_, param_get_and_unset_is_zero
 
 logger = logging.getLogger(__name__)
 
 
+def maybe_transpose(tensor: torch.Tensor, transpose: bool) -> torch.Tensor:
+    return tensor.t() if transpose else tensor
+
+
 @dataclasses.dataclass
 class LinearContext:
-    input_: torch.Tensor
+    # TODO: Check for memory leak
+    input_: torch.Tensor | None
     sparse_map: SparseMap | None
 
 
@@ -28,8 +37,8 @@ class LinearLike(FastLLMModule):
         super().__init__()
         self._forward = wrap_forward_backward(self.forward_only, self.backward)
 
-    def forward(self, input_: torch.Tensor) -> torch.Tensor:
-        return self._forward(input_)
+    def forward(self, input_: torch.Tensor, sparse_map: SparseMap | None = None) -> torch.Tensor:
+        return self._forward(input_, sparse_map)
 
     def forward_only(
         self, input_: torch.Tensor, sparse_map: SparseMap | None = None
@@ -104,9 +113,41 @@ class LinearBase(LinearLike):
         return self._transposed_weight
 
     def backward_parameters(self, grad_output: torch.Tensor, context: LinearContext) -> None:
-        update_linear_gradients(
-            context.input_, self.weight, self.bias, grad_output, self._transposed_weight, context.sparse_map
-        )
+        """
+        Calculate the weight and bias gradients for a linear layer.
+        TODO: fused_dense_cuda fuses weight gradient with bias gradient, but not with grad accumulation.
+          Which one is best? (and can we fuse everything?)
+        """
+
+        grad_output = grad_output.flatten(0, -2)
+        input_ = context.input_.flatten(0, -2)
+        lhs, rhs = (input_.t(), grad_output) if self._transposed_weight else (grad_output.t(), input_)
+
+        if not self.weight.requires_grad:
+            pass
+        elif TritonConfig.TRITON_LINEAR or context.sparse_map is not None:
+            # This assumes the transposed_weight is True for input_sparse, False for output_sparse.
+            input_row_sparse_matmul(
+                lhs,
+                rhs,
+                context.sparse_map,
+                out=weight.grad_buffer,  # noqa
+                accumulate=not param_get_and_unset_is_zero(self.weight),
+            )
+        elif weight.grad_buffer.dtype == grad_output.dtype:  # noqa
+            beta = 1 - param_get_and_unset_is_zero(self.weight)
+            torch.addmm(
+                weight.grad_buffer,  # noqa
+                lhs,
+                rhs,
+                beta=beta,
+                alpha=1,
+                out=weight.grad_buffer,  # noqa
+            )
+        else:
+            accumulate_gradient(self.weight, torch.mm(lhs, rhs))
+        if self.bias is not None and self.bias.requires_grad:
+            accumulate_gradient(self.bias, grad_output.sum(dim=0))
 
 
 class Linear(LinearBase):
