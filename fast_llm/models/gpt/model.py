@@ -13,7 +13,10 @@ from fast_llm.engine.schedule.config import BatchConfig
 from fast_llm.layers.language_model.config import LanguageModelKwargs, LanguageModelLossNames
 from fast_llm.layers.language_model.embedding import WORD_EMBEDDINGS_WEIGHT, LanguageModelEmbedding
 from fast_llm.layers.language_model.head import OUTPUT_WEIGHTS, LanguageModelHead
-from fast_llm.layers.language_model.multi_token_prediction_head import MultiTokenPredictionTransformerLayer, MultiTokenPredictionLanguageModelHead
+from fast_llm.layers.language_model.multi_token_prediction_head import (
+    MultiTokenPredictionLanguageModelHead,
+    MultiTokenPredictionTransformerLayer,
+)
 from fast_llm.layers.language_model.preprocessing import PositionEmbeddingPreprocessor
 from fast_llm.layers.transformer.config import (
     RoutingType,
@@ -65,7 +68,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             self._backup_attention_preprocessor = BackupAttentionPreprocessor(
                 self._config.transformer, self._tensor_space
             )
-    
+
     def get_language_model_layers(self) -> list[Layer]:
         if self._config.num_multi_token_prediction_heads:
             return [
@@ -304,7 +307,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             return self.layers[self.model_head_indices[0]]
         else:
             return self.layers[-1]
-    
+
     @property
     def model_head_indices(self) -> list[int]:
         if self._config.num_multi_token_prediction_heads:
@@ -317,7 +320,8 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             return {
                 WORD_EMBEDDINGS_WEIGHT: (
                     self.embedding.word_embeddings_weight,
-                    (0, *self.model_head_indices),)
+                    (0, *self.model_head_indices),
+                )
             }
         elif self._config.num_multi_token_prediction_heads:
             return {
@@ -355,6 +359,15 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                 )
         if self._config.logit_z_loss:
             LossDef(name=LanguageModelLossNames.z_loss, formatted_name="logit z loss", count=1)
+        if self._config.num_multi_token_prediction_heads:
+            for i in range(self._config.num_multi_token_prediction_heads):
+                loss_defs.append(
+                    LossDef(
+                        name=LanguageModelLossNames.multi_token_prediction_loss(i),
+                        formatted_name=f"multi-token prediction loss {i}",
+                        count=1,
+                    )
+                )
         return loss_defs
 
 

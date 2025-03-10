@@ -28,6 +28,7 @@ from fast_llm.utils import div
 
 OUTPUT_WEIGHTS = "output_weights"
 
+
 class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[LanguageModelBaseConfig], Layer):
     """
     A language model head (GPT), which combines the final layer norm, logits and cross-entropy (if applicable).
@@ -86,10 +87,10 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
                 self._cross_entropy_impl = CrossEntropyImpl.fused
 
         self._forward = wrap_forward_backward(self._forward_backward, grad_is_context)
-    
+
     def _should_init_output_weights(self) -> bool:
         return not self._tie_word_embeddings
-        
+
     def forward(
         self, input_: torch.Tensor, kwargs: dict, losses: dict | None = None, metrics: dict | None = None
     ) -> torch.Tensor:
@@ -136,7 +137,7 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
             return loss, input_.grad
         else:
             return loss, None
-    
+
     def _get_output_weights(self, kwargs: dict) -> torch.Tensor:
         return kwargs[WORD_EMBEDDINGS_WEIGHT] if self._tie_word_embeddings else self.output_weights
 
@@ -159,6 +160,7 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
                 return None, None
         else:
             loss = None
+            # TODO MTP: allow a _cross_entropy_splits that is not a divisor of the sequence length
             split_size = div(labels.numel(), self._cross_entropy_splits)
             grad_output /= self._cross_entropy_splits
             logit_input = input_.flatten(0, -2)
