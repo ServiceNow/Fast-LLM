@@ -4,11 +4,11 @@ Todo: Move all core methods elsewhere (functional?).
 """
 
 import logging
+import typing
 
 import torch
 import torch._dynamo  # noqa
 import torch.autograd
-from torch._C._distributed_c10d import Work
 
 from fast_llm.core.distributed import ProcessGroup, ReduceOp, all_gather_into_tensor, all_reduce, reduce_scatter_tensor
 from fast_llm.utils import Assert, div
@@ -18,12 +18,12 @@ logger = logging.getLogger(__name__)
 
 def reduce_op(
     input_: torch.Tensor, group: ProcessGroup | None, *, op: ReduceOp = ReduceOp.SUM, async_op: bool = False
-) -> tuple[torch.Tensor, Work] | torch.Tensor:
+) -> tuple[torch.Tensor, typing.Callable[[], None]] | torch.Tensor:
     if group:
         handle = all_reduce(input_, group=group, async_op=async_op, op=op)
     else:
         handle = None
-    return (input_, handle) if async_op else input_
+    return (input_, handle.wait) if async_op else input_
 
 
 def split_op(input_: torch.Tensor, group: ProcessGroup | None, dim: int) -> list[torch.Tensor]:
@@ -62,7 +62,7 @@ def swap_mult_dim(tensor: torch.Tensor, factor: int, old_dim: int, new_dim: int)
 
 def gather_op(
     input_: torch.Tensor, group: ProcessGroup | None, dim: int, async_op: bool = False, out=None
-) -> tuple[torch.Tensor, Work] | torch.Tensor:
+) -> tuple[torch.Tensor, typing.Callable[[], None]] | torch.Tensor:
     """Gather tensors and concatenate along the last dimension."""
     # Bypass the function if we are using only 1 GPU.
     if not group:
@@ -79,7 +79,7 @@ def gather_op(
         assert not async_op
         # TODO: contiguous?
         out = swap_mult_dim(out, group.size(), 0, dim)
-    return (out, handle) if async_op else out
+    return (out, handle.wait) if async_op else out
 
 
 def reduce_scatter_op(
@@ -89,7 +89,7 @@ def reduce_scatter_op(
     op: ReduceOp = ReduceOp.SUM,
     dim: int = 0,
     async_op: bool = False,
-) -> tuple[torch.Tensor, Work] | torch.Tensor:
+) -> tuple[torch.Tensor, typing.Callable[[], None]] | torch.Tensor:
     """Reduce-scatter the input tensor across model parallel group."""
     # Bypass the function if we are using only 1 GPU.
     if not group:
@@ -99,7 +99,7 @@ def reduce_scatter_op(
         input_ = swap_mult_dim(input_, group.size(), dim, 0)
     # TODO: May give the wrong output without the contiguous call.
     handle = reduce_scatter_tensor(output, input_.contiguous(), group=group, async_op=async_op, op=op)
-    return (output, handle) if async_op else output
+    return (output, handle.wait) if async_op else output
 
 
 class _ReduceBackward(torch.autograd.Function):

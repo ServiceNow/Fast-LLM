@@ -1,6 +1,6 @@
 import torch
 
-from fast_llm.engine.base_model.base_model import SimpleFastLLMModule
+from fast_llm.engine.base_model.base_model import FastLLMModule
 from fast_llm.engine.config_utils.run import log_main_rank
 from fast_llm.engine.config_utils.tensor_space import TensorDim
 from fast_llm.functional.config import TritonConfig
@@ -131,7 +131,7 @@ class FusedRMSNorm(torch.autograd.Function):
         return grad_input, None, None, None
 
 
-class LayerNorm(SimpleFastLLMModule):
+class LayerNorm(FastLLMModule):
     """
     A layer normalization layer, supporting multiple implementations.
     """
@@ -210,7 +210,7 @@ class LayerNorm(SimpleFastLLMModule):
         return torch.nn.functional.layer_norm(input_, self.normalized_shape, self.weight, self.bias, self._eps)
 
 
-class RMSNorm(SimpleFastLLMModule):
+class RMSNorm(FastLLMModule):
     """
     A RMS normalization layer.
     """
