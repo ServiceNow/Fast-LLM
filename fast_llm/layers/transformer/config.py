@@ -71,6 +71,7 @@ class TransformerKwargs:
     sequence_q_dim = "sequence_q_dim"
     sequence_k_dim = "sequence_k_dim"
     sequence_length = "sequence_length"
+    start_seq_offset = "start_seq_offset"
     # TODO: Move
     grad_output = "grad_output"
 
@@ -476,11 +477,6 @@ class TransformerConfig(TransformerArchitectureConfig, BaseModelConfig):
     # Use flash attention if possible (fp16 or bf16)
     use_flash_attention: bool = Field(
         default=True, desc="Enable Flash Attention if possible.", hint=FieldHint.optional
-    )
-    prevent_cross_document_attention: bool = Field(
-        default=False,
-        desc="Prevent documents in the same sequence from paying attention to each other.",
-        hint=FieldHint.feature,
     )
     window_size: int | None = Field(
         default=None,

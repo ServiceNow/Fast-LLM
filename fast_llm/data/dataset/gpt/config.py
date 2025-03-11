@@ -62,11 +62,6 @@ class GPTSamplingConfig(SamplingConfig):
         desc="Shuffling strategy.",
         hint=FieldHint.feature,
     )
-    per_document_positions: bool | None = Field(
-        default=None,
-        desc="Use per-document positions.",
-        hint=FieldHint.feature,
-    )
 
 
 @dataclasses.dataclass
@@ -76,6 +71,7 @@ class GPTSamplingData(SamplingData):
     sequence_length: int
     vocab_size: int
     tokenizer: "Tokenizer"
+    variable_sequence_lengths: bool = False
 
 
 @config_class()

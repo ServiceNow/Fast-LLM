@@ -61,6 +61,11 @@ class BatchConfig(Config):
         hint=FieldHint.derived,
         valid=check_field(Assert.gt, 0),
     )
+    variable_sequence_lengths: bool = Field(
+        default=False,
+        desc="Treat samples as concatenation of variable length sequences, instead of a fixed-length packed sequence.",
+        hint=FieldHint.feature,
+    )
     _distributed: DistributedConfig = Field(
         init=False,
         desc="Pointer to a distributed configuration, required to know the data-parallel split of the batch.",

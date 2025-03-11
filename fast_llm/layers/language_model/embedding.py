@@ -10,6 +10,7 @@ from fast_llm.engine.config_utils.tensor_space import TensorSpace
 from fast_llm.layers.language_model.config import LanguageModelBaseConfig, LanguageModelDimNames, LanguageModelKwargs
 from fast_llm.layers.transformer.config import TransformerDimNames, TransformerKwargs
 from fast_llm.tensor import ParameterMeta, TensorMeta, init_normal_
+from fast_llm.utils import Assert
 
 WORD_EMBEDDINGS_WEIGHT = "word_embeddings_weight"
 
@@ -75,6 +76,7 @@ class LanguageModelEmbedding[ConfigType: LanguageModelBaseConfig](Configurable[L
 
     @torch.compile
     def _forward(self, input_: torch.Tensor, position_ids: torch.Tensor | None) -> torch.Tensor:
+        Assert.eq(position_ids is not None, self._use_absolute_position_embeddings)
         group = self._tensor_space.distributed.tensor_group
         if self._parallel_embeddings:
             input_mask = (input_ >= self._vocab_start_index) * (input_ < self._vocab_end_index)
@@ -114,12 +116,16 @@ class LanguageModelEmbedding[ConfigType: LanguageModelBaseConfig](Configurable[L
                 tensor_name="Embedding output",
                 dtype=self._residual_dtype,
             )
-        position_ids = kwargs.get(LanguageModelKwargs.position_ids, None)
-        if position_ids is not None:
+        if (
+            self._use_absolute_position_embeddings
+            and (position_ids := kwargs.get(LanguageModelKwargs.position_ids, None)) is not None
+        ):
             sequence_k = kwargs[TransformerKwargs.sequence_k_dim].size
             position_ids = kwargs.get(LanguageModelKwargs.position_ids)[
                 sequence_k - kwargs[TransformerKwargs.sequence_q_dim].size : sequence_k
             ]
             if kwargs[TransformerKwargs.sequence_first]:
                 position_ids = position_ids.transpose(0, 1)
+        else:
+            position_ids = None
         return self._forward(input_, position_ids)

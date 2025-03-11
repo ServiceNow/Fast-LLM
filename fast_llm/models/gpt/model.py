@@ -208,12 +208,6 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             dtype=torch.int64,
             non_blocking=True,
         )
-        if batch.position_ids is not None:
-            batch.position_ids = batch.position_ids.to(
-                device=self._tensor_space.distributed.device,
-                dtype=torch.int32,
-                non_blocking=True,
-            )
         if sequence_first:
             # Move the sequence dimension first to make sequence parallel ops more efficient.
             batch.token_ids = batch.token_ids.transpose(0, 1).contiguous()
@@ -234,26 +228,74 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             else:
                 # TODO: Avoid multiple contiguous calls?
                 tokens = batch.token_ids[:, sequence_k - sequence_q : sequence_k].contiguous()
-            if batch.position_ids is not None:
-                kwargs_meta[LanguageModelKwargs.position_ids] = batch.position_ids
-                position_ids_q = batch.position_ids[:, sequence_k - sequence_q : sequence_k].flatten()
-                position_ids_k = batch.position_ids[:, :sequence_k].flatten()
-                indices_q = torch.arange(position_ids_q.size(0), device=position_ids_q.device, dtype=torch.int32)
-                indices_k = torch.arange(position_ids_k.size(0), device=position_ids_k.device, dtype=torch.int32)
+            if batch.seqlens is not None:
+                if sequence_q < kwargs_meta["sequence_length"]:
+                    cumsums = [torch.cumsum(x, dim=0) for x in batch.seqlens]
+                    # The first and last samples in a microsequence need to be handled separately. Include all tokens from other samples
+                    # in the microsequence. We need to consider all keys computed so far from the first sample. We also store the lengths
+                    # of the first samples so that we can index into their kv pairs
+                    start_seq_idx = [
+                        torch.argmax((cu_seqlens >= sequence_k - sequence_q).to(torch.uint8), dim=0)
+                        for cu_seqlens in cumsums
+                    ]
+                    end_seq_idx = [
+                        torch.argmax((cu_seqlens >= sequence_k).to(torch.uint8), dim=0) for cu_seqlens in cumsums
+                    ]
+                    seqlens_q = []
+                    seqlens_k = []
+                    start_seq_offset = []
+                    for idx, seqlens in enumerate(batch.seqlens):
+                        start_idx = start_seq_idx[idx]
+                        end_idx = end_seq_idx[idx]
+                        if start_idx == end_idx:
+                            # take from the sequence:
+                            seqlens_q.append(sequence_q)
+                            seqlens_k.append(seqlens[end_idx] - (cumsums[idx][end_idx] - sequence_k))
+                            start_seq_offset.append(
+                                seqlens[start_idx] - (cumsums[idx][start_idx] - sequence_k) - sequence_q
+                            )
+                        else:
+                            seqlens_q.extend(
+                                [
+                                    cumsums[idx][start_idx] - (sequence_k - sequence_q),
+                                    *(seqlens[idx] for idx in range(start_idx + 1, end_idx)),
+                                    seqlens[end_idx] - (cumsums[idx][end_idx] - sequence_k),
+                                ]
+                            )
+                            seqlens_k.extend(
+                                [
+                                    seqlens[start_idx],
+                                    *(seqlens[idx] for idx in range(start_idx + 1, end_idx)),
+                                    seqlens[end_idx] - (cumsums[idx][end_idx] - sequence_k),
+                                ]
+                            )
+                            start_seq_offset.append(
+                                seqlens[start_idx] - (cumsums[idx][start_idx] - (sequence_k - sequence_q))
+                            )
+                    seqlens_q = torch.tensor(seqlens_q, dtype=torch.int32)
+                    seqlens_k = torch.tensor(seqlens_k, dtype=torch.int32)
+                    kwargs_meta[TransformerKwargs.start_seq_offset] = start_seq_offset
+                else:
+                    seqlens_q = torch.cat(batch.seqlens)
+                    seqlens_k = torch.cat(batch.seqlens)
                 kwargs_meta[TransformerKwargs.cu_seqlens_q] = torch.cat(
                     (
-                        indices_q[position_ids_q == 0],
-                        torch.tensor(position_ids_q.size(), device=position_ids_q.device, dtype=torch.int32),
+                        torch.zeros(1, dtype=torch.int32, device=self._tensor_space.distributed.device),
+                        torch.cumsum(seqlens_q, dim=0, dtype=torch.int32).to(
+                            device=self._tensor_space.distributed.device
+                        ),
                     )
                 )
                 kwargs_meta[TransformerKwargs.cu_seqlens_k] = torch.cat(
                     (
-                        indices_k[position_ids_k == 0],
-                        torch.tensor(position_ids_k.size(), device=position_ids_k.device, dtype=torch.int32),
+                        torch.zeros(1, dtype=torch.int32, device=self._tensor_space.distributed.device),
+                        torch.cumsum(seqlens_k, dim=0, dtype=torch.int32).to(
+                            device=self._tensor_space.distributed.device
+                        ),
                     )
                 )
-                kwargs_meta[TransformerKwargs.max_seqlen_q] = position_ids_q.max()
-                kwargs_meta[TransformerKwargs.max_seqlen_k] = position_ids_k.max()
+                kwargs_meta[TransformerKwargs.max_seqlen_q] = seqlens_q.max()
+                kwargs_meta[TransformerKwargs.max_seqlen_k] = seqlens_k.max()
             # TODO: Add pasts/presents to meta input?
             # Use lists as pointers so `past_key_values` is populated during the previous micro_sequence.
             pasts = presents

@@ -21,7 +21,6 @@ class GPTSamplingDefaultConfig(SamplingDefaultConfig, GPTSamplingConfig):
     gpu: bool = FieldUpdate(default=True)
     use_loss_masking_spans: bool = FieldUpdate(default=False)
     shuffle: ShufflingType = FieldUpdate(default=ShufflingType.epoch)
-    per_document_positions: bool = FieldUpdate(default=False)
 
 
 @config_class()
@@ -57,6 +56,7 @@ class GPTDataConfig(DataConfig, GPTLegacyConfig):
         desc="Multiprocessing context. Do not touch.",
         hint=FieldHint.expert,
     )
+    variable_sequence_lengths: bool | None = Field(default=None, desc="Use ")
 
     def _validate(self) -> None:
         if not self.datasets:

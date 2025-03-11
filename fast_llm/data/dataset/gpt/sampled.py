@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 class GPTSample:
     token_ids: np.ndarray
     loss_masking_spans: np.ndarray | None = None
-    position_ids: np.ndarray | None = None
+    seqlens: np.ndarray | None = None
 
 
 class MemmapArray:
@@ -87,6 +87,7 @@ class GPTSampledIndexedDataset(SampledDataset):
         self._indexed_dataset = indexed_dataset
         self._num_samples = sampling.num_samples
         self._sequence_length = sampling.sequence_length
+        self._variable_sequence_lengths = sampling.variable_sequence_lengths
         self._config = sampling.config
         self._device = torch.device("cuda" if self._config.gpu else "cpu")
 
@@ -334,18 +335,18 @@ class GPTSampledIndexedDataset(SampledDataset):
             document_sampling_index += 1
             token_count += document_size
 
+        seqlens = (
+            np.array([ids.size - (idx == len(token_ids) - 1) for idx, ids in enumerate(token_ids)], dtype=np.int32)
+            if self._variable_sequence_lengths
+            else None
+        )
         token_ids = np.concatenate(token_ids, dtype=np.int64)
         loss_masking_spans = (
             np.stack(loss_masking_spans, dtype=np.int32) if self._config.use_loss_masking_spans else None
         )
-        position_ids = (
-            np.concatenate([np.arange(len(sample.token_ids), dtype=np.int32) for sample in token_ids])
-            if self._config.per_document_positions
-            else None
-        )
         Assert.eq(len(token_ids), self._sequence_length + 1)
 
-        return GPTSample(token_ids=token_ids, loss_masking_spans=loss_masking_spans, position_ids=position_ids)
+        return GPTSample(token_ids=token_ids, loss_masking_spans=loss_masking_spans, seqlens=seqlens)
 
     @property
     def name(self) -> str:
@@ -378,6 +379,7 @@ class LegacyGPTSampledIndexedDataset(SampledDataset):
         self._indexed_dataset = indexed_dataset
         self._num_samples = sampling.num_samples
         self._sequence_length = sampling.sequence_length
+        self._variable_sequence_lengths = sampling.variable_sequence_lengths
         self._config = sampling.config
         self._tokenizer = sampling.tokenizer
 
@@ -498,14 +500,15 @@ class LegacyGPTSampledIndexedDataset(SampledDataset):
             spans = np.stack(spans, dtype=np.int32)
         else:
             spans = None
-        if self._config.per_document_positions:
-            start_indices = np.where(token_ids == self._tokenizer.bod_id)[0][:-1]
-            position_ids = np.arange(len(token_ids) - 1, dtype=np.int32)
-            for idx in start_indices:
-                position_ids[idx:] -= position_ids[idx]
-        else:
-            position_ids = None
-        return GPTSample(token_ids=token_ids, loss_masking_spans=spans, position_ids=position_ids)
+        seqlens = (
+            np.array(
+                [sample.token_ids.size - (idx == len(sample_list) - 1) for idx, sample in enumerate(sample_list)],
+                dtype=np.int32,
+            )
+            if self._variable_sequence_lengths
+            else None
+        )
+        return GPTSample(token_ids=token_ids, loss_masking_spans=spans, seqlens=seqlens)
 
     @property
     def name(self) -> str:
