@@ -20,7 +20,11 @@ from fast_llm.layers.transformer.config import (
     TransformerKwargs,
     TransformerLossNames,
 )
-from fast_llm.layers.transformer.preprocessing import BackupAttentionPreprocessor, RotaryEmbeddingPreprocessor
+from fast_llm.layers.transformer.preprocessing import (
+    BackupAttentionPreprocessor,
+    FlashAttnVarlenPreprocessor,
+    RotaryEmbeddingPreprocessor,
+)
 from fast_llm.layers.transformer.transformer import TransformerLayer
 from fast_llm.models.gpt.config import GPTBaseModelConfig, GPTModelConfig
 from fast_llm.models.gpt.megatron import get_init_megatron
@@ -64,6 +68,8 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             self._backup_attention_preprocessor = BackupAttentionPreprocessor(
                 self._config.transformer, self._tensor_space
             )
+        else:
+            self._flash_varlen_preprocessor = FlashAttnVarlenPreprocessor(self._config.transformer, self._tensor_space)
 
     def get_layers(self) -> list[Layer]:
         return [
@@ -229,78 +235,9 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                 # TODO: Avoid multiple contiguous calls?
                 tokens = batch.token_ids[:, sequence_k - sequence_q : sequence_k].contiguous()
             if batch.seqlens is not None:
-                if not self._use_flash_attention or self._config.use_absolute_position_embeddings:
-                    kwargs_meta[LanguageModelKwargs.position_ids] = torch.stack(
-                        [torch.cat([torch.arange(x) for x in sample_lens]) for sample_lens in batch.seqlens]
-                    ).to(self._tensor_space.distributed.device, dtype=torch.int64)
+                kwargs_meta[TransformerKwargs.seqlens] = batch.seqlens
                 if self._use_flash_attention:
-                    if sequence_q < kwargs_meta["sequence_length"]:
-                        cumsums = [torch.cumsum(x, dim=0) for x in batch.seqlens]
-                        # The first and last samples in a microsequence need to be handled separately. Include all tokens from other samples
-                        # in the microsequence. We need to consider all keys computed so far from the first sample. We also store the lengths
-                        # of the first samples so that we can index into their kv pairs
-                        start_seq_idx = [
-                            torch.argmax((cu_seqlens >= sequence_k - sequence_q).to(torch.uint8), dim=0)
-                            for cu_seqlens in cumsums
-                        ]
-                        end_seq_idx = [
-                            torch.argmax((cu_seqlens >= sequence_k).to(torch.uint8), dim=0) for cu_seqlens in cumsums
-                        ]
-                        seqlens_q = []
-                        seqlens_k = []
-                        start_seq_offset = []
-                        for idx, seqlens in enumerate(batch.seqlens):
-                            start_idx = start_seq_idx[idx]
-                            end_idx = end_seq_idx[idx]
-                            if start_idx == end_idx:
-                                # take from the sequence:
-                                seqlens_q.append(sequence_q)
-                                seqlens_k.append(seqlens[end_idx] - (cumsums[idx][end_idx] - sequence_k))
-                                start_seq_offset.append(
-                                    seqlens[start_idx] - (cumsums[idx][start_idx] - sequence_k) - sequence_q
-                                )
-                            else:
-                                seqlens_q.extend(
-                                    [
-                                        cumsums[idx][start_idx] - (sequence_k - sequence_q),
-                                        *(seqlens[idx] for idx in range(start_idx + 1, end_idx)),
-                                        seqlens[end_idx] - (cumsums[idx][end_idx] - sequence_k),
-                                    ]
-                                )
-                                seqlens_k.extend(
-                                    [
-                                        seqlens[start_idx],
-                                        *(seqlens[idx] for idx in range(start_idx + 1, end_idx)),
-                                        seqlens[end_idx] - (cumsums[idx][end_idx] - sequence_k),
-                                    ]
-                                )
-                                start_seq_offset.append(
-                                    seqlens[start_idx] - (cumsums[idx][start_idx] - (sequence_k - sequence_q))
-                                )
-                        seqlens_q = torch.tensor(seqlens_q, dtype=torch.int32)
-                        seqlens_k = torch.tensor(seqlens_k, dtype=torch.int32)
-                        kwargs_meta[TransformerKwargs.start_seq_offset] = start_seq_offset
-                    else:
-                        seqlens_q = torch.cat(batch.seqlens)
-                        seqlens_k = torch.cat(batch.seqlens)
-                    kwargs_meta[TransformerKwargs.cu_seqlens_q] = torch.cat(
-                        (
-                            torch.zeros(1, dtype=torch.int32, device=self._tensor_space.distributed.device),
-                            torch.cumsum(seqlens_q, dim=0, dtype=torch.int32).to(
-                                device=self._tensor_space.distributed.device
-                            ),
-                        )
-                    )
-                    kwargs_meta[TransformerKwargs.cu_seqlens_k] = torch.cat(
-                        (
-                            torch.zeros(1, dtype=torch.int32, device=self._tensor_space.distributed.device),
-                            torch.cumsum(seqlens_k, dim=0, dtype=torch.int32).to(
-                                device=self._tensor_space.distributed.device
-                            ),
-                        )
-                    )
-                    kwargs_meta[TransformerKwargs.max_seqlen_q] = seqlens_q.max()
-                    kwargs_meta[TransformerKwargs.max_seqlen_k] = seqlens_k.max()
+                    self._flash_varlen_preprocessor.preprocess(kwargs_meta)
 
             # TODO: Add pasts/presents to meta input?
             # Use lists as pointers so `past_key_values` is populated during the previous micro_sequence.
