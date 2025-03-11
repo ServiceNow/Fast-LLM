@@ -653,14 +653,10 @@ class TransformerConfig(TransformerArchitectureConfig, BaseModelConfig):
         Assert.geq(self.hidden_dropout, 0)
         Assert.incl(len(self.mlp_lr_scale), (1, self.num_experts))
         if self.peft.type != PeftType.none and (
-            self.peft.layers is None
-            or TransformerLinearLayerName.mlp_1 in self.peft.layers
+            TransformerLinearLayerName.mlp_1 in self.peft.layers
             or TransformerLinearLayerName.mlp_2 in self.peft.layers
         ):
-            if self.mlp_recompute_level != MLPRecomputeLevel.none:
-                raise ValueError("Activation recomputation not supported with Peft.")
-            if self.num_experts > 1:
-                raise ValueError("Mixture of experts not supported with Peft.")
+            raise NotImplementedError("LoRA not supported for MLP.")
         for scale in self.mlp_lr_scale:
             if scale is not None:
                 Assert.geq(scale, 0)
