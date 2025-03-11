@@ -56,7 +56,6 @@ class GPTDataConfig(DataConfig, GPTLegacyConfig):
         desc="Multiprocessing context. Do not touch.",
         hint=FieldHint.expert,
     )
-    variable_sequence_lengths: bool | None = Field(default=None, desc="Use ")
 
     def _validate(self) -> None:
         if not self.datasets:
