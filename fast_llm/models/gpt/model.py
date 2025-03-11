@@ -234,8 +234,8 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             else:
                 # TODO: Avoid multiple contiguous calls?
                 tokens = batch.token_ids[:, sequence_k - sequence_q : sequence_k].contiguous()
-            if batch.seqlens is not None:
-                kwargs_meta[TransformerKwargs.seqlens] = batch.seqlens
+            if batch.sequence_lengths is not None:
+                kwargs_meta[TransformerKwargs.sequence_lengths] = batch.sequence_lengths
                 if self._use_flash_attention:
                     self._flash_varlen_preprocessor.preprocess(kwargs_meta)
 

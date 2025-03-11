@@ -234,8 +234,10 @@ class BackupAttentionPreprocessor:
         kwargs[TransformerKwargs.attention_mask] = self._mask[
             None, None, sequence_k - sequence_q : sequence_k, None, :sequence_k
         ]
-        if (seqlens := kwargs.get(TransformerKwargs.seqlens, None)) is not None:
-            seq_ids = torch.stack([torch.cat([torch.arange(x) for x in sample_lens]) for sample_lens in seqlens])
+        if (sequence_lengths := kwargs.get(TransformerKwargs.sequence_lengths, None)) is not None:
+            seq_ids = torch.stack(
+                [torch.cat([torch.arange(x) for x in sample_lens]) for sample_lens in sequence_lengths]
+            )
             document_mask = (seq_ids[:, None, :] == seq_ids[:, :, None]).to(self._tensor_space.distributed.device)
             kwargs[TransformerKwargs.attention_mask] = (
                 kwargs[TransformerKwargs.attention_mask]
@@ -270,11 +272,11 @@ class FlashAttnVarlenPreprocessor:
         assert self._config.do_use_flash_attention(self._distributed_config)
 
     def preprocess(self, kwargs: dict[str, typing.Any]) -> None:
-        seqlens = kwargs.get(TransformerKwargs.seqlens)
+        sequence_lengths = kwargs.get(TransformerKwargs.sequence_lengths)
         sequence_k = kwargs[TransformerKwargs.sequence_k_dim].size
         sequence_q = kwargs[TransformerKwargs.sequence_q_dim].size
         if sequence_q < kwargs[TransformerKwargs.sequence_length]:
-            cumsums = [torch.cumsum(x, dim=0) for x in seqlens]
+            cumsums = [torch.cumsum(x, dim=0) for x in sequence_lengths]
             # The first and last samples in a microsequence need to be handled separately. Include all tokens from other samples
             # in the microsequence. We need to consider all keys computed so far from the first sample. We also store the offsets
             # of the first samples so that we can index into their kv pairs
@@ -285,11 +287,11 @@ class FlashAttnVarlenPreprocessor:
             seqlens_q = []
             seqlens_k = []
             start_seq_offset = []
-            for idx, seqlens in enumerate(seqlens):
+            for idx, sequence_lengths in enumerate(sequence_lengths):
                 start_idx = start_seq_idx[idx]
                 end_idx = end_seq_idx[idx]
                 if start_idx == end_idx:
-                    n_attention_tokens = seqlens[start_idx] - (cumsums[idx][start_idx] - sequence_k)
+                    n_attention_tokens = sequence_lengths[start_idx] - (cumsums[idx][start_idx] - sequence_k)
                     seqlens_q.append(sequence_q)
                     seqlens_k.append(n_attention_tokens)
                     start_seq_offset.append(n_attention_tokens - sequence_q)
@@ -298,24 +300,24 @@ class FlashAttnVarlenPreprocessor:
                     seqlens_q.extend(
                         [
                             start_q_tokens,
-                            *(seqlens[idx] for idx in range(start_idx + 1, end_idx)),
-                            seqlens[end_idx] - (cumsums[idx][end_idx] - sequence_k),
+                            *(sequence_lengths[idx] for idx in range(start_idx + 1, end_idx)),
+                            sequence_lengths[end_idx] - (cumsums[idx][end_idx] - sequence_k),
                         ]
                     )
                     seqlens_k.extend(
                         [
-                            seqlens[start_idx],
-                            *(seqlens[idx] for idx in range(start_idx + 1, end_idx)),
-                            seqlens[end_idx] - (cumsums[idx][end_idx] - sequence_k),
+                            sequence_lengths[start_idx],
+                            *(sequence_lengths[idx] for idx in range(start_idx + 1, end_idx)),
+                            sequence_lengths[end_idx] - (cumsums[idx][end_idx] - sequence_k),
                         ]
                     )
-                    start_seq_offset.append(seqlens[start_idx] - start_q_tokens)
+                    start_seq_offset.append(sequence_lengths[start_idx] - start_q_tokens)
             seqlens_q = torch.tensor(seqlens_q, dtype=torch.int32)
             seqlens_k = torch.tensor(seqlens_k, dtype=torch.int32)
             kwargs[TransformerKwargs.start_seq_offset] = start_seq_offset
         else:
-            seqlens_q = torch.cat(seqlens)
-            seqlens_k = torch.cat(seqlens)
+            seqlens_q = torch.cat(sequence_lengths)
+            seqlens_k = torch.cat(sequence_lengths)
         kwargs[TransformerKwargs.cu_seqlens_q] = torch.cat(
             (
                 torch.zeros(1, dtype=torch.int32, device=self._tensor_space.distributed.device),

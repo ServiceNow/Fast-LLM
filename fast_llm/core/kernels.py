@@ -16,13 +16,6 @@ try:
 except ImportError:
     _apex_available = False
 
-try:
-    from flash_attn.flash_attn_interface import flash_attn_func as _flash_attn_func  # noqa
-
-    _flash_available = True
-except ImportError:
-    _flash_available = False
-
 
 def l2_norm(tensors: list[torch.Tensor], noop_flag: torch.Tensor) -> torch.Tensor:
     assert _apex_available

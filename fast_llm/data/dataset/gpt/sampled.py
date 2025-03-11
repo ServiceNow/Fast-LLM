@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 class GPTSample:
     token_ids: np.ndarray
     loss_masking_spans: np.ndarray | None = None
-    seqlens: np.ndarray | None = None
+    sequence_lengths: np.ndarray | None = None
 
 
 class MemmapArray:
@@ -335,7 +335,7 @@ class GPTSampledIndexedDataset(SampledDataset):
             document_sampling_index += 1
             token_count += document_size
 
-        seqlens = (
+        sequence_lengths = (
             np.array([ids.size - (idx == len(token_ids) - 1) for idx, ids in enumerate(token_ids)], dtype=np.int32)
             if self._variable_sequence_lengths
             else None
@@ -346,7 +346,7 @@ class GPTSampledIndexedDataset(SampledDataset):
         )
         Assert.eq(len(token_ids), self._sequence_length + 1)
 
-        return GPTSample(token_ids=token_ids, loss_masking_spans=loss_masking_spans, seqlens=seqlens)
+        return GPTSample(token_ids=token_ids, loss_masking_spans=loss_masking_spans, sequence_lengths=sequence_lengths)
 
     @property
     def name(self) -> str:
@@ -500,7 +500,7 @@ class LegacyGPTSampledIndexedDataset(SampledDataset):
             spans = np.stack(spans, dtype=np.int32)
         else:
             spans = None
-        seqlens = (
+        sequence_lengths = (
             np.array(
                 [sample.token_ids.size - (idx == len(sample_list) - 1) for idx, sample in enumerate(sample_list)],
                 dtype=np.int32,
@@ -508,7 +508,7 @@ class LegacyGPTSampledIndexedDataset(SampledDataset):
             if self._variable_sequence_lengths
             else None
         )
-        return GPTSample(token_ids=token_ids, loss_masking_spans=spans, seqlens=seqlens)
+        return GPTSample(token_ids=token_ids, loss_masking_spans=spans, sequence_lengths=sequence_lengths)
 
     @property
     def name(self) -> str:

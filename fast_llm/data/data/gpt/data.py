@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 class GPTBatch:
     token_ids: torch.Tensor
     loss_masking_spans: list[torch.Tensor] | None = None
-    seqlens: list[torch.Tensor] | None = None
+    sequence_lengths: list[torch.Tensor] | None = None
 
 
 def gpt_data_collate_fn(
@@ -39,12 +39,14 @@ def gpt_data_collate_fn(
 ) -> GPTBatch:
     stacked_ids = np.stack([sample.token_ids for sample in batch])
     stacked_spans = None
-    seqlens = None
+    sequence_lengths = None
     if use_loss_masking_spans:
         stacked_spans = [torch.from_numpy(sample.loss_masking_spans) for sample in batch]
     if variable_sequence_lengths:
-        seqlens = [torch.tensor(sample.seqlens) for sample in batch]
-    return GPTBatch(token_ids=torch.from_numpy(stacked_ids), loss_masking_spans=stacked_spans, seqlens=seqlens)
+        sequence_lengths = [torch.tensor(sample.sequence_lengths) for sample in batch]
+    return GPTBatch(
+        token_ids=torch.from_numpy(stacked_ids), loss_masking_spans=stacked_spans, sequence_lengths=sequence_lengths
+    )
 
 
 class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):

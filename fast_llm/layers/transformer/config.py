@@ -59,7 +59,7 @@ class TransformerKwargs:
     rotary_freq_k = "rotary_freq_k"
     attention_mask = "attention_mask"
     attention_mask_value = "attention_mask_value"
-    seqlens = "seqlens"
+    sequence_lengths = "sequence_lengths"
     cu_seqlens_q = "cu_seqlens_q"
     cu_seqlens_k = "cu_seqlens_k"
     max_seqlen_q = "max_seqlen_q"

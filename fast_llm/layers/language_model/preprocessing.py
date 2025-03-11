@@ -42,9 +42,9 @@ class PositionEmbeddingPreprocessor:
     def preprocess(self, kwargs: dict[str, typing.Any]) -> None:
         sequence_k = kwargs[TransformerKwargs.sequence_k_dim].size
         sequence_q = kwargs[TransformerKwargs.sequence_q_dim].size
-        if (seqlens := kwargs.get(TransformerKwargs.seqlens)) is not None:
+        if (sequence_lengths := kwargs.get(TransformerKwargs.sequence_lengths)) is not None:
             position_ids = torch.stack(
-                [torch.cat([torch.arange(x) for x in sample_lens]) for sample_lens in seqlens]
+                [torch.cat([torch.arange(x) for x in sample_lens]) for sample_lens in sequence_lengths]
             ).to(self._tensor_space.distributed.device, dtype=torch.int64)
             position_ids = position_ids[:, sequence_k - sequence_q : sequence_k]
             if kwargs[TransformerKwargs.sequence_first]:
