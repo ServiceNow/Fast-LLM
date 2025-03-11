@@ -175,8 +175,8 @@ class TransformerLinearLayerName(str, enum.Enum):
 
 @config_class()
 class TransformerPeftConfig(PeftConfig):
-    layers: list[TransformerLinearLayerName] | None = Field(
-        default=None,
+    layers: list[TransformerLinearLayerName] = Field(
+        default_factory=lambda: [TransformerLinearLayerName.query, TransformerLinearLayerName.key_value],
         desc="The layers on which to apply LoRA.",
         hint=FieldHint.feature,
     )
