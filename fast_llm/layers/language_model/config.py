@@ -61,6 +61,12 @@ class LanguageModelArchitectureConfig(BaseModelArchitectureConfig):
     tie_word_embeddings: bool = Field(
         default=True, desc="Tie the output weights (logits) with the vocabulary embedding.", hint=FieldHint.core
     )
+    num_multi_token_prediction_heads: int | None = Field(
+        default=None,
+        desc="Number of multi-token prediction heads.",
+        hint=FieldHint.feature,
+        valid=skip_valid_if_none(check_field(Assert.gt, 0)),
+    )
 
     def _validate(self) -> None:
         if self.use_position_embeddings is None:
@@ -176,12 +182,6 @@ class LanguageModelBaseConfig(LanguageModelArchitectureConfig, BaseModelConfig):
         " Since we are mupltiplying the output logits, under muP the scale factor should be < 1.0.",
         hint=FieldHint.feature,
         valid=check_field(Assert.geq, 0),
-    )
-    num_multi_token_prediction_heads: int | None = Field(
-        default=None,
-        desc="Number of multi-token prediction heads.",
-        hint=FieldHint.feature,
-        valid=skip_valid_if_none(check_field(Assert.gt, 0)),
     )
 
     def _validate(self) -> None:
