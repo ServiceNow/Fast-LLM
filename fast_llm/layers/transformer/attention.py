@@ -14,6 +14,7 @@ from fast_llm.layers.transformer.config import (
     TransformerConfig,
     TransformerDimNames,
     TransformerKwargs,
+    TransformerLinearLayerName,
 )
 from fast_llm.logging import log_distributed_grad, log_distributed_tensor
 from fast_llm.tensor import TensorMeta, init_normal_, init_zeros_
@@ -103,35 +104,44 @@ class Attention(torch.nn.Module):
         hidden_dim = self._tensor_space.get_tensor_dim(TransformerDimNames.hidden)
 
         # TODO: Merge the query and key-value computations? (harder with sequence parallel.)
-        self.query = OutputParallelLinear(
-            hidden_dim,
-            self._tensor_space.get_tensor_dim(TransformerDimNames.composite_query),
-            bias=self._config.add_attn_qkv_bias,
-            weight_init_method=init_method_qkv,
-            bias_init_method=init_method_qkv if self._config.random_bias_init else init_zeros_,
-            sequence_parallel=self._sequence_parallel,
-            lr_scale=self._config.attention_lr_scale,
+        self.query = self._config.peft.apply_linear(
+            OutputParallelLinear(
+                hidden_dim,
+                self._tensor_space.get_tensor_dim(TransformerDimNames.composite_query),
+                bias=self._config.add_attn_qkv_bias,
+                weight_init_method=init_method_qkv,
+                bias_init_method=init_method_qkv if self._config.random_bias_init else init_zeros_,
+                sequence_parallel=self._sequence_parallel,
+                lr_scale=self._config.attention_lr_scale,
+            ),
+            TransformerLinearLayerName.query,
         )
-        self.key_value = OutputParallelLinear(
-            hidden_dim,
-            self._tensor_space.get_tensor_dim(TransformerDimNames.composite_key_value),
-            bias=self._config.add_attn_qkv_bias,
-            weight_init_method=init_method_qkv,
-            bias_init_method=init_method_qkv if self._config.random_bias_init else init_zeros_,
-            sequence_parallel=self._sequence_parallel,
-            lr_scale=self._config.attention_lr_scale,
+        self.key_value = self._config.peft.apply_linear(
+            OutputParallelLinear(
+                hidden_dim,
+                self._tensor_space.get_tensor_dim(TransformerDimNames.composite_key_value),
+                bias=self._config.add_attn_qkv_bias,
+                weight_init_method=init_method_qkv,
+                bias_init_method=init_method_qkv if self._config.random_bias_init else init_zeros_,
+                sequence_parallel=self._sequence_parallel,
+                lr_scale=self._config.attention_lr_scale,
+            ),
+            TransformerLinearLayerName.key_value,
         )
         self._query_key_value = wrap_forward_backward(self._query_key_value_forward, self._query_key_value_backward)
 
         # Output.
-        self.dense = InputParallelLinear(
-            self._tensor_space.get_tensor_dim(TransformerDimNames.composite_dense),
-            hidden_dim,
-            bias=self._config.add_attn_dense_bias,
-            weight_init_method=init_method_std_attn_proj,
-            bias_init_method=init_method_std_attn_proj if self._config.random_bias_init else init_zeros_,
-            sequence_parallel=self._sequence_parallel,
-            lr_scale=self._config.attention_lr_scale,
+        self.dense = self._config.peft.apply_linear(
+            InputParallelLinear(
+                self._tensor_space.get_tensor_dim(TransformerDimNames.composite_dense),
+                hidden_dim,
+                bias=self._config.add_attn_dense_bias,
+                weight_init_method=init_method_std_attn_proj,
+                bias_init_method=init_method_std_attn_proj if self._config.random_bias_init else init_zeros_,
+                sequence_parallel=self._sequence_parallel,
+                lr_scale=self._config.attention_lr_scale,
+            ),
+            TransformerLinearLayerName.dense,
         )
 
     def _attn_fused(

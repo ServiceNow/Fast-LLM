@@ -20,7 +20,25 @@ from fast_llm.tensor import ParameterMeta, init_zeros_
 logger = logging.getLogger(__name__)
 
 
-class LinearBase(torch.nn.Module):
+class LinearLike(torch.nn.Module):
+    def forward(self, input_: torch.Tensor) -> torch.Tensor:
+        return self._forward(input_)
+
+    def forward_only(self, input_: torch.Tensor):
+        raise NotImplementedError()
+
+    def backward(self, grad_output: torch.Tensor, context: typing.Any) -> torch.Tensor:
+        context, gather_handle = self.backward_gather_input(context)
+        grad_input, reduce_handle = self.backward_activation(grad_output, context)
+        if gather_handle is not None:
+            gather_handle()
+        self.backward_parameters(grad_output, context)
+        if reduce_handle is not None:
+            gather_handle()
+        return grad_input
+
+
+class LinearBase(LinearLike):
     """
     A base module for linear layers holding weights and biases.
     """
