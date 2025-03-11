@@ -234,9 +234,8 @@ class BackupAttentionPreprocessor:
         kwargs[TransformerKwargs.attention_mask] = self._mask[
             None, None, sequence_k - kwargs[TransformerKwargs.sequence_q_dim].size : sequence_k, None, :sequence_k
         ]
-        if self._config.prevent_cross_document_attention:
-            kwargs[LanguageModelKwargs.position_ids]
-            seq_ids = (kwargs[LanguageModelKwargs.position_ids] == 0).cumsum(dim=1) - 1
+        if (position_ids := kwargs.get(LanguageModelKwargs.position_ids, None)) is not None:
+            seq_ids = (position_ids == 0).cumsum(dim=1) - 1
             document_mask = seq_ids[:, None, :] == seq_ids[:, :, None]
             kwargs[TransformerKwargs.attention_mask] = (
                 kwargs[TransformerKwargs.attention_mask]
