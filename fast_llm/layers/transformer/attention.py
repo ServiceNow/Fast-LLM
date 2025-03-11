@@ -345,6 +345,10 @@ class Attention(torch.nn.Module):
         if self._use_flash_attention:
             assert _flash_available
             with set_generator(self._tensor_space.distributed.tp_generator):
+                # By default, sequence_data_parallel > 1 includes KVs from all past tokens and Queries only from tokens in
+                # the current micro-sequence. However, flash_attn_varlen_func expects same number of documents in query and key.
+                # So we slice the KVs to match the number of documents in the query, but make sure to include all tokens past tokens
+                # from the first sample, even if the tokens are not part of this micro-sequence.
                 if (cu_seqlens_q := kwargs.get(TransformerKwargs.cu_seqlens_q, None)) is not None:
                     out_dims = query.size()
                     query = query.view(-1, query.size(-2), query.size(-1))

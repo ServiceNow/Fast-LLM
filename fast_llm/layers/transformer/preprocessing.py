@@ -272,14 +272,23 @@ class FlashAttnVarlenPreprocessor:
         assert self._config.do_use_flash_attention(self._distributed_config)
 
     def preprocess(self, kwargs: dict[str, typing.Any]) -> None:
+        """
+        Prepares cu_seqlens_q and cu_seqlens_k for flash_attn_varlen_func:
+        https://github.com/Dao-AILab/flash-attention/blob/main/flash_attn/flash_attn_interface.py#L1375
+        cu_seqlens_q and cu_seqlens_k are cumulative sequence lengths for the query and key/value tensors, respectively.
+        Assumes a flattened batch of documents. In absence of sequence_data_parallelism, cu_seqlens_q = cu_seqlens_k.
+        If sequence_data_parallelism > 1, query tensors contain tokens only from current micro-sequence, whereas key/value tensors additionally
+        also contain previous tokens from the first document in micro-sequence.
+        We use individual sequence lengths of each document to (optionally) find the micro-sequences in the batch and compute the cumulative lengths.
+        """
         sequence_lengths = kwargs.get(TransformerKwargs.sequence_lengths)
         sequence_k = kwargs[TransformerKwargs.sequence_k_dim].size
         sequence_q = kwargs[TransformerKwargs.sequence_q_dim].size
         if sequence_q < kwargs[TransformerKwargs.sequence_length]:
             cumsums = [torch.cumsum(x, dim=0) for x in sequence_lengths]
-            # The first and last samples in a microsequence need to be handled separately. Include all tokens from other samples
+            # The first and last documents in a microsequence need to be handled separately. Include all tokens from other documents
             # in the microsequence. We need to consider all keys computed so far from the first sample. We also store the offsets
-            # of the first samples so that we can index into their kv pairs
+            # of the first documents so that we can index into their kv pairs
             start_seq_idx = [
                 torch.argmax((cu_seqlens >= sequence_k - sequence_q).to(torch.uint8), dim=0) for cu_seqlens in cumsums
             ]
