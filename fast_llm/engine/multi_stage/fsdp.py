@@ -1,0 +1,323 @@
+import typing
+
+import torch
+
+from fast_llm.core.distributed import ProcessGroup
+from fast_llm.core.ops import gather_op
+from fast_llm.engine.config_utils.data_type import DataType
+from fast_llm.engine.config_utils.tensor_space import TensorDim
+from fast_llm.engine.distributed.config import DistributedDim
+from fast_llm.engine.distributed.distributed import Distributed
+from fast_llm.engine.multi_stage.config import SHARD_PAD_TO_MULTIPLE, StageMode
+from fast_llm.logging import log_distributed_tensor
+from fast_llm.tensor import ParameterMeta, SafeTensorSlice, TensorMeta
+from fast_llm.utils import Assert, clamp, padded_cumsum
+
+
+class FSDP:
+    _is_setup: bool = False
+    _fsdp_group: ProcessGroup
+
+    def __init__(
+        self,
+        name: str,
+        parameter_metas: list[ParameterMeta],
+        fsdp_dim: DistributedDim,
+        training_dtype: DataType,
+        gradient_buffer_dtype: DataType,
+        optimization_dtype: DataType,
+    ):
+        self._name = name
+        self._parameter_metas = {parameter_meta.tensor_name: parameter_meta for parameter_meta in parameter_metas}
+        self._fsdp_dim = fsdp_dim
+        self._training_dtype = training_dtype
+        self._gradient_buffer_dtype = gradient_buffer_dtype
+        self._optimization_dtype = optimization_dtype
+
+        parameter_sizes = [meta.numel() for meta in self._parameter_metas.values()]
+        self._parameter_count = sum(parameter_sizes)
+        parameter_offsets = padded_cumsum(parameter_sizes).tolist()
+
+        # The index range of the parameters in the buffer.
+        self._parameter_begins_in_buffer = {
+            parameter_meta.tensor_name: offset
+            for parameter_meta, offset in zip(parameter_metas, parameter_offsets[:-1])
+        }
+        self._parameter_ends_in_buffer = {
+            parameter_meta.tensor_name: offset
+            for parameter_meta, offset in zip(parameter_metas, parameter_offsets[1:])
+        }
+
+        # Shard properties
+        # We pad the stage so that each shard has the same size
+        #   and is a multiple of SHARD_PAD_TO_MULTIPLE (for data alignment)
+        self._global_pad = -self._parameter_count % (self._fsdp_dim.size * SHARD_PAD_TO_MULTIPLE)
+        self._shard_size = (self._parameter_count + self._global_pad) // self._fsdp_dim.size
+        # Typically the padding is all on the last shard, but in some cases it can overflow to other shards.
+        self._shard_pad = min(
+            max(self._global_pad - self._shard_size * (self._fsdp_dim.size - self._fsdp_dim.rank - 1), 0),
+            self._shard_size,
+        )
+
+        # TODO: Use parallel_dim property instead?
+        shard_dim = TensorDim("flat_shard", (self._parameter_count + self._global_pad) // self._fsdp_dim.size)
+        buffer_dim = TensorDim("flat_buffer", shard_dim.size * self._fsdp_dim.size)
+
+        self._weight_shard_meta = TensorMeta.from_dims(
+            (shard_dim,),
+            tensor_name=f"{self._name}_weight_shard",
+            dtype=self._optimization_dtype.torch,
+        )
+        self._grad_shard_meta = TensorMeta.from_dims(
+            (shard_dim,),
+            tensor_name=f"{self._name}_grad_shard",
+            dtype=self._optimization_dtype.torch,
+        )
+        self._weight_buffer_meta = TensorMeta.from_dims(
+            (buffer_dim,),
+            tensor_name=f"{self._name}_weight_buffer",
+            dtype=self._training_dtype.torch,
+        )
+        self._grad_buffer_meta = TensorMeta.from_dims(
+            (buffer_dim,),
+            tensor_name=f"{self._name}_weight_buffer",
+            dtype=self._gradient_buffer_dtype.torch,
+        )
+
+    @property
+    def parameter_names(self) -> list[str]:
+        return list(self._parameter_metas)
+
+    @property
+    def parameter_count(self) -> int:
+        return self._parameter_count
+
+    def __contains__(self, parameter_name: str) -> bool:
+        return parameter_name in self.parameter_names
+
+    def get_parameter_meta(self, parameter_name: str) -> ParameterMeta:
+        return self._parameter_metas[parameter_name]
+
+    def get_parameter_buffer(self, parameter_name: str) -> torch.nn.Parameter:
+        assert self._is_setup
+        assert self._mode.support_forward
+        return self._parameter_buffers[parameter_name]
+
+    def setup(
+        self,
+        mode: StageMode,
+        fsdp_group: ProcessGroup,
+        weight_shard: torch.Tensor | None,
+        grad_shard: torch.Tensor | None,
+        weight_buffer: torch.Tensor | None,
+        grad_buffer: torch.Tensor | None,
+        sequence_tensor_parallel: bool = False,
+    ) -> None:
+        assert not self._is_setup
+        self._is_setup = True
+        self._fsdp_group = fsdp_group
+        self._mode = mode
+
+        # Validate and set the shards and buffers
+        if self._mode.on_device:
+            self._weight_shard = self._weight_shard_meta.validate(weight_shard)
+        else:
+            Assert.none(weight_shard)
+        if self._mode.support_forward:
+            self._weight_buffer = self._weight_buffer_meta.validate(weight_buffer)
+            # Pre-compute the local shard for restore ops.
+            self._weight_buffer_local_shard = self._weight_buffer[
+                self._fsdp_dim.rank * self._shard_size : (self._fsdp_dim.rank + 1) * self._shard_size
+            ]
+        else:
+            Assert.none(weight_buffer)
+
+        if self._mode.support_backward:
+            self._grad_shard = self._grad_shard_meta.validate(grad_shard)
+            self._grad_buffer = self._grad_buffer_meta.validate(grad_buffer)
+            # Pre-compute the local shard for reduce ops.
+            self._grad_buffer_local_shard = self._grad_buffer[
+                self._fsdp_dim.rank * self._shard_size : (self._fsdp_dim.rank + 1) * self._shard_size
+            ]
+            # Pre-compute the sequence-parallel grads.
+            sp_indices = [i for i, meta in enumerate(self._parameter_metas.values()) if meta.sequence_tensor_parallel]
+            if sp_indices and sequence_tensor_parallel:
+                Assert.eq(sp_indices, list(range(sp_indices[0], sp_indices[-1] + 1)))
+                sp_indices = [
+                    i for i, meta in enumerate(self._parameter_metas.values()) if meta.sequence_tensor_parallel
+                ]
+                sp_begin, sp_end = (
+                    list(self._parameter_begins_in_buffer.values())[sp_indices[0]],
+                    list(self._parameter_ends_in_buffer.values())[sp_indices[-1]],
+                )
+            else:
+                sp_begin, sp_end = 0, 0
+            self._sequence_parallel_grads = self._grad_buffer[sp_begin:sp_end] if sp_end > sp_begin else None
+
+        else:
+            Assert.none(grad_shard)
+            Assert.none(grad_buffer)
+
+        if self._mode.support_forward:
+            # Precompute the buffer slice for each parameter.
+            # Use `.data` to hide the restore ops from autograd.
+            self._parameter_buffers = {}
+            for weight_buffer, grad_buffer, parameter_name in zip(
+                self.split_buffer(self._weight_buffer.data).values(),
+                self.split_buffer(
+                    self._grad_buffer if self._mode.support_backward else self._grad_buffer_meta
+                ).values(),
+                self._parameter_metas,
+            ):
+                parameter_buffer = torch.nn.Parameter(weight_buffer, requires_grad=self._mode.support_backward)
+                if self._mode.support_backward:
+                    parameter_buffer.grad_buffer = grad_buffer
+                # TODO: This is only needed for Megatron initialization
+                self._parameter_buffers[parameter_name] = parameter_buffer
+
+    def reset_shard_pad(self, shard: torch.Tensor) -> int:
+        assert self._is_setup
+        assert self._mode.on_device
+        # TODO: Needed?
+        # Prevent nans with the padded values
+        # Also ensures a correct parameter count in loading context.
+        self._weight_shard_meta.validate(shard)
+        if self._shard_pad > 0:
+            shard[-self._shard_pad :].zero_()
+            return self._shard_pad
+        return 0
+
+    def split_buffer(self, buffer: torch.Tensor) -> dict[str, torch.Tensor]:
+        # Split a buffer into appropriately shaped parameters.
+        return {
+            name: buffer[self._parameter_begins_in_buffer[name] : self._parameter_ends_in_buffer[name]].view(
+                meta.shape
+            )
+            for name, meta in self._parameter_metas.items()
+        }
+
+    def split_shard(self, shard: torch.Tensor) -> dict[str, torch.Tensor]:
+        # Split a shard into flat (possibly empty) parameter slices.
+        return {
+            name: shard[
+                self._index_buffer_to_shard(self._parameter_begins_in_buffer[name]) : self._parameter_ends_in_buffer[
+                    name
+                ]
+            ]
+            for name in self._parameter_metas
+        }
+
+    def _index_buffer_to_shard(self, index: int, rank: int | None = None) -> int:
+        shard_begin = (self._fsdp_dim.rank if rank is None else rank) * self._shard_size
+        return clamp(index - shard_begin, 0, self._shard_size - self._shard_pad)
+
+    def _index_buffer_to_param(self, index: int, parameter_name: str) -> int:
+        return clamp(
+            index - self._parameter_begins_in_buffer[parameter_name], 0, self._parameter_metas[parameter_name].numel()
+        )
+
+    def reconstruct_from_shard(self, local_shard: torch.Tensor, out: torch.Tensor | None = None) -> torch.Tensor:
+        return gather_op(local_shard, group=self._fsdp_group, dim=0, out=out)
+
+    def import_state_tensor(
+        self, parameter_name: str, shard: torch.Tensor, tensor: torch.Tensor | SafeTensorSlice
+    ) -> int:
+        """
+        Given a global parameter tensor, set the associated slice of a local parameter shard.
+        Return the size of the local slice.
+        """
+        Assert.eq(shard.shape, (self._shard_size,))
+        tensor_shard = self._parameter_global_to_shard(tensor, parameter_name)
+        begin, end = self._parameter_range_in_shard(parameter_name)
+        Assert.eq(tensor_shard.numel(), end - begin)
+        shard[begin:end].copy_(tensor_shard)
+        return end - begin
+
+    def export_shard(
+        self, shard: torch.Tensor, distributed: Distributed, data_type: DataType | None = None
+    ) -> typing.Generator[tuple[str, torch.Tensor], None, None]:
+        if data_type is not None:
+            shard = shard.to(dtype=data_type.torch)
+        tensors = self.split_buffer(self.reconstruct_from_shard(shard))
+        for name, meta in self._parameter_metas.items():
+            yield name, meta.local_to_global(tensors[name], distributed=distributed)[0]
+
+    def log_shard(self, name, shard, *, distributed: Distributed, level, global_: bool) -> None:
+        # if global_ is None:
+        #    global_ = self._config.debug_global_tensors
+        parameters = self.split_buffer(self.reconstruct_from_shard(shard)) if global_ else self.split_shard(shard)
+        for parameter_name, parameter in parameters.items():
+            log_distributed_tensor(
+                name,
+                parameter,
+                level=level,
+                distributed=distributed,
+                global_=global_,
+                duplicate_groups=(distributed.data_group,),
+                meta=self.get_parameter_meta(parameter_name),
+            )
+
+    def _parameter_range_in_shard(self, parameter_name: str) -> tuple[int, int]:
+        begin = self._index_buffer_to_shard(self._parameter_begins_in_buffer[parameter_name])
+        end = self._index_buffer_to_shard(self._parameter_ends_in_buffer[parameter_name])
+        return begin, end
+
+    def _parameter_global_to_shard(
+        self, global_param: torch.Tensor | SafeTensorSlice, parameter_name: str
+    ) -> torch.Tensor:
+        shard_param = self.get_parameter_meta(parameter_name).global_to_local(global_param).flatten()
+        if self._fsdp_dim.size > 1:
+            shard_param = shard_param[
+                self._index_buffer_to_param(
+                    self._fsdp_dim.rank * self._shard_size, parameter_name
+                ) : self._index_buffer_to_param((self._fsdp_dim.rank + 1) * self._shard_size, parameter_name)
+            ]
+        return shard_param
+
+    def _get_parameter_shard_indices_in_full_weight(self, parameter_name: str, device: torch.device) -> torch.Tensor:
+        """
+        Create an index array for the global parameter, where each entry corresponds to the index
+        where it is located in the shard if it exists, or -1 if it's not in the shard.
+        Used to determine the location of each entry in a different distributed configuration.
+        """
+        parameter_meta = self.get_parameter_meta(parameter_name)
+
+        # Create an empty index for the global parameter.
+        index = torch.full(
+            parameter_meta.global_shape,
+            -1,
+            dtype=torch.int64,
+            device=device,
+        )
+        # Set the shard slice of the global parameter to corresponding indices of the parameter slice of the shard
+        begin, end = self._parameter_range_in_shard(parameter_name)
+        self._parameter_global_to_shard(index, parameter_name).copy_(
+            torch.arange(begin, end, dtype=torch.int64, device=device)
+        )
+        return index
+
+    def _copy_shard_overlaps(
+        self,
+        loaded_fsdp: "FSDP",
+        shards: list[torch.Tensor],
+        loaded_shards: list[torch.Tensor],
+        counter: torch.Tensor,
+        device: torch.device,
+    ) -> None:
+        """
+        See MultiStage._load_partial.
+        TODO: Not intended to work with frozen weights, need to enforce.
+        """
+        index_overlap = [name for name in loaded_fsdp._parameter_metas if name in self._parameter_metas]
+        for name in index_overlap:
+            overlap_index_map = self._parameter_global_to_shard(
+                loaded_fsdp._get_parameter_shard_indices_in_full_weight(name, device), name
+            )
+            overlap_mask = overlap_index_map >= 0
+            overlap_index_map_masked = overlap_index_map[overlap_mask]
+            overlap_count = overlap_mask.sum()
+            begin, end = self._parameter_range_in_shard(name)
+
+            for shard, loaded_shard in zip(shards, loaded_shards):
+                shard[begin:end][overlap_mask] = loaded_shard[overlap_index_map_masked]
+                counter += overlap_count
