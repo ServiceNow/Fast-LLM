@@ -71,7 +71,8 @@ class StageConfig(Config):
         hint=FieldHint.optional,
     )
     store_frozen_weights_in_optimization_precision: bool = Field(
-        default=False,
+        # TODO: Implement and set default to False
+        default=True,
         desc="Store frozen weights in full precision even if not not needed."
         "Allows preserving the precision for saved checkpoints,"
         " at the cost of memory and compute (copy) overheads.",

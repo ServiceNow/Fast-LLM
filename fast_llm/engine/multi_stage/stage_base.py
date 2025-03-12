@@ -5,7 +5,7 @@ import torch
 import torch._dynamo  # noqa
 
 from fast_llm.config import Configurable
-from fast_llm.core.distributed import ProcessGroup, check_parallel_match
+from fast_llm.core.distributed import check_parallel_match
 from fast_llm.engine.base_model.base_model import BaseModel
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
@@ -14,7 +14,7 @@ from fast_llm.engine.multi_stage.config import StageConfig, StageMode
 from fast_llm.engine.multi_stage.fsdp import FSDP
 from fast_llm.engine.optimizer.config import ParamGroup
 from fast_llm.logging import log_generator
-from fast_llm.tensor import ParameterMeta, SafeTensorSlice, TensorMeta
+from fast_llm.tensor import ParameterMeta, SafeTensorSlice
 from fast_llm.utils import Assert, div
 
 logger = logging.getLogger(__name__)
@@ -22,17 +22,14 @@ logger = logging.getLogger(__name__)
 
 class StageBase(Configurable[StageConfig]):
     config_class: typing.ClassVar[type[StageConfig]] = StageConfig
-    _meta_inputs: list[TensorMeta]
-    _meta_outputs: list[TensorMeta]
     _distributed: Distributed
-    _fsdp_group: ProcessGroup
     _mode: StageMode
 
     # _weight_shard: torch.Tensor
     # _grad_shard: torch.Tensor
     # _weight_buffer: torch.Tensor
     # _grad_buffer: torch.Tensor
-    _sequence_parallel_grads: torch.Tensor
+    # _sequence_parallel_grads: torch.Tensor
     # _weight_buffer_local_shard: torch.Tensor
     # _grad_buffer_local_shard: torch.Tensor
     # _parameter_buffers: list[torch.nn.Parameter]
@@ -105,35 +102,9 @@ class StageBase(Configurable[StageConfig]):
     def index(self) -> int:
         return self._index
 
-    # @property
-    # def weight_shard_meta(self) -> TensorMeta:
-    #    return self._weight_shard_meta
-
-    # @property
-    # def grad_shard_meta(self) -> TensorMeta:
-    #    return self._grad_shard_meta
-
-    # @property
-    # def weight_buffer_meta(self) -> TensorMeta:
-    #    return self._weight_buffer_meta
-
-    # @property
-    # def grad_buffer_meta(self) -> TensorMeta:
-    #    return self._grad_buffer_meta
-
-    # @property
-    # def weight_shard(self) -> torch.Tensor:
-    #    # TODO: Avoid this method (needed for tied weights broadcast)
-    #    assert self._is_setup
-    #    assert self._mode.support_forward
-    #    return self._weight_shard
-
-    # @property
-    # def grad_shard(self) -> torch.Tensor:
-    #    # TODO: Avoid this method (needed for tied weights reduce)
-    #    assert self._is_setup
-    #    assert self._mode.support_backward
-    #    return self._grad_shard
+    @property
+    def fsdps(self) -> list[FSDP]:
+        return self._fsdps
 
     @property
     def parameter_count(self) -> int:
@@ -154,20 +125,20 @@ class StageBase(Configurable[StageConfig]):
         self,
         *,
         distributed: Distributed,
-        weight_shard: torch.Tensor | None,
-        grad_shard: torch.Tensor | None,
-        weight_buffer: torch.Tensor | None,
-        grad_buffer: torch.Tensor | None,
+        weight_shards: list[torch.Tensor | None],
+        grad_shards: list[torch.Tensor | None],
+        weight_buffers: list[torch.Tensor | None],
+        grad_buffers: list[torch.Tensor | None],
         mode: StageMode = StageMode.training,
     ) -> None:
         assert not self._is_setup
         assert distributed.config is self._distributed_config
         self._is_setup = True
         self._distributed = distributed
-        self._fsdp_group = self._distributed.data_group
 
-        for fsdp in self._fsdps:
-            # TODO: Adjust
+        for fsdp, weight_shard, grad_shard, weight_buffer, grad_buffer in zip(
+            self._fsdps, weight_shards, grad_shards, weight_buffers, grad_buffers, strict=True
+        ):
             fsdp.setup(
                 mode=mode,
                 fsdp_group=self._distributed.data_group,
@@ -206,7 +177,7 @@ class StageBase(Configurable[StageConfig]):
                 # Ensure a reproducible ordering.
                 sorted_metas = sorted(self._parameter_metas, key=lambda parameter_meta: parameter_meta.tensor_name)
             weight_shards_split = [
-                fsdp.split_shard(fsdp.weight_shard if fsdp.mode.on_device else fsdp.weight_shard_meta)
+                fsdp.split_shard(fsdp.weight_shard if self._mode.on_device else fsdp.weight_shard_meta)
                 for fsdp in self._fsdps
             ]
 
@@ -249,21 +220,25 @@ class StageBase(Configurable[StageConfig]):
     #    return sum(fsdp.reset_shard_pad(shard) for fsdp in self._fsdps)
 
     def get_param_groups(
-        self, optimizer_state_shards: dict[str, torch.Tensor], param_group_cls: type[ParamGroup]
+        self, optimizer_state_shards: dict[str, tuple[torch.Tensor]], param_group_cls: type[ParamGroup]
     ) -> tuple[list[ParamGroup], list[torch.Tensor]]:
         # TODO: Separate model-specific code.
         # TODO: verify optimizer states
         assert self._is_setup
         assert self._mode.support_training
+        assert all(len(state_shards) == len(self._fsdps) for state_shards in optimizer_state_shards.values())
 
         # Get the weight slices and group by optimizer parameters, merging consecutive slices.
         grouped_parameter_slices = {}
-        for fsdp in self._fsdps:
+        param_groups = []
+        for i, fsdp in enumerate(self._fsdps):
             for parameter_name in fsdp.parameter_names:
                 # If needed, chunk the parameter on the first dimension.
                 parameter_meta = fsdp.get_parameter_meta(parameter_name)
+                if not parameter_meta.requires_grad:
+                    continue
                 chunk_size = div(parameter_meta.numel(), len(parameter_meta.lr_scale))
-                buffer_begin = fsdp.parameter_begins_in_buffer[parameter_meta]
+                buffer_begin = fsdp.get_parameter_begin_in_buffer(parameter_meta.tensor_name)
                 for i, lr_scale in enumerate(parameter_meta.lr_scale):
                     begin = fsdp.index_buffer_to_shard(buffer_begin + i * chunk_size)
                     end = fsdp.index_buffer_to_shard(buffer_begin + (i + 1) * chunk_size)
@@ -279,20 +254,20 @@ class StageBase(Configurable[StageConfig]):
                         grouped_parameter_slices[optimizer_params] = []
                     grouped_parameter_slices[optimizer_params].append(slice(begin, end))
 
-        param_groups = [
-            param_group_cls(
-                name=f"wd_{weight_decay}_lr_scale_{lr_scale}",  # noqa
-                params=[self._weight_shard[slice_] for slice_ in slices],  # noqa
-                grads=[self._grad_shard[slice_] for slice_ in slices],  # noqa
-                **{  # noqa
-                    name: [optimizer_state[slice_] for slice_ in slices]
-                    for name, optimizer_state in optimizer_state_shards.items()
-                },
-                weight_decay=None if weight_decay else 0.0,  # noqa
-                lr_scale=lr_scale,  # noqa
-            )
-            for (weight_decay, lr_scale), slices in grouped_parameter_slices.items()
-        ]
+            param_groups += [
+                param_group_cls(
+                    name=f"wd_{weight_decay}_lr_scale_{lr_scale}",  # noqa
+                    params=[self._weight_shard[slice_] for slice_ in slices],  # noqa
+                    grads=[self._grad_shard[slice_] for slice_ in slices],  # noqa
+                    **{  # noqa
+                        name: [optimizer_state[i][slice_] for slice_ in slices]
+                        for name, optimizer_state in optimizer_state_shards.items()
+                    },
+                    weight_decay=None if weight_decay else 0.0,  # noqa
+                    lr_scale=lr_scale,  # noqa
+                )
+                for (weight_decay, lr_scale), slices in grouped_parameter_slices.items()
+            ]
 
         # Get the weight slices to use for grad norm computation, merging consecutive slices.
         grads_for_norm = []
@@ -334,10 +309,11 @@ class StageBase(Configurable[StageConfig]):
         return self._fsdps[self._fsdp_index[parameter_name]].import_state_tensor(parameter_name, shard, tensor)
 
     def _export_shard(
-        self, shard: torch.Tensor, data_type: DataType | None = None
+        self, shards: tuple[torch.Tensor], data_type: DataType | None = None
     ) -> typing.Generator[tuple[str, torch.Tensor], None, None]:
         # TODO: Doesn't work
-        yield from self._fsdps[i].export_shard(shard, self._distributed, data_type)
+        for fsdp, shard in zip(self._fsdps, shards, strict=True):
+            yield from fsdp.export_shard(shard, self._distributed, data_type)
 
     def _get_parameter_metas(self) -> tuple[list[ParameterMeta], list[ParameterMeta]]:
         # Get all the stage parameters,
@@ -351,10 +327,10 @@ class StageBase(Configurable[StageConfig]):
             for name, meta in layer.named_parameters():
                 Assert.custom(isinstance, meta, ParameterMeta)
                 Assert.eq(meta.dtype, self._distributed_config.optimization_dtype.torch)
-                if meta.lr_scale == 0 or not meta.requires_grad:
-                    frozen_metas.append(meta)
-                else:
+                if meta.requires_grad:
                     parameter_metas.append(meta)
+                else:
+                    frozen_metas.append(meta)
 
         return self._reorder_parameter_metas(parameter_metas), self._reorder_parameter_metas(frozen_metas)
 
