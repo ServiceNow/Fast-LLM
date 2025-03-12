@@ -105,6 +105,7 @@ class MultiTokenPredictionLanguageModelHead(LanguageModelHead):
             truncated_input = input_[:, : -self.multi_token_prediction_index, :].contiguous()
         else:
             truncated_input = input_
+        truncated_input = truncated_input.requires_grad_(do_grad)
         with torch.enable_grad():
             ln_output = self.final_norm(truncated_input)
 
