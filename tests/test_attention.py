@@ -53,13 +53,13 @@ def test_varlen_preprocessor():
     # [3,0...10] + [13...15, 0...8] -> [1,12,15,24]
     cumulative_sequences_q = [
         torch.tensor([0, 8, 12, 23, 24], dtype=torch.int32),
-        torch.tensor([0, 9, 12, 24], dtype=torch.int32),
-        torch.tensor([0, 1, 12, 15, 24], dtype=torch.int32),
+        torch.tensor([0, 0, 9, 12, 12, 24], dtype=torch.int32),
+        torch.tensor([0, 0, 0, 1, 12, 12, 15, 24], dtype=torch.int32),
     ]
     cumulative_sequences_k = [
         torch.tensor([0, 8, 12, 23, 24], dtype=torch.int32),
-        torch.tensor([0, 13, 16, 29], dtype=torch.int32),
-        torch.tensor([0, 4, 15, 31, 40]),
+        torch.tensor([0, 8, 21, 24, 35, 48], dtype=torch.int32),
+        torch.tensor([0, 8, 21, 25, 36, 47, 63, 72], dtype=torch.int32),
     ]
     micro_sequence_length = 12
     sequence_length = 36

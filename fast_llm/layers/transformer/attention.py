@@ -345,35 +345,11 @@ class Attention(torch.nn.Module):
         if self._use_flash_attention:
             assert _flash_available
             with set_generator(self._tensor_space.distributed.tp_generator):
-                # By default, sequence_data_parallel > 1 includes KVs from all past tokens and Queries only from tokens in
-                # the current micro-sequence. However, flash_attn_varlen_func expects same number of documents in query and key.
-                # So we slice the KVs to match the number of documents in the query, but make sure to include all tokens past tokens
-                # from the first sample, even if the tokens are not part of this micro-sequence.
                 if (cu_seqlens_q := kwargs.get(TransformerKwargs.cu_seqlens_q, None)) is not None:
                     out_dims = query.size()
                     query = query.view(-1, query.size(-2), query.size(-1))
-                    if key.size(-3) != out_dims[-3]:
-                        start_seq_offset = kwargs.get(TransformerKwargs.start_seq_offset)
-                        # flash_attn_varlen expects same length for query and key
-                        sequence_k_dim = key.size(-3)
-                        sequence_q_dim = out_dims[-3]
-                        key = torch.cat(
-                            [
-                                x[sequence_k_dim - sequence_q_dim - start_seq_offset[idx] :]
-                                for idx, x in enumerate(key)
-                            ],
-                            dim=0,
-                        )
-                        value = torch.cat(
-                            [
-                                x[sequence_k_dim - sequence_q_dim - start_seq_offset[idx] :]
-                                for idx, x in enumerate(value)
-                            ],
-                            dim=0,
-                        )
-                    else:
-                        key = key.view(-1, key.size(-2), key.size(-1))
-                        value = value.view(-1, value.size(-2), value.size(-1))
+                    key = key.view(-1, key.size(-2), key.size(-1))
+                    value = value.view(-1, value.size(-2), value.size(-1))
                     input_ = _flash_attn_varlen_func(
                         query,
                         key,
