@@ -82,6 +82,7 @@ class GPTSampledIndexedDataset(SampledDataset):
         indexed_dataset: GPTIndexedDataset,
         sampling: GPTSamplingData,
     ):
+        # TODO Soham: Add padded sampling here
         assert isinstance(sampling, GPTSamplingData)
         self._indexed_dataset = indexed_dataset
         self._num_samples = sampling.num_samples
