@@ -20,7 +20,7 @@ class MambaConfig(TransformerArchitectureConfig, BaseModelConfig):
     )
     
     state_size: int = Field(
-        default=16,
+        default=64,
         desc="Size of the internal state vector",
         hint=FieldHint.core,
         valid=check_field(Assert.gt, 0),
@@ -99,6 +99,60 @@ class MambaConfig(TransformerArchitectureConfig, BaseModelConfig):
         desc="Default scale for weight initialization. Default: hidden_size**-0.5",
         hint=FieldHint.optional,
         valid=skip_valid_if_none(check_field(Assert.geq, 0)),
+    )
+
+
+    device: str = Field(
+        default="cuda",
+        desc="device",
+        hint=FieldHint.optional,
+    )
+
+    mamba_headdim: int = Field(
+        default=64,
+        desc="headdim",
+        hint=FieldHint.optional,
+    )
+    mamba_ngroups: int = Field(
+        default=1,
+        desc="ngroups",
+        hint=FieldHint.optional,
+    )
+
+    use_low_rank_mamba_proj: bool = Field(
+        default=False,
+        desc="use_low_rank_mamba_proj",
+        hint=FieldHint.optional,
+    )
+
+    use_module_layernorm: bool = Field(
+        default=False,
+        desc="use_module_layernorm",
+        hint=FieldHint.optional,
+    )
+
+    layernorm_epsilon: float = Field(
+        default=1e-5,
+        desc="layernorm_epsilon",
+        hint=FieldHint.optional,
+    )
+
+    rms_norm: bool = Field(
+        default=False,
+        desc="rms_norm",
+        hint=FieldHint.optional,
+    )
+
+    fused_add_norm: bool = Field(
+        default=False,
+        desc="fused_add_norm",
+        hint=FieldHint.optional,
+    )
+
+    residual_in_fp32: bool = Field(
+        default=False,
+        desc="residual_in_fp32",
+        hint=FieldHint.optional,
     )
 
     def _validate(self) -> None:
