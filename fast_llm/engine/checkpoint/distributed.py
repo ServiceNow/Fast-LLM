@@ -93,14 +93,26 @@ class DistributedCheckpointHandler(CheckpointHandler):
 
                         counter = torch.zeros(1, dtype=torch.int64, device=self._model.distributed.device)
                         for loaded_shard_index, loaded_stage in enumerate(loaded_model.stages_on_device.values()):
-                            loaded_shards = (
-                                loaded_shard_split[loaded_shard_index].to(self._model.distributed.device).unbind(0)
+                            loaded_stage_shards = loaded_shard_split[loaded_shard_index].to(
+                                self._model.distributed.device
                             )
-                            for self_shard_index, self_stage in enumerate(self._model.stages_on_device.values()):
-                                self_stage._copy_shard_overlaps(  # noqa
-                                    loaded_stage,
-                                    self_shard_split[self_shard_index].unbind(0),
-                                    loaded_shards,
-                                    counter,
-                                )
+                            for loaded_fsdp, loaded_fsdp_shards in zip(
+                                loaded_stage.fsdps,
+                                loaded_stage_shards.split(loaded_model._fsdp_shard_sizes[loaded_shard_index], 1),
+                                strict=True,
+                            ):
+                                for self_shard_index, self_stage in enumerate(self._model.stages_on_device.values()):
+                                    self_stage_shards = self_shard_split[self_shard_index]
+                                    for self_fsdp, self_fsdp_shards in zip(
+                                        self_stage.fsdps,
+                                        self_stage_shards.split(self._model._fsdp_shard_sizes[self_shard_index], 1),
+                                        strict=True,
+                                    ):
+                                        self_fsdp._copy_shard_overlaps(  # noqa
+                                            loaded_fsdp,
+                                            self_fsdp_shards.unbind(0),
+                                            loaded_fsdp_shards,
+                                            counter,
+                                            self._model.distributed.device,
+                                        )
                         context.mark_as_loaded(counter.item())

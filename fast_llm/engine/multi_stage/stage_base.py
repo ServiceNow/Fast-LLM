@@ -125,16 +125,26 @@ class StageBase(Configurable[StageConfig]):
         self,
         *,
         distributed: Distributed,
-        weight_shards: list[torch.Tensor | None],
-        grad_shards: list[torch.Tensor | None],
-        weight_buffers: list[torch.Tensor | None],
-        grad_buffers: list[torch.Tensor | None],
+        weight_shards: list[torch.Tensor | None] | None,
+        grad_shards: list[torch.Tensor | None] | None,
+        weight_buffers: list[torch.Tensor | None] | None,
+        grad_buffers: list[torch.Tensor | None] | None,
         mode: StageMode = StageMode.training,
     ) -> None:
         assert not self._is_setup
         assert distributed.config is self._distributed_config
+        self._mode = mode
         self._is_setup = True
         self._distributed = distributed
+
+        if weight_shards is None:
+            weight_shards = [None for _ in self._fsdps]
+        if grad_shards is None:
+            grad_shards = [None for _ in self._fsdps]
+        if weight_buffers is None:
+            weight_buffers = [None for _ in self._fsdps]
+        if grad_buffers is None:
+            grad_buffers = [None for _ in self._fsdps]
 
         for fsdp, weight_shard, grad_shard, weight_buffer, grad_buffer in zip(
             self._fsdps, weight_shards, grad_shards, weight_buffers, grad_buffers, strict=True
@@ -257,8 +267,8 @@ class StageBase(Configurable[StageConfig]):
             param_groups += [
                 param_group_cls(
                     name=f"wd_{weight_decay}_lr_scale_{lr_scale}",  # noqa
-                    params=[self._weight_shard[slice_] for slice_ in slices],  # noqa
-                    grads=[self._grad_shard[slice_] for slice_ in slices],  # noqa
+                    params=[fsdp.weight_shard[slice_] for slice_ in slices],  # noqa
+                    grads=[fsdp.grad_shard[slice_] for slice_ in slices],  # noqa
                     **{  # noqa
                         name: [optimizer_state[i][slice_] for slice_ in slices]
                         for name, optimizer_state in optimizer_state_shards.items()
@@ -299,14 +309,15 @@ class StageBase(Configurable[StageConfig]):
                         )
 
     def import_state_tensor(
-        self, parameter_name: str, shard: torch.Tensor, tensor: torch.Tensor | SafeTensorSlice
+        self, parameter_name: str, shards: tuple[torch.Tensor], tensor: torch.Tensor | SafeTensorSlice
     ) -> int:
         """
         Given a global parameter tensor, set the associated slice of a local parameter shard.
         Return the size of the local slice.
         TODO: Doesn't work
         """
-        return self._fsdps[self._fsdp_index[parameter_name]].import_state_tensor(parameter_name, shard, tensor)
+        fsdp_index = self._fsdp_index[parameter_name]
+        return self._fsdps[fsdp_index].import_state_tensor(parameter_name, shards[fsdp_index], tensor)
 
     def _export_shard(
         self, shards: tuple[torch.Tensor], data_type: DataType | None = None

@@ -270,26 +270,26 @@ class MultiStageModel[ConfigType: FastLLMModelConfig](Configurable[ConfigType]):
             shard_index = self._stage_shard_indices.get(stage_index)
             weight_buffer_index = self._weight_buffer_indices.get(stage_index)
             grad_buffer_index = self._grad_buffer_indices.get(stage_index)
-            weight_buffers = (
+            stage_weight_buffers = (
                 weight_buffers[weight_buffer_index][: self._stage_weight_buffer_sizes[weight_buffer_index]].split(
                     self._fsdp_weight_buffer_sizes[weight_buffer_index]
                 )
                 if self._mode.support_forward and weight_buffer_index is not None
                 else None
             )
-            grad_buffers = (
+            stage_grad_buffers = (
                 grad_buffers[grad_buffer_index][: self._stage_grad_buffer_sizes[grad_buffer_index]].split(
                     self._fsdp_grad_buffer_sizes[grad_buffer_index]
                 )
                 if self._mode.support_backward and grad_buffer_index is not None
                 else None
             )
-            weight_shards = (
+            stage_weight_shards = (
                 weight_shard_split[shard_index].split(self._fsdp_shard_sizes[shard_index])
                 if self._mode.on_device and shard_index is not None
                 else None  # noqa
             )
-            grad_shards = (
+            stage_grad_shards = (
                 grad_shard_split[shard_index].split(self._fsdp_shard_sizes[shard_index])  # noqa
                 if self._mode.support_backward and shard_index is not None
                 else None
@@ -301,10 +301,10 @@ class MultiStageModel[ConfigType: FastLLMModelConfig](Configurable[ConfigType]):
             )
             stage.setup(
                 distributed=distributed,
-                weight_shards=weight_shards,
-                grad_shards=grad_shards,
-                weight_buffers=weight_buffers,
-                grad_buffers=grad_buffers,
+                weight_shards=stage_weight_shards,
+                grad_shards=stage_grad_shards,
+                weight_buffers=stage_weight_buffers,
+                grad_buffers=stage_grad_buffers,
                 mode=self._mode if stage_index in self._stages_on_device else StageMode.off_device,
                 is_tied_weight_copy=stage_index in self._stages_on_device and stage_index not in self._stages_owned,
                 weight_buffer_shared_with=weight_buffer_shared_with,

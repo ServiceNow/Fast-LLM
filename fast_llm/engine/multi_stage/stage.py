@@ -38,10 +38,10 @@ class Stage(StageBase):
         self,
         *,
         distributed: Distributed,
-        weight_shards: torch.Tensor | None,
-        grad_shards: torch.Tensor | None,
-        weight_buffers: torch.Tensor | None,
-        grad_buffers: torch.Tensor | None,
+        weight_shards: list[torch.Tensor | None] | None,
+        grad_shards: list[torch.Tensor | None] | None,
+        weight_buffers: list[torch.Tensor | None] | None,
+        grad_buffers: list[torch.Tensor | None] | None,
         mode: StageMode = StageMode.training,
         is_tied_weight_copy: bool = False,
         weight_buffer_shared_with: list["Stage"],
@@ -153,7 +153,9 @@ class Stage(StageBase):
                 fsdp.log_shard(
                     name="gradient",
                     shard=fsdp.grad_shard,
+                    distributed=self._distributed,
                     level=self._config.debug_all_param_gradients,
+                    global_=self._config.debug_global_tensors,
                 )
 
     @property

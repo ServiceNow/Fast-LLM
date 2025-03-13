@@ -341,7 +341,7 @@ class FSDP:
         assert self._mode.support_backward
         if not self._requires_grad:
             return
-        for buffer, meta in zip(self._parameter_buffers, self._parameter_metas.values()):
+        for buffer, meta in zip(self._parameter_buffers.values(), self._parameter_metas.values()):
             if buffer.param_grad_is_zero:  # noqa
                 assert self.is_tied_weight_copy or meta.allow_no_grad, meta
                 triton_fill(buffer.grad_buffer, 0)  # noqa

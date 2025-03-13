@@ -40,8 +40,13 @@ class SafeLoad:
         # Reset and count shard pads
         for shard in self._model.state_shard[: self._num_shards]:
             shard_split = shard.split(self._model.stage_shard_sizes, 0)
-            for stage, stage_shard in zip(self._model.stages_on_device.values(), shard_split):
-                self._loaded += stage.reset_shard_pad(stage_shard)
+            for shard_index, (stage, stage_shard) in enumerate(
+                zip(self._model.stages_on_device.values(), shard_split)
+            ):
+                for fsdp, fsdp_shard in zip(
+                    stage.fsdps, stage_shard.split(self._model._fsdp_shard_sizes[shard_index]), strict=True
+                ):
+                    self._loaded += fsdp.reset_shard_pad(fsdp_shard)
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
@@ -92,30 +97,35 @@ class SafeLoad:
             global_total, local_total = 0, 0
             for shard_name, shard_ in zip(self._model.state_shard_names[: self._num_shards], self._self_shard):
                 shard_split = shard_.split(self._model.stage_shard_sizes, 0)
-                for stage, shard in zip(self._model.stages_on_device.values(), shard_split):
-                    buffer = stage._reconstruct_from_shard(shard)
-                    for i, parameter in enumerate(stage._split_buffer(buffer)):
-                        missing_for_param = parameter.isnan().sum().item()
-                        if missing_for_param > 0:
-                            global_total += missing_for_param
-                            local_values = stage._split_shard(shard)[i]
-                            local_missing_for_param = local_values.isnan().sum().item()
-                            local_total += local_missing_for_param
-                            errors.append(
-                                f"{missing_for_param:,} values missing out of {parameter.numel():,} for parameter {stage.parameter_names[i]} in stage {stage.index}, shard {shard_name}"
-                                f" (locally {local_missing_for_param:,} out of {local_values.numel():,})"
+                for shard_index, (stage, stage_shard) in enumerate(
+                    zip(self._model.stages_on_device.values(), shard_split)
+                ):
+                    for fsdp, fsdp_shard in zip(
+                        stage.fsdps, stage_shard.split(self._model._fsdp_shard_sizes[shard_index]), strict=True
+                    ):
+                        buffer = fsdp.reconstruct_from_shard(fsdp_shard)
+                        for parameter_name, parameter in fsdp.split_buffer(buffer).items():
+                            missing_for_param = parameter.isnan().sum().item()
+                            if missing_for_param > 0:
+                                global_total += missing_for_param
+                                local_values = fsdp.split_shard(fsdp_shard)[parameter_name]
+                                local_missing_for_param = local_values.isnan().sum().item()
+                                local_total += local_missing_for_param
+                                errors.append(
+                                    f"{missing_for_param:,} values missing out of {parameter.numel():,} for parameter {parameter_name} in stage {stage.index}, shard {shard_name}"
+                                    f" (locally {local_missing_for_param:,} out of {local_values.numel():,})"
+                                )
+                        missing_for_pad = buffer[-fsdp._global_pad :].isnan().sum().item()
+                        if missing_for_pad > 0:
+                            global_total += missing_for_pad
+                            local_missing_for_pad = (
+                                fsdp_shard[-fsdp._shard_pad :].isnan().sum().item() if fsdp._shard_pad > 0 else 0
                             )
-                    missing_for_pad = buffer[-stage._global_pad :].isnan().sum().item()
-                    if missing_for_pad > 0:
-                        global_total += missing_for_pad
-                        local_missing_for_pad = (
-                            shard[-stage._shard_pad :].isnan().sum().item() if stage._shard_pad > 0 else 0
-                        )
-                        local_total += local_missing_for_pad
-                        errors.append(
-                            f"{missing_for_pad:,} values missing out of {stage._global_pad:,} for padding in stage {stage.index}, shard {shard_name}"
-                            f" (locally {local_missing_for_pad:,} out of {stage._shard_pad:,})"
-                        )
+                            local_total += local_missing_for_pad
+                            errors.append(
+                                f"{missing_for_pad:,} values missing out of {fsdp._global_pad:,} for padding in stage {stage.index}, shard {shard_name}"
+                                f" (locally {local_missing_for_pad:,} out of {fsdp._shard_pad:,})"
+                            )
             if global_total != global_missing:
                 errors.append(
                     f"Incorrect global breakdown of missing state entries (expected {global_missing:,}, got {global_total:,})"
