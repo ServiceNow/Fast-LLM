@@ -17,7 +17,7 @@ from fast_llm.engine.config_utils.run import log_main_rank
 from fast_llm.utils import Assert
 
 try:
-    from fast_llm.csrc.data import build_sample_idx  # noqa
+    from fast_llm.csrc.data import build_sample_idx, build_sample_idx_padded  # noqa
 
     _extension_available = True
 except ImportError:
@@ -373,6 +373,7 @@ class LegacyGPTSampledIndexedDataset(SampledDataset):
         self._num_samples = sampling.num_samples
         self._sequence_length = sampling.sequence_length
         self._config = sampling.config
+        self._padding = sampling.padding
 
         if sampling.cache_directory is None:
             log_main_rank(
@@ -402,7 +403,64 @@ class LegacyGPTSampledIndexedDataset(SampledDataset):
             sampling.distributed.config.rank == sampling.get_next_rank()
             and not (self._doc_idx.exists() and self._sample_idx.exists() and self._shuffle_idx.exists())
         ):
-            self._sample()
+            if self._padding:
+                self._sample_padded()
+            else:
+                self._sample()
+
+    def _sample_padded(self) -> None:
+        """
+        Create sample_idx with padding in mind. This is similar to the original sampling, but avoids document truncations.
+        If the entire document does not fit in the current sequence, we end the current sequence and move the document to
+        the next sequence. If the document is longer than sequence_length + 1, we skip it altogether to avoid incomplete/truncated
+        documents in training.
+        """
+        logger.info(f" > Sampling dataset {self._indexed_dataset.name} with padding ...")
+        document_sizes = self._indexed_dataset.get_document_sizes()
+        length_filter = document_sizes <= self._sequence_length + 1
+        document_idx = np.arange(document_sizes.size)[length_filter]
+        document_sizes = document_sizes[length_filter]
+        num_documents = document_sizes.size
+        num_tokens = document_sizes.sum()
+        np_rng = np.random.RandomState(seed=self._config.seed)
+
+        num_epochs = math.ceil((self._sequence_length * self._num_samples + 1) / num_tokens)
+        main_epochs_samples = ((num_epochs - 1) * num_tokens - 1) // self._sequence_length
+        last_epoch_samples = self._num_samples - main_epochs_samples
+        samples_per_epoch = (num_tokens - 1) // self._sequence_length
+        separate_last_epoch = num_epochs > 1 and last_epoch_samples < 0.8 * samples_per_epoch
+
+        doc_idx = np.tile(document_idx, num_epochs)
+
+        if separate_last_epoch:
+            np_rng.shuffle(doc_idx[:-num_documents])
+            np_rng.shuffle(doc_idx[-num_documents:])
+        else:
+            np_rng.shuffle(doc_idx)
+
+        sample_idx = build_sample_idx_padded(
+            document_sizes,
+            doc_idx,
+            self._sequence_length,
+            num_epochs,
+            num_tokens,
+            True,
+        )
+
+        total_size = sample_idx.shape[0] - 1
+        shuffle_idx = np.arange(
+            0, total_size, dtype=np.int64 if total_size >= (np.iinfo(np.uint32).max - 1) else np.uint32
+        )
+        if separate_last_epoch:
+            np_rng.shuffle(shuffle_idx[:main_epochs_samples])
+            np_rng.shuffle(shuffle_idx[main_epochs_samples:])
+        else:
+            np_rng.shuffle(shuffle_idx)
+
+        Assert.geq(len(shuffle_idx), self._num_samples)
+        self._doc_idx.save(doc_idx)
+        self._sample_idx.save(sample_idx)
+        self._shuffle_idx.save(shuffle_idx[: self._num_samples])
 
     def _sample(self) -> None:
         """

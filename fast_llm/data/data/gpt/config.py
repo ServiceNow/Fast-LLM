@@ -61,6 +61,11 @@ class GPTDataConfig(DataConfig, GPTLegacyConfig):
         desc="Read and use loss masking spans from the dataset, if present.",
         hint=FieldHint.feature,
     )
+    padding: bool = Field(
+        default=False,
+        desc="If True, pad packed sequences instead of adding a new truncated document",
+        hint=FieldHint.feature,
+    )
 
     def _validate(self) -> None:
         if not self.datasets:
