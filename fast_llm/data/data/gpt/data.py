@@ -111,6 +111,7 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
                     vocab_size=self._vocab_size,
                     tokenizer=self._tokenizer,
                     use_document_boundaries=self._use_document_boundaries,
+                    padding=self._config.padding,
                 )
                 dataset = self._config.datasets[phase].build_and_sample(sampling)
                 self._datasets[phase] = DatasetMonitor(dataset, self._config.data_sample_warn_time_ms)
