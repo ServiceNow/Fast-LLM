@@ -271,15 +271,15 @@ class MultiStageModel[ConfigType: FastLLMModelConfig](Configurable[ConfigType]):
             weight_buffer_index = self._weight_buffer_indices.get(stage_index)
             grad_buffer_index = self._grad_buffer_indices.get(stage_index)
             stage_weight_buffers = (
-                weight_buffers[weight_buffer_index][: self._stage_weight_buffer_sizes[weight_buffer_index]].split(
-                    self._fsdp_weight_buffer_sizes[weight_buffer_index]
+                weight_buffers[weight_buffer_index][: self._stage_weight_buffer_sizes[stage_index]].split(
+                    self._fsdp_weight_buffer_sizes[stage_index]
                 )
                 if self._mode.support_forward and weight_buffer_index is not None
                 else None
             )
             stage_grad_buffers = (
-                grad_buffers[grad_buffer_index][: self._stage_grad_buffer_sizes[grad_buffer_index]].split(
-                    self._fsdp_grad_buffer_sizes[grad_buffer_index]
+                grad_buffers[grad_buffer_index][: self._stage_grad_buffer_sizes[stage_index]].split(
+                    self._fsdp_grad_buffer_sizes[stage_index]
                 )
                 if self._mode.support_backward and grad_buffer_index is not None
                 else None

@@ -183,15 +183,18 @@ class StageBase(Configurable[StageConfig]):
                 log_generator("PP init generator before reset", self._distributed.pp_init_generator)
                 log_generator("TP init generator before reset", self._distributed.tp_init_generator)
 
-            if self._distributed_config.reproducible_init:
-                # Ensure a reproducible ordering.
-                sorted_metas = sorted(self._parameter_metas, key=lambda parameter_meta: parameter_meta.tensor_name)
+            # Ensure a reproducible ordering.
+            metas = (
+                sorted(self._parameter_metas, key=lambda parameter_meta: parameter_meta.tensor_name)
+                if self._distributed_config.reproducible_init
+                else self._parameter_metas
+            )
             weight_shards_split = [
                 fsdp.split_shard(fsdp.weight_shard if self._mode.on_device else fsdp.weight_shard_meta)
                 for fsdp in self._fsdps
             ]
 
-            for meta in sorted_metas:
+            for meta in metas:
                 fsdp = self._fsdps[fsdp_index := self._fsdp_index[meta.tensor_name]]
                 parameter = weight_shards_split[fsdp_index][meta.tensor_name]
                 # Multi-gpu init may be different because of TP or FSDP (different shape), or PP (not on device)
