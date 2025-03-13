@@ -421,16 +421,15 @@ class LegacyGPTSampledIndexedDataset(SampledDataset):
         """
         Create sample_idx with padding in mind. This is similar to the original sampling, but avoids document truncations.
         If the entire document does not fit in the current sequence, we end the current sequence and move the document to
-        the next sequence. If the document is longer than sequence_length + 1, we skip it altogether to avoid incomplete/truncated
-        documents in training.
+        the next sequence. Skip all documents longer than sequence_length + 1 to avoid incomplete/truncated documents in training.
         """
         logger.info(f" > Sampling dataset {self._indexed_dataset.name} with padding ...")
         document_sizes = self._indexed_dataset.get_document_sizes()
         length_filter = document_sizes <= self._sequence_length + 1
         document_idx = np.arange(document_sizes.size)[length_filter]
-        document_sizes = document_sizes[length_filter]
-        num_documents = document_sizes.size
-        num_tokens = document_sizes.sum()
+        filtered_document_sizes = document_sizes[length_filter]
+        num_documents = filtered_document_sizes.size
+        num_tokens = filtered_document_sizes.sum()
         np_rng = np.random.RandomState(seed=self._config.seed)
 
         num_epochs = math.ceil((self._sequence_length * self._num_samples + 1) / num_tokens)
@@ -534,18 +533,34 @@ class LegacyGPTSampledIndexedDataset(SampledDataset):
         # Get the shuffled index.
         shuffled_idx = self._shuffle_idx[idx]
         # Start and end documents and offsets.
-        doc_f, offset_f = self._sample_idx[shuffled_idx]
-        doc_l, offset_l = self._sample_idx[shuffled_idx + 1]
-        sample_list = [
-            self._indexed_dataset.get(
-                self._doc_idx[doc].item(),
-                offset=(doc == doc_f) * offset_f,
-                length=offset_l + 1 - (doc == doc_f) * offset_f if doc == doc_l else None,
-                use_loss_masking_spans=self._config.use_loss_masking_spans,
+        if self._padding:
+            doc_f, num_docs = self._sample_idx[shuffled_idx]
+            sample_list = [
+                self._indexed_dataset.get(
+                    self._doc_idx[doc].item(),
+                    offset=0,
+                    length=None,
+                    use_loss_masking_spans=self._config.use_loss_masking_spans,
+                )
+                for doc in range(doc_f, doc_f + num_docs)
+            ]
+            token_ids = np.concatenate([sample.token_ids for sample in sample_list], dtype=np.int64)
+            token_ids = np.concatenate(
+                [token_ids, np.array([-100] * (self._sequence_length + 1 - len(token_ids)), dtype=token_ids.dtype)]
             )
-            for doc in range(doc_f, doc_l + 1)
-        ]
-        token_ids = np.concatenate([sample.token_ids for sample in sample_list], dtype=np.int64)
+        else:
+            doc_f, offset_f = self._sample_idx[shuffled_idx]
+            doc_l, offset_l = self._sample_idx[shuffled_idx + 1]
+            sample_list = [
+                self._indexed_dataset.get(
+                    self._doc_idx[doc].item(),
+                    offset=(doc == doc_f) * offset_f,
+                    length=offset_l + 1 - (doc == doc_f) * offset_f if doc == doc_l else None,
+                    use_loss_masking_spans=self._config.use_loss_masking_spans,
+                )
+                for doc in range(doc_f, doc_l + 1)
+            ]
+            token_ids = np.concatenate([sample.token_ids for sample in sample_list], dtype=np.int64)
         Assert.eq(len(token_ids), self._sequence_length + 1)
 
         if self._config.use_loss_masking_spans:

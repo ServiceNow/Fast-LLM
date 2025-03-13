@@ -71,7 +71,6 @@ class GPTSamplingData(SamplingData):
     sequence_length: int
     vocab_size: int
     tokenizer: "Tokenizer"
-    use_document_boundaries: bool = False
     padding: bool = False
 
 
