@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 def calculate_normalized_average_entropy(probs: torch.Tensor) -> torch.Tensor:
     """
     Calculates routing entropy for each token, then averages over all tokens.
-    If low, means a lot of mass is put on a single expert, which can indicate collapse.
+    If low, means a lot of mass is put on a single expert in all tokens, which can indicate collapse or specialization.
     """
     n_experts = probs.size(-1)
     entropy_values = entropy(probs)
@@ -45,15 +45,15 @@ def entropy(probs: torch.Tensor) -> torch.Tensor:
 def calculate_mutual_information(probs: torch.Tensor) -> torch.Tensor:
     """
     Calculates the difference between the entropy of the average routing and
-    the average routing entropy. If low, means that routing is not informative.
+    the average routing entropy, we average across all tokens of all examples in the batch.
+    If low, means that routing is not informative.
     """
-    average_routing = torch.mean(probs, dim=1)  # Average over tokens
-    entropy_avg_routing = entropy(average_routing).mean()  # H[E[X]], mean over batch
-    entropy_routing = entropy(probs).mean()  # E[H[X]]
+    n_experts = probs.size(-1)
+    average_routing = torch.mean(probs.view(-1, n_experts), dim=0)  # Average over tokens
+    entropy_avg_routing = entropy(average_routing) /  torch.log(torch.tensor(n_experts, dtype=probs.dtype))  # H[E[X]]
+    entropy_routing = calculate_normalized_average_entropy(probs)  # E[H[X]]
 
-    return (entropy_avg_routing - entropy_routing) / torch.log(
-        torch.tensor(probs.size(-1), dtype=probs.dtype)
-    )  # Normalize
+    return entropy_avg_routing - entropy_routing
 
 
 class MixtureOfExpertMLP(MLPBase):

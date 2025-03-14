@@ -54,7 +54,7 @@ def test_diversity_entropy():
     norm_entropy = calculate_normalized_average_entropy(diverse_probs)
     mutual_info = calculate_mutual_information(diverse_probs)
     assert torch.isclose(norm_entropy, torch.tensor(0.0), atol=1e-1), f"Expected 0.0, got {norm_entropy}"
-    assert torch.isclose(mutual_info, torch.tensor(0.75), atol=1e-1), f"Expected 1.0, got {mutual_info}"
+    assert torch.isclose(mutual_info, torch.tensor(0.9), atol=1e-1), f"Expected 1.0, got {mutual_info}"
 
 
 def test_calculate_normalized_average_entropy():
