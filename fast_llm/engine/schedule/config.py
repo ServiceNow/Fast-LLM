@@ -61,11 +61,6 @@ class BatchConfig(Config):
         hint=FieldHint.derived,
         valid=check_field(Assert.gt, 0),
     )
-    document_aware_sequences: bool = Field(
-        default=False,
-        desc="Bounds attention to within a document in a packed sequence with multiple documents.",
-        hint=FieldHint.feature,
-    )
     _distributed: DistributedConfig = Field(
         init=False,
         desc="Pointer to a distributed configuration, required to know the data-parallel split of the batch.",

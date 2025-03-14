@@ -478,6 +478,11 @@ class TransformerConfig(TransformerArchitectureConfig, BaseModelConfig):
     use_flash_attention: bool = Field(
         default=True, desc="Enable Flash Attention if possible.", hint=FieldHint.optional
     )
+    isolate_document_context: bool = Field(
+        default=False,
+        desc="Applies attention mask to tokens from other documents in the packed sequence.",
+        hint=FieldHint.feature,
+    )
     window_size: int | None = Field(
         default=None,
         desc="Size of the attention sliding window. Warning: this parameter is not part of the architecture and must be redefined when loading a pretrained model.",

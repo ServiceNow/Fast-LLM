@@ -20,7 +20,7 @@ class GPTTrainer[ConfigType: GPTTrainerConfig](Trainer[ConfigType]):
             distributed_config=self._config.model.distributed,
             vocab_size=self._config.model.base_model.vocab_size,
             max_sequence_length=self._config.batch.sequence_length,
-            document_aware_sequences=self._config.batch.document_aware_sequences,
+            use_document_boundaries=self._config.model.base_model.transformer.isolate_document_context,
         )
 
     def get_tflops(self, phase: PhaseType, elapsed_time_per_iteration) -> tuple[int, int]:
