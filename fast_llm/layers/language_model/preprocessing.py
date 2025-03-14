@@ -37,13 +37,23 @@ class PositionEmbeddingPreprocessor:
         Assert.leq(sequence_length, self._config.num_absolute_position_embeddings)
         self._position_ids = torch.arange(
             0, sequence_length, device=self._tensor_space.distributed.device, dtype=torch.int64
-        )
+        ).unsqueeze(0)
 
     def preprocess(self, kwargs: dict[str, typing.Any]) -> None:
         sequence_k = kwargs[TransformerKwargs.sequence_k_dim].size
-        kwargs[LanguageModelKwargs.position_ids] = self._position_ids[
-            sequence_k - kwargs[TransformerKwargs.sequence_q_dim].size : sequence_k
-        ].unsqueeze(int(kwargs[TransformerKwargs.sequence_first]))
+        sequence_q = kwargs[TransformerKwargs.sequence_q_dim].size
+        if (sequence_lengths := kwargs.get(TransformerKwargs.sequence_lengths)) is not None:
+            position_ids = torch.stack(
+                [torch.cat([torch.arange(x) for x in sample_lens]) for sample_lens in sequence_lengths]
+            ).to(self._tensor_space.distributed.device, dtype=torch.int64)
+            position_ids = position_ids[:, sequence_k - sequence_q : sequence_k]
+            if kwargs[TransformerKwargs.sequence_first]:
+                position_ids = position_ids.transpose(0, 1)
+            kwargs[LanguageModelKwargs.position_ids] = position_ids
+        else:
+            kwargs[LanguageModelKwargs.position_ids] = self._position_ids[
+                sequence_k - sequence_q : sequence_k
+            ].unsqueeze(int(kwargs[TransformerKwargs.sequence_first]))
 
     def preprocess_meta(self, kwargs: dict[str, typing.Any]) -> None:
         # Position embeddings will be broadcast.

@@ -16,6 +16,14 @@ from tests.data.common import (
     validate_indexed_dataset_sampling,
 )
 
+try:
+    from fast_llm.csrc.data import build_sample_idx_padded  # noqa
+
+    _extension_available = True
+except ImportError:
+    _extension_available = False
+
+
 GPT_MEMMAP_SAMPLES = [
     [4709, 819, 79, 207, 277, 1790],
     [1790, 80, 6506, 1735, 542, 88],
@@ -126,3 +134,17 @@ def test_gpt_sample(seed, shuffle):
             # Check that the sequence is independent of `num_sample`.
             Assert.all_equal(samples, previous_samples[: len(samples)])
         previous_samples = samples
+
+
+@pytest.mark.skipif(not _extension_available, reason="CPP Extension not available")
+def test_build_idx_sample_padded():
+    sizes = np.array([4, 1, 3, 5, 1, 2, 2], dtype=np.int32)
+    doc_idx = np.array([2, 1, 0, 3, 4, 5, 6], dtype=np.int32)
+    sequence_length = 4
+    num_epochs = 1
+    tokens_per_epoch = 16
+    # doc indices for packed sequences:
+    # [2, 1], [0], [3], [4, 5, 6] i.e., packed sizes: [3, 1], [4], [5], [1, 2, 2]
+    expected_sample_idx = [[0, 2], [2, 1], [3, 1], [4, 3]]
+    sample_idx = build_sample_idx_padded(sizes, doc_idx, sequence_length, num_epochs, tokens_per_epoch, True)
+    Assert.all_equal(sample_idx, expected_sample_idx)
