@@ -54,6 +54,7 @@ class MultiTokenPredictionLanguageModelHead(LanguageModelHead):
         multi_token_prediction_index: int,
     ):
         self.multi_token_prediction_index = multi_token_prediction_index
+        self.is_last_head = self.multi_token_prediction_index == config.num_multi_token_prediction_heads - 1
         super().__init__(config, tensor_space)
         self.loss_name = LanguageModelLossNames.multi_token_prediction_loss(multi_token_prediction_index)
         # TODO MTP: Handle SP logits and CE splits
@@ -87,12 +88,15 @@ class MultiTokenPredictionLanguageModelHead(LanguageModelHead):
         language_model_loss = self._forward(transformer_layer_output, kwargs, losses)
         if language_model_loss is not None:
             losses[self.loss_name].append(language_model_loss)
-        # TODO MTP: What happens for the last MTP-head?
-        # Backward hook to compute the gradient of the loss
-        shared_hidden = AuxiliaryLoss.apply(shared_hidden, language_model_loss, 1.0)
-        # TODO: Return the model output when needed.
-        # MTP: Return shared_hidden to be used by the next head.
-        return shared_hidden
+        if self.is_last_head:
+            # Last layer should return the loss for backward.
+            return language_model_loss
+        else:
+            # Backward hook to compute the gradient of the loss
+            shared_hidden = AuxiliaryLoss.apply(shared_hidden, language_model_loss, 1.0)
+            # TODO: Return the model output when needed.
+            # MTP: Return shared_hidden to be used by the next head.
+            return shared_hidden
 
     def _forward_backward(
         self, input_: torch.Tensor, kwargs: dict, losses: dict | None = None
