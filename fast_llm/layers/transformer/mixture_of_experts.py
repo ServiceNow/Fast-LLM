@@ -25,6 +25,30 @@ from fast_llm.utils import Assert
 
 logger = logging.getLogger(__name__)
 
+def calculate_normalized_average_entropy(probs: torch.Tensor) -> torch.Tensor:
+    '''
+    Calculates routing entropy for each token, then averages over all tokens.
+    If low, means a lot of mass is put on a single expert, which can indicate collapse.
+    '''
+    n_experts = probs.size(-1)
+    entropy_values = entropy(probs)
+    average_entropy = entropy_values.mean()  # Average over batch and tokens
+    return average_entropy / torch.log(torch.tensor(n_experts, dtype=probs.dtype))
+
+def entropy(probs: torch.Tensor) -> torch.Tensor:
+    probs = torch.clamp(probs, min=1e-9)  # Avoid log(0)
+    return -torch.sum(probs * torch.log(probs), dim=-1)
+
+def calculate_mutual_information(probs: torch.Tensor) -> torch.Tensor:
+    '''
+    Calculates the difference between the entropy of the average routing and 
+    the average routing entropy. If low, means that routing is not informative.
+    '''
+    average_routing = torch.mean(probs, dim=1)  # Average over tokens
+    entropy_avg_routing = entropy(average_routing).mean()  # H[E[X]], mean over batch
+    entropy_routing = entropy(probs).mean()  # E[H[X]]
+    
+    return (entropy_avg_routing - entropy_routing) / torch.log(torch.tensor(probs.size(-1), dtype=probs.dtype))  # Normalize
 
 class MixtureOfExpertMLP(MLPBase):
     """
@@ -111,6 +135,7 @@ class MixtureOfExpertMLP(MLPBase):
         else:
             raise NotImplementedError(self._routing_type)
 
+
         if self._debug_mode:
             # To log all ranks set `global_=False`
             self._debug_log(scores, "Router scores", TransformerDimNames.top_experts, kwargs)
@@ -174,6 +199,20 @@ class MixtureOfExpertMLP(MLPBase):
         scores = torch.softmax(top_logits, dim=-1, dtype=torch.float32)
         if losses is not None or (self.training and grad_scale is not None):
             probs = torch.softmax(logits, dim=-1, dtype=torch.float32)
+
+            # Calculate and log entropy and mutual information
+            entropy = calculate_normalized_average_entropy(probs)
+            mutual_info = calculate_mutual_information(probs)
+            
+            # Store these metrics
+            if "router_entropy" not in losses:
+                losses["router_entropy"] = []
+            if "router_mutual_info" not in losses:
+                losses["router_mutual_info"] = []
+                
+            losses["router_entropy"].append(entropy.detach())
+            losses["router_mutual_info"].append(mutual_info.detach())
+
             mask = torch.nn.functional.one_hot(top_experts, num_classes=self._num_unshared_experts).sum(dim=1)
             # Auxiliary loss, corresponding to the sum of probabilities for the top experts.
             # In the optimal case (uniform distribution), loss = experts_per_token / num_experts.

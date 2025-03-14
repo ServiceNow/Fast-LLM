@@ -74,6 +74,8 @@ class TransformerKwargs:
 class TransformerLossNames:
     load_balancing_loss = "load_balancing_loss"
     router_z_loss = "router_z_loss"
+    router_entropy = "router_entropy"
+    router_mutual_info = "router_mutual_info"
 
 
 class RotaryEmbeddingType(str, enum.Enum):

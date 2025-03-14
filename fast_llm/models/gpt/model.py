@@ -308,6 +308,22 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                         count=self._config.transformer.num_layers,
                     )
                 )
+            # Add new metrics
+            loss_defs.append(
+                LossDef(
+                    name="router_entropy",
+                    formatted_name="router entropy",
+                    count=self._config.transformer.num_layers,
+                )
+            )
+            loss_defs.append(
+                LossDef(
+                    name="router_mutual_info",
+                    formatted_name="router mutual info",
+                    count=self._config.transformer.num_layers,
+                )
+            )
+            
         if self._config.logit_z_loss:
             LossDef(name=LanguageModelLossNames.z_loss, formatted_name="logit z loss", count=1)
         return loss_defs
