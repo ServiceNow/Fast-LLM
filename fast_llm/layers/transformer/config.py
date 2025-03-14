@@ -59,6 +59,11 @@ class TransformerKwargs:
     rotary_freq_k = "rotary_freq_k"
     attention_mask = "attention_mask"
     attention_mask_value = "attention_mask_value"
+    sequence_lengths = "sequence_lengths"
+    cu_seqlens_q = "cu_seqlens_q"
+    cu_seqlens_k = "cu_seqlens_k"
+    max_seqlen_q = "max_seqlen_q"
+    max_seqlen_k = "max_seqlen_k"
     # TODO: Review these
     presents = "presents"
     past_key_values = "past_key_values"
@@ -472,6 +477,11 @@ class TransformerConfig(TransformerArchitectureConfig, BaseModelConfig):
     # Use flash attention if possible (fp16 or bf16)
     use_flash_attention: bool = Field(
         default=True, desc="Enable Flash Attention if possible.", hint=FieldHint.optional
+    )
+    cross_document_attention: bool = Field(
+        default=True,
+        desc="Applies attention to tokens from other documents in the packed sequence. Set to False for masking attention to other documents.",
+        hint=FieldHint.feature,
     )
     window_size: int | None = Field(
         default=None,
