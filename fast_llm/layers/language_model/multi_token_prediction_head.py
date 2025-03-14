@@ -5,12 +5,17 @@ from torch._C._distributed_c10d import ReduceOp  # noqa
 
 from fast_llm.engine.config_utils.tensor_space import DefaultDimNames, TensorSpace
 from fast_llm.engine.distributed.config import DistributedDimNames
+from fast_llm.layers.common.auxiliary_loss import AuxiliaryLoss
 from fast_llm.layers.language_model.config import LanguageModelBaseConfig, LanguageModelKwargs, LanguageModelLossNames
 from fast_llm.layers.language_model.embedding import WORD_EMBEDDINGS_WEIGHT
 from fast_llm.layers.language_model.head import OUTPUT_WEIGHTS, LanguageModelHead
 from fast_llm.layers.transformer.config import TransformerKwargs
 from fast_llm.layers.transformer.transformer import TransformerLayer
 from fast_llm.tensor import TensorMeta
+
+
+def grad_is_context_sum(grad_output: torch.Tensor, context: torch.Tensor) -> torch.Tensor:  # noqa
+    return grad_output + context
 
 
 class MultiTokenPredictionTransformerLayer(TransformerLayer):
@@ -56,8 +61,6 @@ class MultiTokenPredictionLanguageModelHead(LanguageModelHead):
         assert not self._sequence_parallel_logits, "Sequence parallel logits not supported for multi-token prediction."
         assert not self._cross_entropy_splits, "Cross-entropy splits not supported for multi-token prediction."
 
-        # TODO MTP: Handle tied output weights
-
     def _should_init_output_weights(self) -> bool:
         if self.multi_token_prediction_index > 0:
             return False
@@ -84,6 +87,9 @@ class MultiTokenPredictionLanguageModelHead(LanguageModelHead):
         language_model_loss = self._forward(transformer_layer_output, kwargs, losses)
         if language_model_loss is not None:
             losses[self.loss_name].append(language_model_loss)
+        # TODO MTP: What happens for the last MTP-head?
+        # Backward hook to compute the gradient of the loss
+        shared_hidden = AuxiliaryLoss.apply(shared_hidden, language_model_loss, 1.0)
         # TODO: Return the model output when needed.
         # MTP: Return shared_hidden to be used by the next head.
         return shared_hidden
@@ -100,13 +106,12 @@ class MultiTokenPredictionLanguageModelHead(LanguageModelHead):
             labels = split_op(labels, self._tensor_space.distributed.tensor_group, 0)
         do_grad = labels is not None and self.training
         input_ = input_.detach().requires_grad_(do_grad)
-        # MTP: truncate the input
-        if self.multi_token_prediction_index > 0:
-            truncated_input = input_[:, : -self.multi_token_prediction_index, :].contiguous()
-        else:
-            truncated_input = input_
-        truncated_input = truncated_input.requires_grad_(do_grad)
         with torch.enable_grad():
+            # MTP: truncate the input
+            if self.multi_token_prediction_index > 0:
+                truncated_input = input_[:, : -self.multi_token_prediction_index, :].contiguous()
+            else:
+                truncated_input = input_
             ln_output = self.final_norm(truncated_input)
 
         grad_output = kwargs[TransformerKwargs.grad_output] / (
