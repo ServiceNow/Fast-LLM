@@ -31,14 +31,15 @@ except ImportError:
     selective_state_update = None
 
 try:
-    from ops.triton.layernorm import RMSNorm, layer_norm_fn, rms_norm_fn
+    from ops.triton.layernorm import layer_norm_fn, rms_norm_fn
 except ImportError:
-    RMSNorm, layer_norm_fn, rms_norm_fn = None, None, None
+    layer_norm_fn, rms_norm_fn = None, None
 
+from fast_llm.layers.common.normalization import LayerNorm, RMSNorm
 from mamba_layer import MambaLayer
 from mamba2_layer import Mamba2Layer
 from fast_llm.layers.ssm.config import MambaConfig
-
+from fast_llm.engine.config_utils.tensor_space import TensorDim
 
 class MambaBlock(nn.Module):
     def __init__(
@@ -53,13 +54,13 @@ class MambaBlock(nn.Module):
         if config.use_module_layernorm and not config.rms_norm:
             self.norm = norm_cls
         else:
-            self.norm = norm_cls(config.hidden_size)
+            self.norm = norm_cls(TensorDim("D_model", config.hidden_size))
         if self.fused_add_norm:
             assert RMSNorm is not None, "RMSNorm import fails"
             assert isinstance(
-                self.norm, (nn.LayerNorm, RMSNorm)
+                self.norm, (LayerNorm, RMSNorm)
             ), "Only LayerNorm and RMSNorm are supported for fused_add_norm"
-            assert config.num_mem_heads == 0, 'args.num_mem_heads > 0 only supports fused_add_norm=False'
+            # assert config.num_mem_heads == 0, 'args.num_mem_heads > 0 only supports fused_add_norm=False' # TODO: ehat are mem_heads? They are implemented in the Zamba code
 
     def forward(
         self, hidden_states: Tensor,  from_shared_proj: Optional[Tensor] = None, from_tf: Optional[Tensor] = None, residual: Optional[Tensor] = None, inference_params=None, attention_mask=None

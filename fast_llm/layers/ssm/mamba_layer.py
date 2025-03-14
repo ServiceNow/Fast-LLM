@@ -1,14 +1,18 @@
 import math
-from typing import Optional, Union
+from typing import Optional, Union, Callable
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
+from fast_llm.engine.config_utils.tensor_space import TensorDim
 
 from einops import rearrange, repeat
 from fast_llm.layers.ssm.config import MambaConfig
+from fast_llm.layers.common.linear import Linear
+from fast_llm.layers.common.conv import Conv1D
+from fast_llm.tensor import ParameterMeta, init_zeros_, init_ones_, init_normal_
 
 try:
     from causal_conv1d import causal_conv1d_fn, causal_conv1d_update
@@ -30,6 +34,33 @@ except ImportError:
     RMSNorm, layer_norm_fn, rms_norm_fn = None, None, None
     
 
+
+def init_A(d_state, d_inner) -> Callable[[ParameterMeta, torch.Tensor, torch.Generator], torch.Tensor]:
+    def init_(meta: ParameterMeta, tensor: torch.Tensor, generator: torch.Generator):  # noqa        
+        # S4D real initialization
+        A = repeat(
+            torch.arange(1, d_state + 1, dtype=torch.float32),
+            "n -> d n",
+            d=d_inner
+        ).contiguous()
+        A_log = torch.log(A)  # Keep A_log in fp32
+        tensor.copy_(A_log)
+        return tensor
+
+    return init_
+
+def init_dtprojbias(d_inner: int, dt_max: float, dt_min: float, dt_init_floor: float, factory_kwargs: dict) -> Callable[[ParameterMeta, torch.Tensor, torch.Generator], torch.Tensor]:
+    def init_(meta: ParameterMeta, tensor: torch.Tensor, generator: torch.Generator):  # noqa        
+        dt = torch.exp(
+            torch.rand(d_inner, **factory_kwargs) * (math.log(dt_max) - math.log(dt_min))
+            + math.log(dt_min)
+        ).clamp(min=dt_init_floor)
+        # Inverse of softplus: https://github.com/pytorch/pytorch/issues/72759
+        inv_dt = dt + torch.log(-torch.expm1(-dt))
+        tensor.copy_(inv_dt)
+        return tensor
+    return init_
+
 class MambaLayer(nn.Module):
     def __init__(
         self,
@@ -49,53 +80,51 @@ class MambaLayer(nn.Module):
         self.layer_idx = layer_idx
         self.device = config.device
         
-        self.in_proj = nn.Linear(self.d_model, self.d_inner * 2, bias=config.add_bias_linear, **factory_kwargs) # for upscaled x and residual
+        self.in_proj = Linear(TensorDim("D_model", self.d_model), TensorDim("D_inner", self.d_inner * 2),
+                              weight_init_method=init_normal_(), # TODO: check init method
+                              bias_init_method=init_zeros_, bias=config.add_bias_linear, **factory_kwargs) # for upscaled x and residual
 
-        self.conv1d = nn.Conv1d(
-            in_channels=self.d_inner,
-            out_channels=self.d_inner,
+        self.conv1d = Conv1D(
+            in_channels=TensorDim("D_inner", self.d_inner),
+            out_channels=TensorDim("D_inner", self.d_inner),
             bias=config.conv_bias,
             kernel_size=self.d_conv,
             groups=self.d_inner, # independent kernel per d_inned
             padding=self.d_conv - 1,
+            weight_init_method=init_normal_(), # TODO: check init method
             **factory_kwargs,
         )
 
         self.activation = "silu"
         self.act = nn.SiLU()
 
-        self.x_proj = nn.Linear(
-            self.d_inner, self.dt_rank + self.d_state * 2, bias=False, **factory_kwargs
+        self.x_proj = Linear(
+            TensorDim("D_inner", self.d_inner), TensorDim("D_dt", self.dt_rank + self.d_state * 2), weight_init_method=init_normal_(), bias=False, **factory_kwargs
         )
 
-        self.dt_proj = nn.Linear(self.dt_rank, self.d_inner, bias=True, **factory_kwargs)
+        self.dt_proj = Linear(TensorDim("D_dt", self.dt_rank), TensorDim("D_inner", self.d_inner), bias=True, weight_init_method=init_normal_(),
+                              bias_init_method=init_dtprojbias(self.d_inner, config.dt_max, config.dt_min, config.dt_init_floor, factory_kwargs), 
+                              **factory_kwargs)# TODO: check init method
 
-        dt = torch.exp(
-            torch.rand(self.d_inner, **factory_kwargs) * (math.log(config.dt_max) - math.log(config.dt_min))
-            + math.log(config.dt_min)
-        ).clamp(min=config.dt_init_floor)
-        # Inverse of softplus: https://github.com/pytorch/pytorch/issues/72759
-        inv_dt = dt + torch.log(-torch.expm1(-dt))
-        with torch.no_grad():
-            self.dt_proj.bias.copy_(inv_dt)
         # Our initialization would set all Linear.bias to zero, need to mark this one as _no_reinit
         self.dt_proj.bias._no_reinit = True
 
-        # S4D real initialization
-        A = repeat(
-            torch.arange(1, self.d_state + 1, dtype=torch.float32, device=self.device),
-            "n -> d n",
-            d=self.d_inner
-        ).contiguous()
-        A_log = torch.log(A)  # Keep A_log in fp32
-        self.A_log = nn.Parameter(A_log)
-        self.A_log._no_weight_decay = True
+
+        self.A_log = ParameterMeta(torch.empty(self.d_inner, self.d_state, device="meta"), 
+                                    dims=(TensorDim("D_inner", self.d_inner), TensorDim("D_state", self.d_state)), 
+                                    weight_decay=False, 
+                                    init_method=init_A(self.d_state, self.d_inner))
 
         # D "skip" parameter
-        self.D = nn.Parameter(torch.ones(self.d_inner, device=self.device))  # Keep in fp32
-        self.D._no_weight_decay = True
+        self.D = ParameterMeta(torch.empty(self.d_inner, device="meta"), 
+                                dims=(TensorDim("D_inner", self.d_inner),), 
+                                weight_decay=False, 
+                                init_method=init_ones_)
 
-        self.out_proj = nn.Linear(self.d_inner, self.d_model, bias=config.add_bias_linear, **factory_kwargs)
+        self.out_proj = Linear(TensorDim("D_inner", self.d_inner), TensorDim("D_model", self.d_model), 
+                               bias=config.add_bias_linear, # TODO: check init method
+                               weight_init_method=init_normal_(), 
+                               **factory_kwargs)
 
     def forward(self, hidden_states, from_shared_proj = None, inference_params=None):
         batch, seqlen, dim = hidden_states.shape
