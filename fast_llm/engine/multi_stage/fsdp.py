@@ -333,7 +333,9 @@ class FSDP:
             assert buffer.grad is None
             buffer.param_grad_is_zero = True
 
-    def reduce_gradients(self, accumulate=False) -> None:
+    def reduce_gradients(
+        self, distributed: Distributed, accumulate: bool = False, allow_no_grad: bool = False
+    ) -> None:
         # Reduce the buffer, then copy (add) to actual grads.
         # Run in a separate cuda stream to allow communication overlap.
         # TODO: Allow partial FSDP
@@ -343,10 +345,10 @@ class FSDP:
             return
         for buffer, meta in zip(self._parameter_buffers.values(), self._parameter_metas.values()):
             if buffer.param_grad_is_zero:  # noqa
-                assert self.is_tied_weight_copy or meta.allow_no_grad, meta
+                assert allow_no_grad or meta.allow_no_grad, meta
                 triton_fill(buffer.grad_buffer, 0)  # noqa
-        if self._sequence_parallel_grads is not None and self._distributed.tensor_group:
-            all_reduce(self._sequence_parallel_grads, group=self._distributed.tensor_group)
+        if self._sequence_parallel_grads is not None and distributed.tensor_group:
+            all_reduce(self._sequence_parallel_grads, group=distributed.tensor_group)
         if self._fsdp_dim.size > 1:
             full_precision_gradients = self._grad_buffer_local_shard.dtype == self._grad_shard.dtype
             out = self._grad_shard if full_precision_gradients else self._grad_buffer_local_shard

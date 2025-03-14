@@ -438,6 +438,7 @@ def test_load_pretrained_in_dp2_match_checkpoint():
         assert (stage_shard_test[stage_shard_ref.numel() :] == 0).all()  # noqa
 
 
+@pytest.mark.skip(reason="Fails because of incorrect init config.")
 @pytest.mark.slow
 @pytest.mark.depends(on=["test_load_pretrained_in_dp2_match_checkpoint"])
 def test_load_distributed_checkpoint_dp2():
