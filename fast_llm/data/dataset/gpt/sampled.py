@@ -87,7 +87,7 @@ class GPTSampledIndexedDataset(SampledDataset):
         self._indexed_dataset = indexed_dataset
         self._num_samples = sampling.num_samples
         self._sequence_length = sampling.sequence_length
-        self._use_document_boundaries = sampling.use_document_boundaries
+        self._cross_document_attention = sampling.cross_document_attention
         self._config = sampling.config
         self._device = torch.device("cuda" if self._config.gpu else "cpu")
 
@@ -337,7 +337,7 @@ class GPTSampledIndexedDataset(SampledDataset):
 
         sequence_lengths = (
             np.array([ids.size - (idx == len(token_ids) - 1) for idx, ids in enumerate(token_ids)], dtype=np.int32)
-            if self._use_document_boundaries
+            if not self._cross_document_attention
             else None
         )
         token_ids = np.concatenate(token_ids, dtype=np.int64)
@@ -379,7 +379,7 @@ class LegacyGPTSampledIndexedDataset(SampledDataset):
         self._indexed_dataset = indexed_dataset
         self._num_samples = sampling.num_samples
         self._sequence_length = sampling.sequence_length
-        self._use_document_boundaries = sampling.use_document_boundaries
+        self._cross_document_attention = sampling.cross_document_attention
         self._config = sampling.config
         self._tokenizer = sampling.tokenizer
 
@@ -505,7 +505,7 @@ class LegacyGPTSampledIndexedDataset(SampledDataset):
                 [sample.token_ids.size - (idx == len(sample_list) - 1) for idx, sample in enumerate(sample_list)],
                 dtype=np.int32,
             )
-            if self._use_document_boundaries
+            if not self._cross_document_attention
             else None
         )
         return GPTSample(token_ids=token_ids, loss_masking_spans=spans, sequence_lengths=sequence_lengths)

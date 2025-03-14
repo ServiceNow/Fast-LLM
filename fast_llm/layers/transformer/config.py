@@ -478,9 +478,9 @@ class TransformerConfig(TransformerArchitectureConfig, BaseModelConfig):
     use_flash_attention: bool = Field(
         default=True, desc="Enable Flash Attention if possible.", hint=FieldHint.optional
     )
-    isolate_document_context: bool = Field(
-        default=False,
-        desc="Applies attention mask to tokens from other documents in the packed sequence.",
+    cross_document_attention: bool = Field(
+        default=True,
+        desc="Applies attention to tokens from other documents in the packed sequence. Set to False for masking attention to other documents.",
         hint=FieldHint.feature,
     )
     window_size: int | None = Field(
