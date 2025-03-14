@@ -254,9 +254,9 @@ class FSDP:
         # Split a shard into flat (possibly empty) parameter slices.
         return {
             name: shard[
-                self.index_buffer_to_shard(
-                    self.get_parameter_begin_in_buffer(name)
-                ) : self.get_parameter_end_in_buffer(name)
+                self.index_buffer_to_shard(self.get_parameter_begin_in_buffer(name)) : self.index_buffer_to_shard(
+                    self.get_parameter_end_in_buffer(name)
+                )
             ]
             for name in self._parameter_metas
         }
