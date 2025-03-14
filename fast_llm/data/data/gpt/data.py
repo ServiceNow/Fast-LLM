@@ -66,7 +66,7 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
         distributed_config: DistributedConfig,
         vocab_size: int,
         max_sequence_length: int,
-        cross_document_attention: bool | None = None,
+        cross_document_attention: bool = True,
     ):
         """
         Create the data and gather some basic information on the dataset(s).
