@@ -35,14 +35,14 @@ class GPTBatch:
 
 
 def gpt_data_collate_fn(
-    batch: list[GPTSample], use_loss_masking_spans: bool, variable_sequence_lengths: bool
+    batch: list[GPTSample], use_loss_masking_spans: bool, document_aware_sequences_sequences: bool
 ) -> GPTBatch:
     stacked_ids = np.stack([sample.token_ids for sample in batch])
     stacked_spans = None
     sequence_lengths = None
     if use_loss_masking_spans:
         stacked_spans = [torch.from_numpy(sample.loss_masking_spans) for sample in batch]
-    if variable_sequence_lengths:
+    if document_aware_sequences_sequences:
         sequence_lengths = [torch.tensor(sample.sequence_lengths) for sample in batch]
     return GPTBatch(
         token_ids=torch.from_numpy(stacked_ids), loss_masking_spans=stacked_spans, sequence_lengths=sequence_lengths
@@ -66,7 +66,7 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
         distributed_config: DistributedConfig,
         vocab_size: int,
         max_sequence_length: int,
-        variable_sequence_lengths: bool | None = None,
+        document_aware_sequences: bool | None = None,
     ):
         """
         Create the data and gather some basic information on the dataset(s).
@@ -75,7 +75,7 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
         super().__init__(config, distributed_config)
         self._vocab_size = vocab_size
         self._max_sequence_length = max_sequence_length
-        self._variable_sequence_lengths = variable_sequence_lengths
+        self._document_aware_sequences = document_aware_sequences
 
     def setup(
         self,
@@ -110,7 +110,7 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
                     sequence_length=self._max_sequence_length,
                     vocab_size=self._vocab_size,
                     tokenizer=self._tokenizer,
-                    variable_sequence_lengths=self._variable_sequence_lengths,
+                    document_aware_sequences=self._document_aware_sequences,
                 )
                 dataset = self._config.datasets[phase].build_and_sample(sampling)
                 self._datasets[phase] = DatasetMonitor(dataset, self._config.data_sample_warn_time_ms)
@@ -152,7 +152,7 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
                 collate_fn=partial(
                     gpt_data_collate_fn,
                     use_loss_masking_spans=self._config.sampling.use_loss_masking_spans,
-                    variable_sequence_lengths=self._variable_sequence_lengths,
+                    document_aware_sequences=self._document_aware_sequences,
                 ),
                 multiprocessing_context=self._config.multiprocessing_context.value if num_workers > 0 else None,
             )

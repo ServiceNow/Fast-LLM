@@ -61,9 +61,9 @@ class BatchConfig(Config):
         hint=FieldHint.derived,
         valid=check_field(Assert.gt, 0),
     )
-    variable_sequence_lengths: bool = Field(
+    document_aware_sequences: bool = Field(
         default=False,
-        desc="Treat samples as concatenation of variable length sequences, instead of a fixed-length packed sequence.",
+        desc="Bounds attention to within a document in a packed sequence with multiple documents.",
         hint=FieldHint.feature,
     )
     _distributed: DistributedConfig = Field(

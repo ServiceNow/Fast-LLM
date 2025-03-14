@@ -72,7 +72,6 @@ class TransformerKwargs:
     sequence_q_dim = "sequence_q_dim"
     sequence_k_dim = "sequence_k_dim"
     sequence_length = "sequence_length"
-    start_seq_offset = "start_seq_offset"
     # TODO: Move
     grad_output = "grad_output"
 

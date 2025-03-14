@@ -71,7 +71,7 @@ class GPTSamplingData(SamplingData):
     sequence_length: int
     vocab_size: int
     tokenizer: "Tokenizer"
-    variable_sequence_lengths: bool = False
+    document_aware_sequences: bool = False
 
 
 @config_class()
