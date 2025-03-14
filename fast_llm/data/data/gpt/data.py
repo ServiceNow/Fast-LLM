@@ -35,14 +35,14 @@ class GPTBatch:
 
 
 def gpt_data_collate_fn(
-    batch: list[GPTSample], use_loss_masking_spans: bool, document_aware_sequences_sequences: bool
+    batch: list[GPTSample], use_loss_masking_spans: bool, document_aware_sequences: bool
 ) -> GPTBatch:
     stacked_ids = np.stack([sample.token_ids for sample in batch])
     stacked_spans = None
     sequence_lengths = None
     if use_loss_masking_spans:
         stacked_spans = [torch.from_numpy(sample.loss_masking_spans) for sample in batch]
-    if document_aware_sequences_sequences:
+    if document_aware_sequences:
         sequence_lengths = [torch.tensor(sample.sequence_lengths) for sample in batch]
     return GPTBatch(
         token_ids=torch.from_numpy(stacked_ids), loss_masking_spans=stacked_spans, sequence_lengths=sequence_lengths
