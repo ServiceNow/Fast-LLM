@@ -372,6 +372,11 @@ class FSDP:
         end = self.index_buffer_to_shard(self.get_parameter_end_in_buffer(parameter_name))
         return begin, end
 
+    def invalidate_buffer(self) -> None:
+        # Buffer is no longer valid (Updated weights or overwritten by other stage)
+        assert self._mode.support_forward
+        self._is_restored = False
+
     def parameter_global_to_shard(
         self, global_param: torch.Tensor | SafeTensorSlice, parameter_name: str
     ) -> torch.Tensor:

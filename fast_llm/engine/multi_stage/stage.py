@@ -141,7 +141,7 @@ class Stage(StageBase):
         assert self._is_restored
         assert self._mode.support_backward
         for fsdp in self._fsdps:
-            fsdp.reduce_gradients(accumulate)
+            fsdp.reduce_gradients(self._distributed, accumulate, self._is_tied_weight_copy)
             if self._config.debug_param_gradients:
                 log_tensor(
                     "Reduced gradient shard",
@@ -174,6 +174,9 @@ class Stage(StageBase):
         # Buffer is no longer valid (Updated weights or overwritten by other stage)
         assert self._mode.support_forward
         self._is_restored = False
+        # TODO: Frozen weights fsdps may not be invalidated on weight update.
+        for fsdp in self._fsdps:
+            fsdp.invalidate_buffer()
 
     def _log_layer_forward(self, output: torch.Tensor, kwargs: dict[str, typing.Any], i: int) -> None:
         if (
