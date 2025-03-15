@@ -25,15 +25,6 @@ class StageBase(Configurable[StageConfig]):
     _distributed: Distributed
     _mode: StageMode
 
-    # _weight_shard: torch.Tensor
-    # _grad_shard: torch.Tensor
-    # _weight_buffer: torch.Tensor
-    # _grad_buffer: torch.Tensor
-    # _sequence_parallel_grads: torch.Tensor
-    # _weight_buffer_local_shard: torch.Tensor
-    # _grad_buffer_local_shard: torch.Tensor
-    # _parameter_buffers: list[torch.nn.Parameter]
-
     def __init__(
         self,
         *,

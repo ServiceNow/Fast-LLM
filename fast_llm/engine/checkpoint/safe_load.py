@@ -44,7 +44,7 @@ class SafeLoad:
                 zip(self._model.stages_on_device.values(), shard_split)
             ):
                 for fsdp, fsdp_shard in zip(
-                    stage.fsdps, stage_shard.split(self._model._fsdp_shard_sizes[shard_index]), strict=True
+                    stage.fsdps, stage_shard.split(self._model._fsdp_weight_shard_sizes[shard_index]), strict=True
                 ):
                     self._loaded += fsdp.reset_shard_pad(fsdp_shard)
         return self
@@ -101,7 +101,7 @@ class SafeLoad:
                     zip(self._model.stages_on_device.values(), shard_split)
                 ):
                     for fsdp, fsdp_shard in zip(
-                        stage.fsdps, stage_shard.split(self._model._fsdp_shard_sizes[shard_index]), strict=True
+                        stage.fsdps, stage_shard.split(self._model._fsdp_weight_shard_sizes[shard_index]), strict=True
                     ):
                         buffer = fsdp.reconstruct_from_shard(fsdp_shard)
                         for parameter_name, parameter in fsdp.split_buffer(buffer).items():

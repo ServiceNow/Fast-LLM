@@ -419,16 +419,18 @@ def test_load_pretrained_in_dp2_match_checkpoint():
     ref_model = TEST_MODEL_CLS(config_ref)
     test_model = TEST_MODEL_CLS(config_test)
 
-    weight_shard_ref_split = shard_ref[0].split(ref_model._stage_shard_sizes)
-    weight_shards_test_split = [shard_test[0].split(test_model._stage_shard_sizes) for shard_test in shards_test]
+    weight_shard_ref_split = shard_ref[0].split(ref_model._stage_weight_shard_sizes)
+    weight_shards_test_split = [
+        shard_test[0].split(test_model._stage_weight_shard_sizes) for shard_test in shards_test
+    ]
     for shard_test in shards_test:
         assert (shard_test[1:] == 0).all()  # noqa
 
-    assert len(ref_model._stage_shard_sizes) == len(test_model._stage_shard_sizes)
+    assert len(ref_model._stage_weight_shard_sizes) == len(test_model._stage_weight_shard_sizes)
     for i, stage_shard_ref in enumerate(weight_shard_ref_split):
         assert (
-            test_model._stage_shard_sizes[i]
-            == ref_model._stage_shard_sizes[i] // 2 + (-ref_model._stage_shard_sizes[i] // 2) % 32
+            test_model._stage_weight_shard_sizes[i]
+            == ref_model._stage_weight_shard_sizes[i] // 2 + (-ref_model._stage_weight_shard_sizes[i] // 2) % 32
         )
 
         stage_shard_test = torch.concatenate(

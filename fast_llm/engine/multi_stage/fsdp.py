@@ -75,25 +75,27 @@ class FSDP:
         )
 
         # TODO: Use parallel_dim property instead?
-        shard_dim = TensorDim("flat_shard", (self._parameter_count + self._global_pad) // self._fsdp_dim.size)
+        weight_shard_dim = TensorDim("weight_shard", (self._parameter_count + self._global_pad) // self._fsdp_dim.size)
+        grad_shard_dim = TensorDim("grad_shard", weight_shard_dim.size if self._requires_grad else 0)
 
         self._weight_shard_meta = TensorMeta.from_dims(
-            (shard_dim,),
+            (weight_shard_dim,),
             tensor_name=f"{self._name}_weight_shard",
             dtype=self._optimization_dtype.torch,
         )
+        # TODO: Distinguish grad and optimizer shard?
         self._grad_shard_meta = TensorMeta.from_dims(
-            (shard_dim,),
+            (grad_shard_dim,),
             tensor_name=f"{self._name}_grad_shard",
             dtype=self._optimization_dtype.torch,
         )
         self._weight_buffer_meta = TensorMeta.from_dims(
-            (TensorDim("weight_buffer", shard_dim.size * self._fsdp_dim.size),),
+            (TensorDim("weight_buffer", weight_shard_dim.size * self._fsdp_dim.size),),
             tensor_name=f"{self._name}_weight_buffer",
             dtype=self._training_dtype.torch,
         )
         self._grad_buffer_meta = TensorMeta.from_dims(
-            (TensorDim("grad_buffer", shard_dim.size * self._fsdp_dim.size if self._requires_grad else 0),),
+            (TensorDim("grad_buffer", weight_shard_dim.size * self._fsdp_dim.size if self._requires_grad else 0),),
             tensor_name=f"{self._name}_grad_buffer",
             dtype=self._gradient_buffer_dtype.torch,
         )
@@ -114,9 +116,9 @@ class FSDP:
     def weight_shard_meta(self) -> TensorMeta:
         return self._weight_shard_meta
 
-    # @property
-    # def grad_shard_meta(self) -> TensorMeta:
-    #   return self._grad_shard_meta
+    @property
+    def grad_shard_meta(self) -> TensorMeta:
+        return self._grad_shard_meta
 
     @property
     def weight_buffer_meta(self) -> TensorMeta:
