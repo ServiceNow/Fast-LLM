@@ -17,6 +17,7 @@ from fast_llm.layers.transformer.config import (
     TransformerDimNames,
     TransformerKwargs,
     TransformerLossNames,
+    TransformerRoutingMetrics
 )
 from fast_llm.layers.transformer.mlp import MLPBase
 from fast_llm.logging import log_distributed_grad, log_distributed_tensor, log_memory_usage
@@ -133,7 +134,7 @@ class MixtureOfExpertMLP(MLPBase):
 
         # Routing
         if self._routing_type == RoutingType.topk:
-            scores, top_experts = self._topk_routing(logits, kwargs.get(TransformerKwargs.grad_output), losses)
+            scores, top_experts = self._topk_routing(logits, kwargs.get(TransformerKwargs.grad_output), losses, metrics)
             if self._num_shared_experts > 0:
                 scores, top_experts = self._add_shared_experts(top_experts, scores)
         elif self._routing_type == RoutingType.sinkhorn:
@@ -199,6 +200,7 @@ class MixtureOfExpertMLP(MLPBase):
         logits: torch.Tensor,
         grad_scale: float | None = None,
         losses: dict | None = None,
+        metrics: dict | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         top_logits, top_experts = torch.topk(logits, k=self._experts_per_token, dim=-1)
         scores = torch.softmax(top_logits, dim=-1, dtype=torch.float32)
@@ -209,14 +211,15 @@ class MixtureOfExpertMLP(MLPBase):
             entropy = calculate_normalized_average_entropy(probs)
             mutual_info = calculate_mutual_information(probs)
 
-            # Store these metrics
-            if "router_entropy" not in losses:
-                losses["router_entropy"] = []
-            if "router_mutual_info" not in losses:
-                losses["router_mutual_info"] = []
+            # Store these metrics        
+            if metrics is not None:
+                if TransformerRoutingMetrics.normalized_average_entropy not in metrics:
+                    metrics[TransformerRoutingMetrics.normalized_average_entropy] = []
+                if TransformerRoutingMetrics.mutual_info not in metrics:
+                    metrics[TransformerRoutingMetrics.mutual_info] = []
 
-            losses["router_entropy"].append(entropy.detach())
-            losses["router_mutual_info"].append(mutual_info.detach())
+                metrics[TransformerRoutingMetrics.normalized_average_entropy].append(entropy.detach())
+                metrics[TransformerRoutingMetrics.mutual_info].append(mutual_info.detach())
 
             mask = torch.nn.functional.one_hot(top_experts, num_classes=self._num_unshared_experts).sum(dim=1)
             # Auxiliary loss, corresponding to the sum of probabilities for the top experts.
