@@ -23,14 +23,22 @@ from fast_llm.utils import Assert, get_unique
 logger = logging.getLogger(__name__)
 
 
+class ShardName:
+    weights = "weights"
+    grads = "grads"
+
+
 class MultiStageModel[ConfigType: FastLLMModelConfig](Configurable[ConfigType]):
     config_class: typing.ClassVar[type[FastLLMModelConfig]] = FastLLMModelConfig
     base_model_class: typing.ClassVar[type[BaseModel]] = BaseModel
     _is_setup: bool = False
-    _state_shard: torch.Tensor
-    _weight_shard: torch.Tensor
-    _grad_shard: torch.Tensor
-    _optimizer_shard: torch.Tensor
+    _flat_shard: torch.Tensor
+    _shards: dict[str, torch.Tensor]
+    _shards_names: tuple[str, ...]
+    # _state_shard: torch.Tensor
+    # _weight_shard: torch.Tensor
+    # _grad_shard: torch.Tensor
+    # _optimizer_shards: list[torch.Tensor]
     _distributed: Distributed
     _mode: StageMode
 
@@ -38,6 +46,7 @@ class MultiStageModel[ConfigType: FastLLMModelConfig](Configurable[ConfigType]):
         self,
         config: FastLLMModelConfig,
         *,
+        # TODO: No longer needed in __init__, move to setup?
         optimizer_state_names: tuple[str, ...] = (),
         verbose: bool = True,
         # A filter to create only a subset of the stages. Used for model conversion.
@@ -48,6 +57,7 @@ class MultiStageModel[ConfigType: FastLLMModelConfig](Configurable[ConfigType]):
         self._training = None
         self._verbose = verbose
         self._stage_filter = stage_filter
+        self._optimizer_state_names = optimizer_state_names
 
         stage_splits = self._split_into_stages()
         self._num_stages = len(stage_splits) - 1
@@ -119,27 +129,56 @@ class MultiStageModel[ConfigType: FastLLMModelConfig](Configurable[ConfigType]):
         self._stage_shard_indices = {
             stage_index: shard_index for shard_index, stage_index in enumerate(self._stages_on_device)
         }
-        self._stage_shard_sizes = [stage.weight_shard_meta.numel() for stage in self._stages_on_device.values()]
-        stage_shard_dtype = get_unique([stage.weight_shard_meta.dtype for stage in self._stages_on_device.values()])
 
-        self._state_shard_names = ("weights",) + optimizer_state_names
+        self._fsdp_weight_shard_sizes = [
+            [fsdp.weight_shard_meta.numel() for fsdp in stage.fsdps] for stage in self._stages_on_device.values()
+        ]
+        self._stage_weight_shard_sizes = [sum(shard_sizes) for shard_sizes in self._fsdp_weight_shard_sizes]
+        self._weight_shard_size = sum(self._stage_weight_shard_sizes)
 
-        shard_dim = TensorDim("flat_shard", sum(self._stage_shard_sizes))
+        self._fsdp_grad_shard_sizes = [
+            [fsdp.grad_shard_meta.numel() for fsdp in stage.fsdps] for stage in self._stages_on_device.values()
+        ]
+        self._stage_grad_shard_sizes = [sum(shard_sizes) for shard_sizes in self._fsdp_grad_shard_sizes]
+        self._grad_shard_size = sum(self._stage_grad_shard_sizes)
+
+        # TODO: Support non-unique data type.
+        self._shard_dtype = get_unique(
+            [fsdp.weight_shard_meta.dtype for stage in self._stages_on_device.values() for fsdp in stage.fsdps]
+        )
+        # self._shard_names = (ShardName.weights,) + self._optimizer_state_names + (ShardName.grads,)
         self._weight_shard_meta = TensorMeta.from_dims(
-            (shard_dim,),
+            (TensorDim("weight_shard", self._weight_shard_size),),
             tensor_name=f"multi_stage_weight_shard",
-            dtype=stage_shard_dtype,
+            dtype=self._shard_dtype,
         )
-        self._state_shard_meta = TensorMeta.from_dims(
-            (TensorDim("state_shards", self.num_state_shards), shard_dim),
-            tensor_name=f"multi_stage_state_shard",
-            dtype=stage_shard_dtype,
+        self._grad_shard_meta = TensorMeta.from_dims(
+            (TensorDim("grad_shard", self._grad_shard_size),),
+            tensor_name=f"multi_stage_grad_shard",
+            dtype=self._shard_dtype,
         )
-        self._full_shards_meta = TensorMeta.from_dims(
-            (TensorDim("shards", self.num_shards), shard_dim),
-            tensor_name=f"multi_stage_state_shard",
-            dtype=stage_shard_dtype,
-        )
+
+        # state_shard_sizes={"weights":self._weight_shard_size, **{optimizer_state_name:self._grad_shard_size for optimizer_state_name in optimizer_state_names}, "grads":self._grad_shard_size}
+
+        # self._shard_sizes=(weight_shard_size,)+(grad_shard_size,)*self.num_state_shards
+        # self._state_shard_sizes=self._shard_sizes[:-1]
+
+        # TODO: Avoid unnecessary shards (frozen weights or shard identical to buffer)
+        # self._weight_shard_meta = TensorMeta.from_dims(
+        #    (TensorDim("weight_shard", weight_shard_size),),
+        #    tensor_name=f"multi_stage_weight_shard",
+        #    dtype=self._shard_dtype,
+        # )
+        # self._state_shard_meta = TensorMeta.from_dims(
+        #    (TensorDim("state_shards", sum(self._state_shard_sizes)),),
+        #    tensor_name=f"multi_stage_state_shard",
+        #    dtype=self._shard_dtype,
+        # )
+        # self._full_shards_meta = TensorMeta.from_dims(
+        #    (TensorDim("shards", sum(self._shard_sizes)),),
+        #    tensor_name=f"multi_stage_state_shard",
+        #    dtype=self._shard_dtype,
+        # )
 
         # contents: buffer_index -> set[stage_index]
         # indices: stage_index -> buffer_index
@@ -151,11 +190,17 @@ class MultiStageModel[ConfigType: FastLLMModelConfig](Configurable[ConfigType]):
         )
         if self._verbose:
             log_model_parallel_main_rank(f"Weight buffer placement:\n{self._weight_buffer_indices}")
+        self._fsdp_weight_buffer_sizes = [
+            [fsdp.weight_buffer_meta.numel() for fsdp in stage.fsdps] for stage in self._stages
+        ]
+        self._stage_weight_buffer_sizes = [sum(buffer_sizes) for buffer_sizes in self._fsdp_weight_buffer_sizes]
         self._weight_buffer_sizes = [
-            max(self._stages[stage_index].weight_buffer_meta.numel() for stage_index in contents)
+            max(self._stage_weight_buffer_sizes[stage_index] for stage_index in contents)
             for contents in self._weight_buffer_contents
         ]
-        weight_buffer_dtype = get_unique([stage.weight_buffer_meta.dtype for stage in self._stages])
+        weight_buffer_dtype = get_unique(
+            [fsdp.weight_buffer_meta.dtype for stage in self._stages for fsdp in stage.fsdps]
+        )
         self._weight_buffer_meta = TensorMeta.from_dims(
             (TensorDim("weight_buffer", sum(self._weight_buffer_sizes)),),
             tensor_name=f"multi_stage_weight_buffer",
@@ -167,11 +212,16 @@ class MultiStageModel[ConfigType: FastLLMModelConfig](Configurable[ConfigType]):
         )
         if self._verbose:
             log_model_parallel_main_rank(f"Grad buffer placement:\n{self._grad_buffer_indices}")
+        self._fsdp_grad_buffer_sizes = [
+            [fsdp.grad_buffer_meta.numel() for fsdp in stage.fsdps] for stage in self._stages
+        ]
+        self._stage_grad_buffer_sizes = [sum(buffer_sizes) for buffer_sizes in self._fsdp_grad_buffer_sizes]
         self._grad_buffer_sizes = [
-            max(self._stages[stage_index].grad_buffer_meta.numel() for stage_index in contents)
+            max(self._stage_grad_buffer_sizes[stage_index] for stage_index in contents)
             for contents in self._grad_buffer_contents
         ]
-        grad_buffer_dtype = get_unique([stage.grad_buffer_meta.dtype for stage in self._stages])
+
+        grad_buffer_dtype = get_unique([fsdp.grad_buffer_meta.dtype for stage in self._stages for fsdp in stage.fsdps])
         self._grad_buffer_meta = TensorMeta.from_dims(
             (TensorDim("grad_buffer", sum(self._grad_buffer_sizes)),),
             tensor_name=f"multi_stage_grad_buffer",
@@ -216,31 +266,37 @@ class MultiStageModel[ConfigType: FastLLMModelConfig](Configurable[ConfigType]):
                 self._grad_buffer_sizes
             )
 
+        self._shards_names = ()
         if self._mode.on_device:
-            num_shards = (
-                self._full_shards_meta.size(0)
-                if self._mode.support_training
-                else 2 if self._mode.support_backward else 1
+            self._shards_names += (ShardName.weights,)
+            if self._mode.support_training:
+                self._shards_names += self._optimizer_state_names
+            if self._mode.support_backward:
+                self._shards_names += (ShardName.grads,)
+
+        if self._mode.on_device:
+            shard_sizes = [
+                self._weight_shard_size if shard_name == ShardName.weights else self._grad_shard_size
+                for shard_name in self._shards_names
+            ]
+            full_shards_meta = TensorMeta.from_dims(
+                (TensorDim("", sum(shard_sizes)),),
+                tensor_name=f"",
+                dtype=self._shard_dtype,
             )
-            allocated += (mem := num_shards * self._full_shards_meta.memory_usage // self._full_shards_meta.size(0))
+            allocated += (mem := full_shards_meta.memory_usage)
             if self._verbose:
                 log_model_parallel_main_rank(
-                    f">>> Allocating {self.num_shards} x {len(self._stage_shard_sizes)}"
-                    f" shards ({mem / 2 ** 20:,.2f} MiB)"
+                    f">>> Allocating {len(self._shards_names)} shards ({mem / 2 ** 20:,.2f} MiB)"
                 )
-            shards = torch.empty_like(self._full_shards_meta[:num_shards], device=self._distributed.device)
+            self._flat_shard = torch.empty_like(full_shards_meta, device=self._distributed.device)
             if self._verbose:
                 log_model_parallel_main_rank(f"Total allocated: {allocated / 2 ** 20:,.2f} MiB")
-            self._weight_shard = shards[0]
-            weight_shard_split = self._weight_shard.split(self._stage_shard_sizes)
-            if self._mode.support_backward:
-                self._state_shard = shards[:-1]
-                if self._mode.support_training:
-                    self._optimizer_shard = shards[1:-1]
-                self._grad_shard = shards[-1]
-                grad_shard_split = self._grad_shard.split(self._stage_shard_sizes)
-            else:
-                self._state_shard = shards
+
+            self._shards = {
+                shard_name: shard
+                for shard_name, shard in zip(self._shards_names, self._flat_shard.split(shard_sizes), strict=True)
+            }
 
         # Setup the tied parameter process groups
         for tied_parameter in self._tied_parameters.values():
@@ -251,21 +307,31 @@ class MultiStageModel[ConfigType: FastLLMModelConfig](Configurable[ConfigType]):
             shard_index = self._stage_shard_indices.get(stage_index)
             weight_buffer_index = self._weight_buffer_indices.get(stage_index)
             grad_buffer_index = self._grad_buffer_indices.get(stage_index)
-            weight_buffer = (
-                weight_buffers[weight_buffer_index][: stage.weight_buffer_meta.numel()]  # noqa
+            stage_weight_buffers = (
+                weight_buffers[weight_buffer_index][: self._stage_weight_buffer_sizes[stage_index]].split(  # noqa
+                    self._fsdp_weight_buffer_sizes[stage_index]
+                )
                 if self._mode.support_forward and weight_buffer_index is not None
                 else None
             )
-            grad_buffer = (
-                grad_buffers[grad_buffer_index][: stage.grad_buffer_meta.numel()]  # noqa
+            stage_grad_buffers = (
+                grad_buffers[grad_buffer_index][: self._stage_grad_buffer_sizes[stage_index]].split(  # noqa
+                    self._fsdp_grad_buffer_sizes[stage_index]
+                )
                 if self._mode.support_backward and grad_buffer_index is not None
                 else None
             )
-            weight_shard = (
-                weight_shard_split[shard_index] if self._mode.on_device and shard_index is not None else None  # noqa
+            stage_weight_shards = (
+                self._shards[ShardName.weights]
+                .split(self._stage_weight_shard_sizes)[shard_index]
+                .split(self._fsdp_weight_shard_sizes[shard_index])
+                if self._mode.on_device and shard_index is not None
+                else None  # noqa
             )
-            grad_shard = (
-                grad_shard_split[shard_index]  # noqa
+            stage_grad_shards = (
+                self._shards[ShardName.grads]
+                .split(self._stage_weight_shard_sizes)[shard_index]
+                .split(self._fsdp_weight_shard_sizes[shard_index])
                 if self._mode.support_backward and shard_index is not None
                 else None
             )
@@ -276,10 +342,10 @@ class MultiStageModel[ConfigType: FastLLMModelConfig](Configurable[ConfigType]):
             )
             stage.setup(
                 distributed=distributed,
-                weight_shard=weight_shard,
-                grad_shard=grad_shard,
-                weight_buffer=weight_buffer,
-                grad_buffer=grad_buffer,
+                weight_shards=stage_weight_shards,
+                grad_shards=stage_grad_shards,
+                weight_buffers=stage_weight_buffers,
+                grad_buffers=stage_grad_buffers,
                 mode=self._mode if stage_index in self._stages_on_device else StageMode.off_device,
                 is_tied_weight_copy=stage_index in self._stages_on_device and stage_index not in self._stages_owned,
                 weight_buffer_shared_with=weight_buffer_shared_with,
@@ -293,12 +359,24 @@ class MultiStageModel[ConfigType: FastLLMModelConfig](Configurable[ConfigType]):
         assert self._is_setup
         assert self._mode.support_training
         # Setup the optimizer param groups.
-        optimizer_shards_split = [shard.split(self._stage_shard_sizes) for shard in self._optimizer_shard.unbind()]
+        optimizer_shards_split = {
+            shard_name: self._shards[shard_name].split(
+                self._stage_weight_shard_sizes if shard_name == ShardName.weights else self._stage_grad_shard_sizes
+            )
+            for shard_name in self._optimizer_state_names
+        }
         param_groups, grads_for_norm = [], []
         for stage_index, stage in self._stages_on_device.items():
+            shard_index = self._stage_shard_indices.get(stage_index)
             stage_optimizer_shards = {
-                name: shard_split[self._stage_shard_indices[stage_index]]
-                for name, shard_split in zip(self._state_shard_names[1:], optimizer_shards_split)
+                shard_name: shard_split[shard_index].split(
+                    (
+                        self._fsdp_weight_shard_sizes
+                        if shard_name == ShardName.weights
+                        else self._stage_grad_shard_sizes
+                    )[shard_index]
+                )
+                for shard_name, shard_split in optimizer_shards_split.items()
             }
             stage_param_groups, stage_grads_for_norm = stage.get_param_groups(
                 stage_optimizer_shards,
@@ -311,9 +389,15 @@ class MultiStageModel[ConfigType: FastLLMModelConfig](Configurable[ConfigType]):
 
         return param_groups, grads_for_norm
 
-    @property
-    def state_shard_meta(self) -> TensorMeta:
-        return self._state_shard_meta
+    # @property
+    # def state_shard_meta(self) -> TensorMeta:
+    #    return self._state_shard_meta
+
+    def get_shard_meta(self, name: str) -> TensorMeta:
+        assert self._is_setup
+        if name not in self._shards_names:
+            raise KeyError(f"Unknown shard name {name}")
+        return self._weight_shard_meta if name == ShardName.weights else self._grad_shard_meta
 
     @property
     def support_forward(self) -> bool:
@@ -338,17 +422,17 @@ class MultiStageModel[ConfigType: FastLLMModelConfig](Configurable[ConfigType]):
     def stages(self) -> list[Stage]:
         return self._stages
 
-    @property
-    def state_shard(self) -> torch.Tensor:
-        return self._state_shard
+    # @property
+    # def state_shards(self) -> tuple[torch.Tensor]:
+    #    return self._shards[:-1] if self._mode.support_backward else self._shards
 
-    @property
-    def num_shards(self) -> int:
-        return len(self._state_shard_names) + 1
+    # @property
+    # def num_shards(self) -> int:
+    #    return len(self._state_shard_names) + 1
 
-    @property
-    def num_state_shards(self) -> int:
-        return len(self._state_shard_names)
+    # @property
+    # def num_state_shards(self) -> int:
+    #    return len(self._state_shard_names)
 
     @property
     def stages_on_device(self) -> dict[int, Stage]:
@@ -368,11 +452,11 @@ class MultiStageModel[ConfigType: FastLLMModelConfig](Configurable[ConfigType]):
 
     @property
     def state_shard_names(self) -> tuple[str, ...]:
-        return self._state_shard_names
+        return self._shards_names[:-1] if self._mode.support_backward else self._shards_names
 
     @property
     def stage_shard_sizes(self) -> list[int]:
-        return self._stage_shard_sizes
+        return self._stage_weight_shard_sizes
 
     @property
     def parameter_names(self) -> list[str]:
@@ -401,10 +485,14 @@ class MultiStageModel[ConfigType: FastLLMModelConfig](Configurable[ConfigType]):
     def get_state_tensor_iterator(
         self, shard_names: list[str], data_type: DataType | None = None
     ) -> typing.Generator[tuple[str, str, torch.Tensor], None, None]:
-        for i, shard_name in enumerate(shard_names):
-            shard_split = self._state_shard[i].split(self._stage_shard_sizes, 0)
-            for stage, shard in zip(self._stages_on_device.values(), shard_split):
-                for name, tensor in stage._export_shard(shard, data_type=data_type):  # noqa
+        for shard_name in shard_names:
+            shard_split = self._shards[shard_name].split(self._stage_weight_shard_sizes, 0)
+            for shard_index, (stage, shard) in enumerate(
+                zip(self._stages_on_device.values(), shard_split, strict=True)
+            ):
+                for name, tensor in stage._export_shard(
+                    shard.split(self._fsdp_weight_shard_sizes[shard_index]), data_type=data_type
+                ):  # noqa
                     yield name, shard_name, tensor
 
     def import_state_tensor(self, parameter_name: str, shard_name: str, tensor: torch.Tensor | SafeTensorSlice):
@@ -415,11 +503,13 @@ class MultiStageModel[ConfigType: FastLLMModelConfig](Configurable[ConfigType]):
         if not self.is_parameter_on_device(parameter_name):
             # Parameter is not on device, nothing to do.
             return 0
-        stage_index = self._stage_shard_indices[self._parameter_stages[parameter_name]]
-        stage_shard = self._state_shard[self._state_shard_names.index(shard_name)].split(self._stage_shard_sizes, 0)[
-            stage_index
-        ]
-        return self.get_parameter_stage(parameter_name).import_state_tensor(parameter_name, stage_shard, tensor)
+        shard_index = self._stage_shard_indices[self._parameter_stages[parameter_name]]
+        stage_shards = (
+            self._shards[shard_name]
+            .split(self._stage_weight_shard_sizes, 0)[shard_index]
+            .split(self._fsdp_weight_shard_sizes[shard_index])
+        )
+        return self.get_parameter_stage(parameter_name).import_state_tensor(parameter_name, stage_shards, tensor)
 
     def _split_into_stages(self) -> list[int]:
         # Create stages (greedy split, could do better).

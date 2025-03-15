@@ -45,9 +45,9 @@ class DistributedCheckpointHandler(CheckpointHandler):
         # TODO: More safety checks
         loaded_config_dict = config.to_copy({"load_config": ModelConfigType.fast_llm})
         loaded_config = self._model.config_class.from_metadata(loaded_config_dict, metadata)
-        num_shards = self.get_num_shards(config)
+        # num_shards = self.get_num_shards(config)
         shard_names = self.get_shard_names(config)
-        Assert.eq(metadata.shards[:num_shards], list(shard_names))
+        Assert.eq(metadata.shards[: len(shard_names)], list(shard_names))
 
         same_format = (
             loaded_config.to_serialized(verbose=None) == self._model.config.to_serialized(verbose=None)
@@ -67,6 +67,8 @@ class DistributedCheckpointHandler(CheckpointHandler):
             ) as f:
                 # TODO: Does this copy twice?
                 self._model.state_shard[:num_shards].copy_(f.get_slice("state_shard")[:num_shards])
+                # self._model.state_shard_sizes
+
         else:
             log_main_rank("Checkpoint format doesn't match, using safe load")
             self._model.config.base_model.compare_architecture(loaded_config.base_model, config.compare_log_fn)
@@ -93,14 +95,30 @@ class DistributedCheckpointHandler(CheckpointHandler):
 
                         counter = torch.zeros(1, dtype=torch.int64, device=self._model.distributed.device)
                         for loaded_shard_index, loaded_stage in enumerate(loaded_model.stages_on_device.values()):
-                            loaded_shards = (
-                                loaded_shard_split[loaded_shard_index].to(self._model.distributed.device).unbind(0)
+                            loaded_stage_shards = loaded_shard_split[loaded_shard_index].to(
+                                self._model.distributed.device
                             )
-                            for self_shard_index, self_stage in enumerate(self._model.stages_on_device.values()):
-                                self_stage._copy_shard_overlaps(  # noqa
-                                    loaded_stage,
-                                    self_shard_split[self_shard_index].unbind(0),
-                                    loaded_shards,
-                                    counter,
-                                )
+                            for loaded_fsdp, loaded_fsdp_shards in zip(
+                                loaded_stage.fsdps,
+                                loaded_stage_shards.split(
+                                    loaded_model._fsdp_weight_shard_sizes[loaded_shard_index], 1
+                                ),
+                                strict=True,
+                            ):
+                                for self_shard_index, self_stage in enumerate(self._model.stages_on_device.values()):
+                                    self_stage_shards = self_shard_split[self_shard_index]
+                                    for self_fsdp, self_fsdp_shards in zip(
+                                        self_stage.fsdps,
+                                        self_stage_shards.split(
+                                            self._model._fsdp_weight_shard_sizes[self_shard_index], 1
+                                        ),
+                                        strict=True,
+                                    ):
+                                        self_fsdp._copy_shard_overlaps(  # noqa
+                                            loaded_fsdp,
+                                            self_fsdp_shards.unbind(0),
+                                            loaded_fsdp_shards,
+                                            counter,
+                                            self._model.distributed.device,
+                                        )
                         context.mark_as_loaded(counter.item())

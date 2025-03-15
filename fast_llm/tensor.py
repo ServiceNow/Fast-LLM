@@ -222,7 +222,6 @@ class ParameterMeta(TensorMeta):
         self.param_weight_decay = weight_decay
         self._is_param = True
         self.param_grad_is_zero = False
-        self.requires_grad = requires_grad
         # Almost all parameters are either tensor-parallel or process tensor-sequence-parallel inputs.
         # Except for position embedding weights
         self.sequence_tensor_parallel = allow_sequence_tensor_parallel and not self.is_tensor_parallel
@@ -234,6 +233,7 @@ class ParameterMeta(TensorMeta):
         self.allow_no_grad = allow_no_grad
 
         self.lr_scale = lr_scale if isinstance(lr_scale, tuple) else (lr_scale,)
+        self.requires_grad = requires_grad and any(lr_scale_ != 0 for lr_scale_ in self.lr_scale)
         # Ensure the parameter is split in chunks of equal size.
         Assert.multiple(self.dims[0].size, len(self.lr_scale))
 
