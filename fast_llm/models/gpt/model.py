@@ -19,6 +19,7 @@ from fast_llm.layers.transformer.config import (
     TransformerDimNames,
     TransformerKwargs,
     TransformerLossNames,
+    TransformerRoutingMetrics
 )
 from fast_llm.layers.transformer.preprocessing import (
     BackupAttentionPreprocessor,
@@ -318,6 +319,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                         count=self._config.transformer.num_layers,
                     )
                 )
+            
         if self._config.logit_z_loss:
             LossDef(name=LanguageModelLossNames.z_loss, formatted_name="logit z loss", count=1)
         return loss_defs
