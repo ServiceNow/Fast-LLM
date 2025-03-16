@@ -267,7 +267,7 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ScheduleConfig]):
             log_pipeline_parallel_main_rank(
                 lambda: log_memory_usage(f"End of {context.phase.value} iteration {iteration}", str)
             )
-        metrics = self._reduce_metrics(context) if return_metrics else None
+        metrics = self._reduce_metrics(context) if return_metrics else metrics
         return (
             self._reduce_losses(context),
             update_successful,
