@@ -75,7 +75,13 @@ class TransformerLossNames:
     load_balancing_loss = "load_balancing_loss"
     router_z_loss = "router_z_loss"
 
-class TransformerRoutingMetrics:
+class TransformerReducedMetrics:
+    """
+    Metrics that are reduced in the same way as loss before logging.
+    """
+    pass
+
+class TransformerRoutingMetrics(TransformerReducedMetrics):
     normalized_average_entropy = "normalized_average_entropy"
     mutual_info = "mutual_info"
 

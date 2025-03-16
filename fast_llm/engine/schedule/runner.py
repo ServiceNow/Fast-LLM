@@ -20,6 +20,7 @@ from fast_llm.engine.schedule.config import EventType, ScheduleConfig, StepType,
 from fast_llm.engine.schedule.schedule import Schedule, Step
 from fast_llm.logging import log_memory_usage
 from fast_llm.utils import Assert
+from typing import Callable
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +95,7 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ScheduleConfig]):
         self._tied_parameters = self._multi_stage.tied_parameters
         self._num_stages = len(self._stages)
         self._loss_defs = {loss_def.name: loss_def for loss_def in self._multi_stage.base_model.loss_defs}
+        self._metric_defs = {metric_def.name: metric_def for metric_def in self._multi_stage.base_model.metric_defs}
 
     def setup(self, distributed: Distributed, optimizer: Optimizer | None = None) -> None:
         assert not self._is_setup
@@ -266,19 +268,34 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ScheduleConfig]):
                 lambda: log_memory_usage(f"End of {context.phase.value} iteration {iteration}", str)
             )
 
-        return self._reduce_losses(context), update_successful, metrics
+        return self._reduce_losses(context), update_successful, self._reduce_metrics(context)
 
     def _reduce_losses(self, context: BatchContext) -> dict[str, float | int]:
+        return self._reduce_metric_or_loss(context, lambda name: self._loss_defs[name].count, "losses")
+
+    def _reduce_metrics(self, context: BatchContext) -> dict[str, float | int]:
+        return self._reduce_metric_or_loss(context, lambda name: self._metric_defs[name].count, "metrics", self._is_reduced_metric)
+
+    def _reduce_metric_or_loss(
+        self,
+        context: BatchContext,
+        check_count: Callable[[str], int],
+        reduce_attr: str = "losses",
+        check_reduce: Callable[[str], bool] = lambda _: True,
+    ) -> dict[str, float | int]:
         reduced_losses = {}
         num_inputs = self._distributed_config.data_parallel * context.schedule.batch_config.num_inputs
-        for name, losses in context.losses.items():
+        for name, losses in context.__getattribute__(reduce_attr).items():
+            if not check_reduce(name):
+                reduced_losses[name] = losses
+                continue
             if losses or self._distributed.pipeline_group:
                 if losses:
-                    reduced_loss = torch.stack(losses).sum() / num_inputs / self._loss_defs[name].count
+                    reduced_loss = torch.stack(losses).sum() / num_inputs / check_count(name)
                     if self._distributed.data_group:
                         all_reduce(reduced_loss, group=self._distributed.data_group)
                 else:
-                    reduced_loss = torch.zeros([1], dtype=self._loss_defs[name].dtype, device=self._distributed.device)
+                    reduced_loss = torch.zeros([1], dtype=check_count(name).dtype, device=self._distributed.device)
                 if self._distributed.pipeline_group:
                     all_reduce(reduced_loss, group=self._distributed.pipeline_group)
             else:
@@ -288,6 +305,18 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ScheduleConfig]):
             name: reduced_loss.item() if isinstance(reduced_loss, torch.Tensor) else reduced_loss
             for name, reduced_loss in reduced_losses.items()
         }
+
+    def _is_reduced_metric(self, metric_name: str) -> bool:
+        """Check if a metric should be reduced (is defined in a TransformerReducedMetrics subclass)."""
+        from fast_llm.layers.transformer.config import TransformerReducedMetrics
+        if metric_name not in self._metric_defs:
+            return False
+        if not hasattr(self, "_reduced_metrics"):
+            self._reduced_metrics = set()
+            for cls in TransformerReducedMetrics.__subclasses__():
+                for attr_name in dir(cls):
+                    self._reduced_metrics.add(attr_name)
+        return metric_name in self._reduced_metrics
 
     def _train_step(self, context: BatchContext, step: Step) -> None:
         if step.throttle_event is not None:
