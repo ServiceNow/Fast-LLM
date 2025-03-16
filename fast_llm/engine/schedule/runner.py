@@ -267,14 +267,20 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ScheduleConfig]):
             log_pipeline_parallel_main_rank(
                 lambda: log_memory_usage(f"End of {context.phase.value} iteration {iteration}", str)
             )
-
-        return self._reduce_losses(context), update_successful, self._reduce_metrics(context)
+        metrics = self._reduce_metrics(context) if return_metrics else None
+        return (
+            self._reduce_losses(context),
+            update_successful,
+            metrics,
+        )
 
     def _reduce_losses(self, context: BatchContext) -> dict[str, float | int]:
         return self._reduce_metric_or_loss(context, lambda name: self._loss_defs[name].count, "losses")
 
     def _reduce_metrics(self, context: BatchContext) -> dict[str, float | int]:
-        return self._reduce_metric_or_loss(context, lambda name: self._metric_defs[name].count, "metrics", self._is_reduced_metric)
+        return self._reduce_metric_or_loss(
+            context, lambda name: self._metric_defs[name].count, "metrics", self._is_reduced_metric
+        )
 
     def _reduce_metric_or_loss(
         self,
@@ -309,6 +315,7 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ScheduleConfig]):
     def _is_reduced_metric(self, metric_name: str) -> bool:
         """Check if a metric should be reduced (is defined in a TransformerReducedMetrics subclass)."""
         from fast_llm.layers.transformer.config import TransformerReducedMetrics
+
         if metric_name not in self._metric_defs:
             return False
         if not hasattr(self, "_reduced_metrics"):
