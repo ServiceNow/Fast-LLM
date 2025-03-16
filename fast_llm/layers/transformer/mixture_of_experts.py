@@ -35,8 +35,7 @@ def calculate_normalized_average_entropy(probs: torch.Tensor) -> torch.Tensor:
     n_experts = probs.size(-1)
     entropy_values = entropy(probs)
     average_entropy = entropy_values.mean()  # Average over batch and tokens
-    return average_entropy / torch.log(torch.tensor(n_experts, dtype=probs.dtype))
-
+    return average_entropy / torch.log(torch.tensor(n_experts, dtype=probs.dtype, device=probs.device))
 
 def entropy(probs: torch.Tensor) -> torch.Tensor:
     probs = torch.clamp(probs, min=1e-9)  # Avoid log(0)
@@ -207,12 +206,12 @@ class MixtureOfExpertMLP(MLPBase):
         if losses is not None or (self.training and grad_scale is not None):
             probs = torch.softmax(logits, dim=-1, dtype=torch.float32)
 
-            # Calculate and log entropy and mutual information
-            entropy = calculate_normalized_average_entropy(probs)
-            mutual_info = calculate_mutual_information(probs)
 
             # Store these metrics        
             if metrics is not None:
+                # Calculate and log entropy and mutual information
+                entropy = calculate_normalized_average_entropy(probs)
+                mutual_info = calculate_mutual_information(probs)
                 if TransformerRoutingMetrics.normalized_average_entropy not in metrics:
                     metrics[TransformerRoutingMetrics.normalized_average_entropy] = []
                 if TransformerRoutingMetrics.mutual_info not in metrics:
