@@ -56,11 +56,6 @@ class GPTDataConfig(DataConfig, GPTLegacyConfig):
         desc="Multiprocessing context. Do not touch.",
         hint=FieldHint.expert,
     )
-    use_loss_masking_spans: bool = Field(
-        default=False,
-        desc="Read and use loss masking spans from the dataset, if present.",
-        hint=FieldHint.feature,
-    )
     padding: bool = Field(
         default=False,
         desc="If True, pad packed sequences instead of adding a new truncated document. Documents longer than sequence length will be skipped.",
