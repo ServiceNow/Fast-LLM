@@ -36,6 +36,8 @@ class MultiStageModel[ConfigType: FastLLMModelConfig](Configurable[ConfigType]):
     _flat_shard: torch.Tensor
     _shards: dict[str, torch.Tensor]
     _shard_names: tuple[str, ...]
+    _weight_buffers: tuple[torch.Tensor, ...]
+    _grad_buffers: tuple[torch.Tensor, ...]
     _distributed: Distributed
     _mode: StageMode
 
@@ -221,15 +223,13 @@ class MultiStageModel[ConfigType: FastLLMModelConfig](Configurable[ConfigType]):
 
         # Allocate and split shards and buffers.
         if self._mode.support_forward:
-            weight_buffers, mem = self._allocate_buffers(self._weight_buffer_meta, self._weight_buffer_sizes, "weight")
+            self._weight_buffers, mem = self._allocate_buffers(
+                self._weight_buffer_meta, self._weight_buffer_sizes, "weight"
+            )
             allocated += mem
-        else:
-            weight_buffers = None
         if self._mode.support_backward:
-            grad_buffers, mem = self._allocate_buffers(self._grad_buffer_meta, self._grad_buffer_sizes, "grad")
+            self._grad_buffers, mem = self._allocate_buffers(self._grad_buffer_meta, self._grad_buffer_sizes, "grad")
             allocated += mem
-        else:
-            grad_buffers = None
 
         self._shard_names = ()
         if self._mode.on_device:
@@ -250,7 +250,7 @@ class MultiStageModel[ConfigType: FastLLMModelConfig](Configurable[ConfigType]):
             tied_parameter.setup(self._distributed)
 
         # Setup the layer shards and buffers.
-        self._setup_stages(weight_buffers, grad_buffers)
+        self._setup_stages()
 
         self.train(self._mode.support_backward)
 
@@ -283,22 +283,22 @@ class MultiStageModel[ConfigType: FastLLMModelConfig](Configurable[ConfigType]):
         }
         return mem
 
-    def _setup_stages(
-        self, weight_buffers: tuple[torch.Tensor, ...] | None, grad_buffers: tuple[torch.Tensor, ...] | None
-    ) -> None:
+    def _setup_stages(self) -> None:
         for stage_index, stage in enumerate(self._stages):
             shard_index = self._stage_shard_indices.get(stage_index)
             weight_buffer_index = self._weight_buffer_indices.get(stage_index)
             grad_buffer_index = self._grad_buffer_indices.get(stage_index)
             stage_weight_buffers = (
-                weight_buffers[weight_buffer_index][: self._stage_weight_buffer_sizes[stage_index]].split(  # noqa
+                self._weight_buffers[weight_buffer_index][
+                    : self._stage_weight_buffer_sizes[stage_index]
+                ].split(  # noqa
                     self._fsdp_weight_buffer_sizes[stage_index]
                 )
                 if self._mode.support_forward and weight_buffer_index is not None
                 else None
             )
             stage_grad_buffers = (
-                grad_buffers[grad_buffer_index][: self._stage_grad_buffer_sizes[stage_index]].split(  # noqa
+                self._grad_buffers[grad_buffer_index][: self._stage_grad_buffer_sizes[stage_index]].split(  # noqa
                     self._fsdp_grad_buffer_sizes[stage_index]
                 )
                 if self._mode.support_backward and grad_buffer_index is not None
