@@ -83,7 +83,6 @@ class GPTSampledIndexedDataset(SampledDataset):
         indexed_dataset: GPTIndexedDataset,
         sampling: GPTSamplingData,
     ):
-        # TODO Soham: Add padded sampling here
         assert isinstance(sampling, GPTSamplingData)
         self._indexed_dataset = indexed_dataset
         self._num_samples = sampling.num_samples
@@ -525,7 +524,6 @@ class GPTSampledIndexedPaddedDataset(SampledDataset):
             spans = np.stack(spans, dtype=np.int32)
         else:
             spans = None
-        # TODO Soham: Check if sequence lengths need to include padding
         sequence_lengths = (
             np.array(
                 [sample.token_ids.size - (idx == len(sample_list) - 1) for idx, sample in enumerate(sample_list)],
