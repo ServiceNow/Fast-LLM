@@ -236,6 +236,8 @@ class StageBase(Configurable[StageConfig]):
         grouped_parameter_slices = {}
         param_groups = []
         for i, fsdp in enumerate(self._fsdps):
+            if not fsdp.requires_grad:
+                continue
             for parameter_name in fsdp.parameter_names:
                 # If needed, chunk the parameter on the first dimension.
                 parameter_meta = fsdp.get_parameter_meta(parameter_name)
