@@ -4,7 +4,6 @@ import typing
 import numpy as np
 
 from fast_llm.data.dataset.gpt.config import GPTSamplingData, ShufflingType
-from fast_llm.data.dataset.gpt.sampled import GPTSampledIndexedPaddedDataset
 from fast_llm.data.dataset.indexed import ConcatenatedDataset, DatasetSlice, IndexedDataset
 
 if typing.TYPE_CHECKING:
@@ -27,7 +26,11 @@ class GPTIndexedDataset(IndexedDataset):
         """
 
     def sample(self, sampling: GPTSamplingData) -> "GPTSampledIndexedDataset":
-        from fast_llm.data.dataset.gpt.sampled import GPTSampledIndexedDataset, LegacyGPTSampledIndexedDataset
+        from fast_llm.data.dataset.gpt.sampled import (
+            GPTSampledIndexedDataset,
+            GPTSampledIndexedPaddedDataset,
+            LegacyGPTSampledIndexedDataset,
+        )
 
         if sampling.config.shuffle == ShufflingType.legacy:
             return LegacyGPTSampledIndexedDataset(self, sampling)

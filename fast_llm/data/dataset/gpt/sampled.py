@@ -377,6 +377,7 @@ class GPTSampledIndexedPaddedDataset(SampledDataset):
         if sampling.cache_directory is not None:
             self._doc_idx = MemmapArray()
             self._sample_idx = MemmapArray()
+            self._yaml_path = None
             log_main_rank(
                 " > No dataset cache directory provided, building the index map on all ranks."
                 "This may be very inefficient...",
@@ -390,6 +391,7 @@ class GPTSampledIndexedPaddedDataset(SampledDataset):
             )
             self._doc_idx = MemmapArray(base_path.with_name(base_path.name + "_doc_idx.npy"))
             self._sample_idx = MemmapArray(base_path.with_name(base_path.name + "_sample_idx.npy"))
+            self._yaml_path = base_path.with_suffix(".yaml")
 
             # Build the indexed mapping if it doesn't exist.
             if sampling.distributed.config.rank == sampling.get_next_rank():
@@ -448,7 +450,7 @@ class GPTSampledIndexedPaddedDataset(SampledDataset):
                 yaml.safe_dump(yaml_data, self._yaml_path.open("w"))
 
         # doc_idx = np.tile(np.arange(document_sizes.size, dtype=np.int32)[length_filter], num_epochs)
-        filtered_epoch_idx = np.arange(documents_per_epoch, dtype=np.int32)[length_filter]
+        filtered_epoch_idx = np.arange(document_sizes.size, dtype=np.int32)[length_filter]
         if self._config.shuffle == ShufflingType.full:
             doc_idx = np.tile(np_rng.shuffle(filtered_epoch_idx), num_epochs)
             np_rng.shuffle(doc_idx)
@@ -462,7 +464,8 @@ class GPTSampledIndexedPaddedDataset(SampledDataset):
             doc_idx = np.empty(shuffled_documents, dtype=np.int32)
             for i in range(shuffled_epochs):
                 np_rng = np.random.RandomState(seed=self._config.seed + i * 571)
-                doc_idx[i * documents_per_epoch : (i + 1) * documents_per_epoch] = np_rng.shuffle(filtered_epoch_idx)
+                np_rng.shuffle(filtered_epoch_idx)
+                doc_idx[i * documents_per_epoch : (i + 1) * documents_per_epoch] = filtered_epoch_idx
         elif self._config.shuffle == ShufflingType.disabled:
             doc_idx = np.tile(filtered_epoch_idx, num_epochs)
         else:
@@ -532,6 +535,10 @@ class GPTSampledIndexedPaddedDataset(SampledDataset):
             else None
         )
         return GPTSample(token_ids=token_ids, loss_masking_spans=spans, sequence_lengths=sequence_lengths)
+
+    @property
+    def name(self) -> str:
+        return self._indexed_dataset.name
 
 
 class LegacyGPTSampledIndexedDataset(SampledDataset):
