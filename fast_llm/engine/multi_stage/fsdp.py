@@ -413,11 +413,11 @@ class FSDP:
         )
         return index
 
-    def _copy_shard_overlaps(
+    def copy_shard_overlaps(
         self,
         loaded_fsdp: "FSDP",
-        shards: list[torch.Tensor],
-        loaded_shards: list[torch.Tensor],
+        shards: dict[str, torch.Tensor],
+        loaded_shards: dict[str, torch.Tensor],
         counter: torch.Tensor,
         device: torch.device,
     ) -> None:
@@ -425,6 +425,7 @@ class FSDP:
         See MultiStage._load_partial.
         TODO: Not intended to work with frozen weights, need to enforce.
         """
+        Assert.eq(set(shards), set(loaded_shards))
         index_overlap = [name for name in loaded_fsdp._parameter_metas if name in self._parameter_metas]
         for name in index_overlap:
             overlap_index_map = self.parameter_global_to_shard(
@@ -435,6 +436,6 @@ class FSDP:
             overlap_count = overlap_mask.sum()
             begin, end = self._parameter_range_in_shard(name)
 
-            for shard, loaded_shard in zip(shards, loaded_shards):
-                shard[begin:end][overlap_mask] = loaded_shard[overlap_index_map_masked]
+            for shard_name, shard in shards.items():
+                shard[begin:end][overlap_mask] = loaded_shards[shard_name][overlap_index_map_masked]
                 counter += overlap_count

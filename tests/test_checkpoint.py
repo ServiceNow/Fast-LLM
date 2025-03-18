@@ -15,6 +15,7 @@ from fast_llm.engine.checkpoint.config import (
     ModelConfigType,
 )
 from fast_llm.engine.multi_stage.config import StageMode
+from fast_llm.engine.multi_stage.multi_stage import ShardName
 from fast_llm.models.auto import model_registry
 from fast_llm.tools.convert import ConversionConfig
 from tests.common import (
@@ -206,12 +207,13 @@ def test_converted_distributed():
     w = safetensors.torch.load_file(_CKPT_PATH / "rank_0.safetensors")
     w0 = safetensors.torch.load_file(_CONVERT_PATH / "distributed_0" / "rank_0.safetensors")
     w1 = safetensors.torch.load_file(_CONVERT_PATH / "distributed_1" / "rank_0.safetensors")
-    assert w.keys() == w0.keys() == w1.keys() == {"state_shard"}
-    for key in w:
-        assert w[key][:1].shape == w0[key].shape, (key, w[key][:1].shape, w0[key].shape)
-        assert (w[key][:1] == w0[key]).all(), (w[key][:1], w0[key])
-        assert w[key][:1].shape == w1[key].shape, (key, w[key][:1].shape, w1[key].shape)
-        assert (w[key][:1] == w1[key]).all(), (w[key][:1], w1[key])
+    assert w.keys() >= {f"{ShardName.weights}_shard"}
+    assert w0.keys() == w1.keys() == {f"{ShardName.weights}_shard"}
+    for key in w0:
+        assert w[key].shape == w0[key].shape, (key, w[key].shape, w0[key].shape)
+        assert (w[key] == w0[key]).all(), (w[key], w0[key])
+        assert w[key].shape == w1[key].shape, (key, w[key].shape, w1[key].shape)
+        assert (w[key] == w1[key]).all(), (w[key], w1[key])
 
 
 @pytest.mark.depends(on=["test_convert_distributed_to_fast_llm", "test_convert_huggingface_to_fast_llm"])
@@ -251,10 +253,11 @@ def test_load_pretrained_distributed_checkpoint():
     )
     model = TEST_MODEL_CLS.from_pretrained(pretrained_config_ref)
     _compare_configs(config.base_model, model.config.base_model)
-    weight_shard = safetensors.torch.load_file(
-        _CKPT_PATH / "rank_0.safetensors", device=str(model._state_shard.device)
-    )["state_shard"]
-    assert (weight_shard == model._state_shard).all()
+    state_shards = safetensors.torch.load_file(
+        _CKPT_PATH / "rank_0.safetensors", device=str(model._distributed.device)
+    )
+    for shard_name in model.state_shard_names:
+        assert (state_shards[f"{shard_name}_shard"] == model.get_shard(shard_name)).all()
 
 
 @pytest.mark.depends(on=["test_load_pretrained_distributed_checkpoint"])
@@ -274,9 +277,9 @@ def test_load_converted_distributed_checkpoint():
     _compare_configs(config.base_model, model.config.base_model)
     _compare_configs(config.base_model, config_1.base_model)
     weight_shard = safetensors.torch.load_file(
-        _CKPT_PATH / "rank_0.safetensors", device=str(model._state_shard.device)
-    )["state_shard"][:1]
-    assert (weight_shard == model._state_shard).all()
+        _CKPT_PATH / "rank_0.safetensors", device=str(model._distributed.device)
+    )[f"{ShardName.weights}_shard"]
+    assert (weight_shard == model.get_shard(ShardName.weights)).all()
 
 
 @pytest.mark.depends(on=["test_converted_fast_llm", "test_load_pretrained_distributed_checkpoint"])
@@ -290,9 +293,9 @@ def test_load_converted_fast_llm_checkpoint():
     _compare_configs(config.base_model, model.config.base_model)
     _compare_configs(config.base_model, config_1.base_model)
     weight_shard = safetensors.torch.load_file(
-        _CKPT_PATH / "rank_0.safetensors", device=str(model._state_shard.device)
-    )["state_shard"][:1]
-    assert (weight_shard == model._state_shard).all()
+        _CKPT_PATH / "rank_0.safetensors", device=str(model._distributed.device)
+    )[f"{ShardName.weights}_shard"]
+    assert (weight_shard == model.get_shard(ShardName.weights)).all()
 
 
 @pytest.mark.depends(on=["test_converted_fast_llm", "test_load_pretrained_distributed_checkpoint"])
@@ -315,9 +318,9 @@ def test_load_converted_huggingface_checkpoint():
     _compare_configs(config.base_model, model.config.base_model)
     _compare_configs(config.base_model, config_1.base_model)
     weight_shard = safetensors.torch.load_file(
-        _CKPT_PATH / "rank_0.safetensors", device=str(model._state_shard.device)
-    )["state_shard"][:1]
-    assert (weight_shard == model._state_shard).all()
+        _CKPT_PATH / "rank_0.safetensors", device=str(model._distributed.device)
+    )[f"{ShardName.weights}_shard"]
+    assert (weight_shard == model.get_shard(ShardName.weights)).all()
 
 
 @pytest.mark.depends(on=["test_load_converted_fast_llm_checkpoint", "test_load_converted_huggingface_checkpoint"])
@@ -458,9 +461,9 @@ def test_load_distributed_checkpoint_dp2():
     model = TEST_MODEL_CLS.from_pretrained(pretrained_config_test, mode=StageMode.weights)
     _compare_configs(config.base_model, model.config.base_model)
     weight_shard = safetensors.torch.load_file(
-        _CKPT_PATH / "rank_0.safetensors", device=str(model._state_shard.device)
-    )["state_shard"][:1]
-    assert (weight_shard == model._state_shard).all()
+        _CKPT_PATH / "rank_0.safetensors", device=str(model._distributed.device)
+    )[f"{ShardName.weights}_shard"]
+    assert (weight_shard == model.get_shard(ShardName.weights)).all()
 
 
 @pytest.mark.slow

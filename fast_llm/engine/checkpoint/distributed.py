@@ -36,7 +36,7 @@ class DistributedCheckpointHandler(CheckpointHandler):
         if self._model.config.distributed.rank == 0:
             yaml.safe_dump(serialized_metadata, (config.path / "metadata.yaml").open("w"))
         safetensors.torch.save_file(
-            tensors={"state_shard": self._model.state_shard[: self.get_num_shards(config)]},
+            tensors={f"{shard_name}_shard": self._model.get_shard(shard_name) for shard_name in metadata.shards},
             filename=config.path / f"rank_{self._model.config.distributed.rank}.safetensors",
             metadata=export_safetensors_metadata(serialized_metadata),
         )
@@ -45,8 +45,9 @@ class DistributedCheckpointHandler(CheckpointHandler):
         # TODO: More safety checks
         loaded_config_dict = config.to_copy({"load_config": ModelConfigType.fast_llm})
         loaded_config = self._model.config_class.from_metadata(loaded_config_dict, metadata)
-        # num_shards = self.get_num_shards(config)
         shard_names = self.get_shard_names(config)
+        # Make sure all shards to load are in the checkpoint.
+        Assert.leq(set(self.get_shard_names(config)), set(metadata.shards))
         Assert.eq(metadata.shards[: len(shard_names)], list(shard_names))
 
         same_format = (
@@ -65,14 +66,22 @@ class DistributedCheckpointHandler(CheckpointHandler):
                 framework="pt",
                 device=str(self._model.distributed.device),
             ) as f:
-                # TODO: Does this copy twice?
-                self._model.state_shard[:num_shards].copy_(f.get_slice("state_shard")[:num_shards])
-                # self._model.state_shard_sizes
+                if "state_shard" in f.keys():
+                    # Old format `state_shard` with shape `(num_shards, shard_size)
+                    # TODO v0.3: Use checkpoint version? Drop support?
+                    for shard_name in shard_names:
+                        self._model.get_shard(shard_name).copy_(
+                            f.get_slice("state_shard")[metadata.shards.index(shard_name)]
+                        )
+                else:
+                    # TODO: Does this copy twice?
+                    for shard_name in shard_names:
+                        self._model.get_shard(shard_name).copy_(f.get_tensor(f"{shard_name}_shard"))
 
         else:
             log_main_rank("Checkpoint format doesn't match, using safe load")
             self._model.config.base_model.compare_architecture(loaded_config.base_model, config.compare_log_fn)
-            with SafeLoad(self._model, num_shards=num_shards, timeout=config.timeout) as context:
+            with SafeLoad(self._model, shard_names=shard_names, timeout=config.timeout) as context:
                 for rank in range(loaded_config.distributed.world_size):
                     loaded_model = self._model.__class__(
                         loaded_config.to_copy({("distributed", "rank"): rank}),
@@ -84,41 +93,32 @@ class DistributedCheckpointHandler(CheckpointHandler):
                     # TODO: skip shards without overlap.
                     with safetensors.safe_open(path, framework="pt", device=str(self._model.distributed.device)) as f:
                         # TODO: Use self_shard
-                        loaded_shard = f.get_slice("state_shard")[:num_shards]
-                        loaded_model.state_shard_meta.validate(loaded_shard)
+                        if "state_shard" in f.keys():
+                            # Old format `state_shard` with shape `(num_shards, shard_size)
+                            # TODO v0.3: Use checkpoint version? Drop support?
+                            loaded_shards = {
+                                shard_name: f.get_slice("state_shard")[metadata.shards.index(shard_name)]
+                                for shard_name in shard_names
+                            }
+                        else:
+                            loaded_shards = {
+                                shard_name: f.get_tensor(f"{shard_name}_shard") for shard_name in shard_names
+                            }
 
-                        # TODO: Improve num shard selection.
-                        self_shard_split = self._model.state_shard[: loaded_shard.size(0)].split(
-                            self._model.stage_shard_sizes, 1
-                        )
-                        loaded_shard_split = loaded_shard.split(loaded_model.stage_shard_sizes, 1)
+                        for shard_name, loaded_shard in loaded_shards.items():
+                            loaded_model.get_shard_meta(shard_name).validate(loaded_shard)
+
+                        self_shards = {shard_name: self._model.get_shard(shard_name) for shard_name in shard_names}
 
                         counter = torch.zeros(1, dtype=torch.int64, device=self._model.distributed.device)
-                        for loaded_shard_index, loaded_stage in enumerate(loaded_model.stages_on_device.values()):
-                            loaded_stage_shards = loaded_shard_split[loaded_shard_index].to(
-                                self._model.distributed.device
-                            )
-                            for loaded_fsdp, loaded_fsdp_shards in zip(
-                                loaded_stage.fsdps,
-                                loaded_stage_shards.split(
-                                    loaded_model._fsdp_weight_shard_sizes[loaded_shard_index], 1
-                                ),
-                                strict=True,
-                            ):
-                                for self_shard_index, self_stage in enumerate(self._model.stages_on_device.values()):
-                                    self_stage_shards = self_shard_split[self_shard_index]
-                                    for self_fsdp, self_fsdp_shards in zip(
-                                        self_stage.fsdps,
-                                        self_stage_shards.split(
-                                            self._model._fsdp_weight_shard_sizes[self_shard_index], 1
-                                        ),
-                                        strict=True,
-                                    ):
-                                        self_fsdp._copy_shard_overlaps(  # noqa
-                                            loaded_fsdp,
-                                            self_fsdp_shards.unbind(0),
-                                            loaded_fsdp_shards,
-                                            counter,
-                                            self._model.distributed.device,
-                                        )
+                        for _, loaded_fsdp, loaded_fsdp_shards in loaded_model.split_shards_by_fsdp(loaded_shards):
+                            for _, self_fsdp, self_fsdp_shards in self._model.split_shards_by_fsdp(self_shards):
+                                self_fsdp.copy_shard_overlaps(
+                                    loaded_fsdp,
+                                    self_fsdp_shards,
+                                    loaded_fsdp_shards,
+                                    counter,
+                                    self._model.distributed.device,
+                                )
+
                         context.mark_as_loaded(counter.item())
