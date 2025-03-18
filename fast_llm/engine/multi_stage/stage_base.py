@@ -51,6 +51,11 @@ class StageBase(Configurable[StageConfig]):
         parameter_metas, frozen_metas = self._get_parameter_metas()
         self._parameter_metas = parameter_metas + frozen_metas
         self._fsdps = []
+        gradient_buffer_dtype = (
+            self._distributed_config.optimization_dtype
+            if self._config.full_precision_gradients
+            else self._distributed_config.training_dtype
+        )
         if parameter_metas:
             self._fsdps.append(
                 FSDP(
@@ -58,11 +63,7 @@ class StageBase(Configurable[StageConfig]):
                     parameter_metas,
                     self._distributed_config.get_distributed_dim(DistributedDimNames.data),
                     training_dtype=self._distributed_config.training_dtype,
-                    gradient_buffer_dtype=(
-                        self._distributed_config.optimization_dtype
-                        if self._config.full_precision_gradients
-                        else self._distributed_config.training_dtype
-                    ),
+                    gradient_buffer_dtype=gradient_buffer_dtype,
                     optimization_dtype=self._distributed_config.optimization_dtype,
                 )
             )
@@ -73,7 +74,7 @@ class StageBase(Configurable[StageConfig]):
                     frozen_metas,
                     self._distributed_config.get_distributed_dim(DistributedDimNames.data),
                     training_dtype=self._distributed_config.training_dtype,
-                    gradient_buffer_dtype=self._distributed_config.training_dtype,
+                    gradient_buffer_dtype=gradient_buffer_dtype,
                     optimization_dtype=(
                         self._distributed_config.optimization_dtype
                         if self._config.store_frozen_weights_in_optimization_precision
