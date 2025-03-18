@@ -98,7 +98,7 @@ class FastLLMModel[ConfigType: FastLLMModelConfig](MultiStageModel[ConfigType]):
 
     def _finalize_load(self, reset_optimizer: bool = True) -> None:
         if reset_optimizer:
-            triton_fill(self._state_shard[1:], 0.0)
+            triton_fill(self._flat_shard[self._weight_shard_size :], 0.0)
         if self._mode.support_forward:
             self.invalidate_buffers()
         self._is_loaded = True
