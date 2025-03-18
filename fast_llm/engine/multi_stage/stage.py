@@ -66,6 +66,8 @@ class Stage(StageBase):
             with torch.enable_grad():
                 for meta in self._parameter_metas:
                     buffer = self.get_parameter_buffer(meta.tensor_name)
+                    if not buffer.requires_grad:
+                        continue
                     # We want to replace the grad accumulation function with ours, but pytorch won't let us do that.
                     # Instead, we let a trivial accumulation run its course (sets .grad),
                     # then run the actual accumulation.

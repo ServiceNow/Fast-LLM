@@ -313,8 +313,8 @@ class MultiStageModel[ConfigType: FastLLMModelConfig](Configurable[ConfigType]):
             )
             stage_grad_shards = (
                 self._shards[ShardName.grads]
-                .split(self._stage_weight_shard_sizes)[shard_index]
-                .split(self._fsdp_weight_shard_sizes[shard_index])
+                .split(self._stage_grad_shard_sizes)[shard_index]
+                .split(self._fsdp_grad_shard_sizes[shard_index])
                 if self._mode.support_backward and shard_index is not None
                 else None
             )
@@ -354,7 +354,7 @@ class MultiStageModel[ConfigType: FastLLMModelConfig](Configurable[ConfigType]):
                     (
                         self._fsdp_weight_shard_sizes
                         if shard_name == ShardName.weights
-                        else self._stage_grad_shard_sizes
+                        else self._fsdp_grad_shard_sizes
                     )[shard_index]
                 )
                 for shard_name, shard_split in optimizer_shards_split.items()

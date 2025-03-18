@@ -218,17 +218,15 @@ class FSDP:
             # Precompute the buffer slice for each parameter.
             # Use `.data` to hide the restore ops from autograd.
             self._parameter_buffers = {}
-            for weight_buffer, grad_buffer, parameter_name in zip(
-                self.split_buffer(self._weight_buffer.data).values(),
-                self.split_buffer(
-                    self._grad_buffer if self._mode.support_backward else self._grad_buffer_meta
-                ).values(),
-                self._parameter_metas,
-            ):
-                parameter_buffer = torch.nn.Parameter(weight_buffer, requires_grad=self._mode.support_backward)
-                if self._mode.support_backward:
-                    parameter_buffer.grad_buffer = grad_buffer
-                # TODO: This is only needed for Megatron initialization
+            for parameter_name in self._parameter_metas:
+                parameter_buffer = torch.nn.Parameter(
+                    self._get_parameter_in_buffer(self._weight_buffer.data, parameter_name),
+                    requires_grad=self._mode.support_backward and self._parameter_metas[parameter_name].requires_grad,
+                )
+                if self._mode.support_backward and self._requires_grad:
+                    parameter_buffer.grad_buffer = self._get_parameter_in_buffer(
+                        self._grad_buffer.data, parameter_name
+                    )
                 self._parameter_buffers[parameter_name] = parameter_buffer
 
     def reset_shard_pad(self, shard: torch.Tensor) -> int:
@@ -245,12 +243,12 @@ class FSDP:
 
     def split_buffer(self, buffer: torch.Tensor) -> dict[str, torch.Tensor]:
         # Split a buffer into appropriately shaped parameters.
-        return {
-            name: buffer[self.get_parameter_begin_in_buffer(name) : self.get_parameter_end_in_buffer(name)].view(
-                meta.shape
-            )
-            for name, meta in self._parameter_metas.items()
-        }
+        return {name: self._get_parameter_in_buffer(buffer, name) for name in self._parameter_metas}
+
+    def _get_parameter_in_buffer(self, buffer: torch.Tensor, name: str) -> torch.Tensor:
+        return buffer[self.get_parameter_begin_in_buffer(name) : self.get_parameter_end_in_buffer(name)].view(
+            self._parameter_metas[name].shape
+        )
 
     def split_shard(self, shard: torch.Tensor) -> dict[str, torch.Tensor]:
         # Split a shard into flat (possibly empty) parameter slices.
