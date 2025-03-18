@@ -558,7 +558,10 @@ class LegacyGPTSampledIndexedDataset(SampledDataset):
         self._sequence_length = sampling.sequence_length
         self._config = sampling.config
         self._tokenizer = sampling.tokenizer
-        self._truncations = sampling.truncations
+        if not sampling.truncations:
+            raise NotImplementedError(
+                "Legacy sampling only supports document truncation. Please use the latest dataset format."
+            )
         self._cross_document_attention = sampling.cross_document_attention
         self._config = sampling.config
         self._tokenizer = sampling.tokenizer
@@ -600,15 +603,8 @@ class LegacyGPTSampledIndexedDataset(SampledDataset):
         logger.info(f" > Sampling dataset {self._indexed_dataset.name} ...")
         document_sizes = self._indexed_dataset.get_document_sizes()
         doc_idx = np.arange(document_sizes.size, dtype=np.int32)
-        if self._truncations:
-            num_documents = len(document_sizes)
-            num_tokens = document_sizes.sum()
-        else:
-            length_filter = document_sizes <= self._sequence_length + 1
-            filtered_document_sizes = document_sizes[length_filter]
-            doc_idx = doc_idx[length_filter]
-            num_documents = filtered_document_sizes.size
-            num_tokens = filtered_document_sizes.sum()
+        num_documents = len(document_sizes)
+        num_tokens = document_sizes.sum()
         np_rng = np.random.RandomState(seed=self._config.seed)
 
         num_epochs = math.ceil((self._sequence_length * self._num_samples + 1) / num_tokens)
@@ -628,24 +624,14 @@ class LegacyGPTSampledIndexedDataset(SampledDataset):
             "The C++ extension for dataset sampling is missing." " Please make sure Fast-LLM is installed correctly."
         )
 
-        if self._truncations:
-            sample_idx = build_sample_idx(
-                document_sizes,
-                doc_idx,
-                self._sequence_length,
-                num_epochs,
-                num_tokens,
-                True,
-            )
-        else:
-            sample_idx = build_sample_idx_padded(
-                document_sizes,
-                doc_idx,
-                self._sequence_length,
-                num_epochs,
-                num_tokens,
-                True,
-            )
+        sample_idx = build_sample_idx(
+            document_sizes,
+            doc_idx,
+            self._sequence_length,
+            num_epochs,
+            num_tokens,
+            True,
+        )
 
         total_size = sample_idx.shape[0] - 1
         shuffle_idx = np.arange(
@@ -674,35 +660,18 @@ class LegacyGPTSampledIndexedDataset(SampledDataset):
         # Get the shuffled index.
         shuffled_idx = self._shuffle_idx[idx]
         # Start and end documents and offsets.
-        if self._truncations:
-            doc_f, offset_f = self._sample_idx[shuffled_idx]
-            doc_l, offset_l = self._sample_idx[shuffled_idx + 1]
-            sample_list = [
-                self._indexed_dataset.get(
-                    self._doc_idx[doc].item(),
-                    offset=(doc == doc_f) * offset_f,
-                    length=offset_l + 1 - (doc == doc_f) * offset_f if doc == doc_l else None,
-                    use_loss_masking_spans=self._config.use_loss_masking_spans,
-                )
-                for doc in range(doc_f, doc_l + 1)
-            ]
-            token_ids = np.concatenate([sample.token_ids for sample in sample_list], dtype=np.int64)
-        else:
-            # in case of no truncation, `sample_idx` is a tuple of (doc_f, num_docs) and there is no offset used.
-            doc_f, num_docs = self._sample_idx[shuffled_idx]
-            sample_list = [
-                self._indexed_dataset.get(
-                    self._doc_idx[doc].item(),
-                    offset=0,
-                    length=None,
-                    use_loss_masking_spans=self._config.use_loss_masking_spans,
-                )
-                for doc in range(doc_f, doc_f + num_docs)
-            ]
-            token_ids = np.concatenate([sample.token_ids for sample in sample_list], dtype=np.int64)
-            token_ids = np.concatenate(
-                [token_ids, np.array([-100] * (self._sequence_length + 1 - len(token_ids)), dtype=token_ids.dtype)]
+        doc_f, offset_f = self._sample_idx[shuffled_idx]
+        doc_l, offset_l = self._sample_idx[shuffled_idx + 1]
+        sample_list = [
+            self._indexed_dataset.get(
+                self._doc_idx[doc].item(),
+                offset=(doc == doc_f) * offset_f,
+                length=offset_l + 1 - (doc == doc_f) * offset_f if doc == doc_l else None,
+                use_loss_masking_spans=self._config.use_loss_masking_spans,
             )
+            for doc in range(doc_f, doc_l + 1)
+        ]
+        token_ids = np.concatenate([sample.token_ids for sample in sample_list], dtype=np.int64)
         Assert.eq(len(token_ids), self._sequence_length + 1)
 
         if self._config.use_loss_masking_spans:
