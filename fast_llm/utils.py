@@ -87,6 +87,10 @@ class Assert:
     def eq(x, *args):
         for arg in args:
             assert x == arg, f"{x} != {arg}"
+    
+    @staticmethod
+    def eq_with_msg(x, y, msg=""):
+        assert x == y, f"{x} != {y} ({msg})"
 
     @staticmethod
     def is_(x, y):
