@@ -4,6 +4,7 @@ import math
 import pathlib
 import typing
 import warnings
+from abc import abstractmethod
 
 import numpy as np
 import torch
@@ -73,10 +74,16 @@ class MemmapArray:
 TOKEN_CUMSUM_RATE = 10
 
 
-class GPTSampledIndexedDataset(SampledDataset):
-    """
-    A sampled GPT dataset.
-    """
+class GPTSampledDatasetFactory:
+    @staticmethod
+    def create(indexed_dataset: GPTIndexedDataset, sampling: GPTSamplingData) -> SampledDataset:
+        if sampling.truncations:
+            return GPTSampledIndexedDataset(indexed_dataset, sampling)
+        else:
+            return GPTSampledIndexedPaddedDataset(indexed_dataset, sampling)
+
+
+class GPTSampledIndexedBase(SampledDataset):
 
     def __init__(
         self,
@@ -92,31 +99,92 @@ class GPTSampledIndexedDataset(SampledDataset):
         self._device = torch.device("cuda" if self._config.gpu else "cpu")
 
         if sampling.cache_directory is None:
-            self._document_shuffling = MemmapArray()
-            self._token_cumsum_shuffled = MemmapArray()
-            self._token_cumsum_unshuffled = MemmapArray()
-            self._yaml_path = None
-            log_main_rank(
-                " > No dataset cache directory provided, building the index map on all ranks."
-                "This may be very inefficient...",
-                log_fn=logger.warning,
-            )
-            self._sample()
+            self._setup_cache()
         else:
             base_path = (
                 sampling.cache_directory / f"{self.name}_ns_{self._num_samples}_sl_{self._sequence_length}"
                 f"_s_{self._config.seed}"
             )
-            # TODO: Names are confusing
-            self._document_shuffling = MemmapArray(base_path.with_name(base_path.name + "_shuffling.npy"))
-            self._token_cumsum_shuffled = MemmapArray(base_path.with_name(base_path.name + "_shuffled_cumsum.npy"))
-            self._token_cumsum_unshuffled = MemmapArray(base_path.with_name(base_path.name + "_unshuffled_cumsum.npy"))
-            self._yaml_path = base_path.with_suffix(".yaml")
+            self._load_cache(base_path)
             # Sample or validate the dataset of a given rank.
             if sampling.distributed.config.rank == sampling.get_next_rank():
                 self._sample()
             # No barrier yet to allow running in parallel.
             # There needs to be one before calling `__getitem__`, normally handled through `GPTData`.
+
+    @abstractmethod
+    def _setup_cache(self):
+        """
+        Setup the cache for the dataset.
+        """
+
+    @abstractmethod
+    def _load_cache(self, base_path: str):
+        """
+        Load the cache for the dataset if already present
+        """
+
+    @abstractmethod
+    def _sample(self) -> None:
+        """
+        Create a `GPTSampledDataset` with the requested parameters.
+        """
+
+    def _load_yaml_data(self, data: dict[str, typing.Any]):
+        self._documents_per_epoch = data["dataset"]["documents_per_epoch"]
+        self._unshuffled_tokens = data["unshuffled_epochs"] * data["dataset"]["tokens_per_epoch"]
+        self._unshuffled_documents = data["unshuffled_epochs"] * self._documents_per_epoch
+
+    def _load_verify_yaml_data(self, data: dict[str, typing.Any]):
+        self._load_yaml_data(data)
+        if self._yaml_path is not None:
+            if self._yaml_path.is_file():
+                loaded_yaml_data = yaml.safe_load(self._yaml_path.open("r"))
+                if loaded_yaml_data != data:
+                    raise RuntimeError(
+                        f"Invalid dataset cache for dataset {self.name}."
+                        " If this is due to an intended configuration change,"
+                        " please delete the cache before continuing."
+                        f"\nCurrent config:\n{yaml.safe_dump(data)}"
+                        f"\nCached config:\n{yaml.safe_dump(loaded_yaml_data)}"
+                    )
+                # Dataset is already sampled, skip.
+                logger.info(f"Using existing sampling for dataset {self.name}")
+                return
+            else:
+                self._yaml_path.parent.mkdir(parents=True, exist_ok=True)
+                yaml.safe_dump(data, self._yaml_path.open("w"))
+
+    def __len__(self):
+        return self._num_samples
+
+    @property
+    def name(self) -> str:
+        return self._indexed_dataset.name
+
+
+class GPTSampledIndexedDataset(GPTSampledIndexedBase):
+    """
+    A sampled GPT dataset.
+    """
+
+    def _setup_cache(self):
+        self._document_shuffling = MemmapArray()
+        self._token_cumsum_shuffled = MemmapArray()
+        self._token_cumsum_unshuffled = MemmapArray()
+        self._yaml_path = None
+        log_main_rank(
+            " > No dataset cache directory provided, building the index map on all ranks."
+            "This may be very inefficient...",
+            log_fn=logger.warning,
+        )
+        self._sample()
+
+    def _load_cache(self, base_path: str):
+        self._document_shuffling = MemmapArray(base_path.with_name(base_path.name + "_shuffling.npy"))
+        self._token_cumsum_shuffled = MemmapArray(base_path.with_name(base_path.name + "_shuffled_cumsum.npy"))
+        self._token_cumsum_unshuffled = MemmapArray(base_path.with_name(base_path.name + "_unshuffled_cumsum.npy"))
+        self._yaml_path = base_path.with_suffix(".yaml")
 
     def _sample(self) -> None:
         """
@@ -155,25 +223,7 @@ class GPTSampledIndexedDataset(SampledDataset):
             "sequence_length": self._sequence_length,
             "config": self._config.to_serialized(),
         }
-        self._load_yaml_data(yaml_data)
-
-        if self._yaml_path is not None:
-            if self._yaml_path.is_file():
-                loaded_yaml_data = yaml.safe_load(self._yaml_path.open("r"))
-                if loaded_yaml_data != yaml_data:
-                    raise RuntimeError(
-                        f"Invalid dataset cache for dataset {self.name}."
-                        " If this is due to an intended configuration change,"
-                        " please delete the cache before continuing."
-                        f"\nCurrent config:\n{yaml.safe_dump(yaml_data)}"
-                        f"\nCached config:\n{yaml.safe_dump(loaded_yaml_data)}"
-                    )
-                # Dataset is already sampled, skip.
-                logger.info(f"Using existing sampling for dataset {self.name}")
-                return
-            else:
-                self._yaml_path.parent.mkdir(parents=True, exist_ok=True)
-                yaml.safe_dump(yaml_data, self._yaml_path.open("w"))
+        self._load_verify_yaml_data(yaml_data)
 
         if shuffled_documents > 1e8:
             warnings.warn(
@@ -362,46 +412,33 @@ class GPTSampledIndexedDataset(SampledDataset):
         self._unshuffled_documents = data["unshuffled_epochs"] * self._documents_per_epoch
 
 
-class GPTSampledIndexedPaddedDataset(SampledDataset):
+class GPTSampledIndexedPaddedDataset(GPTSampledIndexedBase):
     def __init__(self, indexed_dataset: GPTIndexedDataset, sampling: GPTSamplingData):
-        assert isinstance(sampling, GPTSamplingData)
-        self._indexed_dataset = indexed_dataset
-        self._num_samples = sampling.num_samples
-        self._sequence_length = sampling.sequence_length
         self._truncations = sampling.truncations
-        self._cross_document_attention = sampling.cross_document_attention
-        self._config = sampling.config
-        self._device = torch.device("cuda" if self._config.gpu else "cpu")
+        super().__init__(indexed_dataset, sampling)
 
-        if sampling.cache_directory is not None:
-            self._doc_idx = MemmapArray()
-            self._sample_idx = MemmapArray()
-            self._yaml_path = None
-            log_main_rank(
-                " > No dataset cache directory provided, building the index map on all ranks."
-                "This may be very inefficient...",
-                log_fn=logger.warning,
-            )
-            self._sample()
-        else:
-            base_path = (
-                sampling.cache_directory / f"{self.name}_ns_{self._num_samples}_sl_{self._sequence_length}"
-                f"_s_{self._config.seed}"
-            )
-            self._doc_idx = MemmapArray(base_path.with_name(base_path.name + "_doc_idx.npy"))
-            self._sample_idx = MemmapArray(base_path.with_name(base_path.name + "_sample_idx.npy"))
-            self._yaml_path = base_path.with_suffix(".yaml")
+    def _setup_cache(self):
+        self._doc_idx = MemmapArray()
+        self._sample_idx = MemmapArray()
+        self._yaml_path = None
+        log_main_rank(
+            " > No dataset cache directory provided, building the index map on all ranks."
+            "This may be very inefficient...",
+            log_fn=logger.warning,
+        )
+        self._sample()
 
-            # Build the indexed mapping if it doesn't exist.
-            if sampling.distributed.config.rank == sampling.get_next_rank():
-                self._sample()
+    def _load_cache(self, base_path: str):
+        self._doc_idx = MemmapArray(base_path.with_name(base_path.name + "_doc_idx.npy"))
+        self._sample_idx = MemmapArray(base_path.with_name(base_path.name + "_sample_idx.npy"))
+        self._yaml_path = base_path.with_suffix(".yaml")
 
     def _sample(self) -> None:
         document_sizes = self._indexed_dataset.get_document_sizes()
         length_filter = document_sizes <= self._sequence_length + 1
         filtered_document_sizes = document_sizes[length_filter]
         documents_per_epoch = filtered_document_sizes.size
-        tokens_per_epoch = filtered_document_sizes.sum()
+        tokens_per_epoch = filtered_document_sizes.sum().item()
         np_rng = np.random.RandomState(seed=self._config.seed)
 
         num_epochs = math.ceil((self._sequence_length * self._num_samples + 1) / tokens_per_epoch)
@@ -428,25 +465,7 @@ class GPTSampledIndexedPaddedDataset(SampledDataset):
             "config": self._config.to_serialized(),
             "truncations": self._truncations,
         }
-        self._load_yaml_data(yaml_data)
-
-        if self._yaml_path is not None:
-            if self._yaml_path.is_file():
-                loaded_yaml_data = yaml.safe_load(self._yaml_path.open("r"))
-                if loaded_yaml_data != yaml_data:
-                    raise RuntimeError(
-                        f"Invalid dataset cache for dataset {self.name}."
-                        " If this is due to an intended configuration change,"
-                        " please delete the cache before continuing."
-                        f"\nCurrent config:\n{yaml.safe_dump(yaml_data)}"
-                        f"\nCached config:\n{yaml.safe_dump(loaded_yaml_data)}"
-                    )
-                # Dataset is already sampled, skip.
-                logger.info(f"Using existing sampling for dataset {self.name}")
-                return
-            else:
-                self._yaml_path.parent.mkdir(parents=True, exist_ok=True)
-                yaml.safe_dump(yaml_data, self._yaml_path.open("w"))
+        self._load_verify_yaml_data(yaml_data)
 
         # doc_idx = np.tile(np.arange(document_sizes.size, dtype=np.int32)[length_filter], num_epochs)
         filtered_epoch_idx = np.arange(document_sizes.size, dtype=np.int32)[length_filter]

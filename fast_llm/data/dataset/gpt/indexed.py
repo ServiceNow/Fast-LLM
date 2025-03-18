@@ -26,19 +26,12 @@ class GPTIndexedDataset(IndexedDataset):
         """
 
     def sample(self, sampling: GPTSamplingData) -> "GPTSampledIndexedDataset":
-        from fast_llm.data.dataset.gpt.sampled import (
-            GPTSampledIndexedDataset,
-            GPTSampledIndexedPaddedDataset,
-            LegacyGPTSampledIndexedDataset,
-        )
+        from fast_llm.data.dataset.gpt.sampled import GPTSampledDatasetFactory, LegacyGPTSampledIndexedDataset
 
         if sampling.config.shuffle == ShufflingType.legacy:
             return LegacyGPTSampledIndexedDataset(self, sampling)
         else:
-            if not sampling.truncations:
-                return GPTSampledIndexedPaddedDataset(self, sampling)
-            else:
-                return GPTSampledIndexedDataset(self, sampling)
+            return GPTSampledDatasetFactory.create(self, sampling)
 
 
 class GPTDatasetSlice[IndexedDatasetType: GPTIndexedDataset](DatasetSlice[IndexedDatasetType], GPTIndexedDataset):
