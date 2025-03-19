@@ -392,7 +392,13 @@ class GPTSampledIndexedDataset(GPTSampledIndexedBase):
         )
         token_ids = np.concatenate(token_ids, dtype=np.int64)
         loss_masking_spans = (
-            np.stack(loss_masking_spans, dtype=np.int32) if self._config.use_loss_masking_spans else None
+            (
+                np.stack(loss_masking_spans, dtype=np.int32)
+                if self._config.use_loss_masking_spans and loss_masking_spans
+                else np.array([])
+            )
+            if self._config.use_loss_masking_spans
+            else None
         )
         Assert.eq(len(token_ids), self._sequence_length + 1)
 
@@ -529,9 +535,8 @@ class GPTSampledIndexedPaddedDataset(GPTSampledIndexedBase):
             for doc in range(doc_f, doc_f + num_docs)
         ]
         token_ids = np.concatenate([sample.token_ids for sample in sample_list], dtype=np.int64)
-        token_ids = np.concatenate(
-            [token_ids, np.array([-100] * (self._sequence_length + 1 - len(token_ids)), dtype=token_ids.dtype)]
-        )
+        padded_tokens = self._sequence_length + 1 - len(token_ids)
+        token_ids = np.concatenate([token_ids, np.array([-100] * padded_tokens, dtype=token_ids.dtype)])
         Assert.eq(len(token_ids), self._sequence_length + 1)
         if self._config.use_loss_masking_spans:
             spans = []
@@ -545,7 +550,8 @@ class GPTSampledIndexedPaddedDataset(GPTSampledIndexedBase):
             spans = None
         sequence_lengths = (
             np.array(
-                [sample.token_ids.size - (idx == len(sample_list) - 1) for idx, sample in enumerate(sample_list)],
+                [sample.token_ids.size - (idx == len(sample_list) - 1) for idx, sample in enumerate(sample_list)]
+                + [padded_tokens],
                 dtype=np.int32,
             )
             if not self._cross_document_attention
@@ -700,7 +706,7 @@ class LegacyGPTSampledIndexedDataset(SampledDataset):
                 for span in sample.loss_masking_spans:
                     spans.append(span + offset)
                 offset += len(sample.token_ids)
-            spans = np.stack(spans, dtype=np.int32)
+            spans = np.stack(spans, dtype=np.int32) if spans else np.array([])
         else:
             spans = None
         sequence_lengths = (
