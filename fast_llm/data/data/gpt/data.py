@@ -13,7 +13,7 @@ from fast_llm.core.distributed import safe_barrier
 from fast_llm.data.data.abstract import Data
 from fast_llm.data.data.gpt.config import GPTDataConfig
 from fast_llm.data.dataset.abstract import SampledDataset
-from fast_llm.data.dataset.gpt.config import GPTSamplingData, GPTSampledDatasetConfig
+from fast_llm.data.dataset.gpt.config import GPTSamplingData
 from fast_llm.data.dataset.gpt.sampled import GPTSample
 from fast_llm.data.dataset.monitor import DatasetMonitor
 from fast_llm.data.iterator import SampledDatasetIterator
@@ -91,39 +91,18 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
             if num_samples > 0:
                 # TODO: Do the check earlier.
                 assert phase in self._config.datasets
-                if phase == PhaseType.validation:
-                    # Only for a validation step multiple datasets are supported
-                    assert isinstance(self._config.datasets[phase], dict)
-                    self._datasets[phase] = dict()
-                    for validation_dataset_name in self._config.datasets[phase].keys():
-                        sampling = GPTSamplingData(
-                            num_samples=samples_per_phase[phase],
-                            config=self._config.sampling,
-                            cache_directory=self._cache_directory,
-                            distributed=distributed,
-                            phase=phase,
-                            sequence_length=self._max_sequence_length,
-                            vocab_size=self._vocab_size,
-                            tokenizer=self._tokenizer,
-                        )
-                        dataset = self._config.datasets[phase][validation_dataset_name].build_and_sample(sampling)
-                        self._datasets[phase][validation_dataset_name] = DatasetMonitor(
-                            dataset, self._config.data_sample_warn_time_ms
-                        )
-                else:
-                    assert isinstance(self._config.datasets[phase], GPTSampledDatasetConfig)
-                    sampling = GPTSamplingData(
-                        num_samples=samples_per_phase[phase],
-                        config=self._config.sampling,
-                        cache_directory=self._cache_directory,
-                        distributed=distributed,
-                        phase=phase,
-                        sequence_length=self._max_sequence_length,
-                        vocab_size=self._vocab_size,
-                        tokenizer=self._tokenizer,
-                    )
-                    dataset = self._config.datasets[phase].build_and_sample(sampling)
-                    self._datasets[phase] = DatasetMonitor(dataset, self._config.data_sample_warn_time_ms)
+                sampling = GPTSamplingData(
+                    num_samples=samples_per_phase[phase],
+                    config=self._config.sampling,
+                    cache_directory=self._cache_directory,
+                    distributed=distributed,
+                    phase=phase,
+                    sequence_length=self._max_sequence_length,
+                    vocab_size=self._vocab_size,
+                    tokenizer=self._tokenizer,
+                )
+                dataset = self._config.datasets[phase].build_and_sample(sampling)
+                self._datasets[phase] = DatasetMonitor(dataset, self._config.data_sample_warn_time_ms)
 
         safe_barrier(self._distributed.world_group, "data_preparation", timeout)
         self._is_setup = True
@@ -142,62 +121,15 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
         num_workers: int,
         prefetch_factor: int | None = None,
     ) -> typing.Iterator[typing.Any]:
-        Assert.incl(phase, self._datasets)
-        return self._get_iterator(
-            batch_config=batch_config,
-            phase=phase,
-            dataset=self._datasets[phase],
-            consumed_samples=consumed_samples,
-            num_workers=num_workers,
-            prefetch_factor=prefetch_factor,
-        )
-
-    def get_validation_dataset_iterator(
-        self,
-        batch_config: BatchConfig,
-        validation_dataset_name: str,
-        *,
-        consumed_samples: int,
-        num_workers: int,
-        prefetch_factor: int | None = None,
-    ) -> typing.Iterator[typing.Any]:
-        Assert.incl(validation_dataset_name, self._datasets[PhaseType.validation])
-        return self._get_iterator(
-            batch_config=batch_config,
-            phase=PhaseType.validation,
-            sub_dataset_name=validation_dataset_name,
-            dataset=self._datasets[PhaseType.validation][validation_dataset_name],
-            consumed_samples=consumed_samples,
-            num_workers=num_workers,
-            prefetch_factor=prefetch_factor,
-        )
-
-    @property
-    def validation_dataset_names(self) -> typing.Iterable[str]:
-        return self._datasets[PhaseType.validation].keys()
-
-    def _get_iterator(
-        self,
-        batch_config: BatchConfig,
-        phase: PhaseType,
-        dataset: SampledDataset,
-        *,
-        consumed_samples: int,
-        num_workers: int,
-        prefetch_factor: int | None = None,
-        sub_dataset_name: str | None = None,
-    ) -> typing.Iterator[typing.Any]:
         assert self._is_setup
+        Assert.incl(phase, self._datasets)
         Assert.in_range_incl(batch_config.sequence_length, 1, self._max_sequence_length)
-        if sub_dataset_name is None:
-            log_main_rank(f"Initializing {phase} data iterator from sample {consumed_samples}...")
-        else:
-            log_main_rank(f"Initializing {phase}:{sub_dataset_name} data iterator from sample {consumed_samples}...")
+        log_main_rank(f"Initializing {phase} data iterator from sample {consumed_samples}...")
         return iter(
             torch.utils.data.DataLoader(
-                dataset,  # noqa
+                self._datasets[phase],  # noqa
                 batch_sampler=SampledDatasetIterator(
-                    total_samples=len(dataset),
+                    total_samples=len(self._datasets[phase]),
                     begin_index=consumed_samples,
                     micro_batch_size=batch_config.micro_batch_size,
                     data_rank=self._distributed.config.batch_data_rank,
