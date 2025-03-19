@@ -144,7 +144,7 @@ class Attention(torch.nn.Module):
 
         # PEFT.
         self.query = self._config.peft.apply_linear(self.query, TransformerSubLayerName.query)
-        self.key_value = self._config.peft.apply_linear(self.key_value, TransformerSubLayerName.dense)
+        self.key_value = self._config.peft.apply_linear(self.key_value, TransformerSubLayerName.key_value)
         self.dense = self._config.peft.apply_linear(self.dense, TransformerSubLayerName.dense)
 
     def _attn_fused(
