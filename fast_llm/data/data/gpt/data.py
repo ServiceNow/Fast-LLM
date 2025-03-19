@@ -70,7 +70,7 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
     def setup(
         self,
         distributed: "Distributed",
-        samples_per_phase: dict[PhaseType, int],
+        samples_per_dataset: dict[str, int],
         cache_directory: pathlib.Path,
         timeout: float | None = None,
     ) -> None:
@@ -78,7 +78,7 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
         Load the datasets, and prepare or load the samplings.
         This may take a while and a significant amount of cpu memory.
         """
-        super().setup(distributed, samples_per_phase, cache_directory)
+        super().setup(distributed, samples_per_dataset, cache_directory)
         log_main_rank(f"Preparing dataset. This may take several minutes.")
         self._tokenizer = None if self._config.tokenizer.path is None else Tokenizer(self._config.tokenizer)
 
@@ -87,22 +87,22 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
             warnings.warn(f"Using the dataset directory for the index cache.")
 
         self._datasets = {}
-        for phase, num_samples in samples_per_phase.items():
+        for dataset_name, num_samples in samples_per_dataset.items():
             if num_samples > 0:
                 # TODO: Do the check earlier.
-                assert phase in self._config.datasets
+                assert dataset_name in self._config.datasets
                 sampling = GPTSamplingData(
-                    num_samples=samples_per_phase[phase],
+                    num_samples=samples_per_dataset[dataset_name],
                     config=self._config.sampling,
                     cache_directory=self._cache_directory,
                     distributed=distributed,
-                    phase=phase,
+                    dataset_name=dataset_name,
                     sequence_length=self._max_sequence_length,
                     vocab_size=self._vocab_size,
                     tokenizer=self._tokenizer,
                 )
-                dataset = self._config.datasets[phase].build_and_sample(sampling)
-                self._datasets[phase] = DatasetMonitor(dataset, self._config.data_sample_warn_time_ms)
+                dataset = self._config.datasets[dataset_name].build_and_sample(sampling)
+                self._datasets[dataset_name] = DatasetMonitor(dataset, self._config.data_sample_warn_time_ms)
 
         safe_barrier(self._distributed.world_group, "data_preparation", timeout)
         self._is_setup = True
@@ -115,21 +115,21 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
     def get_iterator(
         self,
         batch_config: BatchConfig,
-        phase: PhaseType,
+        dataset_name: str,
         *,
         consumed_samples: int,
         num_workers: int,
         prefetch_factor: int | None = None,
     ) -> typing.Iterator[typing.Any]:
         assert self._is_setup
-        Assert.incl(phase, self._datasets)
+        Assert.incl(dataset_name, self._datasets)
         Assert.in_range_incl(batch_config.sequence_length, 1, self._max_sequence_length)
-        log_main_rank(f"Initializing {phase} data iterator from sample {consumed_samples}...")
+        log_main_rank(f"Initializing {dataset_name} dataset iterator from sample {consumed_samples}...")
         return iter(
             torch.utils.data.DataLoader(
-                self._datasets[phase],  # noqa
+                self._datasets[dataset_name],  # noqa
                 batch_sampler=SampledDatasetIterator(
-                    total_samples=len(self._datasets[phase]),
+                    total_samples=len(self._datasets[dataset_name]),
                     begin_index=consumed_samples,
                     micro_batch_size=batch_config.micro_batch_size,
                     data_rank=self._distributed.config.batch_data_rank,

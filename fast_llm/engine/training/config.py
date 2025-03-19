@@ -267,9 +267,9 @@ class ShutdownConfig(IntervalConfig):
 
 @config_class()
 class TrainingConfig(Config):
-    validation: ValidationConfig = Field(
-        default_factory=ValidationConfig,
-        desc="Configuration for the validation phase",
+    validation: dict[str, ValidationConfig] = Field(
+        default_factory=dict,
+        desc="A dictionary of validation dataset names and their configurations for the validation phase.",
         hint=FieldHint.core,
     )
     logs: MetricsLogsConfig = Field(

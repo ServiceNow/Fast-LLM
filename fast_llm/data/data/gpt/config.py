@@ -39,7 +39,7 @@ class GPTDataConfig(DataConfig, GPTLegacyConfig):
         hint=FieldHint.feature,
     )
     # TODO: Review field. Move closer to phase definition in training config?
-    datasets: dict[PhaseType, GPTSampledDatasetConfig | dict[str, GPTSampledDatasetConfig]] = Field(
+    datasets: dict[str, GPTSampledDatasetConfig] = Field(
         default_factory=dict,
         desc="Configuration for the dataset(s).",
         hint=FieldHint.core,
@@ -68,7 +68,7 @@ class GPTDataConfig(DataConfig, GPTLegacyConfig):
                 "Using the legacy dataset definition format." " Specify it through `data.datasets` instead."
             )
             self.datasets = {
-                phase: GPTLegacyDatasetConfig.from_dict(self, strict=False)
+                phase.value: GPTLegacyDatasetConfig.from_dict(self, strict=False)
                 for phase in (PhaseType.training, PhaseType.validation, PhaseType.test)
             }
         super()._validate()

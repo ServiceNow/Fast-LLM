@@ -54,29 +54,40 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
             distributed_config=self._config.model.distributed,
         )
         steps_per_split = {
-            PhaseType.training: self._config.training.train_iters,
-            PhaseType.validation: self._config.training.validation.get_iteration_count(
-                self._config.training.train_iters,
-                # There may be an extra validation after the last training step.
-                not self._config.training.validation.enabled(self._config.training.train_iters),
-            ),
-            PhaseType.test: self._config.training.test_iters,
+            PhaseType.training: {PhaseType.training.value: self._config.training.train_iters},
+            PhaseType.validation: {
+                dataset_name: self._config.training.validation[dataset_name].get_iteration_count(
+                    self._config.training.train_iters,
+                    # There may be an extra validation after the last training step.
+                    not self._config.training.validation[dataset_name].enabled(self._config.training.train_iters),
+                )
+                for dataset_name in self._config.training.validation.keys()
+            },
+            PhaseType.test: {PhaseType.test.value: self._config.training.test_iters},
         }
         self._samples_per_split = {
-            phase: self._config.batch.batch_size * steps for phase, steps in steps_per_split.items() if steps > 0
+            phase: {
+                dataset_name: self._config.batch.batch_size * steps
+                for dataset_name, steps in datasets.items()
+                if steps > 0
+            }
+            for phase, datasets in steps_per_split.items()
         }
         self._loss_defs = self._multi_stage.base_model.loss_defs
 
         # Setup the schedules
         self._schedule = {
-            phase: Schedule(
-                multi_stage=self._multi_stage,
-                batch_config=self._config.batch,
-                schedule_config=self._config.schedule,
-                distributed_config=self._config.model.distributed,
-                phase=phase,
-            )
-            for phase in self._samples_per_split
+            phase: {
+                dataset_name: Schedule(
+                    multi_stage=self._multi_stage,
+                    batch_config=self._config.batch,
+                    schedule_config=self._config.schedule,
+                    distributed_config=self._config.model.distributed,
+                    phase=phase,
+                )
+                for dataset_name in datasets
+            }
+            for phase, datasets in self._samples_per_split.items()
         }
 
     def setup(self, distributed: Distributed, run: Run) -> None:
@@ -107,7 +118,11 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
         log_main_rank("Preparing datasets...")
         self._data.setup(
             distributed,
-            self._samples_per_split,
+            {
+                dataset_name: steps
+                for datasets in self._samples_per_split.values()
+                for dataset_name, steps in datasets.items()
+            },
             None if run.experiment_directory is None else run.experiment_directory / "dataset_cache",
             timeout=self._config.training.timeout,
         )
@@ -127,10 +142,9 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
         assert self._is_setup
         return self._consumed_samples * self._config.batch.sequence_length
 
-    @property
-    def _completed_validation_steps(self) -> int:
+    def _get_completed_validation_steps(self, dataset_name) -> int:
         # Number of validation steps performed before the current step
-        return self._config.training.validation.get_iteration_count(self._completed_steps - 1)
+        return self._config.training.validation[dataset_name].get_iteration_count(self._completed_steps - 1)
 
     def run(self) -> None:
         assert self._is_setup
@@ -155,7 +169,7 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
 
         if done and PhaseType.test in self._samples_per_split:
             log_main_rank(lambda: f"Running test phase ...")
-            test_iterator = self._get_data_iterator(PhaseType.test)
+            test_iterator = self._get_data_iterator(PhaseType.test.value)
             metrics[PhaseType.test] = self._evaluate(
                 data_iterator=test_iterator,
                 phase=PhaseType.test,
@@ -180,11 +194,11 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
         )
 
         train_iterator = self._get_data_iterator(
-            PhaseType.training,
+            PhaseType.training.value,
             self._completed_steps,
             self._config.training.prefetch_factor,
         )
-        valid_iterators = {name: None for name in self._data.validation_dataset_names}
+        valid_iterators = {name: None for name in self._config.training.validation.keys()}
 
         log_main_rank("Training ...")
 
@@ -206,7 +220,7 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
                 #   (Also preprocessing adds overhead)
                 reduced_losses, update_successful, train_metrics = self._runner.run_step(
                     train_iterator,
-                    self._schedule[PhaseType.training],
+                    self._schedule[PhaseType.training][PhaseType.training.value],
                     iteration=self._completed_steps,
                     return_metrics=is_logging,
                 )
@@ -288,38 +302,48 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
                 # Evaluation
                 # TODO: Adjust valid iterator length.
                 if PhaseType.validation in self._samples_per_split and (
-                    done or self._config.training.validation.enabled(self._completed_steps)
+                    done
+                    or any(
+                        valid_conf.enabled(self._completed_steps)
+                        for valid_conf in self._config.training.validation.values()
+                    )
                 ):
                     formatted_metrics = []
-                    for validation_dataset_name in self._data.validation_dataset_names:
-                        if valid_iterators[validation_dataset_name] is None:
-                            valid_iterators[validation_dataset_name] = self._get_validation_data_iterator(
-                                validation_dataset_name, self._completed_validation_steps
+                    for dataset_name in self._config.training.validation.keys():
+                        if not self._config.training.validation[dataset_name].enabled(
+                            self._completed_steps
+                        ):
+                            continue
+                        if valid_iterators[dataset_name] is None:
+                            valid_iterators[dataset_name] = self._get_data_iterator(
+                                dataset_name, self._get_completed_validation_steps(dataset_name)
                             )
                         # TODO: formatting metric category as Validation.validation_dataset_name
                         #       maybe format each metric with validation_dataset_name prefix instead?
                         # TODO: setting performance metrics per validation dataset
                         #       maybe to set aggregate performance metrics for all validation datasets?
-                        metrics[f"{PhaseType.validation}.{validation_dataset_name}"] = self._evaluate(
-                            data_iterator=valid_iterators[validation_dataset_name],
+                        metric_key = f"{PhaseType.validation}.{dataset_name}"
+                        metrics[metric_key] = self._evaluate(
+                            data_iterator=valid_iterators[dataset_name],
                             phase=PhaseType.validation,
-                            num_iters=self._config.training.validation.iterations,
-                            begin_iter=self._completed_validation_steps,
-                            sub_dataset_name=validation_dataset_name
+                            num_iters=self._config.training.validation[dataset_name].iterations,
+                            begin_iter=self.get_completed_validation_steps(dataset_name),
+                            dataset_name=dataset_name,
                         )
                         formatted_metrics.append(
                             format_metrics(
-                                metrics[PhaseType.validation],
+                                metrics[metric_key],
                                 self._loss_defs,
                                 PhaseType.validation,
-                                sub_dataset_name=validation_dataset_name,
+                                dataset_name=dataset_name,
                             )
                         )
 
-                    formatted_metrics = "\n".join(formatted_metrics)
-                    log_main_rank(formatted_metrics)
-                    if self._config.training.wandb.alert.enabled(self._completed_steps):
-                        self._wandb.alert("Validation results", formatted_metrics, "INFO")
+                    if len(formatted_metrics) > 0:
+                        formatted_metrics = "\n".join(formatted_metrics)
+                        log_main_rank(formatted_metrics)
+                        if self._config.training.wandb.alert.enabled(self._completed_steps):
+                            self._wandb.alert("Validation results", formatted_metrics, "INFO")
 
                 if is_main_rank() and metrics:
                     self._wandb.log_metrics(self._completed_steps, metrics)
@@ -340,15 +364,15 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
         phase: PhaseType,
         num_iters: int,
         begin_iter: int = 0,
-        sub_dataset_name: str | None = None,
+        dataset_name: str | None = None,
     ) -> dict[str, float | int]:
-        full_phase_name = phase.value if sub_dataset_name is None else f"{phase.value}_{sub_dataset_name}"
+        full_phase_name = phase.value if dataset_name is None else f"{phase.value}_{dataset_name}"
         safe_barrier(self._distributed.world_group, f"{full_phase_name} begin")
         begin_time = time.perf_counter()
         total_losses = {loss_def.name: 0.0 for loss_def in self._loss_defs}
         for iter_ in range(num_iters):
             iter_losses, _, _ = self._runner.run_step(
-                data_iterator, self._schedule[phase], iteration=begin_iter + iter_
+                data_iterator, self._schedule[phase][dataset_name], iteration=begin_iter + iter_
             )
             for name, value in iter_losses.items():
                 total_losses[name] += value
@@ -383,11 +407,11 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
         return metrics
 
     def _get_data_iterator(
-        self, phase, completed_steps: int = 0, prefetch_factor: int | None = None
+        self, dataset_name, completed_steps: int = 0, prefetch_factor: int | None = None
     ) -> typing.Iterator[typing.Any]:
         return self._data.get_iterator(
             self._config.batch,
-            phase,
+            dataset_name,
             consumed_samples=completed_steps * self._config.batch.batch_size,
             num_workers=self._config.training.num_workers,
             prefetch_factor=prefetch_factor,
