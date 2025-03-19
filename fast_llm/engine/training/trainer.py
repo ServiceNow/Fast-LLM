@@ -310,9 +310,7 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
                 ):
                     formatted_metrics = []
                     for dataset_name in self._config.training.validation.keys():
-                        if not self._config.training.validation[dataset_name].enabled(
-                            self._completed_steps
-                        ):
+                        if not self._config.training.validation[dataset_name].enabled(self._completed_steps):
                             continue
                         if valid_iterators[dataset_name] is None:
                             valid_iterators[dataset_name] = self._get_data_iterator(
@@ -412,17 +410,6 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
         return self._data.get_iterator(
             self._config.batch,
             dataset_name,
-            consumed_samples=completed_steps * self._config.batch.batch_size,
-            num_workers=self._config.training.num_workers,
-            prefetch_factor=prefetch_factor,
-        )
-
-    def _get_validation_data_iterator(
-        self, validation_dataset_name, completed_steps: int = 0, prefetch_factor: int | None = None
-    ) -> typing.Iterator[typing.Any]:
-        return self._data.get_validation_dataset_iterator(
-            self._config.batch,
-            validation_dataset_name,
             consumed_samples=completed_steps * self._config.batch.batch_size,
             num_workers=self._config.training.num_workers,
             prefetch_factor=prefetch_factor,
