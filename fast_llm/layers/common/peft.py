@@ -20,29 +20,36 @@ class LoRALinear(LinearLike):
         super().__init__()
         self.linear = linear
         self.linear.weight.requires_grad = False
-        if self.linear._in_dim.parallel_dim is not None or self.linear._out_dim.parallel_dim is not None:
-            # TODO: TP support.
-            raise ValueError("LoRA not supported with tensor parallelism.")
+        in_dim = self.linear._in_dim
+        if in_dim.parallel_dim is not None:
+            assert in_dim.parallel_dim.size == 1, "LoRA not supported with tensor parallelism."
+            in_dim = TensorDim(in_dim.name, in_dim.global_size)
+        out_dim = self.linear._out_dim
+        if out_dim.parallel_dim is not None:
+            assert out_dim.parallel_dim.size == 1, "LoRA not supported with tensor parallelism."
+            out_dim = TensorDim(out_dim.name, out_dim.global_size)
+
+        self._rank = rank
         self._alpha = alpha
         self._dropout = dropout
         self._transposed_weight = self.linear._transposed_weight
-        middle_dim = TensorDim("lora_middle", rank)
+        middle_dim = TensorDim("lora_middle", self._rank)
 
         self.layer_0 = Linear(
-            self.linear._in_dim,
+            in_dim,
             middle_dim,
             bias=False,
             weight_init_method=init_method_0,
             transposed_weight=self.linear._transposed_weight,
-            lr_scale=self.linear._lr_scale,
+            lr_scale=self.linear.weight.lr_scale,
         )
         self.layer_1 = Linear(
             middle_dim,
-            self.linear._out_dim,
+            out_dim,
             bias=False,
             weight_init_method=init_method_1,
             transposed_weight=self.linear._transposed_weight,
-            lr_scale=self.linear._lr_scale,
+            lr_scale=self.linear.weight.lr_scale,
         )
         # TODO: Implement proper backward pass.
         self.layer_0.weight.auto_grad_accumulation = True

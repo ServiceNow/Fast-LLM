@@ -59,6 +59,7 @@ class LinearBase(LinearLike):
         self._transposed_weight = transposed_weight
         self._in_dim = in_dim
         self._out_dim = out_dim
+        self._weight_init_method = weight_init_method
         self.weight = ParameterMeta.from_dims(
             (self._in_dim, self._out_dim) if self._transposed_weight else (self._out_dim, self._in_dim),
             init_method=weight_init_method,

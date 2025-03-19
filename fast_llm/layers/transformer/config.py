@@ -20,7 +20,10 @@ from fast_llm.layers.common.config import (
 from fast_llm.utils import Assert, div
 
 if typing.TYPE_CHECKING:
+    import torch
+
     from fast_llm.layers.common.linear import LinearBase, LinearLike
+    from fast_llm.tensor import ParameterMeta
 
 logger = logging.getLogger(__name__)
 
@@ -169,7 +172,7 @@ class AddLinearBiasChoices(str, enum.Enum):
     only_attn_qkv = "only_attn_qkv"
 
 
-class TransformerLinearLayerName(str, enum.Enum):
+class TransformerSubLayerName(str, enum.Enum):
     # TODO: Use this to replace AddLinearBiasChoices.
     query = "query"
     key_value = "key_value"
@@ -180,8 +183,8 @@ class TransformerLinearLayerName(str, enum.Enum):
 
 @config_class()
 class TransformerPeftConfig(PeftConfig):
-    layers: list[TransformerLinearLayerName] = Field(
-        default_factory=lambda: [TransformerLinearLayerName.query, TransformerLinearLayerName.key_value],
+    layers: list[TransformerSubLayerName] = Field(
+        default_factory=lambda: [TransformerSubLayerName.query, TransformerSubLayerName.key_value],
         desc="The layers on which to apply LoRA.",
         hint=FieldHint.feature,
     )
@@ -190,12 +193,23 @@ class TransformerPeftConfig(PeftConfig):
         desc="Whether to freeze other layers during training.",
     )
 
-    def apply_linear(self, linear: "LinearBase", layer_type: TransformerLinearLayerName | None = None) -> "LinearLike":
+    def apply_linear(self, linear: "LinearBase", layer_type: TransformerSubLayerName | None = None) -> "LinearLike":
         if layer_type is None or self.layers is None or layer_type in self.layers:
             return super().apply_linear(linear)
         elif self.freeze_others:
             linear.weight.requires_grad = False
         return linear
+
+    def apply_other(self, module: "torch.nn.Module") -> "torch.nn.Module":
+        if self.freeze_others:
+            for parameter in module.parameters():
+                parameter.requires_grad = False
+        return module
+
+    def apply_weight(self, parameter: "ParameterMeta") -> "ParameterMeta":
+        if self.freeze_others:
+            parameter.requires_grad = False
+        return parameter
 
 
 @config_class()
@@ -658,8 +672,7 @@ class TransformerConfig(TransformerArchitectureConfig, BaseModelConfig):
         Assert.geq(self.hidden_dropout, 0)
         Assert.incl(len(self.mlp_lr_scale), (1, self.num_experts))
         if self.peft.type != PeftType.none and (
-            TransformerLinearLayerName.mlp_1 in self.peft.layers
-            or TransformerLinearLayerName.mlp_2 in self.peft.layers
+            TransformerSubLayerName.mlp_1 in self.peft.layers or TransformerSubLayerName.mlp_2 in self.peft.layers
         ):
             raise NotImplementedError("LoRA not supported for MLP.")
         for scale in self.mlp_lr_scale:

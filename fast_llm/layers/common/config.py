@@ -131,6 +131,7 @@ class PeftArchitectureConfig(BaseModelArchitectureConfig):
 
 @config_class()
 class PeftConfig(PeftArchitectureConfig, BaseModelConfig):
+    _abstract = False
     # TODO: Architecture/non-architecture split might not make much sense here.
 
     type: PeftType = Field(
@@ -162,7 +163,12 @@ class PeftConfig(PeftArchitectureConfig, BaseModelConfig):
 
             # TODO: Init method?
             return LoRALinear(
-                linear, linear._weight_init_method, linear._weight_init_method, self.rank, self.alpha, self.dropout
+                linear,
+                linear.weight.param_init_method,
+                linear.weight.param_init_method,
+                self.rank,
+                self.alpha,
+                self.dropout,
             )
         else:
             raise NotImplementedError(self.type)
