@@ -27,7 +27,7 @@
 
 /*
  Helper methods for fast index mapping builds.
- Changes for Fast-LLM: Use int16 for dataset index, add verbose argument to build_sample_idx.
+ Changes for Fast-LLM: Use int16 for dataset index, add verbose argument to build_sample_idx, add build_sample_idx_padded
 */
 
 #include <iostream>
@@ -129,6 +129,74 @@ py::array build_sample_idx(const py::array_t<int32_t>& sizes_,
 
 }
 
+py::array build_sample_idx_padded(const py::array_t<int32_t>& sizes_,
+        const py::array_t<int32_t>& doc_idx_,
+        const int32_t seq_length,
+        const int32_t num_epochs,
+        const int64_t tokens_per_epoch,
+        const bool verbose) {
+    /* Similar to the method above but expects the sequences to be padded instead of truncating
+        the last document in a sequence. Expects all sizes to be lesser than seq_length + 1
+        2D array with sizes [number-of-samples + 1, 2] where [..., 0] contains an index into `doc_idx`
+        and [..., 1] has the number of documents from the starting index to fully include into it */
+    assert (seq_length > 1);
+    assert (num_epochs > 0);
+    assert (tokens_per_epoch > 1);
+
+    auto sizes = sizes_.unchecked<1>();
+    auto doc_idx = doc_idx_.unchecked<1>();
+
+    int64_t num_samples = (num_epochs * tokens_per_epoch - 1) / seq_length;
+    int32_t* sample_idx = new int32_t[2*(num_samples+1)];
+
+    if (verbose) {
+        cout << "    using:" << endl << std::flush;
+        cout << "     number of documents:       " << doc_idx_.shape(0) / num_epochs << endl << std::flush;
+        cout << "     number of epochs:          " << num_epochs << endl << std::flush;
+        cout << "     sequence length:           " << seq_length << endl << std::flush;
+        cout << "     total number of samples:   " << num_samples << endl << std::flush;
+    }
+
+    int64_t sample_index = 0;
+    int64_t doc_idx_index = 0;
+    int64_t start_doc_index = 0;
+    int32_t n_docs = 0;
+    while (sample_index <= num_samples) {
+      int32_t remaining_seq_length = seq_length + 1;
+      while (remaining_seq_length != 0) {
+        auto doc_id = doc_idx[doc_idx_index];
+        remaining_seq_length -= sizes[doc_id];
+        if (remaining_seq_length < 0) {
+          remaining_seq_length = 0;
+        } else if (remaining_seq_length == 0) {
+          ++n_docs;
+          ++doc_idx_index;
+          remaining_seq_length = 0;
+        } else {
+          ++n_docs;
+          ++doc_idx_index;
+        }
+      }
+      sample_idx[2 * sample_index] = start_doc_index;
+      sample_idx[2 * sample_index + 1] = n_docs;
+      ++sample_index;
+      start_doc_index = doc_idx_index;
+      n_docs = 0;
+    }
+
+    py::capsule free_when_done(sample_idx, [](void *mem_) {
+        int32_t *mem = reinterpret_cast<int32_t*>(mem_);
+        delete[] mem;
+    });
+
+    const auto byte_size = sizeof(int32_t);
+    return py::array(std::vector<int64_t>{num_samples+1, 2},
+                     {2*byte_size, byte_size},
+                     sample_idx,
+                     free_when_done);
+}
+
 PYBIND11_MODULE(data, m) {
     m.def("build_sample_idx", &build_sample_idx);
+    m.def("build_sample_idx_padded", &build_sample_idx_padded);
 }
