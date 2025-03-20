@@ -19,6 +19,7 @@ from fast_llm.tensor import ParameterMeta, TensorMeta
 from fast_llm.layers.transformer.config import TransformerArchitectureConfig, TransformerConfig
 from fast_llm.layers.language_model.config import LanguageModelKwargs, LanguageModelLossNames
 
+
 def materialize_meta_tensors(model, tensor_space):
     # Initialize parameters that are on meta device
     for name, param in model.named_parameters():
@@ -90,6 +91,7 @@ def mamba_config():
     # config.setup_tensor_space(TensorSpace(config))
     return config
 
+
 # def test_mamba_layer(distributed_config, distributed, mamba_config):
 #     # Initialize layer
 
@@ -115,6 +117,8 @@ def mamba_config():
 #     assert not torch.isnan(output).any()
 #     assert not torch.isinf(output).any()
 
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA available")
 def test_mamba_block(distributed_config, distributed, mamba_config):
 
     factory_kwargs = {}
@@ -129,17 +133,15 @@ def test_mamba_block(distributed_config, distributed, mamba_config):
         norm_cls=norm_cls,
         fused_add_norm=mamba_config.fused_add_norm,
         residual_in_fp32=mamba_config.residual_in_fp32,
-        )
-
+    )
 
     tensor_space = TensorSpace(distributed_config=distributed_config)
     tensor_space.setup(distributed)
 
     # model = MultiStageModel(mamba_config, distributed, tensor_space)
 
-
     materialize_meta_tensors(block, tensor_space)
-    block.to('cuda')
+    block.to("cuda")
 
     batch_size = 2
     seq_length = 32
@@ -155,6 +157,7 @@ def test_mamba_block(distributed_config, distributed, mamba_config):
     assert not torch.isinf(hidden_states).any()
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA available")
 def test_hybrid_model_train_with_fast_mode(distributed_config, hybrid_config):
     print(hybrid_config)
     model = HybridBaseModel(hybrid_config, distributed_config)
@@ -189,6 +192,7 @@ def test_hybrid_model_train_with_fast_mode(distributed_config, hybrid_config):
     loss.backward()
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA available")
 def test_hybrid_model_slow_mode(distributed_config, hybrid_config):
     print(hybrid_config)
     hybrid_config.use_fast_path = False
@@ -223,17 +227,20 @@ def test_hybrid_model_slow_mode(distributed_config, hybrid_config):
     loss = sum(losses[LanguageModelLossNames.language_model_loss])
     loss.backward()
 
+
 @dataclass
 class InferenceParams:
     max_seqlen: int
     max_batch_size: int
     sequence_len_offset: int = 0
     key_value_memory_dict: dict = None
-    
+
     def __post_init__(self):
         if self.key_value_memory_dict is None:
             self.key_value_memory_dict = {}
 
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA available")
 def test_hybrid_model_inference(distributed_config, hybrid_config):
     print(hybrid_config)
     hybrid_config.use_fast_path = False
@@ -255,10 +262,8 @@ def test_hybrid_model_inference(distributed_config, hybrid_config):
     max_new_tokens = 10
 
     inference_params = InferenceParams(
-            max_seqlen=len(x[0]) + max_new_tokens,
-            max_batch_size=x.shape[0],
-            sequence_len_offset=0
-        )
+        max_seqlen=len(x[0]) + max_new_tokens, max_batch_size=x.shape[0], sequence_len_offset=0
+    )
     losses = {LanguageModelLossNames.language_model_loss: []}
 
     output = model(
