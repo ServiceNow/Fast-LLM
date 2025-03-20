@@ -3,7 +3,6 @@ import typing
 import torch
 
 from fast_llm.engine.config_utils.tensor_space import TensorDim
-from fast_llm.functional.autograd import wrap_forward_backward
 from fast_llm.layers.common.linear import Linear, LinearBase, LinearLike
 
 
@@ -54,10 +53,6 @@ class LoRALinear(LinearLike):
         # TODO: Implement proper backward pass.
         self.layer_0.weight.auto_grad_accumulation = True
         self.layer_1.weight.auto_grad_accumulation = True
-        self._forward = wrap_forward_backward(self.forward_only, self.backward)
-
-    def forward(self, input_: torch.Tensor) -> torch.Tensor:
-        return self._forward(input_)
 
     def forward_only(self, input_: torch.Tensor) -> tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor]]:
         # TODO: torch compile?

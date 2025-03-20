@@ -302,11 +302,8 @@ class Attention(torch.nn.Module):
         return window_size
 
     def forward(self, input_: torch.Tensor, kwargs: dict[str, typing.Any]) -> tuple[torch.Tensor, torch.Tensor | None]:
-        print("BBBBBBBBBBBBBB")
         sequence_first = kwargs[TransformerKwargs.sequence_first]
-        print("input_", input_.shape)
         query, key_value = self._query_key_value(input_, sequence_first)
-        print("query", query.shape)
 
         # TODO: Move the rest to function.
 
@@ -336,9 +333,6 @@ class Attention(torch.nn.Module):
 
         key, value = key_value.split(self._local_head_groups * self._kv_channels, dim=-1)
 
-        print("query_t", query.shape)
-        print("self._local_heads", self._local_heads)
-        print("self._kv_channels", self._kv_channels)
         query = query.view(*query.shape[:2], self._local_heads, self._kv_channels)
         key = key.view(*key.shape[:2], self._local_head_groups, self._kv_channels)
         value = value.view(*value.shape[:2], self._local_head_groups, self._kv_channels)
