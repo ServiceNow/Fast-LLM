@@ -57,15 +57,16 @@ class LoRALinear(LinearLike):
     def forward_only(self, input_: torch.Tensor) -> tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor]]:
         # TODO: torch compile?
         input_ = input_.detach().requires_grad_()
-        output = self.linear(input_) + (self._alpha / self._rank) * self.layer_1(
-            self.layer_0(torch.dropout(input_, self._dropout, self._training) if self._dropout > 0.0 else input_)
-        )
+        with torch.enable_grad():
+            output = self.linear(input_) + (self._alpha / self._rank) * self.layer_1(
+                self.layer_0(torch.dropout(input_, self._dropout, self._training) if self._dropout > 0.0 else input_)
+            )
         return output.detach(), (input_, output)
 
     def backward(
-        self, grad_output: torch.Tensor, context: tuple[torch.Tensor, torch.Tensor]
+        self, grad_output: torch.Tensor, context: torch.Tensor
     ) -> tuple[torch.Tensor, typing.Callable[[], None] | None]:
         # TODO: Implement proper backward pass.
         input_, output = context
         output.backward(grad_output)
-        return input_.grad, None
+        return input_.grad

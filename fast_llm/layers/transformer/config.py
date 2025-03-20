@@ -194,20 +194,21 @@ class TransformerPeftConfig(PeftConfig):
     )
 
     def apply_linear(self, linear: "LinearBase", layer_type: TransformerSubLayerName | None = None) -> "LinearLike":
-        if layer_type is None or self.layers is None or layer_type in self.layers:
-            return super().apply_linear(linear)
-        elif self.freeze_others:
-            linear.weight.requires_grad = False
+        if self.type != PeftType.none:
+            if layer_type is None or self.layers is None or layer_type in self.layers:
+                return super().apply_linear(linear)
+            elif self.freeze_others:
+                linear.weight.requires_grad = False
         return linear
 
     def apply_other(self, module: "torch.nn.Module") -> "torch.nn.Module":
-        if self.freeze_others:
+        if self.type != PeftType.none and self.freeze_others:
             for parameter in module.parameters():
                 parameter.requires_grad = False
         return module
 
     def apply_weight(self, parameter: "ParameterMeta") -> "ParameterMeta":
-        if self.freeze_others:
+        if self.type != PeftType.none and self.freeze_others:
             parameter.requires_grad = False
         return parameter
 

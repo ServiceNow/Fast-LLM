@@ -406,7 +406,7 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ScheduleConfig]):
             losses=context.losses,
             metrics=context.metrics,
         )
-        if context.is_training:
+        if step.backward_step is not None:
             context.contexts[step.backward_step.global_index] = grad_context
         self._record_compute(context, step)
         return output
