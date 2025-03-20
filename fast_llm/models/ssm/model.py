@@ -98,6 +98,12 @@ class HybridModelConfig(LanguageModelBaseConfig, HybridArchitectureConfig):
         hint=FieldHint.core,
     )
 
+    use_fast_path: bool = Field(
+        default=False,
+        desc="Use fast path for Mamba blocks.",
+        hint=FieldHint.core,
+    )
+
     @classmethod
     def _from_dict(
         cls,
@@ -184,7 +190,7 @@ class HybridBaseModel(GPTBaseModel[HybridModelConfig]):
                     residual_in_fp32=self._config.mamba_residual_in_fp32,
                     fused_add_norm=self._config.mamba_fused_add_norm,
                     layernorm_epsilon=self._config.mamba_layernorm_epsilon,
-                    add_bias_linear=self._config.transformer.add_linear_biases,
+                    use_fast_path=self._config.use_fast_path,
                 )
                 
                 # Create Mamba block

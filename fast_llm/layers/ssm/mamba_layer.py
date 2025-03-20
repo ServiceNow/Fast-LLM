@@ -34,6 +34,10 @@ except ImportError:
     RMSNorm, layer_norm_fn, rms_norm_fn = None, None, None
     
 
+'''
+Note: this is mostly copied from https://github.com/Zyphra/Zamba2, similar code is aslo in https://github.com/state-spaces/mamba
+'''
+
 
 def init_A(d_state, d_inner) -> Callable[[ParameterMeta, torch.Tensor, torch.Generator], torch.Tensor]:
     def init_(meta: ParameterMeta, tensor: torch.Tensor, generator: torch.Generator):  # noqa        
@@ -122,8 +126,8 @@ class MambaLayer(nn.Module):
                                 init_method=init_ones_)
 
         self.out_proj = Linear(TensorDim("D_inner", self.d_inner), TensorDim("D_model", self.d_model), 
-                               bias=config.add_bias_linear, # TODO: check init method
-                               weight_init_method=init_normal_(), 
+                               bias=False, # TODO: note, if bias is used there is a problem in the MambaInnerFn.backward for the bias grads. I think this bias is not used in other mamba repos.
+                               weight_init_method=init_normal_(), # TODO: check init method
                                **factory_kwargs)
 
     def forward(self, hidden_states, from_shared_proj = None, inference_params=None):
@@ -210,7 +214,7 @@ class MambaLayer(nn.Module):
                     x,
                     rearrange(self.conv1d.weight, "d 1 w -> d w"),
                     self.conv1d.bias,
-                    self.activation,
+                    activation=self.activation,
                 )
 
             # We're careful here about the layout, to avoid extra transposes.
@@ -240,7 +244,6 @@ class MambaLayer(nn.Module):
                 ssm_state.copy_(last_state)
             y = rearrange(y, "b d l -> b l d")
             out = self.out_proj(y)
-        # out = self.out_proj(y) # OO, this is not needed here
         return out
 
     def step(self, hidden_states, conv_state, ssm_state):
