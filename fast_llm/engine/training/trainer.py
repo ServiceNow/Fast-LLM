@@ -73,6 +73,9 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
             }
             for phase, datasets in steps_per_split.items()
         }
+        # prune empty phases
+        self._samples_per_split = {k: v for k, v in self._samples_per_split.items() if len(v) > 0}
+
         self._loss_defs = self._multi_stage.base_model.loss_defs
 
         # Setup the schedules
@@ -170,12 +173,13 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
         if done and PhaseType.test in self._samples_per_split:
             log_main_rank(lambda: f"Running test phase ...")
             test_iterator = self._get_data_iterator(PhaseType.test.value)
-            metrics[PhaseType.test] = self._evaluate(
+            metrics_key = PhaseType.test.value
+            metrics[metrics_key] = self._evaluate(
                 data_iterator=test_iterator,
                 phase=PhaseType.test,
                 num_iters=self._config.training.test_iters,
             )
-            formatted_metrics = format_metrics(metrics[PhaseType.test], self._loss_defs, PhaseType.test)
+            formatted_metrics = format_metrics(metrics[metrics_key], self._loss_defs, PhaseType.test)
             log_main_rank(formatted_metrics)
             self._wandb.alert("Testing results", formatted_metrics, "WARN")
             # TODO: This may erase some metrics.
@@ -251,7 +255,8 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
                             self._config.training.train_iters - self._completed_steps
                         )
                         model_tflops, hardware_tflops = self.get_tflops(PhaseType.training, time_per_iteration)
-                        metrics[PhaseType.training] = {
+                        metrics_key = PhaseType.training.value
+                        metrics[metrics_key] = {
                             "train_iters": self._config.training.train_iters,
                             "batch_size": self._config.batch.batch_size,
                             "iteration": self._completed_steps,
@@ -280,9 +285,7 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
                             **get_memory_usage_mib(),
                         }
 
-                        formatted_metrics = format_metrics(
-                            metrics[PhaseType.training], self._loss_defs, PhaseType.training
-                        )
+                        formatted_metrics = format_metrics(metrics[metrics_key], self._loss_defs, PhaseType.training)
                         logger.info(formatted_metrics)
                         if self._config.training.wandb.alert.enabled(self._completed_steps):
                             self._wandb.alert("Training results", formatted_metrics, "INFO")
@@ -325,7 +328,7 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
                             data_iterator=valid_iterators[dataset_name],
                             phase=PhaseType.validation,
                             num_iters=self._config.training.validation[dataset_name].iterations,
-                            begin_iter=self.get_completed_validation_steps(dataset_name),
+                            begin_iter=self._get_completed_validation_steps(dataset_name),
                             dataset_name=dataset_name,
                         )
                         formatted_metrics.append(
@@ -438,7 +441,7 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
         assert self._multi_stage._is_loaded  # noqa
 
     def _save_checkpoint(
-        self, config: TrainingCheckpointBaseConfig, metrics: dict[PhaseType, dict[str, float | int]] | None
+        self, config: TrainingCheckpointBaseConfig, metrics: dict[str, dict[str, float | int]] | None
     ) -> None:
         # TODO v0.3: Move barrier, ok file to FastLLMModel
         checkpoint_base_directory = config.get_save_directory(self._run.experiment_directory)
@@ -456,7 +459,7 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
             "completed_steps": self._completed_steps,
         }
         if metrics is not None:
-            metadata["metrics"] = {key.value: value for key, value in metrics.items()}
+            metadata["metrics"] = metrics
         self._multi_stage.save_checkpoint(
             config.get_save_config(checkpoint_directory, timeout=self._config.training.timeout), metadata
         )
