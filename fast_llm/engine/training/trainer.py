@@ -323,7 +323,7 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
                         #       maybe format each metric with validation_dataset_name prefix instead?
                         # TODO: setting performance metrics per validation dataset
                         #       maybe to set aggregate performance metrics for all validation datasets?
-                        metric_key = f"{PhaseType.validation}.{dataset_name}"
+                        metric_key = f"{PhaseType.validation.value}.{dataset_name}"
                         metrics[metric_key] = self._evaluate(
                             data_iterator=valid_iterators[dataset_name],
                             phase=PhaseType.validation,
