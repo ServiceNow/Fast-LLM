@@ -192,6 +192,7 @@ class InputParallelLinear(LinearBase):
         )
 
     def forward(self, input_: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor | None]:
+        # TODO: Use self._forward instead (broken).
         return input_parallel_linear_autograd(
             input_,
             weight=self.weight,
@@ -202,15 +203,17 @@ class InputParallelLinear(LinearBase):
         )
 
     def forward_only(self, input_: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor | None, tuple[typing.Any, ...]]:
+        group = self._in_dim.parallel_group
         output, context = input_parallel_linear_forward(
             input_,
             weight=self.weight,
-            bias=None if self._group else self.bias,
-            group=self._in_dim.parallel_group,
+            bias=None if group else self.bias,
+            group=group,
             sequence_parallel=self._sequence_parallel,
             transposed_weight=self._transposed_weight,
         )
-        return output, self.bias if self._group else None, context
+        return output, self.bias if group else None, context
 
     def backward(self, grad_output: torch.Tensor, context: tuple[typing.Any, ...]) -> torch.Tensor:  # noqa
+        # TODO: Needs grad_bias as input too?
         return input_parallel_linear_backward(grad_output, context)

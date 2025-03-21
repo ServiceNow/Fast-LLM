@@ -212,6 +212,15 @@ class TransformerPeftConfig(PeftConfig):
             parameter.requires_grad = False
         return parameter
 
+    def _validate(self) -> None:
+        if self.type != PeftType.none:
+            if TransformerSubLayerName.mlp_1 in self.layers or TransformerSubLayerName.mlp_2 in self.layers:
+                # TODO: Add MLP support.
+                raise NotImplementedError("LoRA not supported for MLP.")
+            if TransformerSubLayerName.dense in self.layers:
+                # TODO: Support InputParallelLinear (different output format).
+                raise NotImplementedError("LoRA not supported for attention dense layer.")
+
 
 @config_class()
 class TransformerArchitectureConfig(BaseModelArchitectureConfig):
@@ -672,10 +681,7 @@ class TransformerConfig(TransformerArchitectureConfig, BaseModelConfig):
         Assert.geq(self.attention_dropout, 0)
         Assert.geq(self.hidden_dropout, 0)
         Assert.incl(len(self.mlp_lr_scale), (1, self.num_experts))
-        if self.peft.type != PeftType.none and (
-            TransformerSubLayerName.mlp_1 in self.peft.layers or TransformerSubLayerName.mlp_2 in self.peft.layers
-        ):
-            raise NotImplementedError("LoRA not supported for MLP.")
+
         for scale in self.mlp_lr_scale:
             if scale is not None:
                 Assert.geq(scale, 0)

@@ -159,10 +159,10 @@ class PeftConfig(PeftArchitectureConfig, BaseModelConfig):
         if self.type == PeftType.none:
             return linear
         elif self.type == PeftType.lora:
-            from fast_llm.layers.common.peft import LoRALinear
+            from fast_llm.layers.common.peft import lora_linear
 
             # TODO: Init method?
-            return LoRALinear(
+            return lora_linear(
                 linear,
                 linear.weight.param_init_method,
                 linear.weight.param_init_method,
