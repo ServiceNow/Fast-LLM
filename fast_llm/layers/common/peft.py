@@ -14,6 +14,8 @@ def lora_linear(
     rank: int,
     alpha: float,
     dropout: float = 0.0,
+    out_channel_begin: int | None = None,
+    out_channel_end: int | None = None,
 ):
     layer.weight.requires_grad = False
     in_dim = layer._in_dim
@@ -24,6 +26,13 @@ def lora_linear(
     if out_dim.parallel_dim is not None:
         assert out_dim.parallel_dim.size == 1, "LoRA not supported with tensor parallelism."
         out_dim = TensorDim(out_dim.name, out_dim.global_size)
+    if out_channel_begin is not None or out_channel_end is not None:
+        if out_channel_begin is None:
+            out_channel_begin = 0
+        if out_channel_end is None:
+            out_channel_end = out_dim.global_size
+        # TODO: This won't work with TP. Use Composite dim structure for proper split?
+        out_dim = TensorDim(out_dim.name, out_channel_end - out_channel_begin)
 
     middle_dim = TensorDim("lora_middle", rank)
 
@@ -53,9 +62,17 @@ def lora_linear(
         # TODO: torch compile?
         input_ = input_.detach().requires_grad_()
         with torch.enable_grad():
-            output = old_forward(input_) + (alpha / rank) * layer.lora_1(
+            output = old_forward(input_)
+            if isinstance(output, tuple):
+                layer_out, tp_bias = output[0]
+                assert tp_bias is None
+            lora_out = (alpha / rank) * layer.lora_1(
                 layer.lora_0(torch.dropout(input_, dropout, layer.training) if dropout > 0.0 else input_)
             )
+            if out_channel_begin is None:
+                output = output + lora_out
+            else:
+                output.view(-1, layer_out.size(-1))[:, out_channel_begin:out_channel_end] += lora_out
         return output.detach(), (input_, output)
 
     def backward(

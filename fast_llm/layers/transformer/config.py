@@ -175,6 +175,8 @@ class AddLinearBiasChoices(str, enum.Enum):
 class TransformerSubLayerName(str, enum.Enum):
     # TODO: Use this to replace AddLinearBiasChoices.
     query = "query"
+    key = "key"
+    value_ = "value"
     key_value = "key_value"
     dense = "dense"
     mlp_1 = "mlp_1"
@@ -184,7 +186,7 @@ class TransformerSubLayerName(str, enum.Enum):
 @config_class()
 class TransformerPeftConfig(PeftConfig):
     layers: list[TransformerSubLayerName] = Field(
-        default_factory=lambda: [TransformerSubLayerName.query, TransformerSubLayerName.key_value],
+        default_factory=lambda: [TransformerSubLayerName.query, TransformerSubLayerName.value],
         desc="The layers on which to apply LoRA.",
         hint=FieldHint.feature,
     )
@@ -196,7 +198,12 @@ class TransformerPeftConfig(PeftConfig):
     def apply_linear(self, linear: "LinearBase", layer_type: TransformerSubLayerName | None = None) -> "LinearLike":
         if self.type != PeftType.none:
             if layer_type is None or self.layers is None or layer_type in self.layers:
-                return super().apply_linear(linear)
+                if layer_type == TransformerSubLayerName.key:
+                    return super().apply_linear(linear, out_channel_end=div(linear._out_dim.global_size, 2))
+                elif layer_type == TransformerSubLayerName.value_:
+                    return super().apply_linear(linear, out_channel_begin=div(linear._out_dim.global_size, 2))
+                else:
+                    return super().apply_linear(linear)
             elif self.freeze_others:
                 linear.weight.requires_grad = False
         return linear
@@ -220,6 +227,20 @@ class TransformerPeftConfig(PeftConfig):
             if TransformerSubLayerName.dense in self.layers:
                 # TODO: Support InputParallelLinear (different output format).
                 raise NotImplementedError("LoRA not supported for attention dense layer.")
+            if (
+                sum(
+                    name in self.layers
+                    for name in (
+                        TransformerSubLayerName.key_value,
+                        TransformerSubLayerName.key,
+                        TransformerSubLayerName.value_,
+                    )
+                )
+                > 1
+            ):
+                raise ValueError(
+                    f"{TransformerSubLayerName.key_value.value}, {TransformerSubLayerName.key.value} and {TransformerSubLayerName.value_.value} are mutually exclusive."
+                )
 
 
 @config_class()

@@ -155,7 +155,7 @@ class PeftConfig(PeftArchitectureConfig, BaseModelConfig):
         hint=FieldHint.stability,
     )
 
-    def apply_linear(self, linear: "LinearBase") -> "LinearLike":
+    def apply_linear(self, linear: "LinearBase", **kwargs) -> "LinearLike":
         if self.type == PeftType.none:
             return linear
         elif self.type == PeftType.lora:
@@ -169,6 +169,7 @@ class PeftConfig(PeftArchitectureConfig, BaseModelConfig):
                 self.rank,
                 self.alpha,
                 self.dropout,
+                **kwargs,
             )
         else:
             raise NotImplementedError(self.type)
