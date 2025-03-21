@@ -223,14 +223,17 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ScheduleConfig]):
                         # Stage hasn't been reduced yet.
                         # TODO: Overlap this? (reduce with last local layer that uses it)
                         main_stage.reduce_gradients()
-                # TODO: Overlap this? (not really useful for gpt)
-                all_reduce(main_stage.grad_shard, group=tied_parameter.group)
-                if self._multi_stage.config.multi_stage.debug_all_param_gradients:
-                    main_stage.log_shard(
-                        name="gradient",
-                        shard=main_stage.grad_shard,
-                        level=self._multi_stage.config.multi_stage.debug_all_param_gradients,
-                    )
+                for fsdp in main_stage.fsdps:
+                    # TODO: Overlap this? (not really useful for gpt)
+                    all_reduce(fsdp.grad_shard, group=tied_parameter.group)
+                    if self._multi_stage.config.multi_stage.debug_all_param_gradients:
+                        fsdp.log_shard(
+                            name="gradient",
+                            shard=fsdp.grad_shard,
+                            distributed=self._distributed,
+                            level=self._multi_stage.config.multi_stage.debug_all_param_gradients,
+                            global_=self._multi_stage.config.multi_stage.debug_global_tensors,
+                        )
 
         self._record_event(context, EventType.post_reduce, None)
         # Update weights
@@ -248,11 +251,14 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ScheduleConfig]):
                 stage.invalidate_buffer()
         if self._multi_stage.config.multi_stage.debug_param_update:
             for stage in self._stages_on_device:
-                stage.log_shard(
-                    name="param",
-                    shard=stage.weight_shard,
-                    level=self._multi_stage.config.multi_stage.debug_param_update,
-                )
+                for fsdp in stage.fsdps:
+                    fsdp.log_shard(
+                        name="param",
+                        shard=fsdp.weight_shard,
+                        distributed=self._distributed,
+                        level=self._multi_stage.config.multi_stage.debug_param_update,
+                        global_=self._multi_stage.config.multi_stage.debug_global_tensors,
+                    )
 
         self._record_event(context, EventType.optimizer, None)
         self._record_event(context, EventType.batch_end, None)
@@ -335,7 +341,7 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ScheduleConfig]):
                 for name, tied_parameter in self._tied_parameters.items():
                     if tied_parameter.on_device:
                         kwargs[name] = self._stages[tied_parameter.main_stage].get_parameter_buffer(
-                            tied_parameter.meta
+                            tied_parameter.meta.tensor_name
                         )
                 data_index = context.schedule.get_data_index(micro_batch, micro_sequence)
                 if self._stages_owned[0]:

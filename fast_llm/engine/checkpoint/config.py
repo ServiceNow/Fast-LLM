@@ -251,8 +251,5 @@ class CheckpointHandler(abc.ABC):
     def load(self, config: CheckpointLoadConfig, metadata: "CheckpointMetadata"):
         pass
 
-    def get_num_shards(self, config: CheckpointStateConfigBase) -> int:
-        return len(self._model.state_shard_names) if config.optimizer_state else 1
-
     def get_shard_names(self, config: CheckpointStateConfigBase) -> tuple[str, ...]:
         return self._model.state_shard_names if config.optimizer_state else self._model.state_shard_names[:1]

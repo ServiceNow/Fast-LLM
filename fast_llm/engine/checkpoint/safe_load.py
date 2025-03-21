@@ -24,11 +24,11 @@ class SafeLoad:
     In case of failure, it will attempt to find out as precisely as possible where the problem comes from.
     """
 
-    def __init__(self, model: "FastLLMModel", *, num_shards: int, timeout: float | None = None):
+    def __init__(self, model: "FastLLMModel", *, shard_names: tuple[str, ...], timeout: float | None = None):
         self._model = model
         self._distributed = self._model.distributed
-        self._num_shards = num_shards
-        self._self_shard = self._model.state_shard[: self._num_shards]
+        # self._num_shards = num_shards
+        self._self_shards = {shard_name: self._model.get_shard(shard_name) for shard_name in shard_names}
         self._timeout = timeout
 
     def __enter__(self) -> "SafeLoad":
@@ -36,12 +36,12 @@ class SafeLoad:
         self._loaded_parameters = {}
         # Track the number of loaded entries.
         # Use nan to mark non-loaded entries.
-        triton_fill(self._self_shard, math.nan)
+        for self_shard in self._self_shards.values():
+            triton_fill(self_shard, math.nan)
         # Reset and count shard pads
-        for shard in self._model.state_shard[: self._num_shards]:
-            shard_split = shard.split(self._model.stage_shard_sizes, 0)
-            for stage, stage_shard in zip(self._model.stages_on_device.values(), shard_split):
-                self._loaded += stage.reset_shard_pad(stage_shard)
+        for _, fsdp, fsdp_shards in self._model.split_shards_by_fsdp(self._self_shards):
+            for fsdp_shard in fsdp_shards.values():
+                self._loaded += fsdp.reset_shard_pad(fsdp_shard)
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
@@ -70,18 +70,19 @@ class SafeLoad:
         logger.info(f"{self._loaded:,} state entries loaded successfully")
 
     def _check_counter(self, errors: list[str]) -> None:
-        to_load = self._self_shard.numel()
+        to_load = sum(self_shard.numel() for self_shard in self._self_shards.values())
         if self._loaded != to_load:
             # Ensure the right amount of weights is loaded.
             errors.append(f"Loaded a total of {self._loaded:,}, state entries, expected {to_load:,}")
 
     def _check_missing(self, errors: list[str]) -> None:
         # Ensure the loaded weights have a 1-1 mapping by looking for nans.
-        missing = self._self_shard.new_zeros([], dtype=torch.int64)
+        missing = torch.zeros([], dtype=torch.int64, device=self._distributed.device)
         # Count nans in slices of 100M parameters to limit memory usage.
         # TODO: Find better solution (triton kernel?)
-        for shard_slice in self._self_shard.flatten().split(100000000):
-            missing += shard_slice.isnan().sum()
+        for shard in self._self_shards.values():
+            for shard_slice in shard.flatten().split(100000000):
+                missing += shard_slice.isnan().sum()
         local_missing = missing.item()
         if self._distributed.world_group is not None:
             all_reduce(missing, group=self._distributed.world_group)
@@ -90,32 +91,32 @@ class SafeLoad:
             errors.append(f"{global_missing:,} state entries failed to load or corrupted (local={local_missing:,}).")
             # Determine where the missing values are coming from.
             global_total, local_total = 0, 0
-            for shard_name, shard_ in zip(self._model.state_shard_names[: self._num_shards], self._self_shard):
-                shard_split = shard_.split(self._model.stage_shard_sizes, 0)
-                for stage, shard in zip(self._model.stages_on_device.values(), shard_split):
-                    buffer = stage._reconstruct_from_shard(shard)
-                    for i, parameter in enumerate(stage._split_buffer(buffer)):
+            for stage, fsdp, fsdp_shards in self._model.split_shards_by_fsdp(self._self_shards):
+                for shard_name, fsdp_shard in fsdp_shards.items():
+                    buffer = fsdp.reconstruct_from_shard(fsdp_shard)
+                    for parameter_name, parameter in fsdp.split_buffer(buffer).items():
                         missing_for_param = parameter.isnan().sum().item()
                         if missing_for_param > 0:
                             global_total += missing_for_param
-                            local_values = stage._split_shard(shard)[i]
+                            local_values = fsdp.split_shard(fsdp_shard)[parameter_name]
                             local_missing_for_param = local_values.isnan().sum().item()
                             local_total += local_missing_for_param
                             errors.append(
-                                f"{missing_for_param:,} values missing out of {parameter.numel():,} for parameter {stage.parameter_names[i]} in stage {stage.index}, shard {shard_name}"
+                                f"{missing_for_param:,} values missing out of {parameter.numel():,} for parameter {parameter_name} in stage {stage.index}, shard {shard_name}"
                                 f" (locally {local_missing_for_param:,} out of {local_values.numel():,})"
                             )
-                    missing_for_pad = buffer[-stage._global_pad :].isnan().sum().item()
+                    missing_for_pad = buffer[-fsdp._global_pad :].isnan().sum().item()
                     if missing_for_pad > 0:
                         global_total += missing_for_pad
                         local_missing_for_pad = (
-                            shard[-stage._shard_pad :].isnan().sum().item() if stage._shard_pad > 0 else 0
+                            fsdp_shard[-fsdp._shard_pad :].isnan().sum().item() if fsdp._shard_pad > 0 else 0
                         )
                         local_total += local_missing_for_pad
                         errors.append(
-                            f"{missing_for_pad:,} values missing out of {stage._global_pad:,} for padding in stage {stage.index}, shard {shard_name}"
-                            f" (locally {local_missing_for_pad:,} out of {stage._shard_pad:,})"
+                            f"{missing_for_pad:,} values missing out of {fsdp._global_pad:,} for padding in stage {stage.index}, shard {shard_name}"
+                            f" (locally {local_missing_for_pad:,} out of {fsdp._shard_pad:,})"
                         )
+
             if global_total != global_missing:
                 errors.append(
                     f"Incorrect global breakdown of missing state entries (expected {global_missing:,}, got {global_total:,})"
@@ -127,7 +128,7 @@ class SafeLoad:
 
     def _check_parameters(self, errors: list[str]) -> None:
         loaded_shard_names = set(self._loaded_parameters)
-        shard_names = set(self._model.state_shard_names[: self._num_shards])
+        shard_names = set(self._self_shards)
         if loaded_shard_names != shard_names:
             errors.append(f"Incorrect loaded shards: {loaded_shard_names}!={shard_names}")
         for shard_name in shard_names & loaded_shard_names:

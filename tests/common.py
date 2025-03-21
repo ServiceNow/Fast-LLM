@@ -15,9 +15,9 @@ from fast_llm.data.dataset.gpt.memmap import GPTMemmapDataset
 from fast_llm.data.dataset.gpt.sampled import GPTSample
 from fast_llm.models.gpt.config import (
     LlamaGPTHuggingfaceCheckpointFormat,
-    Qwen2GPTHuggingfaceCheckpointFormat,
     MistralGPTHuggingfaceCheckpointFormat,
     MixtralGPTHuggingfaceCheckpointFormat,
+    Qwen2GPTHuggingfaceCheckpointFormat,
     Starcoder2GPTHuggingfaceCheckpointFormat,
 )
 from fast_llm.tools.train import CliTrainingConfig
@@ -62,8 +62,10 @@ CONFIG_BASE_FAST_LLM = [
     f"model.multi_stage.debug_all_param_gradients={_LOG_LEVEL}",
     "model.multi_stage.debug_tensor_parallel=True",
     "model.distributed.reproducible_init=True",
+    "model.distributed.timeout=10",
     "training.train_iters=2",
     "training.num_workers=0",
+    "training.timeout=30",
     "batch.batch_size=8",
     "batch.sequence_length=512",
     "data.datasets.Training.type=slice",
