@@ -74,6 +74,13 @@ class LanguageModelEmbedding[ConfigType: LanguageModelBaseConfig](Configurable[L
                 allow_sequence_tensor_parallel=not config.parallel_embeddings,
             )
 
+        # PEFT.
+        self.word_embeddings_weight = self._config.transformer.peft.apply_weight(self.word_embeddings_weight)
+        if hasattr(self, "position_embeddings_weight"):
+            self.position_embeddings_weight = self._config.transformer.peft.apply_weight(
+                self.position_embeddings_weight
+            )
+
     @torch.compile
     def _forward(self, input_: torch.Tensor, position_ids: torch.Tensor | None) -> torch.Tensor:
         Assert.eq(position_ids is not None, self._use_absolute_position_embeddings)

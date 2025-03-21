@@ -46,6 +46,10 @@ class TransformerLayer(Layer):
             self._config, self._tensor_space, f"{self.name} mlp"
         )
 
+        # PEFT.
+        self.norm_1 = self._config.peft.apply_other(self.norm_1)
+        self.norm_2 = self._config.peft.apply_other(self.norm_2)
+
     @torch.compile
     def _bias_dropout_add(
         self, input_: torch.Tensor, bias: torch.Tensor | None, residual: torch.Tensor

@@ -71,11 +71,14 @@ class FastLayerNorm(torch.autograd.Function):
     @staticmethod
     def backward(ctx, grad_output: torch.Tensor) -> tuple[torch.Tensor, None, None, None, None]:  # noqa
         output, weight, bias, inv_var = ctx.saved_tensors
+        # TODO: Gradients may be computed unnecessarily.
         grad_input, grad_weight, grad_bias, _, _ = fast_layer_norm.ln_bwd(
             grad_output, output, None, inv_var, weight, bias, True
         )
-        accumulate_gradient(weight, grad_weight)
-        accumulate_gradient(bias, grad_bias)
+        if weight.requires_grad:
+            accumulate_gradient(weight, grad_weight)
+        if bias.requires_grad:
+            accumulate_gradient(bias, grad_bias)
         return grad_input, None, None, None, None
 
 
@@ -100,11 +103,14 @@ class FusedLayerNorm(torch.autograd.Function):
     @staticmethod
     def backward(ctx, grad_output: torch.Tensor) -> tuple[torch.Tensor, None, None, None, None]:  # noqa
         output, weight, bias, inv_var = ctx.saved_tensors
+        # TODO: Gradients may be computed unnecessarily.
         grad_input, grad_weight, grad_bias = fused_layer_norm_cuda.backward_affine(
             grad_output, None, inv_var, output, ctx.normalized_shape, weight, bias, ctx.eps, True
         )
-        accumulate_gradient(weight, grad_weight)
-        accumulate_gradient(bias, grad_bias)
+        if weight.requires_grad:
+            accumulate_gradient(weight, grad_weight)
+        if bias.requires_grad:
+            accumulate_gradient(bias, grad_bias)
         return grad_input, None, None, None, None
 
 
@@ -123,10 +129,12 @@ class FusedRMSNorm(torch.autograd.Function):
     @staticmethod
     def backward(ctx, grad_output: torch.Tensor) -> tuple[torch.Tensor, None, None, None]:  # noqa
         output, weight, inv_var = ctx.saved_tensors
+        # TODO: Gradients may be computed unnecessarily.
         grad_input, grad_weight = fused_layer_norm_cuda.rms_backward_affine(
             grad_output.contiguous(), inv_var, output, ctx.normalized_shape, weight, ctx.eps, True
         )
-        accumulate_gradient(weight, grad_weight)
+        if weight.requires_grad:
+            accumulate_gradient(weight, grad_weight)
         return grad_input, None, None, None
 
 
