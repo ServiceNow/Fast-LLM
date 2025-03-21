@@ -59,7 +59,7 @@ class DistributedCheckpointHandler(CheckpointHandler):
         same_format = broadcast_scalar(same_format, torch.uint8, self._model.distributed.world_group)
 
         if same_format:
-            log_main_rank("Checkpoint format matches, using fast load")
+            log_main_rank("Checkpoint format matches, using fast load", log_fn=logger.info)
             # TODO: Add version without optimizer state?
             with safetensors.safe_open(
                 config.path / f"rank_{self._model.config.distributed.rank}.safetensors",
@@ -69,6 +69,7 @@ class DistributedCheckpointHandler(CheckpointHandler):
                 if "state_shard" in f.keys():
                     # Old format `state_shard` with shape `(num_shards, shard_size)
                     # TODO v0.3: Use checkpoint version? Drop support?
+                    log_main_rank("Using legacy distributed checkpoint loader.", log_fn=logger.warning)
                     for shard_name in shard_names:
                         self._model.get_shard(shard_name).copy_(
                             f.get_slice("state_shard")[metadata.shards.index(shard_name)]
@@ -79,7 +80,7 @@ class DistributedCheckpointHandler(CheckpointHandler):
                         self._model.get_shard(shard_name).copy_(f.get_tensor(f"{shard_name}_shard"))
 
         else:
-            log_main_rank("Checkpoint format doesn't match, using safe load")
+            log_main_rank("Checkpoint format doesn't match, using safe load", log_fn=logger.info)
             self._model.config.base_model.compare_architecture(loaded_config.base_model, config.compare_log_fn)
             with SafeLoad(self._model, shard_names=shard_names, timeout=config.timeout) as context:
                 for rank in range(loaded_config.distributed.world_size):
@@ -89,13 +90,14 @@ class DistributedCheckpointHandler(CheckpointHandler):
                         verbose=False,
                     )
                     path = config.path / f"rank_{rank}.safetensors"
-                    log_main_rank(f"Loading from {path}")
+                    log_main_rank(f"Loading from {path}", log_fn=logger.info)
                     # TODO: skip shards without overlap.
                     with safetensors.safe_open(path, framework="pt", device=str(self._model.distributed.device)) as f:
                         # TODO: Use self_shard
                         if "state_shard" in f.keys():
                             # Old format `state_shard` with shape `(num_shards, shard_size)
                             # TODO v0.3: Use checkpoint version? Drop support?
+                            log_main_rank("Using legacy distributed checkpoint loader.", log_fn=logger.warning())
                             loaded_shards = {
                                 shard_name: f.get_slice("state_shard")[metadata.shards.index(shard_name)]
                                 for shard_name in shard_names
