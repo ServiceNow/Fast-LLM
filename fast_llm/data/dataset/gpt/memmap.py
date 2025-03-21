@@ -36,7 +36,7 @@ class GPTMemmapDataset(GPTIndexedDataset):
         self._has_spans = 0
 
         with self._prefix.with_suffix(".idx").open("rb") as stream:
-            Assert.eq(stream.read(9), MEMMAP_INDEX_HEADER)
+            Assert.eq(stream.read(9), MEMMAP_INDEX_HEADER, msg=f"File: {stream.name}")
             self._version = struct.unpack("<Q", stream.read(8))[0]
             assert self._version in [1, 2], f"Unsupported version for gpt_memmap dataset: {self._version}."
             if self._version == 2:
