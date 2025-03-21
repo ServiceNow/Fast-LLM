@@ -48,7 +48,7 @@ _VALIDATION_METRIC_FORMAT_KEYS = _MEMORY_METRIC_FORMAT_KEYS | {
 }
 
 _VALIDATION_METRIC_FORMATS = (
-    "{phase} @ iteration {iteration:6.0f}/{train_iters:6.0f}"
+    "{phase}{dataset_name} @ iteration {iteration:6.0f}/{train_iters:6.0f}"
     " | consumed samples: {consumed_samples:12,.0f}"
     " | consumed tokens: {consumed_tokens:16,.0f}"
     " | batch size: {batch_size:3.0f}"
@@ -101,13 +101,17 @@ _METRIC_FORMATS = {
 }
 
 
-def format_metrics(metrics: dict[str, float | int], loss_defs: list[LossDef], phase: PhaseType) -> str:
+def format_metrics(
+    metrics: dict[str, float | int], loss_defs: list[LossDef], phase: PhaseType, dataset_name: str | None = None
+) -> str:
     # TODO: Improve, add flexibility.
     metrics = {key: _FORMAT_MAP[key](value) if key in _FORMAT_MAP else value for key, value in metrics.items()}
 
     outputs = [
         _METRIC_FORMATS[phase].format(
-            phase=phase, **{key: metrics.pop(key, _NAN) for key in _METRIC_FORMATS_KEYS[phase]}
+            phase=phase,
+            dataset_name="" if dataset_name is None else f"/{dataset_name}",
+            **{key: metrics.pop(key, _NAN) for key in _METRIC_FORMATS_KEYS[phase]},
         )
     ]
     outputs.extend([f"{loss_def.formatted_name}: {metrics.pop(loss_def.name, _NAN):.5f}" for loss_def in loss_defs])

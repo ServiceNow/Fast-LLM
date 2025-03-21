@@ -47,7 +47,7 @@ def get_sampling_data(
         num_samples=num_samples,
         cache_directory=cache_directory,
         distributed=distributed,
-        phase=phase,
+        dataset_name=phase.value,
         sequence_length=sequence_length,
         vocab_size=vocab_size,
         tokenizer=tokenizer,
