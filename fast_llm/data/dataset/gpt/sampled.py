@@ -419,6 +419,11 @@ class GPTSampledIndexedDataset(SampledDataset):
                             if span[1] > span[0]:
                                 loss_masking_spans.append(span)
                 else:
+                    if document_size > self._sequence_length + 1:
+                        log_main_rank(
+                            f" > Sampling document longer than {self._sequence_length + 1}, this can lead to errors",
+                            log_fn=logger.warning,
+                        )
                     if not token_ids:
                         # account for padding tokens from the previous sample before starting the current sample
                         token_count += token_start - token_count
