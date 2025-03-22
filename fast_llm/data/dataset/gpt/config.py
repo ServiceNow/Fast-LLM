@@ -71,7 +71,7 @@ class GPTSamplingData(SamplingData):
     sequence_length: int
     vocab_size: int
     tokenizer: "Tokenizer"
-    truncations: bool = True
+    allow_truncations: bool = True
     cross_document_attention: bool = True
 
 

@@ -56,7 +56,7 @@ class GPTDataConfig(DataConfig, GPTLegacyConfig):
         desc="Multiprocessing context. Do not touch.",
         hint=FieldHint.expert,
     )
-    truncations: bool = Field(
+    allow_truncations: bool = Field(
         default=True,
         desc=(
             "If True, documents could be truncated while being packed to fit the sequence legth"
