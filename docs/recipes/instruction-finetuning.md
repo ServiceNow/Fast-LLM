@@ -1,5 +1,5 @@
 ---
-title: Supervised Finetuning (SFT) of Llama 3.1 8B
+title: Instruction Finetuning on Llama 3.1 8B
 ---
 
 
@@ -104,7 +104,7 @@ tokenizer:
 
 ## ⚙️ Step 4: Configure Fast-LLM
 
-It's time to configure the Fast-LLM training config. This is very similar to [Quick Start](../quick-start.md) with two additional options, namely, `truncations` and `cross_document_attention` which are important for improving the task performance of instruction-tuned models.
+It's time to configure the Fast-LLM training config. This is very similar to [Quick Start](../quick-start.md) with two additional options, namely, `allow_truncations` and `cross_document_attention` which are important for improving the task performance of instruction-tuned models.
 
 ```yaml
 training:
@@ -135,11 +135,13 @@ data:
       type: file
       path: ./sft-tutorial/tokenized/Llama-3.1-8B/fast_llm_config_validation.yaml
   fim: {}
-  truncations: no # (2)!
+  allow_truncations: no # (2)!
   split:
     - 0.99
     - 0.01
     - 0.0
+  sampling:
+    use_loss_masking_spans: yes
 optimizer:
   weight_decay: 0.1
   beta_1: 0.9
@@ -152,7 +154,7 @@ optimizer:
     warmup_iterations: 2000
 pretrained:
   format: llama
-  path: ./sft-tutorial/SmolLM-135M-131k-vocab
+  path: ./sft-tutorial/Llama-3.1-8B
   model_weights: yes
 model:
   base_model:
@@ -165,7 +167,7 @@ model:
     timeout: 3600
     training_dtype: bf16
 run:
-  experiment_dir: /tmp/fast-llm-exp/truncated-new
+  experiment_dir: ./sft-tutorial/llama-3.1-magpie
 ```
 
 1. Prevents paying attention to other documents in a packed sequence
