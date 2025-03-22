@@ -531,7 +531,6 @@ class LegacyGPTSampledIndexedDataset(SampledDataset):
         """
         logger.info(f" > Sampling dataset {self._indexed_dataset.name} ...")
         document_sizes = self._indexed_dataset.get_document_sizes()
-        doc_idx = np.arange(document_sizes.size, dtype=np.int32)
         num_documents = len(document_sizes)
         num_tokens = document_sizes.sum()
         np_rng = np.random.RandomState(seed=self._config.seed)
@@ -542,7 +541,7 @@ class LegacyGPTSampledIndexedDataset(SampledDataset):
         samples_per_epoch = (num_tokens - 1) // self._sequence_length
         separate_last_epoch = num_epochs > 1 and last_epoch_samples < 0.8 * samples_per_epoch
 
-        doc_idx = np.tile(doc_idx, num_epochs)
+        doc_idx = np.tile(np.arange(num_documents, dtype=np.int32), num_epochs)
         if separate_last_epoch:
             np_rng.shuffle(doc_idx[:-num_documents])
             np_rng.shuffle(doc_idx[-num_documents:])
