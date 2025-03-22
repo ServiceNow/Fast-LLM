@@ -17,7 +17,7 @@ from tests.data.common import (
 )
 
 try:
-    from fast_llm.csrc.data import build_sample_idx_padded  # noqa
+    from fast_llm.csrc.data import build_padded_token_cumsum  # noqa
 
     _extension_available = True
 except ImportError:
@@ -137,14 +137,17 @@ def test_gpt_sample(seed, shuffle):
 
 
 @pytest.mark.skipif(not _extension_available, reason="CPP Extension not available")
-def test_build_idx_sample_padded():
-    sizes = np.array([4, 1, 3, 5, 1, 2, 2], dtype=np.int32)
-    doc_idx = np.array([2, 1, 0, 3, 4, 5, 6], dtype=np.int32)
-    sequence_length = 4
-    num_epochs = 1
-    tokens_per_epoch = 16
-    # doc indices for packed sequences:
-    # [2, 1], [0], [3], [4, 5, 6] i.e., packed sizes: [3, 1], [4], [5], [1, 2, 2]
-    expected_sample_idx = [[0, 2], [2, 1], [3, 1], [4, 3]]
-    sample_idx = build_sample_idx_padded(sizes, doc_idx, sequence_length, num_epochs, tokens_per_epoch, True)
-    Assert.all_equal(sample_idx, expected_sample_idx)
+def test_build_padded_token_cumsum():
+    sizes = np.array([100, 256, 580, 600, 550, 89, 339, 430, 400, 680, 50], dtype=np.int32)
+    sequence_length = 768
+    token_cumsum_rate = 4
+    padding_offset = 0
+    offset = 0
+    # sequences with padding
+    # [100, 256, 413 padded, 580, 189 padded, 600, 169 padded, 550, 89, 130 padded, 339, 430, 400, 369 padded, 680, 50, 39 padded]
+    expected_cumsums = [[0, 1349, 2857, 3845, 5344], [0, 1, 3, 4, 5]]
+    token_cumsum, padding_cumsum = build_padded_token_cumsum(
+        sizes, sequence_length, token_cumsum_rate, offset, padding_offset
+    )
+    Assert.all_equal(token_cumsum, expected_cumsums[0])
+    Assert.all_equal(padding_cumsum, expected_cumsums[1])

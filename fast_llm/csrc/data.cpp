@@ -129,74 +129,89 @@ py::array build_sample_idx(const py::array_t<int32_t>& sizes_,
 
 }
 
-py::array build_sample_idx_padded(const py::array_t<int32_t>& sizes_,
-        const py::array_t<int32_t>& doc_idx_,
-        const int32_t seq_length,
-        const int32_t num_epochs,
-        const int64_t tokens_per_epoch,
-        const bool verbose) {
-    /* Similar to the method above but expects the sequences to be padded instead of truncating
-        the last document in a sequence. Expects all sizes to be lesser than seq_length + 1
-        2D array with sizes [number-of-samples + 1, 2] where [..., 0] contains an index into `doc_idx`
-        and [..., 1] has the number of documents from the starting index to fully include into it */
-    assert (seq_length > 1);
-    assert (num_epochs > 0);
-    assert (tokens_per_epoch > 1);
+py::tuple build_padded_token_cumsum(const py::array_t<int32_t>& sizes_,
+                                const int32_t seq_length,
+                                const int32_t token_cumsum_rate,
+                                const int64_t offset,
+                                const int64_t padding_offset
+                              ) {
+  /*
+  Build token cumsums at regular intervals from document sizes with padding in mind.
+  We inject 0 or more padding tokens at the end of every sequence to fill the sequence length.
+  */
+  int32_t seq_size = 0;
+  int64_t sizes_idx = 0;
+  int32_t samples = 0;
+  auto sizes = sizes_.unchecked<1>();
+  std::vector<int64_t> token_cumsum;
+  // store the number of padded samples seen every token_cumsum_rate
+  std::vector<int64_t> padding_cumsum;
 
-    auto sizes = sizes_.unchecked<1>();
-    auto doc_idx = doc_idx_.unchecked<1>();
+  int64_t cumsum = offset;
+  int64_t padded_samples = padding_offset;
 
-    int64_t num_samples = (num_epochs * tokens_per_epoch - 1) / seq_length;
-    int32_t* sample_idx = new int32_t[2*(num_samples+1)];
+  //TODO: offset for padding_cumsum
 
-    if (verbose) {
-        cout << "    using:" << endl << std::flush;
-        cout << "     number of documents:       " << doc_idx_.shape(0) / num_epochs << endl << std::flush;
-        cout << "     number of epochs:          " << num_epochs << endl << std::flush;
-        cout << "     sequence length:           " << seq_length << endl << std::flush;
-        cout << "     total number of samples:   " << num_samples << endl << std::flush;
-    }
+  token_cumsum.push_back(cumsum);
+  padding_cumsum.push_back(padded_samples);
 
-    int64_t sample_index = 0;
-    int64_t doc_idx_index = 0;
-    int64_t start_doc_index = 0;
-    int32_t n_docs = 0;
-    while (sample_index <= num_samples) {
-      int32_t remaining_seq_length = seq_length + 1;
-      while (remaining_seq_length != 0) {
-        auto doc_id = doc_idx[doc_idx_index];
-        remaining_seq_length -= sizes[doc_id];
-        if (remaining_seq_length < 0) {
-          remaining_seq_length = 0;
-        } else if (remaining_seq_length == 0) {
-          ++n_docs;
-          ++doc_idx_index;
-          remaining_seq_length = 0;
-        } else {
-          ++n_docs;
-          ++doc_idx_index;
-        }
+  while (sizes_idx < sizes.size()) {
+    int32_t size = sizes[sizes_idx];
+    if (size > seq_length + 1) {
+      // Skip sequences that are too long, to avoid truncations
+      sizes_idx += 1;
+      continue;
+    } else if (seq_size + size > seq_length + 1) {
+      // add padded tokens if a document does not fit in current sequence and start a new sequence
+      int32_t padding_tokens = seq_length + 1 - seq_size;
+      if (padding_tokens > 0) {
+        padded_samples += 1;
+        samples += 1;
       }
-      sample_idx[2 * sample_index] = start_doc_index;
-      sample_idx[2 * sample_index + 1] = n_docs;
-      ++sample_index;
-      start_doc_index = doc_idx_index;
-      n_docs = 0;
+      cumsum += padding_tokens;
+      seq_size = 0;
+    } else {
+      seq_size += size;
+      cumsum += size;
+      sizes_idx += 1;
+      samples += 1;
     }
+    if (samples == token_cumsum_rate) {
+      token_cumsum.push_back(cumsum);
+      padding_cumsum.push_back(padded_samples);
+      samples = 0;
+    }
+  }
 
-    py::capsule free_when_done(sample_idx, [](void *mem_) {
-        int32_t *mem = reinterpret_cast<int32_t*>(mem_);
-        delete[] mem;
-    });
+  int64_t* token_cumsum_result = new int64_t[token_cumsum.size()];
+  memcpy(token_cumsum_result, token_cumsum.data(), token_cumsum.size() * sizeof(int64_t));
 
-    const auto byte_size = sizeof(int32_t);
-    return py::array(std::vector<int64_t>{num_samples+1, 2},
-                     {2*byte_size, byte_size},
-                     sample_idx,
-                     free_when_done);
+  py::capsule free_when_done(token_cumsum_result, [](void *mem_) {
+    int64_t *mem = reinterpret_cast<int64_t*>(mem_);
+    delete[] mem;
+  });
+
+  int64_t* padded_samples_result = new int64_t[padding_cumsum.size()];
+  memcpy(padded_samples_result, padding_cumsum.data(), padding_cumsum.size() * sizeof(int64_t));
+  py::capsule free_when_done_padded(padded_samples_result, [](void *mem_) {
+    int64_t *mem = reinterpret_cast<int64_t*>(mem_);
+    delete[] mem;
+  });
+
+  const auto byte_size = sizeof(int64_t);
+  return py::make_tuple(
+    py::array(std::vector<int64_t>{token_cumsum.size()},
+                   {byte_size},
+                   token_cumsum_result,
+                   free_when_done),
+    py::array(std::vector<int64_t>{padding_cumsum.size()},
+                   {byte_size},
+                   padded_samples_result,
+                   free_when_done_padded)
+  );
 }
 
 PYBIND11_MODULE(data, m) {
     m.def("build_sample_idx", &build_sample_idx);
-    m.def("build_sample_idx_padded", &build_sample_idx_padded);
+    m.def("build_padded_token_cumsum", &build_padded_token_cumsum);
 }
