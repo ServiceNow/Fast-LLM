@@ -370,7 +370,7 @@ class GPTSampledIndexedDataset(SampledDataset):
                     token_end_index_in_document = min(token_end - token_count, document_size)
                     sample = self._indexed_dataset.get(
                         document_index,
-                        offset=token_start_index_in_document * (1 - self._allow_truncations),
+                        offset=token_start_index_in_document,
                         length=token_end_index_in_document - token_start_index_in_document,
                         use_loss_masking_spans=self._config.use_loss_masking_spans,
                     )
