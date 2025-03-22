@@ -241,7 +241,7 @@ class GPTSampledIndexedDataset(SampledDataset):
             token_cumsum_unshuffled, padding_cumsum_unshuffled = self._get_token_cumsum(
                 document_sizes,
                 offset=0,
-                dtype=get_unsigned_integer_type(tokens_per_epoch * num_epochs).torch,
+                dtype=get_unsigned_integer_type(tokens_per_epoch * num_epochs),
                 padding_offset=padding_offset,
             )
             self._token_cumsum_unshuffled.save(token_cumsum_unshuffled)
@@ -278,16 +278,16 @@ class GPTSampledIndexedDataset(SampledDataset):
         self, sizes: torch.Tensor, offset: int, dtype: DataType, padding_offset: None | int
     ) -> tuple[np.ndarray, None | np.ndarray]:
         if self._allow_truncations:
-            # Get partial sums for regular intervals, excluding the last incomplete interval.
             # Create the output tensor.
             out = sizes.new_empty(sizes.numel() // TOKEN_CUMSUM_RATE + 1, dtype=dtype.torch)
-            # Pad with the begin offset
-            out[0] = offset
+            # Get partial sums for regular intervals, excluding the last incomplete interval.
             torch.sum(
                 sizes[: sizes.numel() - sizes.numel() % TOKEN_CUMSUM_RATE].view(-1, TOKEN_CUMSUM_RATE),
                 dim=1,
                 out=out[1:],
             )
+            # Pad with the begin offset
+            out[0] = offset
             # Calculate the cumsum.
             out.cumsum_(0)
             # Crop unnecessary entries.
@@ -312,41 +312,8 @@ class GPTSampledIndexedDataset(SampledDataset):
             ]
         return token_cumsum, padded_samples_cumsum
 
-    def _load_yaml_data(self, data: dict[str, typing.Any]) -> None:
-        self._documents_per_epoch = data["dataset"]["documents_per_epoch"]
-        self._unshuffled_tokens = data["unshuffled_epochs"] * data["dataset"]["tokens_per_epoch"]
-        self._unshuffled_documents = data["unshuffled_epochs"] * self._documents_per_epoch
-
-    def _load_verify_yaml_data(self, data: dict[str, typing.Any]) -> None:
-        self._load_yaml_data(data)
-        if self._yaml_path is not None:
-            if self._yaml_path.is_file():
-                loaded_yaml_data = yaml.safe_load(self._yaml_path.open("r"))
-                if loaded_yaml_data != data:
-                    raise RuntimeError(
-                        f"Invalid dataset cache for dataset {self.name}."
-                        " If this is due to an intended configuration change,"
-                        " please delete the cache before continuing."
-                        f"\nCurrent config:\n{yaml.safe_dump(data)}"
-                        f"\nCached config:\n{yaml.safe_dump(loaded_yaml_data)}"
-                    )
-                # Dataset is already sampled, skip.
-                logger.info(f"Using existing sampling for dataset {self.name}")
-                return
-            else:
-                self._yaml_path.parent.mkdir(parents=True, exist_ok=True)
-                yaml.safe_dump(data, self._yaml_path.open("w"))
-
-    def _lazy_load(self):
-        if not hasattr(self, "_documents_per_epoch"):
-            self._load_yaml_data(yaml.safe_load(self._yaml_path.open("r")))
-
     def __len__(self):
         return self._num_samples
-
-    @property
-    def name(self) -> str:
-        return self._indexed_dataset.name
 
     def __getitem__(self, index: int) -> typing.Any:
         """
@@ -360,7 +327,6 @@ class GPTSampledIndexedDataset(SampledDataset):
         token_start = index * (self._sequence_length + (1 - self._allow_truncations))
         token_end = token_start + self._sequence_length + 1
 
-        # TODO: deal with unshuffled stuff
         if token_start < self._unshuffled_tokens:
             token_start_array = self._token_cumsum_unshuffled.array
             token_start_array_document_offset = 0
@@ -405,11 +371,7 @@ class GPTSampledIndexedDataset(SampledDataset):
                     sample = self._indexed_dataset.get(
                         document_index,
                         offset=token_start_index_in_document * (1 - self._allow_truncations),
-                        length=(
-                            token_end_index_in_document - token_start_index_in_document
-                            if self._allow_truncations
-                            else None
-                        ),
+                        length=token_end_index_in_document - token_start_index_in_document,
                         use_loss_masking_spans=self._config.use_loss_masking_spans,
                     )
                     token_ids.append(sample.token_ids)
@@ -455,17 +417,46 @@ class GPTSampledIndexedDataset(SampledDataset):
         )
         token_ids = np.concatenate(token_ids, dtype=np.int64)
         loss_masking_spans = (
-            (
-                np.stack(loss_masking_spans, dtype=np.int32)
-                if self._config.use_loss_masking_spans and loss_masking_spans
-                else np.array([])
-            )
+            (np.stack(loss_masking_spans, dtype=np.int32) if loss_masking_spans else np.array([]))
             if self._config.use_loss_masking_spans
             else None
         )
         Assert.eq(len(token_ids), self._sequence_length + 1)
 
         return GPTSample(token_ids=token_ids, loss_masking_spans=loss_masking_spans, sequence_lengths=sequence_lengths)
+
+    @property
+    def name(self) -> str:
+        return self._indexed_dataset.name
+
+    def _lazy_load(self):
+        if not hasattr(self, "_documents_per_epoch"):
+            self._load_yaml_data(yaml.safe_load(self._yaml_path.open("r")))
+
+    def _load_yaml_data(self, data: dict[str, typing.Any]) -> None:
+        self._documents_per_epoch = data["dataset"]["documents_per_epoch"]
+        self._unshuffled_tokens = data["unshuffled_epochs"] * data["dataset"]["tokens_per_epoch"]
+        self._unshuffled_documents = data["unshuffled_epochs"] * self._documents_per_epoch
+
+    def _load_verify_yaml_data(self, data: dict[str, typing.Any]) -> None:
+        self._load_yaml_data(data)
+        if self._yaml_path is not None:
+            if self._yaml_path.is_file():
+                loaded_yaml_data = yaml.safe_load(self._yaml_path.open("r"))
+                if loaded_yaml_data != data:
+                    raise RuntimeError(
+                        f"Invalid dataset cache for dataset {self.name}."
+                        " If this is due to an intended configuration change,"
+                        " please delete the cache before continuing."
+                        f"\nCurrent config:\n{yaml.safe_dump(data)}"
+                        f"\nCached config:\n{yaml.safe_dump(loaded_yaml_data)}"
+                    )
+                # Dataset is already sampled, skip.
+                logger.info(f"Using existing sampling for dataset {self.name}")
+                return
+            else:
+                self._yaml_path.parent.mkdir(parents=True, exist_ok=True)
+                yaml.safe_dump(data, self._yaml_path.open("w"))
 
 
 class LegacyGPTSampledIndexedDataset(SampledDataset):
