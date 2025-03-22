@@ -286,7 +286,7 @@ class GPTSampledIndexedDataset(SampledDataset):
             torch.sum(
                 sizes[: sizes.numel() - sizes.numel() % TOKEN_CUMSUM_RATE].view(-1, TOKEN_CUMSUM_RATE),
                 dim=1,
-                tensor_out=out[1:],
+                out=out[1:],
             )
             # Calculate the cumsum.
             out.cumsum_(0)
