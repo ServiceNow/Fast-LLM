@@ -21,20 +21,20 @@ from fast_llm.layers.language_model.config import LanguageModelKwargs, LanguageM
 
 
 def materialize_meta_tensors(model, tensor_space):
-    # Initialize parameters that are on meta device
+    # Materialize parameters that are on meta device
     for name, param in model.named_parameters():
         if param.device.type == "meta":
             # Check if the parameter is a custom tensor type
             if hasattr(param, "tensor_name") and hasattr(param, "init_parameter"):
-                # Create a new parameter of the same type
                 param_data = param.new_empty(param.shape, device="cuda")
-                # Initialize the parameter
+                # Initialize param_data
                 param.init_parameter(param_data, tensor_space.distributed)
                 # Replace the parameter in the module
-                module_path, param_name = name.rsplit(".", 1)
+                module_path, param_name = name.rsplit(".", 1) if "." in name else (None, name)
                 module = model
-                for part in module_path.split("."):
-                    module = getattr(module, part)
+                if module_path is not None:                    
+                    for part in module_path.split("."):
+                        module = getattr(module, part)
                 param = torch.nn.Parameter(param_data, requires_grad=param.requires_grad)
                 # TODO: add param_grad_is_zero etc., grad_buffer, etc., see test_mlp_recomputation
                 param.grad = None
@@ -77,14 +77,6 @@ def hybrid_config():
     )
     return config
 
-
-# @pytest.fixture
-# def tensor_space(distributed_config):
-#     tensor_space = TensorSpace(distributed_config)
-#     tensor_space.setup(Distributed(config=distributed_config))
-#     return tensor_space
-
-
 @pytest.fixture
 def mamba_config():
     config = MambaConfig(device="cuda")
@@ -92,30 +84,30 @@ def mamba_config():
     return config
 
 
-# def test_mamba_layer(distributed_config, distributed, mamba_config):
-#     # Initialize layer
+def test_mamba_layer(distributed_config, distributed, mamba_config):
+    # Initialize layer
 
-#     layer = MambaLayer(mamba_config)
-#     tensor_space = TensorSpace(distributed_config=distributed_config)
-#     tensor_space.setup(distributed)
-#     materialize_meta_tensors(layer, tensor_space)
-#     layer.to(distributed.device)
+    layer = MambaLayer(mamba_config)
+    tensor_space = TensorSpace(distributed_config=distributed_config)
+    tensor_space.setup(distributed)
+    materialize_meta_tensors(layer, tensor_space)
+    layer.to(distributed.device)
 
 
-#     batch_size = 2
-#     seq_length = 32
-#     hidden_size = mamba_config.hidden_size
-#     x = torch.randn(batch_size, seq_length, hidden_size, device=distributed.device)
+    batch_size = 2
+    seq_length = 32
+    hidden_size = mamba_config.hidden_size
+    x = torch.randn(batch_size, seq_length, hidden_size, device=distributed.device)
 
-#     # Run forward pass
-#     output = layer(x)
+    # Run forward pass
+    output = layer(x)
 
-#     loss = output.sum()
-#     loss.backward()
-#     # Basic shape checkss
-#     assert output.shape == x.shape
-#     assert not torch.isnan(output).any()
-#     assert not torch.isinf(output).any()
+    loss = output.sum()
+    loss.backward()
+    # Basic shape checkss
+    assert output.shape == x.shape
+    assert not torch.isnan(output).any()
+    assert not torch.isinf(output).any()
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA available")
