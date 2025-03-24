@@ -56,11 +56,6 @@ class GPTDataConfig(DataConfig, GPTLegacyConfig):
         desc="Multiprocessing context. Do not touch.",
         hint=FieldHint.expert,
     )
-    use_loss_masking_spans: bool = Field(
-        default=False,
-        desc="Read and use loss masking spans from the dataset, if present.",
-        hint=FieldHint.feature,
-    )
 
     def _validate(self) -> None:
         if not self.datasets:

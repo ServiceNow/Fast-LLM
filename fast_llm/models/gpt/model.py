@@ -24,7 +24,11 @@ from fast_llm.layers.transformer.config import (
     TransformerKwargs,
     TransformerLossNames,
 )
-from fast_llm.layers.transformer.preprocessing import BackupAttentionPreprocessor, RotaryEmbeddingPreprocessor
+from fast_llm.layers.transformer.preprocessing import (
+    BackupAttentionPreprocessor,
+    FlashAttnVarlenPreprocessor,
+    RotaryEmbeddingPreprocessor,
+)
 from fast_llm.layers.transformer.transformer import TransformerLayer
 from fast_llm.models.gpt.config import GPTBaseModelConfig, GPTModelConfig
 from fast_llm.models.gpt.megatron import get_init_megatron
@@ -68,6 +72,8 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             self._backup_attention_preprocessor = BackupAttentionPreprocessor(
                 self._config.transformer, self._tensor_space
             )
+        else:
+            self._flash_varlen_preprocessor = FlashAttnVarlenPreprocessor(self._config.transformer, self._tensor_space)
 
     def get_language_model_layers(self) -> list[Layer]:
         if self._config.num_multi_token_prediction_heads:
@@ -256,6 +262,10 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             else:
                 # TODO: Avoid multiple contiguous calls?
                 tokens = batch.token_ids[:, sequence_k - sequence_q : sequence_k].contiguous()
+            if batch.sequence_lengths is not None:
+                kwargs_meta[TransformerKwargs.sequence_lengths] = batch.sequence_lengths
+                if self._use_flash_attention:
+                    self._flash_varlen_preprocessor.preprocess(kwargs_meta)
 
             # TODO: Add pasts/presents to meta input?
             # Use lists as pointers so `past_key_values` is populated during the previous micro_sequence.

@@ -183,6 +183,7 @@ class MockGPTMemmapDatasetConfig(GPTIndexedDatasetConfig):
         desc="Expected number of tokens in the dataset.",
         hint=FieldHint.optional,
     )
+    path: pathlib.Path = Field(default=".")
 
     def build(self) -> "GPTIndexedDataset":
         return MockGPTMemmapDataset(self)
