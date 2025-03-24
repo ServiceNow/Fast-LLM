@@ -34,8 +34,9 @@ This is not much different from a pretraining config. We will:
       logs:
         interval: 10
       validation:
-        iterations: 25
-        interval: 1000
+        Validation:
+          iterations: 25
+          interval: 1000
       checkpoint:
         interval: 1000
         keep: 5
@@ -84,8 +85,9 @@ This is not much different from a pretraining config. We will:
       logs:
         interval: 10
       validation:
-        iterations: 25
-        interval: 1000
+        Validation:
+          iterations: 25
+          interval: 1000
       checkpoint:
         interval: 1000
         keep: 5

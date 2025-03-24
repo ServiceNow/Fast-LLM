@@ -25,6 +25,16 @@ We already saw an example dataset configuration in the [quick-start guide](../qu
 
 In this section we are interested in generalizing step 3. For more details on steps 1 and 2, please refer to the quick-start guide or [this example](data-configuration.md).
 
+The section `data.datasets` holds descriptions of datasets used in training, validation, and testing.  
+
+The Training and Testing phases must have predetermined dataset names: `Training` and `Testing`, respectively. Each of these phases can have only one dataset.  
+
+For validation datasets, the rules are different. There can be as many validation datasets as needed, and their names are arbitrary. In the example above, the dataset name `Validation` is chosen for simplicity. The datasets names used for validation and their application details are specified in the training config validation sections.  
+
+Adding multiple validation datasets increases flexibility in tracking the accuracy of your trained model. One possible scenario is using a separate validation dataset for each blended training dataset, allowing you to track training progress on each subset separately and observe how the model performs in real time on different subsets of your training data.  
+
+Below are examples of how to configure various aspects of training and validation datasets.
+
 ## Example 1: Blending multiple datasets
 
 In this example, we have three datasets and want to sample from each of them during training with probabilities 0.70, 0.25 and 0.05. For this, we use the `blended` type which takes other datasets as arguments:
@@ -118,7 +128,34 @@ data:
 !!! note "Default seed"
     In the absence of explicit seed, Fast-LLM uses a default seed (`data.sampling`'s default) instead, and uses seed shifts to ensure different seeds for each phase and for the various blended datasets.
 
-## Example 5: Advanced scenario
+
+## Example 5: Specifying Multiple Validation Datasets  
+
+In this example, we show how to specify multiple validation datasets and configure how often they are applied, along with their application attributes in the `training.validation` section.  
+
+Please note that the same dataset names must be used in the `training.validation` section. If a validation dataset is specified in the `datasets` section but not in `training.validation`, it will not be used for validation.  
+
+```yaml
+training:
+  validation:
+    the_stack:
+      iterations: 25
+      interval: 50
+    fineweb:
+      iterations: 25
+      interval: 100
+data:
+  datasets:
+    the_stack:
+      type: file
+      path: path/to/validation_the_stack_dataset.yaml
+    fineweb:
+      type: file
+      path: path/to/validation_fineweb_dataset.yaml
+      
+```
+
+## Example 6: Advanced scenario
 
 In this example, we combine everything we learned so far to create a complex scenario, where:
 

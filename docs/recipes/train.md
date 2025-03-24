@@ -20,8 +20,9 @@ Let's start from the following training configuration:
       logs:
         interval: 10
       validation:
-        iterations: 25
-        interval: 1000
+        Validation:
+          iterations: 25
+          interval: 1000
       checkpoint:
         interval: 1000
         keep: 5
@@ -64,8 +65,9 @@ Let's start from the following training configuration:
       logs:
         interval: 10
       validation:
-        iterations: 25
-        interval: 1000
+        Validation:
+          iterations: 25
+          interval: 1000
       checkpoint:
         interval: 1000
         keep: 5

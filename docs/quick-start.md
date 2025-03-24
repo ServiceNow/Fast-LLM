@@ -493,8 +493,9 @@ Save the following as `fast-llm-tutorial/train-config.yaml`:
       logs:
         interval: 10
       validation:
-        iterations: 25
-        interval: 100
+        Validation:
+          iterations: 25
+          interval: 100
       export:  # (2)!
         format: llama
         interval: 100
@@ -550,8 +551,9 @@ Save the following as `fast-llm-tutorial/train-config.yaml`:
       logs:
         interval: 10
       validation:
-        iterations: 25
-        interval: 1000
+        Validation:
+          iterations: 25
+          interval: 1000
       checkpoint:
         interval: 1000
         keep: 5
