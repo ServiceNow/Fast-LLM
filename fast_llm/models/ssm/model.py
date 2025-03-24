@@ -2,38 +2,17 @@ import logging
 import typing
 from functools import partial
 
-import torch
-import torch.nn as nn
-
-from fast_llm.config import Field, FieldHint, FieldUpdate, config_class
-from fast_llm.data.data.gpt.data import GPTBatch
-from fast_llm.engine.base_model.base_model import BaseModel, Layer, LossDef
-from fast_llm.engine.config_utils.tensor_space import TensorDim
-from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames, PhaseType
-from fast_llm.engine.distributed.distributed import Distributed
+from fast_llm.engine.base_model.base_model import Layer
+from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
-from fast_llm.engine.schedule.config import BatchConfig
-from fast_llm.layers.language_model.config import LanguageModelKwargs, LanguageModelLossNames
-from fast_llm.layers.language_model.embedding import WORD_EMBEDDINGS_WEIGHT, LanguageModelEmbedding
+from fast_llm.layers.language_model.embedding import LanguageModelEmbedding
 from fast_llm.layers.language_model.head import LanguageModelHead
-from fast_llm.layers.language_model.config import LanguageModelArchitectureConfig, LanguageModelBaseConfig
-from fast_llm.layers.language_model.preprocessing import PositionEmbeddingPreprocessor
-from fast_llm.layers.transformer.config import (
-    RoutingType,
-    TransformerDimNames,
-    TransformerKwargs,
-    TransformerLossNames,
-)
-from fast_llm.layers.transformer.preprocessing import BackupAttentionPreprocessor, RotaryEmbeddingPreprocessor
 from fast_llm.layers.transformer.transformer import TransformerLayer
 from fast_llm.layers.ssm.mamba_block import MambaBlock
 from fast_llm.layers.ssm.mamba_layer import MambaLayer
-from fast_llm.models.gpt.config import GPTBaseModelConfig, GPTModelConfig, GPTArchitectureConfig
-from fast_llm.models.gpt.megatron import get_init_megatron
-from fast_llm.models.gpt.model import GPTBaseModel, GPTModel
-from fast_llm.tensor import ParameterMeta, TensorMeta
+from fast_llm.models.gpt.model import GPTBaseModel
 from fast_llm.utils import Assert
-
+from fast_llm.models.ssm.config import HybridBaseModelConfig, HybridModelConfig
 # try:
 #     from ops.triton.layernorm import RMSNorm
 # except ImportError:
@@ -43,101 +22,17 @@ from fast_llm.layers.common.normalization import LayerNorm, RMSNorm
 
 logger = logging.getLogger(__name__)
 
-class HybridArchitectureConfig(GPTArchitectureConfig):
-    pass
-@config_class()
-class HybridModelConfig(LanguageModelBaseConfig, HybridArchitectureConfig):
-    architecture_class = HybridArchitectureConfig
-
-    # Debug, to get an exact match with megatron init.
-    use_megatron_initialization: bool = Field(
-        default=False, desc="Exactly match the initialization of a Megatron model.", hint=FieldHint.testing
-    )
-
-    block_pattern: list[str] = Field(
-        default_factory=list,
-        desc="Pattern of blocks to use in the model. 't' for Transformer, 'm' for Mamba.",
-        hint=FieldHint.core,
-    )
-    
-    # Mamba configuration parameters
-    mamba_expansion_factor: int =  Field(
-        default=2,
-        desc="Expansion factor for Mamba blocks.",
-        hint=FieldHint.core,
-    )
-    mamba_state_size: int = Field(
-        default=16,
-        desc="State size for Mamba blocks.",
-        hint=FieldHint.core,
-    )
-    mamba_conv_dimension: int = Field(
-        default=4,
-        desc="Conv dimension for Mamba blocks.",
-        hint=FieldHint.core,
-    )
-    mamba_rms_norm: bool = Field(
-        default=True,
-        desc="Use RMS normalization for Mamba blocks.",
-        hint=FieldHint.core,
-    )
-
-    mamba_residual_in_fp32: bool = Field(
-        default=True,
-        desc="Use residual in fp32 for Mamba blocks.",
-        hint=FieldHint.core,
-    )
-    mamba_fused_add_norm: bool = Field(
-        default=False,
-        desc="Use fused add norm for Mamba blocks.",
-        hint=FieldHint.core,
-    )
-    mamba_layernorm_epsilon: float = Field(
-        default=1e-5,
-        desc="Epsilon for layer normalization for Mamba blocks.",
-        hint=FieldHint.core,
-    )
-
-    use_fast_path: bool = Field(
-        default=False,
-        desc="Use fast path for Mamba blocks.",
-        hint=FieldHint.core,
-    )
-
-    @classmethod
-    def _from_dict(
-        cls,
-        default: dict[str, typing.Any],
-        strict: bool = True,
-        flat: bool = False,
-    ) -> typing.Self:
-        # TODO v0.3: Remove backward compatibility fix
-        if "match_megatron" in default:
-            assert "use_megatron_initialization" not in default
-            default["use_megatron_initialization"] = default.pop("match_megatron")
-        if "layer_norm_impl" in default:
-            assert "normalization_implementation" not in default
-            default["normalization_implementation"] = default.pop("layer_norm_impl")
-        if "fused_mlp" in default:
-            del default["fused_mlp"]
-        return super()._from_dict(default, strict, flat)
-    
-    def __post_init__(self):
-        if len(self.block_pattern) == 0:
-            logger.warning("No block pattern provided, using default pattern of Transformer blocks.")
-            self.block_pattern = ['t'] * self.transformer.num_layers
-
-class HybridBaseModel(GPTBaseModel[HybridModelConfig]):
+class HybridBaseModel(GPTBaseModel[HybridBaseModelConfig]):
     """
     A hybrid model that interleaves Transformer and Mamba blocks.
     """
 
-    config_class: typing.ClassVar[type[HybridModelConfig]] = HybridModelConfig
+    config_class: typing.ClassVar[type[HybridBaseModelConfig]] = HybridBaseModelConfig
     _is_setup: bool = False
 
     def __init__(
         self,
-        config: HybridModelConfig,
+        config: HybridBaseModelConfig,
         distributed_config: DistributedConfig,
     ):
         super().__init__(config, distributed_config)
@@ -198,6 +93,7 @@ class HybridBaseModel(GPTBaseModel[HybridModelConfig]):
                 mamba_block = MambaBlock(
                     mamba_config,
                     mixer_cls=mixer_cls,
+                    layer_index=i + 1,
                     norm_cls=norm_cls,
                     fused_add_norm=mamba_config.fused_add_norm,
                     residual_in_fp32=mamba_config.residual_in_fp32

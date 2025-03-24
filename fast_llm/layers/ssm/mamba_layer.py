@@ -43,6 +43,7 @@ def kaiming_init(a=math.sqrt(5)):
 def init_A(d_state, d_inner) -> Callable[[ParameterMeta, torch.Tensor, torch.Generator], torch.Tensor]:
     def init_(meta: ParameterMeta, tensor: torch.Tensor, generator: torch.Generator):  # noqa        
         # S4D real initialization
+        # TODO: make sure the innitialization works
         A = repeat(
             torch.arange(1, d_state + 1, dtype=torch.float32),
             "n -> d n",

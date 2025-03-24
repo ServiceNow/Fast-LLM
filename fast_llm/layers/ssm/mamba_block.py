@@ -39,13 +39,15 @@ from fast_llm.layers.common.normalization import LayerNorm, RMSNorm
 from mamba_layer import MambaLayer
 from fast_llm.layers.ssm.config import MambaConfig
 from fast_llm.engine.config_utils.tensor_space import TensorDim
+from fast_llm.tensor import TensorMeta
 
 class MambaBlock(nn.Module):
     def __init__(
-        self, config: MambaConfig, mixer_cls, norm_cls=LayerNorm, fused_add_norm=False, residual_in_fp32=False
+        self, config: MambaConfig, mixer_cls, layer_index: int, norm_cls=LayerNorm, fused_add_norm=False, residual_in_fp32=False
     ):
 
         super().__init__()
+        self._layer_index = layer_index
         self.config = config
         self.residual_in_fp32 = residual_in_fp32
         self.fused_add_norm = fused_add_norm
@@ -61,10 +63,20 @@ class MambaBlock(nn.Module):
             ), "Only LayerNorm and RMSNorm are supported for fused_add_norm"
             # assert config.num_mem_heads == 0, 'args.num_mem_heads > 0 only supports fused_add_norm=False' # TODO: ehat are mem_heads? They are implemented in the Zamba code
 
+    def _get_meta(self, tensor: TensorMeta, name: str):
+        return TensorMeta.from_dims(
+            tensor.dims, tensor_name=f"{self.name} {name}", dtype=tensor.dtype
+        )
+    
+    @property
+    def name(self) -> str:
+        return f"Mamba block {self._layer_index}"
+    
     def forward(
         self, hidden_states: Tensor,  from_shared_proj: Optional[Tensor] = None, from_tf: Optional[Tensor] = None, residual: Optional[Tensor] = None, inference_params=None, attention_mask=None
-    ):
-        
+    ):        
+        if isinstance(hidden_states, TensorMeta):
+            return self._get_meta(hidden_states, "output"), self._get_meta(hidden_states, "residual")
         if not self.fused_add_norm:
             
             residual = (hidden_states + residual) if residual is not None else hidden_states
