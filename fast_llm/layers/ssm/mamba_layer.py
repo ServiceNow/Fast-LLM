@@ -12,7 +12,7 @@ from einops import rearrange, repeat
 from fast_llm.layers.ssm.config import MambaConfig
 from fast_llm.layers.common.linear import Linear
 from fast_llm.layers.common.conv import Conv1D
-from fast_llm.tensor import ParameterMeta, init_zeros_, init_ones_, init_normal_
+from fast_llm.tensor import ParameterMeta, init_zeros_, init_ones_
 
 try:
     from causal_conv1d import causal_conv1d_fn, causal_conv1d_update
@@ -21,23 +21,24 @@ except ImportError:
     causal_conv1d_update = None
     
 
-from ops.selective_scan_interface import selective_scan_fn, mamba_inner_fn, SELECTIVE_SCAN_CUDA_IMPORT_FAILED
+from ops.selective_scan_interface import selective_scan_fn, mamba_inner_fn
 
 try:
     from ops.triton.selective_state_update import selective_state_update
 except ImportError:
     selective_state_update = None
-
-try:
-    from ops.triton.layernorm import RMSNorm, layer_norm_fn, rms_norm_fn
-except ImportError:
-    RMSNorm, layer_norm_fn, rms_norm_fn = None, None, None
     
 
 '''
 Note: this is mostly copied from https://github.com/Zyphra/Zamba2, similar code is aslo in https://github.com/state-spaces/mamba
 '''
 
+def kaiming_init(a=math.sqrt(5)):
+    # same as torch linear layer init https://github.com/pytorch/pytorch/blob/b248edd7ccae15cf3a2dd86442149e4bc029846a/torch/nn/modules/linear.py#L114
+    def init_(meta: ParameterMeta, tensor: torch.Tensor, generator: torch.Generator):  # noqa
+        nn.init.kaiming_normal_(tensor, a=a)
+        return tensor
+    return init_
 
 def init_A(d_state, d_inner) -> Callable[[ParameterMeta, torch.Tensor, torch.Generator], torch.Tensor]:
     def init_(meta: ParameterMeta, tensor: torch.Tensor, generator: torch.Generator):  # noqa        
@@ -83,30 +84,41 @@ class MambaLayer(nn.Module):
         self.use_fast_path = config.use_fast_path if mamba_inner_fn is not None else False
         self.layer_idx = layer_idx
         self.device = config.device
+
+
+        # Tensor dims:
+        # TODO: how to correctly set parallel dims for distributed training?
+        td_inner = TensorDim("D_inner", self.d_inner)
+        td_inner_times2 = TensorDim("D_inner_2", self.d_inner * 2)
+        tdt_rank = TensorDim("D_rank", self.dt_rank)
+        td_x_proj = TensorDim("D_x_proj", self.dt_rank + self.d_state * 2)
+        td_state = TensorDim("D_state", self.d_state)
+        td_model = TensorDim("D_model", self.d_model)
         
-        self.in_proj = Linear(TensorDim("D_model", self.d_model), TensorDim("D_inner", self.d_inner * 2),
-                              weight_init_method=init_normal_(), # TODO: check init method
+        self.in_proj = Linear(td_model, td_inner_times2,
+                              weight_init_method=kaiming_init(),
                               bias_init_method=init_zeros_, bias=config.add_bias_linear, **factory_kwargs) # for upscaled x and residual
 
         self.conv1d = Conv1D(
-            in_channels=TensorDim("D_inner", self.d_inner),
-            out_channels=TensorDim("D_inner", self.d_inner),
+            in_channels=td_inner,
+            out_channels=td_inner,
             bias=config.conv_bias,
             kernel_size=self.d_conv,
             groups=self.d_inner, # independent kernel per d_inned
             padding=self.d_conv - 1,
-            weight_init_method=init_normal_(), # TODO: check init method
+            weight_init_method=kaiming_init(),
             **factory_kwargs,
         )
 
         self.activation = "silu"
         self.act = nn.SiLU()
+        
 
         self.x_proj = Linear(
-            TensorDim("D_inner", self.d_inner), TensorDim("D_dt", self.dt_rank + self.d_state * 2), weight_init_method=init_normal_(), bias=False, **factory_kwargs
+            td_inner, td_x_proj, weight_init_method=kaiming_init(), bias=False, **factory_kwargs
         )
 
-        self.dt_proj = Linear(TensorDim("D_dt", self.dt_rank), TensorDim("D_inner", self.d_inner), bias=True, weight_init_method=init_normal_(),
+        self.dt_proj = Linear(tdt_rank, td_inner, bias=True, weight_init_method=kaiming_init(),
                               bias_init_method=init_dtprojbias(self.d_inner, config.dt_max, config.dt_min, config.dt_init_floor, factory_kwargs), 
                               **factory_kwargs)# TODO: check init method
 
@@ -115,24 +127,24 @@ class MambaLayer(nn.Module):
 
 
         self.A_log = ParameterMeta(torch.empty(self.d_inner, self.d_state, device="meta"), 
-                                    dims=(TensorDim("D_inner", self.d_inner), TensorDim("D_state", self.d_state)), 
+                                    dims=(td_inner, td_state), 
                                     weight_decay=False, 
                                     init_method=init_A(self.d_state, self.d_inner))
 
         # D "skip" parameter
         self.D = ParameterMeta(torch.empty(self.d_inner, device="meta"), 
-                                dims=(TensorDim("D_inner", self.d_inner),), 
+                                dims=(td_inner,), 
                                 weight_decay=False, 
                                 init_method=init_ones_)
 
-        self.out_proj = Linear(TensorDim("D_inner", self.d_inner), TensorDim("D_model", self.d_model), 
+        self.out_proj = Linear(td_inner, td_model, 
                                bias=False, # TODO: note, if bias is used there is a problem in the MambaInnerFn.backward for the bias grads. I think this bias is not used in other mamba repos.
-                               weight_init_method=init_normal_(), # TODO: check init method
+                               weight_init_method=kaiming_init(),
                                **factory_kwargs)
 
     def forward(self, hidden_states, from_shared_proj = None, inference_params=None):
         batch, seqlen, dim = hidden_states.shape
-        print("IN MAMBA LAYER FORWARD: ", hidden_states.shape)
+        # print("IN MAMBA LAYER FORWARD: ", hidden_states.shape)
         conv_state, ssm_state = None, None
         if inference_params is not None:
             conv_state, ssm_state = self._get_states_from_cache(inference_params, batch)
@@ -153,39 +165,6 @@ class MambaLayer(nn.Module):
         A = -torch.exp(self.A_log.float())  # (d_inner, d_state)
         # In the backward pass we write dx and dz next to each other to avoid torch.cat
         if self.use_fast_path and inference_params is None:  # Doesn't support outputting the states
-            # y_0 = mamba_inner_fn(
-            #     self.d_inner//2,
-            #     xz[:,:self.d_inner,:],
-            #     self.conv1d.weight[:self.d_inner//2],
-            #     self.conv1d.bias[:self.d_inner//2] if self.conv1d.bias is not None else None,
-            #     self.x_proj.weight[:,:self.d_inner//2],
-            #     self.dt_proj.weight[:self.d_inner//2],
-            #     #self.out_proj.weight,
-            #     #self.out_proj.bias,
-            #     A[:self.d_inner//2],
-            #     None,  # input-dependent B
-            #     None,  # input-dependent C
-            #     self.D[:self.d_inner//2].float(),
-            #     delta_bias=self.dt_proj.bias[:self.d_inner//2].float(),
-            #     delta_softplus=True,
-            # )
-            # y_1 = mamba_inner_fn(
-            #     self.d_inner//2,
-            #     xz[:,self.d_inner:,:],
-            #     self.conv1d.weight[self.d_inner//2:],
-            #     self.conv1d.bias[self.d_inner//2:] if self.conv1d.bias is not None else None,
-            #     self.x_proj.weight[:,self.d_inner//2:],
-            #     self.dt_proj.weight[self.d_inner//2:],
-            #     #self.out_proj.weight,
-            #     #self.out_proj.bias,
-            #     A[self.d_inner//2:],
-            #     None,  # input-dependent B
-            #     None,  # input-dependent C
-            #     self.D[self.d_inner//2:].float(),
-            #     delta_bias=self.dt_proj.bias[self.d_inner//2:].float(),
-            #     delta_softplus=True,
-            # )
-            # y = torch.cat((y_0, y_1), dim=2)
             out = mamba_inner_fn(
                 xz,
                 self.conv1d.weight,
@@ -245,8 +224,10 @@ class MambaLayer(nn.Module):
             y = rearrange(y, "b d l -> b l d")
             out = self.out_proj(y)
         return out
-
+    
+    # INFERENCE-SPECIFIC CODE, CURRENTLY UNUSED
     def step(self, hidden_states, conv_state, ssm_state):
+        # TODO: OO, remove this and the following, as this is specific to inference?
         dtype = hidden_states.dtype
         assert hidden_states.shape[1] == 1, "Only support decoding with 1 token at a time for now"
         xz = self.in_proj(hidden_states.squeeze(1))  # (B 2D)
