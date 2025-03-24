@@ -107,6 +107,26 @@ class MLPLayer2Converter(WeightConverter):
         return (merged_weight.t().contiguous(),)
 
 
+@dataclasses.dataclass
+class NumLayersParamConverter(ParamConverter):
+
+    def __post_init__(self):
+        Assert.eq(len(self.fast_llm_names), 2)
+        Assert.eq(len(self.export_names), 1)
+
+    def export_params(self, fast_llm_values: tuple[typing.Any, ...]) -> tuple[typing.Any, ...]:
+        num_layers, num_multi_token_prediction_heads = fast_llm_values
+        if num_multi_token_prediction_heads:
+            # MTP adds an additional layer on top of the shared trunk
+            return (num_layers + 1,)
+        return (num_layers,)
+
+    def import_params(self, export_values: tuple[typing.Any, ...]) -> tuple[typing.Any, ...]:
+        (num_layers,) = export_values
+        # disable MTP by default
+        return (num_layers, None)
+
+
 class CommonHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
     _model: GPTModel
     _model_class: typing.ClassVar[FastLLMModelConfig] = GPTModelConfig
@@ -127,8 +147,8 @@ class CommonHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
                 fast_llm_value=ActivationType.from_hf_name,
                 export_value=lambda activation_type: activation_type.hf_name,
             ),
-            RenameParamConverter(
-                fast_llm_names=(("transformer", "num_layers"),),
+            NumLayersParamConverter(
+                fast_llm_names=(("transformer", "num_layers"), ("num_multi_token_prediction_heads",)),
                 export_names=(("num_hidden_layers",),),
             ),
             RenameParamConverter(

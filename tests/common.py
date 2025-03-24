@@ -15,9 +15,9 @@ from fast_llm.data.dataset.gpt.memmap import GPTMemmapDataset
 from fast_llm.data.dataset.gpt.sampled import GPTSample
 from fast_llm.models.gpt.config import (
     LlamaGPTHuggingfaceCheckpointFormat,
-    Qwen2GPTHuggingfaceCheckpointFormat,
     MistralGPTHuggingfaceCheckpointFormat,
     MixtralGPTHuggingfaceCheckpointFormat,
+    Qwen2GPTHuggingfaceCheckpointFormat,
     Starcoder2GPTHuggingfaceCheckpointFormat,
 )
 from fast_llm.tools.train import CliTrainingConfig
@@ -192,6 +192,12 @@ CONFIG_MIXTRAL_YARN_FAST_LLM = CONFIG_MIXTRAL_FAST_LLM + [
 ]
 CONFIG_MIXTRAL_YARN_COMMON = CONFIG_MIXTRAL_YARN_FAST_LLM + ["model.distributed.training_dtype=bf16"]
 
+CONFIG_LLAMA_MTP_MEGATRON = None
+CONFIG_LLAMA_MTP_FAST_LLM = CONFIG_LLAMA_FAST_LLM + [
+    "model.base_model.num_multi_token_prediction_heads=4",
+]
+CONFIG_LLAMA_MTP_COMMON = CONFIG_LLAMA_MTP_FAST_LLM + ["model.distributed.training_dtype=bf16"]
+
 _CONFIGS = {
     "gpt2": ("gpt", CONFIG_GPT2_FAST_LLM, CONFIG_GPT2_MEGATRON, CONFIG_GPT2_COMMON, None),
     "sc1": ("gpt", CONFIG_SC1_FAST_LLM, CONFIG_SC1_MEGATRON, CONFIG_SC1_COMMON, None),
@@ -250,6 +256,13 @@ _CONFIGS = {
         CONFIG_MIXTRAL_YARN_MEGATRON,
         CONFIG_MIXTRAL_YARN_COMMON,
         MixtralGPTHuggingfaceCheckpointFormat,
+    ),
+    "llama-mtp": (
+        "gpt",
+        CONFIG_LLAMA_MTP_FAST_LLM,
+        CONFIG_LLAMA_MTP_MEGATRON,
+        CONFIG_LLAMA_MTP_COMMON,
+        LlamaGPTHuggingfaceCheckpointFormat,
     ),
 }
 
