@@ -145,7 +145,6 @@ py::array build_padded_token_cumsum(const py::array_t<int32_t>& sizes_,
   std::vector<int64_t> token_cumsum;
 
   int64_t cumsum = offset;
-  int64_t padded_samples = padding_offset;
 
   while (sizes_idx < sizes.size()) {
     int32_t size = sizes[sizes_idx];
@@ -180,9 +179,9 @@ py::array build_padded_token_cumsum(const py::array_t<int32_t>& sizes_,
   });
 
   const auto byte_size = sizeof(int64_t);
-  return py::array(std::vector<int64_t>{padding_cumsum.size()},
+  return py::array(std::vector<int64_t>{token_cumsum.size()},
                    {byte_size},
-                   padded_samples_result,
+                   token_cumsum_result,
                    free_when_done_padded)
 }
 
