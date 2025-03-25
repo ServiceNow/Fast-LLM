@@ -13,10 +13,6 @@ from fast_llm.engine.schedule.config import BatchConfig
 from fast_llm.layers.language_model.config import LanguageModelKwargs, LanguageModelLossNames
 from fast_llm.layers.language_model.embedding import WORD_EMBEDDINGS_WEIGHT, LanguageModelEmbedding
 from fast_llm.layers.language_model.head import OUTPUT_WEIGHTS, LanguageModelHead
-from fast_llm.layers.language_model.multi_token_prediction_head import (
-    MultiTokenPredictionLanguageModelHead,
-    MultiTokenPredictionTransformerLayer,
-)
 from fast_llm.layers.language_model.preprocessing import PositionEmbeddingPreprocessor
 from fast_llm.layers.transformer.config import (
     RoutingType,
@@ -76,28 +72,26 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             self._flash_varlen_preprocessor = FlashAttnVarlenPreprocessor(self._config.transformer, self._tensor_space)
 
     def get_output_layers(self) -> list[Layer]:
-        if self._config.num_multi_token_prediction_heads:
-            return [
-                layer
-                for i in range(self._config.num_multi_token_prediction_heads)
-                for layer in [
-                    MultiTokenPredictionTransformerLayer(
-                        self._config.transformer,
-                        self._tensor_space,
-                        # TODO MTP: which index?
-                        layer_index=self._config.transformer.num_layers,
-                    ),
-                    MultiTokenPredictionLanguageModelHead(
-                        self._config,
-                        self._tensor_space,
-                        multi_token_prediction_index=i,
-                    ),
-                ]
+        return [
+            layer
+            for i in range(self._config.num_multi_token_prediction_heads)
+            for layer in [
+                TransformerLayer(
+                    self._config.transformer,
+                    self._tensor_space,
+                    # TODO MTP: which index?
+                    layer_index=self._config.transformer.num_layers,
+                    # The last layer only returns the transformer output.
+                    # The previous layers return a stack of shared_hidden and transformer_output.
+                    stacked_output=i < self._config.num_multi_token_prediction_heads - 1,
+                ),
+                LanguageModelHead(
+                    self._config,
+                    self._tensor_space,
+                    multi_token_prediction_index=i,
+                ),
             ]
-        else:
-            return [
-                LanguageModelHead(self._config, self._tensor_space),
-            ]
+        ]
 
     def get_layers(self) -> list[Layer]:
         return [
@@ -108,7 +102,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                     self._tensor_space,
                     layer_index=i + 1,
                 )
-                for i in range(self._config.transformer.num_layers)
+                for i in range(self._config.transformer.num_layers - 1)
             ],
             *self.get_output_layers(),
         ]
@@ -345,9 +339,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
 
     @property
     def loss_defs(self) -> list[LossDef]:
-        loss_defs = [
-            LossDef(name=LanguageModelLossNames.language_model_loss, formatted_name="language model loss", count=1)
-        ]
+        loss_defs = []
         if (
             self._config.transformer.num_experts > 1
             and self._config.transformer.expert_routing_type == RoutingType.topk
@@ -369,15 +361,15 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                 )
         if self._config.logit_z_loss:
             LossDef(name=LanguageModelLossNames.z_loss, formatted_name="logit z loss", count=1)
-        if self._config.num_multi_token_prediction_heads:
-            for i in range(self._config.num_multi_token_prediction_heads):
-                loss_defs.append(
-                    LossDef(
-                        name=LanguageModelLossNames.multi_token_prediction_loss(i),
-                        formatted_name=f"multi-token prediction loss {i}",
-                        count=1,
-                    )
+
+        for i in range(self._config.num_multi_token_prediction_heads):
+            loss_defs.append(
+                LossDef(
+                    name=LanguageModelLossNames.multi_token_prediction_loss(i),
+                    formatted_name=f"language model loss {i}",
+                    count=1,
                 )
+            )
         return loss_defs
 
 

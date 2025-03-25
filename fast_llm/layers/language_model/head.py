@@ -13,7 +13,7 @@ from fast_llm.functional.autograd import grad_is_context, wrap_forward_backward
 from fast_llm.functional.config import CrossEntropyImpl, TritonConfig
 from fast_llm.functional.cross_entropy import cross_entropy_forward_backward
 from fast_llm.functional.linear import output_parallel_linear_backward, output_parallel_linear_forward
-from fast_llm.layers.common.auxiliary_loss import z_loss
+from fast_llm.layers.common.auxiliary_loss import AuxiliaryLoss, z_loss
 from fast_llm.layers.language_model.config import (
     LanguageModelBaseConfig,
     LanguageModelDimNames,
@@ -40,6 +40,7 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
         self,
         config: LanguageModelBaseConfig,
         tensor_space: TensorSpace,
+        multi_token_prediction_index: int,
     ):
         super().__init__(config)
         self._debug_transformer = config.transformer.debug_transformer
@@ -58,24 +59,20 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
 
         hidden_dim = self._tensor_space.get_tensor_dim(TransformerDimNames.hidden)
 
-        self._loss_name = LanguageModelLossNames.language_model_loss
+        self._loss_name = LanguageModelLossNames.multi_token_prediction_loss(multi_token_prediction_index)
         self.final_norm = config.transformer.normalization.get_layer(hidden_dim)
         self._logits_scale_factor = config.logits_scale_factor
         self._z_loss_factor = config.logit_z_loss
 
-        # untie embedding weights
-        if self._should_init_output_weights():
-            vocab_dim = self._tensor_space.get_tensor_dim(
-                LanguageModelDimNames.vocab_tp if self._parallel_embeddings else LanguageModelDimNames.vocab
-            )
-            self.output_weights = ParameterMeta.from_dims(
-                (vocab_dim, hidden_dim),
-                init_method=init_normal_(
-                    std=config.init_method_std_embed,
-                    min_val=config.init_method_min_embed,
-                    max_val=config.init_method_max_embed,
-                ),
-            )
+        self.multi_token_prediction_index = multi_token_prediction_index
+        self.is_last_head = self.multi_token_prediction_index == config.num_multi_token_prediction_heads - 1
+        if self.multi_token_prediction_index > 0:
+            assert (
+                not self._sequence_parallel_logits
+            ), "Sequence parallel logits not supported for multi-token prediction."
+            assert not self._cross_entropy_splits, "Cross-entropy splits not supported for multi-token prediction."
+
+        self._init_output_weights(hidden_dim, config)
 
         self._cross_entropy_impl = config.cross_entropy_impl
         if self._cross_entropy_impl == CrossEntropyImpl.auto:
@@ -88,8 +85,21 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
 
         self._forward = wrap_forward_backward(self._forward_backward, grad_is_context)
 
-    def _should_init_output_weights(self) -> bool:
-        return not self._tie_word_embeddings
+    def _init_output_weights(self, hidden_dim: TensorDim, config) -> None:
+        if self._tie_word_embeddings or self.multi_token_prediction_index > 0:
+            return
+        # untie embedding weights
+        vocab_dim = self._tensor_space.get_tensor_dim(
+            LanguageModelDimNames.vocab_tp if self._parallel_embeddings else LanguageModelDimNames.vocab
+        )
+        self.output_weights = ParameterMeta.from_dims(
+            (vocab_dim, hidden_dim),
+            init_method=init_normal_(
+                std=config.init_method_std_embed,
+                min_val=config.init_method_min_embed,
+                max_val=config.init_method_max_embed,
+            ),
+        )
 
     def forward(
         self, input_: torch.Tensor, kwargs: dict, losses: dict | None = None, metrics: dict | None = None
@@ -101,6 +111,9 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
                 tensor_name="Loss",
                 reductions=((DistributedDimNames.data, ReduceOp.AVG),),  # noqa
             )
+        if not self.is_last_head:
+            # MTP: split the stacked input
+            shared_hidden, input_ = torch.unbind(input_, dim=0)
         # TODO: Pytorch copies the grads in backward for no reason (not sure if still the case)
         # TODO: Torch compile implementation sometimes break.
         # TODO: Double-check correctness, optimize a bit more.
@@ -110,18 +123,32 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
         if language_model_loss is not None:
             losses[self._loss_name].append(language_model_loss)
         # TODO: Return the model output when needed.
-        return language_model_loss
+        if self.is_last_head:
+            # Last head should return the loss for backward.
+            return language_model_loss
+        else:
+            # Backward hook to compute the gradient of the loss
+            shared_hidden = AuxiliaryLoss.apply(shared_hidden, language_model_loss, 1.0)
+            # MTP: Return shared_hidden to be used by the next head.
+            return shared_hidden
 
     def _forward_backward(
         self, input_: torch.Tensor, kwargs: dict, losses: dict | None = None
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
-        labels = kwargs[LanguageModelKwargs.labels].flatten() if LanguageModelKwargs.labels in kwargs else None
+        labels = kwargs[LanguageModelKwargs.labels] if LanguageModelKwargs.labels in kwargs else None
+        # MTP: Shift the labels
+        labels = labels[:, self.multi_token_prediction_index :].flatten() if labels is not None else None
         if self._sequence_parallel_logits:
             labels = split_op(labels, self._tensor_space.distributed.tensor_group, 0)
         do_grad = labels is not None and self.training
         input_ = input_.detach().requires_grad_(do_grad)
         with torch.enable_grad():
-            ln_output = self.final_norm(input_)
+            # MTP: truncate the input
+            if self.multi_token_prediction_index > 0:
+                truncated_input = input_[:, : -self.multi_token_prediction_index, :].contiguous()
+            else:
+                truncated_input = input_
+            ln_output = self.final_norm(truncated_input)
 
         grad_output = kwargs[TransformerKwargs.grad_output] / (
             self._group_size if self._sequence_parallel_logits else 1
@@ -139,7 +166,11 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
             return loss, None
 
     def _get_output_weights(self, kwargs: dict) -> torch.Tensor:
-        return kwargs[WORD_EMBEDDINGS_WEIGHT] if self._tie_word_embeddings else self.output_weights
+        if self._tie_word_embeddings:
+            return kwargs[WORD_EMBEDDINGS_WEIGHT]
+        if self.multi_token_prediction_index > 0:
+            return kwargs[OUTPUT_WEIGHTS]
+        return self.output_weights
 
     def _logits_cross_entropy_forward_backward_split(
         self,

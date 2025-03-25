@@ -27,11 +27,14 @@ class TransformerLayer(Layer):
         config: TransformerConfig,
         tensor_space: TensorSpace,
         layer_index: int,
+        stacked_output: bool = False,
     ):
         super().__init__()
         self._config = config
         self._tensor_space = tensor_space
         self._dropout_p = self._config.hidden_dropout
+        # For multi-token prediction, return a stack of shared_hidden and transformer_output.
+        self._stacked_output = stacked_output
 
         self._layer_index = layer_index
         self._debug_mode = self._config.debug_transformer or self._config.debug_transformer_memory
@@ -99,6 +102,7 @@ class TransformerLayer(Layer):
         )
         if self._debug_mode:
             self._debug_log(None, "Begin", kwargs)
+        fw_input = input_
         hidden_states = self.norm_1(input_)
         if self._debug_mode:
             self._debug_log(hidden_states, "Norm 1", kwargs)
@@ -119,4 +123,6 @@ class TransformerLayer(Layer):
             hidden_states = self._bias_dropout_add(hidden_states, bias, input_)
         if self._debug_mode:
             self._debug_log(None, "MLP residual", kwargs, bias=bias)
+        if self._stacked_output:
+            hidden_states = torch.stack((fw_input, hidden_states), dim=0)
         return hidden_states
