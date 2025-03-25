@@ -74,6 +74,9 @@ TOKEN_CUMSUM_RATE = 10
 
 
 class GPTSampledIndexedDataset(SampledDataset):
+    """
+    A sampled GPT dataset.
+    """
 
     def __init__(
         self,
@@ -104,7 +107,8 @@ class GPTSampledIndexedDataset(SampledDataset):
             base_path = (
                 sampling.cache_directory / f"{self.name}_ns_{self._num_samples}_sl_{self._sequence_length}"
                 f"_s_{self._config.seed}"
-            )  # TODO: Names are confusing
+            )
+            # TODO: Names are confusing
             self._document_shuffling = MemmapArray(base_path.with_name(base_path.name + "_shuffling.npy"))
             self._token_cumsum_shuffled = MemmapArray(base_path.with_name(base_path.name + "_shuffled_cumsum.npy"))
             self._token_cumsum_unshuffled = MemmapArray(base_path.with_name(base_path.name + "_unshuffled_cumsum.npy"))
@@ -141,7 +145,6 @@ class GPTSampledIndexedDataset(SampledDataset):
 
         documents_per_epoch = document_sizes.numel()
         tokens_per_epoch = document_sizes.sum().item()
-
         # We produce sequences of length `self._sequence_length + 1` so the last token has a label,
         # but we also include that last label in the following sample,
         # so we need `sequence_length * num_samples + 1` tokens in total.
@@ -313,7 +316,7 @@ class GPTSampledIndexedDataset(SampledDataset):
             ]
             return out, num_tokens
 
-    def __len__(self):
+    def __len__(self) -> int:
         return self._num_samples
 
     def __getitem__(self, index: int) -> typing.Any:
@@ -356,12 +359,12 @@ class GPTSampledIndexedDataset(SampledDataset):
                 document_index = self._document_shuffling[document_sampling_index - self._unshuffled_documents].item()
 
             document_size = self._indexed_dataset.get_document_size(document_index)
-            if document_size > self._sequence_length + 1:
-                # Document too long, ignore
-                document_sampling_index += 1
-                continue
 
             if not self._truncate_documents:
+                if document_size > self._sequence_length + 1:
+                    # Document too long, ignore
+                    document_sampling_index += 1
+                    continue
                 tokens_in_sample = token_count % (self._sequence_length + 1)
                 if document_size + tokens_in_sample > self._sequence_length + 1:
                     # Document belongs to the next sample, need to account for padding.
@@ -392,6 +395,7 @@ class GPTSampledIndexedDataset(SampledDataset):
                         span = np.clip(loss_masking_span + token_count - token_start, 0, self._sequence_length + 1)
                         if span[1] > span[0]:
                             loss_masking_spans.append(span)
+
             # Go to the next document.
             document_sampling_index += 1
             token_count += document_size
