@@ -75,7 +75,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
         else:
             self._flash_varlen_preprocessor = FlashAttnVarlenPreprocessor(self._config.transformer, self._tensor_space)
 
-    def get_language_model_layers(self) -> list[Layer]:
+    def get_output_layers(self) -> list[Layer]:
         if self._config.num_multi_token_prediction_heads:
             return [
                 layer
@@ -110,7 +110,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                 )
                 for i in range(self._config.transformer.num_layers)
             ],
-            *self.get_language_model_layers(),
+            *self.get_output_layers(),
         ]
 
     def setup(self, distributed: Distributed) -> None:
