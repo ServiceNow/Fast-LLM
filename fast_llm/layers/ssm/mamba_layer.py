@@ -33,24 +33,32 @@ except ImportError:
 Note: this is mostly copied from https://github.com/Zyphra/Zamba2, similar code is aslo in https://github.com/state-spaces/mamba
 '''
 
-def kaiming_init(a=math.sqrt(5)):
+def kaiming_init(d_in, d_out, a=math.sqrt(5)):
     # same as torch linear layer init https://github.com/pytorch/pytorch/blob/b248edd7ccae15cf3a2dd86442149e4bc029846a/torch/nn/modules/linear.py#L114
     def init_(meta: ParameterMeta, tensor: torch.Tensor, generator: torch.Generator):  # noqa
-        nn.init.kaiming_normal_(tensor, a=a)
+        tensor_view = tensor.view(d_out, d_in)
+        nn.init.kaiming_normal_(tensor_view, a=a)
         return tensor
     return init_
 
 def init_A(d_state, d_inner) -> Callable[[ParameterMeta, torch.Tensor, torch.Generator], torch.Tensor]:
     def init_(meta: ParameterMeta, tensor: torch.Tensor, generator: torch.Generator):  # noqa        
         # S4D real initialization
-        # TODO: make sure the innitialization works
+        # TODO: adopt this innitialization to work for tensor parallel setting!
         A = repeat(
             torch.arange(1, d_state + 1, dtype=torch.float32),
             "n -> d n",
             d=d_inner
         ).contiguous()
         A_log = torch.log(A)  # Keep A_log in fp32
-        tensor.copy_(A_log)
+        if tensor.shape != A_log.shape:
+            if tensor.numel() == A_log.numel():
+                tensor_view = tensor.view(d_inner, d_state)
+                tensor_view.copy_(A_log)
+            else:
+                raise ValueError(f"Tensor size {tensor.numel()} doesn't match expected size {A_log.numel()}")
+        else:
+            tensor.copy_(A_log)
         return tensor
 
     return init_
@@ -97,7 +105,7 @@ class MambaLayer(nn.Module):
         td_model = TensorDim("D_model", self.d_model)
         
         self.in_proj = Linear(td_model, td_inner_times2,
-                              weight_init_method=kaiming_init(),
+                              weight_init_method=kaiming_init(td_model.size, td_inner_times2.size),
                               bias_init_method=init_zeros_, bias=config.add_bias_linear, **factory_kwargs) # for upscaled x and residual
 
         self.conv1d = Conv1D(
@@ -107,7 +115,7 @@ class MambaLayer(nn.Module):
             kernel_size=self.d_conv,
             groups=self.d_inner, # independent kernel per d_inned
             padding=self.d_conv - 1,
-            weight_init_method=kaiming_init(),
+            weight_init_method=kaiming_init(td_inner.size, self.d_conv),
             **factory_kwargs,
         )
 
@@ -116,18 +124,17 @@ class MambaLayer(nn.Module):
         
 
         self.x_proj = Linear(
-            td_inner, td_x_proj, weight_init_method=kaiming_init(), bias=False, **factory_kwargs
+            td_inner, td_x_proj, weight_init_method=kaiming_init(td_inner.size, td_x_proj.size), bias=False, **factory_kwargs
         )
 
-        self.dt_proj = Linear(tdt_rank, td_inner, bias=True, weight_init_method=kaiming_init(),
+        self.dt_proj = Linear(tdt_rank, td_inner, bias=True, weight_init_method=kaiming_init(tdt_rank.size, td_inner.size),
                               bias_init_method=init_dtprojbias(self.d_inner, config.dt_max, config.dt_min, config.dt_init_floor, factory_kwargs), 
                               **factory_kwargs)# TODO: check init method
 
         # Our initialization would set all Linear.bias to zero, need to mark this one as _no_reinit
-        self.dt_proj.bias._no_reinit = True
+        # self.dt_proj.bias._no_reinit = True #TODO: check if this is needed, why is this needed in the original implementation?
 
-
-        self.A_log = ParameterMeta(torch.empty(self.d_inner, self.d_state, device="meta"), 
+        self.A_log = ParameterMeta(torch.empty(self.d_inner, self.d_state, device="meta", dtype=torch.float32), 
                                     dims=(td_inner, td_state), 
                                     weight_decay=False, 
                                     init_method=init_A(self.d_state, self.d_inner))
@@ -140,7 +147,7 @@ class MambaLayer(nn.Module):
 
         self.out_proj = Linear(td_inner, td_model, 
                                bias=False, # TODO: note, if bias is used there is a problem in the MambaInnerFn.backward for the bias grads. I think this bias is not used in other mamba repos.
-                               weight_init_method=kaiming_init(),
+                               weight_init_method=kaiming_init(td_inner.size, td_model.size),
                                **factory_kwargs)
 
     def forward(self, hidden_states, from_shared_proj = None, inference_params=None):
@@ -161,7 +168,7 @@ class MambaLayer(nn.Module):
             "d (b l) -> b d l",
             l=seqlen,
         )
-        print("XZ: ", xz.shape)
+        # print("XZ: ", xz.shape) #TODO: enabe logging when debugging
 
         A = -torch.exp(self.A_log.float())  # (d_inner, d_state)
         # In the backward pass we write dx and dz next to each other to avoid torch.cat
