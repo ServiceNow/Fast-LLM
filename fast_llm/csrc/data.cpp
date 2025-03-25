@@ -132,7 +132,7 @@ py::array build_sample_idx(const py::array_t<int32_t>& sizes_,
 py::array build_padded_token_cumsum(const py::array_t<int32_t>& sizes_,
                                 const int32_t seq_length,
                                 const int32_t token_cumsum_rate,
-                                const int64_t offset,
+                                const int64_t offset
                               ) {
   /*
   Build token cumsums at regular intervals from document sizes with padding in mind.
@@ -166,7 +166,7 @@ py::array build_padded_token_cumsum(const py::array_t<int32_t>& sizes_,
   }
 
   // Add a final (padded) entry so we know how many tokens there are in total.
-  cumsum += seq_length - seq_size
+  cumsum += seq_length - seq_size;
   token_cumsum.push_back(cumsum);
 
 
@@ -182,7 +182,7 @@ py::array build_padded_token_cumsum(const py::array_t<int32_t>& sizes_,
   return py::array(std::vector<int64_t>{token_cumsum.size()},
                    {byte_size},
                    token_cumsum_result,
-                   free_when_done_padded)
+                   free_when_done)
 }
 
 PYBIND11_MODULE(data, m) {
