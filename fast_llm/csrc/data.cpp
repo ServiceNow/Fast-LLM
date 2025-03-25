@@ -182,7 +182,7 @@ py::array build_padded_token_cumsum(const py::array_t<int32_t>& sizes_,
   return py::array(std::vector<int64_t>{token_cumsum.size()},
                    {byte_size},
                    token_cumsum_result,
-                   free_when_done)
+                   free_when_done);
 }
 
 PYBIND11_MODULE(data, m) {
