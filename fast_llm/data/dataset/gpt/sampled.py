@@ -328,8 +328,7 @@ class GPTSampledIndexedDataset(SampledDataset):
         self._lazy_load()
         # tokens at the boundary are included in only one sample when we pack without truncations
         # in case of packing with truncations, the last token from the previous sample is also the first token of the next sample
-        # TODO!!!!!!!!! Wrong for `not self._truncate_documents` (self._sequence_length + 1)
-        token_start = index * self._sequence_length
+        token_start = index * (self._sequence_length + 1 - self._truncate_documents)
         token_end = token_start + self._sequence_length + 1
 
         if token_start < self._unshuffled_tokens:

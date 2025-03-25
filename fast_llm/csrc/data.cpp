@@ -148,7 +148,7 @@ py::array build_padded_token_cumsum(const py::array_t<int32_t>& sizes_,
 
   while (sizes_idx < sizes.size()) {
     int32_t size = sizes[sizes_idx];
-    if (size > seq_length+1) {
+    if (size > seq_length) {
       // Skip sequences that are too long, to avoid truncations
       sizes_idx += 1;
     } else if (seq_size + size > seq_length) {
