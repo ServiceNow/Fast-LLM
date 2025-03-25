@@ -138,16 +138,14 @@ def test_gpt_sample(seed, shuffle):
 
 @pytest.mark.skipif(not _extension_available, reason="CPP Extension not available")
 def test_build_padded_token_cumsum():
-    sizes = np.array([100, 256, 580, 600, 550, 89, 339, 430, 400, 680, 50], dtype=np.int32)
+    sizes = np.array([100, 256, 580, 600, 550, 89, 339, 430, 400, 795, 680, 50], dtype=np.int32)
     sequence_length = 768
     token_cumsum_rate = 4
-    padding_offset = 0
     offset = 0
-    # sequences with padding
+    # sequences with padding:
     # [100, 256, 413 padded, 580, 189 padded, 600, 169 padded, 550, 89, 130 padded, 339, 430, 400, 369 padded, 680, 50, 39 padded]
-    expected_cumsums = [[0, 1349, 2857, 3845, 5344], [0, 1, 3, 4, 5]]
-    token_cumsum, padding_cumsum = build_padded_token_cumsum(
-        sizes, sequence_length, token_cumsum_rate, offset, padding_offset
-    )
-    Assert.all_equal(token_cumsum, expected_cumsums[0])
-    Assert.all_equal(padding_cumsum, expected_cumsums[1])
+    # cumsums:
+    # [100, 356, 1349, 2307, 2857, 2946, 3415, 3845, 4245, 5294, 5344, 5383]
+    expected_cumsums = [0, 2307, 3845, 5383]
+    token_cumsum = build_padded_token_cumsum(sizes, sequence_length + 1, token_cumsum_rate, offset)
+    Assert.all_equal(token_cumsum, expected_cumsums)
