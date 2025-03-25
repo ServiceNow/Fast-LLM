@@ -52,7 +52,7 @@ class MultiTokenPredictionLanguageModelHead(LanguageModelHead):
         self.multi_token_prediction_index = multi_token_prediction_index
         self.is_last_head = self.multi_token_prediction_index == config.num_multi_token_prediction_heads - 1
         super().__init__(config, tensor_space)
-        self.loss_name = LanguageModelLossNames.multi_token_prediction_loss(multi_token_prediction_index)
+        self._loss_name = LanguageModelLossNames.multi_token_prediction_loss(multi_token_prediction_index)
         # TODO MTP: Handle SP logits and CE splits
         # One issue is that these require the number of labels to be divisible by the nb of splits
         assert not self._sequence_parallel_logits, "Sequence parallel logits not supported for multi-token prediction."
@@ -83,7 +83,7 @@ class MultiTokenPredictionLanguageModelHead(LanguageModelHead):
         # TODO: Skip cross-entropy backward if not needed.
         language_model_loss = self._forward(transformer_layer_output, kwargs, losses)
         if language_model_loss is not None:
-            losses[self.loss_name].append(language_model_loss)
+            losses[self._loss_name].append(language_model_loss)
         if self.is_last_head:
             # Last layer should return the loss for backward.
             return language_model_loss

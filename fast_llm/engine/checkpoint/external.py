@@ -144,7 +144,7 @@ class WeightConverter:
 class IgnoreImportWeightConverter(WeightConverter):
     def __post_init__(self):
         Assert.eq(len(self.fast_llm_name), 0)
-        Assert.eq(len(self.export_name), 1)
+        Assert.gt(len(self.export_name), 0)
 
     def export_weight(
         self, weight: tuple[torch.Tensor | SafeTensorSlice, ...]
@@ -161,7 +161,7 @@ class IgnoreImportWeightConverter(WeightConverter):
 
 class IgnoreExportWeightConverter(WeightConverter):
     def __post_init__(self):
-        Assert.eq(len(self.fast_llm_name), 1)
+        Assert.gt(len(self.fast_llm_name), 0)
         Assert.eq(len(self.export_name), 0)
 
     def export_weight(

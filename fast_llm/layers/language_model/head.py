@@ -58,7 +58,7 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
 
         hidden_dim = self._tensor_space.get_tensor_dim(TransformerDimNames.hidden)
 
-        self.loss_name = LanguageModelLossNames.language_model_loss
+        self._loss_name = LanguageModelLossNames.language_model_loss
         self.final_norm = config.transformer.normalization.get_layer(hidden_dim)
         self._logits_scale_factor = config.logits_scale_factor
         self._z_loss_factor = config.logit_z_loss
@@ -108,7 +108,7 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
         # TODO: Skip cross-entropy backward if not needed.
         language_model_loss = self._forward(input_, kwargs, losses)
         if language_model_loss is not None:
-            losses[self.loss_name].append(language_model_loss)
+            losses[self._loss_name].append(language_model_loss)
         # TODO: Return the model output when needed.
         return language_model_loss
 
