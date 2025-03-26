@@ -187,4 +187,4 @@ def test_gpt_sample_padding(seed):
     )
     sampled = dataset.sample(sampling)
     for idx in range(len(expected_samples)):
-        Assert.all_equal(sampled[idx].token_ids, np.array(expected_samples[idx], dtype=np.int64))
+        Assert.all_equal(sampled[idx].token_ids, np.array(expected_samples[idx]))
