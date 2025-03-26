@@ -102,6 +102,8 @@ class GPTSampledIndexedDataset(SampledDataset):
                 "This may be very inefficient...",
                 log_fn=logger.warning,
             )
+            if not self._truncate_documents:
+                self._document_indices = MemmapArray()
             self._sample()
         else:
             base_path = (
@@ -112,6 +114,8 @@ class GPTSampledIndexedDataset(SampledDataset):
             self._document_shuffling = MemmapArray(base_path.with_name(base_path.name + "_shuffling.npy"))
             self._token_cumsum_shuffled = MemmapArray(base_path.with_name(base_path.name + "_shuffled_cumsum.npy"))
             self._token_cumsum_unshuffled = MemmapArray(base_path.with_name(base_path.name + "_unshuffled_cumsum.npy"))
+            if not self._truncate_documents:
+                self._document_indices = MemmapArray(base_path.with_name(base_path.name + "_indices.npy"))
             self._yaml_path = base_path.with_suffix(".yaml")
             # Sample or validate the dataset of a given rank.
             if sampling.distributed.config.rank == sampling.get_next_rank():
@@ -132,12 +136,14 @@ class GPTSampledIndexedDataset(SampledDataset):
                 "The C++ extension for dataset sampling is missing."
                 " Please make sure Fast-LLM is installed correctly."
             )
-            ignored_documents = sum(document_sizes > self._sequence_length + 1)
-            if ignored_documents:
+            length_filter = document_sizes <= self._sequence_length + 1
+            if ignored_documents := document_sizes.numel() - sum(length_filter):
                 log_main_rank(
                     f" > {ignored_documents} documents are longer than {self._sequence_length+1} tokens and will be ignored.",
                     log_fn=logger.warning,
                 )
+            document_sizes = document_sizes[length_filter]
+            document_indices = torch.nonzero(length_filter, as_tuple=True)[0]
 
         documents_per_epoch = document_sizes.numel()
         tokens_per_epoch = document_sizes.sum().item()
@@ -278,6 +284,8 @@ class GPTSampledIndexedDataset(SampledDataset):
             )
             # Free memory
             del document_shuffling
+        if not self._truncate_documents:
+            self._document_indices.save(document_indices.numpy(force=self._config.gpu))
 
     def _get_token_cumsum(self, sizes: torch.Tensor, offset: int, dtype: DataType) -> tuple[np.ndarray, int | None]:
         if self._truncate_documents:
@@ -349,6 +357,8 @@ class GPTSampledIndexedDataset(SampledDataset):
                 document_index = document_sampling_index % self._documents_per_epoch
             else:
                 document_index = self._document_shuffling[document_sampling_index - self._unshuffled_documents].item()
+
+            document_index = self._document_indices[document_index] if not self._truncate_documents else document_index
 
             document_size = self._indexed_dataset.get_document_size(document_index)
 
