@@ -84,13 +84,9 @@ class Assert:
     """
 
     @staticmethod
-    def eq(x, *args, **kwargs):
-        msg = kwargs.get("msg", None)
+    def eq(x, *args, msg=None):
         for arg in args:
-            if msg:
-                assert x == arg, f"{x} != {arg} | ({msg})"
-            else:
-                assert x == arg, f"{x} != {arg}"
+            assert x == arg, f"{x} != {arg} " + f"| {msg}" if msg else ""
 
     @staticmethod
     def is_(x, y):
