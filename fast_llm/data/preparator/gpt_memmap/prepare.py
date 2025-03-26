@@ -221,6 +221,9 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
         else:
             tokenize_fn = self._tokenize_batch
 
+        # Process dataset before tokenizing
+        dataset = self._config.processors.apply(dataset)
+
         # Tokenize the dataset in parallel
         tokenized_dataset = dataset.map(
             tokenize_fn,

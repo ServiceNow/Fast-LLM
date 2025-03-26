@@ -8,6 +8,8 @@ from fast_llm.data.preparator.config import DatasetPreparatorConfig
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.utils import Assert
 
+from fast_llm.data.preparator.hf_processors.configs.agregator import AgregatorConfig
+
 if typing.TYPE_CHECKING:
     from fast_llm.data.preparator.gpt_memmap.prepare import GPTMemmapDatasetPreparator
 MEMMAP_DTYPES = {
@@ -164,6 +166,8 @@ class GPTMemmapDatasetPreparatorConfig(DatasetPreparatorConfig):
         " Does not shuffle samples.",
         hint=FieldHint.optional,
     )
+
+    processors: AgregatorConfig = Field(default=AgregatorConfig)
 
     def _validate(self) -> None:
         assert self.tokenizer.path is not None

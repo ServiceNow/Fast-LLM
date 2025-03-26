@@ -9,7 +9,16 @@ import warnings
 
 import yaml
 
-from fast_llm.utils import Assert, Tag, get_type_name, header, log, pop_nested_dict_value, set_nested_dict_value
+from fast_llm.utils import (
+    Assert,
+    Tag,
+    Registry,
+    get_type_name,
+    header,
+    log,
+    pop_nested_dict_value,
+    set_nested_dict_value,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -634,17 +643,17 @@ class Config:
             value = str(value)
         return value
 
-    def to_copy[
-        T
-    ](self: T, *updates: typing.Union["Config", dict[str | tuple[str, ...], typing.Any]], strict: bool = True,) -> T:
+    def to_copy[T](
+        self: T,
+        *updates: typing.Union["Config", dict[str | tuple[str, ...], typing.Any]],
+        strict: bool = True,
+    ) -> T:
         return self.from_dict(self, *updates, strict=strict)
 
     def to_serialized(self, verbose: int | None = FieldVerboseLevel.core) -> dict[str, typing.Any]:
         return self._to_dict(verbose=verbose, format_=_ConfigDictFormat.nested, serializable=True)
 
-    def to_logs[
-        T
-    ](
+    def to_logs[T](
         self,
         verbose: int | None = FieldVerboseLevel.core,
         log_fn: typing.Callable[[str], T] = logger.info,
@@ -916,3 +925,69 @@ class Configurable[ConfigType: Config]:
     @property
     def config(self) -> ConfigType:
         return self._config
+
+
+@config_class()
+class TypeableConfig(Config):
+    """
+    Base Config class that instantiates a subclass type
+    based on the 'type' field in config files or params.
+    The root class must define its own _registry, and
+    subclasses must set a unique _type. Final classes
+    to be instantiated should have _abstract as False.
+    """
+
+    _abstract: typing.ClassVar[bool] = True
+    _registry: typing.ClassVar[Registry[str, type["TypeableConfig"]] | None] = None
+
+    type_: typing.ClassVar[str | None] = None
+    type: str | None = Field(
+        default=None,
+        desc="Config specifieble type of the class.",
+        hint=FieldHint.core,
+    )
+
+    def _validate(self) -> None:
+        if self.type is None:
+            self.type = self.type_
+        # Should be handled in `from_dict`, but can fail if instantiating directly.
+        Assert.eq(self.type, self.__class__.type_)
+        super()._validate()
+
+    @classmethod
+    def _from_dict(
+        cls,
+        default: dict[str, typing.Any],
+        strict: bool = True,
+        flat: bool = False,
+    ) -> typing.Self:
+        type_ = default.get("type")
+        if type_ is None:
+            actual_cls = cls
+        else:
+            if type_ not in cls._registry:
+                raise ValueError(
+                    f"Unknown {cls._registry.name} type {type_}." f" Available types: {list(cls._registry.keys())}"
+                )
+            actual_cls = cls._registry[type_]
+            Assert.custom(issubclass, actual_cls, cls)
+        if actual_cls == cls:
+            return super()._from_dict(default, strict=strict, flat=flat)
+        else:
+            return actual_cls._from_dict(default, strict=strict, flat=flat)
+
+    def __init_subclass__(cls) -> None:
+        registry = getattr(cls, "_registry")
+        if registry is None:
+            raise ValueError(f"Sublass {cls.__name__} or one of its parents needs to set __registry")
+        if cls._abstract and cls.type_ is not None:
+            # Abstract classes should not have a `type_`
+            raise ValueError(f"Abstract class {cls.__name__} has type = {cls.type_}, expected None.")
+        if cls.type_ is not None:
+            if cls.type_ in registry:
+                raise ValueError(
+                    f"Registry {cls._registry.name} already contains type {cls.type_}."
+                    f" Make sure all classes either have a unique or `None` type."
+                )
+            registry[cls.type_] = cls
+        super().__init_subclass__()
