@@ -307,17 +307,11 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
 
     @property
     def model_head(self) -> LanguageModelHead:
-        if self._config.prediction_heads:
-            return self.layers[self.model_head_indices[0]]
-        else:
-            return self.layers[-1]
+        return self.layers[self.model_head_indices[0]]
 
     @property
     def model_head_indices(self) -> list[int]:
-        if self._config.prediction_heads:
-            return sorted([len(self) - 1 - 2 * i for i in range(self._config.prediction_heads)])
-        else:
-            return [len(self) - 1]
+        return sorted([len(self) - 1 - 2 * i for i in range(self._config.prediction_heads)])
 
     def get_tied_weights(self) -> dict[str, tuple[ParameterMeta, tuple[int, ...]]]:
         if self._config.tie_word_embeddings:
@@ -327,7 +321,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                     (0, *self.model_head_indices),
                 )
             }
-        elif self._config.prediction_heads:
+        elif self._config.prediction_heads > 1:
             return {
                 OUTPUT_WEIGHTS: (
                     self.model_head.output_weights,
