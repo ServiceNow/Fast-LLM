@@ -149,3 +149,42 @@ def test_build_padded_token_cumsum():
     expected_cumsums = [0, 2307, 3845, 5383]
     token_cumsum = build_padded_token_cumsum(sizes, sequence_length + 1, token_cumsum_rate, offset)
     Assert.all_equal(token_cumsum, expected_cumsums)
+
+
+@pytest.mark.skipif(not _extension_available, reason="CPP Extension not available")
+@pytest.mark.parametrize("seed", (0, 1234, 5678, 571, 687, 1, 188))
+def test_gpt_sample_padding(seed):
+    vocab_size = 131072
+    np.random.seed(seed)
+    num_sequences = np.random.randint(1, 1000)
+    sequence_length = np.random.randint(1, 512)
+    doc_sizes = np.random.randint(1, 2 * sequence_length, num_sequences)
+    samples = [np.random.randint(0, vocab_size, size) for size in doc_sizes]
+    expected_samples = []
+    seq_size = 0
+    token_ids = []
+    for idx, sample in enumerate(samples):
+        doc_size = len(sample)
+        if doc_size > sequence_length + 1:
+            continue
+        elif doc_size + seq_size > sequence_length + 1:
+            padding_tokens = sequence_length + 1 - seq_size
+            token_ids.append([-100] * padding_tokens)
+            expected_samples.append(list(np.concatenate(token_ids)))
+            token_ids = [sample]
+            seq_size = doc_size
+        else:
+            token_ids.append(sample)
+            seq_size += doc_size
+    dataset = SimpleGPTIndexedDataset(samples)
+    sampling = get_sampling_data(
+        num_samples=len(expected_samples),
+        sequence_length=sequence_length,
+        vocab_size=vocab_size,
+        seed=seed,
+        shuffle=ShufflingType.disabled,
+        truncate_documents=False,
+    )
+    sampled = dataset.sample(sampling)
+    for idx in range(len(expected_samples)):
+        Assert.all_equal(sampled[idx].token_ids, np.array(expected_samples[idx], dtype=np.int64))
