@@ -60,6 +60,8 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
     _tokenizer: Tokenizer | None
     _is_setup: bool = False
 
+    _dataset_name_map: dict[str, str]
+
     def __init__(
         self,
         config: GPTDataConfig,
@@ -76,6 +78,11 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
         self._vocab_size = vocab_size
         self._max_sequence_length = max_sequence_length
         self._cross_document_attention = cross_document_attention
+
+        # This is a mapping between the dataset name in the config and its normalized variant for later reference.
+        # This is needed because previously, dataset names were based on phases and were capitalized,
+        # but this is no longer a requirement.
+        self._dataset_name_map = {key.lower(): key for key in self._config.datasets.keys()}
 
     def setup(
         self,
@@ -98,11 +105,15 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
 
         self._datasets = {}
         for dataset_name, num_samples in samples_per_dataset.items():
+            # Some dataset names may come from phases and are capitalized,
+            # so we need to normalize them before use.
+            dataset_name = dataset_name.lower()
+
             if num_samples > 0:
                 # TODO: Do the check earlier.
-                assert dataset_name in self._config.datasets
+                assert dataset_name in self._dataset_name_map
                 sampling = GPTSamplingData(
-                    num_samples=samples_per_dataset[dataset_name],
+                    num_samples=num_samples,
                     config=self._config.sampling,
                     cache_directory=self._cache_directory,
                     distributed=distributed,
@@ -112,7 +123,7 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
                     tokenizer=self._tokenizer,
                     cross_document_attention=self._cross_document_attention,
                 )
-                dataset = self._config.datasets[dataset_name].build_and_sample(sampling)
+                dataset = self._config.datasets[self._dataset_name_map[dataset_name]].build_and_sample(sampling)
                 self._datasets[dataset_name] = DatasetMonitor(dataset, self._config.data_sample_warn_time_ms)
 
         safe_barrier(self._distributed.world_group, "data_preparation", timeout)
@@ -133,6 +144,11 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
         prefetch_factor: int | None = None,
     ) -> typing.Iterator[typing.Any]:
         assert self._is_setup
+
+        # Some dataset names may come from phases and are capitalized,
+        # so we need to normalize them before use.
+        dataset_name = dataset_name.lower()
+
         Assert.incl(dataset_name, self._datasets)
         Assert.in_range_incl(batch_config.sequence_length, 1, self._max_sequence_length)
         log_main_rank(f"Initializing {dataset_name} dataset iterator from sample {consumed_samples}...")

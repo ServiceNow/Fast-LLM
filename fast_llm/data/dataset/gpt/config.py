@@ -474,9 +474,9 @@ class GPTLegacyDatasetConfig(GPTSampledDatasetConfig, GPTLegacyConfig):
             phase_splits = padded_cumsum(normalize_probabilities(self.split))
 
             phase_index = {
-                PhaseType.training.value: 0,
-                PhaseType.validation.value: 1,
-                PhaseType.test.value: 2,
+                PhaseType.training.value.lower(): 0,
+                PhaseType.validation.value.lower(): 1,
+                PhaseType.test.value.lower(): 2,
             }[sampling.dataset_name]
 
             dataset_configs = [

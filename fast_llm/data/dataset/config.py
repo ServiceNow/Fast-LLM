@@ -44,6 +44,10 @@ class SamplingData:
     # Using a mutable rather than an int so it's shared with all copies made with `update`.
     _rank_counter: typing.Iterator[int] = itertools.count
 
+    def __post_init__(self):
+        # Enforce that the dataset name is always normalized to lowercase.
+        self.dataset_name = self.dataset_name.lower()
+    
     def update(self, config: SamplingConfig, **kwargs):
         if config_updates := config.updates:
             kwargs["config"] = self.config.to_copy(config_updates)
