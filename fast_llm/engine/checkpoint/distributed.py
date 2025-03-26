@@ -97,7 +97,7 @@ class DistributedCheckpointHandler(CheckpointHandler):
                         if "state_shard" in f.keys():
                             # Old format `state_shard` with shape `(num_shards, shard_size)
                             # TODO v0.3: Use checkpoint version? Drop support?
-                            log_main_rank("Using legacy distributed checkpoint loader.", log_fn=logger.warning())
+                            log_main_rank("Using legacy distributed checkpoint loader.", log_fn=logger.warning)
                             loaded_shards = {
                                 shard_name: f.get_slice("state_shard")[metadata.shards.index(shard_name)]
                                 for shard_name in shard_names
