@@ -257,7 +257,7 @@ class GPTSampledIndexedDataset(SampledDataset):
                 dtype=get_unsigned_integer_type((2 - self._truncate_documents) * tokens_per_epoch * num_epochs),
             )
             if self._truncate_documents:
-                num_tokens_unshuffled = tokens_per_epoch * num_epochs
+                num_tokens_unshuffled = tokens_per_epoch * unshuffled_epochs
             self._token_cumsum_unshuffled.save(token_cumsum_unshuffled)
         else:
             num_tokens_unshuffled = 0
