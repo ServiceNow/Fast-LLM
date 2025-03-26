@@ -1,3 +1,4 @@
+import contextlib
 import dataclasses
 import enum
 import logging
@@ -9,7 +10,7 @@ import warnings
 
 import yaml
 
-from fast_llm.utils import Assert, Tag, get_type_name, header, log, pop_nested_dict_value, set_nested_dict_value
+from fast_llm.utils import Assert, Tag, get_type_name, header, log
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +42,13 @@ class _ConfigDictFormat(str, enum.Enum):
     flat = "flat"
     nested = "nested"
     tuple = "tuple"
+
+
+class UpdateType(str, enum.Enum):
+    # Override entries no matter what they contais.
+    override = "override"
+    # Override atomic entries and lists, but update dicts recursively by setting or overriding only the specified entries.
+    update = "update"
 
 
 class FieldHint:
@@ -125,6 +133,9 @@ class Field(dataclasses.Field):
         # Should raise an Exception in case of failure, and return the validated value.
         # Run before the default validation (type check).
         valid: typing.Optional[typing.Callable[[typing.Any], typing.Any]] = None,
+        # Option to skip (postpone) instantiation of a `Config` field.
+        # Note: The config still needs to be instantiated for validation to succeed.
+        # auto_instantiate: bool = True,
         default=dataclasses.MISSING,
         default_factory=dataclasses.MISSING,
         init: bool = True,
@@ -152,6 +163,7 @@ class Field(dataclasses.Field):
         self.doc = doc
         self.hint = hint
         self.valid = valid
+        # self.auto_instantiate = auto_instantiate
 
 
 class FieldUpdate(dict):
@@ -254,7 +266,16 @@ def config_class(cls=None):
 
     def wrap(cls):
         Assert.custom(issubclass, cls, Config)
-        return _process_config_class(dataclasses.dataclass(cls))
+        wrapped = _process_config_class(dataclasses.dataclass(cls))
+
+        wrapped_init = cls.__init__
+
+        def __init__(self, **kwargs):
+            wrapped_init(self, **kwargs)
+            self._explicit_fields = set(kwargs)
+
+        cls.__init__ = __init__
+        return wrapped
 
     # See if we're being called as @config_class or @config_class().
     if cls is None:
@@ -277,9 +298,17 @@ class Config:
 
     # We can't use @config_class on this one because it needs this class to be defined, so we assume this one is OK.
     __class_validated__: typing.ClassVar[bool] = True
+    # Set to true to prevent instantiation.
     _abstract: typing.ClassVar[bool] = False
+    # Keep track of whether an instance has been validated
     _validated: bool = Field(init=False, repr=False)
+    # Keep track of unknown fields so they can be reported during validation.
     _unknown_fields: dict[str, typing.Any] = Field(init=False, repr=False)
+    # Keep track of explicitly set fields to ensure they get serialized and used as config updates.
+    _explicit_fields: set[str] = Field(init=False, repr=False)
+    # Used within `_set_implicit_default` to set implicit defaults for fields
+    # without them being automatically added to `_explicit_fields`.
+    _setting_implicit_default: bool = Field(init=False, repr=False)
 
     def __post_init__(self):
         """
@@ -288,6 +317,7 @@ class Config:
         and all post-processing should be done in `_validate`
         """
         self._validated = False
+        self._setting_implicit_default = False
         if _AUTO_VALIDATE:
             self.validate()
 
@@ -305,6 +335,12 @@ class Config:
                 f"Cannot set attribute `{key}`"
                 f" in configuration class `{get_type_name(type(self))}` after validation."
             )
+        elif not getattr(self, "_setting_implicit_default", True):
+            field = self.get_field(key)
+            if field.init and field._field_type != dataclasses._FIELD_CLASSVAR:
+                # Adding to explicit field list except within `_set_implicit_default` context
+                # and during dataclass initialization (`_setting_implicit_default` not yet set).
+                self._explicit_fields.add(key)
         super().__setattr__(key, value)
 
     def __delattr__(self, key: str) -> None:
@@ -317,6 +353,12 @@ class Config:
                 f" in configuration class `{get_type_name(type(self))}` after validation."
             )
         super().__delattr__(key)
+
+    @contextlib.contextmanager
+    def _set_implicit_default(self):
+        self._setting_implicit_default = True
+        yield
+        self._setting_implicit_default = False
 
     def validate[T](self: T, *, _is_validating: bool = False) -> T:
         """
@@ -332,6 +374,7 @@ class Config:
                 else:
                     raise type(e)("\n".join(e.args)) from None
             self._validated = True
+            print("WLIEHGIUWERGNHBWIO", self.__class__.__name__, self._explicit_fields)
         return self
 
     def _validate(self) -> None:
@@ -344,16 +387,17 @@ class Config:
         """
         self._check_abstract()
         errors = []
-        for name, field in self.fields():
-            if not field.init or field._field_type == dataclasses._FIELD_CLASSVAR:  # noqa
-                continue
-            value = getattr(self, name)
-            if value is DEFAULT:
-                # Replace the value with its default.
-                # We still need to validate because some fields have invalid defaults.
-                value = field.default
-            new_value = self._validate_nested(value, field.type, field.name, field.valid, errors, False)
-            setattr(self, name, new_value)
+        with self._set_implicit_default():
+            for name, field in self.fields():
+                if not field.init or field._field_type == dataclasses._FIELD_CLASSVAR:  # noqa
+                    continue
+                value = getattr(self, name)
+                if value is DEFAULT:
+                    # Replace the value with its default.
+                    # We still need to validate because some fields have invalid defaults.
+                    value = field.default
+                new_value = self._validate_nested(value, field.type, field.name, field.valid, errors, False)
+                setattr(self, name, new_value)
         for name in getattr(self, "_unknown_fields", {}):
             errors.append(f"Unknown field `{name}` in class {self._get_class_name()}")
         if errors:
@@ -555,9 +599,8 @@ class Config:
 
         return arg_dict
 
-    @classmethod
     def _add_field_to_args(
-        cls,
+        self,
         args: dict | list,
         name: str | None,
         field: Field | None,
@@ -574,46 +617,48 @@ class Config:
         ):
             # Exclude class variables and derived fields unless requested explicitly.
             return
-        elif isinstance(value, Config):
+        explicit_field = (
+            field is None
+            or name in self._explicit_fields
+            or (verbose is not None and verbose >= FieldHintImportance[field.hint])
+        )
+        if isinstance(value, Config):
             field_value = value._to_dict(
                 verbose=verbose,
                 all_fields=all_fields,
                 format_=format_,
                 serializable=serializable,
             )
+            # Empty configs can safely be trimmed.
+            explicit_field = all_fields
         elif isinstance(value, (list, tuple, set)):
             field_value = {} if format_ == _ConfigDictFormat.tuple else []
             for i, list_value in enumerate(value):
-                cls._add_field_to_args(
+                self._add_field_to_args(
                     field_value, str(i), None, list_value, verbose, all_fields, format_, serializable
                 )
         elif isinstance(value, dict):
             field_value = {}
             for dict_name, dict_value in value.items():
-                cls._add_field_to_args(
+                self._add_field_to_args(
                     field_value, dict_name, None, dict_value, verbose, all_fields, format_, serializable
                 )
-        elif (
-            verbose is not None
-            and field is not None
-            and FieldHintImportance[field.hint] > verbose
-            and value == field.default
-        ):
-            # Exclude unimportant default values.
-            return
-        else:
+        elif explicit_field:
             field_value = value
             if serializable:
-                field_value = cls._serialize_value(value)
+                field_value = self._serialize_value(value)
             if format_ == _ConfigDictFormat.tuple:
                 field_value = {(): field_value}
+        else:
+            # Exclude unimportant (implicit or explicit) default values.
+            return
 
         if serializable:
-            name = cls._serialize_value(name)
+            name = self._serialize_value(name)
         if format_ == _ConfigDictFormat.tuple:
             args.update({(name,) + name_: value_ for name_, value_ in field_value.items()})
         elif format_ == _ConfigDictFormat.nested:
-            if not isinstance(field_value, (dict, list)) or len(field_value) > 0 or all_fields:
+            if not isinstance(field_value, (dict, list)) or len(field_value) > 0 or explicit_field or all_fields:
                 if isinstance(args, dict):
                     args[name] = field_value
                 else:
@@ -671,6 +716,7 @@ class Config:
         default: typing.Union["Config", dict[str, typing.Any]],
         *updates: typing.Union["Config", dict[str | tuple[str, ...], typing.Any]],
         strict: bool = True,
+        update_type: UpdateType = UpdateType.override,
     ) -> typing.Self:
         if isinstance(default, Config):
             default = default._to_dict()
@@ -678,7 +724,7 @@ class Config:
             if isinstance(update, Config):
                 update = update._to_dict(format_=_ConfigDictFormat.tuple)
             for keys, value in update.items():
-                set_nested_dict_value(default, keys, value)
+                set_nested_dict_value(default, keys, value, update_type)
 
         return cls._from_dict(default, strict)
 
@@ -712,10 +758,7 @@ class Config:
                     continue
                 if flat:
                     if isinstance(field.type, type) and issubclass(field.type, Config):
-                        if flat:
-                            out_arg_dict[name] = field.type._from_dict(default, False, True)
-                        else:
-                            out_arg_dict[name] = field.type._from_dict(default.pop(name, {}), strict)
+                        out_arg_dict[name] = field.type._from_dict(default, False, True)
                     elif name in default:
                         out_arg_dict[name] = default.pop(name)
                 else:
@@ -916,3 +959,69 @@ class Configurable[ConfigType: Config]:
     @property
     def config(self) -> ConfigType:
         return self._config
+
+
+def set_nested_dict_value[
+    KeyType, ValueType
+](
+    d: dict[KeyType, ValueType],
+    keys: KeyType | tuple[KeyType, ...],
+    value: ValueType,
+    update_type: UpdateType = UpdateType.override,
+) -> None:
+    if isinstance(keys, tuple):
+        for key in keys[:-1]:
+            d = d.setdefault(key, {})
+            assert isinstance(d, dict)
+        key = keys[-1]
+    else:
+        key = keys
+    if update_type == UpdateType.override:
+        d[key] = value
+    elif update_type == UpdateType.update:
+        # TODO: Improve error messages, ex. for nested cases?
+        if isinstance(d[key], Config):
+            raise ValueError("Cannot update an already instantiated config.")
+        elif isinstance(value, Config):
+            raise ValueError("Cannot update a config dict with an already instantiated config.")
+        elif isinstance(d, dict):
+            if key in d:
+                Assert.custom(isinstance, d[key], dict)
+            else:
+                d[key] = {}
+            for key_, value_ in value.items():
+                set_nested_dict_value(d, key_, value_, update_type)
+        elif (
+            isinstance(value, (list, set, tuple))
+            and any(isinstance(value_, (list, set, tuple, dict, Config)) for value_ in value)
+        ) or (
+            isinstance(d[key], (list, set, tuple))
+            and any(isinstance(value_, (list, set, tuple, dict, Config)) for value_ in d[key])
+        ):
+            raise ValueError("Update not supported for nested lists.")
+        else:
+            d[key] = value
+    else:
+        raise NotImplementedError(update_type)
+
+
+def get_nested_dict_value[
+    KeyType, ValueType
+](d: dict[KeyType, ValueType], keys: KeyType | tuple[KeyType, ...]) -> ValueType:
+    if isinstance(keys, tuple):
+        for key in keys:
+            d = d[key]
+        return d
+    else:
+        return d[keys]
+
+
+def pop_nested_dict_value[
+    KeyType, ValueType
+](d: dict[KeyType, ValueType], keys: KeyType | tuple[KeyType, ...]) -> ValueType:
+    if isinstance(keys, tuple):
+        for key in keys[:-1]:
+            d = d[key]
+        return d.pop(keys[-1])
+    else:
+        return d.pop(keys)
