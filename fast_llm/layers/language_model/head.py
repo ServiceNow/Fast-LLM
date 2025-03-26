@@ -24,7 +24,7 @@ from fast_llm.layers.language_model.embedding import WORD_EMBEDDINGS_WEIGHT
 from fast_llm.layers.transformer.config import TransformerDimNames, TransformerKwargs
 from fast_llm.logging import log_distributed_tensor
 from fast_llm.tensor import ParameterMeta, TensorMeta, init_normal_
-from fast_llm.utils import div
+from fast_llm.utils import Assert, div
 
 OUTPUT_WEIGHTS = "output_weights"
 
@@ -40,7 +40,7 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
         self,
         config: LanguageModelBaseConfig,
         tensor_space: TensorSpace,
-        multi_token_prediction_index: int,
+        prediction_distance: int,
     ):
         super().__init__(config)
         self._debug_transformer = config.transformer.debug_transformer
@@ -59,14 +59,18 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
 
         hidden_dim = self._tensor_space.get_tensor_dim(TransformerDimNames.hidden)
 
-        self._loss_name = LanguageModelLossNames.multi_token_prediction_loss(multi_token_prediction_index)
+        self._loss_name = LanguageModelLossNames.multi_token_prediction_loss(prediction_distance)
         self.final_norm = config.transformer.normalization.get_layer(hidden_dim)
         self._logits_scale_factor = config.logits_scale_factor
         self._z_loss_factor = config.logit_z_loss
 
-        self.multi_token_prediction_index = multi_token_prediction_index
-        self.is_last_head = self.multi_token_prediction_index == config.prediction_heads - 1
-        if self.multi_token_prediction_index > 0:
+        # Distance of the target token prediction
+        # 0: next-token prediction
+        # >0: multi-token prediction (MTP)
+        Assert.geq(prediction_distance, 0)
+        self._prediction_distance = prediction_distance
+        self.is_last_head = self._prediction_distance == config.prediction_heads - 1
+        if self._prediction_distance > 0:
             assert (
                 not self._sequence_parallel_logits
             ), "Sequence parallel logits not supported for multi-token prediction."
@@ -86,7 +90,8 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
         self._forward = wrap_forward_backward(self._forward_backward, grad_is_context)
 
     def _init_output_weights(self, hidden_dim: TensorDim, config) -> None:
-        if self._tie_word_embeddings or self.multi_token_prediction_index > 0:
+        # Only the first head defines the output weights
+        if self._tie_word_embeddings or self._prediction_distance > 0:
             return
         # untie embedding weights
         vocab_dim = self._tensor_space.get_tensor_dim(
@@ -137,15 +142,15 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
         labels = kwargs[LanguageModelKwargs.labels] if LanguageModelKwargs.labels in kwargs else None
         # MTP: Shift the labels
-        labels = labels[:, self.multi_token_prediction_index :].flatten() if labels is not None else None
+        labels = labels[:, self._prediction_distance :].flatten() if labels is not None else None
         if self._sequence_parallel_logits:
             labels = split_op(labels, self._tensor_space.distributed.tensor_group, 0)
         do_grad = labels is not None and self.training
         input_ = input_.detach().requires_grad_(do_grad)
         with torch.enable_grad():
             # MTP: truncate the input
-            if self.multi_token_prediction_index > 0:
-                truncated_input = input_[:, : -self.multi_token_prediction_index, :].contiguous()
+            if self._prediction_distance > 0:
+                truncated_input = input_[:, : -self._prediction_distance, :].contiguous()
             else:
                 truncated_input = input_
             ln_output = self.final_norm(truncated_input)
@@ -168,7 +173,7 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
     def _get_output_weights(self, kwargs: dict) -> torch.Tensor:
         if self._tie_word_embeddings:
             return kwargs[WORD_EMBEDDINGS_WEIGHT]
-        if self.multi_token_prediction_index > 0:
+        if self._prediction_distance > 0:
             return kwargs[OUTPUT_WEIGHTS]
         return self.output_weights
 

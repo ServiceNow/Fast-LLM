@@ -88,7 +88,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                 LanguageModelHead(
                     self._config,
                     self._tensor_space,
-                    multi_token_prediction_index=i,
+                    prediction_distance=i,
                 ),
             ]
         ]
