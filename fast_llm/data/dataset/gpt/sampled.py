@@ -132,10 +132,6 @@ class GPTSampledIndexedDataset(SampledDataset):
                 "The C++ extension for dataset sampling is missing."
                 " Please make sure Fast-LLM is installed correctly."
             )
-            # NOTE!!!!!!!!! This won't work, it will mess up document indices. Also not really needed.
-            # length_filter = document_sizes <= self._sequence_length
-            # document_sizes = document_sizes[length_filter]
-
             ignored_documents = sum(document_sizes > self._sequence_length + 1)
             if ignored_documents:
                 log_main_rank(
