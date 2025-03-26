@@ -107,7 +107,7 @@ splits:
 
 ## ⚙️ Step 4: Configure Fast-LLM
 
-It's time to configure the Fast-LLM training config. This is very similar to [Quick Start](../quick-start.md) with two additional options, namely, `allow_truncations` and `cross_document_attention` which are important for improving the task performance of instruction-tuned models.
+It's time to configure the Fast-LLM training config. This is very similar to [Quick Start](../quick-start.md) with two additional options, namely, `truncate_documents` and `cross_document_attention` which are important for improving the task performance of instruction-tuned models.
 
 ```yaml
 training:
@@ -137,7 +137,7 @@ data:
     Validation:
       type: file
       path: ./sft-tutorial/tokenized/Llama-3.1-8B/fast_llm_config_validation.yaml
-  allow_truncations: no # (2)!
+  truncate_documents: no # (2)!
   sampling:
     use_loss_masking_spans: yes
 optimizer:
