@@ -315,6 +315,21 @@ class TrainingConfig(Config):
         valid=skip_valid_if_none(check_field(Assert.gt, 0)),
     )
 
+    @classmethod
+    def _from_dict(
+        cls,
+        default: dict[str, typing.Any],
+        strict: bool = True,
+        flat: bool = False,
+    ) -> typing.Self:
+        # TODO v0.x: Remove backward compatibility.
+        validation_keys = ["interval", "offset", "iterations"]
+        if (flat and any(f"validation.{key}" in default for key in validation_keys)) or (
+            not flat and "validation" in default and any(key in default["validation"] for key in validation_keys)
+        ):
+            cls._handle_renamed_field(default, "validation", ("validation", "validation"))
+        return super()._from_dict(default, strict, flat)
+
     def _validate(self) -> None:
         super()._validate()
         self.shutdown.assert_sub_interval(self.checkpoint)
