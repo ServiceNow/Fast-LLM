@@ -61,7 +61,7 @@ class LanguageModelArchitectureConfig(BaseModelArchitectureConfig):
     tie_word_embeddings: bool = Field(
         default=True, desc="Tie the output weights (logits) with the vocabulary embedding.", hint=FieldHint.core
     )
-    num_multi_token_prediction_heads: int = Field(
+    prediction_heads: int = Field(
         default=1,
         desc="Number of multi-token prediction heads.",
         hint=FieldHint.feature,
