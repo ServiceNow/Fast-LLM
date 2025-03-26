@@ -22,8 +22,8 @@ class LanguageModelLossNames:
     language_model_loss = "language_model_loss"
     z_loss = "z_loss"
 
-    @classmethod
-    def multi_token_prediction_loss(cls, index: int) -> str:
+    @staticmethod
+    def multi_token_prediction_loss(index: int) -> str:
         return f"language_model_loss_{index}"
 
 

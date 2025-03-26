@@ -74,7 +74,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
     def get_output_layers(self) -> list[Layer]:
         return [
             layer
-            for i in range(self._config.num_multi_token_prediction_heads)
+            for i in range(self._config.prediction_heads)
             for layer in [
                 TransformerLayer(
                     self._config.transformer,
@@ -83,7 +83,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                     layer_index=self._config.transformer.num_layers,
                     # The last layer only returns the transformer output.
                     # The previous layers return a stack of shared_hidden and transformer_output.
-                    stacked_output=i < self._config.num_multi_token_prediction_heads - 1,
+                    stacked_output=i < self._config.prediction_heads - 1,
                 ),
                 LanguageModelHead(
                     self._config,
@@ -307,15 +307,15 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
 
     @property
     def model_head(self) -> LanguageModelHead:
-        if self._config.num_multi_token_prediction_heads:
+        if self._config.prediction_heads:
             return self.layers[self.model_head_indices[0]]
         else:
             return self.layers[-1]
 
     @property
     def model_head_indices(self) -> list[int]:
-        if self._config.num_multi_token_prediction_heads:
-            return sorted([len(self) - 1 - 2 * i for i in range(self._config.num_multi_token_prediction_heads)])
+        if self._config.prediction_heads:
+            return sorted([len(self) - 1 - 2 * i for i in range(self._config.prediction_heads)])
         else:
             return [len(self) - 1]
 
@@ -327,7 +327,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                     (0, *self.model_head_indices),
                 )
             }
-        elif self._config.num_multi_token_prediction_heads:
+        elif self._config.prediction_heads:
             return {
                 OUTPUT_WEIGHTS: (
                     self.model_head.output_weights,
@@ -362,7 +362,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
         if self._config.logit_z_loss:
             LossDef(name=LanguageModelLossNames.z_loss, formatted_name="logit z loss", count=1)
 
-        for i in range(self._config.num_multi_token_prediction_heads):
+        for i in range(self._config.prediction_heads):
             loss_defs.append(
                 LossDef(
                     name=LanguageModelLossNames.multi_token_prediction_loss(i),

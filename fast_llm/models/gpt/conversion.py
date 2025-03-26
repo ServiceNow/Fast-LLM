@@ -115,8 +115,8 @@ class NumLayersParamConverter(ParamConverter):
         Assert.eq(len(self.export_names), 1)
 
     def export_params(self, fast_llm_values: tuple[typing.Any, ...]) -> tuple[typing.Any, ...]:
-        num_layers, num_multi_token_prediction_heads = fast_llm_values
-        if num_multi_token_prediction_heads:
+        num_layers, prediction_heads = fast_llm_values
+        if prediction_heads:
             # MTP adds an additional layer on top of the shared trunk
             return (num_layers + 1,)
         return (num_layers,)
@@ -148,7 +148,7 @@ class CommonHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
                 export_value=lambda activation_type: activation_type.hf_name,
             ),
             NumLayersParamConverter(
-                fast_llm_names=(("transformer", "num_layers"), ("num_multi_token_prediction_heads",)),
+                fast_llm_names=(("transformer", "num_layers"), ("prediction_heads",)),
                 export_names=(("num_hidden_layers",),),
             ),
             RenameParamConverter(
@@ -258,11 +258,11 @@ class CommonHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
 
     def _create_lm_head_converters(self) -> list[WeightConverter]:
         num_layers = self._model.config.base_model.transformer.num_layers
-        num_multi_token_prediction_heads = self._model.config.base_model.num_multi_token_prediction_heads
+        prediction_heads = self._model.config.base_model.prediction_heads
         norm_bias: bool = self._model.config.base_model.transformer.normalization.type == NormalizationType.layer_norm
         converters = []
 
-        if num_multi_token_prediction_heads:
+        if prediction_heads:
             # First MTP-head's transformer layer
             converters += self._create_transformer_layer_converters(num_layers)
             # Final norm
@@ -277,7 +277,7 @@ class CommonHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
                 converters.append(WeightConverter(f"layers.{num_layers + 2}.output_weights", "lm_head.weight"))
 
             # MTP-heads > 0 are thrown away
-            for i in range(1, num_multi_token_prediction_heads):
+            for i in range(1, prediction_heads):
                 mtp_transformer_layer_index = num_layers + 2 * i
                 # MTP transformer layer
                 converters += self._create_transformer_layer_converters(

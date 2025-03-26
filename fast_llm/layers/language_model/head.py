@@ -65,7 +65,7 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
         self._z_loss_factor = config.logit_z_loss
 
         self.multi_token_prediction_index = multi_token_prediction_index
-        self.is_last_head = self.multi_token_prediction_index == config.num_multi_token_prediction_heads - 1
+        self.is_last_head = self.multi_token_prediction_index == config.prediction_heads - 1
         if self.multi_token_prediction_index > 0:
             assert (
                 not self._sequence_parallel_logits

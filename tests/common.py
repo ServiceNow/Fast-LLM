@@ -194,7 +194,7 @@ CONFIG_MIXTRAL_YARN_COMMON = CONFIG_MIXTRAL_YARN_FAST_LLM + ["model.distributed.
 
 CONFIG_LLAMA_MTP_MEGATRON = None
 CONFIG_LLAMA_MTP_FAST_LLM = CONFIG_LLAMA_FAST_LLM + [
-    "model.base_model.num_multi_token_prediction_heads=4",
+    "model.base_model.prediction_heads=4",
 ]
 CONFIG_LLAMA_MTP_COMMON = CONFIG_LLAMA_MTP_FAST_LLM + ["model.distributed.training_dtype=bf16"]
 
