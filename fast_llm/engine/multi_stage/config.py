@@ -10,6 +10,7 @@ from fast_llm.config import (
     Field,
     FieldHint,
     NoAutoValidate,
+    UpdateType,
     ValidationError,
     check_field,
     config_class,
@@ -248,13 +249,11 @@ class FastLLMModelConfig(Config):
     def from_pretrained(
         cls, pretrained: CheckpointLoadMetadataConfig, *updates: Config | dict[str | tuple[str, ...], typing.Any]
     ) -> typing.Self:
-        # TODO: Add *updates?
-        assert pretrained.path is not None
-        metadata = cls.load_metadata(pretrained)
-        return cls.from_dict(metadata.config, *updates)
+        return cls.from_dict(cls.load_metadata(pretrained).config, *updates, update_type=UpdateType.update)
 
     @classmethod
     def load_metadata(cls, config: CheckpointLoadMetadataConfig) -> "CheckpointMetadata":
+        assert config.path is not None
         with NoAutoValidate():
             metadata = config.format.get_handler_class().load_metadata(config)
         try:

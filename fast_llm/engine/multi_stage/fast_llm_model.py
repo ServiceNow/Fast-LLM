@@ -36,11 +36,11 @@ class FastLLMModel[ConfigType: FastLLMModelConfig](MultiStageModel[ConfigType]):
         # TODO: Test with more distributed configs.
         # TODO: Safety checks
         # TODO: Handle barriers, ok file, etc. here
-        fast_llm_metadata = self.config_class.load_metadata(config)
+        metadata = self.config_class.load_metadata(config)
         converter = config.format.get_handler_class()(self)
-        converter.load(config, fast_llm_metadata)
+        converter.load(config, metadata)
         self._finalize_load(reset_optimizer=not config.optimizer_state)
-        return fast_llm_metadata.metadata
+        return metadata.metadata
 
     @classmethod
     def from_pretrained(
