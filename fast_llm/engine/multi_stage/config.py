@@ -70,6 +70,14 @@ class StageConfig(Config):
         desc="Reduce and accumulate gradients in fp32 to improve numerical stability.",
         hint=FieldHint.optional,
     )
+    store_frozen_weights_in_optimization_precision: bool = Field(
+        # TODO: Implement and set default to False
+        default=True,
+        desc="Store frozen weights in full precision even if not not needed."
+        "Allows preserving the precision for saved checkpoints,"
+        " at the cost of memory and compute (copy) overheads.",
+        hint=FieldHint.optional,
+    )
     debug_layer_outputs: int = Field(
         default=0,
         desc="Log the output of each layer.",

@@ -68,6 +68,7 @@ def triton_normalization_backward_kernel_1(
     n_cols,
     n_rows,
     has_bias: tl_constexpr,
+    parameter_grad: tl_constexpr,
     zero_centered: tl_constexpr,
     block_size: tl_constexpr,
     block_size_row: tl_constexpr,
@@ -108,18 +109,19 @@ def triton_normalization_backward_kernel_1(
     tl.store(grad_input_ptr + offsets, grad_input, mask=mask)
 
     # Parameter grad partial sums
-    parameter_offsets = tl.program_id(0) * n_cols + cols
-    grad_weight_partial_ptr = grad_weight_partial_ptr + parameter_offsets
-    grad_weight_partial = (grad_output * input_normalized).to(weight.dtype)
-    grad_weight_partial = tl.sum(grad_weight_partial, axis=0)[None, :]
+    if parameter_grad:
+        parameter_offsets = tl.program_id(0) * n_cols + cols
+        grad_weight_partial_ptr = grad_weight_partial_ptr + parameter_offsets
+        grad_weight_partial = (grad_output * input_normalized).to(weight.dtype)
+        grad_weight_partial = tl.sum(grad_weight_partial, axis=0)[None, :]
 
-    if has_bias:
-        grad_bias_partial_ptr = grad_bias_partial_ptr + parameter_offsets
-        grad_bias_partial = tl.sum(grad_output.to(weight.dtype), axis=0)[None, :]
+        if has_bias:
+            grad_bias_partial_ptr = grad_bias_partial_ptr + parameter_offsets
+            grad_bias_partial = tl.sum(grad_output.to(weight.dtype), axis=0)[None, :]
 
-    tl.store(grad_weight_partial_ptr, grad_weight_partial, mask=col_mask)
-    if has_bias:
-        tl.store(grad_bias_partial_ptr, grad_bias_partial, mask=col_mask)  # noqa
+        tl.store(grad_weight_partial_ptr, grad_weight_partial, mask=col_mask)
+        if has_bias:
+            tl.store(grad_bias_partial_ptr, grad_bias_partial, mask=col_mask)  # noqa
 
 
 @triton_jit()
@@ -211,6 +213,11 @@ def triton_normalization_backward(grad_output: torch.Tensor, context: list[typin
     context.clear()
     has_bias = bias is not None
 
+    parameter_grad = weight.requires_grad
+    assert parameter_grad == hasattr(weight, "grad_buffer")
+    if has_bias:
+        assert parameter_grad == bias.requires_grad
+
     grad_output = grad_output.contiguous()
 
     n_rows = grad_output.shape[:-1].numel()
@@ -232,12 +239,17 @@ def triton_normalization_backward(grad_output: torch.Tensor, context: list[typin
 
     grad_input = torch.empty_like(grad_output)
 
-    grad_is_zero = param_get_and_unset_is_zero(weight)
-    grad_weight = weight.grad_buffer
-    # TODO: Any point in making it full precision?
-    grad_weight_partial = grad_output.new_empty(num_blocks_row, n_cols)
+    if parameter_grad:
+        grad_is_zero = param_get_and_unset_is_zero(weight)
+        grad_weight = weight.grad_buffer
+        # TODO: Any point in making it full precision?
+        grad_weight_partial = grad_output.new_empty(num_blocks_row, n_cols)
+    else:
+        grad_is_zero = True
+        grad_weight = None
+        grad_weight_partial = None
 
-    if has_bias:
+    if has_bias and parameter_grad:
         assert param_get_and_unset_is_zero(bias) == grad_is_zero
         grad_bias = bias.grad_buffer
         grad_bias_partial = grad_output.new_empty(num_blocks_row, n_cols)
@@ -256,24 +268,26 @@ def triton_normalization_backward(grad_output: torch.Tensor, context: list[typin
         n_cols,
         n_rows,
         has_bias,
+        parameter_grad,
         zero_centered,
         block_size,
         block_size_row,
         num_warps=num_warps,
     )
-    triton_normalization_backward_kernel_2[(triton.cdiv(n_cols, block_size_n),)](
-        grad_weight_partial,
-        grad_bias_partial,
-        grad_weight,
-        grad_bias,
-        num_blocks_row,
-        n_cols,
-        has_bias,
-        not grad_is_zero,
-        block_size_m,
-        block_size_n,
-        num_ctas=1,
-    )
+    if parameter_grad:
+        triton_normalization_backward_kernel_2[(triton.cdiv(n_cols, block_size_n),)](
+            grad_weight_partial,
+            grad_bias_partial,
+            grad_weight,
+            grad_bias,
+            num_blocks_row,
+            n_cols,
+            has_bias,
+            not grad_is_zero,
+            block_size_m,
+            block_size_n,
+            num_ctas=1,
+        )
     return grad_input
 
 
