@@ -4,8 +4,7 @@ training:
   logs:
     interval: 10
   validation:
-    Validation:
-      iterations: null
+    iterations: null
   test_iters: 0
 batch:
   sequence_length: 4096
