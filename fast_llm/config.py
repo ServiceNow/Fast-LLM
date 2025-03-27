@@ -266,13 +266,21 @@ def config_class(cls=None):
 
     def wrap(cls):
         Assert.custom(issubclass, cls, Config)
-        wrapped = _process_config_class(dataclasses.dataclass(cls))
+        if hasattr(cls, "__post_init__"):
+            raise TypeError(f"`__post_init__` should not be implemented for `Config` classes")
+
+        wrapped = _process_config_class(dataclasses.dataclass(cls, kw_only=True))
 
         wrapped_init = cls.__init__
 
         def __init__(self, **kwargs):
+            # This is similar to `__post_init__`, but has access to the list of arguments passed to `__init__`.
             wrapped_init(self, **kwargs)
             self._explicit_fields = set(kwargs)
+            self._validated = False
+            self._setting_implicit_default = False
+            if _AUTO_VALIDATE:
+                self.validate()
 
         cls.__init__ = __init__
         return wrapped
@@ -309,17 +317,6 @@ class Config:
     # Used within `_set_implicit_default` to set implicit defaults for fields
     # without them being automatically added to `_explicit_fields`.
     _setting_implicit_default: bool = Field(init=False, repr=False)
-
-    def __post_init__(self):
-        """
-        Perform validation unless prevented with `NoAutoValidate`.
-        In general this should not be overridden in derived classes,
-        and all post-processing should be done in `_validate`
-        """
-        self._validated = False
-        self._setting_implicit_default = False
-        if _AUTO_VALIDATE:
-            self.validate()
 
     def __setattr__(self, key: str, value: typing.Any) -> None:
         """
@@ -983,13 +980,15 @@ def set_nested_dict_value[
             raise ValueError("Cannot update an already instantiated config.")
         elif isinstance(value, Config):
             raise ValueError("Cannot update a config dict with an already instantiated config.")
-        elif isinstance(d, dict):
+        elif isinstance(value, dict):
             if key in d:
                 Assert.custom(isinstance, d[key], dict)
             else:
                 d[key] = {}
             for key_, value_ in value.items():
                 set_nested_dict_value(d, key_, value_, update_type)
+        elif isinstance(d[key], dict):
+            raise ValueError("Cannot replace a dict with a non-dict value.")
         elif (
             isinstance(value, (list, set, tuple))
             and any(isinstance(value_, (list, set, tuple, dict, Config)) for value_ in value)
