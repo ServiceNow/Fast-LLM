@@ -19,8 +19,8 @@ Let's start from the following training configuration:
       train_iters: 100_000
       logs:
         interval: 10
-      validation:
-        Validation:
+      evaluations:
+        validation:
           iterations: 25
           interval: 1000
       checkpoint:
@@ -35,9 +35,13 @@ Let's start from the following training configuration:
       sequence_length: 4096
       batch_size: 256
     data:
-      format: file
-      path: fast-llm-tutorial/dataset/fast_llm_dataset.json
-      split: [99, 1, 0]
+      datasets:
+        training:
+          type: file
+          path: path/to/training_dataset_config.yaml
+        validation:
+          type: file
+          path: path/to/validation_dataset_config.yaml
     optimizer:
       weight_decay: 0.1
       beta_1: 0.9
@@ -64,8 +68,8 @@ Let's start from the following training configuration:
       train_iters: 100_000
       logs:
         interval: 10
-      validation:
-        Validation:
+      evaluations:
+        validation:
           iterations: 25
           interval: 1000
       checkpoint:
@@ -80,9 +84,13 @@ Let's start from the following training configuration:
       sequence_length: 8192
       batch_size: 256
     data:
-      format: file
-      path: fast-llm-tutorial/dataset/fast_llm_dataset.json
-      split: [99, 1, 0]
+      datasets:
+        training:
+          type: file
+          path: path/to/training_dataset_config.yaml
+        validation:
+          type: file
+          path: path/to/validation_dataset_config.yaml
     optimizer:
       weight_decay: 0.1
       beta_1: 0.9
