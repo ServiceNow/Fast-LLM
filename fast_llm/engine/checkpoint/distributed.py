@@ -67,11 +67,11 @@ class DistributedCheckpointHandler(CheckpointHandler):
                 self._model.state_shard[:num_shards].copy_(f.get_slice("state_shard")[:num_shards])
         else:
             log_main_rank("Checkpoint format doesn't match, using safe load")
-            self._model.config.base_model.compare_architecture(loaded_config.base_model, config.compare_log_fn)
+            self._model.config.base_model.compare_architecture(metadata.config.base_model, logger.warning)
             with SafeLoad(self._model, num_shards=num_shards, timeout=config.timeout) as context:
-                for rank in range(loaded_config.distributed.world_size):
+                for rank in range(metadata.config.distributed.world_size):
                     loaded_model = self._model.__class__(
-                        loaded_config.to_copy({("distributed", "rank"): rank}),
+                        metadata.config.to_copy({("distributed", "rank"): rank}),
                         optimizer_state_names=shard_names[1:],
                         verbose=False,
                     )
