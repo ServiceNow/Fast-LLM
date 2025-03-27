@@ -268,6 +268,7 @@ def triton_normalization_backward(grad_output: torch.Tensor, context: list[typin
         n_cols,
         n_rows,
         has_bias,
+        parameter_grad,
         zero_centered,
         block_size,
         block_size_row,

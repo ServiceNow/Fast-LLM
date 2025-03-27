@@ -126,12 +126,11 @@ class PeftType(str, enum.Enum):
 
 @config_class()
 class PeftArchitectureConfig(BaseModelArchitectureConfig):
-    pass
+    _abstract = False
 
 
 @config_class()
 class PeftConfig(PeftArchitectureConfig, BaseModelConfig):
-    _abstract = False
     # TODO: Architecture/non-architecture split might not make much sense here.
 
     type: PeftType = Field(

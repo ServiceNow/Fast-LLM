@@ -186,7 +186,7 @@ class TransformerSubLayerName(str, enum.Enum):
 @config_class()
 class TransformerPeftConfig(PeftConfig):
     layers: list[TransformerSubLayerName] = Field(
-        default_factory=lambda: [TransformerSubLayerName.query, TransformerSubLayerName.value],
+        default_factory=lambda: [TransformerSubLayerName.query, TransformerSubLayerName.value_],
         desc="The layers on which to apply LoRA.",
         hint=FieldHint.feature,
     )
@@ -463,7 +463,7 @@ class TransformerArchitectureConfig(BaseModelArchitectureConfig):
 class TransformerConfig(TransformerArchitectureConfig, BaseModelConfig):
     normalization: NormalizationConfig = FieldUpdate(default_factory=NormalizationConfig)
     rotary: RotaryConfig = FieldUpdate(default_factory=RotaryConfig)
-    peft: TransformerPeftConfig = FieldUpdate(default_factory=PeftConfig)
+    peft: TransformerPeftConfig = FieldUpdate(default_factory=TransformerPeftConfig)
     # Default: hidden_size**-0.5
     # TODO: Allow custom initialization (InitializationConfig?)
     init_method_std: float = Field(
