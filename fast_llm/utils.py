@@ -84,9 +84,9 @@ class Assert:
     """
 
     @staticmethod
-    def eq(x, *args):
+    def eq(x, *args, msg=None):
         for arg in args:
-            assert x == arg, f"{x} != {arg}"
+            assert x == arg, f"{x} != {arg} " + f"| {msg}" if msg else ""
 
     @staticmethod
     def is_(x, y):
