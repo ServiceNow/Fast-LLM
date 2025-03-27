@@ -54,7 +54,7 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
             distributed_config=self._config.model.distributed,
         )
         steps_per_split = {
-            PhaseType.training: {PhaseType.training.value: self._config.training.train_iters},
+            PhaseType.training: {PhaseType.training.value.lower(): self._config.training.train_iters},
             PhaseType.validation: {
                 dataset_name: self._config.training.evaluations[dataset_name].get_iteration_count(
                     self._config.training.train_iters,
@@ -63,7 +63,7 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
                 )
                 for dataset_name in self._config.training.evaluations.keys()
             },
-            PhaseType.test: {PhaseType.test.value: self._config.training.test_iters},
+            PhaseType.test: {PhaseType.test.value.lower(): self._config.training.test_iters},
         }
         self._samples_per_split = {
             phase: {
@@ -172,7 +172,7 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
 
         if done and PhaseType.test in self._samples_per_split:
             log_main_rank(lambda: f"Running test phase ...")
-            test_iterator = self._get_data_iterator(PhaseType.test.value)
+            test_iterator = self._get_data_iterator(PhaseType.test.value.lower())
             metrics_key = PhaseType.test.value
             metrics[metrics_key] = self._evaluate(
                 data_iterator=test_iterator,
@@ -224,7 +224,7 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
                 #   (Also preprocessing adds overhead)
                 reduced_losses, update_successful, train_metrics = self._runner.run_step(
                     train_iterator,
-                    self._schedule[PhaseType.training][PhaseType.training.value],
+                    self._schedule[PhaseType.training][PhaseType.training.value.lower()],
                     iteration=self._completed_steps,
                     return_metrics=is_logging,
                 )

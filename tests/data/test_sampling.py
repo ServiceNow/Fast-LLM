@@ -6,7 +6,6 @@ import pytest
 from fast_llm.data.dataset.gpt.config import GPTMemmapDatasetConfig, ShufflingType
 from fast_llm.data.dataset.gpt.indexed import GPTIndexedDataset
 from fast_llm.data.dataset.gpt.sampled import GPTSample
-from fast_llm.engine.distributed.config import PhaseType
 from fast_llm.utils import Assert
 from tests.common import DATASET_PREFIX, get_test_dataset
 from tests.data.common import (
@@ -58,18 +57,18 @@ def test_gpt_sampled_data():
                 }
             }
         },
-        {PhaseType.training: 8},
+        8,
         sequence_length=5,
-        expected_samples={PhaseType.training: GPT_MEMMAP_SAMPLES},
+        expected_samples=GPT_MEMMAP_SAMPLES,
     )
 
 
 def test_gpt_sampled_data_legacy():
     get_test_data_and_compare_samples(
         {"format": "list", "path": [str(DATASET_PREFIX)], "split": [1, 0, 0]},
-        {PhaseType.training: 8},
+        8,
         sequence_length=5,
-        expected_samples={PhaseType.training: GPT_MEMMAP_SAMPLES_LEGACY},
+        expected_samples=GPT_MEMMAP_SAMPLES_LEGACY,
         legacy=True,
     )
 

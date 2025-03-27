@@ -123,7 +123,7 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
                     tokenizer=self._tokenizer,
                     cross_document_attention=self._cross_document_attention,
                 )
-                dataset = self._config.datasets[self._config.datasets[dataset_name]].build_and_sample(sampling)
+                dataset = self._config.datasets[dataset_name].build_and_sample(sampling)
                 self._datasets[dataset_name] = DatasetMonitor(dataset, self._config.data_sample_warn_time_ms)
 
         safe_barrier(self._distributed.world_group, "data_preparation", timeout)
