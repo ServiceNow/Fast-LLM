@@ -19,7 +19,7 @@ from fast_llm.data.dataset.monitor import DatasetMonitor
 from fast_llm.data.iterator import SampledDatasetIterator
 from fast_llm.data.tokenizer import Tokenizer
 from fast_llm.engine.config_utils.run import log_main_rank
-from fast_llm.engine.distributed.config import DistributedConfig, PhaseType
+from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.engine.schedule.config import BatchConfig
 from fast_llm.utils import Assert
@@ -56,11 +56,9 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
     TODO: Separate generic and GPT classes.
     """
 
-    _datasets: dict[PhaseType, SampledDataset]
+    _datasets: dict[str, SampledDataset]
     _tokenizer: Tokenizer | None
     _is_setup: bool = False
-
-    _dataset_name_map: dict[str, str]
 
     def __init__(
         self,
@@ -79,11 +77,6 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
         self._max_sequence_length = max_sequence_length
         self._cross_document_attention = cross_document_attention
 
-        # This is a mapping between the dataset name in the config and its normalized variant for later reference.
-        # This is needed because previously, dataset names were based on phases and were capitalized,
-        # but this is no longer a requirement.
-        self._dataset_name_map = {key.lower(): key for key in self._config.datasets.keys()}
-
     def setup(
         self,
         distributed: "Distributed",
@@ -95,23 +88,16 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
         Load the datasets, and prepare or load the samplings.
         This may take a while and a significant amount of cpu memory.
         """
-        # Some dataset names may come from phases and are capitalized,
-        # so we need to normalize them before use.
-        samples_per_dataset = {key.lower(): value for key, value in samples_per_dataset.items()}
-
         # Check and raise an error if a used dataset is not defined.
         for dataset_name in samples_per_dataset.keys():
-            if dataset_name not in self._dataset_name_map:
-                raise ValueError(
-                    f"Dataset name {dataset_name} (case insensitive check applied) not found in defined datasets. "
-                    "Please check your config."
-                )
+            if dataset_name not in self._config.datasets:
+                raise ValueError(f"Dataset {dataset_name} not found.")
 
         # Check and warn if there are defined datasets that are not used.
-        unused_datasets = self._dataset_name_map.keys() - samples_per_dataset.keys()
+        unused_datasets = self._config.datasets.keys() - samples_per_dataset.keys()
         if unused_datasets:
             warnings.warn(
-                f"The following datasets are defined but not used (case insensitive check applied): {', '.join(unused_datasets)}. "
+                f"The following datasets are defined but not used: {', '.join(unused_datasets)}. "
                 "Ensure this is intentional, or update the configuration accordingly."
             )
 
@@ -137,7 +123,7 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
                     tokenizer=self._tokenizer,
                     cross_document_attention=self._cross_document_attention,
                 )
-                dataset = self._config.datasets[self._dataset_name_map[dataset_name]].build_and_sample(sampling)
+                dataset = self._config.datasets[self._config.datasets[dataset_name]].build_and_sample(sampling)
                 self._datasets[dataset_name] = DatasetMonitor(dataset, self._config.data_sample_warn_time_ms)
 
         safe_barrier(self._distributed.world_group, "data_preparation", timeout)
