@@ -85,6 +85,11 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
 
         self._forward = wrap_forward_backward(self._forward_backward, grad_is_context)
 
+        # PEFT.
+        self.final_norm = self._config.transformer.peft.apply_other(self.final_norm)
+        if hasattr(self, "output_weights"):
+            self.output_weights = self._config.transformer.peft.apply_weight(self.output_weights)
+
     def forward(
         self, input_: torch.Tensor, kwargs: dict, losses: dict | None = None, metrics: dict | None = None
     ) -> torch.Tensor:
