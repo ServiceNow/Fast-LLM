@@ -150,7 +150,9 @@ py::array build_padded_token_cumsum(const py::array_t<int32_t>& sizes_,
     int32_t size = sizes[sizes_idx];
     if (size > seq_length) {
       // Skip sequences that are too long, to avoid truncations
+      if (samples % token_cumsum_rate==0) token_cumsum.push_back(cumsum);
       sizes_idx += 1;
+      samples += 1;
     } else if (seq_size + size > seq_length) {
       // add padded tokens if a document does not fit in current sequence and start a new sequence
       cumsum += seq_length - seq_size;
