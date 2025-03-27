@@ -86,6 +86,10 @@ class StageBase(Configurable[StageConfig]):
         self._fsdp_index = {name: i for i, fsdp in enumerate(self._fsdps) for name in fsdp.parameter_names}
 
     @property
+    def requires_grad(self):
+        return any(fsdp.requires_grad for fsdp in self._fsdps)
+
+    @property
     def mode(self) -> StageMode:
         assert self._is_setup
         return self._mode

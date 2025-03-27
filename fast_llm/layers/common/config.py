@@ -7,6 +7,7 @@ from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
     from fast_llm.engine.config_utils.tensor_space import TensorDim
+    from fast_llm.layers.common.linear import LinearBase, LinearLike
     from fast_llm.layers.common.normalization import LayerNorm, RMSNorm
 
 
@@ -115,3 +116,59 @@ class NormalizationConfig(NormalizationArchitectureConfig, BaseModelConfig):
         cls._handle_renamed_field(default, "normalization_implementation", "implementation")
         cls._handle_renamed_field(default, "layer_norm_init_range", "initialization_range")
         return super()._from_dict(default, strict, flat)
+
+
+class PeftType(str, enum.Enum):
+    # TODO : Use a dynamic config type instead.
+    none = "none"
+    lora = "lora"
+
+
+@config_class()
+class PeftArchitectureConfig(BaseModelArchitectureConfig):
+    _abstract = False
+
+
+@config_class()
+class PeftConfig(PeftArchitectureConfig, BaseModelConfig):
+    # TODO: Architecture/non-architecture split might not make much sense here.
+
+    type: PeftType = Field(
+        default=PeftType.none,
+        desc="The type of parameter-efficient fine tuning to use Only LoRA is supported at the moment.",
+        hint=FieldHint.core,
+    )
+    rank: int = Field(
+        default=8,
+        desc="The LoRA rank, i.e. the size of the intermediate dimension.",
+        hint=FieldHint.stability,
+    )
+    alpha: float = Field(
+        default=8.0,
+        desc="The LoRA scaling parameter.",
+        hint=FieldHint.stability,
+    )
+    dropout: float = Field(
+        default=0.0,
+        desc="Dropout rate for LoRA.",
+        hint=FieldHint.stability,
+    )
+
+    def apply_linear(self, linear: "LinearBase", **kwargs) -> "LinearLike":
+        if self.type == PeftType.none:
+            return linear
+        elif self.type == PeftType.lora:
+            from fast_llm.layers.common.peft import lora_linear
+
+            # TODO: Init method?
+            return lora_linear(
+                linear,
+                linear.weight.param_init_method,
+                linear.weight.param_init_method,
+                self.rank,
+                self.alpha,
+                self.dropout,
+                **kwargs,
+            )
+        else:
+            raise NotImplementedError(self.type)
