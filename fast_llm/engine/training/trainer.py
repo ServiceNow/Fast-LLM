@@ -56,12 +56,12 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
         steps_per_split = {
             PhaseType.training: {PhaseType.training.value: self._config.training.train_iters},
             PhaseType.validation: {
-                dataset_name: self._config.training.validation[dataset_name].get_iteration_count(
+                dataset_name: self._config.training.evaluations[dataset_name].get_iteration_count(
                     self._config.training.train_iters,
-                    # There may be an extra validation after the last training step.
-                    not self._config.training.validation[dataset_name].enabled(self._config.training.train_iters),
+                    # There may be an extra evaluation after the last training step.
+                    not self._config.training.evaluations[dataset_name].enabled(self._config.training.train_iters),
                 )
-                for dataset_name in self._config.training.validation.keys()
+                for dataset_name in self._config.training.evaluations.keys()
             },
             PhaseType.test: {PhaseType.test.value: self._config.training.test_iters},
         }
@@ -145,9 +145,9 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
         assert self._is_setup
         return self._consumed_samples * self._config.batch.sequence_length
 
-    def _get_completed_validation_steps(self, dataset_name) -> int:
-        # Number of validation steps performed before the current step
-        return self._config.training.validation[dataset_name].get_iteration_count(self._completed_steps - 1)
+    def _get_completed_evaluation_steps(self, dataset_name) -> int:
+        # Number of evaluations steps performed before the current step
+        return self._config.training.evaluations[dataset_name].get_iteration_count(self._completed_steps - 1)
 
     def run(self) -> None:
         assert self._is_setup
@@ -202,7 +202,7 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
             self._completed_steps,
             self._config.training.prefetch_factor,
         )
-        valid_iterators = {name: None for name in self._config.training.validation.keys()}
+        evaluation_iterators = {name: None for name in self._config.training.evaluations.keys()}
 
         log_main_rank("Training ...")
 
@@ -307,28 +307,28 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
                 if PhaseType.validation in self._samples_per_split and (
                     done
                     or any(
-                        valid_conf.enabled(self._completed_steps)
-                        for valid_conf in self._config.training.validation.values()
+                        evaluation_conf.enabled(self._completed_steps)
+                        for evaluation_conf in self._config.training.evaluations.values()
                     )
                 ):
                     formatted_metrics = []
-                    for dataset_name in self._config.training.validation.keys():
-                        if not self._config.training.validation[dataset_name].enabled(self._completed_steps):
+                    for dataset_name, evaluation_conf in self._config.training.evaluations.items():
+                        if not evaluation_conf.enabled(self._completed_steps):
                             continue
-                        if valid_iterators[dataset_name] is None:
-                            valid_iterators[dataset_name] = self._get_data_iterator(
-                                dataset_name, self._get_completed_validation_steps(dataset_name)
+                        if evaluation_iterators[dataset_name] is None:
+                            evaluation_iterators[dataset_name] = self._get_data_iterator(
+                                dataset_name, self._get_completed_evaluation_steps(dataset_name)
                             )
-                        # TODO: formatting metric category as Validation.validation_dataset_name
-                        #       maybe format each metric with validation_dataset_name prefix instead?
-                        # TODO: setting performance metrics per validation dataset
-                        #       maybe to set aggregate performance metrics for all validation datasets?
+                        # TODO: formatting metric category as Validation.evaluation_dataset_name
+                        #       maybe format each metric with evaluation_dataset_name prefix instead?
+                        # TODO: setting performance metrics per evaluation dataset
+                        #       maybe to set aggregate performance metrics for all evaluations datasets?
                         metric_key = f"{PhaseType.validation.value}.{dataset_name}"
                         metrics[metric_key] = self._evaluate(
-                            data_iterator=valid_iterators[dataset_name],
+                            data_iterator=evaluation_iterators[dataset_name],
                             phase=PhaseType.validation,
-                            num_iters=self._config.training.validation[dataset_name].iterations,
-                            begin_iter=self._get_completed_validation_steps(dataset_name),
+                            num_iters=evaluation_conf.iterations,
+                            begin_iter=self._get_completed_evaluation_steps(dataset_name),
                             dataset_name=dataset_name,
                         )
                         formatted_metrics.append(
