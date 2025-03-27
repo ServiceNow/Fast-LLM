@@ -90,12 +90,12 @@ FieldHintImportance = {
 
 
 class FieldVerboseLevel:
-    nothing = -1
+    explicit = None
     core = 0
     optional = 10
     performance = 20
     debug = 50
-    everything = None
+    everything = 2**31
 
 
 FieldHintDoc = {
@@ -680,7 +680,7 @@ class Config:
     ](self: T, *updates: typing.Union["Config", dict[str | tuple[str, ...], typing.Any]], strict: bool = True,) -> T:
         return self.from_dict(self, *updates, strict=strict)
 
-    def to_serialized(self, verbose: int | None = FieldVerboseLevel.core) -> dict[str, typing.Any]:
+    def to_serialized(self, verbose: int | None = FieldVerboseLevel.explicit) -> dict[str, typing.Any]:
         return self._to_dict(verbose=verbose, format_=_ConfigDictFormat.nested, serializable=True)
 
     def to_logs[
@@ -863,8 +863,12 @@ class Config:
 
     def compare(self, other: "Config", log_fn: typing.Union[type[BaseException], typing.Callable] = ValueError):
         # TODO: Check classes?
-        self_dict = self._to_dict(format_=_ConfigDictFormat.tuple, serializable=True)
-        other_dict = other._to_dict(format_=_ConfigDictFormat.tuple, serializable=True)
+        self_dict = self._to_dict(
+            format_=_ConfigDictFormat.tuple, serializable=True, verbose=FieldVerboseLevel.everything
+        )
+        other_dict = other._to_dict(
+            format_=_ConfigDictFormat.tuple, serializable=True, verbose=FieldVerboseLevel.everything
+        )
         compare = {
             key: (self_dict.get(key, MISSING), other_dict.get(key, MISSING))
             for key in self_dict.keys() | other_dict.keys()
