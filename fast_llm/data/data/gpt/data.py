@@ -95,6 +95,26 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
         Load the datasets, and prepare or load the samplings.
         This may take a while and a significant amount of cpu memory.
         """
+        # Some dataset names may come from phases and are capitalized,
+        # so we need to normalize them before use.
+        samples_per_dataset = {key.lower(): value for key, value in samples_per_dataset.items()}
+
+        # Check and raise an error if a used dataset is not defined.
+        for dataset_name in samples_per_dataset.keys():
+            if dataset_name not in self._dataset_name_map:
+                raise ValueError(
+                    f"Dataset name {dataset_name} (case insensitive check applied) not found in defined datasets. "
+                    "Please check your config."
+                )
+
+        # Check and warn if there are defined datasets that are not used.
+        unused_datasets = self._dataset_name_map.keys() - samples_per_dataset.keys()
+        if unused_datasets:
+            warnings.warn(
+                f"The following datasets are defined but not used (case insensitive check applied): {', '.join(unused_datasets)}. "
+                "Ensure this is intentional, or update the configuration accordingly."
+            )
+
         super().setup(distributed, samples_per_dataset, cache_directory)
         log_main_rank(f"Preparing dataset. This may take several minutes.")
         self._tokenizer = None if self._config.tokenizer.path is None else Tokenizer(self._config.tokenizer)
@@ -105,13 +125,7 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
 
         self._datasets = {}
         for dataset_name, num_samples in samples_per_dataset.items():
-            # Some dataset names may come from phases and are capitalized,
-            # so we need to normalize them before use.
-            dataset_name = dataset_name.lower()
-
             if num_samples > 0:
-                # TODO: Do the check earlier.
-                assert dataset_name in self._dataset_name_map
                 sampling = GPTSamplingData(
                     num_samples=num_samples,
                     config=self._config.sampling,
