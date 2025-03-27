@@ -1,6 +1,7 @@
 import logging
 import typing
 
+from fast_llm.config import UpdateType
 from fast_llm.core.distributed import broadcast
 from fast_llm.engine.checkpoint.config import CheckpointLoadConfig, CheckpointSaveConfig
 from fast_llm.engine.distributed.distributed import Distributed
@@ -45,9 +46,7 @@ class FastLLMModel[ConfigType: FastLLMModelConfig](MultiStageModel[ConfigType]):
     def from_pretrained(
         cls,
         pretrained_config: CheckpointLoadConfig,
-        default_config: FastLLMModelConfig = None,
-        *,
-        config_updates: dict[str | tuple[str, ...], typing.Any] | None = None,
+        *updates: dict[str | tuple[str, ...], typing.Any],
         optimizer_state_names: tuple[str, ...] | None = None,
         setup: bool = True,
         mode: StageMode = StageMode.training,
@@ -55,7 +54,7 @@ class FastLLMModel[ConfigType: FastLLMModelConfig](MultiStageModel[ConfigType]):
         stage_filter: set | None = None,
     ) -> typing.Self:
         metadata = cls.config_class.load_metadata(pretrained_config)
-        config = cls.config_class.from_metadata(pretrained_config, metadata, default_config, config_updates)
+        config = cls.config_class.from_dict(metadata.config, *updates, update_type=UpdateType.update)
         if mode.support_training:
             # TODO v0.3: Make metadata.shards mandatory?
             if metadata.shards:

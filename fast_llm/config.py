@@ -374,7 +374,6 @@ class Config:
                 else:
                     raise type(e)("\n".join(e.args)) from None
             self._validated = True
-            print("WLIEHGIUWERGNHBWIO", self.__class__.__name__, self._explicit_fields)
         return self
 
     def _validate(self) -> None:
@@ -713,8 +712,8 @@ class Config:
     @classmethod
     def from_dict(
         cls,
-        default: typing.Union["Config", dict[str, typing.Any]],
-        *updates: typing.Union["Config", dict[str | tuple[str, ...], typing.Any]],
+        default: "Config| dict[str, typing.Any]]",
+        *updates: "Config| dict[str | tuple[str, ...], typing.Any]",
         strict: bool = True,
         update_type: UpdateType = UpdateType.override,
     ) -> typing.Self:

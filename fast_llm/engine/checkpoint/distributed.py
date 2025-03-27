@@ -13,7 +13,6 @@ from fast_llm.engine.checkpoint.config import (
     CheckpointLoadMetadataConfig,
     CheckpointSaveConfig,
     DistributedCheckpointFormat,
-    ModelConfigType,
     export_safetensors_metadata,
 )
 from fast_llm.engine.checkpoint.safe_load import SafeLoad
@@ -43,15 +42,14 @@ class DistributedCheckpointHandler(CheckpointHandler):
 
     def load(self, config: CheckpointLoadConfig, metadata: CheckpointMetadata) -> None:
         # TODO: More safety checks
-        loaded_config_dict = config.to_copy({"load_config": ModelConfigType.fast_llm})
-        loaded_config = self._model.config_class.from_metadata(loaded_config_dict, metadata)
         num_shards = self.get_num_shards(config)
         shard_names = self.get_shard_names(config)
         Assert.eq(metadata.shards[:num_shards], list(shard_names))
 
         same_format = (
-            loaded_config.to_serialized(verbose=None) == self._model.config.to_serialized(verbose=None)
+            type(metadata.config) == type(self._model.config)
             and config.optimizer_state
+            and metadata.config.to_serialized(verbose=None) == self._model.config.to_serialized(verbose=None)
         )
         # Make sure all nodes agree on which loading scheme to use.
         # Note: they may not agree before the broadcast because of the rank comparison, but that's ok.

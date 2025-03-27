@@ -200,6 +200,7 @@ class CheckpointSaveConfig(CheckpointSaveMetadataConfig, CheckpointStateSaveConf
 
 @config_class()
 class CheckpointLoadMetadataConfig(CheckpointPathConfigBase):
+    # TODO!!!!!!!
     _abstract = False
 
     load_config: ModelConfigType = Field(
