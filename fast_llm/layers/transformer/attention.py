@@ -9,7 +9,12 @@ from fast_llm.functional.autograd import wrap_forward_backward
 from fast_llm.functional.rotary import apply_rotary_embeddings
 from fast_llm.functional.triton.rotary import triton_rotary_autograd_
 from fast_llm.layers.common.linear import InputParallelLinear, OutputParallelLinear
-from fast_llm.layers.transformer.config import TransformerConfig, TransformerDimNames, TransformerKwargs
+from fast_llm.layers.transformer.config import (
+    TransformerConfig,
+    TransformerDimNames,
+    TransformerKwargs,
+    TransformerSubLayerName,
+)
 from fast_llm.logging import log_distributed_grad, log_distributed_tensor
 from fast_llm.tensor import TensorMeta, init_normal_, init_zeros_
 from fast_llm.utils import Assert
@@ -137,6 +142,11 @@ class Attention(torch.nn.Module):
             lr_scale=self._config.attention_lr_scale,
         )
 
+        # PEFT.
+        self.query = self._config.peft.apply_linear(self.query, TransformerSubLayerName.query)
+        self.key_value = self._config.peft.apply_linear(self.key_value, TransformerSubLayerName.key_value)
+        self.dense = self._config.peft.apply_linear(self.dense, TransformerSubLayerName.dense)
+
     def _attn_fused(
         self, query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, mask: torch.Tensor, mask_value: torch.Tensor
     ) -> torch.Tensor:
@@ -253,14 +263,14 @@ class Attention(torch.nn.Module):
         return query, key_value, context
 
     def _query_key_value_backward(
-        self, query_grad: torch.Tensor, key_grad: torch.Tensor, context: dict
+        self, query_grad: torch.Tensor, key_value_grad: torch.Tensor, context: dict
     ) -> torch.Tensor:
         # TODO: De-allocate qkv grads quicker.
         handle = None
 
         if self._tensor_space.distributed.sequence_data_group:
-            key_grad, handle = reduce_scatter_op(
-                key_grad,
+            key_value_grad, handle = reduce_scatter_op(
+                key_value_grad,
                 group=self._tensor_space.distributed.sequence_data_group,
                 dim=1 - context["sequence_first"],
                 async_op=True,
@@ -274,11 +284,11 @@ class Attention(torch.nn.Module):
 
         if self._head_groups == 1 and (group := self._tensor_space.distributed.tensor_group):
             if self._sequence_parallel:
-                key_grad = reduce_scatter_op(key_grad, group=group, dim=0)
+                key_value_grad = reduce_scatter_op(key_value_grad, group=group, dim=0)
             else:
-                key_grad = reduce_op(key_grad, group=group)
+                key_value_grad = reduce_op(key_value_grad, group=group)
 
-        input_grad.add_(self.key_value.backward(key_grad, context.pop("key_value")))
+        input_grad.add_(self.key_value.backward(key_value_grad, context.pop("key_value")))
         return input_grad
 
     def _decide_window_size(self) -> int | None:
