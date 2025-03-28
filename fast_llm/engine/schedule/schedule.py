@@ -141,7 +141,7 @@ class Schedule(abc.ABC):
             phase=self._phase,
         )
 
-        self._steps = self._create_steps()
+        self._steps, self._first_grad_stage = self._create_steps()
 
         self._create_index()
 
@@ -214,8 +214,8 @@ class Schedule(abc.ABC):
         # Consistency checks
         step_map = self._step_map.copy()
         for data_index in range(self._batch_config.num_inputs):
-            for type_ in (StepType.forward, StepType.backward) if self._is_training else (StepType.forward,):
-                for stage in range(self._num_stages):
+            for type_ in (StepType.forward, StepType.backward):
+                for stage in range(0 if type_ == StepType.forward else self._first_grad_stage, self._num_stages):
                     assert (
                         step_map.pop((type_, stage, data_index), None) is not None
                     ), f"Missing {type_.value} step with stage={stage}, data_index={data_index}"
@@ -225,7 +225,8 @@ class Schedule(abc.ABC):
         for i, step in enumerate(self._steps):
             if self._is_training:
                 if step.type_ == StepType.forward:
-                    step.backward_step = self.get_step(StepType.backward, *step.map_index[1:])
+                    if step.stage >= self._first_grad_stage:
+                        step.backward_step = self.get_step(StepType.backward, *step.map_index[1:])
                 else:
                     step.forward_step = self.get_step(StepType.forward, *step.map_index[1:])
             if step.type_ == StepType.forward and step.stage == 0:
@@ -236,7 +237,8 @@ class Schedule(abc.ABC):
                 step.prev_step = self.get_step(
                     step.type_, step.stage + (1 if step.type_ == StepType.backward else -1), *step.map_index[2:]
                 )
-            if step.type_ == StepType.backward and step.stage == 0:
+
+            if step.type_ == StepType.backward and step.stage == self._first_grad_stage:
                 step.next_step = None
             elif step.type_ == StepType.forward and step.stage == self._num_stages - 1:
                 step.next_step = self.get_step(StepType.backward, *step.map_index[1:]) if self._is_training else None
@@ -249,11 +251,15 @@ class Schedule(abc.ABC):
         for step in self._steps:
             if self._is_training:
                 if step.type_ == StepType.forward:
-                    Assert.gt(step.backward_step.global_index, step.global_index)
-                    Assert.is_(step.backward_step.forward_step, step)
+                    if step.stage >= self._first_grad_stage:
+                        Assert.gt(step.backward_step.global_index, step.global_index)
+                        Assert.is_(step.backward_step.forward_step, step)
+                    else:
+                        assert step.backward_step is None
                 else:
                     Assert.lt(step.forward_step.global_index, step.global_index)
-                    Assert.is_(step.forward_step.backward_step, step)
+                    if step.stage >= self._first_grad_stage:
+                        Assert.is_(step.forward_step.backward_step, step)
             if step.next_step is not None:
                 Assert.gt(step.next_step.global_index, step.global_index)
                 Assert.is_(step.next_step.prev_step, step)
@@ -303,7 +309,10 @@ class Schedule(abc.ABC):
                 reduce_step.reduce_accumulate = reduction_count[reduce_step.stage] > 0
                 reduction_count[reduce_step.stage] += 1
             for stage, count in enumerate(reduction_count):
-                assert (count > 0) == (stage % self._distributed.pipeline_parallel == self._distributed.pipeline_rank)
+                assert (count > 0) == (
+                    stage >= self._first_grad_stage
+                    and (stage % self._distributed.pipeline_parallel == self._distributed.pipeline_rank)
+                )
 
     def _setup_timeline(self) -> None:
         # TODO: Include network time
@@ -468,8 +477,16 @@ class Schedule(abc.ABC):
             micro_sequence,
         )
 
-    def _create_steps(self) -> list[Step]:
+    def _create_steps(self) -> tuple[list[Step], int]:
         steps = []
+        if self._is_training:
+            # The first stage(s) may not have any trainable parameters,
+            # in which case we shouldn't run the backward pass.
+            first_grad_stage = 0
+            while first_grad_stage < self._num_stages and not self._multi_stage.stages[first_grad_stage].requires_grad:
+                first_grad_stage += 1
+        else:
+            first_grad_stage = self._num_stages
         for depth_first_micro_batch in range(self._batch_config.depth_first_micro_batches):
             for stage in range(self._num_stages):
                 for breadth_first_micro_batch in range(self._batch_config.breadth_first_micro_batches):
@@ -485,7 +502,7 @@ class Schedule(abc.ABC):
                             )
                         )
             if self._is_training:
-                for stage in reversed(range(self._num_stages)):
+                for stage in reversed(range(first_grad_stage, self._num_stages)):
                     for breadth_first_micro_batch in range(self._batch_config.breadth_first_micro_batches):
                         for micro_sequence in reversed(range(self._batch_config.num_micro_sequences)):
                             steps.append(
@@ -498,4 +515,4 @@ class Schedule(abc.ABC):
                                     type_=StepType.backward,
                                 )
                             )
-        return steps
+        return steps, first_grad_stage

@@ -40,7 +40,7 @@ To disable loss computation on pieces of texts like the user/system messages or 
 
 ```python
 from datasets import load_dataset
-from tranformers import AutoTokenizer
+from transformers import AutoTokenizer
 
 def apply_chat_template(conversation):
     chatml_conv = []
@@ -70,7 +70,7 @@ def get_sample_with_spans(sample, start_delimiter, end_delimiter):
     return {"text": text, "spans": spans}
 
 dataset_name = "Magpie-Align/Magpie-Llama-3.1-Pro-MT-300K-Filtered"
-tokenizer_path = "./sft-tutorial/instruction-tuned-model"
+tokenizer_path = "./sft-tutorial/Llama-3.1-8B-Instruct"
 dataset = load_dataset(dataset_name)
 tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
 
@@ -100,15 +100,18 @@ dataset:
 
 tokenizer:
   path: ./sft-tutorial/Llama-3.1-8B
+splits:
+  training: 0.998
+  validation: 0.002
 ```
 
 ## ⚙️ Step 4: Configure Fast-LLM
 
-It's time to configure the Fast-LLM training config. This is very similar to [Quick Start](../quick-start.md) with two additional options, namely, `allow_truncations` and `cross_document_attention` which are important for improving the task performance of instruction-tuned models.
+It's time to configure the Fast-LLM training config. This is very similar to [Quick Start](../quick-start.md) with two additional options, namely, `truncate_documents` and `cross_document_attention` which are important for improving the task performance of instruction-tuned models.
 
 ```yaml
 training:
-  train_iters: 100_000
+  train_iters: 5_000
   logs:
     interval: 1
   validation:
@@ -122,9 +125,9 @@ training:
     format: llama
     interval: 1000
 batch:
-  micro_batch_size: 2
+  micro_batch_size: 1
   sequence_length: 4096
-  batch_size: 16
+  batch_size: 32
   cross_document_attention: no # (1)!
 data:
   datasets:
@@ -134,12 +137,7 @@ data:
     Validation:
       type: file
       path: ./sft-tutorial/tokenized/Llama-3.1-8B/fast_llm_config_validation.yaml
-  fim: {}
-  allow_truncations: no # (2)!
-  split:
-    - 0.99
-    - 0.01
-    - 0.0
+  truncate_documents: no # (2)!
   sampling:
     use_loss_masking_spans: yes
 optimizer:
@@ -147,11 +145,11 @@ optimizer:
   beta_1: 0.9
   beta_2: 0.95
   learning_rate:
-    base: 6.0e-04
-    minimum: 6.0e-05
+    base: 2.0e-05
+    minimum: 0.0
     decay_style: cosine
-    decay_iterations: 100_000
-    warmup_iterations: 2000
+    decay_iterations: 4_900
+    warmup_iterations: 100
 pretrained:
   format: llama
   path: ./sft-tutorial/Llama-3.1-8B
@@ -167,7 +165,7 @@ model:
     timeout: 3600
     training_dtype: bf16
 run:
-  experiment_dir: ./sft-tutorial/llama-3.1-magpie
+  experiment_dir: ./sft-tutorial/llama-3.1-8b-instruct-magpie
 ```
 
 1. Prevents paying attention to other documents in a packed sequence
