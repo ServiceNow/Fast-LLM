@@ -202,21 +202,6 @@ class CheckpointSaveConfig(CheckpointSaveMetadataConfig, CheckpointStateSaveConf
 class CheckpointLoadMetadataConfig(CheckpointPathConfigBase):
     _abstract = False
 
-    load_config: ModelConfigType = Field(
-        default=ModelConfigType.architecture,
-        desc="Configuration to save/load.",
-        hint=FieldHint.core,
-    )
-
-    def _validate(self) -> None:
-        super()._validate()
-        if self.format.enforce_architecture_match:
-            assert self.load_config.load_architecture
-
-    @property
-    def compare_log_fn(self):
-        return ValueError if self.load_config.load_architecture else logger.warning
-
 
 @config_class()
 class CheckpointLoadConfig(CheckpointLoadMetadataConfig, CheckpointStateConfigBase):

@@ -45,7 +45,7 @@ class MLPBase(Layer, ABC):
             bias=config.add_mlp_bias,
             weight_init_method=init_method_1,
             bias_init_method=init_method_1 if config.random_bias_init else init_zeros_,
-            lr_scale=tuple(config.mlp_lr_scale),
+            lr_scale=tuple(config.mlp_lr_scale) if isinstance(config.mlp_lr_scale, list) else config.mlp_lr_scale,
         )
         self.layer_2 = LinearBase(
             self._intermediate_dim,
@@ -55,7 +55,7 @@ class MLPBase(Layer, ABC):
             bias_init_method=init_method_2 if config.random_bias_init else init_zeros_,
             auto_bias_grad_accumulation=tensor_space.distributed_config.tensor_parallel > 1,
             transposed_weight=True,
-            lr_scale=tuple(config.mlp_lr_scale),
+            lr_scale=tuple(config.mlp_lr_scale) if isinstance(config.mlp_lr_scale, list) else config.mlp_lr_scale,
         )
 
         # PEFT.

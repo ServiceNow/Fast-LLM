@@ -41,7 +41,7 @@ class HuggingfaceStateDictCheckpointHandler(ExternalStateDictCheckpointHandler, 
 
     def load(self, config: CheckpointLoadConfig, metadata: CheckpointMetadata) -> None:
         assert not config.optimizer_state
-        self._model.config.base_model.compare_architecture(metadata.config.base_model, config.compare_log_fn)
+        self._model.config.base_model.compare_architecture(metadata.config.base_model, logger.warning)
         super().load(config, metadata)
 
     @classmethod

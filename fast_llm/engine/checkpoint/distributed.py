@@ -13,7 +13,6 @@ from fast_llm.engine.checkpoint.config import (
     CheckpointLoadMetadataConfig,
     CheckpointSaveConfig,
     DistributedCheckpointFormat,
-    ModelConfigType,
     export_safetensors_metadata,
 )
 from fast_llm.engine.checkpoint.safe_load import SafeLoad
@@ -43,16 +42,15 @@ class DistributedCheckpointHandler(CheckpointHandler):
 
     def load(self, config: CheckpointLoadConfig, metadata: CheckpointMetadata) -> None:
         # TODO: More safety checks
-        loaded_config_dict = config.to_copy({"load_config": ModelConfigType.fast_llm})
-        loaded_config = self._model.config_class.from_metadata(loaded_config_dict, metadata)
         shard_names = self.get_shard_names(config)
         # Make sure all shards to load are in the checkpoint.
         Assert.leq(set(self.get_shard_names(config)), set(metadata.shards))
         Assert.eq(metadata.shards[: len(shard_names)], list(shard_names))
 
         same_format = (
-            loaded_config.to_serialized(verbose=None) == self._model.config.to_serialized(verbose=None)
+            type(metadata.config) == type(self._model.config)
             and config.optimizer_state
+            and metadata.config.to_serialized(verbose=None) == self._model.config.to_serialized(verbose=None)
         )
         # Make sure all nodes agree on which loading scheme to use.
         # Note: they may not agree before the broadcast because of the rank comparison, but that's ok.
@@ -81,11 +79,11 @@ class DistributedCheckpointHandler(CheckpointHandler):
 
         else:
             log_main_rank("Checkpoint format doesn't match, using safe load", log_fn=logger.info)
-            self._model.config.base_model.compare_architecture(loaded_config.base_model, config.compare_log_fn)
+            self._model.config.base_model.compare_architecture(metadata.config.base_model, logger.warning)
             with SafeLoad(self._model, shard_names=shard_names, timeout=config.timeout) as context:
-                for rank in range(loaded_config.distributed.world_size):
+                for rank in range(metadata.config.distributed.world_size):
                     loaded_model = self._model.__class__(
-                        loaded_config.to_copy({("distributed", "rank"): rank}),
+                        metadata.config.to_copy({("distributed", "rank"): rank}),
                         optimizer_state_names=shard_names[1:],
                         verbose=False,
                     )
