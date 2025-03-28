@@ -128,6 +128,7 @@ class GPTSampledIndexedDataset(SampledDataset):
         # Calculate basic stats.
         documents_per_epoch = document_sizes.numel()
         tokens_per_epoch = document_sizes.sum().item()
+        # TODO MTP: Produce more labels to provide labels for the multi-token prediction heads?
         # We produce sequences of length `self._sequence_length + 1` so the last token has a label,
         # but we also include that last label in the following sample,
         # so we need `sequence_length * num_samples + 1` tokens in total.

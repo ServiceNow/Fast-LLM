@@ -141,18 +141,40 @@ class WeightConverter:
         return weight
 
 
-class IgnoreWeightConverter(WeightConverter):
+class IgnoreImportWeightConverter(WeightConverter):
+    def __post_init__(self):
+        Assert.eq(len(self.fast_llm_name), 0)
+        Assert.gt(len(self.export_name), 0)
+
     def export_weight(
         self, weight: tuple[torch.Tensor | SafeTensorSlice, ...]
     ) -> tuple[torch.Tensor | SafeTensorSlice, ...]:
         raise RuntimeError(
-            f"IgnoreWeightConverter should not be used for export: {self.fast_llm_name}, {self.export_name}"
+            f"IgnoreImportWeightConverter should not be used for export: {self.fast_llm_name}, {self.export_name}"
         )
 
     def import_weight(
         self, weight: tuple[torch.Tensor | SafeTensorSlice, ...]
     ) -> tuple[torch.Tensor | SafeTensorSlice, ...]:
         return ()
+
+
+class IgnoreExportWeightConverter(WeightConverter):
+    def __post_init__(self):
+        Assert.gt(len(self.fast_llm_name), 0)
+        Assert.eq(len(self.export_name), 0)
+
+    def export_weight(
+        self, weight: tuple[torch.Tensor | SafeTensorSlice, ...]
+    ) -> tuple[torch.Tensor | SafeTensorSlice, ...]:
+        return ()
+
+    def import_weight(
+        self, weight: tuple[torch.Tensor | SafeTensorSlice, ...]
+    ) -> tuple[torch.Tensor | SafeTensorSlice, ...]:
+        raise RuntimeError(
+            f"IgnoreExportWeightConverter should not be used for import: {self.fast_llm_name}, {self.export_name}"
+        )
 
 
 class CopyWeightConverter(WeightConverter):
@@ -198,7 +220,9 @@ class ExternalStateDictCheckpointHandler(StateDictCheckpointHandler):
             if weight_converter.fast_llm_name
         }
         self._import_converters = {
-            weight_converter.export_name[0]: weight_converter for weight_converter in weight_converters
+            weight_converter.export_name[0]: weight_converter
+            for weight_converter in weight_converters
+            if weight_converter.export_name
         }
 
     @classmethod
