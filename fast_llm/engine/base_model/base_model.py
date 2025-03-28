@@ -135,3 +135,7 @@ class BaseModel[ConfigType: BaseModelConfig](Configurable[ConfigType], Sequentia
     @abc.abstractmethod
     def loss_defs(self) -> list[LossDef]:
         pass
+
+    @property
+    def metric_defs(self) -> list[LossDef]:
+        return []
