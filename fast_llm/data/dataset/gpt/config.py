@@ -57,6 +57,16 @@ class GPTSamplingConfig(SamplingConfig):
         desc="Read loss masking spans from the dataset.",
         hint=FieldHint.feature,
     )
+    use_preference_loss_masking_spans: bool | None = Field(
+        default=None,
+        desc="Read preference loss masking spans from the dataset.",
+        hint=FieldHint.feature,
+    )
+    enable_packing: bool | None = Field(
+        default=True,
+        desc="Whether to enable packing or not.",
+        hint=FieldHint.feature,
+    )
     shuffle: ShufflingType | None = Field(
         default=None,
         desc="Shuffling strategy.",

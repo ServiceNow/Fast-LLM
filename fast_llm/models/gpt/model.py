@@ -91,6 +91,8 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
         self._tensor_space.setup(distributed)
         self._is_setup = True
 
+
+    # perform preprocessing for sequence parallel
     def preprocess_meta(
         self, batch_meta: BatchConfig | torch.Tensor, phase: PhaseType
     ) -> list[tuple[TensorMeta, dict]]:
@@ -136,6 +138,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             else sequence_q_dim
         )
 
+        # determins if batch dim or sequence dim is first
         need_sequence_first = hidden_sequence_q_dim.size != sequence_length
         if self._config.sequence_first is None:
             sequence_first = need_sequence_first
@@ -143,6 +146,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             sequence_first = self._config.sequence_first
             assert not (need_sequence_first and not sequence_first)
 
+        # hidden dim is model hidden size
         hidden_dim = self._tensor_space.get_tensor_dim(TransformerDimNames.hidden)
         hidden_dims = (
             (hidden_sequence_q_dim, batch_dim, hidden_dim)
@@ -167,6 +171,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             sequence_k = sequence_k_past + sequence_q_dim.size
             sequence_k_dim = TensorDim(TransformerDimNames.sequence_k, sequence_k)
 
+            # sequence_k_past is start and sequence_k is end of sequence
             tokens = TensorMeta.from_dims(
                 hidden_dims[:2], tensor_name=f"tokens_{sequence_k_past}_to_{sequence_k-1}", dtype=torch.int64
             )

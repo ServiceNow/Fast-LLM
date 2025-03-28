@@ -34,13 +34,17 @@ class GPTMemmapDataset(GPTIndexedDataset):
         self._name = name
         self._prefix = pathlib.Path(prefix)
         self._has_spans = 0
+        self._has_preference_spans = False
 
         with self._prefix.with_suffix(".idx").open("rb") as stream:
             Assert.eq(stream.read(9), MEMMAP_INDEX_HEADER)
             self._version = struct.unpack("<Q", stream.read(8))[0]
-            assert self._version in [1, 2], f"Unsupported version for gpt_memmap dataset: {self._version}."
+            assert self._version in [1, 2, 3], f"Unsupported version for gpt_memmap dataset: {self._version}."
             if self._version == 2:
                 self._has_spans = struct.unpack("<B", stream.read(1))[0]
+            if self._version == 3:
+                self._has_spans = struct.unpack("<B", stream.read(1))[0]
+                self._has_preference_spans = struct.unpack("<B", stream.read(1))[0]
 
             self._dtype = MEMMAP_DTYPES[struct.unpack("<B", stream.read(1))[0]].numpy
             self._num_documents = struct.unpack("<Q", stream.read(8))[0]
@@ -52,9 +56,13 @@ class GPTMemmapDataset(GPTIndexedDataset):
 
         self._index_bin_buffer_mmap = np.memmap(self._prefix.with_suffix(".idx"), mode="r", order="C")
         self._index_bin_buffer = memoryview(self._index_bin_buffer_mmap)
+
+        # read document sizes
         self._document_sizes = np.frombuffer(
             self._index_bin_buffer, dtype=np.int32, count=self._num_documents, offset=offset
         )
+
+        # read pointers
         self._pointers = np.frombuffer(
             self._index_bin_buffer,
             dtype=np.int64,
@@ -62,6 +70,7 @@ class GPTMemmapDataset(GPTIndexedDataset):
             offset=offset + self._document_sizes.nbytes,
         )
 
+        # read spans
         self._spans = None
         if self._has_spans and self._version == 2:
             self._spans = []
@@ -80,6 +89,34 @@ class GPTMemmapDataset(GPTIndexedDataset):
                         dtype=np.int32,
                         count=self._num_spans[idx] * 2,
                         offset=span_offset + self._num_spans_cumsum[idx] * 2 * np.dtype(np.int32).itemsize,
+                    ).reshape(-1, 2)
+                )
+
+        # read preference spans
+        self._chosen_spans = None
+        self._rejected_spans = None
+        if self._has_preference_spans:
+            self._chosen_spans = []
+            self._rejected_spans = []
+            chosen_span_offset = offset + self._document_sizes.nbytes + self._pointers.nbytes
+            for idx in range(self._num_documents):
+                self._chosen_spans.append(
+                    np.frombuffer(
+                        self._index_bin_buffer,
+                        dtype=np.int32,
+                        count=2,
+                        offset=chosen_span_offset + idx * 2 * np.dtype(np.int32).itemsize,
+                    ).reshape(-1, 2)
+                )
+            
+            rejected_span_offset = offset + self._document_sizes.nbytes + self._pointers.nbytes + np.array(self._chosen_spans).nbytes
+            for idx in range(self._num_documents):
+                self._rejected_spans.append(
+                    np.frombuffer(
+                        self._index_bin_buffer,
+                        dtype=np.int32,
+                        count=2,
+                        offset=rejected_span_offset + idx * 2 * np.dtype(np.int32).itemsize,
                     ).reshape(-1, 2)
                 )
 
@@ -105,7 +142,7 @@ class GPTMemmapDataset(GPTIndexedDataset):
             del self._index_bin_buffer_mmap
 
     def get(
-        self, idx: int, offset: int = 0, length: int | None = None, use_loss_masking_spans: bool = False
+        self, idx: int, offset: int = 0, length: int | None = None, use_loss_masking_spans: bool = False, use_preference_loss_masking_spans: bool = False
     ) -> GPTSample:
         token_ids = np.frombuffer(
             self._bin_buffer,
@@ -116,13 +153,47 @@ class GPTMemmapDataset(GPTIndexedDataset):
         sample_spans = None
         if use_loss_masking_spans and self._spans is not None:
             sample_spans = self._spans[idx]
-            # adjust the spans for the offset and length
+
+            # filter spans that are outside the range of the selected tokens in the document
             sample_spans = sample_spans[
                 (sample_spans[:, 0] < offset + len(token_ids)) & (sample_spans[:, 1] >= offset)
             ]
-            sample_spans[:, 0] = np.maximum(sample_spans[:, 0], offset) - offset
+
+            # subtract by offset to normalize span boundaries
+            sample_spans[:, 0] = np.maximum(sample_spans[:, 0], offset) - offset # offset 
             sample_spans[:, 1] = np.minimum(sample_spans[:, 1], offset + len(token_ids) - 1) - offset
-        return GPTSample(token_ids=token_ids, loss_masking_spans=sample_spans)
+        
+        chosen_spans = None
+        rejected_spans = None
+        if use_preference_loss_masking_spans and self._chosen_spans is not None and self._rejected_spans is not None:
+            chosen_spans = self._chosen_spans[idx]
+
+            # filter spans that are outside the range of the selected tokens in the document
+            chosen_sample_spans = chosen_spans[
+                (chosen_spans[:, 0] < offset + len(token_ids)) & (chosen_spans[:, 1] >= offset)
+            ]
+
+            # subtract by offset to normalize span boundaries
+            chosen_spans[:, 0] = np.maximum(chosen_spans[:, 0], offset) - offset # offset 
+            chosen_spans[:, 1] = np.minimum(chosen_spans[:, 1], offset + len(token_ids) - 1) - offset
+
+            rejected_spans = self._rejected_spans[idx]
+
+            # filter spans that are outside the range of the selected tokens in the document
+            rejected_sample_spans = rejected_spans[
+                (rejected_spans[:, 0] < offset + len(token_ids)) & (rejected_spans[:, 1] >= offset)
+            ]
+
+            # subtract by offset to normalize span boundaries
+            rejected_spans[:, 0] = np.maximum(rejected_spans[:, 0], offset) - offset # offset 
+            rejected_spans[:, 1] = np.minimum(rejected_spans[:, 1], offset + len(token_ids) - 1) - offset
+
+        return GPTSample(
+            token_ids=token_ids, 
+            loss_masking_spans=sample_spans, 
+            chosen_loss_masking_spans=chosen_sample_spans, 
+            rejected_loss_masking_spans=rejected_sample_spans
+        )
 
     @property
     def name(self) -> str:
@@ -157,6 +228,8 @@ class GPTMemmapDataset(GPTIndexedDataset):
         # number of spans for each document
         num_spans = []
         spans = []
+        chosen_spans = []
+        rejected_spans = []
 
         prefix = pathlib.Path(prefix)
         prefix.parent.mkdir(parents=True, exist_ok=True)
@@ -182,6 +255,10 @@ class GPTMemmapDataset(GPTIndexedDataset):
                 if document.loss_masking_spans is not None:
                     num_spans.append(len(document.loss_masking_spans))
                     spans.append(document.loss_masking_spans)
+                if document.chosen_loss_masking_spans is not None:
+                    chosen_spans.append(document.chosen_loss_masking_spans)
+                if document.rejected_loss_masking_spans is not None:
+                    rejected_spans.append(document.rejected_loss_masking_spans)
                 offset += doc_length * np.dtype(dtype).itemsize
                 num_documents += 1
 
@@ -193,15 +270,26 @@ class GPTMemmapDataset(GPTIndexedDataset):
             spans = np.vstack(spans, dtype=np.int32)
         else:
             spans = np.array(spans, dtype=np.int32)
+        # if len(chosen_spans) > 0:
+        #     chosen_spans = np.vstack(chosen_spans, dtype=np.int32)
+        # else:
+        chosen_spans = np.array(chosen_spans, dtype=np.int32).reshape(-1, 2)
+        # if len(rejected_spans) > 0:
+        #     rejected_spans = np.vstack(rejected_spans, dtype=np.int32)
+        # else:
+        rejected_spans = np.array(rejected_spans, dtype=np.int32).reshape(-1, 2)
 
         # Write the index file (.idx)
         with prefix.with_suffix(".idx").open("wb") as idx_stream:
             idx_stream.write(MEMMAP_INDEX_HEADER)
             # Indicates the version
             # Version 2 optionally adds loss-masking spans
-            idx_stream.write(struct.pack("<Q", 2))
+            # Version 3 optionally adds chosen/rejected spans
+            idx_stream.write(struct.pack("<Q", 3))
             # Flag to indicate whether loss-masking spans are present
             idx_stream.write(struct.pack("<B", 1 if spans.size > 0 else 0))
+            # Flag to indicate whether preference loss-masking spans are present
+            idx_stream.write(struct.pack("<B", 1 if chosen_spans.size > 0 and rejected_spans.size > 0 else 0))
             # Data type
             idx_stream.write(struct.pack("<B", MEMMAP_DTYPES_INV[DataType.from_numpy(dtype.type)]))
             # "Number of sequences", same as documents in our case
@@ -216,5 +304,9 @@ class GPTMemmapDataset(GPTIndexedDataset):
             idx_stream.write(num_spans.tobytes(order="C"))
             # Span indices for each document
             idx_stream.write(spans.tobytes(order="C"))
+            # Chosen indices for each document
+            idx_stream.write(chosen_spans.tobytes(order="C"))
+            # Rejected indices for each document
+            idx_stream.write(rejected_spans.tobytes(order="C"))
             # Document indices, unused but needed for compatibility with Megatron-LM
             idx_stream.write(np.arange(num_documents + 1, dtype=np.int64).tobytes(order="C"))

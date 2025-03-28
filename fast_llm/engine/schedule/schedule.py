@@ -135,7 +135,7 @@ class Schedule(abc.ABC):
         if self._batch_config.num_inputs < self._distributed.pipeline_parallel:
             warnings.warn("Not enough input to achieve true pipeline parallelism.")
 
-        # Setup the activation metas.
+        # Setup the activation metas. (metadata for sequence parallel)
         self._preprocessed_meta = self._multi_stage.base_model.preprocess_meta(
             self._batch_config,
             phase=self._phase,
@@ -191,8 +191,8 @@ class Schedule(abc.ABC):
         return self._step_map[(type_, stage, data_index)]
 
     def _create_index(self) -> None:
-        self._device_steps: list[list[Step]] = [[] for _ in range(self._distributed.pipeline_parallel)]
-        self._step_map = {}
+        self._device_steps: list[list[Step]] = [[] for _ in range(self._distributed.pipeline_parallel)]  # steps for each device
+        self._step_map = {} # map index (type, stage, data index) => step
         for i, step in enumerate(self._steps):
             Assert.in_range(step.stage, 0, self._num_stages)
             Assert.in_range(
@@ -203,6 +203,8 @@ class Schedule(abc.ABC):
             Assert.incl(step.type_, (StepType.forward, StepType.backward))
             step.global_index = i
             # TODO: More configurable placement?
+
+            # perform looping here
             step.pipeline_rank = step.stage % self._distributed.pipeline_parallel
             step.local_index = len(self._device_steps[step.pipeline_rank])
             self._device_steps[step.pipeline_rank].append(step)
@@ -222,12 +224,16 @@ class Schedule(abc.ABC):
         Assert.empty(step_map)
 
         # Related steps
+        
         for i, step in enumerate(self._steps):
+            # link forward and backward steps together
             if self._is_training:
                 if step.type_ == StepType.forward:
                     step.backward_step = self.get_step(StepType.backward, *step.map_index[1:])
                 else:
                     step.forward_step = self.get_step(StepType.forward, *step.map_index[1:])
+
+            # link the previous step
             if step.type_ == StepType.forward and step.stage == 0:
                 step.prev_step = None
             elif step.type_ == StepType.backward and step.stage == self._num_stages - 1:
@@ -236,6 +242,8 @@ class Schedule(abc.ABC):
                 step.prev_step = self.get_step(
                     step.type_, step.stage + (1 if step.type_ == StepType.backward else -1), *step.map_index[2:]
                 )
+            
+            # link the next step
             if step.type_ == StepType.backward and step.stage == 0:
                 step.next_step = None
             elif step.type_ == StepType.forward and step.stage == self._num_stages - 1:

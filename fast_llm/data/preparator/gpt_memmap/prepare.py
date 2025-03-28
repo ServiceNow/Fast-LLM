@@ -73,6 +73,37 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
             "token_spans": token_spans,
             "num_tokens": num_tokens,
         }
+    
+    def _tokenize_preference_batch_with_spans(self, batch: dict[str, list[typing.Any]]) -> dict[str, list[typing.Any]]:
+        input_ids, chosen_token_spans, rejected_token_spans = map(
+            list,
+            zip(
+                *[
+                    (
+                        np.array(input_ids, dtype=self._data_type.numpy),
+                        np.array(token_spans[0], dtype=np.int32),
+                        np.array(token_spans[1], dtype=np.int32)
+                    )
+                    for input_ids, token_spans in [
+                        self._tokenizer.tokenize_with_spans(text, [chosen_span, rejected_span])
+                        for text, chosen_span, rejected_span in zip(
+                            batch[self._config.dataset.field], 
+                            batch[self._config.dataset.chosen_loss_masking_spans],
+                            batch[self._config.dataset.rejected_loss_masking_spans]
+                        )
+                    ]
+                ]
+            ),
+        )
+
+        num_tokens = [len(x) for x in input_ids]
+
+        return {
+            "input_ids": input_ids,
+            "chosen_token_spans": chosen_token_spans,
+            "rejected_token_spans": rejected_token_spans,
+            "num_tokens": num_tokens
+        }
 
     def _save_shard(self, args: tuple[int, datasets.Dataset]) -> GPTMemmapDatasetConfig:
         shard_idx, shard_dataset = args
@@ -85,6 +116,13 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
                     yield GPTSample(
                         np.array(item["input_ids"], dtype=self._data_type.numpy),
                         np.array(item["token_spans"], dtype=np.int32).reshape(-1, 2),
+                    )
+            elif "chosen_token_spans" in shard_dataset.column_names and "rejected_token_spans" in shard_dataset.column_names and self._config.dataset.chosen_loss_masking_spans is not None and self._config.dataset.rejected_loss_masking_spans is not None:
+                for item in tqdm.tqdm(shard_dataset, desc=f"Saving shard {shard_idx}", unit="docs"):
+                    yield GPTSample(
+                        token_ids=np.array(item["input_ids"], dtype=self._data_type.numpy),
+                        chosen_loss_masking_spans=np.array(item["chosen_token_spans"], dtype=np.int32).reshape(-1, 2),
+                        rejected_loss_masking_spans=np.array(item["rejected_token_spans"], dtype=np.int32).reshape(-1, 2)
                     )
             else:
                 for item in tqdm.tqdm(shard_dataset, desc=f"Saving shard {shard_idx}", unit="docs"):
@@ -214,10 +252,23 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
         )
         if self._config.dataset.field not in dataset.column_names:
             raise ValueError(f"Dataset does not have field '{self._config.dataset.field}'.")
+        if self._config.dataset.loss_masking_spans is not None and \
+            (self._config.dataset.chosen_loss_masking_spans is not None or self._config.dataset.rejected_loss_masking_spans is not None):
+            raise ValueError(f"Can not enable both loss masking spans and chosen/rejected loss masking spans.")
+        if (self._config.dataset.chosen_loss_masking_spans is None) != (self._config.dataset.rejected_loss_masking_spans is None):
+            raise ValueError(f"Both chosen and rejected loss masking spans must be specified if one is specified.")
+        
+        # route tokenize function
         if self._config.dataset.loss_masking_spans is not None:
             if self._config.dataset.loss_masking_spans not in dataset.column_names:
                 raise ValueError(f"Dataset does not have spans field '{self._config.dataset.loss_masking_spans}'.")
             tokenize_fn = self._tokenize_batch_with_spans
+        elif self._config.dataset.chosen_loss_masking_spans is not None and self._config.dataset.rejected_loss_masking_spans is not None:
+            if self._config.dataset.chosen_loss_masking_spans not in dataset.column_names:
+                raise ValueError(f"Dataset does not have chosen spans field '{self._config.dataset.chosen_loss_masking_spans}'.")
+            if self._config.dataset.rejected_loss_masking_spans not in dataset.column_names:
+                raise ValueError(f"Dataset does not have rejected spans field '{self._config.dataset.rejected_loss_masking_spans}'.")
+            tokenize_fn = self._tokenize_preference_batch_with_spans
         else:
             tokenize_fn = self._tokenize_batch
 
