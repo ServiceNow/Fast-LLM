@@ -107,26 +107,6 @@ class MLPLayer2Converter(WeightConverter):
         return (merged_weight.t().contiguous(),)
 
 
-@dataclasses.dataclass
-class NumLayersParamConverter(ParamConverter):
-
-    def __post_init__(self):
-        Assert.eq(len(self.fast_llm_names), 2)
-        Assert.eq(len(self.export_names), 1)
-
-    def export_params(self, fast_llm_values: tuple[typing.Any, ...]) -> tuple[typing.Any, ...]:
-        num_layers, prediction_heads = fast_llm_values
-        if prediction_heads:
-            # MTP adds an additional layer on top of the shared trunk
-            return (num_layers + 1,)
-        return (num_layers,)
-
-    def import_params(self, export_values: tuple[typing.Any, ...]) -> tuple[typing.Any, ...]:
-        (num_layers,) = export_values
-        # disable MTP by default
-        return (num_layers, None)
-
-
 class CommonHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
     _model: GPTModel
     _model_class: typing.ClassVar[FastLLMModelConfig] = GPTModelConfig
@@ -147,8 +127,8 @@ class CommonHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
                 fast_llm_value=ActivationType.from_hf_name,
                 export_value=lambda activation_type: activation_type.hf_name,
             ),
-            NumLayersParamConverter(
-                fast_llm_names=(("transformer", "num_layers"), ("prediction_heads",)),
+            RenameParamConverter(
+                fast_llm_names=(("transformer", "num_layers"),),
                 export_names=(("num_hidden_layers",),),
             ),
             RenameParamConverter(
@@ -262,42 +242,27 @@ class CommonHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
         norm_bias: bool = self._model.config.base_model.transformer.normalization.type == NormalizationType.layer_norm
         converters = []
 
-        if prediction_heads:
-            # First MTP-head's transformer layer
-            converters += self._create_transformer_layer_converters(num_layers)
-            # Final norm
-            converters += self._get_weight_and_bias_converters(
-                f"layers.{num_layers + 2}.final_norm", "model.norm", norm_bias
-            )
-            # Output weights
-            if self._model.config.base_model.tie_word_embeddings:
-                converters.append(IgnoreImportWeightConverter((), "lm_head.weight"))
-            else:
-                # First MTP-head contains the output weights
-                converters.append(WeightConverter(f"layers.{num_layers + 2}.output_weights", "lm_head.weight"))
-
-            # MTP-heads > 0 are thrown away
-            for i in range(1, prediction_heads):
-                mtp_transformer_layer_index = num_layers + 2 * i
-                # MTP transformer layer
-                converters += self._create_transformer_layer_converters(
-                    mtp_transformer_layer_index, ignore_export=True
-                )
-                # MTP output norm
-                converters += self._get_weight_and_bias_converters(
-                    f"layers.{mtp_transformer_layer_index + 2}.final_norm", (), norm_bias, IgnoreExportWeightConverter
-                )
-
+        # Next-token prediction head
+        # Final norm
+        converters += self._get_weight_and_bias_converters(
+            f"layers.{num_layers + 1}.final_norm", "model.norm", norm_bias
+        )
+        # Output weights
+        if self._model.config.base_model.tie_word_embeddings:
+            converters.append(IgnoreImportWeightConverter((), "lm_head.weight"))
         else:
-            # Final norm
+            converters.append(WeightConverter(f"layers.{num_layers + 1}.output_weights", "lm_head.weight"))
+
+        # MTP-heads > 0 are thrown away
+        for i in range(1, prediction_heads):
+            mtp_transformer_layer_index = num_layers - 1 + 2 * i
+            # MTP transformer layer
+            converters += self._create_transformer_layer_converters(mtp_transformer_layer_index, ignore_export=True)
+            # MTP output norm
             converters += self._get_weight_and_bias_converters(
-                f"layers.{num_layers + 1}.final_norm", "model.norm", norm_bias
+                f"layers.{mtp_transformer_layer_index + 2}.final_norm", (), norm_bias, IgnoreExportWeightConverter
             )
-            # Output weights
-            if self._model.config.base_model.tie_word_embeddings:
-                converters.append(IgnoreImportWeightConverter((), "lm_head.weight"))
-            else:
-                converters.append(WeightConverter(f"layers.{num_layers + 1}.output_weights", "lm_head.weight"))
+
         return converters
 
     def _get_weight_and_bias_converters(
