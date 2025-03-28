@@ -47,7 +47,7 @@ def get_sampling_data(
         num_samples=num_samples,
         cache_directory=cache_directory,
         distributed=distributed,
-        phase=phase,
+        dataset_name=phase.value,
         sequence_length=sequence_length,
         vocab_size=vocab_size,
         tokenizer=tokenizer,
@@ -62,7 +62,7 @@ def get_dataset_config[T: GPTSampledDatasetConfig](config: dict[str, typing.Any]
 
 def get_test_data_and_compare_samples(
     config: dict,
-    samples_per_phase: dict[PhaseType, int],
+    samples_per_dataset: dict[str, int] | int,
     *,
     seed: int = 54983,
     gpu: bool = False,
@@ -70,11 +70,16 @@ def get_test_data_and_compare_samples(
     cache_directory: pathlib.Path | None = None,
     sequence_length: int = 512,
     vocab_size=TEST_VOCAB_SIZE,
-    expected_samples: dict[PhaseType, list[list[int]]],
+    expected_samples: dict[str, list[list[int]]] | list[list[int]],
     legacy: bool = False,
 ) -> GPTData:
     distributed_config = DistributedConfig(seed=seed if legacy else 87522)
     distributed = Distributed(distributed_config, use_cpu=True)
+    if isinstance(samples_per_dataset, int):
+        samples_per_dataset = {PhaseType.training.value.lower(): samples_per_dataset}
+    if isinstance(expected_samples, list):
+        expected_samples = {PhaseType.training.value.lower(): expected_samples}
+
     assert "sampling" not in config
     config["sampling"] = GPTSamplingDefaultConfig(
         seed=87522 if legacy else seed,
@@ -82,7 +87,7 @@ def get_test_data_and_compare_samples(
         shuffle=shuffle,
     )
     data = GPTData(GPTDataConfig.from_dict(config), distributed_config, vocab_size, sequence_length)
-    data.setup(distributed, samples_per_phase, cache_directory)
+    data.setup(distributed, samples_per_dataset, cache_directory)
     with NoAutoValidate():
         batch_config = BatchConfig(batch_size=1, sequence_length=sequence_length)
     batch_config.setup(distributed_config)
@@ -91,10 +96,9 @@ def get_test_data_and_compare_samples(
         phase: torch.stack(
             [batch.token_ids[0] for batch in data.get_iterator(batch_config, phase, consumed_samples=0, num_workers=0)]
         )
-        for phase, samples in samples_per_phase.items()
+        for phase, samples in samples_per_dataset.items()
     }
     for phase, expected_samples_ in expected_samples.items():
-        print("jerbn", phase, tokens[phase].tolist())
         Assert.all_equal(tokens[phase], expected_samples_)
     return data
 

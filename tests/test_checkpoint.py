@@ -47,7 +47,11 @@ def test_checkpoint_and_eval():
     run_test_script(
         f"test_{TEST_MODEL}_checkpoint_and_eval",
         CONFIG_COMMON
-        + ["training.checkpoint.interval=1", "training.validation.interval=2", "training.validation.iterations=1"],
+        + [
+            "training.checkpoint.interval=1",
+            "training.evaluations.validation.interval=2",
+            "training.evaluations.validation.iterations=1",
+        ],
     )
 
 
@@ -76,7 +80,11 @@ def test_resume():
     run_test_script(
         f"test_{TEST_MODEL}_resume",
         CONFIG_COMMON
-        + ["training.checkpoint.interval=1", "training.validation.interval=2", "training.validation.iterations=1"],
+        + [
+            "training.checkpoint.interval=1",
+            "training.evaluations.validation.interval=2",
+            "training.evaluations.validation.iterations=1",
+        ],
         compare=f"test_{TEST_MODEL}_checkpoint_and_eval",
         prepare_fn=_prepare_resume_fn,
         compare_fn=_compare_resume_fn,

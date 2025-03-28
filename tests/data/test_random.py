@@ -1,5 +1,4 @@
 from fast_llm.data.dataset.gpt.config import GPTRandomDatasetConfig
-from fast_llm.engine.distributed.config import PhaseType
 from tests.data.common import (
     compare_sampled_dataset,
     get_dataset_config,
@@ -32,17 +31,17 @@ def test_gpt_random_data():
                 }
             }
         },
-        {PhaseType.training: 4},
+        4,
         sequence_length=7,
-        expected_samples={PhaseType.training: RANDOM_DATASET_EXPECTED_SAMPLES},
+        expected_samples=RANDOM_DATASET_EXPECTED_SAMPLES,
     )
 
 
 def test_gpt_random_data_legacy():
     get_test_data_and_compare_samples(
         {"format": "random"},
-        {PhaseType.training: 4},
+        4,
         sequence_length=7,
-        expected_samples={PhaseType.training: RANDOM_DATASET_EXPECTED_SAMPLES},
+        expected_samples=RANDOM_DATASET_EXPECTED_SAMPLES,
         legacy=True,
     )

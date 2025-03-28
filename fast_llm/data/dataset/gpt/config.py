@@ -472,11 +472,12 @@ class GPTLegacyDatasetConfig(GPTSampledDatasetConfig, GPTLegacyConfig):
                 raise NotImplementedError(self.format)
 
             phase_splits = padded_cumsum(normalize_probabilities(self.split))
+
             phase_index = {
-                PhaseType.training: 0,
-                PhaseType.validation: 1,
-                PhaseType.test: 2,
-            }[sampling.phase]
+                PhaseType.training.value.lower(): 0,
+                PhaseType.validation.value.lower(): 1,
+                PhaseType.test.value.lower(): 2,
+            }[sampling.dataset_name]
 
             dataset_configs = [
                 {

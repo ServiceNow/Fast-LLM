@@ -3,8 +3,9 @@ training:
   num_workers: 8
   logs:
     interval: 10
-  validation:
-    iterations: null
+  evaluations:
+    validation:
+      iterations: null
   test_iters: 0
 batch:
   sequence_length: 4096
@@ -12,7 +13,7 @@ batch:
   batch_size: 64
 data:
   datasets:
-    Training:
+    training:
       type: random
 optimizer:
   learning_rate:
