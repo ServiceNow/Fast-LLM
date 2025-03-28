@@ -1,4 +1,5 @@
 import contextlib
+import copy
 import dataclasses
 import enum
 import logging
@@ -316,7 +317,7 @@ class Config:
     _explicit_fields: set[str] = Field(init=False, repr=False)
     # Used within `_set_implicit_default` to set implicit defaults for fields
     # without them being automatically added to `_explicit_fields`.
-    _setting_implicit_default: bool = Field(init=False, repr=False)
+    _setting_implicit_default: bool | None = Field(init=False, repr=False)
 
     def __setattr__(self, key: str, value: typing.Any) -> None:
         """
@@ -332,12 +333,20 @@ class Config:
                 f"Cannot set attribute `{key}`"
                 f" in configuration class `{get_type_name(type(self))}` after validation."
             )
-        elif not getattr(self, "_setting_implicit_default", True):
-            field = self.get_field(key)
-            if field.init and field._field_type != dataclasses._FIELD_CLASSVAR:
-                # Adding to explicit field list except within `_set_implicit_default` context
-                # and during dataclass initialization (`_setting_implicit_default` not yet set).
-                self._explicit_fields.add(key)
+        if getattr(self, "_setting_implicit_default", None) is not None:
+            if self._setting_implicit_default:
+                if key in self._explicit_fields:
+                    raise RuntimeError(
+                        f"Trying to set an implicit default for field `{key}`,"
+                        f"but the field has already been set explicitly."
+                    )
+            else:
+                field = self.get_field(key)
+                if field.init and field._field_type != dataclasses._FIELD_CLASSVAR:
+                    # Adding to explicit field list except within `_set_implicit_default` context,
+                    # during dataclass initialization (`_setting_implicit_default` not yet set)
+                    # and during automated config validation (`_setting_implicit_default=None`)
+                    self._explicit_fields.add(key)
         super().__setattr__(key, value)
 
     def __delattr__(self, key: str) -> None:
@@ -352,8 +361,9 @@ class Config:
         super().__delattr__(key)
 
     @contextlib.contextmanager
-    def _set_implicit_default(self):
-        self._setting_implicit_default = True
+    def _set_implicit_default(self, _value: bool | int = True):
+        assert self._setting_implicit_default is False
+        self._setting_implicit_default = _value
         yield
         self._setting_implicit_default = False
 
@@ -383,7 +393,7 @@ class Config:
         """
         self._check_abstract()
         errors = []
-        with self._set_implicit_default():
+        with self._set_implicit_default(None):
             for name, field in self.fields():
                 if not field.init or field._field_type == dataclasses._FIELD_CLASSVAR:  # noqa
                     continue
@@ -567,7 +577,7 @@ class Config:
 
     def _to_dict(
         self,
-        verbose: int | None = None,
+        verbose: int | None = FieldVerboseLevel.explicit,
         all_fields: bool = False,
         format_: _ConfigDictFormat = _ConfigDictFormat.nested,
         serializable: bool = False,
@@ -716,6 +726,8 @@ class Config:
     ) -> typing.Self:
         if isinstance(default, Config):
             default = default._to_dict()
+        else:
+            default = copy.deepcopy(default)
         for update in updates:
             if isinstance(update, Config):
                 update = update._to_dict(format_=_ConfigDictFormat.tuple)
@@ -980,7 +992,7 @@ def set_nested_dict_value[
         d[key] = value
     elif update_type == UpdateType.update:
         # TODO: Improve error messages, ex. for nested cases?
-        if isinstance(d[key], Config):
+        if isinstance(d.get(key), Config):
             raise ValueError("Cannot update an already instantiated config.")
         elif isinstance(value, Config):
             raise ValueError("Cannot update a config dict with an already instantiated config.")
@@ -991,13 +1003,13 @@ def set_nested_dict_value[
                 d[key] = {}
             for key_, value_ in value.items():
                 set_nested_dict_value(d, key_, value_, update_type)
-        elif isinstance(d[key], dict):
+        elif isinstance(d.get(key), dict):
             raise ValueError("Cannot replace a dict with a non-dict value.")
         elif (
             isinstance(value, (list, set, tuple))
             and any(isinstance(value_, (list, set, tuple, dict, Config)) for value_ in value)
         ) or (
-            isinstance(d[key], (list, set, tuple))
+            isinstance(d.get(key), (list, set, tuple))
             and any(isinstance(value_, (list, set, tuple, dict, Config)) for value_ in d[key])
         ):
             raise ValueError("Update not supported for nested lists.")

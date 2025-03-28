@@ -148,7 +148,6 @@ def test_split_datasets_1():
         {
             "training": {
                 "type": "blended",
-                "name": "blended",
                 "datasets": [
                     dataset_config_0.to_serialized(),
                     {
