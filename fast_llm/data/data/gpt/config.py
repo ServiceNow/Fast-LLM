@@ -57,6 +57,15 @@ class GPTDataConfig(DataConfig, GPTLegacyConfig):
         desc="Multiprocessing context. Do not touch.",
         hint=FieldHint.expert,
     )
+    truncate_documents: bool = Field(
+        default=True,
+        desc=(
+            "If enabled, documents may be truncated while being packed to fit the sequence length."
+            "Otherwise, sequences will be padded such that every document lies entirely within a sample"
+            " (and documents exceeding the sequence length will be skipped altogether)."
+        ),
+        hint=FieldHint.feature,
+    )
 
     def _validate(self) -> None:
         if not self.datasets:

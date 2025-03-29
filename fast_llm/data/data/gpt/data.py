@@ -121,6 +121,7 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
                     sequence_length=self._max_sequence_length,
                     vocab_size=self._vocab_size,
                     tokenizer=self._tokenizer,
+                    truncate_documents=self._config.truncate_documents,
                     cross_document_attention=self._cross_document_attention,
                 )
                 dataset = self._config.datasets[dataset_name].build_and_sample(sampling)

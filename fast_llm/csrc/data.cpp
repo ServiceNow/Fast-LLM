@@ -27,7 +27,7 @@
 
 /*
  Helper methods for fast index mapping builds.
- Changes for Fast-LLM: Use int16 for dataset index, add verbose argument to build_sample_idx.
+ Changes for Fast-LLM: Use int16 for dataset index, add verbose argument to build_sample_idx, add build_sample_idx_padded
 */
 
 #include <iostream>
@@ -129,6 +129,65 @@ py::array build_sample_idx(const py::array_t<int32_t>& sizes_,
 
 }
 
+py::array build_padded_token_cumsum(const py::array_t<int32_t>& sizes_,
+                                const int32_t seq_length,
+                                const int32_t token_cumsum_rate,
+                                const int64_t offset
+                              ) {
+  /*
+  Build token cumsums at regular intervals from document sizes with padding in mind.
+  We inject 0 or more padding tokens at the end of every sequence to fill the sequence length.
+  */
+  int32_t seq_size = 0;
+  int64_t sizes_idx = 0;
+  int32_t samples = 0;
+  auto sizes = sizes_.unchecked<1>();
+  std::vector<int64_t> token_cumsum;
+
+  int64_t cumsum = offset;
+
+  while (sizes_idx < sizes.size()) {
+    int32_t size = sizes[sizes_idx];
+    if (size > seq_length) {
+      // Skip sequences that are too long, to avoid truncations
+      if (samples % token_cumsum_rate==0) token_cumsum.push_back(cumsum);
+      sizes_idx += 1;
+      samples += 1;
+    } else if (seq_size + size > seq_length) {
+      // add padded tokens if a document does not fit in current sequence and start a new sequence
+      cumsum += seq_length - seq_size;
+      seq_size = 0;
+    } else {
+      // Increment here to account for padding. This ensures that the stored values match the beginning of the next document.
+      if (samples % token_cumsum_rate==0) token_cumsum.push_back(cumsum);
+      seq_size += size;
+      cumsum += size;
+      sizes_idx += 1;
+      samples += 1;
+    }
+  }
+
+  // Add a final (padded) entry so we know how many tokens there are in total.
+  cumsum += seq_length - seq_size;
+  token_cumsum.push_back(cumsum);
+
+
+  int64_t* token_cumsum_result = new int64_t[token_cumsum.size()];
+  memcpy(token_cumsum_result, token_cumsum.data(), token_cumsum.size() * sizeof(int64_t));
+
+  py::capsule free_when_done(token_cumsum_result, [](void *mem_) {
+    int64_t *mem = reinterpret_cast<int64_t*>(mem_);
+    delete[] mem;
+  });
+
+  const auto byte_size = sizeof(int64_t);
+  return py::array(std::vector<int64_t>{token_cumsum.size()},
+                   {byte_size},
+                   token_cumsum_result,
+                   free_when_done);
+}
+
 PYBIND11_MODULE(data, m) {
     m.def("build_sample_idx", &build_sample_idx);
+    m.def("build_padded_token_cumsum", &build_padded_token_cumsum);
 }

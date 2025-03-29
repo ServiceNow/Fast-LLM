@@ -36,6 +36,7 @@ def get_sampling_data(
     tokenizer: Tokenizer | None = None,
     gpu: bool = False,
     shuffle: ShufflingType = ShufflingType.epoch,
+    truncate_documents=True,
 ) -> GPTSamplingData:
     # Config with convenient defaults.
     return GPTSamplingData(
@@ -51,6 +52,7 @@ def get_sampling_data(
         sequence_length=sequence_length,
         vocab_size=vocab_size,
         tokenizer=tokenizer,
+        truncate_documents=truncate_documents,
     )
 
 
