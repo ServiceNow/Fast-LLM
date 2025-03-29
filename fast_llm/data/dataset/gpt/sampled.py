@@ -312,12 +312,13 @@ class GPTSampledIndexedDataset(SampledDataset):
             out = build_padded_token_cumsum(
                 sizes.cpu().numpy(), (self._sequence_length + 1), TOKEN_CUMSUM_RATE, offset
             )
-            if out.size <= 2:
-                # contains only the offset and final cumsum, number of valid documents too small (< TOKEN_CUMSUM_RATE)
+            num_tokens = out[-1]
+            # TODO: should this instead be a low multiple of seqlen + 1, or a fraction of num_samples?
+            if num_tokens <= self._sequence_length + 1:
+                # contains only the offset and final cumsum, number of valid documents too small
                 raise RuntimeError(
                     f"Insufficient samples in the dataset which are smaller than {self._sequence_length}: {self._indexed_dataset.name}"
                 )
-            num_tokens = out[-1]
             out = out[:-1][
                 : np.clip(np.searchsorted(out, self._num_samples * (self._sequence_length + 1), side="right"), 0, None)
             ]
