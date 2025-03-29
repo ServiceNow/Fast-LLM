@@ -4,14 +4,14 @@ import pathlib
 from fast_llm.config import Config, Field, FieldHint, config_class
 
 
-class TestEnum(str, enum.Enum):
+class ExampleEnum(enum.StrEnum):
     a = "a"
     b = "b"
     c = "c"
 
 
 @config_class
-class TestConfig(Config):
+class ExampleConfig(Config):
     int_field: int = Field(default=0, hint=FieldHint.optional)
     bool_field: bool = Field(default=False, hint=FieldHint.optional)
     str_field: str = Field(default="", hint=FieldHint.optional)
@@ -26,7 +26,7 @@ class TestConfig(Config):
     set_field: set[int] = Field(default_factory=set, hint=FieldHint.optional)
     dict_field: dict[int, int] = Field(default_factory=dict, hint=FieldHint.optional)
     type_field: type[int] = Field(default=int, hint=FieldHint.optional)
-    enum_field: TestEnum = Field(default=TestEnum.a, hint=FieldHint.optional)
+    enum_field: ExampleEnum = Field(default=ExampleEnum.a, hint=FieldHint.optional)
     core_field: int = Field(default=4, hint=FieldHint.core)
     complex_field: dict[str | int, list[tuple[str, int]] | None] = Field(default_factory=dict, hint=FieldHint.optional)
 

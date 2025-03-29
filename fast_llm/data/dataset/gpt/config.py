@@ -484,8 +484,8 @@ class GPTLegacyDatasetConfig(GPTSampledDatasetConfig, GPTLegacyConfig):
                     "type": "slice",
                     # TODO: this duplicates memmap datasets for each phase.
                     "dataset": {"type": "memmap", "path": prefix},
-                    "begin": phase_splits[phase_index],
-                    "end": phase_splits[phase_index + 1],
+                    "begin": float(phase_splits[phase_index]),
+                    "end": float(phase_splits[phase_index + 1]),
                 }
                 for prefix in dataset_prefixes
             ]

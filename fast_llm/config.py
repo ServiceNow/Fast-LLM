@@ -468,10 +468,10 @@ class Config:
         elif not isinstance(type_, type):
             raise FieldTypeError(f"Not a type.")
         elif issubclass(type_, Config):
-            cls._validate_element_type(value, type_, name)
+            cls._validate_element_type(value, type_, strict=False)
             value.validate(_is_validating=True)
         else:
-            value = cls._validate_simple(value, type_, name)
+            value = cls._validate_simple(value, type_)
         return value
 
     @classmethod
@@ -491,7 +491,7 @@ class Config:
     @classmethod
     def _validate_array(cls, value, type_, name: str):
         origin = type_.__origin__
-        cls._validate_element_type(value, (origin, list, tuple), name)
+        cls._validate_element_type(value, (origin, list, tuple), strict=False)
         args = getattr(type_, "__args__", [typing.Any, ...] if origin is tuple else [typing.Any])
         errors = []
         if issubclass(origin, tuple) and not (len(args) == 2 and args[1] is ...):
@@ -518,7 +518,7 @@ class Config:
         if len(args) > 2:
             raise FieldTypeError(f"Invalid dict specification `{get_type_name(type_)}` for field `{name}`")
         args.extend([typing.Any for _ in range(2 - len(args))])
-        cls._validate_element_type(value, type_.__origin__, name)
+        cls._validate_element_type(value, type_.__origin__, strict=False)
         errors = []
         new_value = {}
         old_keys = {}
@@ -534,19 +534,22 @@ class Config:
         return new_value
 
     @classmethod
-    def _validate_simple(cls, value, type_, name: str):
+    def _validate_simple(cls, value, type_, strict: bool = True):
         if hasattr(type_, "__fast_llm_validator__"):
             value = type_.__fast_llm_validator__(value)
-        elif type_ is float and isinstance(value, int):
+        elif type_ is float and type(value) == int:
             # Ints are ok too.
             value = float(value)
         elif issubclass(type_, enum.Enum) and not isinstance(value, type_) and issubclass(type_, type(value)):
             # Enum values are ok too.
             value = type_(value)
-        elif issubclass(type_, pathlib.PurePath) and isinstance(value, str):
-            # Str paths are ok too.
-            value = type_(value)
-        cls._validate_element_type(value, type_, name)
+        elif issubclass(type_, pathlib.PurePath):
+            if isinstance(value, str):
+                # Str paths are ok too.
+                value = type_(value)
+            # Path type may depend on the OS.
+            strict = False
+        cls._validate_element_type(value, type_, strict)
         return value
 
     @classmethod
@@ -560,9 +563,9 @@ class Config:
             raise ValidationError(f"Field value `{value} is not a subclass of `{get_type_name(type_)}`")
 
     @classmethod
-    def _validate_element_type(cls, value, type_: type | tuple[type, ...], name):
-        if not isinstance(value, type_):
-            raise ValidationError(f"Unexpected type `{get_type_name(type(value))}`")
+    def _validate_element_type(cls, value, type_: type | tuple[type, ...], strict: bool = True):
+        if not (type(value) == type_ if strict else isinstance(value, type_)):
+            raise ValidationError(f"Unexpected field type: {get_type_name(type(value))} != {get_type_name(type_)}")
 
     @classmethod
     def fields(cls) -> typing.Iterable[tuple[str, Field]]:
