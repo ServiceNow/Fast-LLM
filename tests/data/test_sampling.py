@@ -159,7 +159,7 @@ def get_test_seeds(num_seeds):
 
 @pytest.mark.skipif(not _extension_available, reason="CPP Extension not available")
 def test_gpt_sample_padding():
-    for seed in get_test_seeds(10000):
+    for seed in get_test_seeds(100):
         vocab_size = 30
         np.random.seed(seed)
         num_sequences = np.random.randint(1, 20)

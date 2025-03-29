@@ -125,6 +125,7 @@ class GPTSampledIndexedDataset(SampledDataset):
         """
         # Get the document sizes, the main information needed for sampling.
         document_sizes = torch.from_numpy(self._indexed_dataset.get_document_sizes()).to(self._device)
+        documents_per_epoch = document_sizes.numel()
 
         # Calculate basic stats.
         if not self._truncate_documents:
@@ -135,11 +136,10 @@ class GPTSampledIndexedDataset(SampledDataset):
             ignored_documents = sum(document_sizes > self._sequence_length + 1)
             if ignored_documents:
                 log_main_rank(
-                    f" > {ignored_documents} documents are longer than {self._sequence_length+1} tokens and will be ignored.",
+                    f" > {ignored_documents}/{documents_per_epoch} documents are longer than {self._sequence_length+1} tokens and will be ignored.",
                     log_fn=logger.warning,
                 )
 
-        documents_per_epoch = document_sizes.numel()
         tokens_per_epoch = document_sizes.sum().item()
         # We produce sequences of length `self._sequence_length + 1` so the last token has a label,
         # but we also include that last label in the following sample,
@@ -312,6 +312,11 @@ class GPTSampledIndexedDataset(SampledDataset):
             out = build_padded_token_cumsum(
                 sizes.cpu().numpy(), (self._sequence_length + 1), TOKEN_CUMSUM_RATE, offset
             )
+            if out.size <= 2:
+                # contains only the offset and final cumsum, number of valid documents too small (< TOKEN_CUMSUM_RATE)
+                raise RuntimeError(
+                    f"Insufficient samples in the dataset which are smaller than {self._sequence_length}: {self._indexed_dataset.name}"
+                )
             num_tokens = out[-1]
             out = out[:-1][
                 : np.clip(np.searchsorted(out, self._num_samples * (self._sequence_length + 1), side="right"), 0, None)
@@ -447,15 +452,12 @@ class LegacyGPTSampledIndexedDataset(SampledDataset):
         self._indexed_dataset = indexed_dataset
         self._num_samples = sampling.num_samples
         self._sequence_length = sampling.sequence_length
-        self._config = sampling.config
-        self._tokenizer = sampling.tokenizer
         if not sampling.truncate_documents:
             raise NotImplementedError(
                 "Legacy sampling only supports document truncation. Please use the latest dataset format."
             )
         self._cross_document_attention = sampling.cross_document_attention
         self._config = sampling.config
-        self._tokenizer = sampling.tokenizer
 
         if sampling.cache_directory is None:
             log_main_rank(
