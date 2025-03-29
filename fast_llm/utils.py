@@ -86,7 +86,7 @@ class Assert:
     @staticmethod
     def eq(x, *args, msg=None):
         for arg in args:
-            assert x == arg, f"{x} != {arg} " + f"| {msg}" if msg else ""
+            assert x == arg, f"{x} != {arg} " + (f"| {msg}" if msg else "")
 
     @staticmethod
     def is_(x, y):
@@ -247,40 +247,6 @@ def normalize_probabilities(p: "npt.ArrayLike", return_array: bool = False) -> "
     Assert.gt(p_sum, 0)
     out = p / p_sum
     return out if return_array else out.tolist()
-
-
-def set_nested_dict_value[
-    KeyType, ValueType
-](d: dict[KeyType, ValueType], keys: KeyType | tuple[KeyType, ...], value: ValueType) -> None:
-    if isinstance(keys, tuple):
-        for key in keys[:-1]:
-            d = d.setdefault(key, {})
-            assert isinstance(d, dict)
-        d[keys[-1]] = value
-    else:
-        d[keys] = value
-
-
-def get_nested_dict_value[
-    KeyType, ValueType
-](d: dict[KeyType, ValueType], keys: KeyType | tuple[KeyType, ...]) -> ValueType:
-    if isinstance(keys, tuple):
-        for key in keys:
-            d = d[key]
-        return d
-    else:
-        return d[keys]
-
-
-def pop_nested_dict_value[
-    KeyType, ValueType
-](d: dict[KeyType, ValueType], keys: KeyType | tuple[KeyType, ...]) -> ValueType:
-    if isinstance(keys, tuple):
-        for key in keys[:-1]:
-            d = d[key]
-        return d.pop(keys[-1])
-    else:
-        return d.pop(keys)
 
 
 class InvalidObject:

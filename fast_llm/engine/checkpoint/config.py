@@ -164,8 +164,9 @@ class CheckpointStateSaveConfigBase(CheckpointSaveConfigBase, CheckpointStateCon
 
     def _validate(self) -> None:
         if self.optimizer_state is None:
-            # TODO: Make sure it's a type
-            self.optimizer_state = self.format.support_optimizer
+            with self._set_implicit_default():
+                # TODO: Make sure it's a type
+                self.optimizer_state = self.format.support_optimizer
         super()._validate()
         if self.optimizer_state:
             assert self.format.support_optimizer
