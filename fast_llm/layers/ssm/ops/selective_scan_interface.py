@@ -173,7 +173,8 @@ class MambaInnerFn(torch.autograd.Function):
         """
         assert causal_conv1d_cuda is not None, "causal_conv1d_cuda is not available. Please install causal-conv1d."
         assert checkpoint_lvl in [0, 1]
-        print("IN SELECTIVE SCNA: ", xz)
+        # if getattr(ctx, 'debug', False):
+        #     print("IN SELECTIVE SCNA: ", xz)
         L = xz.shape[-1]
         delta_rank = delta_proj_weight.shape[1]
         d_state = A.shape[-1] * (1 if not A.is_complex() else 2)

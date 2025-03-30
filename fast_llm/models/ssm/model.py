@@ -58,8 +58,8 @@ class HybridBaseModel(GPTBaseModel[HybridBaseModelConfig]):
         
         # Create norm class for Mamba blocks
         norm_cls = partial(
-            LayerNorm if not self._config.mamba_rms_norm else RMSNorm, 
-            eps=self._config.mamba_layernorm_epsilon
+            LayerNorm if not self._config.ssm.rms_norm else RMSNorm, 
+            eps=self._config.ssm.layernorm_epsilon
         )
         
         # Create blocks according to pattern
@@ -74,29 +74,15 @@ class HybridBaseModel(GPTBaseModel[HybridBaseModelConfig]):
                     )
                 )
             else:  # block_type == 'm'
-                # Create Mamba config from model config
-                from fast_llm.layers.ssm.config import MambaConfig
-                mamba_config = MambaConfig(
-                    hidden_size=self._config.transformer.hidden_size,
-                    expansion_factor=self._config.mamba_expansion_factor,
-                    state_size=self._config.mamba_state_size,
-                    conv_dimension=self._config.mamba_conv_dimension,
-                    rms_norm=self._config.mamba_rms_norm,
-                    residual_in_fp32=self._config.mamba_residual_in_fp32,
-                    fused_add_norm=self._config.mamba_fused_add_norm,
-                    layernorm_epsilon=self._config.mamba_layernorm_epsilon,
-                    use_fast_path=self._config.use_fast_path,
-                )
                 
                 # Create Mamba block
                 mixer_cls = partial(MambaLayer, layer_idx=i)
                 mamba_block = MambaBlock(
-                    mamba_config,
+                    self._config.ssm,
                     mixer_cls=mixer_cls,
                     layer_index=i + 1,
+                    tensor_space=self._tensor_space,
                     norm_cls=norm_cls,
-                    fused_add_norm=mamba_config.fused_add_norm,
-                    residual_in_fp32=mamba_config.residual_in_fp32
                 )
                 
                 # Wrap MambaBlock to match Layer interface

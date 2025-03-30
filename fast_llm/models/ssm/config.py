@@ -4,14 +4,15 @@ import typing
 from fast_llm.data.data.gpt.config import GPTDataConfig
 from fast_llm.config import Field, FieldHint, FieldUpdate, config_class
 from fast_llm.layers.language_model.config import LanguageModelBaseConfig
-from fast_llm.models.gpt.config import GPTBaseModelConfig, GPTArchitectureConfig
+from fast_llm.models.gpt.config import GPTArchitectureConfig
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig, PretrainedFastLLMModelConfig
 from fast_llm.engine.training.config import TrainerConfig
-
+from fast_llm.tensor import TensorSpace, TensorDim
+from fast_llm.layers.ssm.config import SSMDimNames, SSMArchitectureConfig
+import math
 
 if typing.TYPE_CHECKING:
     from fast_llm.models.ssm.model import HybridModel
-    from fast_llm.models.gpt.trainer import GPTTrainer
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +24,12 @@ class HybridArchitectureConfig(GPTArchitectureConfig):
 class HybridBaseModelConfig(LanguageModelBaseConfig, HybridArchitectureConfig):
     architecture_class = HybridArchitectureConfig
 
+    ssm: SSMArchitectureConfig = Field(
+        default_factory=SSMArchitectureConfig,
+        desc="Configuration for the transformer architecture.",
+        hint=FieldHint.core,
+    )
+
     # Debug, to get an exact match with megatron init.
     use_megatron_initialization: bool = Field(
         default=False, desc="Exactly match the initialization of a Megatron model.", hint=FieldHint.testing
@@ -33,50 +40,30 @@ class HybridBaseModelConfig(LanguageModelBaseConfig, HybridArchitectureConfig):
         desc="Pattern of blocks to use in the model. 't' for Transformer, 'm' for Mamba.",
         hint=FieldHint.core,
     )
-    
-    # Mamba configuration parameters
-    mamba_expansion_factor: int =  Field(
-        default=2,
-        desc="Expansion factor for Mamba blocks.",
-        hint=FieldHint.core,
-    )
-    mamba_state_size: int = Field(
-        default=16,
-        desc="State size for Mamba blocks.",
-        hint=FieldHint.core,
-    )
-    mamba_conv_dimension: int = Field(
-        default=4,
-        desc="Conv dimension for Mamba blocks.",
-        hint=FieldHint.core,
-    )
-    mamba_rms_norm: bool = Field(
-        default=True,
-        desc="Use RMS normalization for Mamba blocks.",
-        hint=FieldHint.core,
-    )
-
-    mamba_residual_in_fp32: bool = Field(
-        default=True,
-        desc="Use residual in fp32 for Mamba blocks.",
-        hint=FieldHint.core,
-    )
-    mamba_fused_add_norm: bool = Field(
-        default=False,
-        desc="Use fused add norm for Mamba blocks.",
-        hint=FieldHint.core,
-    )
-    mamba_layernorm_epsilon: float = Field(
-        default=1e-5,
-        desc="Epsilon for layer normalization for Mamba blocks.",
-        hint=FieldHint.core,
-    )
 
     use_fast_path: bool = Field(
-        default=False,
+        default=True,
         desc="Use fast path for Mamba blocks.",
         hint=FieldHint.core,
     )
+
+    def setup_tensor_space(self, tensor_space: TensorSpace) -> None:
+        super().setup_tensor_space(tensor_space)
+        # tensor = tensor_space.distributed_config.get_distributed_dim(DistributedDimNames.tensor)
+        if self.ssm.dt_rank == "auto":
+            mamba_dt_rank = math.ceil(self.transformer.hidden_size / 16)
+        else:
+            mamba_dt_rank = self.ssm.dt_rank
+        
+        # Hidden dimension
+        tensor_space.add_tensor_dim(TensorDim(SSMDimNames.d_model, self.transformer.hidden_size))        
+        # Mamba-specific dimensions
+        tensor_space.add_tensor_dim(TensorDim(SSMDimNames.d_inner, int(self.ssm.expansion_factor * self.transformer.hidden_size)))
+        tensor_space.add_tensor_dim(TensorDim(SSMDimNames.d_state, self.ssm.state_size))
+        tensor_space.add_tensor_dim(TensorDim(SSMDimNames.d_conv, self.ssm.conv_dimension))
+        tensor_space.add_tensor_dim(TensorDim(SSMDimNames.dt_rank,  mamba_dt_rank))
+        tensor_space.add_tensor_dim(TensorDim(SSMDimNames.d_inner_2, self.ssm.expansion_factor * self.transformer.hidden_size * 2))
+        tensor_space.add_tensor_dim(TensorDim(SSMDimNames.d_x_proj, mamba_dt_rank + self.ssm.state_size * 2))
 
     @classmethod
     def _from_dict(
@@ -101,6 +88,9 @@ class HybridBaseModelConfig(LanguageModelBaseConfig, HybridArchitectureConfig):
         if len(self.block_pattern) == 0:
             logger.warning("No block pattern provided, using default pattern of Transformer blocks.")
             self.block_pattern = ['t'] * self.transformer.num_layers
+    
+    def _validate(self):
+        super()._validate()
 
 
 @config_class()
