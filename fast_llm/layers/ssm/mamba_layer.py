@@ -21,6 +21,7 @@ except ImportError:
 """
 Note: this is mostly addapted from https://github.com/Zyphra/Zamba2, similar code is aslo in https://github.com/state-spaces/mamba.
 For now it only supports training and not inference.
+This works with triton 3.1.0
 """
 
 
@@ -85,14 +86,14 @@ class MambaLayer(nn.Module):
 
         # Tensor dims:
         td_inner = tensor_space.get_tensor_dim(SSMDimNames.d_inner)
-        td_inner_times2 = tensor_space.get_tensor_dim(
-            SSMDimNames.d_inner_2
+        td_inner_proj = tensor_space.get_tensor_dim(
+            SSMDimNames.d_inner_proj
         )  # TensorDim("D_inner_2", self.d_inner * 2)
         tdt_rank = tensor_space.get_tensor_dim(SSMDimNames.dt_rank)
         td_x_proj = tensor_space.get_tensor_dim(SSMDimNames.d_x_proj)
         td_state = tensor_space.get_tensor_dim(SSMDimNames.d_state)
         td_model = tensor_space.get_tensor_dim(SSMDimNames.d_model)
-        td_conv = tensor_space.get_tensor_dim(SSMDimNames.d_conv)
+        td_conv = tensor_space.get_tensor_dim(SSMDimNames.d_conv_kernel)
         self.d_conv = td_conv.size
         self.d_inner = td_inner.size
         self.d_state = td_state.size
@@ -100,9 +101,9 @@ class MambaLayer(nn.Module):
         self.dt_rank = tdt_rank.size
 
         self.in_proj_weight = ParameterMeta(
-            torch.empty(td_inner_times2.size, td_model.size, device="meta", dtype=torch.float32),
-            dims=(td_inner_times2, td_model),
-            init_method=kaiming_init(td_model.size, td_inner_times2.size),
+            torch.empty(td_inner_proj.size, td_model.size, device="meta", dtype=torch.float32),
+            dims=(td_inner_proj, td_model),
+            init_method=kaiming_init(td_model.size, td_inner_proj.size),
         )
 
         self.conv1d_weight = ParameterMeta(

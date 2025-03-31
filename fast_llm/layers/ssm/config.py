@@ -9,11 +9,15 @@ from fast_llm.utils import Assert
 class SSMDimNames:
     d_model = "D_model"
     d_state = "D_state"
-    d_conv = "D_conv"
+    d_conv = "D_conv"  # dimention of the conv1d input in mamba layers
     d_inner = "D_inner"
     dt_rank = "D_rank"
-    d_inner_2 = "D_inner_2"
+    d_inner_proj = "D_inner_proj"
     d_x_proj = "D_x_proj"
+    headdim = "D_headdim"  # dimention of the mamba2 head
+    d_conv_kernel = "D_conv_kernel"  # kernel size of the conv1d in mamba layers
+    n_qk_heads = "N_qk_heads"
+    n_v_heads = "N_v_heads"
 
 
 @config_class()
@@ -109,9 +113,9 @@ class MambaConfig(TransformerArchitectureConfig, BaseModelConfig):
         desc="State size for Mamba blocks.",
         hint=FieldHint.core,
     )
-    conv_dimension: int = Field(
+    conv_kernel_dimension: int = Field(
         default=4,
-        desc="Conv dimension for Mamba blocks.",
+        desc="Conv kernel dimension for Mamba blocks.",
         hint=FieldHint.core,
     )
     rms_norm: bool = Field(
@@ -142,6 +146,31 @@ class MambaConfig(TransformerArchitectureConfig, BaseModelConfig):
         hint=FieldHint.core,
     )
 
+    # Mamba2 parameters
+    use_mamba2: bool = Field(
+        default=False,
+        desc="Use Mamba2 blocks.",
+        hint=FieldHint.core,
+    )
+
+    chunk_size: int = Field(
+        default=256,
+        desc="Chunk size for Mamba2 blocks.",
+        hint=FieldHint.core,
+    )
+
+    n_qk_heads: int = Field(
+        default=32,
+        desc="Number of QK heads for Mamba2 blocks.",
+        hint=FieldHint.core,
+    )
+
+    n_v_heads: int = Field(
+        default=32,
+        desc="Number of V heads for Mamba2 blocks.",
+        hint=FieldHint.core,
+    )
+
     def setup_tensor_space(self, tensor_space: TensorSpace) -> None:
         pass
 
@@ -153,7 +182,7 @@ class MambaConfig(TransformerArchitectureConfig, BaseModelConfig):
         # Validate SSM-specific parameters
         Assert.gt(self.state_size, 0)
         Assert.gt(self.expansion_factor, 0)
-        Assert.gt(self.conv_dimension, 0)
+        Assert.gt(self.conv_kernel_dimension, 0)
         Assert.gt(self.dt_min, 0)
         Assert.gt(self.dt_max, 0)
         Assert.gt(self.dt_init_floor, 0)

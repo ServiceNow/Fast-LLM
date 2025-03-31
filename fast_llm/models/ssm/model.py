@@ -8,6 +8,7 @@ from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
 from fast_llm.layers.common.normalization import LayerNorm, RMSNorm
 from fast_llm.layers.language_model.embedding import LanguageModelEmbedding
 from fast_llm.layers.language_model.head import LanguageModelHead
+from fast_llm.layers.ssm.discrete_mamba2 import DiscreteMamba2 as Mamba2Layer
 from fast_llm.layers.ssm.mamba_block import MambaBlock
 from fast_llm.layers.ssm.mamba_layer import MambaLayer
 from fast_llm.layers.transformer.transformer import TransformerLayer
@@ -76,7 +77,11 @@ class HybridBaseModel(GPTBaseModel[HybridBaseModelConfig]):
             else:  # block_type == 'm'
 
                 # Create Mamba block
-                mixer_cls = partial(MambaLayer, layer_idx=i)
+                mixer_cls = (
+                    partial(MambaLayer, layer_idx=i)
+                    if not self._config.ssm.use_mamba2
+                    else partial(Mamba2Layer, layer_idx=i)
+                )
                 mamba_block = MambaBlock(
                     self._config.ssm,
                     mixer_cls=mixer_cls,

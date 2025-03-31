@@ -10,6 +10,7 @@ from fast_llm.layers.language_model.config import LanguageModelBaseConfig
 from fast_llm.layers.ssm.config import MambaConfig, SSMDimNames
 from fast_llm.models.gpt.config import GPTArchitectureConfig
 from fast_llm.tensor import TensorDim, TensorSpace
+from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
     from fast_llm.models.ssm.model import HybridModel
@@ -56,19 +57,35 @@ class HybridBaseModelConfig(LanguageModelBaseConfig, HybridArchitectureConfig):
         else:
             mamba_dt_rank = self.ssm.dt_rank
 
+        d_inner = int(self.ssm.expansion_factor * self.transformer.hidden_size)
+
         # Hidden dimension
         tensor_space.add_tensor_dim(TensorDim(SSMDimNames.d_model, self.transformer.hidden_size))
         # Mamba-specific dimensions
-        tensor_space.add_tensor_dim(
-            TensorDim(SSMDimNames.d_inner, int(self.ssm.expansion_factor * self.transformer.hidden_size))
-        )
+        tensor_space.add_tensor_dim(TensorDim(SSMDimNames.d_inner, d_inner))
         tensor_space.add_tensor_dim(TensorDim(SSMDimNames.d_state, self.ssm.state_size))
-        tensor_space.add_tensor_dim(TensorDim(SSMDimNames.d_conv, self.ssm.conv_dimension))
         tensor_space.add_tensor_dim(TensorDim(SSMDimNames.dt_rank, mamba_dt_rank))
-        tensor_space.add_tensor_dim(
-            TensorDim(SSMDimNames.d_inner_2, self.ssm.expansion_factor * self.transformer.hidden_size * 2)
-        )
         tensor_space.add_tensor_dim(TensorDim(SSMDimNames.d_x_proj, mamba_dt_rank + self.ssm.state_size * 2))
+        tensor_space.add_tensor_dim(TensorDim(SSMDimNames.d_conv_kernel, self.ssm.conv_kernel_dimension))
+
+        if self.ssm.use_mamba2:
+            # as per https://github.com/cartesia-ai/edge/blob/a0e121ebed3d2324c6d762b0e211a08d62583681/cartesia-pytorch/cartesia_pytorch/Llamba/mixers/discrete_mamba2.py#L66C3-L66C4
+            headdim = d_inner // self.ssm.n_v_heads
+            Assert.eq(self.ssm.n_v_heads, d_inner // headdim)
+            Assert.eq(d_inner % headdim, 0)
+            Assert.eq(self.ssm.n_v_heads % self.ssm.n_qk_heads, 0)
+
+            conv_dim = d_inner + 2 * self.ssm.n_qk_heads * self.ssm.state_size
+            inner_proj_dim = 2 * d_inner + 2 * self.ssm.n_qk_heads * self.ssm.state_size + self.ssm.n_v_heads
+
+            tensor_space.add_tensor_dim(TensorDim(SSMDimNames.headdim, headdim))
+            tensor_space.add_tensor_dim(TensorDim(SSMDimNames.n_qk_heads, self.ssm.n_qk_heads))
+            tensor_space.add_tensor_dim(TensorDim(SSMDimNames.n_v_heads, self.ssm.n_v_heads))
+            tensor_space.add_tensor_dim(TensorDim(SSMDimNames.d_inner_proj, inner_proj_dim))
+            tensor_space.add_tensor_dim(TensorDim(SSMDimNames.d_conv, conv_dim))
+        else:
+
+            tensor_space.add_tensor_dim(TensorDim(SSMDimNames.d_inner_proj, d_inner * 2))
 
     @classmethod
     def _from_dict(
