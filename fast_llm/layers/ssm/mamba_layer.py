@@ -4,7 +4,7 @@ from typing import Callable
 import torch
 import torch.nn as nn
 from einops import rearrange, repeat
-from ops.selective_scan_interface import mamba_inner_fn, selective_scan_fn
+from mamba_ssm.ops.selective_scan_interface import mamba_inner_fn, selective_scan_fn
 
 from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
 from fast_llm.layers.common.linear import Linear

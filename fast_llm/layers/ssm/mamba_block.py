@@ -10,7 +10,7 @@ from fast_llm.layers.ssm.config import MambaConfig
 from fast_llm.tensor import TensorMeta
 
 try:
-    from ops.triton.layernorm import layer_norm_fn, rms_norm_fn
+    from mamba_ssm.ops.triton.layer_norm import layer_norm_fn, rms_norm_fn
 except ImportError:
     layer_norm_fn, rms_norm_fn = None, None
 
