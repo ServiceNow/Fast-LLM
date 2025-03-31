@@ -17,7 +17,7 @@ try:
     from fast_llm.layers.ssm.mamba_layer import MambaLayer
     from fast_llm.models.ssm.model import HybridBaseModel, HybridBaseModelConfig
 except ImportError:
-    MambaLayer, MambaBlock, HybridBaseModel, HybridBaseModelConfig = None, None, None, None
+    MambaLayer, MambaBlock, HybridBaseModel, HybridBaseModelConfig, DiscreteMamba2 = None, None, None, None, None
     # Mamba not isntalled, skipping tests
 
 run_test = MambaLayer is not None and torch.cuda.is_available()
