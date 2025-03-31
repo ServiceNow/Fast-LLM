@@ -6,7 +6,7 @@ import torch
 from fast_llm.core.distributed import set_generator
 from fast_llm.engine.base_model.base_model import Layer
 from fast_llm.engine.config_utils.run import log_pipeline_parallel_main_rank
-from fast_llm.engine.config_utils.tensor_space import TensorSpace
+from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
 from fast_llm.layers.transformer.attention import Attention
 from fast_llm.layers.transformer.config import TransformerConfig, TransformerDimNames, TransformerKwargs
 from fast_llm.layers.transformer.mixture_of_experts import MixtureOfExpertMLP
@@ -27,14 +27,14 @@ class TransformerLayer(Layer):
         config: TransformerConfig,
         tensor_space: TensorSpace,
         layer_index: int,
-        stacked_output: bool = False,
+        return_input: bool = False,
     ):
         super().__init__()
         self._config = config
         self._tensor_space = tensor_space
         self._dropout_p = self._config.hidden_dropout
         # For multi-token prediction, return a stack of shared_hidden and transformer_output.
-        self._stacked_output = stacked_output
+        self._return_input = return_input
 
         self._layer_index = layer_index
         self._debug_mode = self._config.debug_transformer or self._config.debug_transformer_memory
@@ -66,9 +66,10 @@ class TransformerLayer(Layer):
         return f"Transformer layer {self._layer_index}"
 
     def _get_meta(self, tensor: torch.Tensor, name: str, kwargs: dict):
-        return TensorMeta.from_dims(
-            kwargs[TransformerKwargs.hidden_dims], tensor_name=f"{self.name} {name}", dtype=tensor.dtype
-        )
+        dims = kwargs[TransformerKwargs.hidden_dims]
+        if self._return_input:
+            dims = (TensorDim("stacked_input_output", 2),) + dims
+        return TensorMeta.from_dims(dims, tensor_name=f"{self.name} {name}", dtype=tensor.dtype)
 
     def _debug_log(self, tensor: torch.Tensor | None, name: str, kwargs: dict[str, typing.Any], *, bias=None) -> None:
         if self._config.debug_transformer_memory:
@@ -127,6 +128,6 @@ class TransformerLayer(Layer):
             hidden_states = self._bias_dropout_add(hidden_states, bias, input_)
         if self._debug_mode:
             self._debug_log(None, "MLP residual", kwargs, bias=bias)
-        if self._stacked_output:
+        if self._return_input:
             hidden_states = torch.stack((fw_input, hidden_states), dim=0)
         return hidden_states

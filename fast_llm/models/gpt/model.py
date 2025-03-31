@@ -83,7 +83,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                     layer_index=self._config.transformer.num_layers,
                     # The last layer only returns the transformer output.
                     # The previous layers return a stack of shared_hidden and transformer_output.
-                    stacked_output=i < self._config.prediction_heads - 1,
+                    return_input=i < self._config.prediction_heads - 1,
                 ),
                 LanguageModelHead(
                     self._config,
