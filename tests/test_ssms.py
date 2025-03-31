@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from fast_llm.engine.config_utils.tensor_space import TensorSpace
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.engine.distributed.distributed import Distributed
-from fast_llm.layers.ssm.config import SSMArchitectureConfig
+from fast_llm.layers.ssm.config import MambaConfig
 from fast_llm.layers.ssm.mamba_layer import MambaLayer
 from fast_llm.layers.ssm.mamba_block import MambaBlock
 from fast_llm.layers.transformer.config import TransformerKwargs
@@ -61,7 +61,7 @@ def distributed(distributed_config):
 def hybrid_config():
     config = HybridBaseModelConfig(
         transformer=TransformerConfig(num_layers=4),
-        ssm=SSMArchitectureConfig(
+        ssm=MambaConfig(
             rms_norm=True,
             residual_in_fp32=True,
             fused_add_norm=True

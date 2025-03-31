@@ -8,7 +8,7 @@ from fast_llm.models.gpt.config import GPTArchitectureConfig
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig, PretrainedFastLLMModelConfig
 from fast_llm.engine.training.config import TrainerConfig
 from fast_llm.tensor import TensorSpace, TensorDim
-from fast_llm.layers.ssm.config import SSMDimNames, SSMArchitectureConfig
+from fast_llm.layers.ssm.config import SSMDimNames, MambaConfig
 import math
 
 if typing.TYPE_CHECKING:
@@ -24,8 +24,8 @@ class HybridArchitectureConfig(GPTArchitectureConfig):
 class HybridBaseModelConfig(LanguageModelBaseConfig, HybridArchitectureConfig):
     architecture_class = HybridArchitectureConfig
 
-    ssm: SSMArchitectureConfig = Field(
-        default_factory=SSMArchitectureConfig,
+    ssm: MambaConfig = Field(
+        default_factory=MambaConfig,
         desc="Configuration for the transformer architecture.",
         hint=FieldHint.core,
     )
@@ -55,15 +55,26 @@ class HybridBaseModelConfig(LanguageModelBaseConfig, HybridArchitectureConfig):
         else:
             mamba_dt_rank = self.ssm.dt_rank
         
+        d_inner = int(self.ssm.expansion_factor * self.transformer.hidden_size)
+        
         # Hidden dimension
         tensor_space.add_tensor_dim(TensorDim(SSMDimNames.d_model, self.transformer.hidden_size))        
         # Mamba-specific dimensions
-        tensor_space.add_tensor_dim(TensorDim(SSMDimNames.d_inner, int(self.ssm.expansion_factor * self.transformer.hidden_size)))
+        tensor_space.add_tensor_dim(TensorDim(SSMDimNames.d_inner, d_inner))
         tensor_space.add_tensor_dim(TensorDim(SSMDimNames.d_state, self.ssm.state_size))
         tensor_space.add_tensor_dim(TensorDim(SSMDimNames.d_conv, self.ssm.conv_dimension))
         tensor_space.add_tensor_dim(TensorDim(SSMDimNames.dt_rank,  mamba_dt_rank))
-        tensor_space.add_tensor_dim(TensorDim(SSMDimNames.d_inner_2, self.ssm.expansion_factor * self.transformer.hidden_size * 2))
         tensor_space.add_tensor_dim(TensorDim(SSMDimNames.d_x_proj, mamba_dt_rank + self.ssm.state_size * 2))
+
+        if self.ssm.use_mamba2:
+            assert d_inner % self.ssm.headdim == 0
+            nheads = d_inner // self.ssm.headdim
+            tensor_space.add_tensor_dim(TensorDim(SSMDimNames.d_nheads, nheads))
+            tensor_space.add_tensor_dim(TensorDim(SSMDimNames.d_headdim, self.ssm.headdim))
+            tensor_space.add_tensor_dim(TensorDim(SSMDimNames.d_inner_proj,  2 * d_inner + 2 * self.ssm.ngroups * self.ssm.state_size + nheads))
+        else:
+            tensor_space.add_tensor_dim(TensorDim(SSMDimNames.d_inner_proj, d_inner * 2))
+       
 
     @classmethod
     def _from_dict(

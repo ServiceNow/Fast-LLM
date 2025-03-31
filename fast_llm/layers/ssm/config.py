@@ -16,12 +16,13 @@ class SSMDimNames:
     d_conv = "D_conv"
     d_inner = "D_inner"
     dt_rank = "D_rank"
-    d_inner_2 = "D_inner_2"
+    d_inner_proj = "D_inner_proj"
     d_x_proj = "D_x_proj"
-
+    d_nheads = "D_nheads"
+    d_headdim = "D_headdim"
 
 @config_class()
-class SSMArchitectureConfig(TransformerArchitectureConfig, BaseModelConfig):
+class MambaConfig(TransformerArchitectureConfig, BaseModelConfig):
     """Configuration for a Structured State Space Model (SSM) layer."""
 
     dt_init_floor: float = Field(
@@ -147,6 +148,43 @@ class SSMArchitectureConfig(TransformerArchitectureConfig, BaseModelConfig):
     dt_rank: str | int = Field(
         default="auto",
         desc="Rank of the Δ projection matrix. If 'auto', set to ceil(hidden_size/16)",
+        hint=FieldHint.core,
+    )
+
+    # Mamba2 parameters 
+
+    use_mamba2: bool = Field(
+        default=False,
+        desc="Use Mamba2 blocks.",
+        hint=FieldHint.core,
+    )
+
+    headdim: int = Field(
+        default=128,
+        desc="Head dimension for Mamba2 blocks.",  
+        hint=FieldHint.core,
+    )
+
+    conv_init: float | None = Field(
+        default=None,
+        desc="Initial value for conv1d weights for Mamba2 blocks.",
+        hint=FieldHint.optional,
+    )
+
+    ngroups: int = Field(
+        default=1,
+        desc="Number of groups for Mamba2 blocks.",
+        hint=FieldHint.core,
+    )
+    chunk_size: int = Field(
+        default=256,
+        desc="Chunk size for Mamba2 blocks.",
+        hint=FieldHint.core,
+    )
+
+    use_mem_eff_path: bool = Field(
+        default=True,
+        desc="Use memory efficient path for Mamba2 blocks.",
         hint=FieldHint.core,
     )
 

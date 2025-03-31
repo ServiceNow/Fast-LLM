@@ -5,7 +5,7 @@ import torch.nn as nn
 from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
 
 from einops import rearrange, repeat
-from fast_llm.layers.ssm.config import SSMArchitectureConfig, SSMDimNames
+from fast_llm.layers.ssm.config import MambaConfig, SSMDimNames
 from fast_llm.layers.common.linear import Linear
 from fast_llm.tensor import ParameterMeta, init_ones_
 
@@ -21,6 +21,7 @@ from ops.selective_scan_interface import selective_scan_fn, mamba_inner_fn
 """
 Note: this is mostly addapted from https://github.com/Zyphra/Zamba2, similar code is aslo in https://github.com/state-spaces/mamba.
 For now it only supports training and not inference.
+This works with triton 3.1.0
 """
 
 
@@ -71,13 +72,13 @@ def init_dtprojbias(
 class MambaLayer(nn.Module):
     def __init__(
         self,
-        config: SSMArchitectureConfig,
+        config: MambaConfig,
         layer_idx: int,
         tensor_space: TensorSpace,
     ):
         factory_kwargs = {}
         super().__init__()
-        self.config: SSMArchitectureConfig = config
+        self.config: MambaConfig = config
         self.use_fast_path = config.use_fast_path if mamba_inner_fn is not None else False
         self.layer_idx = layer_idx
 
@@ -85,8 +86,8 @@ class MambaLayer(nn.Module):
 
         # Tensor dims:
         td_inner = tensor_space.get_tensor_dim(SSMDimNames.d_inner)
-        td_inner_times2 = tensor_space.get_tensor_dim(
-            SSMDimNames.d_inner_2
+        td_inner_proj = tensor_space.get_tensor_dim(
+            SSMDimNames.d_inner_proj
         )  # TensorDim("D_inner_2", self.d_inner * 2)
         tdt_rank = tensor_space.get_tensor_dim(SSMDimNames.dt_rank)
         td_x_proj = tensor_space.get_tensor_dim(SSMDimNames.d_x_proj)
@@ -100,9 +101,9 @@ class MambaLayer(nn.Module):
         self.dt_rank = tdt_rank.size
 
         self.in_proj_weight = ParameterMeta(
-            torch.empty(td_inner_times2.size, td_model.size, device="meta", dtype=torch.float32),
-            dims=(td_inner_times2, td_model),
-            init_method=kaiming_init(td_model.size, td_inner_times2.size),
+            torch.empty(td_inner_proj.size, td_model.size, device="meta", dtype=torch.float32),
+            dims=(td_inner_proj, td_model),
+            init_method=kaiming_init(td_model.size, td_inner_proj.size),
         )
 
         self.conv1d_weight = ParameterMeta(
