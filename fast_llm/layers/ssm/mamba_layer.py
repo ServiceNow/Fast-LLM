@@ -1,12 +1,14 @@
 import math
 from typing import Callable
+
 import torch
 import torch.nn as nn
-from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
-
 from einops import rearrange, repeat
-from fast_llm.layers.ssm.config import MambaConfig, SSMDimNames
+from ops.selective_scan_interface import mamba_inner_fn, selective_scan_fn
+
+from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
 from fast_llm.layers.common.linear import Linear
+from fast_llm.layers.ssm.config import MambaConfig, SSMDimNames
 from fast_llm.tensor import ParameterMeta, init_ones_
 
 try:
@@ -14,8 +16,6 @@ try:
 except ImportError:
     # causal_conv1d_fn = None
     raise ImportError("Causal conv1d not installed")
-
-from ops.selective_scan_interface import selective_scan_fn, mamba_inner_fn
 
 
 """

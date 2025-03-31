@@ -1,16 +1,12 @@
-
 # Copyright (c) 2024, Tri Dao, Albert Gu.
 
 """We want triton==2.1.0 or triton==2.2.0 or triton==2.3.0 for this
 """
 
-import math
 import torch
 import torch.nn.functional as F
-
 import triton
 import triton.language as tl
-
 from einops import rearrange, repeat
 
 
@@ -21,20 +17,52 @@ from einops import rearrange, repeat
 @triton.jit
 def _selective_scan_update_kernel(
     # Pointers to matrices
-    state_ptr, x_ptr, dt_ptr, dt_bias_ptr, A_ptr, B_ptr, C_ptr, D_ptr, z_ptr, out_ptr,
+    state_ptr,
+    x_ptr,
+    dt_ptr,
+    dt_bias_ptr,
+    A_ptr,
+    B_ptr,
+    C_ptr,
+    D_ptr,
+    z_ptr,
+    out_ptr,
     # Matrix dimensions
-    batch, nheads, dim, dstate, nheads_ngroups_ratio,
+    batch,
+    nheads,
+    dim,
+    dstate,
+    nheads_ngroups_ratio,
     # Strides
-    stride_state_batch, stride_state_head, stride_state_dim, stride_state_dstate,
-    stride_x_batch, stride_x_head, stride_x_dim,
-    stride_dt_batch, stride_dt_head, stride_dt_dim,
-    stride_dt_bias_head, stride_dt_bias_dim,
-    stride_A_head, stride_A_dim, stride_A_dstate,
-    stride_B_batch, stride_B_group, stride_B_dstate,
-    stride_C_batch, stride_C_group, stride_C_dstate,
-    stride_D_head, stride_D_dim,
-    stride_z_batch, stride_z_head, stride_z_dim,
-    stride_out_batch, stride_out_head, stride_out_dim,
+    stride_state_batch,
+    stride_state_head,
+    stride_state_dim,
+    stride_state_dstate,
+    stride_x_batch,
+    stride_x_head,
+    stride_x_dim,
+    stride_dt_batch,
+    stride_dt_head,
+    stride_dt_dim,
+    stride_dt_bias_head,
+    stride_dt_bias_dim,
+    stride_A_head,
+    stride_A_dim,
+    stride_A_dstate,
+    stride_B_batch,
+    stride_B_group,
+    stride_B_dstate,
+    stride_C_batch,
+    stride_C_group,
+    stride_C_dstate,
+    stride_D_head,
+    stride_D_dim,
+    stride_z_batch,
+    stride_z_head,
+    stride_z_dim,
+    stride_out_batch,
+    stride_out_head,
+    stride_out_dim,
     # Meta-parameters
     DT_SOFTPLUS: tl.constexpr,
     TIE_HDIM: tl.constexpr,
@@ -166,30 +194,60 @@ def selective_state_update(state, x, dt, A, B, C, D=None, z=None, dt_bias=None, 
     if dt_bias is not None:
         assert dt_bias.shape == (nheads, dim)
     out = torch.empty_like(x)
-    grid = lambda META: (triton.cdiv(dim, META['BLOCK_SIZE_M']), batch, nheads)
-    z_strides = ((z.stride(0), z.stride(1), z.stride(2)) if z is not None else (0, 0, 0))
+    grid = lambda META: (triton.cdiv(dim, META["BLOCK_SIZE_M"]), batch, nheads)
+    z_strides = (z.stride(0), z.stride(1), z.stride(2)) if z is not None else (0, 0, 0)
     # We don't want autotune since it will overwrite the state
     # We instead tune by hand.
-    BLOCK_SIZE_M, num_warps = ((32, 4) if dstate <= 16
-                               else ((16, 4) if dstate <= 32 else
-                                     ((8, 4) if dstate <= 64 else
-                                      ((4, 4) if dstate <= 128 else
-                                       ((4, 8))))))
+    BLOCK_SIZE_M, num_warps = (
+        (32, 4)
+        if dstate <= 16
+        else ((16, 4) if dstate <= 32 else ((8, 4) if dstate <= 64 else ((4, 4) if dstate <= 128 else ((4, 8)))))
+    )
     tie_hdim = A.stride(-1) == 0 and A.stride(-2) == 0 and dt.stride(-1) == 0 and dt_bias.stride(-1) == 0
     with torch.cuda.device(x.device.index):
         _selective_scan_update_kernel[grid](
-            state, x, dt, dt_bias, A, B, C, D, z, out,
-            batch, nheads, dim, dstate, nheads // ngroups,
-            state.stride(0), state.stride(1), state.stride(2), state.stride(3),
-            x.stride(0), x.stride(1), x.stride(2),
-            dt.stride(0), dt.stride(1), dt.stride(2),
+            state,
+            x,
+            dt,
+            dt_bias,
+            A,
+            B,
+            C,
+            D,
+            z,
+            out,
+            batch,
+            nheads,
+            dim,
+            dstate,
+            nheads // ngroups,
+            state.stride(0),
+            state.stride(1),
+            state.stride(2),
+            state.stride(3),
+            x.stride(0),
+            x.stride(1),
+            x.stride(2),
+            dt.stride(0),
+            dt.stride(1),
+            dt.stride(2),
             *(dt_bias.stride(0), dt_bias.stride(1)) if dt_bias is not None else 0,
-            A.stride(0), A.stride(1), A.stride(2),
-            B.stride(0), B.stride(1), B.stride(2),
-            C.stride(0), C.stride(1), C.stride(2),
+            A.stride(0),
+            A.stride(1),
+            A.stride(2),
+            B.stride(0),
+            B.stride(1),
+            B.stride(2),
+            C.stride(0),
+            C.stride(1),
+            C.stride(2),
             *(D.stride(0), D.stride(1)) if D is not None else 0,
-            z_strides[0], z_strides[1], z_strides[2],
-            out.stride(0), out.stride(1), out.stride(2),
+            z_strides[0],
+            z_strides[1],
+            z_strides[2],
+            out.stride(0),
+            out.stride(1),
+            out.stride(2),
             dt_softplus,
             tie_hdim,
             BLOCK_SIZE_M,

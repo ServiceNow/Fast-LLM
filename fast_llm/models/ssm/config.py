@@ -1,20 +1,21 @@
 import logging
+import math
 import typing
 
-from fast_llm.data.data.gpt.config import GPTDataConfig
 from fast_llm.config import Field, FieldHint, FieldUpdate, config_class
-from fast_llm.layers.language_model.config import LanguageModelBaseConfig
-from fast_llm.models.gpt.config import GPTArchitectureConfig
+from fast_llm.data.data.gpt.config import GPTDataConfig
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig, PretrainedFastLLMModelConfig
 from fast_llm.engine.training.config import TrainerConfig
-from fast_llm.tensor import TensorSpace, TensorDim
-from fast_llm.layers.ssm.config import SSMDimNames, MambaConfig
-import math
+from fast_llm.layers.language_model.config import LanguageModelBaseConfig
+from fast_llm.layers.ssm.config import MambaConfig, SSMDimNames
+from fast_llm.models.gpt.config import GPTArchitectureConfig
+from fast_llm.tensor import TensorDim, TensorSpace
 
 if typing.TYPE_CHECKING:
     from fast_llm.models.ssm.model import HybridModel
 
 logger = logging.getLogger(__name__)
+
 
 class HybridArchitectureConfig(GPTArchitectureConfig):
     pass
@@ -54,15 +55,19 @@ class HybridBaseModelConfig(LanguageModelBaseConfig, HybridArchitectureConfig):
             mamba_dt_rank = math.ceil(self.transformer.hidden_size / 16)
         else:
             mamba_dt_rank = self.ssm.dt_rank
-        
+
         # Hidden dimension
-        tensor_space.add_tensor_dim(TensorDim(SSMDimNames.d_model, self.transformer.hidden_size))        
+        tensor_space.add_tensor_dim(TensorDim(SSMDimNames.d_model, self.transformer.hidden_size))
         # Mamba-specific dimensions
-        tensor_space.add_tensor_dim(TensorDim(SSMDimNames.d_inner, int(self.ssm.expansion_factor * self.transformer.hidden_size)))
+        tensor_space.add_tensor_dim(
+            TensorDim(SSMDimNames.d_inner, int(self.ssm.expansion_factor * self.transformer.hidden_size))
+        )
         tensor_space.add_tensor_dim(TensorDim(SSMDimNames.d_state, self.ssm.state_size))
         tensor_space.add_tensor_dim(TensorDim(SSMDimNames.d_conv, self.ssm.conv_dimension))
-        tensor_space.add_tensor_dim(TensorDim(SSMDimNames.dt_rank,  mamba_dt_rank))
-        tensor_space.add_tensor_dim(TensorDim(SSMDimNames.d_inner_2, self.ssm.expansion_factor * self.transformer.hidden_size * 2))
+        tensor_space.add_tensor_dim(TensorDim(SSMDimNames.dt_rank, mamba_dt_rank))
+        tensor_space.add_tensor_dim(
+            TensorDim(SSMDimNames.d_inner_2, self.ssm.expansion_factor * self.transformer.hidden_size * 2)
+        )
         tensor_space.add_tensor_dim(TensorDim(SSMDimNames.d_x_proj, mamba_dt_rank + self.ssm.state_size * 2))
 
     @classmethod
@@ -82,13 +87,13 @@ class HybridBaseModelConfig(LanguageModelBaseConfig, HybridArchitectureConfig):
         if "fused_mlp" in default:
             del default["fused_mlp"]
         return super()._from_dict(default, strict, flat)
-    
+
     def __post_init__(self):
         super().__post_init__()
         if len(self.block_pattern) == 0:
             logger.warning("No block pattern provided, using default pattern of Transformer blocks.")
-            self.block_pattern = ['t'] * self.transformer.num_layers
-    
+            self.block_pattern = ["t"] * self.transformer.num_layers
+
     def _validate(self):
         super()._validate()
 
@@ -121,4 +126,3 @@ class HybridTrainerConfig(PretrainedHybridModelConfig, TrainerConfig):
         from fast_llm.models.ssm.trainer import SSMTrainer
 
         return SSMTrainer
-

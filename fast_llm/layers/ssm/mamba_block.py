@@ -4,15 +4,15 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 
+from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
+from fast_llm.layers.common.normalization import LayerNorm, RMSNorm
+from fast_llm.layers.ssm.config import MambaConfig
+from fast_llm.tensor import TensorMeta
+
 try:
     from ops.triton.layernorm import layer_norm_fn, rms_norm_fn
 except ImportError:
     layer_norm_fn, rms_norm_fn = None, None
-
-from fast_llm.layers.common.normalization import LayerNorm, RMSNorm
-from fast_llm.layers.ssm.config import MambaConfig
-from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
-from fast_llm.tensor import TensorMeta
 
 
 class MambaBlock(nn.Module):

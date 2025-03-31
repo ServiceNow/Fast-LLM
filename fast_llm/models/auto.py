@@ -2,8 +2,8 @@ from fast_llm.engine.multi_stage.config import FastLLMModelConfig
 from fast_llm.engine.training.config import TrainerConfig
 from fast_llm.models.custom.config import CustomModelConfig, CustomTrainerConfig
 from fast_llm.models.gpt.config import GPTModelConfig, GPTTrainerConfig
-from fast_llm.utils import Registry
 from fast_llm.models.ssm.config import HybridTrainerConfig
+from fast_llm.utils import Registry
 
 model_registry = Registry[str, FastLLMModelConfig](
     "Model",

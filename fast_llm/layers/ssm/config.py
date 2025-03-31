@@ -1,13 +1,9 @@
-import math
-from typing import Optional
-
-from fast_llm.config import Field, FieldHint, FieldUpdate, check_field, config_class, skip_valid_if_none
+from fast_llm.config import Field, FieldHint, FieldUpdate, check_field, config_class
 from fast_llm.engine.base_model.config import BaseModelConfig
 from fast_llm.layers.common.config import NormalizationConfig
 from fast_llm.layers.transformer.config import TransformerArchitectureConfig
-from fast_llm.utils import Assert
 from fast_llm.tensor import TensorSpace
-
+from fast_llm.utils import Assert
 
 
 class SSMDimNames:
@@ -39,9 +35,7 @@ class MambaConfig(TransformerArchitectureConfig, BaseModelConfig):
     )
 
     # Normalization
-    normalization: NormalizationConfig = FieldUpdate(
-        default_factory=NormalizationConfig
-    )
+    normalization: NormalizationConfig = FieldUpdate(default_factory=NormalizationConfig)
 
     # Performance optimization
     use_fast_path: bool = Field(
@@ -68,7 +62,6 @@ class MambaConfig(TransformerArchitectureConfig, BaseModelConfig):
         hint=FieldHint.optional,
     )
 
-
     fused_add_norm: bool = Field(
         default=False,
         desc="fused_add_norm",
@@ -81,14 +74,13 @@ class MambaConfig(TransformerArchitectureConfig, BaseModelConfig):
         hint=FieldHint.optional,
     )
 
-
     dt_min: float = Field(
         default=0.001,
         desc="Minimum step size for discretization",
         hint=FieldHint.core,
         valid=check_field(Assert.gt, 0),
     )
-    
+
     dt_max: float = Field(
         default=0.1,
         desc="Maximum step size for discretization",
@@ -107,7 +99,7 @@ class MambaConfig(TransformerArchitectureConfig, BaseModelConfig):
         desc="residual_in_fp32",
         hint=FieldHint.optional,
     )
-    expansion_factor: int =  Field(
+    expansion_factor: int = Field(
         default=2,
         desc="Expansion factor for Mamba blocks.",
         hint=FieldHint.core,
@@ -157,7 +149,7 @@ class MambaConfig(TransformerArchitectureConfig, BaseModelConfig):
         """Validate configuration parameters."""
 
         super()._validate()
-        
+
         # Validate SSM-specific parameters
         Assert.gt(self.state_size, 0)
         Assert.gt(self.expansion_factor, 0)
@@ -166,6 +158,6 @@ class MambaConfig(TransformerArchitectureConfig, BaseModelConfig):
         Assert.gt(self.dt_max, 0)
         Assert.gt(self.dt_init_floor, 0)
         Assert.geq(self.dt_max, self.dt_min)
-        
+
         if isinstance(self.dt_rank, int):
             Assert.gt(self.dt_rank, 0)
