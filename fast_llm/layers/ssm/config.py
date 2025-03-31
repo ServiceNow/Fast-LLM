@@ -21,7 +21,7 @@ class SSMDimNames:
 
 
 @config_class()
-class SSMArchitectureConfig(TransformerArchitectureConfig, BaseModelConfig):
+class MambaConfig(TransformerArchitectureConfig, BaseModelConfig):
     """Configuration for a Structured State Space Model (SSM) layer."""
 
     dt_init_floor: float = Field(

@@ -8,7 +8,7 @@ from fast_llm.models.gpt.config import GPTArchitectureConfig
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig, PretrainedFastLLMModelConfig
 from fast_llm.engine.training.config import TrainerConfig
 from fast_llm.tensor import TensorSpace, TensorDim
-from fast_llm.layers.ssm.config import SSMDimNames, SSMArchitectureConfig
+from fast_llm.layers.ssm.config import SSMDimNames, MambaConfig
 import math
 
 if typing.TYPE_CHECKING:
@@ -24,8 +24,8 @@ class HybridArchitectureConfig(GPTArchitectureConfig):
 class HybridBaseModelConfig(LanguageModelBaseConfig, HybridArchitectureConfig):
     architecture_class = HybridArchitectureConfig
 
-    ssm: SSMArchitectureConfig = Field(
-        default_factory=SSMArchitectureConfig,
+    ssm: MambaConfig = Field(
+        default_factory=MambaConfig,
         desc="Configuration for the transformer architecture.",
         hint=FieldHint.core,
     )

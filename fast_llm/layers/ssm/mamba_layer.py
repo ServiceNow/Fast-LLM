@@ -5,15 +5,15 @@ import torch.nn as nn
 from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
 
 from einops import rearrange, repeat
-from fast_llm.layers.ssm.config import SSMArchitectureConfig, SSMDimNames
+from fast_llm.layers.ssm.config import MambaConfig, SSMDimNames
 from fast_llm.layers.common.linear import Linear
 from fast_llm.tensor import ParameterMeta, init_ones_
 
 try:
     from causal_conv1d import causal_conv1d_fn
 except ImportError:
-    causal_conv1d_fn = None
-
+    # causal_conv1d_fn = None
+    raise ImportError("Causal conv1d not installed")
 
 from ops.selective_scan_interface import selective_scan_fn, mamba_inner_fn
 
@@ -71,13 +71,13 @@ def init_dtprojbias(
 class MambaLayer(nn.Module):
     def __init__(
         self,
-        config: SSMArchitectureConfig,
+        config: MambaConfig,
         layer_idx: int,
         tensor_space: TensorSpace,
     ):
         factory_kwargs = {}
         super().__init__()
-        self.config: SSMArchitectureConfig = config
+        self.config: MambaConfig = config
         self.use_fast_path = config.use_fast_path if mamba_inner_fn is not None else False
         self.layer_idx = layer_idx
 
