@@ -94,6 +94,12 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
         ]
 
     def get_layers(self) -> list[Layer]:
+        if self._config.transformer.num_layers == 0:
+            Assert.eq(self._config.prediction_heads, 1)
+            return [
+                LanguageModelEmbedding(self._config, self._tensor_space),
+                LanguageModelHead(self._config, self._tensor_space, 0),
+            ]
         return [
             LanguageModelEmbedding(self._config, self._tensor_space),
             *[
