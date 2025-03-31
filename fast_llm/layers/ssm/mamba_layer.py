@@ -1,21 +1,20 @@
 import math
 from typing import Callable
+
 import torch
 import torch.nn as nn
-from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
-
 from einops import rearrange, repeat
-from fast_llm.layers.ssm.config import MambaConfig, SSMDimNames
+from ops.selective_scan_interface import mamba_inner_fn, selective_scan_fn
+
+from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
 from fast_llm.layers.common.linear import Linear
+from fast_llm.layers.ssm.config import MambaConfig, SSMDimNames
 from fast_llm.tensor import ParameterMeta, init_ones_
 
 try:
     from causal_conv1d import causal_conv1d_fn
 except ImportError:
     causal_conv1d_fn = None
-
-
-from ops.selective_scan_interface import selective_scan_fn, mamba_inner_fn
 
 
 """
@@ -93,7 +92,7 @@ class MambaLayer(nn.Module):
         td_x_proj = tensor_space.get_tensor_dim(SSMDimNames.d_x_proj)
         td_state = tensor_space.get_tensor_dim(SSMDimNames.d_state)
         td_model = tensor_space.get_tensor_dim(SSMDimNames.d_model)
-        td_conv = tensor_space.get_tensor_dim(SSMDimNames.d_conv)
+        td_conv = tensor_space.get_tensor_dim(SSMDimNames.d_conv_kernel)
         self.d_conv = td_conv.size
         self.d_inner = td_inner.size
         self.d_state = td_state.size

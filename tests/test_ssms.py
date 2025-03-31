@@ -1,20 +1,26 @@
+from functools import partial
+
 import pytest
 import torch
 
-from functools import partial
-
-from dataclasses import dataclass
 from fast_llm.engine.config_utils.tensor_space import TensorSpace
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.engine.distributed.distributed import Distributed
-from fast_llm.layers.ssm.config import MambaConfig
-from fast_llm.layers.ssm.mamba_layer import MambaLayer
-from fast_llm.layers.ssm.mamba_block import MambaBlock
-from fast_llm.layers.transformer.config import TransformerKwargs
-from fast_llm.models.ssm.model import HybridBaseModel, HybridBaseModelConfig
 from fast_llm.layers.common.normalization import LayerNorm, RMSNorm
-from fast_llm.layers.transformer.config import TransformerConfig
 from fast_llm.layers.language_model.config import LanguageModelKwargs, LanguageModelLossNames
+from fast_llm.layers.transformer.config import TransformerConfig, TransformerKwargs
+
+try:
+    from fast_llm.layers.ssm.config import MambaConfig
+    from fast_llm.layers.ssm.discrete_mamba2 import DiscreteMamba2
+    from fast_llm.layers.ssm.mamba_block import MambaBlock
+    from fast_llm.layers.ssm.mamba_layer import MambaLayer
+    from fast_llm.models.ssm.model import HybridBaseModel, HybridBaseModelConfig
+except ImportError:
+    MambaLayer, MambaBlock, HybridBaseModel, HybridBaseModelConfig = None, None, None, None
+    # Mamba not isntalled, skipping tests
+
+run_test = MambaLayer is not None and torch.cuda.is_available()
 
 
 def materialize_meta_tensors(model, tensor_space):
@@ -29,7 +35,7 @@ def materialize_meta_tensors(model, tensor_space):
                 # Replace the parameter in the module
                 module_path, param_name = name.rsplit(".", 1) if "." in name else (None, name)
                 module = model
-                if module_path is not None:                    
+                if module_path is not None:
                     for part in module_path.split("."):
                         module = getattr(module, part)
                 param = torch.nn.Parameter(param_data, requires_grad=param.requires_grad)
@@ -57,34 +63,39 @@ def distributed(distributed_config):
     return Distributed(config=distributed_config)
 
 
-@pytest.fixture
-def hybrid_config():
+def get_hybrid_config(use_mamba2: bool = False, use_fast_path: bool = True):
     config = HybridBaseModelConfig(
         transformer=TransformerConfig(num_layers=4),
-        ssm=MambaConfig(
-            rms_norm=True,
-            residual_in_fp32=True,
-            fused_add_norm=True
-        ),
+        ssm=MambaConfig(rms_norm=True, residual_in_fp32=True, fused_add_norm=True, use_mamba2=use_mamba2),
         block_pattern=["t", "m", "t", "m"],
         init_method_std_embed=0.02,
         init_method_min_embed=-0.02,
         init_method_max_embed=0.02,
         use_position_embeddings=True,
         tie_word_embeddings=False,
-        use_fast_path=True,
+        use_fast_path=use_fast_path,
     )
     return config
 
-def test_mamba_layer(distributed_config, distributed, hybrid_config):
-    
+
+@pytest.mark.skipif(not run_test, reason="No CUDA available or Mamba not installed")
+@pytest.mark.parametrize(
+    "use_mamba2,use_fast_path,LAYER_CLS",
+    [
+        (False, True, MambaLayer),
+        (False, False, MambaLayer),
+        (True, False, DiscreteMamba2),
+    ],
+    ids=["mamba-fast", "mamba-slow", "descrete_mamba2"],
+)
+def test_mamba_layer(distributed_config, distributed, use_mamba2, use_fast_path, LAYER_CLS):
+    hybrid_config = get_hybrid_config(use_mamba2, use_fast_path)
     tensor_space = TensorSpace(distributed_config=distributed_config)
     hybrid_config.setup_tensor_space(tensor_space)
-    layer = MambaLayer(hybrid_config.ssm, layer_idx=0, tensor_space=tensor_space)
+    layer = LAYER_CLS(hybrid_config.ssm, layer_idx=0, tensor_space=tensor_space)
     tensor_space.setup(distributed)
     materialize_meta_tensors(layer, tensor_space)
     layer.to(distributed.device)
-
 
     batch_size = 2
     seq_length = 32
@@ -102,23 +113,21 @@ def test_mamba_layer(distributed_config, distributed, hybrid_config):
     assert not torch.isinf(output).any()
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA available")
-def test_mamba_block(distributed_config, distributed, hybrid_config):
-
+@pytest.mark.skipif(not run_test, reason="No CUDA available or Mamba not installed")
+def test_mamba_block(distributed_config, distributed):
+    hybrid_config = get_hybrid_config(use_mamba2=False, use_fast_path=True)
     tensor_space = TensorSpace(distributed_config=distributed_config)
     tensor_space.setup(distributed)
     hybrid_config.setup_tensor_space(tensor_space)
 
-    norm_cls = partial(LayerNorm if not hybrid_config.ssm.rms_norm else RMSNorm, eps=hybrid_config.ssm.layernorm_epsilon)
+    norm_cls = partial(
+        LayerNorm if not hybrid_config.ssm.rms_norm else RMSNorm, eps=hybrid_config.ssm.layernorm_epsilon
+    )
     layer_idx = 0
 
     mixer_cls = partial(MambaLayer, layer_idx=layer_idx)
     block = MambaBlock(
-        hybrid_config.ssm,
-        mixer_cls=mixer_cls,
-        norm_cls=norm_cls,
-        tensor_space=tensor_space,
-        layer_index=layer_idx
+        hybrid_config.ssm, mixer_cls=mixer_cls, norm_cls=norm_cls, tensor_space=tensor_space, layer_index=layer_idx
     )
 
     materialize_meta_tensors(block, tensor_space)
@@ -138,17 +147,24 @@ def test_mamba_block(distributed_config, distributed, hybrid_config):
     assert not torch.isinf(hidden_states).any()
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA available")
-def test_hybrid_model_train_with_fast_mode(distributed_config, hybrid_config):
-    # hybrid_config_dict = hybrid_config.to_dict()
-
+@pytest.mark.skipif(not run_test, reason="No CUDA available or Mamba not installed")
+@pytest.mark.parametrize(
+    "use_mamba2,use_fast_path",
+    [
+        (False, True),
+        (False, False),
+        (True, False),
+    ],
+    ids=["mamba-fast", "mamba-slow", "descrete_mamba2"],
+)
+def test_hybrid_model_train_with_fast_mode(distributed_config, use_mamba2, use_fast_path):
+    hybrid_config = get_hybrid_config(use_mamba2, use_fast_path)
     model = HybridBaseModel(hybrid_config, distributed_config)
     distributed = Distributed(distributed_config)
     model.setup(distributed)
     tensor_space = model._tensor_space
     materialize_meta_tensors(model, tensor_space)
     model.to("cuda")
-    # print(model)
 
     batch_size = 2
     seq_length = 32
@@ -172,7 +188,8 @@ def test_hybrid_model_train_with_fast_mode(distributed_config, hybrid_config):
     loss = sum(losses[LanguageModelLossNames.language_model_loss])
     loss.backward()
 
-# TODO: added tghis whgen inference enabled
+
+# TODO: added this when inference enabled
 # No inference for now
 # @dataclass
 # class InferenceParams:
