@@ -8,13 +8,18 @@ from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.layers.common.normalization import LayerNorm, RMSNorm
 from fast_llm.layers.language_model.config import LanguageModelKwargs, LanguageModelLossNames
-from fast_llm.layers.ssm.config import MambaConfig
-from fast_llm.layers.ssm.mamba_block import MambaBlock
-from fast_llm.layers.ssm.mamba_layer import MambaLayer
 from fast_llm.layers.transformer.config import TransformerConfig, TransformerKwargs
-from fast_llm.models.ssm.model import HybridBaseModel, HybridBaseModelConfig
 
-run_test = torch.cuda.is_available()
+try:
+    from fast_llm.layers.ssm.config import MambaConfig
+    from fast_llm.layers.ssm.mamba_block import MambaBlock
+    from fast_llm.layers.ssm.mamba_layer import MambaLayer
+    from fast_llm.models.ssm.model import HybridBaseModel, HybridBaseModelConfig
+except ImportError:
+    MambaLayer, MambaBlock, HybridBaseModel, HybridBaseModelConfig = None, None, None, None
+    # Mamba not isntalled, skipping tests
+
+run_test = MambaLayer is not None and torch.cuda.is_available()
 
 
 def materialize_meta_tensors(model, tensor_space):
