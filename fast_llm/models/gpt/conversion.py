@@ -255,6 +255,9 @@ class CommonHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
 
         # MTP-heads > 0 are thrown away
         for i in range(1, prediction_heads):
+            logger.warning(
+                f"The model weights for the multi-token prediction head {i} are discarded during conversion."
+            )
             mtp_transformer_layer_index = num_layers - 1 + 2 * i
             # MTP transformer layer
             converters += self._create_transformer_layer_converters(mtp_transformer_layer_index, ignore_export=True)

@@ -24,6 +24,8 @@ class LanguageModelLossNames:
 
     @staticmethod
     def multi_token_prediction_loss(index: int) -> str:
+        if index == 0:
+            return LanguageModelLossNames.language_model_loss
         return f"language_model_loss_{index}"
 
 
