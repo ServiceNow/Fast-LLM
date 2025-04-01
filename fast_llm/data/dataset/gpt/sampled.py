@@ -126,6 +126,7 @@ class GPTSampledIndexedDataset(SampledDataset):
         # Get the document sizes, the main information needed for sampling.
         document_sizes = torch.from_numpy(self._indexed_dataset.get_document_sizes()).to(self._device)
         documents_per_epoch = document_sizes.numel()
+        tokens_per_epoch = document_sizes.sum().item()
 
         # Calculate basic stats.
         if not self._truncate_documents:
@@ -133,18 +134,25 @@ class GPTSampledIndexedDataset(SampledDataset):
                 "The C++ extension for dataset sampling is missing."
                 " Please make sure Fast-LLM is installed correctly."
             )
-            ignored_documents = sum(document_sizes > self._sequence_length + 1)
+            long_docs_filter = document_sizes > self._sequence_length + 1
+            ignored_documents = sum(long_docs_filter)
             if ignored_documents:
                 log_main_rank(
                     f" > {ignored_documents}/{documents_per_epoch} documents are longer than {self._sequence_length+1} tokens and will be ignored.",
                     log_fn=logger.warning,
                 )
-
-        tokens_per_epoch = document_sizes.sum().item()
+            tokens_per_epoch = document_sizes[~long_docs_filter].sum().item()
+            if tokens_per_epoch == 0:
+                raise RuntimeError(
+                    f" > No documents shorter than {self._sequence_length+1} tokens found in dataset {self._indexed_dataset.name}."
+                )
         # We produce sequences of length `self._sequence_length + 1` so the last token has a label,
-        # but we also include that last label in the following sample,
+        # but in case of truncations we also include that last label in the following sample,
         # so we need `sequence_length * num_samples + 1` tokens in total.
-        num_epochs = math.ceil((self._sequence_length * self._num_samples + 1) / tokens_per_epoch)
+        num_epochs = math.ceil(
+            ((self._sequence_length + 1 - self._truncate_documents) * self._num_samples + 1 * self._truncate_documents)
+            / tokens_per_epoch
+        )
 
         # Prepare for shuffling.
         generator = torch.Generator(device=self._device)
@@ -265,7 +273,7 @@ class GPTSampledIndexedDataset(SampledDataset):
             yaml.safe_dump(yaml_data, self._yaml_path.open("w"))
 
         if shuffled_epochs > 0:
-            token_cumsum_shuffled, _ = self._get_token_cumsum(
+            token_cumsum_shuffled, num_tokens_shuffled = self._get_token_cumsum(
                 document_sizes[
                     # Torch indexing only works with int32 or int64
                     document_shuffling.to(
@@ -313,12 +321,6 @@ class GPTSampledIndexedDataset(SampledDataset):
                 sizes.cpu().numpy(), (self._sequence_length + 1), TOKEN_CUMSUM_RATE, offset
             )
             num_tokens = out[-1]
-            # TODO: should this instead be a low multiple of seqlen + 1, or a fraction of num_samples?
-            if num_tokens <= self._sequence_length + 1:
-                # contains only the offset and final cumsum, number of valid documents too small
-                raise RuntimeError(
-                    f"Insufficient samples in the dataset which are smaller than {self._sequence_length}: {self._indexed_dataset.name}"
-                )
             out = out[:-1][
                 : np.clip(np.searchsorted(out, self._num_samples * (self._sequence_length + 1), side="right"), 0, None)
             ]

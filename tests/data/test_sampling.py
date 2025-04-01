@@ -177,14 +177,14 @@ def test_gpt_sample_padding():
             elif doc_size + seq_size > sequence_length + 1:
                 padding_tokens = sequence_length + 1 - seq_size
                 token_ids.append([-100] * padding_tokens)
-                total_tokens += padding_tokens
                 expected_samples.append(list(np.concatenate(token_ids)))
                 token_ids = [sample]
                 seq_size = doc_size
+                total_tokens += doc_size
             else:
                 token_ids.append(sample)
                 seq_size += doc_size
-            total_tokens += doc_size
+                total_tokens += doc_size
         dataset = SimpleGPTIndexedDataset(samples)
         sampling = get_sampling_data(
             num_samples=len(expected_samples),
@@ -194,7 +194,7 @@ def test_gpt_sample_padding():
             shuffle=ShufflingType.disabled,
             truncate_documents=False,
         )
-        if total_tokens <= sequence_length + 1:
+        if total_tokens == 0:
             with pytest.raises(RuntimeError):
                 dataset.sample(sampling)
         else:
