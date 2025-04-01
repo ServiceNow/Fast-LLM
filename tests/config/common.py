@@ -35,3 +35,24 @@ class ExampleConfig(Config):
             if self.implicit_field is None:
                 self.implicit_field = "implicit"
         super()._validate()
+
+
+@config_class
+class ExampleVerboseConfig(Config):
+    # These fields will have non-empty default serialized values.
+    list_default_field: list[int] = Field(default_factory=lambda: [0], hint=FieldHint.optional)
+    tuple_default_field: tuple[int, ...] = Field(default=(0, 1), hint=FieldHint.optional)
+    tuple_fixed_length_field: tuple[int, str] = Field(default=(5, "text"), hint=FieldHint.optional)
+    set_default_field: set[int] = Field(default_factory=lambda: {0, 1, 2}, hint=FieldHint.optional)
+    dict_default_field: dict[str, int] = Field(default_factory=lambda: {"0": 0, "1": 1}, hint=FieldHint.optional)
+    explicit_field: str = Field(default=None, hint=FieldHint.optional)
+
+    def _validate(self) -> None:
+        if self.explicit_field is None:
+            self.explicit_field = "explicit"
+        super()._validate()
+
+
+@config_class
+class ExampleNestedConfig(ExampleConfig):
+    nested_field: ExampleConfig = Field(default_factory=ExampleConfig, hint=FieldHint.core)

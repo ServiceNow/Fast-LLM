@@ -4,29 +4,29 @@ import pathlib
 import numpy
 import pytest
 
-from fast_llm.config import FieldVerboseLevel, ValidationError
+from fast_llm.config import Config, FieldVerboseLevel, ValidationError
 from fast_llm.utils import Assert
-from tests.config.common import ExampleConfig, ExampleEnum
+from tests.config.common import ExampleConfig, ExampleEnum, ExampleVerboseConfig
 
 
 def _check_equal(config_a, config_b):
     # Check for equality of both values and types.
-    for key in config_a.keys() | config_b.keys():
-        assert key in config_a and key in config_b, key
-        Assert.eq(type(config_a[key]), type(config_b[key]))
-        if isinstance(config_a[key], (list, tuple, set)):
-            Assert.eq(len(config_a[key]), len(config_b[key]))
-            for i in range(len(config_a[key])):
-                _check_equal({"": config_a[key][i]}, {"": config_b[key][i]})
-        elif isinstance(config_a[key], dict):
+    Assert.eq(type(config_a), type(config_b))
+    if isinstance(config_a, dict):
+        for key in config_a.keys() | config_b.keys():
+            assert key in config_a and key in config_b, key
             _check_equal(config_a[key], config_b[key])
-        else:
-            try:
-                Assert.eq(config_a[key], config_b[key])
-            except AssertionError as e:
-                # Special case for `math.nan`
-                if config_a[key] is not config_b[key]:
-                    raise e
+    elif isinstance(config_a, (list, tuple, set)):
+        Assert.eq(len(config_a), len(config_b))
+        for i in range(len(config_a)):
+            _check_equal(config_a[i], config_b[i])
+    else:
+        try:
+            Assert.eq(config_a, config_b)
+        except AssertionError:
+            # Special case for `math.nan`
+            if config_a is not config_b:
+                raise
 
 
 def check_equal(config_a, config_b):
@@ -36,17 +36,30 @@ def check_equal(config_a, config_b):
         raise AssertionError(config_a, config_b, *e.args)
 
 
-def check_config(internal_config, *alternate, serialized_config=None):
+def check_config(
+    internal_config,
+    *alternate,
+    serialized_config=None,
+    cls: type[Config] = ExampleConfig,
+    fields: list[str] | None = None,
+):
     serialized_config = serialized_config if serialized_config else alternate[0] if alternate else internal_config
     for init_config in (internal_config, *alternate):
-        config = ExampleConfig.from_dict(init_config)
-        check_equal(config.to_serialized(), serialized_config)
-        check_equal(config._to_dict(), internal_config)
+        config = cls.from_dict(init_config)
+        serialized_config_ = config.to_serialized()
+        internal_config_ = config._to_dict()
+        if fields is None:
+            check_equal(serialized_config_, serialized_config)
+            check_equal(internal_config_, internal_config)
+        else:
+            for field in fields:
+                check_equal(serialized_config_[field], serialized_config[field])
+                check_equal(internal_config_[field], internal_config[field])
 
 
-def check_invalid_config(config):
+def check_invalid_config(config, cls: type[Config] = ExampleConfig):
     with pytest.raises(ValidationError):
-        ExampleConfig.from_dict(config)
+        cls.from_dict(config)
 
 
 def test_create_and_serialize_config():
@@ -134,10 +147,11 @@ def test_implicit_field(value):
     check_config({"implicit_field": value})
 
 
-TUPLE_VALUES = ((), (1,), (3, 4, 6), (4, 5, 4))
+ARRAY_VALUES = ((), (1,), (3, 4, 6), (4, 5, 4))
+ARRAY_VALUES_INVALID = (6.0, {}, True, "text")
 
 
-@pytest.mark.parametrize("value", TUPLE_VALUES)
+@pytest.mark.parametrize("value", ARRAY_VALUES)
 def test_list_field(value):
     check_config(
         {"list_field": list(value)},
@@ -146,7 +160,12 @@ def test_list_field(value):
     )
 
 
-@pytest.mark.parametrize("value", TUPLE_VALUES)
+@pytest.mark.parametrize("value", ARRAY_VALUES_INVALID)
+def test_list_field_invalid(value):
+    check_invalid_config({"list_field": value})
+
+
+@pytest.mark.parametrize("value", ARRAY_VALUES)
 def test_tuple_field(value):
     check_config(
         {"tuple_field": list(value)},
@@ -155,7 +174,12 @@ def test_tuple_field(value):
     )
 
 
-@pytest.mark.parametrize("value", TUPLE_VALUES)
+@pytest.mark.parametrize("value", ARRAY_VALUES_INVALID)
+def test_tuple_field_invalid(value):
+    check_invalid_config({"tuple_field": value})
+
+
+@pytest.mark.parametrize("value", ARRAY_VALUES)
 def test_set_field(value):
     check_config(
         {"set_field": list(set(value))},
@@ -166,12 +190,9 @@ def test_set_field(value):
     )
 
 
-# @pytest.mark.parametrize("value", ((0, ""), (5, "text"), (True, "True")))
-# def test_tuple_fixed_length_field(value):
-#    expected_config = {"tuple_variable_length_field": value}
-#    Assert.eq(TestConfig.from_dict(expected_config).to_serialized(), expected_config)
-#    Assert.eq(TestConfig.from_dict({"tuple_variable_length_field": list(value)}).to_serialized(), expected_config)
-#    Assert.eq(TestConfig.from_dict({"tuple_variable_length_field": set(value)}).to_serialized(), {"tuple_variable_length_field": tuple(set(value))})
+@pytest.mark.parametrize("value", ARRAY_VALUES_INVALID)
+def test_tuple_field_invalid(value):
+    check_invalid_config({"set_field": value})
 
 
 @pytest.mark.parametrize("value", ({}, {1: 2, 3: 4}))
@@ -193,9 +214,19 @@ def test_type_field(value):
     check_config({"type_field": value}, serialized_config={"type_field": str(value)})
 
 
+@pytest.mark.parametrize("value", (5, None, [], "text"))
+def test_type_field_invalid(value):
+    check_invalid_config({"type_field": value})
+
+
 @pytest.mark.parametrize("value", (ExampleEnum.a, ExampleEnum.b, ExampleEnum.c))
 def test_enum_field(value):
-    check_config({"enum_field": value}, {"enum_field": value.value})
+    check_config({"enum_field": value}, {"enum_field": str(value)})
+
+
+@pytest.mark.parametrize("value", (5, None, [], "text"))
+def test_enum_field_invalid(value):
+    check_invalid_config({"type_field": value})
 
 
 def test_core_field():
@@ -220,3 +251,37 @@ def test_complex_field(value):
 )
 def test_complex_field_invalid(value):
     check_invalid_config({"complex_field": value})
+
+
+def test_verbose_config_default():
+    default_values = {
+        "list_default_field": [0],
+        "tuple_default_field": [0, 1],
+        "tuple_fixed_length_field": [5, "text"],
+        "set_default_field": [0, 1, 2],
+        "dict_default_field": {"0": 0, "1": 1},
+        "explicit_field": "explicit",
+    }
+    config = ExampleVerboseConfig.from_dict({})
+    check_equal(config.to_serialized(), default_values)
+    check_equal(config._to_dict(), default_values)
+
+
+@pytest.mark.parametrize("value", ((0, ""), (5, "text"), (7, "True")))
+def test_tuple_fixed_length_field(value):
+    check_config(
+        {"tuple_fixed_length_field": list(value)},
+        {"tuple_fixed_length_field": value},
+        serialized_config={"tuple_fixed_length_field": list(value)},
+        cls=ExampleVerboseConfig,
+        fields=["tuple_fixed_length_field"],
+    )
+
+
+@pytest.mark.parametrize("value", ((), (5,), ("", 0), ("0", "True"), (0, "", "text")))
+def test_tuple_fixed_length_field_invalid(value):
+    check_invalid_config({"tuple_fixed_length_field": value}, cls=ExampleVerboseConfig)
+
+
+# TODO: Test other fields with defaults.
+# TODO: Test nested fields.
