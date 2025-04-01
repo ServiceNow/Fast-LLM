@@ -21,6 +21,7 @@ from fast_llm.profile import ProfilingConfig
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
+    from fast_llm.engine.inference.runner import InferenceRunner
     from fast_llm.engine.training.trainer import Trainer
 
 
@@ -364,6 +365,11 @@ class TrainerConfig(PretrainedFastLLMModelConfig, ExperimentConfig):
         desc="Configuration for the training optimizer and learning rate schedule.",
         hint=FieldHint.core,
     )
+    reference_models: dict[str, PretrainedFastLLMModelConfig] = Field(
+        default_factory=dict,
+        desc="Additional models used during training, ex. for knowledge distillation.",
+        hint=FieldHint.feature,
+    )
 
     def _validate(self) -> None:
         self.training.export.setup(self.model)
@@ -377,6 +383,10 @@ class TrainerConfig(PretrainedFastLLMModelConfig, ExperimentConfig):
 
     @classmethod
     def get_trainer_class(cls) -> type["Trainer"]:
+        raise NotImplementedError
+
+    @classmethod
+    def get_inference_runner_class(cls) -> type["InferenceRunner"]:
         raise NotImplementedError
 
     def _get_runnable(self) -> typing.Callable[[], None]:

@@ -442,6 +442,7 @@ class MultiStageModel[ConfigType: FastLLMModelConfig](Configurable[ConfigType]):
 
     @property
     def distributed(self) -> Distributed:
+        assert self._is_setup
         return self._distributed
 
     def invalidate_buffers(self) -> None:
