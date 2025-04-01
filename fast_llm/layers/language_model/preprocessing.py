@@ -37,7 +37,7 @@ class PositionEmbeddingPreprocessor:
         Assert.leq(sequence_length, self._config.num_absolute_position_embeddings)
         self._position_ids = torch.arange(
             0, sequence_length, device=self._tensor_space.distributed.device, dtype=torch.int64
-        ).unsqueeze(0)
+        )
 
     def preprocess(self, kwargs: dict[str, typing.Any]) -> None:
         sequence_k = kwargs[TransformerKwargs.sequence_k_dim].size

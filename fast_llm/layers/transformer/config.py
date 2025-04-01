@@ -10,8 +10,20 @@ from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.engine.config_utils.tensor_space import CompositeTensorDim, TensorDim, TensorSpace
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
 from fast_llm.functional.config import ActivationType, MLPRecomputeLevel, TritonConfig
-from fast_llm.layers.common.config import NormalizationArchitectureConfig, NormalizationConfig
+from fast_llm.layers.common.config import (
+    NormalizationArchitectureConfig,
+    NormalizationConfig,
+    PeftArchitectureConfig,
+    PeftConfig,
+    PeftType,
+)
 from fast_llm.utils import Assert, div
+
+if typing.TYPE_CHECKING:
+    import torch
+
+    from fast_llm.layers.common.linear import LinearBase, LinearLike
+    from fast_llm.tensor import ParameterMeta
 
 logger = logging.getLogger(__name__)
 
@@ -160,12 +172,88 @@ class AddLinearBiasChoices(str, enum.Enum):
     only_attn_qkv = "only_attn_qkv"
 
 
+class TransformerSubLayerName(str, enum.Enum):
+    # TODO: Use this to replace AddLinearBiasChoices.
+    query = "query"
+    key = "key"
+    value_ = "value"
+    key_value = "key_value"
+    dense = "dense"
+    mlp_1 = "mlp_1"
+    mlp_2 = "mlp_2"
+
+
+@config_class()
+class TransformerPeftConfig(PeftConfig):
+    layers: list[TransformerSubLayerName] = Field(
+        default_factory=lambda: [TransformerSubLayerName.query, TransformerSubLayerName.value_],
+        desc="The layers on which to apply LoRA.",
+        hint=FieldHint.feature,
+    )
+    freeze_others: bool = Field(
+        default=True,
+        desc="Whether to freeze other layers during training.",
+    )
+
+    def apply_linear(self, linear: "LinearBase", layer_type: TransformerSubLayerName | None = None) -> "LinearLike":
+        if self.type != PeftType.none:
+            if layer_type is None or self.layers is None or layer_type in self.layers:
+                if layer_type == TransformerSubLayerName.key:
+                    return super().apply_linear(linear, out_channel_end=div(linear._out_dim.global_size, 2))
+                elif layer_type == TransformerSubLayerName.value_:
+                    return super().apply_linear(linear, out_channel_begin=div(linear._out_dim.global_size, 2))
+                else:
+                    return super().apply_linear(linear)
+            elif self.freeze_others:
+                linear.weight.requires_grad = False
+        return linear
+
+    def apply_other(self, module: "torch.nn.Module") -> "torch.nn.Module":
+        if self.type != PeftType.none and self.freeze_others:
+            for parameter in module.parameters():
+                parameter.requires_grad = False
+        return module
+
+    def apply_weight(self, parameter: "ParameterMeta") -> "ParameterMeta":
+        if self.type != PeftType.none and self.freeze_others:
+            parameter.requires_grad = False
+        return parameter
+
+    def _validate(self) -> None:
+        if self.type != PeftType.none:
+            if TransformerSubLayerName.mlp_1 in self.layers or TransformerSubLayerName.mlp_2 in self.layers:
+                # TODO: Add MLP support.
+                raise NotImplementedError("LoRA not supported for MLP.")
+            if TransformerSubLayerName.dense in self.layers:
+                # TODO: Support InputParallelLinear (different output format).
+                raise NotImplementedError("LoRA not supported for attention dense layer.")
+            if (
+                sum(
+                    name in self.layers
+                    for name in (
+                        TransformerSubLayerName.key_value,
+                        TransformerSubLayerName.key,
+                        TransformerSubLayerName.value_,
+                    )
+                )
+                > 1
+            ):
+                raise ValueError(
+                    f"{TransformerSubLayerName.key_value.value}, {TransformerSubLayerName.key.value} and {TransformerSubLayerName.value_.value} are mutually exclusive."
+                )
+
+
 @config_class()
 class TransformerArchitectureConfig(BaseModelArchitectureConfig):
     _abstract = False
     normalization: NormalizationArchitectureConfig = Field(
         default_factory=NormalizationArchitectureConfig,
         desc="Configuration for the normalization layers architecture.",
+        hint=FieldHint.core,
+    )
+    peft: PeftArchitectureConfig = Field(
+        default_factory=PeftArchitectureConfig,
+        desc="Configuration for the parameter-efficient fine tuning.",
         hint=FieldHint.core,
     )
     num_layers: int = Field(
@@ -375,6 +463,7 @@ class TransformerArchitectureConfig(BaseModelArchitectureConfig):
 class TransformerConfig(TransformerArchitectureConfig, BaseModelConfig):
     normalization: NormalizationConfig = FieldUpdate(default_factory=NormalizationConfig)
     rotary: RotaryConfig = FieldUpdate(default_factory=RotaryConfig)
+    peft: TransformerPeftConfig = FieldUpdate(default_factory=TransformerPeftConfig)
     # Default: hidden_size**-0.5
     # TODO: Allow custom initialization (InitializationConfig?)
     init_method_std: float = Field(
@@ -613,6 +702,7 @@ class TransformerConfig(TransformerArchitectureConfig, BaseModelConfig):
         Assert.geq(self.attention_dropout, 0)
         Assert.geq(self.hidden_dropout, 0)
         Assert.incl(len(self.mlp_lr_scale), (1, self.num_experts))
+
         for scale in self.mlp_lr_scale:
             if scale is not None:
                 Assert.geq(scale, 0)

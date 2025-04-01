@@ -1,5 +1,4 @@
 from fast_llm.data.dataset.gpt.config import GPTConcatenatedDatasetConfig
-from fast_llm.engine.distributed.config import PhaseType
 from tests.common import DATASET_PREFIX, get_test_dataset
 from tests.data.common import (
     compare_indexed_dataset,
@@ -49,7 +48,7 @@ def test_gpt_concatenate_data():
                 }
             }
         },
-        {PhaseType.training: 8},
+        8,
         sequence_length=5,
-        expected_samples={PhaseType.training: GPT_CONCATENATED_SAMPLES},
+        expected_samples=GPT_CONCATENATED_SAMPLES,
     )

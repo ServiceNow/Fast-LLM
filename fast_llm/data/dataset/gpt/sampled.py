@@ -146,6 +146,7 @@ class GPTSampledIndexedDataset(SampledDataset):
                 raise RuntimeError(
                     f" > No documents shorter than {self._sequence_length+1} tokens found in dataset {self._indexed_dataset.name}."
                 )
+        # TODO MTP: Produce more labels to provide labels for the multi-token prediction heads?
         # We produce sequences of length `self._sequence_length + 1` so the last token has a label,
         # but in case of truncations we also include that last label in the following sample,
         # so we need `sequence_length * num_samples + 1` tokens in total.

@@ -15,9 +15,9 @@ from fast_llm.data.dataset.gpt.memmap import GPTMemmapDataset
 from fast_llm.data.dataset.gpt.sampled import GPTSample
 from fast_llm.models.gpt.config import (
     LlamaGPTHuggingfaceCheckpointFormat,
-    Qwen2GPTHuggingfaceCheckpointFormat,
     MistralGPTHuggingfaceCheckpointFormat,
     MixtralGPTHuggingfaceCheckpointFormat,
+    Qwen2GPTHuggingfaceCheckpointFormat,
     Starcoder2GPTHuggingfaceCheckpointFormat,
 )
 from fast_llm.tools.train import CliTrainingConfig
@@ -62,24 +62,26 @@ CONFIG_BASE_FAST_LLM = [
     f"model.multi_stage.debug_all_param_gradients={_LOG_LEVEL}",
     "model.multi_stage.debug_tensor_parallel=True",
     "model.distributed.reproducible_init=True",
+    "model.distributed.timeout=10",
     "training.train_iters=2",
     "training.num_workers=0",
+    "training.timeout=30",
     "batch.batch_size=8",
     "batch.sequence_length=512",
-    "data.datasets.Training.type=slice",
-    "data.datasets.Training.end=0.969",
-    "data.datasets.Training.dataset.type=memmap",
-    f"data.datasets.Training.dataset.path={DATASET_PREFIX}",
-    "data.datasets.Validation.type=slice",
-    "data.datasets.Validation.begin=0.969",
-    "data.datasets.Validation.end=0.999",
-    "data.datasets.Validation.dataset.type=memmap",
-    f"data.datasets.Validation.dataset.path={DATASET_PREFIX}",
-    "data.datasets.Test.type=slice",
-    "data.datasets.Test.begin=0.999",
-    "data.datasets.Test.end=1",
-    "data.datasets.Test.dataset.type=memmap",
-    f"data.datasets.Test.dataset.path={DATASET_PREFIX}",
+    "data.datasets.training.type=slice",
+    "data.datasets.training.end=0.969",
+    "data.datasets.training.dataset.type=memmap",
+    f"data.datasets.training.dataset.path={DATASET_PREFIX}",
+    "data.datasets.validation.type=slice",
+    "data.datasets.validation.begin=0.969",
+    "data.datasets.validation.end=0.999",
+    "data.datasets.validation.dataset.type=memmap",
+    f"data.datasets.validation.dataset.path={DATASET_PREFIX}",
+    "data.datasets.test.type=slice",
+    "data.datasets.test.begin=0.999",
+    "data.datasets.test.end=1",
+    "data.datasets.test.dataset.type=memmap",
+    f"data.datasets.test.dataset.path={DATASET_PREFIX}",
     "optimizer.learning_rate.base=0.0001",
 ]
 CONFIG_BASE_MEGATRON = [
@@ -192,6 +194,12 @@ CONFIG_MIXTRAL_YARN_FAST_LLM = CONFIG_MIXTRAL_FAST_LLM + [
 ]
 CONFIG_MIXTRAL_YARN_COMMON = CONFIG_MIXTRAL_YARN_FAST_LLM + ["model.distributed.training_dtype=bf16"]
 
+CONFIG_LLAMA_MTP_MEGATRON = None
+CONFIG_LLAMA_MTP_FAST_LLM = CONFIG_LLAMA_FAST_LLM + [
+    "model.base_model.prediction_heads=4",
+]
+CONFIG_LLAMA_MTP_COMMON = CONFIG_LLAMA_MTP_FAST_LLM + ["model.distributed.training_dtype=bf16"]
+
 _CONFIGS = {
     "gpt2": ("gpt", CONFIG_GPT2_FAST_LLM, CONFIG_GPT2_MEGATRON, CONFIG_GPT2_COMMON, None),
     "sc1": ("gpt", CONFIG_SC1_FAST_LLM, CONFIG_SC1_MEGATRON, CONFIG_SC1_COMMON, None),
@@ -250,6 +258,13 @@ _CONFIGS = {
         CONFIG_MIXTRAL_YARN_MEGATRON,
         CONFIG_MIXTRAL_YARN_COMMON,
         MixtralGPTHuggingfaceCheckpointFormat,
+    ),
+    "llama-mtp": (
+        "gpt",
+        CONFIG_LLAMA_MTP_FAST_LLM,
+        CONFIG_LLAMA_MTP_MEGATRON,
+        CONFIG_LLAMA_MTP_COMMON,
+        LlamaGPTHuggingfaceCheckpointFormat,
     ),
 }
 
