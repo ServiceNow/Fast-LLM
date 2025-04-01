@@ -34,7 +34,7 @@ class HuggingfaceStateDictCheckpointHandler(ExternalStateDictCheckpointHandler, 
         huggingface_config = self._export_config(self._model.config.base_model)
         self._save_config(config.path, huggingface_config)
         return {
-            "fast_llm_metadata": metadata.to_serialized(),
+            "fast_llm_metadata": metadata.to_dict(),
             "model_config": huggingface_config,
             "format": "pt",
         }

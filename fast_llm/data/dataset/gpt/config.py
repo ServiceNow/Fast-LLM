@@ -505,7 +505,7 @@ class GPTLegacyDatasetConfig(GPTSampledDatasetConfig, GPTLegacyConfig):
                 dataset_config = {
                     "type": "fim",
                     "dataset": dataset_config,
-                    **self.fim.to_serialized(),
+                    **self.fim.to_dict(),
                 }
         # Legacy sampling config
         dataset_config = {

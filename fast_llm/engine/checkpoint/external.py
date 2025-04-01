@@ -232,7 +232,7 @@ class ExternalStateDictCheckpointHandler(StateDictCheckpointHandler):
             fast_llm_version=__version__,
             model=cls._model_class,
             format=config.format,
-            config=cls._model_class.from_dict({"base_model": imported_model_config.to_serialized()}),
+            config=cls._model_class.from_dict({"base_model": imported_model_config.to_dict()}),
             shards=["weights"],
         )
 

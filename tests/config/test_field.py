@@ -4,66 +4,13 @@ import pathlib
 import numpy
 import pytest
 
-from fast_llm.config import Config, FieldVerboseLevel, ValidationError
-from fast_llm.utils import Assert
-from tests.config.common import ExampleConfig, ExampleEnum, ExampleVerboseConfig
-
-
-def _check_equal(config_a, config_b):
-    # Check for equality of both values and types.
-    Assert.eq(type(config_a), type(config_b))
-    if isinstance(config_a, dict):
-        for key in config_a.keys() | config_b.keys():
-            assert key in config_a and key in config_b, key
-            _check_equal(config_a[key], config_b[key])
-    elif isinstance(config_a, (list, tuple, set)):
-        Assert.eq(len(config_a), len(config_b))
-        for i in range(len(config_a)):
-            _check_equal(config_a[i], config_b[i])
-    else:
-        try:
-            Assert.eq(config_a, config_b)
-        except AssertionError:
-            # Special case for `math.nan`
-            if config_a is not config_b:
-                raise
-
-
-def check_equal(config_a, config_b):
-    try:
-        _check_equal(config_a, config_b)
-    except AssertionError as e:
-        raise AssertionError(config_a, config_b, *e.args)
-
-
-def check_config(
-    internal_config,
-    *alternate,
-    serialized_config=None,
-    cls: type[Config] = ExampleConfig,
-    fields: list[str] | None = None,
-):
-    serialized_config = serialized_config if serialized_config else alternate[0] if alternate else internal_config
-    for init_config in (internal_config, *alternate):
-        config = cls.from_dict(init_config)
-        serialized_config_ = config.to_serialized()
-        internal_config_ = config._to_dict()
-        if fields is None:
-            check_equal(serialized_config_, serialized_config)
-            check_equal(internal_config_, internal_config)
-        else:
-            for field in fields:
-                check_equal(serialized_config_[field], serialized_config[field])
-                check_equal(internal_config_[field], internal_config[field])
-
-
-def check_invalid_config(config, cls: type[Config] = ExampleConfig):
-    with pytest.raises(ValidationError):
-        cls.from_dict(config)
+from fast_llm.config import FieldVerboseLevel
+from fast_llm.utils import Assert, check_equal_nested
+from tests.config.common import ExampleConfig, ExampleEnum, ExampleVerboseConfig, check_config, check_invalid_config
 
 
 def test_create_and_serialize_config():
-    Assert.eq(ExampleConfig.from_dict({}).to_serialized(), {})
+    Assert.eq(ExampleConfig.from_dict({}).to_dict(), {})
 
 
 @pytest.mark.parametrize("value", (0, -6, 3))
@@ -230,7 +177,7 @@ def test_enum_field_invalid(value):
 
 
 def test_core_field():
-    Assert.eq(ExampleConfig.from_dict({}).to_serialized(verbose=FieldVerboseLevel.core), {"core_field": 4})
+    Assert.eq(ExampleConfig.from_dict({}).to_dict(verbose=FieldVerboseLevel.core), {"core_field": 4})
 
 
 @pytest.mark.parametrize(
@@ -263,8 +210,8 @@ def test_verbose_config_default():
         "explicit_field": "explicit",
     }
     config = ExampleVerboseConfig.from_dict({})
-    check_equal(config.to_serialized(), default_values)
-    check_equal(config._to_dict(), default_values)
+    check_equal_nested(config.to_dict(), default_values)
+    check_equal_nested(config.to_dict(serialized=False), default_values)
 
 
 @pytest.mark.parametrize("value", ((0, ""), (5, "text"), (7, "True")))

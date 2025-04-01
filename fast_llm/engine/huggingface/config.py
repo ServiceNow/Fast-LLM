@@ -91,12 +91,12 @@ class HuggingfaceModelConfig(transformers.PretrainedConfig):
 
     def to_dict(self) -> dict[str, typing.Any]:
         out = super().to_dict()
-        out["fast_llm_config"] = self.fast_llm_config.to_serialized(verbose=FieldVerboseLevel.everything)
+        out["fast_llm_config"] = self.fast_llm_config.to_dict(verbose=FieldVerboseLevel.everything)
         return out
 
     def to_diff_dict(self) -> dict[str, typing.Any]:
         out = super().to_diff_dict()
-        out["fast_llm_config"] = self.fast_llm_config.to_serialized(verbose=FieldVerboseLevel.explicit)
+        out["fast_llm_config"] = self.fast_llm_config.to_dict(verbose=FieldVerboseLevel.explicit)
         return out
 
     def to_json_file(self, json_file_path: str | os.PathLike, use_diff: bool = True) -> None:

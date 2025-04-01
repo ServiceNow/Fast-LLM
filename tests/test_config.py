@@ -118,4 +118,4 @@ def test_add_attn_dense_bias():
 def test_serialize_default_config_updates(cls):
     # Config classes used as config updates should have a default that serializes to an empty dict
     #   so no value is incorrectly overridden.
-    assert cls.from_dict({}).to_serialized() == {}
+    assert cls.from_dict({}).to_dict() == {}

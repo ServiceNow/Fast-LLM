@@ -1,7 +1,10 @@
 import enum
 import pathlib
 
-from fast_llm.config import Config, Field, FieldHint, config_class
+import pytest
+
+from fast_llm.config import Config, Field, FieldHint, ValidationError, config_class
+from fast_llm.utils import check_equal_nested
 
 
 class ExampleEnum(enum.StrEnum):
@@ -56,3 +59,29 @@ class ExampleVerboseConfig(Config):
 @config_class
 class ExampleNestedConfig(ExampleConfig):
     nested_field: ExampleConfig = Field(default_factory=ExampleConfig, hint=FieldHint.core)
+
+
+def check_config(
+    internal_config,
+    *alternate,
+    serialized_config=None,
+    cls: type[Config] = ExampleConfig,
+    fields: list[str] | None = None,
+):
+    serialized_config = serialized_config if serialized_config else alternate[0] if alternate else internal_config
+    for init_config in (internal_config, *alternate):
+        config = cls.from_dict(init_config)
+        serialized_config_ = config.to_dict()
+        internal_config_ = config.to_dict(serialized=False)
+        if fields is None:
+            check_equal_nested(serialized_config_, serialized_config)
+            check_equal_nested(internal_config_, internal_config)
+        else:
+            for field in fields:
+                check_equal_nested(serialized_config_[field], serialized_config[field])
+                check_equal_nested(internal_config_[field], internal_config[field])
+
+
+def check_invalid_config(config, cls: type[Config] = ExampleConfig):
+    with pytest.raises(ValidationError):
+        cls.from_dict(config)

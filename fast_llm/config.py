@@ -11,7 +11,7 @@ import warnings
 
 import yaml
 
-from fast_llm.utils import Assert, Tag, get_type_name, header, log
+from fast_llm.utils import Assert, Tag, compare_nested, get_type_name, header, log
 
 logger = logging.getLogger(__name__)
 
@@ -36,13 +36,6 @@ class NoAutoValidate:
     def __exit__(self, exc_type, exc_val, exc_tb):
         global _AUTO_VALIDATE
         _AUTO_VALIDATE = self._old_value
-
-
-class _ConfigDictFormat(str, enum.Enum):
-    # TODO v0.3: delete class
-    flat = "flat"
-    nested = "nested"
-    tuple = "tuple"
 
 
 class UpdateType(str, enum.Enum):
@@ -578,33 +571,26 @@ class Config:
     def get_field(cls, name: str) -> Field:
         return cls.__dataclass_fields__[name]  # noqa
 
-    def _to_dict(
+    def to_dict(
         self,
         verbose: int | None = FieldVerboseLevel.explicit,
         all_fields: bool = False,
-        format_: _ConfigDictFormat = _ConfigDictFormat.nested,
-        serializable: bool = False,
+        serialized: bool = True,
     ) -> dict[str, typing.Any]:
         """
         Serialize the config to a dict that can (generally) be used to reconstruct an identical `Config`.
-        When not flat, the dict includes a `__class__` entry which allows support for derived classes.
 
         Args:
             all_fields: Include the derived fields, with `init=False`.
-            format_: The config format used to represent nested configs. Options:
-              * `ConfigDictFormat.nested`: Preserve the nested config structure by returning nested dicts.
-                Also save a `__class__` entry to support derived classes. Standard format.
-              * `ConfigDictFormat.tuple`: Preserve the nested config structure by returning tuples of keys.
-                Used for config updates.
-            serializable: Ensure the dict is serializable to json or yaml. Information may be lost.
+            serialized: Ensure the dict is serializable to json or yaml. Information may be lost.
         """
         arg_dict = {}
         for name, field in self.fields():
             value = getattr(self, name, MISSING)
-            self._add_field_to_args(arg_dict, name, field, value, verbose, all_fields, format_, serializable)
+            self._add_field_to_args(arg_dict, name, field, value, verbose, all_fields, serialized)
         if hasattr(self, "_unknown_fields"):
             for name, value in self._unknown_fields.items():
-                self._add_field_to_args(arg_dict, f"!!! {name}", None, value, None, all_fields, format_, serializable)
+                self._add_field_to_args(arg_dict, f"!!! {name}", None, value, None, all_fields, serialized)
 
         return arg_dict
 
@@ -616,13 +602,12 @@ class Config:
         value: typing.Any,
         verbose: int | None = None,
         all_fields: bool = False,
-        format_: _ConfigDictFormat = _ConfigDictFormat.nested,
-        serializable: bool = False,
+        serializable: bool = True,
     ) -> None:
         if (
             field is not None
             and (not field.init or field._field_type == dataclasses._FIELD_CLASSVAR)
-            and not (all_fields)
+            and not all_fields
         ):
             # Exclude class variables and derived fields unless requested explicitly.
             return
@@ -632,48 +617,36 @@ class Config:
             or (verbose is not None and verbose >= FieldHintImportance[field.hint])
         )
         if isinstance(value, Config):
-            field_value = value._to_dict(
+            field_value = value.to_dict(
                 verbose=verbose,
                 all_fields=all_fields,
-                format_=format_,
-                serializable=serializable,
+                serialized=serializable,
             )
             # Empty configs can safely be trimmed.
             explicit_field = all_fields
         elif isinstance(value, (list, tuple, set)):
-            field_value = {} if format_ == _ConfigDictFormat.tuple else []
+            field_value = []
             for i, list_value in enumerate(value):
-                self._add_field_to_args(
-                    field_value, str(i), None, list_value, verbose, all_fields, format_, serializable
-                )
+                self._add_field_to_args(field_value, str(i), None, list_value, verbose, all_fields, serializable)
         elif isinstance(value, dict):
             field_value = {}
             for dict_name, dict_value in value.items():
-                self._add_field_to_args(
-                    field_value, dict_name, None, dict_value, verbose, all_fields, format_, serializable
-                )
+                self._add_field_to_args(field_value, dict_name, None, dict_value, verbose, all_fields, serializable)
         elif explicit_field:
             field_value = value
             if serializable:
                 field_value = self._serialize_value(value)
-            if format_ == _ConfigDictFormat.tuple:
-                field_value = {(): field_value}
         else:
             # Exclude unimportant (implicit or explicit) default values.
             return
 
         if serializable:
             name = self._serialize_value(name)
-        if format_ == _ConfigDictFormat.tuple:
-            args.update({(name,) + name_: value_ for name_, value_ in field_value.items()})
-        elif format_ == _ConfigDictFormat.nested:
-            if not isinstance(field_value, (dict, list)) or len(field_value) > 0 or explicit_field or all_fields:
-                if isinstance(args, dict):
-                    args[name] = field_value
-                else:
-                    args.append(field_value)
-        else:
-            raise NotImplementedError(format_)
+        if not isinstance(field_value, (dict, list)) or len(field_value) > 0 or explicit_field or all_fields:
+            if isinstance(args, dict):
+                args[name] = field_value
+            else:
+                args.append(field_value)
 
     @classmethod
     def _serialize_value(cls, value: typing.Any) -> int | float | bool | str | None:
@@ -689,12 +662,14 @@ class Config:
         return value
 
     def to_copy[
-        T
-    ](self: T, *updates: typing.Union["Config", dict[str | tuple[str, ...], typing.Any]], strict: bool = True,) -> T:
-        return self.from_dict(self, *updates, strict=strict)
-
-    def to_serialized(self, verbose: int | None = FieldVerboseLevel.explicit) -> dict[str, typing.Any]:
-        return self._to_dict(verbose=verbose, format_=_ConfigDictFormat.nested, serializable=True)
+        T: Config,
+    ](
+        self: T,
+        *updates: typing.Union["Config", dict[str | tuple[str, ...], typing.Any]],
+        strict: bool = True,
+        update_type: UpdateType = UpdateType.override,
+    ) -> T:
+        return self.from_dict(self, *updates, strict=strict, update_type=update_type)
 
     def to_logs[
         T
@@ -706,7 +681,7 @@ class Config:
         width: int = 80,
         fill_char: str = "-",
     ) -> T:
-        arg_dict = self.to_serialized(verbose=verbose)
+        arg_dict = self.to_dict(verbose=verbose)
         if title is None:
             title = self._get_class_name()
         return log_fn(
@@ -728,12 +703,14 @@ class Config:
         update_type: UpdateType = UpdateType.override,
     ) -> typing.Self:
         if isinstance(default, Config):
-            default = default._to_dict()
+            default = default.to_dict(serialized=False)
         else:
             default = copy.deepcopy(default)
         for update in updates:
             if isinstance(update, Config):
-                update = update._to_dict(format_=_ConfigDictFormat.tuple)
+                update = update.to_dict(serialized=False)
+            else:
+                update = copy.deepcopy(update)
             for keys, value in update.items():
                 set_nested_dict_value(default, keys, value, update_type)
 
@@ -878,27 +855,15 @@ class Config:
 
     def compare(self, other: "Config", log_fn: typing.Union[type[BaseException], typing.Callable] = ValueError):
         # TODO: Check classes?
-        self_dict = self._to_dict(
-            format_=_ConfigDictFormat.tuple, serializable=True, verbose=FieldVerboseLevel.everything
-        )
-        other_dict = other._to_dict(
-            format_=_ConfigDictFormat.tuple, serializable=True, verbose=FieldVerboseLevel.everything
-        )
-        compare = {
-            key: (self_dict.get(key, MISSING), other_dict.get(key, MISSING))
-            for key in self_dict.keys() | other_dict.keys()
-        }
-        diff = {
-            key: (self_value, other_value)
-            for key, (self_value, other_value) in compare.items()
-            if self_value != other_value
-        }
-        if diff:
-            log(
+        self_dict = self.to_dict(verbose=FieldVerboseLevel.everything)
+        other_dict = other.to_dict(verbose=FieldVerboseLevel.everything)
+        errors = compare_nested(self_dict, other_dict)
+        if errors:
+            return log(
                 f"Config diff:\n  "
                 + "\n  ".join(
                     f"{'.'.join(key)}`: `{self_value}` != `{other_value}`"
-                    for key, (self_value, other_value) in diff.items()
+                    for key, (self_value, other_value) in errors.items()
                 ),
                 log_fn=log_fn,
             )
@@ -1005,7 +970,7 @@ def set_nested_dict_value[
             else:
                 d[key] = {}
             for key_, value_ in value.items():
-                set_nested_dict_value(d, key_, value_, update_type)
+                set_nested_dict_value(d[key], key_, value_, update_type)
         elif isinstance(d.get(key), dict):
             raise ValueError("Cannot replace a dict with a non-dict value.")
         elif (
