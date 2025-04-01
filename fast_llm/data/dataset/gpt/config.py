@@ -72,6 +72,7 @@ class GPTSamplingData(SamplingData):
     vocab_size: int
     tokenizer: "Tokenizer"
     cross_document_attention: bool = True
+    prediction_heads: int = 1
 
 
 @config_class()

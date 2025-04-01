@@ -88,6 +88,7 @@ class GPTSampledIndexedDataset(SampledDataset):
         self._num_samples = sampling.num_samples
         self._sequence_length = sampling.sequence_length
         self._cross_document_attention = sampling.cross_document_attention
+        self._prediction_heads = sampling.prediction_heads
         self._config = sampling.config
         self._device = torch.device("cuda" if self._config.gpu else "cpu")
 
@@ -129,10 +130,10 @@ class GPTSampledIndexedDataset(SampledDataset):
         documents_per_epoch = document_sizes.numel()
         tokens_per_epoch = document_sizes.sum().item()
         # TODO MTP: Produce more labels to provide labels for the multi-token prediction heads?
-        # We produce sequences of length `self._sequence_length + 1` so the last token has a label,
-        # but we also include that last label in the following sample,
-        # so we need `sequence_length * num_samples + 1` tokens in total.
-        num_epochs = math.ceil((self._sequence_length * self._num_samples + 1) / tokens_per_epoch)
+        # We produce sequences of length `self._sequence_length + prediction_heads` so the last token has a label for all heads,
+        # but we also include those last labels in the following sample,
+        # so we need `sequence_length * num_samples + prediction_heads` tokens in total.
+        num_epochs = math.ceil((self._sequence_length * self._num_samples + self._prediction_heads) / tokens_per_epoch)
 
         # Prepare for shuffling.
         generator = torch.Generator(device=self._device)
@@ -289,7 +290,7 @@ class GPTSampledIndexedDataset(SampledDataset):
         """
         self._lazy_load()
         token_start = index * self._sequence_length
-        token_end = token_start + self._sequence_length + 1
+        token_end = token_start + self._sequence_length + self._prediction_heads
 
         if token_start < self._unshuffled_tokens:
             token_start_array = self._token_cumsum_unshuffled.array
@@ -328,7 +329,11 @@ class GPTSampledIndexedDataset(SampledDataset):
                 token_ids.append(sample.token_ids)
                 if self._config.use_loss_masking_spans:
                     for loss_masking_span in sample.loss_masking_spans:
-                        span = np.clip(loss_masking_span + token_count - token_start, 0, self._sequence_length + 1)
+                        span = np.clip(
+                            loss_masking_span + token_count - token_start,
+                            0,
+                            self._sequence_length + self._prediction_heads,
+                        )
                         if span[1] > span[0]:
                             loss_masking_spans.append(span)
 
@@ -345,7 +350,7 @@ class GPTSampledIndexedDataset(SampledDataset):
         loss_masking_spans = (
             np.stack(loss_masking_spans, dtype=np.int32) if self._config.use_loss_masking_spans else None
         )
-        Assert.eq(len(token_ids), self._sequence_length + 1)
+        Assert.eq(len(token_ids), self._sequence_length + self._prediction_heads)
 
         return GPTSample(token_ids=token_ids, loss_masking_spans=loss_masking_spans, sequence_lengths=sequence_lengths)
 
