@@ -1,4 +1,3 @@
-import os
 import pathlib
 import typing
 
@@ -8,7 +7,8 @@ from fast_llm.data.preparator.config import DatasetPreparatorConfig
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.utils import Assert
 
-from fast_llm.data.preparator.hf_processors.configs.agregator import AgregatorConfig
+from fast_llm.data.preparator.gpt_memmap.distributed_config import DatasetPreparatorDistributedConfig
+from fast_llm.data.preparator.gpt_memmap.hf_processors.configs import HFProcessorConfig, ProcessorsConfig
 
 if typing.TYPE_CHECKING:
     from fast_llm.data.preparator.gpt_memmap.prepare import GPTMemmapDatasetPreparator
@@ -79,39 +79,6 @@ class GPTHuggingfaceDatasetConfig(Config):
     )
 
 
-@config_class
-class DatasetPreparatorDistributedConfig(Config):
-    # TODO: Unify with fast_llm.engine.distributed.config.DistributedConfig
-
-    default_world_size: typing.ClassVar[int] = int(os.environ.get("WORLD_SIZE", 1))
-    default_rank: typing.ClassVar[int] = int(os.environ.get("RANK", 0))
-    world_size: int = Field(
-        default=None,
-        desc="Size of the world group. Typically provided by torchrun or equivalent through the `WORLD_SIZE` environment variable.",
-        hint=FieldHint.expert,
-        valid=check_field(Assert.gt, 0),
-    )
-    rank: int = Field(
-        default=None,
-        desc="Rank of the local process. Typically provided by torchrun or equivalent through the `RANK` environment variable.",
-        hint=FieldHint.expert,
-        valid=check_field(Assert.geq, 0),
-    )
-    backend: str = Field(
-        default="gloo",
-        desc="Distributed backend to use.",
-        hint=FieldHint.optional,
-    )
-
-    def _validate(self) -> None:
-        if self.world_size is None:
-            self.world_size = self.default_world_size
-        if self.rank is None:
-            self.rank = self.default_rank
-        super()._validate()
-        Assert.in_range(self.rank, 0, self.world_size)
-
-
 @config_class()
 class GPTMemmapDatasetPreparatorConfig(DatasetPreparatorConfig):
     preparator_name: typing.ClassVar[str] = "gpt_memmap"
@@ -167,13 +134,22 @@ class GPTMemmapDatasetPreparatorConfig(DatasetPreparatorConfig):
         hint=FieldHint.optional,
     )
 
-    processors: AgregatorConfig = Field(default=AgregatorConfig)
+    # TODO: Add desc and hint.
+    processors: ProcessorsConfig = Field(default=ProcessorsConfig)
 
     def _validate(self) -> None:
         assert self.tokenizer.path is not None
         if self.dataset.data_type is not None:
             Assert.incl(DataType.from_numpy(self.dataset.data_type.numpy), MEMMAP_DTYPES_INV)
         super()._validate()
+
+        # Propagete datasaet field name and workers count if not set in processors' configs.
+        for processor_config_field_name in self.processors.get_processor_types_map().keys():
+            config: HFProcessorConfig = getattr(self.processors, processor_config_field_name)
+            if config.field is None:
+                config.field = self.dataset.field
+            if config.num_proc is None:
+                config.num_proc = self.tokenize_workers
 
     @classmethod
     def get_dataset_preparator_class(cls) -> type["GPTMemmapDatasetPreparator"]:

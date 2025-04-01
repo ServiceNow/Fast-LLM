@@ -28,6 +28,8 @@ from fast_llm.data.preparator.gpt_memmap.config import GPTMemmapDatasetPreparato
 from fast_llm.data.tokenizer import Tokenizer
 from fast_llm.engine.config_utils.data_type import DataType, get_unsigned_integer_type
 from fast_llm.utils import Assert, normalize_probabilities, padded_cumsum
+from fast_llm.data.preparator.gpt_memmap.hf_processors.configs import HFProcessor
+from fast_llm.data.preparator.gpt_memmap.hf_processors.processor_metrics_logger import ProcessorMetricsLogger
 
 logger = logging.getLogger(__name__)
 
@@ -222,7 +224,22 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
             tokenize_fn = self._tokenize_batch
 
         # Process dataset before tokenizing
-        dataset = self._config.processors.apply(dataset)
+        metrics = []
+        pml = ProcessorMetricsLogger()
+        for processor_config_field_name in self._config.processors.order:
+            processor: HFProcessor = self._config.processors.get_processor_types_map()[processor_config_field_name](
+                config=getattr(self._config.processors, processor_config_field_name),
+                distributed_config=self._config.distributed,
+            )
+            pml.start()
+            dataset = processor.apply(dataset)
+            processor_metrics = pml.stop(dataset, processor.config.human_readable_name)
+            metrics.append(processor_metrics)
+            if self._config.distributed.rank == 0:
+                logger.info(ProcessorMetricsLogger.format(processor_metrics))
+
+        if self._config.distributed.rank == 0:
+            ProcessorMetricsLogger.save_as_yaml(pathlib.Path(self._config.output_path) / "processors_log", metrics)
 
         # Tokenize the dataset in parallel
         tokenized_dataset = dataset.map(
