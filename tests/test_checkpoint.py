@@ -354,7 +354,9 @@ def test_run_converted_model():
     )
     errors = []
     compare = CompareConfig()
-    model_as_hf = transformers.AutoModelForCausalLM.from_pretrained(_CONVERT_PATH / "huggingface_0").cuda()
+    model_as_hf = transformers.AutoModelForCausalLM.from_pretrained(
+        _CONVERT_PATH / "huggingface_0", trust_remote_code=HUGGINGFACE_CHECKPOINT_FORMAT.trust_remote_code
+    ).cuda()
     for name, model in zip(
         ("From state dict", "From Huggingface", "Native Huggingface"),
         (model_from_fast_llm, model_from_hf, model_as_hf),

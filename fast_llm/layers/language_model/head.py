@@ -137,8 +137,9 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
             # Last head should return the loss for backward.
             return language_model_loss
         else:
-            # Backward hook to compute the gradient of the loss
-            shared_hidden = AuxiliaryLoss.apply(shared_hidden, language_model_loss, 1.0)
+            if self.training:
+                # Backward hook to compute the gradient of the loss
+                shared_hidden = AuxiliaryLoss.apply(shared_hidden, language_model_loss, 1.0)
             # MTP: Return shared_hidden to be used by the next head.
             return shared_hidden
 

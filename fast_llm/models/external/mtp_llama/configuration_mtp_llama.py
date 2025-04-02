@@ -1,12 +1,10 @@
-"""LLaMA model configuration"""
-
-from ...configuration_utils import PretrainedConfig
-from ...modeling_rope_utils import rope_config_validation
+from transformers.configuration_utils import PretrainedConfig
+from transformers.modeling_rope_utils import rope_config_validation
 
 
-class LlamaConfig(PretrainedConfig):
+class MTPLlamaConfig(PretrainedConfig):
     r"""
-    This is the configuration class to store the configuration of a [`LlamaModel`]. It is used to instantiate an LLaMA
+    This is the configuration class to store the configuration of a [`MTPLlamaModel`]. It is used to instantiate an LLaMA
     model according to the specified arguments, defining the model architecture. Instantiating a configuration with the
     defaults will yield a similar configuration to that of the LLaMA-7B.
 
@@ -17,7 +15,7 @@ class LlamaConfig(PretrainedConfig):
     Args:
         vocab_size (`int`, *optional*, defaults to 32000):
             Vocabulary size of the LLaMA model. Defines the number of different tokens that can be represented by the
-            `inputs_ids` passed when calling [`LlamaModel`]
+            `inputs_ids` passed when calling [`MTPLlamaModel`]
         hidden_size (`int`, *optional*, defaults to 4096):
             Dimension of the hidden representations.
         intermediate_size (`int`, *optional*, defaults to 11008):
@@ -120,7 +118,7 @@ class LlamaConfig(PretrainedConfig):
     >>> configuration = model.config
     ```"""
 
-    model_type = "llama"
+    model_type = "mtp_llama"
     keys_to_ignore_at_inference = ["past_key_values"]
     # Default tensor parallel plan for base model `LlamaModel`
     base_model_tp_plan = {
@@ -162,6 +160,7 @@ class LlamaConfig(PretrainedConfig):
         attention_dropout=0.0,
         mlp_bias=False,
         head_dim=None,
+        prediction_heads=1,
         **kwargs,
     ):
         self.vocab_size = vocab_size
@@ -187,6 +186,7 @@ class LlamaConfig(PretrainedConfig):
         self.attention_dropout = attention_dropout
         self.mlp_bias = mlp_bias
         self.head_dim = head_dim if head_dim is not None else self.hidden_size // self.num_attention_heads
+        self.prediction_heads = prediction_heads
         # Validate the correctness of rotary position embeddings parameters
         # BC: if there is a 'type' field, copy it it to 'rope_type'.
         if self.rope_scaling is not None and "type" in self.rope_scaling:
@@ -200,6 +200,3 @@ class LlamaConfig(PretrainedConfig):
             tie_word_embeddings=tie_word_embeddings,
             **kwargs,
         )
-
-
-__all__ = ["LlamaConfig"]
