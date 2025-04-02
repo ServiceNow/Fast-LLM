@@ -48,7 +48,7 @@ class DistributedCheckpointHandler(CheckpointHandler):
         Assert.eq(metadata.shards[: len(shard_names)], list(shard_names))
 
         # Using `log_fn=bool` sets the output to true if the error list is non-empty.
-        same_format = config.optimizer_state and not loaded_config.compare(self._model.config, log_fn=bool)
+        same_format = config.optimizer_state and not metadata.config.compare(self._model.config, log_fn=bool)
         # Make sure all nodes agree on which loading scheme to use.
         # Note: they may not agree before the broadcast because of the rank comparison, but that's ok.
         same_format = broadcast_scalar(same_format, torch.uint8, self._model.distributed.world_group)

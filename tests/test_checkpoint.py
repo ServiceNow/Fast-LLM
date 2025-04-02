@@ -259,7 +259,6 @@ def test_load_pretrained_distributed_checkpoint():
         path=_CKPT_PATH,
         format=DistributedCheckpointFormat,
         optimizer_state=True,
-        load_config=ModelConfigType.fast_llm,
     )
     model = TEST_MODEL_CLS.from_pretrained(pretrained_config_ref)
     _compare_configs(config.base_model, model.config.base_model)
@@ -409,7 +408,6 @@ def test_load_pretrained_distributed_with_config():
     )
 
 
-@pytest.mark.skip(reason="Fails because of incorrect init config.")
 @pytest.mark.depends(on=["test_load_pretrained_distributed_in_dp2"])
 def test_load_pretrained_in_dp2_match_checkpoint():
     test_ckpt_path = TEST_RESULTS_PATH / f"test_{TEST_MODEL}_load_pretrained_distributed_in_dp2" / "checkpoint" / "1"
@@ -454,7 +452,6 @@ def test_load_pretrained_in_dp2_match_checkpoint():
         assert (stage_shard_test[stage_shard_ref.numel() :] == 0).all()  # noqa
 
 
-@pytest.mark.skip(reason="Fails because of incorrect init config.")
 @pytest.mark.slow
 @pytest.mark.depends(on=["test_load_pretrained_in_dp2_match_checkpoint"])
 def test_load_distributed_checkpoint_dp2():
