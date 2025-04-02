@@ -71,11 +71,16 @@ def rms_diff(x: "torch.Tensor", y: "torch.Tensor") -> "torch.Tensor":
 
 
 class Tag:
+    __slots__ = ("value",)
+
     def __init__(self, value: str):
         self.value = value
 
     def __repr__(self) -> str:
         return self.value
+
+    def __deepcopy__(self, memodict: dict[str, typing.Any]) -> typing.Self:
+        return self
 
 
 class Assert:

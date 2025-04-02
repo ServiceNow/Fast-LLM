@@ -391,9 +391,11 @@ class Config:
                 if not field.init or field._field_type == dataclasses._FIELD_CLASSVAR:  # noqa
                     continue
                 value = getattr(self, name)
-                if value is DEFAULT:
+                if isinstance(value, Tag):
+                    Assert.is_(value, DEFAULT)
                     # Replace the value with its default.
                     # We still need to validate because some fields have invalid defaults.
+                    # TODO: Improve (still needed with new config update format? Do earlier to allow implicit defaults?)
                     value = field.default
                 new_value = self._validate_nested(value, field.type, field.name, field.valid, errors, False)
                 setattr(self, name, new_value)
@@ -860,11 +862,7 @@ class Config:
         errors = compare_nested(self_dict, other_dict)
         if errors:
             return log(
-                f"Config diff:\n  "
-                + "\n  ".join(
-                    f"{'.'.join(key)}`: `{self_value}` != `{other_value}`"
-                    for key, (self_value, other_value) in errors.items()
-                ),
+                f"Config comparison errors:\n  " + "\n".join(errors),
                 log_fn=log_fn,
             )
 
