@@ -114,9 +114,10 @@ training:
   train_iters: 5_000
   logs:
     interval: 1
-  validation:
-    iterations: 25
-    interval: 1000
+  evaluations:
+    validation:
+      iterations: 25
+      interval: 1000
   checkpoint:
     interval: 1000
     keep: 5
@@ -131,10 +132,10 @@ batch:
   cross_document_attention: no # (1)!
 data:
   datasets:
-    Training:
+    training:
       type: file
       path: ./sft-tutorial/tokenized/Llama-3.1-8B/fast_llm_config_training.yaml
-    Validation:
+    validation:
       type: file
       path: ./sft-tutorial/tokenized/Llama-3.1-8B/fast_llm_config_validation.yaml
   truncate_documents: no # (2)!

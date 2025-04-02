@@ -93,7 +93,7 @@ class AddExpertsConfig(RunnableConfig):
         model.save_pretrained(self.output_dir, state_dict=state_dict)
 
         # Save surgery config as yaml
-        yaml.safe_dump(self.to_serialized(), (self.output_dir / "surgery_config.yaml").open("w"))
+        yaml.safe_dump(self.to_dict(), (self.output_dir / "surgery_config.yaml").open("w"))
         logger.info("Done!")
 
 

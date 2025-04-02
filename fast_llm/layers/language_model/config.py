@@ -22,6 +22,12 @@ class LanguageModelLossNames:
     language_model_loss = "language_model_loss"
     z_loss = "z_loss"
 
+    @staticmethod
+    def multi_token_prediction_loss(index: int) -> str:
+        if index == 0:
+            return LanguageModelLossNames.language_model_loss
+        return f"language_model_loss_{index}"
+
 
 class LanguageModelKwargs:
     position_ids = "position_ids"
@@ -56,6 +62,12 @@ class LanguageModelArchitectureConfig(BaseModelArchitectureConfig):
     )
     tie_word_embeddings: bool = Field(
         default=True, desc="Tie the output weights (logits) with the vocabulary embedding.", hint=FieldHint.core
+    )
+    prediction_heads: int = Field(
+        default=1,
+        desc="Number of multi-token prediction heads.",
+        hint=FieldHint.feature,
+        valid=check_field(Assert.gt, 0),
     )
 
     def _validate(self) -> None:

@@ -492,9 +492,10 @@ Save the following as `fast-llm-tutorial/train-config.yaml`:
       train_iters: 100  # (1)!
       logs:
         interval: 10
-      validation:
-        iterations: 25
-        interval: 100
+      evaluations:
+        validation:
+          iterations: 25
+          interval: 100
       export:  # (2)!
         format: llama
         interval: 100
@@ -508,10 +509,10 @@ Save the following as `fast-llm-tutorial/train-config.yaml`:
       batch_size: 480  # (5)!
     data:
       datasets:
-        Training:
+        training:
           type: file
           path: fast-llm-tutorial/dataset/fast_llm_config_training.yaml  # (6)!
-        Validation:
+        validation:
           type: file
           path: fast-llm-tutorial/dataset/fast_llm_config_validation.yaml  # (6)!
     optimizer:
@@ -549,9 +550,10 @@ Save the following as `fast-llm-tutorial/train-config.yaml`:
       train_iters: 100_000  # (1)!
       logs:
         interval: 10
-      validation:
-        iterations: 25
-        interval: 1000
+      evaluations:
+        validation:
+          iterations: 25
+          interval: 1000
       checkpoint:
         interval: 1000
         keep: 5
@@ -569,10 +571,10 @@ Save the following as `fast-llm-tutorial/train-config.yaml`:
       batch_size: 512  # (5)!
     data:
       datasets:
-        Training:
+        training:
           type: file
           path: fast-llm-tutorial/dataset/fast_llm_config_training.yaml  # (6)!
-        Validation:
+        validation:
           type: file
           path: fast-llm-tutorial/dataset/fast_llm_config_validation.yaml  # (6)!
     optimizer:  # (7)!

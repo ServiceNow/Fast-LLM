@@ -56,7 +56,9 @@ class StateDictCheckpointHandler(CheckpointHandler):
                 saver.add_tensor(self._get_key(exported_name, shard_name), exported_tensor)
 
         for shard_name, shard_state_dict in state_dict.items():
-            assert not shard_state_dict, (shard_name, list(state_dict))
+            assert (
+                not shard_state_dict
+            ), f"Un-handled entries after conversion: {({k: list(v) for k, v in state_dict.items()})}"
 
         index = saver.finalize()
         if self._model.config.distributed.rank == 0:
@@ -69,7 +71,7 @@ class StateDictCheckpointHandler(CheckpointHandler):
     def _serialize_metadata(
         self, config: CheckpointSaveMetadataConfig, metadata: CheckpointMetadata
     ) -> dict[str, typing.Any]:
-        return metadata.to_serialized()
+        return metadata.to_dict()
 
     def load(self, config: CheckpointLoadConfig, metadata: CheckpointMetadata) -> None:
         with SafeLoad(self._model, shard_names=self.get_shard_names(config), timeout=config.timeout) as context:
@@ -90,7 +92,7 @@ class StateDictCheckpointHandler(CheckpointHandler):
                     context.mark_as_loaded(loaded, (parameter_name, shard_name))
 
             for shard_name, shard_state_dict in state_dict.items():
-                assert not shard_state_dict, (shard_name, list(state_dict))
+                assert not shard_state_dict, (shard_name, list(shard_state_dict))
 
     @classmethod
     @abc.abstractmethod
