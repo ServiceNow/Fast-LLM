@@ -186,7 +186,7 @@ class TransformerSubLayerName(str, enum.Enum):
 @config_class()
 class TransformerPeftConfig(PeftConfig):
     layers: list[TransformerSubLayerName] = Field(
-        default_factory=lambda: [TransformerSubLayerName.query, TransformerSubLayerName.value_],
+        default=None,
         desc="The layers on which to apply LoRA.",
         hint=FieldHint.feature,
     )
@@ -220,6 +220,15 @@ class TransformerPeftConfig(PeftConfig):
         return parameter
 
     def _validate(self) -> None:
+        if self.layers is None:
+            with self._set_implicit_default():
+                # Setting the default layers only whee PeFT is enabled
+                # so they don't appear when serializing the default transformer config.
+                self.layers = (
+                    [TransformerSubLayerName.query, TransformerSubLayerName.value_]
+                    if self.type == PeftType.lora
+                    else []
+                )
         if self.type != PeftType.none:
             if TransformerSubLayerName.mlp_1 in self.layers or TransformerSubLayerName.mlp_2 in self.layers:
                 # TODO: Add MLP support.
