@@ -338,12 +338,13 @@ class TransformerArchitectureConfig(BaseModelArchitectureConfig):
     )
 
     def _validate(self) -> None:
-        if self.ffn_hidden_size is None:
-            self.ffn_hidden_size = 4 * self.hidden_size
-        if self.kv_channels is None:
-            self.kv_channels = div(self.hidden_size, self.num_attention_heads)
-        if self.activation_type is None:
-            self.activation_type = ActivationType.silu if self.gated else ActivationType.gelu
+        with self._set_implicit_default():
+            if self.ffn_hidden_size is None:
+                self.ffn_hidden_size = 4 * self.hidden_size
+            if self.kv_channels is None:
+                self.kv_channels = div(self.hidden_size, self.num_attention_heads)
+            if self.activation_type is None:
+                self.activation_type = ActivationType.silu if self.gated else ActivationType.gelu
         self.projection_size = self.num_attention_heads * self.kv_channels
         self.num_unshared_experts = self.num_experts - self.num_shared_experts
 
@@ -658,46 +659,47 @@ class TransformerConfig(TransformerArchitectureConfig, BaseModelConfig):
     )
 
     def _validate(self) -> None:
-        if self.init_method_std is None:
-            self.init_method_std = self.hidden_size**-0.5
-        if self.init_method_std_qkv is None:
-            self.init_method_std_qkv = self.init_method_std
-        if self.init_method_std_attn_proj is None:
-            self.init_method_std_attn_proj = self.init_method_std / (2 * self.num_layers) ** 0.5
-        if self.init_method_std_mlp_1 is None:
-            self.init_method_std_mlp_1 = self.init_method_std
-        if self.init_method_std_mlp_2 is None:
-            self.init_method_std_mlp_2 = self.init_method_std / (2 * self.num_layers) ** 0.5
-        if self.mlp_lr_scale is None or len(self.mlp_lr_scale) == 0:
-            self.mlp_lr_scale = [None]
-        if self.init_method_max_qkv is None:
-            self.init_method_max_qkv = self.init_method_max
-        if self.init_method_min_qkv is None:
-            self.init_method_min_qkv = self.init_method_min
-        if self.init_method_max_attn_proj is None:
-            self.init_method_max_attn_proj = self.init_method_max
-        if self.init_method_min_attn_proj is None:
-            self.init_method_min_attn_proj = self.init_method_min
-        if self.init_method_max_mlp_1 is None:
-            self.init_method_max_mlp_1 = self.init_method_max
-        if self.init_method_min_mlp_1 is None:
-            self.init_method_min_mlp_1 = self.init_method_min
-        if self.init_method_max_mlp_2 is None:
-            self.init_method_max_mlp_2 = self.init_method_max
-        if self.init_method_min_mlp_2 is None:
-            self.init_method_min_mlp_2 = self.init_method_min
-        if self.init_method_min is not None and self.init_method_max is not None:
-            Assert.leq(self.init_method_min, self.init_method_max)
-        if self.init_method_min_qkv is not None and self.init_method_max_qkv is not None:
-            Assert.leq(self.init_method_min, self.init_method_max)
-        if self.init_method_min_qkv is not None and self.init_method_max_qkv is not None:
-            Assert.leq(self.init_method_min_qkv, self.init_method_max_qkv)
-        if self.init_method_min_attn_proj is not None and self.init_method_max_attn_proj is not None:
-            Assert.leq(self.init_method_min_attn_proj, self.init_method_max_attn_proj)
-        if self.init_method_min_mlp_1 is not None and self.init_method_max_mlp_1 is not None:
-            Assert.leq(self.init_method_min_mlp_1, self.init_method_max_mlp_1)
-        if self.init_method_min_mlp_2 is not None and self.init_method_max_mlp_2 is not None:
-            Assert.leq(self.init_method_min_mlp_2, self.init_method_max_mlp_2)
+        with self._set_implicit_default():
+            if self.init_method_std is None:
+                self.init_method_std = self.hidden_size**-0.5
+            if self.init_method_std_qkv is None:
+                self.init_method_std_qkv = self.init_method_std
+            if self.init_method_std_attn_proj is None:
+                self.init_method_std_attn_proj = self.init_method_std / (2 * self.num_layers) ** 0.5
+            if self.init_method_std_mlp_1 is None:
+                self.init_method_std_mlp_1 = self.init_method_std
+            if self.init_method_std_mlp_2 is None:
+                self.init_method_std_mlp_2 = self.init_method_std / (2 * self.num_layers) ** 0.5
+            if self.mlp_lr_scale is None or len(self.mlp_lr_scale) == 0:
+                self.mlp_lr_scale = [None]
+            if self.init_method_max_qkv is None:
+                self.init_method_max_qkv = self.init_method_max
+            if self.init_method_min_qkv is None:
+                self.init_method_min_qkv = self.init_method_min
+            if self.init_method_max_attn_proj is None:
+                self.init_method_max_attn_proj = self.init_method_max
+            if self.init_method_min_attn_proj is None:
+                self.init_method_min_attn_proj = self.init_method_min
+            if self.init_method_max_mlp_1 is None:
+                self.init_method_max_mlp_1 = self.init_method_max
+            if self.init_method_min_mlp_1 is None:
+                self.init_method_min_mlp_1 = self.init_method_min
+            if self.init_method_max_mlp_2 is None:
+                self.init_method_max_mlp_2 = self.init_method_max
+            if self.init_method_min_mlp_2 is None:
+                self.init_method_min_mlp_2 = self.init_method_min
+            if self.init_method_min is not None and self.init_method_max is not None:
+                Assert.leq(self.init_method_min, self.init_method_max)
+            if self.init_method_min_qkv is not None and self.init_method_max_qkv is not None:
+                Assert.leq(self.init_method_min, self.init_method_max)
+            if self.init_method_min_qkv is not None and self.init_method_max_qkv is not None:
+                Assert.leq(self.init_method_min_qkv, self.init_method_max_qkv)
+            if self.init_method_min_attn_proj is not None and self.init_method_max_attn_proj is not None:
+                Assert.leq(self.init_method_min_attn_proj, self.init_method_max_attn_proj)
+            if self.init_method_min_mlp_1 is not None and self.init_method_max_mlp_1 is not None:
+                Assert.leq(self.init_method_min_mlp_1, self.init_method_max_mlp_1)
+            if self.init_method_min_mlp_2 is not None and self.init_method_max_mlp_2 is not None:
+                Assert.leq(self.init_method_min_mlp_2, self.init_method_max_mlp_2)
         super()._validate()
         Assert.geq(self.attention_dropout, 0)
         Assert.geq(self.hidden_dropout, 0)

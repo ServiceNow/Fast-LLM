@@ -40,7 +40,7 @@ class Wandb:
                 if wandb_path is not None:
                     yaml.safe_dump(wandb_config, wandb_path.open("w"))
             # TODO: Does wandb work with nested configs?
-            self._wandb = wandb.init(config=experiment_config.to_serialized(), **wandb_config)
+            self._wandb = wandb.init(config=experiment_config.to_dict(), **wandb_config)
         else:
             self._wandb = None
 

@@ -32,7 +32,7 @@ class DistributedCheckpointHandler(CheckpointHandler):
         return CheckpointMetadata.from_dict(yaml.safe_load((config.path / "metadata.yaml").open("r")))
 
     def save(self, config: CheckpointSaveConfig, metadata: CheckpointMetadata) -> None:
-        serialized_metadata = metadata.to_serialized()
+        serialized_metadata = metadata.to_dict()
         if self._model.config.distributed.rank == 0:
             yaml.safe_dump(serialized_metadata, (config.path / "metadata.yaml").open("w"))
         safetensors.torch.save_file(
@@ -50,10 +50,8 @@ class DistributedCheckpointHandler(CheckpointHandler):
         Assert.leq(set(self.get_shard_names(config)), set(metadata.shards))
         Assert.eq(metadata.shards[: len(shard_names)], list(shard_names))
 
-        same_format = (
-            loaded_config.to_serialized(verbose=None) == self._model.config.to_serialized(verbose=None)
-            and config.optimizer_state
-        )
+        # Using `log_fn=bool` sets the output to true if the error list is non-empty.
+        same_format = config.optimizer_state and not loaded_config.compare(self._model.config, log_fn=bool)
         # Make sure all nodes agree on which loading scheme to use.
         # Note: they may not agree before the broadcast because of the rank comparison, but that's ok.
         same_format = broadcast_scalar(same_format, torch.uint8, self._model.distributed.world_group)

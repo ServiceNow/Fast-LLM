@@ -176,7 +176,7 @@ class GPTSampledIndexedDataset(SampledDataset):
             "unshuffled_epochs": unshuffled_epochs,
             "sequence_length": self._sequence_length,
             "truncate_documents": self._truncate_documents,
-            "config": self._config.to_serialized(),
+            "config": self._config.to_dict(),
         }
         if self._truncate_documents:
             yaml_data["unshuffled_tokens"] = tokens_per_epoch * unshuffled_epochs
