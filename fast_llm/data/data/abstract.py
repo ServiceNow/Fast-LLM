@@ -4,7 +4,7 @@ import typing
 
 from fast_llm.config import Configurable
 from fast_llm.data.data.config import DataConfig
-from fast_llm.engine.distributed.config import DistributedConfig, PhaseType
+from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.engine.schedule.config import BatchConfig
 
 if typing.TYPE_CHECKING:
@@ -45,5 +45,6 @@ class Data[ConfigType: DataConfig](Configurable[ConfigType], abc.ABC):
         consumed_samples: int,
         num_workers: int,
         prefetch_factor: int | None = None,
+        timeout: float = 60,
     ) -> typing.Iterator[typing.Any]:
         pass

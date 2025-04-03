@@ -143,6 +143,7 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
         consumed_samples: int,
         num_workers: int,
         prefetch_factor: int | None = None,
+        timeout: float = 60,
     ) -> typing.Iterator[typing.Any]:
         assert self._is_setup
 
