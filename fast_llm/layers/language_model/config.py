@@ -4,7 +4,7 @@ from fast_llm.config import Field, FieldHint, FieldUpdate, check_field, config_c
 from fast_llm.engine.base_model.config import BaseModelArchitectureConfig, BaseModelConfig
 from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
 from fast_llm.engine.distributed.config import DistributedDimNames
-from fast_llm.functional.config import CrossEntropyImpl
+from fast_llm.functional.config import CrossEntropyImpl, LossFunctionType
 from fast_llm.layers.transformer.config import TransformerArchitectureConfig, TransformerConfig
 from fast_llm.utils import Assert
 
@@ -28,6 +28,8 @@ class LanguageModelKwargs:
     # TODO: These are generic
     labels = "labels"
     phase = "phase"
+    chosen_spans = "chosen_spans"
+    rejected_spans = "rejected_spans"
 
 
 @config_class()
@@ -126,6 +128,16 @@ class LanguageModelBaseConfig(LanguageModelArchitectureConfig, BaseModelConfig):
     init_method_min_embed: float | None = Field(
         default=None,
         desc="Min value for clamping initialized weights of the vocabulary embedding and output (logits).",
+        hint=FieldHint.feature,
+    )
+    loss_function_type: LossFunctionType = Field(
+        default=LossFunctionType.cross_entropy,
+        desc="Type of loss function to use",
+        hint=FieldHint.feature,
+    )
+    beta: float | None = Field(
+        default=1.0,
+        desc="Beta value for DPO loss.",
         hint=FieldHint.feature,
     )
     cross_entropy_impl: CrossEntropyImpl = Field(

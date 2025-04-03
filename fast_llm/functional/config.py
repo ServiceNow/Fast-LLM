@@ -91,3 +91,7 @@ class CrossEntropyImpl(str, enum.Enum):
     torch = "torch"
     fused = "fused"
     triton = "triton"
+
+class LossFunctionType(str, enum.Enum):
+    cross_entropy = "cross_entropy"
+    dpo = "dpo"

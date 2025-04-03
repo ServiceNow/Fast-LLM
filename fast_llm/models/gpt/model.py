@@ -254,7 +254,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                 TransformerKwargs.presents: presents,
             }
             if phase != PhaseType.inference:
-                sequence_offset = sequence_k - sequence_q + 1
+                sequence_offset = sequence_k - sequence_q + 1  # +1 for shift in labels
                 if sequence_first:
                     labels = batch.token_ids[sequence_offset : sequence_k + 1]
                 else:
@@ -266,8 +266,10 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                     for i, spans in enumerate(batch.loss_masking_spans):
                         if not spans.numel():
                             continue
+                        # filter spans within the sequence or partially within the sequence
                         valid_spans = spans[(spans[:, 0] <= sequence_k) & (spans[:, 1] >= sequence_offset)]
                         if valid_spans.numel():
+                            # if span is partially within the sequence, truncate parts of spans that are outside of the sequence
                             valid_spans[:, 0].clamp_(min=sequence_offset)
                             valid_spans[:, 1].clamp_(max=sequence_k)
                             valid_spans -= sequence_offset
@@ -276,6 +278,30 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                                     labels[start : end + 1, i] = -100
                                 else:
                                     labels[i, start : end + 1] = -100
+                if batch.chosen_loss_masking_spans is not None:
+                    for i, spans in enumerate(batch.chosen_loss_masking_spans):
+                        if not spans.numel():
+                            continue
+                        # filter spans within the sequence or partially within the sequence
+                        valid_spans = spans[(spans[0] <= sequence_k) & (spans[1] >= sequence_offset)]
+                        if valid_spans.numel():
+                            # if span is partially within the sequence, truncate parts of spans that are outside of the sequence
+                            valid_spans[:, 0].clamp_(min=sequence_offset)
+                            valid_spans[:, 1].clamp_(max=sequence_k)
+                            valid_spans -= sequence_offset
+                            kwargs[LanguageModelKwargs.chosen_spans] = valid_spans
+                if batch.rejected_loss_masking_spans is not None:
+                    for i, spans in enumerate(batch.rejected_loss_masking_spans):
+                        if not spans.numel():
+                            continue
+                        # filter spans within the sequence or partially within the sequence
+                        valid_spans = spans[(spans[0] <= sequence_k) & (spans[1] >= sequence_offset)]
+                        if valid_spans.numel():
+                            # if span is partially within the sequence, truncate parts of spans that are outside of the sequence
+                            valid_spans[:, 0].clamp_(min=sequence_offset)
+                            valid_spans[:, 1].clamp_(max=sequence_k)
+                            valid_spans -= sequence_offset
+                            kwargs[LanguageModelKwargs.rejected_spans] = valid_spans
                 kwargs[LanguageModelKwargs.labels] = labels
             if self._config.use_absolute_position_embeddings:
                 self._position_embedding_preprocessor.preprocess(kwargs)

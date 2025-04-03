@@ -10,9 +10,10 @@ from fast_llm.engine.base_model.base_model import Layer
 from fast_llm.engine.config_utils.tensor_space import DefaultDimNames, TensorDim, TensorSpace
 from fast_llm.engine.distributed.config import DistributedDimNames
 from fast_llm.functional.autograd import grad_is_context, wrap_forward_backward
-from fast_llm.functional.config import CrossEntropyImpl, TritonConfig
+from fast_llm.functional.config import CrossEntropyImpl, TritonConfig, LossFunctionType
 from fast_llm.functional.cross_entropy import cross_entropy_forward_backward
 from fast_llm.functional.linear import output_parallel_linear_backward, output_parallel_linear_forward
+from fast_llm.functional.dpo import compute_simplified_dpo_loss
 from fast_llm.layers.common.auxiliary_loss import z_loss
 from fast_llm.layers.language_model.config import (
     LanguageModelBaseConfig,
@@ -74,14 +75,20 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
                 ),
             )
 
-        self._cross_entropy_impl = config.cross_entropy_impl
-        if self._cross_entropy_impl == CrossEntropyImpl.auto:
-            if self._parallel_embeddings:
-                self._cross_entropy_impl = CrossEntropyImpl.fused
-            elif TritonConfig.TRITON_ENABLED:
-                self._cross_entropy_impl = CrossEntropyImpl.triton
-            else:
-                self._cross_entropy_impl = CrossEntropyImpl.fused
+        self._loss_function_type = config.loss_function_type
+        if self._loss_function_type == LossFunctionType.cross_entropy:
+            self._cross_entropy_impl = config.cross_entropy_impl
+            if self._cross_entropy_impl == CrossEntropyImpl.auto:
+                if self._parallel_embeddings:
+                    self._cross_entropy_impl = CrossEntropyImpl.fused
+                elif TritonConfig.TRITON_ENABLED:
+                    self._cross_entropy_impl = CrossEntropyImpl.triton
+                else:
+                    self._cross_entropy_impl = CrossEntropyImpl.fused
+            self._loss_fcn = self._logits_cross_entropy_forward_backward_split
+        else:
+            self._loss_fcn = self._logits_dpo
+            self.dpo_beta = config.beta
 
         self._forward = wrap_forward_backward(self._forward_backward, grad_is_context)
 
@@ -127,7 +134,7 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
         )
 
         output_weights = kwargs[WORD_EMBEDDINGS_WEIGHT] if self._tie_word_embeddings else self.output_weights
-        loss, ln_output_grad = self._logits_cross_entropy_forward_backward_split(
+        loss, ln_output_grad = self._loss_fcn(
             ln_output.detach(), labels, output_weights, grad_output, kwargs, losses
         )
 
@@ -136,6 +143,38 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
             return loss, input_.grad
         else:
             return loss, None
+        
+    def _logits_dpo(
+            self,
+            input_: torch.Tensor,
+            labels: torch.Tensor | None,
+            weight: torch.Tensor,
+            grad_output: float,
+            kwargs: dict,
+            losses: dict | None = None
+        ) -> tuple[torch.Tensor | None, torch.Tensor | None]:
+        logits, context = output_parallel_linear_forward(
+            input_=input_,
+            weight=weight,
+            bias=None,
+            group=self._tensor_space.distributed.tensor_group if self._parallel_embeddings else None,
+            sequence_parallel=self._sequence_parallel and self._parallel_embeddings,
+        )
+
+        loss, grad = compute_simplified_dpo_loss(
+            logits.flatten(0, -2),
+            labels,
+            kwargs[LanguageModelKwargs.chosen_spans],
+            kwargs[LanguageModelKwargs.rejected_spans],
+            self.dpo_beta,
+            grad_output
+        )
+
+        # TODO: de-allocate earlier.
+        del logits
+        return loss, output_parallel_linear_backward(grad, context).view_as(input_)
+
+
 
     def _logits_cross_entropy_forward_backward_split(
         self,
