@@ -120,6 +120,9 @@ class GPTSampledIndexedDataset(SampledDataset):
             # contains cumulative sum of document sizes grouped by TOKEN_CUMSUM_RATE in shuffled order
             self._token_cumsum_shuffled = MemmapArray(base_path.with_name(base_path.name + "_shuffled_cumsum.npy"))
             self._token_cumsum_unshuffled = MemmapArray(base_path.with_name(base_path.name + "_unshuffled_cumsum.npy"))
+
+            self._document_sizes = MemmapArray(base_path.with_name(base_path.name + "_shuffled_cumsum.npy"))
+
             self._yaml_path = base_path.with_suffix(".yaml")
             # Sample or validate the dataset of a given rank.
             if sampling.distributed.config.rank == sampling.get_next_rank():
@@ -132,11 +135,11 @@ class GPTSampledIndexedDataset(SampledDataset):
         Create a `GPTSampledDataset` with the requested parameters.
         """
         # Get the document sizes, the main information needed for sampling.
-        self.document_sizes = torch.from_numpy(self._indexed_dataset.get_document_sizes()).to(self._device)
+        document_sizes = torch.from_numpy(self._indexed_dataset.get_document_sizes()).to(self._device)
 
         # Calculate basic stats.
-        documents_per_epoch = self.document_sizes.numel()
-        tokens_per_epoch = self.document_sizes.sum().item()
+        documents_per_epoch = document_sizes.numel()
+        tokens_per_epoch = document_sizes.sum().item()
         # We produce sequences of length `self._sequence_length + 1` so the last token has a label,
         # but we also include that last label in the following sample,
         # so we need `sequence_length * num_samples + 1` tokens in total.
@@ -160,7 +163,7 @@ class GPTSampledIndexedDataset(SampledDataset):
             "dataset": {
                 "name": self._indexed_dataset.name,
                 "documents_per_epoch": documents_per_epoch,
-                "tokens_per_epoch": tokens_per_epoch,
+                "tokens_per_epoch": tokens_per_epoch
             },
             "num_samples": self._num_samples,
             "unshuffled_epochs": unshuffled_epochs,
@@ -247,7 +250,7 @@ class GPTSampledIndexedDataset(SampledDataset):
         if self._config.enable_packing:
             if shuffled_epochs > 0:
                 token_cumsum_shuffled = self._get_token_cumsum(
-                    self.document_sizes[
+                    document_sizes[
                         # Torch indexing only works with int32 or int64
                         document_shuffling.to(
                             dtype=torch.int64 if document_shuffling.dtype == torch.int64 else torch.int32
@@ -268,15 +271,17 @@ class GPTSampledIndexedDataset(SampledDataset):
 
             if unshuffled_epochs > 0:
                 token_cumsum_unshuffled = self._get_token_cumsum(
-                    self.document_sizes, offset=0, dtype=get_unsigned_integer_type(tokens_per_epoch * num_epochs).torch
+                    document_sizes, offset=0, dtype=get_unsigned_integer_type(tokens_per_epoch * num_epochs).torch
                 )
                 self._token_cumsum_unshuffled.save(token_cumsum_unshuffled.numpy(force=self._config.gpu))
         else:
-            self._document_shuffling.save(
-                document_shuffling[:self._num_samples].numpy(
-                    force=self._config.gpu
+            if shuffled_epochs > 0:
+                self._document_shuffling.save(
+                    document_shuffling[:self._num_samples].numpy(
+                        force=self._config.gpu
+                    )
                 )
-            )
+            self._document_sizes.save(document_sizes.numpy(force=self._config.gpu))
 
     def _get_token_cumsum(self, sizes: torch.Tensor, offset: int, dtype: torch.dtype) -> torch.Tensor:
         # Create the output tensor.
@@ -385,10 +390,14 @@ class GPTSampledIndexedDataset(SampledDataset):
             sample = self._indexed_dataset.get(
                 document_index,
                 offset=0,
-                length=self.document_sizes[document_index],
+                length=self._document_sizes[document_index],
                 use_loss_masking_spans=self._config.use_loss_masking_spans,
                 use_preference_loss_masking_spans=self._config.use_preference_loss_masking_spans
             )
+
+            chosen_loss_masking_span_end = sample.chosen_loss_masking_spans[1] + 1
+            sequence_lengths = np.array([chosen_loss_masking_span_end, len(sample.token_ids) - chosen_loss_masking_span_end])
+            sample.sequence_lengths = sequence_lengths
 
             return sample
 

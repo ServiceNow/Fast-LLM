@@ -106,7 +106,7 @@ class GPTMemmapDataset(GPTIndexedDataset):
                         dtype=np.int32,
                         count=2,
                         offset=chosen_span_offset + idx * 2 * np.dtype(np.int32).itemsize,
-                    ).reshape(-1, 2)
+                    )
                 )
             
             rejected_span_offset = offset + self._document_sizes.nbytes + self._pointers.nbytes + np.array(self._chosen_spans).nbytes
@@ -117,7 +117,7 @@ class GPTMemmapDataset(GPTIndexedDataset):
                         dtype=np.int32,
                         count=2,
                         offset=rejected_span_offset + idx * 2 * np.dtype(np.int32).itemsize,
-                    ).reshape(-1, 2)
+                    )
                 )
 
         self._bin_buffer_mmap = np.memmap(self._prefix.with_suffix(".bin"), mode="r", order="C")
@@ -169,30 +169,30 @@ class GPTMemmapDataset(GPTIndexedDataset):
             chosen_spans = self._chosen_spans[idx]
 
             # filter spans that are outside the range of the selected tokens in the document
-            chosen_sample_spans = chosen_spans[
-                (chosen_spans[:, 0] < offset + len(token_ids)) & (chosen_spans[:, 1] >= offset)
-            ]
+            chosen_spans = chosen_spans[
+                (chosen_spans[0] < offset + len(token_ids)) & (chosen_spans[1] >= offset)
+            ][0]
 
             # subtract by offset to normalize span boundaries
-            chosen_spans[:, 0] = np.maximum(chosen_spans[:, 0], offset) - offset # offset 
-            chosen_spans[:, 1] = np.minimum(chosen_spans[:, 1], offset + len(token_ids) - 1) - offset
+            chosen_spans[0] = np.maximum(chosen_spans[0], offset) - offset # offset 
+            chosen_spans[1] = np.minimum(chosen_spans[1], offset + len(token_ids) - 1) - offset
 
             rejected_spans = self._rejected_spans[idx]
 
             # filter spans that are outside the range of the selected tokens in the document
-            rejected_sample_spans = rejected_spans[
-                (rejected_spans[:, 0] < offset + len(token_ids)) & (rejected_spans[:, 1] >= offset)
-            ]
+            rejected_spans = rejected_spans[
+                (rejected_spans[0] < offset + len(token_ids)) & (rejected_spans[1] >= offset)
+            ][0]
 
             # subtract by offset to normalize span boundaries
-            rejected_spans[:, 0] = np.maximum(rejected_spans[:, 0], offset) - offset # offset 
-            rejected_spans[:, 1] = np.minimum(rejected_spans[:, 1], offset + len(token_ids) - 1) - offset
+            rejected_spans[0] = np.maximum(rejected_spans[0], offset) - offset # offset 
+            rejected_spans[1] = np.minimum(rejected_spans[1], offset + len(token_ids) - 1) - offset
 
         return GPTSample(
             token_ids=token_ids, 
             loss_masking_spans=sample_spans, 
-            chosen_loss_masking_spans=chosen_sample_spans, 
-            rejected_loss_masking_spans=rejected_sample_spans
+            chosen_loss_masking_spans=chosen_spans, 
+            rejected_loss_masking_spans=rejected_spans
         )
 
     @property

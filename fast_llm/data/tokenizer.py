@@ -22,6 +22,8 @@ class Tokenizer:
             raise ValueError("Tokenizer does not have an BOS token.")
         self.eod_id = self.tokenizer.eos_token_id
         self.bod_id = self.tokenizer.bos_token_id
+        self.eod_token = self.tokenizer.eos_token
+        self.bod_token = self.tokenizer.bos_token
 
     @property
     def vocab_size(self) -> int:
@@ -52,6 +54,9 @@ class Tokenizer:
         token_spans = []
         char_pos = 0
         beginning_of_text = True
+        if text.startswith(self.bod_token):
+            beginning_of_text = False
+        
         for start, end in char_spans:
             if char_pos < start:
                 curr_text = text[char_pos:start]
@@ -60,7 +65,11 @@ class Tokenizer:
                 input_ids.extend(tokenized_text)
             curr_text = text[start : end + 1]
             if end >= len(text) - 1:
-                tokenized_text = self.tokenize(curr_text, begin=beginning_of_text, end=True)
+                tokenized_text = self.tokenize(
+                    curr_text, 
+                    begin=beginning_of_text, 
+                    end=True if not curr_text.endswith(self.eod_token) else False
+                )
             else:
                 tokenized_text = self.tokenize(curr_text, begin=beginning_of_text, end=False)
             beginning_of_text = False
@@ -69,7 +78,11 @@ class Tokenizer:
             char_pos = end + 1
         if char_pos < len(text):
             curr_text = text[char_pos:]
-            tokenized_text = self.tokenize(curr_text, begin=beginning_of_text, end=True)
+            tokenized_text = self.tokenize(
+                curr_text, 
+                begin=beginning_of_text, 
+                end=True if not curr_text.endswith(self.eod_token) else False
+            )
             input_ids.extend(tokenized_text)
         return input_ids, token_spans
 
