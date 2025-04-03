@@ -181,11 +181,14 @@ class GPTSampledIndexedDataset(SampledDataset):
 
         if self._yaml_path is not None and self._yaml_path.is_file():
             loaded_yaml_data = yaml.safe_load(self._yaml_path.open("r"))
-            if "unshuffled_tokens" not in loaded_yaml_data:
+            if "unshuffled_tokens" in loaded_yaml_data:
+                del loaded_yaml_data["unshuffled_tokens"]
+            else:
                 # Backward compatibility
                 # TODO v0.x: Remove
                 assert self._truncate_documents
                 loaded_yaml_data["unshuffled_tokens"] = tokens_per_epoch * unshuffled_epochs
+
             if loaded_yaml_data != yaml_data:
                 raise RuntimeError(
                     f"Invalid dataset cache for dataset {self.name}."
