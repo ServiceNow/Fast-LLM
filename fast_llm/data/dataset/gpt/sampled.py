@@ -65,7 +65,7 @@ class MemmapArray:
 
     def _lazy_load(self):
         if self._array is None:
-            assert self.exists()
+            assert self.exists(), self._path
             self._array = np.load(self._path, mmap_mode="r")
 
 
@@ -178,25 +178,26 @@ class GPTSampledIndexedDataset(SampledDataset):
             "truncate_documents": self._truncate_documents,
             "config": self._config.to_serialized(),
         }
-        self._load_yaml_data(yaml_data)
+        if self._truncate_documents:
+            yaml_data["unshuffled_tokens"] = tokens_per_epoch * unshuffled_epochs
 
-        if self._yaml_path is not None:
-            if self._yaml_path.is_file():
-                loaded_yaml_data = yaml.safe_load(self._yaml_path.open("r"))
-                unshuffled_tokens = loaded_yaml_data.pop("unshuffled_tokens", None)
-                if unshuffled_tokens is not None:
-                    self._unshuffled_tokens = unshuffled_tokens
-                if loaded_yaml_data != yaml_data:
-                    raise RuntimeError(
-                        f"Invalid dataset cache for dataset {self.name}."
-                        " If this is due to an intended configuration change,"
-                        " please delete the cache before continuing."
-                        f"\nCurrent config:\n{yaml.safe_dump(yaml_data)}"
-                        f"\nCached config:\n{yaml.safe_dump(loaded_yaml_data)}"
-                    )
-                # Dataset is already sampled, skip.
-                logger.info(f"Using existing sampling for dataset {self.name}")
-                return
+        if self._yaml_path is not None and self._yaml_path.is_file():
+            loaded_yaml_data = yaml.safe_load(self._yaml_path.open("r"))
+            self._load_yaml_data(yaml_data)
+            if not self._truncate_documents:
+                del loaded_yaml_data["unshuffled_tokens"]
+
+            if loaded_yaml_data != yaml_data:
+                raise RuntimeError(
+                    f"Invalid dataset cache for dataset {self.name}."
+                    " If this is due to an intended configuration change,"
+                    " please delete the cache before continuing."
+                    f"\nCurrent config:\n{yaml.safe_dump(yaml_data)}"
+                    f"\nCached config:\n{yaml.safe_dump(loaded_yaml_data)}"
+                )
+            # Dataset is already sampled, skip.
+            logger.info(f"Using existing sampling for dataset {self.name}")
+            return
 
         if shuffled_documents > 1e8:
             warnings.warn(
@@ -255,33 +256,32 @@ class GPTSampledIndexedDataset(SampledDataset):
         # Using `TOKEN_CUMSUM_RATE > 1` reduces pre-computation overhead at the cost of runtime computation.
         # Equivalent to `torch.hstack((0, document_sizes[all_document_index].cumsum()[::TOKEN_CUMSUM_RATE]))`
         if unshuffled_epochs > 0:
-            token_cumsum_unshuffled, num_tokens_unshuffled = self._get_token_cumsum(
+            token_cumsum_unshuffled, unshuffled_tokens = self._get_token_cumsum(
                 document_sizes,
                 offset=0,
                 # TODO: Allowing for max 100% extra tokens for padding, is that enough?
                 dtype=get_unsigned_integer_type((2 - self._truncate_documents) * tokens_per_epoch * num_epochs),
             )
-            if self._truncate_documents:
-                num_tokens_unshuffled = tokens_per_epoch * unshuffled_epochs
             self._token_cumsum_unshuffled.save(token_cumsum_unshuffled)
         else:
-            num_tokens_unshuffled = 0
-        self._unshuffled_tokens = num_tokens_unshuffled
+            unshuffled_tokens = 0
 
+        if not self._truncate_documents:
+            yaml_data["unshuffled_tokens"] = unshuffled_tokens
+        self._load_yaml_data(yaml_data)
         if self._yaml_path is not None:
-            yaml_data["unshuffled_tokens"] = num_tokens_unshuffled
             self._yaml_path.parent.mkdir(parents=True, exist_ok=True)
             yaml.safe_dump(yaml_data, self._yaml_path.open("w"))
 
         if shuffled_epochs > 0:
-            token_cumsum_shuffled, num_tokens_shuffled = self._get_token_cumsum(
+            token_cumsum_shuffled, _ = self._get_token_cumsum(
                 document_sizes[
                     # Torch indexing only works with int32 or int64
                     document_shuffling.to(
                         dtype=torch.int64 if document_shuffling.dtype == torch.int64 else torch.int32
                     )
                 ],
-                offset=num_tokens_unshuffled,
+                offset=self._unshuffled_tokens,
                 # TODO: Allowing for max 100% extra tokens for padding, is that enough?
                 dtype=get_unsigned_integer_type((2 - self._truncate_documents) * tokens_per_epoch * num_epochs),
             )
@@ -432,10 +432,14 @@ class GPTSampledIndexedDataset(SampledDataset):
 
     def _load_yaml_data(self, data: dict[str, typing.Any]) -> None:
         self._documents_per_epoch = data["dataset"]["documents_per_epoch"]
-        if unshuffled_tokens := data.get("unshuffled_tokens") is not None:
-            self._unshuffled_tokens = unshuffled_tokens
-        else:
-            self._unshuffled_tokens = data["unshuffled_epochs"] * data["dataset"]["tokens_per_epoch"]
+
+        if "unshuffled_tokens" not in data:
+            # Backward compatibility
+            # TODO v0.x: Remove
+            assert self._truncate_documents
+            data["unshuffled_tokens"] = data["tokens_per_epoch"] * data["unshuffled_epochs"]
+
+        self._unshuffled_tokens = data["unshuffled_tokens"]
         self._unshuffled_documents = data["unshuffled_epochs"] * self._documents_per_epoch
 
 
