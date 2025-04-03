@@ -416,6 +416,7 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
             consumed_samples=completed_steps * self._config.batch.batch_size,
             num_workers=self._config.training.num_workers,
             prefetch_factor=prefetch_factor,
+            timeout=self._config.training.timeout,
         )
 
     def _prepare_training_state(self) -> None:
