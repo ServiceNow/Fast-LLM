@@ -65,7 +65,7 @@ class MemmapArray:
 
     def _lazy_load(self):
         if self._array is None:
-            assert self.exists()
+            assert self.exists(), self._path
             self._array = np.load(self._path, mmap_mode="r")
 
 
@@ -176,7 +176,7 @@ class GPTSampledIndexedDataset(SampledDataset):
             "unshuffled_epochs": unshuffled_epochs,
             "sequence_length": self._sequence_length,
             "truncate_documents": self._truncate_documents,
-            "config": self._config.to_serialized(),
+            "config": self._config.to_dict(),
         }
         self._load_yaml_data(yaml_data)
 
@@ -432,7 +432,7 @@ class GPTSampledIndexedDataset(SampledDataset):
 
     def _load_yaml_data(self, data: dict[str, typing.Any]) -> None:
         self._documents_per_epoch = data["dataset"]["documents_per_epoch"]
-        if unshuffled_tokens := data.get("unshuffled_tokens") is not None:
+        if (unshuffled_tokens := data.get("unshuffled_tokens")) is not None:
             self._unshuffled_tokens = unshuffled_tokens
         else:
             self._unshuffled_tokens = data["unshuffled_epochs"] * data["dataset"]["tokens_per_epoch"]
