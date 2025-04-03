@@ -183,6 +183,7 @@ class GPTSampledIndexedDataset(SampledDataset):
             loaded_yaml_data = yaml.safe_load(self._yaml_path.open("r"))
             if "unshuffled_tokens" not in loaded_yaml_data:
                 # Backward compatibility
+                # TODO v0.x: Remove
                 assert self._truncate_documents
                 loaded_yaml_data["unshuffled_tokens"] = tokens_per_epoch * unshuffled_epochs
             if loaded_yaml_data != yaml_data:
