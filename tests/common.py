@@ -194,6 +194,12 @@ CONFIG_MIXTRAL_YARN_FAST_LLM = CONFIG_MIXTRAL_FAST_LLM + [
 ]
 CONFIG_MIXTRAL_YARN_COMMON = CONFIG_MIXTRAL_YARN_FAST_LLM + ["model.distributed.training_dtype=bf16"]
 
+CONFIG_LLAMA_MTP_MEGATRON = None
+CONFIG_LLAMA_MTP_FAST_LLM = CONFIG_LLAMA_FAST_LLM + [
+    "model.base_model.prediction_heads=4",
+]
+CONFIG_LLAMA_MTP_COMMON = CONFIG_LLAMA_MTP_FAST_LLM + ["model.distributed.training_dtype=bf16"]
+
 _CONFIGS = {
     "gpt2": ("gpt", CONFIG_GPT2_FAST_LLM, CONFIG_GPT2_MEGATRON, CONFIG_GPT2_COMMON, None),
     "sc1": ("gpt", CONFIG_SC1_FAST_LLM, CONFIG_SC1_MEGATRON, CONFIG_SC1_COMMON, None),
@@ -252,6 +258,13 @@ _CONFIGS = {
         CONFIG_MIXTRAL_YARN_MEGATRON,
         CONFIG_MIXTRAL_YARN_COMMON,
         MixtralGPTHuggingfaceCheckpointFormat,
+    ),
+    "llama-mtp": (
+        "gpt",
+        CONFIG_LLAMA_MTP_FAST_LLM,
+        CONFIG_LLAMA_MTP_MEGATRON,
+        CONFIG_LLAMA_MTP_COMMON,
+        LlamaGPTHuggingfaceCheckpointFormat,
     ),
 }
 
@@ -381,7 +394,7 @@ def run_test_script(
         if num_gpus == 1 and not is_megatron:
             CliTrainingConfig.parse_and_run(script)
         else:
-            completed_proc = subprocess.run(command, env=env)
+            completed_proc = subprocess.run(command, env=env, timeout=60)
             if completed_proc.returncode:
                 raise RuntimeError(f"Process failed with return code {completed_proc.returncode}")
     if compare:
