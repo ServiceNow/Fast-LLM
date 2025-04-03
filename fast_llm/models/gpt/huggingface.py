@@ -3,6 +3,7 @@ import random
 
 import torch
 import transformers.modeling_outputs
+import transformers.generation.utils as tgu
 
 from fast_llm.data.data.gpt.data import GPTBatch
 from fast_llm.engine.distributed.config import PhaseType
@@ -21,7 +22,7 @@ class HuggingfaceGPTModelConfig(HuggingfaceModelConfig):
     fast_llm_config: GPTModelConfig
 
 
-class HuggingfaceGPTModelForCausalLM(HuggingfacePreTrainedModel):
+class HuggingfaceGPTModelForCausalLM(HuggingfacePreTrainedModel, tgu.GenerationMixin):
     config_class = HuggingfaceGPTModelConfig
     config: HuggingfaceGPTModelConfig
     model_class = GPTModel
@@ -56,19 +57,38 @@ class HuggingfaceGPTModelForCausalLM(HuggingfacePreTrainedModel):
             raise NotImplementedError()
         if output_hidden_states:
             raise NotImplementedError()
-        if attention_mask is not None:
-            raise NotImplementedError()
-        if position_ids is not None:
-            raise NotImplementedError()
+        # if attention_mask is not None:
+        #     print(attention_mask)
+        #     raise NotImplementedError()
+        # if position_ids is not None:
+        #     print(position_ids)
+        #     raise NotImplementedError()
         if inputs_embeds is not None:
             raise NotImplementedError()
         if labels is not None:
             raise NotImplementedError()
 
+        if self._use_fm_changes:
+
+            # First non zero indexes or zero index if the row is all zeros (invalid row)
+            first_non_zero_indexes = attention_mask.argmax(dim=1)
+
+            # Check if the sequence is left-padded and if the remaining ones are continuous 1-ns
+            assert (attention_mask.sum(axis=1) == (attention_mask.shape[1] - first_non_zero_indexes)).all()
+
+            sequence_lenghts = [
+                torch.tensor(
+                    [attention_mask.shape[1]] if el == 0 else [el, attention_mask.shape[1] - el], dtype=torch.int64
+                )
+                for el in first_non_zero_indexes.tolist()
+            ]
+        else:
+            sequence_lenghts = None
+
         # Iteration serves as a random seed, using random module because it's not seeded by Fast LLM
         iteration = random.randint(0, 2**32)
         batch = self._fast_llm_model.base_model.preprocess(
-            GPTBatch(input_ids), phase=PhaseType.inference, iteration=iteration
+            GPTBatch(input_ids, sequence_lengths=sequence_lenghts), phase=PhaseType.inference, iteration=iteration
         )
         ((_, kwargs),) = batch
 
@@ -97,7 +117,7 @@ class HuggingfaceGPTModelForCausalLM(HuggingfacePreTrainedModel):
             past_key_values=kwargs[TransformerKwargs.presents],
         )
 
-    def prepare_inputs_for_generation(
-        self, input_ids, past_key_values=None, attention_mask=None, inputs_embeds=None, **kwargs
-    ):
-        raise NotImplementedError()
+    # def prepare_inputs_for_generation(
+    #     self, input_ids, past_key_values=None, attention_mask=None, inputs_embeds=None, **kwargs
+    # ):
+    #     raise NotImplementedError()
