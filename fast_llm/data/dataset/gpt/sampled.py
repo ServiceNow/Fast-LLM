@@ -176,7 +176,7 @@ class GPTSampledIndexedDataset(SampledDataset):
             "unshuffled_epochs": unshuffled_epochs,
             "sequence_length": self._sequence_length,
             "truncate_documents": self._truncate_documents,
-            "config": self._config.to_dict(),
+            "config": self._config.to_serialized(),
         }
         self._load_yaml_data(yaml_data)
 
