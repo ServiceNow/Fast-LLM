@@ -4,6 +4,7 @@ import typing
 
 from fast_llm.config import Field, FieldHint, FieldUpdate, config_class
 from fast_llm.data.data.gpt.config import GPTDataConfig
+from fast_llm.engine.checkpoint.config import CheckpointFormat, CheckpointHandler
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig, PretrainedFastLLMModelConfig
 from fast_llm.engine.training.config import TrainerConfig
 from fast_llm.layers.language_model.config import LanguageModelBaseConfig
@@ -18,13 +19,9 @@ if typing.TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+@config_class
 class HybridArchitectureConfig(GPTArchitectureConfig):
-    pass
-
-
-@config_class()
-class HybridBaseModelConfig(LanguageModelBaseConfig, HybridArchitectureConfig):
-    architecture_class = HybridArchitectureConfig
+    _abstract = False
 
     ssm: MambaConfig = Field(
         default_factory=MambaConfig,
@@ -32,15 +29,20 @@ class HybridBaseModelConfig(LanguageModelBaseConfig, HybridArchitectureConfig):
         hint=FieldHint.core,
     )
 
-    # Debug, to get an exact match with megatron init.
-    use_megatron_initialization: bool = Field(
-        default=False, desc="Exactly match the initialization of a Megatron model.", hint=FieldHint.testing
-    )
-
     block_pattern: list[str] = Field(
         default_factory=list,
         desc="Pattern of blocks to use in the model. 't' for Transformer, 'm' for Mamba.",
         hint=FieldHint.core,
+    )
+
+
+@config_class()
+class HybridBaseModelConfig(LanguageModelBaseConfig, HybridArchitectureConfig):
+    architecture_class = HybridArchitectureConfig
+
+    # Debug, to get an exact match with megatron init.
+    use_megatron_initialization: bool = Field(
+        default=False, desc="Exactly match the initialization of a Megatron model.", hint=FieldHint.testing
     )
 
     use_fast_path: bool = Field(
@@ -81,8 +83,12 @@ class HybridBaseModelConfig(LanguageModelBaseConfig, HybridArchitectureConfig):
             tensor_space.add_tensor_dim(TensorDim(SSMDimNames.headdim, headdim))
             tensor_space.add_tensor_dim(TensorDim(SSMDimNames.n_qk_heads, self.ssm.n_qk_heads))
             tensor_space.add_tensor_dim(TensorDim(SSMDimNames.n_v_heads, self.ssm.n_v_heads))
-            tensor_space.add_tensor_dim(TensorDim(SSMDimNames.d_inner_proj, inner_proj_dim))
-            tensor_space.add_tensor_dim(TensorDim(SSMDimNames.d_conv, conv_dim))
+            tensor_space.add_tensor_dim(
+                TensorDim(SSMDimNames.d_inner_proj, inner_proj_dim)
+            )  # TODO: enable tensor parallelism here?
+            tensor_space.add_tensor_dim(
+                TensorDim(SSMDimNames.d_conv, conv_dim)
+            )  # TODO: enable tensor parallelism here?
         else:
 
             tensor_space.add_tensor_dim(TensorDim(SSMDimNames.d_inner_proj, d_inner * 2))
@@ -109,10 +115,21 @@ class HybridBaseModelConfig(LanguageModelBaseConfig, HybridArchitectureConfig):
         super().__post_init__()
         if len(self.block_pattern) == 0:
             logger.warning("No block pattern provided, using default pattern of Transformer blocks.")
-            self.block_pattern = ["t"] * self.transformer.num_layers
+            self.block_pattern = ["m"] * self.transformer.num_layers
 
     def _validate(self):
         super()._validate()
+
+
+class LLambaHuggingfaceCheckpointFormat(CheckpointFormat):
+    support_optimizer: typing.ClassVar[bool] = False
+    name: typing.ClassVar[str] = "llamba"
+
+    @classmethod
+    def get_handler_class(cls) -> type[CheckpointHandler]:
+        from fast_llm.models.ssm.conversion import LLambaHuggingfaceCheckpointHandler
+
+        return LLambaHuggingfaceCheckpointHandler
 
 
 @config_class()
@@ -120,12 +137,19 @@ class HybridModelConfig(FastLLMModelConfig):
     _abstract = False
     model_name: typing.ClassVar[str] = "hybrid_ssm"
     base_model: HybridBaseModelConfig = FieldUpdate(default_factory=HybridBaseModelConfig)
+    checkpoint_formats = FastLLMModelConfig.checkpoint_formats + (LLambaHuggingfaceCheckpointFormat,)
 
     @classmethod
     def get_model_class(cls) -> type["HybridModel"]:
         from fast_llm.models.ssm.model import HybridModel
 
         return HybridModel
+
+    @classmethod
+    def get_huggingface_model_class(cls) -> type["HuggingfaceSSMModelForCausalLM"]:
+        from fast_llm.models.ssm.huggingface import HuggingfaceSSMModelForCausalLM
+
+        return HuggingfaceSSMModelForCausalLM
 
 
 @config_class()

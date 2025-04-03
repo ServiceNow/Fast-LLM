@@ -1,7 +1,6 @@
 from fast_llm.config import Field, FieldHint, FieldUpdate, check_field, config_class
-from fast_llm.engine.base_model.config import BaseModelConfig
-from fast_llm.layers.common.config import NormalizationConfig
-from fast_llm.layers.transformer.config import TransformerArchitectureConfig
+from fast_llm.engine.base_model.config import BaseModelArchitectureConfig
+from fast_llm.layers.common.config import NormalizationArchitectureConfig, NormalizationConfig
 from fast_llm.tensor import TensorSpace
 from fast_llm.utils import Assert
 
@@ -21,8 +20,75 @@ class SSMDimNames:
 
 
 @config_class()
-class MambaConfig(TransformerArchitectureConfig, BaseModelConfig):
+class SSMArchitectureConfig(BaseModelArchitectureConfig):
+    _abstract = False
+
+    # Normalization
+    normalization: NormalizationArchitectureConfig = Field(
+        default_factory=NormalizationArchitectureConfig,
+        desc="Configuration for the normalization layers architecture.",
+        hint=FieldHint.core,
+    )
+
+    expansion_factor: int = Field(
+        default=2,
+        desc="Expansion factor for Mamba blocks.",
+        hint=FieldHint.core,
+    )
+    state_size: int = Field(
+        default=16,
+        desc="State size for Mamba blocks.",
+        hint=FieldHint.core,
+    )
+    conv_kernel_dimension: int = Field(
+        default=4,
+        desc="Conv kernel dimension for Mamba blocks.",
+        hint=FieldHint.core,
+    )
+
+    # Layer parameters
+    add_bias_linear: bool = Field(
+        default=False,
+        desc="Whether to use bias in SSM layers",
+        hint=FieldHint.core,
+    )
+
+    dt_rank: str | int = Field(
+        default="auto",
+        desc="Rank of the Δ projection matrix. If 'auto', set to ceil(hidden_size/16)",
+        hint=FieldHint.core,
+    )
+
+    chunk_size: int = Field(
+        default=256,
+        desc="Chunk size for Mamba2 blocks.",
+        hint=FieldHint.core,
+    )
+
+    n_qk_heads: int = Field(
+        default=32,
+        desc="Number of QK heads for Mamba2 blocks.",
+        hint=FieldHint.core,
+    )
+
+    n_v_heads: int = Field(
+        default=32,
+        desc="Number of V heads for Mamba2 blocks.",
+        hint=FieldHint.core,
+    )
+
+    activation: str = Field(
+        default="silu",
+        desc="Activation function for Mamba2 blocks.",
+        hint=FieldHint.core,
+    )
+
+
+@config_class()
+class MambaConfig(SSMArchitectureConfig):
     """Configuration for a Structured State Space Model (SSM) layer."""
+
+    normalization: NormalizationConfig = FieldUpdate(default_factory=NormalizationConfig)
 
     dt_init_floor: float = Field(
         default=1e-4,
@@ -30,17 +96,6 @@ class MambaConfig(TransformerArchitectureConfig, BaseModelConfig):
         hint=FieldHint.core,
         valid=check_field(Assert.gt, 0),
     )
-
-    # Layer parameters
-    add_bias_linear: bool = Field(
-        default=False,
-        desc="Whether to use bias in linear transformations",
-        hint=FieldHint.core,
-    )
-
-    # Normalization
-    normalization: NormalizationConfig = FieldUpdate(default_factory=NormalizationConfig)
-
     # Performance optimization
     use_fast_path: bool = Field(
         default=True,
@@ -48,33 +103,9 @@ class MambaConfig(TransformerArchitectureConfig, BaseModelConfig):
         hint=FieldHint.performance,
     )
 
-    use_module_layernorm: bool = Field(
-        default=False,
-        desc="use_module_layernorm",
-        hint=FieldHint.optional,
-    )
-
-    rms_norm: bool = Field(
-        default=False,
-        desc="rms_norm",
-        hint=FieldHint.optional,
-    )
-
     debug_ssm: bool = Field(
         default=False,
         desc="debug_ssm",
-        hint=FieldHint.optional,
-    )
-
-    fused_add_norm: bool = Field(
-        default=False,
-        desc="fused_add_norm",
-        hint=FieldHint.optional,
-    )
-
-    layernorm_epsilon: float = Field(
-        default=1e-5,
-        desc="layernorm_epsilon",
         hint=FieldHint.optional,
     )
 
@@ -98,76 +129,11 @@ class MambaConfig(TransformerArchitectureConfig, BaseModelConfig):
         hint=FieldHint.core,
         valid=check_field(Assert.gt, 0),
     )
-    residual_in_fp32: bool = Field(
-        default=False,
-        desc="residual_in_fp32",
-        hint=FieldHint.optional,
-    )
-    expansion_factor: int = Field(
-        default=2,
-        desc="Expansion factor for Mamba blocks.",
-        hint=FieldHint.core,
-    )
-    state_size: int = Field(
-        default=16,
-        desc="State size for Mamba blocks.",
-        hint=FieldHint.core,
-    )
-    conv_kernel_dimension: int = Field(
-        default=4,
-        desc="Conv kernel dimension for Mamba blocks.",
-        hint=FieldHint.core,
-    )
-    rms_norm: bool = Field(
-        default=True,
-        desc="Use RMS normalization for Mamba blocks.",
-        hint=FieldHint.core,
-    )
-
-    residual_in_fp32: bool = Field(
-        default=True,
-        desc="Use residual in fp32 for Mamba blocks.",
-        hint=FieldHint.core,
-    )
-    fused_add_norm: bool = Field(
-        default=False,
-        desc="Use fused add norm for Mamba blocks.",
-        hint=FieldHint.core,
-    )
-    layernorm_epsilon: float = Field(
-        default=1e-5,
-        desc="Epsilon for layer normalization for Mamba blocks.",
-        hint=FieldHint.core,
-    )
-
-    dt_rank: str | int = Field(
-        default="auto",
-        desc="Rank of the Δ projection matrix. If 'auto', set to ceil(hidden_size/16)",
-        hint=FieldHint.core,
-    )
 
     # Mamba2 parameters
     use_mamba2: bool = Field(
         default=False,
         desc="Use Mamba2 blocks.",
-        hint=FieldHint.core,
-    )
-
-    chunk_size: int = Field(
-        default=256,
-        desc="Chunk size for Mamba2 blocks.",
-        hint=FieldHint.core,
-    )
-
-    n_qk_heads: int = Field(
-        default=32,
-        desc="Number of QK heads for Mamba2 blocks.",
-        hint=FieldHint.core,
-    )
-
-    n_v_heads: int = Field(
-        default=32,
-        desc="Number of V heads for Mamba2 blocks.",
         hint=FieldHint.core,
     )
 

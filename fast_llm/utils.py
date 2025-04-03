@@ -254,8 +254,15 @@ def set_nested_dict_value[
     if isinstance(keys, tuple):
         for key in keys[:-1]:
             d = d.setdefault(key, {})
-            assert isinstance(d, dict)
-        d[keys[-1]] = value
+            assert isinstance(d, dict) or isinstance(d, list)
+        if isinstance(d, list):
+            idx = int(keys[-1])
+            if idx >= len(d):
+                d.append(value)
+            else:
+                d[int(keys[-1])] = value
+        else:
+            d[keys[-1]] = value
     else:
         d[keys] = value
 

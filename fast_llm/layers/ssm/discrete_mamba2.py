@@ -42,10 +42,10 @@ class DiscreteMamba2(nn.Module):
 
         Other options are all experimental and should not need to be configured.
         """
-        factory_kwargs = {"device": "meta"}  # {"dtype": dtype}
+        factory_kwargs = {"device": "meta"}  # , "dtype": torch.bfloat16}
         super().__init__()
         self.config: MambaConfig = config
-        bias = False  # TODO: hard coded
+        bias = config.add_bias_linear
         self.layer_idx = layer_idx
 
         td_inner = tensor_space.get_tensor_dim(SSMDimNames.d_inner)
@@ -65,8 +65,14 @@ class DiscreteMamba2(nn.Module):
         self.n_v_heads = td_n_v_heads.size
         self.conv_kernel_size = td_conv_kernel.size
 
-        self.activation = "silu"
-        self.act = nn.SiLU()
+        self.activation = config.activation
+        if self.activation == "silu":
+            self.act = nn.SiLU()
+        elif self.activation == "identity":
+            self.act = nn.Identity()
+        else:
+            raise ValueError(f"Activation {self.activation} not supported")
+
         # TODO: double check innitializations
         # Projections
         self.in_proj = Linear(
@@ -85,11 +91,15 @@ class DiscreteMamba2(nn.Module):
 
         # Convolutional layer
         self.conv1d_weight = ParameterMeta(
-            torch.empty(td_conv.size, 1, td_conv_kernel.size, dtype=torch.float32, **factory_kwargs),
+            torch.empty(td_conv.size, 1, td_conv_kernel.size, **factory_kwargs),
             dims=(td_conv, TensorDim("1", 1), td_conv_kernel),
             init_method=kaiming_init(td_conv.size, td_conv_kernel.size),
         )
-        self.conv1d_bias = None
+        self.conv1d_bias = ParameterMeta(
+            torch.empty(td_conv.size, **factory_kwargs),
+            dims=(td_conv,),
+            init_method=kaiming_init(td_conv.size, 1),
+        )
 
         # D "skip" parameter
         self.D = ParameterMeta(
@@ -103,7 +113,7 @@ class DiscreteMamba2(nn.Module):
         self.out_proj = Linear(
             td_inner,
             td_model,
-            bias=False,
+            bias=bias,
             weight_init_method=kaiming_init(td_inner.size, td_model.size),
         )
 
