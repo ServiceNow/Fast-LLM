@@ -14,7 +14,7 @@ from fast_llm.functional.config import CrossEntropyImpl, TritonConfig, LossFunct
 from fast_llm.functional.cross_entropy import cross_entropy_forward_backward
 from fast_llm.functional.linear import output_parallel_linear_backward, output_parallel_linear_forward
 from fast_llm.functional.dpo import compute_simplified_dpo_loss
-from fast_llm.layers.common.auxiliary_loss import z_loss
+from fast_llm.layers.common.auxiliary_loss import AuxiliaryLoss, z_loss
 from fast_llm.layers.language_model.config import (
     LanguageModelBaseConfig,
     LanguageModelDimNames,
@@ -25,7 +25,9 @@ from fast_llm.layers.language_model.embedding import WORD_EMBEDDINGS_WEIGHT
 from fast_llm.layers.transformer.config import TransformerDimNames, TransformerKwargs
 from fast_llm.logging import log_distributed_tensor
 from fast_llm.tensor import ParameterMeta, TensorMeta, init_normal_
-from fast_llm.utils import div
+from fast_llm.utils import Assert, div
+
+OUTPUT_WEIGHTS = "output_weights"
 
 
 class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[LanguageModelBaseConfig], Layer):
@@ -39,6 +41,7 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
         self,
         config: LanguageModelBaseConfig,
         tensor_space: TensorSpace,
+        prediction_distance: int,
     ):
         super().__init__(config)
         self._debug_transformer = config.transformer.debug_transformer
@@ -57,23 +60,24 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
 
         hidden_dim = self._tensor_space.get_tensor_dim(TransformerDimNames.hidden)
 
+        self._loss_name = LanguageModelLossNames.multi_token_prediction_loss(prediction_distance)
         self.final_norm = config.transformer.normalization.get_layer(hidden_dim)
         self._logits_scale_factor = config.logits_scale_factor
         self._z_loss_factor = config.logit_z_loss
 
-        # untie embedding weights
-        if not self._tie_word_embeddings:
-            vocab_dim = self._tensor_space.get_tensor_dim(
-                LanguageModelDimNames.vocab_tp if self._parallel_embeddings else LanguageModelDimNames.vocab
-            )
-            self.output_weights = ParameterMeta.from_dims(
-                (vocab_dim, hidden_dim),
-                init_method=init_normal_(
-                    std=config.init_method_std_embed,
-                    min_val=config.init_method_min_embed,
-                    max_val=config.init_method_max_embed,
-                ),
-            )
+        # Distance of the target token prediction
+        # 0: next-token prediction
+        # >0: multi-token prediction (MTP)
+        Assert.geq(prediction_distance, 0)
+        self._prediction_distance = prediction_distance
+        self.is_last_head = self._prediction_distance == config.prediction_heads - 1
+        if self._prediction_distance > 0:
+            assert (
+                not self._sequence_parallel_logits
+            ), "Sequence parallel logits not supported for multi-token prediction."
+            assert not self._cross_entropy_splits, "Cross-entropy splits not supported for multi-token prediction."
+
+        self._init_output_weights(hidden_dim, config)
 
         self._loss_function_type = config.loss_function_type
         if self._loss_function_type == LossFunctionType.cross_entropy:
@@ -97,6 +101,23 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
         if hasattr(self, "output_weights"):
             self.output_weights = self._config.transformer.peft.apply_weight(self.output_weights)
 
+    def _init_output_weights(self, hidden_dim: TensorDim, config) -> None:
+        # Only the first head defines the output weights
+        if self._tie_word_embeddings or self._prediction_distance > 0:
+            return
+        # untie embedding weights
+        vocab_dim = self._tensor_space.get_tensor_dim(
+            LanguageModelDimNames.vocab_tp if self._parallel_embeddings else LanguageModelDimNames.vocab
+        )
+        self.output_weights = ParameterMeta.from_dims(
+            (vocab_dim, hidden_dim),
+            init_method=init_normal_(
+                std=config.init_method_std_embed,
+                min_val=config.init_method_min_embed,
+                max_val=config.init_method_max_embed,
+            ),
+        )
+
     def forward(
         self, input_: torch.Tensor, kwargs: dict, losses: dict | None = None, metrics: dict | None = None
     ) -> torch.Tensor:
@@ -107,6 +128,9 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
                 tensor_name="Loss",
                 reductions=((DistributedDimNames.data, ReduceOp.AVG),),  # noqa
             )
+        if not self.is_last_head:
+            # MTP: split the stacked input
+            shared_hidden, input_ = torch.unbind(input_, dim=0)
         # TODO: Pytorch copies the grads in backward for no reason (not sure if still the case)
         # TODO: Torch compile implementation sometimes break.
         # TODO: Double-check correctness, optimize a bit more.
@@ -114,26 +138,40 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
         # TODO: Skip cross-entropy backward if not needed.
         language_model_loss = self._forward(input_, kwargs, losses)
         if language_model_loss is not None:
-            losses[LanguageModelLossNames.language_model_loss].append(language_model_loss)
+            losses[self._loss_name].append(language_model_loss)
         # TODO: Return the model output when needed.
-        return language_model_loss
+        if self.is_last_head:
+            # Last head should return the loss for backward.
+            return language_model_loss
+        else:
+            # Backward hook to compute the gradient of the loss
+            shared_hidden = AuxiliaryLoss.apply(shared_hidden, language_model_loss, 1.0)
+            # MTP: Return shared_hidden to be used by the next head.
+            return shared_hidden
 
     def _forward_backward(
         self, input_: torch.Tensor, kwargs: dict, losses: dict | None = None
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
-        labels = kwargs[LanguageModelKwargs.labels].flatten() if LanguageModelKwargs.labels in kwargs else None
+        labels = kwargs[LanguageModelKwargs.labels] if LanguageModelKwargs.labels in kwargs else None
+        # MTP: Shift the labels
+        labels = labels[:, self._prediction_distance :].flatten() if labels is not None else None
         if self._sequence_parallel_logits:
             labels = split_op(labels, self._tensor_space.distributed.tensor_group, 0)
         do_grad = labels is not None and self.training
         input_ = input_.detach().requires_grad_(do_grad)
         with torch.enable_grad():
-            ln_output = self.final_norm(input_)
+            # MTP: truncate the input
+            if self._prediction_distance > 0:
+                truncated_input = input_[:, : -self._prediction_distance, :].contiguous()
+            else:
+                truncated_input = input_
+            ln_output = self.final_norm(truncated_input)
 
         grad_output = kwargs[TransformerKwargs.grad_output] / (
             self._group_size if self._sequence_parallel_logits else 1
         )
 
-        output_weights = kwargs[WORD_EMBEDDINGS_WEIGHT] if self._tie_word_embeddings else self.output_weights
+        output_weights = self._get_output_weights(kwargs)
         loss, ln_output_grad = self._loss_fcn(
             ln_output.detach(), labels, output_weights, grad_output, kwargs, losses
         )
@@ -176,6 +214,13 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
 
 
 
+    def _get_output_weights(self, kwargs: dict) -> torch.Tensor:
+        if self._tie_word_embeddings:
+            return kwargs[WORD_EMBEDDINGS_WEIGHT]
+        if self._prediction_distance > 0:
+            return kwargs[OUTPUT_WEIGHTS]
+        return self.output_weights
+
     def _logits_cross_entropy_forward_backward_split(
         self,
         input_: torch.Tensor,
@@ -195,6 +240,7 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
                 return None, None
         else:
             loss = None
+            # TODO MTP: allow a _cross_entropy_splits that is not a divisor of the sequence length
             split_size = div(labels.numel(), self._cross_entropy_splits)
             grad_output /= self._cross_entropy_splits
             logit_input = input_.flatten(0, -2)
