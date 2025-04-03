@@ -431,7 +431,8 @@ class GPTSampledIndexedDataset(SampledDataset):
 
     def _load_yaml_data(self, data: dict[str, typing.Any]) -> None:
         self._documents_per_epoch = data["dataset"]["documents_per_epoch"]
-        self._unshuffled_tokens = data["unshuffled_tokens"]
+        if "unshuffled_tokens" in data:
+            self._unshuffled_tokens = data["unshuffled_tokens"]
         self._unshuffled_documents = data["unshuffled_epochs"] * self._documents_per_epoch
 
 
