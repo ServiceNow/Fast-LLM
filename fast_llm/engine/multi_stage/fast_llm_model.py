@@ -31,16 +31,15 @@ class FastLLMModel[ConfigType: FastLLMModelConfig](MultiStageModel[ConfigType]):
         )
         converter.save(config, fast_llm_metadata)
 
-    def load_checkpoint(self, config: CheckpointLoadConfig) -> dict[str, typing.Any]:
+    def load_checkpoint(self, config: CheckpointLoadConfig) -> dict[str, typing.Any] | None:
         # TODO: Simplify branching.
         # TODO: Test with more distributed configs.
         # TODO: Safety checks
         # TODO: Handle barriers, ok file, etc. here
-        metadata = self.config_class.load_metadata(config)
         converter = config.format.get_handler_class()(self)
-        converter.load(config, metadata)
+        metadata = converter.load(config)
         self._finalize_load(reset_optimizer=not config.optimizer_state)
-        return metadata.metadata
+        return metadata
 
     @classmethod
     def from_pretrained(

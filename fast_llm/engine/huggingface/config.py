@@ -74,7 +74,10 @@ class HuggingfaceModelConfig(transformers.PretrainedConfig):
         torch_dtype = kwargs.pop("torch_dtype", None)
         if torch_dtype is not None:
             updates[("distributed", "training_dtype")] = torch_dtype
-        fast_llm_config = cls.model_config_class.from_dict(metadata.config, kwargs.pop("fast_llm_config", {}), updates)
+        fast_llm_config = cls.model_config_class.from_metadata(
+            pretrained, metadata, default=kwargs.pop("fast_llm_config", None), updates=updates
+        )
+
         config_dict = {"fast_llm_config": fast_llm_config}
         return config_dict, kwargs
 

@@ -65,7 +65,7 @@ class MemmapArray:
 
     def _lazy_load(self):
         if self._array is None:
-            assert self.exists()
+            assert self.exists(), self._path
             self._array = np.load(self._path, mmap_mode="r")
 
 
@@ -432,7 +432,7 @@ class GPTSampledIndexedDataset(SampledDataset):
 
     def _load_yaml_data(self, data: dict[str, typing.Any]) -> None:
         self._documents_per_epoch = data["dataset"]["documents_per_epoch"]
-        if unshuffled_tokens := data.get("unshuffled_tokens") is not None:
+        if (unshuffled_tokens := data.get("unshuffled_tokens")) is not None:
             self._unshuffled_tokens = unshuffled_tokens
         else:
             self._unshuffled_tokens = data["unshuffled_epochs"] * data["dataset"]["tokens_per_epoch"]

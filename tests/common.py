@@ -54,7 +54,7 @@ CONFIG_BASE_FAST_LLM = [
     "model.base_model.transformer.num_layers=2",
     "model.base_model.transformer.hidden_size=256",
     "model.base_model.transformer.num_attention_heads=8",
-    # "model.base_model.transformer.init_method_std=0.022",
+    "model.base_model.transformer.init_method_std=0.022",
     f"model.base_model.vocab_size={TEST_VOCAB_SIZE}",
     f"model.multi_stage.debug_param_init={_LOG_LEVEL}",
     f"model.multi_stage.debug_layer_outputs={_LOG_LEVEL}",
@@ -101,7 +101,7 @@ CONFIG_BASE_MEGATRON = [
     "--global-batch-size=8",
     "--max-position-embeddings=512",
     "--seq-length=512",
-    "--init-method-std=0.0625",
+    "--init-method-std=0.022",
     "--lr=0.0001",
     "--num-workers=0",
     "--valid-num-workers=0",
@@ -394,7 +394,7 @@ def run_test_script(
         if num_gpus == 1 and not is_megatron:
             CliTrainingConfig.parse_and_run(script)
         else:
-            completed_proc = subprocess.run(command, env=env)
+            completed_proc = subprocess.run(command, env=env, timeout=30)
             if completed_proc.returncode:
                 raise RuntimeError(f"Process failed with return code {completed_proc.returncode}")
     if compare:

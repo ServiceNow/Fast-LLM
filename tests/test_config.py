@@ -10,6 +10,8 @@ from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.layers.transformer.config import AddLinearBiasChoices, TransformerArchitectureConfig, TransformerConfig
 from fast_llm.models.auto import trainer_registry
+from fast_llm.models.gpt.config import GPTModelConfig
+from fast_llm.utils import check_equal_nested
 
 
 def run_without_import(cmd: str):
@@ -114,8 +116,11 @@ def test_add_attn_dense_bias():
     )
 
 
-@pytest.mark.parametrize("cls", (GPTSamplingConfig,))
-def test_serialize_default_config_updates(cls):
+@pytest.mark.parametrize(
+    ("cls", "default"),
+    ((GPTSamplingConfig, {}), (GPTModelConfig, {"distributed": {"world_size": 1, "rank": 0, "local_world_size": 1}})),
+)
+def test_serialize_default_config_updates(cls, default):
     # Config classes used as config updates should have a default that serializes to an empty dict
     #   so no value is incorrectly overridden.
-    assert cls.from_dict({}).to_dict() == {}
+    check_equal_nested(cls.from_dict({}).to_dict(), default)

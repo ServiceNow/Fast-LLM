@@ -39,10 +39,11 @@ class HuggingfaceStateDictCheckpointHandler(ExternalStateDictCheckpointHandler, 
             "format": "pt",
         }
 
-    def load(self, config: CheckpointLoadConfig, metadata: CheckpointMetadata) -> None:
+    def load(self, config: CheckpointLoadConfig) -> dict[str, typing.Any] | None:
         assert not config.optimizer_state
+        metadata = self._model.config.load_metadata(config)
         self._model.config.base_model.compare_architecture(metadata.config.base_model, logger.warning)
-        super().load(config, metadata)
+        super().load(config)
 
     @classmethod
     def get_huggingface_model_type(self) -> str:
