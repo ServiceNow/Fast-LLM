@@ -28,8 +28,11 @@ class HuggingfacePreTrainedModel(transformers.PreTrainedModel):
         super().__init__(config, **kwargs)
 
         self._inference_runner = self.runner_class(fast_llm_model)
+        if not fast_llm_model.is_setup:
+            fast_llm_model.setup(mode=StageMode.inference)
+        self._inference_runner.setup()
         # Transformers needs to be able to inspect the base model.
-        self.fast_llm_base_model = self._fast_llm_model.base_model
+        self.fast_llm_base_model = fast_llm_model.base_model
         # TODO: Support distributed models?
         assert fast_llm_model.config.distributed.world_size == 1
 
@@ -57,7 +60,7 @@ class HuggingfacePreTrainedModel(transformers.PreTrainedModel):
             config_updates[("distributed", "training_dtype")] = torch_dtype
 
         # Create the model
-        fast_llm_model = cls.model_class.from_pretrained(
+        fast_llm_model = cls.runner_class.model_class.from_pretrained(
             pretrained_model_name_or_path, config_updates=config_updates, mode=mode
         )
         config = cls.config_class(fast_llm_model.config)

@@ -48,7 +48,7 @@ class InferenceRunner(abc.ABC):
     ) -> tuple[dict[str, float | int], dict[str, typing.Any] | None]:
         # TODO: Return an actual model output.
         reduced_losses, update_successful, metrics = self._runner.run_step(
-            iter(((input_, kwargs),)),
+            iter((((input_, kwargs),),)),
             self._schedule,
             iteration=iteration,
             return_metrics=return_metrics,

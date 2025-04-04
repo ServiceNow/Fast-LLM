@@ -9,10 +9,9 @@ from fast_llm.data.data.gpt.data import GPTBatch
 from fast_llm.engine.distributed.config import PhaseType
 from fast_llm.engine.inference.config import HuggingfaceModelConfig
 from fast_llm.engine.inference.huggingface import HuggingfacePreTrainedModel
-from fast_llm.engine.inference.runner import InferenceRunner
 from fast_llm.layers.transformer.config import TransformerKwargs
 from fast_llm.models.gpt.config import GPTModelConfig
-from fast_llm.models.gpt.model import GPTModel
+from fast_llm.models.gpt.model import GPTBaseModel, GPTInferenceRunner
 
 logger = logging.getLogger(__name__)
 
@@ -26,8 +25,8 @@ class HuggingfaceGPTModelConfig(HuggingfaceModelConfig):
 class HuggingfaceGPTModelForCausalLM(HuggingfacePreTrainedModel):
     config_class = HuggingfaceGPTModelConfig
     config: HuggingfaceGPTModelConfig
-    runner_class: typing.ClassVar[type[InferenceRunner]] = InferenceRunner
-    _fast_llm_model: GPTModel
+    runner_class: typing.ClassVar[type[GPTInferenceRunner]] = GPTInferenceRunner
+    fast_llm_base_model: GPTBaseModel
     # base_model_prefix = ""
     # _no_split_modules = None
     # _supports_cache_class = False
@@ -69,7 +68,7 @@ class HuggingfaceGPTModelForCausalLM(HuggingfacePreTrainedModel):
 
         # Iteration serves as a random seed, using random module because it's not seeded by Fast LLM
         iteration = random.randint(0, 2**32)
-        batch = self._fast_llm_model.base_model.preprocess(
+        batch = self.fast_llm_base_model.preprocess(
             GPTBatch(input_ids), phase=PhaseType.inference, iteration=iteration
         )
         ((input_, kwargs),) = batch

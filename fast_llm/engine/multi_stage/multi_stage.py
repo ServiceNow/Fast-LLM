@@ -209,12 +209,15 @@ class MultiStageModel[ConfigType: FastLLMModelConfig](Configurable[ConfigType]):
                 "Bfloat16 gradient accumulation and reduction is not recommended. (use --full_precision_gradients=1)"
             )
 
-    def setup(self, distributed: Distributed, mode: StageMode = StageMode.training) -> None:
+    def setup(self, distributed: Distributed | None = None, mode: StageMode = StageMode.training) -> None:
         # TODO: More checks?
         stage: Stage
-        assert distributed.config is self._config.distributed
         assert not self._is_setup
         self._is_setup = True
+        if distributed is None:
+            distributed = Distributed(self._config.distributed)
+        else:
+            assert distributed.config is self._config.distributed
         self._distributed = distributed
         self._mode = mode
         self._base_model.setup(distributed)
@@ -380,6 +383,10 @@ class MultiStageModel[ConfigType: FastLLMModelConfig](Configurable[ConfigType]):
         if name not in self._shard_names:
             raise KeyError(f"Unknown shard name {name}")
         return self._shards[name]
+
+    @property
+    def is_setup(self) -> bool:
+        return self._is_setup
 
     @property
     def support_forward(self) -> bool:
