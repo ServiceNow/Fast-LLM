@@ -9,7 +9,16 @@ import warnings
 
 import yaml
 
-from fast_llm.utils import Assert, Tag, get_type_name, header, log, pop_nested_dict_value, set_nested_dict_value
+from fast_llm.utils import (
+    Assert,
+    Tag,
+    Registry,
+    get_type_name,
+    header,
+    log,
+    pop_nested_dict_value,
+    set_nested_dict_value,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -634,17 +643,17 @@ class Config:
             value = str(value)
         return value
 
-    def to_copy[
-        T
-    ](self: T, *updates: typing.Union["Config", dict[str | tuple[str, ...], typing.Any]], strict: bool = True,) -> T:
+    def to_copy[T](
+        self: T,
+        *updates: typing.Union["Config", dict[str | tuple[str, ...], typing.Any]],
+        strict: bool = True,
+    ) -> T:
         return self.from_dict(self, *updates, strict=strict)
 
     def to_serialized(self, verbose: int | None = FieldVerboseLevel.core) -> dict[str, typing.Any]:
         return self._to_dict(verbose=verbose, format_=_ConfigDictFormat.nested, serializable=True)
 
-    def to_logs[
-        T
-    ](
+    def to_logs[T](
         self,
         verbose: int | None = FieldVerboseLevel.core,
         log_fn: typing.Callable[[str], T] = logger.info,
