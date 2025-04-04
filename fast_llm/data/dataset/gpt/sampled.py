@@ -96,6 +96,8 @@ class GPTSampledIndexedDataset(SampledDataset):
 
         if self._config.enable_packing and self._config.use_preference_loss_masking_spans:
             raise NotImplementedError("Packing currently not implemented with preference loss masking.")
+        if not self._config.enable_packing and self._truncate_documents:
+            raise NotImplementedError("If packing is disabled, document truncation must also be disabled.")
 
         if sampling.cache_directory is None:
             self._document_shuffling = MemmapArray()
@@ -122,7 +124,9 @@ class GPTSampledIndexedDataset(SampledDataset):
             self._token_cumsum_shuffled = MemmapArray(base_path.with_name(base_path.name + "_shuffled_cumsum.npy"))
             self._token_cumsum_unshuffled = MemmapArray(base_path.with_name(base_path.name + "_unshuffled_cumsum.npy"))
 
-            self._document_sizes = MemmapArray(base_path.with_name(base_path.name + "_doc_sizes.npy"))
+            if not self._config.enable_packing:
+                self._document_sizes = MemmapArray(base_path.with_name(base_path.name + "_doc_sizes.npy"))
+                self._doc_length_filtered_indicies = MemmapArray(base_path.with_name(base_path.name + "_doc_length_filtered_indices.npy"))
 
             self._yaml_path = base_path.with_suffix(".yaml")
             # Sample or validate the dataset of a given rank.
@@ -168,6 +172,7 @@ class GPTSampledIndexedDataset(SampledDataset):
                 / tokens_per_epoch
             )
         else:
+            documents_per_epoch = (~long_docs_filter).sum().item()
             num_epochs = math.ceil(self._num_samples / documents_per_epoch)
 
         # Prepare for shuffling.
@@ -310,6 +315,18 @@ class GPTSampledIndexedDataset(SampledDataset):
                 # Free memory
                 del document_shuffling
         else:
+            # index of all documents less than seq length long
+            doc_length_filtered_indicies = torch.nonzero(~long_docs_filter, as_tuple=True)[0]
+            self._doc_length_filtered_indicies.save(
+                doc_length_filtered_indicies.numpy(
+                    force=self._config.gpu
+                )
+            )
+
+            # # apply shuffling on doc_length_filtered_indicies
+            # document_shuffling_length_filtered_indices = torch.gather(
+            #     doc_length_filtered_indicies, dim=0, index=document_shuffling.to(torch.int64)
+            # )
             if shuffled_epochs > 0:
                 self._document_shuffling.save(
                     document_shuffling[:self._num_samples].numpy(
@@ -321,8 +338,6 @@ class GPTSampledIndexedDataset(SampledDataset):
                 # yaml_data["unshuffled_tokens"] = num_tokens_unshuffled
                 self._yaml_path.parent.mkdir(parents=True, exist_ok=True)
                 yaml.safe_dump(yaml_data, self._yaml_path.open("w"))
-            
-
 
     def _get_token_cumsum(self, sizes: torch.Tensor, offset: int, dtype: DataType) -> tuple[np.ndarray, int | None]:
         if self._truncate_documents:
@@ -454,9 +469,9 @@ class GPTSampledIndexedDataset(SampledDataset):
             return GPTSample(token_ids=token_ids, loss_masking_spans=loss_masking_spans, sequence_lengths=sequence_lengths)
         else:
             if index < self._unshuffled_documents:
-                document_index = index % self._documents_per_epoch
+                document_index = self._doc_length_filtered_indicies[index % self._documents_per_epoch]
             else:
-                document_index = self._document_shuffling[index - self._unshuffled_documents].item()
+                document_index = self._doc_length_filtered_indicies[self._document_shuffling[index - self._unshuffled_documents].item()]
             
             sample = self._indexed_dataset.get(
                 document_index,
