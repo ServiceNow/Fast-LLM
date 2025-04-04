@@ -13,10 +13,10 @@ We already saw an example dataset configuration in the [quick-start guide](../qu
     ```yaml
     data:
       datasets:
-        Training:
+        training:
           type: file
           path: fast-llm-tutorial/dataset/fast_llm_config_training.yaml
-        Validation:
+        validation:
           type: file
           path: fast-llm-tutorial/dataset/fast_llm_config_validation.yaml
     ```
@@ -25,6 +25,16 @@ We already saw an example dataset configuration in the [quick-start guide](../qu
 
 In this section we are interested in generalizing step 3. For more details on steps 1 and 2, please refer to the quick-start guide or [this example](data-configuration.md).
 
+The section `data.datasets` holds descriptions of datasets used in training, validation, and testing.  
+
+The Training and Testing phases must have predetermined dataset names: `training` and `testing`, respectively. Each of these phases can have only one dataset.  
+
+For validation datasets, the rules are different. There can be as many validation datasets as needed, and their names are arbitrary. In the example above, the dataset name `validation` is chosen for simplicity. The datasets names used for validation and their application details are specified in the training config `evaluations` sections.  
+
+Adding multiple validation datasets increases flexibility in tracking the accuracy of your trained model. One possible scenario is using a separate validation dataset for each blended training dataset, allowing you to track training progress on each subset separately and observe how the model performs in real time on different subsets of your training data.  
+
+Below are examples of how to configure various aspects of training and validation datasets.
+
 ## Example 1: Blending multiple datasets
 
 In this example, we have three datasets and want to sample from each of them during training with probabilities 0.70, 0.25 and 0.05. For this, we use the `blended` type which takes other datasets as arguments:
@@ -32,7 +42,7 @@ In this example, we have three datasets and want to sample from each of them dur
 ```yaml
 data:
   datasets:
-    Training:
+    training:
       type: blended
       datasets:
         - type: file
@@ -54,7 +64,7 @@ In this example, we have a large dataset that comes pre-shuffled, so shuffling i
 ```yaml
 data:
   datasets:
-    Training:
+    training:
       type: file
       path: path/to/dataset.yaml
   sampling:
@@ -68,10 +78,10 @@ In this example, we want to disable shuffling entirely, but only for the validat
 ```yaml
 data:
   datasets:
-    Training:
+    training:
       type: file
       path: path/to/training_dataset.yaml
-    Validation:
+    validation:
       type: sampled
       dataset:
         type: file
@@ -91,7 +101,7 @@ In this example, we have a blend of datasets as in example 1, but we wish to set
 ```yaml
 data:
   datasets:
-    Training:
+    training:
       type: blended
       datasets:
         - type: sampled
@@ -118,7 +128,34 @@ data:
 !!! note "Default seed"
     In the absence of explicit seed, Fast-LLM uses a default seed (`data.sampling`'s default) instead, and uses seed shifts to ensure different seeds for each phase and for the various blended datasets.
 
-## Example 5: Advanced scenario
+
+## Example 5: Specifying Multiple Validation Datasets  
+
+In this example, we show how to specify multiple validation datasets and configure how often they are applied, along with their usage attributes in the `training.evaluations` section.  
+
+Please note that the same dataset names must be used in the `training.evaluations` section. If a validation dataset is specified in the `datasets` section but not in `training.evaluations`, it will not be used for validation.  
+
+```yaml
+training:
+  evaluations:
+    the_stack:
+      iterations: 25
+      interval: 50
+    fineweb:
+      iterations: 25
+      interval: 100
+data:
+  datasets:
+    the_stack:
+      type: file
+      path: path/to/validation_the_stack_dataset.yaml
+    fineweb:
+      type: file
+      path: path/to/validation_fineweb_dataset.yaml
+      
+```
+
+## Example 6: Advanced scenario
 
 In this example, we combine everything we learned so far to create a complex scenario, where:
 
@@ -129,7 +166,7 @@ In this example, we combine everything we learned so far to create a complex sce
 ```yaml
 data:
   datasets:
-    Training:
+    training:
       type: blended
       datasets:
         - type: sampled
@@ -156,7 +193,7 @@ data:
           # Seed = default + train_shift + 2 * blend_shift, shuffle = skip_first_epoch
           path: path/to/dataset_3.yaml
       weights: [0.70, 0.25, 0.05]
-    Validation:
+    validation:
         type: sampled
         dataset:
           type: file
@@ -174,10 +211,10 @@ data:
     ```yaml
     data:
       datasets:
-        Training:
+        training:
           type: file
           path: path/to/training_dataset_config.yaml
-        Validation:
+        validation:
           type: file
           path: path/to/validation_dataset_config.yaml
       sampling:

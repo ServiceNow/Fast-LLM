@@ -61,6 +61,11 @@ class BatchConfig(Config):
         hint=FieldHint.derived,
         valid=check_field(Assert.gt, 0),
     )
+    cross_document_attention: bool = Field(
+        default=True,
+        desc="Applies attention to tokens from other documents in the packed sequence. Set to False for masking attention to other documents.",
+        hint=FieldHint.feature,
+    )
     _distributed: DistributedConfig = Field(
         init=False,
         desc="Pointer to a distributed configuration, required to know the data-parallel split of the batch.",

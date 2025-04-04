@@ -6,8 +6,6 @@ Todo: Move all core methods elsewhere (functional?).
 
 import torch
 
-from fast_llm.core.distributed import set_generator
-
 try:
     from amp_C import multi_tensor_adam as _multi_tensor_adam  # noqa
     from amp_C import multi_tensor_l2norm as _multi_tensor_l2norm  # noqa
@@ -17,13 +15,6 @@ try:
     _apex_available = True
 except ImportError:
     _apex_available = False
-
-try:
-    from flash_attn.flash_attn_interface import flash_attn_func as _flash_attn_func  # noqa
-
-    _flash_available = True
-except ImportError:
-    _flash_available = False
 
 
 def l2_norm(tensors: list[torch.Tensor], noop_flag: torch.Tensor) -> torch.Tensor:
@@ -74,27 +65,3 @@ def fused_adam(
         1,  # bias correction
         wd,
     )
-
-
-def flash_attn(
-    query: torch.Tensor,
-    key: torch.Tensor,
-    value: torch.Tensor,
-    dropout_p: float,
-    *,
-    window_size: int | None,
-    causal: bool = False,
-    generator: torch.Generator | None,
-    softmax_scale: float | None = None,
-) -> torch.Tensor:
-    assert _flash_available
-    with set_generator(generator):
-        return _flash_attn_func(
-            query,
-            key,
-            value,
-            window_size=(-1, -1) if window_size is None else (window_size - 1, 0),
-            dropout_p=dropout_p,
-            causal=causal,
-            softmax_scale=softmax_scale,
-        )
