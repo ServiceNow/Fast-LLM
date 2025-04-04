@@ -5,7 +5,16 @@ import shlex
 import subprocess
 import typing
 
-from fast_llm.config import Config, Field, FieldHint, FieldUpdate, check_field, config_class, skip_valid_if_none
+from fast_llm.config import (
+    Config,
+    Field,
+    FieldHint,
+    FieldUpdate,
+    NoAutoValidate,
+    check_field,
+    config_class,
+    skip_valid_if_none,
+)
 from fast_llm.data.data.config import DataConfig
 from fast_llm.engine.checkpoint.config import (
     CheckpointLoadConfig,
@@ -375,6 +384,13 @@ class TrainerConfig(PretrainedFastLLMModelConfig, ExperimentConfig):
     def _validate(self) -> None:
         self.training.export.setup(self.model)
         self.model.validate()
+        if self.reference_models:
+            # TODO: Add support.
+            Assert.eq(self.model.distributed.pipeline_parallel, 1)
+            # TODO: Check if these work.
+            Assert.eq(self.model.distributed.tensor_parallel, 1)
+            Assert.eq(self.model.distributed.sequence_data_parallel, 1)
+
         for reference_model in self.reference_models.values():
             _add_reference_distributed_to_pretrained(reference_model, self.model.distributed)
         super()._validate()
@@ -416,7 +432,8 @@ def _add_reference_distributed_to_pretrained(pretrained: PretrainedFastLLMModelC
         # TODO!!!!!!!!!!!!!: Uncomment after #205
         # pretrained.model.distributed.validate()
         # Assert.leq(pretrained.model.distributed.to_dict().keys(), {"world_size", "rank", "local_world_size"})
-        pretrained.model.distributed = distributed.to_copy()
+        with NoAutoValidate():
+            pretrained.model.distributed = distributed.to_copy()
         # Allow sharing the `Distributed` instance.
         pretrained.model.distributed.reference_config = distributed
         old_setup()

@@ -7,6 +7,7 @@ from fast_llm.engine.multi_stage.config import FastLLMModelConfig, PretrainedFas
 from fast_llm.engine.training.config import TrainerConfig
 from fast_llm.layers.language_model.config import LanguageModelArchitectureConfig, LanguageModelBaseConfig
 from fast_llm.models.gpt.megatron import set_megatron_distributed_seeds
+from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
     from fast_llm.models.gpt.huggingface import HuggingfaceGPTModelForCausalLM
@@ -138,6 +139,8 @@ class GPTTrainerConfig(PretrainedGPTModelConfig, TrainerConfig):
             self.batch.sequence_length = self.model.base_model.max_position_embeddings
         if self.model.base_model.use_megatron_initialization:
             set_megatron_distributed_seeds(self.model.distributed)
+        for reference_model in self.reference_models.values():
+            Assert.none(reference_model.model.base_model.cross_entropy_splits)
         super()._validate()
 
     @classmethod
