@@ -2,14 +2,13 @@ import math
 from typing import Callable
 
 import torch
-import torch.nn as nn
 from einops import rearrange, repeat
 from mamba_ssm.ops.selective_scan_interface import mamba_inner_fn, selective_scan_fn
 
 from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
 from fast_llm.layers.common.linear import Linear
 from fast_llm.layers.ssm.config import MambaConfig, SSMDimNames
-from fast_llm.tensor import ParameterMeta, init_ones_
+from fast_llm.tensor import ParameterMeta, init_ones_, kaiming_init_
 
 try:
     from causal_conv1d import causal_conv1d_fn
@@ -23,16 +22,6 @@ Note: this is mostly addapted from https://github.com/Zyphra/Zamba2, similar cod
 For now it only supports training and not inference.
 This works with triton 3.1.0
 """
-
-
-def kaiming_init(d_in, d_out, a=math.sqrt(5)):
-    # same as torch linear layer init https://github.com/pytorch/pytorch/blob/b248edd7ccae15cf3a2dd86442149e4bc029846a/torch/nn/modules/linear.py#L114
-    def init_(meta: ParameterMeta, tensor: torch.Tensor, generator: torch.Generator):  # noqa
-        tensor_view = tensor.view(d_out, d_in)
-        nn.init.kaiming_normal_(tensor_view, a=a)
-        return tensor
-
-    return init_
 
 
 def init_A(d_state, d_inner) -> Callable[[ParameterMeta, torch.Tensor, torch.Generator], torch.Tensor]:
@@ -69,7 +58,7 @@ def init_dtprojbias(
     return init_
 
 
-class MambaLayer(nn.Module):
+class MambaLayer(torch.nn.Module):
     def __init__(
         self,
         config: MambaConfig,
@@ -87,41 +76,38 @@ class MambaLayer(nn.Module):
         # Tensor dims:
         td_inner = tensor_space.get_tensor_dim(SSMDimNames.d_inner)
         td_inner_proj = tensor_space.get_tensor_dim(
-            SSMDimNames.d_inner_proj
+            SSMDimNames.d_inner_proj_m
         )  # TensorDim("D_inner_2", self.d_inner * 2)
         tdt_rank = tensor_space.get_tensor_dim(SSMDimNames.dt_rank)
         td_x_proj = tensor_space.get_tensor_dim(SSMDimNames.d_x_proj)
         td_state = tensor_space.get_tensor_dim(SSMDimNames.d_state)
         td_model = tensor_space.get_tensor_dim(SSMDimNames.d_model)
-        td_conv = tensor_space.get_tensor_dim(SSMDimNames.d_conv_kernel)
-        self.d_conv = td_conv.size
+        td_conv_kernel = tensor_space.get_tensor_dim(SSMDimNames.d_conv_kernel)
+        self.d_conv = td_conv_kernel.size
         self.d_inner = td_inner.size
         self.d_state = td_state.size
         self.d_model = td_model.size
         self.dt_rank = tdt_rank.size
 
-        self.in_proj_weight = ParameterMeta(
-            torch.empty(td_inner_proj.size, td_model.size, device="meta", dtype=torch.float32),
-            dims=(td_inner_proj, td_model),
-            init_method=kaiming_init(td_model.size, td_inner_proj.size),
+        self.in_proj_weight = ParameterMeta.from_dims(
+            (td_inner_proj, td_model),
+            init_method=kaiming_init_(td_model.size),
         )
 
-        self.conv1d_weight = ParameterMeta(
-            torch.empty(self.d_inner, self.d_inner // self.d_inner, self.d_conv, device="meta", dtype=torch.float32),
-            dims=(td_inner, TensorDim("D_inner_2", self.d_inner // self.d_inner), td_conv),
-            init_method=kaiming_init(td_inner.size, self.d_conv),
+        self.conv1d_weight = ParameterMeta.from_dims(
+            (td_inner, TensorDim("D_inner_2", self.d_inner // self.d_inner), td_conv_kernel),
+            init_method=kaiming_init_(td_inner.size),
         )
 
         self.conv1d_bias = None
 
         self.activation = "silu"
-        self.act = nn.SiLU()
+        self.act = torch.nn.SiLU()
 
         if self.use_fast_path:
-            self.x_proj_weight = ParameterMeta(
-                torch.empty(td_x_proj.size, td_inner.size, device="meta", dtype=torch.float32),
-                dims=(td_x_proj, td_inner),
-                init_method=kaiming_init(td_inner.size, td_x_proj.size),
+            self.x_proj_weight = ParameterMeta.from_dims(
+                (td_x_proj, td_inner),
+                init_method=kaiming_init_(td_x_proj.size),
             )
 
             self.x_proj_bias = None
@@ -129,47 +115,42 @@ class MambaLayer(nn.Module):
             self.x_proj = Linear(
                 td_inner,
                 td_x_proj,
-                weight_init_method=kaiming_init(td_inner.size, td_x_proj.size),
+                weight_init_method=kaiming_init_(td_inner.size),
                 bias=False,
                 **factory_kwargs,
             )
 
         # TODO: the weights are innitialized a bit differently here https://github.com/state-spaces/mamba/blob/0cce0fa645f100f00620ddf2333c2b7712abfdec/mamba_ssm/modules/mamba_simple.py#L82
-        self.dt_proj_weight = ParameterMeta(
-            torch.empty(td_inner.size, tdt_rank.size, device="meta", dtype=torch.float32),
-            dims=(td_inner, tdt_rank),
-            init_method=kaiming_init(td_inner.size, tdt_rank.size),
+        self.dt_proj_weight = ParameterMeta.from_dims(
+            (td_inner, tdt_rank),
+            init_method=kaiming_init_(tdt_rank.size),
         )
 
-        self.dt_proj_bias = ParameterMeta(
-            torch.empty(td_inner.size, device="meta", dtype=torch.float32),
-            dims=(td_inner,),
+        self.dt_proj_bias = ParameterMeta.from_dims(
+            (td_inner,),
             init_method=init_dtprojbias(
                 self.d_inner, self.config.dt_max, self.config.dt_min, self.config.dt_init_floor, factory_kwargs
             ),
         )
 
-        # Our initialization would set all Linear.bias to zero, need to mark this one as _no_reinit
-        # self.dt_proj.bias._no_reinit = True #TODO: check if this is needed, why is this needed in the original implementation?
-
-        self.A_log = ParameterMeta(
-            torch.empty(self.d_inner, self.d_state, device="meta", dtype=torch.float32),
-            dims=(td_inner, td_state),
+        self.A_log = ParameterMeta.from_dims(
+            (td_inner, td_state),
             weight_decay=False,
             init_method=init_A(self.d_state, self.d_inner),
         )
 
         # D "skip" parameter
-        self.D = ParameterMeta(
-            torch.empty(self.d_inner, device="meta"), dims=(td_inner,), weight_decay=False, init_method=init_ones_
+        self.D = ParameterMeta.from_dims(
+            (td_inner,),
+            weight_decay=False,
+            init_method=init_ones_,
         )
 
         if self.use_fast_path:
 
-            self.out_proj_weight = ParameterMeta(
-                torch.empty(td_model.size, td_inner.size, device="meta", dtype=torch.float32),
-                dims=(td_model, td_inner),
-                init_method=kaiming_init(td_inner.size, td_model.size),
+            self.out_proj_weight = ParameterMeta.from_dims(
+                (td_model, td_inner),
+                init_method=kaiming_init_(td_model.size),
             )
 
             self.out_proj_bias = None
@@ -178,7 +159,7 @@ class MambaLayer(nn.Module):
                 td_inner,
                 td_model,
                 bias=False,  # TODO: note, if bias is used there is a problem in the MambaInnerFn.backward for the bias grads. I think this bias is not used in other mamba repos.
-                weight_init_method=kaiming_init(td_inner.size, td_model.size),
+                weight_init_method=kaiming_init_(td_model.size),
                 **factory_kwargs,
             )
 

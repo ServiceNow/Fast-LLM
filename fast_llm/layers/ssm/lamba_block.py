@@ -3,31 +3,41 @@ import typing
 import torch
 
 from fast_llm.engine.base_model.base_model import Layer
-from fast_llm.engine.config_utils.tensor_space import TensorSpace
 from fast_llm.layers.transformer.config import TransformerDimNames
 from fast_llm.layers.transformer.mlp import MLP
 from fast_llm.logging import log_distributed_grad, log_distributed_tensor
-from fast_llm.models.ssm.config import HybridBaseModelConfig
 from fast_llm.tensor import TensorMeta
+
+if typing.TYPE_CHECKING:
+    from fast_llm.engine.config_utils.tensor_space import TensorSpace
+    from fast_llm.layers.ssm.config import MambaConfig
+    from fast_llm.layers.transformer.config import TransformerConfig
 
 
 class LambaBlock(Layer):
-    def __init__(self, config: HybridBaseModelConfig, mixer_cls, layer_index: int, tensor_space: TensorSpace):
+    def __init__(
+        self,
+        config_transformer: "TransformerConfig",
+        config_ssm: "MambaConfig",
+        mixer_cls,
+        layer_index: int,
+        tensor_space: "TensorSpace",
+    ):
 
         super().__init__()
         self._layer_index = layer_index
-        self._config = config
+        self._config_transformer = config_transformer
+        self._config_ssm = config_ssm
         self._tensor_space = tensor_space
-        self._ssm_config = config.ssm
 
-        self._debug_mode = self._ssm_config.debug_ssm
-        self.mixer = mixer_cls(self._ssm_config, layer_idx=layer_index, tensor_space=tensor_space)
+        self._debug_mode = self._config_ssm.debug_ssm
+        self.mixer = mixer_cls(self._config_ssm, layer_idx=layer_index, tensor_space=tensor_space)
 
         hidden_dim = self._tensor_space.get_tensor_dim(TransformerDimNames.hidden)
-        self.norm_1 = self._config.transformer.normalization.get_layer(hidden_dim)
-        self.norm_2 = self._config.transformer.normalization.get_layer(hidden_dim)
+        self.norm_1 = self._config_transformer.normalization.get_layer(hidden_dim)
+        self.norm_2 = self._config_transformer.normalization.get_layer(hidden_dim)
 
-        self.mlp = MLP(self._config.transformer, self._tensor_space, f"{self.name} mlp")
+        self.mlp = MLP(self._config_transformer, self._tensor_space, f"{self.name} mlp")
 
     def _get_meta(self, tensor: TensorMeta, name: str):
         return TensorMeta.from_dims(tensor.dims, tensor_name=f"{self.name} {name}", dtype=tensor.dtype)
@@ -42,14 +52,14 @@ class LambaBlock(Layer):
             log_distributed_tensor(
                 "",
                 tensor if bias is None else tensor + bias,
-                level=self._config.debug_transformer,
+                level=self._config_transformer.debug_transformer,
                 meta=self._get_meta(tensor, name, kwargs),
                 distributed=self._tensor_space.distributed,
             )
             log_distributed_grad(
                 "",
                 tensor,
-                level=self._config.debug_transformer,
+                level=self._config_transformer.debug_transformer,
                 meta=self._get_meta(tensor, name + " grad", kwargs),
                 distributed=self._tensor_space.distributed,
             )

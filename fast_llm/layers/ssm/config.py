@@ -6,17 +6,18 @@ from fast_llm.utils import Assert
 
 
 class SSMDimNames:
-    d_model = "D_model"
-    d_state = "D_state"
-    d_conv = "D_conv"  # dimention of the conv1d input in mamba layers
-    d_inner = "D_inner"
-    dt_rank = "D_rank"
-    d_inner_proj = "D_inner_proj"
-    d_x_proj = "D_x_proj"
-    headdim = "D_headdim"  # dimention of the mamba2 head
-    d_conv_kernel = "D_conv_kernel"  # kernel size of the conv1d in mamba layers
-    n_qk_heads = "N_qk_heads"
-    n_v_heads = "N_v_heads"
+    d_model = "model_dimension_D"
+    d_state = "state_dimension_N"
+    d_conv = "size_of_conv1d_input"  # dimention of the conv1d input in mamba layers
+    d_inner = "inner_dimension_after_expansion"
+    dt_rank = "rank_of_Δ"
+    d_inner_proj_m = "inner_projection_dimension_mamba"
+    d_inner_proj_m2 = "inner_projection_dimension_mamba2"
+    d_x_proj = "x_projection_dimension"
+    headdim = "head_dimension_P"  # dimention of the mamba2 head
+    d_conv_kernel = "1d_conv_kernel_size"  # kernel size of the conv1d in mamba layers
+    n_qk_heads = "number_of_qk_heads"
+    n_v_heads = "number_of_v_heads"
 
 
 @config_class()
@@ -31,19 +32,20 @@ class SSMArchitectureConfig(BaseModelArchitectureConfig):
     )
 
     expansion_factor: int = Field(
-        default=2,
-        desc="Expansion factor for Mamba blocks.",
-        hint=FieldHint.core,
+        default=2, desc="Expansion factor for Mamba blocks.", hint=FieldHint.core, valid=check_field(Assert.gt, 0)
     )
+
     state_size: int = Field(
         default=16,
         desc="State size for Mamba blocks.",
         hint=FieldHint.core,
+        valid=check_field(Assert.gt, 0),
     )
     conv_kernel_dimension: int = Field(
         default=4,
         desc="Conv kernel dimension for Mamba blocks.",
         hint=FieldHint.core,
+        valid=check_field(Assert.gt, 0),
     )
 
     # Layer parameters
@@ -83,32 +85,6 @@ class SSMArchitectureConfig(BaseModelArchitectureConfig):
         hint=FieldHint.core,
     )
 
-
-@config_class()
-class MambaConfig(SSMArchitectureConfig):
-    """Configuration for a Structured State Space Model (SSM) layer."""
-
-    normalization: NormalizationConfig = FieldUpdate(default_factory=NormalizationConfig)
-
-    dt_init_floor: float = Field(
-        default=1e-4,
-        desc="Minimum value for initializing dt",
-        hint=FieldHint.core,
-        valid=check_field(Assert.gt, 0),
-    )
-    # Performance optimization
-    use_fast_path: bool = Field(
-        default=True,
-        desc="Whether to use optimized CUDA kernels when available",
-        hint=FieldHint.performance,
-    )
-
-    debug_ssm: bool = Field(
-        default=False,
-        desc="debug_ssm",
-        hint=FieldHint.optional,
-    )
-
     dt_min: float = Field(
         default=0.001,
         desc="Minimum step size for discretization",
@@ -130,11 +106,23 @@ class MambaConfig(SSMArchitectureConfig):
         valid=check_field(Assert.gt, 0),
     )
 
-    # Mamba2 parameters
-    use_mamba2: bool = Field(
+
+@config_class()
+class MambaConfig(SSMArchitectureConfig):
+    """Configuration for a Structured State Space Model (SSM) layer."""
+
+    normalization: NormalizationConfig = FieldUpdate(default_factory=NormalizationConfig)
+    # Performance optimization
+    use_fast_path: bool = Field(
+        default=True,
+        desc="Whether to use optimized CUDA kernels when available",
+        hint=FieldHint.performance,
+    )
+
+    debug_ssm: bool = Field(
         default=False,
-        desc="Use Mamba2 blocks.",
-        hint=FieldHint.core,
+        desc="debug_ssm",
+        hint=FieldHint.optional,
     )
 
     def setup_tensor_space(self, tensor_space: TensorSpace) -> None:
@@ -144,14 +132,6 @@ class MambaConfig(SSMArchitectureConfig):
         """Validate configuration parameters."""
 
         super()._validate()
-
-        # Validate SSM-specific parameters
-        Assert.gt(self.state_size, 0)
-        Assert.gt(self.expansion_factor, 0)
-        Assert.gt(self.conv_kernel_dimension, 0)
-        Assert.gt(self.dt_min, 0)
-        Assert.gt(self.dt_max, 0)
-        Assert.gt(self.dt_init_floor, 0)
         Assert.geq(self.dt_max, self.dt_min)
 
         if isinstance(self.dt_rank, int):

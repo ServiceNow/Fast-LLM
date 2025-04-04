@@ -23,9 +23,9 @@ try:
     from fast_llm.layers.ssm.config import MambaConfig
     from fast_llm.layers.ssm.discrete_mamba2 import DiscreteMamba2
     from fast_llm.layers.ssm.mamba_layer import MambaLayer
-    from fast_llm.models.ssm.model import HybridBaseModel, HybridBaseModelConfig, HybridModel
+    from fast_llm.models.ssm.model import HybridSSMBaseModel, HybridSSMBaseModelConfig, HybridSSMModel
 except ImportError:
-    MambaLayer, LambaBlock, HybridBaseModel, HybridBaseModelConfig, DiscreteMamba2 = None, None, None, None, None
+    MambaLayer, LambaBlock, HybridSSMBaseModel, HybridSSMBaseModelConfig, DiscreteMamba2 = None, None, None, None, None
     # Mamba not isntalled, skipping tests
 
 run_test = MambaLayer is not None and torch.cuda.is_available()
@@ -71,10 +71,10 @@ def distributed(distributed_config):
     return Distributed(config=distributed_config)
 
 
-def get_hybrid_config(use_mamba2: bool = False, use_fast_path: bool = True, block_pattern=["t", "m", "t", "m"]):
-    config = HybridBaseModelConfig(
-        transformer=TransformerConfig(num_layers=4),
-        ssm=MambaConfig(use_mamba2=use_mamba2),
+def get_hybrid_config(use_fast_path: bool = True, block_pattern=["t", "m", "t", "m"]):
+    config = HybridSSMBaseModelConfig(
+        transformer=TransformerConfig(num_layers=len(block_pattern)),
+        ssm=MambaConfig(),
         block_pattern=block_pattern,
         init_method_std_embed=0.02,
         init_method_min_embed=-0.02,
@@ -123,7 +123,7 @@ def test_load_from_llamba_checkpoint(distributed_config):
     # Create checkpoint load config
     checkpoint_config = CheckpointLoadConfig(path=path, format=format, model_weights=True, optimizer_state=False)
     # Initialize model
-    model = HybridModel.from_pretrained(checkpoint_config)
+    model = HybridSSMModel.from_pretrained(checkpoint_config)
     param_sum_fll = 0
     for stage in model.stages:
         if hasattr(stage, "_weight_shard"):
@@ -166,16 +166,16 @@ def test_load_from_llamba_checkpoint(distributed_config):
 
 @pytest.mark.skipif(not run_test, reason="No CUDA available or Mamba not installed")
 @pytest.mark.parametrize(
-    "use_mamba2,use_fast_path,LAYER_CLS",
+    "block_pattern,use_fast_path,LAYER_CLS",
     [
-        (False, True, MambaLayer),
-        (False, False, MambaLayer),
-        (True, False, DiscreteMamba2),
+        (["m", "t"], True, MambaLayer),
+        (["m", "t"], False, MambaLayer),
+        (["m2", "t"], False, DiscreteMamba2),
     ],
     ids=["mamba-fast", "mamba-slow", "descrete_mamba2"],
 )
-def test_mamba_layer(distributed_config, distributed, use_mamba2, use_fast_path, LAYER_CLS):
-    hybrid_config = get_hybrid_config(use_mamba2, use_fast_path)
+def test_mamba_layer(distributed_config, distributed, block_pattern, use_fast_path, LAYER_CLS):
+    hybrid_config = get_hybrid_config(use_fast_path, block_pattern=block_pattern)
     tensor_space = TensorSpace(distributed_config=distributed_config)
     hybrid_config.setup_tensor_space(tensor_space)
     layer = LAYER_CLS(hybrid_config.ssm, layer_idx=0, tensor_space=tensor_space)
@@ -201,14 +201,20 @@ def test_mamba_layer(distributed_config, distributed, use_mamba2, use_fast_path,
 
 @pytest.mark.skipif(not run_test, reason="No CUDA available or Mamba not installed")
 def test_mamba_block(distributed_config, distributed):
-    hybrid_config = get_hybrid_config(use_mamba2=False, use_fast_path=True)
+    hybrid_config = get_hybrid_config(use_fast_path=True, block_pattern=["m", "t"])
     tensor_space = TensorSpace(distributed_config=distributed_config)
     tensor_space.setup(distributed)
     hybrid_config.setup_tensor_space(tensor_space)
     layer_idx = 0
 
     mixer_cls = partial(MambaLayer, layer_idx=layer_idx)
-    block = LambaBlock(hybrid_config.ssm, mixer_cls=mixer_cls, tensor_space=tensor_space, layer_index=layer_idx)
+    block = LambaBlock(
+        hybrid_config.transformer,
+        hybrid_config.ssm,
+        mixer_cls=mixer_cls,
+        tensor_space=tensor_space,
+        layer_index=layer_idx,
+    )
 
     materialize_meta_tensors(block, tensor_space)
     block.to("cuda")
@@ -218,7 +224,7 @@ def test_mamba_block(distributed_config, distributed):
     hidden_size = hybrid_config.transformer.hidden_size
     x = torch.randn(batch_size, seq_length, hidden_size, device=distributed.device)
 
-    hidden_states, residual = block(x)
+    hidden_states = block(x, {})
     loss = hidden_states.sum()
     loss.backward()
 
@@ -229,17 +235,17 @@ def test_mamba_block(distributed_config, distributed):
 
 @pytest.mark.skipif(not run_test, reason="No CUDA available or Mamba not installed")
 @pytest.mark.parametrize(
-    "use_mamba2,use_fast_path",
+    "block_pattern,use_fast_path",
     [
-        (False, True),
-        (False, False),
-        (True, False),
+        (["m", "t"], True),
+        (["m", "t"], False),
+        (["m2", "t"], False),
     ],
     ids=["mamba-fast", "mamba-slow", "descrete_mamba2"],
 )
-def test_hybrid_model_train_with_fast_mode(distributed_config, use_mamba2, use_fast_path):
-    hybrid_config = get_hybrid_config(use_mamba2, use_fast_path)
-    model = HybridBaseModel(hybrid_config, distributed_config)
+def test_hybrid_model_train_with_fast_mode(distributed_config, block_pattern, use_fast_path):
+    hybrid_config = get_hybrid_config(use_fast_path, block_pattern=block_pattern)
+    model = HybridSSMBaseModel(hybrid_config, distributed_config)
     distributed = Distributed(distributed_config)
     model.setup(distributed)
     tensor_space = model._tensor_space
@@ -286,7 +292,7 @@ def test_hybrid_model_train_with_fast_mode(distributed_config, use_mamba2, use_f
 # @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA available")
 # def test_hybrid_model_inference(distributed_config, hybrid_config):
 #     hybrid_config.ssm.use_fast_path = False
-#     model = HybridBaseModel(hybrid_config, distributed_config)
+#     model = HybridSSMBaseModel(hybrid_config, distributed_config)
 #     distributed = Distributed(distributed_config)
 #     model.setup(distributed)
 #     tensor_space = model._tensor_space
@@ -320,7 +326,3 @@ def test_hybrid_model_train_with_fast_mode(distributed_config, use_mamba2, use_f
 #         },
 #         losses=losses,
 #     )
-
-
-if __name__ == "__main__":
-    pytest.main([__file__])

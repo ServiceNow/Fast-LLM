@@ -14,8 +14,8 @@ from fast_llm.engine.checkpoint.huggingface import HuggingfaceStateDictCheckpoin
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig
 from fast_llm.layers.common.config import NormalizationType
 from fast_llm.models.gpt.conversion import MLPLayer2Converter
-from fast_llm.models.ssm.config import HybridModelConfig, LLambaHuggingfaceCheckpointFormat
-from fast_llm.models.ssm.model import HybridModel
+from fast_llm.models.ssm.config import HybridSSMModelConfig, LLambaHuggingfaceCheckpointFormat
+from fast_llm.models.ssm.model import HybridSSMModel
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
@@ -23,8 +23,8 @@ if typing.TYPE_CHECKING:
 
 
 class LLambaHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
-    _model: HybridModel
-    _model_class: typing.ClassVar[FastLLMModelConfig] = HybridModelConfig
+    _model: HybridSSMModel
+    _model_class: typing.ClassVar[FastLLMModelConfig] = HybridSSMModelConfig
     format: typing.ClassVar[type[CheckpointFormat]] = LLambaHuggingfaceCheckpointFormat
 
     @classmethod
@@ -88,7 +88,7 @@ class LLambaHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
                     ),
                 ),
             ),
-            ConstantImportParamConverter(fast_llm_names=(("ssm", "use_mamba2"),), fast_llm_value=True),
+            ConstantImportParamConverter(fast_llm_names=(("default_block"),), fast_llm_value="m2"),
             RenameParamConverter(
                 fast_llm_names=(("ssm", "state_size"),),
                 export_names=(
