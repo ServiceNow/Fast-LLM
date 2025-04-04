@@ -120,7 +120,6 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
         self._is_setup = True
 
 
-    # perform preprocessing for sequence parallel
     def preprocess_meta(
         self, batch_meta: BatchConfig | torch.Tensor, phase: PhaseType
     ) -> list[tuple[TensorMeta, dict]]:
@@ -166,7 +165,6 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             else sequence_q_dim
         )
 
-        # determins if batch dim or sequence dim is first
         need_sequence_first = hidden_sequence_q_dim.size != sequence_length
         if self._config.sequence_first is None:
             sequence_first = need_sequence_first
@@ -174,7 +172,6 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             sequence_first = self._config.sequence_first
             assert not (need_sequence_first and not sequence_first)
 
-        # hidden dim is model hidden size
         hidden_dim = self._tensor_space.get_tensor_dim(TransformerDimNames.hidden)
         hidden_dims = (
             (hidden_sequence_q_dim, batch_dim, hidden_dim)
@@ -199,7 +196,6 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             sequence_k = sequence_k_past + sequence_q_dim.size
             sequence_k_dim = TensorDim(TransformerDimNames.sequence_k, sequence_k)
 
-            # sequence_k_past is start and sequence_k is end of sequence
             tokens = TensorMeta.from_dims(
                 hidden_dims[:2], tensor_name=f"tokens_{sequence_k_past}_to_{sequence_k-1}", dtype=torch.int64
             )
@@ -294,7 +290,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                     for i, spans in enumerate(batch.loss_masking_spans):
                         if not spans.numel():
                             continue
-                        # filter spans within the sequence or partially within the sequence
+                        # only keep spans within the sequence or partially within the sequence
                         valid_spans = spans[(spans[:, 0] <= sequence_k) & (spans[:, 1] >= sequence_offset)]
                         if valid_spans.numel():
                             # if span is partially within the sequence, truncate parts of spans that are outside of the sequence
@@ -310,7 +306,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                     for i, spans in enumerate(batch.chosen_loss_masking_spans):
                         if not spans.numel():
                             continue
-                        # filter spans within the sequence or partially within the sequence
+                        # only keep spans within the sequence or partially within the sequence
                         valid_spans = spans[(spans[0] <= sequence_k) & (spans[1] >= sequence_offset)]
                         if valid_spans.numel():
                             # if span is partially within the sequence, truncate parts of spans that are outside of the sequence
@@ -322,7 +318,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                     for i, spans in enumerate(batch.rejected_loss_masking_spans):
                         if not spans.numel():
                             continue
-                        # filter spans within the sequence or partially within the sequence
+                        # only keep spans within the sequence or partially within the sequence
                         valid_spans = spans[(spans[0] <= sequence_k) & (spans[1] >= sequence_offset)]
                         if valid_spans.numel():
                             # if span is partially within the sequence, truncate parts of spans that are outside of the sequence

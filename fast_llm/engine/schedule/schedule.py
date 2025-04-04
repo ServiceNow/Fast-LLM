@@ -135,7 +135,7 @@ class Schedule(abc.ABC):
         if self._batch_config.num_inputs < self._distributed.pipeline_parallel:
             warnings.warn("Not enough input to achieve true pipeline parallelism.")
 
-        # Setup the activation metas. (metadata for sequence parallel)
+        # Setup the activation metas.
         self._preprocessed_meta = self._multi_stage.base_model.preprocess_meta(
             self._batch_config,
             phase=self._phase,
@@ -191,8 +191,8 @@ class Schedule(abc.ABC):
         return self._step_map[(type_, stage, data_index)]
 
     def _create_index(self) -> None:
-        self._device_steps: list[list[Step]] = [[] for _ in range(self._distributed.pipeline_parallel)]  # steps for each device
-        self._step_map = {} # map index (type, stage, data index) => step
+        self._device_steps: list[list[Step]] = [[] for _ in range(self._distributed.pipeline_parallel)]
+        self._step_map = {}
         for i, step in enumerate(self._steps):
             Assert.in_range(step.stage, 0, self._num_stages)
             Assert.in_range(
@@ -204,7 +204,6 @@ class Schedule(abc.ABC):
             step.global_index = i
             # TODO: More configurable placement?
 
-            # perform looping here
             step.pipeline_rank = step.stage % self._distributed.pipeline_parallel
             step.local_index = len(self._device_steps[step.pipeline_rank])
             self._device_steps[step.pipeline_rank].append(step)

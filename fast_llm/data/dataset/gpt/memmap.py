@@ -270,13 +270,8 @@ class GPTMemmapDataset(GPTIndexedDataset):
             spans = np.vstack(spans, dtype=np.int32)
         else:
             spans = np.array(spans, dtype=np.int32)
-        # if len(chosen_spans) > 0:
-        #     chosen_spans = np.vstack(chosen_spans, dtype=np.int32)
-        # else:
+
         chosen_spans = np.array(chosen_spans, dtype=np.int32).reshape(-1, 2)
-        # if len(rejected_spans) > 0:
-        #     rejected_spans = np.vstack(rejected_spans, dtype=np.int32)
-        # else:
         rejected_spans = np.array(rejected_spans, dtype=np.int32).reshape(-1, 2)
 
         # Write the index file (.idx)

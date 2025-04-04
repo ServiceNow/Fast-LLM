@@ -12,7 +12,6 @@ def compute_logps_for_spans(
     log_probs = torch.nn.functional.log_softmax(logits, dim=-1)
     
     # gather log probabilities corresponding to the target tokens
-    # selected_log_probs = log_probs[torch.arange(logits.shape[0] - 1), targets]
     selected_log_probs = log_probs[:-1].gather(dim=-1, index=targets.unsqueeze(-1)).squeeze(-1)
     
     # apply chosen mask
@@ -25,9 +24,6 @@ def compute_logps_for_spans(
     rejected_mask[rejected_span[:, 0]: rejected_span[:, 1] + 1] = 1
     rejected_logp = (selected_log_probs * rejected_mask).sum()
 
-    # chosen_logp = selected_log_probs[chosen_span[:, 0]: chosen_span[:, 1] + 1].sum()
-    # rejected_logp = selected_log_probs[rejected_span[:, 0]: rejected_span[:, 1] + 1].sum()
-    
     return chosen_logp, rejected_logp
 
 def compute_simplified_dpo_loss(
