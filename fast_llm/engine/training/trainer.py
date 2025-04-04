@@ -48,15 +48,14 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
             self._config.model,
             optimizer_state_names=self._config.optimizer.state_names(),
         )
-        self._reference_models = {
-            name: self._config.get_inference_runner_class()(
+        self._reference_models = {}
+        for name, reference_config in self._config.reference_models.items():
+            log_main_rank(f"Creating `{name} reference model...")
+            self._reference_models[name] = self._config.get_inference_runner_class()(
                 reference_config.model.get_model_class()(reference_config.model)
             )
-            for name, reference_config in self._config.reference_models.items()
-        }
-        for name, inference_runner in self._reference_models.items():
             self._multi_stage.base_model.add_preprocessor(
-                self._get_reference_model_preprocessor(name, inference_runner)
+                self._get_reference_model_preprocessor(name, self._reference_models[name])
             )
 
         phase: PhaseType
