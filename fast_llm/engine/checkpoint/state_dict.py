@@ -56,7 +56,9 @@ class StateDictCheckpointHandler(CheckpointHandler):
                 saver.add_tensor(self._get_key(exported_name, shard_name), exported_tensor)
 
         for shard_name, shard_state_dict in state_dict.items():
-            assert not shard_state_dict, (shard_name, list(state_dict))
+            assert (
+                not shard_state_dict
+            ), f"Un-handled entries after conversion: {({k: list(v) for k, v in state_dict.items()})}"
 
         index = saver.finalize()
         if self._model.config.distributed.rank == 0:
@@ -72,7 +74,7 @@ class StateDictCheckpointHandler(CheckpointHandler):
         return metadata.to_serialized()
 
     def load(self, config: CheckpointLoadConfig, metadata: CheckpointMetadata) -> None:
-        with SafeLoad(self._model, num_shards=self.get_num_shards(config), timeout=config.timeout) as context:
+        with SafeLoad(self._model, shard_names=self.get_shard_names(config), timeout=config.timeout) as context:
             # The tensor mapping may not be one-to-one. `convert_state_dict` pops all tensors from
             #   `state_dict` that are ready for conversion,
             #   and return a dict containing the converted tensors(s).
@@ -90,7 +92,7 @@ class StateDictCheckpointHandler(CheckpointHandler):
                     context.mark_as_loaded(loaded, (parameter_name, shard_name))
 
             for shard_name, shard_state_dict in state_dict.items():
-                assert not shard_state_dict, (shard_name, list(state_dict))
+                assert not shard_state_dict, (shard_name, list(shard_state_dict))
 
     @classmethod
     @abc.abstractmethod
@@ -145,7 +147,7 @@ class FastLLMCheckpointHandler(StateDictCheckpointHandler):
     ) -> typing.Iterator[tuple[str, str, torch.Tensor | SafeTensorSlice]]:
         metadata = self.load_metadata(config)
         shard_names = self.get_shard_names(config)
-        Assert.eq(metadata.shards[: self.get_num_shards(config)], list(shard_names))
+        Assert.leq(set(shard_names), set(metadata.shards))
         for file_name in set(metadata.metadata["state_index"].values()):
             logger.info(f"Loading from {config.path / file_name}")
             with safetensors.safe_open(

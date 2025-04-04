@@ -43,9 +43,9 @@ def test_model_dp2_timeout():
             # Use a short timeout
             "model.distributed.timeout=4",
             # Make a dataset that would timeout under the distributed timeout
-            'data.datasets.Training={"type":"test_slow"}',
-            "data.datasets.Training.type=test_slow",
-            "data.datasets.Training.sleep=6",
+            'data.datasets.training={"type":"test_slow"}',
+            "data.datasets.training.type=test_slow",
+            "data.datasets.training.sleep=6",
             # Use a bigger timeout for the dataset.
             "training.timeout=10",
             # Remove testing clutter.

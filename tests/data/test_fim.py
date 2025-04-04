@@ -1,7 +1,6 @@
 from fast_llm.data.config import TokenizerConfig
 from fast_llm.data.dataset.gpt.config import GPTFimSampledDatasetConfig
 from fast_llm.data.tokenizer import Tokenizer
-from fast_llm.engine.distributed.config import PhaseType
 from tests.common import DATASET_PREFIX, TOKENIZER_PATH, get_test_dataset
 from tests.data.common import (
     compare_sampled_dataset,
@@ -71,9 +70,9 @@ def test_gpt_fim_data():
             },
             "tokenizer": {"path": TOKENIZER_PATH},
         },
-        {PhaseType.training: 8},
+        8,
         sequence_length=5,
-        expected_samples={PhaseType.training: GPT_FIM_SAMPLES},
+        expected_samples=GPT_FIM_SAMPLES,
     )
 
 
@@ -86,8 +85,8 @@ def test_gpt_fim_data_legacy():
             "tokenizer": {"path": TOKENIZER_PATH},
             "split": [1, 0, 0],
         },
-        {PhaseType.training: 8},
+        8,
         sequence_length=5,
-        expected_samples={PhaseType.training: GPT_FIM_SAMPLES_LEGACY},
+        expected_samples=GPT_FIM_SAMPLES_LEGACY,
         legacy=True,
     )

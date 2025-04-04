@@ -8,7 +8,7 @@ from fast_llm.engine.config_utils.tensor_space import TensorSpace
 from fast_llm.functional.config import TritonConfig
 from fast_llm.functional.triton.mlp import mlp_autograd, torch_mlp_activation, triton_mlp_activation_autograd
 from fast_llm.layers.common.linear import LinearBase
-from fast_llm.layers.transformer.config import TransformerConfig, TransformerDimNames
+from fast_llm.layers.transformer.config import TransformerConfig, TransformerDimNames, TransformerSubLayerName
 from fast_llm.tensor import init_normal_, init_zeros_
 from fast_llm.utils import Assert
 
@@ -42,7 +42,7 @@ class MLPBase(Layer, ABC):
         self.layer_1 = LinearBase(
             hidden_dim,
             tensor_space.get_tensor_dim(TransformerDimNames.composite_gated_expert_mlp),
-            bias=config.add_linear_biases,
+            bias=config.add_mlp_bias,
             weight_init_method=init_method_1,
             bias_init_method=init_method_1 if config.random_bias_init else init_zeros_,
             lr_scale=tuple(config.mlp_lr_scale),
@@ -50,13 +50,17 @@ class MLPBase(Layer, ABC):
         self.layer_2 = LinearBase(
             self._intermediate_dim,
             hidden_dim,
-            bias=config.add_linear_biases,
+            bias=config.add_mlp_bias,
             weight_init_method=init_method_2,
             bias_init_method=init_method_2 if config.random_bias_init else init_zeros_,
             auto_bias_grad_accumulation=tensor_space.distributed_config.tensor_parallel > 1,
             transposed_weight=True,
             lr_scale=tuple(config.mlp_lr_scale),
         )
+
+        # PEFT.
+        self.layer_1 = config.peft.apply_linear(self.layer_1, TransformerSubLayerName.mlp_1)
+        self.layer_2 = config.peft.apply_linear(self.layer_2, TransformerSubLayerName.mlp_2)
 
 
 class MLP(MLPBase):

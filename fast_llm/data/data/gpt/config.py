@@ -1,4 +1,5 @@
 import logging
+import typing
 
 from fast_llm.config import Field, FieldHint, FieldUpdate, check_field, config_class
 from fast_llm.data.config import MultiprocessingContext, TokenizerConfig
@@ -39,7 +40,7 @@ class GPTDataConfig(DataConfig, GPTLegacyConfig):
         hint=FieldHint.feature,
     )
     # TODO: Review field. Move closer to phase definition in training config?
-    datasets: dict[PhaseType, GPTSampledDatasetConfig] = Field(
+    datasets: dict[str, GPTSampledDatasetConfig] = Field(
         default_factory=dict,
         desc="Configuration for the dataset(s).",
         hint=FieldHint.core,
@@ -56,9 +57,13 @@ class GPTDataConfig(DataConfig, GPTLegacyConfig):
         desc="Multiprocessing context. Do not touch.",
         hint=FieldHint.expert,
     )
-    use_loss_masking_spans: bool = Field(
-        default=False,
-        desc="Read and use loss masking spans from the dataset, if present.",
+    truncate_documents: bool = Field(
+        default=True,
+        desc=(
+            "If enabled, documents may be truncated while being packed to fit the sequence length."
+            "Otherwise, sequences will be padded such that every document lies entirely within a sample"
+            " (and documents exceeding the sequence length will be skipped altogether)."
+        ),
         hint=FieldHint.feature,
     )
 
@@ -68,7 +73,26 @@ class GPTDataConfig(DataConfig, GPTLegacyConfig):
                 "Using the legacy dataset definition format." " Specify it through `data.datasets` instead."
             )
             self.datasets = {
-                phase: GPTLegacyDatasetConfig.from_dict(self, strict=False)
+                phase.value.lower(): GPTLegacyDatasetConfig.from_dict(self, strict=False)
                 for phase in (PhaseType.training, PhaseType.validation, PhaseType.test)
             }
         super()._validate()
+
+    @classmethod
+    def _from_dict(
+        cls,
+        default: dict[str, typing.Any],
+        strict: bool = True,
+        flat: bool = False,
+    ) -> typing.Self:
+        # TODO v0.x: Remove backward compatibility.
+        if "datasets" in default:
+            for phase in PhaseType:
+                if phase.value in default["datasets"]:
+                    rename = phase.value.lower()
+                    logger.warning(f"Renaming dataset {phase.value} to {rename}")
+                    assert rename not in default["datasets"]
+                    default["datasets"][rename] = default["datasets"].pop(phase.value)
+
+        cls._handle_renamed_field(default, "validation", ("evaluations", "validation"))
+        return super()._from_dict(default, strict, flat)

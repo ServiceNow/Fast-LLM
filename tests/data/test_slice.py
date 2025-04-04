@@ -1,5 +1,4 @@
 from fast_llm.data.dataset.gpt.config import GPTDatasetSliceConfig
-from fast_llm.engine.distributed.config import PhaseType
 from tests.common import DATASET_PREFIX, get_test_dataset
 from tests.data.common import (
     compare_indexed_dataset,
@@ -62,19 +61,19 @@ def test_gpt_slice_data():
     get_test_data_and_compare_samples(
         {
             "datasets": {
-                "Training": {
+                "training": {
                     "type": "slice",
                     "dataset": {"type": "memmap", "path": DATASET_PREFIX},
                     "begin": 0,
                     "end": 0.0015,
                 },
-                "Validation": {
+                "validation": {
                     "type": "slice",
                     "dataset": {"type": "memmap", "path": DATASET_PREFIX},
                     "begin": 0.0015,
                     "end": 0.003,
                 },
-                "Test": {
+                "test": {
                     "type": "slice",
                     "dataset": {"type": "memmap", "path": DATASET_PREFIX},
                     "begin": 0.003,
@@ -82,11 +81,11 @@ def test_gpt_slice_data():
                 },
             }
         },
-        {PhaseType.training: 4, PhaseType.validation: 8, PhaseType.test: 5},
+        {"training": 4, "validation": 8, "test": 5},
         sequence_length=5,
         expected_samples={
-            PhaseType.training: GPT_SLICE_TRAINING_SAMPLES,
-            PhaseType.validation: GPT_SLICE_VALIDATION_SAMPLES,
+            "training": GPT_SLICE_TRAINING_SAMPLES,
+            "validation": GPT_SLICE_VALIDATION_SAMPLES,
         },
     )
 
@@ -95,11 +94,11 @@ def test_gpt_slice_data_legacy():
     get_test_dataset()
     get_test_data_and_compare_samples(
         {"format": "list", "path": [str(DATASET_PREFIX)], "split": [0.0015, 0.0015, 0.997]},
-        {PhaseType.training: 4, PhaseType.validation: 8, PhaseType.test: 5},
+        {"training": 4, "validation": 8, "test": 5},
         sequence_length=5,
         expected_samples={
-            PhaseType.training: GPT_SLICE_TRAINING_SAMPLES_LEGACY,
-            PhaseType.validation: GPT_SLICE_VALIDATION_SAMPLES_LEGACY,
+            "training": GPT_SLICE_TRAINING_SAMPLES_LEGACY,
+            "validation": GPT_SLICE_VALIDATION_SAMPLES_LEGACY,
         },
         legacy=True,
     )

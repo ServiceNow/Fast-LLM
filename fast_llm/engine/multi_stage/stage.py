@@ -2,14 +2,12 @@ import logging
 import typing
 
 import torch
-from torch.distributed import all_reduce, reduce_scatter_tensor
 
-from fast_llm.core.distributed import ReduceOp, check_parallel_match
+from fast_llm.core.distributed import check_parallel_match
 from fast_llm.engine.config_utils.run import log_pipeline_parallel_main_rank
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.engine.multi_stage.config import StageMode
 from fast_llm.engine.multi_stage.stage_base import StageBase
-from fast_llm.functional.triton.pointwise import triton_add, triton_copy, triton_fill
 from fast_llm.logging import log_distributed_grad, log_distributed_tensor, log_memory_usage, log_tensor
 from fast_llm.tensor import ParameterMeta, TensorMeta, accumulate_gradient
 from fast_llm.utils import Assert
@@ -40,20 +38,20 @@ class Stage(StageBase):
         self,
         *,
         distributed: Distributed,
-        weight_shard: torch.Tensor | None,
-        grad_shard: torch.Tensor | None,
-        weight_buffer: torch.Tensor | None,
-        grad_buffer: torch.Tensor | None,
+        weight_shards: list[torch.Tensor | None] | None,
+        grad_shards: list[torch.Tensor | None] | None,
+        weight_buffers: list[torch.Tensor | None] | None,
+        grad_buffers: list[torch.Tensor | None] | None,
         mode: StageMode = StageMode.training,
         is_tied_weight_copy: bool = False,
         weight_buffer_shared_with: list["Stage"],
     ) -> None:
         super().setup(
             distributed=distributed,
-            weight_shard=weight_shard,
-            grad_shard=grad_shard,
-            weight_buffer=weight_buffer,
-            grad_buffer=grad_buffer,
+            weight_shards=weight_shards,
+            grad_shards=grad_shards,
+            weight_buffers=weight_buffers,
+            grad_buffers=grad_buffers,
             mode=mode,
         )
         self._is_tied_weight_copy = is_tied_weight_copy
@@ -66,7 +64,10 @@ class Stage(StageBase):
         if self._mode.support_backward:
             self._accumulators = []
             with torch.enable_grad():
-                for buffer, meta in zip(self._parameter_buffers, self._parameter_metas):
+                for meta in self._parameter_metas:
+                    buffer = self.get_parameter_buffer(meta.tensor_name)
+                    if not buffer.requires_grad:
+                        continue
                     # We want to replace the grad accumulation function with ours, but pytorch won't let us do that.
                     # Instead, we let a trivial accumulation run its course (sets .grad),
                     # then run the actual accumulation.
@@ -122,69 +123,42 @@ class Stage(StageBase):
         assert self._mode.support_forward
         # TODO: Allow partial FSDP
         if not self._is_restored:
-            triton_copy(self._weight_shard, self._weight_buffer_local_shard)
-            if self._fsdp_size > 1:
-                self._reconstruct_from_shard(self._weight_buffer_local_shard, self._weight_buffer)
+            for fsdp in self._fsdps:
+                fsdp.restore_parameters()
             self._is_restored = True
             for stage in self._weight_buffer_shared_with:
                 stage.invalidate_buffer()
 
     def reset_gradients(self) -> None:
         # TODO: Allow re-allocating the gradient every time.
-        # TODO: Autograd will always increment gradient instead of setting the value (less efficient)
-        #   Can this (and op below) be avoided? (Probably needs messing with autograd)
-        #   Solution: set a zero_grad flag on parameter, then adjust backward fn to set or accumulate depending on flag.
-        #     Then we can also avoid explicitly setting to zero.
-        #     Logic implemented for linear and ln, missing embedding.
         assert self._is_setup
         assert self._mode.support_backward
-        # assert self._is_restored
-        for buffer in self._parameter_buffers:
-            assert buffer.grad is None
-            buffer.param_grad_is_zero = True
+        for fsdp in self._fsdps:
+            fsdp.reset_gradients()
 
     def reduce_gradients(self, accumulate=False) -> None:
-        # Just need to reduce the buffer, then copy (add) to actual grads.
-        # Works fine as is but does not allow communication overlap by itself.
-        # Reduction should only be done once per step, after the full backward pass is done for the stage.
+        # Reduce the buffer, then copy (add) to actual grads.
+        # Run in a separate cuda stream to allow communication overlap.
         # TODO: Allow partial FSDP
         assert self._is_restored
         assert self._mode.support_backward
-        for buffer, meta in zip(self._parameter_buffers, self._parameter_metas):
-            if buffer.param_grad_is_zero:  # noqa
-                assert self.is_tied_weight_copy or meta.allow_no_grad, meta
-                triton_fill(buffer.grad_buffer, 0)  # noqa
-        if self._sequence_parallel_grads is not None and self._distributed.tensor_group:
-            all_reduce(self._sequence_parallel_grads, group=self._distributed.tensor_group)
-        if self._fsdp_size > 1:
-            out = self._grad_shard if self._config.full_precision_gradients else self._grad_buffer_local_shard
-            if accumulate:
-                out = torch.empty_like(out)
-            reduce_scatter_tensor(
-                out,
-                self._grad_buffer,
-                group=self._fsdp_group,
-                op=ReduceOp.AVG,
-            )
-            if accumulate:
-                triton_add(self._grad_shard, out, self._grad_shard)
-            elif not self._config.full_precision_gradients:
-                triton_copy(self._grad_buffer_local_shard, self._grad_shard)
-        else:
-            triton_copy(self._grad_buffer_local_shard, self._grad_shard)
-        if self._config.debug_param_gradients:
-            log_tensor(
-                "Reduced gradient shard",
-                self._grad_shard,
-                level=self._config.debug_param_gradients,
-                global_=False,
-            )
-        if self._config.debug_all_param_gradients:
-            self.log_shard(
-                name="gradient",
-                shard=self._grad_shard,
-                level=self._config.debug_all_param_gradients,
-            )
+        for fsdp in self._fsdps:
+            fsdp.reduce_gradients(self._distributed, accumulate, self._is_tied_weight_copy)
+            if self._config.debug_param_gradients:
+                log_tensor(
+                    "Reduced gradient shard",
+                    fsdp.grad_shard,
+                    level=self._config.debug_param_gradients,
+                    global_=False,
+                )
+            if self._config.debug_all_param_gradients:
+                fsdp.log_shard(
+                    name="gradient",
+                    shard=fsdp.grad_shard,
+                    distributed=self._distributed,
+                    level=self._config.debug_all_param_gradients,
+                    global_=self._config.debug_global_tensors,
+                )
 
     @property
     def is_tied_weight_copy(self) -> bool:
@@ -202,6 +176,9 @@ class Stage(StageBase):
         # Buffer is no longer valid (Updated weights or overwritten by other stage)
         assert self._mode.support_forward
         self._is_restored = False
+        # TODO: Frozen weights fsdps may not be invalidated on weight update.
+        for fsdp in self._fsdps:
+            fsdp.invalidate_buffer()
 
     def _log_layer_forward(self, output: torch.Tensor, kwargs: dict[str, typing.Any], i: int) -> None:
         if (

@@ -36,6 +36,10 @@ class LlamaGPTHuggingfaceCheckpointFormat(GPTHuggingfaceCheckpointFormat):
     name: typing.ClassVar[str] = "llama"
 
 
+class Qwen2GPTHuggingfaceCheckpointFormat(GPTHuggingfaceCheckpointFormat):
+    name: typing.ClassVar[str] = "qwen2"
+
+
 class MistralGPTHuggingfaceCheckpointFormat(GPTHuggingfaceCheckpointFormat):
     name: typing.ClassVar[str] = "mistral"
 
@@ -98,6 +102,7 @@ class GPTModelConfig(FastLLMModelConfig):
         AutoGPTHuggingfaceCheckpointFormat,
         Starcoder2GPTHuggingfaceCheckpointFormat,
         LlamaGPTHuggingfaceCheckpointFormat,
+        Qwen2GPTHuggingfaceCheckpointFormat,
         MistralGPTHuggingfaceCheckpointFormat,
         MixtralGPTHuggingfaceCheckpointFormat,
     )

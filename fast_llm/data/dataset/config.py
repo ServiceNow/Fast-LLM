@@ -7,8 +7,7 @@ import typing
 
 from fast_llm.config import Config, Field, FieldHint, FieldVerboseLevel, check_field, config_class
 from fast_llm.data.dataset.abstract import SamplableDataset, SampledDataset
-from fast_llm.engine.distributed.config import PhaseType
-from fast_llm.utils import Assert
+from fast_llm.utils import Assert, normalize_probabilities
 
 if typing.TYPE_CHECKING:
     from fast_llm.data.dataset.indexed import ConcatenatedDataset, DatasetSlice, IndexedDataset
@@ -40,7 +39,7 @@ class SamplingData:
     cache_directory: pathlib.Path | None
     # TODO: This prevents the sampling config from being pickled in multiprocessing.
     distributed: "Distributed"
-    phase: PhaseType
+    dataset_name: str
     # Using a mutable rather than an int so it's shared with all copies made with `update`.
     _rank_counter: typing.Iterator[int] = itertools.count
 
@@ -204,6 +203,7 @@ class BlendedDatasetConfig(SampledDatasetConfig):
     )
 
     def _validate(self) -> None:
+        self.weights = normalize_probabilities(self.weights)
         super()._validate()
         Assert.geq(len(self.datasets), 2)
         Assert.eq(len(self.datasets), len(self.weights))
@@ -215,9 +215,6 @@ class BlendedDatasetConfig(SampledDatasetConfig):
         from fast_llm.data.dataset.blended import BlendedDataset
 
         # Build and sample the datasets.
-        # TODO: Vary the seed?
-        # Add 5 times the standard deviation (of a binomial distribution)
-        # so the probability of sampling more than this amount during blending is negligible.
 
         sampled_datasets = [
             dataset.build_and_sample(
@@ -229,6 +226,7 @@ class BlendedDatasetConfig(SampledDatasetConfig):
                         if self.legacy
                         else math.ceil(weight * sampling.num_samples) + 1
                     ),
+                    # TODO: Seed may not be unique for nested blended datasets.
                     config=sampling.config.to_copy({"seed": sampling.config.seed + i * (0 if self.legacy else 697)}),
                 ),
             )

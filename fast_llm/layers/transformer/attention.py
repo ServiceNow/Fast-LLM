@@ -3,17 +3,29 @@ import typing
 import torch
 
 from fast_llm.core.distributed import set_generator
-from fast_llm.core.kernels import flash_attn
 from fast_llm.core.ops import gather_op, reduce_op, reduce_scatter_op, swap_mult_dim
 from fast_llm.engine.config_utils.tensor_space import TensorSpace
 from fast_llm.functional.autograd import wrap_forward_backward
 from fast_llm.functional.rotary import apply_rotary_embeddings
 from fast_llm.functional.triton.rotary import triton_rotary_autograd_
 from fast_llm.layers.common.linear import InputParallelLinear, OutputParallelLinear
-from fast_llm.layers.transformer.config import TransformerConfig, TransformerDimNames, TransformerKwargs
+from fast_llm.layers.transformer.config import (
+    TransformerConfig,
+    TransformerDimNames,
+    TransformerKwargs,
+    TransformerSubLayerName,
+)
 from fast_llm.logging import log_distributed_grad, log_distributed_tensor
 from fast_llm.tensor import TensorMeta, init_normal_, init_zeros_
 from fast_llm.utils import Assert
+
+try:
+    from flash_attn.flash_attn_interface import flash_attn_func as _flash_attn_func  # noqa
+    from flash_attn.flash_attn_interface import flash_attn_varlen_func as _flash_attn_varlen_func
+
+    _flash_available = True
+except ImportError:
+    _flash_available = False
 
 
 class AttachGrad(torch.autograd.Function):
@@ -102,7 +114,7 @@ class Attention(torch.nn.Module):
         self.query = OutputParallelLinear(
             hidden_dim,
             self._tensor_space.get_tensor_dim(TransformerDimNames.composite_query),
-            bias=self._config.add_linear_biases,
+            bias=self._config.add_attn_qkv_bias,
             weight_init_method=init_method_qkv,
             bias_init_method=init_method_qkv if self._config.random_bias_init else init_zeros_,
             sequence_parallel=self._sequence_parallel,
@@ -111,7 +123,7 @@ class Attention(torch.nn.Module):
         self.key_value = OutputParallelLinear(
             hidden_dim,
             self._tensor_space.get_tensor_dim(TransformerDimNames.composite_key_value),
-            bias=self._config.add_linear_biases,
+            bias=self._config.add_attn_qkv_bias,
             weight_init_method=init_method_qkv,
             bias_init_method=init_method_qkv if self._config.random_bias_init else init_zeros_,
             sequence_parallel=self._sequence_parallel,
@@ -123,12 +135,17 @@ class Attention(torch.nn.Module):
         self.dense = InputParallelLinear(
             self._tensor_space.get_tensor_dim(TransformerDimNames.composite_dense),
             hidden_dim,
-            bias=self._config.add_linear_biases,
+            bias=self._config.add_attn_dense_bias,
             weight_init_method=init_method_std_attn_proj,
             bias_init_method=init_method_std_attn_proj if self._config.random_bias_init else init_zeros_,
             sequence_parallel=self._sequence_parallel,
             lr_scale=self._config.attention_lr_scale,
         )
+
+        # PEFT.
+        self.query = self._config.peft.apply_linear(self.query, TransformerSubLayerName.query)
+        self.key_value = self._config.peft.apply_linear(self.key_value, TransformerSubLayerName.key_value)
+        self.dense = self._config.peft.apply_linear(self.dense, TransformerSubLayerName.dense)
 
     def _attn_fused(
         self, query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, mask: torch.Tensor, mask_value: torch.Tensor
@@ -246,14 +263,14 @@ class Attention(torch.nn.Module):
         return query, key_value, context
 
     def _query_key_value_backward(
-        self, query_grad: torch.Tensor, key_grad: torch.Tensor, context: dict
+        self, query_grad: torch.Tensor, key_value_grad: torch.Tensor, context: dict
     ) -> torch.Tensor:
         # TODO: De-allocate qkv grads quicker.
         handle = None
 
         if self._tensor_space.distributed.sequence_data_group:
-            key_grad, handle = reduce_scatter_op(
-                key_grad,
+            key_value_grad, handle = reduce_scatter_op(
+                key_value_grad,
                 group=self._tensor_space.distributed.sequence_data_group,
                 dim=1 - context["sequence_first"],
                 async_op=True,
@@ -267,12 +284,22 @@ class Attention(torch.nn.Module):
 
         if self._head_groups == 1 and (group := self._tensor_space.distributed.tensor_group):
             if self._sequence_parallel:
-                key_grad = reduce_scatter_op(key_grad, group=group, dim=0)
+                key_value_grad = reduce_scatter_op(key_value_grad, group=group, dim=0)
             else:
-                key_grad = reduce_op(key_grad, group=group)
+                key_value_grad = reduce_op(key_value_grad, group=group)
 
-        input_grad.add_(self.key_value.backward(key_grad, context.pop("key_value")))
+        input_grad.add_(self.key_value.backward(key_value_grad, context.pop("key_value")))
         return input_grad
+
+    def _decide_window_size(self) -> int | None:
+        # NOTE: This is a temporal solution for qwen 2.X
+        # https://github.com/huggingface/transformers/blob/5e2183f344911aa82aba0b83778a4f196cff378e/src/transformers/models/qwen2/modular_qwen2.py#L71
+        # TODO: make universal per layer config
+        window_size = self._config.window_size
+        if self._config.max_window_layers is not None and self._layer_index < self._config.max_window_layers:
+            window_size = None
+
+        return window_size
 
     def forward(self, input_: torch.Tensor, kwargs: dict[str, typing.Any]) -> tuple[torch.Tensor, torch.Tensor | None]:
         sequence_first = kwargs[TransformerKwargs.sequence_first]
@@ -323,17 +350,40 @@ class Attention(torch.nn.Module):
             query = rotary_fn(query, kwargs[TransformerKwargs.rotary_freq_q])
             key = rotary_fn(key, kwargs[TransformerKwargs.rotary_freq_k])
 
+        window_size = self._decide_window_size()
+
         if self._use_flash_attention:
-            input_ = flash_attn(
-                query,
-                key,
-                value,
-                dropout_p=self._config.attention_dropout if self.training else 0.0,
-                window_size=self._config.window_size,
-                causal=True,
-                generator=self._tensor_space.distributed.tp_generator,
-                softmax_scale=self._softmax_scale,
-            ).flatten(-2)
+            assert _flash_available
+            with set_generator(self._tensor_space.distributed.tp_generator):
+                if (cu_seqlens_q := kwargs.get(TransformerKwargs.cu_seqlens_q, None)) is not None:
+                    out_dims = query.size()
+                    query = query.view(-1, query.size(-2), query.size(-1))
+                    key = key.view(-1, key.size(-2), key.size(-1))
+                    value = value.view(-1, value.size(-2), value.size(-1))
+                    input_ = _flash_attn_varlen_func(
+                        query,
+                        key,
+                        value,
+                        cu_seqlens_q=cu_seqlens_q,
+                        cu_seqlens_k=kwargs.get(TransformerKwargs.cu_seqlens_k),
+                        max_seqlen_q=kwargs.get(TransformerKwargs.max_seqlen_q),
+                        max_seqlen_k=kwargs.get(TransformerKwargs.max_seqlen_k),
+                        dropout_p=self._config.attention_dropout if self.training else 0.0,
+                        window_size=(-1, -1) if window_size is None else (window_size - 1, 0),
+                        causal=True,
+                        softmax_scale=self._softmax_scale,
+                    ).view(*out_dims)
+                else:
+                    input_ = _flash_attn_func(
+                        query,
+                        key,
+                        value,
+                        window_size=(-1, -1) if window_size is None else (window_size - 1, 0),
+                        dropout_p=self._config.attention_dropout if self.training else 0.0,
+                        causal=True,
+                        softmax_scale=self._softmax_scale,
+                    )
+            input_ = input_.flatten(-2)
         else:
             # TODO: Avoid the flattens.
             input_ = self._attn_fused(
