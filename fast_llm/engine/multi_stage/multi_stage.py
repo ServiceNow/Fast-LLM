@@ -217,7 +217,7 @@ class MultiStageModel[ConfigType: FastLLMModelConfig](Configurable[ConfigType]):
         if distributed is None:
             distributed = Distributed(self._config.distributed)
         else:
-            assert distributed.config is self._config.distributed
+            distributed.check_config(self._config.distributed)
         self._distributed = distributed
         self._mode = mode
         self._base_model.setup(distributed)

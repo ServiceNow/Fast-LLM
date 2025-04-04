@@ -116,7 +116,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
 
     def setup(self, distributed: Distributed) -> None:
         assert not self._is_setup
-        assert distributed.config is self._tensor_space.distributed_config
+        distributed.check_config(self._tensor_space.distributed_config)
         self._tensor_space.setup(distributed)
         self._is_setup = True
 

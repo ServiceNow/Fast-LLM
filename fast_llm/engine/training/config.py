@@ -14,6 +14,7 @@ from fast_llm.engine.checkpoint.config import (
     DistributedCheckpointFormat,
 )
 from fast_llm.engine.config_utils.run import ExperimentConfig
+from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.engine.multi_stage.config import PretrainedFastLLMModelConfig
 from fast_llm.engine.optimizer.config import OptimizerConfig
 from fast_llm.engine.schedule.config import BatchConfig, ScheduleConfig
@@ -373,6 +374,9 @@ class TrainerConfig(PretrainedFastLLMModelConfig, ExperimentConfig):
 
     def _validate(self) -> None:
         self.training.export.setup(self.model)
+        self.model.validate()
+        for reference_model in self.reference_models.values():
+            _add_reference_distributed_to_pretrained(reference_model, self.model.distributed)
         super()._validate()
         if self.run.experiment_dir is None:
             assert not self.training.checkpoint.enabled()
@@ -402,3 +406,13 @@ class TrainerConfig(PretrainedFastLLMModelConfig, ExperimentConfig):
                 trainer.run()
 
         return runnable
+
+
+def _add_reference_distributed_to_pretrained(pretrained: PretrainedFastLLMModelConfig, distributed: DistributedConfig):
+    old_setup = pretrained._setup
+
+    def new_setup():
+        pretrained.model.distributed.reference_config = distributed
+        old_setup()
+
+    pretrained._setup = new_setup

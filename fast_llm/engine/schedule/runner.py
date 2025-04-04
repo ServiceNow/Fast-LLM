@@ -97,7 +97,7 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ScheduleConfig]):
 
     def setup(self, distributed: Distributed, optimizer: Optimizer | None = None) -> None:
         assert not self._is_setup
-        assert distributed.config is self._distributed_config
+        distributed.check_config(self._distributed_config)
         self._is_setup = True
         self._optimizer = optimizer
         assert self._multi_stage.support_forward
