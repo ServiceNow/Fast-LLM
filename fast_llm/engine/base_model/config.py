@@ -1,3 +1,4 @@
+import abc
 import typing
 
 from fast_llm.config import Config, config_class
@@ -40,3 +41,12 @@ class BaseModelConfig(BaseModelArchitectureConfig):
 
     def get_architecture(self) -> BaseModelArchitectureConfig:
         return self.architecture_class.from_dict(self, strict=False)
+
+
+class Preprocessor(abc.ABC):
+    def preprocess_meta(self, kwargs: dict[str, typing.Any]) -> None:
+        pass
+
+    @abc.abstractmethod
+    def preprocess(self, batch, kwargs: dict[str, typing.Any]) -> None:
+        pass
