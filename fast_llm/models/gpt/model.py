@@ -66,10 +66,10 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             self._preprocessors.append(
                 RotaryEmbeddingPreprocessor(self._config.transformer.rotary, self._tensor_space)
             )
-        if not self._use_flash_attention:
-            self._preprocessors.append(BackupAttentionPreprocessor(self._config.transformer, self._tensor_space))
-        else:
+        if self._use_flash_attention:
             self._preprocessors.append(FlashAttnVarlenPreprocessor(self._config.transformer, self._tensor_space))
+        else:
+            self._preprocessors.append(BackupAttentionPreprocessor(self._config.transformer, self._tensor_space))
 
     def get_output_layers(self) -> list[Layer]:
         return [
