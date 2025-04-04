@@ -271,9 +271,8 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ScheduleConfig]):
                 lambda: log_memory_usage(f"End of {context.phase.value} iteration {iteration}", str)
             )
         # All metrics comming out of forward pass are reduced by default.
-        metrics = self._reduce_metrics(context) if return_metrics else metrics
-
         if metrics is not None:
+            metrics = self._reduce_metrics(context)
             metrics["loss_scale"] = self._optimizer.grad_scale
 
         return (
