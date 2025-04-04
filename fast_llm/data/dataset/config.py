@@ -7,7 +7,6 @@ import typing
 
 from fast_llm.config import Config, Field, FieldHint, FieldVerboseLevel, check_field, config_class
 from fast_llm.data.dataset.abstract import SamplableDataset, SampledDataset
-from fast_llm.engine.distributed.config import PhaseType
 from fast_llm.utils import Assert, normalize_probabilities
 
 if typing.TYPE_CHECKING:
@@ -40,7 +39,7 @@ class SamplingData:
     cache_directory: pathlib.Path | None
     # TODO: This prevents the sampling config from being pickled in multiprocessing.
     distributed: "Distributed"
-    phase: PhaseType
+    dataset_name: str
     # Using a mutable rather than an int so it's shared with all copies made with `update`.
     _rank_counter: typing.Iterator[int] = itertools.count
 

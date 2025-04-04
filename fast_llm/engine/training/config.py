@@ -140,22 +140,22 @@ class WandbConfig(Config):
 
 
 @config_class()
-class ValidationConfig(IntervalConfig):
+class EvaluationConfig(IntervalConfig):
     interval = FieldUpdate(
-        desc="The number of training iterations between each validation phase."
-        " Setting to None will disable validation."
+        desc="The number of training iterations between each evaluation phase."
+        " Setting to None will disable evaluation."
     )
-    offset = FieldUpdate(desc="Offset for the first validation phase.")
+    offset = FieldUpdate(desc="Offset for the first evaluation phase.")
     iterations: int | None = Field(
         default=None,
-        desc="Number of iterations for each validation phase. Setting to None will disable.",
+        desc="Number of iterations for each evaluation phase. Setting to None will disable.",
         hint=FieldHint.feature,
         valid=skip_valid_if_none(check_field(Assert.gt, 0)),
     )
 
-    def get_iteration_count(self, training_iterations: int, extra_validations: int = 0):
+    def get_iteration_count(self, training_iterations: int, extra_evaluations: int = 0):
         # Number of completed validation iterations
-        return (self.get_count(training_iterations) + extra_validations) * self.iterations if self.enabled() else 0
+        return (self.get_count(training_iterations) + extra_evaluations) * self.iterations if self.enabled() else 0
 
 
 @config_class()
@@ -267,9 +267,9 @@ class ShutdownConfig(IntervalConfig):
 
 @config_class()
 class TrainingConfig(Config):
-    validation: ValidationConfig = Field(
-        default_factory=ValidationConfig,
-        desc="Configuration for the validation phase",
+    evaluations: dict[str, EvaluationConfig] = Field(
+        default_factory=dict,
+        desc="A dictionary of evaluation dataset names and their configurations for the validation phase.",
         hint=FieldHint.core,
     )
     logs: MetricsLogsConfig = Field(
@@ -314,6 +314,17 @@ class TrainingConfig(Config):
         hint=FieldHint.feature,
         valid=skip_valid_if_none(check_field(Assert.gt, 0)),
     )
+
+    @classmethod
+    def _from_dict(
+        cls,
+        default: dict[str, typing.Any],
+        strict: bool = True,
+        flat: bool = False,
+    ) -> typing.Self:
+        # TODO v0.x: Remove backward compatibility.
+        cls._handle_renamed_field(default, "validation", ("evaluations", "validation"))
+        return super()._from_dict(default, strict, flat)
 
     def _validate(self) -> None:
         super()._validate()

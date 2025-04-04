@@ -4,7 +4,7 @@ import typing
 
 from fast_llm.config import Configurable
 from fast_llm.data.data.config import DataConfig
-from fast_llm.engine.distributed.config import DistributedConfig, PhaseType
+from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.engine.schedule.config import BatchConfig
 
 if typing.TYPE_CHECKING:
@@ -13,7 +13,7 @@ if typing.TYPE_CHECKING:
 
 class Data[ConfigType: DataConfig](Configurable[ConfigType], abc.ABC):
     _distributed: "Distributed"
-    _samples_per_phase: dict[PhaseType, int]
+    _samples_per_dataset: dict[str, int]
     _cache_directory: pathlib.Path | None
 
     def __init__(self, config: DataConfig, distributed_config: DistributedConfig) -> None:
@@ -24,12 +24,12 @@ class Data[ConfigType: DataConfig](Configurable[ConfigType], abc.ABC):
     def setup(
         self,
         distributed: "Distributed",
-        samples_per_phase: dict[PhaseType, int],
+        samples_per_dataset: dict[str, int],
         cache_directory: pathlib.Path,
         timeout: float | None = None,
     ) -> None:
         self._distributed = distributed
-        self._samples_per_phase = samples_per_phase
+        self._samples_per_dataset = samples_per_dataset
         self._cache_directory = cache_directory
 
     @property
@@ -40,10 +40,11 @@ class Data[ConfigType: DataConfig](Configurable[ConfigType], abc.ABC):
     def get_iterator(
         self,
         batch_config: BatchConfig,
-        phase: PhaseType,
+        dataset_name: str,
         *,
         consumed_samples: int,
         num_workers: int,
         prefetch_factor: int | None = None,
+        timeout: float = 60,
     ) -> typing.Iterator[typing.Any]:
         pass
