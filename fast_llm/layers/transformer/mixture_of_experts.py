@@ -17,7 +17,7 @@ from fast_llm.layers.transformer.config import (
     TransformerDimNames,
     TransformerKwargs,
     TransformerLossNames,
-    TransformerRoutingMetrics
+    TransformerRoutingMetrics,
 )
 from fast_llm.layers.transformer.mlp import MLPBase
 from fast_llm.logging import log_distributed_grad, log_distributed_tensor, log_memory_usage
@@ -27,21 +27,25 @@ from fast_llm.utils import Assert
 logger = logging.getLogger(__name__)
 
 
+@torch.compile
 def calculate_normalized_average_entropy(probs: torch.Tensor) -> torch.Tensor:
     """
     Calculates routing entropy for each token, then averages over all tokens.
     If low, means a lot of mass is put on a single expert in all tokens, which can indicate collapse or specialization.
     """
     n_experts = probs.size(-1)
-    entropy_values = entropy(probs)
+    entropy_values = calculate_entropy(probs)
     average_entropy = entropy_values.mean()  # Average over batch and tokens
     return average_entropy / torch.log(torch.tensor(n_experts, dtype=probs.dtype, device=probs.device))
 
-def entropy(probs: torch.Tensor) -> torch.Tensor:
+
+@torch.compile
+def calculate_entropy(probs: torch.Tensor) -> torch.Tensor:
     probs = torch.clamp(probs, min=1e-9)  # Avoid log(0)
     return -torch.sum(probs * torch.log(probs), dim=-1)
 
 
+@torch.compile
 def calculate_mutual_information(probs: torch.Tensor) -> torch.Tensor:
     """
     Calculates the difference between the entropy of the average routing and
@@ -50,7 +54,9 @@ def calculate_mutual_information(probs: torch.Tensor) -> torch.Tensor:
     """
     n_experts = probs.size(-1)
     average_routing = torch.mean(probs.view(-1, n_experts), dim=0)  # Average over tokens
-    entropy_avg_routing = entropy(average_routing) /  torch.log(torch.tensor(n_experts, dtype=probs.dtype))  # H[E[X]]
+    entropy_avg_routing = calculate_entropy(average_routing) / torch.log(
+        torch.tensor(n_experts, dtype=probs.dtype)
+    )  # H[E[X]]
     entropy_routing = calculate_normalized_average_entropy(probs)  # E[H[X]]
 
     return entropy_avg_routing - entropy_routing
@@ -133,7 +139,9 @@ class MixtureOfExpertMLP(MLPBase):
 
         # Routing
         if self._routing_type == RoutingType.topk:
-            scores, top_experts = self._topk_routing(logits, kwargs.get(TransformerKwargs.grad_output), losses, metrics)
+            scores, top_experts = self._topk_routing(
+                logits, kwargs.get(TransformerKwargs.grad_output), losses, metrics
+            )
             if self._num_shared_experts > 0:
                 scores, top_experts = self._add_shared_experts(top_experts, scores)
         elif self._routing_type == RoutingType.sinkhorn:
@@ -206,8 +214,7 @@ class MixtureOfExpertMLP(MLPBase):
         if losses is not None or (self.training and grad_scale is not None):
             probs = torch.softmax(logits, dim=-1, dtype=torch.float32)
 
-
-            # Store these metrics        
+            # Store these metrics
             if metrics is not None:
                 # Calculate and log entropy and mutual information
                 entropy = calculate_normalized_average_entropy(probs)
