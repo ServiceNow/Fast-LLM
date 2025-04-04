@@ -29,7 +29,7 @@ from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
-    from fast_llm.engine.huggingface.model import HuggingfacePreTrainedModel
+    from fast_llm.engine.inference.model import HuggingfacePreTrainedModel
     from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
 
 logger = logging.getLogger(__name__)

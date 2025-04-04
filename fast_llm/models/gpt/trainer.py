@@ -2,17 +2,35 @@ import logging
 import typing
 
 from fast_llm.data.data.gpt.data import GPTData
+from fast_llm.engine.base_model.config import Preprocessor
 from fast_llm.engine.distributed.config import PhaseType
 from fast_llm.engine.training.trainer import Trainer
+from fast_llm.layers.language_model.config import LanguageModelKwargs
 from fast_llm.models.gpt.config import GPTTrainerConfig
-from fast_llm.models.gpt.model import GPTModel
+from fast_llm.models.gpt.model import GPTInferenceRunner
 
 logger = logging.getLogger(__name__)
 
 
+class GPTReferenceModelPreprocessor(Preprocessor):
+    def __init__(self, name: str, inference_runner: GPTInferenceRunner):
+        self._name = name
+        self._inference_runner = inference_runner
+
+    def preprocess_meta(self, kwargs: dict[str, typing.Any]) -> None:
+        pass
+
+    def preprocess(self, batch, kwargs: dict[str, typing.Any]) -> None:
+        # TODO: Fix random state/iteration.
+        preprocess_kwargs = kwargs.copy()
+        del preprocess_kwargs[LanguageModelKwargs.labels]
+        self._inference_runner.forward(batch, preprocess_kwargs, iteration=1)
+        # TODO: Improve.
+        kwargs[f"{self._name}_logits"] = preprocess_kwargs["logits"]
+
+
 class GPTTrainer[ConfigType: GPTTrainerConfig](Trainer[ConfigType]):
     config_class: typing.ClassVar[type[GPTTrainerConfig]] = GPTTrainerConfig
-    model_class: typing.ClassVar[type[GPTModel]] = GPTModel
 
     def _get_data(self) -> GPTData:
         return GPTData(
@@ -71,3 +89,6 @@ class GPTTrainer[ConfigType: GPTTrainerConfig](Trainer[ConfigType]):
         hardware_flops = flops_per_iteration + 7 / 6 * attn_flops
         ratio = elapsed_time_per_iteration * self._config.model.distributed.world_size * 1e12
         return model_tflops / ratio, hardware_flops / ratio
+
+    def _get_reference_model_preprocessor(self, name: str, inference_runner: GPTInferenceRunner) -> Preprocessor:
+        return GPTReferenceModelPreprocessor(name, inference_runner)

@@ -128,7 +128,7 @@ class StageBase(Configurable[StageConfig]):
         mode: StageMode = StageMode.training,
     ) -> None:
         assert not self._is_setup
-        assert distributed.config is self._distributed_config
+        distributed.check_config(self._distributed_config)
         self._mode = mode
         self._is_setup = True
         self._distributed = distributed

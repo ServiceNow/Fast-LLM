@@ -61,8 +61,8 @@ class PretrainedCustomModelConfig(PretrainedGPTModelConfig):
 @config_class()
 class CustomTrainerConfig(PretrainedCustomModelConfig, GPTTrainerConfig):
     # TODO: Add custom trainer config parameters, if any (typically none).
-
     data: CustomDataConfig = FieldUpdate(default_factory=CustomDataConfig)
+    reference_models: dict[str, PretrainedCustomModelConfig] = FieldUpdate(default_factory=PretrainedCustomModelConfig)
 
     @classmethod
     def get_trainer_class(cls) -> type["CustomTrainer"]:
