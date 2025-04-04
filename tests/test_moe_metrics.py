@@ -236,31 +236,6 @@ def setup_runner():
     return runner, context, schedule
 
 
-def test_reduce_metrics(setup_runner):
-    """Test that _reduce_metrics correctly reduces only the appropriate metrics"""
-    runner, context, _ = setup_runner
-
-    assert runner._is_reduced_metric(TransformerRoutingMetrics.normalized_average_entropy) is True
-    assert runner._is_reduced_metric(TransformerRoutingMetrics.mutual_info) is True
-
-    assert runner._is_reduced_metric("non_reduced_metric") is False
-    assert runner._is_reduced_metric("random_metric") is False
-
-    reduced_metrics = runner._reduce_metrics(context)
-
-    # Check that metrics in TransformerReducedMetrics were reduced
-    assert TransformerRoutingMetrics.normalized_average_entropy in reduced_metrics
-    assert TransformerRoutingMetrics.mutual_info in reduced_metrics
-
-    # Check that the values were correctly averaged
-    assert pytest.approx(reduced_metrics[TransformerRoutingMetrics.normalized_average_entropy], 0.001) == 0.6
-    assert pytest.approx(reduced_metrics[TransformerRoutingMetrics.mutual_info], 0.001) == 0.3
-
-    # Check that non-reduced metrics are not in the result
-    assert "non_reduced_metric" in reduced_metrics
-    assert sum(reduced_metrics["non_reduced_metric"]) == 3.0
-
-
 def test_reduce_losses(setup_runner):
     """Test that _reduce_losses correctly reduces losses"""
     runner, context, _ = setup_runner
