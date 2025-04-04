@@ -412,6 +412,12 @@ def _add_reference_distributed_to_pretrained(pretrained: PretrainedFastLLMModelC
     old_setup = pretrained._setup
 
     def new_setup():
+        # Make sure the distributed config isn't set
+        # TODO!!!!!!!!!!!!!: Uncomment after #205
+        # pretrained.model.distributed.validate()
+        # Assert.leq(pretrained.model.distributed.to_dict().keys(), {"world_size", "rank", "local_world_size"})
+        pretrained.model.distributed = distributed.to_copy()
+        # Allow sharing the `Distributed` instance.
         pretrained.model.distributed.reference_config = distributed
         old_setup()
 
