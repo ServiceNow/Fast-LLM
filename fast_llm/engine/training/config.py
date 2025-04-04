@@ -368,7 +368,7 @@ class TrainerConfig(PretrainedFastLLMModelConfig, ExperimentConfig):
     )
     reference_models: dict[str, PretrainedFastLLMModelConfig] = Field(
         default_factory=dict,
-        desc="Additional models used during training, ex. for knowledge distillation.",
+        desc="Auxiliary models used during training, ex. for knowledge distillation.",
         hint=FieldHint.feature,
     )
 

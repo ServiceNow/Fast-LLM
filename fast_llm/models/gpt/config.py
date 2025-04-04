@@ -130,7 +130,7 @@ class PretrainedGPTModelConfig(PretrainedFastLLMModelConfig):
 class GPTTrainerConfig(PretrainedGPTModelConfig, TrainerConfig):
     data: GPTDataConfig = FieldUpdate(default_factory=GPTDataConfig)
     # TODO: Use dynamic model type?
-    reference_models: dict[str, PretrainedGPTModelConfig] = FieldUpdate(default_factory=PretrainedGPTModelConfig)
+    reference_models: dict[str, PretrainedGPTModelConfig] = FieldUpdate()
 
     def _validate(self) -> None:
         if self.batch.sequence_length is None:

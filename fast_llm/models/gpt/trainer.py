@@ -5,6 +5,7 @@ from fast_llm.data.data.gpt.data import GPTData
 from fast_llm.engine.base_model.config import Preprocessor
 from fast_llm.engine.distributed.config import PhaseType
 from fast_llm.engine.training.trainer import Trainer
+from fast_llm.layers.language_model.config import LanguageModelKwargs
 from fast_llm.models.gpt.config import GPTTrainerConfig
 from fast_llm.models.gpt.model import GPTInferenceRunner
 
@@ -22,6 +23,7 @@ class GPTReferenceModelPreprocessor(Preprocessor):
     def preprocess(self, batch, kwargs: dict[str, typing.Any]) -> None:
         # TODO: Fix random state/iteration.
         preprocess_kwargs = kwargs.copy()
+        del preprocess_kwargs[LanguageModelKwargs.labels]
         self._inference_runner.forward(batch, preprocess_kwargs, iteration=1)
         # TODO: Improve.
         kwargs[f"{self._name}_logits"] = preprocess_kwargs["logits"]

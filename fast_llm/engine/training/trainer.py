@@ -114,8 +114,10 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
 
         # Setup the model.
         with torch.no_grad():
+            log_main_rank("Setting up model...")
             self._multi_stage.setup(distributed)
-            for reference_model in self._reference_models.values():
+            for name, reference_model in self._reference_models.items():
+                log_main_rank(f"Setting up `{name}` reference model...")
                 reference_model.fast_llm_model.setup(distributed, StageMode.inference)
                 reference_model.setup()
 
@@ -451,6 +453,19 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
         else:
             log_main_rank(lambda: f"Loading checkpoint from iteration {last_iteration}...")
             self._load_checkpoint(self._config.training.checkpoint, last_iteration)
+
+        for name, reference_model in self._reference_models.items():
+            pretrained = self._config.reference_models[name].pretrained
+            if pretrained.path is not None and pretrained.model_weights:
+                log_main_rank(f"Loading weights for `{name}` reference model from {pretrained.path}")
+                reference_model.fast_llm_model.load_checkpoint(pretrained)
+            else:
+                log_main_rank(
+                    f"No pretrained checkpoint specified for `{name}` reference model,"
+                    f" using a freshly initialized model...",
+                    log_fn=logger.warning,
+                )
+                reference_model.fast_llm_model.initialize_weights()
 
         Assert.eq(self._completed_steps, last_iteration or 0)
         assert self._multi_stage._is_loaded  # noqa
