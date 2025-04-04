@@ -44,7 +44,6 @@ class BaseModelConfig(BaseModelArchitectureConfig):
 
 
 class Preprocessor(abc.ABC):
-    @abc.abstractmethod
     def preprocess_meta(self, kwargs: dict[str, typing.Any]) -> None:
         pass
 

@@ -284,7 +284,9 @@ class FlashAttnVarlenPreprocessor(Preprocessor):
         also contain previous tokens from the first document in micro-sequence.
         We use individual sequence lengths of each document to (optionally) find the micro-sequences in the batch and compute the cumulative lengths.
         """
-        sequence_lengths = kwargs.get(TransformerKwargs.sequence_lengths)
+        if TransformerKwargs.sequence_lengths not in kwargs:
+            return
+        sequence_lengths = kwargs[TransformerKwargs.sequence_lengths]
         sequence_k = kwargs[TransformerKwargs.sequence_k_dim].size
         sequence_q = kwargs[TransformerKwargs.sequence_q_dim].size
         if sequence_q < kwargs[TransformerKwargs.sequence_length]:
