@@ -226,7 +226,7 @@ class ExternalStateDictCheckpointHandler(StateDictCheckpointHandler):
         }
 
     @classmethod
-    def load_metadata(cls, config: CheckpointLoadMetadataConfig) -> CheckpointMetadata:
+    def _load_metadata(cls, config: CheckpointLoadMetadataConfig) -> CheckpointMetadata:
         imported_model_config = cls._import_config(cls._load_config(config.path), True)
         return CheckpointMetadata(
             fast_llm_version=__version__,

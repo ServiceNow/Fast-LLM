@@ -10,6 +10,7 @@ from fast_llm.config import (
     Field,
     FieldHint,
     NoAutoValidate,
+    UpdateType,
     ValidationError,
     check_field,
     config_class,
@@ -186,11 +187,12 @@ class MultiStageConfig(StageConfig):
     def _validate(self) -> None:
         super()._validate()
         if self.zero_stage is not None:
-            Assert.in_range_incl(self.zero_stage, 1, 3)
-            if self.zero_stage >= 2:
-                self.num_grad_buffers = 2
-            if self.zero_stage >= 3:
-                self.num_weight_buffers = 2
+            with self._set_implicit_default():
+                Assert.in_range_incl(self.zero_stage, 1, 3)
+                if self.zero_stage >= 2:
+                    self.num_grad_buffers = 2
+                if self.zero_stage >= 3:
+                    self.num_weight_buffers = 2
         if self.num_grad_buffers is not None:
             Assert.geq(self.num_grad_buffers, 1)
         if self.num_weight_buffers is not None:
@@ -254,49 +256,13 @@ class FastLLMModelConfig(Config):
 
     @classmethod
     def from_pretrained(
-        cls,
-        pretrained: CheckpointLoadMetadataConfig,
-        default: typing.Self | None = None,
+        cls, pretrained: CheckpointLoadMetadataConfig, *updates: Config | dict[str | tuple[str, ...], typing.Any]
     ) -> typing.Self:
-        # TODO: Add *updates?
-        assert pretrained.path is not None
-        metadata = cls.load_metadata(pretrained)
-        return cls.from_metadata(pretrained, metadata, default)
-
-    @classmethod
-    def from_metadata(
-        cls,
-        pretrained: CheckpointLoadMetadataConfig,
-        metadata: "CheckpointMetadata",
-        default: typing.Self | None = None,
-        updates: dict[str | tuple[str, ...], typing.Any] | None = None,
-    ) -> typing.Self:
-        # TODO: Standardize to *updates?
-        # TODO v0.3: Update, remove support for older checkpoints.
-        if metadata.fast_llm_version.major != 0 or metadata.fast_llm_version.minor not in (0, 1, 2):
-            raise ValueError(f"Invalid checkpoint version: {metadata.fast_llm_version}")
-        pretrained_config = cls.from_dict(metadata.config)
-        if not pretrained.load_config.load_architecture:
-            assert default is not None
-            config = default.to_copy()
-            config.base_model.compare_architecture(pretrained_config.base_model, pretrained.compare_log_fn)
-        elif pretrained.load_config.load_fast_llm:
-            config = pretrained_config
-        else:
-            with NoAutoValidate():
-                config = cls() if default is None else default.to_copy()
-            if pretrained.load_config.load_base_model:
-                config.base_model = pretrained_config.base_model
-            else:
-                config.base_model = config.base_model.to_copy(pretrained_config.base_model.get_architecture())
-            config.validate()
-
-        if updates:
-            config = config.to_copy(updates)
-        return config
+        return cls.from_dict(cls.load_metadata(pretrained).config, *updates, update_type=UpdateType.update)
 
     @classmethod
     def load_metadata(cls, config: CheckpointLoadMetadataConfig) -> "CheckpointMetadata":
+        assert config.path is not None
         with NoAutoValidate():
             metadata = config.format.get_handler_class().load_metadata(config)
         try:
@@ -315,6 +281,9 @@ class FastLLMModelConfig(Config):
             config=self,
             **kwargs,
         )
+
+    def save_metadata(self, config: CheckpointSaveMetadataConfig, **kwargs) -> None:
+        self.get_checkpoint_handler_class(config.format).save_metadata(config, self.to_metadata(config, **kwargs))
 
 
 @config_class()
@@ -336,7 +305,7 @@ class PretrainedFastLLMModelConfig(Config):
         self.pretrained.setup(self.model)
         self.pretrained.validate()
         if self.pretrained.path is not None:
-            self.model = self.model.from_pretrained(self.pretrained, default=self.model)
+            self.model = self.model.from_pretrained(self.pretrained, self.model)
         self._setup()
         super()._validate()
 
@@ -388,6 +357,8 @@ class CheckpointMetadata(Config):
 
         self.format = self.model.get_checkpoint_format(self.format)
         super()._validate()
+        if self.fast_llm_version.major != 0 or self.fast_llm_version.minor not in (0, 1, 2):
+            raise ValueError(f"Invalid checkpoint version: {self.fast_llm_version}")
         Assert.eq(self.config.__class__, self.model)
 
     @classmethod

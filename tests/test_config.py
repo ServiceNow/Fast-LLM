@@ -5,11 +5,16 @@ import unittest.mock
 import pytest
 import yaml
 
+from fast_llm.config import NoAutoValidate
 from fast_llm.data.dataset.gpt.config import GPTSamplingConfig
+from fast_llm.engine.checkpoint.config import CheckpointSaveMetadataConfig, ModelConfigType
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.layers.transformer.config import AddLinearBiasChoices, TransformerArchitectureConfig, TransformerConfig
 from fast_llm.models.auto import trainer_registry
+from fast_llm.models.gpt.config import GPTModelConfig, PretrainedGPTModelConfig
+from fast_llm.utils import Assert, check_equal_nested
+from tests.common import TEST_RESULTS_PATH
 
 
 def run_without_import(cmd: str):
@@ -114,8 +119,88 @@ def test_add_attn_dense_bias():
     )
 
 
-@pytest.mark.parametrize("cls", (GPTSamplingConfig,))
-def test_serialize_default_config_updates(cls):
+@pytest.mark.parametrize(
+    ("cls", "default"),
+    ((GPTSamplingConfig, {}), (GPTModelConfig, {"distributed": {"world_size": 1, "rank": 0, "local_world_size": 1}})),
+)
+def test_serialize_default_config_updates(cls, default):
     # Config classes used as config updates should have a default that serializes to an empty dict
     #   so no value is incorrectly overridden.
-    assert cls.from_dict({}).to_dict() == {}
+    check_equal_nested(cls.from_dict({}).to_dict(), default)
+
+
+@pytest.mark.parametrize("load_config", tuple(ModelConfigType))
+def test_pretrained_config(load_config: ModelConfigType):
+    config_path = TEST_RESULTS_PATH / "pretrained_config"
+    pretrained_model_config = GPTModelConfig.from_dict(
+        {
+            "base_model": {
+                "transformer": {
+                    "normalization": {"type": "rms_norm"},  # Nested
+                    "rotary": {"type": "default"},
+                    "num_layers": 12,  # Default
+                    "hidden_size": 1024,  # Default
+                    "window_size": 32,  # Non-architecture
+                    "ffn_hidden_size": 4096,  # Implicit default, default value
+                    "activation_type": "silu",  # Implicit default, non-default value
+                    "head_groups": 4,
+                },
+                "tie_word_embeddings": False,
+            },
+            "multi_stage": {"zero_stage": 3},
+            "distributed": {"training_dtype": "bfloat16"},
+        }
+    )
+    with NoAutoValidate():
+        save_config = CheckpointSaveMetadataConfig.from_dict({"format": "fast_llm", "path": config_path})
+    save_config.setup(GPTModelConfig)
+    save_config.validate()
+    pretrained_model_config.save_metadata(save_config)
+
+    base_model_update = {
+        "transformer": {
+            # rotary: Don't override nested.
+            "normalization": {"implementation": "triton"},  # Update non-default nested
+            "peft": {"freeze_others": False},  # Update default nested, non-architecture
+            "hidden_size": 512,  # Override, affects derived value (kv channels)
+            "head_groups": 1,  # Override to default
+        },
+        "vocab_size": 1000,
+    }
+    pretrained_config = PretrainedGPTModelConfig.from_dict(
+        {
+            "model": {
+                "base_model": base_model_update,
+                "distributed": {"seed": 1234, "training_dtype": "float16"},
+            },
+            "pretrained": {"format": "fast_llm", "path": config_path, "load_config": load_config},
+        }
+    )
+    Assert.eq(pretrained_config.model.base_model.transformer.kv_channels, 64)
+    serialized_config = pretrained_config.model.to_dict()
+    expected_config = {"distributed": DistributedConfig().to_dict()}
+
+    if load_config == ModelConfigType.fast_llm:
+        expected_config["multi_stage"] = {"zero_stage": 3}
+    expected_config["distributed"].update({"seed": 1234, "training_dtype": "float16"})
+    if load_config in (ModelConfigType.architecture, ModelConfigType.fast_llm, ModelConfigType.model):
+        expected_config["base_model"] = {
+            "transformer": {
+                "normalization": {"type": "rms_norm", "implementation": "triton"},
+                "rotary": {"type": "default"},
+                "peft": {"freeze_others": False},
+                "num_layers": 12,
+                "hidden_size": 512,
+                "ffn_hidden_size": 4096,
+                "activation_type": "silu",
+                "head_groups": 1,
+            },
+            "tie_word_embeddings": False,
+            "vocab_size": 1000,
+        }
+        if load_config != ModelConfigType.architecture:
+            expected_config["base_model"]["transformer"]["window_size"] = 32
+    else:
+        expected_config["base_model"] = base_model_update
+
+    check_equal_nested(serialized_config, expected_config)

@@ -1,6 +1,7 @@
 import logging
 import typing
 
+from fast_llm.config import UpdateType
 from fast_llm.core.distributed import broadcast
 from fast_llm.engine.checkpoint.config import CheckpointLoadConfig, CheckpointSaveConfig
 from fast_llm.engine.distributed.distributed import Distributed
@@ -30,24 +31,21 @@ class FastLLMModel[ConfigType: FastLLMModelConfig](MultiStageModel[ConfigType]):
         )
         converter.save(config, fast_llm_metadata)
 
-    def load_checkpoint(self, config: CheckpointLoadConfig) -> dict[str, typing.Any]:
+    def load_checkpoint(self, config: CheckpointLoadConfig) -> dict[str, typing.Any] | None:
         # TODO: Simplify branching.
         # TODO: Test with more distributed configs.
         # TODO: Safety checks
         # TODO: Handle barriers, ok file, etc. here
-        fast_llm_metadata = self.config_class.load_metadata(config)
         converter = config.format.get_handler_class()(self)
-        converter.load(config, fast_llm_metadata)
+        metadata = converter.load(config)
         self._finalize_load(reset_optimizer=not config.optimizer_state)
-        return fast_llm_metadata.metadata
+        return metadata
 
     @classmethod
     def from_pretrained(
         cls,
         pretrained_config: CheckpointLoadConfig,
-        default_config: FastLLMModelConfig = None,
-        *,
-        config_updates: dict[str | tuple[str, ...], typing.Any] | None = None,
+        *updates: dict[str | tuple[str, ...], typing.Any],
         optimizer_state_names: tuple[str, ...] | None = None,
         setup: bool = True,
         mode: StageMode = StageMode.training,
@@ -55,7 +53,7 @@ class FastLLMModel[ConfigType: FastLLMModelConfig](MultiStageModel[ConfigType]):
         stage_filter: set | None = None,
     ) -> typing.Self:
         metadata = cls.config_class.load_metadata(pretrained_config)
-        config = cls.config_class.from_metadata(pretrained_config, metadata, default_config, config_updates)
+        config = cls.config_class.from_dict(metadata.config, *updates, update_type=UpdateType.update)
         if mode.support_training:
             # TODO v0.3: Make metadata.shards mandatory?
             if metadata.shards:
