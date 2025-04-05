@@ -3,6 +3,7 @@ import dataclasses
 import logging
 import time
 import typing
+from typing import Callable
 
 import torch
 import torch.cuda
@@ -94,6 +95,7 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ScheduleConfig]):
         self._tied_parameters = self._multi_stage.tied_parameters
         self._num_stages = len(self._stages)
         self._loss_defs = {loss_def.name: loss_def for loss_def in self._multi_stage.base_model.loss_defs}
+        self._metric_defs = {metric_def.name: metric_def for metric_def in self._multi_stage.base_model.metric_defs}
 
     def setup(self, distributed: Distributed, optimizer: Optimizer | None = None) -> None:
         assert not self._is_setup
@@ -264,27 +266,43 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ScheduleConfig]):
         self._record_event(context, EventType.batch_end, None)
         self._handle_events(context)
 
-        if metrics is not None:
-            metrics["loss_scale"] = self._optimizer.grad_scale
-
         if self._multi_stage.config.multi_stage.debug_activation_memory:
             log_pipeline_parallel_main_rank(
                 lambda: log_memory_usage(f"End of {context.phase.value} iteration {iteration}", str)
             )
+        # All metrics comming out of forward pass are reduced by default.
+        if metrics is not None:
+            metrics = self._reduce_metrics(context)
+            metrics["loss_scale"] = self._optimizer.grad_scale
 
-        return self._reduce_losses(context), update_successful, metrics
+        return (
+            self._reduce_losses(context),
+            update_successful,
+            metrics,
+        )
 
     def _reduce_losses(self, context: BatchContext) -> dict[str, float | int]:
+        return self._reduce_metric_or_loss(context, lambda name: self._loss_defs[name].count, "losses")
+
+    def _reduce_metrics(self, context: BatchContext) -> dict[str, float | int]:
+        return self._reduce_metric_or_loss(context, lambda name: self._metric_defs[name].count, "metrics")
+
+    def _reduce_metric_or_loss(
+        self,
+        context: BatchContext,
+        check_count: Callable[[str], int],
+        reduce_attr: str = "losses",
+    ) -> dict[str, float | int]:
         reduced_losses = {}
         num_inputs = self._distributed_config.data_parallel * context.schedule.batch_config.num_inputs
-        for name, losses in context.losses.items():
+        for name, losses in context.__getattribute__(reduce_attr).items():
             if losses or self._distributed.pipeline_group:
                 if losses:
-                    reduced_loss = torch.stack(losses).sum() / num_inputs / self._loss_defs[name].count
+                    reduced_loss = torch.stack(losses).sum() / num_inputs / check_count(name)
                     if self._distributed.data_group:
                         all_reduce(reduced_loss, group=self._distributed.data_group)
                 else:
-                    reduced_loss = torch.zeros([1], dtype=self._loss_defs[name].dtype, device=self._distributed.device)
+                    reduced_loss = torch.zeros([1], dtype=check_count(name).dtype, device=self._distributed.device)
                 if self._distributed.pipeline_group:
                     all_reduce(reduced_loss, group=self._distributed.pipeline_group)
             else:
