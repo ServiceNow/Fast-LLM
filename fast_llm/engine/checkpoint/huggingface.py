@@ -20,8 +20,10 @@ from fast_llm.utils import Assert
 
 class HuggingfaceStateDictCheckpointHandler(ExternalStateDictCheckpointHandler, abc.ABC):
 
-    def _save_serialized_metadata(self, config: CheckpointSaveMetadataConfig, metadata: dict, index: dict) -> None:
-        path = config.path / f"{self.base_file_name}.safetensors.index.json"
+    @classmethod
+    def _save_serialized_metadata(cls, config: CheckpointSaveMetadataConfig, metadata: dict, index: dict) -> None:
+        config.path.mkdir(parents=True, exist_ok=True)
+        path = config.path / f"{cls.base_file_name}.safetensors.index.json"
         logger.info(f"Saving index to {path}")
         # Save the index.
         json.dump(

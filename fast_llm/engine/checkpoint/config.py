@@ -201,9 +201,9 @@ class CheckpointSaveConfig(CheckpointSaveMetadataConfig, CheckpointStateSaveConf
 @config_class()
 class CheckpointLoadMetadataConfig(CheckpointPathConfigBase):
     _abstract = False
-
+    # TODO: Set default to model? (Not backward compatible)
     load_config: ModelConfigType = Field(
-        default=ModelConfigType.model,
+        default=ModelConfigType.architecture,
         desc="Configuration to save/load.",
         hint=FieldHint.core,
     )
@@ -233,7 +233,10 @@ class CheckpointHandler(abc.ABC):
     def __init__(self, model: "FastLLMModel"):
         self._model = model
 
-    # TODO: save_metadata?
+    @classmethod
+    @abc.abstractmethod
+    def save_metadata(cls, config: CheckpointSaveMetadataConfig, metadata: "CheckpointMetadata"):
+        pass
 
     @classmethod
     def load_metadata(cls, config: CheckpointLoadMetadataConfig) -> "CheckpointMetadata":
@@ -245,7 +248,7 @@ class CheckpointHandler(abc.ABC):
         if not config.load_config.load_architecture:
             updates[("config", "base_model")] = {}
         elif not config.load_config.load_base_model:
-            updates[("config", "base_model")] = metadata.config.base_model.get_architecture()
+            updates[("config", "base_model")] = metadata.config.base_model.get_architecture().to_dict()
         if updates:
             metadata = metadata.to_copy(updates)
         return metadata

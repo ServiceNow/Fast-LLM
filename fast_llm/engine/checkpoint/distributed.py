@@ -12,6 +12,7 @@ from fast_llm.engine.checkpoint.config import (
     CheckpointLoadConfig,
     CheckpointLoadMetadataConfig,
     CheckpointSaveConfig,
+    CheckpointSaveMetadataConfig,
     DistributedCheckpointFormat,
     ModelConfigType,
     export_safetensors_metadata,
@@ -26,6 +27,12 @@ logger = logging.getLogger(__name__)
 
 class DistributedCheckpointHandler(CheckpointHandler):
     format: typing.ClassVar[type[CheckpointFormat]] = DistributedCheckpointFormat
+
+    @classmethod
+    def save_metadata(cls, config: CheckpointSaveMetadataConfig, metadata: CheckpointMetadata):
+        config.path.mkdir(parents=True, exist_ok=True)
+        serialized_metadata = metadata.to_dict()
+        yaml.safe_dump(serialized_metadata, (config.path / "metadata.yaml").open("w"))
 
     @classmethod
     def _load_metadata(cls, config: CheckpointLoadMetadataConfig) -> CheckpointMetadata:

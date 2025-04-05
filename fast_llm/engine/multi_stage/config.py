@@ -187,11 +187,12 @@ class MultiStageConfig(StageConfig):
     def _validate(self) -> None:
         super()._validate()
         if self.zero_stage is not None:
-            Assert.in_range_incl(self.zero_stage, 1, 3)
-            if self.zero_stage >= 2:
-                self.num_grad_buffers = 2
-            if self.zero_stage >= 3:
-                self.num_weight_buffers = 2
+            with self._set_implicit_default():
+                Assert.in_range_incl(self.zero_stage, 1, 3)
+                if self.zero_stage >= 2:
+                    self.num_grad_buffers = 2
+                if self.zero_stage >= 3:
+                    self.num_weight_buffers = 2
         if self.num_grad_buffers is not None:
             Assert.geq(self.num_grad_buffers, 1)
         if self.num_weight_buffers is not None:
@@ -280,6 +281,9 @@ class FastLLMModelConfig(Config):
             config=self,
             **kwargs,
         )
+
+    def save_metadata(self, config: CheckpointSaveMetadataConfig, **kwargs) -> None:
+        self.get_checkpoint_handler_class(config.format).save_metadata(config, self.to_metadata(config, **kwargs))
 
 
 @config_class()
