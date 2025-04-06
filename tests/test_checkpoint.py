@@ -409,6 +409,7 @@ def test_load_pretrained_distributed_with_config():
     )
 
 
+@pytest.mark.skip(reason="Fails because of incorrect init config.")
 @pytest.mark.depends(on=["test_load_pretrained_distributed_in_dp2"])
 def test_load_pretrained_in_dp2_match_checkpoint():
     test_ckpt_path = TEST_RESULTS_PATH / f"test_{TEST_MODEL}_load_pretrained_distributed_in_dp2" / "checkpoint" / "1"

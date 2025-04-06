@@ -281,7 +281,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
     def _save_dataset_config(cls, dataset_config: GPTIndexedDatasetConfig, output_path: pathlib.Path) -> None:
         logger.info(f"Saving config to {output_path}")
         yaml.safe_dump(
-            dataset_config.to_serialized(),
+            dataset_config.to_dict(),
             output_path.open("w"),
         )
 

@@ -147,8 +147,8 @@ class Run:
         self._is_pipeline_parallel_main_rank = (
             self._distributed_config.data_rank == 0 and self._distributed_config.tensor_rank == 0
         )
-        config_dict = config.to_serialized()
-        config_dict_verbose = config.to_serialized(verbose=FieldVerboseLevel.performance)
+        config_dict = config.to_dict()
+        config_dict_verbose = config.to_dict(verbose=FieldVerboseLevel.performance)
 
         if self._config.experiment_dir is not None:
             self._experiment_directory = self._config.experiment_dir.resolve()
