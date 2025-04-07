@@ -1,3 +1,5 @@
+import json
+import os
 import pathlib
 import typing
 
@@ -264,13 +266,9 @@ class LLambaHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
 
     @classmethod
     def _load_config(cls, directory: pathlib.Path | str) -> dict:
-        try:
-            from cartesia_pytorch.Llamba.configuration_llamba import LlambaConfig
-        except ImportError:
-            raise ImportError(
-                "Cartesia Pytorch is not installed. Please install it from https://github.com/cartesia-ai/edge/tree/main/cartesia-pytorch"
-            )
-
-        config, _ = LlambaConfig.get_config_dict(directory)
+        if not os.path.exists(directory / "config.json"):
+            raise FileNotFoundError(f"config.json not found in {directory}")
+        with open(directory / "config.json") as f:
+            config = json.load(f)
         Assert.eq(config["model_type"], cls.get_huggingface_model_type())
         return config
