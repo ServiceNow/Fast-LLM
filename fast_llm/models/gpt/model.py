@@ -9,6 +9,7 @@ from fast_llm.engine.base_model.config import Preprocessor
 from fast_llm.engine.config_utils.tensor_space import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames, PhaseType
 from fast_llm.engine.distributed.distributed import Distributed
+from fast_llm.engine.inference.runner import InferenceRunner
 from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
 from fast_llm.engine.schedule.config import BatchConfig
 from fast_llm.layers.language_model.config import LanguageModelKwargs, LanguageModelLossNames
@@ -115,7 +116,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
 
     def setup(self, distributed: Distributed) -> None:
         assert not self._is_setup
-        assert distributed.config is self._tensor_space.distributed_config
+        distributed.check_config(self._tensor_space.distributed_config)
         self._tensor_space.setup(distributed)
         self._is_setup = True
 
@@ -369,3 +370,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
 class GPTModel[ConfigType: GPTModelConfig](FastLLMModel[ConfigType]):
     config_class: typing.ClassVar[type[GPTModelConfig]] = GPTModelConfig
     base_model_class: typing.ClassVar[type[GPTBaseModel]] = GPTBaseModel
+
+
+class GPTInferenceRunner(InferenceRunner):
+    model_class: typing.ClassVar[type[GPTModel]] = GPTModel
