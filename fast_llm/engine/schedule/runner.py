@@ -282,20 +282,30 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ScheduleConfig]):
         )
 
     def _reduce_losses(self, context: BatchContext) -> dict[str, float | int]:
-        return self._reduce_metric_or_loss(context, lambda name: self._loss_defs[name].count, "losses")
+        return self._reduce_metric_or_loss(
+            context,
+            lambda name: self._loss_defs[name].count,
+            "losses",
+        )
 
     def _reduce_metrics(self, context: BatchContext) -> dict[str, float | int]:
-        return self._reduce_metric_or_loss(context, lambda name: self._metric_defs[name].count, "metrics")
+        return self._reduce_metric_or_loss(
+            context, lambda name: self._metric_defs[name].count, "metrics", lambda x: x in self._metric_defs
+        )
 
     def _reduce_metric_or_loss(
         self,
         context: BatchContext,
         check_count: Callable[[str], int],
         reduce_attr: str = "losses",
+        check_reduce: Callable[[str], bool] = lambda _: True,
     ) -> dict[str, float | int]:
         reduced_losses = {}
         num_inputs = self._distributed_config.data_parallel * context.schedule.batch_config.num_inputs
         for name, losses in context.__getattribute__(reduce_attr).items():
+            if not check_reduce(name):
+                reduced_losses[name] = losses
+                continue
             if losses or self._distributed.pipeline_group:
                 if losses:
                     reduced_loss = torch.stack(losses).sum() / num_inputs / check_count(name)
