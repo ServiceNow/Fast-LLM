@@ -4,7 +4,7 @@ import typing
 from fast_llm.engine.checkpoint.config import CheckpointFormat
 from fast_llm.engine.checkpoint.external import (
     ConstantImportParamConverter,
-    IgnoreWeightConverter,
+    IgnoreImportWeightConverter,
     ParamConverter,
     RenameParamConverter,
     SplitWeightConverter,
@@ -163,7 +163,7 @@ class LLambaHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
         # Embedding and output
         if self._model.config.base_model.tie_word_embeddings:
             converters.append(WeightConverter("layers.0.word_embeddings_weight", "backbone.embedding.weight"))
-            converters.append(IgnoreWeightConverter((), "lm_head.weight"))
+            converters.append(IgnoreImportWeightConverter((), "lm_head.weight"))
         else:
             converters.append(WeightConverter("layers.0.word_embeddings_weight", "backbone.embedding.weight"))
             converters.append(WeightConverter(f"layers.{num_layers + 1}.output_weights", "lm_head.weight"))

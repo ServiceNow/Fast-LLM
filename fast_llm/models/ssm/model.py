@@ -96,7 +96,7 @@ class HybridSSMBaseModel[ConfigType: HybridSSMBaseModelConfig](GPTBaseModel[Conf
                 raise ValueError(f"Invalid block type: {block_type}. Must be 't' or 'm' or 'm2'")
 
         # Add the language model head
-        layers.append(LanguageModelHead(self._config, self._tensor_space))
+        layers.append(LanguageModelHead(self._config, self._tensor_space, prediction_distance=0))
 
         return layers
 
