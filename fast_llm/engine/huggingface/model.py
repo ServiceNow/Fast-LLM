@@ -57,6 +57,7 @@ class HuggingfacePreTrainedModel(transformers.PreTrainedModel):
         )
         with transformers.modeling_utils.no_init_weights():
             self.post_init()
+        self._use_fm_changes = False
 
     @classmethod
     def from_pretrained(
@@ -78,13 +79,25 @@ class HuggingfacePreTrainedModel(transformers.PreTrainedModel):
         if torch_dtype is not None:
             config_updates[("distributed", "training_dtype")] = torch_dtype
 
+        attn_implementation = kwargs.pop("attn_implementation", None)
+        if attn_implementation is not None:
+            if attn_implementation == "flash_attention_2":
+                config_updates[("base_model", "transformer", "use_flash_attention")] = True
+            else:
+                config_updates[("base_model", "transformer", "use_flash_attention")] = False
+
         # Create the model
         fast_llm_model = cls.model_class.from_pretrained(
             pretrained_model_name_or_path, config_updates=config_updates, mode=mode
         )
         config = cls.config_class(fast_llm_model.config)
 
-        return cls(config, fast_llm_model, **kwargs)
+        obj = cls(config, fast_llm_model, **kwargs)
+
+        use_fm_changes = kwargs.pop("use_fm_changes", False)
+        obj._use_fm_changes = use_fm_changes
+
+        return obj
 
     def _init_weights(self, module) -> None:
         raise NotImplementedError(module)
