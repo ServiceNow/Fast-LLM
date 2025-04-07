@@ -136,6 +136,10 @@ class BaseModel[ConfigType: BaseModelConfig](Configurable[ConfigType], Sequentia
     def loss_defs(self) -> list[LossDef]:
         pass
 
+    @property
+    def metric_defs(self) -> list[LossDef]:
+        return []
+
     def add_preprocessor(self, preprocessor: Preprocessor):
         # TODO: Generalize preprocessors.
         raise NotImplementedError()

@@ -21,6 +21,7 @@ from fast_llm.layers.transformer.config import (
     TransformerDimNames,
     TransformerKwargs,
     TransformerLossNames,
+    TransformerRoutingMetrics,
 )
 from fast_llm.layers.transformer.preprocessing import (
     BackupAttentionPreprocessor,
@@ -349,6 +350,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                         count=self._config.transformer.num_layers,
                     )
                 )
+
         if self._config.logit_z_loss:
             LossDef(name=LanguageModelLossNames.z_loss, formatted_name="logit z loss", count=1)
 
@@ -361,6 +363,29 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                 )
             )
         return loss_defs
+
+    @property
+    def metric_defs(self) -> list[LossDef]:
+        metric_defs = []
+        if (
+            self._config.transformer.num_experts > 1
+            and self._config.transformer.expert_routing_type == RoutingType.topk
+        ):
+            metric_defs.append(
+                LossDef(
+                    name=TransformerRoutingMetrics.normalized_average_entropy,
+                    formatted_name="Normalized Entropy",
+                    count=self._config.transformer.num_layers,
+                )
+            )
+            metric_defs.append(
+                LossDef(
+                    name=TransformerRoutingMetrics.mutual_info,
+                    formatted_name="Mutual Information",
+                    count=self._config.transformer.num_layers,
+                )
+            )
+        return metric_defs
 
     def add_preprocessor(self, preprocessor: Preprocessor):
         assert not self._is_setup
