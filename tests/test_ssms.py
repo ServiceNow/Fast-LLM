@@ -28,6 +28,11 @@ except ImportError:
     MambaLayer, LambaBlock, HybridSSMBaseModel, HybridSSMBaseModelConfig, DiscreteMamba2 = None, None, None, None, None
     # Mamba not isntalled, skipping tests
 
+try:
+    from cartesia_pytorch.Llamba.llamba import LlambaLMHeadModel as LMHeadModel
+except ImportError:
+    LMHeadModel = None
+
 run_test = MambaLayer is not None and torch.cuda.is_available()
 
 
@@ -104,7 +109,10 @@ def get_hf_llamba_out(input_ids, path, format):
 
 
 @pytest.mark.slow
-@pytest.mark.skipif(not run_test, reason="No CUDA available or Mamba not installed")
+@pytest.mark.skipif(
+    not run_test or LMHeadModel is None,
+    reason=f"Skipping because one of the following: cartesia_pytorch.Llamba not installed or no CUDA available or Mamba not installed",
+)
 def test_load_from_llamba_checkpoint(distributed_config):
     """
     Test to check whether the of Fast-LLM and Huggingface checkpoint loading for Llamba-1B produce the same results.

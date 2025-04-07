@@ -7,6 +7,7 @@ from fast_llm.engine.checkpoint.config import CheckpointFormat
 from fast_llm.engine.checkpoint.external import (
     ConstantImportParamConverter,
     IgnoreImportWeightConverter,
+    MappedConfigParamConverter,
     ParamConverter,
     RenameParamConverter,
     SplitWeightConverter,
@@ -14,6 +15,7 @@ from fast_llm.engine.checkpoint.external import (
 )
 from fast_llm.engine.checkpoint.huggingface import HuggingfaceStateDictCheckpointHandler
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig
+from fast_llm.functional.config import ActivationType
 from fast_llm.layers.common.config import NormalizationType
 from fast_llm.models.gpt.conversion import MLPLayer2Converter
 from fast_llm.models.ssm.config import HybridSSMModelConfig, LLambaHuggingfaceCheckpointFormat
@@ -81,7 +83,7 @@ class LLambaHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
                     ),
                 ),
             ),
-            RenameParamConverter(
+            MappedConfigParamConverter(
                 fast_llm_names=(("transformer", "activation_type"),),
                 export_names=(
                     (
@@ -89,6 +91,8 @@ class LLambaHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
                         "act_fn",
                     ),
                 ),
+                fast_llm_value=ActivationType.from_hf_name,
+                export_value=lambda activation_type: activation_type.hf_name,
             ),
             ConstantImportParamConverter(fast_llm_names=(("default_block"),), fast_llm_value="m2"),
             RenameParamConverter(
@@ -272,3 +276,8 @@ class LLambaHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
             config = json.load(f)
         Assert.eq(config["model_type"], cls.get_huggingface_model_type())
         return config
+
+    @classmethod
+    def _save_config(cls, directory: pathlib.Path | str, config: dict[str, typing.Any]) -> None:
+        with open(directory / "config.json", "w") as f:
+            json.dump(config, f)
