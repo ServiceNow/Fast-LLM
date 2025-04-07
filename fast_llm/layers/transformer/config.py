@@ -661,6 +661,11 @@ class TransformerConfig(TransformerArchitectureConfig, BaseModelConfig):
         " Reduces memory usage, but increases fragmentation and requires CPU synchronisation. Not recommended.",
         hint=FieldHint.expert,
     )
+    calculate_moe_metrics: bool = Field(
+        default=True,
+        desc="If 'True', will calculate the MoE metrics (entropy and MI) at each logging step.",
+        hint=FieldHint.logging,
+    )
 
     def _validate(self) -> None:
         if self.init_method_std is None:

@@ -84,6 +84,7 @@ class MixtureOfExpertMLP(MLPBase):
         self._config = config
         self._tensor_space = tensor_space
         self._debug_mode = self._config.debug_transformer or self._config.debug_transformer_memory
+        self._calculate_moe_metrics = config.calculate_moe_metrics
 
         self._num_experts = config.num_experts
         self._experts_per_token = config.num_experts_per_token
@@ -215,7 +216,7 @@ class MixtureOfExpertMLP(MLPBase):
             probs = torch.softmax(logits, dim=-1, dtype=torch.float32)
 
             # Store these metrics
-            if metrics is not None:
+            if metrics is not None and self._calculate_moe_metrics:
                 # Calculate and log entropy and mutual information
                 entropy = calculate_normalized_average_entropy(probs)
                 mutual_info = calculate_mutual_information(probs)
