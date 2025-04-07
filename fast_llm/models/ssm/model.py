@@ -2,14 +2,13 @@ import logging
 import typing
 from functools import partial
 
-from lamba_block import LambaBlock
-
 from fast_llm.engine.base_model.base_model import Layer
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
 from fast_llm.layers.language_model.embedding import LanguageModelEmbedding
 from fast_llm.layers.language_model.head import LanguageModelHead
 from fast_llm.layers.ssm.discrete_mamba2 import DiscreteMamba2
+from fast_llm.layers.ssm.lamba_block import LambaBlock
 from fast_llm.layers.ssm.mamba_layer import MambaLayer
 from fast_llm.layers.transformer.transformer import TransformerLayer
 from fast_llm.models.gpt.model import GPTBaseModel
