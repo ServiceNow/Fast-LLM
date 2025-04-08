@@ -1,0 +1,48 @@
+{
+  "os": "Linux-5.15.0-1067-nvidia-x86_64-with-glibc2.35",
+  "python": "CPython 3.12.8",
+  "startedAt": "2025-04-07T21:40:14.193432Z",
+  "args": [
+    "train",
+    "hybrid_ssm",
+    "--config",
+    "/home/toolkit/dev/Fast-LLM/__old_train_config.yaml"
+  ],
+  "program": "/home/toolkit/dev/Fast-LLM/fast_llm/tools/cli.py",
+  "codePath": "fast_llm/tools/cli.py",
+  "git": {
+    "remote": "https://github.com/ServiceNow/Fast-LLM.git",
+    "commit": "7f2b35f83cbbe015d050c62d61d3763e734badee"
+  },
+  "email": "torsten.scholak@googlemail.com",
+  "root": "/home/toolkit/dev/Fast-LLM",
+  "host": "79b46b30-c26a-4ba2-8392-96d7d2f6c025",
+  "executable": "/home/toolkit/.conda/envs/fast_llm/bin/python",
+  "codePathLocal": "fast_llm/tools/cli.py",
+  "cpu_count": 112,
+  "cpu_count_logical": 224,
+  "gpu": "NVIDIA H100 80GB HBM3",
+  "gpu_count": 1,
+  "disk": {
+    "/": {
+      "total": "1888556142592",
+      "used": "266341933056"
+    }
+  },
+  "memory": {
+    "total": "2164194234368"
+  },
+  "cpu": {
+    "count": 112,
+    "countLogical": 224
+  },
+  "gpu_nvidia": [
+    {
+      "name": "NVIDIA H100 80GB HBM3",
+      "memoryTotal": "85520809984",
+      "cudaCores": 16896,
+      "architecture": "Hopper"
+    }
+  ],
+  "cudaVersion": "12.4"
+}

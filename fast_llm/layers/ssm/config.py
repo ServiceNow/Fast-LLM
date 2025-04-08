@@ -85,6 +85,25 @@ class SSMArchitectureConfig(BaseModelArchitectureConfig):
         hint=FieldHint.core,
     )
 
+
+@config_class()
+class MambaConfig(SSMArchitectureConfig):
+    """Configuration for a Structured State Space Model (SSM) layer."""
+
+    normalization: NormalizationConfig = FieldUpdate(default_factory=NormalizationConfig)
+    # Performance optimization
+    use_fast_path: bool = Field(
+        default=True,
+        desc="Whether to use optimized CUDA kernels when available",
+        hint=FieldHint.performance,
+    )
+
+    debug_ssm: bool = Field(
+        default=False,
+        desc="debug_ssm",
+        hint=FieldHint.optional,
+    )
+
     dt_min: float = Field(
         default=0.001,
         desc="Minimum step size for discretization",
@@ -104,25 +123,6 @@ class SSMArchitectureConfig(BaseModelArchitectureConfig):
         desc="Minimum value for initializing dt",
         hint=FieldHint.core,
         valid=check_field(Assert.gt, 0),
-    )
-
-
-@config_class()
-class MambaConfig(SSMArchitectureConfig):
-    """Configuration for a Structured State Space Model (SSM) layer."""
-
-    normalization: NormalizationConfig = FieldUpdate(default_factory=NormalizationConfig)
-    # Performance optimization
-    use_fast_path: bool = Field(
-        default=True,
-        desc="Whether to use optimized CUDA kernels when available",
-        hint=FieldHint.performance,
-    )
-
-    debug_ssm: bool = Field(
-        default=False,
-        desc="debug_ssm",
-        hint=FieldHint.optional,
     )
 
     def setup_tensor_space(self, tensor_space: TensorSpace) -> None:

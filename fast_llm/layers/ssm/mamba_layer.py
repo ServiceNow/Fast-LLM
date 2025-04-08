@@ -163,16 +163,10 @@ class MambaLayer(torch.nn.Module):
                 **factory_kwargs,
             )
 
-    def forward(self, hidden_states, from_shared_proj=None, inference_params=None):
+    def forward(self, hidden_states):
         batch, seqlen, dim = hidden_states.shape
         # print("IN MAMBA LAYER FORWARD: ", hidden_states.shape)
         conv_state, ssm_state = None, None
-        if inference_params is not None:
-            conv_state, ssm_state = self._get_states_from_cache(inference_params, batch)
-            if inference_params.sequence_len_offset > 0:
-                # The states are updated inplace
-                out, _, _ = self.step(hidden_states, conv_state, ssm_state)
-                return out
 
         # We do matmul and transpose BLH -> HBL at the same time
         xz = rearrange(
@@ -185,7 +179,7 @@ class MambaLayer(torch.nn.Module):
 
         A = -torch.exp(self.A_log.float())  # (d_inner, d_state)
         # In the backward pass we write dx and dz next to each other to avoid torch.cat
-        if self.use_fast_path and inference_params is None:  # Doesn't support outputting the states
+        if self.use_fast_path:  # Doesn't support outputting the states
             out = mamba_inner_fn(
                 xz,
                 self.conv1d_weight,

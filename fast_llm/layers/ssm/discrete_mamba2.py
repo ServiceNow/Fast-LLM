@@ -125,11 +125,10 @@ class DiscreteMamba2(torch.nn.Module):
         """Returns the state of the model as a tensor."""
         return self.layer.state_to_tensor
 
-    def forward(self, u, inference_params=None, **kwargs):
+    def forward(self, u, **kwargs):
         """
         Args:
             u: (B, L, D),
-            inference_params: dict.
 
         Returns:
             outputs: dict.
@@ -141,14 +140,6 @@ class DiscreteMamba2(torch.nn.Module):
         batch, seqlen, dim = u.shape
 
         state = None
-        if inference_params is not None:
-            state = self._get_states_from_cache(inference_params, batch)
-            if inference_params.seqlen_offset > 0:
-                # States are updated inplace
-                u = u.squeeze(1) if len(u.shape) == 3 else u
-                out, _ = self.step(u, state)
-                out = out.unsqueeze(1) if len(u.shape) == 2 else out
-                return {"hidden_states": out}
 
         # Hacky way to initialize state during inference
         chunk_size = self.chunk_size if state is None else seqlen

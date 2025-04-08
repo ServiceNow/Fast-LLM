@@ -1,0 +1,17 @@
+{"time":"2025-04-07T21:37:15.989856731Z","level":"INFO","msg":"stream: starting","core version":"0.19.9","symlink path":"/home/toolkit/dev/Fast-LLM/wandb/run-20250407_213715-c29gbngclivpf4kr/logs/debug-core.log"}
+{"time":"2025-04-07T21:37:16.200236044Z","level":"INFO","msg":"created new stream","id":"c29gbngclivpf4kr"}
+{"time":"2025-04-07T21:37:16.20026548Z","level":"INFO","msg":"stream: started","id":"c29gbngclivpf4kr"}
+{"time":"2025-04-07T21:37:16.200416724Z","level":"INFO","msg":"sender: started","stream_id":"c29gbngclivpf4kr"}
+{"time":"2025-04-07T21:37:16.200416706Z","level":"INFO","msg":"writer: Do: started","stream_id":"c29gbngclivpf4kr"}
+{"time":"2025-04-07T21:37:16.200450027Z","level":"INFO","msg":"handler: started","stream_id":"c29gbngclivpf4kr"}
+{"time":"2025-04-07T21:37:16.346526611Z","level":"ERROR","msg":"HTTP error","status":401,"method":"POST","url":"https://api.wandb.ai/graphql"}
+{"time":"2025-04-07T21:37:16.346601829Z","level":"ERROR","msg":"sender: upsertRun:","error":"failed to upsert bucket: returned error 401: {\"data\":{\"upsertBucket\":null},\"errors\":[{\"message\":\"user is not logged in\",\"path\":[\"upsertBucket\"],\"extensions\":{\"code\":\"PERMISSION_ERROR\"}}]}"}
+{"time":"2025-04-07T21:37:17.35011929Z","level":"INFO","msg":"stream: closing","id":"c29gbngclivpf4kr"}
+{"time":"2025-04-07T21:37:17.350203523Z","level":"ERROR","msg":"sender: upsertConfig: RunRecord is nil"}
+{"time":"2025-04-07T21:37:17.442160282Z","level":"ERROR","msg":"HTTP error","status":404,"method":"POST","url":"https://api.wandb.ai/graphql"}
+{"time":"2025-04-07T21:37:17.442213492Z","level":"ERROR","msg":"runfiles: CreateRunFiles returned error: returned error 404: {\"data\":{\"createRunFiles\":null},\"errors\":[{\"message\":\"project tscholak/fast-llm-ssm-test not found during createRunFiles\",\"path\":[\"createRunFiles\"]}]}"}
+{"time":"2025-04-07T21:37:17.449699424Z","level":"INFO","msg":"fileTransfer: Close: file transfer manager closed"}
+{"time":"2025-04-07T21:37:17.449731216Z","level":"INFO","msg":"handler: closed","stream_id":"c29gbngclivpf4kr"}
+{"time":"2025-04-07T21:37:17.449737124Z","level":"INFO","msg":"writer: Close: closed","stream_id":"c29gbngclivpf4kr"}
+{"time":"2025-04-07T21:37:17.449898438Z","level":"INFO","msg":"sender: closed","stream_id":"c29gbngclivpf4kr"}
+{"time":"2025-04-07T21:37:17.451290024Z","level":"INFO","msg":"stream: closed","id":"c29gbngclivpf4kr"}
