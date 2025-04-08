@@ -16,6 +16,7 @@ def generate(model, input_ids, attention_mask, max_new_tokens, tensors_save_path
     if tensors_save_path is not None:
         if tensors_save_path.is_dir():
             shutil.rmtree(tensors_save_path, ignore_errors=True)
+        tensors_save_path.mkdir(exist_ok=True, parents=True)
 
     # assume attention mask is left padded with zeroes if any
     mask_step = torch.ones((attention_mask.shape[0], 1), dtype=torch.int64).to(attention_mask.device)
@@ -37,8 +38,6 @@ def generate(model, input_ids, attention_mask, max_new_tokens, tensors_save_path
         attention_mask = torch.cat([attention_mask, mask_step], dim=1)
 
         if tensors_save_path is not None:
-            tensors_save_path.mkdir(exist_ok=True, parents=True)
-
             tensors_save_file = tensors_save_path / f"tensor{i}.pt"
             torch.save(output.logits, tensors_save_file)
 
