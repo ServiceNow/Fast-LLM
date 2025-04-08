@@ -38,6 +38,9 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
     _tokenizer: Tokenizer
     _data_type: DataType
 
+    def _process_batch(self, batch: dict[str, list[typing.Any]]) -> dict[str, list[typing.Any]]:
+        pass
+
     def _tokenize_batch(self, batch: dict[str, list[typing.Any]]) -> dict[str, list[typing.Any]]:
         input_ids = [
             np.array(self._tokenizer.tokenize(text), dtype=self._data_type.numpy)
