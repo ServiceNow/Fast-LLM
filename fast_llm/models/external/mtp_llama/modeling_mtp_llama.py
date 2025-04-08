@@ -507,6 +507,7 @@ class MTPLlamaModel(LlamaPreTrainedModel):
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         cache_position: Optional[torch.LongTensor] = None,
+        return_all_prediction_heads: bool = False,
         **flash_attn_kwargs: Unpack[FlashAttentionKwargs],
     ) -> BaseModelOutputWithPast:
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
@@ -592,8 +593,12 @@ class MTPLlamaModel(LlamaPreTrainedModel):
                 all_self_attns += (layer_outputs[1],)
 
         # MTP heads
+        if return_all_prediction_heads:
+            layers_to_run = [self.layers[-1]] + list(self.mtp_heads)
+        else:
+            layers_to_run = [self.layers[-1]]
         latents = []
-        for i, decoder_layer in enumerate([self.layers[-1]] + list(self.mtp_heads)):
+        for i, decoder_layer in enumerate(layers_to_run):
             layer_outputs = decoder_layer(
                 hidden_states,
                 attention_mask=causal_mask,
@@ -608,8 +613,13 @@ class MTPLlamaModel(LlamaPreTrainedModel):
             mtp_hidden_states = layer_outputs[0]
             latents.append(self.mtp_norms[i](mtp_hidden_states))
 
-        # (*, num_prediction_heads, hidden_size)
-        hidden_states = torch.stack(latents, dim=-2)
+        if return_all_prediction_heads:
+            # (batch, seq, len(layers_to_run), hidden_size)
+            hidden_states = torch.stack(latents, dim=-2)
+        else:
+            # (batch, seq, hidden_size)
+            assert len(latents) == 1
+            hidden_states = latents[0]
 
         # add hidden states from the last decoder layer
         if output_hidden_states:
