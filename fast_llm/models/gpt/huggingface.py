@@ -1,6 +1,9 @@
 import logging
 import random
 
+import pathlib
+import shutil
+
 import torch
 import transformers.modeling_outputs
 import transformers.generation.utils as tgu
@@ -27,6 +30,7 @@ class HuggingfaceGPTModelForCausalLM(HuggingfacePreTrainedModel, tgu.GenerationM
     config: HuggingfaceGPTModelConfig
     model_class = GPTModel
     _fast_llm_model: GPTModel
+    _counter = 0
     # base_model_prefix = ""
     # _no_split_modules = None
     # _supports_cache_class = False
@@ -105,6 +109,16 @@ class HuggingfaceGPTModelForCausalLM(HuggingfacePreTrainedModel, tgu.GenerationM
 
         # TODO: Make a proper way of returning the model output.
         logits = kwargs["logits"]
+
+        tesor_path = pathlib.Path(f"/mnt/datasets/tests/denis/tensors/fast_llm/tensor{self._counter}.pt")
+        if self._counter == 0:
+            if tesor_path.parent.is_dir():
+                shutil.rmtree(tesor_path.parent, ignore_errors=True)
+        tesor_path.parent.mkdir(exist_ok=True, parents=True)
+
+        self._counter += 1
+    
+        torch.save(logits, tesor_path)
 
         if not return_dict:
             outputs = (logits,)
