@@ -251,6 +251,12 @@ class DistributedConfig(Config):
         desc="Ensure the initialization is the same for any distributed configuration.",
         hint=FieldHint.testing,
     )
+    reference_config: "DistributedConfig|None" = Field(
+        default=None,
+        init=False,
+        desc="Pointer to the distributed config this one is an identical copy of.",
+        hint=FieldHint.derived,
+    )
 
     def _validate(self) -> None:
         if self.world_size is None:
@@ -281,76 +287,90 @@ class DistributedConfig(Config):
         if self.tensor_parallel == 1:
             self.sequence_tensor_parallel = False
 
-        self.distributed_dims = {}
+        if self.reference_config is not None:
+            self.reference_config.validate()
+            if self.reference_config.reference_config is not None:
+                self.reference_config = self.reference_config.reference_config
+            assert self.reference_config.reference_config is None
+            self.compare(self.reference_config, ValueError)
+            self.distributed_dims = self.reference_config.distributed_dims
+        else:
+            self.distributed_dims = {}
 
-        self.add_distributed_dim(
-            DistributedDim(name=DistributedDimNames.world, size=self.world_size, rank=self.rank, id_=None, parent=None)
-        )
-        self.add_distributed_dim(
-            DistributedDim(
-                name=DistributedDimNames.data,
-                size=self.data_parallel,
-                rank=self.data_rank,
-                id_=f"x_{self.pipeline_rank}_{self.tensor_rank}",
-                parent=DistributedDimNames.world,
+            self._add_distributed_dim(
+                DistributedDim(
+                    name=DistributedDimNames.world, size=self.world_size, rank=self.rank, id_=None, parent=None
+                )
             )
-        )
-        self.add_distributed_dim(
-            DistributedDim(
-                name=DistributedDimNames.pipeline,
-                size=self.pipeline_parallel,
-                rank=self.pipeline_rank,
-                id_=f"x_{self.data_rank}_{self.tensor_rank}",
-                parent=DistributedDimNames.world,
+            self._add_distributed_dim(
+                DistributedDim(
+                    name=DistributedDimNames.data,
+                    size=self.data_parallel,
+                    rank=self.data_rank,
+                    id_=f"x_{self.pipeline_rank}_{self.tensor_rank}",
+                    parent=DistributedDimNames.world,
+                )
             )
-        )
-        self.add_distributed_dim(
-            DistributedDim(
-                name=DistributedDimNames.tensor,
-                size=self.tensor_parallel,
-                rank=self.tensor_rank,
-                id_=f"x_{self.data_rank}_{self.pipeline_rank}",
-                parent=DistributedDimNames.world,
+            self._add_distributed_dim(
+                DistributedDim(
+                    name=DistributedDimNames.pipeline,
+                    size=self.pipeline_parallel,
+                    rank=self.pipeline_rank,
+                    id_=f"x_{self.data_rank}_{self.tensor_rank}",
+                    parent=DistributedDimNames.world,
+                )
             )
-        )
-        self.add_distributed_dim(
-            DistributedDim(
-                name=DistributedDimNames.sequence_data,
-                size=self.sequence_data_parallel,
-                rank=self.sequence_data_rank,
-                id_=f"{self.batch_data_rank}_{self.pipeline_rank}_{self.tensor_rank}",
-                parent=DistributedDimNames.data,
+            self._add_distributed_dim(
+                DistributedDim(
+                    name=DistributedDimNames.tensor,
+                    size=self.tensor_parallel,
+                    rank=self.tensor_rank,
+                    id_=f"x_{self.data_rank}_{self.pipeline_rank}",
+                    parent=DistributedDimNames.world,
+                )
             )
-        )
-        self.add_distributed_dim(
-            DistributedDim(
-                name=DistributedDimNames.batch_data,
-                size=self.batch_data_parallel,
-                rank=self.batch_data_rank,
-                id_=f"{self.sequence_data_rank}_{self.pipeline_rank}_{self.tensor_rank}",
-                parent=DistributedDimNames.data,
+            self._add_distributed_dim(
+                DistributedDim(
+                    name=DistributedDimNames.sequence_data,
+                    size=self.sequence_data_parallel,
+                    rank=self.sequence_data_rank,
+                    id_=f"{self.batch_data_rank}_{self.pipeline_rank}_{self.tensor_rank}",
+                    parent=DistributedDimNames.data,
+                )
             )
-        )
-        self.add_distributed_dim(
-            DistributedDim(
-                name=DistributedDimNames.tensor_and_sequence_data,
-                size=self.sequence_data_parallel * self.tensor_parallel,
-                rank=self.tensor_rank + self.sequence_data_rank * self.tensor_parallel,
-                id_=f"{self.batch_data_rank}_{self.pipeline_rank}",
-                parent=(
-                    DistributedDimNames.tensor
-                    if self.sequence_data_parallel == 1
-                    else DistributedDimNames.sequence_data if self.tensor_parallel == 1 else DistributedDimNames.world
-                ),
+            self._add_distributed_dim(
+                DistributedDim(
+                    name=DistributedDimNames.batch_data,
+                    size=self.batch_data_parallel,
+                    rank=self.batch_data_rank,
+                    id_=f"{self.sequence_data_rank}_{self.pipeline_rank}_{self.tensor_rank}",
+                    parent=DistributedDimNames.data,
+                )
             )
-        )
+            self._add_distributed_dim(
+                DistributedDim(
+                    name=DistributedDimNames.tensor_and_sequence_data,
+                    size=self.sequence_data_parallel * self.tensor_parallel,
+                    rank=self.tensor_rank + self.sequence_data_rank * self.tensor_parallel,
+                    id_=f"{self.batch_data_rank}_{self.pipeline_rank}",
+                    parent=(
+                        DistributedDimNames.tensor
+                        if self.sequence_data_parallel == 1
+                        else (
+                            DistributedDimNames.sequence_data
+                            if self.tensor_parallel == 1
+                            else DistributedDimNames.world
+                        )
+                    ),
+                )
+            )
 
         super()._validate()
 
         Assert.in_range(self.rank, 0, self.world_size)
         Assert.in_range(self.local_rank, 0, self.local_world_size)
 
-    def add_distributed_dim(self, distributed_dim: DistributedDim) -> None:
+    def _add_distributed_dim(self, distributed_dim: DistributedDim) -> None:
         if distributed_dim.name in self.distributed_dims:
             Assert.eq(distributed_dim, self.distributed_dims[distributed_dim.name])
         else:

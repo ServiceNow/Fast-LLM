@@ -7,10 +7,11 @@ from fast_llm.engine.multi_stage.config import FastLLMModelConfig, PretrainedFas
 from fast_llm.engine.training.config import TrainerConfig
 from fast_llm.layers.language_model.config import LanguageModelArchitectureConfig, LanguageModelBaseConfig
 from fast_llm.models.gpt.megatron import set_megatron_distributed_seeds
+from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
     from fast_llm.models.gpt.huggingface import HuggingfaceGPTModelForCausalLM
-    from fast_llm.models.gpt.model import GPTModel
+    from fast_llm.models.gpt.model import GPTInferenceRunner, GPTModel
     from fast_llm.models.gpt.trainer import GPTTrainer
 
 
@@ -129,6 +130,8 @@ class PretrainedGPTModelConfig(PretrainedFastLLMModelConfig):
 @config_class()
 class GPTTrainerConfig(PretrainedGPTModelConfig, TrainerConfig):
     data: GPTDataConfig = FieldUpdate(default_factory=GPTDataConfig)
+    # TODO: Use dynamic model type?
+    reference_models: dict[str, PretrainedGPTModelConfig] = FieldUpdate()
 
     def _validate(self) -> None:
         if self.batch.sequence_length is None:
@@ -136,6 +139,8 @@ class GPTTrainerConfig(PretrainedGPTModelConfig, TrainerConfig):
             self.batch.sequence_length = self.model.base_model.max_position_embeddings
         if self.model.base_model.use_megatron_initialization:
             set_megatron_distributed_seeds(self.model.distributed)
+        for reference_model in self.reference_models.values():
+            Assert.none(reference_model.model.base_model.cross_entropy_splits)
         super()._validate()
 
     @classmethod
@@ -143,3 +148,9 @@ class GPTTrainerConfig(PretrainedGPTModelConfig, TrainerConfig):
         from fast_llm.models.gpt.trainer import GPTTrainer
 
         return GPTTrainer
+
+    @classmethod
+    def get_inference_runner_class(cls) -> type["GPTInferenceRunner"]:
+        from fast_llm.models.gpt.model import GPTInferenceRunner
+
+        return GPTInferenceRunner
