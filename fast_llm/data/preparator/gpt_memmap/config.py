@@ -3,7 +3,7 @@ import pathlib
 import typing
 
 from fast_llm.config import Config, Field, FieldHint, check_field, config_class
-from fast_llm.data.config import TokenizerConfig
+from fast_llm.data.config import MultiModalProcessorConfig
 from fast_llm.data.preparator.config import DatasetPreparatorConfig
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.utils import Assert
@@ -153,9 +153,9 @@ class GPTMemmapDatasetPreparatorConfig(DatasetPreparatorConfig):
         desc="Configuration for the dataset.",
         hint=FieldHint.feature,
     )
-    tokenizer: TokenizerConfig = Field(
-        default_factory=TokenizerConfig,
-        desc="Configuration for the tokenizer.",
+    data_processor: MultiModalProcessorConfig = Field(
+        default_factory=MultiModalProcessorConfig,
+        desc="Configuration for data processing. Describes the tokenizer and image processor",
         hint=FieldHint.feature,
     )
     splits: dict[str, float] | None = Field(

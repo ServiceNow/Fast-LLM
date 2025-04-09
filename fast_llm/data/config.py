@@ -73,3 +73,21 @@ class ImageProcessorConfig(Config):
         desc="Diminisher factor for pixel normalization",
         hint=FieldHint.optional,
     )
+
+
+@config_class()
+class MultiModalProcessorConfig(Config):
+    """
+    Wrapper config that stores the `ImageProcessorConfig` and `TokenizerConfig`
+    """
+
+    tokenizer: TokenizerConfig = Field(
+        default_factory=TokenizerConfig,
+        desc="Configuration for the tokenizer.",
+        hint=FieldHint.core,
+    )
+    image_processor: ImageProcessorConfig = Field(
+        default_factory=ImageProcessorConfig,
+        desc="Configuration for the image processor.",
+        hint=FieldHint.core,
+    )

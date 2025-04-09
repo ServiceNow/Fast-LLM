@@ -38,3 +38,6 @@ class ImageProcessor:
     def normalize(self, image: torch.Tensor) -> torch.Tensor:
         # Normalize the image using the mean and std
         return F.normalize(image, mean=self.mean, std=self.std)
+
+    def get_num_patches(self, image: torch.Tensor) -> torch.Tensor:
+        return (image.size(0) // self.patch_size[0]) * (image.size(1) // self.patch_size[1])
