@@ -334,3 +334,6 @@ def test_hybrid_model_train_with_fast_mode(distributed_config, block_pattern, us
 #         },
 #         losses=losses,
 #     )
+
+if __name__ == "__main__":
+    pytest.main(["-s", __file__])

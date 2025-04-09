@@ -104,21 +104,15 @@ class MambaLayer(torch.nn.Module):
         self.activation = "silu"
         self.act = torch.nn.SiLU()
 
+        self.x_proj = Linear(
+            td_inner,
+            td_x_proj,
+            weight_init_method=kaiming_init_(td_inner.size),
+            bias=False,
+            **factory_kwargs,
+        )
         if self.use_fast_path:
-            self.x_proj_weight = ParameterMeta.from_dims(
-                (td_x_proj, td_inner),
-                init_method=kaiming_init_(td_x_proj.size),
-            )
-
-            self.x_proj_bias = None
-        else:
-            self.x_proj = Linear(
-                td_inner,
-                td_x_proj,
-                weight_init_method=kaiming_init_(td_inner.size),
-                bias=False,
-                **factory_kwargs,
-            )
+            self.x_proj.weight.auto_grad_accumulation = True
 
         # TODO: the weights are innitialized a bit differently here https://github.com/state-spaces/mamba/blob/0cce0fa645f100f00620ddf2333c2b7712abfdec/mamba_ssm/modules/mamba_simple.py#L82
         self.dt_proj_weight = ParameterMeta.from_dims(
@@ -146,24 +140,17 @@ class MambaLayer(torch.nn.Module):
             init_method=init_ones_,
         )
 
+        self.out_proj = Linear(
+            td_inner,
+            td_model,
+            bias=False,  # TODO: note, if bias is used there is a problem in the MambaInnerFn.backward for the bias grads. I think this bias is not used in other mamba repos.
+            weight_init_method=kaiming_init_(td_model.size),
+            **factory_kwargs,
+        )
         if self.use_fast_path:
+            self.out_proj.weight.auto_grad_accumulation = True
 
-            self.out_proj_weight = ParameterMeta.from_dims(
-                (td_model, td_inner),
-                init_method=kaiming_init_(td_model.size),
-            )
-
-            self.out_proj_bias = None
-        else:
-            self.out_proj = Linear(
-                td_inner,
-                td_model,
-                bias=False,  # TODO: note, if bias is used there is a problem in the MambaInnerFn.backward for the bias grads. I think this bias is not used in other mamba repos.
-                weight_init_method=kaiming_init_(td_model.size),
-                **factory_kwargs,
-            )
-
-    def forward(self, hidden_states):
+    def forward(self, hidden_states, **kwargs):
         batch, seqlen, dim = hidden_states.shape
         # print("IN MAMBA LAYER FORWARD: ", hidden_states.shape)
         conv_state, ssm_state = None, None
@@ -179,15 +166,15 @@ class MambaLayer(torch.nn.Module):
 
         A = -torch.exp(self.A_log.float())  # (d_inner, d_state)
         # In the backward pass we write dx and dz next to each other to avoid torch.cat
-        if self.use_fast_path:  # Doesn't support outputting the states
+        if self.use_fast_path:  # Doesn't support outputting the states, only for training
             out = mamba_inner_fn(
                 xz,
                 self.conv1d_weight,
                 self.conv1d_bias,
-                self.x_proj_weight,
+                self.x_proj.weight,
                 self.dt_proj_weight,
-                self.out_proj_weight,
-                self.out_proj_bias,
+                self.out_proj.weight,
+                self.out_proj.bias,  # is None here
                 A,
                 None,  # input-dependent B
                 None,  # input-dependent C

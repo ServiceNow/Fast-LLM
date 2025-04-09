@@ -111,6 +111,9 @@ class HybridSSMBaseModelConfig(LanguageModelBaseConfig, HybridArchitectureConfig
         strict: bool = True,
         flat: bool = False,
     ) -> typing.Self:
+        if "block_pattern" in default and isinstance(default["block_pattern"], dict):
+            # Not sure why, but the block pattern can sometime sbe loaded as a dict (serialization related)
+            default["block_pattern"] = list(default["block_pattern"].values())
         # TODO v0.3: Remove backward compatibility fix
         if "match_megatron" in default:
             assert "use_megatron_initialization" not in default
@@ -122,13 +125,17 @@ class HybridSSMBaseModelConfig(LanguageModelBaseConfig, HybridArchitectureConfig
             del default["fused_mlp"]
         return super()._from_dict(default, strict, flat)
 
-    def __post_init__(self):
-        super().__post_init__()
+    def _validate(self):
         if len(self.block_pattern) == 0:
             logger.warning(f"No block pattern provided, using default_block [{self.default_block}]")
             self.block_pattern = [self.default_block] * self.transformer.num_layers
 
-    def _validate(self):
+        Assert.eq(len(self.block_pattern), self.transformer.num_layers)
+        Assert.custom(
+            lambda _: all(block_type in ["t", "m", "m2"] for block_type in self.block_pattern),
+            f"Invalid block type: {self.block_pattern}. Must be 't' or 'm' or 'm2'",
+        )
+
         super()._validate()
 
 

@@ -35,18 +35,6 @@ class HybridSSMBaseModel[ConfigType: HybridSSMBaseModelConfig](GPTBaseModel[Conf
         self.SSM_BLOCK_CLS = LambaBlock  # TODO: extend to other block types if needed
         super().__init__(config, distributed_config)
 
-        # Validate block pattern length
-        if len(config.block_pattern) != config.transformer.num_layers:
-            raise ValueError(
-                f"Block pattern length ({len(config.block_pattern)}) must match "
-                f"number of layers ({config.transformer.num_layers})"
-            )
-
-        # Validate block pattern values
-        for block_type in config.block_pattern:
-            if block_type not in ["t", "m", "m2"]:
-                raise ValueError(f"Invalid block type: {block_type}. Must be 't' or 'm' or 'm2'")
-
     def get_layers(self) -> list[Layer]:
         """
         Create a list of layers for the model, interleaving Transformer and Mamba blocks
