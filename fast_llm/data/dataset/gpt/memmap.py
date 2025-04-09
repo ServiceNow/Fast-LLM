@@ -38,9 +38,13 @@ class GPTMemmapDataset(GPTIndexedDataset):
         with self._prefix.with_suffix(".idx").open("rb") as stream:
             Assert.eq(stream.read(9), MEMMAP_INDEX_HEADER, msg=f"File: {stream.name}")
             self._version = struct.unpack("<Q", stream.read(8))[0]
-            assert self._version in [1, 2], f"Unsupported version for gpt_memmap dataset: {self._version}."
-            if self._version == 2:
+            assert self._version in [1, 2, 3], f"Unsupported version for gpt_memmap dataset: {self._version}."
+            # TODO Soham: similar flag for _has_images. Bump version
+            if self._version >= 2:
                 self._has_spans = struct.unpack("<B", stream.read(1))[0]
+
+            if self._version >= 3:
+                self._has_images = struct.unpack("<B", stream.read(1))[0]
 
             self._dtype = MEMMAP_DTYPES[struct.unpack("<B", stream.read(1))[0]].numpy
             self._num_documents = struct.unpack("<Q", stream.read(8))[0]
@@ -63,7 +67,7 @@ class GPTMemmapDataset(GPTIndexedDataset):
         )
 
         self._spans = None
-        if self._has_spans and self._version == 2:
+        if self._has_spans and self._version >= 2:
             self._spans = []
             self._num_spans = np.frombuffer(
                 self._index_bin_buffer,
@@ -82,6 +86,8 @@ class GPTMemmapDataset(GPTIndexedDataset):
                         offset=span_offset + self._num_spans_cumsum[idx] * 2 * np.dtype(np.int32).itemsize,
                     ).reshape(-1, 2)
                 )
+        if self._has_images and self._version >= 3:
+            self._image_sizes = np.frombuffer()
 
         self._bin_buffer_mmap = np.memmap(self._prefix.with_suffix(".bin"), mode="r", order="C")
         self._bin_buffer = memoryview(self._bin_buffer_mmap)
@@ -151,7 +157,11 @@ class GPTMemmapDataset(GPTIndexedDataset):
         # Initialize metadata
         dtype = None
         num_documents = 0
-        lengths = []
+        doc_lengths = []
+        n_images = []
+        im_lengths = []
+        im_positions = []
+        total_images = 0
         pointers = []
         offset = 0
         # number of spans for each document
@@ -160,8 +170,10 @@ class GPTMemmapDataset(GPTIndexedDataset):
 
         prefix = pathlib.Path(prefix)
         prefix.parent.mkdir(parents=True, exist_ok=True)
+        pathlib.Path(prefix + "_images")
 
         # Write the binary data file (.bin) lazily
+        # TODO Soham: append image tokens along with text tokens
         with prefix.with_suffix(".bin").open("wb") as bin_stream:
             for document in documents:
                 # Infer dtype from the first document
@@ -174,10 +186,18 @@ class GPTMemmapDataset(GPTIndexedDataset):
 
                 # Write document to binary file
                 bin_stream.write(document.token_ids.tobytes(order="C"))
+                if document.images:
+                    n_images.append(len(document.images))
+                    total_images += len(document.images)
+                    for image, image_position in zip(document.images, document.image_positions):
+                        im_lengths.append(image.size)
+                        im_positions.append(document.image_positions)
+                        bin_stream.write(image.tobytes(order="C"))
 
                 # Update metadata
                 doc_length = len(document.token_ids)
-                lengths.append(doc_length)
+                doc_lengths.append(doc_length)
+                im_lengths.append()
                 pointers.append(offset)
                 if document.loss_masking_spans is not None:
                     num_spans.append(len(document.loss_masking_spans))
@@ -186,7 +206,7 @@ class GPTMemmapDataset(GPTIndexedDataset):
                 num_documents += 1
 
         # Finalize metadata arrays
-        lengths = np.array(lengths, dtype=np.int32)
+        doc_lengths = np.array(doc_lengths, dtype=np.int32)
         pointers = np.array(pointers, dtype=np.int64)
         num_spans = np.array(num_spans, dtype=np.int32)
         if len(spans) > 0:
@@ -194,27 +214,46 @@ class GPTMemmapDataset(GPTIndexedDataset):
         else:
             spans = np.array(spans, dtype=np.int32)
 
+        # TODO Soham: else condition might not be necessary
+        if total_images:
+            n_images = np.array(n_images, dtype=np.int32)
+            im_lengths = np.array(im_lengths, dtype=np.int32)
+            im_positions = np.array(im_positions, dtype=np.int32)
+        else:
+            n_images = np.array([])
+            im_lengths = np.array([])
+            im_positions = np.array([])
+
         # Write the index file (.idx)
         with prefix.with_suffix(".idx").open("wb") as idx_stream:
             idx_stream.write(MEMMAP_INDEX_HEADER)
             # Indicates the version
-            # Version 2 optionally adds loss-masking spans
-            idx_stream.write(struct.pack("<Q", 2))
+            # Version 2 onwards optionally add loss-masking spans
+            # Version 3 onwards optionally add images
+            idx_stream.write(struct.pack("<Q", 3))
             # Flag to indicate whether loss-masking spans are present
             idx_stream.write(struct.pack("<B", 1 if spans.size > 0 else 0))
+            # Flag to indicate whether images are present
+            idx_stream.write(struct.pack("<B", 1 if total_images > 0 else 0))
             # Data type
             idx_stream.write(struct.pack("<B", MEMMAP_DTYPES_INV[DataType.from_numpy(dtype.type)]))
             # "Number of sequences", same as documents in our case
             idx_stream.write(struct.pack("<Q", num_documents))
             # "Number of documents", needs a +1 for some reason
             idx_stream.write(struct.pack("<Q", num_documents + 1))
-            # Sequence (document) lengths
-            idx_stream.write(lengths.tobytes(order="C"))
+            # Sequence (document) doc_lengths
+            idx_stream.write(doc_lengths.tobytes(order="C"))
             # Sequence (document) begin offsets in the bin file
             idx_stream.write(pointers.tobytes(order="C"))
             # Number of spans per document
             idx_stream.write(num_spans.tobytes(order="C"))
             # Span indices for each document
             idx_stream.write(spans.tobytes(order="C"))
+            # Number of images per document
+            idx_stream.write(n_images.tobytes(order="C"))
+            # n_pixels * 3 per image
+            idx_stream.write(im_lengths.tobytes(order="C"))
+            # Position of each image in the document
+            idx_stream.write(im_positions.tobytes(order="C"))
             # Document indices, unused but needed for compatibility with Megatron-LM
             idx_stream.write(np.arange(num_documents + 1, dtype=np.int64).tobytes(order="C"))
