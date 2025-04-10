@@ -72,7 +72,7 @@ class GPTMemmapDataset(GPTIndexedDataset):
 
         # read spans
         self._spans = None
-        if self._has_spans and self._version == 2:
+        if self._has_spans and self._version in {2, 3}:
             self._spans = []
             self._num_spans = np.frombuffer(
                 self._index_bin_buffer,
@@ -270,7 +270,6 @@ class GPTMemmapDataset(GPTIndexedDataset):
             spans = np.vstack(spans, dtype=np.int32)
         else:
             spans = np.array(spans, dtype=np.int32)
-
         chosen_spans = np.array(chosen_spans, dtype=np.int32).reshape(-1, 2)
         rejected_spans = np.array(rejected_spans, dtype=np.int32).reshape(-1, 2)
 
