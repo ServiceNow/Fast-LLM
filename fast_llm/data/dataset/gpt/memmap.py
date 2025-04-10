@@ -108,8 +108,10 @@ class GPTMemmapDataset(GPTIndexedDataset):
                         offset=chosen_span_offset + idx * 2 * np.dtype(np.int32).itemsize,
                     )
                 )
-            
-            rejected_span_offset = offset + self._document_sizes.nbytes + self._pointers.nbytes + np.array(self._chosen_spans).nbytes
+
+            rejected_span_offset = (
+                offset + self._document_sizes.nbytes + self._pointers.nbytes + np.array(self._chosen_spans).nbytes
+            )
             for idx in range(self._num_documents):
                 self._rejected_spans.append(
                     np.frombuffer(
@@ -142,7 +144,12 @@ class GPTMemmapDataset(GPTIndexedDataset):
             del self._index_bin_buffer_mmap
 
     def get(
-        self, idx: int, offset: int = 0, length: int | None = None, use_loss_masking_spans: bool = False, use_preference_loss_masking_spans: bool = False
+        self,
+        idx: int,
+        offset: int = 0,
+        length: int | None = None,
+        use_loss_masking_spans: bool = False,
+        use_preference_loss_masking_spans: bool = False,
     ) -> GPTSample:
         token_ids = np.frombuffer(
             self._bin_buffer,
@@ -160,39 +167,37 @@ class GPTMemmapDataset(GPTIndexedDataset):
             ]
 
             # subtract by offset to normalize span boundaries
-            sample_spans[:, 0] = np.maximum(sample_spans[:, 0], offset) - offset # offset 
+            sample_spans[:, 0] = np.maximum(sample_spans[:, 0], offset) - offset  # offset
             sample_spans[:, 1] = np.minimum(sample_spans[:, 1], offset + len(token_ids) - 1) - offset
-        
-        chosen_spans = None
-        rejected_spans = None
+
+        chosen_span = None
+        rejected_span = None
         if use_preference_loss_masking_spans and self._chosen_spans is not None and self._rejected_spans is not None:
-            chosen_spans = self._chosen_spans[idx]
+            chosen_span = self._chosen_spans[idx]
 
             # filter spans that are outside the range of the selected tokens in the document
-            chosen_spans = chosen_spans[
-                (chosen_spans[0] < offset + len(token_ids)) & (chosen_spans[1] >= offset)
-            ][0]
+            chosen_span = chosen_span[(chosen_span[0] < offset + len(token_ids)) & (chosen_span[1] >= offset)][0]
 
             # subtract by offset to normalize span boundaries
-            chosen_spans[0] = np.maximum(chosen_spans[0], offset) - offset # offset 
-            chosen_spans[1] = np.minimum(chosen_spans[1], offset + len(token_ids) - 1) - offset
+            chosen_span[0] = np.maximum(chosen_span[0], offset) - offset  # offset
+            chosen_span[1] = np.minimum(chosen_span[1], offset + len(token_ids) - 1) - offset
 
-            rejected_spans = self._rejected_spans[idx]
+            rejected_span = self._rejected_spans[idx]
 
             # filter spans that are outside the range of the selected tokens in the document
-            rejected_spans = rejected_spans[
-                (rejected_spans[0] < offset + len(token_ids)) & (rejected_spans[1] >= offset)
-            ][0]
+            rejected_span = rejected_span[(rejected_span[0] < offset + len(token_ids)) & (rejected_span[1] >= offset)][
+                0
+            ]
 
             # subtract by offset to normalize span boundaries
-            rejected_spans[0] = np.maximum(rejected_spans[0], offset) - offset # offset 
-            rejected_spans[1] = np.minimum(rejected_spans[1], offset + len(token_ids) - 1) - offset
+            rejected_span[0] = np.maximum(rejected_span[0], offset) - offset  # offset
+            rejected_span[1] = np.minimum(rejected_span[1], offset + len(token_ids) - 1) - offset
 
         return GPTSample(
-            token_ids=token_ids, 
-            loss_masking_spans=sample_spans, 
-            chosen_loss_masking_spans=chosen_spans, 
-            rejected_loss_masking_spans=rejected_spans
+            token_ids=token_ids,
+            loss_masking_spans=sample_spans,
+            chosen_loss_masking_span=chosen_span,
+            rejected_loss_masking_span=rejected_span,
         )
 
     @property
@@ -255,10 +260,10 @@ class GPTMemmapDataset(GPTIndexedDataset):
                 if document.loss_masking_spans is not None:
                     num_spans.append(len(document.loss_masking_spans))
                     spans.append(document.loss_masking_spans)
-                if document.chosen_loss_masking_spans is not None:
-                    chosen_spans.append(document.chosen_loss_masking_spans)
-                if document.rejected_loss_masking_spans is not None:
-                    rejected_spans.append(document.rejected_loss_masking_spans)
+                if document.chosen_loss_masking_span is not None:
+                    chosen_spans.append(document.chosen_loss_masking_span)
+                if document.rejected_loss_masking_span is not None:
+                    rejected_spans.append(document.rejected_loss_masking_span)
                 offset += doc_length * np.dtype(dtype).itemsize
                 num_documents += 1
 
