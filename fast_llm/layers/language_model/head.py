@@ -149,11 +149,10 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
         labels = kwargs[LanguageModelKwargs.labels] if LanguageModelKwargs.labels in kwargs else None
         # MTP: Shift the labels
-        labels_sequence_length = labels.shape[1] if labels is not None else 0
         labels = (
             labels[
                 :,
-                self._prediction_distance : labels_sequence_length
+                self._prediction_distance : labels.shape[1]
                 - self._config.prediction_heads
                 + 1
                 + self._prediction_distance,
@@ -166,12 +165,7 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
         do_grad = labels is not None and self.training
         input_ = input_.detach().requires_grad_(do_grad)
         with torch.enable_grad():
-            # MTP: truncate the input
-            # if self._prediction_distance > 0:
-            #     truncated_input = input_[:, : -self._prediction_distance, :].contiguous()
-            # else:
-            truncated_input = input_
-            ln_output = self.final_norm(truncated_input)
+            ln_output = self.final_norm(input_)
 
         grad_output = kwargs[TransformerKwargs.grad_output] / (
             self._group_size if self._sequence_parallel_logits else 1
