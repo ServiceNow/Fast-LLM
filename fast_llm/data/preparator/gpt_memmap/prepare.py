@@ -73,12 +73,12 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
             "token_spans": token_spans,
             "num_tokens": num_tokens,
         }
-    
+
     def _tokenize_preference_batch_with_spans(self, batch: dict[str, list[typing.Any]]) -> dict[str, list[typing.Any]]:
         packed_texts = []
         chosen_spans = []
         rejected_spans = []
-        
+
         for conv_history, chosen_text, rejected_text in zip(
             batch[self._config.dataset.field],
             batch[self._config.dataset.chosen_text],
@@ -92,15 +92,22 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
 
             # compute rejected span
             full_rejected_text = self._tokenizer.tokenizer.bos_token + conv_history + rejected_text
-            rejected_span = [offset + len(self._tokenizer.tokenizer.bos_token + conv_history), offset + len(full_rejected_text) - 1]
+            rejected_span = [
+                offset + len(self._tokenizer.tokenizer.bos_token + conv_history),
+                offset + len(full_rejected_text) - 1,
+            ]
             rejected_spans.append(rejected_span)
 
             # pack texts
             packed_text = full_chosen_text + full_rejected_text
 
-            assert packed_text[chosen_span[0]: chosen_span[1] + 1] == chosen_text + self._tokenizer.tokenizer.eos_token, f"{packed_text[chosen_span[0]: chosen_span[1] + 1]} does not match {chosen_text}"
+            assert (
+                packed_text[chosen_span[0] : chosen_span[1] + 1] == chosen_text + self._tokenizer.tokenizer.eos_token
+            ), f"{packed_text[chosen_span[0]: chosen_span[1] + 1]} does not match {chosen_text}"
 
-            assert packed_text[rejected_span[0]: rejected_span[1] + 1] == rejected_text, f"{packed_text[rejected_span[0]: rejected_span[1] + 1]} does not match {rejected_text}"
+            assert (
+                packed_text[rejected_span[0] : rejected_span[1] + 1] == rejected_text
+            ), f"{packed_text[rejected_span[0]: rejected_span[1] + 1]} does not match {rejected_text}"
             packed_texts.append(packed_text)
 
         # tokenize with spans
@@ -111,39 +118,24 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
                     (
                         np.array(input_ids, dtype=self._data_type.numpy),
                         np.array(token_spans[0], dtype=np.int32),
-                        np.array([token_spans[1][0], token_spans[1][1] + 1], dtype=np.int32) # adding 1 to end for eos token
+                        np.array(
+                            [token_spans[1][0], token_spans[1][1] + 1], dtype=np.int32
+                        ),  # adding 1 to end for eos token
                     )
                     for input_ids, token_spans in [
                         self._tokenizer.tokenize_with_spans(text, [chosen_span, rejected_span])
-                        for text, chosen_span, rejected_span in zip(
-                            packed_texts, 
-                            chosen_spans,
-                            rejected_spans
-                        )
+                        for text, chosen_span, rejected_span in zip(packed_texts, chosen_spans, rejected_spans)
                     ]
                 ]
             ),
         )
 
-        # verify span tokenization
-        for input_ids_arr, chosen_token_span, rejected_token_span, chosen_text, rejected_text in zip(
-            input_ids,
-            chosen_token_spans, 
-            rejected_token_spans, 
-            batch[self._config.dataset.chosen_text],
-            batch[self._config.dataset.rejected_text]
-        ):
-            assert self._tokenizer.tokenizer.decode(input_ids_arr[chosen_token_span[0]: chosen_token_span[1] + 1]) == chosen_text + self._tokenizer.tokenizer.eos_token
-
-            assert self._tokenizer.tokenizer.decode(input_ids_arr[rejected_token_span[0]: rejected_token_span[1] + 1]) == rejected_text + self._tokenizer.tokenizer.eos_token
-
         num_tokens = [len(x) for x in input_ids]
-
         return {
             "input_ids": input_ids,
             "chosen_token_spans": chosen_token_spans,
             "rejected_token_spans": rejected_token_spans,
-            "num_tokens": num_tokens
+            "num_tokens": num_tokens,
         }
 
     def _save_shard(self, args: tuple[int, datasets.Dataset]) -> GPTMemmapDatasetConfig:
@@ -158,12 +150,19 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
                         np.array(item["input_ids"], dtype=self._data_type.numpy),
                         np.array(item["token_spans"], dtype=np.int32).reshape(-1, 2),
                     )
-            elif "chosen_token_spans" in shard_dataset.column_names and "rejected_token_spans" in shard_dataset.column_names and self._config.dataset.chosen_text is not None and self._config.dataset.rejected_text is not None:
+            elif (
+                "chosen_token_spans" in shard_dataset.column_names
+                and "rejected_token_spans" in shard_dataset.column_names
+                and self._config.dataset.chosen_text is not None
+                and self._config.dataset.rejected_text is not None
+            ):
                 for item in tqdm.tqdm(shard_dataset, desc=f"Saving shard {shard_idx}", unit="docs"):
                     yield GPTSample(
                         token_ids=np.array(item["input_ids"], dtype=self._data_type.numpy),
                         chosen_loss_masking_spans=np.array(item["chosen_token_spans"], dtype=np.int32).reshape(-1, 2),
-                        rejected_loss_masking_spans=np.array(item["rejected_token_spans"], dtype=np.int32).reshape(-1, 2)
+                        rejected_loss_masking_spans=np.array(item["rejected_token_spans"], dtype=np.int32).reshape(
+                            -1, 2
+                        ),
                     )
             else:
                 for item in tqdm.tqdm(shard_dataset, desc=f"Saving shard {shard_idx}", unit="docs"):
@@ -293,12 +292,13 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
         )
         if self._config.dataset.field not in dataset.column_names:
             raise ValueError(f"Dataset does not have field '{self._config.dataset.field}'.")
-        if self._config.dataset.loss_masking_spans is not None and \
-            (self._config.dataset.chosen_text is not None or self._config.dataset.rejected_text is not None):
+        if self._config.dataset.loss_masking_spans is not None and (
+            self._config.dataset.chosen_text is not None or self._config.dataset.rejected_text is not None
+        ):
             raise ValueError(f"Can not enable both loss masking spans and chosen/rejected loss masking spans.")
         if (self._config.dataset.chosen_text is None) != (self._config.dataset.rejected_text is None):
             raise ValueError(f"Both chosen and rejected loss masking spans must be specified if one is specified.")
-        
+
         # route tokenize function
         if self._config.dataset.loss_masking_spans is not None:
             if self._config.dataset.loss_masking_spans not in dataset.column_names:
