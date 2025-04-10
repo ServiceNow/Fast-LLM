@@ -184,6 +184,50 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
             self._wandb.alert("Testing results", formatted_metrics, "WARN")
             # TODO: This may erase some metrics.
             self._wandb.log_metrics(self._completed_steps, metrics)
+    
+    def _run_validation(self, _completed_steps, done: bool, evaluation_iterators: dict, metrics: dict):
+        if PhaseType.validation in self._samples_per_split and (
+            done
+            or any(
+                evaluation_conf.enabled(_completed_steps)
+                for evaluation_conf in self._config.training.evaluations.values()
+            )
+        ):
+            formatted_metrics = []
+            for dataset_name, evaluation_conf in self._config.training.evaluations.items():
+                if not evaluation_conf.enabled(_completed_steps):
+                    continue
+                if evaluation_iterators[dataset_name] is None:
+                    evaluation_iterators[dataset_name] = self._get_data_iterator(
+                        dataset_name, self._get_completed_evaluation_steps(dataset_name)
+                    )
+                # TODO: formatting metric category as Validation.evaluation_dataset_name
+                #       maybe format each metric with evaluation_dataset_name prefix instead?
+                # TODO: setting performance metrics per evaluation dataset
+                #       maybe to set aggregate performance metrics for all evaluations datasets?
+                metric_key = f"{PhaseType.validation.value}.{dataset_name}"
+                metrics[metric_key] = self._evaluate(
+                    data_iterator=evaluation_iterators[dataset_name],
+                    phase=PhaseType.validation,
+                    num_iters=evaluation_conf.iterations,
+                    begin_iter=self._get_completed_evaluation_steps(dataset_name),
+                    dataset_name=dataset_name,
+                )
+                formatted_metrics.append(
+                    format_metrics(
+                        metrics[metric_key],
+                        self._loss_defs,
+                        PhaseType.validation,
+                        dataset_name=dataset_name,
+                    )
+                )
+
+            if len(formatted_metrics) > 0:
+                formatted_metrics = "\n".join(formatted_metrics)
+                log_main_rank(formatted_metrics)
+                if self._config.training.wandb.alert.enabled(_completed_steps):
+                    self._wandb.alert("Validation results", formatted_metrics, "INFO")
+
 
     def _train(self) -> tuple[bool, dict[PhaseType, dict[str, typing.Any]]]:
         # Tracking loss.
@@ -215,8 +259,9 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
         last_iteration = start_iteration
         stop = False
         with profiler:
+            # Validation step in the beggining of training.
+            self._run_validation(0, False, evaluation_iterators, {})
             while not stop:
-                # Iteration starts at 1, so we increment at the beginning.
                 self._completed_steps += 1
                 is_logging = self._config.training.logs.enabled(self._completed_steps)
 
@@ -304,47 +349,7 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
                 stop = done or self._config.training.shutdown.enabled(self._completed_steps)
                 # Evaluation
                 # TODO: Adjust valid iterator length.
-                if PhaseType.validation in self._samples_per_split and (
-                    done
-                    or any(
-                        evaluation_conf.enabled(self._completed_steps)
-                        for evaluation_conf in self._config.training.evaluations.values()
-                    )
-                ):
-                    formatted_metrics = []
-                    for dataset_name, evaluation_conf in self._config.training.evaluations.items():
-                        if not evaluation_conf.enabled(self._completed_steps):
-                            continue
-                        if evaluation_iterators[dataset_name] is None:
-                            evaluation_iterators[dataset_name] = self._get_data_iterator(
-                                dataset_name, self._get_completed_evaluation_steps(dataset_name)
-                            )
-                        # TODO: formatting metric category as Validation.evaluation_dataset_name
-                        #       maybe format each metric with evaluation_dataset_name prefix instead?
-                        # TODO: setting performance metrics per evaluation dataset
-                        #       maybe to set aggregate performance metrics for all evaluations datasets?
-                        metric_key = f"{PhaseType.validation.value}.{dataset_name}"
-                        metrics[metric_key] = self._evaluate(
-                            data_iterator=evaluation_iterators[dataset_name],
-                            phase=PhaseType.validation,
-                            num_iters=evaluation_conf.iterations,
-                            begin_iter=self._get_completed_evaluation_steps(dataset_name),
-                            dataset_name=dataset_name,
-                        )
-                        formatted_metrics.append(
-                            format_metrics(
-                                metrics[metric_key],
-                                self._loss_defs,
-                                PhaseType.validation,
-                                dataset_name=dataset_name,
-                            )
-                        )
-
-                    if len(formatted_metrics) > 0:
-                        formatted_metrics = "\n".join(formatted_metrics)
-                        log_main_rank(formatted_metrics)
-                        if self._config.training.wandb.alert.enabled(self._completed_steps):
-                            self._wandb.alert("Validation results", formatted_metrics, "INFO")
+                self._run_validation(self._completed_steps, done, evaluation_iterators, metrics)
 
                 if is_main_rank() and metrics:
                     self._wandb.log_metrics(self._completed_steps, metrics)
