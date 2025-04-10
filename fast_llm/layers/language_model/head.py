@@ -10,8 +10,9 @@ from fast_llm.engine.base_model.base_model import Layer
 from fast_llm.engine.config_utils.tensor_space import DefaultDimNames, TensorDim, TensorSpace
 from fast_llm.engine.distributed.config import DistributedDimNames
 from fast_llm.functional.autograd import grad_is_context, wrap_forward_backward
-from fast_llm.functional.config import CrossEntropyImpl, TritonConfig
+from fast_llm.functional.config import CrossEntropyImpl, LossFunctionType, TritonConfig
 from fast_llm.functional.cross_entropy import cross_entropy_forward_backward
+from fast_llm.functional.dpo import compute_simplified_dpo_loss
 from fast_llm.functional.linear import output_parallel_linear_backward, output_parallel_linear_forward
 from fast_llm.layers.common.auxiliary_loss import AuxiliaryLoss, z_loss
 from fast_llm.layers.language_model.config import (
@@ -78,14 +79,20 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
 
         self._init_output_weights(hidden_dim, config)
 
-        self._cross_entropy_impl = config.cross_entropy_impl
-        if self._cross_entropy_impl == CrossEntropyImpl.auto:
-            if self._parallel_embeddings:
-                self._cross_entropy_impl = CrossEntropyImpl.fused
-            elif TritonConfig.TRITON_ENABLED:
-                self._cross_entropy_impl = CrossEntropyImpl.triton
-            else:
-                self._cross_entropy_impl = CrossEntropyImpl.fused
+        self._loss_function_type = config.loss_function_type
+        if self._loss_function_type == LossFunctionType.cross_entropy:
+            self._cross_entropy_impl = config.cross_entropy_impl
+            if self._cross_entropy_impl == CrossEntropyImpl.auto:
+                if self._parallel_embeddings:
+                    self._cross_entropy_impl = CrossEntropyImpl.fused
+                elif TritonConfig.TRITON_ENABLED:
+                    self._cross_entropy_impl = CrossEntropyImpl.triton
+                else:
+                    self._cross_entropy_impl = CrossEntropyImpl.fused
+        elif self._loss_function_type == LossFunctionType.dpo:
+            self.dpo_beta = config.beta
+        else:
+            raise NotImplementedError(f"Loss function type {self._loss_function_type} not supported.")
 
         self._forward = wrap_forward_backward(self._forward_backward, grad_is_context)
 
@@ -287,14 +294,25 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
 
         if labels is None:
             return logits * self._logits_scale_factor, None
-        loss, grad = cross_entropy_forward_backward(
-            logits.flatten(0, -2),
-            labels,
-            group=self._tensor_space.distributed.tensor_group if self._parallel_embeddings else None,
-            grad_output=grad_output,
-            implementation=self._cross_entropy_impl,
-            logits_scale_factor=self._logits_scale_factor,
-        )
+        if self._loss_function_type == LossFunctionType.cross_entropy:
+            loss, grad = cross_entropy_forward_backward(
+                logits.flatten(0, -2),
+                labels,
+                group=self._tensor_space.distributed.tensor_group if self._parallel_embeddings else None,
+                grad_output=grad_output,
+                implementation=self._cross_entropy_impl,
+                logits_scale_factor=self._logits_scale_factor,
+            )
+        elif self._loss_function_type == LossFunctionType.dpo:
+            loss, grad = compute_simplified_dpo_loss(
+                logits.flatten(0, -2),
+                labels,
+                kwargs[LanguageModelKwargs.chosen_spans],
+                kwargs[LanguageModelKwargs.rejected_spans],
+                self.dpo_beta,
+                grad_output,
+            )
+
         # TODO: de-allocate earlier.
         del logits
         return loss, output_parallel_linear_backward(grad, context)
