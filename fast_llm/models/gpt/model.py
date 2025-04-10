@@ -291,11 +291,11 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                         if not spans.numel():
                             continue
                         valid_spans = spans[
-                            (spans[:, 0] <= sequence_k + prediction_heads) & (spans[:, 1] >= sequence_offset)
+                            (spans[:, 0] <= sequence_k + prediction_heads - 1) & (spans[:, 1] >= sequence_offset)
                         ]
                         if valid_spans.numel():
                             valid_spans[:, 0].clamp_(min=sequence_offset)
-                            valid_spans[:, 1].clamp_(max=sequence_k + prediction_heads)
+                            valid_spans[:, 1].clamp_(max=sequence_k + prediction_heads - 1)
                             valid_spans -= sequence_offset
                             for start, end in valid_spans:
                                 if sequence_first:
