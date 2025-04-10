@@ -32,7 +32,8 @@ class GPTTrainer[ConfigType: GPTTrainerConfig](Trainer[ConfigType]):
         sequence_length = self._config.batch.sequence_length
 
         tokens = self._config.batch.batch_size * sequence_length
-        transformer_flops_base = 2 * checkpoint_activations_factor * tokens * transformer_config.num_layers
+        num_transformer_layers = transformer_config.num_layers + self._config.model.base_model.prediction_heads - 1
+        transformer_flops_base = 2 * checkpoint_activations_factor * tokens * num_transformer_layers
         dense_flops_base = transformer_flops_base * transformer_config.hidden_size
         # Query, key, value, dense.
         flops_per_iteration = (
@@ -50,7 +51,13 @@ class GPTTrainer[ConfigType: GPTTrainerConfig](Trainer[ConfigType]):
         )
 
         # LM-head
-        flops_per_iteration += 6 * tokens * transformer_config.hidden_size * self._config.model.base_model.vocab_size
+        flops_per_iteration += (
+            6
+            * tokens
+            * transformer_config.hidden_size
+            * self._config.model.base_model.vocab_size
+            * self._config.model.base_model.prediction_heads
+        )
 
         # Attention-matrix computation
         attn_flops_base = transformer_flops_base * transformer_config.projection_size
