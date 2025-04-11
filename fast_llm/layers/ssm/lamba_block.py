@@ -6,7 +6,7 @@ from fast_llm.layers.transformer.transformer import BaseBlock
 
 if typing.TYPE_CHECKING:
     from fast_llm.engine.config_utils.tensor_space import TensorSpace
-    from fast_llm.layers.ssm.config import MambaConfig
+    from fast_llm.layers.ssm.config import SSMLayerConfig
     from fast_llm.layers.transformer.config import TransformerConfig
 
 
@@ -14,7 +14,7 @@ class LambaBlock(BaseBlock):
     def __init__(
         self,
         config_transformer: "TransformerConfig",
-        config_ssm: "MambaConfig",
+        config_ssm: "SSMLayerConfig",
         tensor_space: "TensorSpace",
         mixer_cls,
         layer_index: int,

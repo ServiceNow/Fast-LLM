@@ -20,7 +20,7 @@ from fast_llm.models.ssm.config import LLambaHuggingfaceCheckpointFormat
 try:
     from lamba_block import LambaBlock
 
-    from fast_llm.layers.ssm.config import MambaConfig
+    from fast_llm.layers.ssm.config import SSMLayerConfig
     from fast_llm.layers.ssm.discrete_mamba2 import DiscreteMamba2
     from fast_llm.layers.ssm.mamba_layer import MambaLayer
     from fast_llm.models.ssm.model import HybridSSMBaseModel, HybridSSMBaseModelConfig, HybridSSMModel
@@ -79,7 +79,7 @@ def distributed(distributed_config):
 def get_hybrid_config(use_fast_path: bool = True, hybrid_block_layout=["t", "m", "t", "m"]):
     config = HybridSSMBaseModelConfig(
         transformer=TransformerConfig(num_layers=len(hybrid_block_layout)),
-        ssm=MambaConfig(),
+        ssm=SSMLayerConfig(),
         hybrid_block_layout=hybrid_block_layout,
         init_method_std_embed=0.02,
         init_method_min_embed=-0.02,

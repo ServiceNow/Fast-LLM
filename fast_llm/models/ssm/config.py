@@ -8,7 +8,7 @@ from fast_llm.engine.checkpoint.config import CheckpointFormat, CheckpointHandle
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig, PretrainedFastLLMModelConfig
 from fast_llm.engine.training.config import TrainerConfig
 from fast_llm.layers.language_model.config import LanguageModelBaseConfig
-from fast_llm.layers.ssm.config import MambaConfig, SSMDimNames
+from fast_llm.layers.ssm.config import SSMDimNames, SSMLayerConfig
 from fast_llm.models.gpt.config import GPTArchitectureConfig
 from fast_llm.tensor import TensorDim, TensorSpace
 from fast_llm.utils import Assert
@@ -20,11 +20,11 @@ logger = logging.getLogger(__name__)
 
 
 @config_class
-class HybridArchitectureConfig(GPTArchitectureConfig):
+class HybridSSMArchitectureConfig(GPTArchitectureConfig):
     _abstract = False
 
-    ssm: MambaConfig = Field(
-        default_factory=MambaConfig,
+    ssm: SSMLayerConfig = Field(
+        default_factory=SSMLayerConfig,
         desc="Configuration for the transformer architecture.",
         hint=FieldHint.core,
     )
@@ -43,8 +43,8 @@ class HybridArchitectureConfig(GPTArchitectureConfig):
 
 
 @config_class()
-class HybridSSMBaseModelConfig(LanguageModelBaseConfig, HybridArchitectureConfig):
-    architecture_class = HybridArchitectureConfig
+class HybridSSMBaseModelConfig(LanguageModelBaseConfig, HybridSSMArchitectureConfig):
+    architecture_class = HybridSSMArchitectureConfig
 
     use_megatron_initialization: bool = Field(
         default=False, desc="Exactly match the initialization of a Megatron model.", hint=FieldHint.testing

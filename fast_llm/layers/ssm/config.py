@@ -87,7 +87,7 @@ class SSMArchitectureConfig(BaseModelArchitectureConfig):
 
 
 @config_class()
-class MambaConfig(SSMArchitectureConfig):
+class SSMLayerConfig(SSMArchitectureConfig):
     """Configuration for a Structured State Space Model (SSM) layer."""
 
     normalization: NormalizationConfig = FieldUpdate(default_factory=NormalizationConfig)

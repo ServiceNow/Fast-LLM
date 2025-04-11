@@ -6,7 +6,7 @@ from mamba_ssm.ops.triton.ssd_combined import mamba_chunk_scan_combined
 
 from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
 from fast_llm.layers.common.linear import Linear
-from fast_llm.layers.ssm.config import MambaConfig, SSMDimNames
+from fast_llm.layers.ssm.config import SSMDimNames, SSMLayerConfig
 from fast_llm.tensor import ParameterMeta, init_ones_, init_uniform_, init_zeros_, kaiming_init_
 
 try:
@@ -36,7 +36,7 @@ class DiscreteMamba2(torch.nn.Module):
 
     def __init__(
         self,
-        config: MambaConfig,
+        config: SSMLayerConfig,
         layer_idx: int,
         tensor_space: TensorSpace,
     ):
@@ -49,7 +49,7 @@ class DiscreteMamba2(torch.nn.Module):
         """
         # factory_kwargs = {"device": "meta"}  # , "dtype": torch.bfloat16}
         super().__init__()
-        self.config: MambaConfig = config
+        self.config: SSMLayerConfig = config
         bias = config.add_bias_linear
         self.layer_idx = layer_idx
 

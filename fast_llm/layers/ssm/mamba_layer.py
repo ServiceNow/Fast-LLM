@@ -7,7 +7,7 @@ from mamba_ssm.ops.selective_scan_interface import mamba_inner_fn, selective_sca
 
 from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
 from fast_llm.layers.common.linear import Linear
-from fast_llm.layers.ssm.config import MambaConfig, SSMDimNames
+from fast_llm.layers.ssm.config import SSMDimNames, SSMLayerConfig
 from fast_llm.tensor import ParameterMeta, init_ones_, kaiming_init_
 
 try:
@@ -61,13 +61,13 @@ def init_dtprojbias(
 class MambaLayer(torch.nn.Module):
     def __init__(
         self,
-        config: MambaConfig,
+        config: SSMLayerConfig,
         layer_idx: int,
         tensor_space: TensorSpace,
     ):
         factory_kwargs = {}
         super().__init__()
-        self.config: MambaConfig = config
+        self.config: SSMLayerConfig = config
         self.use_fast_path = config.use_fast_path if mamba_inner_fn is not None else False
         self.layer_idx = layer_idx
 
