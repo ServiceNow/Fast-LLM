@@ -2,6 +2,7 @@ import torch
 
 from pathlib import Path
 import shutil
+import cloudpickle
 
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from transformers.modeling_outputs import CausalLMOutputWithPast
@@ -13,10 +14,14 @@ import torch
 
 
 def generate(model, input_ids, attention_mask, max_new_tokens, tensors_save_path: Path | None = None):
+    
     if tensors_save_path is not None:
         if tensors_save_path.is_dir():
             shutil.rmtree(tensors_save_path, ignore_errors=True)
-        tensors_save_path.mkdir(exist_ok=True, parents=True)
+        logits_save_path = tensors_save_path / 'logits'
+        hs_save_path = tensors_save_path / 'hidden_states'
+        logits_save_path.mkdir(exist_ok=True, parents=True)
+        hs_save_path.mkdir(exist_ok=True, parents=True)
 
     # assume attention mask is left padded with zeroes if any
     mask_step = torch.ones((attention_mask.shape[0], 1), dtype=torch.int64).to(attention_mask.device)
@@ -30,7 +35,7 @@ def generate(model, input_ids, attention_mask, max_new_tokens, tensors_save_path
             labels=None,
             use_cache=False,
             output_attentions=False,
-            output_hidden_states=False,
+            output_hidden_states=True,
             return_dict=True,
         )
         current_ids = output.logits[:, -1, :].argmax(dim=1, keepdim=True)
@@ -38,8 +43,12 @@ def generate(model, input_ids, attention_mask, max_new_tokens, tensors_save_path
         attention_mask = torch.cat([attention_mask, mask_step], dim=1)
 
         if tensors_save_path is not None:
-            tensors_save_file = tensors_save_path / f"tensor{i}.pt"
-            torch.save(output.logits, tensors_save_file)
+            logits_file = logits_save_path / f"tensor{i}.pt"
+            torch.save(output.logits, logits_file)
+
+            hidden_states_file = hs_save_path / f"data{i}.pickle"
+            with hidden_states_file.open('wb') as f:
+                cloudpickle.dump(output.hidden_states, f)
 
     return input_ids
 
@@ -56,7 +65,7 @@ def diff_flm_hf(tokenizer, flm_tokens, hf_tokens):
     )
 
 
-def run_test(attn_implementation, torch_dtype, is_batch_size2, use_fm_changes, tensors_save_path):
+def run_test(attn_implementation, torch_dtype, is_batch_size2, use_fm_changes, tensors_save_path, num_new_tokens):
     checkpoint = "/mnt/checkpoints/pretrained_models/SmolLM2-135M-Instruct"
 
     device = "cuda"  # for GPU usage or "cpu" for CPU usage
@@ -85,7 +94,7 @@ def run_test(attn_implementation, torch_dtype, is_batch_size2, use_fm_changes, t
     inputs = tokenizer(input_text, padding="longest", return_tensors="pt").to(device)
 
     # outputs_hf = model_hf.generate(**inputs, max_new_tokens=50, use_cache=False)
-    outputs_hf = generate(model_hf, **inputs, max_new_tokens=50, tensors_save_path=tensors_save_path / "hf")
+    outputs_hf = generate(model_hf, **inputs, max_new_tokens=num_new_tokens, tensors_save_path=tensors_save_path / "hf")
     # print(tokenizer.decode(outputs_hf[0]))
 
     fm_kwards = {}
@@ -108,7 +117,7 @@ def run_test(attn_implementation, torch_dtype, is_batch_size2, use_fm_changes, t
     )
 
     # outputs_fm = model_fm.generate(**inputs, max_new_tokens=50, use_cache=False)
-    outputs_fm = generate(model_fm, **inputs, max_new_tokens=5, tensors_save_path=tensors_save_path / "fast_llm")
+    outputs_fm = generate(model_fm, **inputs, max_new_tokens=num_new_tokens, tensors_save_path=tensors_save_path / "fast_llm")
 
     diff_flm_hf(
         tokenizer, outputs_fm[0][inputs["input_ids"].shape[1] :], outputs_hf[0][inputs["input_ids"].shape[1] :]
@@ -123,10 +132,12 @@ def main():
     run_test(
         # attn_implementation="flash_attention_2",
         attn_implementation=None,
-        torch_dtype=torch.bfloat16,
-        is_batch_size2=True,
+        #torch_dtype=torch.bfloat16,
+        torch_dtype=None,
+        is_batch_size2=False,
         use_fm_changes=False,
-        tensors_save_path=Path("/mnt/datasets/tests/denis/tensors/fast_llm"),
+        tensors_save_path=Path("/mnt/datasets/tests/denis/tensors_f32/"),
+        num_new_tokens=1000,
     )
 
 

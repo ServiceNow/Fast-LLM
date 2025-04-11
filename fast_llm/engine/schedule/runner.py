@@ -400,8 +400,11 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ScheduleConfig]):
             self._record_event(context, EventType.compute_wait_pipe, step)
 
     def _forward(self, context: BatchContext, step: Step) -> None:
+        input = self._get_forward_input(context, step)
+        if not "hidden_states" in context.batch[step.data_index]:
+            context.batch[step.data_index]["hidden_states"] = {}
         output, grad_context = self._stages[step.stage].forward(
-            self._get_forward_input(context, step),
+            input,
             context.batch[step.data_index],
             losses=context.losses,
             metrics=context.metrics,

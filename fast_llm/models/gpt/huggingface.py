@@ -58,8 +58,8 @@ class HuggingfaceGPTModelForCausalLM(HuggingfacePreTrainedModel, tgu.GenerationM
 
         if output_attentions:
             raise NotImplementedError()
-        if output_hidden_states:
-            raise NotImplementedError()
+        # if output_hidden_states:
+        #     raise NotImplementedError()
         # if attention_mask is not None:
         #     print(attention_mask)
         #     raise NotImplementedError()
@@ -104,19 +104,35 @@ class HuggingfaceGPTModelForCausalLM(HuggingfacePreTrainedModel, tgu.GenerationM
             # The transformers will save the present keys and values to this list.
             kwargs[TransformerKwargs.presents] = []
 
+        if output_hidden_states:
+            kwargs["output_hidden_states"] = True
+        else:
+            kwargs["output_hidden_states"] = False
+
         _, _, _ = self._runner.run_step(iter((batch,)), self._schedule, iteration=iteration, preprocessed=True)
 
         # TODO: Make a proper way of returning the model output.
         logits = kwargs["logits"]
+        
+        # TODO: convert hidden state form dict to list to be the same as with HFs
+        hidden_states = None
+        if output_hidden_states:
+            hidden_states = kwargs["hidden_states"]
 
         if not return_dict:
-            outputs = (logits,)
+            # TODO: check hidden state go before past in the tuple
+            if output_hidden_states:
+                outputs = (logits, hidden_states)
+            else:
+                outputs = (logits,)
+            
             if use_cache:
                 outputs += (kwargs[TransformerKwargs.presents],)
             return outputs
 
         return transformers.modeling_outputs.CausalLMOutputWithPast(
             logits=logits,
+            hidden_states=hidden_states,
             past_key_values=kwargs[TransformerKwargs.presents],
         )
 
