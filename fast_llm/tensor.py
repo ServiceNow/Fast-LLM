@@ -1,3 +1,4 @@
+import math
 import typing
 
 import torch
@@ -323,6 +324,10 @@ def init_normal_(
             return tensor
 
     return init_
+
+
+def kaiming_init_(d_in):
+    return init_normal_(0.0, math.sqrt(2.0 / d_in))
 
 
 def init_uniform_(
