@@ -1,0 +1,3 @@
+nohup: ignoring input
+bash: /opt/conda/lib/libtinfo.so.6: no version information available (required by bash)
+bash: __oo_scripts/launch_sweeps.sh: No such file or directory

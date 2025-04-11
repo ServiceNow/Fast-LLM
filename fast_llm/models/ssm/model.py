@@ -43,7 +43,7 @@ class HybridSSMBaseModel[ConfigType: HybridSSMBaseModelConfig](GPTBaseModel[Conf
         layers = [LanguageModelEmbedding(self._config, self._tensor_space)]
 
         # Create blocks according to pattern
-        for i, block_type in enumerate(self._config.block_pattern):
+        for i, block_type in enumerate(self._config.hybrid_block_layout):
             if block_type == "t":
                 # Transformer block
                 layers.append(

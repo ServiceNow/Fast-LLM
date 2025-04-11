@@ -29,7 +29,7 @@ class HybridArchitectureConfig(GPTArchitectureConfig):
         hint=FieldHint.core,
     )
 
-    block_pattern: list[str] = Field(
+    hybrid_block_layout: list[str] = Field(
         default_factory=list,
         desc="Pattern of blocks to use in the model. 't' for Transformer, 'm' for Mamba1, 'm2' for Descrete Mamba2.",
         hint=FieldHint.core,
@@ -37,7 +37,7 @@ class HybridArchitectureConfig(GPTArchitectureConfig):
 
     default_block: str = Field(
         default="m",
-        desc="m - Mamba, m2 - Descrete Mamba2, t - Transformer. Only used if block_pattern is not specified.",
+        desc="m - Mamba, m2 - Descrete Mamba2, t - Transformer. Only used if hybrid_block_layout is not specified.",
         hint=FieldHint.core,
     )
 
@@ -62,7 +62,7 @@ class HybridSSMBaseModelConfig(LanguageModelBaseConfig, HybridArchitectureConfig
         Some of these can be setup directly in the layer config, but keeping them here for clarity.
         """
         super().setup_tensor_space(tensor_space)
-        if not "m2" in self.block_pattern and not "m" in self.block_pattern:
+        if not "m2" in self.hybrid_block_layout and not "m" in self.hybrid_block_layout:
             raise ValueError(
                 "Block pattern must contain at least one 'm' or 'm2', use gpt model for transformer only architectures"
             )
@@ -83,7 +83,7 @@ class HybridSSMBaseModelConfig(LanguageModelBaseConfig, HybridArchitectureConfig
         tensor_space.add_tensor_dim(TensorDim(SSMDimNames.d_conv_kernel, self.ssm.conv_kernel_dimension))
         tensor_space.add_tensor_dim(TensorDim(SSMDimNames.d_inner_proj_m, d_inner * 2))
 
-        if "m2" in self.block_pattern:
+        if "m2" in self.hybrid_block_layout:
             # Mamba2 specific dimensions
             # as per https://github.com/cartesia-ai/edge/blob/a0e121ebed3d2324c6d762b0e211a08d62583681/cartesia-pytorch/cartesia_pytorch/Llamba/mixers/discrete_mamba2.py#L66C3-L66C4
             headdim = d_inner // self.ssm.n_v_heads
@@ -111,9 +111,9 @@ class HybridSSMBaseModelConfig(LanguageModelBaseConfig, HybridArchitectureConfig
         strict: bool = True,
         flat: bool = False,
     ) -> typing.Self:
-        if "block_pattern" in default and isinstance(default["block_pattern"], dict):
+        if "hybrid_block_layout" in default and isinstance(default["hybrid_block_layout"], dict):
             # Not sure why, but the block pattern can sometime sbe loaded as a dict (serialization related)
-            default["block_pattern"] = list(default["block_pattern"].values())
+            default["hybrid_block_layout"] = list(default["hybrid_block_layout"].values())
         # TODO v0.3: Remove backward compatibility fix
         if "match_megatron" in default:
             assert "use_megatron_initialization" not in default
@@ -126,14 +126,14 @@ class HybridSSMBaseModelConfig(LanguageModelBaseConfig, HybridArchitectureConfig
         return super()._from_dict(default, strict, flat)
 
     def _validate(self):
-        if len(self.block_pattern) == 0:
+        if len(self.hybrid_block_layout) == 0:
             logger.warning(f"No block pattern provided, using default_block [{self.default_block}]")
-            self.block_pattern = [self.default_block] * self.transformer.num_layers
+            self.hybrid_block_layout = [self.default_block] * self.transformer.num_layers
 
-        Assert.eq(len(self.block_pattern), self.transformer.num_layers)
+        Assert.eq(len(self.hybrid_block_layout), self.transformer.num_layers)
         Assert.custom(
-            lambda _: all(block_type in ["t", "m", "m2"] for block_type in self.block_pattern),
-            f"Invalid block type: {self.block_pattern}. Must be 't' or 'm' or 'm2'",
+            lambda _: all(block_type in ["t", "m", "m2"] for block_type in self.hybrid_block_layout),
+            f"Invalid block type: {self.hybrid_block_layout}. Must be 't' or 'm' or 'm2'",
         )
 
         super()._validate()

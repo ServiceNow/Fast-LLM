@@ -76,11 +76,11 @@ def distributed(distributed_config):
     return Distributed(config=distributed_config)
 
 
-def get_hybrid_config(use_fast_path: bool = True, block_pattern=["t", "m", "t", "m"]):
+def get_hybrid_config(use_fast_path: bool = True, hybrid_block_layout=["t", "m", "t", "m"]):
     config = HybridSSMBaseModelConfig(
-        transformer=TransformerConfig(num_layers=len(block_pattern)),
+        transformer=TransformerConfig(num_layers=len(hybrid_block_layout)),
         ssm=MambaConfig(),
-        block_pattern=block_pattern,
+        hybrid_block_layout=hybrid_block_layout,
         init_method_std_embed=0.02,
         init_method_min_embed=-0.02,
         init_method_max_embed=0.02,
@@ -174,7 +174,7 @@ def test_load_from_llamba_checkpoint(distributed_config):
 
 @pytest.mark.skipif(not run_test, reason="No CUDA available or Mamba not installed")
 @pytest.mark.parametrize(
-    "block_pattern,use_fast_path,LAYER_CLS",
+    "hybrid_block_layout,use_fast_path,LAYER_CLS",
     [
         (["m", "t"], True, MambaLayer),
         (["m", "t"], False, MambaLayer),
@@ -182,8 +182,8 @@ def test_load_from_llamba_checkpoint(distributed_config):
     ],
     ids=["mamba-fast", "mamba-slow", "descrete_mamba2"],
 )
-def test_mamba_layer(distributed_config, distributed, block_pattern, use_fast_path, LAYER_CLS):
-    hybrid_config = get_hybrid_config(use_fast_path, block_pattern=block_pattern)
+def test_mamba_layer(distributed_config, distributed, hybrid_block_layout, use_fast_path, LAYER_CLS):
+    hybrid_config = get_hybrid_config(use_fast_path, hybrid_block_layout=hybrid_block_layout)
     tensor_space = TensorSpace(distributed_config=distributed_config)
     hybrid_config.setup_tensor_space(tensor_space)
     layer = LAYER_CLS(hybrid_config.ssm, layer_idx=0, tensor_space=tensor_space)
@@ -209,7 +209,7 @@ def test_mamba_layer(distributed_config, distributed, block_pattern, use_fast_pa
 
 @pytest.mark.skipif(not run_test, reason="No CUDA available or Mamba not installed")
 def test_mamba_block(distributed_config, distributed):
-    hybrid_config = get_hybrid_config(use_fast_path=True, block_pattern=["m", "t"])
+    hybrid_config = get_hybrid_config(use_fast_path=True, hybrid_block_layout=["m", "t"])
     tensor_space = TensorSpace(distributed_config=distributed_config)
     tensor_space.setup(distributed)
     hybrid_config.setup_tensor_space(tensor_space)
@@ -243,7 +243,7 @@ def test_mamba_block(distributed_config, distributed):
 
 @pytest.mark.skipif(not run_test, reason="No CUDA available or Mamba not installed")
 @pytest.mark.parametrize(
-    "block_pattern,use_fast_path",
+    "hybrid_block_layout,use_fast_path",
     [
         (["m", "t"], True),
         (["m", "t"], False),
@@ -251,8 +251,8 @@ def test_mamba_block(distributed_config, distributed):
     ],
     ids=["mamba-fast", "mamba-slow", "descrete_mamba2"],
 )
-def test_hybrid_model_train_with_fast_mode(distributed_config, block_pattern, use_fast_path):
-    hybrid_config = get_hybrid_config(use_fast_path, block_pattern=block_pattern)
+def test_hybrid_model_train_with_fast_mode(distributed_config, hybrid_block_layout, use_fast_path):
+    hybrid_config = get_hybrid_config(use_fast_path, hybrid_block_layout=hybrid_block_layout)
     model = HybridSSMBaseModel(hybrid_config, distributed_config)
     distributed = Distributed(distributed_config)
     model.setup(distributed)
