@@ -71,11 +71,6 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
         Assert.geq(prediction_distance, 0)
         self._prediction_distance = prediction_distance
         self.is_last_head = self._prediction_distance == config.prediction_heads - 1
-        if self._prediction_distance > 0:
-            assert (
-                not self._sequence_parallel_logits
-            ), "Sequence parallel logits not supported for multi-token prediction."
-            assert not self._cross_entropy_splits, "Cross-entropy splits not supported for multi-token prediction."
 
         self._init_output_weights(hidden_dim, config)
 
