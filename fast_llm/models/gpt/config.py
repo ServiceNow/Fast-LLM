@@ -139,9 +139,14 @@ class GPTTrainerConfig(PretrainedGPTModelConfig, TrainerConfig):
             self.batch.sequence_length = self.model.base_model.max_position_embeddings
         if self.model.base_model.use_megatron_initialization:
             set_megatron_distributed_seeds(self.model.distributed)
+        super()._validate()
+        if (name := self.model.base_model.distillation_model) is None:
+            Assert.empty(self.reference_models)
+        else:
+            Assert.eq(self.reference_models.keys(), {name})
         for reference_model in self.reference_models.values():
             Assert.none(reference_model.model.base_model.cross_entropy_splits)
-        super()._validate()
+            Assert.none(reference_model.model.base_model.distillation_model)
 
     @classmethod
     def get_trainer_class(cls) -> type["GPTTrainer"]:

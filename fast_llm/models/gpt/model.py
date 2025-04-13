@@ -269,7 +269,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                     labels = batch.token_ids[sequence_offset : sequence_k + 1]
                 else:
                     # TODO: Avoid multiple contiguous calls?
-                    labels = batch.token_ids[:, sequence_k - sequence_q + 1 : sequence_k + 1].contiguous()
+                    labels = batch.token_ids[:, sequence_offset : sequence_k + 1].contiguous()
                     # We set label indices to -100 for masked spans, inline with ignore_index in torch.nn.CrossEntropyLoss
                     # TODO: take ignore_index from config
                 if batch.loss_masking_spans is not None:

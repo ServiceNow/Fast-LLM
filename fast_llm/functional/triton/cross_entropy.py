@@ -62,6 +62,7 @@ def triton_cross_entropy_from_distribution_forward_backward_kernel(
     grad_losses,
     n_cols: tl_constexpr,
     logits_stride_0: tl_constexpr,
+    target_stride_0: tl_constexpr,
     grad_logits_stride_0: tl_constexpr,
     logits_scale_factor: tl_constexpr,
     from_logits: tl_constexpr,
@@ -70,33 +71,40 @@ def triton_cross_entropy_from_distribution_forward_backward_kernel(
     # TODO: Int64 ptr only if needed?
     block_idx = tl.program_id(0).to(tl.int64)
     col_offsets = tl.arange(0, block_size)
-    logits_ptr = logits_ptr + block_idx * logits_stride_0
     mask = col_offsets < n_cols
 
-    logits = tl.load(logits_ptr + col_offsets, mask=mask, other=-float("inf")).to(tl.float32)
+    logits = tl.load(logits_ptr + block_idx * logits_stride_0 + col_offsets, mask=mask, other=-float("inf")).to(
+        tl.float32
+    )
     if logits_scale_factor != 1.0:
         logits *= logits_scale_factor
 
     max_logits = tl.max(logits, 0)
-    exp_logits = tl.exp(logits - max_logits)
+    logits_norm = logits - max_logits
+    exp_logits = tl.exp(logits_norm)
     sum_exp_logits = tl.sum(exp_logits, 0)
 
-    target = tl.load(target_ptr + col_offsets, mask=mask, other=-float("inf")).to(tl.float32)
+    target = tl.load(target_ptr + block_idx * target_stride_0 + col_offsets, mask=mask, other=-float("inf")).to(
+        tl.float32
+    )
     if from_logits:
-        max_target_logits = tl.max(logits, 0)
+        if logits_scale_factor != 1.0:
+            target *= logits_scale_factor
+        max_target_logits = tl.max(target, 0)
         exp_target_logits = tl.exp(target - max_target_logits)
         sum_exp_target_logits = tl.sum(exp_target_logits, 0)
         target = exp_target_logits / sum_exp_target_logits
 
     # per_sample_loss = log(sum_exp_logits) - sum(probabilities * logits)
-    loss = tl.log(sum_exp_logits) - tl.sum(target * logits, 0)
+    loss = tl.log(sum_exp_logits) - tl.sum(target * logits_norm, 0)
     tl.store(losses_ptr + block_idx, loss)
 
-    # grad / grad_output = exp_logits / sum_exp_logits - target_probabilities.
-    if logits_scale_factor != 1.0:
-        exp_logits *= logits_scale_factor
-    grad_logits = grad_losses * (exp_logits / sum_exp_logits - target)
-    tl.store(grad_logits_ptr + block_idx * grad_logits_stride_0 + col_offsets, grad_logits, mask=mask)
+    if grad_losses is not None:
+        # grad / grad_output = exp_logits / sum_exp_logits - target_probabilities.
+        grad_logits = grad_losses * (exp_logits / sum_exp_logits - target)
+        if logits_scale_factor != 1.0:
+            grad_logits *= logits_scale_factor
+        tl.store(grad_logits_ptr + block_idx * grad_logits_stride_0 + col_offsets, grad_logits, mask=mask)
 
 
 def triton_cross_entropy_forward_backward(
@@ -117,7 +125,6 @@ def triton_cross_entropy_forward_backward(
     assert logits.is_contiguous()
     assert target.is_contiguous()
     n_rows, n_cols = logits.shape
-    assert target.shape == (n_rows,)
     block_size = triton.next_power_of_2(n_cols)
     assert block_size <= TritonConfig.MAX_BLOCK_SIZE_BYTES
     num_warps = 4 if block_size < 2048 else (8 if block_size < 8192 else 16)
@@ -147,6 +154,7 @@ def triton_cross_entropy_forward_backward(
             None if grad_output is None else grad_output / n_rows,
             n_cols,
             logits.stride(0),
+            target.stride(0),
             None if grad_output is None else grad_logits.stride(0),
             logits_scale_factor,
             block_size=block_size,

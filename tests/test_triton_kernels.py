@@ -190,6 +190,7 @@ def test_triton_mlp_activation(gated, activation_type, recompute):
 
 
 @requires_cuda
+@pytest.mark.slow
 @pytest.mark.parametrize(
     ("num_columns", "grad_output", "logits_scale_factor"),
     (
@@ -201,15 +202,20 @@ def test_triton_mlp_activation(gated, activation_type, recompute):
         (131072, 1.0, 1.0),
     ),
 )
-@pytest.mark.parametrize("target_format", (TargetFormat.labels,))  # TargetFormat.logits, TargetFormat.probabilities))
+@pytest.mark.parametrize("target_format", (TargetFormat.labels, TargetFormat.logits, TargetFormat.probabilities))
 def test_cross_entropy(num_columns, grad_output, logits_scale_factor, target_format):
     # TODO: Test tensor-parallel implementation.
     assert TritonConfig.TRITON_ENABLED
-    logits = torch.randn(256, num_columns, dtype=torch.bfloat16, device="cuda", requires_grad=True)
+    # We want something moderately close to the target for the test to be meaningful
+    logits_var = torch.randn(256, num_columns, dtype=torch.bfloat16, device="cuda") / 3
     if target_format == TargetFormat.labels:
         target = torch.randint(0, num_columns, (256,), dtype=torch.int64, device="cuda")
+        logits = (torch.nn.functional.one_hot(target, num_columns) + logits_var).requires_grad_()
     else:
         target = torch.randn(256, num_columns, dtype=torch.bfloat16, device="cuda")
+        logits = (target + logits_var).requires_grad_()
+        if target_format == TargetFormat.probabilities:
+            target = torch.softmax(target, -1)
 
     kwargs = {
         "logits": logits,
@@ -229,16 +235,16 @@ def test_cross_entropy(num_columns, grad_output, logits_scale_factor, target_for
     else:
         Assert.rms_close(grad_fused, grad_torch, 5e-3)
 
-    if target_format == TargetFormat.probabilities or num_columns > 65536:
+    if num_columns > 65536:
         with pytest.raises(AssertionError):
             cross_entropy_forward_backward(**kwargs, implementation=CrossEntropyImpl.triton)
     else:
         out_triton, grad_triton = cross_entropy_forward_backward(**kwargs, implementation=CrossEntropyImpl.triton)
-        Assert.rms_close(out_triton, out_torch, 5e-3)
         if grad_output is None:
             assert grad_triton is None
         else:
             Assert.rms_close(grad_triton, grad_torch, 5e-3)
+        Assert.rms_close(out_triton, out_torch, 5e-3)
 
 
 @requires_cuda

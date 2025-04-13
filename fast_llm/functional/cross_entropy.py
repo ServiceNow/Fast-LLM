@@ -25,6 +25,8 @@ def torch_cross_entropy_forward_backward(
     with torch.set_grad_enabled(grad_output is not None):
         logits_ = logits.float().detach().requires_grad_(grad_output is not None)
         if target_format == TargetFormat.logits:
+            if logits_scale_factor != 1.0:
+                target = target * logits_scale_factor
             target = torch.softmax(target, dim=-1)
         loss = torch.nn.functional.cross_entropy(
             logits_ if logits_scale_factor == 1 else logits_ * logits_scale_factor, target
@@ -63,7 +65,7 @@ def fused_softmax(
     return exp_logits / sum_exp_logits
 
 
-# @torch.compile
+@torch.compile
 def fused_cross_entropy_forward_backward(
     logits: torch.Tensor,
     target: torch.Tensor,
