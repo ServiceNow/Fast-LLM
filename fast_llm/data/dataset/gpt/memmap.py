@@ -40,10 +40,9 @@ class GPTMemmapDataset(GPTIndexedDataset):
             Assert.eq(stream.read(9), MEMMAP_INDEX_HEADER, msg=f"File: {stream.name}")
             self._version = struct.unpack("<Q", stream.read(8))[0]
             assert self._version in [1, 2, 3], f"Unsupported version for gpt_memmap dataset: {self._version}."
-            if self._version == 2:
+            if self._version >= 2:
                 self._has_spans = struct.unpack("<B", stream.read(1))[0]
-            if self._version == 3:
-                self._has_spans = struct.unpack("<B", stream.read(1))[0]
+            if self._version >= 3:
                 self._has_preference_spans = struct.unpack("<B", stream.read(1))[0]
 
             self._dtype = MEMMAP_DTYPES[struct.unpack("<B", stream.read(1))[0]].numpy
@@ -72,7 +71,7 @@ class GPTMemmapDataset(GPTIndexedDataset):
 
         # read spans
         self._spans = None
-        if self._has_spans and self._version in {2, 3}:
+        if self._has_spans and self._version >= 2:
             self._spans = []
             self._num_spans = np.frombuffer(
                 self._index_bin_buffer,
@@ -95,7 +94,7 @@ class GPTMemmapDataset(GPTIndexedDataset):
         # read preference spans
         self._chosen_spans = None
         self._rejected_spans = None
-        if self._has_preference_spans:
+        if self._has_preference_spans and self._version >= 3:
             self._chosen_spans = []
             self._rejected_spans = []
             chosen_span_offset = offset + self._document_sizes.nbytes + self._pointers.nbytes
