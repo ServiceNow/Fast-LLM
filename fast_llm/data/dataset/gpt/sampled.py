@@ -320,6 +320,9 @@ class GPTSampledIndexedDataset(SampledDataset):
                 # Free memory
                 del document_shuffling
         else:
+            if not self._truncate_documents:
+                yaml_data["unshuffled_tokens"] = None  # not used with packing disabled
+
             # index of all documents less than seq length long
             doc_length_filtered_indicies = torch.nonzero(~long_docs_filter, as_tuple=True)[0]
             self._doc_length_filtered_indicies.save(doc_length_filtered_indicies.numpy(force=self._config.gpu))
@@ -485,10 +488,18 @@ class GPTSampledIndexedDataset(SampledDataset):
             )
 
             chosen_loss_masking_span_end = sample.chosen_loss_masking_span[1] + 1
-            sequence_lengths = np.array(
-                [chosen_loss_masking_span_end, len(sample.token_ids) - chosen_loss_masking_span_end]
-            )
-            sample.sequence_lengths = sequence_lengths
+            sequence_lengths = [
+                chosen_loss_masking_span_end,
+                len(sample.token_ids) - chosen_loss_masking_span_end,
+            ]
+
+            # compute padding size
+            padding = np.full((self._sequence_length,), 0)
+            padding[: len(sample.token_ids)] = sample.token_ids
+            sequence_lengths.append(self._sequence_length - len(sample.token_ids))
+            sample.token_ids = padding
+
+            sample.sequence_lengths = np.array(sequence_lengths)
 
             return sample
 
