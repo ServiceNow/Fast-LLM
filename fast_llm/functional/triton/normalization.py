@@ -67,6 +67,7 @@ def triton_normalization_backward_kernel_1(
     inv_var_ptr,
     n_cols,
     n_rows,
+    eps,
     has_bias: tl_constexpr,
     parameter_grad: tl_constexpr,
     zero_centered: tl_constexpr,
@@ -98,7 +99,8 @@ def triton_normalization_backward_kernel_1(
         output = output - bias
 
     # Input grad
-    input_normalized = tl.where(mask, output / weight, 0.0)
+    weight_regularised = tl.where(weight >= 0, tl.maximum(weight, eps), tl.minimum(weight, -eps))
+    input_normalized = tl.where(mask, output / weight_regularised, 0.0)
     weight_grad_output = tl.where(mask, weight * grad_output * inv_var, 0.0)
     grad_input = weight_grad_output - input_normalized * (
         tl.sum(input_normalized * weight_grad_output, axis=1)[:, None] / n_cols
@@ -267,6 +269,7 @@ def triton_normalization_backward(grad_output: torch.Tensor, context: list[typin
         inv_var,
         n_cols,
         n_rows,
+        eps,
         has_bias,
         parameter_grad,
         zero_centered,
