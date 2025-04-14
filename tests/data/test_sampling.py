@@ -15,6 +15,14 @@ from tests.data.common import (
     validate_indexed_dataset_sampling,
 )
 
+try:
+    from fast_llm.csrc.data import build_padded_token_cumsum  # noqa
+
+    _extension_available = True
+except ImportError:
+    _extension_available = False
+
+
 GPT_MEMMAP_SAMPLES = [
     [4709, 819, 79, 207, 277, 1790],
     [1790, 80, 6506, 1735, 542, 88],
@@ -125,3 +133,70 @@ def test_gpt_sample(seed, shuffle):
             # Check that the sequence is independent of `num_sample`.
             Assert.all_equal(samples, previous_samples[: len(samples)])
         previous_samples = samples
+
+
+@pytest.mark.skipif(not _extension_available, reason="CPP Extension not available")
+def test_build_padded_token_cumsum():
+    sizes = np.array([100, 256, 580, 600, 550, 89, 339, 430, 400, 795, 680, 50], dtype=np.int32)
+    sequence_length = 768
+    token_cumsum_rate = 4
+    offset = 0
+    # sequences with padding:
+    # [100, 256, 413 padded, 580, 189 padded, 600, 169 padded, 550, 89, 130 padded, 339, 430, 400, 369 padded, 680, 50, 39 padded]
+    # cumsums:
+    # [100, 356, 1349, 2307, 2857, 2946, 3415, 3845, 4245, 5294, 5344, 5383]
+    expected_cumsums = [0, 2307, 3845, 5383]
+    token_cumsum = build_padded_token_cumsum(sizes, sequence_length + 1, token_cumsum_rate, offset)
+    Assert.all_equal(token_cumsum, expected_cumsums)
+
+
+def get_test_seeds(num_seeds):
+    np.random.seed(42)
+    seeds = np.random.randint(0, num_seeds * 100, num_seeds)
+    return seeds.tolist()
+
+
+@pytest.mark.skipif(not _extension_available, reason="CPP Extension not available")
+def test_gpt_sample_padding():
+    for seed in get_test_seeds(100):
+        vocab_size = 30
+        np.random.seed(seed)
+        num_sequences = np.random.randint(1, 20)
+        sequence_length = np.random.randint(1, 20)
+        doc_sizes = np.random.randint(1, 2 * sequence_length, num_sequences)
+        samples = [np.random.randint(0, vocab_size, size) for size in doc_sizes]
+        expected_samples = []
+        seq_size = 0
+        token_ids = []
+        total_tokens = 0
+        for idx, sample in enumerate(samples):
+            doc_size = len(sample)
+            if doc_size > sequence_length + 1:
+                continue
+            elif doc_size + seq_size > sequence_length + 1:
+                padding_tokens = sequence_length + 1 - seq_size
+                token_ids.append([-100] * padding_tokens)
+                expected_samples.append(list(np.concatenate(token_ids)))
+                token_ids = [sample]
+                seq_size = doc_size
+                total_tokens += doc_size
+            else:
+                token_ids.append(sample)
+                seq_size += doc_size
+                total_tokens += doc_size
+        dataset = SimpleGPTIndexedDataset(samples)
+        sampling = get_sampling_data(
+            num_samples=len(expected_samples),
+            sequence_length=sequence_length,
+            vocab_size=vocab_size,
+            seed=seed,
+            shuffle=ShufflingType.disabled,
+            truncate_documents=False,
+        )
+        if total_tokens == 0:
+            with pytest.raises(RuntimeError):
+                dataset.sample(sampling)
+        else:
+            sampled = dataset.sample(sampling)
+            for idx in range(len(expected_samples)):
+                Assert.all_equal(sampled[idx].token_ids, np.array(expected_samples[idx]))

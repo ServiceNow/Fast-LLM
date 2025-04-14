@@ -209,12 +209,15 @@ class MultiStageModel[ConfigType: FastLLMModelConfig](Configurable[ConfigType]):
                 "Bfloat16 gradient accumulation and reduction is not recommended. (use --full_precision_gradients=1)"
             )
 
-    def setup(self, distributed: Distributed, mode: StageMode = StageMode.training) -> None:
+    def setup(self, distributed: Distributed | None = None, mode: StageMode = StageMode.training) -> None:
         # TODO: More checks?
         stage: Stage
-        assert distributed.config is self._config.distributed
         assert not self._is_setup
         self._is_setup = True
+        if distributed is None:
+            distributed = Distributed(self._config.distributed)
+        else:
+            distributed.check_config(self._config.distributed)
         self._distributed = distributed
         self._mode = mode
         self._base_model.setup(distributed)
@@ -382,6 +385,10 @@ class MultiStageModel[ConfigType: FastLLMModelConfig](Configurable[ConfigType]):
         return self._shards[name]
 
     @property
+    def is_setup(self) -> bool:
+        return self._is_setup
+
+    @property
     def support_forward(self) -> bool:
         assert self._is_setup
         return self._mode.support_forward and self._stage_filter is None
@@ -442,6 +449,7 @@ class MultiStageModel[ConfigType: FastLLMModelConfig](Configurable[ConfigType]):
 
     @property
     def distributed(self) -> Distributed:
+        assert self._is_setup
         return self._distributed
 
     def invalidate_buffers(self) -> None:

@@ -123,6 +123,7 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
                     sequence_length=self._max_sequence_length,
                     vocab_size=self._vocab_size,
                     tokenizer=self._tokenizer,
+                    truncate_documents=self._config.truncate_documents,
                     cross_document_attention=self._cross_document_attention,
                     prediction_heads=self._prediction_heads,
                 )
@@ -145,6 +146,7 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
         consumed_samples: int,
         num_workers: int,
         prefetch_factor: int | None = None,
+        timeout: float = 60,
     ) -> typing.Iterator[typing.Any]:
         assert self._is_setup
 

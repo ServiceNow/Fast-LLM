@@ -5,9 +5,11 @@ import torch
 
 from fast_llm.data.data.gpt.data import GPTBatch
 from fast_llm.engine.base_model.base_model import BaseModel, Layer, LossDef
+from fast_llm.engine.base_model.config import Preprocessor
 from fast_llm.engine.config_utils.tensor_space import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames, PhaseType
 from fast_llm.engine.distributed.distributed import Distributed
+from fast_llm.engine.inference.runner import InferenceRunner
 from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
 from fast_llm.engine.schedule.config import BatchConfig
 from fast_llm.layers.language_model.config import LanguageModelKwargs, LanguageModelLossNames
@@ -58,18 +60,17 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             for param in self.parameters():
                 Assert.custom(isinstance, param, ParameterMeta)
                 param.init_parameter = get_init_megatron(param, self._config.transformer)  # Noqa
+        self._preprocessors: list[Preprocessor] = []
         if self._config.use_absolute_position_embeddings:
-            self._position_embedding_preprocessor = PositionEmbeddingPreprocessor(self._config, self._tensor_space)
+            self._preprocessors.append(PositionEmbeddingPreprocessor(self._config, self._tensor_space))
         if self._config.transformer.rotary.enabled:
-            self._rotary_embedding_preprocessor = RotaryEmbeddingPreprocessor(
-                self._config.transformer.rotary, self._tensor_space
+            self._preprocessors.append(
+                RotaryEmbeddingPreprocessor(self._config.transformer.rotary, self._tensor_space)
             )
-        if not self._use_flash_attention:
-            self._backup_attention_preprocessor = BackupAttentionPreprocessor(
-                self._config.transformer, self._tensor_space
-            )
+        if self._use_flash_attention:
+            self._preprocessors.append(FlashAttnVarlenPreprocessor(self._config.transformer, self._tensor_space))
         else:
-            self._flash_varlen_preprocessor = FlashAttnVarlenPreprocessor(self._config.transformer, self._tensor_space)
+            self._preprocessors.append(BackupAttentionPreprocessor(self._config.transformer, self._tensor_space))
 
     def get_output_layers(self) -> list[Layer]:
         return [
@@ -115,7 +116,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
 
     def setup(self, distributed: Distributed) -> None:
         assert not self._is_setup
-        assert distributed.config is self._tensor_space.distributed_config
+        distributed.check_config(self._tensor_space.distributed_config)
         self._tensor_space.setup(distributed)
         self._is_setup = True
 
@@ -207,12 +208,8 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                 kwargs[LanguageModelKwargs.labels] = TensorMeta.from_dims(
                     hidden_dims[:2], tensor_name="labels", dtype=torch.int64
                 )
-            if self._config.use_absolute_position_embeddings:
-                self._position_embedding_preprocessor.preprocess_meta(kwargs)
-            if self._config.transformer.rotary.enabled:
-                self._rotary_embedding_preprocessor.preprocess_meta(kwargs)
-            if not self._use_flash_attention:
-                self._backup_attention_preprocessor.preprocess_meta(kwargs)
+            for preprocessor in self._preprocessors:
+                preprocessor.preprocess_meta(kwargs)
             preprocessed_meta.append((tokens, kwargs))
 
         return preprocessed_meta
@@ -235,7 +232,6 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
         _, common_kwargs = preprocessed_meta[0]
         sequence_q = common_kwargs[TransformerKwargs.sequence_q_dim].size
         sequence_first = common_kwargs[TransformerKwargs.sequence_first]
-        sequence_length = common_kwargs[TransformerKwargs.sequence_length]
         prediction_heads: int = self._config.prediction_heads
 
         batch.token_ids = batch.token_ids.to(
@@ -246,13 +242,6 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
         if sequence_first:
             # Move the sequence dimension first to make sequence parallel ops more efficient.
             batch.token_ids = batch.token_ids.transpose(0, 1).contiguous()
-
-        if self._config.use_absolute_position_embeddings:
-            self._position_embedding_preprocessor.create_tensors(sequence_length)
-        if self._config.transformer.rotary.enabled:
-            self._rotary_embedding_preprocessor.create_tensors(sequence_length)
-        if not self._use_flash_attention:
-            self._backup_attention_preprocessor.create_tensors(sequence_length)
 
         preprocessed = []
         presents = None
@@ -265,8 +254,6 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                 tokens = batch.token_ids[:, sequence_k - sequence_q : sequence_k].contiguous()
             if batch.sequence_lengths is not None:
                 kwargs_meta[TransformerKwargs.sequence_lengths] = batch.sequence_lengths
-                if self._use_flash_attention:
-                    self._flash_varlen_preprocessor.preprocess(kwargs_meta)
 
             # TODO: Add pasts/presents to meta input?
             # Use lists as pointers so `past_key_values` is populated during the previous micro_sequence.
@@ -303,12 +290,8 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                                 else:
                                     labels[i, start : end + 1] = -100
                 kwargs[LanguageModelKwargs.labels] = labels
-            if self._config.use_absolute_position_embeddings:
-                self._position_embedding_preprocessor.preprocess(kwargs)
-            if self._config.transformer.rotary.enabled:
-                self._rotary_embedding_preprocessor.preprocess(kwargs)
-            if not self._use_flash_attention:
-                self._backup_attention_preprocessor.preprocess(kwargs)
+            for preprocessor in self._preprocessors:
+                preprocessor.preprocess(tokens, kwargs)
             preprocessed.append((tokens, kwargs))
 
         return preprocessed
@@ -382,7 +365,15 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             )
         return loss_defs
 
+    def add_preprocessor(self, preprocessor: Preprocessor):
+        assert not self._is_setup
+        self._preprocessors.append(preprocessor)
+
 
 class GPTModel[ConfigType: GPTModelConfig](FastLLMModel[ConfigType]):
     config_class: typing.ClassVar[type[GPTModelConfig]] = GPTModelConfig
     base_model_class: typing.ClassVar[type[GPTBaseModel]] = GPTBaseModel
+
+
+class GPTInferenceRunner(InferenceRunner):
+    model_class: typing.ClassVar[type[GPTModel]] = GPTModel
