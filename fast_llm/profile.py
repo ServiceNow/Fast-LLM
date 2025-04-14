@@ -94,7 +94,9 @@ class ProfilingConfig(Config):
             self.global_attention_layers = set()
         profile_ranks = set(self.ranks or [])
         Assert.eq(len(profile_ranks), len(self.ranks or []))
-        self.ranks = profile_ranks  # noqa
+        with self._set_implicit_default():
+            self.ranks = profile_ranks  # noqa
+        super()._validate()
 
     def get_profiler(
         self, *, distributed_config: DistributedConfig | None = None, start_step: int = 0

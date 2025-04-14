@@ -5,12 +5,13 @@ import numpy as np
 import torch
 
 from fast_llm.config import Field, FieldHint, NoAutoValidate, config_class
-from fast_llm.data.data.gpt.config import GPTDataConfig, GPTSamplingDefaultConfig
+from fast_llm.data.data.gpt.config import GPTDataConfig
 from fast_llm.data.data.gpt.data import GPTData
 from fast_llm.data.dataset.abstract import SampledDataset
 from fast_llm.data.dataset.gpt.config import (
     GPTIndexedDatasetConfig,
     GPTSampledDatasetConfig,
+    GPTSamplingConfig,
     GPTSamplingData,
     ShufflingType,
 )
@@ -40,7 +41,7 @@ def get_sampling_data(
 ) -> GPTSamplingData:
     # Config with convenient defaults.
     return GPTSamplingData(
-        config=GPTSamplingDefaultConfig(
+        config=GPTSamplingConfig(
             seed=seed,
             gpu=gpu,
             shuffle=shuffle,
@@ -83,7 +84,7 @@ def get_test_data_and_compare_samples(
         expected_samples = {PhaseType.training.value.lower(): expected_samples}
 
     assert "sampling" not in config
-    config["sampling"] = GPTSamplingDefaultConfig(
+    config["sampling"] = GPTSamplingConfig(
         seed=87522 if legacy else seed,
         gpu=gpu,
         shuffle=shuffle,
