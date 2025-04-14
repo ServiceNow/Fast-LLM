@@ -263,6 +263,7 @@ def test_load_pretrained_distributed_checkpoint():
         path=_CKPT_PATH,
         format=DistributedCheckpointFormat,
         optimizer_state=True,
+        load_config=ModelConfigType.model,
     )
     model = TEST_MODEL_CLS.from_pretrained(pretrained_config_ref)
     _compare_model_configs(config, model.config)
@@ -276,19 +277,25 @@ def test_load_pretrained_distributed_checkpoint():
 @pytest.mark.depends(on=["test_load_pretrained_distributed_checkpoint"])
 def test_load_converted_distributed_checkpoint():
     config_ref = TEST_MODEL_CONFIG_CLS.from_pretrained(
-        CheckpointLoadConfig(path=_CKPT_PATH, format=DistributedCheckpointFormat)
+        CheckpointLoadConfig(
+            path=_CKPT_PATH,
+            format=DistributedCheckpointFormat,
+            load_config=ModelConfigType.model,
+        )
     )
 
     model = TEST_MODEL_CLS.from_pretrained(
         CheckpointLoadConfig(
             path=_CONVERT_PATH / "distributed_0",
             format=DistributedCheckpointFormat,
+            load_config=ModelConfigType.model,
         )
     )
     config_alt = TEST_MODEL_CONFIG_CLS.from_pretrained(
         CheckpointLoadConfig(
             path=_CONVERT_PATH / "distributed_1",
             format=DistributedCheckpointFormat,
+            load_config=ModelConfigType.model,
         )
     )
     _compare_architectures(config_ref, model.config)
@@ -302,13 +309,25 @@ def test_load_converted_distributed_checkpoint():
 @pytest.mark.depends(on=["test_converted_fast_llm", "test_load_pretrained_distributed_checkpoint"])
 def test_load_converted_fast_llm_checkpoint():
     config_ref = TEST_MODEL_CONFIG_CLS.from_pretrained(
-        CheckpointLoadConfig(path=_CKPT_PATH, format=DistributedCheckpointFormat)
+        CheckpointLoadConfig(
+            path=_CKPT_PATH,
+            format=DistributedCheckpointFormat,
+            load_config=ModelConfigType.model,
+        )
     )
     model = TEST_MODEL_CLS.from_pretrained(
-        CheckpointLoadConfig(path=_CONVERT_PATH / "fast_llm_0", format=FastLLMCheckpointFormat)
+        CheckpointLoadConfig(
+            path=_CONVERT_PATH / "fast_llm_0",
+            format=FastLLMCheckpointFormat,
+            load_config=ModelConfigType.model,
+        )
     )
     config_alt = TEST_MODEL_CONFIG_CLS.from_pretrained(
-        CheckpointLoadConfig(path=_CONVERT_PATH / "fast_llm_1", format=FastLLMCheckpointFormat)
+        CheckpointLoadConfig(
+            path=_CONVERT_PATH / "fast_llm_1",
+            format=FastLLMCheckpointFormat,
+            load_config=ModelConfigType.model,
+        )
     )
     _compare_architectures(config_ref, model.config)
     _compare_architectures(config_ref, config_alt)
@@ -324,12 +343,14 @@ def test_load_converted_huggingface_checkpoint():
         CheckpointLoadConfig(
             path=_CKPT_PATH,
             format=DistributedCheckpointFormat,
+            load_config=ModelConfigType.model,
         )
     )
     model = TEST_MODEL_CLS.from_pretrained(
         CheckpointLoadConfig(
             path=_CONVERT_PATH / "huggingface_1",
             format=HUGGINGFACE_CHECKPOINT_FORMAT,
+            load_config=ModelConfigType.model,
         ),
         mode=StageMode.weights,
     )
@@ -337,6 +358,7 @@ def test_load_converted_huggingface_checkpoint():
         CheckpointLoadConfig(
             path=_CONVERT_PATH / "huggingface_0",
             format=HUGGINGFACE_CHECKPOINT_FORMAT,
+            load_config=ModelConfigType.model,
         )
     )
     _compare_architectures(config_ref, model.config)
@@ -353,6 +375,7 @@ def test_run_converted_model():
         CheckpointLoadConfig(
             path=_CKPT_PATH,
             format=DistributedCheckpointFormat,
+            load_config=ModelConfigType.model,
         )
     )
     test_input = torch.randint(
@@ -364,6 +387,7 @@ def test_run_converted_model():
         CheckpointLoadConfig(
             path=_CONVERT_PATH / "huggingface_0",
             format=HUGGINGFACE_CHECKPOINT_FORMAT,
+            load_config=ModelConfigType.model,
         )
     )
     errors = []
@@ -479,6 +503,7 @@ def test_load_distributed_checkpoint_dp2():
     pretrained_config_test = CheckpointLoadConfig(
         path=TEST_RESULTS_PATH / f"test_{TEST_MODEL}_load_pretrained_distributed_in_dp2" / "checkpoint" / "1",
         format=DistributedCheckpointFormat,
+        load_config=ModelConfigType.model,
     )
     config = TEST_MODEL_CONFIG_CLS.from_pretrained(pretrained_config_ref)
     model = TEST_MODEL_CLS.from_pretrained(pretrained_config_test, mode=StageMode.weights)
