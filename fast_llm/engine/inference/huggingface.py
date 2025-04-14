@@ -54,15 +54,13 @@ class HuggingfacePreTrainedModel(transformers.PreTrainedModel):
                 format=FastLLMCheckpointFormat,
             )
 
-        config_updates = {}
+        updates = {}
         torch_dtype = kwargs.pop("torch_dtype", None)
         if torch_dtype is not None:
-            config_updates[("distributed", "training_dtype")] = torch_dtype
+            updates[("distributed", "training_dtype")] = torch_dtype
 
         # Create the model
-        fast_llm_model = cls.runner_class.model_class.from_pretrained(
-            pretrained_model_name_or_path, config_updates=config_updates, mode=mode
-        )
+        fast_llm_model = cls.model_class.from_pretrained(pretrained_model_name_or_path, updates, mode=mode)
         config = cls.config_class(fast_llm_model.config)
 
         return cls(config, fast_llm_model, **kwargs)
