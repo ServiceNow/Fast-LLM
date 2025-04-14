@@ -53,7 +53,8 @@ class IntervalConfig(Config):
 
     def _validate(self) -> None:
         if self.interval:
-            self.offset %= self.interval
+            with self._set_implicit_default():
+                self.offset %= self.interval
         super()._validate()
 
     def enabled(self, iteration: int | None = None) -> bool:
@@ -120,6 +121,7 @@ class WandbAlertConfig(IntervalConfig):
         "The update may be posted by email and/or slack depending on the Wandb account configuration.",
         hint=FieldHint.feature,
     )
+    post_alerts: bool = Field(init=False, repr=False)
 
     def _validate(self) -> None:
         if self.status_updates is None:

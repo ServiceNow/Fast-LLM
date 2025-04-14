@@ -79,10 +79,6 @@ class BatchConfig(Config):
     def num_inputs(self) -> int:
         return self.sequential_micro_batches * self.num_micro_sequences
 
-    @property
-    def _is_setup(self) -> bool:
-        return hasattr(self, "_distributed")
-
     def _validate(self) -> None:
         # Use the distributed properties to determine the batch size and its breakdown.
         # Requires post-processed distributed config args
@@ -133,7 +129,8 @@ class BatchConfig(Config):
                 " Use at your own risk."
             )
         if self.micro_sequence_length is None:
-            self.micro_sequence_length = self.sequence_length
+            with self._set_implicit_default():
+                self.micro_sequence_length = self.sequence_length
         self.num_micro_sequences = div(self.sequence_length, self.micro_sequence_length)
         super()._validate()
 

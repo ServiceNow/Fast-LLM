@@ -71,7 +71,7 @@ class StateDictCheckpointHandler(CheckpointHandler):
     def _serialize_metadata(
         self, config: CheckpointSaveMetadataConfig, metadata: CheckpointMetadata
     ) -> dict[str, typing.Any]:
-        return metadata.to_serialized()
+        return metadata.to_dict()
 
     def load(self, config: CheckpointLoadConfig, metadata: CheckpointMetadata) -> None:
         with SafeLoad(self._model, shard_names=self.get_shard_names(config), timeout=config.timeout) as context:
