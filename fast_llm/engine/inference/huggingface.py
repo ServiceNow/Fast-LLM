@@ -60,7 +60,9 @@ class HuggingfacePreTrainedModel(transformers.PreTrainedModel):
             updates[("distributed", "training_dtype")] = torch_dtype
 
         # Create the model
-        fast_llm_model = cls.model_class.from_pretrained(pretrained_model_name_or_path, updates, mode=mode)
+        fast_llm_model = cls.runner_class.model_class.from_pretrained(
+            pretrained_model_name_or_path, updates, mode=mode
+        )
         config = cls.config_class(fast_llm_model.config)
 
         return cls(config, fast_llm_model, **kwargs)
