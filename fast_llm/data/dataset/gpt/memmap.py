@@ -148,7 +148,6 @@ class GPTMemmapDataset(GPTIndexedDataset):
         offset: int = 0,
         length: int | None = None,
         use_loss_masking_spans: bool = False,
-        use_preference_loss_masking_spans: bool = False,
     ) -> GPTSample:
         token_ids = np.frombuffer(
             self._bin_buffer,
@@ -171,7 +170,7 @@ class GPTMemmapDataset(GPTIndexedDataset):
 
         chosen_span = None
         rejected_span = None
-        if use_preference_loss_masking_spans and self._chosen_spans is not None and self._rejected_spans is not None:
+        if self._has_preference_spans and self._chosen_spans is not None and self._rejected_spans is not None:
             chosen_span = self._chosen_spans[idx]
 
             # filter spans that are outside the range of the selected tokens in the document
