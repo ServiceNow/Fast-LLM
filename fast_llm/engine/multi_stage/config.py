@@ -336,7 +336,8 @@ class PretrainedFastLLMModelConfig(Config):
         self.pretrained.setup(self.model)
         self.pretrained.validate()
         if self.pretrained.path is not None:
-            self.model = self.model.from_pretrained(self.pretrained, default=self.model)
+            with NoAutoValidate():
+                self.model = self.model.from_pretrained(self.pretrained, default=self.model)
         self._setup()
         super()._validate()
 
