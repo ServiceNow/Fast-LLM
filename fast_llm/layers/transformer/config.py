@@ -256,6 +256,28 @@ class TransformerArchitectureConfig(BaseModelArchitectureConfig):
         desc="Configuration for the parameter-efficient fine tuning.",
         hint=FieldHint.core,
     )
+    # Add diffusion configuration
+    use_diffusion: bool = Field(
+        default=False,
+        desc="Whether to use diffusion for noisy MLM training",
+        hint=FieldHint.feature,
+    )
+    diffusion_noise_schedule: str = Field(
+        default="cosine",
+        desc="Noise schedule for diffusion ('linear', 'cosine', or 'sqrt')",
+        hint=FieldHint.feature,
+    )
+    diffusion_timesteps: int = Field(
+        default=1000,
+        desc="Number of diffusion timesteps",
+        hint=FieldHint.feature,
+        valid=check_field(Assert.gt, 0),
+    )
+    diffusion_loss_type: str = Field(
+        default="mlm",
+        desc="Type of loss to use for diffusion ('mlm' or 'l2')",
+        hint=FieldHint.feature,
+    )
     num_layers: int = Field(
         default=12, desc="Number of layers in the transformer.", hint=FieldHint.core, valid=check_field(Assert.geq, 0)
     )
@@ -272,6 +294,11 @@ class TransformerArchitectureConfig(BaseModelArchitectureConfig):
         doc="Set to 1 for multi-query attention, `num_attention_heads` for multi-head.",
         hint=FieldHint.core,
         valid=check_field(Assert.gt, 0),
+    )
+    bidirectional_attention: bool = Field(
+        default=False,
+        desc="Whether to use bidirectional attention (like BERT) or causal attention (like GPT)",
+        hint=FieldHint.core,
     )
     add_linear_biases: bool | AddLinearBiasChoices = Field(
         default=True,

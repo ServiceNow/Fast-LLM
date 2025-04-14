@@ -29,23 +29,102 @@ logger = logging.getLogger(__name__)
 
 @dataclasses.dataclass
 class GPTBatch:
-    token_ids: torch.Tensor
+    token_ids: torch.Tensor  # [batch_size, sequence_length]
+    labels: torch.Tensor  # [batch_size, sequence_length] original tokens before masking
+    attention_mask: torch.Tensor  # [batch_size, sequence_length]
     loss_masking_spans: list[torch.Tensor] | None = None
     sequence_lengths: list[torch.Tensor] | None = None
 
 
 def gpt_data_collate_fn(
-    batch: list[GPTSample], use_loss_masking_spans: bool, cross_document_attention: bool
+    batch: list[GPTSample], 
+    use_loss_masking_spans: bool, 
+    cross_document_attention: bool,
+    random_token_masking: bool = False,
+    masking_probability: float = 0.15,
+    mask_token_id: int | None = None,
+    vocab_size: int | None = None,
+    mask_replace_prob: float = 0.8,
+    random_replace_prob: float = 0.1,
+    use_diffusion: bool = False,
+    diffusion_noise_schedule: str = "cosine",
+    diffusion_timesteps: int = 1000,
+    diffusion_loss_type: str = "mlm",
 ) -> GPTBatch:
+    """
+    Collate function that supports both standard MLM and diffusion-based noisy MLM.
+    """
     stacked_ids = np.stack([sample.token_ids for sample in batch])
+    batch_size, seq_length = stacked_ids.shape
+    
+    # Convert to tensor early to use PyTorch's random functions
+    token_ids = torch.from_numpy(stacked_ids)
+    labels = token_ids.clone()
+    attention_mask = torch.ones_like(token_ids)
+    
+    if random_token_masking or use_diffusion:
+        Assert.not_none(vocab_size, "vocab_size must be provided when using masking or diffusion")
+        Assert.not_none(mask_token_id, "mask_token_id must be provided when using masking or diffusion")
+        
+        if use_diffusion:
+            # Initialize diffusion process
+            from fast_llm.layers.diffusion.diffusion import get_noise_schedule, get_alphas, apply_forward_diffusion
+            
+            # Get noise schedule and compute alphas
+            betas = get_noise_schedule(diffusion_noise_schedule, diffusion_timesteps)
+            alphas, alpha_bars, _ = get_alphas(betas)
+            
+            # Sample random timesteps for batch
+            t = torch.randint(0, diffusion_timesteps, (batch_size,), device=token_ids.device)
+            
+            # Apply forward diffusion
+            token_ids, noise_mask = apply_forward_diffusion(
+                token_ids,
+                t,
+                alpha_bars,
+                vocab_size,
+                mask_token_id,
+            )
+            
+            # Set labels to -100 for non-corrupted tokens
+            labels = torch.where(noise_mask, labels, -100)
+            
+        else:
+            # Standard MLM masking
+            mask_prob = torch.full_like(token_ids, masking_probability, dtype=torch.float32)
+            mask = torch.bernoulli(mask_prob).bool()
+            
+            # Don't mask padding tokens
+            padding_mask = token_ids.eq(0)
+            mask.masked_fill_(padding_mask, False)
+            
+            # Set labels to -100 for non-masked tokens
+            labels = torch.where(mask, labels, -100)
+            
+            # Apply BERT-style masking (80% MASK, 10% random, 10% unchanged)
+            mask_or_random = torch.bernoulli(torch.full_like(token_ids, mask_replace_prob + random_replace_prob, dtype=torch.float32)).bool() & mask
+            random_or_keep = torch.bernoulli(torch.full_like(token_ids, random_replace_prob / (1 - mask_replace_prob), dtype=torch.float32)).bool() & mask_or_random
+            
+            # Replace with mask token
+            token_ids = torch.where(mask_or_random & ~random_or_keep, torch.full_like(token_ids, mask_token_id), token_ids)
+            
+            # Replace with random token
+            random_tokens = torch.randint_like(token_ids, 1, vocab_size)  # Start from 1 to avoid padding token
+            token_ids = torch.where(random_or_keep, random_tokens, token_ids)
+    
     stacked_spans = None
     sequence_lengths = None
     if use_loss_masking_spans:
         stacked_spans = [torch.from_numpy(sample.loss_masking_spans) for sample in batch]
     if not cross_document_attention:
         sequence_lengths = [torch.tensor(sample.sequence_lengths) for sample in batch]
+    
     return GPTBatch(
-        token_ids=torch.from_numpy(stacked_ids), loss_masking_spans=stacked_spans, sequence_lengths=sequence_lengths
+        token_ids=token_ids,
+        labels=labels,
+        attention_mask=attention_mask,
+        loss_masking_spans=stacked_spans,
+        sequence_lengths=sequence_lengths,
     )
 
 
@@ -171,6 +250,16 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
                     gpt_data_collate_fn,
                     use_loss_masking_spans=self._config.sampling.use_loss_masking_spans,
                     cross_document_attention=self._cross_document_attention,
+                    random_token_masking=self._config.sampling.random_token_masking,
+                    masking_probability=self._config.sampling.masking_probability,
+                    mask_token_id=self._config.sampling.mask_token_id,
+                    vocab_size=self._vocab_size,
+                    mask_replace_prob=self._config.sampling.mask_replace_prob,
+                    random_replace_prob=self._config.sampling.random_replace_prob,
+                    use_diffusion=self._config.sampling.use_diffusion,
+                    diffusion_noise_schedule=self._config.sampling.diffusion_noise_schedule,
+                    diffusion_timesteps=self._config.sampling.diffusion_timesteps,
+                    diffusion_loss_type=self._config.sampling.diffusion_loss_type,
                 ),
                 multiprocessing_context=self._config.multiprocessing_context.value if num_workers > 0 else None,
             )

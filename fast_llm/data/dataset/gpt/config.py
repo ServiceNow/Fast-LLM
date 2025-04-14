@@ -45,21 +45,63 @@ class ShufflingType(str, enum.Enum):
 
 @config_class()
 class GPTSamplingConfig(SamplingConfig):
-    gpu: bool | None = Field(
-        default=None,
-        desc="Enable fast sampling on GPU."
-        " Note that random sampling works differently on GPU,"
-        " so the sample won't match the CPU equivalent.",
+    seed: int = Field(default=1234, desc="Random seed for sampling.", hint=FieldHint.core)
+    gpu: bool = Field(default=False, desc="Use GPU for sampling.", hint=FieldHint.core)
+    shuffle: ShufflingType = Field(
+        default=ShufflingType.full,
+        desc="Type of shuffling to apply to the dataset.",
+        hint=FieldHint.core,
+    )
+    use_loss_masking_spans: bool = Field(
+        default=False,
+        desc="Use loss masking spans for training.",
+        hint=FieldHint.core,
+    )
+    random_token_masking: bool = Field(
+        default=False,
+        desc="Apply random token masking (MLM) during training.",
         hint=FieldHint.feature,
     )
-    use_loss_masking_spans: bool | None = Field(
-        default=None,
-        desc="Read loss masking spans from the dataset.",
+    masking_probability: float = Field(
+        default=0.15,
+        desc="Probability of masking a token in MLM.",
         hint=FieldHint.feature,
     )
-    shuffle: ShufflingType | None = Field(
+    mask_token_id: int | None = Field(
         default=None,
-        desc="Shuffling strategy.",
+        desc="Token ID to use for masking in MLM.",
+        hint=FieldHint.feature,
+    )
+    mask_replace_prob: float = Field(
+        default=0.8,
+        desc="Probability of replacing masked token with [MASK] token.",
+        hint=FieldHint.feature,
+    )
+    random_replace_prob: float = Field(
+        default=0.1,
+        desc="Probability of replacing masked token with random token.",
+        hint=FieldHint.feature,
+    )
+    # Add diffusion parameters
+    use_diffusion: bool = Field(
+        default=False,
+        desc="Whether to use diffusion for noisy MLM training.",
+        hint=FieldHint.feature,
+    )
+    diffusion_noise_schedule: str = Field(
+        default="cosine",
+        desc="Noise schedule for diffusion ('linear', 'cosine', or 'sqrt').",
+        hint=FieldHint.feature,
+    )
+    diffusion_timesteps: int = Field(
+        default=1000,
+        desc="Number of diffusion timesteps.",
+        hint=FieldHint.feature,
+        valid=check_field(Assert.gt, 0),
+    )
+    diffusion_loss_type: str = Field(
+        default="mlm",
+        desc="Type of loss to use for diffusion ('mlm' or 'l2').",
         hint=FieldHint.feature,
     )
 
@@ -540,3 +582,4 @@ class GPTTestSlowDatasetConfig(GPTSampledDatasetConfig):
         if sampling.distributed.config.rank == 0:
             time.sleep(self.sleep)
         return GPTRandomDatasetConfig().build_and_sample(sampling)
+

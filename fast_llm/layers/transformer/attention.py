@@ -302,115 +302,98 @@ class Attention(torch.nn.Module):
         return window_size
 
     def forward(self, input_: torch.Tensor, kwargs: dict[str, typing.Any]) -> tuple[torch.Tensor, torch.Tensor | None]:
+        """
+        Forward pass of the attention layer.
+        """
         sequence_first = kwargs[TransformerKwargs.sequence_first]
-        query, key_value = self._query_key_value(input_, sequence_first)
+        query, key_value, context = self._query_key_value(input_, sequence_first)
 
-        # TODO: Move the rest to function.
+        # Get the attention mask
+        mask = kwargs.get(TransformerKwargs.attention_mask)
+        mask_value = kwargs.get(TransformerKwargs.attention_mask_value, -float("inf"))
 
-        if (past_key_values := kwargs.get(TransformerKwargs.past_key_values)) is not None:
-            assert sequence_first
-            # Clear the lists so tensors can be de-allocated
-            key_value = torch.cat((past_key_values.pop(0), key_value), dim=0)
-
-        if (presents := kwargs.get(TransformerKwargs.presents)) is not None:
-            # Return the presents as a leaf tensors so the gradients from later micro-sequences
-            # don't propagate to this one.
-            presents.append(present := key_value.detach().requires_grad_())
-            # Manually add the gradients from later micro-sequences.
-            key_value = AttachGrad.apply(key_value, present)
-
-        if self._tensor_space.distributed.sequence_data_group:
-            key_value = (
-                key_value[: kwargs[TransformerKwargs.sequence_k_dim].size]
-                if sequence_first
-                else key_value[:, : kwargs[TransformerKwargs.sequence_k_dim].size]
+        # Create causal mask if not using bidirectional attention
+        if not self._config.bidirectional_attention and mask is None:
+            sequence_q = query.size(1)
+            sequence_k = key_value.size(1)
+            # Create causal mask [sequence_q, sequence_k]
+            causal_mask = torch.triu(
+                torch.ones(sequence_q, sequence_k, dtype=torch.bool, device=query.device),
+                diagonal=1,
             )
+            mask = ~causal_mask
+            mask_value = -float("inf")
 
-        if sequence_first:
-            # TODO: Optimize (is contiguous avoidable?)
-            query = query.transpose(0, 1).contiguous()
-            key_value = key_value.transpose(0, 1).contiguous()
-
-        key, value = key_value.split(self._local_head_groups * self._kv_channels, dim=-1)
-
-        query = query.view(*query.shape[:2], self._local_heads, self._kv_channels)
-        key = key.view(*key.shape[:2], self._local_head_groups, self._kv_channels)
-        value = value.view(*value.shape[:2], self._local_head_groups, self._kv_channels)
-
+        # Apply rotary embeddings if enabled
         if self._config.rotary.enabled:
-            if self._debug_transformer:
-                self._debug_log(query, "query_rotary_input", self._QUERY_DIMS, kwargs)
-                self._debug_log(
-                    key,
-                    "key_rotary_input",
-                    self._KV_DIMS,
-                    kwargs,
+            if self._config.rotary.triton:
+                triton_rotary_autograd_(
+                    query,
+                    kwargs[TransformerKwargs.rotary_freq_q],
+                    sequence_first=sequence_first,
                 )
-            rotary_fn = triton_rotary_autograd_ if self._config.rotary.triton else apply_rotary_embeddings
-            query = rotary_fn(query, kwargs[TransformerKwargs.rotary_freq_q])
-            key = rotary_fn(key, kwargs[TransformerKwargs.rotary_freq_k])
+                triton_rotary_autograd_(
+                    key_value,
+                    kwargs[TransformerKwargs.rotary_freq_k],
+                    sequence_first=sequence_first,
+                )
+            else:
+                query = apply_rotary_embeddings(
+                    query,
+                    kwargs[TransformerKwargs.rotary_freq_q],
+                    sequence_first=sequence_first,
+                )
+                key_value = apply_rotary_embeddings(
+                    key_value,
+                    kwargs[TransformerKwargs.rotary_freq_k],
+                    sequence_first=sequence_first,
+                )
 
-        window_size = self._decide_window_size()
+        # Split key and value
+        key, value = key_value.chunk(2, dim=-1)
 
+        # Compute attention
         if self._use_flash_attention:
-            assert _flash_available
-            with set_generator(self._tensor_space.distributed.tp_generator):
-                if (cu_seqlens_q := kwargs.get(TransformerKwargs.cu_seqlens_q, None)) is not None:
-                    out_dims = query.size()
-                    query = query.view(-1, query.size(-2), query.size(-1))
-                    key = key.view(-1, key.size(-2), key.size(-1))
-                    value = value.view(-1, value.size(-2), value.size(-1))
-                    input_ = _flash_attn_varlen_func(
-                        query,
-                        key,
-                        value,
-                        cu_seqlens_q=cu_seqlens_q,
-                        cu_seqlens_k=kwargs.get(TransformerKwargs.cu_seqlens_k),
-                        max_seqlen_q=kwargs.get(TransformerKwargs.max_seqlen_q),
-                        max_seqlen_k=kwargs.get(TransformerKwargs.max_seqlen_k),
-                        dropout_p=self._config.attention_dropout if self.training else 0.0,
-                        window_size=(-1, -1) if window_size is None else (window_size - 1, 0),
-                        causal=True,
-                        softmax_scale=self._softmax_scale,
-                    ).view(*out_dims)
-                else:
-                    input_ = _flash_attn_func(
-                        query,
-                        key,
-                        value,
-                        window_size=(-1, -1) if window_size is None else (window_size - 1, 0),
-                        dropout_p=self._config.attention_dropout if self.training else 0.0,
-                        causal=True,
-                        softmax_scale=self._softmax_scale,
-                    )
-            input_ = input_.flatten(-2)
+            # Flash attention
+            sequence_lengths = kwargs.get(TransformerKwargs.sequence_lengths)
+            if sequence_lengths is not None:
+                # Variable length sequences
+                cu_seqlens_q = kwargs[TransformerKwargs.cu_seqlens_q]
+                cu_seqlens_k = kwargs[TransformerKwargs.cu_seqlens_k]
+                max_seqlen_q = kwargs[TransformerKwargs.max_seqlen_q]
+                max_seqlen_k = kwargs[TransformerKwargs.max_seqlen_k]
+                attn_output = _flash_attn_varlen_func(
+                    query,
+                    key,
+                    value,
+                    cu_seqlens_q,
+                    cu_seqlens_k,
+                    max_seqlen_q,
+                    max_seqlen_k,
+                    self._softmax_scale / self._layer_index,
+                    dropout_p=self._config.attention_dropout if self.training else 0.0,
+                    causal=not self._config.bidirectional_attention,
+                    return_attn_probs=False,
+                )
+            else:
+                # Fixed length sequences
+                attn_output = _flash_attn_func(
+                    query,
+                    key,
+                    value,
+                    self._softmax_scale / self._layer_index,
+                    dropout_p=self._config.attention_dropout if self.training else 0.0,
+                    causal=not self._config.bidirectional_attention,
+                    return_attn_probs=False,
+                )
         else:
-            # TODO: Avoid the flattens.
-            input_ = self._attn_fused(
-                query.flatten(-2),
-                key.flatten(-2),
-                value.flatten(-2),
-                kwargs[TransformerKwargs.attention_mask],
-                kwargs[TransformerKwargs.attention_mask_value],
-            )
+            # Regular attention
+            attn_output = self._attn_fused(query, key, value, mask, mask_value)
+
+        # Project output
+        output = self.dense(attn_output)
 
         if self._debug_transformer:
-            self._debug_log(query, "query", self._QUERY_DIMS, kwargs)
-            self._debug_log(
-                key,
-                "key",
-                self._KV_DIMS,
-                kwargs,
-            )
-            self._debug_log(
-                value,
-                "value",
-                self._KV_DIMS,
-                kwargs,
-            )
-            self._debug_log(input_, "context", self._CONTEXT_DIMS, kwargs)
+            self._debug_log(output, "dense", self._CONTEXT_DIMS, kwargs)
 
-        if sequence_first:
-            # TODO: Optimize (is contiguous avoidable? Transpose dense output?)
-            input_ = input_.transpose(0, 1).contiguous()
-        return self.dense(input_)
+        return output, None

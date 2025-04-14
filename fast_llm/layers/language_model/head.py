@@ -146,15 +146,24 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
         self, input_: torch.Tensor, kwargs: dict, losses: dict | None = None
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
         labels = kwargs[LanguageModelKwargs.labels] if LanguageModelKwargs.labels in kwargs else None
-        # MTP: Shift the labels
-        labels = labels[:, self._prediction_distance :].flatten() if labels is not None else None
+        
+        # For MLM, we don't need to shift labels since we want to predict the original tokens
+        if not kwargs.get(LanguageModelKwargs.is_mlm, False):
+            # MTP: Shift the labels only for regular language modeling
+            labels = labels[:, self._prediction_distance :].flatten() if labels is not None else None
+        else:
+            # For MLM, use the full sequence but flatten
+            labels = labels.flatten() if labels is not None else None
+            
         if self._sequence_parallel_logits:
             labels = split_op(labels, self._tensor_space.distributed.tensor_group, 0)
+            
         do_grad = labels is not None and self.training
         input_ = input_.detach().requires_grad_(do_grad)
+        
         with torch.enable_grad():
-            # MTP: truncate the input
-            if self._prediction_distance > 0:
+            # For MLM, we don't truncate input since we want to predict at masked positions
+            if not kwargs.get(LanguageModelKwargs.is_mlm, False) and self._prediction_distance > 0:
                 truncated_input = input_[:, : -self._prediction_distance, :].contiguous()
             else:
                 truncated_input = input_

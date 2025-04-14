@@ -34,6 +34,7 @@ class LanguageModelKwargs:
     # TODO: These are generic
     labels = "labels"
     phase = "phase"
+    is_mlm = "is_mlm"  # Whether we're doing masked language modeling
 
 
 @config_class()
@@ -68,6 +69,22 @@ class LanguageModelArchitectureConfig(BaseModelArchitectureConfig):
         desc="Number of multi-token prediction heads.",
         hint=FieldHint.feature,
         valid=check_field(Assert.gt, 0),
+    )
+    use_mlm: bool = Field(
+        default=False,
+        desc="Whether to use masked language modeling instead of causal language modeling.",
+        hint=FieldHint.feature,
+    )
+    mlm_probability: float = Field(
+        default=0.15,
+        desc="Probability of masking each token for masked language modeling.",
+        hint=FieldHint.feature,
+        valid=check_field(Assert.in_range_incl, 0.0, 1.0),
+    )
+    mask_token_id: int | None = Field(
+        default=None,
+        desc="Token ID to use for masking in MLM. If None, will use random token substitution.",
+        hint=FieldHint.feature,
     )
 
     def _validate(self) -> None:
