@@ -47,6 +47,7 @@ class GPTTrainer[ConfigType: GPTTrainerConfig](Trainer[ConfigType]):
             {
                 "vocab_size": self._config.model.base_model.vocab_size,
                 "sequence_length": self._config.batch.sequence_length,
+                "use_loss_masking_spans": self._config.batch.use_loss_masking_spans,
                 "cross_document_attention": self._config.batch.cross_document_attention,
             }
         )
