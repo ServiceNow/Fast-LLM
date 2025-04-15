@@ -1,14 +1,13 @@
 import abc
 import dataclasses
 import logging
-import pathlib
-import shutil
 import typing
 
 import torch
+from transformers.configuration_utils import PretrainedConfig
 
 from fast_llm.config import DEFAULT, MISSING
-from fast_llm.engine.checkpoint.config import CheckpointFormat, CheckpointSaveConfig
+from fast_llm.engine.checkpoint.config import CheckpointFormat
 from fast_llm.engine.checkpoint.external import (
     AutoStateDictCheckpointHandler,
     ConstantExportParamConverter,
@@ -22,8 +21,8 @@ from fast_llm.engine.checkpoint.external import (
     SplitWeightConverter,
     WeightConverter,
 )
-from fast_llm.engine.checkpoint.huggingface import HuggingfaceStateDictCheckpointHandler
-from fast_llm.engine.multi_stage.config import CheckpointMetadata, FastLLMModelConfig
+from fast_llm.engine.checkpoint.huggingface import CustomModelingExportMixin, HuggingfaceStateDictCheckpointHandler
+from fast_llm.engine.multi_stage.config import FastLLMModelConfig
 from fast_llm.functional.config import ActivationType
 from fast_llm.functional.rotary import convert_rotary_complex_to_real, convert_rotary_real_to_complex
 from fast_llm.layers.common.config import NormalizationType
@@ -584,7 +583,7 @@ class MixtralHuggingfaceCheckpointHandler(CommonLlamaHuggingfaceCheckpointHandle
         ]
 
 
-class MTPLlamaHuggingfaceCheckpointHandler(CommonLlamaHuggingfaceCheckpointHandler):
+class MTPLlamaHuggingfaceCheckpointHandler(CustomModelingExportMixin, CommonLlamaHuggingfaceCheckpointHandler):
     from fast_llm.models.external.mtp_llama import configuration_mtp_llama, modeling_mtp_llama
 
     format: typing.ClassVar[type[CheckpointFormat]] = MTPLlamaGPTHuggingfaceCheckpointFormat
@@ -592,27 +591,7 @@ class MTPLlamaHuggingfaceCheckpointHandler(CommonLlamaHuggingfaceCheckpointHandl
     configuration_file = configuration_mtp_llama.__file__
     # modeling_file: typing.ClassVar[str] = "fast_llm/models/external/mtp_llama/modeling_mtp_llama.py"
     # configuration_file: typing.ClassVar[str] = "fast_llm/models/external/mtp_llama/configuration_mtp_llama.py"
-    configuration_cls = MTPLlamaConfig
-
-    # Use custom config instead of relying on the transformers library
-    @classmethod
-    def _load_config(cls, directory: pathlib.Path | str) -> dict:
-        config = MTPLlamaConfig.from_pretrained(directory).to_dict()
-        Assert.eq(config["model_type"], cls.get_huggingface_model_type())
-        return config
-
-    @classmethod
-    def _save_config(cls, directory: pathlib.Path | str, config: dict[str, typing.Any]) -> None:
-        MTPLlamaConfig.from_dict(config).save_pretrained(directory)
-
-    def save(self, config: CheckpointSaveConfig, metadata: CheckpointMetadata) -> None:
-        super().save(config, metadata)
-        self._copy_modeling_files(config)
-
-    def _copy_modeling_files(self, config: CheckpointSaveConfig) -> None:
-        # Copy the modeling files to the output directory
-        shutil.copy(self.modeling_file, config.path)
-        shutil.copy(self.configuration_file, config.path)
+    configuration_cls: typing.ClassVar[type[PretrainedConfig]] = MTPLlamaConfig
 
     @classmethod
     def _create_config_converters(cls) -> list[ParamConverter]:

@@ -1,12 +1,14 @@
 import abc
 import json
 import pathlib
+import shutil
 import typing
 
 import safetensors
 import torch
+from transformers.configuration_utils import PretrainedConfig
 
-from fast_llm.engine.checkpoint.config import CheckpointLoadConfig, CheckpointSaveMetadataConfig
+from fast_llm.engine.checkpoint.config import CheckpointLoadConfig, CheckpointSaveConfig, CheckpointSaveMetadataConfig
 from fast_llm.engine.checkpoint.external import (
     ConstantExportParamConverter,
     ExternalStateDictCheckpointHandler,
@@ -118,3 +120,33 @@ class HuggingfaceStateDictCheckpointHandler(ExternalStateDictCheckpointHandler, 
                 yield from torch.load(path)
             else:
                 raise NotImplementedError(f"Unknown file format for {path}")
+
+
+class CustomModelingExportMixin:
+    """
+    Mixin class for HuggingfaceStateDictCheckpointHandler to handle custom modeling files.
+    """
+
+    modeling_file: typing.ClassVar[str]
+    configuration_file: typing.ClassVar[str]
+    configuration_cls: typing.ClassVar[type[PretrainedConfig]]
+
+    # Use custom config instead of relying on the transformers library
+    @classmethod
+    def _load_config(cls, directory: pathlib.Path | str) -> dict:
+        config = cls.configuration_cls.from_pretrained(directory).to_dict()
+        Assert.eq(config["model_type"], cls.get_huggingface_model_type())
+        return config
+
+    @classmethod
+    def _save_config(cls, directory: pathlib.Path | str, config: dict[str, typing.Any]) -> None:
+        cls.configuration_cls.from_dict(config).save_pretrained(directory)
+
+    def save(self, config: CheckpointSaveConfig, metadata: CheckpointMetadata) -> None:
+        super().save(config, metadata)
+        self._copy_modeling_files(config)
+
+    def _copy_modeling_files(self, config: CheckpointSaveConfig) -> None:
+        # Copy the modeling files to the output directory
+        shutil.copy(self.modeling_file, config.path)
+        shutil.copy(self.configuration_file, config.path)
