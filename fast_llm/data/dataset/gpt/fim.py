@@ -23,7 +23,11 @@ class GPTFimDataset(SampledDataset):
         self._config = config
         self._dataset = dataset
 
-        if hasattr(self._dataset, "_indexed_dataset") and dataset._dataset._indexed_dataset._has_preference_spans:
+        if (
+            hasattr(self._dataset, "_indexed_dataset")
+            and hasattr(self._dataset._indexed_dataset, "_has_preference_spans")
+            and dataset._dataset._indexed_dataset._has_preference_spans
+        ):
             raise NotImplementedError("FIM is currently not compatible with preference loss masking.")
 
         self._seed = sampling.config.seed

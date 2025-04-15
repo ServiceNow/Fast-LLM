@@ -171,7 +171,9 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
 
         dataset = self._datasets[dataset_name]  # noqa
 
-        if hasattr(dataset._dataset, "_indexed_dataset"):
+        if hasattr(dataset._dataset, "_indexed_dataset") and hasattr(
+            dataset._dataset._indexed_dataset, "_has_preference_spans"
+        ):
             use_preference_loss_masking_spans = dataset._dataset._indexed_dataset._has_preference_spans
         else:
             use_preference_loss_masking_spans = False
