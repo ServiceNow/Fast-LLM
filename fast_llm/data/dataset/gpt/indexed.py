@@ -34,7 +34,7 @@ class GPTIndexedDataset(IndexedDataset):
 
         if sampling.config.shuffle == ShufflingType.legacy:
             return LegacyGPTSampledIndexedDataset(self, sampling)
-        elif self._has_preference_spans:
+        elif hasattr(self, "_has_preference_spans") and self._has_preference_spans:
             return GPTSampledPreferenceIndexedDataset(self, sampling)
         else:
             return GPTSampledIndexedDataset(self, sampling)
