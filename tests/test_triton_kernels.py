@@ -194,12 +194,13 @@ def test_triton_mlp_activation(gated, activation_type, recompute):
 @pytest.mark.parametrize(
     ("num_columns", "grad_output", "logits_scale_factor"),
     (
-        (8192, 1.0, 1.0),
-        (8192, None, 1.0),
-        (8192, 1.0, 4.0),
-        (8192, 4.0, 1.0),
-        (65536, 1.0, 1.0),
-        (131072, 1.0, 1.0),
+        (8192, 1.0, 1.0),  # Simple
+        (5000, 1.0, 1.0),  # Not a power of 2
+        (5000, None, 1.0),  # No grad
+        (5000, 1.0, 4.0),  # Loss scaling
+        (5000, 4.0, 1.0),  # Grad scaling
+        (65536, 1.0, 1.0),  # Max block size
+        (65537, 1.0, 1.0),  # Above max block size
     ),
 )
 @pytest.mark.parametrize("target_format", (TargetFormat.labels, TargetFormat.logits, TargetFormat.probabilities))

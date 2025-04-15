@@ -96,7 +96,7 @@ def triton_cross_entropy_from_distribution_forward_backward_kernel(
         target = exp_target_logits / sum_exp_target_logits
 
     # per_sample_loss = log(sum_exp_logits) - sum(probabilities * logits)
-    loss = tl.log(sum_exp_logits) - tl.sum(target * logits_norm, 0)
+    loss = tl.log(sum_exp_logits) - tl.sum(tl.where(mask, target * logits_norm, 0), 0)
     tl.store(losses_ptr + block_idx, loss)
 
     if grad_losses is not None:
