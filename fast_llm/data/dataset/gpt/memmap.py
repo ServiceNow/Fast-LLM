@@ -190,6 +190,11 @@ class GPTMemmapDataset(GPTIndexedDataset):
             # subtract by offset to normalize span boundaries
             rejected_span[0] = np.maximum(rejected_span[0], offset) - offset  # offset
             rejected_span[1] = np.minimum(rejected_span[1], offset + len(token_ids) - 1) - offset
+        elif self._has_preference_spans:
+            if self._chosen_spans is None:
+                raise ValueError("Failed to read chosen spans from memmap dataset.")
+            if self._rejected_spans is None:
+                raise ValueError("Failed to read rejected spans from memmap dataset.")
 
         return GPTSample(
             token_ids=token_ids,
