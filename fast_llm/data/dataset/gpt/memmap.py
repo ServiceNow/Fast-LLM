@@ -34,12 +34,12 @@ class GPTMemmapDataset(GPTIndexedDataset):
         self._name = name
         self._prefix = pathlib.Path(prefix)
         self._has_spans = 0
+        self._has_images = 0
 
         with self._prefix.with_suffix(".idx").open("rb") as stream:
             Assert.eq(stream.read(9), MEMMAP_INDEX_HEADER, msg=f"File: {stream.name}")
             self._version = struct.unpack("<Q", stream.read(8))[0]
             assert self._version in [1, 2, 3], f"Unsupported version for gpt_memmap dataset: {self._version}."
-            # TODO Soham: similar flag for _has_images. Bump version
             if self._version >= 2:
                 self._has_spans = struct.unpack("<B", stream.read(1))[0]
 
@@ -66,6 +66,7 @@ class GPTMemmapDataset(GPTIndexedDataset):
             offset=offset + self._document_sizes.nbytes,
         )
 
+        offset += self._document_sizes.nbytes + self._pointers.nbytes
         self._spans = None
         if self._has_spans and self._version >= 2:
             self._spans = []
@@ -73,9 +74,8 @@ class GPTMemmapDataset(GPTIndexedDataset):
                 self._index_bin_buffer,
                 dtype=np.int32,
                 count=self._num_documents,
-                offset=offset + self._document_sizes.nbytes + self._pointers.nbytes,
+                offset=offset,
             )
-            span_offset = offset + self._document_sizes.nbytes + self._pointers.nbytes + self._num_spans.nbytes
             self._num_spans_cumsum = np.r_[0, np.cumsum(self._num_spans[:-1], dtype=np.int64)]
             for idx in range(self._num_documents):
                 self._spans.append(
@@ -83,18 +83,40 @@ class GPTMemmapDataset(GPTIndexedDataset):
                         self._index_bin_buffer,
                         dtype=np.int32,
                         count=self._num_spans[idx] * 2,
-                        offset=span_offset + self._num_spans_cumsum[idx] * 2 * np.dtype(np.int32).itemsize,
+                        offset=offset
+                        + self._num_spans.nbytes
+                        + self._num_spans_cumsum[idx] * 2 * np.dtype(np.int32).itemsize,
                     ).reshape(-1, 2)
                 )
+            offset += (
+                self._num_spans.nbytes
+                + self._num_spans.sum() * 2 * np.dtype(np.int32).itemsize
+                + sum([x.nbytes for x in self._spans])
+            )
         if self._has_images and self._version >= 3:
-            self._image_sizes = np.frombuffer()
+            self._n_images = np.frombuffer(
+                self._index_bin_buffer, dtype=np.int32, count=self._num_documents, offset=offset
+            )
+            self._im_lengths = np.frombuffer(
+                self._index_bin_buffer,
+                dtype=np.int32,
+                count=self._n_images.sum() * 3,
+                offset=offset + self._n_images.nbytes,
+            )
+            self._im_positions = np.frombuffer(
+                self._index_bin_buffer,
+                dtype=np.int32,
+                count=self._n_images.sum(),
+                offset=offset + self._n_images.nbytes + self._im_lengths.nbytes,
+            )
 
         self._bin_buffer_mmap = np.memmap(self._prefix.with_suffix(".bin"), mode="r", order="C")
         self._bin_buffer = memoryview(self._bin_buffer_mmap)
 
+        # TODO Soham: fix num_tokens to include images
         self._num_tokens = div(self._bin_buffer_mmap.size, np.dtype(self._dtype).itemsize)
-        if num_tokens is not None:
-            assert self._num_tokens == num_tokens
+        # if num_tokens is not None:
+        #     assert self._num_tokens == num_tokens
 
     def __getstate__(self) -> tuple[str, pathlib.Path, int | None, int | None]:
         return (self._name, self._prefix, self._num_documents, self._num_tokens)
@@ -110,6 +132,7 @@ class GPTMemmapDataset(GPTIndexedDataset):
             self._index_bin_buffer_mmap._mmap.close()  # noqa
             del self._index_bin_buffer_mmap
 
+    # TODO Soham: get images
     def get(
         self, idx: int, offset: int = 0, length: int | None = None, use_loss_masking_spans: bool = False
     ) -> GPTSample:
@@ -170,10 +193,8 @@ class GPTMemmapDataset(GPTIndexedDataset):
 
         prefix = pathlib.Path(prefix)
         prefix.parent.mkdir(parents=True, exist_ok=True)
-        pathlib.Path(prefix + "_images")
 
         # Write the binary data file (.bin) lazily
-        # TODO Soham: append image tokens along with text tokens
         with prefix.with_suffix(".bin").open("wb") as bin_stream:
             for document in documents:
                 # Infer dtype from the first document
@@ -186,23 +207,25 @@ class GPTMemmapDataset(GPTIndexedDataset):
 
                 # Write document to binary file
                 bin_stream.write(document.token_ids.tobytes(order="C"))
+                total_im_size = 0
                 if document.images:
                     n_images.append(len(document.images))
                     total_images += len(document.images)
                     for image, image_position in zip(document.images, document.image_positions):
-                        im_lengths.append(image.size)
+                        # assume 3 channels (RGB) for all images
+                        im_lengths.append(np.array(image.shape[1:]))
                         im_positions.append(document.image_positions)
                         bin_stream.write(image.tobytes(order="C"))
+                        total_im_size += image.size
 
                 # Update metadata
                 doc_length = len(document.token_ids)
                 doc_lengths.append(doc_length)
-                im_lengths.append()
                 pointers.append(offset)
                 if document.loss_masking_spans is not None:
                     num_spans.append(len(document.loss_masking_spans))
                     spans.append(document.loss_masking_spans)
-                offset += doc_length * np.dtype(dtype).itemsize
+                offset += doc_length * np.dtype(dtype).itemsize + total_im_size * np.dtype(np.uint8).itemsize
                 num_documents += 1
 
         # Finalize metadata arrays
@@ -214,15 +237,12 @@ class GPTMemmapDataset(GPTIndexedDataset):
         else:
             spans = np.array(spans, dtype=np.int32)
 
-        # TODO Soham: else condition might not be necessary
         if total_images:
             n_images = np.array(n_images, dtype=np.int32)
-            im_lengths = np.array(im_lengths, dtype=np.int32)
-            im_positions = np.array(im_positions, dtype=np.int32)
         else:
             n_images = np.array([])
-            im_lengths = np.array([])
-            im_positions = np.array([])
+        im_lengths = np.stack(im_lengths, dtype=np.int32)
+        im_positions = np.array(im_positions, dtype=np.int32)
 
         # Write the index file (.idx)
         with prefix.with_suffix(".idx").open("wb") as idx_stream:

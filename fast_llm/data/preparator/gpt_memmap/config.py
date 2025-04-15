@@ -59,6 +59,15 @@ class GPTHuggingfaceDatasetConfig(Config):
     loss_masking_spans: None | str = Field(
         default=None, desc="Field containing character spans to mask for loss computation", hint=FieldHint.optional
     )
+    image_paths: None | str = Field(
+        default=None, desc="Field containing images within the document", hint=FieldHint.optional
+    )
+    image_positions: None | str = Field(
+        default=None, desc="Field containing image positions within a document", hint=FieldHint.optional
+    )
+    images: None | str = Field(
+        default=None, desc="Field containing images relevant to a document", hint=FieldHint.optional
+    )
     data_type: DataType | None = Field(
         default=None,
         desc="Data type of the dataset field."
@@ -142,6 +151,12 @@ class GPTMemmapDatasetPreparatorConfig(DatasetPreparatorConfig):
         hint=FieldHint.optional,
         valid=check_field(Assert.geq, 1),
     )
+    tokenize_batch_size: int = Field(
+        default=1000,
+        desc="Batch size for tokenization.",
+        hint=FieldHint.optional,
+        valid=check_field(Assert.geq, 1),
+    )
     saving_workers: int = Field(
         default=1,
         desc="Number of processes for saving the data.",
@@ -165,8 +180,9 @@ class GPTMemmapDatasetPreparatorConfig(DatasetPreparatorConfig):
         hint=FieldHint.optional,
     )
 
+    # TODO Soham: move tokenizer validation to MultiModalDataProcessor
     def _validate(self) -> None:
-        assert self.tokenizer.path is not None
+        assert self.data_processor.tokenizer.path is not None
         if self.dataset.data_type is not None:
             Assert.incl(DataType.from_numpy(self.dataset.data_type.numpy), MEMMAP_DTYPES_INV)
         super()._validate()

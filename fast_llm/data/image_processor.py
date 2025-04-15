@@ -9,8 +9,8 @@ from fast_llm.data.config import ImageProcessorConfig
 class ImageProcessor:
     def __init__(self, config: ImageProcessorConfig):
         self.patch_size = config.patch_size
-        self.mean = config.mean / config.rescale_factor
-        self.std = config.std / config.rescale_factor
+        self.mean = [x / config.rescale_factor for x in config.mean]
+        self.std = [x / config.rescale_factor for x in config.std]
         self.max_height = config.max_height
         self.max_width = config.max_width
         assert (
@@ -20,16 +20,19 @@ class ImageProcessor:
             self.max_width % self.patch_size[1] == 0
         ), "max_width must be divisible by patch_size[1]. Found {max_width} and {self.patch_size[1]}"
 
-    def resize(self, image: torch.Tensor) -> torch.Tensor:
+    def resize(self, image):
         # Resize the image to the specified size
-        height = image.shape[0]
-        width = image.shape[1]
+        # TODO Soham: resize for patches only during train?
+        # TODO Soham: convert all images to tensor?
+        # height = image.shape[0]
+        # width = image.shape[1]
+        height, width = image.size
         ratio = max(height / self.max_height, width / self.max_width)
         if ratio > 1:
             height = math.ceil(height / ratio)
             width = math.ceil(width / ratio)
         else:
-            height = self.patch_size[0] * math.ceil(height / self.self.patch_size[0])
+            height = self.patch_size[0] * math.ceil(height / self.patch_size[0])
             width = self.patch_size[1] * math.ceil(width / self.patch_size[1])
 
         # TODO: options for interpolation mode
@@ -40,4 +43,4 @@ class ImageProcessor:
         return F.normalize(image, mean=self.mean, std=self.std)
 
     def get_num_patches(self, image: torch.Tensor) -> torch.Tensor:
-        return (image.size(0) // self.patch_size[0]) * (image.size(1) // self.patch_size[1])
+        return (image.size[0] // self.patch_size[0]) * (image.size[1] // self.patch_size[1])
