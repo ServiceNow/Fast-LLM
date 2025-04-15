@@ -62,7 +62,7 @@ def test_write_memmap_preference_dataset(dtype):
         GPTMemmapDataset.write_dataset(prefix=prefix, documents=documents)
         dataset = GPTMemmapDataset(name="foo", prefix=prefix)
         for i, document in enumerate(documents):
-            dataset_item = dataset.get(i, use_preference_loss_masking_spans=True)
+            dataset_item = dataset.get(i)
             assert np.array_equal(
                 dataset_item.token_ids, document.token_ids, equal_nan=True
             ), f"Token ids mismatch for document {i}: {document} != {dataset.get(i)}."
