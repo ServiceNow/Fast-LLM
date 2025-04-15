@@ -144,14 +144,16 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
         labels = kwargs[LanguageModelKwargs.labels] if LanguageModelKwargs.labels in kwargs else None
         # MTP: Shift the labels
-        labels = (
-            labels[
-                :,
-                self._prediction_distance : self._prediction_distance + input_.size(1),
-            ].flatten()
-            if labels is not None
-            else None
-        )
+        if labels is not None:
+            labels = (
+                labels[self._prediction_distance : self._prediction_distance + input_.size(0),]
+                if kwargs[TransformerKwargs.sequence_first]
+                else labels[
+                    :,
+                    self._prediction_distance : self._prediction_distance + input_.size(1),
+                ]
+            )
+            labels = labels.flatten()
         if self._sequence_parallel_logits:
             labels = split_op(labels, self._tensor_space.distributed.tensor_group, 0)
         do_grad = labels is not None and self.training

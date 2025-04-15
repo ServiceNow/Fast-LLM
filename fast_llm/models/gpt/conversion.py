@@ -27,7 +27,6 @@ from fast_llm.functional.config import ActivationType
 from fast_llm.functional.rotary import convert_rotary_complex_to_real, convert_rotary_real_to_complex
 from fast_llm.layers.common.config import NormalizationType
 from fast_llm.layers.transformer.config import RotaryEmbeddingType, RoutingType, TransformerConfig
-from fast_llm.models.external.mtp_llama.configuration_mtp_llama import MTPLlamaConfig
 from fast_llm.models.gpt.config import (
     GPTArchitectureConfig,
     GPTModelConfig,
@@ -38,6 +37,7 @@ from fast_llm.models.gpt.config import (
     Qwen2GPTHuggingfaceCheckpointFormat,
     Starcoder2GPTHuggingfaceCheckpointFormat,
 )
+from fast_llm.models.gpt.external.mtp_llama.configuration_mtp_llama import MTPLlamaConfig
 from fast_llm.models.gpt.model import GPTModel
 from fast_llm.tensor import SafeTensorSlice
 from fast_llm.utils import Assert
