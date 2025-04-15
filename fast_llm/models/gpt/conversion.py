@@ -584,13 +584,11 @@ class MixtralHuggingfaceCheckpointHandler(CommonLlamaHuggingfaceCheckpointHandle
 
 
 class MTPLlamaHuggingfaceCheckpointHandler(CustomModelingExportMixin, CommonLlamaHuggingfaceCheckpointHandler):
-    from fast_llm.models.external.mtp_llama import configuration_mtp_llama, modeling_mtp_llama
+    from fast_llm.models.gpt.external.mtp_llama import configuration_mtp_llama, modeling_mtp_llama
 
     format: typing.ClassVar[type[CheckpointFormat]] = MTPLlamaGPTHuggingfaceCheckpointFormat
     modeling_file = modeling_mtp_llama.__file__
     configuration_file = configuration_mtp_llama.__file__
-    # modeling_file: typing.ClassVar[str] = "fast_llm/models/external/mtp_llama/modeling_mtp_llama.py"
-    # configuration_file: typing.ClassVar[str] = "fast_llm/models/external/mtp_llama/configuration_mtp_llama.py"
     configuration_cls: typing.ClassVar[type[PretrainedConfig]] = MTPLlamaConfig
 
     @classmethod
