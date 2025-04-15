@@ -147,10 +147,7 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
         labels = (
             labels[
                 :,
-                self._prediction_distance : labels.shape[1]
-                - self._config.prediction_heads
-                + 1
-                + self._prediction_distance,
+                self._prediction_distance : self._prediction_distance + input_.size(1),
             ].flatten()
             if labels is not None
             else None
