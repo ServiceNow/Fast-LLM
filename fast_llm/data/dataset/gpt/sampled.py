@@ -708,10 +708,6 @@ class LegacyGPTSampledIndexedDataset(SampledDataset):
         self._indexed_dataset = indexed_dataset
         self._num_samples = sampling.num_samples
         self._sequence_length = sampling.sequence_length
-        if not sampling.config.enable_packing:
-            raise NotImplementedError(
-                "Legacy sampling only supports document packing. Please use the latest dataset format."
-            )
         if not sampling.truncate_documents:
             raise NotImplementedError(
                 "Legacy sampling only supports document truncation. Please use the latest dataset format."

@@ -170,6 +170,12 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
         log_main_rank(f"Initializing {dataset_name} dataset iterator from sample {consumed_samples}...")
 
         dataset = self._datasets[dataset_name]  # noqa
+
+        if hasattr(dataset._dataset, "_indexed_dataset"):
+            use_preference_loss_masking_spans = dataset._dataset._indexed_dataset._has_preference_spans
+        else:
+            use_preference_loss_masking_spans = False
+
         return iter(
             torch.utils.data.DataLoader(
                 dataset,
@@ -187,7 +193,7 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
                     gpt_data_collate_fn,
                     use_loss_masking_spans=self._config.sampling.use_loss_masking_spans,
                     cross_document_attention=self._cross_document_attention,
-                    use_preference_loss_masking_spans=dataset._dataset._indexed_dataset._has_preference_spans,
+                    use_preference_loss_masking_spans=use_preference_loss_masking_spans,
                 ),
                 multiprocessing_context=self._config.multiprocessing_context.value if num_workers > 0 else None,
             )
