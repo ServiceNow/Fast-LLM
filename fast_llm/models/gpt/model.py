@@ -373,3 +373,4 @@ class GPTModel[ConfigType: GPTModelConfig](FastLLMModel[ConfigType]):
 
 class GPTInferenceRunner(InferenceRunner):
     model_class: typing.ClassVar[type[GPTModel]] = GPTModel
+    batch_config_class: typing.ClassVar[type[GPTBatchConfig]] = GPTBatchConfig

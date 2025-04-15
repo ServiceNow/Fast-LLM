@@ -82,6 +82,7 @@ class GPTBatchConfig(BatchConfig):
         hint=FieldHint.performance,
         valid=check_field(Assert.gt, 0),
     )
+    # TODO: Find a better place for these?
     cross_document_attention: bool = Field(
         default=True,
         desc="Applies attention to tokens from other documents in the packed sequence. Set to False for masking attention to other documents.",
@@ -181,6 +182,19 @@ class GPTTrainerConfig(PretrainedGPTModelConfig, TrainerConfig):
         for reference_model in self.reference_models.values():
             Assert.none(reference_model.model.base_model.cross_entropy_splits)
         super()._validate()
+
+    @classmethod
+    def _from_dict(
+        cls,
+        default: dict[str, typing.Any],
+        strict: bool = True,
+        flat: bool = False,
+    ) -> typing.Self:
+        # TODO v0.x: Remove backward compatibility.
+        cls._handle_renamed_field(
+            default, ("data", "sampling", "use_loss_masking_spans"), ("batch", "use_loss_masking_spans")
+        )
+        return super()._from_dict(default, strict, flat)
 
     @classmethod
     def get_trainer_class(cls) -> type["GPTTrainer"]:

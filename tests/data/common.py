@@ -21,7 +21,7 @@ from fast_llm.data.dataset.gpt.sampled import GPTSampledIndexedDataset
 from fast_llm.data.tokenizer import Tokenizer
 from fast_llm.engine.distributed.config import DistributedConfig, PhaseType
 from fast_llm.engine.distributed.distributed import Distributed
-from fast_llm.engine.schedule.config import BatchConfig
+from fast_llm.models.gpt.config import GPTBatchConfig
 from fast_llm.utils import Assert, div
 from tests.common import TEST_VOCAB_SIZE
 
@@ -105,7 +105,7 @@ def get_test_data_and_compare_samples(
     data = GPTData(GPTDataConfig.from_dict(config), distributed_config)
     data.setup(distributed, sampling_parameters, cache_directory)
     with NoAutoValidate():
-        batch_config = BatchConfig(batch_size=1, sequence_length=sequence_length)
+        batch_config = GPTBatchConfig(batch_size=1, sequence_length=sequence_length)
     batch_config.setup(distributed_config)
     batch_config.validate()
     tokens = {
