@@ -73,7 +73,9 @@ class GPTSamplingData(SamplingData):
     tokenizer: "Tokenizer"
     truncate_documents: bool = True
     cross_document_attention: bool = True
-    prediction_heads: int = 1
+    # How many extra tokens to add to the sequence length.
+    # This is used to provide labels even for the last tokens in the sequence.
+    extra_tokens: int = 1
 
 
 @config_class()

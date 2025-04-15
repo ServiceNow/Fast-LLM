@@ -67,7 +67,7 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
         vocab_size: int,
         max_sequence_length: int,
         cross_document_attention: bool = True,
-        prediction_heads: int = 1,
+        extra_tokens: int = 1,
     ):
         """
         Create the data and gather some basic information on the dataset(s).
@@ -77,7 +77,7 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
         self._vocab_size = vocab_size
         self._max_sequence_length = max_sequence_length
         self._cross_document_attention = cross_document_attention
-        self._prediction_heads = prediction_heads
+        self._extra_tokens = extra_tokens
 
     def setup(
         self,
@@ -125,7 +125,7 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
                     tokenizer=self._tokenizer,
                     truncate_documents=self._config.truncate_documents,
                     cross_document_attention=self._cross_document_attention,
-                    prediction_heads=self._prediction_heads,
+                    extra_tokens=self._extra_tokens,
                 )
                 dataset = self._config.datasets[dataset_name].build_and_sample(sampling)
                 self._datasets[dataset_name] = DatasetMonitor(dataset, self._config.data_sample_warn_time_ms)

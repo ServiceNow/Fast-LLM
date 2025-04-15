@@ -88,7 +88,7 @@ class GPTSampledIndexedDataset(SampledDataset):
         self._num_samples = sampling.num_samples
         self._sequence_length = sampling.sequence_length
         self._cross_document_attention = sampling.cross_document_attention
-        self._prediction_heads = sampling.prediction_heads
+        self._extra_tokens = sampling.extra_tokens
         self._config = sampling.config
         self._truncate_documents = sampling.truncate_documents
         self._device = torch.device("cuda" if self._config.gpu else "cpu")
@@ -147,15 +147,15 @@ class GPTSampledIndexedDataset(SampledDataset):
                 raise RuntimeError(
                     f" > No documents shorter than {self._sequence_length+1} tokens found in dataset {self._indexed_dataset.name}."
                 )
-        # TODO MTP: Produce more labels to provide labels for the multi-token prediction heads?
-        # We produce sequences of length `self._sequence_length + prediction_heads` so the last token has a label for all heads,
+        # We produce sequences of length `self._sequence_length + extra_tokens` so the last token has a label for all prediction heads,
         # but in case of truncations we also include those last labels in the following sample,
-        # so we need `sequence_length * num_samples + prediction_heads` tokens in total.
+        # so we need `sequence_length * num_samples + extra_tokens` tokens in total.
         if self._truncate_documents:
-            num_epochs = math.ceil((self._sequence_length * self._num_samples + self._prediction_heads) / tokens_per_epoch)
+            num_epochs = math.ceil((self._sequence_length * self._num_samples + self._extra_tokens) / tokens_per_epoch)
         else:
-            num_epochs = math.ceil(((self._sequence_length + self._prediction_heads) * self._num_samples) / tokens_per_epoch)
-
+            num_epochs = math.ceil(
+                ((self._sequence_length + self._extra_tokens) * self._num_samples) / tokens_per_epoch
+            )
 
         # Prepare for shuffling.
         generator = torch.Generator(device=self._device)
@@ -341,9 +341,11 @@ class GPTSampledIndexedDataset(SampledDataset):
         self._lazy_load()
         # tokens at the boundary are included in only one sample when we pack without truncations
         # in case of packing with truncations, the last token from the previous sample is also the first token of the next sample
-        sample_length = self._sequence_length if self._truncate_documents else self._sequence_length + self._prediction_heads
+        sample_length = (
+            self._sequence_length if self._truncate_documents else self._sequence_length + self._extra_tokens
+        )
         token_start = index * sample_length
-        token_end = token_start + self._sequence_length + self._prediction_heads
+        token_end = token_start + self._sequence_length + self._extra_tokens
 
         if token_start < self._unshuffled_tokens:
             token_start_array = self._token_cumsum_unshuffled.array
@@ -405,7 +407,7 @@ class GPTSampledIndexedDataset(SampledDataset):
                         span = np.clip(
                             loss_masking_span + token_count - token_start,
                             0,
-                            self._sequence_length + self._prediction_heads,
+                            self._sequence_length + self._extra_tokens,
                         )
                         if span[1] > span[0]:
                             loss_masking_spans.append(span)
@@ -425,7 +427,7 @@ class GPTSampledIndexedDataset(SampledDataset):
             if self._config.use_loss_masking_spans
             else None
         )
-        Assert.eq(len(token_ids), self._sequence_length + self._prediction_heads)
+        Assert.eq(len(token_ids), self._sequence_length + self._extra_tokens)
 
         return GPTSample(token_ids=token_ids, loss_masking_spans=loss_masking_spans, sequence_lengths=sequence_lengths)
 
