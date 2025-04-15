@@ -244,7 +244,7 @@ class GPTDatasetFromFileConfig(GPTSamplableDatasetConfig):
         return config.build()
 
     def _load_config(self):
-        assert self.path.is_file()
+        assert self.path.is_file(), f"File {self.path} does not exist."
         return GPTSampledDatasetConfig.from_dict(self._convert_paths(yaml.safe_load(self.path.open("r"))))
 
     def _convert_paths(self, config):
