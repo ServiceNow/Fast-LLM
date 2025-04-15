@@ -71,7 +71,7 @@ class HuggingfaceGPTModelForCausalLM(HuggingfacePreTrainedModel, tgu.GenerationM
         if labels is not None:
             raise NotImplementedError()
 
-        if self._use_fm_changes:
+        if self._use_fm_changes and attention_mask is not None:
 
             # First non zero indexes or zero index if the row is all zeros (invalid row)
             first_non_zero_indexes = attention_mask.argmax(dim=1)
