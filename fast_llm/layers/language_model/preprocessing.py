@@ -69,3 +69,52 @@ class PositionEmbeddingPreprocessor(Preprocessor):
             tensor_name=LanguageModelKwargs.position_ids,
             dtype=torch.int64,
         )
+
+
+class PreferenceSpanPreprocessor(Preprocessor):
+    def __init__(self, config: LanguageModelBaseConfig, tensor_space: TensorSpace):
+        self._config = config
+        self._tensor_space = tensor_space
+        self._distributed_config = self._tensor_space.distributed_config
+        self._scalar_dim = self._tensor_space.get_tensor_dim(DefaultDimNames.scalar)
+
+    def preprocess_meta(self, kwargs: dict[str, typing.Any]) -> None:
+        return
+
+    def preprocess(self, batch, kwargs: dict[str, typing.Any]) -> None:
+        sequence_q = kwargs[TransformerKwargs.sequence_q_dim].size
+        sequence_k = kwargs[TransformerKwargs.sequence_k_dim].size
+        sequence_offset = sequence_k - sequence_q + 1  # +1 for shift in labels
+
+        if LanguageModelKwargs.chosen_spans not in kwargs or LanguageModelKwargs.rejected_spans not in kwargs:
+            raise ValueError("Expected chosen spans or rejected spans to be found within the batch.")
+
+        chosen_loss_masking_spans = kwargs[LanguageModelKwargs.chosen_spans]
+        for spans in chosen_loss_masking_spans:
+            if not spans.numel():
+                continue
+            # only keep spans within the sequence or partially within the sequence
+            valid_spans = spans[(spans[0] <= sequence_k) & (spans[1] >= sequence_offset)]
+            if valid_spans.numel():
+                # if span is partially within the sequence, truncate parts of spans that are outside of the sequence
+                valid_spans[:, 0].clamp_(min=sequence_offset)
+                valid_spans[:, 1].clamp_(max=sequence_k)
+                valid_spans -= sequence_offset
+
+                # TODO: check higher batch size
+                kwargs[LanguageModelKwargs.chosen_spans] = valid_spans
+
+        rejected_loss_masking_spans = kwargs[LanguageModelKwargs.rejected_spans]
+        for spans in rejected_loss_masking_spans:
+            if not spans.numel():
+                continue
+            # only keep spans within the sequence or partially within the sequence
+            valid_spans = spans[(spans[0] <= sequence_k) & (spans[1] >= sequence_offset)]
+            if valid_spans.numel():
+                # if span is partially within the sequence, truncate parts of spans that are outside of the sequence
+                valid_spans[:, 0].clamp_(min=sequence_offset)
+                valid_spans[:, 1].clamp_(max=sequence_k)
+                valid_spans -= sequence_offset
+
+                # TODO: check higher batch size
+                kwargs[LanguageModelKwargs.rejected_spans] = valid_spans

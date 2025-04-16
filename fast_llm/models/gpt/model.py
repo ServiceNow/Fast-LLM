@@ -15,7 +15,7 @@ from fast_llm.engine.schedule.config import BatchConfig
 from fast_llm.layers.language_model.config import LanguageModelKwargs, LanguageModelLossNames
 from fast_llm.layers.language_model.embedding import WORD_EMBEDDINGS_WEIGHT, LanguageModelEmbedding
 from fast_llm.layers.language_model.head import OUTPUT_WEIGHTS, LanguageModelHead
-from fast_llm.layers.language_model.preprocessing import PositionEmbeddingPreprocessor
+from fast_llm.layers.language_model.preprocessing import PositionEmbeddingPreprocessor, PreferenceSpanPreprocessor
 from fast_llm.layers.transformer.config import (
     RoutingType,
     TransformerDimNames,
@@ -72,6 +72,9 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
         else:
             self._preprocessors.append(BackupAttentionPreprocessor(self._config.transformer, self._tensor_space))
 
+        if self._config.loss_function == "dpo":  # TODO better way to pass in?
+            self._preprocessors.append(PreferenceSpanPreprocessor(self._config, self._tensor_space))
+
     def get_output_layers(self) -> list[Layer]:
         return [
             layer
@@ -119,7 +122,6 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
         distributed.check_config(self._tensor_space.distributed_config)
         self._tensor_space.setup(distributed)
         self._is_setup = True
-
 
     def preprocess_meta(
         self, batch_meta: BatchConfig | torch.Tensor, phase: PhaseType
@@ -254,6 +256,10 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                 tokens = batch.token_ids[:, sequence_k - sequence_q : sequence_k].contiguous()
             if batch.sequence_lengths is not None:
                 kwargs_meta[TransformerKwargs.sequence_lengths] = batch.sequence_lengths
+            if batch.chosen_loss_masking_spans is not None:
+                kwargs_meta[LanguageModelKwargs.chosen_spans] = batch.chosen_loss_masking_spans
+            if batch.rejected_loss_masking_spans is not None:
+                kwargs_meta[LanguageModelKwargs.rejected_spans] = batch.rejected_loss_masking_spans
 
             # TODO: Add pasts/presents to meta input?
             # Use lists as pointers so `past_key_values` is populated during the previous micro_sequence.
@@ -289,30 +295,6 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                                     labels[start : end + 1, i] = -100
                                 else:
                                     labels[i, start : end + 1] = -100
-                if batch.chosen_loss_masking_spans is not None:
-                    for i, spans in enumerate(batch.chosen_loss_masking_spans):
-                        if not spans.numel():
-                            continue
-                        # only keep spans within the sequence or partially within the sequence
-                        valid_spans = spans[(spans[0] <= sequence_k) & (spans[1] >= sequence_offset)]
-                        if valid_spans.numel():
-                            # if span is partially within the sequence, truncate parts of spans that are outside of the sequence
-                            valid_spans[:, 0].clamp_(min=sequence_offset)
-                            valid_spans[:, 1].clamp_(max=sequence_k)
-                            valid_spans -= sequence_offset
-                            kwargs[LanguageModelKwargs.chosen_spans] = valid_spans
-                if batch.rejected_loss_masking_spans is not None:
-                    for i, spans in enumerate(batch.rejected_loss_masking_spans):
-                        if not spans.numel():
-                            continue
-                        # only keep spans within the sequence or partially within the sequence
-                        valid_spans = spans[(spans[0] <= sequence_k) & (spans[1] >= sequence_offset)]
-                        if valid_spans.numel():
-                            # if span is partially within the sequence, truncate parts of spans that are outside of the sequence
-                            valid_spans[:, 0].clamp_(min=sequence_offset)
-                            valid_spans[:, 1].clamp_(max=sequence_k)
-                            valid_spans -= sequence_offset
-                            kwargs[LanguageModelKwargs.rejected_spans] = valid_spans
                 kwargs[LanguageModelKwargs.labels] = labels
             for preprocessor in self._preprocessors:
                 preprocessor.preprocess(tokens, kwargs)
