@@ -11,6 +11,7 @@ from fast_llm.engine.schedule.schedule import Schedule
 
 class InferenceRunner(abc.ABC):
     model_class: typing.ClassVar[type[FastLLMModel]] = FastLLMModel
+    batch_config_class: typing.ClassVar[type[BatchConfig]] = BatchConfig
 
     def __init__(self, fast_llm_model: FastLLMModel):
         assert isinstance(fast_llm_model, self.model_class)
@@ -19,7 +20,7 @@ class InferenceRunner(abc.ABC):
         self._schedule_config = ScheduleConfig()
         # TODO: Sort things out.
         with NoAutoValidate():
-            self._batch_config = BatchConfig()
+            self._batch_config = self.batch_config_class()
         self._batch_config.setup(self._fast_llm_model.config.distributed)
         self._batch_config.validate()
         self._runner = ScheduleRunner(

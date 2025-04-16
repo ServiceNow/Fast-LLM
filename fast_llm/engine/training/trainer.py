@@ -11,6 +11,7 @@ import torch
 from fast_llm.config import Configurable
 from fast_llm.core.distributed import safe_barrier
 from fast_llm.data.data.abstract import Data
+from fast_llm.data.dataset.config import SamplingParameters
 from fast_llm.engine.base_model.config import Preprocessor
 from fast_llm.engine.config_utils.run import Run, is_main_rank, log_main_rank, log_pipeline_parallel_main_rank
 from fast_llm.engine.distributed.config import PhaseType
@@ -137,9 +138,9 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
         self._data.setup(
             distributed,
             {
-                dataset_name: steps
+                dataset_name: self._get_sampling_parameters({"num_samples": samples})
                 for datasets in self._samples_per_split.values()
-                for dataset_name, steps in datasets.items()
+                for dataset_name, samples in datasets.items()
             },
             None if run.experiment_directory is None else run.experiment_directory / "dataset_cache",
             timeout=self._config.training.timeout,
@@ -149,6 +150,11 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
     @abc.abstractmethod
     def _get_data(self) -> Data:
         pass
+
+    def _get_sampling_parameters(
+        self, parameters: dict[str, typing.Any], _return_dict: bool = False
+    ) -> SamplingParameters | dict[str, typing.Any]:
+        return parameters if _return_dict else SamplingParameters(**parameters)
 
     @property
     def _consumed_samples(self) -> int:

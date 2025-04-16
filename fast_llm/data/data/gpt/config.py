@@ -3,25 +3,17 @@ import typing
 
 from fast_llm.config import Field, FieldHint, FieldUpdate, check_field, config_class
 from fast_llm.data.config import MultiprocessingContext, TokenizerConfig
-from fast_llm.data.data.config import DataConfig, SamplingDefaultConfig
+from fast_llm.data.data.config import DataConfig
 from fast_llm.data.dataset.gpt.config import (
     GPTLegacyConfig,
     GPTLegacyDatasetConfig,
     GPTSampledDatasetConfig,
     GPTSamplingConfig,
-    ShufflingType,
 )
 from fast_llm.engine.distributed.config import PhaseType
 from fast_llm.utils import Assert
 
 logger = logging.getLogger(__name__)
-
-
-@config_class()
-class GPTSamplingDefaultConfig(SamplingDefaultConfig, GPTSamplingConfig):
-    gpu: bool = FieldUpdate(default=True)
-    use_loss_masking_spans: bool = FieldUpdate(default=False)
-    shuffle: ShufflingType = FieldUpdate(default=ShufflingType.epoch)
 
 
 @config_class()
@@ -45,7 +37,7 @@ class GPTDataConfig(DataConfig, GPTLegacyConfig):
         desc="Configuration for the dataset(s).",
         hint=FieldHint.core,
     )
-    sampling: GPTSamplingDefaultConfig = FieldUpdate(default_factory=GPTSamplingDefaultConfig)
+    sampling: GPTSamplingConfig = FieldUpdate(default_factory=GPTSamplingConfig)
     data_sample_warn_time_ms: float = Field(
         default=1000,
         desc="Warn if a sample takes too long to load.",
