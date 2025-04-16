@@ -60,7 +60,6 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
         hidden_dim = self._tensor_space.get_tensor_dim(TransformerDimNames.hidden)
 
         self._loss_name = LanguageModelLossNames.multi_token_prediction_loss(prediction_distance)
-        self._logits_name = "logits" if prediction_distance == 0 else f"logits_{prediction_distance}"
         self.final_norm = config.transformer.normalization.get_layer(hidden_dim)
         self._logits_scale_factor = config.logits_scale_factor
         self._z_loss_factor = config.logit_z_loss
@@ -198,7 +197,7 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
             )
             if labels is None:
                 # TODO: Make a proper way of returning the model output.
-                kwargs[self._logits_name] = loss
+                kwargs["logits" if self._prediction_distance == 0 else f"logits_{self._prediction_distance}"] = loss
                 return None, None
         else:
             loss = None
