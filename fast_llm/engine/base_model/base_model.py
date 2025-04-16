@@ -146,7 +146,7 @@ class BaseModel[ConfigType: BaseModelConfig](Configurable[ConfigType], Sequentia
     def loss_defs(self) -> list[LossDef]:
         pass
 
-    def add_reference_model(self, name: str, inference_runner: InferenceRunner) -> None:
+    def add_reference_model(self, name: str, inference_runner: "InferenceRunner") -> None:
         assert name not in self._reference_models
         assert not self._is_setup
         self._reference_models[name] = inference_runner
