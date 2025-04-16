@@ -70,12 +70,12 @@ class Step:
     meta_kwargs: dict | None = None
 
     @property
-    def micro_sequence(self) -> int:
-        return self.data_index % self.config.num_micro_sequences
+    def micro_batch_split(self) -> int:
+        return self.data_index % self.config.micro_batch_splits
 
     @property
     def micro_batch(self) -> int:
-        return self.data_index // self.config.num_micro_sequences
+        return self.data_index // self.config.micro_batch_splits
 
     @property
     def depth_first_micro_batch(self) -> int:
@@ -108,7 +108,7 @@ class Step:
             f" local_idx={self.local_index},"
             f" stage={self.stage}{'f' if self.type_ == StepType.forward else 'b'},"
             f" dfmb={self.depth_first_micro_batch}, bfmb={self.breadth_first_micro_batch},"
-            f" ms={self.micro_sequence}{misc})"
+            f" ms={self.micro_batch_split}{misc})"
         )
 
     def get_stage_index(self, num_stages) -> int:
@@ -198,7 +198,7 @@ class Schedule(abc.ABC):
             Assert.in_range(
                 step.data_index,
                 0,
-                self._batch_config.sequential_micro_batches * self._batch_config.num_micro_sequences,
+                self._batch_config.sequential_micro_batches * self._batch_config.micro_batch_splits,
             )
             Assert.incl(step.type_, (StepType.forward, StepType.backward))
             step.global_index = i
@@ -458,7 +458,7 @@ class Schedule(abc.ABC):
             if step.type_ == StepType.forward:
                 if step.prev_step is None:
                     assert step.stage == 0
-                    step.meta_input, step.meta_kwargs = self._preprocessed_meta[step.micro_sequence]
+                    step.meta_input, step.meta_kwargs = self._preprocessed_meta[step.micro_batch_split]
                 # meta_kwargs may be modified.
                 meta_kwargs = step.meta_kwargs.copy()
                 step.meta_output = self._multi_stage.stages[step.stage].forward_meta(step.meta_input, meta_kwargs)
@@ -466,15 +466,15 @@ class Schedule(abc.ABC):
                     step.next_step.meta_input = step.meta_output
                     step.next_step.meta_kwargs = step.meta_kwargs
 
-    def get_data_index(self, micro_batch: int, micro_sequence: int) -> int:
-        return micro_batch * self._batch_config.num_micro_sequences + micro_sequence
+    def get_data_index(self, micro_batch: int, micro_batch_split: int) -> int:
+        return micro_batch * self._batch_config.micro_batch_splits + micro_batch_split
 
     def get_data_index_split(
-        self, breadth_first_micro_batch: int, depth_first_micro_batch: int, micro_sequence: int
+        self, breadth_first_micro_batch: int, depth_first_micro_batch: int, micro_batch_split: int
     ) -> int:
         return self.get_data_index(
             breadth_first_micro_batch * self._batch_config.depth_first_micro_batches + depth_first_micro_batch,
-            micro_sequence,
+            micro_batch_split,
         )
 
     def _create_steps(self) -> tuple[list[Step], int]:
@@ -490,13 +490,13 @@ class Schedule(abc.ABC):
         for depth_first_micro_batch in range(self._batch_config.depth_first_micro_batches):
             for stage in range(self._num_stages):
                 for breadth_first_micro_batch in range(self._batch_config.breadth_first_micro_batches):
-                    for micro_sequence in range(self._batch_config.num_micro_sequences):
+                    for micro_batch_split in range(self._batch_config.micro_batch_splits):
                         steps.append(
                             Step(
                                 config=self._batch_config,
                                 stage=stage,
                                 data_index=self.get_data_index_split(
-                                    breadth_first_micro_batch, depth_first_micro_batch, micro_sequence
+                                    breadth_first_micro_batch, depth_first_micro_batch, micro_batch_split
                                 ),
                                 type_=StepType.forward,
                             )
@@ -504,13 +504,13 @@ class Schedule(abc.ABC):
             if self._is_training:
                 for stage in reversed(range(first_grad_stage, self._num_stages)):
                     for breadth_first_micro_batch in range(self._batch_config.breadth_first_micro_batches):
-                        for micro_sequence in reversed(range(self._batch_config.num_micro_sequences)):
+                        for micro_batch_split in reversed(range(self._batch_config.micro_batch_splits)):
                             steps.append(
                                 Step(
                                     config=self._batch_config,
                                     stage=stage,
                                     data_index=self.get_data_index_split(
-                                        breadth_first_micro_batch, depth_first_micro_batch, micro_sequence
+                                        breadth_first_micro_batch, depth_first_micro_batch, micro_batch_split
                                     ),
                                     type_=StepType.backward,
                                 )
