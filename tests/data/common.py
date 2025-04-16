@@ -13,6 +13,7 @@ from fast_llm.data.dataset.gpt.config import (
     GPTSampledDatasetConfig,
     GPTSamplingConfig,
     GPTSamplingData,
+    GPTSamplingParameters,
     ShufflingType,
 )
 from fast_llm.data.dataset.gpt.indexed import GPTIndexedDataset
@@ -20,7 +21,7 @@ from fast_llm.data.dataset.gpt.sampled import GPTSampledIndexedDataset
 from fast_llm.data.tokenizer import Tokenizer
 from fast_llm.engine.distributed.config import DistributedConfig, PhaseType
 from fast_llm.engine.distributed.distributed import Distributed
-from fast_llm.engine.schedule.config import BatchConfig
+from fast_llm.models.gpt.config import GPTBatchConfig
 from fast_llm.utils import Assert, div
 from tests.common import TEST_VOCAB_SIZE
 
@@ -46,12 +47,14 @@ def get_sampling_data(
             gpu=gpu,
             shuffle=shuffle,
         ),
-        num_samples=num_samples,
+        parameters=GPTSamplingParameters(
+            num_samples=num_samples,
+            sequence_length=sequence_length,
+            vocab_size=vocab_size,
+        ),
         cache_directory=cache_directory,
         distributed=distributed,
         dataset_name=phase.value,
-        sequence_length=sequence_length,
-        vocab_size=vocab_size,
         tokenizer=tokenizer,
         truncate_documents=truncate_documents,
     )
@@ -80,6 +83,16 @@ def get_test_data_and_compare_samples(
     distributed = Distributed(distributed_config, use_cpu=True)
     if isinstance(samples_per_dataset, int):
         samples_per_dataset = {PhaseType.training.value.lower(): samples_per_dataset}
+
+    sampling_parameters = {
+        dataset_name: GPTSamplingParameters(
+            num_samples=num_samples,
+            sequence_length=sequence_length,
+            vocab_size=vocab_size,
+        )
+        for dataset_name, num_samples in samples_per_dataset.items()
+    }
+
     if isinstance(expected_samples, list):
         expected_samples = {PhaseType.training.value.lower(): expected_samples}
 
@@ -89,10 +102,10 @@ def get_test_data_and_compare_samples(
         gpu=gpu,
         shuffle=shuffle,
     )
-    data = GPTData(GPTDataConfig.from_dict(config), distributed_config, vocab_size, sequence_length)
-    data.setup(distributed, samples_per_dataset, cache_directory)
+    data = GPTData(GPTDataConfig.from_dict(config), distributed_config)
+    data.setup(distributed, sampling_parameters, cache_directory)
     with NoAutoValidate():
-        batch_config = BatchConfig(batch_size=1, sequence_length=sequence_length)
+        batch_config = GPTBatchConfig(batch_size=1, sequence_length=sequence_length)
     batch_config.setup(distributed_config)
     batch_config.validate()
     tokens = {
@@ -140,8 +153,8 @@ def validate_indexed_dataset_sampling(
     """
     Compare `GPTSampledIndexedDataset` sampling against a more basic approach
     """
-    num_tokens = sampled._num_samples * sampled._sequence_length + 1
-    all_tokens = np.full(sampled._num_samples * sampled._sequence_length + 1, -1, dtype=np.int64)
+    num_tokens = sampled._parameters.num_samples * sampled._parameters.sequence_length + 1
+    all_tokens = np.full(sampled._parameters.num_samples * sampled._parameters.sequence_length + 1, -1, dtype=np.int64)
     unshuffled_epochs = div(sampled._unshuffled_documents, sampled._documents_per_epoch)
 
     document_sampling = np.tile(
@@ -165,8 +178,8 @@ def validate_indexed_dataset_sampling(
             break
 
     validate_samples = [
-        all_tokens[index * sampled._sequence_length : (index + 1) * sampled._sequence_length + 1]
-        for index in range(sampled._num_samples)
+        all_tokens[index * sampled._parameters.sequence_length : (index + 1) * sampled._parameters.sequence_length + 1]
+        for index in range(sampled._parameters.num_samples)
     ]
     token_ids = [sampled[i].token_ids for i in range(len(sampled))]
 

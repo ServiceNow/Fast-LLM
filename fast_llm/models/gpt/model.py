@@ -11,7 +11,6 @@ from fast_llm.engine.distributed.config import DistributedConfig, DistributedDim
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.engine.inference.runner import InferenceRunner
 from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
-from fast_llm.engine.schedule.config import BatchConfig
 from fast_llm.layers.language_model.config import LanguageModelKwargs, LanguageModelLossNames
 from fast_llm.layers.language_model.embedding import WORD_EMBEDDINGS_WEIGHT, LanguageModelEmbedding
 from fast_llm.layers.language_model.head import OUTPUT_WEIGHTS, LanguageModelHead
@@ -28,7 +27,7 @@ from fast_llm.layers.transformer.preprocessing import (
     RotaryEmbeddingPreprocessor,
 )
 from fast_llm.layers.transformer.transformer import TransformerLayer
-from fast_llm.models.gpt.config import GPTBaseModelConfig, GPTModelConfig
+from fast_llm.models.gpt.config import GPTBaseModelConfig, GPTBatchConfig, GPTModelConfig
 from fast_llm.models.gpt.megatron import get_init_megatron
 from fast_llm.tensor import ParameterMeta, TensorMeta
 from fast_llm.utils import Assert
@@ -121,12 +120,12 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
         self._is_setup = True
 
     def preprocess_meta(
-        self, batch_meta: BatchConfig | torch.Tensor, phase: PhaseType
+        self, batch_meta: GPTBatchConfig | torch.Tensor, phase: PhaseType
     ) -> list[tuple[TensorMeta, dict]]:
         # TODO: How much of this is generalizable?
         # TODO: Use parallel/sequential dims, distinguish micro and full batch/sequence
 
-        if isinstance(batch_meta, BatchConfig):
+        if isinstance(batch_meta, GPTBatchConfig):
             micro_batch_size = batch_meta.micro_batch_size
             sequence_length = batch_meta.sequence_length
             micro_sequence_length = batch_meta.micro_sequence_length
@@ -139,7 +138,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
         batch_data = self._tensor_space.distributed_config.get_distributed_dim(DistributedDimNames.batch_data)
         batch_dim = TensorDim(TransformerDimNames.batch, micro_batch_size * batch_data.size, batch_data)
 
-        if isinstance(batch_meta, BatchConfig):
+        if isinstance(batch_meta, GPTBatchConfig):
             micro_sequence_length = batch_meta.micro_sequence_length
 
         if micro_sequence_length is None:
@@ -374,3 +373,4 @@ class GPTModel[ConfigType: GPTModelConfig](FastLLMModel[ConfigType]):
 
 class GPTInferenceRunner(InferenceRunner):
     model_class: typing.ClassVar[type[GPTModel]] = GPTModel
+    batch_config_class: typing.ClassVar[type[GPTBatchConfig]] = GPTBatchConfig
