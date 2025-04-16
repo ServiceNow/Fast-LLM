@@ -381,7 +381,9 @@ def run_test_script(
         script = [model_type, *script, f"run.experiment_dir={path}"]
     header = ["Megatron-LM/pretrain_gpt.py"] if is_megatron else ["--no-python", "fast-llm", "train"]
     command = [
-        "torchrun",
+        "python",
+        "-m",
+        "torch.distributed.run",
         f"--nproc-per-node={num_gpus}",
         *header,
         *script,
