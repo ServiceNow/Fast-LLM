@@ -1,4 +1,5 @@
 import enum
+import functools
 import warnings
 
 from fast_llm.config import Config, Field, FieldHint, check_field, config_class, test_field
@@ -43,29 +44,6 @@ class BatchConfig(Config):
         hint=FieldHint.core,
         valid=check_field(Assert.gt, 0),
     )
-    sequence_length: int = Field(
-        default=2048,
-        desc="Number of tokens in a sample.",
-        hint=FieldHint.core,
-        valid=check_field(Assert.gt, 0),
-    )
-    micro_sequence_length: int = Field(
-        default=None,
-        desc="Number of tokens in a micro-sequence (must divide the sequence length).",
-        hint=FieldHint.performance,
-        valid=check_field(Assert.gt, 0),
-    )
-    num_micro_sequences: int = Field(
-        init=False,
-        desc="Number of micro-sequences to split each sample (= seqence length / micro-sequence length).",
-        hint=FieldHint.derived,
-        valid=check_field(Assert.gt, 0),
-    )
-    cross_document_attention: bool = Field(
-        default=True,
-        desc="Applies attention to tokens from other documents in the packed sequence. Set to False for masking attention to other documents.",
-        hint=FieldHint.feature,
-    )
     _distributed: DistributedConfig = Field(
         init=False,
         desc="Pointer to a distributed configuration, required to know the data-parallel split of the batch.",
@@ -75,9 +53,13 @@ class BatchConfig(Config):
     def setup(self, distributed_config: DistributedConfig) -> None:
         self._distributed = distributed_config
 
-    @property
+    @functools.cached_property
     def num_inputs(self) -> int:
-        return self.sequential_micro_batches * self.num_micro_sequences
+        return self.sequential_micro_batches * self.micro_batch_splits
+
+    @functools.cached_property
+    def micro_batch_splits(self) -> int:
+        return 1
 
     def _validate(self) -> None:
         # Use the distributed properties to determine the batch size and its breakdown.
@@ -128,10 +110,6 @@ class BatchConfig(Config):
                 "Mixing of breadth-first and depth-first gradient accumulation is not thoroughly tested."
                 " Use at your own risk."
             )
-        if self.micro_sequence_length is None:
-            with self._set_implicit_default():
-                self.micro_sequence_length = self.sequence_length
-        self.num_micro_sequences = div(self.sequence_length, self.micro_sequence_length)
         super()._validate()
 
 
