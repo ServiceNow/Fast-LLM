@@ -132,20 +132,20 @@ def test_split_dataset():
         {"training": 3, "validation": 1},
         pathlib.Path("."),
     )
-    config = {key: value.to_serialized() for key, value in config.items()}
+    config = {key: value.to_dict() for key, value in config.items()}
 
     Assert.eq(
         config,
         {
             "training": {
                 "type": "slice",
-                "dataset": dataset_config_0.to_serialized(),
+                "dataset": dataset_config_0.to_dict(),
                 "begin": 0,
                 "end": 0.75,
             },
             "validation": {
                 "type": "slice",
-                "dataset": dataset_config_0.to_serialized(),
+                "dataset": dataset_config_0.to_dict(),
                 "begin": 0.75,
                 "end": 1,
             },
@@ -161,13 +161,13 @@ def test_split_datasets_0():
         {"training": 1, "validation": 1},
         pathlib.Path("."),
     )
-    config = {key: value.to_serialized() for key, value in config.items()}
+    config = {key: value.to_dict() for key, value in config.items()}
 
     Assert.eq(
         config,
         {
-            "training": dataset_config_0.to_serialized(),
-            "validation": dataset_config_1.to_serialized(),
+            "training": dataset_config_0.to_dict(),
+            "validation": dataset_config_1.to_dict(),
         },
     )
 
@@ -178,19 +178,18 @@ def test_split_datasets_1():
     config = GPTMemmapDatasetPreparator._split_and_blend_dataset_configs(
         [dataset_config_0, dataset_config_1], {"training": 3, "validation": 1}, pathlib.Path(".")
     )
-    config = {key: value.to_serialized() for key, value in config.items()}
+    config = {key: value.to_dict() for key, value in config.items()}
 
     Assert.eq(
         config,
         {
             "training": {
                 "type": "blended",
-                "name": "blended",
                 "datasets": [
-                    dataset_config_0.to_serialized(),
+                    dataset_config_0.to_dict(),
                     {
                         "type": "slice",
-                        "dataset": dataset_config_1.to_serialized(),
+                        "dataset": dataset_config_1.to_dict(),
                         "begin": 0,
                         "end": 0.5,
                     },
@@ -199,7 +198,7 @@ def test_split_datasets_1():
             },
             "validation": {
                 "type": "slice",
-                "dataset": dataset_config_1.to_serialized(),
+                "dataset": dataset_config_1.to_dict(),
                 "begin": 0.5,
                 "end": 1,
             },

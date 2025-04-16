@@ -5,7 +5,7 @@ import math
 import pathlib
 import typing
 
-from fast_llm.config import Config, Field, FieldHint, FieldVerboseLevel, check_field, config_class
+from fast_llm.config import Config, Field, FieldHint, UpdateType, check_field, config_class
 from fast_llm.data.dataset.abstract import SamplableDataset, SampledDataset
 from fast_llm.utils import Assert, normalize_probabilities
 
@@ -16,26 +16,36 @@ if typing.TYPE_CHECKING:
 
 @config_class()
 class SamplingConfig(Config):
-    seed: int | None = Field(
-        default=None,
+    """
+    A dataset-dependent configuration for sampling.
+    """
+
+    seed: int = Field(
+        default=784569,
         desc="Seed for random sampling.",
         hint=FieldHint.feature,
     )
 
-    @property
-    def updates(self) -> dict[str, typing.Any]:
-        return {
-            key: value
-            for key, value in self.to_serialized(verbose=FieldVerboseLevel.everything).items()
-            if value is not None
-        }
+
+@dataclasses.dataclass(kw_only=True)
+class SamplingParameters:
+    """
+    Sampling parameters set externally to the dataset and data, ex. determined by the trainer or model.
+    """
+
+    num_samples: int
 
 
 @dataclasses.dataclass(kw_only=True)
 class SamplingData:
+    """
+    Holds all the necessary information for sampling, including dataset-dependent ones (`SamplingConfig`),
+    usage-dependent ones (`SamplingParameters`), and others set by the `Data`.
+    """
+
     # TODO: Have a separate configuration (subset?) for `build`?
     config: SamplingConfig
-    num_samples: int
+    parameters: SamplingParameters
     cache_directory: pathlib.Path | None
     # TODO: This prevents the sampling config from being pickled in multiprocessing.
     distributed: "Distributed"
@@ -43,10 +53,10 @@ class SamplingData:
     # Using a mutable rather than an int so it's shared with all copies made with `update`.
     _rank_counter: typing.Iterator[int] = itertools.count
 
-    def update(self, config: SamplingConfig, **kwargs):
-        if config_updates := config.updates:
-            kwargs["config"] = self.config.to_copy(config_updates)
-        return dataclasses.replace(self, **kwargs) if kwargs else self
+    def update_config(self, update: SamplingConfig):
+        return dataclasses.replace(
+            self, config=self.config.from_dict(self.config, update, update_type=UpdateType.update)
+        )
 
     def get_next_rank(self) -> int:
         # Counter that loops over ranks to try to distribute workloads evenly between ranks.
@@ -162,7 +172,7 @@ class SampledDatasetUpdateConfig(SampledDatasetConfig):
     Only explicitly set parameters (not None) will be updated, other will still be taken from `build_and_sample`'s argument.
     """
 
-    _abstract = False
+    _abstract = True
     sampling: SamplingConfig = Field(
         default_factory=SamplingConfig,
         desc="Optional override to sampling configuration parameters.",
@@ -175,7 +185,7 @@ class SampledDatasetUpdateConfig(SampledDatasetConfig):
     )
 
     def build_and_sample(self, data: SamplingData) -> SampledDataset:
-        return self.dataset.build_and_sample(data.update(self.sampling))
+        return self.dataset.build_and_sample(data.update_config(self.sampling))
 
 
 @config_class()
@@ -221,10 +231,19 @@ class BlendedDatasetConfig(SampledDatasetConfig):
                 # Blending is deterministic and the error will never be higher than 1.
                 dataclasses.replace(
                     sampling,
-                    num_samples=(
-                        math.ceil(weight * (sampling.num_samples + 5 * (sampling.num_samples * (1 - weight)) ** 0.5))
-                        if self.legacy
-                        else math.ceil(weight * sampling.num_samples) + 1
+                    parameters=dataclasses.replace(
+                        sampling.parameters,
+                        num_samples=(
+                            math.ceil(
+                                weight
+                                * (
+                                    sampling.parameters.num_samples
+                                    + 5 * (sampling.parameters.num_samples * (1 - weight)) ** 0.5
+                                )
+                            )
+                            if self.legacy
+                            else math.ceil(weight * sampling.parameters.num_samples) + 1
+                        ),
                     ),
                     # TODO: Seed may not be unique for nested blended datasets.
                     config=sampling.config.to_copy({"seed": sampling.config.seed + i * (0 if self.legacy else 697)}),

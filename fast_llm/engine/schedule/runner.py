@@ -315,11 +315,7 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ScheduleConfig]):
         self, context: BatchContext, data_iterator: typing.Iterator, preprocessed: bool
     ) -> typing.Generator[None, None, None]:
         batch_config = context.schedule.batch_config
-        grad_output = (
-            (1 if self._optimizer is None else self._optimizer.grad_scale)
-            / batch_config.sequential_micro_batches
-            / batch_config.num_micro_sequences
-        )
+        grad_output = (1 if self._optimizer is None else self._optimizer.grad_scale) / batch_config.num_inputs
         for micro_batch in range(batch_config.sequential_micro_batches):
             micro_batch_data = next(data_iterator)
             if not preprocessed:
@@ -330,20 +326,20 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ScheduleConfig]):
                     iteration=context.iteration,
                     metrics=context.metrics,
                 )
-            for micro_sequence, (input_, kwargs) in enumerate(micro_batch_data):
+            for micro_batch_split, (input_, kwargs) in enumerate(micro_batch_data):
                 kwargs.update(
                     grad_output=grad_output,
                     micro_batch=micro_batch,
-                    micro_sequence=micro_sequence,
+                    micro_batch_split=micro_batch_split,
                     num_micro_batches=batch_config.sequential_micro_batches,
-                    num_micro_sequences=batch_config.num_micro_sequences,
+                    micro_batch_splits=batch_config.micro_batch_splits,
                 )
                 for name, tied_parameter in self._tied_parameters.items():
                     if tied_parameter.on_device:
                         kwargs[name] = self._stages[tied_parameter.main_stage].get_parameter_buffer(
                             tied_parameter.meta.tensor_name
                         )
-                data_index = context.schedule.get_data_index(micro_batch, micro_sequence)
+                data_index = context.schedule.get_data_index(micro_batch, micro_batch_split)
                 if self._stages_owned[0]:
                     context.inputs[context.schedule.get_step(StepType.forward, 0, data_index).global_index] = input_
                 if context.is_training and self._stages_owned[-1]:
@@ -508,7 +504,7 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ScheduleConfig]):
                             "step_stage": step.stage,
                             "step_depth_first_micro_batch": step.depth_first_micro_batch,
                             "step_breadth_first_micro_batch": step.breadth_first_micro_batch,
-                            "step_micro_sequence": step.micro_sequence,
+                            "step_micro_batch_split": step.micro_batch_split,
                         }
                     ),
                 }

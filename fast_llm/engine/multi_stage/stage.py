@@ -191,8 +191,8 @@ class Stage(StageBase):
             name = f"layer {self._layer_range[i]} fw"
             if (nmb := kwargs.get("num_micro_batches", 1)) > 1:
                 name = f"{name}, mb={kwargs.get('micro_batch',0)}/{nmb}"
-            if (nms := kwargs.get("num_micro_sequences", 1)) > 1:
-                name = f"{name}, ms={kwargs.get('micro_sequence',0)}/{nms}"
+            if (nms := kwargs.get("micro_batch_splits", 1)) > 1:
+                name = f"{name}, ms={kwargs.get('micro_batch_split',0)}/{nms}"
 
             log_distributed_tensor(
                 name,
@@ -222,8 +222,8 @@ class Stage(StageBase):
             name = f"layer {self._layer_range[i]} bw"
             if (nmb := kwargs.get("num_micro_batches", 1)) > 1:
                 name = f"{name}, mb={kwargs.get('micro_batch',0)}/{nmb}"
-            if (nms := kwargs.get("num_micro_sequences", 1)) > 1:
-                name = f"{name}, ms={kwargs.get('micro_sequence',0)}/{nms}"
+            if (nms := kwargs.get("micro_batch_splits", 1)) > 1:
+                name = f"{name}, ms={kwargs.get('micro_batch_split',0)}/{nms}"
             log_distributed_grad(
                 name,
                 input_,
