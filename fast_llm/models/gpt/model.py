@@ -8,7 +8,6 @@ from fast_llm.engine.base_model.base_model import BaseModel, Layer, LossDef
 from fast_llm.engine.base_model.config import Preprocessor
 from fast_llm.engine.config_utils.tensor_space import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames, PhaseType
-from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.engine.inference.runner import InferenceRunner
 from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
 from fast_llm.layers.language_model.config import LanguageModelKwargs, LanguageModelLossNames
@@ -41,7 +40,6 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
     """
 
     config_class: typing.ClassVar[type[GPTBaseModelConfig]] = GPTBaseModelConfig
-    _is_setup: bool = False
     _rotary_embedding_frequencies: torch.Tensor
     _position_ids: torch.Tensor
     _mask: torch.Tensor
@@ -59,6 +57,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             for param in self.parameters():
                 Assert.custom(isinstance, param, ParameterMeta)
                 param.init_parameter = get_init_megatron(param, self._config.transformer)  # Noqa
+        # `self._reference_models` is not populated at this point, so we pass a mutable dict.
         self._preprocessors: list[Preprocessor] = []
         if self._config.use_absolute_position_embeddings:
             self._preprocessors.append(PositionEmbeddingPreprocessor(self._config, self._tensor_space))
@@ -112,12 +111,6 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             ],
             *self.get_output_layers(),
         ]
-
-    def setup(self, distributed: Distributed) -> None:
-        assert not self._is_setup
-        distributed.check_config(self._tensor_space.distributed_config)
-        self._tensor_space.setup(distributed)
-        self._is_setup = True
 
     def preprocess_meta(
         self, batch_meta: GPTBatchConfig | torch.Tensor, phase: PhaseType
@@ -186,12 +179,20 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             TransformerKwargs.sequence_q_dim: sequence_q_dim,
         }
 
-        preprocessed_meta = []
-        for sequence_k_past in range(
+        sequence_k_pasts = range(
             sequence_q_dim.size * self._tensor_space.distributed_config.sequence_data_rank,
             sequence_length,
             micro_sequence_length,
-        ):
+        )
+        reference_preprocessed_metas = {}
+        for name, reference_model in self._reference_models.items():
+            reference_preprocessed_metas[name] = reference_model.fast_llm_model.base_model.preprocess_meta(
+                batch_meta, phase
+            )
+            Assert.eq(len(reference_preprocessed_metas[name]), len(sequence_k_pasts))
+
+        preprocessed_meta = []
+        for i, sequence_k_past in enumerate(sequence_k_pasts):
             sequence_k = sequence_k_past + sequence_q_dim.size
             sequence_k_dim = TensorDim(TransformerDimNames.sequence_k, sequence_k)
 
@@ -209,6 +210,15 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                 )
             for preprocessor in self._preprocessors:
                 preprocessor.preprocess_meta(kwargs)
+            reference_kwargs = {}
+            for name, reference_preprocessed_meta in reference_preprocessed_metas.items():
+                reference_tokens, reference_kwargs_ = reference_preprocessed_meta[i]
+                for key, value in common_kwargs.items():
+                    Assert.eq(reference_kwargs_[key], value)
+                Assert.eq(reference_kwargs_[TransformerKwargs.sequence_k_dim], sequence_k_dim)
+                reference_kwargs[name] = reference_kwargs_
+            kwargs["reference_models"] = reference_kwargs
+
             preprocessed_meta.append((tokens, kwargs))
 
         return preprocessed_meta
@@ -237,13 +247,22 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             dtype=torch.int64,
             non_blocking=True,
         )
+
+        reference_logits = {}
+        for name, reference_model in self._reference_models.items():
+            reference_logits[name] = []
+            for _, kwargs_meta in preprocessed_meta:
+                reference_tokens, reference_kwargs = kwargs_meta["reference_models"][name]
+                reference_model.forward(reference_tokens, reference_kwargs, iteration=iteration)
+                reference_logits[name].append(reference_kwargs["logits"])
+
         if sequence_first:
             # Move the sequence dimension first to make sequence parallel ops more efficient.
             batch.token_ids = batch.token_ids.transpose(0, 1).contiguous()
 
         preprocessed = []
         presents = None
-        for i, (tokens_meta, kwargs_meta) in enumerate(preprocessed_meta):
+        for i, (_, kwargs_meta) in enumerate(preprocessed_meta):
             sequence_k = kwargs_meta[TransformerKwargs.sequence_k_dim].size
             if sequence_first:
                 tokens = batch.token_ids[sequence_k - sequence_q : sequence_k]
@@ -286,6 +305,9 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                                 else:
                                     labels[i, start : end + 1] = -100
                 kwargs[LanguageModelKwargs.labels] = labels
+            for name, reference_logits_ in reference_logits.items():
+                kwargs[f"{name}_logits"] = reference_logits_[i]
+
             for preprocessor in self._preprocessors:
                 preprocessor.preprocess(tokens, kwargs)
             preprocessed.append((tokens, kwargs))
@@ -360,10 +382,6 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                 )
             )
         return loss_defs
-
-    def add_preprocessor(self, preprocessor: Preprocessor):
-        assert not self._is_setup
-        self._preprocessors.append(preprocessor)
 
 
 class GPTModel[ConfigType: GPTModelConfig](FastLLMModel[ConfigType]):
