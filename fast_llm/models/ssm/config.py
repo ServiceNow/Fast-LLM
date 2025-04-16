@@ -50,12 +50,6 @@ class HybridSSMBaseModelConfig(LanguageModelBaseConfig, HybridSSMArchitectureCon
         default=False, desc="Exactly match the initialization of a Megatron model.", hint=FieldHint.testing
     )  # TODO: is this needed?
 
-    use_fast_path: bool = Field(
-        default=True,
-        desc="Use fast path for Mamba blocks.",
-        hint=FieldHint.core,
-    )
-
     def setup_tensor_space(self, tensor_space: TensorSpace) -> None:
         """
         Setup the tensor space for the model.
@@ -66,26 +60,23 @@ class HybridSSMBaseModelConfig(LanguageModelBaseConfig, HybridSSMArchitectureCon
             raise ValueError(
                 "Block pattern must contain at least one 'm' or 'm2', use gpt model for transformer only architectures"
             )
-        # tensor = tensor_space.distributed_config.get_distributed_dim(DistributedDimNames.tensor)
-        if self.ssm.dt_rank == "auto":
-            mamba_dt_rank = math.ceil(self.transformer.hidden_size / 16)
-        else:
-            mamba_dt_rank = self.ssm.dt_rank
+
+        mamba_dt_rank = self.ssm.dt_rank or math.ceil(self.transformer.hidden_size / 16)
 
         d_inner = int(self.ssm.expansion_factor * self.transformer.hidden_size)
         # Hidden dimension
         tensor_space.add_tensor_dim(TensorDim(SSMDimNames.d_model, self.transformer.hidden_size))
         # Mamba-specific dimensions
-        tensor_space.add_tensor_dim(TensorDim(SSMDimNames.d_inner, d_inner))
-        tensor_space.add_tensor_dim(TensorDim(SSMDimNames.d_state, self.ssm.state_size))
+        tensor_space.add_tensor_dim(TensorDim(SSMDimNames.inner_dim, d_inner))
+        tensor_space.add_tensor_dim(TensorDim(SSMDimNames.state_dim, self.ssm.state_size))
         tensor_space.add_tensor_dim(TensorDim(SSMDimNames.dt_rank, mamba_dt_rank))
-        tensor_space.add_tensor_dim(TensorDim(SSMDimNames.d_x_proj, mamba_dt_rank + self.ssm.state_size * 2))
-        tensor_space.add_tensor_dim(TensorDim(SSMDimNames.d_conv_kernel, self.ssm.conv_kernel_dimension))
-        tensor_space.add_tensor_dim(TensorDim(SSMDimNames.d_inner_proj_m, d_inner * 2))
+        tensor_space.add_tensor_dim(TensorDim(SSMDimNames.x_proj_dim, mamba_dt_rank + self.ssm.state_size * 2))
+        tensor_space.add_tensor_dim(TensorDim(SSMDimNames.conv_kernel_size, self.ssm.conv_kernel_dimension))
+        tensor_space.add_tensor_dim(TensorDim(SSMDimNames.inner_proj_mamba, d_inner * 2))
 
         if "m2" in self.hybrid_block_layout:
             # Mamba2 specific dimensions
-            # as per https://github.com/cartesia-ai/edge/blob/a0e121ebed3d2324c6d762b0e211a08d62583681/cartesia-pytorch/cartesia_pytorch/Llamba/mixers/discrete_mamba2.py#L66C3-L66C4
+            # as per https://github.com/cartesia-ai/edge/blob/a0e121ebed3d2324c6d762b0e211a08d62583681/cartesia-pytorch/cartesia_pytorch/Lllamba/mixers/discrete_mamba2.py#L66C3-L66C4
             headdim = d_inner // self.ssm.n_v_heads
             Assert.eq(self.ssm.n_v_heads, d_inner // headdim)
             Assert.eq(d_inner % headdim, 0)
@@ -94,14 +85,14 @@ class HybridSSMBaseModelConfig(LanguageModelBaseConfig, HybridSSMArchitectureCon
             conv_dim = d_inner + 2 * self.ssm.n_qk_heads * self.ssm.state_size
             inner_proj_dim = 2 * d_inner + 2 * self.ssm.n_qk_heads * self.ssm.state_size + self.ssm.n_v_heads
 
-            tensor_space.add_tensor_dim(TensorDim(SSMDimNames.headdim, headdim))
-            tensor_space.add_tensor_dim(TensorDim(SSMDimNames.n_qk_heads, self.ssm.n_qk_heads))
-            tensor_space.add_tensor_dim(TensorDim(SSMDimNames.n_v_heads, self.ssm.n_v_heads))
+            tensor_space.add_tensor_dim(TensorDim(SSMDimNames.head_dim, headdim))
+            tensor_space.add_tensor_dim(TensorDim(SSMDimNames.qk_heads, self.ssm.n_qk_heads))
+            tensor_space.add_tensor_dim(TensorDim(SSMDimNames.v_heads, self.ssm.n_v_heads))
             tensor_space.add_tensor_dim(
-                TensorDim(SSMDimNames.d_inner_proj_m2, inner_proj_dim)
+                TensorDim(SSMDimNames.inner_proj_mamba2, inner_proj_dim)
             )  # TODO: enable tensor parallelism here?
             tensor_space.add_tensor_dim(
-                TensorDim(SSMDimNames.d_conv, conv_dim)
+                TensorDim(SSMDimNames.conv_dim, conv_dim)
             )  # TODO: enable tensor parallelism here?
 
     @classmethod
@@ -114,15 +105,6 @@ class HybridSSMBaseModelConfig(LanguageModelBaseConfig, HybridSSMArchitectureCon
         if "hybrid_block_layout" in default and isinstance(default["hybrid_block_layout"], dict):
             # Not sure why, but the block pattern can sometime sbe loaded as a dict (serialization related)
             default["hybrid_block_layout"] = list(default["hybrid_block_layout"].values())
-        # TODO v0.3: Remove backward compatibility fix
-        if "match_megatron" in default:
-            assert "use_megatron_initialization" not in default
-            default["use_megatron_initialization"] = default.pop("match_megatron")
-        if "layer_norm_impl" in default:
-            assert "normalization_implementation" not in default
-            default["normalization_implementation"] = default.pop("layer_norm_impl")
-        if "fused_mlp" in default:
-            del default["fused_mlp"]
         return super()._from_dict(default, strict, flat)
 
     def _validate(self):

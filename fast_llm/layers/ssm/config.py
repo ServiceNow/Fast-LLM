@@ -1,23 +1,24 @@
 from fast_llm.config import Field, FieldHint, FieldUpdate, check_field, config_class
 from fast_llm.engine.base_model.config import BaseModelArchitectureConfig
+from fast_llm.functional.config import ActivationType
 from fast_llm.layers.common.config import NormalizationArchitectureConfig, NormalizationConfig
 from fast_llm.tensor import TensorSpace
 from fast_llm.utils import Assert
 
 
 class SSMDimNames:
-    d_model = "model_dimension_D"
-    d_state = "state_dimension_N"
-    d_conv = "size_of_conv1d_input"  # dimention of the conv1d input in mamba layers
-    d_inner = "inner_dimension_after_expansion"
-    dt_rank = "rank_of_Δ"
-    d_inner_proj_m = "inner_projection_dimension_mamba"
-    d_inner_proj_m2 = "inner_projection_dimension_mamba2"
-    d_x_proj = "x_projection_dimension"
-    headdim = "head_dimension_P"  # dimention of the mamba2 head
-    d_conv_kernel = "1d_conv_kernel_size"  # kernel size of the conv1d in mamba layers
-    n_qk_heads = "number_of_qk_heads"
-    n_v_heads = "number_of_v_heads"
+    model_dim = "model_dim"  # Model dimension (D)
+    state_dim = "state_dim"  # State dimension (N)
+    conv_dim = "conv_dim"  # Dimension of the conv1d input in mamba layers
+    inner_dim = "inner_dim"  # Inner dimension after expansion
+    dt_rank = "dt_rank"  # Rank of Δ
+    inner_proj_mamba = "inner_proj_mamba"  # Inner projection dimension for mamba
+    inner_proj_mamba2 = "inner_proj_mamba2"  # Inner projection dimension for mamba2
+    x_proj_dim = "x_proj_dim"  # X projection dimension
+    head_dim = "head_dim"  # Dimension of the mamba2 head (P)
+    conv_kernel_size = "conv_kernel_size"  # Kernel size of the conv1d in mamba layers
+    qk_heads = "qk_heads"  # Number of QK heads
+    v_heads = "v_heads"  # Number of V heads
 
 
 @config_class()
@@ -56,7 +57,7 @@ class SSMArchitectureConfig(BaseModelArchitectureConfig):
     )
 
     dt_rank: str | int = Field(
-        default="auto",
+        default=None,
         desc="Rank of the Δ projection matrix. If 'auto', set to ceil(hidden_size/16)",
         hint=FieldHint.core,
     )
@@ -79,11 +80,16 @@ class SSMArchitectureConfig(BaseModelArchitectureConfig):
         hint=FieldHint.core,
     )
 
-    activation: str = Field(
-        default="silu",
-        desc="Activation function for Mamba2 blocks.",
+    activation_type: ActivationType = Field(
+        default=None,
+        desc="The MLP intermediate activation type. Default: SiLU for gated MLP, GeLU otherwise.",
         hint=FieldHint.core,
     )
+
+    def _validate(self) -> None:
+        super()._validate()
+        if self.activation_type is None:
+            self.activation_type = ActivationType.silu
 
 
 @config_class()
@@ -91,12 +97,6 @@ class SSMLayerConfig(SSMArchitectureConfig):
     """Configuration for a Structured State Space Model (SSM) layer."""
 
     normalization: NormalizationConfig = FieldUpdate(default_factory=NormalizationConfig)
-    # Performance optimization
-    use_fast_path: bool = Field(
-        default=True,
-        desc="Whether to use optimized CUDA kernels when available",
-        hint=FieldHint.performance,
-    )
 
     debug_ssm: bool = Field(
         default=False,

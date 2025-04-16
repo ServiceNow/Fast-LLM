@@ -1,27 +1,17 @@
 import math
 
+import causal_conv1d
+import einops
+import mamba_ssm.ops.triton.ssd_combined
 import torch
-from einops import rearrange
-from mamba_ssm.ops.triton.ssd_combined import mamba_chunk_scan_combined
 
 from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
 from fast_llm.layers.common.linear import Linear
 from fast_llm.layers.ssm.config import SSMDimNames, SSMLayerConfig
 from fast_llm.tensor import ParameterMeta, init_ones_, init_uniform_, init_zeros_, kaiming_init_
 
-try:
-    from causal_conv1d import causal_conv1d_fn, causal_conv1d_update
-except ImportError:
-    causal_conv1d_fn, causal_conv1d_update = None, None
-
-
-try:
-    from mamba_ssm.ops.triton.selective_state_update import selective_state_update
-except ImportError:
-    selective_state_update = None
-
 """
-This code is adapted fropm https://github.com/cartesia-ai/edge/blob/main/cartesia-pytorch/cartesia_pytorch/Llamba/mixers/discrete_mamba2.py
+This code is adapted fropm https://github.com/cartesia-ai/edge/blob/main/cartesia-pytorch/cartesia_pytorch/Lllamba/mixers/discrete_mamba2.py
 """
 
 
@@ -53,14 +43,14 @@ class DiscreteMamba2(torch.nn.Module):
         bias = config.add_bias_linear
         self.layer_idx = layer_idx
 
-        td_inner = tensor_space.get_tensor_dim(SSMDimNames.d_inner)
-        td_state = tensor_space.get_tensor_dim(SSMDimNames.d_state)
-        td_model = tensor_space.get_tensor_dim(SSMDimNames.d_model)
-        td_conv = tensor_space.get_tensor_dim(SSMDimNames.d_conv)
-        td_n_qk_heads = tensor_space.get_tensor_dim(SSMDimNames.n_qk_heads)
-        td_n_v_heads = tensor_space.get_tensor_dim(SSMDimNames.n_v_heads)
-        td_conv_kernel = tensor_space.get_tensor_dim(SSMDimNames.d_conv_kernel)
-        td_inner_proj = tensor_space.get_tensor_dim(SSMDimNames.d_inner_proj_m2)
+        td_inner = tensor_space.get_tensor_dim(SSMDimNames.inner_dim)
+        td_state = tensor_space.get_tensor_dim(SSMDimNames.state_dim)
+        td_model = tensor_space.get_tensor_dim(SSMDimNames.model_dim)
+        td_conv = tensor_space.get_tensor_dim(SSMDimNames.conv_dim)
+        td_n_qk_heads = tensor_space.get_tensor_dim(SSMDimNames.qk_heads)
+        td_n_v_heads = tensor_space.get_tensor_dim(SSMDimNames.v_heads)
+        td_conv_kernel = tensor_space.get_tensor_dim(SSMDimNames.conv_kernel_size)
+        td_inner_proj = tensor_space.get_tensor_dim(SSMDimNames.inner_proj_mamba2)
 
         self.d_model = td_model.size
         self.d_inner = td_inner.size
@@ -70,13 +60,7 @@ class DiscreteMamba2(torch.nn.Module):
         self.n_v_heads = td_n_v_heads.size
         self.conv_kernel_size = td_conv_kernel.size
 
-        self.activation = config.activation
-        if self.activation == "silu":
-            self.act = torch.nn.SiLU()
-        elif self.activation == "identity":
-            self.act = torch.nn.Identity()
-        else:
-            raise ValueError(f"Activation {self.activation} not supported")
+        self.act = config.activation_type.activation_fn
 
         # TODO: double check innitializations
         # Projections
@@ -125,8 +109,10 @@ class DiscreteMamba2(torch.nn.Module):
         """Returns the state of the model as a tensor."""
         return self.layer.state_to_tensor
 
-    def forward(self, u, **kwargs):
+    def forward(self, hidden_states, kwargs):
         """
+        ON variable names and pep8: keeping some variable names as in the original code for clarity.
+
         Args:
             u: (B, L, D),
 
@@ -135,6 +121,7 @@ class DiscreteMamba2(torch.nn.Module):
             outputs["hidden_states"]: (B, L, D).
             outputs["state"]: inference cache.
         """
+        u = hidden_states
         outputs = {}
         # assert state is None
         batch, seqlen, dim = u.shape
@@ -164,7 +151,7 @@ class DiscreteMamba2(torch.nn.Module):
         if state is not None:
             # If we just take xBC[:, :, -self.d_conv :], it will error if seqlen < self.d_conv
             # Instead torch.nn.functional.pad will pad with zeros if seqlen < self.d_conv, and truncate otherwise.
-            xBC_t = rearrange(xBC[:, :seqlen, :], "b l d -> b d l")
+            xBC_t = einops.rearrange(xBC[:, :seqlen, :], "b l d -> b d l")
             state["conv"].copy_(
                 torch.nn.functional.pad(xBC_t, (self.conv_kernel_size - xBC_t.shape[-1], 0))
             )  # Update state (B D W)
@@ -182,12 +169,12 @@ class DiscreteMamba2(torch.nn.Module):
             dim=-1,
         )
 
-        x = rearrange(x, "b l (h n) -> b l h n", h=self.n_v_heads)
-        B = rearrange(B, "b l (h n) -> b l h n", h=self.n_qk_heads)
-        C = rearrange(C, "b l (h n) -> b l h n", h=self.n_qk_heads)
+        x = einops.rearrange(x, "b l (h n) -> b l h n", h=self.n_v_heads)
+        B = einops.rearrange(B, "b l (h n) -> b l h n", h=self.n_qk_heads)
+        C = einops.rearrange(C, "b l (h n) -> b l h n", h=self.n_qk_heads)
 
         # SSM forward
-        result = mamba_chunk_scan_combined(
+        result = mamba_ssm.ops.triton.ssd_combined.mamba_chunk_scan_combined(
             x=x / torch.nn.functional.softplus(A_log).to(x.dtype).unsqueeze(-1),
             dt=A_log,
             dt_softplus=True,
@@ -206,7 +193,7 @@ class DiscreteMamba2(torch.nn.Module):
             y = result
 
         Du = torch.einsum("h,blhp->blhp", self.D, x)
-        y = rearrange(y + Du, "b l h p -> b l (h p)")
+        y = einops.rearrange(y + Du, "b l h p -> b l (h p)")
 
         # Norm and gate
         out = self.out_proj(y * torch.nn.functional.silu(z + self.z_bias))
@@ -217,18 +204,10 @@ class DiscreteMamba2(torch.nn.Module):
 
     def convolutional_forward(self, xBC, padded_len):
         """Convolutional layer forward pass for the full sequence."""
-        if causal_conv1d_fn is None or self.activation not in [
-            "silu",
-            "swish",
-            "identity",
-        ]:
-            raise NotImplementedError("Only support causal_conv1d_fn kernel for now")
-            # xBC = self.act(self.conv1d(xBC.transpose(1, 2))[..., :padded_len].transpose(1, 2))
-        else:
-            xBC = causal_conv1d_fn(
-                xBC.transpose(1, 2),
-                rearrange(self.conv1d_weight, "d 1 w -> d w"),
-                self.conv1d_bias,
-                activation=None if self.activation == "identity" else self.activation,
-            ).transpose(1, 2)
+        xBC = causal_conv1d.causal_conv1d_fn(
+            xBC.transpose(1, 2),
+            einops.rearrange(self.conv1d_weight, "d 1 w -> d w"),
+            self.conv1d_bias,
+            activation=None if self.activation == "identity" else self.activation,
+        ).transpose(1, 2)
         return xBC

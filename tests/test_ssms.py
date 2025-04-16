@@ -18,18 +18,24 @@ from fast_llm.models.gpt.config import LlamaGPTHuggingfaceCheckpointFormat
 from fast_llm.models.ssm.config import LLambaHuggingfaceCheckpointFormat
 
 try:
-    from lamba_block import LambaBlock
+    from llamba_block import LllambaBlock
 
     from fast_llm.layers.ssm.config import SSMLayerConfig
     from fast_llm.layers.ssm.discrete_mamba2 import DiscreteMamba2
     from fast_llm.layers.ssm.mamba_layer import MambaLayer
     from fast_llm.models.ssm.model import HybridSSMBaseModel, HybridSSMBaseModelConfig, HybridSSMModel
 except ImportError:
-    MambaLayer, LambaBlock, HybridSSMBaseModel, HybridSSMBaseModelConfig, DiscreteMamba2 = None, None, None, None, None
+    MambaLayer, LllambaBlock, HybridSSMBaseModel, HybridSSMBaseModelConfig, DiscreteMamba2 = (
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
     # Mamba not isntalled, skipping tests
 
 try:
-    from cartesia_pytorch.Llamba.llamba import LlambaLMHeadModel as LMHeadModel
+    from cartesia_pytorch.Lllamba.llamba import LllambaLMHeadModel as LMHeadModel
 except ImportError:
     LMHeadModel = None
 
@@ -76,7 +82,7 @@ def distributed(distributed_config):
     return Distributed(config=distributed_config)
 
 
-def get_hybrid_config(use_fast_path: bool = True, hybrid_block_layout=["t", "m", "t", "m"]):
+def get_hybrid_config(hybrid_block_layout=["t", "m", "t", "m"]):
     config = HybridSSMBaseModelConfig(
         transformer=TransformerConfig(num_layers=len(hybrid_block_layout)),
         ssm=SSMLayerConfig(),
@@ -86,14 +92,13 @@ def get_hybrid_config(use_fast_path: bool = True, hybrid_block_layout=["t", "m",
         init_method_max_embed=0.02,
         use_position_embeddings=True,
         tie_word_embeddings=False,
-        use_fast_path=use_fast_path,
     )
     return config
 
 
 def get_hf_llamba_out(input_ids, path, format):
     if format == LLambaHuggingfaceCheckpointFormat:
-        from cartesia_pytorch.Llamba.llamba import LlambaLMHeadModel as LMHeadModel
+        from cartesia_pytorch.Lllamba.llamba import LllambaLMHeadModel as LMHeadModel
     elif format == LlamaGPTHuggingfaceCheckpointFormat:
         from transformers import LlamaForCausalLM as LMHeadModel
     else:
@@ -111,17 +116,17 @@ def get_hf_llamba_out(input_ids, path, format):
 @pytest.mark.slow
 @pytest.mark.skipif(
     not run_test or LMHeadModel is None,
-    reason=f"Skipping because one of the following: cartesia_pytorch.Llamba not installed or no CUDA available or Mamba not installed",
+    reason=f"Skipping because one of the following: cartesia_pytorch.Lllamba not installed or no CUDA available or Mamba not installed",
 )
 def test_load_from_llamba_checkpoint(distributed_config):
     """
-    Test to check whether the of Fast-LLM and Huggingface checkpoint loading for Llamba-1B produce the same results.
+    Test to check whether the of Fast-LLM and Huggingface checkpoint loading for Lllamba-1B produce the same results.
     """
-    vocab_size = 128256  # from https://huggingface.co/cartesia-ai/Llamba-1B/blob/main/config.json
+    vocab_size = 128256  # from https://huggingface.co/cartesia-ai/Lllamba-1B/blob/main/config.json
     batch_size = 2
     seq_length = 32
 
-    path = pathlib.Path("/mnt/checkpoints_fml/pretrained_models/Llamba-1B")
+    path = pathlib.Path("/mnt/checkpoints_fml/pretrained_models/Lllamba-1B")
     format = LLambaHuggingfaceCheckpointFormat
 
     x = torch.randint(0, vocab_size, (batch_size, seq_length), device="cuda")
@@ -174,16 +179,15 @@ def test_load_from_llamba_checkpoint(distributed_config):
 
 @pytest.mark.skipif(not run_test, reason="No CUDA available or Mamba not installed")
 @pytest.mark.parametrize(
-    "hybrid_block_layout,use_fast_path,LAYER_CLS",
+    "hybrid_block_layout,LAYER_CLS",
     [
-        (["m", "t"], True, MambaLayer),
-        (["m", "t"], False, MambaLayer),
-        (["m2", "t"], False, DiscreteMamba2),
+        (["m", "t"], MambaLayer),
+        (["m2", "t"], DiscreteMamba2),
     ],
-    ids=["mamba-fast", "mamba-slow", "descrete_mamba2"],
+    ids=["mamba", "descrete_mamba2"],
 )
-def test_mamba_layer(distributed_config, distributed, hybrid_block_layout, use_fast_path, LAYER_CLS):
-    hybrid_config = get_hybrid_config(use_fast_path, hybrid_block_layout=hybrid_block_layout)
+def test_mamba_layer(distributed_config, distributed, hybrid_block_layout, LAYER_CLS):
+    hybrid_config = get_hybrid_config(hybrid_block_layout=hybrid_block_layout)
     tensor_space = TensorSpace(distributed_config=distributed_config)
     hybrid_config.setup_tensor_space(tensor_space)
     layer = LAYER_CLS(hybrid_config.ssm, layer_idx=0, tensor_space=tensor_space)
@@ -209,14 +213,14 @@ def test_mamba_layer(distributed_config, distributed, hybrid_block_layout, use_f
 
 @pytest.mark.skipif(not run_test, reason="No CUDA available or Mamba not installed")
 def test_mamba_block(distributed_config, distributed):
-    hybrid_config = get_hybrid_config(use_fast_path=True, hybrid_block_layout=["m", "t"])
+    hybrid_config = get_hybrid_config(hybrid_block_layout=["m", "t"])
     tensor_space = TensorSpace(distributed_config=distributed_config)
     tensor_space.setup(distributed)
     hybrid_config.setup_tensor_space(tensor_space)
     layer_idx = 0
 
     mixer_cls = partial(MambaLayer, layer_idx=layer_idx)
-    block = LambaBlock(
+    block = LllambaBlock(
         hybrid_config.transformer,
         hybrid_config.ssm,
         mixer_cls=mixer_cls,
@@ -243,16 +247,15 @@ def test_mamba_block(distributed_config, distributed):
 
 @pytest.mark.skipif(not run_test, reason="No CUDA available or Mamba not installed")
 @pytest.mark.parametrize(
-    "hybrid_block_layout,use_fast_path",
+    "hybrid_block_layout",
     [
-        (["m", "t"], True),
-        (["m", "t"], False),
-        (["m2", "t"], False),
+        (["m", "t"]),
+        (["m2", "t"]),
     ],
-    ids=["mamba-fast", "mamba-slow", "descrete_mamba2"],
+    ids=["mamba", "descrete_mamba2"],
 )
-def test_hybrid_model_train_with_fast_mode(distributed_config, hybrid_block_layout, use_fast_path):
-    hybrid_config = get_hybrid_config(use_fast_path, hybrid_block_layout=hybrid_block_layout)
+def test_hybrid_model_train_with_fast_mode(distributed_config, hybrid_block_layout):
+    hybrid_config = get_hybrid_config(hybrid_block_layout=hybrid_block_layout)
     model = HybridSSMBaseModel(hybrid_config, distributed_config)
     distributed = Distributed(distributed_config)
     model.setup(distributed)
