@@ -1,13 +1,15 @@
 import typing
+from functools import cached_property
 
-from fast_llm.config import Field, FieldHint, FieldUpdate, config_class
+from fast_llm.config import Field, FieldHint, FieldUpdate, check_field, config_class
 from fast_llm.data.data.gpt.config import GPTDataConfig
 from fast_llm.engine.checkpoint.config import CheckpointFormat, CheckpointHandler
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig, PretrainedFastLLMModelConfig
+from fast_llm.engine.schedule.config import BatchConfig
 from fast_llm.engine.training.config import TrainerConfig
 from fast_llm.layers.language_model.config import LanguageModelArchitectureConfig, LanguageModelBaseConfig
 from fast_llm.models.gpt.megatron import set_megatron_distributed_seeds
-from fast_llm.utils import Assert
+from fast_llm.utils import Assert, div
 
 if typing.TYPE_CHECKING:
     from fast_llm.models.gpt.huggingface import HuggingfaceGPTModelForCausalLM
@@ -64,6 +66,43 @@ class GPTArchitectureConfig(LanguageModelArchitectureConfig):
         if "transposed_mlp_weight" in default:
             assert default.pop("transposed_mlp_weight")
         return super()._from_dict(default, strict, flat)
+
+
+@config_class()
+class GPTBatchConfig(BatchConfig):
+    sequence_length: int = Field(
+        default=2048,
+        desc="Number of tokens in a sample.",
+        hint=FieldHint.core,
+        valid=check_field(Assert.gt, 0),
+    )
+    micro_sequence_length: int = Field(
+        default=None,
+        desc="Number of tokens in a micro-sequence (must divide the sequence length).",
+        hint=FieldHint.performance,
+        valid=check_field(Assert.gt, 0),
+    )
+    # TODO: Find a better place for these?
+    cross_document_attention: bool = Field(
+        default=True,
+        desc="Applies attention to tokens from other documents in the packed sequence. Set to False for masking attention to other documents.",
+        hint=FieldHint.feature,
+    )
+    use_loss_masking_spans: bool = Field(
+        default=False,
+        desc="Read loss masking spans from the dataset.",
+        hint=FieldHint.feature,
+    )
+
+    def _validate(self) -> None:
+        if self.micro_sequence_length is None:
+            with self._set_implicit_default():
+                self.micro_sequence_length = self.sequence_length
+        super()._validate()
+
+    @cached_property
+    def micro_batch_splits(self) -> int:
+        return div(self.sequence_length, self.micro_sequence_length)
 
 
 @config_class()
@@ -130,6 +169,7 @@ class PretrainedGPTModelConfig(PretrainedFastLLMModelConfig):
 @config_class()
 class GPTTrainerConfig(PretrainedGPTModelConfig, TrainerConfig):
     data: GPTDataConfig = FieldUpdate(default_factory=GPTDataConfig)
+    batch: GPTBatchConfig = FieldUpdate(default_factory=GPTBatchConfig)
     # TODO: Use dynamic model type?
     reference_models: dict[str, PretrainedGPTModelConfig] = FieldUpdate()
 
@@ -142,6 +182,19 @@ class GPTTrainerConfig(PretrainedGPTModelConfig, TrainerConfig):
         for reference_model in self.reference_models.values():
             Assert.none(reference_model.model.base_model.cross_entropy_splits)
         super()._validate()
+
+    @classmethod
+    def _from_dict(
+        cls,
+        default: dict[str, typing.Any],
+        strict: bool = True,
+        flat: bool = False,
+    ) -> typing.Self:
+        # TODO v0.x: Remove backward compatibility.
+        cls._handle_renamed_field(
+            default, ("data", "sampling", "use_loss_masking_spans"), ("batch", "use_loss_masking_spans")
+        )
+        return super()._from_dict(default, strict, flat)
 
     @classmethod
     def get_trainer_class(cls) -> type["GPTTrainer"]:

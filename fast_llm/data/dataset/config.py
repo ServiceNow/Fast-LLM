@@ -16,6 +16,10 @@ if typing.TYPE_CHECKING:
 
 @config_class()
 class SamplingConfig(Config):
+    """
+    A dataset-dependent configuration for sampling.
+    """
+
     seed: int = Field(
         default=784569,
         desc="Seed for random sampling.",
@@ -24,10 +28,24 @@ class SamplingConfig(Config):
 
 
 @dataclasses.dataclass(kw_only=True)
+class SamplingParameters:
+    """
+    Sampling parameters set externally to the dataset and data, ex. determined by the trainer or model.
+    """
+
+    num_samples: int
+
+
+@dataclasses.dataclass(kw_only=True)
 class SamplingData:
+    """
+    Holds all the necessary information for sampling, including dataset-dependent ones (`SamplingConfig`),
+    usage-dependent ones (`SamplingParameters`), and others set by the `Data`.
+    """
+
     # TODO: Have a separate configuration (subset?) for `build`?
     config: SamplingConfig
-    num_samples: int
+    parameters: SamplingParameters
     cache_directory: pathlib.Path | None
     # TODO: This prevents the sampling config from being pickled in multiprocessing.
     distributed: "Distributed"
@@ -213,10 +231,19 @@ class BlendedDatasetConfig(SampledDatasetConfig):
                 # Blending is deterministic and the error will never be higher than 1.
                 dataclasses.replace(
                     sampling,
-                    num_samples=(
-                        math.ceil(weight * (sampling.num_samples + 5 * (sampling.num_samples * (1 - weight)) ** 0.5))
-                        if self.legacy
-                        else math.ceil(weight * sampling.num_samples) + 1
+                    parameters=dataclasses.replace(
+                        sampling.parameters,
+                        num_samples=(
+                            math.ceil(
+                                weight
+                                * (
+                                    sampling.parameters.num_samples
+                                    + 5 * (sampling.parameters.num_samples * (1 - weight)) ** 0.5
+                                )
+                            )
+                            if self.legacy
+                            else math.ceil(weight * sampling.parameters.num_samples) + 1
+                        ),
                     ),
                     # TODO: Seed may not be unique for nested blended datasets.
                     config=sampling.config.to_copy({"seed": sampling.config.seed + i * (0 if self.legacy else 697)}),
