@@ -1,4 +1,5 @@
 import dataclasses
+import enum
 import typing
 
 from fast_llm.config import Config, Field, FieldHint, check_field, config_class, skip_valid_if_none
@@ -8,7 +9,7 @@ if typing.TYPE_CHECKING:
     from fast_llm.engine.optimizer.optimizer import Optimizer
 
 
-class LearningRateStageType:
+class LearningRateStageType(enum.StrEnum):
     constant = "constant"
     linear = "linear"
     power = "power"
@@ -18,7 +19,9 @@ class LearningRateStageType:
 @config_class()
 class LearningRateScheduleConfig(Config):
     base: float = Field(default=0.0001, desc="Base learning rate for the optimizer.", hint=FieldHint.core)
-    decay_style: str = Field(default="constant", desc="The learning rate decay formula.", hint=FieldHint.feature)
+    decay_style: LearningRateStageType = Field(
+        default="constant", desc="The learning rate decay formula.", hint=FieldHint.feature
+    )
     decay_iterations: int | None = Field(
         default=None, desc="Duration of the learning rate decay, in iterations.", hint=FieldHint.feature
     )
