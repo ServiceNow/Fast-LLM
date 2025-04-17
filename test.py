@@ -14,12 +14,12 @@ import torch
 
 
 def generate(model, input_ids, attention_mask, max_new_tokens, tensors_save_path: Path | None = None):
-    
+
     if tensors_save_path is not None:
         if tensors_save_path.is_dir():
             shutil.rmtree(tensors_save_path, ignore_errors=True)
-        logits_save_path = tensors_save_path / 'logits'
-        hs_save_path = tensors_save_path / 'hidden_states'
+        logits_save_path = tensors_save_path / "logits"
+        hs_save_path = tensors_save_path / "hidden_states"
         logits_save_path.mkdir(exist_ok=True, parents=True)
         hs_save_path.mkdir(exist_ok=True, parents=True)
 
@@ -47,7 +47,7 @@ def generate(model, input_ids, attention_mask, max_new_tokens, tensors_save_path
             torch.save(output.logits, logits_file)
 
             hidden_states_file = hs_save_path / f"data{i}.pickle"
-            with hidden_states_file.open('wb') as f:
+            with hidden_states_file.open("wb") as f:
                 cloudpickle.dump(output.hidden_states, f)
 
     return input_ids
@@ -65,7 +65,71 @@ def diff_flm_hf(tokenizer, flm_tokens, hf_tokens):
     )
 
 
-def run_test(attn_implementation, torch_dtype, is_batch_size2, use_fm_changes, tensors_save_path, num_new_tokens):
+def run_test_fast_llm(
+    attn_implementation,
+    torch_dtype,
+    is_batch_size2,
+    reverse_samples,
+    tensors_save_path,
+    num_new_tokens,
+):
+    checkpoint = "/mnt/checkpoints/pretrained_models/SmolLM2-135M-Instruct"
+
+    device = "cuda"  # for GPU usage or "cpu" for CPU usage
+    tokenizer = AutoTokenizer.from_pretrained(checkpoint)
+    messages = [
+        # {"role": "user", "content": "What is gravity?"},
+        {"role": "user", "content": "What is gravity?"},
+        {"role": "user", "content": "Who is the president of EU?"},
+        # {"role": "user", "content": "Who is the president of EU?"},
+    ]
+    if reverse_samples:
+        messages = list(reversed(messages))
+    if not is_batch_size2:
+        messages = messages[0:1]
+
+    input_text = [tokenizer.apply_chat_template([el], tokenize=False) for el in messages]
+
+    tokenizer.padding_side = "left"
+    inputs = tokenizer(input_text, padding="longest", return_tensors="pt").to(device)
+
+    fm_kwards = {}
+    if attn_implementation is not None and attn_implementation == "flash_attention_2":
+        fm_kwards["attn_implementation"] = "flash_attention_2"
+    else:
+        fm_kwards["attn_implementation"] = "fuse"
+    if torch_dtype is not None and torch_dtype == torch.bfloat16:
+        fm_kwards["torch_dtype"] = "bf16"
+
+    print("fm_kwards", fm_kwards)
+
+    model_fm = HuggingfaceGPTModelForCausalLM.from_pretrained(
+        CheckpointLoadConfig(
+            path=checkpoint,
+            format=LlamaGPTHuggingfaceCheckpointFormat,
+        ),
+        **fm_kwards,
+    )
+
+    # outputs_fm = model_fm.generate(**inputs, max_new_tokens=50, use_cache=False)
+    outputs_fm = generate(
+        model_fm, **inputs, max_new_tokens=num_new_tokens, tensors_save_path=tensors_save_path / "fast_llm"
+    )
+
+    print(tokenizer.decode(outputs_fm[0][inputs["input_ids"].shape[1] :]))
+    if len(outputs_fm) > 1:
+        print("--------------------------------------------------------------")
+        print(tokenizer.decode(outputs_fm[1][inputs["input_ids"].shape[1] :]))
+
+
+def run_test(
+    attn_implementation,
+    torch_dtype,
+    is_batch_size2,
+    reverse_samples,
+    tensors_save_path,
+    num_new_tokens,
+):
     checkpoint = "/mnt/checkpoints/pretrained_models/SmolLM2-135M-Instruct"
 
     device = "cuda"  # for GPU usage or "cpu" for CPU usage
@@ -81,12 +145,14 @@ def run_test(attn_implementation, torch_dtype, is_batch_size2, use_fm_changes, t
     model_hf = AutoModelForCausalLM.from_pretrained(checkpoint, **hf_kwards).to(device)
 
     messages = [
-        {"role": "user", "content": "What is gravity?"},
+        # {"role": "user", "content": "What is gravity?"},
+        {"role": "user", "content": "Who is the president of EU?"},
+        {"role": "user", "content": "Who is the president of EU?"},
     ]
-    if is_batch_size2:
-        messages += [
-            {"role": "user", "content": "Who is the president of EU?"},
-        ]
+    if reverse_samples:
+        messages = list(reversed(messages))
+    if not is_batch_size2:
+        messages = messages[0:1]
 
     input_text = [tokenizer.apply_chat_template([el], tokenize=False) for el in messages]
 
@@ -94,7 +160,9 @@ def run_test(attn_implementation, torch_dtype, is_batch_size2, use_fm_changes, t
     inputs = tokenizer(input_text, padding="longest", return_tensors="pt").to(device)
 
     # outputs_hf = model_hf.generate(**inputs, max_new_tokens=50, use_cache=False)
-    outputs_hf = generate(model_hf, **inputs, max_new_tokens=num_new_tokens, tensors_save_path=tensors_save_path / "hf")
+    outputs_hf = generate(
+        model_hf, **inputs, max_new_tokens=num_new_tokens, tensors_save_path=tensors_save_path / "hf"
+    )
     # print(tokenizer.decode(outputs_hf[0]))
 
     fm_kwards = {}
@@ -112,12 +180,13 @@ def run_test(attn_implementation, torch_dtype, is_batch_size2, use_fm_changes, t
             path=checkpoint,
             format=LlamaGPTHuggingfaceCheckpointFormat,
         ),
-        use_fm_changes=use_fm_changes,
         **fm_kwards,
     )
 
     # outputs_fm = model_fm.generate(**inputs, max_new_tokens=50, use_cache=False)
-    outputs_fm = generate(model_fm, **inputs, max_new_tokens=num_new_tokens, tensors_save_path=tensors_save_path / "fast_llm")
+    outputs_fm = generate(
+        model_fm, **inputs, max_new_tokens=num_new_tokens, tensors_save_path=tensors_save_path / "fast_llm"
+    )
 
     diff_flm_hf(
         tokenizer, outputs_fm[0][inputs["input_ids"].shape[1] :], outputs_hf[0][inputs["input_ids"].shape[1] :]
@@ -129,15 +198,17 @@ def run_test(attn_implementation, torch_dtype, is_batch_size2, use_fm_changes, t
 
 
 def main():
-    run_test(
-        # attn_implementation="flash_attention_2",
-        attn_implementation=None,
-        #torch_dtype=torch.bfloat16,
-        torch_dtype=None,
-        is_batch_size2=False,
-        use_fm_changes=False,
-        tensors_save_path=Path("/mnt/datasets/tests/denis/tensors_f32/"),
-        num_new_tokens=1000,
+    run_test_fast_llm(
+        # run_test(
+        attn_implementation="flash_attention_2",
+        # attn_implementation=None,
+        torch_dtype=torch.bfloat16,
+        # torch_dtype=None,
+        is_batch_size2=True,
+        reverse_samples=False,
+        # tensors_save_path=Path("/mnt/datasets/tests/denis/tensors_bf16_flash_attention_2_batch_size2/"),
+        tensors_save_path=Path("/mnt/datasets/tests/denis/tmp/"),
+        num_new_tokens=100,
     )
 
 
