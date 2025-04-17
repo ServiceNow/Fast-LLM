@@ -112,7 +112,7 @@ def fused_cross_entropy_forward_backward(
         # grad / grad_output = exp_logits / sum_exp_logits - target_probabilities.
         if target_format == TargetFormat.labels:
             grad_base = exp_logits.scatter_add(
-                1, target, -sum_exp_logits if target_mask is None else -target_mask * sum_exp_logits
+                1, target, -sum_exp_logits if target_mask is None else -(target_mask * sum_exp_logits)
             )
         else:
             grad_base = exp_logits - sum_exp_logits * target
