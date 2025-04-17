@@ -20,6 +20,7 @@ from fast_llm.data.dataset.config import (
     SampledDatasetUpdateConfig,
     SamplingConfig,
     SamplingData,
+    SamplingParameters,
 )
 from fast_llm.engine.distributed.config import PhaseType
 from fast_llm.utils import Assert, Registry, normalize_probabilities, padded_cumsum
@@ -45,16 +46,15 @@ class ShufflingType(str, enum.Enum):
 
 @config_class()
 class GPTSamplingConfig(SamplingConfig):
+    """
+    A dataset-dependent configuration for sampling.
+    """
+
     gpu: bool = Field(
         default=True,
         desc="Enable fast sampling on GPU."
         " Note that random sampling works differently on GPU,"
         " so the sample won't match the CPU equivalent.",
-        hint=FieldHint.feature,
-    )
-    use_loss_masking_spans: bool = Field(
-        default=False,
-        desc="Read loss masking spans from the dataset.",
         hint=FieldHint.feature,
     )
     shuffle: ShufflingType = Field(
@@ -64,15 +64,29 @@ class GPTSamplingConfig(SamplingConfig):
     )
 
 
-@dataclasses.dataclass
-class GPTSamplingData(SamplingData):
-    config: GPTSamplingConfig
-    # TODO: Sort these out
+@dataclasses.dataclass(kw_only=True)
+class GPTSamplingParameters(SamplingParameters):
+    """
+    Sampling parameters set externally to the dataset and data, ex. determined by the trainer or model.
+    """
+
     sequence_length: int
     vocab_size: int
+    use_loss_masking_spans: bool = False
+    cross_document_attention: bool = True
+
+
+@dataclasses.dataclass(kw_only=True)
+class GPTSamplingData(SamplingData):
+    """
+    Holds all the necessary information for sampling, including dataset-dependent ones (`GPTSamplingConfig`),
+    usage-dependent ones (`GPTSamplingParameters`), and others set by the `Data`.
+    """
+
+    config: GPTSamplingConfig
+    parameters: GPTSamplingParameters
     tokenizer: "Tokenizer"
     truncate_documents: bool = True
-    cross_document_attention: bool = True
 
 
 @config_class()
