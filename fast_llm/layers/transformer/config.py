@@ -186,7 +186,7 @@ class TransformerSubLayerName(str, enum.Enum):
 @config_class()
 class TransformerPeftConfig(PeftConfig):
     layers: list[TransformerSubLayerName] = Field(
-        default_factory=lambda: [TransformerSubLayerName.query, TransformerSubLayerName.value_],
+        default=None,
         desc="The layers on which to apply LoRA.",
         hint=FieldHint.feature,
     )
@@ -220,6 +220,15 @@ class TransformerPeftConfig(PeftConfig):
         return parameter
 
     def _validate(self) -> None:
+        if self.layers is None:
+            with self._set_implicit_default():
+                # Setting the default layers only whee PeFT is enabled
+                # so they don't appear when serializing the default transformer config.
+                self.layers = (
+                    [TransformerSubLayerName.query, TransformerSubLayerName.value_]
+                    if self.type == PeftType.lora
+                    else []
+                )
         if self.type != PeftType.none:
             if TransformerSubLayerName.mlp_1 in self.layers or TransformerSubLayerName.mlp_2 in self.layers:
                 # TODO: Add MLP support.
@@ -621,8 +630,8 @@ class TransformerConfig(TransformerArchitectureConfig, BaseModelConfig):
         hint=FieldHint.feature,
         valid=check_field(Assert.geq, 0),
     )
-    mlp_lr_scale: list[float | None] = Field(
-        default_factory=list,
+    mlp_lr_scale: float | None | list[float | None] = Field(
+        default=None,
         desc="Custom learning rate scale for each expert.",
         doc="May be used to freeze some experts by setting their scale to zero.",
         hint=FieldHint.feature,
@@ -670,8 +679,6 @@ class TransformerConfig(TransformerArchitectureConfig, BaseModelConfig):
                 self.init_method_std_mlp_1 = self.init_method_std
             if self.init_method_std_mlp_2 is None:
                 self.init_method_std_mlp_2 = self.init_method_std / (2 * self.num_layers) ** 0.5
-            if self.mlp_lr_scale is None or len(self.mlp_lr_scale) == 0:
-                self.mlp_lr_scale = [None]
             if self.init_method_max_qkv is None:
                 self.init_method_max_qkv = self.init_method_max
             if self.init_method_min_qkv is None:
@@ -703,11 +710,14 @@ class TransformerConfig(TransformerArchitectureConfig, BaseModelConfig):
         super()._validate()
         Assert.geq(self.attention_dropout, 0)
         Assert.geq(self.hidden_dropout, 0)
-        Assert.incl(len(self.mlp_lr_scale), (1, self.num_experts))
 
-        for scale in self.mlp_lr_scale:
-            if scale is not None:
-                Assert.geq(scale, 0)
+        if isinstance(self.mlp_lr_scale, list):
+            Assert.eq(len(self.mlp_lr_scale), self.num_experts)
+            for scale in self.mlp_lr_scale:
+                if scale is not None:
+                    Assert.geq(scale, 0)
+        elif self.mlp_lr_scale is not None:
+            Assert.geq(self.mlp_lr_scale, 0)
 
     def do_use_flash_attention(self, distributed_config: DistributedConfig) -> bool:
         use_flash_attention = self.use_flash_attention and distributed_config.training_dtype in (

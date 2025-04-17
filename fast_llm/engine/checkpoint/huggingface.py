@@ -22,8 +22,10 @@ from fast_llm.utils import Assert
 
 class HuggingfaceStateDictCheckpointHandler(ExternalStateDictCheckpointHandler, abc.ABC):
 
-    def _save_serialized_metadata(self, config: CheckpointSaveMetadataConfig, metadata: dict, index: dict) -> None:
-        path = config.path / f"{self.base_file_name}.safetensors.index.json"
+    @classmethod
+    def _save_serialized_metadata(cls, config: CheckpointSaveMetadataConfig, metadata: dict, index: dict) -> None:
+        config.path.mkdir(parents=True, exist_ok=True)
+        path = config.path / f"{cls.base_file_name}.safetensors.index.json"
         logger.info(f"Saving index to {path}")
         # Save the index.
         json.dump(
@@ -41,10 +43,11 @@ class HuggingfaceStateDictCheckpointHandler(ExternalStateDictCheckpointHandler, 
             "format": "pt",
         }
 
-    def load(self, config: CheckpointLoadConfig, metadata: CheckpointMetadata) -> None:
+    def load(self, config: CheckpointLoadConfig) -> dict[str, typing.Any] | None:
         assert not config.optimizer_state
-        self._model.config.base_model.compare_architecture(metadata.config.base_model, config.compare_log_fn)
-        super().load(config, metadata)
+        metadata = self._model.config.load_metadata(config)
+        self._model.config.base_model.compare_architecture(metadata.config.base_model, logger.warning)
+        super().load(config)
 
     @classmethod
     def get_huggingface_model_type(self) -> str:
