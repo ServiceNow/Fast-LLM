@@ -70,11 +70,6 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
         Assert.geq(prediction_distance, 0)
         self._prediction_distance = prediction_distance
         self.is_last_head = self._prediction_distance == config.prediction_heads - 1
-        if self._prediction_distance > 0:
-            assert (
-                not self._sequence_parallel_logits
-            ), "Sequence parallel logits not supported for multi-token prediction."
-            assert not self._cross_entropy_splits, "Cross-entropy splits not supported for multi-token prediction."
 
         self._init_output_weights(hidden_dim, config)
 
@@ -137,8 +132,9 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
             # Last head should return the loss for backward.
             return language_model_loss
         else:
-            # Backward hook to compute the gradient of the loss
-            shared_hidden = AuxiliaryLoss.apply(shared_hidden, language_model_loss, 1.0)
+            if self.training:
+                # Backward hook to compute the gradient of the loss
+                shared_hidden = AuxiliaryLoss.apply(shared_hidden, language_model_loss, 1.0)
             # MTP: Return shared_hidden to be used by the next head.
             return shared_hidden
 
@@ -147,18 +143,22 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
         labels = kwargs[LanguageModelKwargs.labels] if LanguageModelKwargs.labels in kwargs else None
         # MTP: Shift the labels
-        labels = labels[:, self._prediction_distance :].flatten() if labels is not None else None
+        if labels is not None:
+            labels = (
+                labels[self._prediction_distance : self._prediction_distance + input_.size(0),]
+                if kwargs[TransformerKwargs.sequence_first]
+                else labels[
+                    :,
+                    self._prediction_distance : self._prediction_distance + input_.size(1),
+                ]
+            )
+            labels = labels.flatten()
         if self._sequence_parallel_logits:
             labels = split_op(labels, self._tensor_space.distributed.tensor_group, 0)
         do_grad = labels is not None and self.training
         input_ = input_.detach().requires_grad_(do_grad)
         with torch.enable_grad():
-            # MTP: truncate the input
-            if self._prediction_distance > 0:
-                truncated_input = input_[:, : -self._prediction_distance, :].contiguous()
-            else:
-                truncated_input = input_
-            ln_output = self.final_norm(truncated_input)
+            ln_output = self.final_norm(input_)
 
         grad_output = kwargs[TransformerKwargs.grad_output] / (
             self._group_size if self._sequence_parallel_logits else 1
@@ -197,7 +197,7 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
             )
             if labels is None:
                 # TODO: Make a proper way of returning the model output.
-                kwargs["logits"] = loss
+                kwargs["logits" if self._prediction_distance == 0 else f"logits_{self._prediction_distance}"] = loss
                 return None, None
         else:
             loss = None
