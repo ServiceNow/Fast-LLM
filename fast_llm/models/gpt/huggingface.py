@@ -1,17 +1,14 @@
 import logging
 import random
 
-import pathlib
-import shutil
-
 import torch
 import transformers.modeling_outputs
-import transformers.generation.utils as tgu
+
 
 from fast_llm.data.data.gpt.data import GPTBatch
 from fast_llm.engine.distributed.config import PhaseType
 from fast_llm.engine.huggingface.config import HuggingfaceModelConfig
-from fast_llm.engine.huggingface.model import HuggingfacePreTrainedModel
+from fast_llm.engine.huggingface.model import HuggingfaceBaseModelForCausalLM
 from fast_llm.layers.transformer.config import TransformerKwargs
 from fast_llm.models.gpt.config import GPTModelConfig
 from fast_llm.models.gpt.model import GPTModel
@@ -25,7 +22,7 @@ class HuggingfaceGPTModelConfig(HuggingfaceModelConfig):
     fast_llm_config: GPTModelConfig
 
 
-class HuggingfaceGPTModelForCausalLM(HuggingfacePreTrainedModel, tgu.GenerationMixin):
+class HuggingfaceGPTModelForCausalLM(HuggingfaceBaseModelForCausalLM):
     config_class = HuggingfaceGPTModelConfig
     config: HuggingfaceGPTModelConfig
     model_class = GPTModel
@@ -58,20 +55,13 @@ class HuggingfaceGPTModelForCausalLM(HuggingfacePreTrainedModel, tgu.GenerationM
 
         if output_attentions:
             raise NotImplementedError()
-        # if output_hidden_states:
-        #     raise NotImplementedError()
-        # if attention_mask is not None:
-        #     print(attention_mask)
-        #     raise NotImplementedError()
-        # if position_ids is not None:
-        #     print(position_ids)
-        #     raise NotImplementedError()
         if inputs_embeds is not None:
             raise NotImplementedError()
         if labels is not None:
             raise NotImplementedError()
 
-        if self._use_fm_changes and attention_mask is not None:
+        # NOTE: We are ignoring position_ids as we reconstruct them from attention_mask via sequence_lenghts.
+        if attention_mask is not None:
 
             # First non zero indexes or zero index if the row is all zeros (invalid row)
             first_non_zero_indexes = attention_mask.argmax(dim=1)
@@ -113,7 +103,7 @@ class HuggingfaceGPTModelForCausalLM(HuggingfacePreTrainedModel, tgu.GenerationM
 
         # TODO: Make a proper way of returning the model output.
         logits = kwargs["logits"]
-        
+
         # TODO: convert hidden state form dict to list to be the same as with HFs
         hidden_states = None
         if output_hidden_states:
@@ -125,7 +115,7 @@ class HuggingfaceGPTModelForCausalLM(HuggingfacePreTrainedModel, tgu.GenerationM
                 outputs = (logits, hidden_states)
             else:
                 outputs = (logits,)
-            
+
             if use_cache:
                 outputs += (kwargs[TransformerKwargs.presents],)
             return outputs

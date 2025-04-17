@@ -2,7 +2,9 @@ import os
 import pathlib
 import typing
 
+import torch
 import transformers.modeling_outputs
+import transformers.generation.utils
 
 from fast_llm.config import NoAutoValidate
 from fast_llm.engine.checkpoint.config import CheckpointLoadConfig, FastLLMCheckpointFormat
@@ -15,7 +17,7 @@ from fast_llm.engine.schedule.runner import ScheduleRunner
 from fast_llm.engine.schedule.schedule import Schedule
 
 
-class HuggingfacePreTrainedModel(transformers.PreTrainedModel):
+class HuggingfaceBaseModelForCausalLM(transformers.PreTrainedModel, transformers.generation.utils.GenerationMixin):
     config_class: typing.ClassVar[type[HuggingfaceModelConfig]] = HuggingfaceModelConfig
     model_class: typing.ClassVar[type[FastLLMModel]] = FastLLMModel
     config: HuggingfaceModelConfig
@@ -57,7 +59,27 @@ class HuggingfacePreTrainedModel(transformers.PreTrainedModel):
         )
         with transformers.modeling_utils.no_init_weights():
             self.post_init()
-        self._use_fm_changes = False
+
+    def forward(
+        self,
+        input_ids: torch.Tensor | None = None,
+        attention_mask: torch.Tensor | None = None,
+        position_ids: torch.Tensor | None = None,
+        past_key_values=None,
+        inputs_embeds: torch.FloatTensor | None = None,
+        labels: torch.LongTensor | None = None,
+        use_cache: bool | None = None,
+        output_attentions: bool | None = None,
+        output_hidden_states: bool | None = None,
+        return_dict: bool | None = None,
+    ) -> tuple | transformers.modeling_outputs.CausalLMOutputWithPast:
+        # Meant to be overriden in derived classes
+        raise NotImplementedError()
+
+    @classmethod
+    def from_fast_llm_model(cls, fast_llm_model: FastLLMModel, **kwargs):
+        config = cls.config_class(fast_llm_model.config)
+        return cls(config, fast_llm_model, **kwargs)
 
     @classmethod
     def from_pretrained(
@@ -90,14 +112,11 @@ class HuggingfacePreTrainedModel(transformers.PreTrainedModel):
         fast_llm_model = cls.model_class.from_pretrained(
             pretrained_model_name_or_path, config_updates=config_updates, mode=mode
         )
-        config = cls.config_class(fast_llm_model.config)
 
-        obj = cls(config, fast_llm_model, **kwargs)
-
-        use_fm_changes = kwargs.pop("use_fm_changes", False)
-        obj._use_fm_changes = use_fm_changes
-
-        return obj
+        return cls.from_fast_llm_model(fast_llm_model, **kwargs)
 
     def _init_weights(self, module) -> None:
         raise NotImplementedError(module)
+
+    def can_generate(self):
+        return True
