@@ -145,17 +145,19 @@ class GPTSampledIndexedDataset(SampledDataset):
                 raise RuntimeError(
                     f" > No documents shorter than {self._parameters.sequence_length+1} tokens found in dataset {self._indexed_dataset.name}."
                 )
-        # TODO MTP: Produce more labels to provide labels for the multi-token prediction heads?
-        # We produce sequences of length `self._sequence_length + 1` so the last token has a label,
-        # but in case of truncations we also include that last label in the following sample,
-        # so we need `sequence_length * num_samples + 1` tokens in total.
-        num_epochs = math.ceil(
-            (
-                (self._parameters.sequence_length + 1 - self._truncate_documents) * self._parameters.num_samples
-                + 1 * self._truncate_documents
+        # We produce sequences of length `self._sequence_length + extra_tokens` so the last token has a label for all prediction heads,
+        # but in case of truncations we also include those last labels in the following sample,
+        # so we need `sequence_length * num_samples + extra_tokens` tokens in total.
+        if self._truncate_documents:
+            num_epochs = math.ceil(
+                (self._parameters.sequence_length * self._parameters.num_samples + self._parameters.extra_tokens)
+                / tokens_per_epoch
             )
-            / tokens_per_epoch
-        )
+        else:
+            num_epochs = math.ceil(
+                ((self._parameters.sequence_length + self._parameters.extra_tokens) * self._parameters.num_samples)
+                / tokens_per_epoch
+            )
 
         # Prepare for shuffling.
         generator = torch.Generator(device=self._device)
@@ -349,8 +351,13 @@ class GPTSampledIndexedDataset(SampledDataset):
         self._lazy_load()
         # tokens at the boundary are included in only one sample when we pack without truncations
         # in case of packing with truncations, the last token from the previous sample is also the first token of the next sample
-        token_start = index * (self._parameters.sequence_length + 1 - self._truncate_documents)
-        token_end = token_start + self._parameters.sequence_length + 1
+        sample_length = (
+            self._parameters.sequence_length
+            if self._truncate_documents
+            else self._parameters.sequence_length + self._parameters.extra_tokens
+        )
+        token_start = index * sample_length
+        token_end = token_start + self._parameters.sequence_length + self._parameters.extra_tokens
 
         if token_start < self._unshuffled_tokens:
             token_start_array = self._token_cumsum_unshuffled.array
@@ -410,7 +417,9 @@ class GPTSampledIndexedDataset(SampledDataset):
                 if self._parameters.use_loss_masking_spans:
                     for loss_masking_span in sample.loss_masking_spans:
                         span = np.clip(
-                            loss_masking_span + token_count - token_start, 0, self._parameters.sequence_length + 1
+                            loss_masking_span + token_count - token_start,
+                            0,
+                            self._parameters.sequence_length + self._parameters.extra_tokens,
                         )
                         if span[1] > span[0]:
                             loss_masking_spans.append(span)
@@ -430,7 +439,7 @@ class GPTSampledIndexedDataset(SampledDataset):
             if self._parameters.use_loss_masking_spans
             else None
         )
-        Assert.eq(len(token_ids), self._parameters.sequence_length + 1)
+        Assert.eq(len(token_ids), self._parameters.sequence_length + self._parameters.extra_tokens)
 
         return GPTSample(token_ids=token_ids, loss_masking_spans=loss_masking_spans, sequence_lengths=sequence_lengths)
 

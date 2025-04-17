@@ -74,6 +74,9 @@ class GPTSamplingParameters(SamplingParameters):
     vocab_size: int
     use_loss_masking_spans: bool = False
     cross_document_attention: bool = True
+    # How many extra tokens to add to the sequence length.
+    # This is used to provide labels even for the last tokens in the sequence.
+    extra_tokens: int = 1
 
 
 @dataclasses.dataclass(kw_only=True)
@@ -258,7 +261,7 @@ class GPTDatasetFromFileConfig(GPTSamplableDatasetConfig):
         return config.build()
 
     def _load_config(self):
-        assert self.path.is_file()
+        assert self.path.is_file(), f"File {self.path} does not exist."
         return GPTSampledDatasetConfig.from_dict(self._convert_paths(yaml.safe_load(self.path.open("r"))))
 
     def _convert_paths(self, config):
