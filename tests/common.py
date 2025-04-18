@@ -17,6 +17,7 @@ from fast_llm.models.gpt.config import (
     LlamaGPTHuggingfaceCheckpointFormat,
     MistralGPTHuggingfaceCheckpointFormat,
     MixtralGPTHuggingfaceCheckpointFormat,
+    MTPLlamaGPTHuggingfaceCheckpointFormat,
     Qwen2GPTHuggingfaceCheckpointFormat,
     Starcoder2GPTHuggingfaceCheckpointFormat,
 )
@@ -264,7 +265,7 @@ _CONFIGS = {
         CONFIG_LLAMA_MTP_FAST_LLM,
         CONFIG_LLAMA_MTP_MEGATRON,
         CONFIG_LLAMA_MTP_COMMON,
-        LlamaGPTHuggingfaceCheckpointFormat,
+        MTPLlamaGPTHuggingfaceCheckpointFormat,
     ),
 }
 

@@ -12,6 +12,7 @@ from fast_llm.engine.checkpoint.config import (
     CheckpointLoadConfig,
     CheckpointLoadMetadataConfig,
     CheckpointSaveConfig,
+    CheckpointSaveMetadataConfig,
     DistributedCheckpointFormat,
     ModelConfigType,
     export_safetensors_metadata,
@@ -28,7 +29,13 @@ class DistributedCheckpointHandler(CheckpointHandler):
     format: typing.ClassVar[type[CheckpointFormat]] = DistributedCheckpointFormat
 
     @classmethod
-    def load_metadata(cls, config: CheckpointLoadMetadataConfig) -> CheckpointMetadata:
+    def save_metadata(cls, config: CheckpointSaveMetadataConfig, metadata: CheckpointMetadata):
+        config.path.mkdir(parents=True, exist_ok=True)
+        serialized_metadata = metadata.to_dict()
+        yaml.safe_dump(serialized_metadata, (config.path / "metadata.yaml").open("w"))
+
+    @classmethod
+    def _load_metadata(cls, config: CheckpointLoadMetadataConfig) -> CheckpointMetadata:
         return CheckpointMetadata.from_dict(yaml.safe_load((config.path / "metadata.yaml").open("r")))
 
     def save(self, config: CheckpointSaveConfig, metadata: CheckpointMetadata) -> None:
@@ -41,17 +48,16 @@ class DistributedCheckpointHandler(CheckpointHandler):
             metadata=export_safetensors_metadata(serialized_metadata),
         )
 
-    def load(self, config: CheckpointLoadConfig, metadata: CheckpointMetadata) -> None:
+    def load(self, config: CheckpointLoadConfig) -> dict[str, typing.Any] | None:
         # TODO: More safety checks
-        loaded_config_dict = config.to_copy({"load_config": ModelConfigType.fast_llm})
-        loaded_config = self._model.config_class.from_metadata(loaded_config_dict, metadata)
+        loaded_metadata = self._model.config.load_metadata(config.to_copy({"load_config": ModelConfigType.fast_llm}))
         shard_names = self.get_shard_names(config)
         # Make sure all shards to load are in the checkpoint.
-        Assert.leq(set(self.get_shard_names(config)), set(metadata.shards))
-        Assert.eq(metadata.shards[: len(shard_names)], list(shard_names))
+        Assert.leq(set(self.get_shard_names(config)), set(loaded_metadata.shards))
+        Assert.eq(loaded_metadata.shards[: len(shard_names)], list(shard_names))
 
         # Using `log_fn=bool` sets the output to true if the error list is non-empty.
-        same_format = config.optimizer_state and not loaded_config.compare(self._model.config, log_fn=bool)
+        same_format = config.optimizer_state and not loaded_metadata.config.compare(self._model.config, log_fn=bool)
         # Make sure all nodes agree on which loading scheme to use.
         # Note: they may not agree before the broadcast because of the rank comparison, but that's ok.
         same_format = broadcast_scalar(same_format, torch.uint8, self._model.distributed.world_group)
@@ -70,7 +76,7 @@ class DistributedCheckpointHandler(CheckpointHandler):
                     log_main_rank("Using legacy distributed checkpoint loader.", log_fn=logger.warning)
                     for shard_name in shard_names:
                         self._model.get_shard(shard_name).copy_(
-                            f.get_slice("state_shard")[metadata.shards.index(shard_name)]
+                            f.get_slice("state_shard")[loaded_metadata.shards.index(shard_name)]
                         )
                 else:
                     # TODO: Does this copy twice?
@@ -79,11 +85,11 @@ class DistributedCheckpointHandler(CheckpointHandler):
 
         else:
             log_main_rank("Checkpoint format doesn't match, using safe load", log_fn=logger.info)
-            self._model.config.base_model.compare_architecture(loaded_config.base_model, config.compare_log_fn)
+            self._model.config.base_model.compare_architecture(loaded_metadata.config.base_model, logger.warning)
             with SafeLoad(self._model, shard_names=shard_names, timeout=config.timeout) as context:
-                for rank in range(loaded_config.distributed.world_size):
+                for rank in range(loaded_metadata.config.distributed.world_size):
                     loaded_model = self._model.__class__(
-                        loaded_config.to_copy({("distributed", "rank"): rank}),
+                        loaded_metadata.config.to_copy({("distributed", "rank"): rank}),
                         optimizer_state_names=shard_names[1:],
                         verbose=False,
                     )
@@ -97,7 +103,7 @@ class DistributedCheckpointHandler(CheckpointHandler):
                             # TODO v0.3: Use checkpoint version? Drop support?
                             log_main_rank("Using legacy distributed checkpoint loader.", log_fn=logger.warning)
                             loaded_shards = {
-                                shard_name: f.get_slice("state_shard")[metadata.shards.index(shard_name)]
+                                shard_name: f.get_slice("state_shard")[loaded_metadata.shards.index(shard_name)]
                                 for shard_name in shard_names
                             }
                         else:
@@ -122,3 +128,5 @@ class DistributedCheckpointHandler(CheckpointHandler):
                                 )
 
                         context.mark_as_loaded(counter.item())
+
+        return loaded_metadata.metadata
