@@ -32,6 +32,8 @@ class GPTBatch:
     token_ids: torch.Tensor
     loss_masking_spans: list[torch.Tensor] | None = None
     sequence_lengths: list[torch.Tensor] | None = None
+    chosen_loss_masking_spans: list[torch.Tensor] | None = None
+    rejected_loss_masking_spans: list[torch.Tensor] | None = None
 
 
 def gpt_data_collate_fn(batch: list[GPTSample], sampling_parameters: GPTSamplingParameters) -> GPTBatch:
@@ -40,10 +42,17 @@ def gpt_data_collate_fn(batch: list[GPTSample], sampling_parameters: GPTSampling
     sequence_lengths = None
     if sampling_parameters.use_loss_masking_spans:
         stacked_spans = [torch.from_numpy(sample.loss_masking_spans) for sample in batch]
+    if sampling_parameters.use_preference_loss_masking_spans:
+        stacked_chosen_spans = [torch.from_numpy(sample.chosen_loss_masking_span) for sample in batch]
+        stacked_rejected_spans = [torch.from_numpy(sample.rejected_loss_masking_span) for sample in batch]
     if not sampling_parameters.cross_document_attention:
         sequence_lengths = [torch.tensor(sample.sequence_lengths) for sample in batch]
     return GPTBatch(
-        token_ids=torch.from_numpy(stacked_ids), loss_masking_spans=stacked_spans, sequence_lengths=sequence_lengths
+        token_ids=torch.from_numpy(stacked_ids),
+        loss_masking_spans=stacked_spans,
+        sequence_lengths=sequence_lengths,
+        chosen_loss_masking_spans=stacked_chosen_spans,
+        rejected_loss_masking_spans=stacked_rejected_spans,
     )
 
 
@@ -149,9 +158,12 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
         sampling_parameters = self._sampling_parameters[dataset_name]
         Assert.in_range_incl(batch_config.sequence_length, 1, sampling_parameters.sequence_length)
         log_main_rank(f"Initializing {dataset_name} dataset iterator from sample {consumed_samples}...")
+
+        dataset = self._datasets[dataset_name]  # noqa
+
         return iter(
             torch.utils.data.DataLoader(
-                self._datasets[dataset_name],  # noqa
+                dataset,
                 batch_sampler=SampledDatasetIterator(
                     total_samples=len(self._datasets[dataset_name]),
                     begin_index=consumed_samples,
