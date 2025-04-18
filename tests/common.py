@@ -17,7 +17,6 @@ from fast_llm.models.gpt.config import (
     LlamaGPTHuggingfaceCheckpointFormat,
     MistralGPTHuggingfaceCheckpointFormat,
     MixtralGPTHuggingfaceCheckpointFormat,
-    MTPLlamaGPTHuggingfaceCheckpointFormat,
     Qwen2GPTHuggingfaceCheckpointFormat,
     Starcoder2GPTHuggingfaceCheckpointFormat,
 )
@@ -265,7 +264,7 @@ _CONFIGS = {
         CONFIG_LLAMA_MTP_FAST_LLM,
         CONFIG_LLAMA_MTP_MEGATRON,
         CONFIG_LLAMA_MTP_COMMON,
-        MTPLlamaGPTHuggingfaceCheckpointFormat,
+        LlamaGPTHuggingfaceCheckpointFormat,
     ),
 }
 
@@ -382,9 +381,7 @@ def run_test_script(
         script = [model_type, *script, f"run.experiment_dir={path}"]
     header = ["Megatron-LM/pretrain_gpt.py"] if is_megatron else ["--no-python", "fast-llm", "train"]
     command = [
-        "python",
-        "-m",
-        "torch.distributed.run",
+        "torchrun",
         f"--nproc-per-node={num_gpus}",
         *header,
         *script,

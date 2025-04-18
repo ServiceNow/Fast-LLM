@@ -1,14 +1,20 @@
 import pytest
 import torch
 
-from fast_llm.functional.config import MAX_DROPLESS_BLOCK_SIZE_ROW, ActivationType, TritonConfig
+from fast_llm.functional.config import (
+    MAX_DROPLESS_BLOCK_SIZE_ROW,
+    ActivationType,
+    CrossEntropyImpl,
+    TargetFormat,
+    TritonConfig,
+)
+from fast_llm.functional.cross_entropy import cross_entropy_forward_backward
 from fast_llm.functional.rotary import (
     apply_rotary_embeddings,
     convert_rotary_complex_to_real,
     convert_rotary_real_to_complex,
 )
 from fast_llm.functional.triton.adam import triton_adam
-from fast_llm.functional.triton.cross_entropy import triton_cross_entropy_forward_backward
 from fast_llm.functional.triton.mlp import (
     torch_mlp_activation,
     triton_mlp_activation_backward,
@@ -184,24 +190,62 @@ def test_triton_mlp_activation(gated, activation_type, recompute):
 
 
 @requires_cuda
-def test_triton_cross_entropy():
+@pytest.mark.slow
+@pytest.mark.parametrize(
+    ("num_columns", "grad_output", "logits_scale_factor"),
+    (
+        (8192, 1.0, 1.0),  # Simple
+        (5000, 1.0, 1.0),  # Not a power of 2
+        (5000, None, 1.0),  # No grad
+        (5000, 1.0, 4.0),  # Loss scaling
+        (5000, 4.0, 1.0),  # Grad scaling
+        (65536, 1.0, 1.0),  # Max block size
+        (65537, 1.0, 1.0),  # Above max block size
+    ),
+)
+@pytest.mark.parametrize("target_format", (TargetFormat.labels, TargetFormat.logits, TargetFormat.probabilities))
+def test_cross_entropy(num_columns, grad_output, logits_scale_factor, target_format):
+    # TODO: Test tensor-parallel implementation.
     assert TritonConfig.TRITON_ENABLED
-    logits = torch.randn(1024, 8192, dtype=torch.bfloat16, device="cuda", requires_grad=True)
-    labels = torch.randint(0, 8192, (1024,), dtype=torch.int64, device="cuda")
+    # We want something moderately close to the target for the test to be meaningful
+    logits_var = torch.randn(256, num_columns, dtype=torch.bfloat16, device="cuda") / 3
+    if target_format == TargetFormat.labels:
+        target = torch.randint(0, num_columns, (256,), dtype=torch.int64, device="cuda")
+        logits = (torch.nn.functional.one_hot(target, num_columns) + logits_var).requires_grad_()
+    else:
+        target = torch.randn(256, num_columns, dtype=torch.bfloat16, device="cuda")
+        logits = (target + logits_var).requires_grad_()
+        if target_format == TargetFormat.probabilities:
+            target = torch.softmax(target, -1)
 
-    from fast_llm.functional.cross_entropy import (
-        fused_cross_entropy_forward_backward,
-        torch_cross_entropy_forward_backward,
-    )
+    kwargs = {
+        "logits": logits,
+        "target": target,
+        "grad_output": grad_output,
+        "logits_scale_factor": logits_scale_factor,
+        "target_format": target_format,
+    }
+    # Torch serves as the reference implementation.
+    out_torch, grad_torch = cross_entropy_forward_backward(**kwargs, implementation=CrossEntropyImpl.torch)
 
-    c1, g1 = torch_cross_entropy_forward_backward(logits, labels, 1)
-    c2, g2 = fused_cross_entropy_forward_backward(logits, labels, 1)
-    c3, g3 = triton_cross_entropy_forward_backward(logits, labels, 1)
+    out_fused, grad_fused = cross_entropy_forward_backward(**kwargs, implementation=CrossEntropyImpl.fused)
+    Assert.rms_close(out_fused, out_torch, 5e-3)
+    if grad_output is None:
+        assert grad_torch is None
+        assert grad_fused is None
+    else:
+        Assert.rms_close(grad_fused, grad_torch, 5e-3)
 
-    Assert.rms_close(c2, c3, 5e-3)
-    Assert.rms_close(c1, c3, 5e-3)
-    Assert.rms_close(g1, g3, 5e-3)
-    Assert.rms_close(g2, g3, 5e-3)
+    if num_columns > 65536:
+        with pytest.raises(AssertionError):
+            cross_entropy_forward_backward(**kwargs, implementation=CrossEntropyImpl.triton)
+    else:
+        out_triton, grad_triton = cross_entropy_forward_backward(**kwargs, implementation=CrossEntropyImpl.triton)
+        if grad_output is None:
+            assert grad_triton is None
+        else:
+            Assert.rms_close(grad_triton, grad_torch, 5e-3)
+        Assert.rms_close(out_triton, out_torch, 5e-3)
 
 
 @requires_cuda

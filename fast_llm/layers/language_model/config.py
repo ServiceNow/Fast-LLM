@@ -152,6 +152,12 @@ class LanguageModelBaseConfig(LanguageModelArchitectureConfig, BaseModelConfig):
         hint=FieldHint.feature,
         valid=skip_valid_if_none(check_field(Assert.gt, 0)),
     )
+    distillation_model: str | None = Field(
+        default=None,
+        desc="Name of the reference model to use for knowledge distillation."
+        "If provided, replace the loss with a distillation loss.",
+        hint=FieldHint.feature,
+    )
     # Tensor-parallel word embeddings
     # (Default init std is different, dropout won't match, needs seq_first = False.)
     # (disable to allow for sequence-parallel embeddings and logits, better for larger models)
@@ -196,6 +202,9 @@ class LanguageModelBaseConfig(LanguageModelArchitectureConfig, BaseModelConfig):
                 self.init_method_max_embed = self.transformer.init_method_max
             if self.init_method_min_embed is None:
                 self.init_method_min_embed = self.transformer.init_method_min
-            if self.init_method_max_embed is not None and self.init_method_min_embed is not None:
-                Assert.leq(self.init_method_min_embed, self.init_method_max_embed)
         super()._validate()
+        if self.init_method_max_embed is not None and self.init_method_min_embed is not None:
+            Assert.leq(self.init_method_min_embed, self.init_method_max_embed)
+        if self.distillation_model is not None:
+            if self.prediction_heads > 1:
+                raise NotImplementedError("Multi-token prediction not supported with distillation.")
