@@ -14,6 +14,7 @@ from fast_llm.data.data.abstract import Data
 from fast_llm.engine.config_utils.run import Run, is_main_rank, log_main_rank, log_pipeline_parallel_main_rank
 from fast_llm.engine.distributed.config import PhaseType
 from fast_llm.engine.distributed.distributed import Distributed
+from fast_llm.engine.multi_stage.config import StageMode
 from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
 from fast_llm.engine.optimizer.config import ParamGroup
 from fast_llm.engine.optimizer.optimizer import Optimizer
@@ -53,7 +54,7 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
         log_main_rank("Creating model...")
         self._multi_stage = self.model_class(
             self._config.model,
-            optimizer_state_names=self._config.optimizer.state_names(),
+            optimizer_state_names=self._config.optimizer.state_names() if not self._is_evaluation_only else (),
         )
         self._runner = ScheduleRunner(
             config=self._config.schedule,
@@ -93,6 +94,8 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
                 }
                 for phase, datasets in self._samples_per_split.items()
             }
+        else:
+            self._samples_per_split = {}
 
     def setup(self, distributed: Distributed, run: Run) -> None:
         assert distributed.config is self._config.model.distributed
@@ -103,7 +106,9 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
 
         # Setup the model.
         with torch.no_grad():
-            self._multi_stage.setup(distributed)
+            self._multi_stage.setup(
+                distributed, StageMode.inference if self._is_evaluation_only else StageMode.training
+            )
 
         # TODO: Check with Joel if this will be enought not to allocate grad buffers.
         # Setup the optimizer.
@@ -168,10 +173,15 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
             self._run_training()
 
     def _run_training(self) -> None:
-        self._prepare_training_state()
+        if not self._is_evaluation_only:
+            self._prepare_training_state()
+
         log_main_rank("done with setup ...")
         log_pipeline_parallel_main_rank(lambda: log_memory_usage(f"After initial setup", str))
         self._run.save_logged_tensors("init")
+
+        if self._is_evaluation_only:
+            assert len(self._samples_per_split) == 0
 
         if PhaseType.training in self._samples_per_split:
             done = self._completed_steps >= self._config.training.train_iters
