@@ -148,6 +148,7 @@ class GPTMemmapDataset(GPTIndexedDataset):
         offset: int = 0,
         length: int | None = None,
         use_loss_masking_spans: bool = False,
+        use_preference_loss_masking_spans: bool = False,
     ) -> GPTSample:
         token_ids = np.frombuffer(
             self._bin_buffer,
@@ -171,30 +172,33 @@ class GPTMemmapDataset(GPTIndexedDataset):
         chosen_span = None
         rejected_span = None
 
-        if self._has_preference_spans and self._chosen_spans is None:
-            raise ValueError("Failed to read chosen spans from memmap dataset.")
-        elif self._has_preference_spans and self._rejected_spans is None:
-            raise ValueError("Failed to read rejected spans from memmap dataset.")
-        elif self._has_preference_spans:
-            chosen_span = self._chosen_spans[idx]
+        if use_preference_loss_masking_spans:
+            if self._has_preference_spans and self._chosen_spans is None:
+                raise ValueError("Failed to read chosen spans from memmap dataset.")
+            elif self._has_preference_spans and self._rejected_spans is None:
+                raise ValueError("Failed to read rejected spans from memmap dataset.")
+            elif self._has_preference_spans:
+                chosen_span = self._chosen_spans[idx]
 
-            # filter spans that are outside the range of the selected tokens in the document
-            chosen_span = chosen_span[(chosen_span[0] < offset + len(token_ids)) & (chosen_span[1] >= offset)][0]
+                # filter spans that are outside the range of the selected tokens in the document
+                chosen_span = chosen_span[(chosen_span[0] < offset + len(token_ids)) & (chosen_span[1] >= offset)][0]
 
-            # subtract by offset to normalize span boundaries
-            chosen_span[0] = np.maximum(chosen_span[0], offset) - offset  # offset
-            chosen_span[1] = np.minimum(chosen_span[1], offset + len(token_ids) - 1) - offset
+                # subtract by offset to normalize span boundaries
+                chosen_span[0] = np.maximum(chosen_span[0], offset) - offset  # offset
+                chosen_span[1] = np.minimum(chosen_span[1], offset + len(token_ids) - 1) - offset
 
-            rejected_span = self._rejected_spans[idx]
+                rejected_span = self._rejected_spans[idx]
 
-            # filter spans that are outside the range of the selected tokens in the document
-            rejected_span = rejected_span[(rejected_span[0] < offset + len(token_ids)) & (rejected_span[1] >= offset)][
-                0
-            ]
+                # filter spans that are outside the range of the selected tokens in the document
+                rejected_span = rejected_span[
+                    (rejected_span[0] < offset + len(token_ids)) & (rejected_span[1] >= offset)
+                ][0]
 
-            # subtract by offset to normalize span boundaries
-            rejected_span[0] = np.maximum(rejected_span[0], offset) - offset  # offset
-            rejected_span[1] = np.minimum(rejected_span[1], offset + len(token_ids) - 1) - offset
+                # subtract by offset to normalize span boundaries
+                rejected_span[0] = np.maximum(rejected_span[0], offset) - offset  # offset
+                rejected_span[1] = np.minimum(rejected_span[1], offset + len(token_ids) - 1) - offset
+            else:
+                raise ValueError("No preference spans found in memmap dataset.")
 
         return GPTSample(
             token_ids=token_ids,

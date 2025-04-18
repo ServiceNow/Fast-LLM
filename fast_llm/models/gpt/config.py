@@ -93,6 +93,11 @@ class GPTBatchConfig(BatchConfig):
         desc="Read loss masking spans from the dataset.",
         hint=FieldHint.feature,
     )
+    use_preference_loss_masking_spans: bool = Field(
+        default=False,
+        desc="Read loss masking spans from the dataset.",
+        hint=FieldHint.feature,
+    )
 
     def _validate(self) -> None:
         if self.micro_sequence_length is None:

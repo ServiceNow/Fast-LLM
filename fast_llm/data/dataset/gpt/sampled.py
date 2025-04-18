@@ -75,252 +75,6 @@ class MemmapArray:
 TOKEN_CUMSUM_RATE = 10
 
 
-class GPTSampledPreferenceIndexedDataset(SampledDataset):
-    """
-    A sampled GPT dataset for preference data.
-    """
-
-    def __init__(
-        self,
-        indexed_dataset: GPTIndexedDataset,
-        sampling: GPTSamplingData,
-    ):
-        assert isinstance(sampling, GPTSamplingData)
-        self._indexed_dataset = indexed_dataset
-        self._num_samples = sampling.num_samples
-        self._sequence_length = sampling.sequence_length
-        self._cross_document_attention = sampling.cross_document_attention
-        self._config = sampling.config
-        self._truncate_documents = sampling.truncate_documents
-        self._device = torch.device("cuda" if self._config.gpu else "cpu")
-
-        if self._truncate_documents:
-            raise NotImplementedError("Sampled preference indexed dataset does not support document trunctation.")
-
-        if sampling.cache_directory is None:
-            self._document_shuffling = MemmapArray()
-            self._token_cumsum_shuffled = MemmapArray()
-            self._token_cumsum_unshuffled = MemmapArray()
-            self._yaml_path = None
-            log_main_rank(
-                " > No dataset cache directory provided, building the index map on all ranks."
-                "This may be very inefficient...",
-                log_fn=logger.warning,
-            )
-            self._sample()
-        else:
-            base_path = (
-                sampling.cache_directory / f"{self.name}_ns_{self._num_samples}_sl_{self._sequence_length}"
-                f"_s_{self._config.seed}"
-            )
-            # TODO: Names are confusing
-
-            # contains shuffled document indicies
-            self._document_shuffling = MemmapArray(base_path.with_name(base_path.name + "_shuffling.npy"))
-
-            self._document_sizes = MemmapArray(base_path.with_name(base_path.name + "_doc_sizes.npy"))
-            self._doc_length_filtered_indicies = MemmapArray(
-                base_path.with_name(base_path.name + "_doc_length_filtered_indices.npy")
-            )
-
-            self._yaml_path = base_path.with_suffix(".yaml")
-            # Sample or validate the dataset of a given rank.
-            if sampling.distributed.config.rank == sampling.get_next_rank():
-                self._sample()
-            # No barrier yet to allow running in parallel.
-            # There needs to be one before calling `__getitem__`, normally handled through `GPTData`.
-
-    def _sample(self) -> None:
-        """
-        Create a `GPTSampledDataset` with the requested parameters.
-        """
-        # compute document sizes, documents per epoch, and tok per epoch
-        document_sizes = torch.from_numpy(self._indexed_dataset.get_document_sizes()).to(self._device)
-        documents_per_epoch = document_sizes.numel()
-        tokens_per_epoch = document_sizes.sum().item()
-
-        # filter documents past the sequence length
-        long_docs_filter = document_sizes > self._sequence_length + 1  # TODO: do we need the +1 here if no truncation?
-        ignored_documents = sum(long_docs_filter)
-        if ignored_documents:
-            log_main_rank(
-                f" > {ignored_documents}/{documents_per_epoch} documents are longer than {self._sequence_length+1} tokens and will be ignored.",
-                log_fn=logger.warning,
-            )
-        tokens_per_epoch = document_sizes[~long_docs_filter].sum().item()
-        if tokens_per_epoch == 0:
-            raise RuntimeError(
-                f" > No documents shorter than {self._sequence_length+1} tokens found in dataset {self._indexed_dataset.name}."
-            )
-
-        # update documents per epochs/num epochs based on filter
-        documents_per_epoch = (~long_docs_filter).sum().item()
-        num_epochs = math.ceil(self._num_samples / documents_per_epoch)
-
-        # compute shuffled/unshuffled epochs
-        generator = torch.Generator(device=self._device)
-        if self._config.shuffle == ShufflingType.skip_first_epoch:
-            shuffled_epochs = num_epochs - 1
-        elif self._config.shuffle == ShufflingType.disabled:
-            shuffled_epochs = 0
-        else:
-            shuffled_epochs = num_epochs
-        shuffled_documents = documents_per_epoch * shuffled_epochs
-        unshuffled_epochs = num_epochs - shuffled_epochs
-
-        yaml_data = {
-            "dataset": {
-                "name": self._indexed_dataset.name,
-                "documents_per_epoch": documents_per_epoch,
-                "tokens_per_epoch": tokens_per_epoch,
-            },
-            "num_samples": self._num_samples,
-            "unshuffled_epochs": unshuffled_epochs,
-            "sequence_length": self._sequence_length,
-            "truncate_documents": self._truncate_documents,
-            "config": self._config.to_serialized(),
-        }
-
-        if self._yaml_path is not None and self._yaml_path.is_file():
-            loaded_yaml_data = yaml.safe_load(self._yaml_path.open("r"))
-            self._load_yaml_data(yaml_data)
-            del loaded_yaml_data["unshuffled_tokens"]
-
-            if loaded_yaml_data != yaml_data:
-                raise RuntimeError(
-                    f"Invalid dataset cache for dataset {self.name}."
-                    " If this is due to an intended configuration change,"
-                    " please delete the cache before continuing."
-                    f"\nCurrent config:\n{yaml.safe_dump(yaml_data)}"
-                    f"\nCached config:\n{yaml.safe_dump(loaded_yaml_data)}"
-                )
-            # Dataset is already sampled, skip.
-            logger.info(f"Using existing sampling for dataset {self.name}")
-            return
-
-        if shuffled_documents > 1e8:
-            warnings.warn(
-                f"Shuffling {shuffled_documents:.2e} documents for dataset {self._indexed_dataset.name}."
-                f" This may take a while and/or use an excessive amount of memory."
-            )
-        elif documents_per_epoch > 1e8:
-            # TODO: Most of the damage is already done in `get_document_sizes`. Find a way to warn earlier?
-            warnings.warn(
-                f"The dataset {self._indexed_dataset.name} contains {documents_per_epoch:.2e} documents."
-                f" Sampling may take a while and/or use an excessive amount of memory."
-            )
-
-        # Use the smallest possible data type to save memory and disk usage.
-        document_shuffling_dtype = get_unsigned_integer_type(documents_per_epoch).torch
-        # Shuffle the dataset (documents)
-        # This generates a document shuffling index `all_document_index`, the unshuffled part is trivial
-        #   so we only evaluate and store the shuffled part `document_shuffling`.
-        if self._config.shuffle == ShufflingType.full:
-            generator.manual_seed(self._config.seed)
-            # Equivalent to `shuffle(range(documents_per_epoch * num_epochs)) % documents_per_epoch`
-            document_shuffling = (
-                torch.randperm(
-                    shuffled_documents,
-                    generator=generator,
-                    dtype=get_unsigned_integer_type(shuffled_documents).torch,
-                    device=self._device,
-                )
-                .remainder_(documents_per_epoch)
-                .to(dtype=document_shuffling_dtype)
-            )
-        elif self._config.shuffle in (ShufflingType.skip_first_epoch, ShufflingType.epoch):
-            document_shuffling = torch.empty(
-                shuffled_documents,
-                dtype=document_shuffling_dtype,
-                device=self._device,
-            )
-            for i in range(shuffled_epochs):
-                generator.manual_seed(self._config.seed + i * 571)
-                torch.randperm(
-                    documents_per_epoch,
-                    generator=generator,
-                    out=document_shuffling[i * documents_per_epoch : (i + 1) * documents_per_epoch],
-                )
-        elif self._config.shuffle == ShufflingType.disabled:
-            document_shuffling = None
-        else:
-            raise NotImplementedError(f"Unknown shuffling type: {self._config.shuffle}")
-
-        yaml_data["unshuffled_tokens"] = None  # not used with packing disabled
-
-        # index of all documents less than seq length long
-        doc_length_filtered_indicies = torch.nonzero(~long_docs_filter, as_tuple=True)[0]
-        self._doc_length_filtered_indicies.save(doc_length_filtered_indicies.numpy(force=self._config.gpu))
-
-        # save document shuffling and document sizes
-        if shuffled_epochs > 0:
-            self._document_shuffling.save(document_shuffling[: self._num_samples].numpy(force=self._config.gpu))
-        self._document_sizes.save(document_sizes.numpy(force=self._config.gpu))
-
-        # save yaml
-        if self._yaml_path is not None:
-            # yaml_data["unshuffled_tokens"] = num_tokens_unshuffled
-            self._yaml_path.parent.mkdir(parents=True, exist_ok=True)
-            yaml.safe_dump(yaml_data, self._yaml_path.open("w"))
-
-    def __len__(self) -> int:
-        return self._num_samples
-
-    def __getitem__(self, index: int) -> typing.Any:
-        """
-        Get the sample, (fixed-length sequence of tokens holding one or more complete or partial documents)
-        with the requested sampling index.
-        The returned sample is ready to be concatenated, then fed to a `GPTModel` (see `GPTModel.preprocess`).
-        """
-        self._lazy_load()
-
-        # get the document index to read
-        if index < self._unshuffled_documents:
-            document_index = self._doc_length_filtered_indicies[index % self._documents_per_epoch]
-        else:
-            document_index = self._doc_length_filtered_indicies[
-                self._document_shuffling[index - self._unshuffled_documents].item()
-            ]
-
-        # read document from memmap
-        sample = self._indexed_dataset.get(
-            document_index,
-            offset=0,
-            length=self._document_sizes[document_index],
-            use_loss_masking_spans=self._config.use_loss_masking_spans,
-        )
-
-        # compute sequence lengths
-        chosen_loss_masking_span_end = sample.chosen_loss_masking_span[1] + 1
-        sequence_lengths = [
-            chosen_loss_masking_span_end,
-            len(sample.token_ids) - chosen_loss_masking_span_end,
-        ]
-
-        # compute padding size
-        padding = np.full((self._sequence_length,), 0)
-        padding[: len(sample.token_ids)] = sample.token_ids
-        sequence_lengths.append(self._sequence_length - len(sample.token_ids))
-        sample.token_ids = padding
-
-        if not self._cross_document_attention:  # only add sequence lengths if no cross doc attention
-            sample.sequence_lengths = np.array(sequence_lengths)
-
-        return sample
-
-    @property
-    def name(self) -> str:
-        return self._indexed_dataset.name
-
-    def _lazy_load(self):
-        if not hasattr(self, "_documents_per_epoch"):
-            self._load_yaml_data(yaml.safe_load(self._yaml_path.open("r")))
-
-    def _load_yaml_data(self, data: dict[str, typing.Any]) -> None:
-        self._documents_per_epoch = data["dataset"]["documents_per_epoch"]
-        self._unshuffled_documents = data["unshuffled_epochs"] * self._documents_per_epoch
-
-
 class GPTSampledIndexedDataset(SampledDataset):
     """
     A sampled GPT dataset.
@@ -360,6 +114,14 @@ class GPTSampledIndexedDataset(SampledDataset):
             self._token_cumsum_shuffled = MemmapArray(base_path.with_name(base_path.name + "_shuffled_cumsum.npy"))
             self._token_cumsum_unshuffled = MemmapArray(base_path.with_name(base_path.name + "_unshuffled_cumsum.npy"))
             self._yaml_path = base_path.with_suffix(".yaml")
+
+            # keep document sizes and len filtered docs for preference loss masking
+            if self._parameters.use_preference_loss_masking_spans:
+                self._document_sizes = MemmapArray(base_path.with_name(base_path.name + "_doc_sizes.npy"))
+                self._doc_length_filtered_indicies = MemmapArray(
+                    base_path.with_name(base_path.name + "_doc_length_filtered_indices.npy")
+                )
+
             # Sample or validate the dataset of a given rank.
             if sampling.distributed.config.rank == sampling.get_next_rank():
                 self._sample()
@@ -397,13 +159,18 @@ class GPTSampledIndexedDataset(SampledDataset):
         # We produce sequences of length `self._sequence_length + 1` so the last token has a label,
         # but in case of truncations we also include that last label in the following sample,
         # so we need `sequence_length * num_samples + 1` tokens in total.
-        num_epochs = math.ceil(
-            (
-                (self._parameters.sequence_length + 1 - self._truncate_documents) * self._parameters.num_samples
-                + 1 * self._truncate_documents
+
+        if self._parameters.use_preference_loss_masking_spans:
+            documents_per_epoch = (~long_docs_filter).sum().item()
+            num_epochs = math.ceil(self._parameters.num_samples / documents_per_epoch)
+        else:
+            num_epochs = math.ceil(
+                (
+                    (self._parameters.sequence_length + 1 - self._truncate_documents) * self._parameters.num_samples
+                    + 1 * self._truncate_documents
+                )
+                / tokens_per_epoch
             )
-            / tokens_per_epoch
-        )
 
         # Prepare for shuffling.
         generator = torch.Generator(device=self._device)
@@ -496,6 +263,23 @@ class GPTSampledIndexedDataset(SampledDataset):
             document_shuffling = None
         else:
             raise NotImplementedError(f"Unknown shuffling type: {self._config.shuffle}")
+
+        if self._parameters.use_preference_loss_masking_spans:
+            if not self._truncate_documents:
+                yaml_data["unshuffled_tokens"] = None
+
+            # index of all documents less than seq length long
+            doc_length_filtered_indicies = torch.nonzero(~long_docs_filter, as_tuple=True)[0]
+            self._doc_length_filtered_indicies.save(doc_length_filtered_indicies.numpy(force=self._config.gpu))
+
+            # apply shuffling on doc_length_filtered_indicies
+            if shuffled_epochs > 0:
+                self._document_shuffling.save(document_shuffling[: self._num_samples].numpy(force=self._config.gpu))
+            self._document_sizes.save(document_sizes.numpy(force=self._config.gpu))
+            if self._yaml_path is not None:
+                self._yaml_path.parent.mkdir(parents=True, exist_ok=True)
+                yaml.safe_dump(yaml_data, self._yaml_path.open("w"))
+            return
 
         # To get a sample on the fly we need to know where it begins,
         # and this is a non-trivial information because the documents have variable length.
@@ -595,6 +379,39 @@ class GPTSampledIndexedDataset(SampledDataset):
         The returned sample is ready to be concatenated, then fed to a `GPTModel` (see `GPTModel.preprocess`).
         """
         self._lazy_load()
+
+        if self._parameters.use_preference_loss_masking_spans:
+            if index < self._unshuffled_documents:
+                document_index = self._doc_length_filtered_indicies[index % self._documents_per_epoch]
+            else:
+                document_index = self._doc_length_filtered_indicies[
+                    self._document_shuffling[index - self._unshuffled_documents].item()
+                ]
+
+            sample = self._indexed_dataset.get(
+                document_index,
+                offset=0,
+                length=self._document_sizes[document_index],
+                use_loss_masking_spans=self._parameters.use_loss_masking_spans,
+                use_preference_loss_masking_spans=self._parameters.use_preference_loss_masking_spans,
+            )
+
+            chosen_loss_masking_span_end = sample.chosen_loss_masking_span[1] + 1
+            sequence_lengths = [
+                chosen_loss_masking_span_end,
+                len(sample.token_ids) - chosen_loss_masking_span_end,
+            ]
+
+            # compute padding size
+            padding = np.full((self._parameters.sequence_length,), 0)
+            padding[: len(sample.token_ids)] = sample.token_ids
+            sequence_lengths.append(self._parameters.sequence_length - len(sample.token_ids))
+            sample.token_ids = padding
+
+            sample.sequence_lengths = np.array(sequence_lengths)
+
+            return sample
+
         # tokens at the boundary are included in only one sample when we pack without truncations
         # in case of packing with truncations, the last token from the previous sample is also the first token of the next sample
         token_start = index * (self._parameters.sequence_length + 1 - self._truncate_documents)
@@ -722,6 +539,8 @@ class LegacyGPTSampledIndexedDataset(SampledDataset):
             raise NotImplementedError(
                 "Legacy sampling only supports document truncation. Please use the latest dataset format."
             )
+        if sampling.use_preference_loss_masking_spans:
+            raise NotImplementedError("Legacy sampling does not support preference loss masking.")
         self._config = sampling.config
         self._parameters = sampling.parameters
 
