@@ -231,6 +231,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
         _, common_kwargs = preprocessed_meta[0]
         sequence_q = common_kwargs[TransformerKwargs.sequence_q_dim].size
         sequence_first = common_kwargs[TransformerKwargs.sequence_first]
+        prediction_heads: int = self._config.prediction_heads
 
         batch.token_ids = batch.token_ids.to(
             device=self._tensor_space.distributed.device,
@@ -265,20 +266,22 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             if phase != PhaseType.inference:
                 sequence_offset = sequence_k - sequence_q + 1
                 if sequence_first:
-                    labels = batch.token_ids[sequence_offset : sequence_k + 1]
+                    labels = batch.token_ids[sequence_offset : sequence_k + prediction_heads]
                 else:
                     # TODO: Avoid multiple contiguous calls?
-                    labels = batch.token_ids[:, sequence_k - sequence_q + 1 : sequence_k + 1].contiguous()
+                    labels = batch.token_ids[:, sequence_offset : sequence_k + prediction_heads].contiguous()
                     # We set label indices to -100 for masked spans, inline with ignore_index in torch.nn.CrossEntropyLoss
                     # TODO: take ignore_index from config
                 if batch.loss_masking_spans is not None:
                     for i, spans in enumerate(batch.loss_masking_spans):
                         if not spans.numel():
                             continue
-                        valid_spans = spans[(spans[:, 0] <= sequence_k) & (spans[:, 1] >= sequence_offset)]
+                        valid_spans = spans[
+                            (spans[:, 0] <= sequence_k + prediction_heads - 1) & (spans[:, 1] >= sequence_offset)
+                        ]
                         if valid_spans.numel():
                             valid_spans[:, 0].clamp_(min=sequence_offset)
-                            valid_spans[:, 1].clamp_(max=sequence_k)
+                            valid_spans[:, 1].clamp_(max=sequence_k + prediction_heads - 1)
                             valid_spans -= sequence_offset
                             for start, end in valid_spans:
                                 if sequence_first:
