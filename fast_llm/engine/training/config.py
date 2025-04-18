@@ -5,7 +5,16 @@ import shlex
 import subprocess
 import typing
 
-from fast_llm.config import Config, Field, FieldHint, FieldUpdate, check_field, config_class, skip_valid_if_none
+from fast_llm.config import (
+    Config,
+    Configurable,
+    Field,
+    FieldHint,
+    FieldUpdate,
+    check_field,
+    config_class,
+    skip_valid_if_none,
+)
 from fast_llm.data.data.config import DataConfig
 from fast_llm.engine.checkpoint.config import (
     CheckpointLoadConfig,
@@ -18,10 +27,11 @@ from fast_llm.engine.multi_stage.config import PretrainedFastLLMModelConfig
 from fast_llm.engine.optimizer.config import OptimizerConfig
 from fast_llm.engine.schedule.config import BatchConfig, ScheduleConfig
 from fast_llm.profile import ProfilingConfig
-from fast_llm.utils import Assert
+from fast_llm.utils import Assert, Registry
 
 if typing.TYPE_CHECKING:
     from fast_llm.engine.training.trainer import Trainer
+    from fast_llm.engine.training.evaluator import Evaluation, EvaluationLoss
 
 
 @config_class()
@@ -141,6 +151,73 @@ class WandbConfig(Config):
 
 @config_class()
 class EvaluationConfig(IntervalConfig):
+    _abstract: typing.ClassVar[bool] = True
+    # TODO: Generalize dynamic types?
+    _registry: typing.ClassVar[Registry[str, type["EvaluationConfig"]]] = Registry[str, type["EvaluationConfig"]](
+        "evaluation_class", {}
+    )
+    type_: typing.ClassVar[str | None] = None
+    type: str | None = Field(
+        default=None,
+        desc="The type of evaluation.",
+        hint=FieldHint.core,
+    )
+
+    @classmethod
+    def get_evaluation_class(cls) -> "Evaluation":
+        raise NotImplementedError
+
+    def _validate(self) -> None:
+        if self.type is None:
+            self.type = self.type_
+        # Should be handled in `from_dict`, but can fail if instantiating directly.
+        Assert.eq(self.type, self.__class__.type_)
+        super()._validate()
+
+    @classmethod
+    def _from_dict(
+        cls,
+        default: dict[str, typing.Any],
+        strict: bool = True,
+        flat: bool = False,
+    ) -> typing.Self:
+        type_ = default.get("type")
+        if type_ is None:
+            # TODO: Remove in version 0.* — this is for backward compatibility.
+            #       If 'type' is not provided, it falls back to 'loss'.
+            #actual_cls = cls
+            actual_cls = EvaluationLossConfig
+        else:
+            if type_ not in cls._registry:
+                raise ValueError(
+                    f"Unknown {cls._registry.name} type {type_}." f" Available types: {list(cls._registry.keys())}"
+                )
+            actual_cls = cls._registry[type_]
+            Assert.custom(issubclass, actual_cls, cls)
+        if actual_cls == cls:
+            return super()._from_dict(default, strict=strict, flat=flat)
+        else:
+            return actual_cls._from_dict(default, strict=strict, flat=flat)
+
+    def __init_subclass__(cls) -> None:
+        if cls._abstract and cls.type_ is not None:
+            # Abstract classes should not have a `type_`
+            raise ValueError(f"Abstract class {cls.__name__} has type = {cls.type_}, expected None.")
+        if cls.type_ is not None:
+            if cls.type_ in cls._registry:
+                raise ValueError(
+                    f"Registry {cls._registry.name} already contains type {cls.type_}."
+                    f" Make sure all classes either have a unique or `None` type."
+                )
+            EvaluationConfig._registry[cls.type_] = cls
+        super().__init_subclass__()
+
+
+@config_class()
+class EvaluationLossConfig(EvaluationConfig):
+    _abstract: typing.ClassVar[bool] = False
+    type_: typing.ClassVar[str | None] = "loss"
+
     interval = FieldUpdate(
         desc="The number of training iterations between each evaluation phase."
         " Setting to None will disable evaluation."
@@ -156,6 +233,32 @@ class EvaluationConfig(IntervalConfig):
     def get_iteration_count(self, training_iterations: int, extra_evaluations: int = 0):
         # Number of completed validation iterations
         return (self.get_count(training_iterations) + extra_evaluations) * self.iterations if self.enabled() else 0
+
+    @classmethod
+    def get_evaluation_class(cls) -> type["EvaluationLoss"]:
+        from fast_llm.engine.training.evaluator import EvaluationLoss
+
+        return EvaluationLoss
+
+
+# @config_class()
+# class EvaluationHarnessConfig(EvaluationConfig):
+#     _abstract: typing.ClassVar[bool] = False
+#     type_: typing.ClassVar[str | None] = "lm_eval"
+
+#     interval = FieldUpdate(
+#         desc="The number of training iterations between each evaluation phase."
+#         " Setting to None will disable evaluation."
+#     )
+#     offset = FieldUpdate(desc="Offset for the first evaluation phase.")
+
+#     config: dict[str:any] = Field(default={}, desc="lm_eval config")
+
+#     @classmethod
+#     def get_evaluation_class(cls) -> type["Evaluation"]:
+#         from fast_llm.engine.training.evaluator import EvaluationHarness
+
+#         return EvaluationHarness
 
 
 @config_class()
