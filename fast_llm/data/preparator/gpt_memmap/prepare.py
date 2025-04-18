@@ -1,3 +1,5 @@
+import io
+import itertools
 import json
 import logging
 import multiprocessing
@@ -13,6 +15,7 @@ import torch.distributed
 import tqdm
 import transformers
 import yaml
+from PIL import Image
 
 from fast_llm.data.dataset.gpt.config import (
     GPTBlendedDatasetConfig,
@@ -23,9 +26,9 @@ from fast_llm.data.dataset.gpt.config import (
 )
 from fast_llm.data.dataset.gpt.memmap import GPTMemmapDataset
 from fast_llm.data.dataset.gpt.sampled import GPTSample
+from fast_llm.data.multi_modal_processor import MultiModalProcessor
 from fast_llm.data.preparator.config import DatasetPreparator
 from fast_llm.data.preparator.gpt_memmap.config import GPTMemmapDatasetPreparatorConfig
-from fast_llm.data.tokenizer import Tokenizer
 from fast_llm.engine.config_utils.data_type import DataType, get_unsigned_integer_type
 from fast_llm.utils import Assert, normalize_probabilities, padded_cumsum
 
@@ -35,42 +38,86 @@ logger = logging.getLogger(__name__)
 class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](DatasetPreparator[ConfigType]):
     config_class: typing.ClassVar[type[GPTMemmapDatasetPreparatorConfig]] = GPTMemmapDatasetPreparatorConfig
 
-    _tokenizer: Tokenizer
+    # _tokenizer: Tokenizer
+    _data_processor: MultiModalProcessor
     _data_type: DataType
 
-    def _tokenize_batch(self, batch: dict[str, list[typing.Any]]) -> dict[str, list[typing.Any]]:
-        input_ids = [
-            np.array(self._tokenizer.tokenize(text), dtype=self._data_type.numpy)
-            for text in batch[self._config.dataset.field]
-        ]
-        num_tokens = [len(x) for x in input_ids]
-        return {
-            "input_ids": input_ids,
-            "num_tokens": num_tokens,
-        }
+    def _process_batch(self, batch: dict[str, list[typing.Any]]) -> dict[str, list[typing.Any]]:
+        pass
 
-    def _tokenize_batch_with_spans(self, batch: dict[str, list[typing.Any]]) -> dict[str, list[typing.Any]]:
-        input_ids, token_spans = map(
+    # TODO Soham: can we merged tokenize_batch and tokenize_batch_with_spans?
+    def _tokenize_batch(self, batch: dict[str, list[typing.Any]]) -> dict[str, list[typing.Any]]:
+        # input_ids = [
+        #     np.array(self._tokenizer.tokenize(text), dtype=self._data_type.numpy)
+        #     for text in batch[self._config.dataset.field]
+        # ]
+        input_ids, image_token_positions = map(
             list,
             zip(
                 *[
                     (
                         np.array(input_ids, dtype=self._data_type.numpy),
-                        np.array(token_spans, dtype=np.int32).reshape(-1, 2),
+                        np.array(image_token_positions, dtype=np.int32),
                     )
-                    for input_ids, token_spans in [
-                        self._tokenizer.tokenize_with_spans(text, char_spans)
-                        for text, char_spans in zip(
-                            batch[self._config.dataset.field], batch[self._config.dataset.loss_masking_spans]
+                    for input_ids, image_token_positions in [
+                        self._data_processor.tokenize(
+                            text,
+                            im_char_positions,
+                        )
+                        for text, im_char_positions in zip(
+                            batch[self._config.dataset.field],
+                            batch.get(self._config.dataset.image_positions, itertools.repeat(None)),
                         )
                     ]
                 ]
             ),
         )
         num_tokens = [len(x) for x in input_ids]
+        # TODO Soham: is this ok? Should we get num_image_tokens separately?
+        for idx, images in enumerate(batch.get("images", [])):
+            for bytes_im in images:
+                with Image.open(io.BytesIO(bytes_im["bytes"])) as im:
+                    width, height = im.size
+                    num_tokens[idx] += (width * height * 3) // np.dtype(self._dtype).itemsize
+
+        return {
+            "input_ids": input_ids,
+            "image_positions": image_token_positions,
+            "num_tokens": num_tokens,
+        }
+
+    def _tokenize_batch_with_spans(self, batch: dict[str, list[typing.Any]]) -> dict[str, list[typing.Any]]:
+        input_ids, token_spans, images, image_token_positions = map(
+            list,
+            zip(
+                *[
+                    (
+                        np.array(input_ids, dtype=self._data_type.numpy),
+                        np.array(token_spans, dtype=np.int32).reshape(-1, 2),
+                        np.array(images, dtype=np.uint8),
+                        np.array(image_token_positions, dtype=np.int32),
+                    )
+                    for input_ids, token_spans, images, image_token_positions in [
+                        self._data_processor.tokenize_with_spans(text, char_spans)
+                        for text, char_spans in zip(
+                            batch[self._config.dataset.field],
+                            batch.get(self._config.dataset.loss_masking_spans, itertools.repeat(None)),
+                            batch.get(self._config.dataset.images, itertools.repeat(None)),
+                            batch.get(self._config.dataset.image_positions, itertools.repeat(None)),
+                        )
+                    ]
+                ]
+            ),
+        )
+        num_tokens = [
+            len(x) + sum([self._data_processor._image_processor.get_num_patches(im) for im in doc_images])
+            for x, doc_images in zip(input_ids, images)
+        ]
         return {
             "input_ids": input_ids,
             "token_spans": token_spans,
+            "images": images,
+            "image_positions": image_token_positions,
             "num_tokens": num_tokens,
         }
 
@@ -80,15 +127,27 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
         shard_output_path = self._config.output_path / prefix
 
         def _document_generator():
-            if "token_spans" in shard_dataset.column_names and self._config.dataset.loss_masking_spans is not None:
-                for item in tqdm.tqdm(shard_dataset, desc=f"Saving shard {shard_idx}", unit="docs"):
-                    yield GPTSample(
-                        np.array(item["input_ids"], dtype=self._data_type.numpy),
-                        np.array(item["token_spans"], dtype=np.int32).reshape(-1, 2),
-                    )
-            else:
-                for item in tqdm.tqdm(shard_dataset, desc=f"Saving shard {shard_idx}", unit="docs"):
-                    yield GPTSample(np.array(item["input_ids"], dtype=self._data_type.numpy))
+            for item in tqdm.tqdm(shard_dataset, desc=f"Saving shard {shard_idx}", unit="docs"):
+                yield GPTSample(
+                    np.array(item["input_ids"], dtype=self._data_type.numpy),
+                    (
+                        np.array(item["token_spans"], dtype=np.int32).reshape(-1, 2)
+                        if self._config.dataset.loss_masking_spans
+                        else None
+                    ),
+                    # [np.array(Image.open(pathlib.Path(self._config.dataset.path) / path)) for path in item["image_paths"]] if self._config.dataset.image_paths else None,
+                    [np.array(im) for im in item["images"]] if self._config.dataset.images else None,
+                    item["image_positions"] if self._config.dataset.image_positions else None,
+                )
+            # if "token_spans" in shard_dataset.column_names and self._config.dataset.loss_masking_spans is not None:
+            #     for item in tqdm.tqdm(shard_dataset, desc=f"Saving shard {shard_idx}", unit="docs"):
+            #         yield GPTSample(
+            #             np.array(item["input_ids"], dtype=self._data_type.numpy),
+            #             np.array(item["token_spans"], dtype=np.int32).reshape(-1, 2),
+            #         )
+            # else:
+            #     for item in tqdm.tqdm(shard_dataset, desc=f"Saving shard {shard_idx}", unit="docs"):
+            #         yield GPTSample(np.array(item["input_ids"], dtype=self._data_type.numpy))
 
         GPTMemmapDataset.write_dataset(prefix=shard_output_path, documents=_document_generator())
 
@@ -166,12 +225,12 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
         if self._config.dataset.disable_disk_space_check:
             datasets.builder.has_sufficient_disk_space = lambda needed_bytes, directory=".": True
 
-        # Load tokenizer
-        self._tokenizer = Tokenizer(config=self._config.tokenizer)
+        # Load the data processor
+        self._data_processor = MultiModalProcessor(config=self._config.data_processor)
 
         # Decide the datatype based on the tokenizer vocabulary size
         self._data_type = (
-            get_unsigned_integer_type(self._tokenizer.vocab_size)
+            get_unsigned_integer_type(self._data_processor._tokenizer.vocab_size)
             if self._config.dataset.data_type is None
             else self._config.dataset.data_type
         )
@@ -220,6 +279,9 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
             tokenize_fn = self._tokenize_batch_with_spans
         else:
             tokenize_fn = self._tokenize_batch
+        # Avoid decoding bytes to images unless asked
+        if self._config.dataset.images is not None:
+            dataset = dataset.cast_column("images", datasets.Sequence(datasets.Image(decode=False)))
 
         # Tokenize the dataset in parallel
         tokenized_dataset = dataset.map(
