@@ -97,6 +97,11 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
         else:
             self._samples_per_split = {}
 
+        self._evaluator = Evaluator(
+            config=self._config,
+            get_tflops_func=self.get_tflops,
+        )
+
     def setup(self, distributed: Distributed, run: Run) -> None:
         assert distributed.config is self._config.model.distributed
         assert not self._is_setup
@@ -127,17 +132,6 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
         with torch.no_grad():
             self._runner.setup(distributed, self._optimizer)
 
-        self._evaluator = Evaluator(
-            self._config,
-            self._distributed,
-            self._run,
-            self._multi_stage,
-            self._runner,
-            self._data,
-            get_tflops_func=self.get_tflops,
-            wandb=self._wandb,
-        )
-
         # Setup the datasets.
         log_main_rank("Preparing datasets...")
         self._data.setup(
@@ -151,6 +145,17 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
             None if run.experiment_directory is None else run.experiment_directory / "dataset_cache",
             timeout=self._config.training.timeout,
         )
+
+        # Must be called with all arguments set up
+        self._evaluator.setup(
+            distributed=self._distributed,
+            run=self._run,
+            multi_stage=self._multi_stage,
+            runner=self._runner,
+            data=self._data,
+            wandb=self._wandb,
+        )
+
         self._is_setup = True
 
     @abc.abstractmethod
@@ -173,8 +178,7 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
             self._run_training()
 
     def _run_training(self) -> None:
-        if not self._is_evaluation_only:
-            self._prepare_training_state()
+        self._prepare_model_state()
 
         log_main_rank("done with setup ...")
         log_pipeline_parallel_main_rank(lambda: log_memory_usage(f"After initial setup", str))
@@ -366,7 +370,7 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
             prefetch_factor=prefetch_factor,
         )
 
-    def _prepare_training_state(self) -> None:
+    def _prepare_model_state(self) -> None:
         # Setup the training state.
         if (last_iteration := self._get_last_checkpoint()) is None:
             if (path := self._config.pretrained.path) is not None and self._config.pretrained.model_weights:
@@ -377,9 +381,13 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
                 )
                 self._multi_stage.load_checkpoint(self._config.pretrained)
             else:
+                if self._is_evaluation_only:
+                    raise ValueError("Evaluation mode, model need to be trained first or pretrained checkpoint is provided for loading")
                 log_main_rank(f"Initializing training state from scratch...")
                 self._multi_stage.initialize_weights()
-            self._optimizer.reset_state()
+            
+            if not self._is_evaluation_only:
+                self._optimizer.reset_state()
             self._completed_steps = 0
         else:
             log_main_rank(lambda: f"Loading checkpoint from iteration {last_iteration}...")

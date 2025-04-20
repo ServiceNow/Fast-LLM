@@ -22,11 +22,16 @@ from fast_llm.engine.training.config import (
     TrainerConfig,
     EvaluationConfig,
     EvaluationLossConfig,
-    # EvaluationHarnessConfig,
+    EvaluationHarnessConfig,
 )
 from fast_llm.engine.training.wandb import Wandb
 from fast_llm.logging import format_metrics, get_memory_usage_mib, log_memory_usage
 from fast_llm.utils import Assert
+from fast_llm.engine.training.lm_eval.fast_llm_wrapper import FastLLMWrapper
+from fast_llm.engine.training.lm_eval.utils import prepare_lm_eval_simple_eval_params, process_lm_eval_results
+
+# from fast_llm.engine.training.lm_eval.evaluator import simple_evaluate as lm_eval_simple_evaluate
+from lm_eval.evaluator import simple_evaluate as lm_eval_simple_evaluate
 
 logger = logging.getLogger(__name__)
 
@@ -34,30 +39,37 @@ logger = logging.getLogger(__name__)
 class Evaluation[ConfigType: EvaluationConfig](Configurable[ConfigType], abc.ABC):
     config_class: typing.ClassVar[type[EvaluationConfig]] = EvaluationConfig
 
+    _is_setup: bool = False
+
     @classmethod
     def build(
         cls,
         name: str,
         eval_config: EvaluationLossConfig,
         trainer_config: TrainerConfig,
-        distributed: Distributed,
-        run: Run,
-        multi_stage: FastLLMModel,
-        runner: ScheduleRunner,
-        data: Data,
         get_tflops_func: callable,
     ) -> "Evaluation":
         return cls(
             name=name,
             eval_config=eval_config,
             trainer_config=trainer_config,
-            distributed=distributed,
-            run=run,
-            multi_stage=multi_stage,
-            runner=runner,
-            data=data,
             get_tflops_func=get_tflops_func,
         )
+
+    def setup(
+        self,
+        distributed: Distributed,
+        run: Run,
+        multi_stage: FastLLMModel,
+        runner: ScheduleRunner,
+        data: Data,
+    ) -> None:
+        # TODO: check if objects passed are actually set up themselves, if appropriate
+        self._distributed = distributed
+        self._run = run
+        self._runner = runner
+        self._multi_stage = multi_stage
+        self._data = data
 
     @abc.abstractmethod
     def run(
@@ -85,21 +97,11 @@ class EvaluationLoss[ConfigType: EvaluationLossConfig](Evaluation[ConfigType]):
         name: str,
         eval_config: EvaluationLossConfig,
         trainer_config: TrainerConfig,
-        distributed: Distributed,
-        run: Run,
-        multi_stage: FastLLMModel,
-        runner: ScheduleRunner,
-        data: Data,
         get_tflops_func: callable,
     ):
         self._name = name
         self._eval_config = eval_config
         self._trainer_config = trainer_config
-        self._distributed = distributed
-        self._run = run
-        self._runner = runner
-        self._multi_stage = multi_stage
-        self._data = data
         self._get_tflops_func = get_tflops_func
 
         self._loss_defs = self._multi_stage.base_model.loss_defs
@@ -123,6 +125,17 @@ class EvaluationLoss[ConfigType: EvaluationLossConfig](Evaluation[ConfigType]):
 
         self._evaluation_iterator = None
 
+    def setup(
+        self,
+        distributed: Distributed,
+        run: Run,
+        multi_stage: FastLLMModel,
+        runner: ScheduleRunner,
+        data: Data,
+    ) -> None:
+        super().setup(distributed, run, multi_stage, runner, data)
+        self._is_setup = True
+
     def get_dataset_samples(self) -> tuple[str, int] | None:
         if self._samples is None:
             return None
@@ -135,6 +148,7 @@ class EvaluationLoss[ConfigType: EvaluationLossConfig](Evaluation[ConfigType]):
         consumed_samples: int,
         consumed_tokens: int,
     ) -> tuple[dict[str, any], str | None]:
+        assert self._is_setup
         metrics = {}
         formatted_metrics = None
         if self._samples is not None and (done or self._eval_config.enabled(completed_steps)):
@@ -231,45 +245,114 @@ class EvaluationLoss[ConfigType: EvaluationLossConfig](Evaluation[ConfigType]):
         )
 
 
-# class EvaluationHarness[ConfigType: EvaluationHarnessConfig](Evaluation[ConfigType]):
-#     config_class: typing.ClassVar[type[EvaluationHarnessConfig]] = EvaluationHarnessConfig
+class EvaluationHarness[ConfigType: EvaluationHarnessConfig](Evaluation[ConfigType]):
+    config_class: typing.ClassVar[type[EvaluationHarnessConfig]] = EvaluationHarnessConfig
 
-#     @abc.abstractmethod
-#     def run(
-#         self,
-#     ) -> None: ...
-
-
-# NOTE: This is not a standalone runnable; it's a submodule of Trainer used for code encapsulation.
-class Evaluator:
     def __init__(
         self,
-        config: TrainerConfig,
+        name: str,
+        eval_config: EvaluationHarnessConfig,
+        trainer_config: TrainerConfig,
+        get_tflops_func: callable,
+    ):
+        self._name = name
+        self._eval_config = eval_config
+        self._trainer_config = trainer_config
+        self._get_tflops_func = get_tflops_func
+
+    def setup(
+        self,
         distributed: Distributed,
         run: Run,
         multi_stage: FastLLMModel,
         runner: ScheduleRunner,
         data: Data,
+    ) -> None:
+        super().setup(distributed, run, multi_stage, runner, data)
+
+        self._hf_model = (
+            self._multi_stage.config_class.get_huggingface_model_for_causal_lm_class().from_fast_llm_model_in_training(
+                self._multi_stage, self._trainer_config, self._runner
+            )
+        )
+
+        self._flm_wrapper = FastLLMWrapper(
+            model=self._hf_model,
+            tokenizer=self._data.tokenizer.tokenizer,
+            truncation=self._eval_config.truncation,
+            logits_cache=self._eval_config.logits_cache,
+            add_bos_token=self._eval_config.add_bos_token,
+            prefix_token_id=self._eval_config.prefix_token_id,
+        )
+        self._is_setup = True
+
+    def run(
+        self,
+        done: bool,
+        completed_steps: int,
+        consumed_samples: int,
+        consumed_tokens: int,
+    ) -> tuple[dict[str, any], str | None]:
+        assert self._is_setup
+        if not (done or self._eval_config.enabled(completed_steps)):
+            return {}, None
+
+        # completed_steps is added to output_path like output_path/completed_steps/
+        args, simple_eval_kwargs = prepare_lm_eval_simple_eval_params(self._eval_config.cli_args, completed_steps)
+        simple_eval_kwargs["model"] = self._flm_wrapper
+
+        results = lm_eval_simple_evaluate(**simple_eval_kwargs)
+
+        if results is not None and self._run.is_main_rank:
+            process_lm_eval_results(
+                args,
+                results,
+                simple_eval_kwargs["evaluation_tracker"],
+                completed_steps,
+                consumed_samples,
+                consumed_tokens,
+            )
+
+        # lm_eval logs to disc, wandb and prints to screen itself
+        return {}, None
+
+    def get_dataset_samples(self) -> tuple[str, int] | None:
+        return None
+
+
+# NOTE: This is not a standalone runnable; it's a submodule of Trainer used for code encapsulation.
+class Evaluator:
+    _is_setup: bool = False
+
+    def __init__(
+        self,
+        config: TrainerConfig,
         get_tflops_func: callable,
-        wandb: Wandb,
     ):
         self._config = config
-        self._wandb = wandb
-
         self._evaluations = [
             eval_config.get_evaluation_class().build(
                 name=name,
                 eval_config=eval_config,
                 trainer_config=config,
-                distributed=distributed,
-                run=run,
-                multi_stage=multi_stage,
-                runner=runner,
-                data=data,
                 get_tflops_func=get_tflops_func,
             )
             for name, eval_config in config.training.evaluations.items()
         ]
+
+    def setup(
+        self,
+        distributed: Distributed,
+        run: Run,
+        multi_stage: FastLLMModel,
+        runner: ScheduleRunner,
+        data: Data,
+        wandb: Wandb,
+    ) -> None:
+        self._wandb = wandb
+        for evaluation in self._evaluations:
+            evaluation.setup(distributed, run, multi_stage, runner, data)
+        self._is_setup = True
 
     def get_datasets_samples(self) -> dict[str:int]:
         return {
@@ -286,6 +369,7 @@ class Evaluator:
         consumed_samples: int,
         consumed_tokens: int,
     ):
+        assert self._is_setup
         formatted_metrics = []
         for evaluation in self._evaluations:
             this_metrics, this_formatted_metrics = evaluation.run(

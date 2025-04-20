@@ -31,7 +31,7 @@ from fast_llm.utils import Assert, Registry
 
 if typing.TYPE_CHECKING:
     from fast_llm.engine.training.trainer import Trainer
-    from fast_llm.engine.training.evaluator import Evaluation, EvaluationLoss
+    from fast_llm.engine.training.evaluator import Evaluation, EvaluationLoss, EvaluationHarness
 
 
 @config_class()
@@ -185,8 +185,10 @@ class EvaluationConfig(IntervalConfig):
         if type_ is None:
             # TODO: Remove in version 0.* — this is for backward compatibility.
             #       If 'type' is not provided, it falls back to 'loss'.
-            #actual_cls = cls
+            type_ = "loss"
+            default["type"] = type_
             actual_cls = EvaluationLossConfig
+            # actual_cls = cls
         else:
             if type_ not in cls._registry:
                 raise ValueError(
@@ -241,24 +243,51 @@ class EvaluationLossConfig(EvaluationConfig):
         return EvaluationLoss
 
 
-# @config_class()
-# class EvaluationHarnessConfig(EvaluationConfig):
-#     _abstract: typing.ClassVar[bool] = False
-#     type_: typing.ClassVar[str | None] = "lm_eval"
+@config_class()
+class EvaluationHarnessConfig(EvaluationConfig):
+    _abstract: typing.ClassVar[bool] = False
+    type_: typing.ClassVar[str | None] = "lm_eval"
 
-#     interval = FieldUpdate(
-#         desc="The number of training iterations between each evaluation phase."
-#         " Setting to None will disable evaluation."
-#     )
-#     offset = FieldUpdate(desc="Offset for the first evaluation phase.")
+    interval = FieldUpdate(
+        desc="The number of training iterations between each evaluation phase."
+        " Setting to None will disable evaluation."
+    )
+    offset = FieldUpdate(desc="Offset for the first evaluation phase.")
 
-#     config: dict[str:any] = Field(default={}, desc="lm_eval config")
+    cli_args: list[str] = Field(
+        default_factory=lambda: [],
+        desc="lm_eval CLI arguments, excluding those related to model, wandb, batch sizes, and device.",
+    )
 
-#     @classmethod
-#     def get_evaluation_class(cls) -> type["Evaluation"]:
-#         from fast_llm.engine.training.evaluator import EvaluationHarness
+    truncation: bool = Field(
+        default=False,
+        desc="Whether to use truncation during tokenization (useful when inputs exceed model's max length);"
+        " passed to the Fast-LLM lm_eval model wrapper.",
+    )
 
-#         return EvaluationHarness
+    logits_cache: bool = Field(
+        default=True,
+        desc="Whether to enable logits caching for speedup and avoiding recomputation during repeated evaluations;"
+        " passed to the Fast-LLM lm_eval model wrapper.",
+    )
+
+    add_bos_token: bool = Field(
+        default=False,
+        desc="Whether to prepend a beginning-of-sequence (BOS) token, required for some models like LLaMA;"
+        " passed to the Fast-LLM lm_eval model wrapper.",
+    )
+
+    prefix_token_id: int | None = Field(
+        default=None,
+        desc="Token ID to use as a prefix to the input (e.g., for control codes or prompts);"
+        " passed to the Fast-LLM lm_eval model wrapper.",
+    )
+
+    @classmethod
+    def get_evaluation_class(cls) -> type["EvaluationHarness"]:
+        from fast_llm.engine.training.evaluator import EvaluationHarness
+
+        return EvaluationHarness
 
 
 @config_class()

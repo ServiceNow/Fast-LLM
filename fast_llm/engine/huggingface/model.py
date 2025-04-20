@@ -15,6 +15,7 @@ from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
 from fast_llm.engine.schedule.config import BatchConfig, ScheduleConfig
 from fast_llm.engine.schedule.runner import ScheduleRunner
 from fast_llm.engine.schedule.schedule import Schedule
+from fast_llm.engine.training.config import TrainerConfig
 
 
 class HuggingfaceBaseModelForCausalLM(transformers.PreTrainedModel, transformers.generation.utils.GenerationMixin):
@@ -26,29 +27,62 @@ class HuggingfaceBaseModelForCausalLM(transformers.PreTrainedModel, transformers
     # _supports_cache_class = False
     # _tied_weights_keys = []
 
-    def __init__(self, config: HuggingfaceModelConfig, fast_llm_model: FastLLMModel, **kwargs):
+    def __init__(
+        self,
+        config: HuggingfaceModelConfig,
+        fast_llm_model: FastLLMModel,
+        trainer_config: TrainerConfig | None = None,
+        runner: ScheduleRunner | None = None,
+        **kwargs,
+    ):
+        """
+        Initializes the HuggingfaceBaseModelForCausalLM either in standalone mode (single GPU inference)
+        or integrated training mode (with runner from training loop).
+
+        - If `trainer_config` and `runner` are both provided → assumes training mode.
+        - If both are omitted → assumes standalone mode with default configs.
+        - Any other combination will raise.
+        """
+        has_training_args = trainer_config is not None and runner is not None
+        has_partial_args = (trainer_config is None) != (runner is None)
+        if has_partial_args:
+            raise ValueError("Both trainer_config and runner must be provided together or not at all.")
+
         assert self.model_class.config_class is config.model_config_class
         assert config.fast_llm_config is fast_llm_model.config
         assert isinstance(config, self.config_class)
         super().__init__(config, **kwargs)
+
         self._fast_llm_config = config.fast_llm_config
         self._fast_llm_model = fast_llm_model
         # Transformers needs to be able to inspect the base model.
         self.fast_llm_base_model = self._fast_llm_model.base_model
         self._distributed_config = self._fast_llm_config.distributed
-        # TODO: Support distributed models?
-        assert self._distributed_config.world_size == 1
-        self._schedule_config = ScheduleConfig()
-        # We only need a basic schedule and don't care about dimensions.
-        # TODO: Sort things out.
-        with NoAutoValidate():
-            self._batch_config = BatchConfig()
-        self._batch_config.setup(self._distributed_config)
-        self._batch_config.validate()
-        self._runner = ScheduleRunner(
-            config=self._schedule_config, multi_stage=self._fast_llm_model, distributed_config=self._distributed_config
-        )
-        self._runner.setup(self._fast_llm_model.distributed)
+
+        # passing model from training, already setup or would be setup externally,
+        #  just create own schedule for run_step
+        if has_training_args:
+            self._trainer_config = trainer_config
+            self._schedule_config = self._trainer_config.schedule
+            self._batch_config = self._trainer_config.batch
+            self._runner = runner
+        else:
+            # TODO: Support distributed models?
+            assert self._distributed_config.world_size == 1
+            self._schedule_config = ScheduleConfig()
+            # We only need a basic schedule and don't care about dimensions.
+            # # TODO: Sort things out.
+            with NoAutoValidate():
+                self._batch_config = BatchConfig()
+            self._batch_config.setup(self._distributed_config)
+            self._batch_config.validate()
+            self._runner = ScheduleRunner(
+                config=self._schedule_config,
+                multi_stage=self._fast_llm_model,
+                distributed_config=self._distributed_config,
+            )
+            self._runner.setup(self._fast_llm_model.distributed)
+
         # TODO: Random state? (Distributed.set_step)
         self._schedule = Schedule(
             multi_stage=self._fast_llm_model,
@@ -75,6 +109,13 @@ class HuggingfaceBaseModelForCausalLM(transformers.PreTrainedModel, transformers
     ) -> tuple | transformers.modeling_outputs.CausalLMOutputWithPast:
         # Meant to be overriden in derived classes
         raise NotImplementedError()
+
+    @classmethod
+    def from_fast_llm_model_in_training(
+        cls, fast_llm_model: FastLLMModel, trainer_config: TrainerConfig, runner: ScheduleRunner, **kwargs
+    ):
+        config = cls.config_class(fast_llm_model.config)
+        return cls(config, fast_llm_model, trainer_config=trainer_config, runner=runner, **kwargs)
 
     @classmethod
     def from_fast_llm_model(cls, fast_llm_model: FastLLMModel, **kwargs):
