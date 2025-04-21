@@ -186,9 +186,45 @@ class GPTTrainerConfig(PretrainedGPTModelConfig, TrainerConfig):
             self.batch.sequence_length = self.model.base_model.max_position_embeddings
         if self.model.base_model.use_megatron_initialization:
             set_megatron_distributed_seeds(self.model.distributed)
-        for reference_model in self.reference_models.values():
-            Assert.none(reference_model.model.base_model.cross_entropy_splits)
         super()._validate()
+        if (name := self.model.base_model.distillation_model) is None:
+            Assert.empty(self.reference_models)
+        else:
+            Assert.eq(self.reference_models.keys(), {name})
+        if self.model.base_model.use_absolute_position_embeddings:
+            Assert.geq(self.model.base_model.num_absolute_position_embeddings, self.batch.sequence_length)
+        if self.model.base_model.distillation_model is not None:
+            # TODO: Support loss masking for distillation?
+            assert not self.batch.use_loss_masking_spans
+        for reference_model in self.reference_models.values():
+            Assert.none(reference_model.model.base_model.distillation_model)
+            # TODO: Support more LM head features.
+            Assert.none(reference_model.model.base_model.cross_entropy_splits)
+            Assert.eq(reference_model.model.base_model.parallel_embeddings, self.model.base_model.parallel_embeddings)
+            Assert.geq(reference_model.model.base_model.prediction_heads, self.model.base_model.prediction_heads)
+            # TODO: Support distinct preprocessing
+            reference_model.model.base_model.transformer.rotary.compare(
+                self.model.base_model.transformer.rotary,
+                NotImplementedError,
+            )
+            Assert.eq(
+                reference_model.model.base_model.use_absolute_position_embeddings,
+                self.model.base_model.use_absolute_position_embeddings,
+            )
+            if reference_model.model.base_model.use_absolute_position_embeddings:
+                assert self.model.base_model.use_absolute_position_embeddings
+                Assert.geq(
+                    reference_model.model.base_model.num_absolute_position_embeddings, self.batch.sequence_length
+                )
+            use_flash = reference_model.model.base_model.transformer.do_use_flash_attention(
+                reference_model.model.distributed
+            )
+            Assert.eq(use_flash, self.model.base_model.transformer.do_use_flash_attention(self.model.distributed))
+            if use_flash:
+                Assert.eq(
+                    reference_model.model.base_model.transformer.window_size,
+                    self.model.base_model.transformer.window_size,
+                )
 
     @classmethod
     def _from_dict(

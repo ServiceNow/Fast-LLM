@@ -32,6 +32,7 @@ class NoAutoValidate:
         global _AUTO_VALIDATE
         self._old_value = _AUTO_VALIDATE
         _AUTO_VALIDATE = False
+        return _AUTO_VALIDATE
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         global _AUTO_VALIDATE

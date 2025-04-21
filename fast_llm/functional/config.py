@@ -91,3 +91,9 @@ class CrossEntropyImpl(str, enum.Enum):
     torch = "torch"
     fused = "fused"
     triton = "triton"
+
+
+class TargetFormat(enum.StrEnum):
+    labels = "labels"
+    logits = "logits"
+    probabilities = "probabilities"

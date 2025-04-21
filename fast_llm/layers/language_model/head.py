@@ -10,7 +10,7 @@ from fast_llm.engine.base_model.base_model import Layer
 from fast_llm.engine.config_utils.tensor_space import DefaultDimNames, TensorDim, TensorSpace
 from fast_llm.engine.distributed.config import DistributedDimNames
 from fast_llm.functional.autograd import grad_is_context, wrap_forward_backward
-from fast_llm.functional.config import CrossEntropyImpl, TritonConfig
+from fast_llm.functional.config import CrossEntropyImpl, TargetFormat, TritonConfig
 from fast_llm.functional.cross_entropy import cross_entropy_forward_backward
 from fast_llm.functional.linear import output_parallel_linear_backward, output_parallel_linear_forward
 from fast_llm.layers.common.auxiliary_loss import AuxiliaryLoss, z_loss
@@ -50,9 +50,7 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
         self._group_size = tensor_space.distributed_config.tensor_parallel
         self._sequence_parallel = tensor_space.distributed_config.sequence_tensor_parallel
         self._parallel_embeddings = tensor_space.distributed_config.tensor_parallel > 1 and config.parallel_embeddings
-        self._sequence_parallel_logits = (
-            tensor_space.distributed_config.sequence_tensor_parallel and not config.parallel_embeddings
-        )
+        self._sequence_parallel_logits = self._sequence_parallel and not self._parallel_embeddings
         self._cross_entropy_splits = config.cross_entropy_splits
         if self._cross_entropy_splits is not None and self._sequence_parallel:
             assert not self._parallel_embeddings
@@ -141,21 +139,30 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
     def _forward_backward(
         self, input_: torch.Tensor, kwargs: dict, losses: dict | None = None
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
-        labels = kwargs[LanguageModelKwargs.labels] if LanguageModelKwargs.labels in kwargs else None
-        # MTP: Shift the labels
-        if labels is not None:
-            labels = (
-                labels[self._prediction_distance : self._prediction_distance + input_.size(0),]
-                if kwargs[TransformerKwargs.sequence_first]
-                else labels[
-                    :,
-                    self._prediction_distance : self._prediction_distance + input_.size(1),
-                ]
-            )
-            labels = labels.flatten()
+        target = kwargs.get(
+            LanguageModelKwargs.labels
+            if self._config.distillation_model is None
+            else f"{self._config.distillation_model}_logits"
+        )
+        if target is not None:
+            if self._config.distillation_model is None:
+                # MTP: Shift the labels
+                target = (
+                    target[self._prediction_distance : self._prediction_distance + input_.size(0),]
+                    if kwargs[TransformerKwargs.sequence_first]
+                    else target[
+                        :,
+                        self._prediction_distance : self._prediction_distance + input_.size(1),
+                    ]
+                )
+                target = target.flatten()
+            else:
+                # Target is reference model logits.
+                target = target.flatten(0, -2)
+
         if self._sequence_parallel_logits:
-            labels = split_op(labels, self._tensor_space.distributed.tensor_group, 0)
-        do_grad = labels is not None and self.training
+            target = split_op(target, self._tensor_space.distributed.tensor_group, 0)
+        do_grad = target is not None and self.training
         input_ = input_.detach().requires_grad_(do_grad)
         with torch.enable_grad():
             ln_output = self.final_norm(input_)
@@ -166,7 +173,7 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
 
         output_weights = self._get_output_weights(kwargs)
         loss, ln_output_grad = self._logits_cross_entropy_forward_backward_split(
-            ln_output.detach(), labels, output_weights, grad_output, kwargs, losses
+            ln_output.detach(), target, output_weights, grad_output, kwargs, losses
         )
 
         if do_grad:
@@ -185,33 +192,33 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
     def _logits_cross_entropy_forward_backward_split(
         self,
         input_: torch.Tensor,
-        labels: torch.Tensor | None,
+        target: torch.Tensor | None,
         weight: torch.Tensor,
         grad_output: float,
         kwargs: dict,
         losses: dict | None = None,
     ) -> tuple[torch.Tensor | None, torch.Tensor | None]:
-        if self._cross_entropy_splits is None or labels is None:
+        if self._cross_entropy_splits is None or target is None:
             loss, logit_input_grad = self._logits_cross_entropy_forward_backward(
-                input_, labels, weight, grad_output, kwargs, losses
+                input_, target, weight, grad_output, kwargs, losses
             )
-            if labels is None:
+            if target is None:
                 # TODO: Make a proper way of returning the model output.
                 kwargs["logits" if self._prediction_distance == 0 else f"logits_{self._prediction_distance}"] = loss
                 return None, None
         else:
             loss = None
             # TODO MTP: allow a _cross_entropy_splits that is not a divisor of the sequence length
-            split_size = div(labels.numel(), self._cross_entropy_splits)
+            split_size = div(target.size(0), self._cross_entropy_splits)
             grad_output /= self._cross_entropy_splits
             logit_input = input_.flatten(0, -2)
             logit_input_grad = torch.empty_like(logit_input)
-            for logit_input_, labels_, logit_input_grad_ in zip(
-                logit_input.split(split_size), labels.split(split_size), logit_input_grad.split(split_size)
+            for logit_input_, target_, logit_input_grad_ in zip(
+                logit_input.split(split_size), target.split(split_size), logit_input_grad.split(split_size)
             ):
                 loss_, grad_ = self._logits_cross_entropy_forward_backward(
                     logit_input_,
-                    labels_,
+                    target_,
                     weight,
                     grad_output,
                     kwargs,
@@ -231,7 +238,7 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
     def _logits_cross_entropy_forward_backward(
         self,
         input_: torch.Tensor,
-        labels: torch.Tensor | None,
+        target: torch.Tensor | None,
         weight: torch.Tensor,
         grad_output: float,
         kwargs: dict,
@@ -285,15 +292,16 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
                 scale=self._logits_scale_factor,
             )
 
-        if labels is None:
+        if target is None:
             return logits * self._logits_scale_factor, None
         loss, grad = cross_entropy_forward_backward(
             logits.flatten(0, -2),
-            labels,
+            target,
             group=self._tensor_space.distributed.tensor_group if self._parallel_embeddings else None,
             grad_output=grad_output,
             implementation=self._cross_entropy_impl,
             logits_scale_factor=self._logits_scale_factor,
+            target_format=TargetFormat.labels if self._config.distillation_model is None else TargetFormat.logits,
         )
         # TODO: de-allocate earlier.
         del logits
