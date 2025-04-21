@@ -13,7 +13,7 @@ from fast_llm.engine.inference.runner import InferenceRunner
 from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
 from fast_llm.layers.language_model.config import LanguageModelKwargs, LanguageModelLossNames
 from fast_llm.layers.language_model.embedding import WORD_EMBEDDINGS_WEIGHT, LanguageModelEmbedding
-from fast_llm.layers.language_model.head import OUTPUT_WEIGHTS, LanguageModelHead
+from fast_llm.layers.language_model.head import OUTPUT_WEIGHTS, LanguageModelHead, MLMHead
 from fast_llm.layers.language_model.preprocessing import PositionEmbeddingPreprocessor
 from fast_llm.layers.transformer.config import (
     RoutingType,
@@ -85,7 +85,11 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                     # The previous layers return a stack of shared_hidden and transformer_output.
                     return_input=i < self._config.prediction_heads - 1,
                 ),
-                LanguageModelHead(
+                MLMHead(
+                    self._config,
+                    self._tensor_space,
+                    prediction_distance=i,
+                ) if self._config.transformer.diffusion.enabled else LanguageModelHead(
                     self._config,
                     self._tensor_space,
                     prediction_distance=i,
@@ -332,37 +336,51 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
     @property
     def loss_defs(self) -> list[LossDef]:
         loss_defs = []
-        if (
-            self._config.transformer.num_experts > 1
-            and self._config.transformer.expert_routing_type == RoutingType.topk
-        ):
+        if self._config.transformer.diffusion.enabled:
+            # MLM loss for LLaDA-style training
             loss_defs.append(
                 LossDef(
-                    name=TransformerLossNames.load_balancing_loss,
-                    formatted_name="load balancing loss",
-                    count=self._config.transformer.num_layers,
+                    name=LanguageModelLossNames.mlm_loss,
+                    formatted_name="MLM Loss",
+                    count=1,
+                    dtype=torch.float32
                 )
             )
-            if self._config.transformer.expert_z_loss_coefficient:
+        else:
+            # Standard language modeling loss
+            loss_defs.append(
+                LossDef(
+                    name=LanguageModelLossNames.language_model_loss,
+                    formatted_name="Language Model Loss",
+                    count=1,
+                    dtype=torch.float32
+                )
+            )
+            
+        if self._config.transformer.num_experts > 1:
+            if self._config.transformer.expert_routing_type == RoutingType.topk:
+                loss_defs.append(
+                    LossDef(
+                        name=TransformerLossNames.load_balancing_loss,
+                        formatted_name="Load Balancing Loss",
+                        count=1,
+                        dtype=torch.float32
+                    )
+                )
+            if self._config.transformer.expert_z_loss_coefficient > 0:
                 loss_defs.append(
                     LossDef(
                         name=TransformerLossNames.router_z_loss,
-                        formatted_name="router z loss",
-                        count=self._config.transformer.num_layers,
+                        formatted_name="Router Z Loss",
+                        count=1,
+                        dtype=torch.float32
                     )
                 )
-        if self._config.logit_z_loss:
-            LossDef(name=LanguageModelLossNames.z_loss, formatted_name="logit z loss", count=1)
-
-        for i in range(self._config.prediction_heads):
-            loss_defs.append(
-                LossDef(
-                    name=LanguageModelLossNames.multi_token_prediction_loss(i),
-                    formatted_name=f"language model loss {i}",
-                    count=1,
-                )
-            )
         return loss_defs
+
+    def forward(self, input_ids: torch.Tensor, kwargs: dict[str, typing.Any]) -> dict[str, torch.Tensor]:
+        outputs = super().forward(input_ids, kwargs)
+        return outputs
 
     def add_preprocessor(self, preprocessor: Preprocessor):
         assert not self._is_setup

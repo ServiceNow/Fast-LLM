@@ -298,3 +298,61 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
         # TODO: de-allocate earlier.
         del logits
         return loss, output_parallel_linear_backward(grad, context)
+
+class MLMHead(LanguageModelHead):
+    """
+    A masked language model head for diffusion-based training.
+    """
+    
+    def _logits_cross_entropy_forward_backward(
+        self,
+        input_: torch.Tensor,
+        labels: torch.Tensor | None,
+        weight: torch.Tensor,
+        grad_output: float,
+        kwargs: dict,
+        losses: dict | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+        logits, context = output_parallel_linear_forward(
+            input_=input_,
+            weight=weight,
+            bias=None,
+            group=self._tensor_space.distributed.tensor_group if self._parallel_embeddings else None,
+            sequence_parallel=self._sequence_parallel and self._parallel_embeddings,
+        )
+
+        if self._z_loss_factor > 0.0:
+            logits = z_loss(
+                logits,
+                self._z_loss_factor,
+                self.training,
+                grad_output,
+                losses,
+                LanguageModelLossNames.z_loss,
+                logits_scale_factor=self._logits_scale_factor,
+            )
+
+        if labels is None:
+            return logits * self._logits_scale_factor, None
+
+        masked_indices = kwargs['masked_indices']
+        p_mask = kwargs['p_mask']
+        
+        masked_logits = logits[masked_indices]
+        masked_labels = labels[masked_indices]
+        masked_p = p_mask[masked_indices]
+        
+        # Compute MLM loss
+        loss, grad = cross_entropy_forward_backward(
+            masked_logits.flatten(0, -2),
+            masked_labels,
+            group=self._tensor_space.distributed.tensor_group if self._parallel_embeddings else None,
+            grad_output=grad_output / masked_p,  
+            implementation=self._cross_entropy_impl,
+            logits_scale_factor=self._logits_scale_factor,
+        )
+
+        loss = loss / (labels.shape[0] * labels.shape[1])
+        
+        del logits
+        return loss, output_parallel_linear_backward(grad, context)

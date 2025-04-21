@@ -195,8 +195,8 @@ class BackupAttentionPreprocessor(Preprocessor):
     _scalar_dim: TensorDim
     _kv_channels_dim: TensorDim
     _rotary_embedding_frequencies: torch.Tensor
-    _mask: torch.Tensor
-    _mask_value: torch.Tensor
+    _mask: torch.Tensor | None
+    _mask_value: torch.Tensor | None
     _tensor_cache_max_sequence_length: int = -1
 
     def __init__(
@@ -204,6 +204,7 @@ class BackupAttentionPreprocessor(Preprocessor):
         config: TransformerConfig,
         tensor_space: TensorSpace,
     ):
+        super().__init__()
         self._config = config
         self._tensor_space = tensor_space
         self._distributed_config = self._tensor_space.distributed_config
@@ -263,7 +264,7 @@ class BackupAttentionPreprocessor(Preprocessor):
         kwargs[TransformerKwargs.attention_mask_value] = TensorMeta.from_dims(
             (self._scalar_dim,),
             tensor_name=TransformerKwargs.attention_mask_value,
-            dtype=self._tensor_space.distributed_config.training_dtype.torch,
+            dtype=self._distributed_config.training_dtype.torch,
         )
 
 
@@ -337,3 +338,75 @@ class FlashAttnVarlenPreprocessor(Preprocessor):
         )
         kwargs[TransformerKwargs.max_seqlen_q] = seqlens_q.max()
         kwargs[TransformerKwargs.max_seqlen_k] = seqlens_k.max()
+
+
+class LLaDAMaskingPreprocessor(Preprocessor):
+    """Preprocessor for LLaDA-style masking with diffusion-based training."""
+    
+    def __init__(self, config: TransformerConfig, tensor_space: TensorSpace):
+        self._config = config
+        self._tensor_space = tensor_space
+        self._distributed_config = tensor_space.distributed_config
+        self._scalar_dim = tensor_space.get_tensor_dim(DefaultDimNames.scalar)
+        self._sequence_dim = tensor_space.get_tensor_dim(TransformerDimNames.sequence_q)
+        
+    def preprocess(self, batch, kwargs: dict[str, typing.Any]) -> None:
+        """Apply LLaDA-style masking to the input sequence."""
+        # Get diffusion config from dataset parameters
+        diffusion_config = kwargs['parameters'].diffusion
+        if not diffusion_config.enabled:
+            return
+            
+        batch_size, seq_len = batch.shape
+        device = batch.device
+        
+        t = torch.rand(batch_size, device=device)
+        
+        p_mask = (1 - diffusion_config.epsilon) * t + diffusion_config.epsilon
+        p_mask = torch.min(p_mask, torch.tensor(diffusion_config.max_mask_prob))
+        p_mask = p_mask[:, None].expand(-1, seq_len)
+        
+        masked_indices = torch.rand((batch_size, seq_len), device=device) < p_mask
+        
+        if diffusion_config.pad_prob > 0:
+            pad_mask = torch.rand((batch_size,), device=device) < diffusion_config.pad_prob
+            if pad_mask.any():
+                masked_indices[pad_mask] = True
+        
+        kwargs['masked_indices'] = masked_indices
+        kwargs['p_mask'] = p_mask
+        
+        if self._config.diffusion.bidirectional_attention:
+            # Bidirectional attention - all tokens can attend to all other tokens
+            attention_mask = torch.ones((batch_size, 1, seq_len, seq_len), device=device, dtype=torch.bool)
+        else:
+            # Causal attention
+            attention_mask = torch.ones((batch_size, 1, seq_len, seq_len), device=device, dtype=torch.bool).tril_()
+
+            
+        kwargs[TransformerKwargs.attention_mask] = attention_mask
+        kwargs[TransformerKwargs.attention_mask_value] = torch.tensor(-10000.0, device=device)
+        
+    def preprocess_meta(self, kwargs: dict[str, typing.Any]) -> None:
+        """Define tensor metadata for masking tensors."""
+        # Get diffusion config from dataset parameters
+        diffusion_config = kwargs['parameters'].diffusion
+        if not diffusion_config.enabled:
+            return
+            
+        kwargs['masked_indices'] = TensorMeta.from_dims(
+            (self._scalar_dim, self._sequence_dim),
+            tensor_name='masked_indices'
+        )
+        kwargs['p_mask'] = TensorMeta.from_dims(
+            (self._scalar_dim, self._sequence_dim),
+            tensor_name='p_mask'
+        )
+        kwargs[TransformerKwargs.attention_mask] = TensorMeta.from_dims(
+            (self._scalar_dim, self._scalar_dim, self._sequence_dim, self._sequence_dim),
+            tensor_name=TransformerKwargs.attention_mask
+        )
+        kwargs[TransformerKwargs.attention_mask_value] = TensorMeta.from_dims(
+            (self._scalar_dim,),
+            tensor_name=TransformerKwargs.attention_mask_value
+        )

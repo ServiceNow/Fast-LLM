@@ -35,15 +35,48 @@ class GPTBatch:
 
 
 def gpt_data_collate_fn(batch: list[GPTSample], sampling_parameters: GPTSamplingParameters) -> GPTBatch:
+    """Collate function that supports LLaDA-style masking."""
     stacked_ids = np.stack([sample.token_ids for sample in batch])
     stacked_spans = None
     sequence_lengths = None
+    
+    token_ids = torch.from_numpy(stacked_ids)
+    
+    if sampling_parameters.diffusion.enabled:
+        batch_size, seq_len = token_ids.shape
+        device = token_ids.device
+        t = torch.rand(batch_size, device=device)
+        p_mask = (1 - sampling_parameters.diffusion.epsilon) * t + sampling_parameters.diffusion.epsilon
+        p_mask = torch.min(p_mask, torch.tensor(sampling_parameters.diffusion.max_mask_prob))
+        p_mask = p_mask[:, None].expand(-1, seq_len)
+        
+        masked_indices = torch.rand((batch_size, seq_len), device=device) < p_mask
+        
+        if sampling_parameters.diffusion.pad_prob > 0:
+            pad_mask = torch.rand((batch_size,), device=device) < sampling_parameters.diffusion.pad_prob
+            if pad_mask.any():
+                masked_indices[pad_mask] = True
+        
+        token_ids = torch.where(masked_indices, sampling_parameters.diffusion.mask_token_id, token_ids)
+        
+        if not stacked_spans:
+            stacked_spans = []
+        stacked_spans.extend([
+            torch.stack([masked_indices[i], p_mask[i]]) 
+            for i in range(batch_size)
+        ])
+    
     if sampling_parameters.use_loss_masking_spans:
-        stacked_spans = [torch.from_numpy(sample.loss_masking_spans) for sample in batch]
+        if not stacked_spans:
+            stacked_spans = [torch.from_numpy(sample.loss_masking_spans) for sample in batch]
+            
     if not sampling_parameters.cross_document_attention:
         sequence_lengths = [torch.tensor(sample.sequence_lengths) for sample in batch]
+        
     return GPTBatch(
-        token_ids=torch.from_numpy(stacked_ids), loss_masking_spans=stacked_spans, sequence_lengths=sequence_lengths
+        token_ids=token_ids,
+        loss_masking_spans=stacked_spans,
+        sequence_lengths=sequence_lengths
     )
 
 
