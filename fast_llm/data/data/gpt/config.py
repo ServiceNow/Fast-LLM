@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 class GPTSamplingDefaultConfig(SamplingDefaultConfig, GPTSamplingConfig):
     gpu: bool = FieldUpdate(default=True)
     use_loss_masking_spans: bool = FieldUpdate(default=False)
+    use_images: bool = FieldUpdate(default=False)
     shuffle: ShufflingType = FieldUpdate(default=ShufflingType.epoch)
 
 

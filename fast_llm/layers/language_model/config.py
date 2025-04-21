@@ -6,6 +6,7 @@ from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
 from fast_llm.engine.distributed.config import DistributedDimNames
 from fast_llm.functional.config import CrossEntropyImpl
 from fast_llm.layers.transformer.config import TransformerArchitectureConfig, TransformerConfig
+from fast_llm.layers.vision_encoder.config import VisionArchitectureConfig
 from fast_llm.utils import Assert
 
 
@@ -198,3 +199,16 @@ class LanguageModelBaseConfig(LanguageModelArchitectureConfig, BaseModelConfig):
         if self.init_method_max_embed is not None and self.init_method_min_embed is not None:
             Assert.leq(self.init_method_min_embed, self.init_method_max_embed)
         super()._validate()
+
+
+class MultiModalBaseConfig:
+    language_model: LanguageModelBaseConfig = Field(
+        default_factory=LanguageModelBaseConfig,
+        desc="Configuration for the language model.",
+        hint=FieldHint.core,
+    )
+    vision_model: VisionArchitectureConfig = Field(
+        default_factory=VisionArchitectureConfig,
+        desc="Configuration for the vision inputs.",
+        hint=FieldHint.core,
+    )

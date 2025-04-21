@@ -32,10 +32,16 @@ class GPTBatch:
     token_ids: torch.Tensor
     loss_masking_spans: list[torch.Tensor] | None = None
     sequence_lengths: list[torch.Tensor] | None = None
+    images: list[torch.Tensor] | None = None
+    image_positions: list[torch.Tensor] | None = None
 
 
+# TODO: do we need a separate use_images?
 def gpt_data_collate_fn(
-    batch: list[GPTSample], use_loss_masking_spans: bool, cross_document_attention: bool
+    batch: list[GPTSample],
+    use_loss_masking_spans: bool,
+    cross_document_attention: bool,
+    use_images: bool,
 ) -> GPTBatch:
     stacked_ids = np.stack([sample.token_ids for sample in batch])
     stacked_spans = None
@@ -170,6 +176,7 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
                     gpt_data_collate_fn,
                     use_loss_masking_spans=self._config.sampling.use_loss_masking_spans,
                     cross_document_attention=self._cross_document_attention,
+                    use_images=self._config.sampling.use_images,
                 ),
                 multiprocessing_context=self._config.multiprocessing_context.value if num_workers > 0 else None,
             )

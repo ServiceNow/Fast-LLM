@@ -26,21 +26,26 @@ class ImageProcessor:
         # TODO Soham: convert all images to tensor?
         # height = image.shape[0]
         # width = image.shape[1]
-        height, width = image.size
-        ratio = max(height / self.max_height, width / self.max_width)
-        if ratio > 1:
-            height = math.ceil(height / ratio)
-            width = math.ceil(width / ratio)
-        else:
-            height = self.patch_size[0] * math.ceil(height / self.patch_size[0])
-            width = self.patch_size[1] * math.ceil(width / self.patch_size[1])
+        height, width = self.get_resize_dims(image.shape[0], image.shape[1], self.max_height, self.max_width)
 
         # TODO: options for interpolation mode
         return F.resize(image, size=(height, width), interpolation=F.InterpolationMode.BICUBIC)
+
+    # TODO Soham: move to utils
+    @classmethod
+    def get_resize_dims(height, width, max_height, max_width, patch_size: list[int]):
+        ratio = max(height / max_height, width / max_width)
+        return (
+            (math.ceil(height / ratio), math.ceil(width / ratio))
+            if ratio > 1
+            else (patch_size[0] * math.ceil(height / patch_size[0]), patch_size[1] * math.ceil(width / patch_size[1]))
+        )
 
     def normalize(self, image: torch.Tensor) -> torch.Tensor:
         # Normalize the image using the mean and std
         return F.normalize(image, mean=self.mean, std=self.std)
 
-    def get_num_patches(self, image: torch.Tensor) -> torch.Tensor:
-        return (image.size[0] // self.patch_size[0]) * (image.size[1] // self.patch_size[1])
+    @classmethod
+    # TODO Soham: move to utils
+    def get_num_patches(image: torch.Tensor, patch_size: list[int]) -> torch.Tensor:
+        return (image.size[0] // patch_size[0]) * (image.size[1] // patch_size[1])

@@ -10,12 +10,12 @@ import typing
 import datasets
 import huggingface_hub
 import numpy as np
+import PIL.Image
 import requests
 import torch.distributed
 import tqdm
 import transformers
 import yaml
-from PIL import Image
 
 from fast_llm.data.dataset.gpt.config import (
     GPTBlendedDatasetConfig,
@@ -26,9 +26,9 @@ from fast_llm.data.dataset.gpt.config import (
 )
 from fast_llm.data.dataset.gpt.memmap import GPTMemmapDataset
 from fast_llm.data.dataset.gpt.sampled import GPTSample
-from fast_llm.data.multi_modal_processor import MultiModalProcessor
 from fast_llm.data.preparator.config import DatasetPreparator
 from fast_llm.data.preparator.gpt_memmap.config import GPTMemmapDatasetPreparatorConfig
+from fast_llm.data.tokenizer import Tokenizer
 from fast_llm.engine.config_utils.data_type import DataType, get_unsigned_integer_type
 from fast_llm.utils import Assert, normalize_probabilities, padded_cumsum
 
@@ -38,8 +38,7 @@ logger = logging.getLogger(__name__)
 class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](DatasetPreparator[ConfigType]):
     config_class: typing.ClassVar[type[GPTMemmapDatasetPreparatorConfig]] = GPTMemmapDatasetPreparatorConfig
 
-    # _tokenizer: Tokenizer
-    _data_processor: MultiModalProcessor
+    _tokenizer: Tokenizer
     _data_type: DataType
 
     def _process_batch(self, batch: dict[str, list[typing.Any]]) -> dict[str, list[typing.Any]]:
@@ -60,7 +59,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
                         np.array(image_token_positions, dtype=np.int32),
                     )
                     for input_ids, image_token_positions in [
-                        self._data_processor.tokenize(
+                        self._tokenizer.tokenize(
                             text,
                             im_char_positions,
                         )
@@ -73,17 +72,18 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
             ),
         )
         num_tokens = [len(x) for x in input_ids]
-        # TODO Soham: is this ok? Should we get num_image_tokens separately?
+        num_pixels = [0] * len(input_ids)
         for idx, images in enumerate(batch.get("images", [])):
             for bytes_im in images:
-                with Image.open(io.BytesIO(bytes_im["bytes"])) as im:
+                with PIL.Image.open(io.BytesIO(bytes_im["bytes"])) as im:
                     width, height = im.size
-                    num_tokens[idx] += (width * height * 3) // np.dtype(self._dtype).itemsize
+                    num_pixels[idx] += width * height * 3
 
         return {
             "input_ids": input_ids,
             "image_positions": image_token_positions,
             "num_tokens": num_tokens,
+            "num_pixels": num_pixels,
         }
 
     def _tokenize_batch_with_spans(self, batch: dict[str, list[typing.Any]]) -> dict[str, list[typing.Any]]:
@@ -98,7 +98,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
                         np.array(image_token_positions, dtype=np.int32),
                     )
                     for input_ids, token_spans, images, image_token_positions in [
-                        self._data_processor.tokenize_with_spans(text, char_spans)
+                        self._tokenizer.tokenize_with_spans(text, char_spans)
                         for text, char_spans in zip(
                             batch[self._config.dataset.field],
                             batch.get(self._config.dataset.loss_masking_spans, itertools.repeat(None)),
@@ -109,16 +109,20 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
                 ]
             ),
         )
-        num_tokens = [
-            len(x) + sum([self._data_processor._image_processor.get_num_patches(im) for im in doc_images])
-            for x, doc_images in zip(input_ids, images)
-        ]
+        num_tokens = [len(x) for x in input_ids]
+        num_pixels = [0] * len(input_ids)
+        for idx, images in enumerate(images):
+            for bytes_im in images:
+                with PIL.Image.open(io.BytesIO(bytes_im["bytes"])) as im:
+                    width, height = im.size
+                    num_pixels[idx] += width * height * 3
         return {
             "input_ids": input_ids,
             "token_spans": token_spans,
             "images": images,
             "image_positions": image_token_positions,
             "num_tokens": num_tokens,
+            "num_pixels": num_pixels,
         }
 
     def _save_shard(self, args: tuple[int, datasets.Dataset]) -> GPTMemmapDatasetConfig:
@@ -136,7 +140,8 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
                         else None
                     ),
                     # [np.array(Image.open(pathlib.Path(self._config.dataset.path) / path)) for path in item["image_paths"]] if self._config.dataset.image_paths else None,
-                    [np.array(im) for im in item["images"]] if self._config.dataset.images else None,
+                    # [np.array(im) for im in item["images"]] if self._config.dataset.images else None,
+                    item["images"] if self._config.dataset.images else None,
                     item["image_positions"] if self._config.dataset.image_positions else None,
                 )
             # if "token_spans" in shard_dataset.column_names and self._config.dataset.loss_masking_spans is not None:
@@ -157,6 +162,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
                 "path": prefix,
                 "num_documents": len(shard_dataset),  # Use the length of the shard dataset directly
                 "num_tokens": sum(len(doc["input_ids"]) for doc in shard_dataset),
+                "num_pixels": sum(doc["num_pixels"] for doc in shard_dataset),
             }
         )
 
@@ -225,12 +231,12 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
         if self._config.dataset.disable_disk_space_check:
             datasets.builder.has_sufficient_disk_space = lambda needed_bytes, directory=".": True
 
-        # Load the data processor
-        self._data_processor = MultiModalProcessor(config=self._config.data_processor)
+        # Load tokenizer
+        self._tokenizer = Tokenizer(config=self._config.tokenizer)
 
         # Decide the datatype based on the tokenizer vocabulary size
         self._data_type = (
-            get_unsigned_integer_type(self._data_processor._tokenizer.vocab_size)
+            get_unsigned_integer_type(self._tokenizer.vocab_size)
             if self._config.dataset.data_type is None
             else self._config.dataset.data_type
         )
@@ -293,6 +299,12 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
 
         # Calculate total number of tokens
         total_tokens = sum(tqdm.tqdm(tokenized_dataset["num_tokens"], desc="Counting tokens", unit="tokens"))
+        total_pixels = (
+            sum(tqdm.tqdm(tokenized_dataset["num_pixels"], desc="Counting pixels", unit="pixels"))
+            if self._config.dataset.images
+            else 0
+        )
+        total_tokens += total_pixels // np.dtype(self._data_type.numpy).itemsize
 
         # Split dataset into shards based on number of tokens
         num_shards = int(np.ceil(total_tokens / self._config.tokens_per_shard))
@@ -391,7 +403,8 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
                     # Part of the dataset belongs to the split.
                     # TODO: Somehow getting a segfault when merging two lines below (numpy bug?).
                     dataset = dataset_config.to_copy({"path": output_path / dataset_config.path}).build()
-                    sizes_cumsum = dataset.get_document_sizes().cumsum()
+                    # TODO Soham: handle pixels (could still work with number of tokens?)
+                    sizes_cumsum = dataset.get_document_sizes()[0].cumsum()
                     Assert.eq(sizes_cumsum[-1], dataset_config.num_tokens)
                     begin_index = _get_nearest_split(sizes_cumsum, split_begin_in_dataset * dataset_config.num_tokens)
                     end_index = _get_nearest_split(sizes_cumsum, split_end_in_dataset * dataset_config.num_tokens)

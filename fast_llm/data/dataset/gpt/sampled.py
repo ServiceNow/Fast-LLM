@@ -12,6 +12,7 @@ import yaml
 from fast_llm.data.dataset.abstract import SampledDataset
 from fast_llm.data.dataset.gpt.config import GPTSamplingData, ShufflingType
 from fast_llm.data.dataset.gpt.indexed import GPTIndexedDataset
+from fast_llm.data.image_processor import ImageProcessor
 from fast_llm.engine.config_utils.data_type import DataType, get_unsigned_integer_type
 from fast_llm.engine.config_utils.run import log_main_rank
 from fast_llm.utils import Assert
@@ -89,10 +90,16 @@ class GPTSampledIndexedDataset(SampledDataset):
         self._indexed_dataset = indexed_dataset
         self._num_samples = sampling.num_samples
         self._sequence_length = sampling.sequence_length
+        self._patch_size = sampling.patch_size
         self._cross_document_attention = sampling.cross_document_attention
         self._config = sampling.config
         self._truncate_documents = sampling.truncate_documents
         self._device = torch.device("cuda" if self._config.gpu else "cpu")
+
+        if self._indexed_dataset.has_images and self._truncate_documents:
+            raise RuntimeError(
+                "Truncating documents with images is not supported. Please turn off truncation to use images."
+            )
 
         if sampling.cache_directory is None:
             self._document_shuffling = MemmapArray()
@@ -126,9 +133,15 @@ class GPTSampledIndexedDataset(SampledDataset):
         Create a `GPTSampledDataset` with the requested parameters.
         """
         # Get the document sizes, the main information needed for sampling.
-        document_sizes = torch.from_numpy(self._indexed_dataset.get_document_sizes()).to(self._device)
+        # TODO Soham: verify numpy correctness
+        document_sizes, image_sizes = self._indexed_dataset.get_document_sizes()
+        document_sizes = torch.from_numpy(document_sizes).to(self._device)
+        image_token_sizes = torch.zeros_like(document_sizes).to(self._device)
+        for i, sizes in enumerate(image_sizes):
+            image_token_sizes[i] = sum(sizes[0, :] // self._patch_size[0]) * (sizes[:, 1] // self._patch_size[1])
+
         documents_per_epoch = document_sizes.numel()
-        tokens_per_epoch = document_sizes.sum().item()
+        tokens_per_epoch = document_sizes.sum().item() + image_token_sizes.sum().item()
 
         # Calculate basic stats.
         if not self._truncate_documents:
@@ -136,14 +149,14 @@ class GPTSampledIndexedDataset(SampledDataset):
                 "The C++ extension for dataset sampling is missing."
                 " Please make sure Fast-LLM is installed correctly."
             )
-            long_docs_filter = document_sizes > self._sequence_length + 1
+            long_docs_filter = document_sizes + image_token_sizes > self._sequence_length + 1
             ignored_documents = sum(long_docs_filter)
             if ignored_documents:
                 log_main_rank(
                     f" > {ignored_documents}/{documents_per_epoch} documents are longer than {self._sequence_length+1} tokens and will be ignored.",
                     log_fn=logger.warning,
                 )
-            tokens_per_epoch = document_sizes[~long_docs_filter].sum().item()
+            tokens_per_epoch = (document_sizes[~long_docs_filter] + image_token_sizes[~long_docs_filter]).sum().item()
             if tokens_per_epoch == 0:
                 raise RuntimeError(
                     f" > No documents shorter than {self._sequence_length+1} tokens found in dataset {self._indexed_dataset.name}."
@@ -177,6 +190,7 @@ class GPTSampledIndexedDataset(SampledDataset):
             "num_samples": self._num_samples,
             "unshuffled_epochs": unshuffled_epochs,
             "sequence_length": self._sequence_length,
+            "patch_size": self._patch_size,
             "truncate_documents": self._truncate_documents,
             "config": self._config.to_serialized(),
         }
@@ -258,7 +272,7 @@ class GPTSampledIndexedDataset(SampledDataset):
         # Equivalent to `torch.hstack((0, document_sizes[all_document_index].cumsum()[::TOKEN_CUMSUM_RATE]))`
         if unshuffled_epochs > 0:
             token_cumsum_unshuffled, num_tokens_unshuffled = self._get_token_cumsum(
-                document_sizes,
+                document_sizes + image_token_sizes,
                 offset=0,
                 # TODO: Allowing for max 100% extra tokens for padding, is that enough?
                 dtype=get_unsigned_integer_type((2 - self._truncate_documents) * tokens_per_epoch * num_epochs),
@@ -282,6 +296,9 @@ class GPTSampledIndexedDataset(SampledDataset):
                     document_shuffling.to(
                         dtype=torch.int64 if document_shuffling.dtype == torch.int64 else torch.int32
                     )
+                ]
+                + image_token_sizes[
+                    document_shuffling.to(torch.int64 if document_shuffling.dtype == torch.int64 else torch.int32)
                 ],
                 offset=num_tokens_unshuffled,
                 # TODO: Allowing for max 100% extra tokens for padding, is that enough?
@@ -360,6 +377,9 @@ class GPTSampledIndexedDataset(SampledDataset):
 
         token_ids = []
         loss_masking_spans = []
+        images = []
+        image_positions = []
+        image_tokens_added = 0
         while token_count < token_end:
             # Find the document index in the dataset.
             if document_sampling_index < self._unshuffled_documents:
@@ -367,7 +387,7 @@ class GPTSampledIndexedDataset(SampledDataset):
             else:
                 document_index = self._document_shuffling[document_sampling_index - self._unshuffled_documents].item()
 
-            document_size = self._indexed_dataset.get_document_size(document_index)
+            document_size = self._indexed_dataset.get_document_size(document_index, self._patch_size)
 
             if not self._truncate_documents:
                 if document_size > self._sequence_length + 1:
@@ -398,6 +418,12 @@ class GPTSampledIndexedDataset(SampledDataset):
                     length=token_end_index_in_document - token_start_index_in_document,
                     use_loss_masking_spans=self._config.use_loss_masking_spans,
                 )
+                # TODO Soham: handle images with loss masking spans
+                for idx, im_position in enumerate(sample.image_positions):
+                    # image_positions.append(im_positions + len(token_ids) + image_tokens_added)
+                    image_positions.append(im_position + len(token_ids) + image_tokens_added)
+                    image_tokens_added += ImageProcessor.get_num_patches(sample.images[idx])
+                images.append(sample.images)
                 token_ids.append(sample.token_ids)
                 if self._config.use_loss_masking_spans:
                     for loss_masking_span in sample.loss_masking_spans:
@@ -411,6 +437,7 @@ class GPTSampledIndexedDataset(SampledDataset):
 
         sequence_lengths = (
             np.array([ids.size - (idx == len(token_ids) - 1) for idx, ids in enumerate(token_ids)], dtype=np.int32)
+            + np.array([ImageProcessor.get_num_patches(image) for image in images[idx] for idx in range(len(images))])
             if not self._cross_document_attention
             else None
         )
@@ -420,9 +447,16 @@ class GPTSampledIndexedDataset(SampledDataset):
             if self._config.use_loss_masking_spans
             else None
         )
-        Assert.eq(len(token_ids), self._sequence_length + 1)
+        images = [im for img_list in images for im in img_list]
+        Assert.eq(len(token_ids) + image_tokens_added, self._sequence_length + 1)
 
-        return GPTSample(token_ids=token_ids, loss_masking_spans=loss_masking_spans, sequence_lengths=sequence_lengths)
+        return GPTSample(
+            token_ids=token_ids,
+            loss_masking_spans=loss_masking_spans,
+            sequence_lengths=sequence_lengths,
+            images=images,
+            image_positions=image_positions,
+        )
 
     @property
     def name(self) -> str:
