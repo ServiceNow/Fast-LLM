@@ -298,7 +298,9 @@ def parse_eval_args(parser: argparse.ArgumentParser, args: list[str]) -> argpars
 
 
 def prepare_lm_eval_simple_eval_params(
-    cli_args: list[str], completed_steps: int
+    cli_args: list[str],
+    completed_steps: int,
+    run_index: int,
 ) -> tuple[argparse.Namespace, dict[str, any]]:
     """
     Parses CLI arguments for an LM evaluation run and prepares keyword arguments
@@ -313,6 +315,7 @@ def prepare_lm_eval_simple_eval_params(
         cli_args (list[str]): Command-line arguments, excluding the program name.
         completed_steps (int): Current number of completed training steps, used to
             uniquely tag evaluation output paths.
+        run_index (int): index of the current run of Fast-LLM experiment
 
     Returns:
         tuple:
@@ -349,7 +352,7 @@ def prepare_lm_eval_simple_eval_params(
 
     # update the evaluation tracker args with the output path and the HF token
     if args.output_path:
-        args.output_path = str(pathlib.Path(args.output_path) / f"{completed_steps}")
+        args.output_path = str(pathlib.Path(args.output_path) / f"runs/{run_index}/{completed_steps}")
         args.hf_hub_log_args += f",output_path={args.output_path}"
     if os.environ.get("HF_TOKEN", None):
         args.hf_hub_log_args += f",token={os.environ.get('HF_TOKEN')}"
@@ -501,7 +504,6 @@ def process_lm_eval_results(
 ) -> None:
     if results is not None:
         import wandb
-        wandb.log
 
         if args.log_samples:
             samples = results.pop("samples")
@@ -534,8 +536,8 @@ def process_lm_eval_results(
 
         # TODO: convert to logging entries instead?
         print(
-            f"{args.model} ({args.model_args}), gen_kwargs: ({args.gen_kwargs}), limit: {args.limit}, num_fewshot: {args.num_fewshot}, "
-            f"batch_size: {args.batch_size}{f' ({batch_sizes})' if batch_sizes else ''}"
+            f"{results["config"]["model"]}, gen_kwargs: ({args.gen_kwargs}), limit: {args.limit}, num_fewshot: {args.num_fewshot}, "
+            f"batch_size: {results["config"]["batch_size"]}{f' ({batch_sizes})' if batch_sizes else ''}"
         )
         print(make_table(results))
         if "groups" in results:

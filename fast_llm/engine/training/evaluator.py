@@ -270,11 +270,17 @@ class EvaluationHarness[ConfigType: EvaluationHarnessConfig](Evaluation[ConfigTy
     ) -> None:
         super().setup(distributed, run, multi_stage, runner, data)
 
+        # TODO: pass mini and batch size of the same length for lm_eval not to crash during training
+        #       or implement min batch sequential awareness in fas_llm_wrapper for lm_eval
         self._hf_model = (
             self._multi_stage.config_class.get_huggingface_model_for_causal_lm_class().from_fast_llm_model_in_training(
                 self._multi_stage, self._trainer_config, self._runner
             )
         )
+
+        # For reporting purposes, just to indicate it is from Fast-LLM
+        # as lm_eval.simple_evaluate will take it for results['config']['model']
+        self._hf_model.config.name_or_path = type(self._hf_model).__name__
 
         self._flm_wrapper = FastLLMWrapper(
             model=self._hf_model,
@@ -297,11 +303,24 @@ class EvaluationHarness[ConfigType: EvaluationHarnessConfig](Evaluation[ConfigTy
         if not (done or self._eval_config.enabled(completed_steps)):
             return {}, None
 
-        # completed_steps is added to output_path like output_path/completed_steps/
-        args, simple_eval_kwargs = prepare_lm_eval_simple_eval_params(self._eval_config.cli_args, completed_steps)
+        # completed_steps is added to output_path like output_path/runs/run_index/completed_steps/
+        args, simple_eval_kwargs = prepare_lm_eval_simple_eval_params(self._eval_config.cli_args, completed_steps, self._run.index)
         simple_eval_kwargs["model"] = self._flm_wrapper
 
+        # Needed for reporting as batch_size is set from args not lm for reporting in evaluate
+        simple_eval_kwargs["batch_size"] = self._flm_wrapper.batch_size
+        simple_eval_kwargs["max_batch_size"] = self._flm_wrapper.max_batch_size
+
+        # As of lm_eval commit 758c5ed891b1ca48acd8d3a0d309a827215796b7
+        # Expected to be a string even if empty and not None later on in simple_evaluate
+        simple_eval_kwargs["model_args"] = ""
+
         results = lm_eval_simple_evaluate(**simple_eval_kwargs)
+
+        # Evaluation_tracker save expects model to be either string, but if model is passed  LM wrapper needs to be deep copyable and json serializable
+        simple_eval_kwargs["evaluation_tracker"].general_config_tracker.model_source = (
+            self._hf_model.config.name_or_path
+        )
 
         if results is not None and self._run.is_main_rank:
             process_lm_eval_results(
