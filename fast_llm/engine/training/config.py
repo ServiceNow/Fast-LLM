@@ -385,17 +385,15 @@ class TrainerConfig(PretrainedFastLLMModelConfig, ExperimentConfig):
 
     def _validate(self) -> None:
         self.training.export.setup(self.model)
-        self.model.validate()
+        for reference_model in self.reference_models.values():
+            _add_reference_distributed_to_pretrained(reference_model, self.model.distributed)
+        super()._validate()
         if self.reference_models:
             # TODO: Add support.
             Assert.eq(self.model.distributed.pipeline_parallel, 1)
             # TODO: Check if these work.
             Assert.eq(self.model.distributed.tensor_parallel, 1)
             Assert.eq(self.model.distributed.sequence_data_parallel, 1)
-
-        for reference_model in self.reference_models.values():
-            _add_reference_distributed_to_pretrained(reference_model, self.model.distributed)
-        super()._validate()
         if self.run.experiment_dir is None:
             assert not self.training.checkpoint.enabled()
 
@@ -431,13 +429,12 @@ def _add_reference_distributed_to_pretrained(pretrained: PretrainedFastLLMModelC
 
     def new_setup():
         # Make sure the distributed config isn't set
-        # TODO!!!!!!!!!!!!!: Uncomment after #205
-        # pretrained.model.distributed.validate()
-        # Assert.leq(pretrained.model.distributed.to_dict().keys(), {"world_size", "rank", "local_world_size"})
+        pretrained.model.distributed.validate()
+        Assert.leq(pretrained.model.distributed.to_dict().keys(), {"world_size", "rank", "local_world_size"})
         with NoAutoValidate():
             pretrained.model.distributed = distributed.to_copy()
         # Allow sharing the `Distributed` instance.
         pretrained.model.distributed.reference_config = distributed
         old_setup()
 
-    pretrained._setup = new_setup
+    object.__setattr__(pretrained, "_setup", new_setup)
