@@ -50,9 +50,7 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
         self._group_size = tensor_space.distributed_config.tensor_parallel
         self._sequence_parallel = tensor_space.distributed_config.sequence_tensor_parallel
         self._parallel_embeddings = tensor_space.distributed_config.tensor_parallel > 1 and config.parallel_embeddings
-        self._sequence_parallel_logits = (
-            tensor_space.distributed_config.sequence_tensor_parallel and not config.parallel_embeddings
-        )
+        self._sequence_parallel_logits = self._sequence_parallel and not self._parallel_embeddings
         self._cross_entropy_splits = config.cross_entropy_splits
         if self._cross_entropy_splits is not None and self._sequence_parallel:
             assert not self._parallel_embeddings
@@ -215,12 +213,12 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
             grad_output /= self._cross_entropy_splits
             logit_input = input_.flatten(0, -2)
             logit_input_grad = torch.empty_like(logit_input)
-            for logit_input_, labels_, logit_input_grad_ in zip(
+            for logit_input_, target_, logit_input_grad_ in zip(
                 logit_input.split(split_size), target.split(split_size), logit_input_grad.split(split_size)
             ):
                 loss_, grad_ = self._logits_cross_entropy_forward_backward(
                     logit_input_,
-                    labels_,
+                    target_,
                     weight,
                     grad_output,
                     kwargs,
