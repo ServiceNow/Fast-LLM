@@ -36,14 +36,14 @@ class FastLLMWrapper(HFLM):
         add_bos_token: Optional[bool] = False,
         prefix_token_id: Optional[int] = None,
     ):
-        # intitialize manualy fields in base class as we do not want to call init on HFLM
+        # initialize manually fields in base class as we do not want to call init on HFLM
         # super().__init__()
-        # TODO: properly inicialize distributed, for now works only on one gpu
+        # TODO: properly initialize distributed, for now works only on one gpu
         self._rank = 0
         self._world_size = 1
         self.cache_hook = CacheHook(None)
 
-        # set some inputs which are expected in HFLM but are not used by our model curretnly
+        # set some inputs which are expected in HFLM but are not used by our model currently
         backend = "causal"
         revision = "main"
         gguf_file = None
