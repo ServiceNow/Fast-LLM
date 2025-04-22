@@ -144,7 +144,17 @@ class Assert:
     @staticmethod
     def rms_close(x, y, threshold):
         rms = rms_diff(x, y).item()
-        assert rms <= threshold, f"Rms diff too big ({rms} > {threshold}) between tensors {x} and {y}"
+        assert rms <= threshold, f"Rms diff too big ({rms:.3e} > {threshold:.3e}) between tensors {x} and {y}"
+
+    @staticmethod
+    def rms_close_relative(x, y, threshold, min_threshold=0):
+        import torch
+
+        Assert.eq(x.shape, y.shape)
+        scale = (torch.sum(x**2 + y**2) / (2 * x.numel())) ** 0.5
+        threshold = max(threshold * scale, min_threshold)
+        rms = rms_diff(x, y).item()
+        assert rms <= threshold, f"Rms diff too big ({rms:.3e} > {threshold:.3e}) between tensors {x} and {y}"
 
     @staticmethod
     def all_equal(x, y):
@@ -156,7 +166,7 @@ class Assert:
 
         neq = x != y
         if neq.any().item():  # noqa
-            index = torch.where(neq)  # noqa
+            index = None if x.numel() == 1 else torch.where(neq)  # noqa
             raise AssertionError(
                 f"Tensors have {index[0].numel()} different entries out of "
                 f"{x.numel()}: {x[index]} != {y[index]} at index {torch.stack(index, -1)}"
