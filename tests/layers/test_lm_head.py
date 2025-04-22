@@ -19,6 +19,7 @@ from fast_llm.layers.transformer.config import TransformerKwargs
 from fast_llm.models.gpt.config import GPTBaseModelConfig
 from fast_llm.models.gpt.model import GPTBaseModel
 from fast_llm.utils import Assert
+from tests.common import requires_cuda
 
 
 def _lm_head(
@@ -53,6 +54,7 @@ HIDDEN_SIZE = 256
 VOCAB_SIZE = 500
 
 
+@requires_cuda
 @pytest.mark.slow
 @pytest.mark.parametrize("cross_entropy_impl", tuple(CrossEntropyImpl))
 @pytest.mark.parametrize(

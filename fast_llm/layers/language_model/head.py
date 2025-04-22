@@ -50,7 +50,9 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
         self._group_size = tensor_space.distributed_config.tensor_parallel
         self._sequence_parallel = tensor_space.distributed_config.sequence_tensor_parallel
         self._parallel_embeddings = tensor_space.distributed_config.tensor_parallel > 1 and config.parallel_embeddings
-        self._sequence_parallel_logits = self._sequence_parallel and not self._parallel_embeddings
+        self._sequence_parallel_logits = (
+            tensor_space.distributed_config.sequence_tensor_parallel and not config.parallel_embeddings
+        )
         self._cross_entropy_splits = config.cross_entropy_splits
         if self._cross_entropy_splits is not None and self._sequence_parallel:
             assert not self._parallel_embeddings
@@ -151,7 +153,7 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
                     self._prediction_distance,
                     self._prediction_distance
                     + input_.size(1 - kwargs[TransformerKwargs.sequence_first])
-                    * (self._tensor_space.distributed_config.tensor_parallel if self._parallel_embeddings else 1),
+                    * (self._tensor_space.distributed_config.tensor_parallel if self._sequence_parallel else 1),
                 )
                 target = target[target_slice] if kwargs[TransformerKwargs.sequence_first] else target[:, target_slice]
                 target = target.flatten()
