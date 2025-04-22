@@ -304,7 +304,9 @@ class EvaluationHarness[ConfigType: EvaluationHarnessConfig](Evaluation[ConfigTy
             return {}, None
 
         # completed_steps is added to output_path like output_path/runs/run_index/completed_steps/
-        args, simple_eval_kwargs = prepare_lm_eval_simple_eval_params(self._eval_config.cli_args, completed_steps, self._run.index)
+        args, simple_eval_kwargs = prepare_lm_eval_simple_eval_params(
+            self._eval_config.cli_args, completed_steps, self._run.index
+        )
         simple_eval_kwargs["model"] = self._flm_wrapper
 
         # Needed for reporting as batch_size is set from args not lm for reporting in evaluate
@@ -312,12 +314,13 @@ class EvaluationHarness[ConfigType: EvaluationHarnessConfig](Evaluation[ConfigTy
         simple_eval_kwargs["max_batch_size"] = self._flm_wrapper.max_batch_size
 
         # As of lm_eval commit 758c5ed891b1ca48acd8d3a0d309a827215796b7
-        # Expected to be a string even if empty and not None later on in simple_evaluate
+        # Expected to be a string even if empty and not None in simple_evaluate
         simple_eval_kwargs["model_args"] = ""
 
         results = lm_eval_simple_evaluate(**simple_eval_kwargs)
 
-        # Evaluation_tracker save expects model to be either string, but if model is passed  LM wrapper needs to be deep copyable and json serializable
+        # Evaluation_tracker save expects model to be either string, but if model is passed
+        # LM wrapper needs to be deep copyable and json serializable
         simple_eval_kwargs["evaluation_tracker"].general_config_tracker.model_source = (
             self._hf_model.config.name_or_path
         )
