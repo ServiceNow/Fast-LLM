@@ -50,9 +50,7 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
         self._group_size = tensor_space.distributed_config.tensor_parallel
         self._sequence_parallel = tensor_space.distributed_config.sequence_tensor_parallel
         self._parallel_embeddings = tensor_space.distributed_config.tensor_parallel > 1 and config.parallel_embeddings
-        self._sequence_parallel_logits = (
-            tensor_space.distributed_config.sequence_tensor_parallel and not config.parallel_embeddings
-        )
+        self._sequence_parallel_logits = self._sequence_parallel and not self._parallel_embeddings
         self._cross_entropy_splits = config.cross_entropy_splits
         if self._cross_entropy_splits is not None and self._sequence_parallel:
             assert not self._parallel_embeddings
@@ -70,11 +68,6 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
         Assert.geq(prediction_distance, 0)
         self._prediction_distance = prediction_distance
         self.is_last_head = self._prediction_distance == config.prediction_heads - 1
-        if self._prediction_distance > 0:
-            assert (
-                not self._sequence_parallel_logits
-            ), "Sequence parallel logits not supported for multi-token prediction."
-            assert not self._cross_entropy_splits, "Cross-entropy splits not supported for multi-token prediction."
 
         self._init_output_weights(hidden_dim, config)
 
@@ -137,8 +130,9 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
             # Last head should return the loss for backward.
             return language_model_loss
         else:
-            # Backward hook to compute the gradient of the loss
-            shared_hidden = AuxiliaryLoss.apply(shared_hidden, language_model_loss, 1.0)
+            if self.training:
+                # Backward hook to compute the gradient of the loss
+                shared_hidden = AuxiliaryLoss.apply(shared_hidden, language_model_loss, 1.0)
             # MTP: Return shared_hidden to be used by the next head.
             return shared_hidden
 
@@ -152,23 +146,26 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
         )
         if target is not None:
             if self._config.distillation_model is None:
-                # Target is labels (token ids)
                 # MTP: Shift the labels
-                target = target[:, self._prediction_distance :].flatten()
+                target = (
+                    target[self._prediction_distance : self._prediction_distance + input_.size(0),]
+                    if kwargs[TransformerKwargs.sequence_first]
+                    else target[
+                        :,
+                        self._prediction_distance : self._prediction_distance + input_.size(1),
+                    ]
+                )
+                target = target.flatten()
             else:
                 # Target is reference model logits.
                 target = target.flatten(0, -2)
+
         if self._sequence_parallel_logits:
             target = split_op(target, self._tensor_space.distributed.tensor_group, 0)
         do_grad = target is not None and self.training
         input_ = input_.detach().requires_grad_(do_grad)
         with torch.enable_grad():
-            # MTP: truncate the input
-            if self._prediction_distance > 0:
-                truncated_input = input_[:, : -self._prediction_distance, :].contiguous()
-            else:
-                truncated_input = input_
-            ln_output = self.final_norm(truncated_input)
+            ln_output = self.final_norm(input_)
 
         grad_output = kwargs[TransformerKwargs.grad_output] / (
             self._group_size if self._sequence_parallel_logits else 1
@@ -207,7 +204,7 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
             )
             if target is None:
                 # TODO: Make a proper way of returning the model output.
-                kwargs["logits"] = loss
+                kwargs["logits" if self._prediction_distance == 0 else f"logits_{self._prediction_distance}"] = loss
                 return None, None
         else:
             loss = None
@@ -216,12 +213,12 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
             grad_output /= self._cross_entropy_splits
             logit_input = input_.flatten(0, -2)
             logit_input_grad = torch.empty_like(logit_input)
-            for logit_input_, labels_, logit_input_grad_ in zip(
+            for logit_input_, target_, logit_input_grad_ in zip(
                 logit_input.split(split_size), target.split(split_size), logit_input_grad.split(split_size)
             ):
                 loss_, grad_ = self._logits_cross_entropy_forward_backward(
                     logit_input_,
-                    labels_,
+                    target_,
                     weight,
                     grad_output,
                     kwargs,

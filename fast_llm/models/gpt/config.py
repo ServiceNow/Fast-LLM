@@ -19,6 +19,7 @@ if typing.TYPE_CHECKING:
 
 class GPTHuggingfaceCheckpointFormat(CheckpointFormat):
     support_optimizer: typing.ClassVar[bool] = False
+    trust_remote_code: typing.ClassVar[bool] = False
 
     @classmethod
     def get_handler_class(cls) -> type[CheckpointHandler]:
@@ -49,6 +50,11 @@ class MistralGPTHuggingfaceCheckpointFormat(GPTHuggingfaceCheckpointFormat):
 
 class MixtralGPTHuggingfaceCheckpointFormat(GPTHuggingfaceCheckpointFormat):
     name: typing.ClassVar[str] = "mixtral"
+
+
+class MTPLlamaGPTHuggingfaceCheckpointFormat(GPTHuggingfaceCheckpointFormat):
+    name: typing.ClassVar[str] = "mtp_llama"
+    trust_remote_code: typing.ClassVar[bool] = True
 
 
 @config_class()
@@ -145,6 +151,7 @@ class GPTModelConfig(FastLLMModelConfig):
         Qwen2GPTHuggingfaceCheckpointFormat,
         MistralGPTHuggingfaceCheckpointFormat,
         MixtralGPTHuggingfaceCheckpointFormat,
+        MTPLlamaGPTHuggingfaceCheckpointFormat,
     )
 
     @classmethod
