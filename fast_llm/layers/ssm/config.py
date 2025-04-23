@@ -2,7 +2,6 @@ from fast_llm.config import Field, FieldHint, FieldUpdate, check_field, config_c
 from fast_llm.engine.base_model.config import BaseModelArchitectureConfig, BaseModelConfig
 from fast_llm.functional.config import ActivationType
 from fast_llm.layers.common.config import NormalizationArchitectureConfig, NormalizationConfig
-from fast_llm.tensor import TensorSpace
 from fast_llm.utils import Assert
 
 
@@ -87,10 +86,11 @@ class SSMArchitectureConfig(BaseModelArchitectureConfig):
     )
 
     def _validate(self) -> None:
-        if self.activation_type is None:
-            self.activation_type = ActivationType.silu
-        if self.dt_rank is None:
-            self.dt_rank = -1  # set to -1, it will be overwrittem in ssm validation
+        with self._set_implicit_default():
+            if self.activation_type is None:
+                self.activation_type = ActivationType.silu
+            if self.dt_rank is None:
+                self.dt_rank = -1  # set to -1, it will be overwrittem in ssm validation
 
         super()._validate()
 
@@ -127,9 +127,6 @@ class SSMConfig(SSMArchitectureConfig, BaseModelConfig):
         hint=FieldHint.core,
         valid=check_field(Assert.gt, 0),
     )
-
-    def setup_tensor_space(self, tensor_space: TensorSpace) -> None:
-        pass
 
     def _validate(self) -> None:
         """Validate configuration parameters."""
