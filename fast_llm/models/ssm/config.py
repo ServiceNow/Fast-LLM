@@ -9,6 +9,7 @@ from fast_llm.engine.multi_stage.config import FastLLMModelConfig, PretrainedFas
 from fast_llm.engine.training.config import TrainerConfig
 from fast_llm.layers.language_model.config import LanguageModelArchitectureConfig, LanguageModelBaseConfig
 from fast_llm.layers.ssm.config import SSMDimNames
+from fast_llm.models.gpt.config import GPTBatchConfig
 from fast_llm.tensor import TensorDim, TensorSpace
 from fast_llm.utils import Assert
 
@@ -166,6 +167,7 @@ class PretrainedHybridSSMModelConfig(PretrainedFastLLMModelConfig):
 @config_class()
 class HybridTrainerConfig(PretrainedHybridSSMModelConfig, TrainerConfig):
     data: GPTDataConfig = FieldUpdate(default_factory=GPTDataConfig)
+    batch: GPTBatchConfig = FieldUpdate(default_factory=GPTBatchConfig)
 
     @classmethod
     def get_trainer_class(cls) -> type["SSMTrainer"]:
