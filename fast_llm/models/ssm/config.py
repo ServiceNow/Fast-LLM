@@ -50,7 +50,7 @@ class HybridSSMBaseModelConfig(LanguageModelBaseConfig, HybridSSMArchitectureCon
 
         if self.ssm.dt_rank < 0:
             mamba_dt_rank = math.ceil(self.transformer.hidden_size / 16)
-            logger.warning(f"dt_rank is not set, using ceil(hidden_size/16)")
+            # logger.warning(f"dt_rank is not set, using ceil(hidden_size/16)")
         else:
             mamba_dt_rank = self.ssm.dt_rank
 
@@ -150,11 +150,11 @@ class HybridSSMModelConfig(FastLLMModelConfig):
 
         return HuggingfaceHybridSSMModelForCausalLM
 
-    def __post_init__(self):
-        super().__post_init__()
+    def _validate(self):
         logger.warning(
             "HybridSSMModelConfig is being instantiated. This model is experimental and may not work as expected."
         )
+        super()._validate()
 
 
 @config_class()

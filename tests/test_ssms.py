@@ -9,12 +9,12 @@ from fast_llm.engine.checkpoint.config import CheckpointLoadConfig
 from fast_llm.engine.config_utils.tensor_space import TensorSpace
 from fast_llm.engine.distributed.config import DistributedConfig, PhaseType
 from fast_llm.engine.distributed.distributed import Distributed
-from fast_llm.engine.schedule.config import BatchConfig, ScheduleConfig
+from fast_llm.engine.schedule.config import ScheduleConfig
 from fast_llm.engine.schedule.runner import ScheduleRunner
 from fast_llm.engine.schedule.schedule import Schedule
 from fast_llm.layers.language_model.config import LanguageModelKwargs, LanguageModelLossNames
 from fast_llm.layers.transformer.config import TransformerConfig, TransformerKwargs
-from fast_llm.models.gpt.config import LlamaGPTHuggingfaceCheckpointFormat
+from fast_llm.models.gpt.config import GPTBatchConfig, LlamaGPTHuggingfaceCheckpointFormat
 from fast_llm.models.ssm.config import LLambaHuggingfaceCheckpointFormat
 
 try:
@@ -147,7 +147,7 @@ def test_load_from_llamba_checkpoint(distributed_config):
     assert model.config.base_model.vocab_size == vocab_size
     schedule_config = ScheduleConfig()
     with NoAutoValidate():
-        batch_config = BatchConfig(micro_batch_size=batch_size, sequence_length=seq_length)
+        batch_config = GPTBatchConfig(micro_batch_size=batch_size, sequence_length=seq_length)
     batch_config.setup(distributed_config)
     batch_config.validate()
     schedule_runner = ScheduleRunner(
@@ -202,7 +202,7 @@ def test_mamba_layer(distributed_config, distributed, hybrid_block_layout, LAYER
     x = torch.randn(batch_size, seq_length, hidden_size, device=distributed.device)
 
     # Run forward pass
-    output = layer(x, {})
+    output, _ = layer(x, {})
 
     loss = output.sum()
     loss.backward()

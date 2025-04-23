@@ -170,4 +170,4 @@ class MambaLayer(torch.nn.Module):
             delta_bias=self.dt_proj_bias.float(),
             delta_softplus=True,
         )
-        return out
+        return out, None
