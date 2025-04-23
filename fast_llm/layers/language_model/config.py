@@ -4,7 +4,7 @@ from fast_llm.config import Field, FieldHint, FieldUpdate, check_field, config_c
 from fast_llm.engine.base_model.config import BaseModelArchitectureConfig, BaseModelConfig
 from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
 from fast_llm.engine.distributed.config import DistributedDimNames
-from fast_llm.functional.config import CrossEntropyImpl, LossFunction
+from fast_llm.functional.config import CrossEntropyImpl
 from fast_llm.layers.transformer.config import TransformerArchitectureConfig, TransformerConfig
 from fast_llm.utils import Assert
 
@@ -143,9 +143,9 @@ class LanguageModelBaseConfig(LanguageModelArchitectureConfig, BaseModelConfig):
         desc="Min value for clamping initialized weights of the vocabulary embedding and output (logits).",
         hint=FieldHint.feature,
     )
-    loss_function: LossFunction = Field(
-        default=LossFunction.cross_entropy,
-        desc="Type of loss function to use",
+    use_dpo_loss: bool | None = Field(
+        default=False,
+        desc="Whether to enable DPO loss",
         hint=FieldHint.feature,
     )
     dpo_beta: float | None = Field(

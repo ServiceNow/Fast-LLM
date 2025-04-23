@@ -71,7 +71,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
         else:
             self._preprocessors.append(BackupAttentionPreprocessor(self._config.transformer, self._tensor_space))
 
-        if self._config.loss_function == "dpo":  # TODO better way to pass in?
+        if self._config.use_dpo_loss:  # TODO better way to pass in?
             self._preprocessors.append(PreferenceSpanPreprocessor(self._config, self._tensor_space))
 
     def get_output_layers(self) -> list[Layer]:

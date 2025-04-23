@@ -101,7 +101,6 @@ class PreferenceSpanPreprocessor(Preprocessor):
                 valid_spans[:, 1].clamp_(max=sequence_k)
                 valid_spans -= sequence_offset
 
-                # TODO: check higher batch size
                 kwargs[LanguageModelKwargs.chosen_spans] = valid_spans
 
         rejected_loss_masking_spans = kwargs[LanguageModelKwargs.rejected_spans]
@@ -116,5 +115,4 @@ class PreferenceSpanPreprocessor(Preprocessor):
                 valid_spans[:, 1].clamp_(max=sequence_k)
                 valid_spans -= sequence_offset
 
-                # TODO: check higher batch size
                 kwargs[LanguageModelKwargs.rejected_spans] = valid_spans

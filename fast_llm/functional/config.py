@@ -93,11 +93,6 @@ class CrossEntropyImpl(str, enum.Enum):
     triton = "triton"
 
 
-class LossFunction(str, enum.Enum):
-    cross_entropy = "cross_entropy"
-    dpo = "dpo"
-
-
 class TargetFormat(enum.StrEnum):
     labels = "labels"
     logits = "logits"
