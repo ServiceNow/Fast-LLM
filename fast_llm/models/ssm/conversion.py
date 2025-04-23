@@ -34,7 +34,7 @@ class LLambaHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
     @classmethod
     def _create_config_converters(cls) -> list[ParamConverter]:
         """
-        Create config converters for the model, see args under https://huggingface.co/cartesia-ai/Lllamba-8B/blob/main/config.json
+        Create config converters for the model, see args under https://huggingface.co/cartesia-ai/Llamba-8B/blob/main/config.json
         """
         return super()._create_config_converters() + [
             ConstantImportParamConverter(fast_llm_names=(("use_position_embeddings",),), fast_llm_value=False),
@@ -94,7 +94,6 @@ class LLambaHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
                 fast_llm_value=ActivationType.from_hf_name,
                 export_value=lambda activation_type: activation_type.hf_name,
             ),
-            ConstantImportParamConverter(fast_llm_names=(("default_block"),), fast_llm_value="m2"),
             RenameParamConverter(
                 fast_llm_names=(("ssm", "state_size"),),
                 export_names=(
@@ -149,7 +148,7 @@ class LLambaHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
                     ),
                 ),
             ),
-            RenameParamConverter(
+            MappedConfigParamConverter(
                 fast_llm_names=(("ssm", "activation_type"),),
                 export_names=(
                     (

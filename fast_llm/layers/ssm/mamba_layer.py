@@ -7,7 +7,7 @@ import torch
 
 from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
 from fast_llm.layers.common.linear import Linear
-from fast_llm.layers.ssm.config import SSMDimNames, SSMLayerConfig
+from fast_llm.layers.ssm.config import SSMConfig, SSMDimNames
 from fast_llm.tensor import ParameterMeta, init_ones_, kaiming_init_
 
 """
@@ -54,13 +54,13 @@ def init_dtprojbias(
 class MambaLayer(torch.nn.Module):
     def __init__(
         self,
-        config: SSMLayerConfig,
+        config: SSMConfig,
         layer_idx: int,
         tensor_space: TensorSpace,
     ):
         factory_kwargs = {}
         super().__init__()
-        self.config: SSMLayerConfig = config
+        self.config: SSMConfig = config
         self.layer_idx = layer_idx
 
         self._debug_mode = config.debug_ssm

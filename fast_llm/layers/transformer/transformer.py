@@ -1,6 +1,6 @@
+import abc
 import logging
 import typing
-from abc import ABC, abstractmethod
 
 import torch
 
@@ -18,7 +18,7 @@ from fast_llm.tensor import TensorMeta
 logger = logging.getLogger(__name__)
 
 
-class BaseBlock(Layer, ABC):
+class BaseBlock(Layer, abc.ABC):
     """
     A transformer-like decoder base block block with abstract mixer.
     """
@@ -52,7 +52,7 @@ class BaseBlock(Layer, ABC):
         self.norm_1 = self._config.peft.apply_other(self.norm_1)
         self.norm_2 = self._config.peft.apply_other(self.norm_2)
 
-    @abstractmethod
+    @abc.abstractmethod
     def _create_mixer(self):
         pass
 
@@ -94,7 +94,7 @@ class BaseBlock(Layer, ABC):
                 distributed=self._tensor_space.distributed,
             )
 
-    def _forward_impl(
+    def forward(
         self,
         input_: torch.Tensor,
         kwargs: dict[str, typing.Any],

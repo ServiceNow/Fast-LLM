@@ -7,9 +7,8 @@ from fast_llm.data.data.gpt.config import GPTDataConfig
 from fast_llm.engine.checkpoint.config import CheckpointFormat, CheckpointHandler
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig, PretrainedFastLLMModelConfig
 from fast_llm.engine.training.config import TrainerConfig
-from fast_llm.layers.language_model.config import LanguageModelBaseConfig
-from fast_llm.layers.ssm.config import SSMDimNames, SSMLayerConfig
-from fast_llm.models.gpt.config import GPTArchitectureConfig
+from fast_llm.layers.language_model.config import LanguageModelArchitectureConfig, LanguageModelBaseConfig
+from fast_llm.layers.ssm.config import SSMDimNames
 from fast_llm.tensor import TensorDim, TensorSpace
 from fast_llm.utils import Assert
 
@@ -20,24 +19,12 @@ logger = logging.getLogger(__name__)
 
 
 @config_class
-class HybridSSMArchitectureConfig(GPTArchitectureConfig):
+class HybridSSMArchitectureConfig(LanguageModelArchitectureConfig):
     _abstract = False
 
-    ssm: SSMLayerConfig = Field(
-        default_factory=SSMLayerConfig,
-        desc="Configuration for the transformer architecture.",
-        hint=FieldHint.core,
-    )
-
     hybrid_block_layout: list[str] = Field(
-        default_factory=list,
+        default_factory=lambda: ["m2"],
         desc="Pattern of blocks to use in the model. 't' for Transformer, 'm' for Mamba1, 'm2' for Descrete Mamba2.",
-        hint=FieldHint.core,
-    )
-
-    default_block: str = Field(
-        default="m",
-        desc="m - Mamba, m2 - Descrete Mamba2, t - Transformer. Only used if hybrid_block_layout is not specified.",
         hint=FieldHint.core,
     )
 
@@ -61,11 +48,15 @@ class HybridSSMBaseModelConfig(LanguageModelBaseConfig, HybridSSMArchitectureCon
                 "Block pattern must contain at least one 'm' or 'm2', use gpt model for transformer only architectures"
             )
 
-        mamba_dt_rank = self.ssm.dt_rank or math.ceil(self.transformer.hidden_size / 16)
+        if self.ssm.dt_rank < 0:
+            mamba_dt_rank = math.ceil(self.transformer.hidden_size / 16)
+            logger.warning(f"dt_rank is not set, using ceil(hidden_size/16)")
+        else:
+            mamba_dt_rank = self.ssm.dt_rank
 
         d_inner = int(self.ssm.expansion_factor * self.transformer.hidden_size)
         # Hidden dimension
-        tensor_space.add_tensor_dim(TensorDim(SSMDimNames.d_model, self.transformer.hidden_size))
+        tensor_space.add_tensor_dim(TensorDim(SSMDimNames.model_dim, self.transformer.hidden_size))
         # Mamba-specific dimensions
         tensor_space.add_tensor_dim(TensorDim(SSMDimNames.inner_dim, d_inner))
         tensor_space.add_tensor_dim(TensorDim(SSMDimNames.state_dim, self.ssm.state_size))
@@ -76,7 +67,7 @@ class HybridSSMBaseModelConfig(LanguageModelBaseConfig, HybridSSMArchitectureCon
 
         if "m2" in self.hybrid_block_layout:
             # Mamba2 specific dimensions
-            # as per https://github.com/cartesia-ai/edge/blob/a0e121ebed3d2324c6d762b0e211a08d62583681/cartesia-pytorch/cartesia_pytorch/Lllamba/mixers/discrete_mamba2.py#L66C3-L66C4
+            # as per https://github.com/cartesia-ai/edge/blob/a0e121ebed3d2324c6d762b0e211a08d62583681/cartesia-pytorch/cartesia_pytorch/Llamba/mixers/discrete_mamba2.py#L66C3-L66C4
             headdim = d_inner // self.ssm.n_v_heads
             Assert.eq(self.ssm.n_v_heads, d_inner // headdim)
             Assert.eq(d_inner % headdim, 0)
@@ -108,9 +99,17 @@ class HybridSSMBaseModelConfig(LanguageModelBaseConfig, HybridSSMArchitectureCon
         return super()._from_dict(default, strict, flat)
 
     def _validate(self):
-        if len(self.hybrid_block_layout) == 0:
-            logger.warning(f"No block pattern provided, using default_block [{self.default_block}]")
-            self.hybrid_block_layout = [self.default_block] * self.transformer.num_layers
+        if len(self.hybrid_block_layout) != self.transformer.num_layers:
+            len_block_layout = len(self.hybrid_block_layout)
+            if self.transformer.num_layers % len_block_layout != 0:
+                raise ValueError(
+                    f"hybrid_block_layout length {len(self.hybrid_block_layout)} does not match num_layers {self.transformer.num_layers}"
+                )
+            num_repeats = int(self.transformer.num_layers // len_block_layout)
+            logger.warning(
+                f"hybrid_block_layout length {len(self.hybrid_block_layout)} does not match num_layers {self.transformer.num_layers}, will repeat {self.hybrid_block_layout} {num_repeats} times"
+            )
+            self.hybrid_block_layout = self.hybrid_block_layout * num_repeats
 
         Assert.eq(len(self.hybrid_block_layout), self.transformer.num_layers)
         Assert.custom(
@@ -150,6 +149,12 @@ class HybridSSMModelConfig(FastLLMModelConfig):
         from fast_llm.models.ssm.huggingface import HuggingfaceHybridSSMModelForCausalLM
 
         return HuggingfaceHybridSSMModelForCausalLM
+
+    def __post_init__(self):
+        super().__post_init__()
+        logger.warning(
+            "HybridSSMModelConfig is being instantiated. This model is experimental and may not work as expected."
+        )
 
 
 @config_class()

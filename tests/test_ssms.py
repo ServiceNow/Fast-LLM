@@ -18,14 +18,13 @@ from fast_llm.models.gpt.config import LlamaGPTHuggingfaceCheckpointFormat
 from fast_llm.models.ssm.config import LLambaHuggingfaceCheckpointFormat
 
 try:
-    from llamba_block import LllambaBlock
-
-    from fast_llm.layers.ssm.config import SSMLayerConfig
+    from fast_llm.layers.ssm.config import SSMConfig
     from fast_llm.layers.ssm.discrete_mamba2 import DiscreteMamba2
+    from fast_llm.layers.ssm.llamba_block import LlambaBlock
     from fast_llm.layers.ssm.mamba_layer import MambaLayer
     from fast_llm.models.ssm.model import HybridSSMBaseModel, HybridSSMBaseModelConfig, HybridSSMModel
 except ImportError:
-    MambaLayer, LllambaBlock, HybridSSMBaseModel, HybridSSMBaseModelConfig, DiscreteMamba2 = (
+    MambaLayer, LlambaBlock, HybridSSMBaseModel, HybridSSMBaseModelConfig, DiscreteMamba2 = (
         None,
         None,
         None,
@@ -35,7 +34,7 @@ except ImportError:
     # Mamba not isntalled, skipping tests
 
 try:
-    from cartesia_pytorch.Lllamba.llamba import LllambaLMHeadModel as LMHeadModel
+    from cartesia_pytorch.Llamba.llamba import LlambaLMHeadModel as LMHeadModel
 except ImportError:
     LMHeadModel = None
 
@@ -85,7 +84,7 @@ def distributed(distributed_config):
 def get_hybrid_config(hybrid_block_layout=["t", "m", "t", "m"]):
     config = HybridSSMBaseModelConfig(
         transformer=TransformerConfig(num_layers=len(hybrid_block_layout)),
-        ssm=SSMLayerConfig(),
+        ssm=SSMConfig(),
         hybrid_block_layout=hybrid_block_layout,
         init_method_std_embed=0.02,
         init_method_min_embed=-0.02,
@@ -98,7 +97,7 @@ def get_hybrid_config(hybrid_block_layout=["t", "m", "t", "m"]):
 
 def get_hf_llamba_out(input_ids, path, format):
     if format == LLambaHuggingfaceCheckpointFormat:
-        from cartesia_pytorch.Lllamba.llamba import LllambaLMHeadModel as LMHeadModel
+        from cartesia_pytorch.Llamba.llamba import LlambaLMHeadModel as LMHeadModel
     elif format == LlamaGPTHuggingfaceCheckpointFormat:
         from transformers import LlamaForCausalLM as LMHeadModel
     else:
@@ -116,31 +115,33 @@ def get_hf_llamba_out(input_ids, path, format):
 @pytest.mark.slow
 @pytest.mark.skipif(
     not run_test or LMHeadModel is None,
-    reason=f"Skipping because one of the following: cartesia_pytorch.Lllamba not installed or no CUDA available or Mamba not installed",
+    reason=f"Skipping because one of the following: cartesia_pytorch.Llamba not installed or no CUDA available or Mamba not installed",
 )
 def test_load_from_llamba_checkpoint(distributed_config):
     """
-    Test to check whether the of Fast-LLM and Huggingface checkpoint loading for Lllamba-1B produce the same results.
+    Test to check whether the of Fast-LLM and Huggingface checkpoint loading for Llamba-1B produce the same results.
     """
-    vocab_size = 128256  # from https://huggingface.co/cartesia-ai/Lllamba-1B/blob/main/config.json
+    vocab_size = 128256  # from https://huggingface.co/cartesia-ai/Llamba-1B/blob/main/config.json
     batch_size = 2
     seq_length = 32
 
-    path = pathlib.Path("/mnt/checkpoints_fml/pretrained_models/Lllamba-1B")
+    path = pathlib.Path("/mnt/checkpoints_fml/pretrained_models/Llamba-1B")
     format = LLambaHuggingfaceCheckpointFormat
 
     x = torch.randint(0, vocab_size, (batch_size, seq_length), device="cuda")
-    hf_logits, parameter_sum = get_hf_llamba_out(x, path, format)
+    hf_logits, parameter_sum_hf = get_hf_llamba_out(x, path, format)
     hf_logits = hf_logits["logits"].cpu()
 
     # Create checkpoint load config
     checkpoint_config = CheckpointLoadConfig(path=path, format=format, model_weights=True, optimizer_state=False)
     # Initialize model
     model = HybridSSMModel.from_pretrained(checkpoint_config)
-    param_sum_fll = 0
+    param_sum = 0
     for stage in model.stages:
-        if hasattr(stage, "_weight_shard"):
-            param_sum_fll += torch.sum(stage._weight_shard).item()
+        for fsdp in stage.fsdps:
+            if hasattr(fsdp, "_weight_shard"):
+                param_sum += torch.sum(fsdp._weight_shard).item()
+    assert torch.abs(torch.tensor(param_sum) - parameter_sum_hf) < 1e-1
 
     # model = GPTModel.from_pretrained(checkpoint_config)
     assert model.config.base_model.vocab_size == vocab_size
@@ -201,7 +202,7 @@ def test_mamba_layer(distributed_config, distributed, hybrid_block_layout, LAYER
     x = torch.randn(batch_size, seq_length, hidden_size, device=distributed.device)
 
     # Run forward pass
-    output = layer(x)
+    output = layer(x, {})
 
     loss = output.sum()
     loss.backward()
@@ -220,7 +221,7 @@ def test_mamba_block(distributed_config, distributed):
     layer_idx = 0
 
     mixer_cls = partial(MambaLayer, layer_idx=layer_idx)
-    block = LllambaBlock(
+    block = LlambaBlock(
         hybrid_config.transformer,
         hybrid_config.ssm,
         mixer_cls=mixer_cls,

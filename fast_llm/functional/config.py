@@ -43,6 +43,7 @@ class ActivationType(str, enum.Enum):
     silu = "silu"
     relu = "relu"
     squared_relu = "squared_relu"
+    identity = "identity"
 
     @property
     def activation_fn(self) -> typing.Callable[["torch.Tensor"], "torch.Tensor"]:
@@ -70,6 +71,7 @@ def _set_activation_fn_map() -> None:
         ActivationType.silu: torch.nn.functional.silu,
         ActivationType.relu: torch.nn.functional.relu,
         ActivationType.squared_relu: lambda x: torch.pow(torch.nn.functional.relu(x), 2),
+        ActivationType.identity: lambda x: x,
     }
 
 
@@ -80,6 +82,7 @@ _ACTIVATION_HF_NAMES = {
     ActivationType.silu: "silu",
     ActivationType.relu: "relu",
     ActivationType.squared_relu: "relu2",
+    ActivationType.identity: "identity",
 }
 _ACTIVATION_HF_NAMES_INV = {value: key for key, value in _ACTIVATION_HF_NAMES.items()}
 

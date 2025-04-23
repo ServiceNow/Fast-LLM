@@ -1,5 +1,5 @@
 from fast_llm.config import Field, FieldHint, FieldUpdate, check_field, config_class
-from fast_llm.engine.base_model.config import BaseModelArchitectureConfig
+from fast_llm.engine.base_model.config import BaseModelArchitectureConfig, BaseModelConfig
 from fast_llm.functional.config import ActivationType
 from fast_llm.layers.common.config import NormalizationArchitectureConfig, NormalizationConfig
 from fast_llm.tensor import TensorSpace
@@ -56,9 +56,9 @@ class SSMArchitectureConfig(BaseModelArchitectureConfig):
         hint=FieldHint.core,
     )
 
-    dt_rank: str | int = Field(
-        default=None,
-        desc="Rank of the Δ projection matrix. If 'auto', set to ceil(hidden_size/16)",
+    dt_rank: int = Field(
+        default=-1,
+        desc="Rank of the Δ projection matrix. If '-1', will be set to ceil(hidden_size/16)",
         hint=FieldHint.core,
     )
 
@@ -87,13 +87,14 @@ class SSMArchitectureConfig(BaseModelArchitectureConfig):
     )
 
     def _validate(self) -> None:
-        super()._validate()
         if self.activation_type is None:
             self.activation_type = ActivationType.silu
 
+        super()._validate()
+
 
 @config_class()
-class SSMLayerConfig(SSMArchitectureConfig):
+class SSMConfig(SSMArchitectureConfig, BaseModelConfig):
     """Configuration for a Structured State Space Model (SSM) layer."""
 
     normalization: NormalizationConfig = FieldUpdate(default_factory=NormalizationConfig)
@@ -133,6 +134,3 @@ class SSMLayerConfig(SSMArchitectureConfig):
 
         super()._validate()
         Assert.geq(self.dt_max, self.dt_min)
-
-        if isinstance(self.dt_rank, int):
-            Assert.gt(self.dt_rank, 0)

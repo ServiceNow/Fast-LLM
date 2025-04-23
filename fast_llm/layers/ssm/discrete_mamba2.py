@@ -7,11 +7,11 @@ import torch
 
 from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
 from fast_llm.layers.common.linear import Linear
-from fast_llm.layers.ssm.config import SSMDimNames, SSMLayerConfig
+from fast_llm.layers.ssm.config import SSMConfig, SSMDimNames
 from fast_llm.tensor import ParameterMeta, init_ones_, init_uniform_, init_zeros_, kaiming_init_
 
 """
-This code is adapted fropm https://github.com/cartesia-ai/edge/blob/main/cartesia-pytorch/cartesia_pytorch/Lllamba/mixers/discrete_mamba2.py
+This code is adapted fropm https://github.com/cartesia-ai/edge/blob/main/cartesia-pytorch/cartesia_pytorch/Llamba/mixers/discrete_mamba2.py
 """
 
 
@@ -26,7 +26,7 @@ class DiscreteMamba2(torch.nn.Module):
 
     def __init__(
         self,
-        config: SSMLayerConfig,
+        config: SSMConfig,
         layer_idx: int,
         tensor_space: TensorSpace,
     ):
@@ -39,7 +39,7 @@ class DiscreteMamba2(torch.nn.Module):
         """
         # factory_kwargs = {"device": "meta"}  # , "dtype": torch.bfloat16}
         super().__init__()
-        self.config: SSMLayerConfig = config
+        self.config: SSMConfig = config
         bias = config.add_bias_linear
         self.layer_idx = layer_idx
 
@@ -61,6 +61,7 @@ class DiscreteMamba2(torch.nn.Module):
         self.conv_kernel_size = td_conv_kernel.size
 
         self.act = config.activation_type.activation_fn
+        self.activation_name = config.activation_type.name
 
         # TODO: double check innitializations
         # Projections
@@ -200,7 +201,7 @@ class DiscreteMamba2(torch.nn.Module):
         outputs["hidden_states"] = out[:, :seqlen, :]
 
         # TODO: since we do not support inference for now, we only return the hidden states for now.
-        return outputs["hidden_states"].contiguous()
+        return outputs["hidden_states"].contiguous(), None
 
     def convolutional_forward(self, xBC, padded_len):
         """Convolutional layer forward pass for the full sequence."""
@@ -208,6 +209,6 @@ class DiscreteMamba2(torch.nn.Module):
             xBC.transpose(1, 2),
             einops.rearrange(self.conv1d_weight, "d 1 w -> d w"),
             self.conv1d_bias,
-            activation=None if self.activation == "identity" else self.activation,
+            activation=None if self.activation_name == "identity" else self.activation_name,
         ).transpose(1, 2)
         return xBC
