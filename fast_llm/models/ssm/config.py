@@ -51,7 +51,6 @@ class HybridSSMBaseModelConfig(LanguageModelBaseConfig, HybridSSMArchitectureCon
 
         if self.ssm.dt_rank < 0:
             mamba_dt_rank = math.ceil(self.transformer.hidden_size / 16)
-            # logger.warning(f"dt_rank is not set, using ceil(hidden_size/16)")
         else:
             mamba_dt_rank = self.ssm.dt_rank
 
@@ -80,24 +79,8 @@ class HybridSSMBaseModelConfig(LanguageModelBaseConfig, HybridSSMArchitectureCon
             tensor_space.add_tensor_dim(TensorDim(SSMDimNames.head_dim, headdim))
             tensor_space.add_tensor_dim(TensorDim(SSMDimNames.qk_heads, self.ssm.n_qk_heads))
             tensor_space.add_tensor_dim(TensorDim(SSMDimNames.v_heads, self.ssm.n_v_heads))
-            tensor_space.add_tensor_dim(
-                TensorDim(SSMDimNames.inner_proj_mamba2, inner_proj_dim)
-            )  # TODO: enable tensor parallelism here?
-            tensor_space.add_tensor_dim(
-                TensorDim(SSMDimNames.conv_dim, conv_dim)
-            )  # TODO: enable tensor parallelism here?
-
-    @classmethod
-    def _from_dict(
-        cls,
-        default: dict[str, typing.Any],
-        strict: bool = True,
-        flat: bool = False,
-    ) -> typing.Self:
-        if "hybrid_block_layout" in default and isinstance(default["hybrid_block_layout"], dict):
-            # Not sure why, but the block pattern can sometime sbe loaded as a dict (serialization related)
-            default["hybrid_block_layout"] = list(default["hybrid_block_layout"].values())
-        return super()._from_dict(default, strict, flat)
+            tensor_space.add_tensor_dim(TensorDim(SSMDimNames.inner_proj_mamba2, inner_proj_dim))
+            tensor_space.add_tensor_dim(TensorDim(SSMDimNames.conv_dim, conv_dim))
 
     def _validate(self):
         if len(self.hybrid_block_layout) != self.transformer.num_layers:
