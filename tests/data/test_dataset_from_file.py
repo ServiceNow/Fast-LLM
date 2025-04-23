@@ -8,5 +8,4 @@ def test_dataset_from_file():
     get_test_dataset()
     dataset_config = {"type": "file", "path": str(DATASET_PREFIX.parent.joinpath("fast_llm_config.yaml"))}
     dataset = get_dataset_config(dataset_config, GPTDatasetFromFileConfig).build()
-    print("kjhbwiugfberibgiujebi", len(dataset))
     compare_indexed_dataset(dataset, MEMMAP_DATASET_LENGTH, MEMMAP_DATASET_TOKENS, MEMMAP_DATASET_SAMPLES)

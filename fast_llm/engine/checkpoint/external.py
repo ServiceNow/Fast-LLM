@@ -7,14 +7,14 @@ import typing
 import torch
 
 from fast_llm import __version__
-from fast_llm.config import MISSING
+from fast_llm.config import MISSING, get_nested_dict_value, set_nested_dict_value
 from fast_llm.engine.base_model.config import BaseModelArchitectureConfig
 from fast_llm.engine.checkpoint.config import CheckpointLoadMetadataConfig
 from fast_llm.engine.checkpoint.state_dict import StateDictCheckpointHandler
 from fast_llm.engine.multi_stage.config import CheckpointMetadata, FastLLMModelConfig
 from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
 from fast_llm.tensor import SafeTensorSlice
-from fast_llm.utils import Assert, get_nested_dict_value, set_nested_dict_value
+from fast_llm.utils import Assert
 
 logger = logging.getLogger(__name__)
 
@@ -226,13 +226,13 @@ class ExternalStateDictCheckpointHandler(StateDictCheckpointHandler):
         }
 
     @classmethod
-    def load_metadata(cls, config: CheckpointLoadMetadataConfig) -> CheckpointMetadata:
+    def _load_metadata(cls, config: CheckpointLoadMetadataConfig) -> CheckpointMetadata:
         imported_model_config = cls._import_config(cls._load_config(config.path), True)
         return CheckpointMetadata(
             fast_llm_version=__version__,
             model=cls._model_class,
             format=config.format,
-            config=cls._model_class.from_dict({"base_model": imported_model_config.to_serialized()}),
+            config=cls._model_class.from_dict({"base_model": imported_model_config.to_dict()}),
             shards=["weights"],
         )
 

@@ -285,14 +285,14 @@ class DistributedConfig(Config):
 
         self.tensor_rank = self.rank % self.tensor_parallel
         if self.tensor_parallel == 1:
-            self.sequence_tensor_parallel = False
+            with self._set_implicit_default():
+                self.sequence_tensor_parallel = False
 
         if self.reference_config is not None:
             self.reference_config.validate()
             if self.reference_config.reference_config is not None:
                 self.reference_config = self.reference_config.reference_config
             assert self.reference_config.reference_config is None
-            self.compare(self.reference_config, ValueError)
             self.distributed_dims = self.reference_config.distributed_dims
         else:
             self.distributed_dims = {}
@@ -367,6 +367,8 @@ class DistributedConfig(Config):
 
         super()._validate()
 
+        if self.reference_config is not None:
+            self.compare(self.reference_config, ValueError)
         Assert.in_range(self.rank, 0, self.world_size)
         Assert.in_range(self.local_rank, 0, self.local_world_size)
 

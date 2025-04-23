@@ -164,8 +164,9 @@ class CheckpointStateSaveConfigBase(CheckpointSaveConfigBase, CheckpointStateCon
 
     def _validate(self) -> None:
         if self.optimizer_state is None:
-            # TODO: Make sure it's a type
-            self.optimizer_state = self.format.support_optimizer
+            with self._set_implicit_default():
+                # TODO: Make sure it's a type
+                self.optimizer_state = self.format.support_optimizer
         super()._validate()
         if self.optimizer_state:
             assert self.format.support_optimizer
@@ -200,7 +201,7 @@ class CheckpointSaveConfig(CheckpointSaveMetadataConfig, CheckpointStateSaveConf
 @config_class()
 class CheckpointLoadMetadataConfig(CheckpointPathConfigBase):
     _abstract = False
-
+    # TODO: Set default to model? (Not backward compatible)
     load_config: ModelConfigType = Field(
         default=ModelConfigType.architecture,
         desc="Configuration to save/load.",
@@ -211,10 +212,6 @@ class CheckpointLoadMetadataConfig(CheckpointPathConfigBase):
         super()._validate()
         if self.format.enforce_architecture_match:
             assert self.load_config.load_architecture
-
-    @property
-    def compare_log_fn(self):
-        return ValueError if self.load_config.load_architecture else logger.warning
 
 
 @config_class()
@@ -236,11 +233,29 @@ class CheckpointHandler(abc.ABC):
     def __init__(self, model: "FastLLMModel"):
         self._model = model
 
-    # TODO: save_metadata?
+    @classmethod
+    @abc.abstractmethod
+    def save_metadata(cls, config: CheckpointSaveMetadataConfig, metadata: "CheckpointMetadata"):
+        pass
+
+    @classmethod
+    def load_metadata(cls, config: CheckpointLoadMetadataConfig) -> "CheckpointMetadata":
+        updates = {}
+        metadata = cls._load_metadata(config)
+        if not config.load_config.load_fast_llm:
+            updates[("config", "multi_stage")] = {}
+            updates[("config", "distributed")] = {}
+        if not config.load_config.load_architecture:
+            updates[("config", "base_model")] = {}
+        elif not config.load_config.load_base_model:
+            updates[("config", "base_model")] = metadata.config.base_model.get_architecture().to_dict()
+        if updates:
+            metadata = metadata.to_copy(updates)
+        return metadata
 
     @classmethod
     @abc.abstractmethod
-    def load_metadata(cls, config: CheckpointLoadMetadataConfig) -> "CheckpointMetadata":
+    def _load_metadata(cls, config: CheckpointLoadMetadataConfig) -> "CheckpointMetadata":
         pass
 
     @abc.abstractmethod
@@ -248,7 +263,7 @@ class CheckpointHandler(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def load(self, config: CheckpointLoadConfig, metadata: "CheckpointMetadata"):
+    def load(self, config: CheckpointLoadConfig) -> dict[str, typing.Any] | None:
         pass
 
     def get_shard_names(self, config: CheckpointStateConfigBase) -> tuple[str, ...]:
