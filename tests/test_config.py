@@ -145,6 +145,7 @@ def test_pretrained_config(load_config: ModelConfigType):
                     "activation_type": "silu",  # Implicit default, non-default value
                     "head_groups": 4,
                 },
+                "ssm": {"dt_rank": -1, "activation_type": "silu"},
                 "tie_word_embeddings": False,
             },
             "multi_stage": {"zero_stage": 3},
@@ -165,6 +166,7 @@ def test_pretrained_config(load_config: ModelConfigType):
             "hidden_size": 512,  # Override, affects derived value (kv channels)
             "head_groups": 1,  # Override to default
         },
+        "ssm": {"dt_rank": 10, "activation_type": "silu"},
         "vocab_size": 1000,
     }
     pretrained_config = PretrainedGPTModelConfig.from_dict(
@@ -195,6 +197,7 @@ def test_pretrained_config(load_config: ModelConfigType):
                 "activation_type": "silu",
                 "head_groups": 1,
             },
+            "ssm": {"dt_rank": 10, "activation_type": "silu"},
             "tie_word_embeddings": False,
             "vocab_size": 1000,
         }

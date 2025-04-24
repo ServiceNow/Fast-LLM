@@ -28,9 +28,13 @@ def fast_llm(args=None):
             raise RuntimeError("Unknown subcommand")
         Runnable.parse_and_run(unparsed)
     except ValidationError:
+        if sys.gettrace():
+            raise
         log_main_rank(traceback.format_exc(), log_fn=logger.error)
         sys.exit(1)
     except Exception:  # noqa
+        if sys.gettrace():
+            raise
         logger.critical(traceback.format_exc())
         sys.exit(1)
 
