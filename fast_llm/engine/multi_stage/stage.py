@@ -1,3 +1,4 @@
+import collections
 import logging
 import typing
 
@@ -44,7 +45,7 @@ class Stage(StageBase):
         grad_buffers: list[torch.Tensor | None] | None = None,
         mode: StageMode = StageMode.training,
         is_tied_weight_copy: bool = False,
-        weight_buffer_shared_with: list["Stage"] = (),
+        weight_buffer_shared_with: collections.abc.Sequence["Stage"] = (),
     ) -> None:
         super().setup(
             distributed=distributed,

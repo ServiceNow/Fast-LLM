@@ -149,12 +149,12 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
         if target is not None:
             if self._config.distillation_model is None:
                 # MTP: Shift the labels
-                target_slice = slice(
-                    self._prediction_distance,
-                    self._prediction_distance
-                    + input_.size(1 - kwargs[TransformerKwargs.sequence_first])
-                    * (self._tensor_space.distributed_config.tensor_parallel if self._sequence_parallel else 1),
+                target_sequence_length = (
+                    target.size(1 - kwargs[TransformerKwargs.sequence_first]) + 1 - self._config.prediction_heads
                 )
+                if TransformerKwargs.sequence_q_dim in kwargs:
+                    Assert.eq(target_sequence_length, kwargs[TransformerKwargs.sequence_q_dim].size)
+                target_slice = slice(self._prediction_distance, self._prediction_distance + target_sequence_length)
                 target = target[target_slice] if kwargs[TransformerKwargs.sequence_first] else target[:, target_slice]
                 target = target.flatten()
             else:
