@@ -119,6 +119,10 @@ def triton_mlp_activation_backward_kernel(
         grad = 2 * relu_out
         if gated or recompute:
             out = relu_out * relu_out
+    elif activation_type == _TritonActivationType.identity:
+        grad = 1
+        if gated or recompute:
+            out = input_
     else:
         raise NotImplementedError()
 

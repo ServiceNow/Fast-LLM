@@ -5,6 +5,7 @@ from fast_llm.engine.base_model.config import BaseModelArchitectureConfig, BaseM
 from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
 from fast_llm.engine.distributed.config import DistributedDimNames
 from fast_llm.functional.config import CrossEntropyImpl
+from fast_llm.layers.ssm.config import SSMArchitectureConfig, SSMConfig
 from fast_llm.layers.transformer.config import TransformerArchitectureConfig, TransformerConfig
 from fast_llm.utils import Assert
 
@@ -43,6 +44,13 @@ class LanguageModelArchitectureConfig(BaseModelArchitectureConfig):
         desc="Configuration for the transformer architecture.",
         hint=FieldHint.core,
     )
+
+    ssm: SSMArchitectureConfig = Field(
+        default_factory=SSMArchitectureConfig,
+        desc="Configuration for the transformer architecture.",
+        hint=FieldHint.core,
+    )
+
     max_position_embeddings: int = Field(
         default=2048,
         desc="Number of absolute position embeddings, if applicable.",
@@ -125,6 +133,8 @@ class LanguageModelBaseConfig(LanguageModelArchitectureConfig, BaseModelConfig):
     architecture_class = LanguageModelArchitectureConfig
 
     transformer: TransformerConfig = FieldUpdate(default_factory=TransformerConfig)
+    ssm: SSMConfig = FieldUpdate(default_factory=SSMConfig)
+
     init_method_std_embed: float = Field(
         default=None,
         desc="Initialization scale for the vocabulary embedding and output weights (logits).",

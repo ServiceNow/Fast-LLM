@@ -169,7 +169,14 @@ def test_triton_normalization(has_bias, zero_centered):
 @requires_cuda
 @pytest.mark.parametrize("gated", [True, False])
 @pytest.mark.parametrize(
-    "activation_type", [ActivationType.gelu, ActivationType.silu, ActivationType.relu, ActivationType.squared_relu]
+    "activation_type",
+    [
+        ActivationType.gelu,
+        ActivationType.silu,
+        ActivationType.relu,
+        ActivationType.squared_relu,
+        ActivationType.identity,
+    ],
 )
 @pytest.mark.parametrize("recompute", [True, False])
 def test_triton_mlp_activation(gated, activation_type, recompute):
