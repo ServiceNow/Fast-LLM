@@ -72,34 +72,30 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             self._preprocessors.append(BackupAttentionPreprocessor(self._config.transformer, self._tensor_space))
 
     def get_output_layers(self) -> list[Layer]:
-        return [
-            layer
-            for i in range(self._config.prediction_heads)
-            for layer in [
-                TransformerLayer(
-                    self._config.transformer,
-                    self._tensor_space,
-                    # TODO MTP: which index?
-                    layer_index=self._config.transformer.num_layers,
-                    # The last layer only returns the transformer output.
-                    # The previous layers return a stack of shared_hidden and transformer_output.
-                    return_input=i < self._config.prediction_heads - 1,
-                ),
+        layers = []
+        for i in range(self._config.prediction_heads):
+            if i > 0:
+                layers.append(
+                    TransformerLayer(
+                        self._config.transformer,
+                        self._tensor_space,
+                        # TODO MTP: which index?
+                        layer_index=max(self._config.transformer.num_layers, 1),
+                        # The last layer only returns the transformer output.
+                        # The previous layers return a stack of shared_hidden and transformer_output.
+                        return_input=i < self._config.prediction_heads - 1,
+                    )
+                )
+            layers.append(
                 LanguageModelHead(
                     self._config,
                     self._tensor_space,
                     prediction_distance=i,
-                ),
-            ]
-        ]
+                )
+            )
+        return layers
 
     def get_layers(self) -> list[Layer]:
-        if self._config.transformer.num_layers == 0:
-            Assert.eq(self._config.prediction_heads, 1)
-            return [
-                LanguageModelEmbedding(self._config, self._tensor_space),
-                LanguageModelHead(self._config, self._tensor_space, 0),
-            ]
         return [
             LanguageModelEmbedding(self._config, self._tensor_space),
             *[
@@ -108,7 +104,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                     self._tensor_space,
                     layer_index=i + 1,
                 )
-                for i in range(self._config.transformer.num_layers - 1)
+                for i in range(self._config.transformer.num_layers)
             ],
             *self.get_output_layers(),
         ]
