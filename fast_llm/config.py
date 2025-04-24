@@ -95,9 +95,9 @@ class FieldVerboseLevel:
 FieldHintDoc = {
     FieldHint.core: "A core configuration parameter that is expected to always be provided explicitly.",
     FieldHint.optional: "An optional parameter that may be ignored as the default tends to be good enough.",
+    FieldHint.feature: "An parameter related to an optional feature, that should only be defined if that feature is enabled.",
     FieldHint.performance: "An optional parameter related to computational performance.",
     FieldHint.stability: "An optional parameter related to numerical precision and computational stability.",
-    FieldHint.feature: "An parameter related to an optional feature, that should only be defined if that feature is enabled.",
     FieldHint.expert: "An advanced parameter that needs some additional expertise to be handled.",
     FieldHint.unknown: "No hint has been provided for this parameter.",
     FieldHint.logging: "An optional parameter related to logging or debug logs",
@@ -126,7 +126,7 @@ class Field(dataclasses.Field):
         # Validation function on the field to satisfy.
         # Should raise an Exception in case of failure, and return the validated value.
         # Run before the default validation (type check).
-        valid: typing.Optional[typing.Callable[[typing.Any], typing.Any]] = None,
+        valid: typing.Callable[[typing.Any], typing.Any] | None = None,
         # Option to skip (postpone) instantiation of a `Config` field.
         # Note: The config still needs to be instantiated for validation to succeed.
         # auto_instantiate: bool = True,
@@ -137,7 +137,6 @@ class Field(dataclasses.Field):
         hash=None,
         compare: bool = True,
         metadata=None,
-        kw_only=dataclasses.MISSING,
     ):
         if default is not dataclasses.MISSING and default_factory is not dataclasses.MISSING:
             raise ValueError("cannot specify both default and default_factory")
@@ -151,7 +150,7 @@ class Field(dataclasses.Field):
             hash=hash,
             compare=compare,
             metadata=metadata,
-            kw_only=kw_only,
+            kw_only=True,
         )
         self.desc = desc
         self.doc = doc
@@ -191,19 +190,6 @@ def test_field(fn, *args, **kwargs):
         if not fn(x, *args, **kwargs):
             raise ValueError(fn, x, args, kwargs)
         return x
-
-    return valid
-
-
-def process_field(fn, *args, **kwargs):
-    """
-    Helper function to apply non-standard processing during validation,
-    in the form of a function that returns the processed value,
-    and may raise an exception in case of an unexpected input.
-    """
-
-    def valid(x):
-        return fn(x, *args, **kwargs)
 
     return valid
 
@@ -354,7 +340,7 @@ class Config:
         super().__delattr__(key)
 
     @contextlib.contextmanager
-    def _set_implicit_default(self, _value: bool | int = True):
+    def _set_implicit_default(self, _value: bool | int | None = True):
         assert self._setting_implicit_default is False
         self._setting_implicit_default = _value
         yield
