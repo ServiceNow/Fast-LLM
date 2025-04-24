@@ -48,8 +48,8 @@ class MixtralGPTHuggingfaceCheckpointFormat(GPTHuggingfaceCheckpointFormat):
     name: typing.ClassVar[str] = "mixtral"
 
 
-class PixtralGPTHuggingfaceCheckpointFormat(GPTHuggingfaceCheckpointFormat):
-    name: typing.ClassVar[str] = "pixtral"
+class LlavaGPTHuggingfaceCheckpointFormat(GPTHuggingfaceCheckpointFormat):
+    name: typing.ClassVar[str] = "llava"
 
 
 @config_class()
@@ -109,6 +109,7 @@ class GPTModelConfig(FastLLMModelConfig):
         Qwen2GPTHuggingfaceCheckpointFormat,
         MistralGPTHuggingfaceCheckpointFormat,
         MixtralGPTHuggingfaceCheckpointFormat,
+        LlavaGPTHuggingfaceCheckpointFormat,
     )
 
     @classmethod

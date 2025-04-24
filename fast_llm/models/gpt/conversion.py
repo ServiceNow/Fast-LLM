@@ -30,9 +30,9 @@ from fast_llm.models.gpt.config import (
     GPTArchitectureConfig,
     GPTModelConfig,
     LlamaGPTHuggingfaceCheckpointFormat,
+    LlavaGPTHuggingfaceCheckpointFormat,
     MistralGPTHuggingfaceCheckpointFormat,
     MixtralGPTHuggingfaceCheckpointFormat,
-    PixtralGPTHuggingfaceCheckpointFormat,
     Qwen2GPTHuggingfaceCheckpointFormat,
     Starcoder2GPTHuggingfaceCheckpointFormat,
 )
@@ -367,7 +367,7 @@ class CommonLlamaHuggingfaceCheckpointHandler(CommonHuggingfaceCheckpointHandler
             ),
             RenameParamConverter(
                 fast_llm_names=(("transformer", "kv_channels"),),
-                export_names=(("head_dim"),),
+                export_names=(("head_dim",),),
             ),
             ConstantImportParamConverter(fast_llm_names=(("transformer", "gated"),), fast_llm_value=True),
             ConstantImportParamConverter(fast_llm_names=(("transformer", "add_linear_biases"),), fast_llm_value=False),
@@ -554,23 +554,24 @@ class MistralHuggingfaceCheckpointHandler(CommonLlamaHuggingfaceCheckpointHandle
         ]
 
 
-class PixtralHuggingfaceCheckpointHandler(MistralHuggingfaceCheckpointHandler):
+class LlavaHuggingfaceCheckpointHandler(MistralHuggingfaceCheckpointHandler):
+    format: typing.ClassVar[type[CheckpointFormat]] = LlavaGPTHuggingfaceCheckpointFormat
+
     @classmethod
     def _create_config_converters(cls) -> list[ParamConverter]:
         lm_converters = super()._create_config_converters()
         for converter in lm_converters:
-            if converter.fast_llm_names[0][0] == "transformer":
-                converter.export_names[0] = ("text_config", *converter.export_names[0])
+            if isinstance(converter, (RenameParamConverter, MappedConfigParamConverter, RopeScalingParamConverter)):
+                # Llava uses a different name for the text config
+                # if converter.fast_llm_names[0][0] == "transformer":
+                converter.export_names = (("text_config", *converter.export_names[0]), *converter.export_names[1:])
+            # if converter.fast_llm_names[0][0] == "transformer":
+            #     converter.export_names[0] = ("text_config", *converter.export_names[0])
         return lm_converters + [
             # Multimodal adapter
             RenameParamConverter(
                 fast_llm_names=(("vision_encoder", "adapter_size"),),
-                export_names=(
-                    (
-                        "text_config",
-                        "hidden_size",
-                    )
-                ),
+                export_names=(("text_config", "hidden_size"),),
             ),
             # Image processing and conv layer
             RenameParamConverter(
@@ -579,7 +580,7 @@ class PixtralHuggingfaceCheckpointHandler(MistralHuggingfaceCheckpointHandler):
                     (
                         "vision_config",
                         "image_size",
-                    )
+                    ),
                 ),
             ),
             RenameParamConverter(
@@ -588,7 +589,7 @@ class PixtralHuggingfaceCheckpointHandler(MistralHuggingfaceCheckpointHandler):
                     (
                         "vision_config",
                         "patch_size",
-                    )
+                    ),
                 ),
             ),
             # Vision Transformer
@@ -598,7 +599,7 @@ class PixtralHuggingfaceCheckpointHandler(MistralHuggingfaceCheckpointHandler):
                     (
                         "vision_config",
                         "num_hidden_layers",
-                    )
+                    ),
                 ),
             ),
             RenameParamConverter(
@@ -607,7 +608,7 @@ class PixtralHuggingfaceCheckpointHandler(MistralHuggingfaceCheckpointHandler):
                     (
                         "vision_config",
                         "hidden_size",
-                    )
+                    ),
                 ),
             ),
             RenameParamConverter(
@@ -616,7 +617,7 @@ class PixtralHuggingfaceCheckpointHandler(MistralHuggingfaceCheckpointHandler):
                     (
                         "vision_config",
                         "num_attention_heads",
-                    )
+                    ),
                 ),
             ),
             RenameParamConverter(
@@ -625,7 +626,7 @@ class PixtralHuggingfaceCheckpointHandler(MistralHuggingfaceCheckpointHandler):
                     (
                         "vision_config",
                         "intermediate_size",
-                    )
+                    ),
                 ),
             ),
             MappedConfigParamConverter(
@@ -634,7 +635,7 @@ class PixtralHuggingfaceCheckpointHandler(MistralHuggingfaceCheckpointHandler):
                     (
                         "vision_config",
                         "hidden_act",
-                    )
+                    ),
                 ),
                 fast_llm_value=ActivationType.from_hf_name,
                 export_value=lambda activation_type: activation_type.hf_name,
@@ -645,7 +646,7 @@ class PixtralHuggingfaceCheckpointHandler(MistralHuggingfaceCheckpointHandler):
                     (
                         "vision_config",
                         "num_channels",
-                    )
+                    ),
                 ),
             ),
             RenameParamConverter(
@@ -654,7 +655,7 @@ class PixtralHuggingfaceCheckpointHandler(MistralHuggingfaceCheckpointHandler):
                     (
                         "vision_config",
                         "attention_dropout",
-                    )
+                    ),
                 ),
             ),
             RenameParamConverter(
@@ -793,5 +794,5 @@ class AutoGPTHuggingfaceCheckpointHandler(
         Qwen2GPTHuggingfaceCheckpointFormat.name: Qwen2HuggingfaceCheckpointHandler,
         MistralGPTHuggingfaceCheckpointFormat.name: MistralHuggingfaceCheckpointHandler,
         MixtralGPTHuggingfaceCheckpointFormat.name: MixtralHuggingfaceCheckpointHandler,
-        PixtralGPTHuggingfaceCheckpointFormat.name: PixtralHuggingfaceCheckpointHandler,
+        LlavaGPTHuggingfaceCheckpointFormat.name: LlavaHuggingfaceCheckpointHandler,
     }
