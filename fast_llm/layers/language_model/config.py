@@ -125,6 +125,11 @@ class LanguageModelBaseConfig(LanguageModelArchitectureConfig, BaseModelConfig):
     architecture_class = LanguageModelArchitectureConfig
 
     transformer: TransformerConfig = FieldUpdate(default_factory=TransformerConfig)
+    vision_encoder: VisionArchitectureConfig | None = Field(
+        default=None,
+        desc="Configuration for the vision encoder that transforms images into embeddings.",
+        hint=FieldHint.optional,
+    )
     init_method_std_embed: float = Field(
         default=None,
         desc="Initialization scale for the vocabulary embedding and output weights (logits).",
@@ -200,8 +205,14 @@ class LanguageModelBaseConfig(LanguageModelArchitectureConfig, BaseModelConfig):
             Assert.leq(self.init_method_min_embed, self.init_method_max_embed)
         super()._validate()
 
+    def setup_tensor_space(self, tensor_space: TensorSpace) -> None:
+        super().setup_tensor_space(tensor_space)
 
-class MultiModalBaseConfig:
+        if self.vision_encoder is not None:
+            self.vision_encoder.setup_tensor_space(tensor_space)
+
+
+class MultiModalBaseConfig(BaseModelConfig):
     language_model: LanguageModelBaseConfig = Field(
         default_factory=LanguageModelBaseConfig,
         desc="Configuration for the language model.",

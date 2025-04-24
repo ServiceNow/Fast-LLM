@@ -32,6 +32,7 @@ from fast_llm.models.gpt.config import (
     LlamaGPTHuggingfaceCheckpointFormat,
     MistralGPTHuggingfaceCheckpointFormat,
     MixtralGPTHuggingfaceCheckpointFormat,
+    PixtralGPTHuggingfaceCheckpointFormat,
     Qwen2GPTHuggingfaceCheckpointFormat,
     Starcoder2GPTHuggingfaceCheckpointFormat,
 )
@@ -163,54 +164,65 @@ class CommonHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
 
     def _create_weight_converters(
         self,
+        hf_base_prefix: str = "",
+        fast_llm_offset: int = 0,
     ) -> list[WeightConverter]:
         converters = []
         num_layers = self._model.config.base_model.transformer.num_layers
 
         # Embeddings
-        converters.append(WeightConverter("layers.0.word_embeddings_weight", "model.embed_tokens.weight"))
+        converters.append(
+            WeightConverter(
+                f"layers.{fast_llm_offset}.word_embeddings_weight", f"{hf_base_prefix}model.embed_tokens.weight"
+            )
+        )
 
-        converters += self._create_lm_head_converters()
+        converters += self._create_lm_head_converters(hf_base_prefix, fast_llm_offset)
 
         for i in range(num_layers):
-            converters += self._create_transformer_layer_converters(i)
+            converters += self._create_transformer_layer_converters(i, hf_base_prefix, fast_llm_offset)
 
         return converters
 
-    def _create_transformer_layer_converters(self, i: int, ignore_export: bool = False) -> list[WeightConverter]:
+    def _create_transformer_layer_converters(
+        self, i: int, ignore_export: bool = False, hf_base_prefix: str = "", fast_llm_offset: int = 1
+    ) -> list[WeightConverter]:
         transformer_config: TransformerConfig = self._model.config.base_model.transformer
         norm_bias: bool = self._model.config.base_model.transformer.normalization.type == NormalizationType.layer_norm
         converters = []
         names_bias_cls = [
             # Self-attn
             (
-                f"layers.{i+1}.self_attn.query",
-                f"model.layers.{i}.self_attn.q_proj",
+                f"layers.{i+fast_llm_offset}.self_attn.query",
+                f"{hf_base_prefix}model.layers.{i}.self_attn.q_proj",
                 transformer_config.add_attn_qkv_bias,
                 QueryWeightConverter,
             ),
             (
-                f"layers.{i+1}.self_attn.key_value",
-                (f"model.layers.{i}.self_attn.k_proj", f"model.layers.{i}.self_attn.v_proj"),
+                f"layers.{i+fast_llm_offset}.self_attn.key_value",
+                (
+                    f"{hf_base_prefix}model.layers.{i}.self_attn.k_proj",
+                    f"{hf_base_prefix}model.layers.{i}.self_attn.v_proj",
+                ),
                 transformer_config.add_attn_qkv_bias,
                 KeyValueWeightConverter,
             ),
             (
-                f"layers.{i+1}.self_attn.dense",
-                f"model.layers.{i}.self_attn.o_proj",
+                f"layers.{i+fast_llm_offset}.self_attn.dense",
+                f"{hf_base_prefix}model.layers.{i}.self_attn.o_proj",
                 transformer_config.add_attn_dense_bias,
                 WeightConverter,
             ),
             # Norm
             (
-                f"layers.{i+1}.norm_1",
-                f"model.layers.{i}.input_layernorm",
+                f"layers.{i+fast_llm_offset}.norm_1",
+                f"{hf_base_prefix}model.layers.{i}.input_layernorm",
                 norm_bias,
                 WeightConverter,
             ),
             (
-                f"layers.{i+1}.norm_2",
-                f"model.layers.{i}.post_attention_layernorm",
+                f"layers.{i+fast_llm_offset}.norm_2",
+                f"{hf_base_prefix}model.layers.{i}.post_attention_layernorm",
                 norm_bias,
                 WeightConverter,
             ),
@@ -226,17 +238,23 @@ class CommonHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
         # MLP
         if ignore_export:
             converters += self._get_weight_and_bias_converters(
-                f"layers.{i+1}.mlp.layer_1", (), transformer_config.add_mlp_bias, cls=IgnoreExportWeightConverter
+                f"layers.{i+fast_llm_offset}.mlp.layer_1",
+                (),
+                transformer_config.add_mlp_bias,
+                cls=IgnoreExportWeightConverter,
             )
             converters += self._get_weight_and_bias_converters(
-                f"layers.{i+1}.mlp.layer_2", (), transformer_config.add_mlp_bias, cls=IgnoreExportWeightConverter
+                f"layers.{i+fast_llm_offset}.mlp.layer_2",
+                (),
+                transformer_config.add_mlp_bias,
+                cls=IgnoreExportWeightConverter,
             )
-            converters += [IgnoreExportWeightConverter(f"layers.{i+1}.mlp.router.weight", ())]
+            converters += [IgnoreExportWeightConverter(f"layers.{i+fast_llm_offset}.mlp.router.weight", ())]
         else:
-            converters += self._get_mlp_converters(f"layers.{i+1}", f"model.layers.{i}")
+            converters += self._get_mlp_converters(f"layers.{i+fast_llm_offset}", f"{hf_base_prefix}model.layers.{i}")
         return converters
 
-    def _create_lm_head_converters(self) -> list[WeightConverter]:
+    def _create_lm_head_converters(self, hf_base_prefix: str, fast_llm_offset: int = 1) -> list[WeightConverter]:
         num_layers = self._model.config.base_model.transformer.num_layers
         prediction_heads = self._model.config.base_model.prediction_heads
         norm_bias: bool = self._model.config.base_model.transformer.normalization.type == NormalizationType.layer_norm
@@ -245,15 +263,20 @@ class CommonHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
         # Next-token prediction head
         # Final norm
         converters += self._get_weight_and_bias_converters(
-            f"layers.{num_layers + 1}.final_norm", "model.norm", norm_bias
+            f"layers.{num_layers + fast_llm_offset}.final_norm", f"{hf_base_prefix}model.norm", norm_bias
         )
         # Output weights
         if self._model.config.base_model.tie_word_embeddings:
-            converters.append(IgnoreImportWeightConverter((), "lm_head.weight"))
+            converters.append(IgnoreImportWeightConverter((), f"{hf_base_prefix}lm_head.weight"))
         else:
-            converters.append(WeightConverter(f"layers.{num_layers + 1}.output_weights", "lm_head.weight"))
+            converters.append(
+                WeightConverter(
+                    f"layers.{num_layers + fast_llm_offset}.output_weights", f"{hf_base_prefix}lm_head.weight"
+                )
+            )
 
         # MTP-heads > 0 are thrown away
+        # TODO Soham: handle offset with MTP
         for i in range(1, prediction_heads):
             logger.warning(
                 f"The model weights for the multi-token prediction head {i} are discarded during conversion."
@@ -531,6 +554,196 @@ class MistralHuggingfaceCheckpointHandler(CommonLlamaHuggingfaceCheckpointHandle
         ]
 
 
+class PixtralHuggingfaceCheckpointHandler(MistralHuggingfaceCheckpointHandler):
+    @classmethod
+    def _create_config_converters(cls) -> list[ParamConverter]:
+        lm_converters = super()._create_config_converters()
+        for converter in lm_converters:
+            if converter.fast_llm_names[0][0] == "transformer":
+                converter.export_names[0] = ("text_config", *converter.export_names[0])
+        return lm_converters + [
+            # Multimodal adapter
+            RenameParamConverter(
+                fast_llm_names=(("vision_encoder", "adapter_size"),),
+                export_names=(
+                    (
+                        "text_config",
+                        "hidden_size",
+                    )
+                ),
+            ),
+            # Image processing and conv layer
+            RenameParamConverter(
+                fast_llm_names=(("vision_encoder", "encoder", "image_size"),),
+                export_names=(
+                    (
+                        "vision_config",
+                        "image_size",
+                    )
+                ),
+            ),
+            RenameParamConverter(
+                fast_llm_names=(("vision_encoder", "encoder", "patch_size"),),
+                export_names=(
+                    (
+                        "vision_config",
+                        "patch_size",
+                    )
+                ),
+            ),
+            # Vision Transformer
+            RenameParamConverter(
+                fast_llm_names=(("vision_encoder", "encoder", "num_hidden_layers"),),
+                export_names=(
+                    (
+                        "vision_config",
+                        "num_hidden_layers",
+                    )
+                ),
+            ),
+            RenameParamConverter(
+                fast_llm_names=(("vision_encoder", "encoder", "hidden_size"),),
+                export_names=(
+                    (
+                        "vision_config",
+                        "hidden_size",
+                    )
+                ),
+            ),
+            RenameParamConverter(
+                fast_llm_names=(("vision_encoder", "encoder", "num_attention_heads"),),
+                export_names=(
+                    (
+                        "vision_config",
+                        "num_attention_heads",
+                    )
+                ),
+            ),
+            RenameParamConverter(
+                fast_llm_names=(("vision_encoder", "encoder", "intermediate_size"),),
+                export_names=(
+                    (
+                        "vision_config",
+                        "intermediate_size",
+                    )
+                ),
+            ),
+            MappedConfigParamConverter(
+                fast_llm_names=(("vision_encoder", "encoder", "activation_type"),),
+                export_names=(
+                    (
+                        "vision_config",
+                        "hidden_act",
+                    )
+                ),
+                fast_llm_value=ActivationType.from_hf_name,
+                export_value=lambda activation_type: activation_type.hf_name,
+            ),
+            RenameParamConverter(
+                fast_llm_names=(("vision_encoder", "encoder", "num_channels"),),
+                export_names=(
+                    (
+                        "vision_config",
+                        "num_channels",
+                    )
+                ),
+            ),
+            RenameParamConverter(
+                fast_llm_names=(("vision_encoder", "encoder", "attention_dropout"),),
+                export_names=(
+                    (
+                        "vision_config",
+                        "attention_dropout",
+                    )
+                ),
+            ),
+            RenameParamConverter(
+                fast_llm_names=(("vision_encoder", "encoder", "rope_theta"),),
+                export_names=(("vision_config", "rope_theta"),),
+            ),
+            RenameParamConverter(
+                fast_llm_names=(("vision_encoder", "encoder", "initializer_range"),),
+                export_names=(("vision_config", "initializer_range"),),
+            ),
+        ]
+
+    def _create_vision_transformer_converters(self) -> list[WeightConverter]:
+        num_layers = self._model.config.base_model.vision_encoder.encoder.num_hidden_layers
+        vision_transformer_converters = []
+        for i in range(num_layers):
+            vision_transformer_converters += [
+                WeightConverter(
+                    f"layers.0._vision_encoder.encoder.transformer.layers.{i}.attention.k_proj.weight",
+                    f"vision_tower.transformer.layers.{i}.attention.k_proj.weight",
+                ),
+                WeightConverter(
+                    f"layers.0._vision_encoder.encoder.transformer.layers.{i}.attention.v_proj.weight",
+                    f"vision_tower.transformer.layers.{i}.attention.v_proj.weight",
+                ),
+                WeightConverter(
+                    f"layers.0._vision_encoder.encoder.transformer.layers.{i}.attention.q_proj.weight",
+                    f"vision_tower.transformer.layers.{i}.attention.q_proj.weight",
+                ),
+                WeightConverter(
+                    f"layers.0._vision_encoder.encoder.transformer.layers.{i}.attention.o_proj.weight",
+                    f"vision_tower.transformer.layers.{i}.attention.o_proj.weight",
+                ),
+                WeightConverter(
+                    f"layers.0._vision_encoder.encoder.transformer.layers.{i}.attention_norm.weight",
+                    f"vision_tower.transformer.layers.{i}.attention_norm.weight",
+                ),
+                WeightConverter(
+                    f"layers.0._vision_encoder.encoder.transformer.layers.{i}.feed_forward.down_proj.weight",
+                    f"vision_tower.transformer.layers.{i}.feed_forward.down_proj.weight",
+                ),
+                WeightConverter(
+                    f"layers.0._vision_encoder.encoder.transformer.layers.{i}.feed_forward.gate_proj.weight",
+                    f"vision_tower.transformer.layers.{i}.feed_forward.gate_proj.weight",
+                ),
+                WeightConverter(
+                    f"layers.0._vision_encoder.encoder.transformer.layers.{i}.feed_forward.up_proj.weight",
+                    f"vision_tower.transformer.layers.{i}.feed_forward.up_proj.weight",
+                ),
+                WeightConverter(
+                    f"layers.0._vision_encoder.encoder.transformer.layers.{i}.ffn_norm.weight",
+                    f"vision_tower.transformer.layers.{i}.ffn_norm.weight",
+                ),
+            ]
+
+        return vision_transformer_converters
+
+    def _create_vision_encoder_weight_converters(self) -> list[WeightConverter]:
+        patch_conv_converter = WeightConverter(
+            "layers.0._vision_encoder.patch_conv.weight",
+            "vision_tower.patch_conv.weight",
+        )
+        vision_transformer_converters = self._create_vision_transformer_converters()
+        adapter_converters = [
+            WeightConverter(
+                "layers.0._vision_encoder._adapter.layer_1.weight",
+                "multi_modal_projector.linear_1.weight",
+            ),
+            WeightConverter(
+                "layers.0._vision_encoder._adapter.layer_1.bias",
+                "multi_modal_projector.linear_1.bias",
+            ),
+            WeightConverter(
+                "layers.0._vision_encoder._adapter.layer_2.weight",
+                "multi_modal_projector.linear_2.weight",
+            ),
+            WeightConverter(
+                "layers.0._vision_encoder._adapter.layer_2.bias",
+                "multi_modal_projector.linear_2.bias",
+            ),
+        ]
+        return [patch_conv_converter] + vision_transformer_converters + adapter_converters
+
+    def _create_weight_converters(self) -> list[WeightConverter]:
+        vision_encoder_converter = self._create_vision_encoder_weight_converters()
+        lm_converters = super()._create_weight_converters(hf_base_prefix="language_model.", fast_llm_offset=1)
+        return vision_encoder_converter + lm_converters
+
+
 class MixtralHuggingfaceCheckpointHandler(CommonLlamaHuggingfaceCheckpointHandler):
     format: typing.ClassVar[type[CheckpointFormat]] = MixtralGPTHuggingfaceCheckpointFormat
 
@@ -580,4 +793,5 @@ class AutoGPTHuggingfaceCheckpointHandler(
         Qwen2GPTHuggingfaceCheckpointFormat.name: Qwen2HuggingfaceCheckpointHandler,
         MistralGPTHuggingfaceCheckpointFormat.name: MistralHuggingfaceCheckpointHandler,
         MixtralGPTHuggingfaceCheckpointFormat.name: MixtralHuggingfaceCheckpointHandler,
+        PixtralGPTHuggingfaceCheckpointFormat.name: PixtralHuggingfaceCheckpointHandler,
     }

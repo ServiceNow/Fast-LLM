@@ -91,11 +91,14 @@ class GPTSampledIndexedDataset(SampledDataset):
         self._num_samples = sampling.num_samples
         self._sequence_length = sampling.sequence_length
         self._patch_size = sampling.patch_size
+        self._image_height = sampling.image_height
+        self._image_width = sampling.image_width
         self._cross_document_attention = sampling.cross_document_attention
         self._config = sampling.config
         self._truncate_documents = sampling.truncate_documents
         self._device = torch.device("cuda" if self._config.gpu else "cpu")
 
+        # TODO Soham: use something else for this check, introducing has_images for just this check might be unnecessary.
         if self._indexed_dataset.has_images and self._truncate_documents:
             raise RuntimeError(
                 "Truncating documents with images is not supported. Please turn off truncation to use images."
@@ -137,8 +140,9 @@ class GPTSampledIndexedDataset(SampledDataset):
         document_sizes, image_sizes = self._indexed_dataset.get_document_sizes()
         document_sizes = torch.from_numpy(document_sizes).to(self._device)
         image_token_sizes = torch.zeros_like(document_sizes).to(self._device)
+        # TODO Soham: handle max image size
         for i, sizes in enumerate(image_sizes):
-            image_token_sizes[i] = sum(sizes[0, :] // self._patch_size[0]) * (sizes[:, 1] // self._patch_size[1])
+            image_token_sizes[i] = sum((sizes[:, 0] // self._patch_size[0]) * (sizes[:, 1] // self._patch_size[1]))
 
         documents_per_epoch = document_sizes.numel()
         tokens_per_epoch = document_sizes.sum().item() + image_token_sizes.sum().item()
@@ -387,15 +391,26 @@ class GPTSampledIndexedDataset(SampledDataset):
             else:
                 document_index = self._document_shuffling[document_sampling_index - self._unshuffled_documents].item()
 
-            document_size = self._indexed_dataset.get_document_size(document_index, self._patch_size)
+            document_size, image_lengths = self._indexed_dataset.get_document_size(document_index, self._patch_size)
+
+            image_sizes = [
+                ImageProcessor.get_num_patches_from_dims(
+                    *ImageProcessor.get_resize_dims(
+                        *image_length, self._image_height, self._image_width, self._patch_size
+                    ),
+                    self._patch_size,
+                )
+                for image_length in image_lengths
+            ]
+            image_tokens = sum(image_sizes)
 
             if not self._truncate_documents:
-                if document_size > self._sequence_length + 1:
+                if document_size + image_tokens > self._sequence_length + 1:
                     # Document too long, ignore
                     document_sampling_index += 1
                     continue
                 tokens_in_sample = token_count % (self._sequence_length + 1)
-                if document_size + tokens_in_sample > self._sequence_length + 1:
+                if document_size + image_tokens + tokens_in_sample > self._sequence_length + 1:
                     # Document belongs to the next sample, need to account for padding.
                     padding_size = self._sequence_length + 1 - tokens_in_sample
                     if token_count > token_start:
@@ -408,7 +423,7 @@ class GPTSampledIndexedDataset(SampledDataset):
                         token_count += padding_size
 
             # Determine if the document belongs to the requested sample.
-            if token_count + document_size >= token_start:
+            if token_count + document_size + image_tokens >= token_start:
                 # Determine which part of the document belong to the sample, and add it to the list.
                 token_start_index_in_document = max(token_start - token_count, 0)
                 token_end_index_in_document = min(token_end - token_count, document_size)
@@ -422,7 +437,7 @@ class GPTSampledIndexedDataset(SampledDataset):
                 for idx, im_position in enumerate(sample.image_positions):
                     # image_positions.append(im_positions + len(token_ids) + image_tokens_added)
                     image_positions.append(im_position + len(token_ids) + image_tokens_added)
-                    image_tokens_added += ImageProcessor.get_num_patches(sample.images[idx])
+                    image_tokens_added += image_tokens
                 images.append(sample.images)
                 token_ids.append(sample.token_ids)
                 if self._config.use_loss_masking_spans:
@@ -433,7 +448,7 @@ class GPTSampledIndexedDataset(SampledDataset):
 
             # Go to the next document.
             document_sampling_index += 1
-            token_count += document_size
+            token_count += document_size + image_tokens
 
         sequence_lengths = (
             np.array([ids.size - (idx == len(token_ids) - 1) for idx, ids in enumerate(token_ids)], dtype=np.int32)
@@ -447,7 +462,8 @@ class GPTSampledIndexedDataset(SampledDataset):
             if self._config.use_loss_masking_spans
             else None
         )
-        images = [im for img_list in images for im in img_list]
+        images = [im for img_list in images for im in img_list] if images else None
+        image_positions = np.array(image_positions) if image_positions else None
         Assert.eq(len(token_ids) + image_tokens_added, self._sequence_length + 1)
 
         return GPTSample(

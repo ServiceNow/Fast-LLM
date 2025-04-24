@@ -103,17 +103,17 @@ class GPTMemmapDataset(GPTIndexedDataset):
                 + self._num_spans.sum() * 2 * np.dtype(np.int32).itemsize
                 + sum([x.nbytes for x in self._spans])
             )
-        self._n_pixels = 0
+        self._num_pixels = 0
         if self._has_images and self._version >= 3:
             self._n_images = np.frombuffer(
                 self._index_bin_buffer, dtype=np.int32, count=self._num_documents, offset=offset
             )
-            self._im_lengths = []
-            self._im_positions = []
+            self._image_lengths = []
+            self._image_positions = []
             images_seen = 0
             # TODO Soham: verify correctness, reshaping into width, height?
             for n_images in self._n_images:
-                self._im_lengths.append(
+                self._image_lengths.append(
                     np.frombuffer(
                         self._index_bin_buffer,
                         dtype=np.int32,
@@ -121,8 +121,8 @@ class GPTMemmapDataset(GPTIndexedDataset):
                         offset=offset + self._n_images.nbytes + 2 * images_seen * np.dtype(np.int32).itemsize,
                     ).reshape(-1, 2)
                 )
-                self._n_pixels += self._im_lengths[-1].prod(axis=1, initial=3).sum()
-                self._im_positions.append(
+                self._num_pixels += self._image_lengths[-1].prod(axis=1, initial=3).sum()
+                self._image_positions.append(
                     np.frombuffer(
                         self._index_bin_buffer,
                         dtype=np.int32,
@@ -140,14 +140,14 @@ class GPTMemmapDataset(GPTIndexedDataset):
 
         # TODO Soham: fix num_tokens to include images. Get total number of image pixels from index file and assign
         # self._num_tokens = div(self._bin_buffer_mmap.size - n_pixels, np.dtype(self._dtype).itemsize)
-        self._num_tokens = div(self._bin_buffer_mmap.size - self._n_pixels, np.dtype(self._dtype).itemsize)
+        self._num_tokens = div(self._bin_buffer_mmap.size - self._num_pixels, np.dtype(self._dtype).itemsize)
         if num_pixels is not None:
-            assert self._n_pixels == num_pixels
+            assert self._num_pixels == num_pixels
         if num_tokens is not None:
             assert self._num_tokens == num_tokens
 
     def __getstate__(self) -> tuple[str, pathlib.Path, int | None, int | None]:
-        return (self._name, self._prefix, self._num_documents, self._num_tokens)
+        return (self._name, self._prefix, self._num_documents, self._num_tokens, self._num_pixels)
 
     def __setstate__(self, state: tuple[str, pathlib.Path, int | None, int | None]):
         self._init(*state)
@@ -169,7 +169,7 @@ class GPTMemmapDataset(GPTIndexedDataset):
         use_loss_masking_spans: bool = False,
         # , patch_size: tuple(int), max_height: int, max_width: int
     ):
-        # TODO Soham: Handle truncations?
+        # TODO Soham: handle spans
         # if self._has_images:
         #     doc_size = self._document_sizes[idx]
         #     n_images = self._n_images[idx]
@@ -188,34 +188,42 @@ class GPTMemmapDataset(GPTIndexedDataset):
             offset=self._pointers[idx] + offset * np.dtype(self._dtype).itemsize,
         )
         if self._has_images:
-            image_positions = self._im_positions[idx]
-            images = np.frombuffer(
+            image_positions = self._image_positions[idx]
+            pixels = np.frombuffer(
                 self._bin_buffer,
-                dtype=np.dtype(np.uint8).itemsize,
-                count=self._image_lengths[idx][0] * self._image_lengths[idx][1] * 3,
+                dtype=np.dtype(np.uint8),
+                count=self._image_lengths[idx].prod(initial=3),
                 offset=self._pointers[idx] + self._document_sizes[idx] * np.dtype(self._dtype).itemsize,
             )
+            images = []
+            start = 0
+            for image_length in self._image_lengths[idx]:
+                # TODO Soham: verify reshape dimension order
+                n_pixels = image_length.prod(initial=3)
+                images.append(pixels[start : start + n_pixels].reshape(image_length[0], image_length[1], 3))
+                start += n_pixels
+        # TODO Soham: return loss_masking_spans
         return GPTSample(token_ids=token_ids, images=images, image_positions=image_positions)
 
-    def get(
-        self, idx: int, offset: int = 0, length: int | None = None, use_loss_masking_spans: bool = False
-    ) -> GPTSample:
-        token_ids = np.frombuffer(
-            self._bin_buffer,
-            dtype=self._dtype,
-            count=self._document_sizes[idx] - offset if length is None else length,
-            offset=self._pointers[idx] + offset * np.dtype(self._dtype).itemsize,
-        )
-        sample_spans = None
-        if use_loss_masking_spans and self._spans is not None:
-            sample_spans = self._spans[idx]
-            # adjust the spans for the offset and length
-            sample_spans = sample_spans[
-                (sample_spans[:, 0] < offset + len(token_ids)) & (sample_spans[:, 1] >= offset)
-            ]
-            sample_spans[:, 0] = np.maximum(sample_spans[:, 0], offset) - offset
-            sample_spans[:, 1] = np.minimum(sample_spans[:, 1], offset + len(token_ids) - 1) - offset
-        return GPTSample(token_ids=token_ids, loss_masking_spans=sample_spans)
+    # def get(
+    #     self, idx: int, offset: int = 0, length: int | None = None, use_loss_masking_spans: bool = False
+    # ) -> GPTSample:
+    #     token_ids = np.frombuffer(
+    #         self._bin_buffer,
+    #         dtype=self._dtype,
+    #         count=self._document_sizes[idx] - offset if length is None else length,
+    #         offset=self._pointers[idx] + offset * np.dtype(self._dtype).itemsize,
+    #     )
+    #     sample_spans = None
+    #     if use_loss_masking_spans and self._spans is not None:
+    #         sample_spans = self._spans[idx]
+    #         # adjust the spans for the offset and length
+    #         sample_spans = sample_spans[
+    #             (sample_spans[:, 0] < offset + len(token_ids)) & (sample_spans[:, 1] >= offset)
+    #         ]
+    #         sample_spans[:, 0] = np.maximum(sample_spans[:, 0], offset) - offset
+    #         sample_spans[:, 1] = np.minimum(sample_spans[:, 1], offset + len(token_ids) - 1) - offset
+    #     return GPTSample(token_ids=token_ids, loss_masking_spans=sample_spans)
 
     @property
     def name(self) -> str:
@@ -233,20 +241,21 @@ class GPTMemmapDataset(GPTIndexedDataset):
         return self._has_images
 
     # TODO: image sizes
-    def get_document_sizes(self) -> np.ndarray:
+    def get_document_sizes(self) -> tuple[np.ndarray, np.ndarray]:
         """
         The size of each document in the dataset.
         The resulting array could be very large, so this method should be called cautiously,
         and derived classes should try to avoid holding the whole array im memory.
         """
-        return self._document_sizes, self._im_lengths
+        return self._document_sizes, self._image_lengths
 
     def get_document_size(self, index: int, patch_size: list[int]) -> int:
-        return self._document_sizes[index].item() + (
-            sum((h // patch_size[0]) * (w // patch_size[1]) for h, w in self._image_lengths[index])
-            if self._has_images
-            else 0
-        )
+        # return self._document_sizes[index].item() + (
+        #     sum((h // patch_size[0]) * (w // patch_size[1]) for h, w in self._image_lengths[index])
+        #     if self._has_images
+        #     else 0
+        # )
+        return self._document_sizes[index].item(), self._image_lengths[index] if self._has_images else []
 
     @classmethod
     def write_dataset(cls, prefix: pathlib.Path | str, documents: typing.Iterable[GPTSample]):
@@ -255,7 +264,7 @@ class GPTMemmapDataset(GPTIndexedDataset):
         num_documents = 0
         doc_lengths = []
         n_images = []
-        im_lengths = []
+        image_lengths = []
         im_positions = []
         total_images = 0
         pointers = []
@@ -288,7 +297,7 @@ class GPTMemmapDataset(GPTIndexedDataset):
                         # assume 3 channels (RGB) for all images
                         with PIL.Image.open(io.BytesIO(image["bytes"])) as img:
                             pixels = np.array(img)
-                        im_lengths.append(np.array(pixels.shape[:2]))
+                        image_lengths.append(np.array(pixels.shape[:2]))
                         bin_stream.write(pixels.tobytes(order="C"))
                         total_im_size += pixels.size
                     im_positions.append(document.image_positions)
@@ -316,7 +325,7 @@ class GPTMemmapDataset(GPTIndexedDataset):
             n_images = np.array(n_images, dtype=np.int32)
         else:
             n_images = np.array([])
-        im_lengths = np.stack(im_lengths, dtype=np.int32)
+        image_lengths = np.stack(image_lengths, dtype=np.int32)
         im_positions = np.array(im_positions, dtype=np.int32)
 
         # Write the index file (.idx)
@@ -347,7 +356,7 @@ class GPTMemmapDataset(GPTIndexedDataset):
             # Number of images per document
             idx_stream.write(n_images.tobytes(order="C"))
             # n_pixels * 3 per image
-            idx_stream.write(im_lengths.tobytes(order="C"))
+            idx_stream.write(image_lengths.tobytes(order="C"))
             # Position of each image in the document
             idx_stream.write(im_positions.tobytes(order="C"))
             # Document indices, unused but needed for compatibility with Megatron-LM

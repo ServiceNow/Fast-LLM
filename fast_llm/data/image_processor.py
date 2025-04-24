@@ -33,7 +33,7 @@ class ImageProcessor:
 
     # TODO Soham: move to utils
     @classmethod
-    def get_resize_dims(height, width, max_height, max_width, patch_size: list[int]):
+    def get_resize_dims(self, height, width, max_height, max_width, patch_size: list[int]):
         ratio = max(height / max_height, width / max_width)
         return (
             (math.ceil(height / ratio), math.ceil(width / ratio))
@@ -47,5 +47,9 @@ class ImageProcessor:
 
     @classmethod
     # TODO Soham: move to utils
-    def get_num_patches(image: torch.Tensor, patch_size: list[int]) -> torch.Tensor:
-        return (image.size[0] // patch_size[0]) * (image.size[1] // patch_size[1])
+    def get_num_patches(self, image: torch.Tensor, patch_size: list[int]) -> torch.Tensor:
+        return (image.shape[0] // patch_size[0]) * (image.shape[1] // patch_size[1])
+
+    @classmethod
+    def get_num_patches_from_dims(self, height: int, width: int, patch_size: list[int]) -> torch.Tensor:
+        return (height // patch_size[0]) * (width // patch_size[1])

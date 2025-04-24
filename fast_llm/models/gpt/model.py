@@ -26,6 +26,7 @@ from fast_llm.layers.transformer.preprocessing import (
     RotaryEmbeddingPreprocessor,
 )
 from fast_llm.layers.transformer.transformer import TransformerLayer
+from fast_llm.layers.vision_encoder.encoder import VisionEncoder
 from fast_llm.models.gpt.config import GPTBaseModelConfig, GPTModelConfig
 from fast_llm.models.gpt.megatron import get_init_megatron
 from fast_llm.tensor import ParameterMeta, TensorMeta
@@ -100,7 +101,10 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                 LanguageModelEmbedding(self._config, self._tensor_space),
                 LanguageModelHead(self._config, self._tensor_space, 0),
             ]
-        return [
+        return (
+            [VisionEncoder(self._config, self._tensor_space)] if self._config.vision_encoder is not None else []
+        ) + [
+            # return [
             LanguageModelEmbedding(self._config, self._tensor_space),
             *[
                 TransformerLayer(
@@ -312,11 +316,11 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
 
     @property
     def embedding(self) -> LanguageModelEmbedding:
-        return self.layers[0]
+        return self.layers[self._config.vision_encoder is not None]
 
     @property
     def transformer_layers(self) -> list[TransformerLayer]:
-        return self.layers[1:-1]
+        return self.layers[(self._config.vision_encoder is not None) + 1 : -1]
 
     @property
     def model_head(self) -> LanguageModelHead:
@@ -331,7 +335,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             return {
                 WORD_EMBEDDINGS_WEIGHT: (
                     self.embedding.word_embeddings_weight,
-                    (0, *self.model_head_indices),
+                    (self._config.vision_encoder is not None, *self.model_head_indices),
                 )
             }
         elif self._config.prediction_heads > 1:

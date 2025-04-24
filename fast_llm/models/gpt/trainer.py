@@ -21,6 +21,9 @@ class GPTTrainer[ConfigType: GPTTrainerConfig](Trainer[ConfigType]):
             vocab_size=self._config.model.base_model.vocab_size,
             max_sequence_length=self._config.batch.sequence_length,
             cross_document_attention=self._config.batch.cross_document_attention,
+            patch_size=self._config.batch.patch_size,
+            max_image_height=self._config.batch.max_image_height,
+            max_image_width=self._config.batch.max_image_width,
         )
 
     def get_tflops(self, phase: PhaseType, elapsed_time_per_iteration) -> tuple[int, int]:

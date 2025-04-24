@@ -36,12 +36,11 @@ class GPTBatch:
     image_positions: list[torch.Tensor] | None = None
 
 
-# TODO: do we need a separate use_images?
+# TODO: collate images
 def gpt_data_collate_fn(
     batch: list[GPTSample],
     use_loss_masking_spans: bool,
     cross_document_attention: bool,
-    use_images: bool,
 ) -> GPTBatch:
     stacked_ids = np.stack([sample.token_ids for sample in batch])
     stacked_spans = None
@@ -50,8 +49,24 @@ def gpt_data_collate_fn(
         stacked_spans = [torch.from_numpy(sample.loss_masking_spans) for sample in batch]
     if not cross_document_attention:
         sequence_lengths = [torch.tensor(sample.sequence_lengths) for sample in batch]
+    batch_images = []
+    for sample in batch:
+        if sample.images is not None:
+            batch_images.append([torch.from_numpy(image) for image in sample.images])
+        else:
+            batch_images.append(None)
+    batch_image_positions = []
+    for sample in batch:
+        if sample.image_positions is not None:
+            batch_image_positions.append(torch.from_numpy(sample.image_positions))
+        else:
+            batch_image_positions.append(None)
     return GPTBatch(
-        token_ids=torch.from_numpy(stacked_ids), loss_masking_spans=stacked_spans, sequence_lengths=sequence_lengths
+        token_ids=torch.from_numpy(stacked_ids),
+        loss_masking_spans=stacked_spans,
+        sequence_lengths=sequence_lengths,
+        images=batch_images if any(batch_images) else None,
+        image_positions=batch_image_positions if any(batch_image_positions) else None,
     )
 
 
@@ -73,6 +88,9 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
         vocab_size: int,
         max_sequence_length: int,
         cross_document_attention: bool = True,
+        patch_size: list[int] | None = None,
+        max_image_height: int | None = None,
+        max_image_width: int | None = None,
     ):
         """
         Create the data and gather some basic information on the dataset(s).
@@ -82,6 +100,9 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
         self._vocab_size = vocab_size
         self._max_sequence_length = max_sequence_length
         self._cross_document_attention = cross_document_attention
+        self._patch_size = patch_size
+        self._max_image_height = max_image_height
+        self._max_image_width = max_image_width
 
     def setup(
         self,
@@ -129,6 +150,9 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
                     tokenizer=self._tokenizer,
                     truncate_documents=self._config.truncate_documents,
                     cross_document_attention=self._cross_document_attention,
+                    patch_size=self._patch_size,
+                    image_height=self._max_image_height,
+                    image_width=self._max_image_width,
                 )
                 dataset = self._config.datasets[dataset_name].build_and_sample(sampling)
                 self._datasets[dataset_name] = DatasetMonitor(dataset, self._config.data_sample_warn_time_ms)
@@ -176,7 +200,6 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
                     gpt_data_collate_fn,
                     use_loss_masking_spans=self._config.sampling.use_loss_masking_spans,
                     cross_document_attention=self._cross_document_attention,
-                    use_images=self._config.sampling.use_images,
                 ),
                 multiprocessing_context=self._config.multiprocessing_context.value if num_workers > 0 else None,
             )

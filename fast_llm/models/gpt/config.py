@@ -48,6 +48,10 @@ class MixtralGPTHuggingfaceCheckpointFormat(GPTHuggingfaceCheckpointFormat):
     name: typing.ClassVar[str] = "mixtral"
 
 
+class PixtralGPTHuggingfaceCheckpointFormat(GPTHuggingfaceCheckpointFormat):
+    name: typing.ClassVar[str] = "pixtral"
+
+
 @config_class()
 class GPTArchitectureConfig(LanguageModelArchitectureConfig):
     _abstract = False

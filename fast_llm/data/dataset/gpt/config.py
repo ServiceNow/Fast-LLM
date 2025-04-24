@@ -57,11 +57,6 @@ class GPTSamplingConfig(SamplingConfig):
         desc="Read loss masking spans from the dataset.",
         hint=FieldHint.feature,
     )
-    use_images: bool | None = Field(
-        default=None,
-        desc="Use images in the dataset.",
-        hint=FieldHint.feature,
-    )
     shuffle: ShufflingType | None = Field(
         default=None,
         desc="Shuffling strategy.",
@@ -79,6 +74,8 @@ class GPTSamplingData(SamplingData):
     truncate_documents: bool = True
     cross_document_attention: bool = True
     patch_size: list[int] | None = None
+    image_height: int | None = None
+    image_width: int | None = None
 
 
 @config_class()
