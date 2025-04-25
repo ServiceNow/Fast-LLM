@@ -20,8 +20,12 @@ class Tokenizer:
             raise ValueError("Tokenizer does not have an EOS token.")
         if self.tokenizer.bos_token_id is None:
             raise ValueError("Tokenizer does not have an BOS token.")
-        self.eod_id = self.tokenizer.eos_token_id
-        self.bod_id = self.tokenizer.bos_token_id
+        self.eod_id = None
+        self.bod_id = None
+        if hasattr(self.tokenizer, "eos_token_id"):
+            self.eod_id = self.tokenizer.eos_token_id
+        if hasattr(self.tokenizer, "bos_token_id"):
+            self.bod_id = self.tokenizer.bos_token_id
 
     @property
     def vocab_size(self) -> int:
@@ -37,9 +41,9 @@ class Tokenizer:
 
     def tokenize(self, text: str, begin=True, end=True) -> list[int]:
         return (
-            ([self.bod_id] if begin else [])
+            ([self.bod_id] if (begin and self.bod_id is not None) else [])
             + self.tokenizer.encode(text, add_special_tokens=False)
-            + ([self.eod_id] if end else [])
+            + ([self.eod_id] if (end and self.eod_id is not None) else [])
         )
 
     def tokenize_with_spans(
