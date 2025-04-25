@@ -93,6 +93,11 @@ class TransformerLossNames:
     router_z_loss = "router_z_loss"
 
 
+class TransformerRoutingMetrics:
+    normalized_average_entropy = "normalized_average_entropy"
+    mutual_info = "mutual_info"
+
+
 class RotaryEmbeddingType(str, enum.Enum):
     none = "none"
     default = "default"
@@ -665,6 +670,11 @@ class TransformerConfig(TransformerArchitectureConfig, BaseModelConfig):
         desc="Use a dynamic shape for dropless MLP instead of the worst-case value."
         " Reduces memory usage, but increases fragmentation and requires CPU synchronisation. Not recommended.",
         hint=FieldHint.expert,
+    )
+    calculate_moe_metrics: bool = Field(
+        default=True,
+        desc="If 'True', will calculate the MoE metrics (entropy and MI) at each logging step.",
+        hint=FieldHint.logging,
     )
 
     def _validate(self) -> None:
