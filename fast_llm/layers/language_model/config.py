@@ -44,6 +44,11 @@ class LanguageModelArchitectureConfig(BaseModelArchitectureConfig):
         desc="Configuration for the transformer architecture.",
         hint=FieldHint.core,
     )
+    vision_encoder: None | VisionArchitectureConfig = Field(
+        default=None,
+        desc="Configuration for the vision encoder that transforms images into embeddings.",
+        hint=FieldHint.optional,
+    )
     max_position_embeddings: int = Field(
         default=2048,
         desc="Number of absolute position embeddings, if applicable.",
@@ -125,7 +130,7 @@ class LanguageModelBaseConfig(LanguageModelArchitectureConfig, BaseModelConfig):
     architecture_class = LanguageModelArchitectureConfig
 
     transformer: TransformerConfig = FieldUpdate(default_factory=TransformerConfig)
-    vision_encoder: VisionArchitectureConfig | None = Field(
+    vision_encoder: None | VisionArchitectureConfig = FieldUpdate(
         default=None,
         desc="Configuration for the vision encoder that transforms images into embeddings.",
         hint=FieldHint.optional,

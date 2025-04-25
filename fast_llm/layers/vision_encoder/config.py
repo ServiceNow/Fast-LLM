@@ -2,6 +2,7 @@ from fast_llm.config import Field, FieldHint, config_class
 from fast_llm.engine.base_model.config import BaseModelArchitectureConfig
 from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
 from fast_llm.functional.config import ActivationType
+from fast_llm.layers.common.config import NormalizationType
 
 
 class VisionEncoderDimNames:
@@ -42,6 +43,11 @@ class VisionEncoderArchitectureConfig(BaseModelArchitectureConfig):
     Configuration class for the vision encoder, which transforms images into embeddings
     """
     path: str | None = Field(default=None, desc="Path to a pretrained vision encoder model.", hint=FieldHint.optional)
+    pre_norm: NormalizationType = Field(
+        default=NormalizationType.rms_norm,
+        desc="The type of normalization to use before the transformer layers.",
+        hint=FieldHint.optional,
+    )
     hidden_size: int = Field(
         default=1024, desc="The size of the hidden layers in the transformer model.", hint=FieldHint.optional
     )
@@ -74,6 +80,11 @@ class VisionEncoderArchitectureConfig(BaseModelArchitectureConfig):
     )
     initializer_range: float = Field(
         default=0.02, desc="The standard deviation of the normal initializer.", hint=FieldHint.optional
+    )
+    activation_type: ActivationType = Field(
+        default=ActivationType.silu,
+        desc="The activation function used in the hidden layers. Default: SiLU.",
+        hint=FieldHint.optional,
     )
 
 

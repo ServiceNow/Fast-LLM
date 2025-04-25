@@ -31,17 +31,17 @@ class VisionEncoder(Layer):
             else:
                 self._vision_encoder = PixtralVisionModel(
                     PixtralVisionConfig(
-                        hidden_size=self._config.hidden_size,
-                        intermediate_size=self._config.intermediate_size,
-                        num_hidden_layers=self._config.num_hidden_layers,
-                        num_attention_heads=self._config.num_attention_heads,
-                        num_channels=self._config.num_channels,
-                        image_size=self._config.image_size,
-                        patch_size=self._config.patch_size,
-                        hidden_act=self._config.hidden_act,
-                        attention_dropout=self._config.attention_dropout,
-                        rope_theta=self._config.rope_theta,
-                        initializer_range=self._config.initializer_range,
+                        hidden_size=self._config.encoder.hidden_size,
+                        intermediate_size=self._config.encoder.intermediate_size,
+                        num_hidden_layers=self._config.encoder.num_hidden_layers,
+                        num_attention_heads=self._config.encoder.num_attention_heads,
+                        num_channels=self._config.encoder.num_channels,
+                        image_size=self._config.encoder.image_size,
+                        patch_size=self._config.encoder.patch_size,
+                        hidden_act=self._config.encoder.hidden_act,
+                        attention_dropout=self._config.encoder.attention_dropout,
+                        rope_theta=self._config.encoder.rope_theta,
+                        initializer_range=self._config.encoder.initializer_range,
                     )
                 )
         param_names = []
@@ -49,8 +49,7 @@ class VisionEncoder(Layer):
         for name, param in self._vision_encoder.named_parameters():
             param_names.append(name)
         for name in param_names:
-            # exclude .weight/.bias
-            *module_path, stem = name.split(".")[:-1]
+            *module_path, stem = name.split(".")
             module = functools.reduce(getattr, module_path, self._vision_encoder)
             param = self._vision_encoder.get_parameter(name)
             setattr(
@@ -60,14 +59,10 @@ class VisionEncoder(Layer):
                     tuple(TensorDim(f"{name}_{idx}", size) for idx, size in enumerate(param.shape)),
                     init_method=init_normal_(),
                 ),
-                # ParameterMeta(
-                #     param,
-                #     tensor_name=name,
-                #     dims=(TensorDim(f"{name}_{idx}", size) for idx, size in enumerate(param.shape)),
-                #     init_method=init_normal_(),
-                #     allow_no_grad=True,
-                # ),
             )
+            none_params = [key for key, value in module._parameters.items() if value is None]
+            for key in none_params:
+                module._parameters.pop(key)
         self._adapter = VisionAdapter(
             intermediate_size=tensor_space.get_tensor_dim(VisionEncoderDimNames.intermediate_size),
             tensor_space=tensor_space,
