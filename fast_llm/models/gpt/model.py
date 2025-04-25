@@ -125,7 +125,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
         else:
             micro_batch_size, sequence_length = batch_meta.shape
             if phase != PhaseType.inference:
-                sequence_length -= 1
+                sequence_length -= self._config.prediction_heads
             micro_sequence_length = sequence_length
 
         batch_data = self._tensor_space.distributed_config.get_distributed_dim(DistributedDimNames.batch_data)
@@ -187,7 +187,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
         reference_preprocessed_metas = {}
         for name, reference_model in self._reference_models.items():
             reference_preprocessed_metas[name] = reference_model.fast_llm_model.base_model.preprocess_meta(
-                batch_meta, phase
+                batch_meta, PhaseType.inference
             )
             Assert.eq(len(reference_preprocessed_metas[name]), len(sequence_k_pasts))
 
@@ -213,9 +213,14 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             reference_kwargs = {}
             for name, reference_preprocessed_meta in reference_preprocessed_metas.items():
                 reference_tokens, reference_kwargs_ = reference_preprocessed_meta[i]
-                for key, value in common_kwargs.items():
-                    Assert.eq(reference_kwargs_[key], value)
-                Assert.eq(reference_kwargs_[TransformerKwargs.sequence_k_dim], sequence_k_dim)
+                for key in (
+                    TransformerKwargs.sequence_first,
+                    TransformerKwargs.hidden_dims,
+                    TransformerKwargs.sequence_length,
+                    TransformerKwargs.sequence_q_dim,
+                    TransformerKwargs.sequence_k_dim,
+                ):
+                    Assert.eq(reference_kwargs_[key], kwargs[key])
                 reference_kwargs[name] = reference_kwargs_
             kwargs["reference_models"] = reference_kwargs
 
@@ -249,13 +254,21 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             non_blocking=True,
         )
 
-        reference_logits = {}
+        reference_logits = [{} for _ in preprocessed_meta]
         for name, reference_model in self._reference_models.items():
-            reference_logits[name] = []
-            for _, kwargs_meta in preprocessed_meta:
-                reference_tokens, reference_kwargs = kwargs_meta["reference_models"][name]
+            reference_preprocessed_meta = [
+                (tokens_meta, kwargs_meta["reference_models"][name]) for tokens_meta, kwargs_meta in preprocessed_meta
+            ]
+
+            reference_batch = reference_model.fast_llm_model.base_model.preprocess(
+                batch, reference_preprocessed_meta, phase=PhaseType.inference, iteration=iteration
+            )
+
+            # TODO: Do things work with >1?
+            Assert.eq(len(reference_batch), len(preprocessed_meta), 1)
+            for i, (reference_tokens, reference_kwargs) in enumerate(reference_batch):
                 reference_model.forward(reference_tokens, reference_kwargs, iteration=iteration)
-                reference_logits[name].append(reference_kwargs["logits"])
+                reference_logits[i][f"{name}_logits"] = reference_kwargs["logits"]
 
         if sequence_first:
             # Move the sequence dimension first to make sequence parallel ops more efficient.
@@ -308,8 +321,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                                 else:
                                     labels[i, start : end + 1] = -100
                 kwargs[LanguageModelKwargs.labels] = labels
-            for name, reference_logits_ in reference_logits.items():
-                kwargs[f"{name}_logits"] = reference_logits_[i]
+            kwargs.update(reference_logits[i])
 
             for preprocessor in self._preprocessors:
                 preprocessor.preprocess(tokens, kwargs)
