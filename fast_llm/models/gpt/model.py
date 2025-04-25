@@ -80,7 +80,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                     self._config.transformer,
                     self._tensor_space,
                     # TODO MTP: which index?
-                    layer_index=self._config.transformer.num_layers,
+                    layer_index=self._config.transformer.num_layers + i,
                     # The last layer only returns the transformer output.
                     # The previous layers return a stack of shared_hidden and transformer_output.
                     return_input=i < self._config.prediction_heads - 1,
