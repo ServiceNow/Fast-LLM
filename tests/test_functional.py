@@ -2,38 +2,63 @@ import pytest
 import torch
 
 from fast_llm.functional.config import ActivationType, MLPRecomputeLevel
+from fast_llm.functional.dpo import _compute_dpo_loss
 from fast_llm.functional.triton.mlp import mlp_autograd, mlp_autograd_looped, torch_mlp_activation
 from fast_llm.functional.triton.sparse_copy import get_sparse_map
-from fast_llm.functional.dpo import compute_simplified_dpo_loss
 from fast_llm.utils import Assert
 from tests.common import requires_cuda
 
-def test_simplified_dpo_loss():
+
+def openrlhf_dpo_loss_fcn(
+    policy_chosen_logps: torch.Tensor,
+    policy_rejected_logps: torch.Tensor,
+    reference_chosen_logps: torch.Tensor,
+    reference_rejected_logps: torch.Tensor,
+    beta=1,
+    label_smoothing=0,
+) -> torch.Tensor:
+    pi_logratios = policy_chosen_logps - policy_rejected_logps
+    ref_logratios = reference_chosen_logps - reference_rejected_logps
+    logits = pi_logratios - ref_logratios
+
+    # Eq. 3 https://ericmitchell.ai/cdpo.pdf; label_smoothing=0 gives original DPO (Eq. 7 of https://arxiv.org/pdf/2305.18290.pdf)
+    losses = (
+        -torch.nn.functional.logsigmoid(beta * logits) * (1 - label_smoothing)
+        - torch.nn.functional.logsigmoid(-beta * logits) * label_smoothing
+    )
+
+    loss = losses.mean()
+
+    return loss
+
+
+def test_dpo_loss():
     torch.manual_seed(0)
-    vocab_size = 10
-    seq_length = 10
-    logits = torch.randn((seq_length, vocab_size))
-    targets = torch.randint(vocab_size, size=(seq_length-1, ))
 
-    dpo_loss, _ = compute_simplified_dpo_loss(
-        logits=logits,
-        targets=targets,
-        chosen_span=torch.tensor([[1, 2]]),
-        rejected_span=torch.tensor([[4, 5]]),
-        beta=0.1,
-        grad_output=0.25
-    )
-    Assert.rms_close(dpo_loss, torch.tensor(0.71527), 1e-5)
+    NUM_SAMPLES = 20
+    policy_chosen_logps = torch.rand(NUM_SAMPLES)
+    policy_rejected_logps = torch.rand(NUM_SAMPLES)
+    reference_chosen_logps = torch.rand(NUM_SAMPLES)
+    reference_rejected_logps = torch.rand(NUM_SAMPLES)
+    betas = torch.rand(NUM_SAMPLES)
 
-    dpo_loss, _ = compute_simplified_dpo_loss(
-        logits=logits,
-        targets=targets,
-        chosen_span=torch.tensor([[2, 3]]),
-        rejected_span=torch.tensor([[5, 7]]),
-        beta=0.3,
-        grad_output=0.25
-    )
-    Assert.rms_close(dpo_loss, torch.tensor(0.30449), 1e-5)
+    for i in range(NUM_SAMPLES):
+        fastllm_dpo_loss = _compute_dpo_loss(
+            policy_chosen_logps=policy_chosen_logps[i],
+            policy_rejected_logps=policy_rejected_logps[i],
+            reference_chosen_logps=reference_chosen_logps[i],
+            reference_rejected_logps=reference_rejected_logps[i],
+            beta=betas[i].item(),
+        )
+        openrlhf_dpo_loss = openrlhf_dpo_loss_fcn(
+            policy_chosen_logps=policy_chosen_logps[i].unsqueeze(0),
+            policy_rejected_logps=policy_rejected_logps[i].unsqueeze(0),
+            reference_chosen_logps=reference_chosen_logps[i].unsqueeze(0),
+            reference_rejected_logps=reference_rejected_logps[i].unsqueeze(0),
+            beta=betas[i].item(),
+        )
+        Assert.rms_close(fastllm_dpo_loss, openrlhf_dpo_loss, 1e-5)
+
 
 @requires_cuda
 @pytest.mark.parametrize("gated", [True, False])

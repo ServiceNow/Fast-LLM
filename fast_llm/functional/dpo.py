@@ -26,6 +26,22 @@ def compute_logprobs_for_spans(
     return chosen_logp, rejected_logp
 
 
+def _compute_dpo_loss(
+    policy_chosen_logps: torch.Tensor,
+    policy_rejected_logps: torch.Tensor,
+    reference_chosen_logps: torch.Tensor,
+    reference_rejected_logps: torch.Tensor,
+    beta: float,
+):
+    pi_logratios = policy_chosen_logps - policy_rejected_logps
+    ref_logratios = reference_chosen_logps - reference_rejected_logps
+
+    diff_logratios = pi_logratios - ref_logratios
+
+    losses = -torch.nn.functional.logsigmoid(beta * diff_logratios)
+    return losses
+
+
 def compute_dpo_loss(
     logits: torch.Tensor,
     targets: torch.Tensor,
@@ -47,12 +63,13 @@ def compute_dpo_loss(
             reference_model_logits_, targets, chosen_span, rejected_span
         )
 
-        pi_logratios = policy_chosen_logps - policy_rejected_logps
-        ref_logratios = reference_chosen_logps - reference_rejected_logps
-
-        diff_logratios = pi_logratios - ref_logratios
-
-        losses = -torch.nn.functional.logsigmoid(beta * diff_logratios)
+        losses = _compute_dpo_loss(
+            policy_chosen_logps=policy_chosen_logps,
+            policy_rejected_logps=policy_rejected_logps,
+            reference_chosen_logps=reference_chosen_logps,
+            reference_rejected_logps=reference_rejected_logps,
+            beta=beta,
+        )
 
         if grad_output is None:
             loss = None
