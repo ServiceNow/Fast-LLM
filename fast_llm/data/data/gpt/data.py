@@ -159,11 +159,9 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
         Assert.in_range_incl(batch_config.sequence_length, 1, sampling_parameters.sequence_length)
         log_main_rank(f"Initializing {dataset_name} dataset iterator from sample {consumed_samples}...")
 
-        dataset = self._datasets[dataset_name]  # noqa
-
         return iter(
             torch.utils.data.DataLoader(
-                dataset,
+                self._datasets[dataset_name],  # noqa
                 batch_sampler=SampledDatasetIterator(
                     total_samples=len(self._datasets[dataset_name]),
                     begin_index=consumed_samples,

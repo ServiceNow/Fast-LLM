@@ -202,7 +202,7 @@ class GPTSampledIndexedDataset(SampledDataset):
         if self._yaml_path is not None and self._yaml_path.is_file():
             loaded_yaml_data = yaml.safe_load(self._yaml_path.open("r"))
             self._load_yaml_data(yaml_data)
-            if not self._truncate_documents:
+            if not self._truncate_documents and not self._parameters.use_preference_loss_masking_spans:
                 del loaded_yaml_data["unshuffled_tokens"]
 
             if loaded_yaml_data != yaml_data:
@@ -266,8 +266,7 @@ class GPTSampledIndexedDataset(SampledDataset):
             raise NotImplementedError(f"Unknown shuffling type: {self._config.shuffle}")
 
         if self._parameters.use_preference_loss_masking_spans:
-            if not self._truncate_documents:
-                yaml_data["unshuffled_tokens"] = None
+            yaml_data["unshuffled_tokens"] = 0  # not used, ignore
 
             # index of all documents less than seq length long
             doc_length_filtered_indicies = torch.nonzero(~long_docs_filter, as_tuple=True)[0]
@@ -518,7 +517,9 @@ class GPTSampledIndexedDataset(SampledDataset):
     def _load_yaml_data(self, data: dict[str, typing.Any]) -> None:
         self._documents_per_epoch = data["dataset"]["documents_per_epoch"]
 
-        if "unshuffled_tokens" not in data:
+        if self._parameters.use_preference_loss_masking_spans:
+            data["unshuffled_tokens"] = 0  # not used, ignore
+        elif "unshuffled_tokens" not in data:
             # Backward compatibility
             # TODO v0.x: Remove
             assert self._truncate_documents
