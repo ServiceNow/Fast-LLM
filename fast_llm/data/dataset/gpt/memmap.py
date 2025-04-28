@@ -200,7 +200,7 @@ class GPTMemmapDataset(GPTIndexedDataset):
             for image_length in self._image_lengths[idx]:
                 # TODO Soham: verify reshape dimension order
                 n_pixels = image_length.prod(initial=3)
-                images.append(pixels[start : start + n_pixels].reshape(image_length[0], image_length[1], 3))
+                images.append(pixels[start : start + n_pixels].reshape(3, image_length[0], image_length[1]))
                 start += n_pixels
         # TODO Soham: return loss_masking_spans
         return GPTSample(token_ids=token_ids, images=images, image_positions=image_positions)
@@ -296,8 +296,8 @@ class GPTMemmapDataset(GPTIndexedDataset):
                     for image in document.images:
                         # assume 3 channels (RGB) for all images
                         with PIL.Image.open(io.BytesIO(image["bytes"])) as img:
-                            pixels = np.array(img)
-                        image_lengths.append(np.array(pixels.shape[:2]))
+                            pixels = np.array(img).transpose(2, 0, 1)  # HWC to CHW
+                        image_lengths.append(np.array(pixels.shape[1:]))
                         bin_stream.write(pixels.tobytes(order="C"))
                         total_im_size += pixels.size
                     im_positions.append(document.image_positions)

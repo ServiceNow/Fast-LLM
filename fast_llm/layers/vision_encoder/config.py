@@ -1,4 +1,4 @@
-from fast_llm.config import Field, FieldHint, config_class
+from fast_llm.config import Config, Field, FieldHint, config_class
 from fast_llm.engine.base_model.config import BaseModelArchitectureConfig
 from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
 from fast_llm.functional.config import ActivationType
@@ -10,6 +10,17 @@ class VisionEncoderDimNames:
     intermediate_size = "vision_intermediate_size"
     patch_height = "vision_patch_height"
     patch_width = "vision_patch_width"
+
+
+class VisionModelKwargs:
+    images = "images"
+    image_positions = "image_positions"
+    image_height = "image_height"
+    image_width = "image_width"
+    image_sizes = "image_sizes"
+    image_mean = "image_normalization_mean"
+    image_std = "image_normalization_std"
+    image_rescale_factor = "image_rescale_factor"
 
 
 @config_class()
@@ -89,6 +100,45 @@ class VisionEncoderArchitectureConfig(BaseModelArchitectureConfig):
 
 
 @config_class()
+class ImageNormalizationConfig(Config):
+    mean_r: float = Field(
+        default=0.48145466,
+        desc="Mean value for the red channel in the image normalization process.",
+        hint=FieldHint.optional,
+    )
+    mean_g: float = Field(
+        default=0.4578275,
+        desc="Mean value for the green channel in the image normalization process.",
+        hint=FieldHint.optional,
+    )
+    mean_b: float = Field(
+        default=0.40821073,
+        desc="Mean value for the blue channel in the image normalization process.",
+        hint=FieldHint.optional,
+    )
+    std_r: float = Field(
+        default=0.26862954,
+        desc="Standard deviation value for the red channel in the image normalization process.",
+        hint=FieldHint.optional,
+    )
+    std_g: float = Field(
+        default=0.26130258,
+        desc="Standard deviation value for the green channel in the image normalization process.",
+        hint=FieldHint.optional,
+    )
+    std_b: float = Field(
+        default=0.27577711,
+        desc="Standard deviation value for the blue channel in the image normalization process.",
+        hint=FieldHint.optional,
+    )
+    rescale_factor: float = Field(
+        default=255.0,
+        desc="Rescale factor for the image normalization process.",
+        hint=FieldHint.optional,
+    )
+
+
+@config_class()
 class VisionArchitectureConfig(BaseModelArchitectureConfig):
     _abstract = False
 
@@ -106,6 +156,11 @@ class VisionArchitectureConfig(BaseModelArchitectureConfig):
         default=ActivationType.gelu,
         desc="The intermediate activation type for multi-modal adapter. Default: GeLU.",
         hint=FieldHint.core,
+    )
+    normalization: ImageNormalizationConfig = Field(
+        default_factory=ImageNormalizationConfig,
+        desc="Configuration for the normalization layers applied to the image patches.",
+        hint=FieldHint.optional,
     )
 
     def setup_tensor_space(self, tensor_space: TensorSpace):

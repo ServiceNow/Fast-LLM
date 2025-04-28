@@ -14,6 +14,7 @@ from fast_llm.layers.language_model.config import LanguageModelKwargs, LanguageM
 from fast_llm.layers.language_model.embedding import WORD_EMBEDDINGS_WEIGHT, LanguageModelEmbedding
 from fast_llm.layers.language_model.head import OUTPUT_WEIGHTS, LanguageModelHead
 from fast_llm.layers.language_model.preprocessing import PositionEmbeddingPreprocessor
+from fast_llm.layers.multi_modal.embedding import MultiModalEmbedding
 from fast_llm.layers.transformer.config import (
     RoutingType,
     TransformerDimNames,
@@ -26,7 +27,8 @@ from fast_llm.layers.transformer.preprocessing import (
     RotaryEmbeddingPreprocessor,
 )
 from fast_llm.layers.transformer.transformer import TransformerLayer
-from fast_llm.layers.vision_encoder.encoder import VisionEncoder
+from fast_llm.layers.vision_encoder.config import VisionModelKwargs
+from fast_llm.layers.vision_encoder.preprocessing import VisionPreprocessor
 from fast_llm.models.gpt.config import GPTBaseModelConfig, GPTModelConfig
 from fast_llm.models.gpt.megatron import get_init_megatron
 from fast_llm.tensor import ParameterMeta, TensorMeta
@@ -72,6 +74,9 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
         else:
             self._flash_varlen_preprocessor = FlashAttnVarlenPreprocessor(self._config.transformer, self._tensor_space)
 
+        if self._config.vision_encoder:
+            self._vision_preprocessor = VisionPreprocessor(self._config.vision_encoder, self._tensor_space)
+
     def get_output_layers(self) -> list[Layer]:
         return [
             layer
@@ -98,14 +103,19 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
         if self._config.transformer.num_layers == 0:
             Assert.eq(self._config.prediction_heads, 1)
             return [
-                LanguageModelEmbedding(self._config, self._tensor_space),
+                (
+                    LanguageModelEmbedding(self._config, self._tensor_space)
+                    if self._config.vision_encoder is None
+                    else MultiModalEmbedding(self._config, self._tensor_space)
+                ),
                 LanguageModelHead(self._config, self._tensor_space, 0),
             ]
-        return (
-            [VisionEncoder(self._config, self._tensor_space)] if self._config.vision_encoder is not None else []
-        ) + [
-            # return [
-            LanguageModelEmbedding(self._config, self._tensor_space),
+        return [
+            (
+                LanguageModelEmbedding(self._config, self._tensor_space)
+                if self._config.vision_encoder is None
+                else MultiModalEmbedding(self._config, self._tensor_space)
+            ),
             *[
                 TransformerLayer(
                     self._config.transformer,
@@ -138,6 +148,30 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             if phase != PhaseType.inference:
                 sequence_length -= 1
             micro_sequence_length = sequence_length
+
+        if self._config.vision_encoder:
+            image_height = batch_meta.max_image_height
+            image_width = batch_meta.max_image_width
+            image_mean = [
+                self._config.vision_encoder.normalization.mean_r,
+                self._config.vision_encoder.normalization.mean_g,
+                self._config.vision_encoder.normalization.mean_b,
+            ]
+            image_std = [
+                self._config.vision_encoder.normalization.std_r,
+                self._config.vision_encoder.normalization.std_g,
+                self._config.vision_encoder.normalization.std_b,
+            ]
+            image_rescale_factor = self._config.vision_encoder.normalization.rescale_factor
+            vision_kwargs = {
+                VisionModelKwargs.image_height: image_height,
+                VisionModelKwargs.image_width: image_width,
+                VisionModelKwargs.image_mean: image_mean,
+                VisionModelKwargs.image_std: image_std,
+                VisionModelKwargs.image_rescale_factor: image_rescale_factor,
+            }
+        else:
+            vision_kwargs = {}
 
         batch_data = self._tensor_space.distributed_config.get_distributed_dim(DistributedDimNames.batch_data)
         batch_dim = TensorDim(TransformerDimNames.batch, micro_batch_size * batch_data.size, batch_data)
@@ -189,6 +223,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             TransformerKwargs.sequence_length: sequence_length,
             TransformerKwargs.sequence_q_dim: sequence_q_dim,
         }
+        common_kwargs.update(vision_kwargs)
 
         preprocessed_meta = []
         for sequence_k_past in range(
@@ -270,6 +305,16 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                 kwargs_meta[TransformerKwargs.sequence_lengths] = batch.sequence_lengths
                 if self._use_flash_attention:
                     self._flash_varlen_preprocessor.preprocess(kwargs_meta)
+
+            if batch.images is not None:
+                kwargs_meta[VisionModelKwargs.images] = [
+                    img.to(device=self._tensor_space.distributed.device, dtype=torch.uint8, non_blocking=True)
+                    for images in batch.images
+                    for img in images
+                ]
+                kwargs_meta[VisionModelKwargs.image_positions] = batch.image_positions
+                if self._config.vision_encoder:
+                    self._vision_preprocessor.preprocess(kwargs_meta)
 
             # TODO: Add pasts/presents to meta input?
             # Use lists as pointers so `past_key_values` is populated during the previous micro_sequence.

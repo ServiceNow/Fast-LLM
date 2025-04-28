@@ -9,10 +9,11 @@ from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
 from fast_llm.layers.language_model.config import LanguageModelBaseConfig
 from fast_llm.layers.transformer.config import TransformerKwargs
 from fast_llm.layers.vision_encoder.adapter import VisionAdapter
-from fast_llm.layers.vision_encoder.config import VisionEncoderDimNames
+from fast_llm.layers.vision_encoder.config import VisionEncoderDimNames, VisionModelKwargs
 from fast_llm.tensor import ParameterMeta, TensorMeta, init_normal_
 
 
+# TODO Soham: should this just be nn.Module?
 class VisionEncoder(Layer):
     """
     A vision encoder layer for creating token embeddings from vision model
@@ -25,11 +26,14 @@ class VisionEncoder(Layer):
         self._distributed_config = tensor_space.distributed_config
         with torch.device("meta"):
             if self._config.encoder.path:
-                self._vision_encoder = PixtralVisionModel.from_pretrained(
+                self.vision_encoder = PixtralVisionModel.from_pretrained(
                     self._config.encoder.path, torch_dtype=self._distributed_config.training_dtype.torch
                 )
             else:
-                self._vision_encoder = PixtralVisionModel(
+                # TODO Soham options to fix rotary:
+                # 1. load PixtralTransformer instead of PixtralVisionModel. Required to implement conv2d, ln_pre separately and store positional embeddings in kwargs_meta
+                # 2. set self.vision_encoder.position_embeddings = PixtralRotaryEmbedding(config) outside of meta scope
+                self.vision_encoder = PixtralVisionModel(
                     PixtralVisionConfig(
                         hidden_size=self._config.encoder.hidden_size,
                         intermediate_size=self._config.encoder.intermediate_size,
@@ -46,12 +50,12 @@ class VisionEncoder(Layer):
                 )
         param_names = []
         # gather all names first. PyTorch complains if we do it in the loop
-        for name, param in self._vision_encoder.named_parameters():
+        for name, param in self.vision_encoder.named_parameters():
             param_names.append(name)
         for name in param_names:
             *module_path, stem = name.split(".")
-            module = functools.reduce(getattr, module_path, self._vision_encoder)
-            param = self._vision_encoder.get_parameter(name)
+            module = functools.reduce(getattr, module_path, self.vision_encoder)
+            param = self.vision_encoder.get_parameter(name)
             setattr(
                 module,
                 stem,
@@ -60,10 +64,10 @@ class VisionEncoder(Layer):
                     init_method=init_normal_(),
                 ),
             )
-            none_params = [key for key, value in module._parameters.items() if value is None]
-            for key in none_params:
-                module._parameters.pop(key)
-        self._adapter = VisionAdapter(
+            # none_params = [key for key, value in module._parameters.items() if value is None]
+            # for key in none_params:
+            #     module._parameters.pop(key)
+        self.adapter = VisionAdapter(
             intermediate_size=tensor_space.get_tensor_dim(VisionEncoderDimNames.intermediate_size),
             tensor_space=tensor_space,
         )
@@ -81,4 +85,4 @@ class VisionEncoder(Layer):
                 tensor_name="Vision Output",
                 dtype=self._distributed_config.training_dtype.torch,
             )
-        return self._vision_encoder(input_)
+        return self.adapter(self.vision_encoder(input_, kwargs[VisionModelKwargs.image_sizes]))
