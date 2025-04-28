@@ -12,7 +12,7 @@ from fast_llm.engine.distributed.config import DistributedDimNames
 from fast_llm.functional.autograd import grad_is_context, wrap_forward_backward
 from fast_llm.functional.config import CrossEntropyImpl, TargetFormat, TritonConfig
 from fast_llm.functional.cross_entropy import cross_entropy_forward_backward
-from fast_llm.functional.dpo import compute_simplified_dpo_loss
+from fast_llm.functional.dpo import compute_dpo_loss
 from fast_llm.functional.linear import output_parallel_linear_backward, output_parallel_linear_forward
 from fast_llm.layers.common.auxiliary_loss import AuxiliaryLoss, z_loss
 from fast_llm.layers.language_model.config import (
@@ -144,13 +144,16 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
     def _forward_backward(
         self, input_: torch.Tensor, kwargs: dict, losses: dict | None = None
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
-        target = kwargs.get(
-            LanguageModelKwargs.labels
-            if self._config.distillation_model is None
-            else f"{self._config.distillation_model}_logits"
-        )
+        if kwargs.get(LanguageModelKwargs.labels) is None:
+            target = None
+        else:
+            target = kwargs.get(
+                LanguageModelKwargs.labels
+                if self._use_dpo_loss or self._config.distillation_model is None
+                else f"{self._config.distillation_model}_logits"
+            )
         if target is not None:
-            if self._config.distillation_model is None:
+            if self._config.distillation_model is None or self._use_dpo_loss:
                 # MTP: Shift the labels
                 target = (
                     target[self._prediction_distance : self._prediction_distance + input_.size(0),]
@@ -300,9 +303,10 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
         if target is None:
             return logits * self._logits_scale_factor, None
         if self._use_dpo_loss:
-            loss, grad = compute_simplified_dpo_loss(
+            loss, grad = compute_dpo_loss(
                 logits.flatten(0, -2),
                 target,
+                kwargs.get(f"{self._config.distillation_model}_logits").flatten(0, -2),
                 kwargs[LanguageModelKwargs.chosen_spans],
                 kwargs[LanguageModelKwargs.rejected_spans],
                 self.dpo_beta,
