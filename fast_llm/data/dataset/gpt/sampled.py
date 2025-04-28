@@ -548,10 +548,10 @@ class LegacyGPTSampledIndexedDataset(SampledDataset):
             raise NotImplementedError(
                 "Legacy sampling only supports document truncation. Please use the latest dataset format."
             )
-        if sampling.use_preference_loss_masking_spans:
-            raise NotImplementedError("Legacy sampling does not support preference loss masking.")
         self._config = sampling.config
         self._parameters = sampling.parameters
+        if self._parameters.use_preference_loss_masking_spans:
+            raise NotImplementedError("Legacy sampling does not support preference loss masking.")
 
         if sampling.cache_directory is None:
             log_main_rank(

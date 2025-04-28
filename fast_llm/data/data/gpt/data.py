@@ -40,6 +40,8 @@ def gpt_data_collate_fn(batch: list[GPTSample], sampling_parameters: GPTSampling
     stacked_ids = np.stack([sample.token_ids for sample in batch])
     stacked_spans = None
     sequence_lengths = None
+    stacked_chosen_spans = None
+    stacked_rejected_spans = None
     if sampling_parameters.use_loss_masking_spans:
         stacked_spans = [torch.from_numpy(sample.loss_masking_spans) for sample in batch]
     if sampling_parameters.use_preference_loss_masking_spans:
