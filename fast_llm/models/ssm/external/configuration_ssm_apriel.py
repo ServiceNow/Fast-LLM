@@ -56,6 +56,7 @@ class AprielSSMConfig(PretrainedConfig):
         mlp_bias=False,
         rms_norm_eps=1e-5,
         ssm_cfg: dict = None,
+        head_dim: int = 128,
         **kwargs,
     ):
         self.vocab_size = vocab_size
@@ -71,8 +72,7 @@ class AprielSSMConfig(PretrainedConfig):
         self.use_cache = use_cache
         # self.rope_theta = rope_theta
         self.mlp_bias = mlp_bias
-        # self.head_dim = head_dim if head_dim is not None else self.hidden_size // self.num_attention_heads
-
+        self.head_dim = head_dim
         # Validate the correctness of rotary position embeddings parameters
         # BC: if there is a 'type' field, copy it it to 'rope_type'.
         # if self.rope_scaling is not None and "type" in self.rope_scaling:
@@ -94,8 +94,9 @@ class AprielSSMConfig(PretrainedConfig):
             "chunk_size": 128,
             "activation": "identity",
             "bias": False,
-            "d_inner": 4104,  # to make sure we have 24 heads
+            "d_inner": 24 * self.head_dim,  # num_heads * head_dim
         }
+        assert self.head_dim == self.ssm_cfg["d_inner"] // self.ssm_cfg["n_qk_heads"]
 
 
 __all__ = ["AprielConfig"]
