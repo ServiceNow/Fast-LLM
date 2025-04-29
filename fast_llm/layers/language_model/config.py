@@ -215,6 +215,8 @@ class LanguageModelBaseConfig(LanguageModelArchitectureConfig, BaseModelConfig):
         super()._validate()
         if self.init_method_max_embed is not None and self.init_method_min_embed is not None:
             Assert.leq(self.init_method_min_embed, self.init_method_max_embed)
+        if self.prediction_heads > 1:
+            Assert.gt(self.transformer.num_layers, 1)
         if self.distillation_model is not None:
             if self.prediction_heads > 1:
                 raise NotImplementedError("Multi-token prediction not supported with distillation.")

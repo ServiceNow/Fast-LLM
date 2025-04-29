@@ -102,6 +102,9 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                     self._config.transformer,
                     self._tensor_space,
                     layer_index=i + 1,
+                    # The last layer only returns the transformer output.
+                    # The previous layers return a stack of shared_hidden and transformer_output.
+                    return_input=self._config.prediction_heads > 1 and i == self._config.transformer.num_layers - 1,
                 )
                 for i in range(self._config.transformer.num_layers)
             ],
