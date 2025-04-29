@@ -226,4 +226,6 @@ class GPTTrainerConfig(PretrainedGPTModelConfig, TrainerConfig):
     def get_inference_runner_class(cls) -> type["GPTInferenceRunner"]:
         from fast_llm.models.gpt.model import GPTInferenceRunner
 
+        # TODO" we dont have inference runner for SSM/Hybrid yet, should return None?
+
         return GPTInferenceRunner

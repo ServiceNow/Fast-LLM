@@ -349,58 +349,58 @@ class AprielSSMHuggingfaceCheckpointHandler(CommonSSMHuggingfaceCheckpointHandle
 
         # Embedding and output
         if self._model.config.base_model.tie_word_embeddings:
-            converters.append(WeightConverter("layers.0.word_embeddings_weight", "backbone.embedding.weight"))
+            converters.append(WeightConverter("layers.0.word_embeddings_weight", "model.embed_tokens.weight"))
             converters.append(IgnoreImportWeightConverter((), "lm_head.weight"))
         else:
-            converters.append(WeightConverter("layers.0.word_embeddings_weight", "backbone.embedding.weight"))
+            converters.append(WeightConverter("layers.0.word_embeddings_weight", "model.embed_tokens.weight"))
             converters.append(WeightConverter(f"layers.{num_layers + 1}.output_weights", "lm_head.weight"))
 
         # Final norm
         converters += self._get_weight_and_bias_converters(
-            f"layers.{num_layers + 1}.final_norm", "backbone.final_layernorm", norm_bias
+            f"layers.{num_layers + 1}.final_norm", "model.norm", norm_bias
         )
 
         for i in range(num_layers):
             # SSM
             converters += self._get_weight_and_bias_converters(
-                f"layers.{i+1}.mixer.in_proj", f"backbone.layers.{i}.mixer.in_proj", ssm_bias
+                f"layers.{i+1}.mixer.in_proj", f"model.layers.{i}.mixer.in_proj", ssm_bias
             )
             converters += self._get_weight_and_bias_converters(
-                f"layers.{i+1}.mixer.out_proj", f"backbone.layers.{i}.mixer.out_proj", ssm_bias
+                f"layers.{i+1}.mixer.out_proj", f"model.layers.{i}.mixer.out_proj", ssm_bias
             )
             converters.append(
-                WeightConverter(f"layers.{i+1}.mixer.D", f"backbone.layers.{i}.mixer.D", self._model.config.base_model)
+                WeightConverter(f"layers.{i+1}.mixer.D", f"model.layers.{i}.mixer.D", self._model.config.base_model)
             )
             converters.append(
                 WeightConverter(
-                    f"layers.{i+1}.mixer.z_bias", f"backbone.layers.{i}.mixer.z_bias", self._model.config.base_model
+                    f"layers.{i+1}.mixer.z_bias", f"model.layers.{i}.mixer.z_bias", self._model.config.base_model
                 )
             )
             converters.append(
                 WeightConverter(
                     f"layers.{i+1}.mixer.conv1d_weight",
-                    f"backbone.layers.{i}.mixer.conv1d.weight",
+                    f"model.layers.{i}.mixer.conv1d.weight",
                     self._model.config.base_model,
                 )
             )
             converters.append(
                 WeightConverter(
                     f"layers.{i+1}.mixer.conv1d_bias",
-                    f"backbone.layers.{i}.mixer.conv1d.bias",
+                    f"model.layers.{i}.mixer.conv1d.bias",
                     self._model.config.base_model,
                 )
             )
 
             # Norm
             converters += self._get_weight_and_bias_converters(
-                f"layers.{i+1}.norm_1", f"backbone.layers.{i}.input_layernorm", norm_bias
+                f"layers.{i+1}.norm_1", f"model.layers.{i}.input_layernorm", norm_bias
             )
             converters += self._get_weight_and_bias_converters(
-                f"layers.{i+1}.norm_2", f"backbone.layers.{i}.post_attention_layernorm", norm_bias
+                f"layers.{i+1}.norm_2", f"model.layers.{i}.post_attention_layernorm", norm_bias
             )
 
             # MLP
-            converters += self._get_mlp_converters(f"layers.{i+1}", f"backbone.layers.{i}")
+            converters += self._get_mlp_converters(f"layers.{i+1}", f"model.layers.{i}")
 
         return converters
 
