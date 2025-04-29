@@ -1,0 +1,77 @@
+training:
+  train_iters: 100_000
+  logs:
+    interval: 10
+  evaluations:
+    gsm8k:
+      type: lm_eval
+      cli_args:
+        - --tasks
+        - gsm8k
+        - --output_path
+        - /mnt/checkpoints/test/denis/qwen_eval_experiment/lm_eval
+    # stack_3b:
+    #   iterations: 10
+    #   interval: 10
+    # fineweb:
+    #   iterations: 10
+    #   interval: 10
+  checkpoint:
+    interval: 1000
+    keep: 5
+  test_iters: 0
+  export:  # (1)!
+    format: llama
+    interval: 20_000
+batch:
+  micro_batch_size: 16
+  sequence_length: 4096
+  batch_size: 16
+data:
+  tokenizer:
+    path: /mnt/checkpoints/pretrained_models/Qwen2-1.5B-Instruct
+    bos_token: "<|endoftext|>"
+  datasets:
+  # Bad dataset they are tokenized with different tokenizer, then llama
+    training:
+      type: file
+      path: /mnt/datasets/test/denis/fineweb_the_stack_3b.yaml
+    stack_3b:
+      type: memmap
+      path: /mnt/datasets/data_collections/the_stack_3b/tokens/stack_3b/default/train/99
+    fineweb:
+      type: memmap
+      path: /mnt/datasets/data_collections/standalone_datasets/tokens/HuggingFaceFW/fineweb/default/train/9_1000
+optimizer:  
+  weight_decay: 0.1
+  beta_1: 0.9
+  beta_2: 0.95
+  learning_rate:
+    base: 1.0e-04  # (3)!
+    minimum: 1.0e-05
+    decay_style: cosine
+    decay_iterations: 100_000
+    warmup_iterations: 2000
+pretrained:  # (4)!
+  format: qwen2
+  path: /mnt/checkpoints/pretrained_models/Qwen2-1.5B-Instruct
+  model_weights: yes  # (5)!
+model:
+  base_model:
+    transformer:
+      use_flash_attention: yes
+    cross_entropy_impl: fused
+  multi_stage:
+    zero_stage: 2
+  distributed:
+    training_dtype: bf16  
+
+run:
+  experiment_dir: "/mnt/checkpoints/test/denis/qwen_eval_experiment"
+
+# training:
+#   logs:
+#     interval: 10
+#   wandb:
+#     project_name: ${job.project_name}
+#     group_name: ${job.project_version}
