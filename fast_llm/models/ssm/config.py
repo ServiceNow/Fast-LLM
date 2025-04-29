@@ -10,7 +10,7 @@ from fast_llm.engine.multi_stage.config import FastLLMModelConfig, PretrainedFas
 from fast_llm.engine.training.config import TrainerConfig
 from fast_llm.layers.language_model.config import LanguageModelArchitectureConfig, LanguageModelBaseConfig
 from fast_llm.layers.ssm.config import SSMDimNames
-from fast_llm.models.gpt.config import GPTBatchConfig
+from fast_llm.models.gpt.config import GPTBatchConfig, PretrainedGPTModelConfig
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
@@ -169,9 +169,36 @@ class PretrainedHybridSSMModelConfig(PretrainedFastLLMModelConfig):
 class HybridTrainerConfig(PretrainedHybridSSMModelConfig, TrainerConfig):
     data: GPTDataConfig = FieldUpdate(default_factory=GPTDataConfig)
     batch: GPTBatchConfig = FieldUpdate(default_factory=GPTBatchConfig)
+    reference_models: dict[str, PretrainedGPTModelConfig] = (
+        FieldUpdate()
+    )  # TODO: make sure any reference mdoel can be suported
 
     @classmethod
     def get_trainer_class(cls) -> type["SSMTrainer"]:
         from fast_llm.models.ssm.trainer import SSMTrainer
 
         return SSMTrainer
+
+    def _validate(self) -> None:
+        super()._validate()
+        if (name := self.model.base_model.distillation_model) is None:
+            Assert.empty(self.reference_models)
+        else:
+            Assert.eq(self.reference_models.keys(), {name})
+        if self.model.base_model.use_absolute_position_embeddings:
+            Assert.geq(self.model.base_model.num_absolute_position_embeddings, self.batch.sequence_length)
+        if self.model.base_model.distillation_model is not None:
+            # TODO: Support loss masking for distillation?
+            assert not self.batch.use_loss_masking_spans
+        for reference_model in self.reference_models.values():
+            Assert.none(reference_model.model.base_model.distillation_model)
+            # TODO: Support more LM head features.
+            Assert.none(reference_model.model.base_model.cross_entropy_splits)
+            Assert.eq(reference_model.model.base_model.parallel_embeddings, self.model.base_model.parallel_embeddings)
+            Assert.geq(reference_model.model.base_model.prediction_heads, self.model.base_model.prediction_heads)
+
+    @classmethod
+    def get_inference_runner_class(cls) -> type["GPTInferenceRunner"]:
+        from fast_llm.models.gpt.model import GPTInferenceRunner
+
+        return GPTInferenceRunner
