@@ -186,7 +186,7 @@ class TransformerSubLayerName(str, enum.Enum):
 @config_class()
 class TransformerPeftConfig(PeftConfig):
     layers: list[TransformerSubLayerName] = Field(
-        default_factory=lambda: [TransformerSubLayerName.query, TransformerSubLayerName.value_],
+        default=None,
         desc="The layers on which to apply LoRA.",
         hint=FieldHint.feature,
     )
@@ -220,6 +220,15 @@ class TransformerPeftConfig(PeftConfig):
         return parameter
 
     def _validate(self) -> None:
+        if self.layers is None:
+            with self._set_implicit_default():
+                # Setting the default layers only whee PeFT is enabled
+                # so they don't appear when serializing the default transformer config.
+                self.layers = (
+                    [TransformerSubLayerName.query, TransformerSubLayerName.value_]
+                    if self.type == PeftType.lora
+                    else []
+                )
         if self.type != PeftType.none:
             if TransformerSubLayerName.mlp_1 in self.layers or TransformerSubLayerName.mlp_2 in self.layers:
                 # TODO: Add MLP support.
@@ -338,12 +347,13 @@ class TransformerArchitectureConfig(BaseModelArchitectureConfig):
     )
 
     def _validate(self) -> None:
-        if self.ffn_hidden_size is None:
-            self.ffn_hidden_size = 4 * self.hidden_size
-        if self.kv_channels is None:
-            self.kv_channels = div(self.hidden_size, self.num_attention_heads)
-        if self.activation_type is None:
-            self.activation_type = ActivationType.silu if self.gated else ActivationType.gelu
+        with self._set_implicit_default():
+            if self.ffn_hidden_size is None:
+                self.ffn_hidden_size = 4 * self.hidden_size
+            if self.kv_channels is None:
+                self.kv_channels = div(self.hidden_size, self.num_attention_heads)
+            if self.activation_type is None:
+                self.activation_type = ActivationType.silu if self.gated else ActivationType.gelu
         self.projection_size = self.num_attention_heads * self.kv_channels
         self.num_unshared_experts = self.num_experts - self.num_shared_experts
 
@@ -620,8 +630,8 @@ class TransformerConfig(TransformerArchitectureConfig, BaseModelConfig):
         hint=FieldHint.feature,
         valid=check_field(Assert.geq, 0),
     )
-    mlp_lr_scale: list[float | None] = Field(
-        default_factory=list,
+    mlp_lr_scale: float | None | list[float | None] = Field(
+        default=None,
         desc="Custom learning rate scale for each expert.",
         doc="May be used to freeze some experts by setting their scale to zero.",
         hint=FieldHint.feature,
@@ -658,54 +668,56 @@ class TransformerConfig(TransformerArchitectureConfig, BaseModelConfig):
     )
 
     def _validate(self) -> None:
-        if self.init_method_std is None:
-            self.init_method_std = self.hidden_size**-0.5
-        if self.init_method_std_qkv is None:
-            self.init_method_std_qkv = self.init_method_std
-        if self.init_method_std_attn_proj is None:
-            self.init_method_std_attn_proj = self.init_method_std / (2 * self.num_layers) ** 0.5
-        if self.init_method_std_mlp_1 is None:
-            self.init_method_std_mlp_1 = self.init_method_std
-        if self.init_method_std_mlp_2 is None:
-            self.init_method_std_mlp_2 = self.init_method_std / (2 * self.num_layers) ** 0.5
-        if self.mlp_lr_scale is None or len(self.mlp_lr_scale) == 0:
-            self.mlp_lr_scale = [None]
-        if self.init_method_max_qkv is None:
-            self.init_method_max_qkv = self.init_method_max
-        if self.init_method_min_qkv is None:
-            self.init_method_min_qkv = self.init_method_min
-        if self.init_method_max_attn_proj is None:
-            self.init_method_max_attn_proj = self.init_method_max
-        if self.init_method_min_attn_proj is None:
-            self.init_method_min_attn_proj = self.init_method_min
-        if self.init_method_max_mlp_1 is None:
-            self.init_method_max_mlp_1 = self.init_method_max
-        if self.init_method_min_mlp_1 is None:
-            self.init_method_min_mlp_1 = self.init_method_min
-        if self.init_method_max_mlp_2 is None:
-            self.init_method_max_mlp_2 = self.init_method_max
-        if self.init_method_min_mlp_2 is None:
-            self.init_method_min_mlp_2 = self.init_method_min
-        if self.init_method_min is not None and self.init_method_max is not None:
-            Assert.leq(self.init_method_min, self.init_method_max)
-        if self.init_method_min_qkv is not None and self.init_method_max_qkv is not None:
-            Assert.leq(self.init_method_min, self.init_method_max)
-        if self.init_method_min_qkv is not None and self.init_method_max_qkv is not None:
-            Assert.leq(self.init_method_min_qkv, self.init_method_max_qkv)
-        if self.init_method_min_attn_proj is not None and self.init_method_max_attn_proj is not None:
-            Assert.leq(self.init_method_min_attn_proj, self.init_method_max_attn_proj)
-        if self.init_method_min_mlp_1 is not None and self.init_method_max_mlp_1 is not None:
-            Assert.leq(self.init_method_min_mlp_1, self.init_method_max_mlp_1)
-        if self.init_method_min_mlp_2 is not None and self.init_method_max_mlp_2 is not None:
-            Assert.leq(self.init_method_min_mlp_2, self.init_method_max_mlp_2)
+        with self._set_implicit_default():
+            if self.init_method_std is None:
+                self.init_method_std = self.hidden_size**-0.5
+            if self.init_method_std_qkv is None:
+                self.init_method_std_qkv = self.init_method_std
+            if self.init_method_std_attn_proj is None:
+                self.init_method_std_attn_proj = self.init_method_std / max(2 * self.num_layers, 1) ** 0.5
+            if self.init_method_std_mlp_1 is None:
+                self.init_method_std_mlp_1 = self.init_method_std
+            if self.init_method_std_mlp_2 is None:
+                self.init_method_std_mlp_2 = self.init_method_std / max(2 * self.num_layers, 1) ** 0.5
+            if self.init_method_max_qkv is None:
+                self.init_method_max_qkv = self.init_method_max
+            if self.init_method_min_qkv is None:
+                self.init_method_min_qkv = self.init_method_min
+            if self.init_method_max_attn_proj is None:
+                self.init_method_max_attn_proj = self.init_method_max
+            if self.init_method_min_attn_proj is None:
+                self.init_method_min_attn_proj = self.init_method_min
+            if self.init_method_max_mlp_1 is None:
+                self.init_method_max_mlp_1 = self.init_method_max
+            if self.init_method_min_mlp_1 is None:
+                self.init_method_min_mlp_1 = self.init_method_min
+            if self.init_method_max_mlp_2 is None:
+                self.init_method_max_mlp_2 = self.init_method_max
+            if self.init_method_min_mlp_2 is None:
+                self.init_method_min_mlp_2 = self.init_method_min
+            if self.init_method_min is not None and self.init_method_max is not None:
+                Assert.leq(self.init_method_min, self.init_method_max)
+            if self.init_method_min_qkv is not None and self.init_method_max_qkv is not None:
+                Assert.leq(self.init_method_min, self.init_method_max)
+            if self.init_method_min_qkv is not None and self.init_method_max_qkv is not None:
+                Assert.leq(self.init_method_min_qkv, self.init_method_max_qkv)
+            if self.init_method_min_attn_proj is not None and self.init_method_max_attn_proj is not None:
+                Assert.leq(self.init_method_min_attn_proj, self.init_method_max_attn_proj)
+            if self.init_method_min_mlp_1 is not None and self.init_method_max_mlp_1 is not None:
+                Assert.leq(self.init_method_min_mlp_1, self.init_method_max_mlp_1)
+            if self.init_method_min_mlp_2 is not None and self.init_method_max_mlp_2 is not None:
+                Assert.leq(self.init_method_min_mlp_2, self.init_method_max_mlp_2)
         super()._validate()
         Assert.geq(self.attention_dropout, 0)
         Assert.geq(self.hidden_dropout, 0)
-        Assert.incl(len(self.mlp_lr_scale), (1, self.num_experts))
 
-        for scale in self.mlp_lr_scale:
-            if scale is not None:
-                Assert.geq(scale, 0)
+        if isinstance(self.mlp_lr_scale, list):
+            Assert.eq(len(self.mlp_lr_scale), self.num_experts)
+            for scale in self.mlp_lr_scale:
+                if scale is not None:
+                    Assert.geq(scale, 0)
+        elif self.mlp_lr_scale is not None:
+            Assert.geq(self.mlp_lr_scale, 0)
 
     def do_use_flash_attention(self, distributed_config: DistributedConfig) -> bool:
         use_flash_attention = self.use_flash_attention and distributed_config.training_dtype in (

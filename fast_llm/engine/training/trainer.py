@@ -11,9 +11,12 @@ import torch
 from fast_llm.config import Configurable
 from fast_llm.core.distributed import safe_barrier
 from fast_llm.data.data.abstract import Data
+from fast_llm.data.dataset.config import SamplingParameters
+from fast_llm.engine.base_model.config import Preprocessor
 from fast_llm.engine.config_utils.run import Run, is_main_rank, log_main_rank, log_pipeline_parallel_main_rank
 from fast_llm.engine.distributed.config import PhaseType
 from fast_llm.engine.distributed.distributed import Distributed
+from fast_llm.engine.inference.runner import InferenceRunner
 from fast_llm.engine.multi_stage.config import StageMode
 from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
 from fast_llm.engine.optimizer.config import ParamGroup
@@ -31,7 +34,6 @@ logger = logging.getLogger(__name__)
 
 class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
     config_class: typing.ClassVar[type[TrainerConfig]] = TrainerConfig
-    model_class: typing.ClassVar[type[FastLLMModel]] = FastLLMModel
     # TODO: Generalize data, schedule, logging, etc.
     _is_setup: bool = False
     _distributed: Distributed
@@ -52,10 +54,21 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
 
         self._data = self._get_data()
         log_main_rank("Creating model...")
-        self._multi_stage = self.model_class(
+        self._multi_stage = self._config.model.get_model_class()(
             self._config.model,
             optimizer_state_names=self._config.optimizer.state_names() if not self._is_evaluation_only else (),
         )
+        self._reference_models = {}
+        for name, reference_config in self._config.reference_models.items():
+            log_main_rank(f"Creating `{name} reference model...")
+            self._reference_models[name] = self._config.get_inference_runner_class()(
+                reference_config.model.get_model_class()(reference_config.model)
+            )
+            self._multi_stage.base_model.add_preprocessor(
+                self._get_reference_model_preprocessor(name, self._reference_models[name])
+            )
+
+        phase: PhaseType
         self._runner = ScheduleRunner(
             config=self._config.schedule,
             multi_stage=self._multi_stage,
@@ -111,9 +124,12 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
 
         # Setup the model.
         with torch.no_grad():
-            self._multi_stage.setup(
-                distributed, StageMode.inference if self._is_evaluation_only else StageMode.training
-            )
+            log_main_rank("Setting up model...")
+            self._multi_stage.setup(distributed)
+            for name, reference_model in self._reference_models.items():
+                log_main_rank(f"Setting up `{name}` reference model...")
+                reference_model.fast_llm_model.setup(distributed, StageMode.inference)
+                reference_model.setup()
 
         # TODO: Check with Joel if this will be enought not to allocate grad buffers.
         # Setup the optimizer.
@@ -137,11 +153,14 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
         self._data.setup(
             distributed,
             {
-                dataset_name: steps
+                dataset_name: self._get_sampling_parameters({"num_samples": samples})
                 for datasets in self._samples_per_split.values()
-                for dataset_name, steps in datasets.items()
+                for dataset_name, samples in datasets.items()
             }
-            | self._evaluator.get_datasets_samples(),
+            | {
+                dataset_name: self._get_sampling_parameters({"num_samples": samples})
+                for dataset_name, samples in self._evaluator.get_datasets_samples().items()
+            },
             None if run.experiment_directory is None else run.experiment_directory / "dataset_cache",
             timeout=self._config.training.timeout,
         )
@@ -161,6 +180,11 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
     @abc.abstractmethod
     def _get_data(self) -> Data:
         pass
+
+    def _get_sampling_parameters(
+        self, parameters: dict[str, typing.Any], _return_dict: bool = False
+    ) -> SamplingParameters | dict[str, typing.Any]:
+        return parameters if _return_dict else SamplingParameters(**parameters)
 
     @property
     def _consumed_samples(self) -> int:
@@ -368,6 +392,7 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
             consumed_samples=completed_steps * self._config.batch.batch_size,
             num_workers=self._config.training.num_workers,
             prefetch_factor=prefetch_factor,
+            timeout=self._config.training.timeout,
         )
 
     def _prepare_model_state(self) -> None:
@@ -382,16 +407,31 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
                 self._multi_stage.load_checkpoint(self._config.pretrained)
             else:
                 if self._is_evaluation_only:
-                    raise ValueError("Evaluation mode, model need to be trained first or pretrained checkpoint is provided for loading")
+                    raise ValueError(
+                        "Evaluation mode, model need to be trained first or pretrained checkpoint is provided for loading"
+                    )
                 log_main_rank(f"Initializing training state from scratch...")
                 self._multi_stage.initialize_weights()
-            
+
             if not self._is_evaluation_only:
                 self._optimizer.reset_state()
             self._completed_steps = 0
         else:
             log_main_rank(lambda: f"Loading checkpoint from iteration {last_iteration}...")
             self._load_checkpoint(self._config.training.checkpoint, last_iteration)
+
+        for name, reference_model in self._reference_models.items():
+            pretrained = self._config.reference_models[name].pretrained
+            if pretrained.path is not None and pretrained.model_weights:
+                log_main_rank(f"Loading weights for `{name}` reference model from {pretrained.path}")
+                reference_model.fast_llm_model.load_checkpoint(pretrained)
+            else:
+                log_main_rank(
+                    f"No pretrained checkpoint specified for `{name}` reference model,"
+                    f" using a freshly initialized model...",
+                    log_fn=logger.warning,
+                )
+                reference_model.fast_llm_model.initialize_weights()
 
         Assert.eq(self._completed_steps, last_iteration or 0)
         assert self._multi_stage._is_loaded  # noqa
@@ -450,6 +490,7 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
         metadata = self._multi_stage.load_checkpoint(
             config.get_load_config(checkpoint_directory, timeout=self._config.training.timeout)
         )
+        assert metadata is not None
         self._optimizer.load(metadata["optimizer"])
         if "schedules" in metadata:
             # Backward compatibility.
@@ -482,3 +523,6 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
     def get_tflops(self, phase: PhaseType, elapsed_time_per_iteration) -> tuple[int, int]:
         # TODO: Do in model, automate/generalize, get other stats
         pass
+
+    def _get_reference_model_preprocessor(self, name: str, inference_runner: InferenceRunner) -> Preprocessor:
+        raise NotImplementedError()

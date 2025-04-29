@@ -104,8 +104,7 @@ class EvaluationLoss[ConfigType: EvaluationLossConfig](Evaluation[ConfigType]):
         self._trainer_config = trainer_config
         self._get_tflops_func = get_tflops_func
 
-        self._loss_defs = self._multi_stage.base_model.loss_defs
-
+        
         steps = self._eval_config.get_iteration_count(
             self._trainer_config.training.train_iters,
             # There may be an extra evaluation after the last training step.
@@ -114,14 +113,6 @@ class EvaluationLoss[ConfigType: EvaluationLossConfig](Evaluation[ConfigType]):
 
         self._samples = self._trainer_config.batch.batch_size * steps if steps > 0 else None
 
-        # Setup the schedule
-        self._schedule = Schedule(
-            multi_stage=self._multi_stage,
-            batch_config=self._trainer_config.batch,
-            schedule_config=self._trainer_config.schedule,
-            distributed_config=self._trainer_config.model.distributed,
-            phase=PhaseType.validation,
-        )
 
         self._evaluation_iterator = None
 
@@ -134,6 +125,16 @@ class EvaluationLoss[ConfigType: EvaluationLossConfig](Evaluation[ConfigType]):
         data: Data,
     ) -> None:
         super().setup(distributed, run, multi_stage, runner, data)
+        self._loss_defs = self._multi_stage.base_model.loss_defs
+        # Setup the schedule
+        self._schedule = Schedule(
+            multi_stage=self._multi_stage,
+            batch_config=self._trainer_config.batch,
+            schedule_config=self._trainer_config.schedule,
+            distributed_config=self._trainer_config.model.distributed,
+            phase=PhaseType.validation,
+        )
+
         self._is_setup = True
 
     def get_dataset_samples(self) -> tuple[str, int] | None:

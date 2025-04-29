@@ -7,10 +7,10 @@ import typing
 
 from fast_llm.config import (
     Config,
-    Configurable,
     Field,
     FieldHint,
     FieldUpdate,
+    NoAutoValidate,
     check_field,
     config_class,
     skip_valid_if_none,
@@ -23,6 +23,7 @@ from fast_llm.engine.checkpoint.config import (
     DistributedCheckpointFormat,
 )
 from fast_llm.engine.config_utils.run import ExperimentConfig
+from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.engine.multi_stage.config import PretrainedFastLLMModelConfig
 from fast_llm.engine.optimizer.config import OptimizerConfig
 from fast_llm.engine.schedule.config import BatchConfig, ScheduleConfig
@@ -30,6 +31,7 @@ from fast_llm.profile import ProfilingConfig
 from fast_llm.utils import Assert, Registry
 
 if typing.TYPE_CHECKING:
+    from fast_llm.engine.inference.runner import InferenceRunner
     from fast_llm.engine.training.trainer import Trainer
     from fast_llm.engine.training.evaluator import Evaluation, EvaluationLoss, EvaluationHarness
 
@@ -52,7 +54,8 @@ class IntervalConfig(Config):
 
     def _validate(self) -> None:
         if self.interval:
-            self.offset %= self.interval
+            with self._set_implicit_default():
+                self.offset %= self.interval
         super()._validate()
 
     def enabled(self, iteration: int | None = None) -> bool:
@@ -119,6 +122,7 @@ class WandbAlertConfig(IntervalConfig):
         "The update may be posted by email and/or slack depending on the Wandb account configuration.",
         hint=FieldHint.feature,
     )
+    post_alerts: bool = Field(init=False, repr=False)
 
     def _validate(self) -> None:
         if self.status_updates is None:
@@ -496,10 +500,23 @@ class TrainerConfig(PretrainedFastLLMModelConfig, ExperimentConfig):
         desc="Configuration for the training optimizer and learning rate schedule.",
         hint=FieldHint.core,
     )
+    reference_models: dict[str, PretrainedFastLLMModelConfig] = Field(
+        default_factory=dict,
+        desc="Auxiliary models used during training, ex. for knowledge distillation.",
+        hint=FieldHint.feature,
+    )
 
     def _validate(self) -> None:
         self.training.export.setup(self.model)
+        for reference_model in self.reference_models.values():
+            _add_reference_distributed_to_pretrained(reference_model, self.model.distributed)
         super()._validate()
+        if self.reference_models:
+            # TODO: Add support.
+            Assert.eq(self.model.distributed.pipeline_parallel, 1)
+            # TODO: Check if these work.
+            Assert.eq(self.model.distributed.tensor_parallel, 1)
+            Assert.eq(self.model.distributed.sequence_data_parallel, 1)
         if self.run.experiment_dir is None:
             assert not self.training.checkpoint.enabled()
 
@@ -509,6 +526,10 @@ class TrainerConfig(PretrainedFastLLMModelConfig, ExperimentConfig):
 
     @classmethod
     def get_trainer_class(cls) -> type["Trainer"]:
+        raise NotImplementedError
+
+    @classmethod
+    def get_inference_runner_class(cls) -> type["InferenceRunner"]:
         raise NotImplementedError
 
     def _get_runnable(self) -> typing.Callable[[], None]:
@@ -524,3 +545,19 @@ class TrainerConfig(PretrainedFastLLMModelConfig, ExperimentConfig):
                 trainer.run()
 
         return runnable
+
+
+def _add_reference_distributed_to_pretrained(pretrained: PretrainedFastLLMModelConfig, distributed: DistributedConfig):
+    old_setup = pretrained._setup
+
+    def new_setup():
+        # Make sure the distributed config isn't set
+        pretrained.model.distributed.validate()
+        Assert.leq(pretrained.model.distributed.to_dict().keys(), {"world_size", "rank", "local_world_size"})
+        with NoAutoValidate():
+            pretrained.model.distributed = distributed.to_copy()
+        # Allow sharing the `Distributed` instance.
+        pretrained.model.distributed.reference_config = distributed
+        old_setup()
+
+    object.__setattr__(pretrained, "_setup", new_setup)

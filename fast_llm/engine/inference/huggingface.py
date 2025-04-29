@@ -6,10 +6,9 @@ import torch
 import transformers.modeling_outputs
 import transformers.generation.utils
 
-from fast_llm.config import NoAutoValidate
 from fast_llm.engine.checkpoint.config import CheckpointLoadConfig, FastLLMCheckpointFormat
-from fast_llm.engine.distributed.config import PhaseType
-from fast_llm.engine.huggingface.config import HuggingfaceModelConfig
+from fast_llm.engine.inference.config import HuggingfaceModelConfig
+from fast_llm.engine.inference.runner import InferenceRunner
 from fast_llm.engine.multi_stage.config import StageMode
 from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
 from fast_llm.engine.schedule.config import BatchConfig, ScheduleConfig
@@ -20,7 +19,7 @@ from fast_llm.engine.training.config import TrainerConfig
 
 class HuggingfaceBaseModelForCausalLM(transformers.PreTrainedModel, transformers.generation.utils.GenerationMixin):
     config_class: typing.ClassVar[type[HuggingfaceModelConfig]] = HuggingfaceModelConfig
-    model_class: typing.ClassVar[type[FastLLMModel]] = FastLLMModel
+    runner_class: typing.ClassVar[type[InferenceRunner]] = InferenceRunner
     config: HuggingfaceModelConfig
     # base_model_prefix = ""
     # _no_split_modules = None
@@ -48,49 +47,21 @@ class HuggingfaceBaseModelForCausalLM(transformers.PreTrainedModel, transformers
         if has_partial_args:
             raise ValueError("Both trainer_config and runner must be provided together or not at all.")
 
-        assert self.model_class.config_class is config.model_config_class
+        assert self.runner_class.model_class.config_class is config.model_config_class
         assert config.fast_llm_config is fast_llm_model.config
         assert isinstance(config, self.config_class)
+
         super().__init__(config, **kwargs)
 
-        self._fast_llm_config = config.fast_llm_config
-        self._fast_llm_model = fast_llm_model
+        self._inference_runner = self.runner_class(fast_llm_model, trainer_config, runner)
+        if not fast_llm_model.is_setup:
+            fast_llm_model.setup(mode=StageMode.inference)
+        self._inference_runner.setup()
         # Transformers needs to be able to inspect the base model.
-        self.fast_llm_base_model = self._fast_llm_model.base_model
-        self._distributed_config = self._fast_llm_config.distributed
+        self.fast_llm_base_model = fast_llm_model.base_model
+        # TODO: Support distributed models?
+        assert fast_llm_model.config.distributed.world_size == 1
 
-        # passing model from training, already setup or would be setup externally,
-        #  just create own schedule for run_step
-        if has_training_args:
-            self._trainer_config = trainer_config
-            self._schedule_config = self._trainer_config.schedule
-            self._batch_config = self._trainer_config.batch
-            self._runner = runner
-        else:
-            # TODO: Support distributed models?
-            assert self._distributed_config.world_size == 1
-            self._schedule_config = ScheduleConfig()
-            # We only need a basic schedule and don't care about dimensions.
-            # # TODO: Sort things out.
-            with NoAutoValidate():
-                self._batch_config = BatchConfig()
-            self._batch_config.setup(self._distributed_config)
-            self._batch_config.validate()
-            self._runner = ScheduleRunner(
-                config=self._schedule_config,
-                multi_stage=self._fast_llm_model,
-                distributed_config=self._distributed_config,
-            )
-            self._runner.setup(self._fast_llm_model.distributed)
-
-        # TODO: Random state? (Distributed.set_step)
-        self._schedule = Schedule(
-            multi_stage=self._fast_llm_model,
-            batch_config=self._batch_config,
-            schedule_config=self._schedule_config,
-            distributed_config=self._distributed_config,
-            phase=PhaseType.inference,
-        )
         with transformers.modeling_utils.no_init_weights():
             self.post_init()
 
@@ -137,21 +108,21 @@ class HuggingfaceBaseModelForCausalLM(transformers.PreTrainedModel, transformers
                 format=FastLLMCheckpointFormat,
             )
 
-        config_updates = {}
+        updates = {}
         torch_dtype = kwargs.pop("torch_dtype", None)
         if torch_dtype is not None:
-            config_updates[("distributed", "training_dtype")] = torch_dtype
+            updates[("distributed", "training_dtype")] = torch_dtype
 
         attn_implementation = kwargs.pop("attn_implementation", None)
         if attn_implementation is not None:
             if attn_implementation == "flash_attention_2":
-                config_updates[("base_model", "transformer", "use_flash_attention")] = True
+                updates[("base_model", "transformer", "use_flash_attention")] = True
             else:
-                config_updates[("base_model", "transformer", "use_flash_attention")] = False
+                updates[("base_model", "transformer", "use_flash_attention")] = False
 
         # Create the model
-        fast_llm_model = cls.model_class.from_pretrained(
-            pretrained_model_name_or_path, config_updates=config_updates, mode=mode
+        fast_llm_model = cls.runner_class.model_class.from_pretrained(
+            pretrained_model_name_or_path, updates, mode=mode
         )
 
         return cls.from_fast_llm_model(fast_llm_model, **kwargs)

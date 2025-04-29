@@ -30,7 +30,7 @@ class BlendedDataset(SampledDataset):
         Assert.eq(len(datasets), len(weights))
         self._datasets = datasets
         self._weights = np.array(normalize_probabilities(weights))
-        self._num_samples = sampling_config.num_samples
+        self._num_samples = sampling_config.parameters.num_samples
 
     def __len__(self) -> int:
         return self._num_samples

@@ -1,5 +1,6 @@
 import logging
 import random
+import typing
 
 import torch
 import transformers.modeling_outputs
@@ -7,11 +8,11 @@ import transformers.modeling_outputs
 
 from fast_llm.data.data.gpt.data import GPTBatch
 from fast_llm.engine.distributed.config import PhaseType
-from fast_llm.engine.huggingface.config import HuggingfaceModelConfig
-from fast_llm.engine.huggingface.model import HuggingfaceBaseModelForCausalLM
+from fast_llm.engine.inference.config import HuggingfaceModelConfig
+from fast_llm.engine.inference.huggingface import HuggingfaceBaseModelForCausalLM
 from fast_llm.layers.transformer.config import TransformerKwargs
 from fast_llm.models.gpt.config import GPTModelConfig
-from fast_llm.models.gpt.model import GPTModel
+from fast_llm.models.gpt.model import GPTBaseModel, GPTInferenceRunner
 
 logger = logging.getLogger(__name__)
 
@@ -25,8 +26,8 @@ class HuggingfaceGPTModelConfig(HuggingfaceModelConfig):
 class HuggingfaceGPTModelForCausalLM(HuggingfaceBaseModelForCausalLM):
     config_class = HuggingfaceGPTModelConfig
     config: HuggingfaceGPTModelConfig
-    model_class = GPTModel
-    _fast_llm_model: GPTModel
+    runner_class: typing.ClassVar[type[GPTInferenceRunner]] = GPTInferenceRunner
+    fast_llm_base_model: GPTBaseModel
     # base_model_prefix = ""
     # _no_split_modules = None
     # _supports_cache_class = False
@@ -80,10 +81,10 @@ class HuggingfaceGPTModelForCausalLM(HuggingfaceBaseModelForCausalLM):
 
         # Iteration serves as a random seed, using random module because it's not seeded by Fast LLM
         iteration = random.randint(0, 2**32)
-        batch = self._fast_llm_model.base_model.preprocess(
+        batch = self.fast_llm_base_model.preprocess(
             GPTBatch(input_ids, sequence_lengths=sequence_lenghts), phase=PhaseType.inference, iteration=iteration
         )
-        ((_, kwargs),) = batch
+        ((input_, kwargs),) = batch
 
         if past_key_values is not None:
             # The transformers will use the past keys and values to this list.
@@ -99,7 +100,7 @@ class HuggingfaceGPTModelForCausalLM(HuggingfaceBaseModelForCausalLM):
         else:
             kwargs["output_hidden_states"] = False
 
-        _, _, _ = self._runner.run_step(iter((batch,)), self._schedule, iteration=iteration, preprocessed=True)
+        self._inference_runner.forward(input_, kwargs, iteration=iteration)
 
         # TODO: Make a proper way of returning the model output.
         logits = kwargs["logits"]

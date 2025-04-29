@@ -17,7 +17,7 @@ from lm_eval.api.model import CacheHook
 from fast_llm.engine.checkpoint.config import CheckpointLoadConfig
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig
 from fast_llm.models.auto import model_registry
-from fast_llm.engine.huggingface.model import HuggingfaceBaseModelForCausalLM
+from fast_llm.engine.inference.huggingface import HuggingfaceBaseModelForCausalLM
 
 
 eval_logger = logging.getLogger(__name__)
@@ -52,9 +52,9 @@ class FastLLMWrapper(HFLM):
 
         # set some inputs which are expected in HFLM but are set by our model config
         # TODO: do _batch_config public read only property
-        max_length = model._batch_config.sequence_length
+        max_length = model._inference_runner._batch_config.sequence_length
         #batch_size = model._batch_config.micro_batch_size
-        batch_size = model._batch_config.batch_size
+        batch_size = model._inference_runner._batch_config.batch_size
         max_batch_size = batch_size
 
         self.backend = backend

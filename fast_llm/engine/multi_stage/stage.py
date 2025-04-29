@@ -1,3 +1,4 @@
+import collections
 import logging
 import typing
 
@@ -41,13 +42,13 @@ class Stage(StageBase):
         self,
         *,
         distributed: Distributed,
-        weight_shards: list[torch.Tensor | None] | None,
-        grad_shards: list[torch.Tensor | None] | None,
-        weight_buffers: list[torch.Tensor | None] | None,
-        grad_buffers: list[torch.Tensor | None] | None,
+        weight_shards: list[torch.Tensor | None] | None = None,
+        grad_shards: list[torch.Tensor | None] | None = None,
+        weight_buffers: list[torch.Tensor | None] | None = None,
+        grad_buffers: list[torch.Tensor | None] | None = None,
         mode: StageMode = StageMode.training,
         is_tied_weight_copy: bool = False,
-        weight_buffer_shared_with: list["Stage"],
+        weight_buffer_shared_with: collections.abc.Sequence["Stage"] = (),
     ) -> None:
         super().setup(
             distributed=distributed,
@@ -95,7 +96,11 @@ class Stage(StageBase):
         return input_
 
     def forward(
-        self, input_: torch.Tensor, kwargs: dict, losses: dict[str, list[torch.Tensor]], metrics: dict | None = None
+        self,
+        input_: torch.Tensor,
+        kwargs: dict,
+        losses: dict[str, list[torch.Tensor]] | None = None,
+        metrics: dict | None = None,
     ) -> tuple[torch.Tensor | None, tuple[torch.Tensor | None, torch.Tensor | None]]:
         assert self._is_restored
         assert self._mode.support_forward
@@ -213,8 +218,8 @@ class Stage(StageBase):
             name = f"layer {self._layer_range[i]} fw"
             if (nmb := kwargs.get("num_micro_batches", 1)) > 1:
                 name = f"{name}, mb={kwargs.get('micro_batch',0)}/{nmb}"
-            if (nms := kwargs.get("num_micro_sequences", 1)) > 1:
-                name = f"{name}, ms={kwargs.get('micro_sequence',0)}/{nms}"
+            if (nms := kwargs.get("micro_batch_splits", 1)) > 1:
+                name = f"{name}, ms={kwargs.get('micro_batch_split',0)}/{nms}"
 
             log_distributed_tensor(
                 name,
@@ -244,8 +249,8 @@ class Stage(StageBase):
             name = f"layer {self._layer_range[i]} bw"
             if (nmb := kwargs.get("num_micro_batches", 1)) > 1:
                 name = f"{name}, mb={kwargs.get('micro_batch',0)}/{nmb}"
-            if (nms := kwargs.get("num_micro_sequences", 1)) > 1:
-                name = f"{name}, ms={kwargs.get('micro_sequence',0)}/{nms}"
+            if (nms := kwargs.get("micro_batch_splits", 1)) > 1:
+                name = f"{name}, ms={kwargs.get('micro_batch_split',0)}/{nms}"
             log_distributed_grad(
                 name,
                 input_,

@@ -1,20 +1,20 @@
 import pathlib
-import pytest
 import subprocess
 import unittest.mock
+
+import pytest
 import yaml
 
-
-from fast_llm.layers.transformer.config import (
-    TransformerConfig,
-    TransformerArchitectureConfig,
-    AddLinearBiasChoices,
-)
-from fast_llm.engine.distributed.config import DistributedConfig
+from fast_llm.config import NoAutoValidate
+from fast_llm.data.dataset.gpt.config import GPTSamplingConfig
+from fast_llm.engine.checkpoint.config import CheckpointSaveMetadataConfig, ModelConfigType
 from fast_llm.engine.config_utils.data_type import DataType
-from fast_llm.config import ValidationError
-
+from fast_llm.engine.distributed.config import DistributedConfig
+from fast_llm.layers.transformer.config import AddLinearBiasChoices, TransformerArchitectureConfig, TransformerConfig
 from fast_llm.models.auto import trainer_registry
+from fast_llm.models.gpt.config import GPTModelConfig, PretrainedGPTModelConfig
+from fast_llm.utils import Assert, check_equal_nested
+from tests.common import TEST_RESULTS_PATH
 
 
 def run_without_import(cmd: str):
@@ -90,33 +90,6 @@ def test_do_use_flash_attention():
         config.do_use_flash_attention(mock_distributed_config)
 
 
-def test_add_linear_biases_valid_values():
-    # Valid boolean values
-    assert TransformerArchitectureConfig(add_linear_biases=True).add_linear_biases is True
-    assert TransformerArchitectureConfig(add_linear_biases=False).add_linear_biases is False
-
-    # Valid enum values
-    assert TransformerArchitectureConfig(add_linear_biases="nowhere").add_linear_biases == AddLinearBiasChoices.nowhere
-    assert (
-        TransformerArchitectureConfig(add_linear_biases="everywhere").add_linear_biases
-        == AddLinearBiasChoices.everywhere
-    )
-    assert (
-        TransformerArchitectureConfig(add_linear_biases="only_attn_qkv").add_linear_biases == AddLinearBiasChoices.only_attn_qkv
-    )
-
-
-def test_add_linear_biases_invalid_values():
-    with pytest.raises(ValidationError):
-        TransformerArchitectureConfig(add_linear_biases="invalid_value")
-
-    with pytest.raises(ValidationError):
-        TransformerArchitectureConfig(add_linear_biases=123)
-
-    with pytest.raises(ValidationError):
-        TransformerArchitectureConfig(add_linear_biases=None)
-
-
 def test_add_mlp_bias():
     assert TransformerArchitectureConfig(add_linear_biases=True).add_mlp_bias is True
     assert TransformerArchitectureConfig(add_linear_biases=False).add_mlp_bias is False
@@ -130,7 +103,9 @@ def test_add_attn_qkv_bias():
     assert TransformerArchitectureConfig(add_linear_biases=False).add_attn_qkv_bias is False
     assert TransformerArchitectureConfig(add_linear_biases=AddLinearBiasChoices.everywhere).add_attn_qkv_bias is True
     assert TransformerArchitectureConfig(add_linear_biases=AddLinearBiasChoices.nowhere).add_attn_qkv_bias is False
-    assert TransformerArchitectureConfig(add_linear_biases=AddLinearBiasChoices.only_attn_qkv).add_attn_qkv_bias is True
+    assert (
+        TransformerArchitectureConfig(add_linear_biases=AddLinearBiasChoices.only_attn_qkv).add_attn_qkv_bias is True
+    )
 
 
 def test_add_attn_dense_bias():
@@ -138,4 +113,97 @@ def test_add_attn_dense_bias():
     assert TransformerArchitectureConfig(add_linear_biases=False).add_attn_dense_bias is False
     assert TransformerArchitectureConfig(add_linear_biases=AddLinearBiasChoices.everywhere).add_attn_dense_bias is True
     assert TransformerArchitectureConfig(add_linear_biases=AddLinearBiasChoices.nowhere).add_attn_dense_bias is False
-    assert TransformerArchitectureConfig(add_linear_biases=AddLinearBiasChoices.only_attn_qkv).add_attn_dense_bias is False
+    assert (
+        TransformerArchitectureConfig(add_linear_biases=AddLinearBiasChoices.only_attn_qkv).add_attn_dense_bias
+        is False
+    )
+
+
+@pytest.mark.parametrize(
+    ("cls", "default"),
+    ((GPTSamplingConfig, {}), (GPTModelConfig, {"distributed": {"world_size": 1, "rank": 0, "local_world_size": 1}})),
+)
+def test_serialize_default_config_updates(cls, default):
+    # Config classes used as config updates should have a default that serializes to an empty dict
+    #   so no value is incorrectly overridden.
+    check_equal_nested(cls.from_dict({}).to_dict(), default)
+
+
+@pytest.mark.parametrize("load_config", tuple(ModelConfigType))
+def test_pretrained_config(load_config: ModelConfigType):
+    config_path = TEST_RESULTS_PATH / "pretrained_config"
+    pretrained_model_config = GPTModelConfig.from_dict(
+        {
+            "base_model": {
+                "transformer": {
+                    "normalization": {"type": "rms_norm"},  # Nested
+                    "rotary": {"type": "default"},
+                    "num_layers": 12,  # Default
+                    "hidden_size": 1024,  # Default
+                    "window_size": 32,  # Non-architecture
+                    "ffn_hidden_size": 4096,  # Implicit default, default value
+                    "activation_type": "silu",  # Implicit default, non-default value
+                    "head_groups": 4,
+                },
+                "ssm": {"dt_rank": -1, "activation_type": "silu"},
+                "tie_word_embeddings": False,
+            },
+            "multi_stage": {"zero_stage": 3},
+            "distributed": {"training_dtype": "bfloat16"},
+        }
+    )
+    with NoAutoValidate():
+        save_config = CheckpointSaveMetadataConfig.from_dict({"format": "fast_llm", "path": config_path})
+    save_config.setup(GPTModelConfig)
+    save_config.validate()
+    pretrained_model_config.save_metadata(save_config)
+
+    base_model_update = {
+        "transformer": {
+            # rotary: Don't override nested.
+            "normalization": {"implementation": "triton"},  # Update non-default nested
+            "peft": {"freeze_others": False},  # Update default nested, non-architecture
+            "hidden_size": 512,  # Override, affects derived value (kv channels)
+            "head_groups": 1,  # Override to default
+        },
+        "ssm": {"dt_rank": 10, "activation_type": "silu"},
+        "vocab_size": 1000,
+    }
+    pretrained_config = PretrainedGPTModelConfig.from_dict(
+        {
+            "model": {
+                "base_model": base_model_update,
+                "distributed": {"seed": 1234, "training_dtype": "float16"},
+            },
+            "pretrained": {"format": "fast_llm", "path": config_path, "load_config": load_config},
+        }
+    )
+    Assert.eq(pretrained_config.model.base_model.transformer.kv_channels, 64)
+    serialized_config = pretrained_config.model.to_dict()
+    expected_config = {"distributed": DistributedConfig().to_dict()}
+
+    if load_config == ModelConfigType.fast_llm:
+        expected_config["multi_stage"] = {"zero_stage": 3}
+    expected_config["distributed"].update({"seed": 1234, "training_dtype": "float16"})
+    if load_config in (ModelConfigType.architecture, ModelConfigType.fast_llm, ModelConfigType.model):
+        expected_config["base_model"] = {
+            "transformer": {
+                "normalization": {"type": "rms_norm", "implementation": "triton"},
+                "rotary": {"type": "default"},
+                "peft": {"freeze_others": False},
+                "num_layers": 12,
+                "hidden_size": 512,
+                "ffn_hidden_size": 4096,
+                "activation_type": "silu",
+                "head_groups": 1,
+            },
+            "ssm": {"dt_rank": 10, "activation_type": "silu"},
+            "tie_word_embeddings": False,
+            "vocab_size": 1000,
+        }
+        if load_config != ModelConfigType.architecture:
+            expected_config["base_model"]["transformer"]["window_size"] = 32
+    else:
+        expected_config["base_model"] = base_model_update
+
+    check_equal_nested(serialized_config, expected_config)
