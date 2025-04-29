@@ -50,7 +50,9 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
         self._group_size = tensor_space.distributed_config.tensor_parallel
         self._sequence_parallel = tensor_space.distributed_config.sequence_tensor_parallel
         self._parallel_embeddings = tensor_space.distributed_config.tensor_parallel > 1 and config.parallel_embeddings
-        self._sequence_parallel_logits = self._sequence_parallel and not self._parallel_embeddings
+        self._sequence_parallel_logits = (
+            tensor_space.distributed_config.sequence_tensor_parallel and not config.parallel_embeddings
+        )
         self._cross_entropy_splits = config.cross_entropy_splits
         if self._cross_entropy_splits is not None and self._sequence_parallel:
             assert not self._parallel_embeddings
@@ -67,7 +69,7 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
         # >0: multi-token prediction (MTP)
         Assert.geq(prediction_distance, 0)
         self._prediction_distance = prediction_distance
-        self.is_last_head = self._prediction_distance == config.prediction_heads - 1
+        self._is_last_head = self._prediction_distance == config.prediction_heads - 1
 
         self._init_output_weights(hidden_dim, config)
 
@@ -114,7 +116,7 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
                 tensor_name="Loss",
                 reductions=((DistributedDimNames.data, ReduceOp.AVG),),  # noqa
             )
-        if not self.is_last_head:
+        if not self._is_last_head:
             # MTP: split the stacked input
             shared_hidden, input_ = torch.unbind(input_, dim=0)
         # TODO: Pytorch copies the grads in backward for no reason (not sure if still the case)
@@ -123,10 +125,10 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
         # TODO: Drop autograd entirely.
         # TODO: Skip cross-entropy backward if not needed.
         language_model_loss = self._forward(input_, kwargs, losses)
-        if language_model_loss is not None:
+        if losses is not None and language_model_loss is not None:
             losses[self._loss_name].append(language_model_loss)
         # TODO: Return the model output when needed.
-        if self.is_last_head:
+        if self._is_last_head:
             # Last head should return the loss for backward.
             return language_model_loss
         else:
@@ -147,14 +149,13 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
         if target is not None:
             if self._config.distillation_model is None:
                 # MTP: Shift the labels
-                target = (
-                    target[self._prediction_distance : self._prediction_distance + input_.size(0),]
-                    if kwargs[TransformerKwargs.sequence_first]
-                    else target[
-                        :,
-                        self._prediction_distance : self._prediction_distance + input_.size(1),
-                    ]
+                target_sequence_length = (
+                    target.size(1 - kwargs[TransformerKwargs.sequence_first]) + 1 - self._config.prediction_heads
                 )
+                if TransformerKwargs.sequence_q_dim in kwargs:
+                    Assert.eq(target_sequence_length, kwargs[TransformerKwargs.sequence_q_dim].size)
+                target_slice = slice(self._prediction_distance, self._prediction_distance + target_sequence_length)
+                target = target[target_slice] if kwargs[TransformerKwargs.sequence_first] else target[:, target_slice]
                 target = target.flatten()
             else:
                 # Target is reference model logits.
