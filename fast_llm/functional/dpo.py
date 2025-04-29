@@ -1,7 +1,7 @@
 import torch
 
 
-def compute_logprobs_for_spans(
+def _compute_logprobs_for_preference_spans(
     logits: torch.Tensor, targets: torch.Tensor, chosen_span: torch.Tensor, rejected_span: torch.Tensor
 ):
     assert torch.all(targets < logits.size(-1)), "Target out of vocab range"
@@ -23,7 +23,7 @@ def compute_logprobs_for_spans(
     # rejected_logp = (selected_log_probs * rejected_mask).sum()
     rejected_logp = selected_log_probs[rejected_span[0][0].item() : rejected_span[0][1].item() + 1].sum()
 
-    return chosen_logp, rejected_logp
+    return chosen_logp, rejected_logp, selected_log_probs
 
 
 def _compute_dpo_loss(
@@ -55,11 +55,11 @@ def compute_dpo_loss(
         logits_ = logits.float().detach().requires_grad_()
         reference_model_logits_ = reference_model_logits.float().detach()
 
-        policy_chosen_logps, policy_rejected_logps = compute_logprobs_for_spans(
+        policy_chosen_logps, policy_rejected_logps, _ = _compute_logprobs_for_preference_spans(
             logits_, targets, chosen_span, rejected_span
         )
 
-        reference_chosen_logps, reference_rejected_logps = compute_logprobs_for_spans(
+        reference_chosen_logps, reference_rejected_logps, _ = _compute_logprobs_for_preference_spans(
             reference_model_logits_, targets, chosen_span, rejected_span
         )
 
