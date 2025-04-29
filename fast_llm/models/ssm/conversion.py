@@ -1,3 +1,4 @@
+import dataclasses
 import json
 import os
 import pathlib
@@ -29,6 +30,23 @@ from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
     pass
+
+
+@dataclasses.dataclass(kw_only=True)
+class HybridBlockLayoutConverter(ParamConverter):
+    num_layers_getter: typing.Callable[[typing.Any], int] = lambda config: config.transformer.num_layers
+
+    # TODO: generalize this t
+    def __post_init__(self) -> None:
+        Assert.eq(len(self.fast_llm_names), 1)
+        Assert.eq(len(self.export_names), 1)
+
+    def export_params(self, fast_llm_values: tuple[typing.Any, ...]) -> tuple[typing.Any, ...]:
+        # Use the expanded list as-is
+        return (["m2"],)
+
+    def import_params(self, export_values: tuple[typing.Any, ...]) -> tuple[typing.Any, ...]:
+        return (["m2"],)
 
 
 class CommonSSMHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
@@ -169,6 +187,9 @@ class LLambaHuggingfaceCheckpointHandler(CommonSSMHuggingfaceCheckpointHandler):
             RenameParamConverter(
                 fast_llm_names=(("tie_word_embeddings",),),
                 export_names=(("tie_embeddings",),),
+            ),
+            HybridBlockLayoutConverter(
+                fast_llm_names=(("hybrid_block_layout",),), export_names=(("hybrid_block_layout",),)
             ),
         ]
 
@@ -338,7 +359,10 @@ class AprielSSMHuggingfaceCheckpointHandler(CommonSSMHuggingfaceCheckpointHandle
                 fast_llm_names=(("tie_word_embeddings",),),
                 export_names=(("tie_word_embeddings",),),
             ),
-            ConstantImportParamConverter(fast_llm_names=(("hybrid_block_layout"),), fast_llm_value=["m2"]),
+            # ConstantImportParamConverter(fast_llm_names=(("hybrid_block_layout"),), fast_llm_value=["m2"]),
+            HybridBlockLayoutConverter(
+                fast_llm_names=(("hybrid_block_layout",),), export_names=(("hybrid_block_layout",),)
+            ),
         ]
 
     def _create_weight_converters(self) -> list[WeightConverter]:
