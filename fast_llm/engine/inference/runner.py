@@ -32,6 +32,8 @@ class InferenceRunner(abc.ABC):
             self._schedule_config = self._trainer_config.schedule
             self._batch_config = self._trainer_config.batch
             self._runner = runner
+            # External runner from training loop must be already setup
+            assert runner._is_setup
         else:
             # We only need a basic schedule and don't care about dimensions.
             self._schedule_config = ScheduleConfig()

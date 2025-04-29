@@ -42,25 +42,31 @@ class HuggingfaceBaseModelForCausalLM(transformers.PreTrainedModel, transformers
         - If both are omitted → assumes standalone mode with default configs.
         - Any other combination will raise.
         """
-        has_training_args = trainer_config is not None and runner is not None
-        has_partial_args = (trainer_config is None) != (runner is None)
-        if has_partial_args:
-            raise ValueError("Both trainer_config and runner must be provided together or not at all.")
-
         assert self.runner_class.model_class.config_class is config.model_config_class
         assert config.fast_llm_config is fast_llm_model.config
         assert isinstance(config, self.config_class)
 
+        # The HF constructor performs a deep copy of the config,
+        # but config.fast_llm_config may contain non-picklable items like process groups.
+        # Temporarily remove it before the call and restore it afterward.
+        fast_llm_config = config.fast_llm_config
+        config.fast_llm_config = None
         super().__init__(config, **kwargs)
+        config.fast_llm_config = fast_llm_config
 
         self._inference_runner = self.runner_class(fast_llm_model, trainer_config, runner)
-        if not fast_llm_model.is_setup:
-            fast_llm_model.setup(mode=StageMode.inference)
+
+        # A model can be created from pretrained which setup it in the current HF wrapper api
+        # or set from training loop and also is setup, so, do not accept not setup model
+        assert fast_llm_model.is_setup
+        # if not fast_llm_model.is_setup:
+        #   fast_llm_model.setup(distributed=distributed, mode=StageMode.inference)
         self._inference_runner.setup()
+
         # Transformers needs to be able to inspect the base model.
         self.fast_llm_base_model = fast_llm_model.base_model
-        # TODO: Support distributed models?
-        assert fast_llm_model.config.distributed.world_size == 1
+        # # TODO: Support distributed models?
+        # assert fast_llm_model.config.distributed.world_size == 1
 
         with transformers.modeling_utils.no_init_weights():
             self.post_init()
@@ -78,7 +84,7 @@ class HuggingfaceBaseModelForCausalLM(transformers.PreTrainedModel, transformers
         output_hidden_states: bool | None = None,
         return_dict: bool | None = None,
     ) -> tuple | transformers.modeling_outputs.CausalLMOutputWithPast:
-        # Meant to be overriden in derived classes
+        # Meant to be overridden in derived classes
         raise NotImplementedError()
 
     @classmethod
@@ -89,16 +95,15 @@ class HuggingfaceBaseModelForCausalLM(transformers.PreTrainedModel, transformers
         return cls(config, fast_llm_model, trainer_config=trainer_config, runner=runner, **kwargs)
 
     @classmethod
-    def from_fast_llm_model(cls, fast_llm_model: FastLLMModel, **kwargs):
-        config = cls.config_class(fast_llm_model.config)
-        return cls(config, fast_llm_model, **kwargs)
-
-    @classmethod
     def from_pretrained(
         cls,
         pretrained_model_name_or_path: str | os.PathLike | CheckpointLoadConfig,
-        *,
-        mode: StageMode = StageMode.inference,
+        *updates: dict[str | tuple[str, ...], typing.Any],
+        optimizer_state_names: tuple[str, ...] | None = None,
+        # setup: bool = True,
+        mode: StageMode = StageMode.training,
+        use_cpu: bool = False,
+        stage_filter: set | None = None,
         **kwargs,
     ) -> typing.Self:
         # Pretrained config.
@@ -108,24 +113,20 @@ class HuggingfaceBaseModelForCausalLM(transformers.PreTrainedModel, transformers
                 format=FastLLMCheckpointFormat,
             )
 
-        updates = {}
-        torch_dtype = kwargs.pop("torch_dtype", None)
-        if torch_dtype is not None:
-            updates[("distributed", "training_dtype")] = torch_dtype
-
-        attn_implementation = kwargs.pop("attn_implementation", None)
-        if attn_implementation is not None:
-            if attn_implementation == "flash_attention_2":
-                updates[("base_model", "transformer", "use_flash_attention")] = True
-            else:
-                updates[("base_model", "transformer", "use_flash_attention")] = False
-
         # Create the model
+        # always set up model and crate distributed instance internally for now
         fast_llm_model = cls.runner_class.model_class.from_pretrained(
-            pretrained_model_name_or_path, updates, mode=mode
+            pretrained_model_name_or_path,
+            *updates,
+            optimizer_state_names=optimizer_state_names,
+            # setup=setup,
+            mode=mode,
+            use_cpu=use_cpu,
+            stage_filter=stage_filter,
         )
 
-        return cls.from_fast_llm_model(fast_llm_model, **kwargs)
+        config = cls.config_class(fast_llm_model.config)
+        return cls(config, fast_llm_model, **kwargs)
 
     def _init_weights(self, module) -> None:
         raise NotImplementedError(module)
