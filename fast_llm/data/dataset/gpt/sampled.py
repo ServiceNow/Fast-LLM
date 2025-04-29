@@ -274,7 +274,9 @@ class GPTSampledIndexedDataset(SampledDataset):
 
             # apply shuffling on doc_length_filtered_indicies
             if shuffled_epochs > 0:
-                self._document_shuffling.save(document_shuffling[: self._num_samples].numpy(force=self._config.gpu))
+                self._document_shuffling.save(
+                    document_shuffling[: self._parameters.num_samples].numpy(force=self._config.gpu)
+                )
             self._document_sizes.save(document_sizes.numpy(force=self._config.gpu))
             if self._yaml_path is not None:
                 self._yaml_path.parent.mkdir(parents=True, exist_ok=True)
