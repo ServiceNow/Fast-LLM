@@ -49,12 +49,16 @@ class HybridSSMBaseModelConfig(LanguageModelBaseConfig, HybridSSMArchitectureCon
                 "Block pattern must contain at least one 'm' or 'm2', use gpt model for transformer only architectures"
             )
 
-        if self.ssm.dt_rank < 0:
+        if self.ssm.dt_rank is None:
             mamba_dt_rank = math.ceil(self.transformer.hidden_size / 16)
         else:
             mamba_dt_rank = self.ssm.dt_rank
 
-        d_inner = int(self.ssm.expansion_factor * self.transformer.hidden_size)
+        d_inner = (
+            int(self.ssm.expansion_factor * self.transformer.hidden_size)
+            if self.ssm.d_inner is None
+            else self.ssm.d_inner
+        )
         # Hidden dimension
         tensor_space.add_tensor_dim(TensorDim(SSMDimNames.model_dim, self.transformer.hidden_size))
         # Mamba-specific dimensions
@@ -115,12 +119,26 @@ class LLambaHuggingfaceCheckpointFormat(CheckpointFormat):
         return LLambaHuggingfaceCheckpointHandler
 
 
+class AprielSSMHuggingfaceCheckpointFormat(CheckpointFormat):
+    support_optimizer: typing.ClassVar[bool] = False
+    name: typing.ClassVar[str] = "apriel_ssm"
+
+    @classmethod
+    def get_handler_class(cls) -> type[CheckpointHandler]:
+        from fast_llm.models.ssm.conversion import AprielSSMHuggingfaceCheckpointHandler
+
+        return AprielSSMHuggingfaceCheckpointHandler
+
+
 @config_class()
 class HybridSSMModelConfig(FastLLMModelConfig):
     _abstract = False
     model_name: typing.ClassVar[str] = "hybrid_ssm"
     base_model: HybridSSMBaseModelConfig = FieldUpdate(default_factory=HybridSSMBaseModelConfig)
-    checkpoint_formats = FastLLMModelConfig.checkpoint_formats + (LLambaHuggingfaceCheckpointFormat,)
+    checkpoint_formats = FastLLMModelConfig.checkpoint_formats + (
+        LLambaHuggingfaceCheckpointFormat,
+        AprielSSMHuggingfaceCheckpointFormat,
+    )
 
     @classmethod
     def get_model_class(cls) -> type["HybridSSMModel"]:

@@ -55,7 +55,7 @@ class SSMArchitectureConfig(BaseModelArchitectureConfig):
         hint=FieldHint.core,
     )
 
-    dt_rank: int = Field(
+    dt_rank: None | int = Field(
         default=None,
         desc="Rank of the Δ projection matrix. If 'None', will be set to ceil(hidden_size/16)",
         hint=FieldHint.core,
@@ -85,12 +85,16 @@ class SSMArchitectureConfig(BaseModelArchitectureConfig):
         hint=FieldHint.core,
     )
 
+    d_inner: None | int = Field(
+        default=None,
+        desc="Inner dimension for Mamba2 blocks.",
+        hint=FieldHint.core,
+    )
+
     def _validate(self) -> None:
         with self._set_implicit_default():
             if self.activation_type is None:
                 self.activation_type = ActivationType.silu
-            if self.dt_rank is None:
-                self.dt_rank = -1  # set to -1, it will be overwrittem in ssm validation
 
         super()._validate()
 
