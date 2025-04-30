@@ -11,7 +11,7 @@ from fast_llm.layers.ssm.llamba_block import LlambaBlock
 from fast_llm.layers.ssm.mamba_layer import MambaLayer
 from fast_llm.layers.transformer.transformer import TransformerLayer
 from fast_llm.models.gpt.model import GPTBaseModel
-from fast_llm.models.ssm.config import HybridSSMBaseModelConfig, HybridSSMModelConfig
+from fast_llm.models.ssm.config import HybridSSMBaseModelConfig, HybridSSMModelConfig, SSMBlockType
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +43,7 @@ class HybridSSMBaseModel[ConfigType: HybridSSMBaseModelConfig](GPTBaseModel[Conf
 
         # Create blocks according to pattern
         for i, block_type in enumerate(self._config.hybrid_block_layout):
-            if block_type == "t":
+            if block_type == SSMBlockType.transformer.value:
                 # Transformer block
                 layers.append(
                     TransformerLayer(
@@ -52,7 +52,7 @@ class HybridSSMBaseModel[ConfigType: HybridSSMBaseModelConfig](GPTBaseModel[Conf
                         layer_index=i + 1,
                     )
                 )
-            elif block_type == "m2":
+            elif block_type == SSMBlockType.mamba2_discrete.value:
                 mamba_block = self.SSM_BLOCK_CLS(
                     config_transformer=self._config.transformer,
                     config_ssm=self._config.ssm,
@@ -62,7 +62,7 @@ class HybridSSMBaseModel[ConfigType: HybridSSMBaseModelConfig](GPTBaseModel[Conf
                 )
                 layers.append(mamba_block)
 
-            elif block_type == "m":
+            elif block_type == SSMBlockType.mamba.value:
                 # Create Mamba block
                 mamba_block = self.SSM_BLOCK_CLS(
                     config_transformer=self._config.transformer,
@@ -74,7 +74,7 @@ class HybridSSMBaseModel[ConfigType: HybridSSMBaseModelConfig](GPTBaseModel[Conf
                 layers.append(mamba_block)
 
             else:
-                raise ValueError(f"Invalid block type: {block_type}. Must be 't' or 'm' or 'm2'")
+                raise ValueError(f"Invalid block type: {block_type}. Must be {SSMBlockType.__members__}")
 
         # Add the language model head
         layers.append(LanguageModelHead(self._config, self._tensor_space, prediction_distance=0))

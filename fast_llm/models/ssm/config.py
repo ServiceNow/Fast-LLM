@@ -9,7 +9,7 @@ from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig, PretrainedFastLLMModelConfig
 from fast_llm.engine.training.config import TrainerConfig
 from fast_llm.layers.language_model.config import LanguageModelArchitectureConfig, LanguageModelBaseConfig
-from fast_llm.layers.ssm.config import SSMDimNames
+from fast_llm.layers.ssm.config import SSMBlockType, SSMDimNames
 from fast_llm.models.gpt.config import GPTBatchConfig, PretrainedGPTModelConfig
 from fast_llm.utils import Assert
 
@@ -24,8 +24,8 @@ class HybridSSMArchitectureConfig(LanguageModelArchitectureConfig):
     _abstract = False
 
     hybrid_block_layout: list[str] = Field(
-        default_factory=lambda: ["m2"],
-        desc="Pattern of blocks to use in the model. 't' for Transformer, 'm' for Mamba1, 'm2' for Descrete Mamba2.",
+        default_factory=lambda: [SSMBlockType.mamba2_discrete.value],
+        desc=f"Pattern of blocks to use in the model. Availabel types: {SSMBlockType.__members__.values()}",
         hint=FieldHint.core,
     )
 
@@ -44,9 +44,12 @@ class HybridSSMBaseModelConfig(LanguageModelBaseConfig, HybridSSMArchitectureCon
         Some of these can be setup directly in the layer config, but keeping them here for clarity.
         """
         super().setup_tensor_space(tensor_space)
-        if not "m2" in self.hybrid_block_layout and not "m" in self.hybrid_block_layout:
+        if (
+            not SSMBlockType.mamba2_discrete.value in self.hybrid_block_layout
+            and not SSMBlockType.mamba.value in self.hybrid_block_layout
+        ):
             raise ValueError(
-                "Block pattern must contain at least one 'm' or 'm2', use gpt model for transformer only architectures"
+                f"Block pattern must contain at least one '{SSMBlockType.mamba2_discrete.value}' or '{SSMBlockType.mamba.value}', use gpt model for transformer only architectures"
             )
 
         if self.ssm.dt_rank is None:
@@ -69,7 +72,7 @@ class HybridSSMBaseModelConfig(LanguageModelBaseConfig, HybridSSMArchitectureCon
         tensor_space.add_tensor_dim(TensorDim(SSMDimNames.conv_kernel_size, self.ssm.conv_kernel_dimension))
         tensor_space.add_tensor_dim(TensorDim(SSMDimNames.inner_proj_mamba, d_inner * 2))
 
-        if "m2" in self.hybrid_block_layout:
+        if SSMBlockType.mamba2_discrete.value in self.hybrid_block_layout:
             # Mamba2 specific dimensions
             # as per https://github.com/cartesia-ai/edge/blob/a0e121ebed3d2324c6d762b0e211a08d62583681/cartesia-pytorch/cartesia_pytorch/Llamba/mixers/discrete_mamba2.py#L66C3-L66C4
             headdim = d_inner // self.ssm.n_v_heads
@@ -101,8 +104,8 @@ class HybridSSMBaseModelConfig(LanguageModelBaseConfig, HybridSSMArchitectureCon
 
         Assert.eq(len(self.hybrid_block_layout), self.transformer.num_layers)
         Assert.custom(
-            lambda _: all(block_type in ["t", "m", "m2"] for block_type in self.hybrid_block_layout),
-            f"Invalid block type: {self.hybrid_block_layout}. Must be 't' or 'm' or 'm2'",
+            lambda _: all(block_type in SSMBlockType.__members__.values() for block_type in self.hybrid_block_layout),
+            f"Invalid block type: {self.hybrid_block_layout}. Must be one of {SSMBlockType.__members__.values()}",
         )
 
         super()._validate()

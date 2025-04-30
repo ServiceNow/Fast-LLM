@@ -1,3 +1,5 @@
+import enum
+
 from fast_llm.config import Field, FieldHint, FieldUpdate, check_field, config_class
 from fast_llm.engine.base_model.config import BaseModelArchitectureConfig, BaseModelConfig
 from fast_llm.functional.config import ActivationType
@@ -18,6 +20,17 @@ class SSMDimNames:
     conv_kernel_size = "conv_kernel_size"  # Kernel size of the conv1d in mamba layers
     qk_heads = "qk_heads"  # Number of QK heads
     v_heads = "v_heads"  # Number of V heads
+
+
+class SSMBlockType(str, enum.Enum):
+    """
+    An enum for the available mamba types for the MLP layer.
+    """
+
+    mamba = "m"
+    mamba2_discrete = "m2d"
+    mamba2 = "m2"
+    transformer = "t"
 
 
 @config_class()

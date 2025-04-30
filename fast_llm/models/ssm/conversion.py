@@ -18,6 +18,7 @@ from fast_llm.engine.checkpoint.huggingface import HuggingfaceStateDictCheckpoin
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig
 from fast_llm.functional.config import ActivationType
 from fast_llm.layers.common.config import NormalizationType
+from fast_llm.layers.ssm.config import SSMBlockType
 from fast_llm.models.gpt.conversion import MLPLayer2Converter
 from fast_llm.models.ssm.config import (
     AprielSSMHuggingfaceCheckpointFormat,
@@ -40,7 +41,7 @@ class HybridModelCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
 
     _model: HybridSSMModel
     _model_class: typing.ClassVar[FastLLMModelConfig] = HybridSSMModelConfig
-    _default_block_type: str = "m2"
+    _default_block_type: str = SSMBlockType.mamba2_discrete.value
 
     @classmethod
     def _import_config(cls, config, architecture_only: bool = False):
@@ -149,7 +150,7 @@ class LLambaHuggingfaceCheckpointHandler(HybridModelCheckpointHandler, CommonSSM
     _model: HybridSSMModel
     _model_class: typing.ClassVar[FastLLMModelConfig] = HybridSSMModelConfig
     format: typing.ClassVar[type[CheckpointFormat]] = LLambaHuggingfaceCheckpointFormat
-    _default_block_type: str = "m2"
+    _default_block_type: str = SSMBlockType.mamba2_discrete.value
 
     @classmethod
     def _create_config_converters(cls) -> list[ParamConverter]:
@@ -334,7 +335,7 @@ class LLambaHuggingfaceCheckpointHandler(HybridModelCheckpointHandler, CommonSSM
 class AprielSSMHuggingfaceCheckpointHandler(HybridModelCheckpointHandler, CommonSSMHuggingfaceCheckpointHandler):
     _model_class: typing.ClassVar[FastLLMModelConfig] = HybridSSMModelConfig
     format: typing.ClassVar[type[CheckpointFormat]] = AprielSSMHuggingfaceCheckpointFormat
-    _default_block_type: str = "m2"
+    _default_block_type: str = SSMBlockType.mamba2_discrete.value
 
     @classmethod
     def _create_config_converters(cls) -> list[ParamConverter]:
