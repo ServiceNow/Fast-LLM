@@ -674,11 +674,11 @@ class TransformerConfig(TransformerArchitectureConfig, BaseModelConfig):
             if self.init_method_std_qkv is None:
                 self.init_method_std_qkv = self.init_method_std
             if self.init_method_std_attn_proj is None:
-                self.init_method_std_attn_proj = self.init_method_std / (2 * self.num_layers) ** 0.5
+                self.init_method_std_attn_proj = self.init_method_std / max(2 * self.num_layers, 1) ** 0.5
             if self.init_method_std_mlp_1 is None:
                 self.init_method_std_mlp_1 = self.init_method_std
             if self.init_method_std_mlp_2 is None:
-                self.init_method_std_mlp_2 = self.init_method_std / (2 * self.num_layers) ** 0.5
+                self.init_method_std_mlp_2 = self.init_method_std / max(2 * self.num_layers, 1) ** 0.5
             if self.init_method_max_qkv is None:
                 self.init_method_max_qkv = self.init_method_max
             if self.init_method_min_qkv is None:
