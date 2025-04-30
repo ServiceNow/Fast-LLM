@@ -11,7 +11,7 @@ import warnings
 
 import yaml
 
-from fast_llm.utils import Assert, Tag, compare_nested, get_type_name, header, log
+from fast_llm.utils import Assert, Registry, Tag, compare_nested, get_type_name, header, log
 
 logger = logging.getLogger(__name__)
 
@@ -313,6 +313,14 @@ class Config:
     # without them being automatically added to `_explicit_fields`.
     _setting_implicit_default: bool | None = Field(init=False, repr=False)
 
+    # A registry for all the config classes.
+    _registry: typing.ClassVar[Registry[str, type["Config"]]] = Registry[str, type["Config"]]("config", {})
+    type: str | None = Field(
+        default=None,
+        desc="The config class name.",
+        hint=FieldHint.core,
+    )
+
     def __setattr__(self, key: str, value: typing.Any) -> None:
         """
         Make the class read-only after validation.
@@ -355,7 +363,7 @@ class Config:
         super().__delattr__(key)
 
     @contextlib.contextmanager
-    def _set_implicit_default(self, _value: bool | int = True):
+    def _set_implicit_default(self, _value: bool | None = True):
         assert self._setting_implicit_default is False
         self._setting_implicit_default = _value
         yield
@@ -388,6 +396,10 @@ class Config:
         self._check_abstract()
         errors = []
         with self._set_implicit_default(None):
+            if self.type is None:
+                self.type = self.__class__.__name__
+            # Should be handled in `from_dict`, but can fail if instantiating directly.
+            Assert.is_(self._registry[self.type], self.__class__)
             for name, field in self.fields():
                 if not field.init or field._field_type == dataclasses._FIELD_CLASSVAR:  # noqa
                     continue
@@ -465,6 +477,13 @@ class Config:
             raise FieldTypeError(f"Not a type.")
         elif issubclass(type_, Config):
             cls._validate_element_type(value, type_, strict=False)
+            # If the value belongs to a proper subclass of `type_`,
+            #   we need an explicitly set `type` field for serialization to remember the actual config class.
+            if type(value) != type_:
+                if value.type is None:
+                    value.type = value.__class__.__name__
+                value._explicit_fields.add("type")
+
             value.validate(_is_validating=True)
         else:
             value = cls._validate_simple(value, type_)
@@ -717,7 +736,18 @@ class Config:
             for keys, value in update.items():
                 set_nested_dict_value(default, keys, value, update_type)
 
-        return cls._from_dict(default, strict)
+        type_ = default.get("type")
+        if type_ is None:
+            actual_cls = cls
+        else:
+            if type_ not in cls._registry:
+                raise ValueError(f"Unknown config type {type_}.")
+            actual_cls = cls._registry[type_]
+            if not issubclass(actual_cls, cls):
+                raise ValueError(
+                    f"Config class {actual_cls.__name__} (from type {type_}) is not a subclass of {cls.__name__}"
+                )
+        return actual_cls._from_dict(default, strict=strict)
 
     @classmethod
     def from_flat_dict(
@@ -880,6 +910,11 @@ class Config:
         """
         We need to postpone validation until the class has been processed by the dataclass wrapper.
         """
+        Assert.is_(cls._registry, Config._registry)
+        cls._registry[cls.__name__] = cls
+        short_name = cls.__name__.strip("Config")
+        if short_name != cls.__name__:
+            cls._registry[short_name] = cls
         for base_class in cls.__mro__:
             if issubclass(base_class, Config):
                 assert cls.__class_validated__, (
