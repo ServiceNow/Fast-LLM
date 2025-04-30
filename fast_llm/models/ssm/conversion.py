@@ -1,4 +1,3 @@
-import dataclasses
 import json
 import os
 import pathlib
@@ -32,21 +31,39 @@ if typing.TYPE_CHECKING:
     pass
 
 
-@dataclasses.dataclass(kw_only=True)
-class HybridBlockLayoutConverter(ParamConverter):
-    num_layers_getter: typing.Callable[[typing.Any], int] = lambda config: config.transformer.num_layers
+class HybridModelCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
+    """
+    This is a temporary solution for importing/exporting hybrid models. Since there is no standard solution for this in HF, we just use the block_pattern.
+    If block_pattern is None, it will multiply the provided default block type by the number of layers and export/import it.
+    If block_pattern is provided, it will export/import it as-is.
+    """
 
-    # TODO: generalize this t
-    def __post_init__(self) -> None:
-        Assert.eq(len(self.fast_llm_names), 1)
-        Assert.eq(len(self.export_names), 1)
+    _model: HybridSSMModel
+    _model_class: typing.ClassVar[FastLLMModelConfig] = HybridSSMModelConfig
+    _default_block_type: str = "m2"
 
-    def export_params(self, fast_llm_values: tuple[typing.Any, ...]) -> tuple[typing.Any, ...]:
-        # Use the expanded list as-is
-        return (["m2"],)
+    @classmethod
+    def _import_config(cls, config, architecture_only: bool = False):
+        cls.num_layers = config["n_layer"] if "n_layer" in config else config["num_hidden_layers"]
+        cls.block_pattern = config.get("hybrid_block_layout", None)
+        return super()._import_config(config, architecture_only)
 
-    def import_params(self, export_values: tuple[typing.Any, ...]) -> tuple[typing.Any, ...]:
-        return (["m2"],)
+    @classmethod
+    def _create_config_converters(cls) -> list[ParamConverter]:
+        if cls.block_pattern is not None:
+            block_converter = MappedConfigParamConverter(
+                fast_llm_names=(("hybrid_block_layout",),),
+                export_names=(("hybrid_block_layout",),),
+                fast_llm_value=cls.block_pattern,
+                export_value=cls.block_pattern,
+            )
+        else:
+            block_converter = ConstantImportParamConverter(
+                fast_llm_names=(("hybrid_block_layout",),),
+                fast_llm_value=[cls._default_block_type] * cls.num_layers,
+            )
+
+        return super()._create_config_converters() + [block_converter]
 
 
 class CommonSSMHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
@@ -128,10 +145,11 @@ class CommonSSMHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandle
         ]
 
 
-class LLambaHuggingfaceCheckpointHandler(CommonSSMHuggingfaceCheckpointHandler):
+class LLambaHuggingfaceCheckpointHandler(HybridModelCheckpointHandler, CommonSSMHuggingfaceCheckpointHandler):
     _model: HybridSSMModel
     _model_class: typing.ClassVar[FastLLMModelConfig] = HybridSSMModelConfig
     format: typing.ClassVar[type[CheckpointFormat]] = LLambaHuggingfaceCheckpointFormat
+    _default_block_type: str = "m2"
 
     @classmethod
     def _create_config_converters(cls) -> list[ParamConverter]:
@@ -187,9 +205,6 @@ class LLambaHuggingfaceCheckpointHandler(CommonSSMHuggingfaceCheckpointHandler):
             RenameParamConverter(
                 fast_llm_names=(("tie_word_embeddings",),),
                 export_names=(("tie_embeddings",),),
-            ),
-            HybridBlockLayoutConverter(
-                fast_llm_names=(("hybrid_block_layout",),), export_names=(("hybrid_block_layout",),)
             ),
         ]
 
@@ -316,9 +331,10 @@ class LLambaHuggingfaceCheckpointHandler(CommonSSMHuggingfaceCheckpointHandler):
             json.dump(config, f)
 
 
-class AprielSSMHuggingfaceCheckpointHandler(CommonSSMHuggingfaceCheckpointHandler):
+class AprielSSMHuggingfaceCheckpointHandler(HybridModelCheckpointHandler, CommonSSMHuggingfaceCheckpointHandler):
     _model_class: typing.ClassVar[FastLLMModelConfig] = HybridSSMModelConfig
     format: typing.ClassVar[type[CheckpointFormat]] = AprielSSMHuggingfaceCheckpointFormat
+    _default_block_type: str = "m2"
 
     @classmethod
     def _create_config_converters(cls) -> list[ParamConverter]:
@@ -358,10 +374,6 @@ class AprielSSMHuggingfaceCheckpointHandler(CommonSSMHuggingfaceCheckpointHandle
             RenameParamConverter(
                 fast_llm_names=(("tie_word_embeddings",),),
                 export_names=(("tie_word_embeddings",),),
-            ),
-            # ConstantImportParamConverter(fast_llm_names=(("hybrid_block_layout"),), fast_llm_value=["m2"]),
-            HybridBlockLayoutConverter(
-                fast_llm_names=(("hybrid_block_layout",),), export_names=(("hybrid_block_layout",),)
             ),
         ]
 
