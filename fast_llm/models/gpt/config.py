@@ -188,14 +188,6 @@ class GPTTrainerConfig(PretrainedGPTModelConfig, TrainerConfig):
             set_megatron_distributed_seeds(self.model.distributed)
         super()._validate()
 
-        # if self.model.base_model.distillation_model is None and self.model.base_model.dpo_reference_model is None:
-        #     Assert.empty(self.reference_models)
-        # else:
-        #     if (name := self.model.base_model.distillation_model) is not None:
-        #         Assert.eq(self.reference_models.keys(), {name})
-        #     if (name := self.model.base_model.dpo_reference_model) is not None:
-        #         Assert.eq(self.reference_models.keys(), {name})
-
         if self.model.base_model.use_absolute_position_embeddings:
             Assert.geq(self.model.base_model.num_absolute_position_embeddings, self.batch.sequence_length)
 
