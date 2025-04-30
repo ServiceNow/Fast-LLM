@@ -49,11 +49,14 @@ class GPTMemmapDataset(GPTIndexedDataset):
         with self._prefix.with_suffix(".idx").open("rb") as stream:
             Assert.eq(stream.read(9), MEMMAP_INDEX_HEADER, msg=f"File: {stream.name}")
             self._version = struct.unpack("<Q", stream.read(8))[0]
-            assert self._version in [1, 2, 3], f"Unsupported version for gpt_memmap dataset: {self._version}."
+            assert self._version in [1, 2, 3, 4], f"Unsupported version for gpt_memmap dataset: {self._version}."
             if self._version >= 2:
                 self._has_spans = struct.unpack("<B", stream.read(1))[0]
 
             if self._version >= 3:
+                self._has_preference_spans = struct.unpack("<B", stream.read(1))[0]
+
+            if self._version >= 4:
                 self._has_images = struct.unpack("<B", stream.read(1))[0]
 
             self._dtype = MEMMAP_DTYPES[struct.unpack("<B", stream.read(1))[0]].numpy
@@ -104,7 +107,7 @@ class GPTMemmapDataset(GPTIndexedDataset):
                 + sum([x.nbytes for x in self._spans])
             )
         self._num_pixels = 0
-        if self._has_images and self._version >= 3:
+        if self._has_images and self._version >= 4:
             self._n_images = np.frombuffer(
                 self._index_bin_buffer, dtype=np.int32, count=self._num_documents, offset=offset
             )
@@ -333,10 +336,12 @@ class GPTMemmapDataset(GPTIndexedDataset):
             idx_stream.write(MEMMAP_INDEX_HEADER)
             # Indicates the version
             # Version 2 onwards optionally add loss-masking spans
-            # Version 3 onwards optionally add images
-            idx_stream.write(struct.pack("<Q", 3))
+            # Version 4 onwards optionally add images
+            idx_stream.write(struct.pack("<Q", 4))
             # Flag to indicate whether loss-masking spans are present
             idx_stream.write(struct.pack("<B", 1 if spans.size > 0 else 0))
+            # Placeholder flag for preference spans
+            idx_stream.write(struct.pack("<B", 0))
             # Flag to indicate whether images are present
             idx_stream.write(struct.pack("<B", 1 if total_images > 0 else 0))
             # Data type
