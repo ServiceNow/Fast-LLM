@@ -215,6 +215,12 @@ class LanguageModelBaseConfig(LanguageModelArchitectureConfig, BaseModelConfig):
         doc="May be used to freeze the output weights by setting their scale to zero.",
         hint=FieldHint.feature,
     )
+    prediction_loss_coefficient: list[float] | None = Field(
+        default=None,
+        desc="Loss coefficient for each prediction head.",
+        doc="If not provided, all heads are equally weighted.",
+        hint=FieldHint.feature,
+    )
 
     def _validate(self) -> None:
         self.transformer.validate()
@@ -231,3 +237,7 @@ class LanguageModelBaseConfig(LanguageModelArchitectureConfig, BaseModelConfig):
         if self.distillation_model is not None:
             if self.prediction_heads > 1:
                 raise NotImplementedError("Multi-token prediction not supported with distillation.")
+        if isinstance(self.prediction_loss_coefficient, list):
+            Assert.eq(len(self.prediction_loss_coefficient), self.prediction_heads)
+            for coeff in self.prediction_loss_coefficient:
+                Assert.geq(coeff, 0)

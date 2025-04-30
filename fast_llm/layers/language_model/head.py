@@ -57,6 +57,9 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
 
         hidden_dim = self._tensor_space.get_tensor_dim(TransformerDimNames.hidden)
 
+        self._loss_coefficient = (
+            config.prediction_loss_coefficient[prediction_distance] if config.prediction_loss_coefficient else 1.0
+        )
         self._loss_name = LanguageModelLossNames.multi_token_prediction_loss(prediction_distance)
         self.final_norm = config.transformer.normalization.get_layer(hidden_dim)
         self._logits_scale_factor = config.logits_scale_factor
@@ -133,7 +136,7 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
         else:
             if self.training:
                 # Backward hook to compute the gradient of the loss
-                shared_hidden = AuxiliaryLoss.apply(shared_hidden, language_model_loss, 1.0)
+                shared_hidden = AuxiliaryLoss.apply(shared_hidden, language_model_loss, self._loss_coefficient)
             # MTP: Return shared_hidden to be used by the next head.
             return shared_hidden
 
