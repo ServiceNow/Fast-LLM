@@ -143,7 +143,7 @@ class LanguageModelBaseConfig(LanguageModelArchitectureConfig, BaseModelConfig):
         desc="Min value for clamping initialized weights of the vocabulary embedding and output (logits).",
         hint=FieldHint.feature,
     )
-    use_dpo_loss: bool | None = Field(
+    enable_dpo: bool | None = Field(
         default=False,
         desc="Whether to enable DPO loss",
         hint=FieldHint.feature,
@@ -151,6 +151,11 @@ class LanguageModelBaseConfig(LanguageModelArchitectureConfig, BaseModelConfig):
     dpo_beta: float | None = Field(
         default=1.0,
         desc="Beta value for DPO loss.",
+        hint=FieldHint.feature,
+    )
+    dpo_reference_model: str | None = Field(
+        default=None,
+        desc="Name of the reference model to use for dpo.",
         hint=FieldHint.feature,
     )
     cross_entropy_impl: CrossEntropyImpl = Field(

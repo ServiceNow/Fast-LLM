@@ -99,11 +99,6 @@ class GPTBatchConfig(BatchConfig):
         desc="Read loss masking spans from the dataset.",
         hint=FieldHint.feature,
     )
-    use_preference_loss_masking_spans: bool = Field(
-        default=False,
-        desc="Read loss masking spans from the dataset.",
-        hint=FieldHint.feature,
-    )
 
     def _validate(self) -> None:
         if self.micro_sequence_length is None:
@@ -192,20 +187,27 @@ class GPTTrainerConfig(PretrainedGPTModelConfig, TrainerConfig):
         if self.model.base_model.use_megatron_initialization:
             set_megatron_distributed_seeds(self.model.distributed)
         super()._validate()
-        if (name := self.model.base_model.distillation_model) is None:
-            Assert.empty(self.reference_models)
-        else:
+
+        if (name := self.model.base_model.distillation_model) is not None:
             Assert.eq(self.reference_models.keys(), {name})
+        elif (name := self.model.base_model.dpo_reference_model) is not None:
+            Assert.eq(self.reference_models.keys(), {name})
+        else:
+            Assert.empty(self.reference_models)
+
         if self.model.base_model.use_absolute_position_embeddings:
             Assert.geq(self.model.base_model.num_absolute_position_embeddings, self.batch.sequence_length)
         if self.model.base_model.distillation_model is not None:
             # TODO: Support loss masking for distillation?
             assert not self.batch.use_loss_masking_spans
-        assert self.model.base_model.use_dpo_loss == self.batch.use_preference_loss_masking_spans
-        if self.model.base_model.use_dpo_loss:
-            assert self.model.base_model.distillation_model is not None
+
+        if self.model.base_model.enable_dpo:
+            assert self.model.base_model.dpo_reference_model is not None
+            Assert.none(self.model.base_model.distillation_model)
+
         for reference_model in self.reference_models.values():
             Assert.none(reference_model.model.base_model.distillation_model)
+            Assert.none(reference_model.model.base_model.dpo_reference_model)
             # TODO: Support more LM head features.
             Assert.none(reference_model.model.base_model.cross_entropy_splits)
             Assert.eq(reference_model.model.base_model.parallel_embeddings, self.model.base_model.parallel_embeddings)

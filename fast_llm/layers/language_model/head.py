@@ -72,7 +72,7 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
 
         self._init_output_weights(hidden_dim, config)
 
-        self._use_dpo_loss = config.use_dpo_loss
+        self._use_dpo_loss = config.enable_dpo
         if self._use_dpo_loss:
             self.dpo_beta = config.dpo_beta
         else:
@@ -152,8 +152,8 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
                 if self._use_dpo_loss or self._config.distillation_model is None
                 else f"{self._config.distillation_model}_logits"
             )
-        if target is not None:
-            if self._config.distillation_model is None or self._use_dpo_loss:
+        if target is not None and not self._use_dpo_loss:
+            if self._config.distillation_model is None:
                 # MTP: Shift the labels
                 target = (
                     target[self._prediction_distance : self._prediction_distance + input_.size(0),]
@@ -163,8 +163,7 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
                         self._prediction_distance : self._prediction_distance + input_.size(1),
                     ]
                 )
-                if not self._use_dpo_loss:
-                    target = target.flatten()
+                target = target.flatten()
             else:
                 # Target is reference model logits.
                 target = target.flatten(0, -2)
@@ -307,7 +306,7 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
             loss, grad = compute_dpo_loss(
                 logits,
                 target,
-                kwargs.get(f"{self._config.distillation_model}_logits"),
+                kwargs.get(f"{self._config.dpo_reference_model}_logits"),
                 kwargs[LanguageModelKwargs.chosen_spans],
                 kwargs[LanguageModelKwargs.rejected_spans],
                 self.dpo_beta,
