@@ -198,18 +198,19 @@ class GPTTrainerConfig(PretrainedGPTModelConfig, TrainerConfig):
 
         if self.model.base_model.use_absolute_position_embeddings:
             Assert.geq(self.model.base_model.num_absolute_position_embeddings, self.batch.sequence_length)
-        if self.model.base_model.distillation_model is not None:
+
+        distillation_model = self.model.base_model.distillation_model
+        dpo_reference_model = self.model.base_model.dpo_reference_model
+
+        if distillation_model is not None:
             # TODO: Support loss masking for distillation?
             assert not self.batch.use_loss_masking_spans
 
         if self.model.base_model.enable_dpo:
-            assert self.model.base_model.dpo_reference_model is not None
-            Assert.none(self.model.base_model.distillation_model)
+            assert dpo_reference_model is not None
+            Assert.none(distillation_model)
         else:
-            Assert.none(self.model.base_model.dpo_reference_model)
-
-        distillation_model = self.model.base_model.distillation_model
-        dpo_reference_model = self.model.base_model.dpo_reference_model
+            Assert.none(dpo_reference_model)
 
         if distillation_model is None and dpo_reference_model is None:
             Assert.empty(self.reference_models)
