@@ -56,10 +56,12 @@ def ref_packed_get_batch_logps(
     return torch.tensor(chosen_logps), torch.tensor(rejected_logps)
 
 
-def test_preference_logps():
+@pytest.mark.parametrize("batch_size", [1, 2, 4, 8])
+@pytest.mark.parametrize("seq_length", [1024, 4096, 8192])
+@pytest.mark.parametrize("vocab_size", [1000, 2000, 8000])
+def test_preference_logps(batch_size, seq_length, vocab_size):
     random.seed(0)
     torch.manual_seed(0)
-    num_iters = 20
 
     def random_split(seq_length):
         min_val = int(seq_length * 0.3)
@@ -72,42 +74,36 @@ def test_preference_logps():
         b = seq_length - a
         return [a, b]
 
-    for _ in range(num_iters):
-        seq_length = random.choice([1024, 4096, 8192])
-        vocab_size = random.choice([1000, 2000, 8000])
+    logits = torch.randn(batch_size, seq_length, vocab_size)
+    targets = torch.randint(0, vocab_size, (batch_size, seq_length))
+    packed_seq_lens = random_split(seq_length)  # simulate different chosen/rejected lengths
+    prompt_id_lens = [int(min(packed_seq_lens) * 0.75)] * 2  # sequences are 75% prompt 25% generation
+    attention_mask = torch.tensor([1] * packed_seq_lens[0] + [2] * packed_seq_lens[1]).unsqueeze(0)
 
-        logits = torch.randn(1, seq_length, vocab_size)
-        targets = torch.randint(0, vocab_size, (1, seq_length))
-        packed_seq_lens = random_split(seq_length)
-        prompt_id_lens = [int(min(packed_seq_lens) * 0.75)] * 2
-        attention_mask = torch.tensor([1] * packed_seq_lens[0] + [2] * packed_seq_lens[1]).unsqueeze(0)
+    chosen_span = torch.tensor([[prompt_id_lens[0], packed_seq_lens[0] - 1]]) - 1  # shift by 1 due to label shifting
+    rejected_span = (
+        torch.tensor([[packed_seq_lens[0] + prompt_id_lens[1], packed_seq_lens[0] + packed_seq_lens[1] - 1]]) - 1
+    )  # shift by 1 due to label shifting
 
-        chosen_span = (
-            torch.tensor([[prompt_id_lens[0], packed_seq_lens[0] - 1]]) - 1
-        )  # shift by 1 due to label shifting
-        rejected_span = (
-            torch.tensor([[packed_seq_lens[0] + prompt_id_lens[1], packed_seq_lens[0] + packed_seq_lens[1] - 1]]) - 1
-        )  # shift by 1 due to label shifting
+    ref_chosen_logps, ref_rejected_logps = ref_packed_get_batch_logps(
+        logits, targets, attention_mask, prompt_id_lens, packed_seq_lens
+    )
 
-        ref_chosen_logps, ref_rejected_logps = ref_packed_get_batch_logps(
-            logits, targets, attention_mask, prompt_id_lens, packed_seq_lens
-        )
+    chosen_logps, rejected_logps, selected_log_probs = _compute_logprobs_for_preference_spans(
+        logits=logits,
+        targets=targets[:, 1:],
+        chosen_span=chosen_span,
+        rejected_span=rejected_span,
+    )
 
-        chosen_logps, rejected_logps, selected_log_probs = _compute_logprobs_for_preference_spans(
-            logits=logits.flatten(0, -2),
-            targets=targets.flatten()[1:],
-            chosen_span=chosen_span,
-            rejected_span=rejected_span,
-        )
+    ref_logps = ref_log_probs_from_logits(logits[:, :-1, :], targets[:, 1:])
 
-        ref_logps = ref_log_probs_from_logits(logits[:, :-1, :], targets[:, 1:])
+    # check all logps
+    Assert.custom(torch.allclose, ref_logps, selected_log_probs, rtol=1e-5)
 
-        # check all logps
-        Assert.custom(torch.allclose, ref_logps, selected_log_probs, rtol=1e-5)
-
-        # check chosen and rejected summed logps
-        Assert.custom(torch.allclose, ref_chosen_logps, chosen_logps, rtol=1e-5)
-        Assert.custom(torch.allclose, ref_rejected_logps, rejected_logps, rtol=1e-5)
+    # check chosen and rejected summed logps
+    Assert.custom(torch.allclose, ref_chosen_logps, chosen_logps, rtol=1e-5)
+    Assert.custom(torch.allclose, ref_rejected_logps, rejected_logps, rtol=1e-5)
 
 
 def ref_dpo_loss_fcn(
