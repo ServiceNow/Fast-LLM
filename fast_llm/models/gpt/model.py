@@ -27,7 +27,7 @@ from fast_llm.layers.transformer.preprocessing import (
     RotaryEmbeddingPreprocessor,
 )
 from fast_llm.layers.transformer.transformer import TransformerLayer
-from fast_llm.layers.vision_encoder.config import VisionModelKwargs
+from fast_llm.layers.vision_encoder.config import VisionEncoderDimNames, VisionModelKwargs
 from fast_llm.layers.vision_encoder.preprocessing import VisionPreprocessor
 from fast_llm.models.gpt.config import GPTBaseModelConfig, GPTModelConfig
 from fast_llm.models.gpt.megatron import get_init_megatron
@@ -164,11 +164,16 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             ]
             image_rescale_factor = self._config.vision_encoder.normalization.rescale_factor
             vision_kwargs = {
+                VisionModelKwargs.patch_size: self._config.vision_encoder.encoder.patch_size,
                 VisionModelKwargs.image_height: image_height,
                 VisionModelKwargs.image_width: image_width,
                 VisionModelKwargs.image_mean: image_mean,
                 VisionModelKwargs.image_std: image_std,
                 VisionModelKwargs.image_rescale_factor: image_rescale_factor,
+                VisionModelKwargs.rope_theta: self._config.vision_encoder.encoder.rope_theta,
+                VisionModelKwargs.kv_channels: self._tensor_space.get_tensor_dim(
+                    VisionEncoderDimNames.kv_channels
+                ).size,
             }
         else:
             vision_kwargs = {}
@@ -306,16 +311,6 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                 if self._use_flash_attention:
                     self._flash_varlen_preprocessor.preprocess(kwargs_meta)
 
-            if batch.images is not None:
-                kwargs_meta[VisionModelKwargs.images] = [
-                    img.to(device=self._tensor_space.distributed.device, dtype=torch.uint8, non_blocking=True)
-                    for images in batch.images
-                    for img in images
-                ]
-                kwargs_meta[VisionModelKwargs.image_positions] = batch.image_positions
-                if self._config.vision_encoder:
-                    self._vision_preprocessor.preprocess(kwargs_meta)
-
             # TODO: Add pasts/presents to meta input?
             # Use lists as pointers so `past_key_values` is populated during the previous micro_sequence.
             pasts = presents
@@ -349,6 +344,15 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                                 else:
                                     labels[i, start : end + 1] = -100
                 kwargs[LanguageModelKwargs.labels] = labels
+            if batch.images is not None:
+                kwargs[VisionModelKwargs.images] = [
+                    img.to(device=self._tensor_space.distributed.device, dtype=torch.uint8, non_blocking=True)
+                    for images in batch.images
+                    for img in images
+                ]
+                kwargs[VisionModelKwargs.image_positions] = batch.image_positions
+                if self._config.vision_encoder:
+                    self._vision_preprocessor.preprocess(kwargs)
             if self._config.use_absolute_position_embeddings:
                 self._position_embedding_preprocessor.preprocess(kwargs)
             if self._config.transformer.rotary.enabled:

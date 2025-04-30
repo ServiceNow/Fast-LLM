@@ -49,10 +49,12 @@ def gpt_data_collate_fn(
         stacked_spans = [torch.from_numpy(sample.loss_masking_spans) for sample in batch]
     if not cross_document_attention:
         sequence_lengths = [torch.tensor(sample.sequence_lengths) for sample in batch]
+    has_images = False
     batch_images = []
     for sample in batch:
         if sample.images is not None:
             batch_images.append([torch.from_numpy(image) for image in sample.images])
+            has_images = True
         else:
             batch_images.append(None)
     batch_image_positions = []
@@ -65,8 +67,8 @@ def gpt_data_collate_fn(
         token_ids=torch.from_numpy(stacked_ids),
         loss_masking_spans=stacked_spans,
         sequence_lengths=sequence_lengths,
-        images=batch_images if any(batch_images) else None,
-        image_positions=batch_image_positions if any(batch_image_positions) else None,
+        images=batch_images if has_images else None,
+        image_positions=batch_image_positions if has_images else None,
     )
 
 

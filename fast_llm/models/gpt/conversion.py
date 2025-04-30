@@ -597,6 +597,10 @@ class LlavaHuggingfaceCheckpointHandler(MistralHuggingfaceCheckpointHandler):
                     ),
                 ),
             ),
+            ConstantImportParamConverter(
+                fast_llm_names=(("vision_encoder", "encoder", "pre_norm", "type"),),
+                fast_llm_value=NormalizationType.rms_norm,
+            ),
             # Vision Transformer
             RenameParamConverter(
                 fast_llm_names=(("vision_encoder", "encoder", "num_hidden_layers"),),
@@ -679,39 +683,39 @@ class LlavaHuggingfaceCheckpointHandler(MistralHuggingfaceCheckpointHandler):
         for i in range(num_layers):
             vision_transformer_converters += [
                 WeightConverter(
-                    f"layers.0.vision_encoder.vision_encoder.transformer.layers.{i}.attention.k_proj.weight",
+                    f"layers.0.vision_encoder.vision_transformer.layers.{i}.attention.k_proj.weight",
                     f"vision_tower.transformer.layers.{i}.attention.k_proj.weight",
                 ),
                 WeightConverter(
-                    f"layers.0.vision_encoder.vision_encoder.transformer.layers.{i}.attention.v_proj.weight",
+                    f"layers.0.vision_encoder.vision_transformer.layers.{i}.attention.v_proj.weight",
                     f"vision_tower.transformer.layers.{i}.attention.v_proj.weight",
                 ),
                 WeightConverter(
-                    f"layers.0.vision_encoder.vision_encoder.transformer.layers.{i}.attention.q_proj.weight",
+                    f"layers.0.vision_encoder.vision_transformer.layers.{i}.attention.q_proj.weight",
                     f"vision_tower.transformer.layers.{i}.attention.q_proj.weight",
                 ),
                 WeightConverter(
-                    f"layers.0.vision_encoder.vision_encoder.transformer.layers.{i}.attention.o_proj.weight",
+                    f"layers.0.vision_encoder.vision_transformer.layers.{i}.attention.o_proj.weight",
                     f"vision_tower.transformer.layers.{i}.attention.o_proj.weight",
                 ),
                 WeightConverter(
-                    f"layers.0.vision_encoder.vision_encoder.transformer.layers.{i}.attention_norm.weight",
+                    f"layers.0.vision_encoder.vision_transformer.layers.{i}.attention_norm.weight",
                     f"vision_tower.transformer.layers.{i}.attention_norm.weight",
                 ),
                 WeightConverter(
-                    f"layers.0.vision_encoder.vision_encoder.transformer.layers.{i}.feed_forward.down_proj.weight",
+                    f"layers.0.vision_encoder.vision_transformer.layers.{i}.feed_forward.down_proj.weight",
                     f"vision_tower.transformer.layers.{i}.feed_forward.down_proj.weight",
                 ),
                 WeightConverter(
-                    f"layers.0.vision_encoder.vision_encoder.transformer.layers.{i}.feed_forward.gate_proj.weight",
+                    f"layers.0.vision_encoder.vision_transformer.layers.{i}.feed_forward.gate_proj.weight",
                     f"vision_tower.transformer.layers.{i}.feed_forward.gate_proj.weight",
                 ),
                 WeightConverter(
-                    f"layers.0.vision_encoder.vision_encoder.transformer.layers.{i}.feed_forward.up_proj.weight",
+                    f"layers.0.vision_encoder.vision_transformer.layers.{i}.feed_forward.up_proj.weight",
                     f"vision_tower.transformer.layers.{i}.feed_forward.up_proj.weight",
                 ),
                 WeightConverter(
-                    f"layers.0.vision_encoder.vision_encoder.transformer.layers.{i}.ffn_norm.weight",
+                    f"layers.0.vision_encoder.vision_transformer.layers.{i}.ffn_norm.weight",
                     f"vision_tower.transformer.layers.{i}.ffn_norm.weight",
                 ),
             ]
@@ -720,20 +724,20 @@ class LlavaHuggingfaceCheckpointHandler(MistralHuggingfaceCheckpointHandler):
 
     def _create_vision_encoder_weight_converters(self) -> list[WeightConverter]:
         patch_conv_converter = WeightConverter(
-            "layers.0.vision_encoder.vision_encoder.patch_conv.weight",
+            "layers.0.vision_encoder.patch_conv.weight",
             "vision_tower.patch_conv.weight",
         )
         # TODO Soham: use _get_weight_and_bias_converters?
         layernorm_converters = []
         layer_norm_converter = WeightConverter(
-            "layers.0.vision_encoder.vision_encoder.ln_pre.weight",
+            "layers.0.vision_encoder.norm.weight",
             "vision_tower.ln_pre.weight",
         )
         layernorm_converters.append(layer_norm_converter)
         layer_norm_converter
-        if self._model.config.base_model.vision_encoder.encoder.pre_norm == NormalizationType.layer_norm:
+        if self._model.config.base_model.vision_encoder.encoder.pre_norm.type == NormalizationType.layer_norm:
             layer_norm_bias_converter = WeightConverter(
-                "layers.0.vision_encoder.vision_encoder.ln_pre.bias",
+                "layers.0.vision_encoder.norm.bias",
                 "vision_tower.ln_pre.bias",
             )
             layernorm_converters.append(layer_norm_bias_converter)

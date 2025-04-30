@@ -433,13 +433,22 @@ class GPTSampledIndexedDataset(SampledDataset):
                     length=token_end_index_in_document - token_start_index_in_document,
                     use_loss_masking_spans=self._config.use_loss_masking_spans,
                 )
-                # TODO Soham: handle images with loss masking spans
+                start_pos = 0
                 for idx, im_position in enumerate(sample.image_positions):
                     # image_positions.append(im_positions + len(token_ids) + image_tokens_added)
+                    # Add placeholders for image tokens
+                    token_ids.append(sample.token_ids[start_pos:im_position])
+                    token_ids.append(np.full((image_sizes[idx],), -100, dtype=np.int64))
                     image_positions.append(im_position + len(token_ids) + image_tokens_added)
                     image_tokens_added += image_tokens
+                    start_pos = im_position
+                token_ids.append(sample.token_ids[start_pos:])
+                # TODO Soham: remove this
+                # if len(sample.images) == 1:
+                #     sample.images.append(sample.images[0])
+                #     sample.image_positions = np.concatenate([sample.image_positions, sample.image_positions])
                 images.append(sample.images)
-                token_ids.append(sample.token_ids)
+                # TODO Soham: add offsets for loss masking spans
                 if self._config.use_loss_masking_spans:
                     for loss_masking_span in sample.loss_masking_spans:
                         span = np.clip(loss_masking_span + token_count - token_start, 0, self._sequence_length + 1)
@@ -452,7 +461,7 @@ class GPTSampledIndexedDataset(SampledDataset):
 
         sequence_lengths = (
             np.array([ids.size - (idx == len(token_ids) - 1) for idx, ids in enumerate(token_ids)], dtype=np.int32)
-            + np.array([ImageProcessor.get_num_patches(image) for image in images[idx] for idx in range(len(images))])
+            # + np.array([ImageProcessor.get_num_patches(image) for image in images[idx] for idx in range(len(images))])
             if not self._cross_document_attention
             else None
         )
@@ -464,7 +473,7 @@ class GPTSampledIndexedDataset(SampledDataset):
         )
         images = [im for img_list in images for im in img_list] if images else None
         image_positions = np.array(image_positions) if image_positions else None
-        Assert.eq(len(token_ids) + image_tokens_added, self._sequence_length + 1)
+        Assert.eq(len(token_ids), self._sequence_length + 1)
 
         return GPTSample(
             token_ids=token_ids,

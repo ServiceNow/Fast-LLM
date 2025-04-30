@@ -40,7 +40,27 @@ def pad(image: torch.Tensor, max_height, max_width) -> torch.Tensor:
     """
     width_padding = max(0, max_height - image.size(1))
     depth_padding = max(0, max_width - image.size(2))
-    return F.pad(image, (0, 0, width_padding, depth_padding), 0)
+    return F.pad(image, (0, 0, depth_padding, width_padding), 0)
+
+
+def create_inv_freqs(rope_theta: int, kv_channels: int, image_size: int, patch_size: int) -> torch.Tensor:
+    freqs = 1.0 / (rope_theta ** (torch.arange(0, kv_channels, 2).float() / kv_channels))
+    max_patches_per_side = image_size // patch_size
+
+    h = torch.arange(max_patches_per_side)
+    w = torch.arange(max_patches_per_side)
+
+    freqs_h = torch.outer(h, freqs[::2]).float()
+    freqs_w = torch.outer(w, freqs[1::2]).float()
+    inv_freq = torch.cat(
+        [
+            freqs_h[:, None, :].repeat(1, max_patches_per_side, 1),
+            freqs_w[None, :, :].repeat(max_patches_per_side, 1, 1),
+        ],
+        dim=-1,
+    ).reshape(-1, kv_channels // 2)
+
+    return torch.cat((inv_freq, inv_freq), dim=-1)
 
 
 class VisionPreprocessor:
@@ -53,7 +73,8 @@ class VisionPreprocessor:
         images = kwargs.get("images")
         im_height = kwargs.get(VisionModelKwargs.image_height)
         im_width = kwargs.get(VisionModelKwargs.image_width)
-        kwargs[VisionModelKwargs.image_sizes] = [(im.size(1), im.size(2)) for im in images]
+        image_sizes = [get_resize_dims(im.size(1), im.size(2), im_height, im_width) for im in images]
+        kwargs[VisionModelKwargs.image_sizes] = image_sizes
         images = [
             pad(
                 normalize(
@@ -72,3 +93,9 @@ class VisionPreprocessor:
             dtype=self._distributed_config.training_dtype.torch,
         )
         kwargs[VisionModelKwargs.images] = images
+        kwargs[VisionModelKwargs.rotary_inv_freq] = create_inv_freqs(
+            kwargs[VisionModelKwargs.rope_theta],
+            kwargs[VisionModelKwargs.kv_channels],
+            im_height,
+            kwargs[VisionModelKwargs.patch_size],
+        ).to(device=self._tensor_space.distributed.device)
