@@ -163,7 +163,8 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
                         self._prediction_distance : self._prediction_distance + input_.size(1),
                     ]
                 )
-                target = target.flatten()
+                if not self._use_dpo_loss:
+                    target = target.flatten()
             else:
                 # Target is reference model logits.
                 target = target.flatten(0, -2)
@@ -304,9 +305,9 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
             return logits * self._logits_scale_factor, None
         if self._use_dpo_loss:
             loss, grad = compute_dpo_loss(
-                logits.flatten(0, -2),
+                logits,
                 target,
-                kwargs.get(f"{self._config.distillation_model}_logits").flatten(0, -2),
+                kwargs.get(f"{self._config.distillation_model}_logits"),
                 kwargs[LanguageModelKwargs.chosen_spans],
                 kwargs[LanguageModelKwargs.rejected_spans],
                 self.dpo_beta,

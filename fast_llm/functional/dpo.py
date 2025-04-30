@@ -9,19 +9,17 @@ def _compute_logprobs_for_preference_spans(
     log_probs = torch.nn.functional.log_softmax(logits, dim=-1)
 
     # gather log probabilities corresponding to the target tokens
-    selected_log_probs = log_probs[:-1].gather(dim=-1, index=targets.unsqueeze(-1)).squeeze(-1)
+    selected_log_probs = log_probs[:, :-1, :].gather(dim=-1, index=targets.unsqueeze(-1)).squeeze(-1)
 
     # apply chosen mask
-    # chosen_mask = torch.zeros_like(selected_log_probs, dtype=torch.bool)
-    # chosen_mask[chosen_span[0][0].item(): chosen_span[0][1].item() + 1] = 1
-    # chosen_logp = (selected_log_probs * chosen_mask).sum()
-    chosen_logp = selected_log_probs[chosen_span[0][0].item() : chosen_span[0][1].item() + 1].sum()
+    chosen_logp = 0
+    for idx, span in enumerate(chosen_span):
+        chosen_logp += selected_log_probs[idx][span[0].item() : span[1].item() + 1].sum()
 
     # apply rejected mask
-    # rejected_mask = torch.zeros_like(selected_log_probs, dtype=torch.bool)
-    # rejected_mask[rejected_span[0][0].item(): rejected_span[0][1].item() + 1] = 1
-    # rejected_logp = (selected_log_probs * rejected_mask).sum()
-    rejected_logp = selected_log_probs[rejected_span[0][0].item() : rejected_span[0][1].item() + 1].sum()
+    rejected_logp = 0
+    for idx, span in enumerate(rejected_span):
+        rejected_logp += selected_log_probs[idx][span[0].item() : span[1].item() + 1].sum()
 
     return chosen_logp, rejected_logp, selected_log_probs
 

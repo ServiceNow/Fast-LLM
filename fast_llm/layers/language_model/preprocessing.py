@@ -90,29 +90,33 @@ class PreferenceSpanPreprocessor(Preprocessor):
             raise ValueError("Expected chosen spans or rejected spans to be found within the batch.")
 
         chosen_loss_masking_spans = kwargs[LanguageModelKwargs.chosen_spans]
+        chosen_valid_spans = []
         for spans in chosen_loss_masking_spans:
             if not spans.numel():
                 continue
             # only keep spans within the sequence or partially within the sequence
-            valid_spans = spans[(spans[0] <= sequence_k) & (spans[1] >= sequence_offset)]
+            valid_spans = spans[(spans[0] <= sequence_k) & (spans[1] >= sequence_offset)][0]
             if valid_spans.numel():
                 # if span is partially within the sequence, truncate parts of spans that are outside of the sequence
-                valid_spans[:, 0].clamp_(min=sequence_offset)
-                valid_spans[:, 1].clamp_(max=sequence_k)
+                valid_spans[0].clamp_(min=sequence_offset)
+                valid_spans[1].clamp_(max=sequence_k)
                 valid_spans -= sequence_offset
 
-                kwargs[LanguageModelKwargs.chosen_spans] = valid_spans
+                chosen_valid_spans.append(valid_spans)
+        kwargs[LanguageModelKwargs.chosen_spans] = chosen_valid_spans
 
         rejected_loss_masking_spans = kwargs[LanguageModelKwargs.rejected_spans]
+        rejected_valid_spans = []
         for spans in rejected_loss_masking_spans:
             if not spans.numel():
                 continue
             # only keep spans within the sequence or partially within the sequence
-            valid_spans = spans[(spans[0] <= sequence_k) & (spans[1] >= sequence_offset)]
+            valid_spans = spans[(spans[0] <= sequence_k) & (spans[1] >= sequence_offset)][0]
             if valid_spans.numel():
                 # if span is partially within the sequence, truncate parts of spans that are outside of the sequence
-                valid_spans[:, 0].clamp_(min=sequence_offset)
-                valid_spans[:, 1].clamp_(max=sequence_k)
+                valid_spans[0].clamp_(min=sequence_offset)
+                valid_spans[1].clamp_(max=sequence_k)
                 valid_spans -= sequence_offset
 
-                kwargs[LanguageModelKwargs.rejected_spans] = valid_spans
+                rejected_valid_spans.append(valid_spans)
+        kwargs[LanguageModelKwargs.rejected_spans] = rejected_valid_spans
