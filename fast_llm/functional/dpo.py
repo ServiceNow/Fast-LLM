@@ -9,7 +9,7 @@ def _compute_logprobs_for_preference_spans(
     log_probs = torch.nn.functional.log_softmax(logits, dim=-1)
 
     # gather log probabilities corresponding to the target tokens
-    selected_log_probs = log_probs[:, :-1, :].gather(dim=-1, index=targets.unsqueeze(-1)).squeeze(-1)
+    selected_log_probs = log_probs.gather(dim=-1, index=targets.unsqueeze(-1)).squeeze(-1)
 
     # apply chosen mask
     chosen_logp = 0
