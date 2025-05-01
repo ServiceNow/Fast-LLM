@@ -57,12 +57,14 @@ def triton_cross_entropy_forward_backward_kernel(
 def triton_cross_entropy_from_distribution_forward_backward_kernel(
     logits_ptr,
     target_ptr,
+    loss_mask_ptr,
     grad_logits_ptr,
     losses_ptr,
     grad_losses,
     n_cols: tl_constexpr,
     logits_stride_0: tl_constexpr,
     target_stride_0: tl_constexpr,
+    loss_mask_stride_0: tl_constexpr,
     grad_logits_stride_0: tl_constexpr,
     logits_scale_factor: tl_constexpr,
     from_logits: tl_constexpr,
@@ -87,6 +89,8 @@ def triton_cross_entropy_from_distribution_forward_backward_kernel(
     target = tl.load(target_ptr + block_idx * target_stride_0 + col_offsets, mask=mask, other=-float("inf")).to(
         tl.float32
     )
+    if loss_mask_ptr is not None:
+        loss_mask = tl.load(target_ptr + block_idx * target_stride_0 + col_offsets, mask=mask, other=0)
     if from_logits:
         if logits_scale_factor != 1.0:
             target *= logits_scale_factor
@@ -110,6 +114,7 @@ def triton_cross_entropy_from_distribution_forward_backward_kernel(
 def triton_cross_entropy_forward_backward(
     logits: torch.Tensor,
     target: torch.Tensor,
+    loss_mask: torch.Tensor | None,
     grad_output: float | None,
     logits_scale_factor: float,
     target_format: TargetFormat,
@@ -149,12 +154,14 @@ def triton_cross_entropy_forward_backward(
         triton_cross_entropy_from_distribution_forward_backward_kernel[(n_rows,)](
             logits,
             target,
+            loss_mask,
             grad_logits,
             losses,
             None if grad_output is None else grad_output / n_rows,
             n_cols,
             logits.stride(0),
             target.stride(0),
+            None if loss_mask is None else loss_mask.stride(0),
             None if grad_output is None else grad_logits.stride(0),
             logits_scale_factor,
             block_size=block_size,
