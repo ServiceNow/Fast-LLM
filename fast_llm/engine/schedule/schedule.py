@@ -225,7 +225,6 @@ class Schedule(abc.ABC):
         # Related steps
 
         for i, step in enumerate(self._steps):
-            # link forward and backward steps together
             if self._is_training:
                 if step.type_ == StepType.forward:
                     if step.stage >= self._first_grad_stage:
@@ -233,7 +232,6 @@ class Schedule(abc.ABC):
                 else:
                     step.forward_step = self.get_step(StepType.forward, *step.map_index[1:])
 
-            # link the previous step
             if step.type_ == StepType.forward and step.stage == 0:
                 step.prev_step = None
             elif step.type_ == StepType.backward and step.stage == self._num_stages - 1:
