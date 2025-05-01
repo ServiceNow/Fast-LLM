@@ -1,6 +1,7 @@
 import os
 import pathlib
 import typing
+import dataclasses
 
 from fast_llm.config import Config, Field, FieldHint, check_field, config_class
 from fast_llm.data.config import TokenizerConfig
@@ -109,6 +110,31 @@ class DatasetPreparatorDistributedConfig(Config):
         super()._validate()
         Assert.in_range(self.rank, 0, self.world_size)
 
+@config_class
+class FieldCombinePreparatorConfig(Config):
+    fields: typing.List[str] = Field(
+        default_factory=list,
+        desc="Fields of the dataset to combine.",
+        hint=FieldHint.core,
+    )
+    delimiter: str = Field(
+        default=" ",
+        desc="Delimiter to use when combining fields.",
+        hint=FieldHint.optional,
+    )
+    new_field_name: str = Field(
+        default="fast_llm_combined_field",
+        desc="Name of the new field to create.",
+        hint=FieldHint.optional,
+    )
+    
+    def _validate(self) -> None:
+        # Assert.gt(len(self.fields), 0)
+        # assert isinstance(self.fields, list), "Fields must be a list."
+        # assert all(isinstance(field, str) for field in self.fields), "All fields must be strings."
+        assert isinstance(self.delimiter, str), "Delimiter must be a string."
+        # assert isinstance(self.new_field_name, str), "New field name must be a string."
+        super()._validate()
 
 @config_class()
 class GPTMemmapDatasetPreparatorConfig(DatasetPreparatorConfig):
@@ -162,6 +188,11 @@ class GPTMemmapDatasetPreparatorConfig(DatasetPreparatorConfig):
         default=None,
         desc="Split the output dataset into multiple ones (ex, train/valid/test) with the specified ratios."
         " Does not shuffle samples.",
+        hint=FieldHint.optional,
+    )
+    combine_fields: FieldCombinePreparatorConfig = Field(
+        default=None,
+        desc="Combine all files into a single file.",
         hint=FieldHint.optional,
     )
 

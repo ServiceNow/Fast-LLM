@@ -208,6 +208,22 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
                 torch.distributed.barrier()
 
         assert isinstance(dataset, datasets.Dataset)
+        
+        # Check for combining fields
+        if self._config.combine_fields: 
+            Assert.eq(len(set(self._config.combine_fields.fields).intersection(dataset.column_names)), len(self._config.combine_fields.fields))
+            dataset = dataset.map(
+                lambda example: {
+                    self._config.combine_fields.new_field_name: self._config.combine_fields.delimiter.join(
+                        str(example[column]) for column in self._config.combine_fields.fields
+                    )
+                },
+                batched=False,
+                desc="Combining fields",
+            )
+            # Set the new field name in the config for following operations
+            self._config.dataset.field = self._config.combine_fields.new_field_name
+        
         dataset = dataset.shard(
             num_shards=self._config.distributed.world_size,
             index=self._config.distributed.rank,
