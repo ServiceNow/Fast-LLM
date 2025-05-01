@@ -29,6 +29,7 @@ class DiscreteMamba2(torch.nn.Module):
         config: SSMConfig,
         layer_idx: int,
         tensor_space: TensorSpace,
+        return_input: bool = False,
     ):
         """
         See the class .kernel.SSKernel for the kernel constructor which accepts kernel_args.
@@ -42,6 +43,7 @@ class DiscreteMamba2(torch.nn.Module):
         self.config: SSMConfig = config
         bias = config.add_bias_linear
         self.layer_idx = layer_idx
+        self._return_input = return_input
 
         td_inner = tensor_space.get_tensor_dim(SSMDimNames.inner_dim)
         td_state = tensor_space.get_tensor_dim(SSMDimNames.state_dim)
@@ -122,10 +124,10 @@ class DiscreteMamba2(torch.nn.Module):
             outputs["hidden_states"]: (B, L, D).
             outputs["state"]: inference cache.
         """
-        u = hidden_states
+        input_ = hidden_states
         outputs = {}
         # assert state is None
-        batch, seqlen, dim = u.shape
+        batch, seqlen, dim = input_.shape
 
         state = None
 
@@ -134,7 +136,7 @@ class DiscreteMamba2(torch.nn.Module):
 
         # Pad input to nearest multiple of chunklen
         padded_len = (1 + (seqlen - 1) // chunk_size) * chunk_size
-        u = torch.nn.functional.pad(u, (0, 0, 0, padded_len - seqlen))
+        u = torch.nn.functional.pad(input_, (0, 0, 0, padded_len - seqlen))
 
         # Project input
         xBCzA_log = self.in_proj(u)
@@ -198,10 +200,13 @@ class DiscreteMamba2(torch.nn.Module):
 
         # Norm and gate
         out = self.out_proj(y * torch.nn.functional.silu(z + self.z_bias))
-        outputs["hidden_states"] = out[:, :seqlen, :]
+        outputs["hidden_states"] = out[:, :seqlen, :].contiguous()
+
+        if self._return_input:
+            return torch.stack([input_, outputs["hidden_states"]], dim=0)
 
         # TODO: since we do not support inference for now, we only return the hidden states for now.
-        return outputs["hidden_states"].contiguous(), None
+        return outputs["hidden_states"], None
 
     def convolutional_forward(self, xBC, padded_len):
         """Convolutional layer forward pass for the full sequence."""
