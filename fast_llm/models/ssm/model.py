@@ -4,8 +4,8 @@ import typing
 from fast_llm.engine.base_model.base_model import Layer
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
-from fast_llm.layers.language_model.embedding import LanguageModelEmbedding
-from fast_llm.layers.language_model.head import LanguageModelHead
+from fast_llm.layers.language_model.embedding import WORD_EMBEDDINGS_WEIGHT, LanguageModelEmbedding
+from fast_llm.layers.language_model.head import OUTPUT_WEIGHTS, LanguageModelHead
 from fast_llm.layers.ssm.discrete_mamba2 import DiscreteMamba2
 from fast_llm.layers.ssm.llamba_block import LlambaBlock
 from fast_llm.layers.ssm.mamba_layer import MambaLayer
@@ -20,7 +20,7 @@ class HybridSSMBaseModel[ConfigType: HybridSSMBaseModelConfig](GPTBaseModel[Conf
     """
     A hybrid model that interleaves Transformer and Mamba blocks.
     Right now only LlambaBlock is supported.
-    AS for the mixer, transformer uses MHA. For the LLlambaBlock we support Mamba1 and descrete mamba2.
+    AS for the mixer, transformer uses MHA. For the LLlambaBlock we support Mamba1 and discrete mamba2.
     """
 
     config_class: typing.ClassVar[type[HybridSSMBaseModelConfig]] = HybridSSMBaseModelConfig
@@ -77,7 +77,47 @@ class HybridSSMBaseModel[ConfigType: HybridSSMBaseModelConfig](GPTBaseModel[Conf
                 raise ValueError(f"Invalid block type: {block_type}. Must be 't' or 'm' or 'm2'")
 
         # Add the language model head
+        if len(self._config.mtp_heads) > 0:
+            layers[-1]._return_input = True
+
         layers.append(LanguageModelHead(self._config, self._tensor_space, prediction_distance=0))
+
+        if len(self._config.mtp_heads) > 0:
+            layers[-1]._is_last_head = False
+            for i, head_type in enumerate(self._config.mtp_heads):
+                if head_type == "t":
+                    layers.append(
+                        TransformerLayer(
+                            self._config.transformer,
+                            self._tensor_space,
+                            layer_index=len(self._config.hybrid_block_layout),
+                            return_input=i != len(self._config.mtp_heads) - 1,
+                        )
+                    )
+                elif head_type == "m2":
+                    mamba_block = self.SSM_BLOCK_CLS(
+                        config_transformer=self._config.transformer,
+                        config_ssm=self._config.ssm,
+                        mixer_cls=DiscreteMamba2,
+                        layer_index=len(self._config.hybrid_block_layout),
+                        tensor_space=self._tensor_space,
+                        return_input=i != len(self._config.mtp_heads) - 1,
+                    )
+                    layers.append(mamba_block)
+                elif head_type == "m1":
+                    mamba_block = self.SSM_BLOCK_CLS(
+                        config_transformer=self._config.transformer,
+                        config_ssm=self._config.ssm,
+                        mixer_cls=MambaLayer,
+                        layer_index=len(self._config.hybrid_block_layout),
+                        tensor_space=self._tensor_space,
+                        return_input=i != len(self._config.mtp_heads) - 1,
+                    )
+                    layers.append(mamba_block)
+                else:
+                    raise ValueError(f"Invalid block type: {head_type}. Must be 't' or 'm' or 'm2'")
+                layers.append(LanguageModelHead(self._config, self._tensor_space, prediction_distance=i + 1))
+        layers[-1]._is_last_head = True
 
         return layers
 

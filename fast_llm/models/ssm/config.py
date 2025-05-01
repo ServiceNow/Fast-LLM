@@ -32,8 +32,13 @@ class HybridSSMBaseModelConfig(LanguageModelBaseConfig):
     )
     hybrid_block_layout: list[str] = Field(
         default_factory=lambda: ["m2"],
-        desc="Pattern of blocks to use in the model. 't' for Transformer, 'm' for Mamba1, 'm2' for Descrete Mamba2.",
+        desc="Pattern of blocks to use in the model. 't' for Transformer, 'm' for Mamba1, 'm2' for Discrete Mamba2",
         hint=FieldHint.architecture,
+    )
+    mtp_heads: list[str] = Field(
+        default_factory=lambda: [],
+        desc="Pattern of multi-token prediction heads to use in the model. 't' for Transformer, 'm' for Mamba1, 'm2' for discrete Mamba2.",
+        hint=FieldHint.core,
     )
     use_megatron_initialization: bool = Field(
         default=False, desc="Exactly match the initialization of a Megatron model.", hint=FieldHint.testing

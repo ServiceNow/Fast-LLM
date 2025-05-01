@@ -57,6 +57,7 @@ class MambaLayer(torch.nn.Module):
         config: SSMConfig,
         layer_idx: int,
         tensor_space: TensorSpace,
+        return_input: bool = False,
     ):
         factory_kwargs = {}
         super().__init__()
@@ -139,6 +140,7 @@ class MambaLayer(torch.nn.Module):
             **factory_kwargs,
         )
         self.out_proj.weight.auto_grad_accumulation = True
+        self._return_input = return_input
 
     def forward(self, hidden_states, kwargs):
         batch, seqlen, dim = hidden_states.shape
@@ -170,4 +172,6 @@ class MambaLayer(torch.nn.Module):
             delta_bias=self.dt_proj_bias.float(),
             delta_softplus=True,
         )
+        if self._return_input:
+            out = torch.stack((hidden_states, out), dim=0)
         return out, None
