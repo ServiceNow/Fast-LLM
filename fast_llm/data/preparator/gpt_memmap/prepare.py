@@ -212,6 +212,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
         # Check for combining fields
         if self._config.combine_fields: 
             Assert.eq(len(set(self._config.combine_fields.col_names).intersection(dataset.column_names)), len(self._config.combine_fields.col_names))
+            logger.info(f"Combining fields {self._config.combine_fields.col_names} into {self._config.combine_fields.new_field_name}")
             dataset = dataset.map(
                 lambda example: {
                     self._config.combine_fields.new_field_name: self._config.combine_fields.delimiter.join(
@@ -221,9 +222,9 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
                 batched=False,
                 desc="Combining fields",
             )
-            # Set the new field name in the config for following operations
-            self._config.dataset.field = self._config.combine_fields.new_field_name
-        
+            logger.info(f"Sample after combining fields:\n{dataset[0]}")
+            # Note: self.dataset.field is set to new_field_name for the rest of the operation see config validation
+
         dataset = dataset.shard(
             num_shards=self._config.distributed.world_size,
             index=self._config.distributed.rank,

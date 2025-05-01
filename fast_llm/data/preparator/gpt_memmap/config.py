@@ -1,7 +1,7 @@
 import os
 import pathlib
 import typing
-import dataclasses
+import logging
 
 from fast_llm.config import Config, Field, FieldHint, check_field, config_class
 from fast_llm.data.config import TokenizerConfig
@@ -24,7 +24,7 @@ MEMMAP_DTYPES = {
 MEMMAP_DTYPES_INV = {y: x for x, y in MEMMAP_DTYPES.items()}
 MEMMAP_INDEX_HEADER = b"MMIDIDX\x00\x00"
 
-
+logger = logging.getLogger(__name__)
 @config_class
 class GPTHuggingfaceDatasetConfig(Config):
     path: str = Field(
@@ -200,6 +200,12 @@ class GPTMemmapDatasetPreparatorConfig(DatasetPreparatorConfig):
         assert self.tokenizer.path is not None
         if self.dataset.data_type is not None:
             Assert.incl(DataType.from_numpy(self.dataset.data_type.numpy), MEMMAP_DTYPES_INV)
+        if self.combine_fields is not None:
+            if self.dataset.field != self.combine_fields.new_field_name:
+                 logger.warning(
+                    f"Combine mode activated yet dataset.field != combine_fields.new_field_name ({self.dataset.field} != {self.combine_fields.new_field_name}). Setting dataset.field to {self.combine_fields.new_field_name}",
+                 )
+                 self.dataset.field = self.combine_fields.new_field_name
         super()._validate()
 
     @classmethod
