@@ -112,7 +112,7 @@ class DatasetPreparatorDistributedConfig(Config):
 
 @config_class
 class FieldCombinePreparatorConfig(Config):
-    fields: typing.List[str] = Field(
+    col_names: typing.List[str] = Field(
         default_factory=list,
         desc="Fields of the dataset to combine.",
         hint=FieldHint.core,

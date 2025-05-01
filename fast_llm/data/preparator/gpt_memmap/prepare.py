@@ -211,11 +211,11 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
         
         # Check for combining fields
         if self._config.combine_fields: 
-            Assert.eq(len(set(self._config.combine_fields.fields).intersection(dataset.column_names)), len(self._config.combine_fields.fields))
+            Assert.eq(len(set(self._config.combine_fields.col_names).intersection(dataset.column_names)), len(self._config.combine_fields.col_names))
             dataset = dataset.map(
                 lambda example: {
                     self._config.combine_fields.new_field_name: self._config.combine_fields.delimiter.join(
-                        str(example[column]) for column in self._config.combine_fields.fields
+                        str(example[column]) for column in self._config.combine_fields.col_names
                     )
                 },
                 batched=False,
