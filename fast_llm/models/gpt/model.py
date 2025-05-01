@@ -214,7 +214,6 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                 reference_tokens, reference_kwargs_ = reference_preprocessed_meta[i]
                 for key in (
                     TransformerKwargs.sequence_first,
-                    TransformerKwargs.hidden_dims,
                     TransformerKwargs.sequence_length,
                     TransformerKwargs.sequence_q_dim,
                     TransformerKwargs.sequence_k_dim,
