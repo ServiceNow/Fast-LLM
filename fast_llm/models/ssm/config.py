@@ -93,18 +93,23 @@ class HybridSSMBaseModelConfig(LanguageModelBaseConfig):
             len_block_layout = len(self.hybrid_block_layout)
             if self.transformer.num_layers % len_block_layout != 0:
                 raise ValueError(
-                    f"hybrid_block_layout length {len(self.hybrid_block_layout)} does not match num_layers {self.transformer.num_layers}"
+                    f"hybrid_block_layout length {len_block_layout} does not match num_layers {self.transformer.num_layers}"
                 )
             num_repeats = int(self.transformer.num_layers // len_block_layout)
             logger.warning(
-                f"hybrid_block_layout length {len(self.hybrid_block_layout)} does not match num_layers {self.transformer.num_layers}, will repeat {self.hybrid_block_layout} {num_repeats} times"
+                f"hybrid_block_layout length {len_block_layout} does not match num_layers {self.transformer.num_layers}, will repeat {self.hybrid_block_layout} {num_repeats} times"
             )
             self.hybrid_block_layout = self.hybrid_block_layout * num_repeats
 
-        Assert.eq(len(self.hybrid_block_layout), self.transformer.num_layers)
+        Assert.eq(len_block_layout, self.transformer.num_layers)
+        Assert.eq(len(self.mtp_heads), self.prediction_heads - 1)
         Assert.custom(
             lambda _: all(block_type in ["t", "m", "m2"] for block_type in self.hybrid_block_layout),
             f"Invalid block type: {self.hybrid_block_layout}. Must be 't' or 'm' or 'm2'",
+        )
+        Assert.custom(
+            lambda _: all(head_type in ["t", "m", "m2"] for head_type in self.mtp_heads),
+            f"Invalid block type: {self.mtp_heads}. Must be 't' or 'm' or 'm2'",
         )
 
         super()._validate()
