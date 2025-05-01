@@ -10,7 +10,7 @@ from fast_llm.data.dataset.gpt.config import GPTSamplingConfig
 from fast_llm.engine.checkpoint.config import CheckpointSaveMetadataConfig, ModelConfigType
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.engine.distributed.config import DistributedConfig
-from fast_llm.layers.transformer.config import AddLinearBiasChoices, TransformerArchitectureConfig, TransformerConfig
+from fast_llm.layers.transformer.config import TransformerConfig
 from fast_llm.models.auto import trainer_registry
 from fast_llm.models.gpt.config import GPTModelConfig, PretrainedGPTModelConfig
 from fast_llm.utils import Assert, check_equal_nested
@@ -90,35 +90,6 @@ def test_do_use_flash_attention():
         config.do_use_flash_attention(mock_distributed_config)
 
 
-def test_add_mlp_bias():
-    assert TransformerArchitectureConfig(add_linear_biases=True).add_mlp_bias is True
-    assert TransformerArchitectureConfig(add_linear_biases=False).add_mlp_bias is False
-    assert TransformerArchitectureConfig(add_linear_biases=AddLinearBiasChoices.everywhere).add_mlp_bias is True
-    assert TransformerArchitectureConfig(add_linear_biases=AddLinearBiasChoices.nowhere).add_mlp_bias is False
-    assert TransformerArchitectureConfig(add_linear_biases=AddLinearBiasChoices.only_attn_qkv).add_mlp_bias is False
-
-
-def test_add_attn_qkv_bias():
-    assert TransformerArchitectureConfig(add_linear_biases=True).add_attn_qkv_bias is True
-    assert TransformerArchitectureConfig(add_linear_biases=False).add_attn_qkv_bias is False
-    assert TransformerArchitectureConfig(add_linear_biases=AddLinearBiasChoices.everywhere).add_attn_qkv_bias is True
-    assert TransformerArchitectureConfig(add_linear_biases=AddLinearBiasChoices.nowhere).add_attn_qkv_bias is False
-    assert (
-        TransformerArchitectureConfig(add_linear_biases=AddLinearBiasChoices.only_attn_qkv).add_attn_qkv_bias is True
-    )
-
-
-def test_add_attn_dense_bias():
-    assert TransformerArchitectureConfig(add_linear_biases=True).add_attn_dense_bias is True
-    assert TransformerArchitectureConfig(add_linear_biases=False).add_attn_dense_bias is False
-    assert TransformerArchitectureConfig(add_linear_biases=AddLinearBiasChoices.everywhere).add_attn_dense_bias is True
-    assert TransformerArchitectureConfig(add_linear_biases=AddLinearBiasChoices.nowhere).add_attn_dense_bias is False
-    assert (
-        TransformerArchitectureConfig(add_linear_biases=AddLinearBiasChoices.only_attn_qkv).add_attn_dense_bias
-        is False
-    )
-
-
 @pytest.mark.parametrize(
     ("cls", "default"),
     ((GPTSamplingConfig, {}), (GPTModelConfig, {"distributed": {"world_size": 1, "rank": 0, "local_world_size": 1}})),
@@ -145,7 +116,6 @@ def test_pretrained_config(load_config: ModelConfigType):
                     "activation_type": "silu",  # Implicit default, non-default value
                     "head_groups": 4,
                 },
-                "ssm": {"dt_rank": -1, "activation_type": "silu"},
                 "tie_word_embeddings": False,
             },
             "multi_stage": {"zero_stage": 3},
@@ -166,7 +136,6 @@ def test_pretrained_config(load_config: ModelConfigType):
             "hidden_size": 512,  # Override, affects derived value (kv channels)
             "head_groups": 1,  # Override to default
         },
-        "ssm": {"dt_rank": 10, "activation_type": "silu"},
         "vocab_size": 1000,
     }
     pretrained_config = PretrainedGPTModelConfig.from_dict(
@@ -198,7 +167,6 @@ def test_pretrained_config(load_config: ModelConfigType):
                 "head_groups": 1,
                 "window_size": 32,
             },
-            "ssm": {"dt_rank": 10, "activation_type": "silu"},
             "tie_word_embeddings": False,
             "vocab_size": 1000,
         }

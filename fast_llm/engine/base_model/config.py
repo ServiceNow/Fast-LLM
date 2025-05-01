@@ -1,7 +1,8 @@
 import abc
+import dataclasses
 import typing
 
-from fast_llm.config import MISSING, Config, FieldHint, FieldVerboseLevel, config_class
+from fast_llm.config import MISSING, Config, Field, FieldHint, FieldVerboseLevel, config_class
 from fast_llm.utils import compare_nested, log
 
 if typing.TYPE_CHECKING:
@@ -36,6 +37,9 @@ class BaseModelConfig(Config):
     def _get_architecture(self) -> dict[str, typing.Any]:
         architecture = {}
         for name, field in self.fields():
+            if not field.init or field._field_type == dataclasses._FIELD_CLASSVAR:
+                continue
+            assert isinstance(field, Field), f"{name}, {field}"
             if field.hint == FieldHint.architecture:
                 architecture[name] = self._serialize_architecture_field(field, getattr(self, name, MISSING))
 

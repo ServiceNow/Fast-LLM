@@ -23,6 +23,8 @@ logger = logging.getLogger(__name__)
 
 @config_class()
 class HybridSSMBaseModelConfig(LanguageModelBaseConfig):
+    _abstract = False
+
     ssm: SSMConfig = Field(
         default_factory=SSMConfig,
         desc="Configuration for the transformer architecture.",

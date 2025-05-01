@@ -257,8 +257,8 @@ class TransformerConfig(BaseModelConfig):
         desc="Configuration for the rotary positional embeddings.",
         hint=FieldHint.architecture,
     )
-    peft: PeftConfig = Field(
-        default_factory=PeftConfig,
+    peft: TransformerPeftConfig = Field(
+        default_factory=TransformerPeftConfig,
         desc="Configuration for the parameter-efficient fine tuning.",
         hint=FieldHint.architecture,
     )
@@ -291,12 +291,6 @@ class TransformerConfig(BaseModelConfig):
         default=None,
         desc="Hidden dimension of the MLP intermediate state. Default: 4 * hidden_size.",
         hint=FieldHint.architecture,
-        valid=check_field(Assert.gt, 0),
-    )
-    projection_size: int = Field(
-        init=False,
-        desc="Hidden dimension of the attention projection (= num_attention_heads * kv_channels).",
-        hint=FieldHint.derived,
         valid=check_field(Assert.gt, 0),
     )
     kv_channels: int = Field(
