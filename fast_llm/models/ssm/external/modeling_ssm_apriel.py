@@ -19,7 +19,7 @@ from transformers.pytorch_utils import ALL_LAYERNORM_LAYERS
 from transformers.utils import LossKwargs, add_start_docstrings, add_start_docstrings_to_model_forward, logging
 from transformers.utils.generic import ModelOutput
 
-from .configuration_ssm_apriel import AprielSSMConfig
+from fast_llm.models.ssm.external.configuration_ssm_apriel import AprielSSMConfig
 
 logger = logging.get_logger(__name__)
 
@@ -35,12 +35,13 @@ class CustomMambaCausalLMOutput(ModelOutput):
 
 
 class AprielRMSNorm(nn.Module):
-    def __init__(self, hidden_size, eps=1e-6):
+    def __init__(self, hidden_size, eps=1e-6, device=None, dtype=None, **kwargs):
         """
         AprielRMSNorm is equivalent to T5LayerNorm
         """
+        factory_kwargs = {"device": device, "dtype": dtype}
         super().__init__()
-        self.weight = nn.Parameter(torch.ones(hidden_size))
+        self.weight = nn.Parameter(torch.ones(hidden_size, **factory_kwargs))
         self.variance_epsilon = eps
 
     def forward(self, hidden_states):
@@ -58,14 +59,15 @@ ALL_LAYERNORM_LAYERS.append(AprielRMSNorm)
 
 
 class AprielMLP(nn.Module):
-    def __init__(self, config):
-        super().__init__()
+    def __init__(self, config, device=None, dtype=None, **kwargs):
+        super().__init__(**kwargs)
+        factory_kwargs = {"device": device, "dtype": dtype}
         self.config = config
         self.hidden_size = config.hidden_size
         self.intermediate_size = config.intermediate_size
-        self.gate_proj = nn.Linear(self.hidden_size, self.intermediate_size, bias=config.mlp_bias)
-        self.up_proj = nn.Linear(self.hidden_size, self.intermediate_size, bias=config.mlp_bias)
-        self.down_proj = nn.Linear(self.intermediate_size, self.hidden_size, bias=config.mlp_bias)
+        self.gate_proj = nn.Linear(self.hidden_size, self.intermediate_size, bias=config.mlp_bias, **factory_kwargs)
+        self.up_proj = nn.Linear(self.hidden_size, self.intermediate_size, bias=config.mlp_bias, **factory_kwargs)
+        self.down_proj = nn.Linear(self.intermediate_size, self.hidden_size, bias=config.mlp_bias, **factory_kwargs)
         self.act_fn = ACT2FN[config.hidden_act]
 
     def forward(self, x):
@@ -437,19 +439,21 @@ class DiscreteMamba2(nn.Module):
 
 
 class AprielDecoderLayer(nn.Module):
-    def __init__(self, config: AprielSSMConfig, layer_idx: int):
-        super().__init__()
+    def __init__(self, config: AprielSSMConfig, layer_idx: int, device=None, dtype=None, **kwargs):
+        super().__init__(**kwargs)
+        factory_kwargs = {"device": device, "dtype": dtype}
         self.hidden_size = config.hidden_size
 
         self.mixer = DiscreteMamba2(
             d_model=config.hidden_size,
             layer_idx=layer_idx,
             **config.ssm_cfg,
+            **factory_kwargs,
         )
 
-        self.mlp = AprielMLP(config)
-        self.input_layernorm = AprielRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
-        self.post_attention_layernorm = AprielRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.mlp = AprielMLP(config, **factory_kwargs)
+        self.input_layernorm = AprielRMSNorm(config.hidden_size, eps=config.rms_norm_eps, **factory_kwargs)
+        self.post_attention_layernorm = AprielRMSNorm(config.hidden_size, eps=config.rms_norm_eps, **factory_kwargs)
 
     def forward(
         self, hidden_states: torch.Tensor, inference_params=None, **kwargs
@@ -598,16 +602,16 @@ class AprielSSMModel(AprielSSMPreTrainedModel):
         config: AprielSSMConfig
     """
 
-    def __init__(self, config: AprielSSMConfig):
-        super().__init__(config)
+    def __init__(self, config: AprielSSMConfig, device=None, dtype=None, **kwargs):
+        super().__init__(config, device=device, dtype=dtype, **kwargs)
         self.padding_idx = config.pad_token_id
         self.vocab_size = config.vocab_size
-
-        self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size, self.padding_idx)
+        factory_kwargs = {"device": device, "dtype": dtype}
+        self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size, self.padding_idx, **factory_kwargs)
         self.layers = nn.ModuleList(
-            [AprielDecoderLayer(config, layer_idx) for layer_idx in range(config.num_hidden_layers)]
+            [AprielDecoderLayer(config, layer_idx, **factory_kwargs) for layer_idx in range(config.num_hidden_layers)]
         )
-        self.norm = AprielRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.norm = AprielRMSNorm(config.hidden_size, eps=config.rms_norm_eps, **factory_kwargs)
         self.gradient_checkpointing = False
 
         # Initialize weights and apply final processing
@@ -664,11 +668,12 @@ class AprielSSMForCausalLM(AprielSSMPreTrainedModel, GenerationMixin):
     _tp_plan = {"lm_head": "colwise_rep"}
     _pp_plan = {"lm_head": (["hidden_states"], ["logits"])}
 
-    def __init__(self, config):
-        super().__init__(config)
+    def __init__(self, config, device=None, dtype=None, **kwargs):
+        super().__init__(config, device=device, dtype=dtype, **kwargs)
         self.model = AprielSSMModel(config)
         self.vocab_size = config.vocab_size
-        self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
+        factory_kwargs = {"device": device, "dtype": dtype}
+        self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False, **factory_kwargs)
 
         # Initialize weights and apply final processing
         self.post_init()
@@ -721,6 +726,12 @@ class AprielSSMForCausalLM(AprielSSMPreTrainedModel, GenerationMixin):
             all_hidden_states=outputs["all_hidden_states"],
             last_hidden_state=outputs["last_hidden_state"],
         )
+
+    def generate(self, *args, **kwargs):
+        """
+        This is a wrapper to make sure we comply with the HF generation interface for eval harness
+        """
+        return super().generate(*args, **kwargs)
 
 
 __all__ = [
