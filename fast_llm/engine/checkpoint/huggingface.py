@@ -1,12 +1,14 @@
 import abc
 import json
 import pathlib
+import shutil
 import typing
 
 import safetensors
 import torch
+from transformers.configuration_utils import PretrainedConfig
 
-from fast_llm.engine.checkpoint.config import CheckpointLoadConfig, CheckpointSaveMetadataConfig
+from fast_llm.engine.checkpoint.config import CheckpointLoadConfig, CheckpointSaveConfig, CheckpointSaveMetadataConfig
 from fast_llm.engine.checkpoint.external import (
     ConstantExportParamConverter,
     ExternalStateDictCheckpointHandler,
@@ -20,8 +22,10 @@ from fast_llm.utils import Assert
 
 class HuggingfaceStateDictCheckpointHandler(ExternalStateDictCheckpointHandler, abc.ABC):
 
-    def _save_serialized_metadata(self, config: CheckpointSaveMetadataConfig, metadata: dict, index: dict) -> None:
-        path = config.path / f"{self.base_file_name}.safetensors.index.json"
+    @classmethod
+    def _save_serialized_metadata(cls, config: CheckpointSaveMetadataConfig, metadata: dict, index: dict) -> None:
+        config.path.mkdir(parents=True, exist_ok=True)
+        path = config.path / f"{cls.base_file_name}.safetensors.index.json"
         logger.info(f"Saving index to {path}")
         # Save the index.
         json.dump(
@@ -39,10 +43,11 @@ class HuggingfaceStateDictCheckpointHandler(ExternalStateDictCheckpointHandler, 
             "format": "pt",
         }
 
-    def load(self, config: CheckpointLoadConfig, metadata: CheckpointMetadata) -> None:
+    def load(self, config: CheckpointLoadConfig) -> dict[str, typing.Any] | None:
         assert not config.optimizer_state
-        self._model.config.base_model.compare_architecture(metadata.config.base_model, config.compare_log_fn)
-        super().load(config, metadata)
+        metadata = self._model.config.load_metadata(config)
+        self._model.config.base_model.compare_architecture(metadata.config.base_model, logger.warning)
+        super().load(config)
 
     @classmethod
     def get_huggingface_model_type(self) -> str:
@@ -118,3 +123,33 @@ class HuggingfaceStateDictCheckpointHandler(ExternalStateDictCheckpointHandler, 
                 yield from torch.load(path)
             else:
                 raise NotImplementedError(f"Unknown file format for {path}")
+
+
+class CustomModelingExportMixin:
+    """
+    Mixin class for HuggingfaceStateDictCheckpointHandler to handle custom modeling files.
+    """
+
+    modeling_file: typing.ClassVar[str]
+    configuration_file: typing.ClassVar[str]
+    configuration_cls: typing.ClassVar[type[PretrainedConfig]]
+
+    # Use custom config instead of relying on the transformers library
+    @classmethod
+    def _load_config(cls, directory: pathlib.Path | str) -> dict:
+        config = cls.configuration_cls.from_pretrained(directory).to_dict()
+        Assert.eq(config["model_type"], cls.get_huggingface_model_type())
+        return config
+
+    @classmethod
+    def _save_config(cls, directory: pathlib.Path | str, config: dict[str, typing.Any]) -> None:
+        cls.configuration_cls.from_dict(config).save_pretrained(directory)
+
+    def save(self, config: CheckpointSaveConfig, metadata: CheckpointMetadata) -> None:
+        super().save(config, metadata)
+        self._copy_modeling_files(config)
+
+    def _copy_modeling_files(self, config: CheckpointSaveConfig) -> None:
+        # Copy the modeling files to the output directory
+        shutil.copy(self.modeling_file, config.path)
+        shutil.copy(self.configuration_file, config.path)

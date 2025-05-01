@@ -529,6 +529,7 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
         metadata = self._multi_stage.load_checkpoint(
             config.get_load_config(checkpoint_directory, timeout=self._config.training.timeout)
         )
+        assert metadata is not None
         self._optimizer.load(metadata["optimizer"])
         if "schedules" in metadata:
             # Backward compatibility.

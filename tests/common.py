@@ -17,9 +17,11 @@ from fast_llm.models.gpt.config import (
     LlamaGPTHuggingfaceCheckpointFormat,
     MistralGPTHuggingfaceCheckpointFormat,
     MixtralGPTHuggingfaceCheckpointFormat,
+    MTPLlamaGPTHuggingfaceCheckpointFormat,
     Qwen2GPTHuggingfaceCheckpointFormat,
     Starcoder2GPTHuggingfaceCheckpointFormat,
 )
+from fast_llm.models.ssm.config import LLambaHuggingfaceCheckpointFormat
 from fast_llm.tools.train import CliTrainingConfig
 from tests.compare_tensor_logs import CompareConfig, compare_tensor_logs
 
@@ -200,6 +202,10 @@ CONFIG_LLAMA_MTP_FAST_LLM = CONFIG_LLAMA_FAST_LLM + [
 ]
 CONFIG_LLAMA_MTP_COMMON = CONFIG_LLAMA_MTP_FAST_LLM + ["model.distributed.training_dtype=bf16"]
 
+CONFIG_LLAMBA_FAST_LLM = CONFIG_LLAMA_FAST_LLM + ["model.base_model.hybrid_block_layout==['t','m']"]
+CONFIG_LLAMBA_MEGATRON = CONFIG_LLAMA_MEGATRON + []
+CONFIG_LLAMBA_COMMON = CONFIG_LLAMBA_FAST_LLM
+
 _CONFIGS = {
     "gpt2": ("gpt", CONFIG_GPT2_FAST_LLM, CONFIG_GPT2_MEGATRON, CONFIG_GPT2_COMMON, None),
     "sc1": ("gpt", CONFIG_SC1_FAST_LLM, CONFIG_SC1_MEGATRON, CONFIG_SC1_COMMON, None),
@@ -252,6 +258,13 @@ _CONFIGS = {
         CONFIG_MIXTRAL_COMMON,
         MixtralGPTHuggingfaceCheckpointFormat,
     ),
+    "llamba": (
+        "hybrid_ssm",
+        CONFIG_LLAMBA_FAST_LLM,
+        CONFIG_LLAMBA_MEGATRON,
+        CONFIG_LLAMBA_COMMON,
+        LLambaHuggingfaceCheckpointFormat,
+    ),
     "mixtral-yarn": (
         "gpt",
         CONFIG_MIXTRAL_YARN_FAST_LLM,
@@ -264,10 +277,9 @@ _CONFIGS = {
         CONFIG_LLAMA_MTP_FAST_LLM,
         CONFIG_LLAMA_MTP_MEGATRON,
         CONFIG_LLAMA_MTP_COMMON,
-        LlamaGPTHuggingfaceCheckpointFormat,
+        MTPLlamaGPTHuggingfaceCheckpointFormat,
     ),
 }
-
 
 TEST_MODEL_TYPE, CONFIG_FAST_LLM, CONFIG_GPT2, CONFIG_COMMON, HUGGINGFACE_CHECKPOINT_FORMAT = _CONFIGS[TEST_MODEL]
 
@@ -381,7 +393,9 @@ def run_test_script(
         script = [model_type, *script, f"run.experiment_dir={path}"]
     header = ["Megatron-LM/pretrain_gpt.py"] if is_megatron else ["--no-python", "fast-llm", "train"]
     command = [
-        "torchrun",
+        "python",
+        "-m",
+        "torch.distributed.run",
         f"--nproc-per-node={num_gpus}",
         *header,
         *script,

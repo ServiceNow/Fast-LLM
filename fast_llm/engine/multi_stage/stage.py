@@ -1,3 +1,4 @@
+import collections
 import logging
 import typing
 
@@ -38,13 +39,13 @@ class Stage(StageBase):
         self,
         *,
         distributed: Distributed,
-        weight_shards: list[torch.Tensor | None] | None,
-        grad_shards: list[torch.Tensor | None] | None,
-        weight_buffers: list[torch.Tensor | None] | None,
-        grad_buffers: list[torch.Tensor | None] | None,
+        weight_shards: list[torch.Tensor | None] | None = None,
+        grad_shards: list[torch.Tensor | None] | None = None,
+        weight_buffers: list[torch.Tensor | None] | None = None,
+        grad_buffers: list[torch.Tensor | None] | None = None,
         mode: StageMode = StageMode.training,
         is_tied_weight_copy: bool = False,
-        weight_buffer_shared_with: list["Stage"],
+        weight_buffer_shared_with: collections.abc.Sequence["Stage"] = (),
     ) -> None:
         super().setup(
             distributed=distributed,
@@ -92,7 +93,11 @@ class Stage(StageBase):
         return input_
 
     def forward(
-        self, input_: torch.Tensor, kwargs: dict, losses: dict[str, list[torch.Tensor]], metrics: dict | None = None
+        self,
+        input_: torch.Tensor,
+        kwargs: dict,
+        losses: dict[str, list[torch.Tensor]] | None = None,
+        metrics: dict | None = None,
     ) -> tuple[torch.Tensor | None, tuple[torch.Tensor | None, torch.Tensor | None]]:
         assert self._is_restored
         assert self._mode.support_forward

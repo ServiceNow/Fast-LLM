@@ -30,6 +30,13 @@ logger = logging.getLogger(__name__)
 class StateDictCheckpointHandler(CheckpointHandler):
     base_file_name: typing.ClassVar[str] = "model"
 
+    @classmethod
+    def save_metadata(
+        cls, config: CheckpointSaveMetadataConfig, metadata: CheckpointMetadata, index: dict | None = None
+    ):
+        serialized_metadata = cls._serialize_metadata(config, metadata)
+        cls._save_serialized_metadata(config, serialized_metadata, {} if index is None else index)
+
     def save(self, config: CheckpointSaveConfig, metadata: CheckpointMetadata) -> None:
         serialized_metadata = self._serialize_metadata(config, metadata)
         saver = StateDictSaver(
@@ -64,16 +71,18 @@ class StateDictCheckpointHandler(CheckpointHandler):
         if self._model.config.distributed.rank == 0:
             self._save_serialized_metadata(config, serialized_metadata, index)
 
+    @classmethod
     @abc.abstractmethod
-    def _save_serialized_metadata(self, config: CheckpointSaveMetadataConfig, metadata: dict, index: dict) -> None:
+    def _save_serialized_metadata(cls, config: CheckpointSaveMetadataConfig, metadata: dict, index: dict) -> None:
         pass
 
+    @classmethod
     def _serialize_metadata(
-        self, config: CheckpointSaveMetadataConfig, metadata: CheckpointMetadata
+        cls, config: CheckpointSaveMetadataConfig, metadata: CheckpointMetadata
     ) -> dict[str, typing.Any]:
         return metadata.to_dict()
 
-    def load(self, config: CheckpointLoadConfig, metadata: CheckpointMetadata) -> None:
+    def load(self, config: CheckpointLoadConfig) -> dict[str, typing.Any] | None:
         with SafeLoad(self._model, shard_names=self.get_shard_names(config), timeout=config.timeout) as context:
             # The tensor mapping may not be one-to-one. `convert_state_dict` pops all tensors from
             #   `state_dict` that are ready for conversion,
@@ -116,14 +125,16 @@ class FastLLMCheckpointHandler(StateDictCheckpointHandler):
     format: typing.ClassVar[type[CheckpointFormat]] = FastLLMCheckpointFormat
 
     @classmethod
-    def load_metadata(cls, config: CheckpointLoadMetadataConfig) -> CheckpointMetadata:
+    def _load_metadata(cls, config: CheckpointLoadMetadataConfig) -> CheckpointMetadata:
         path = config.path / f"metadata.yaml"
         logger.warning(f"Loading metadata from {path}")
         return CheckpointMetadata.from_dict(yaml.safe_load(path.open("r")))
 
+    @classmethod
     def _save_serialized_metadata(
-        self, config: CheckpointSaveMetadataConfig, serialized_metadata: dict, index: dict
+        cls, config: CheckpointSaveMetadataConfig, serialized_metadata: dict, index: dict
     ) -> None:
+        config.path.mkdir(parents=True, exist_ok=True)
         path = config.path / f"metadata.yaml"
         logger.info(f"Saving metadata to {path}")
         if "metadata" not in serialized_metadata:
