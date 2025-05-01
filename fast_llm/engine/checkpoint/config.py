@@ -80,13 +80,8 @@ class FastLLMCheckpointFormat(CheckpointFormat):
 
 class ModelConfigType(str, enum.Enum):
     none = "none"
-    architecture = "architecture"
     model = "model"
     fast_llm = "fast_llm"
-
-    @property
-    def load_architecture(self) -> bool:
-        return self != ModelConfigType.none
 
     @property
     def load_base_model(self) -> bool:
@@ -203,7 +198,7 @@ class CheckpointLoadMetadataConfig(CheckpointPathConfigBase):
     _abstract = False
     # TODO: Set default to model? (Not backward compatible)
     load_config: ModelConfigType = Field(
-        default=ModelConfigType.architecture,
+        default=ModelConfigType.model,
         desc="Configuration to save/load.",
         hint=FieldHint.core,
     )
@@ -211,7 +206,7 @@ class CheckpointLoadMetadataConfig(CheckpointPathConfigBase):
     def _validate(self) -> None:
         super()._validate()
         if self.format.enforce_architecture_match:
-            assert self.load_config.load_architecture
+            assert self.load_config.load_base_model
 
 
 @config_class()
@@ -245,10 +240,8 @@ class CheckpointHandler(abc.ABC):
         if not config.load_config.load_fast_llm:
             updates[("config", "multi_stage")] = {}
             updates[("config", "distributed")] = {}
-        if not config.load_config.load_architecture:
-            updates[("config", "base_model")] = {}
         elif not config.load_config.load_base_model:
-            updates[("config", "base_model")] = metadata.config.base_model.get_architecture().to_dict()
+            updates[("config", "base_model")] = {}
         if updates:
             metadata = metadata.to_copy(updates)
         return metadata

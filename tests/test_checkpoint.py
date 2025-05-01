@@ -251,7 +251,7 @@ def _compare_model_configs(config_ref: FastLLMModelConfig, config_test: FastLLMM
 
 
 def _compare_architectures(config_ref: FastLLMModelConfig, config_test: FastLLMModelConfig):
-    config_ref.base_model.get_architecture().compare(config_test.base_model.get_architecture())
+    config_ref.base_model.compare_architecture(config_test.base_model)
 
 
 @pytest.mark.depends(on=["test_converted_distributed"])

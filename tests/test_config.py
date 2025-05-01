@@ -185,7 +185,7 @@ def test_pretrained_config(load_config: ModelConfigType):
     if load_config == ModelConfigType.fast_llm:
         expected_config["multi_stage"] = {"zero_stage": 3}
     expected_config["distributed"].update({"seed": 1234, "training_dtype": "float16"})
-    if load_config in (ModelConfigType.architecture, ModelConfigType.fast_llm, ModelConfigType.model):
+    if load_config in (ModelConfigType.fast_llm, ModelConfigType.model):
         expected_config["base_model"] = {
             "transformer": {
                 "normalization": {"type": "rms_norm", "implementation": "triton"},
@@ -196,13 +196,12 @@ def test_pretrained_config(load_config: ModelConfigType):
                 "ffn_hidden_size": 4096,
                 "activation_type": "silu",
                 "head_groups": 1,
+                "window_size": 32,
             },
             "ssm": {"dt_rank": 10, "activation_type": "silu"},
             "tie_word_embeddings": False,
             "vocab_size": 1000,
         }
-        if load_config != ModelConfigType.architecture:
-            expected_config["base_model"]["transformer"]["window_size"] = 32
     else:
         expected_config["base_model"] = base_model_update
 
