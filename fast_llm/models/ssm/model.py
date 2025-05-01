@@ -20,7 +20,7 @@ class HybridSSMBaseModel[ConfigType: HybridSSMBaseModelConfig](GPTBaseModel[Conf
     """
     A hybrid model that interleaves Transformer and Mamba blocks.
     Right now only LlambaBlock is supported.
-    AS for the mixer, transformer uses MHA. For the LLlambaBlock we support Mamba1 and discrete mamba2.
+    As for the mixer, transformer uses MHA. For the LlambaBlock we support Mamba1 and discrete mamba2.
     """
 
     config_class: typing.ClassVar[type[HybridSSMBaseModelConfig]] = HybridSSMBaseModelConfig

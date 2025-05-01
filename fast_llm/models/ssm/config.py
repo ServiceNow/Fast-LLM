@@ -71,7 +71,7 @@ class HybridSSMBaseModelConfig(LanguageModelBaseConfig):
         tensor_space.add_tensor_dim(TensorDim(SSMDimNames.conv_kernel_size, self.ssm.conv_kernel_dimension))
         tensor_space.add_tensor_dim(TensorDim(SSMDimNames.inner_proj_mamba, d_inner * 2))
 
-        if "m2" in self.hybrid_block_layout:
+        if "m2" in self.hybrid_block_layout or "m2" in self.mtp_heads:
             # Mamba2 specific dimensions
             # as per https://github.com/cartesia-ai/edge/blob/a0e121ebed3d2324c6d762b0e211a08d62583681/cartesia-pytorch/cartesia_pytorch/Llamba/mixers/discrete_mamba2.py#L66C3-L66C4
             headdim = d_inner // self.ssm.n_v_heads
@@ -89,8 +89,8 @@ class HybridSSMBaseModelConfig(LanguageModelBaseConfig):
             tensor_space.add_tensor_dim(TensorDim(SSMDimNames.conv_dim, conv_dim))
 
     def _validate(self):
-        if len(self.hybrid_block_layout) != self.transformer.num_layers:
-            len_block_layout = len(self.hybrid_block_layout)
+        len_block_layout = len(self.hybrid_block_layout)
+        if len_block_layout != self.transformer.num_layers:
             if self.transformer.num_layers % len_block_layout != 0:
                 raise ValueError(
                     f"hybrid_block_layout length {len_block_layout} does not match num_layers {self.transformer.num_layers}"

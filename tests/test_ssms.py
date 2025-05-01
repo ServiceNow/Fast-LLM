@@ -13,7 +13,6 @@ from fast_llm.engine.schedule.config import ScheduleConfig
 from fast_llm.engine.schedule.runner import ScheduleRunner
 from fast_llm.engine.schedule.schedule import Schedule
 from fast_llm.layers.language_model.config import LanguageModelKwargs, LanguageModelLossNames
-from fast_llm.layers.language_model.head import OUTPUT_WEIGHTS
 from fast_llm.layers.transformer.config import TransformerConfig, TransformerKwargs
 from fast_llm.models.gpt.config import GPTBatchConfig, LlamaGPTHuggingfaceCheckpointFormat
 from fast_llm.models.ssm.config import LLambaHuggingfaceCheckpointFormat
@@ -32,7 +31,7 @@ except ImportError:
         None,
         None,
     )
-    # Mamba not isntalled, skipping tests
+    # Mamba not installed, skipping tests
 
 try:
     from cartesia_pytorch.Llamba.llamba import LlambaLMHeadModel as LMHeadModel
@@ -82,13 +81,11 @@ def distributed(distributed_config):
     return Distributed(config=distributed_config)
 
 
-def get_hybrid_config(hybrid_block_layout=["t", "m", "t", "m"], mtp_heads=["t"]):
+def get_hybrid_config(hybrid_block_layout=["t", "m", "t", "m"]):
     config = HybridSSMBaseModelConfig(
         transformer=TransformerConfig(num_layers=len(hybrid_block_layout)),
         ssm=SSMConfig(),
         hybrid_block_layout=hybrid_block_layout,
-        mtp_heads=mtp_heads,
-        prediction_heads=len(mtp_heads) + 1,
         init_method_std_embed=0.02,
         init_method_min_embed=-0.02,
         init_method_max_embed=0.02,
@@ -251,15 +248,15 @@ def test_mamba_block(distributed_config, distributed):
 
 @pytest.mark.skipif(not run_test, reason="No CUDA available or Mamba not installed")
 @pytest.mark.parametrize(
-    ("hybrid_block_layout", "mtp_heads"),
+    ("hybrid_block_layout"),
     [
-        (["m", "t"], ["t"]),
-        (["m2", "t"], ["t", "t", "t"]),
+        (["m", "t"]),
+        (["m2", "t"]),
     ],
     ids=["mamba", "discrete_mamba2"],
 )
-def test_hybrid_model_train_with_fast_mode(distributed_config, hybrid_block_layout, mtp_heads):
-    hybrid_config = get_hybrid_config(hybrid_block_layout=hybrid_block_layout, mtp_heads=mtp_heads)
+def test_hybrid_model_train_with_fast_mode(distributed_config, hybrid_block_layout):
+    hybrid_config = get_hybrid_config(hybrid_block_layout=hybrid_block_layout)
     model = HybridSSMBaseModel(hybrid_config, distributed_config)
     distributed = Distributed(distributed_config)
     model.setup(distributed)
@@ -272,10 +269,8 @@ def test_hybrid_model_train_with_fast_mode(distributed_config, hybrid_block_layo
     x = torch.randint(0, 49152, (batch_size, seq_length), device="cuda")
     position_ids = torch.arange(seq_length, device="cuda", dtype=torch.int64)
     attention_mask = torch.ones((1, 1, 1, 1), device="cuda", dtype=torch.bool)  # will be broadcasted to right shape
-    labels = torch.randint(0, 49152, (batch_size, seq_length + model._config.prediction_heads - 1), device="cuda")
-    losses = {
-        LanguageModelLossNames.multi_token_prediction_loss(i): [] for i in range(len(model._config.mtp_heads) + 1)
-    }
+    labels = torch.randint(0, 49152, (batch_size, seq_length), device="cuda")
+    losses = {LanguageModelLossNames.language_model_loss: []}
     output = model(
         x,
         {
@@ -285,16 +280,10 @@ def test_hybrid_model_train_with_fast_mode(distributed_config, hybrid_block_layo
             TransformerKwargs.attention_mask_value: -100,
             TransformerKwargs.grad_output: True,
             LanguageModelKwargs.labels: labels,
-            OUTPUT_WEIGHTS: model.model_head.output_weights,
         },
         losses=losses,
     )
-    loss = sum(
-        [
-            sum(losses[LanguageModelLossNames.multi_token_prediction_loss(i)])
-            for i in range(len(model._config.mtp_heads) + 1)
-        ]
-    )
+    loss = sum(losses[LanguageModelLossNames.language_model_loss])
     loss.backward()
 
 
