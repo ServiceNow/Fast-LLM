@@ -77,7 +77,6 @@ class GPTHuggingfaceDatasetConfig(Config):
         hint=FieldHint.optional,
     )
 
-
 @config_class
 class DatasetPreparatorDistributedConfig(Config):
     # TODO: Unify with fast_llm.engine.distributed.config.DistributedConfig
@@ -111,6 +110,22 @@ class DatasetPreparatorDistributedConfig(Config):
         Assert.in_range(self.rank, 0, self.world_size)
 
 @config_class
+class LossMaskSpansConfig(Config):
+    masking_column: str = Field(
+        default=None, 
+        desc="Field containing character spans to mask for loss computation",
+        hint=FieldHint.optional,
+    )
+    loss_masking_spans: str = Field(
+        default="fast_llm_loss_masking_spans",
+        desc="Field containing character spans to mask for loss computation",
+        hint=FieldHint.optional,
+    )   
+    def _validate(self) -> None:
+        assert isinstance(self.loss_masking_spans, str), "loss_masking_spans col name must be a string."
+        super()._validate()
+
+@config_class
 class FieldCombinePreparatorConfig(Config):
     col_names: typing.List[str] = Field(
         default_factory=list,
@@ -127,13 +142,13 @@ class FieldCombinePreparatorConfig(Config):
         desc="Name of the new field to create.",
         hint=FieldHint.optional,
     )
-    
+    set_masking_span: LossMaskSpansConfig = Field(
+        default=None,
+        desc="Compute loss_masking_spans for the newly combined field.",
+        hint=FieldHint.optional,
+    )
     def _validate(self) -> None:
-        # Assert.gt(len(self.fields), 0)
-        # assert isinstance(self.fields, list), "Fields must be a list."
-        # assert all(isinstance(field, str) for field in self.fields), "All fields must be strings."
         assert isinstance(self.delimiter, str), "Delimiter must be a string."
-        # assert isinstance(self.new_field_name, str), "New field name must be a string."
         super()._validate()
 
 @config_class()
@@ -201,11 +216,13 @@ class GPTMemmapDatasetPreparatorConfig(DatasetPreparatorConfig):
         if self.dataset.data_type is not None:
             Assert.incl(DataType.from_numpy(self.dataset.data_type.numpy), MEMMAP_DTYPES_INV)
         if self.combine_fields is not None:
-            if self.dataset.field != self.combine_fields.new_field_name:
-                 logger.warning(
-                    f"Combine mode activated yet dataset.field != combine_fields.new_field_name ({self.dataset.field} != {self.combine_fields.new_field_name}). Setting dataset.field to {self.combine_fields.new_field_name}",
-                 )
-                 self.dataset.field = self.combine_fields.new_field_name
+            logger.info(
+            f"Setting dataset.field to {self.combine_fields.new_field_name}",
+            )
+            self.dataset.field = self.combine_fields.new_field_name
+            if self.combine_fields.set_masking_span is not None:
+                logger.info(f"Setting dataset.loss_masking_spans to {self.combine_fields.set_masking_span.loss_masking_spans}")
+                self.dataset.loss_masking_spans = self.combine_fields.set_masking_span.loss_masking_spans
         super()._validate()
 
     @classmethod

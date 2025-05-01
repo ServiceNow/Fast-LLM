@@ -211,7 +211,9 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
         
         # Check for combining fields
         if self._config.combine_fields: 
-            Assert.eq(len(set(self._config.combine_fields.col_names).intersection(dataset.column_names)), len(self._config.combine_fields.col_names))
+            Assert.eq(len(set(self._config.combine_fields.col_names).intersection(dataset.column_names)), len(self._config.combine_fields.col_names),\
+                msg=f"Some columns to combine are not in the dataset. {set(self._config.combine_fields.col_names).difference(dataset.column_names)}")
+            
             logger.info(f"Combining fields {self._config.combine_fields.col_names} into {self._config.combine_fields.new_field_name}")
             dataset = dataset.map(
                 lambda example: {
@@ -224,6 +226,20 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
             )
             logger.info(f"Sample after combining fields:\n{dataset[0]}")
             # Note: self.dataset.field is set to new_field_name for the rest of the operation see config validation
+            
+            if self._config.combine_fields.set_masking_span is not None:
+                Assert.incl(self._config.combine_fields.set_masking_span.masking_column, dataset.column_names)
+ 
+                dataset = dataset.map(
+                    lambda example: {
+                        self._config.dataset.loss_masking_spans: [
+                            (0, len(str(example[self._config.combine_fields.set_masking_span.masking_column])) - 1)
+                        ]# spans are inclusive
+                    },
+                    batched=False,
+                    desc="Setting loss masking spans",
+                )
+                logger.info(f"Sample after setting loss masking spans:\n{dataset[0]}")
 
         dataset = dataset.shard(
             num_shards=self._config.distributed.world_size,
