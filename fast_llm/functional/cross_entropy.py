@@ -23,8 +23,6 @@ def _torch_cross_entropy_forward_backward(
     TODO: loss masking only works for with labels format and if the masking index is set to -100.
     """
     # Torch compile doesn't understand this.
-    if loss_mask is not None:
-        raise NotImplementedError(f"Torch cross-entropy from {target_format} doesn't support loss masking.")
     with torch.set_grad_enabled(grad_output is not None):
         logits_ = logits.float().detach().requires_grad_(grad_output is not None)
         if target_format == TargetFormat.logits:
@@ -40,7 +38,7 @@ def _torch_cross_entropy_forward_backward(
                 torch.nn.functional.cross_entropy(
                     logits_ if logits_scale_factor == 1 else logits_ * logits_scale_factor, target, reduction="none"
                 )
-                * loss_mask
+                * loss_mask.unsqueeze(-1)
             ).mean()
         if grad_output is None:
             grad = None
@@ -185,7 +183,7 @@ def cross_entropy_forward_backward(
         Assert.eq(target.shape, logits.shape)
         assert target.dtype.is_floating_point, target.dtype
         if loss_mask is not None:
-            Assert.eq(loss_mask.shape, target.shape)
+            Assert.eq(loss_mask.shape, logits.shape[:-1])
     if group:
         Assert.eq(implementation, CrossEntropyImpl.fused)
         return _fused_cross_entropy_forward_backward(
