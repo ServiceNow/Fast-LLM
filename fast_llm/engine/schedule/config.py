@@ -55,19 +55,14 @@ class BatchConfig(Config):
         hint=FieldHint.performance,
         valid=check_field(Assert.gt, 0),
     )
-    patch_size: list[int] | None = Field(
+    patch_size: int | None = Field(
         default=None,
         desc="Patch size for each image token",
         hint=FieldHint.optional,
     )
-    max_image_height: int | None = Field(
+    max_image_size: int | None = Field(
         default=None,
-        desc="Maximum image height for each image token",
-        hint=FieldHint.optional,
-    )
-    max_image_width: int | None = Field(
-        default=None,
-        desc="Maximum image width for each image token",
+        desc="Maximum image height and width",
         hint=FieldHint.optional,
     )
     num_micro_sequences: int = Field(

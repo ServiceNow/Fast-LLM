@@ -73,9 +73,8 @@ class GPTSamplingData(SamplingData):
     tokenizer: "Tokenizer"
     truncate_documents: bool = True
     cross_document_attention: bool = True
-    patch_size: list[int] | None = None
-    image_height: int | None = None
-    image_width: int | None = None
+    patch_size: int | None = None
+    image_size: int | None = None
 
 
 @config_class()

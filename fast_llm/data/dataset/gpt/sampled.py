@@ -12,9 +12,9 @@ import yaml
 from fast_llm.data.dataset.abstract import SampledDataset
 from fast_llm.data.dataset.gpt.config import GPTSamplingData, ShufflingType
 from fast_llm.data.dataset.gpt.indexed import GPTIndexedDataset
-from fast_llm.data.image_processor import ImageProcessor
 from fast_llm.engine.config_utils.data_type import DataType, get_unsigned_integer_type
 from fast_llm.engine.config_utils.run import log_main_rank
+from fast_llm.layers.vision_encoder.preprocessing import get_num_patches, get_resize_dims
 from fast_llm.utils import Assert
 
 try:
@@ -91,8 +91,7 @@ class GPTSampledIndexedDataset(SampledDataset):
         self._num_samples = sampling.num_samples
         self._sequence_length = sampling.sequence_length
         self._patch_size = sampling.patch_size
-        self._image_height = sampling.image_height
-        self._image_width = sampling.image_width
+        self._image_size = sampling.image_size
         self._cross_document_attention = sampling.cross_document_attention
         self._config = sampling.config
         self._truncate_documents = sampling.truncate_documents
@@ -142,7 +141,7 @@ class GPTSampledIndexedDataset(SampledDataset):
         image_token_sizes = torch.zeros_like(document_sizes).to(self._device)
         # TODO Soham: handle max image size
         for i, sizes in enumerate(image_sizes):
-            image_token_sizes[i] = sum((sizes[:, 0] // self._patch_size[0]) * (sizes[:, 1] // self._patch_size[1]))
+            image_token_sizes[i] = sum((sizes[:, 0] // self._patch_size) * (sizes[:, 1] // self._patch_size))
 
         documents_per_epoch = document_sizes.numel()
         tokens_per_epoch = document_sizes.sum().item() + image_token_sizes.sum().item()
@@ -394,10 +393,8 @@ class GPTSampledIndexedDataset(SampledDataset):
             document_size, image_lengths = self._indexed_dataset.get_document_size(document_index, self._patch_size)
 
             image_sizes = [
-                ImageProcessor.get_num_patches_from_dims(
-                    *ImageProcessor.get_resize_dims(
-                        *image_length, self._image_height, self._image_width, self._patch_size
-                    ),
+                get_num_patches(
+                    *get_resize_dims(*image_length, self._image_size, self._image_size, self._patch_size),
                     self._patch_size,
                 )
                 for image_length in image_lengths
@@ -443,10 +440,6 @@ class GPTSampledIndexedDataset(SampledDataset):
                     image_tokens_added += image_tokens
                     start_pos = im_position
                 token_ids.append(sample.token_ids[start_pos:])
-                # TODO Soham: remove this
-                # if len(sample.images) == 1:
-                #     sample.images.append(sample.images[0])
-                #     sample.image_positions = np.concatenate([sample.image_positions, sample.image_positions])
                 images.append(sample.images)
                 # TODO Soham: add offsets for loss masking spans
                 if self._config.use_loss_masking_spans:
@@ -461,7 +454,6 @@ class GPTSampledIndexedDataset(SampledDataset):
 
         sequence_lengths = (
             np.array([ids.size - (idx == len(token_ids) - 1) for idx, ids in enumerate(token_ids)], dtype=np.int32)
-            # + np.array([ImageProcessor.get_num_patches(image) for image in images[idx] for idx in range(len(images))])
             if not self._cross_document_attention
             else None
         )

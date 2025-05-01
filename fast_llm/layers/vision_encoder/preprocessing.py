@@ -1,3 +1,4 @@
+import math
 import typing
 
 import torch
@@ -5,9 +6,17 @@ import torchvision.transforms.v2.functional as F
 
 from fast_llm.engine.config_utils.tensor_space import TensorSpace
 from fast_llm.layers.vision_encoder.config import VisionArchitectureConfig, VisionModelKwargs
+from fast_llm.utils import div
 
 
-def get_resize_dims(height: int, width: int, max_height: int, max_width: int) -> tuple[int, int]:
+def get_num_patches(height: int, width: int, patch_size: int) -> tuple[int, int]:
+    """
+    Calculate the number of patches in height and width dimensions.
+    """
+    return div(height, patch_size) * div(width, patch_size)
+
+
+def get_resize_dims(height: int, width: int, max_height: int, max_width: int, patch_size: int) -> tuple[int, int]:
     """
     Calculate the new dimensions for resizing an image while maintaining the aspect ratio.
     If the image is larger than the max dimensions, it will be resized to fit within them.
@@ -17,12 +26,12 @@ def get_resize_dims(height: int, width: int, max_height: int, max_width: int) ->
     return (
         (int(height / ratio), int(width / ratio))
         if ratio > 1
-        else (max_height * (height // max_height), max_width * (width // max_width))
+        else (patch_size * math.ceil(height / patch_size), patch_size * math.ceil(width / patch_size))
     )
 
 
-def resize(image: torch.Tensor, max_height: int, max_width: int) -> tuple[int, int]:
-    resize_dims = get_resize_dims(image.size(1), image.size(2), max_height, max_width)
+def resize(image: torch.Tensor, max_height: int, max_width: int, patch_size: int) -> tuple[int, int]:
+    resize_dims = get_resize_dims(image.size(1), image.size(2), max_height, max_width, patch_size=patch_size)
     # TODO: options for interpolation mode?
     return F.resize(image, size=resize_dims, interpolation=F.InterpolationMode.BICUBIC)
 
@@ -71,14 +80,17 @@ class VisionPreprocessor:
 
     def preprocess(self, kwargs: dict[str, typing.Any]) -> None:
         images = kwargs.get("images")
-        im_height = kwargs.get(VisionModelKwargs.image_height)
-        im_width = kwargs.get(VisionModelKwargs.image_width)
-        image_sizes = [get_resize_dims(im.size(1), im.size(2), im_height, im_width) for im in images]
+        im_height = kwargs.get(VisionModelKwargs.image_size)
+        im_width = kwargs.get(VisionModelKwargs.image_size)
+        patch_size = kwargs[VisionModelKwargs.patch_size]
+        image_sizes = [
+            get_resize_dims(im.size(1), im.size(2), im_height, im_width, patch_size=patch_size) for im in images
+        ]
         kwargs[VisionModelKwargs.image_sizes] = image_sizes
         images = [
             pad(
                 normalize(
-                    resize(image, im_height, im_width) / kwargs[VisionModelKwargs.image_rescale_factor],
+                    resize(image, im_height, im_width, patch_size) / kwargs[VisionModelKwargs.image_rescale_factor],
                     mean=kwargs[VisionModelKwargs.image_mean],
                     std=kwargs[VisionModelKwargs.image_std],
                 ),
@@ -97,5 +109,5 @@ class VisionPreprocessor:
             kwargs[VisionModelKwargs.rope_theta],
             kwargs[VisionModelKwargs.kv_channels],
             im_height,
-            kwargs[VisionModelKwargs.patch_size],
+            patch_size,
         ).to(device=self._tensor_space.distributed.device)

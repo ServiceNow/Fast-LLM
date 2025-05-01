@@ -91,8 +91,7 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
         max_sequence_length: int,
         cross_document_attention: bool = True,
         patch_size: list[int] | None = None,
-        max_image_height: int | None = None,
-        max_image_width: int | None = None,
+        max_image_size: int | None = None,
     ):
         """
         Create the data and gather some basic information on the dataset(s).
@@ -103,8 +102,7 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
         self._max_sequence_length = max_sequence_length
         self._cross_document_attention = cross_document_attention
         self._patch_size = patch_size
-        self._max_image_height = max_image_height
-        self._max_image_width = max_image_width
+        self._max_image_size = max_image_size
 
     def setup(
         self,
@@ -153,8 +151,7 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
                     truncate_documents=self._config.truncate_documents,
                     cross_document_attention=self._cross_document_attention,
                     patch_size=self._patch_size,
-                    image_height=self._max_image_height,
-                    image_width=self._max_image_width,
+                    image_size=self._max_image_size,
                 )
                 dataset = self._config.datasets[dataset_name].build_and_sample(sampling)
                 self._datasets[dataset_name] = DatasetMonitor(dataset, self._config.data_sample_warn_time_ms)

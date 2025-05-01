@@ -161,6 +161,6 @@ class VisionEncoder(Layer):
             input_,
             kwargs[VisionModelKwargs.image_sizes][:1],
             kwargs[VisionModelKwargs.rotary_inv_freq],
-            image_width=kwargs[VisionModelKwargs.image_width],
+            image_width=kwargs[VisionModelKwargs.image_size],
         )
         # return self.adapter(self.vision_encoder(input_, kwargs[VisionModelKwargs.image_sizes]))

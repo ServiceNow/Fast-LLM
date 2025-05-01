@@ -170,20 +170,8 @@ class GPTMemmapDataset(GPTIndexedDataset):
         offset: int = 0,
         length: int | None = None,
         use_loss_masking_spans: bool = False,
-        # , patch_size: tuple(int), max_height: int, max_width: int
     ):
         # TODO Soham: handle spans
-        # if self._has_images:
-        #     doc_size = self._document_sizes[idx]
-        #     n_images = self._n_images[idx]
-        #     image_positions = self._im_positions[idx]
-        #     image_lengths = self._im_lengths[idx]
-        #     image_tokens_seen = 0
-        #     for idx in range(n_images):
-        #         height, width = ImageProcessor.get_resize_dims(image_lengths[0], image_lengths[1], max_height, max_width)
-        #         n_image_tokens = (height // patch_size[0]) * (width // patch_size[1])
-        #         if (image_positions[idx] > offset + length) or (image_positions[idx] + n_tokens < offset):
-        #             continue
         token_ids = np.frombuffer(
             self._bin_buffer,
             dtype=self._dtype,
@@ -299,6 +287,9 @@ class GPTMemmapDataset(GPTIndexedDataset):
                     for image in document.images:
                         # assume 3 channels (RGB) for all images
                         with PIL.Image.open(io.BytesIO(image["bytes"])) as img:
+                            if img.mode == "L":
+                                # Convert grayscale to RGB
+                                img = img.convert("RGB")
                             pixels = np.array(img).transpose(2, 0, 1)  # HWC to CHW
                         image_lengths.append(np.array(pixels.shape[1:]))
                         bin_stream.write(pixels.tobytes(order="C"))
