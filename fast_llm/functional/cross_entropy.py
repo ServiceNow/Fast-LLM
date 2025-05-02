@@ -8,9 +8,10 @@ from fast_llm.functional.triton.cross_entropy import triton_cross_entropy_forwar
 from fast_llm.utils import Assert
 
 
-def torch_cross_entropy_forward_backward(
+def _torch_cross_entropy_forward_backward(
     logits: torch.Tensor,
     target: torch.Tensor,
+    loss_mask: torch.Tensor | None,
     grad_output: float | None,
     logits_scale_factor: float,
     target_format: TargetFormat,
@@ -28,9 +29,17 @@ def torch_cross_entropy_forward_backward(
             if logits_scale_factor != 1.0:
                 target = target * logits_scale_factor
             target = torch.softmax(target, dim=-1)
-        loss = torch.nn.functional.cross_entropy(
-            logits_ if logits_scale_factor == 1 else logits_ * logits_scale_factor, target
-        ).mean()
+        if loss_mask is None:
+            loss = torch.nn.functional.cross_entropy(
+                logits_ if logits_scale_factor == 1 else logits_ * logits_scale_factor, target
+            )
+        else:
+            loss = (
+                torch.nn.functional.cross_entropy(
+                    logits_ if logits_scale_factor == 1 else logits_ * logits_scale_factor, target, reduction="none"
+                )
+                * loss_mask.unsqueeze(-1)
+            ).mean()
         if grad_output is None:
             grad = None
         else:
@@ -57,8 +66,8 @@ def _fused_softmax_base(
     return logits_norm, exp_logits, sum_exp_logits
 
 
-# @torch.compile
-def fused_softmax(
+@torch.compile
+def _fused_softmax(
     logits: torch.Tensor, logits_scale_factor: float = 1.0, group: ProcessGroup = None, dim: int = -1
 ) -> torch.Tensor:
     _, exp_logits, sum_exp_logits = _fused_softmax_base(logits, logits_scale_factor, group, dim)
@@ -66,9 +75,10 @@ def fused_softmax(
 
 
 @torch.compile
-def fused_cross_entropy_forward_backward(
+def _fused_cross_entropy_forward_backward(
     logits: torch.Tensor,
     target: torch.Tensor,
+    loss_mask: torch.Tensor | None,
     grad_output: float | None,
     logits_scale_factor: float,
     target_format: TargetFormat,
@@ -85,7 +95,7 @@ def fused_cross_entropy_forward_backward(
     logits_norm, exp_logits, sum_exp_logits = _fused_softmax_base(logits, logits_scale_factor, group)
 
     if target_format == TargetFormat.logits:
-        target = fused_softmax(target, logits_scale_factor, group)
+        target = _fused_softmax(target, logits_scale_factor, group)
 
     if target_format == TargetFormat.labels:
         target = target.unsqueeze(-1)
@@ -101,8 +111,6 @@ def fused_cross_entropy_forward_backward(
             target_mask = (target >= vocab_start_index) * (target < vocab_start_index + logits.size(-1))
             target = (target - vocab_start_index) * target_mask
     else:
-        # TODO: Support masking
-        loss_mask = None
         # Target should be tensor-parallel already, no further manipulation needed.
         target_mask = None
 
@@ -145,8 +153,8 @@ def fused_cross_entropy_forward_backward(
 
 
 _CROSS_ENTROPY_IMPLEMENTATIONS = {
-    CrossEntropyImpl.torch: torch_cross_entropy_forward_backward,
-    CrossEntropyImpl.fused: fused_cross_entropy_forward_backward,
+    CrossEntropyImpl.torch: _torch_cross_entropy_forward_backward,
+    CrossEntropyImpl.fused: _fused_cross_entropy_forward_backward,
     CrossEntropyImpl.triton: triton_cross_entropy_forward_backward,
 }
 
@@ -154,6 +162,7 @@ _CROSS_ENTROPY_IMPLEMENTATIONS = {
 def cross_entropy_forward_backward(
     logits: torch.Tensor,
     target: torch.Tensor,
+    loss_mask: torch.Tensor | None,
     grad_output: float | None,
     group: ProcessGroup | None = None,
     implementation: CrossEntropyImpl = CrossEntropyImpl.fused,
@@ -169,12 +178,15 @@ def cross_entropy_forward_backward(
     if target_format == TargetFormat.labels:
         Assert.eq(target.shape, logits.shape[:-1])
         Assert.eq(target.dtype, torch.int64)
+        assert loss_mask is None
     else:
         Assert.eq(target.shape, logits.shape)
         assert target.dtype.is_floating_point, target.dtype
+        if loss_mask is not None:
+            Assert.eq(loss_mask.shape, logits.shape[:-1])
     if group:
         Assert.eq(implementation, CrossEntropyImpl.fused)
-        return fused_cross_entropy_forward_backward(
+        return _fused_cross_entropy_forward_backward(
             logits, target, grad_output, logits_scale_factor, target_format, group
         )
     else:
