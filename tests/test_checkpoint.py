@@ -35,7 +35,6 @@ TEST_MODEL_CONFIG_CLS = model_registry[TEST_MODEL_TYPE]
 TEST_MODEL_HF_CLS = TEST_MODEL_CONFIG_CLS.get_huggingface_model_class()
 TEST_MODEL_CLS = TEST_MODEL_CONFIG_CLS.get_model_class()
 TEST_BASE_MODEL_CONFIG_CLS = TEST_MODEL_CONFIG_CLS.get_base_model_config_class()
-TEST_ARCHITECTURE_CONFIG_CLS = TEST_BASE_MODEL_CONFIG_CLS.architecture_class
 
 WEIGHT_SHARD_SAVE_NAME = f"{ShardName.weights}_shard"
 
@@ -251,7 +250,7 @@ def _compare_model_configs(config_ref: FastLLMModelConfig, config_test: FastLLMM
 
 
 def _compare_architectures(config_ref: FastLLMModelConfig, config_test: FastLLMModelConfig):
-    config_ref.base_model.get_architecture().compare(config_test.base_model.get_architecture())
+    config_ref.base_model.compare_architecture(config_test.base_model)
 
 
 @pytest.mark.depends(on=["test_converted_distributed"])
