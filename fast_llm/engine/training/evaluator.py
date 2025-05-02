@@ -104,7 +104,6 @@ class EvaluationLoss[ConfigType: EvaluationLossConfig](Evaluation[ConfigType]):
         self._trainer_config = trainer_config
         self._get_tflops_func = get_tflops_func
 
-        
         steps = self._eval_config.get_iteration_count(
             self._trainer_config.training.train_iters,
             # There may be an extra evaluation after the last training step.
@@ -112,7 +111,6 @@ class EvaluationLoss[ConfigType: EvaluationLossConfig](Evaluation[ConfigType]):
         )
 
         self._samples = self._trainer_config.batch.batch_size * steps if steps > 0 else None
-
 
         self._evaluation_iterator = None
 
@@ -305,36 +303,45 @@ class EvaluationHarness[ConfigType: EvaluationHarnessConfig](Evaluation[ConfigTy
             return {}, None
 
         # completed_steps is added to output_path like output_path/runs/run_index/completed_steps/
-        args, simple_eval_kwargs = prepare_lm_eval_simple_eval_params(
-            self._eval_config.cli_args, completed_steps, self._run.index
-        )
-        simple_eval_kwargs["model"] = self._flm_wrapper
 
-        # Needed for reporting as batch_size is set from args not lm for reporting in evaluate
-        simple_eval_kwargs["batch_size"] = self._flm_wrapper.batch_size
-        simple_eval_kwargs["max_batch_size"] = self._flm_wrapper.max_batch_size
-
-        # As of lm_eval commit 758c5ed891b1ca48acd8d3a0d309a827215796b7
-        # Expected to be a string even if empty and not None in simple_evaluate
-        simple_eval_kwargs["model_args"] = ""
-
-        results = lm_eval_simple_evaluate(**simple_eval_kwargs)
-
-        # Evaluation_tracker save expects model to be either string, but if model is passed
-        # LM wrapper needs to be deep copyable and json serializable
-        simple_eval_kwargs["evaluation_tracker"].general_config_tracker.model_source = (
-            self._hf_model.config.name_or_path
-        )
-
-        if results is not None and self._run.is_main_rank:
-            process_lm_eval_results(
-                args,
-                results,
-                simple_eval_kwargs["evaluation_tracker"],
-                completed_steps,
-                consumed_samples,
-                consumed_tokens,
+        if self._run.is_main_rank:
+            args, simple_eval_kwargs = prepare_lm_eval_simple_eval_params(
+                self._eval_config.cli_args, completed_steps, self._run.index
             )
+            simple_eval_kwargs["model"] = self._flm_wrapper
+
+            # Needed for reporting as batch_size is set from args not lm for reporting in evaluate
+            simple_eval_kwargs["batch_size"] = self._flm_wrapper.batch_size
+            simple_eval_kwargs["max_batch_size"] = self._flm_wrapper.max_batch_size
+
+            # As of lm_eval commit 758c5ed891b1ca48acd8d3a0d309a827215796b7
+            # Expected to be a string even if empty and not None in simple_evaluate
+            simple_eval_kwargs["model_args"] = ""
+
+            results = lm_eval_simple_evaluate(**simple_eval_kwargs)
+            self._flm_wrapper.stop_workers()
+
+            # Evaluation_tracker save expects model to be either string, but if model is passed
+            # LM wrapper needs to be deep copyable and json serializable
+            simple_eval_kwargs["evaluation_tracker"].general_config_tracker.model_source = (
+                self._hf_model.config.name_or_path
+            )
+
+            if results is not None:
+                process_lm_eval_results(
+                    args,
+                    results,
+                    simple_eval_kwargs["evaluation_tracker"],
+                    completed_steps,
+                    consumed_samples,
+                    consumed_tokens,
+                )
+        else:
+            self._flm_wrapper.worker_model_invoke()
+
+        # TODO: do we need it here as self._flm_wrapper.stop_workers() and self._flm_wrapper.worker_model_invoke()
+        #       already have barrier
+        safe_barrier(self._distributed.world_group, f"Evaluation Harness Run end")
 
         # lm_eval logs to disc, wandb and prints to screen itself
         return {}, None
