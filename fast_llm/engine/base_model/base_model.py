@@ -6,7 +6,7 @@ import torch
 import torch.nn
 
 from fast_llm.config import Configurable
-from fast_llm.engine.base_model.config import BaseModelArchitectureConfig, BaseModelConfig
+from fast_llm.engine.base_model.config import BaseModelConfig
 from fast_llm.engine.config_utils.tensor_space import TensorSpace
 from fast_llm.engine.distributed.config import DistributedConfig, PhaseType
 from fast_llm.engine.distributed.distributed import Distributed
@@ -109,10 +109,6 @@ class BaseModel[ConfigType: BaseModelConfig](Configurable[ConfigType], Sequentia
         distributed.check_config(self._tensor_space.distributed_config)
         self._tensor_space.setup(distributed)
         self._is_setup = True
-
-    @classmethod
-    def architecture_cls(cls) -> type[BaseModelArchitectureConfig]:
-        return cls.config_class.architecture_class
 
     @abc.abstractmethod
     def get_layers(self) -> list[Layer]:
