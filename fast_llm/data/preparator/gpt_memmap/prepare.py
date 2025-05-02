@@ -210,7 +210,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
         assert isinstance(dataset, datasets.Dataset)
         
         # Check for combining fields
-        if self._config.combine_fields: 
+        if len(self._config.combine_fields.col_names) > 0: 
             Assert.eq(len(set(self._config.combine_fields.col_names).intersection(dataset.column_names)), len(self._config.combine_fields.col_names),\
                 msg=f"Some columns to combine are not in the dataset. {set(self._config.combine_fields.col_names).difference(dataset.column_names)}")
             
@@ -227,9 +227,8 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
             logger.info(f"Sample after combining fields:\n{dataset[0]}")
             # Note: self.dataset.field is set to new_field_name for the rest of the operation see config validation
             
-            if self._config.combine_fields.set_masking_span is not None:
+            if self._config.combine_fields.set_masking_span.masking_column != "":
                 Assert.incl(self._config.combine_fields.set_masking_span.masking_column, dataset.column_names)
- 
                 dataset = dataset.map(
                     lambda example: {
                         self._config.dataset.loss_masking_spans: [

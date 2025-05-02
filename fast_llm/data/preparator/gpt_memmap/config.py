@@ -112,13 +112,13 @@ class DatasetPreparatorDistributedConfig(Config):
 @config_class
 class LossMaskSpansConfig(Config):
     masking_column: str = Field(
-        default=None, 
-        desc="Field containing character spans to mask for loss computation",
-        hint=FieldHint.optional,
+        default="",
+        desc="Field containing (input) character spans for loss masking",
+        hint=FieldHint.core,
     )
     loss_masking_spans: str = Field(
         default="fast_llm_loss_masking_spans",
-        desc="Field containing character spans to mask for loss computation",
+        desc="Column name of field that would contain the masked spans.",
         hint=FieldHint.optional,
     )   
     def _validate(self) -> None:
@@ -126,7 +126,7 @@ class LossMaskSpansConfig(Config):
         super()._validate()
 
 @config_class
-class FieldCombinePreparatorConfig(Config):
+class CombineFieldsConfig(Config):
     col_names: typing.List[str] = Field(
         default_factory=list,
         desc="Fields of the dataset to combine.",
@@ -143,7 +143,7 @@ class FieldCombinePreparatorConfig(Config):
         hint=FieldHint.optional,
     )
     set_masking_span: LossMaskSpansConfig = Field(
-        default=None,
+        default_factory=LossMaskSpansConfig,
         desc="Compute loss_masking_spans for the newly combined field.",
         hint=FieldHint.optional,
     )
@@ -205,8 +205,8 @@ class GPTMemmapDatasetPreparatorConfig(DatasetPreparatorConfig):
         " Does not shuffle samples.",
         hint=FieldHint.optional,
     )
-    combine_fields: FieldCombinePreparatorConfig = Field(
-        default=None,
+    combine_fields: CombineFieldsConfig = Field(
+        default_factory=CombineFieldsConfig,
         desc="Combine all files into a single file.",
         hint=FieldHint.optional,
     )
@@ -215,12 +215,12 @@ class GPTMemmapDatasetPreparatorConfig(DatasetPreparatorConfig):
         assert self.tokenizer.path is not None
         if self.dataset.data_type is not None:
             Assert.incl(DataType.from_numpy(self.dataset.data_type.numpy), MEMMAP_DTYPES_INV)
-        if self.combine_fields is not None:
+        if len(self.combine_fields.col_names) > 0:
             logger.info(
             f"Setting dataset.field to {self.combine_fields.new_field_name}",
             )
             self.dataset.field = self.combine_fields.new_field_name
-            if self.combine_fields.set_masking_span is not None:
+            if self.combine_fields.set_masking_span.masking_column != "":
                 logger.info(f"Setting dataset.loss_masking_spans to {self.combine_fields.set_masking_span.loss_masking_spans}")
                 self.dataset.loss_masking_spans = self.combine_fields.set_masking_span.loss_masking_spans
         super()._validate()
