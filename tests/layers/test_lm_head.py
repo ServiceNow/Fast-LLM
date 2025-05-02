@@ -126,15 +126,13 @@ def test_lm_head(
         else (BATCH_SIZE, SEQUENCE_LENGTH + config.prediction_heads - 1)
     )
     if loss_masking:
-        loss_mask = torch.randint(
-            0,
-            VOCAB_SIZE,
-            label_shape,
-            dtype=torch.bool,
-            device=distributed.device,
-        )
+        loss_mask = torch.randint(0, 2, label_shape, dtype=torch.bool, device=distributed.device)
     else:
         loss_mask = None
+    kwargs = {
+        TransformerKwargs.sequence_first: sequence_first,
+        TransformerKwargs.grad_output: 1.0,
+    }
     if config.distillation_model is None:
         target = torch.randint(
             0,
@@ -145,14 +143,17 @@ def test_lm_head(
         )
         if loss_mask is not None:
             target *= loss_mask
+
+        kwargs[LanguageModelKwargs.labels] = target
     else:
         assert config.prediction_heads == 1
-        target = torch.randn_like(input_)
-    kwargs = {
-        TransformerKwargs.sequence_first: sequence_first,
-        LanguageModelKwargs.labels: target,
-        TransformerKwargs.grad_output: 1.0,
-    }
+        target = torch.randn(
+            input_.shape[:-1] + (VOCAB_SIZE,),
+            dtype=input_.dtype,
+            device=distributed.device,
+        )
+        kwargs[f"{config.distillation_model}_logits"] = target
+
     if config.tie_word_embeddings or config.prediction_heads > 1:
         logit_weight = (
             torch.empty(
