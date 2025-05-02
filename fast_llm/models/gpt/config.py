@@ -188,29 +188,6 @@ class GPTTrainerConfig(PretrainedGPTModelConfig, TrainerConfig):
             Assert.none(reference_model.model.base_model.cross_entropy_splits)
             Assert.eq(reference_model.model.base_model.parallel_embeddings, self.model.base_model.parallel_embeddings)
             Assert.geq(reference_model.model.base_model.prediction_heads, self.model.base_model.prediction_heads)
-            # TODO: Support distinct preprocessing
-            reference_model.model.base_model.transformer.rotary.compare(
-                self.model.base_model.transformer.rotary,
-                NotImplementedError,
-            )
-            Assert.eq(
-                reference_model.model.base_model.use_absolute_position_embeddings,
-                self.model.base_model.use_absolute_position_embeddings,
-            )
-            if reference_model.model.base_model.use_absolute_position_embeddings:
-                assert self.model.base_model.use_absolute_position_embeddings
-                Assert.geq(
-                    reference_model.model.base_model.num_absolute_position_embeddings, self.batch.sequence_length
-                )
-            use_flash = reference_model.model.base_model.transformer.do_use_flash_attention(
-                reference_model.model.distributed
-            )
-            Assert.eq(use_flash, self.model.base_model.transformer.do_use_flash_attention(self.model.distributed))
-            if use_flash:
-                Assert.eq(
-                    reference_model.model.base_model.transformer.window_size,
-                    self.model.base_model.transformer.window_size,
-                )
 
     @classmethod
     def _from_dict(
