@@ -240,7 +240,7 @@ class CheckpointHandler(abc.ABC):
         if not config.load_config.load_fast_llm:
             updates[("config", "multi_stage")] = {}
             updates[("config", "distributed")] = {}
-        elif not config.load_config.load_base_model:
+        if not config.load_config.load_base_model:
             updates[("config", "base_model")] = {}
         if updates:
             metadata = metadata.to_copy(updates)

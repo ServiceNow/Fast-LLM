@@ -8,7 +8,7 @@ import torch
 
 from fast_llm import __version__
 from fast_llm.config import MISSING, get_nested_dict_value, set_nested_dict_value
-from fast_llm.engine.base_model.config import BaseModelArchitectureConfig
+from fast_llm.engine.base_model.config import BaseModelConfig
 from fast_llm.engine.checkpoint.config import CheckpointLoadMetadataConfig
 from fast_llm.engine.checkpoint.state_dict import StateDictCheckpointHandler
 from fast_llm.engine.multi_stage.config import CheckpointMetadata, FastLLMModelConfig
@@ -124,7 +124,7 @@ class WeightConverter:
         self,
         fast_llm_name: str | tuple[str, ...],
         export_name: str | tuple[str, ...],
-        config: BaseModelArchitectureConfig | None = None,
+        config: BaseModelConfig | None = None,
     ):
         self.fast_llm_name: tuple[str, ...] = (fast_llm_name,) if isinstance(fast_llm_name, str) else fast_llm_name
         self.export_name: tuple[str, ...] = (export_name,) if isinstance(export_name, str) else export_name
@@ -211,7 +211,7 @@ class ExternalStateDictCheckpointHandler(StateDictCheckpointHandler):
         Assert.custom(
             isinstance,
             self._model.config.base_model,
-            self._model_class.get_base_model_config_class().architecture_class,
+            self._model_class.get_base_model_config_class(),
         )
         weight_converters = self._create_weight_converters()
         self._export_converters = {
@@ -227,7 +227,7 @@ class ExternalStateDictCheckpointHandler(StateDictCheckpointHandler):
 
     @classmethod
     def _load_metadata(cls, config: CheckpointLoadMetadataConfig) -> CheckpointMetadata:
-        imported_model_config = cls._import_config(cls._load_config(config.path), True)
+        imported_model_config = cls._import_config(cls._load_config(config.path))
         return CheckpointMetadata(
             fast_llm_version=__version__,
             model=cls._model_class,
@@ -251,7 +251,7 @@ class ExternalStateDictCheckpointHandler(StateDictCheckpointHandler):
         pass
 
     @classmethod
-    def _export_config(cls, config: BaseModelArchitectureConfig) -> dict[str, typing.Any]:
+    def _export_config(cls, config: BaseModelConfig) -> dict[str, typing.Any]:
         # TODO v0.3: not used in this class
         exported_config = {}
         for converter in cls._get_config_converters():
@@ -271,9 +271,7 @@ class ExternalStateDictCheckpointHandler(StateDictCheckpointHandler):
         return exported_config  # Noqa
 
     @classmethod
-    def _import_config(
-        cls, config: dict[str, typing.Any], architecture_only: bool = False
-    ) -> BaseModelArchitectureConfig:  # noqa
+    def _import_config(cls, config: dict[str, typing.Any]) -> BaseModelConfig:  # noqa
         kwargs = {}
         for converter in cls._get_config_converters():
             try:
@@ -297,10 +295,7 @@ class ExternalStateDictCheckpointHandler(StateDictCheckpointHandler):
             except Exception as e:
                 raise RuntimeError(f"Config conversion failed for converter {converter}", *e.args)
 
-        config_class = cls._model_class.get_base_model_config_class()
-        if architecture_only:
-            config_class = config_class.architecture_class
-        return config_class.from_dict({}, kwargs)
+        return cls._model_class.get_base_model_config_class().from_dict({}, kwargs)
 
     def _convert_state_dict(
         self, state_dict: dict[str, torch.Tensor | SafeTensorSlice], export: bool
@@ -343,7 +338,7 @@ class ExternalStateDictCheckpointHandler(StateDictCheckpointHandler):
         return cls._config_converters
 
     @staticmethod
-    def _get_fast_llm_attribute(config: BaseModelArchitectureConfig, name: str | tuple[str, ...]) -> typing.Any:
+    def _get_fast_llm_attribute(config: BaseModelConfig, name: str | tuple[str, ...]) -> typing.Any:
         if isinstance(name, str):
             name = (name,)
         val = config
@@ -367,8 +362,6 @@ class AutoStateDictCheckpointHandler(ExternalStateDictCheckpointHandler, abc.ABC
     # TODO: load_metadata???
 
     @classmethod
-    def _import_config(
-        cls, config: dict[str, typing.Any], architecture_only: bool = False
-    ) -> BaseModelArchitectureConfig:
+    def _import_config(cls, config: dict[str, typing.Any]) -> BaseModelConfig:
         # TODO: ???
-        return cls.handler_map[config["model_type"]]._import_config(config, architecture_only)
+        return cls.handler_map[config["model_type"]]._import_config(config)
