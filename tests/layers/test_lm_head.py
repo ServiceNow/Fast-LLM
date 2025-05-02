@@ -40,14 +40,16 @@ def _lm_head(
         rms_weight,
         1e-5,
     )
-    logits = torch.nn.functional.linear(hidden, logit_weight)
+    logits = torch.nn.functional.linear(hidden, logit_weight).float()
     if logit_scale_factor != 1.0:
         logits *= logit_scale_factor
     z_loss = torch.mean(torch.logsumexp(logits, dim=-1) ** 2) if logit_z_loss > 0 else None
     if target.ndim == logits.ndim:
-        loss = torch.nn.functional.cross_entropy(logits, target, reduction="none")
+        loss = torch.nn.functional.cross_entropy(
+            logits.flatten(0, -2), target.float().softmax(-1).flatten(0, -2), reduction="none"
+        )
         if loss_mask is not None:
-            loss = loss * loss_mask.unsqueeze(-1)
+            loss = loss * loss_mask.flatten()
         loss = loss.mean()
     else:
         loss = torch.nn.functional.cross_entropy(logits.flatten(0, -2), target.flatten())
@@ -153,6 +155,8 @@ def test_lm_head(
             device=distributed.device,
         )
         kwargs[f"{config.distillation_model}_logits"] = target
+        if loss_mask is not None:
+            kwargs[LanguageModelKwargs.loss_mask] = loss_mask
 
     if config.tie_word_embeddings or config.prediction_heads > 1:
         logit_weight = (
