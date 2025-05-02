@@ -52,11 +52,9 @@ class HybridModelCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
     @classmethod
     def _create_config_converters(cls) -> list[ParamConverter]:
         if cls.block_pattern is not None:
-            block_converter = (
-                RenameParamConverter(
-                    fast_llm_names=(("hybrid_block_layout",),),
-                    export_names=(("hybrid_block_layout",),),
-                ),
+            block_converter = RenameParamConverter(
+                fast_llm_names=(("hybrid_block_layout",),),
+                export_names=(("hybrid_block_layout",),),
             )
         else:
             block_converter = ConstantImportParamConverter(
