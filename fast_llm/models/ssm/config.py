@@ -172,9 +172,7 @@ class PretrainedHybridSSMModelConfig(PretrainedFastLLMModelConfig):
 class HybridTrainerConfig(PretrainedHybridSSMModelConfig, TrainerConfig):
     data: GPTDataConfig = FieldUpdate(default_factory=GPTDataConfig)
     batch: GPTBatchConfig = FieldUpdate(default_factory=GPTBatchConfig)
-    reference_models: dict[str, PretrainedGPTModelConfig] = (
-        FieldUpdate()
-    )  # TODO: make sure any reference mdoel can be suported
+    reference_models: dict[str, PretrainedGPTModelConfig] = FieldUpdate()
 
     @classmethod
     def get_trainer_class(cls) -> type["SSMTrainer"]:
@@ -190,9 +188,9 @@ class HybridTrainerConfig(PretrainedHybridSSMModelConfig, TrainerConfig):
             Assert.eq(self.reference_models.keys(), {name})
         if self.model.base_model.use_absolute_position_embeddings:
             Assert.geq(self.model.base_model.num_absolute_position_embeddings, self.batch.sequence_length)
-        if self.model.base_model.distillation_model is not None:
-            # TODO: Support loss masking for distillation?
-            assert not self.batch.use_loss_masking_spans
+        # if self.model.base_model.distillation_model is not None:
+        #     # TODO: Support loss masking for distillation?
+        #     assert not self.batch.use_loss_masking_spans
         for reference_model in self.reference_models.values():
             Assert.none(reference_model.model.base_model.distillation_model)
             # TODO: Support more LM head features.
