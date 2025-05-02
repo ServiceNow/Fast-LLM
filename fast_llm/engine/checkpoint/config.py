@@ -4,6 +4,7 @@ import enum
 import logging
 import pathlib
 import typing
+import warnings
 
 import yaml
 
@@ -78,7 +79,7 @@ class FastLLMCheckpointFormat(CheckpointFormat):
         return FastLLMCheckpointHandler
 
 
-class ModelConfigType(str, enum.Enum):
+class ModelConfigType(enum.StrEnum):
     none = "none"
     model = "model"
     fast_llm = "fast_llm"
@@ -204,7 +205,19 @@ class CheckpointLoadMetadataConfig(CheckpointPathConfigBase):
     )
 
     def _validate(self) -> None:
+        if self.load_config == "architecture":
+            raise NotImplementedError("load_config==`architecture` is no longer supported.")
         super()._validate()
+        if (
+            self.format in (DistributedCheckpointFormat, FastLLMCheckpointFormat)
+            and "load_config" not in self._explicit_fields
+        ):
+            warnings.warn(
+                "The default behaviour for model configuration loading has changed (May 2025)."
+                "All model parameters are now loaded, not just the architecture parameters."
+                "Please make sure this doesn't lead to unexpected breaking changes."
+                "Suppress this warning by setting `load_config = model` explicitly.",
+            )
         if self.format.enforce_architecture_match:
             assert self.load_config.load_base_model
 
