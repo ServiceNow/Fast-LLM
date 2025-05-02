@@ -25,7 +25,7 @@ The following table summarizes the behavior of `zero_stage`:
 | `2`           | Replicated | Sharded    | Sharded          | Moderate[^1]              |
 | `3`           | Sharded    | Sharded    | Sharded          | High[^2]                  |
 
-[^1]: Communication overhead for ZeRO Stage 2 is similar to Stage 1, except during (depth-first) gradient accumulation when additional all-reduce operations occur.
+[^1]: Communication overhead for ZeRO Stage 2 is similar to Stage 1, except during (depth-first) gradient accumulation when additional reduce-scatter operations occur.
 [^2]: Communication overhead for ZeRO Stage 3 is higher than Stage 2, especially during (depth-first) gradient accumulation.
 
 Optimizer states are always sharded by default. ZeRO Stage 0 (full replication) is not supported.
@@ -55,21 +55,43 @@ Beyond `zero_stage`, Fast-LLM offers additional multi-stage settings for fine-tu
 
 ### Buffers
 
-When gradients or weights are sharded, Fast-LLM accumulates partial results in shared *buffers* during forward and backward passes, separately for gradients and weights. These buffers reduce communication overhead by batching gradient or weight updates across GPUs or nodes. The options `num_grad_buffers` and `num_weight_buffers` control the number of buffers used for gradients and weights, respectively.
+Fast-LLM streams sharded tensors through communication buffers, allowing network transfers to overlap with GPU computation. These buffers temporarily store gradient or weight shards during forward and backward passes, improving training throughput by hiding communication latency.
 
-By default, Fast-LLM assigns one gradient and weight buffer per stage, where the number of stages equals the total number of logical partitions (stages) of the model. This enables overlapping communication (e.g., data transfers between GPUs or nodes) with computation (actual processing done by each GPU or node). Lower values (e.g., 1) reduce this overlap, potentially increasing communication waiting times.
+Buffers are only relevant when gradients or parameters are actually sharded, depending on your ZeRO stage:
 
-Increasing `num_grad_buffers` or `num_weight_buffers` provides more room for overlapping communication with compute. This can help in some setups, especially when stages are imbalanced, but generally isn't necessary. Note that this does not reduce total communication; it just shifts when it happens.
+| Buffer type      | Active when       | Config key           | Default |
+| ---------------- | ----------------- | -------------------- | ------- |
+| Gradient buffers | ZeRO stage 2 or 3 | `num_grad_buffers`   | `1`     |
+| Weight buffers   | ZeRO stage 3 only | `num_weight_buffers` | `1`     |
 
-If you want explicit control, you can override these values:
+- **Gradient buffers (`num_grad_buffers`)**:
+
+    - Applies when gradients are sharded (ZeRO stages 2 and 3).
+    - Default (`1`) means no overlap (gradients are communicated layer-by-layer).
+    - Setting to `2` enables *double-buffering* (second buffer lets gradients transfer asynchronously while the GPU computes the next layer). Values of `3` or more add additional buffers, further increasing overlap at the cost of extra GPU memory per additional buffer.
+
+- **Weight buffers (`num_weight_buffers`)**:
+
+    - Applies only at ZeRO stage 3 when parameters (weights) are sharded.
+    - Default (`1`) means no overlap (parameters communicated without asynchronous transfer).
+    - Setting to `2` enables *double-buffering* for weights (second buffer lets parameter transfers overlap with GPU computation). Higher values add more overlap, consuming additional GPU memory per buffer.
+
+These buffer settings have no effect when their respective tensors aren't sharded:
+
+- At ZeRO stage **1**, gradients and parameters are fully replicated, so both `num_grad_buffers` and `num_weight_buffers` are ignored.
+- At ZeRO stage **2**, parameters remain replicated; thus, only `num_grad_buffers` is relevant.
+
+Buffers do not reduce the total amount of communication, Rather, they shift when communication occurs, improving throughput if your training is network-bound and you have spare GPU memory.
+
+If you want explicit control, you can override these values in your configuration:
 
 ```yaml
 multi_stage:
-  num_grad_buffers: 3
-  num_weight_buffers: 2
+  num_grad_buffers: 3        # ZeRO 2 or 3
+  num_weight_buffers: 2      # ZeRO 3 only
 ```
 
-Increasing `num_grad_buffers` to `3` or `4` decreases inter-GPU communication frequency, potentially improving throughput—provided sufficient GPU memory is available.
+Adjust buffers only if you observe GPU utilization drops due to frequent waiting for network transfers, and have GPU memory to spare. Start with defaults (`1`) and tune upward cautiously.
 
 ### Stage Layout Control
 
@@ -91,4 +113,4 @@ Defaults work well in most cases:
 - **`stages_per_pipeline_stage`**: Intended to specify how many stages run per pipeline worker when pipeline parallelism is active.
 
     !!! warning
-        This feature is currently **not implemented**. Changing this value has no effect.
+        This feature is currently **not implemented**. Changing this value will currently cause a validation error.
