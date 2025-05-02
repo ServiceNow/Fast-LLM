@@ -92,8 +92,8 @@ def test_preference_logps(batch_size, seq_length, vocab_size):
     chosen_logps, rejected_logps, selected_log_probs = _compute_logprobs_for_preference_spans(
         logits=logits,
         targets=targets[:, 1:],
-        chosen_span=chosen_span,
-        rejected_span=rejected_span,
+        chosen_spans=chosen_span,
+        rejected_spans=rejected_span,
     )
 
     ref_logps = ref_log_probs_from_logits(logits[:, :-1, :], targets[:, 1:])
