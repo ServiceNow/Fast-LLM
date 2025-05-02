@@ -30,8 +30,8 @@ logger = logging.getLogger(__name__)
 class GPTSample:
     token_ids: np.ndarray
     loss_masking_spans: np.ndarray | None = None
-    chosen_loss_masking_span: np.ndarray | None = None
-    rejected_loss_masking_span: np.ndarray | None = None
+    chosen_span: np.ndarray | None = None
+    rejected_span: np.ndarray | None = None
     sequence_lengths: np.ndarray | None = None
 
 
@@ -116,7 +116,7 @@ class GPTSampledIndexedDataset(SampledDataset):
             self._yaml_path = base_path.with_suffix(".yaml")
 
             # keep document sizes and len filtered docs for preference loss masking
-            if self._parameters.use_preference_loss_masking_spans:
+            if self._parameters.use_preference_loss_spans:
                 self._document_sizes = MemmapArray(base_path.with_name(base_path.name + "_doc_sizes.npy"))
                 self._doc_length_filtered_indicies = MemmapArray(
                     base_path.with_name(base_path.name + "_doc_length_filtered_indices.npy")
@@ -159,7 +159,7 @@ class GPTSampledIndexedDataset(SampledDataset):
         # We produce sequences of length `self._sequence_length + extra_tokens` so the last token has a label for all prediction heads,
         # but in case of truncations we also include those last labels in the following sample,
         # so we need `sequence_length * num_samples + extra_tokens` tokens in total.
-        if self._parameters.use_preference_loss_masking_spans:
+        if self._parameters.use_preference_loss_spans:
             documents_per_epoch = (~long_docs_filter).sum().item()
             num_epochs = math.ceil(self._parameters.num_samples / documents_per_epoch)
         elif self._truncate_documents:
@@ -202,7 +202,7 @@ class GPTSampledIndexedDataset(SampledDataset):
         if self._yaml_path is not None and self._yaml_path.is_file():
             loaded_yaml_data = yaml.safe_load(self._yaml_path.open("r"))
             self._load_yaml_data(yaml_data)
-            if not self._truncate_documents and not self._parameters.use_preference_loss_masking_spans:
+            if not self._truncate_documents and not self._parameters.use_preference_loss_spans:
                 del loaded_yaml_data["unshuffled_tokens"]
 
             if loaded_yaml_data != yaml_data:
@@ -265,7 +265,7 @@ class GPTSampledIndexedDataset(SampledDataset):
         else:
             raise NotImplementedError(f"Unknown shuffling type: {self._config.shuffle}")
 
-        if self._parameters.use_preference_loss_masking_spans:
+        if self._parameters.use_preference_loss_spans:
             yaml_data["unshuffled_tokens"] = 0  # not used, ignore
 
             # index of all documents less than seq length long
@@ -382,7 +382,7 @@ class GPTSampledIndexedDataset(SampledDataset):
         """
         self._lazy_load()
 
-        if self._parameters.use_preference_loss_masking_spans:
+        if self._parameters.use_preference_loss_spans:
             if index < self._unshuffled_documents:
                 document_index = self._doc_length_filtered_indicies[index % self._documents_per_epoch]
             else:
@@ -395,13 +395,13 @@ class GPTSampledIndexedDataset(SampledDataset):
                 offset=0,
                 length=self._document_sizes[document_index],
                 use_loss_masking_spans=self._parameters.use_loss_masking_spans,
-                use_preference_loss_masking_spans=self._parameters.use_preference_loss_masking_spans,
+                use_preference_loss_spans=self._parameters.use_preference_loss_spans,
             )
 
-            chosen_loss_masking_span_end = sample.chosen_loss_masking_span[1] + 1
+            chosen_span_end = sample.chosen_span[1] + 1
             sequence_lengths = [
-                chosen_loss_masking_span_end,
-                len(sample.token_ids) - chosen_loss_masking_span_end,
+                chosen_span_end,
+                len(sample.token_ids) - chosen_span_end,
             ]
 
             # compute padding size
@@ -410,7 +410,8 @@ class GPTSampledIndexedDataset(SampledDataset):
             sequence_lengths.append(self._parameters.sequence_length + 1 - len(sample.token_ids))
             sample.token_ids = padding
 
-            sample.sequence_lengths = np.array(sequence_lengths)
+            if not self._parameters.cross_document_attention:
+                sample.sequence_lengths = np.array(sequence_lengths)
 
             return sample
 
@@ -519,7 +520,7 @@ class GPTSampledIndexedDataset(SampledDataset):
     def _load_yaml_data(self, data: dict[str, typing.Any]) -> None:
         self._documents_per_epoch = data["dataset"]["documents_per_epoch"]
 
-        if self._parameters.use_preference_loss_masking_spans:
+        if self._parameters.use_preference_loss_spans:
             data["unshuffled_tokens"] = 0  # not used, ignore
         elif "unshuffled_tokens" not in data:
             # Backward compatibility
@@ -552,7 +553,7 @@ class LegacyGPTSampledIndexedDataset(SampledDataset):
             )
         self._config = sampling.config
         self._parameters = sampling.parameters
-        if self._parameters.use_preference_loss_masking_spans:
+        if self._parameters.use_preference_loss_spans:
             raise NotImplementedError("Legacy sampling does not support preference loss masking.")
 
         if sampling.cache_directory is None:

@@ -89,9 +89,9 @@ class PreferenceSpanPreprocessor(Preprocessor):
         if LanguageModelKwargs.chosen_spans not in kwargs or LanguageModelKwargs.rejected_spans not in kwargs:
             raise ValueError("Expected chosen spans or rejected spans to be found within the batch.")
 
-        chosen_loss_masking_spans = kwargs[LanguageModelKwargs.chosen_spans]
+        chosen_spans = kwargs[LanguageModelKwargs.chosen_spans]
         chosen_valid_spans = []
-        for spans in chosen_loss_masking_spans:
+        for spans in chosen_spans:
             if not spans.numel():
                 continue
             # only keep spans within the sequence or partially within the sequence
@@ -105,9 +105,9 @@ class PreferenceSpanPreprocessor(Preprocessor):
                 chosen_valid_spans.append(valid_spans)
         kwargs[LanguageModelKwargs.chosen_spans] = chosen_valid_spans
 
-        rejected_loss_masking_spans = kwargs[LanguageModelKwargs.rejected_spans]
+        rejected_spans = kwargs[LanguageModelKwargs.rejected_spans]
         rejected_valid_spans = []
-        for spans in rejected_loss_masking_spans:
+        for spans in rejected_spans:
             if not spans.numel():
                 continue
             # only keep spans within the sequence or partially within the sequence

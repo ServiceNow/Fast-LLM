@@ -148,7 +148,7 @@ class GPTMemmapDataset(GPTIndexedDataset):
         offset: int = 0,
         length: int | None = None,
         use_loss_masking_spans: bool = False,
-        use_preference_loss_masking_spans: bool = False,
+        use_preference_loss_spans: bool = False,
     ) -> GPTSample:
         token_ids = np.frombuffer(
             self._bin_buffer,
@@ -172,7 +172,7 @@ class GPTMemmapDataset(GPTIndexedDataset):
         chosen_span = None
         rejected_span = None
 
-        if use_preference_loss_masking_spans:
+        if use_preference_loss_spans:
             if not self._has_preference_spans:
                 raise ValueError("No preference spans found in memmap dataset.")
             elif self._has_preference_spans and self._chosen_spans is None:
@@ -203,8 +203,8 @@ class GPTMemmapDataset(GPTIndexedDataset):
         return GPTSample(
             token_ids=token_ids,
             loss_masking_spans=sample_spans,
-            chosen_loss_masking_span=chosen_span,
-            rejected_loss_masking_span=rejected_span,
+            chosen_span=chosen_span,
+            rejected_span=rejected_span,
         )
 
     @property
@@ -267,10 +267,10 @@ class GPTMemmapDataset(GPTIndexedDataset):
                 if document.loss_masking_spans is not None:
                     num_spans.append(len(document.loss_masking_spans))
                     spans.append(document.loss_masking_spans)
-                if document.chosen_loss_masking_span is not None:
-                    chosen_spans.append(document.chosen_loss_masking_span)
-                if document.rejected_loss_masking_span is not None:
-                    rejected_spans.append(document.rejected_loss_masking_span)
+                if document.chosen_span is not None:
+                    chosen_spans.append(document.chosen_span)
+                if document.rejected_span is not None:
+                    rejected_spans.append(document.rejected_span)
                 offset += doc_length * np.dtype(dtype).itemsize
                 num_documents += 1
 

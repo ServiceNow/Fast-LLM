@@ -159,10 +159,8 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
                 for item in tqdm.tqdm(shard_dataset, desc=f"Saving shard {shard_idx}", unit="docs"):
                     yield GPTSample(
                         token_ids=np.array(item["input_ids"], dtype=self._data_type.numpy),
-                        chosen_loss_masking_span=np.array(item["chosen_token_spans"], dtype=np.int32).reshape(-1, 2),
-                        rejected_loss_masking_span=np.array(item["rejected_token_spans"], dtype=np.int32).reshape(
-                            -1, 2
-                        ),
+                        chosen_span=np.array(item["chosen_token_spans"], dtype=np.int32).reshape(-1, 2),
+                        rejected_span=np.array(item["rejected_token_spans"], dtype=np.int32).reshape(-1, 2),
                     )
             else:
                 for item in tqdm.tqdm(shard_dataset, desc=f"Saving shard {shard_idx}", unit="docs"):

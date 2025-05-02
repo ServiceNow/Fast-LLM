@@ -2,7 +2,7 @@ import torch
 
 
 def _compute_logprobs_for_preference_spans(
-    logits: torch.Tensor, targets: torch.Tensor, chosen_span: torch.Tensor, rejected_span: torch.Tensor
+    logits: torch.Tensor, targets: torch.Tensor, chosen_spans: torch.Tensor, rejected_spans: torch.Tensor
 ):
     assert torch.all(targets < logits.size(-1)), "Target out of vocab range"
 
@@ -13,12 +13,12 @@ def _compute_logprobs_for_preference_spans(
 
     # apply chosen mask
     chosen_logp = 0
-    for idx, span in enumerate(chosen_span):
+    for idx, span in enumerate(chosen_spans):
         chosen_logp += selected_log_probs[idx][span[0].item() : span[1].item() + 1].sum()
 
     # apply rejected mask
     rejected_logp = 0
-    for idx, span in enumerate(rejected_span):
+    for idx, span in enumerate(rejected_spans):
         rejected_logp += selected_log_probs[idx][span[0].item() : span[1].item() + 1].sum()
 
     return chosen_logp, rejected_logp, selected_log_probs
@@ -44,8 +44,8 @@ def compute_dpo_loss(
     logits: torch.Tensor,
     targets: torch.Tensor,
     reference_model_logits: torch.Tensor,
-    chosen_span: torch.Tensor,
-    rejected_span: torch.Tensor,
+    chosen_spans: torch.Tensor,
+    rejected_spans: torch.Tensor,
     beta: float,
     grad_output: float | None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
@@ -54,11 +54,11 @@ def compute_dpo_loss(
         reference_model_logits_ = reference_model_logits.float().detach()
 
         policy_chosen_logps, policy_rejected_logps, _ = _compute_logprobs_for_preference_spans(
-            logits_, targets, chosen_span, rejected_span
+            logits_, targets, chosen_spans, rejected_spans
         )
 
         reference_chosen_logps, reference_rejected_logps, _ = _compute_logprobs_for_preference_spans(
-            reference_model_logits_, targets, chosen_span, rejected_span
+            reference_model_logits_, targets, chosen_spans, rejected_spans
         )
 
         losses = _compute_dpo_loss(

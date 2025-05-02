@@ -52,8 +52,8 @@ def test_write_memmap_preference_dataset(dtype):
     documents = [
         GPTSample(
             token_ids=np.random.randint(vocab_size, size=max_seq_length).astype(dtype),
-            chosen_loss_masking_span=generate_valid_span(max_seq_length=max_seq_length),
-            rejected_loss_masking_span=generate_valid_span(max_seq_length=max_seq_length),
+            chosen_span=generate_valid_span(max_seq_length=max_seq_length),
+            rejected_span=generate_valid_span(max_seq_length=max_seq_length),
         )
         for _ in range(num_samples)
     ]
@@ -62,18 +62,18 @@ def test_write_memmap_preference_dataset(dtype):
         GPTMemmapDataset.write_dataset(prefix=prefix, documents=documents)
         dataset = GPTMemmapDataset(name="foo", prefix=prefix)
         for i, document in enumerate(documents):
-            dataset_item = dataset.get(i, use_preference_loss_masking_spans=True)
+            dataset_item = dataset.get(i, use_preference_loss_spans=True)
             assert np.array_equal(
                 dataset_item.token_ids, document.token_ids, equal_nan=True
             ), f"Token ids mismatch for document {i}: {document} != {dataset.get(i)}."
 
             assert np.array_equal(
-                dataset_item.chosen_loss_masking_span, document.chosen_loss_masking_span, equal_nan=True
-            ), f"Chosen loss masking spans mismatch for document {i}: {document.chosen_loss_masking_span} != {dataset.get(i).chosen_loss_masking_span}."
+                dataset_item.chosen_span, document.chosen_span, equal_nan=True
+            ), f"Chosen loss masking spans mismatch for document {i}: {document.chosen_span} != {dataset.get(i).chosen_span}."
 
             assert np.array_equal(
-                dataset_item.rejected_loss_masking_span, document.rejected_loss_masking_span, equal_nan=True
-            ), f"Rejected loss masking spans mismatch for document {i}: {document.rejected_loss_masking_span} != {dataset.get(i).rejected_loss_masking_span}."
+                dataset_item.rejected_span, document.rejected_span, equal_nan=True
+            ), f"Rejected loss masking spans mismatch for document {i}: {document.rejected_span} != {dataset.get(i).rejected_span}."
 
 
 def test_load_metadata_from_hub():

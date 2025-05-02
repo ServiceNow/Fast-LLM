@@ -252,10 +252,10 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                 tokens = batch.token_ids[:, sequence_k - sequence_q : sequence_k].contiguous()
             if batch.sequence_lengths is not None:
                 kwargs_meta[TransformerKwargs.sequence_lengths] = batch.sequence_lengths
-            if batch.chosen_loss_masking_spans is not None:
-                kwargs_meta[LanguageModelKwargs.chosen_spans] = batch.chosen_loss_masking_spans
-            if batch.rejected_loss_masking_spans is not None:
-                kwargs_meta[LanguageModelKwargs.rejected_spans] = batch.rejected_loss_masking_spans
+            if batch.chosen_spans is not None:
+                kwargs_meta[LanguageModelKwargs.chosen_spans] = batch.chosen_spans
+            if batch.rejected_spans is not None:
+                kwargs_meta[LanguageModelKwargs.rejected_spans] = batch.rejected_spans
 
             # TODO: Add pasts/presents to meta input?
             # Use lists as pointers so `past_key_values` is populated during the previous micro_sequence.
