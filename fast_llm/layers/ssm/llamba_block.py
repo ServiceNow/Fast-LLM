@@ -13,7 +13,7 @@ class LlambaBlock(BaseBlock):
     A transformer-like decoder block with a SSM mixer, see https://arxiv.org/abs/2502.14458
     """
 
-    name = "Llamba block"
+    _name = "Llamba block"
     _mixer_module_name = "mixer"
 
     def __init__(
