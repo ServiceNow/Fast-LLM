@@ -203,6 +203,13 @@ class LanguageModelBaseConfig(LanguageModelArchitectureConfig, BaseModelConfig):
         hint=FieldHint.feature,
         valid=check_field(Assert.geq, 0),
     )
+    embeddings_lr_scale: float | None = Field(
+        default=None,
+        desc="Learning rate scale for the word embeddings.",
+        doc="May be used to freeze some layers by setting their scale to zero.",
+        hint=FieldHint.feature,
+        valid=skip_valid_if_none(check_field(Assert.geq, 0)),
+    )
 
     def _validate(self) -> None:
         self.transformer.validate()
