@@ -1,3 +1,4 @@
+import abc
 import enum
 import typing
 
@@ -6,6 +7,8 @@ from fast_llm.engine.base_model.config import BaseModelConfig
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
+    import torch
+
     from fast_llm.engine.config_utils.tensor_space import TensorDim
     from fast_llm.layers.common.linear import LinearBase, LinearLike
     from fast_llm.layers.common.normalization import LayerNorm, RMSNorm
@@ -23,26 +26,30 @@ class NormalizationImplementation(str, enum.Enum):
     triton = "triton"
 
 
-class NormalizationType(str, enum.Enum):
-    """
-    An enum for the available normalization layers.
-    TODO: Add no_norm type?
-    """
+@config_class()
+class NormalizationConfig(BaseModelConfig):
+    pass
 
-    layer_norm = "layer_norm"
-    rms_norm = "rms_norm"
+    @abc.abstractmethod
+    def get_layer(self, hidden_dim: "TensorDim") -> torch.nn.Module:
+        pass
 
 
 @config_class()
-class NormalizationConfig(BaseModelConfig):
+class NoNormalizationConfig(NormalizationConfig):
     _abstract = False
 
-    # Normalization type
-    type: NormalizationType = Field(
-        default=NormalizationType.layer_norm,
-        desc="The type of normalization to use, for example Layer Norm or RMS Norm.",
-        hint=FieldHint.architecture,
-    )
+    @abc.abstractmethod
+    def get_layer(self, hidden_dim: "TensorDim") -> torch.nn.Module:
+        return torch.nn.Identity()
+
+
+@config_class()
+class LayerNormBaseConfig(NormalizationConfig):
+    """
+    Common configuration for layer norm and rms norm
+    """
+
     # TODO: Rename to normalization_epsilon
     epsilon: float = Field(
         default=1e-5,
@@ -69,7 +76,6 @@ class NormalizationConfig(BaseModelConfig):
     )
 
     def get_layer(self, hidden_dim: "TensorDim") -> "LayerNorm | RMSNorm":
-        from fast_llm.layers.common.normalization import LayerNorm, RMSNorm
         from fast_llm.tensor import init_uniform_
 
         kwargs = {
@@ -83,14 +89,12 @@ class NormalizationConfig(BaseModelConfig):
             kwargs["weight_init_method"] = init_uniform_(
                 mean - self.initialization_range, mean + self.initialization_range
             )
-        if self.type == NormalizationType.layer_norm:
-            if self.initialization_range:
-                kwargs["bias_init_method"] = init_uniform_(-self.initialization_range, self.initialization_range)
-            return LayerNorm(**kwargs)
-        elif self.type == NormalizationType.rms_norm:
-            return RMSNorm(**kwargs)
-        else:
-            raise ValueError(self.type)
+        return self.module_class(**kwargs)
+
+    @property
+    @abc.abstractmethod
+    def module_class(self):
+        pass
 
     @classmethod
     def _from_dict(
@@ -107,21 +111,52 @@ class NormalizationConfig(BaseModelConfig):
         return super()._from_dict(default, strict, flat)
 
 
-class PeftType(str, enum.Enum):
-    # TODO : Use a dynamic config type instead.
-    none = "none"
-    lora = "lora"
+@config_class()
+class LayerNormalizationConfig(LayerNormBaseConfig):
+    _abstract = False
+
+    @property
+    def module_class(self):
+        from fast_llm.layers.common.normalization import LayerNorm
+
+        return LayerNorm
+
+
+@config_class()
+class RMSNormalizationConfig(LayerNormBaseConfig):
+    _abstract = False
+
+    @property
+    def module_class(self):
+        from fast_llm.layers.common.normalization import RMSNorm
+
+        return RMSNorm
+
+
+NormalizationConfig.register_subclass("none", NoNormalizationConfig)
+NormalizationConfig.register_subclass("layer_norm", LayerNormalizationConfig)
+NormalizationConfig.register_subclass("rms_norm", RMSNormalizationConfig)
 
 
 @config_class()
 class PeftConfig(BaseModelConfig):
+    @abc.abstractmethod
+    def apply_linear(self, linear: "LinearBase", **kwargs) -> "LinearLike":
+        pass
+
+
+@config_class()
+class NoPeftConfig(PeftConfig):
     _abstract = False
 
-    type: PeftType = Field(
-        default=PeftType.none,
-        desc="The type of parameter-efficient fine tuning to use Only LoRA is supported at the moment.",
-        hint=FieldHint.core,
-    )
+    def apply_linear(self, linear: "LinearBase", **kwargs) -> "LinearLike":
+        return linear
+
+
+@config_class()
+class LoRAConfig(PeftConfig):
+    _abstract = False
+
     rank: int = Field(
         default=8,
         desc="The LoRA rank, i.e. the size of the intermediate dimension.",
@@ -139,20 +174,15 @@ class PeftConfig(BaseModelConfig):
     )
 
     def apply_linear(self, linear: "LinearBase", **kwargs) -> "LinearLike":
-        if self.type == PeftType.none:
-            return linear
-        elif self.type == PeftType.lora:
-            from fast_llm.layers.common.peft import lora_linear
+        from fast_llm.layers.common.peft import lora_linear
 
-            # TODO: Init method?
-            return lora_linear(
-                linear,
-                linear.weight.param_init_method,
-                linear.weight.param_init_method,
-                self.rank,
-                self.alpha,
-                self.dropout,
-                **kwargs,
-            )
-        else:
-            raise NotImplementedError(self.type)
+        # TODO: Init method?
+        return lora_linear(
+            linear,
+            linear.weight.param_init_method,
+            linear.weight.param_init_method,
+            self.rank,
+            self.alpha,
+            self.dropout,
+            **kwargs,
+        )

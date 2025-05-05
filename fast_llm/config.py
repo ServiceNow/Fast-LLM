@@ -317,7 +317,7 @@ class Config:
     _setting_implicit_default: bool | None = Field(init=False, repr=False)
 
     # A registry for all the config classes.
-    _registry: typing.ClassVar[Registry[str, type["Config"]]] = Registry[str, type["Config"]]("config", {})
+    _registry: typing.ClassVar[Registry[str, type[typing.Self]]]
     type: str | None = Field(
         default=None,
         desc="The config class name.",
@@ -399,8 +399,8 @@ class Config:
         self._check_abstract()
         errors = []
         with self._set_implicit_default(None):
-            if self.type is None:
-                self.type = self.__class__.__name__
+            # Set the type field, or override it to the provided type with the actual class for clarity and safety.
+            self.type = self.__class__.__name__
             # Should be handled in `from_dict`, but can fail if instantiating directly.
             Assert.is_(self._registry[self.type], self.__class__)
             for name, field in self.fields():
@@ -909,15 +909,40 @@ class Config:
                 f"{cls.__name__} hasn't been validated. Make sure to use the @config_class decorator."
             )
 
+    @classmethod
+    def register_subclass(cls, name: str, cls_: type[typing.Self]) -> None:
+        cls._registry[cls.__name__] = cls
+
+    @classmethod
+    def get_subclass(cls, name):
+        # TODO: Make it case-insensitive?
+        cls_ = None
+        for base_class in cls.__mro__:
+            if issubclass(base_class, Config) and name in base_class._registry:
+                if cls_ is None:
+                    cls_ = base_class._registry[name]
+                    if not issubclass(cls_, cls):
+                        raise KeyError(f" {cls_.__name__} is not a subclass of {cls.__name__} (from type {name})")
+                elif base_class._registry[name] is not cls_:
+                    # We explicitly prevent ambiguous classes to ensure safe and unambiguous serialization.
+                    # TODO: Only really need to avoid conflict with `Config`'s registry, relax this a bit?
+                    raise RuntimeError(
+                        f"Ambiguous type `{name}` for base class {cls.__name__}."
+                        f" ({cls_.__name__} vs {base_class._registry[name]})"
+                    )
+        if cls_ is None:
+            raise KeyError(f"Unknown type {name} for base class {cls.__name__}")
+        return cls_
+
     def __init_subclass__(cls):
         """
         We need to postpone validation until the class has been processed by the dataclass wrapper.
         """
-        Assert.is_(cls._registry, Config._registry)
-        cls._registry[cls.__name__] = cls
+        cls._registry = Registry[str, type[cls]](cls.__name__, {})
+        Config._registry[cls.__name__] = cls
         short_name = cls.__name__.strip("Config")
         if short_name != cls.__name__:
-            cls._registry[short_name] = cls
+            Config._registry[short_name] = cls
         for base_class in cls.__mro__:
             if issubclass(base_class, Config):
                 assert cls.__class_validated__, (

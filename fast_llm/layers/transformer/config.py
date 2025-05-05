@@ -1,3 +1,4 @@
+import abc
 import enum
 import functools
 import logging
@@ -11,7 +12,13 @@ from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.engine.config_utils.tensor_space import CompositeTensorDim, TensorDim, TensorSpace
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
 from fast_llm.functional.config import ActivationType, MLPRecomputeLevel, TritonConfig
-from fast_llm.layers.common.config import NormalizationConfig, PeftConfig, PeftType
+from fast_llm.layers.common.config import (
+    LayerNormalizationConfig,
+    LoRAConfig,
+    NoPeftConfig,
+    NormalizationConfig,
+    PeftConfig,
+)
 from fast_llm.utils import Assert, div
 
 if typing.TYPE_CHECKING:
@@ -88,21 +95,21 @@ class TransformerLossNames:
     router_z_loss = "router_z_loss"
 
 
-class RotaryEmbeddingType(str, enum.Enum):
-    none = "none"
-    default = "default"
-    llama3 = "llama3"
-    yarn = "yarn"
+@config_class()
+class RotaryConfig(BaseModelConfig):
+    # TODO: Move rotary to its own submodule.
+
+    @property
+    def enabled(self) -> bool:
+        return False
 
 
 @config_class()
-class RotaryConfig(BaseModelConfig):
+class NoRotaryConfig(RotaryConfig):
     _abstract = False
-    type: RotaryEmbeddingType = Field(
-        default=RotaryEmbeddingType.none,
-        desc="The type of rotary embedding to use. Choices: none, default, llama3.",
-        hint=FieldHint.architecture,
-    )
+
+
+class DefaultRotaryConfig(RotaryConfig):
     theta: float = Field(
         default=10000,
         desc="Scale for the rotary positional embeddings",
@@ -114,48 +121,51 @@ class RotaryConfig(BaseModelConfig):
         desc="Enable the triton implementation of the rotary embeddings. Affects the model layout.",
         hint=FieldHint.architecture,
     )
-    # TODO: These are not really architecture parameters, but we want to import them from huggingface.
-    scale_factor: float = Field(
-        default=8.0, desc="Scaling factor for llama3-type scaling.", hint=FieldHint.architecture
-    )
-    low_frequency_factor: float = Field(
-        default=1.0, desc="Low frequency factor for llama3-type scaling.", hint=FieldHint.feature
-    )
-    high_frequency_factor: float = Field(
-        default=4.0, desc="High frequency factor for llama3-type scaling.", hint=FieldHint.feature
-    )
-    original_context_length: int = Field(
-        default=8192, desc="Original context length for llama3/yarn-type scaling.", hint=FieldHint.feature
-    )
-    attention_factor: None | float = Field(
-        default=None,
-        desc="Attention factor for yarn-type scaling.",
-        hint=FieldHint.feature,
-    )
-    beta_fast: float = Field(
-        default=32.0,
-        desc="Beta-fast for yarn-type scaling.",
-        hint=FieldHint.feature,
-    )
-    beta_slow: float = Field(
-        default=1.0,
-        desc="Beta-slow for yarn-type scaling.",
-        hint=FieldHint.feature,
-    )
 
     @property
     def enabled(self) -> bool:
-        return self.type != RotaryEmbeddingType.none
+        return True
 
     @property
     def complex_format(self) -> bool:
         # TODO: Make a backup implementation that doesn't affect the layout.
-        return self.enabled and not self.triton
+        return not self.triton
 
     def _validate(self) -> None:
         super()._validate()
         if self.triton and not TritonConfig.TRITON_ENABLED:
             warnings.warn("Triton is disabled, but the triton rotary kernel will be used anyway.")
+
+
+class Llama3RotaryConfig(DefaultRotaryConfig):
+    # TODO: Add descriptions.
+    scale_factor: float = Field(default=8.0, hint=FieldHint.feature)
+    low_frequency_factor: float = Field(default=1.0, hint=FieldHint.feature)
+    high_frequency_factor: float = Field(default=4.0, hint=FieldHint.feature)
+    original_context_length: int = Field(default=8192, hint=FieldHint.feature)
+
+
+class YarnRotaryConfig(DefaultRotaryConfig):
+    # TODO: Add descriptions.
+    attention_factor: None | float = Field(
+        default=None,
+        hint=FieldHint.feature,
+    )
+    beta_fast: float = Field(
+        default=32.0,
+        hint=FieldHint.feature,
+    )
+    beta_slow: float = Field(
+        default=1.0,
+        hint=FieldHint.feature,
+    )
+    original_context_length: int = Field(default=8192, hint=FieldHint.feature)
+
+
+RotaryConfig.register_subclass("none", RotaryConfig)
+RotaryConfig.register_subclass("default", DefaultRotaryConfig)
+RotaryConfig.register_subclass("llama3", Llama3RotaryConfig)
+RotaryConfig.register_subclass("yarn", YarnRotaryConfig)
 
 
 class AddLinearBiasChoices(str, enum.Enum):
@@ -175,10 +185,21 @@ class TransformerSubLayerName(str, enum.Enum):
     mlp_2 = "mlp_2"
 
 
-@config_class()
 class TransformerPeftConfig(PeftConfig):
+    @abc.abstractmethod
+    def apply_linear(self, linear: "LinearBase", layer_type: TransformerSubLayerName | None = None) -> "LinearLike":
+        pass
+
+
+@config_class()
+class TransformerNoPeftConfig(TransformerPeftConfig, NoPeftConfig):
+    _abstract = False
+
+
+@config_class()
+class TransformerLoRAConfig(LoRAConfig, TransformerPeftConfig):
     layers: list[TransformerSubLayerName] = Field(
-        default=None,
+        default=(TransformerSubLayerName.query, TransformerSubLayerName.value_),
         desc="The layers on which to apply LoRA.",
         hint=FieldHint.feature,
     )
@@ -188,77 +209,70 @@ class TransformerPeftConfig(PeftConfig):
     )
 
     def apply_linear(self, linear: "LinearBase", layer_type: TransformerSubLayerName | None = None) -> "LinearLike":
-        if self.type != PeftType.none:
-            if layer_type is None or self.layers is None or layer_type in self.layers:
-                if layer_type == TransformerSubLayerName.key:
-                    return super().apply_linear(linear, out_channel_end=div(linear._out_dim.global_size, 2))
-                elif layer_type == TransformerSubLayerName.value_:
-                    return super().apply_linear(linear, out_channel_begin=div(linear._out_dim.global_size, 2))
-                else:
-                    return super().apply_linear(linear)
-            elif self.freeze_others:
-                linear.weight.requires_grad = False
+        if layer_type is None or self.layers is None or layer_type in self.layers:
+            if layer_type == TransformerSubLayerName.key:
+                return super().apply_linear(linear, out_channel_end=div(linear._out_dim.global_size, 2))
+            elif layer_type == TransformerSubLayerName.value_:
+                return super().apply_linear(linear, out_channel_begin=div(linear._out_dim.global_size, 2))
+            else:
+                return super().apply_linear(linear)
+        elif self.freeze_others:
+            linear.weight.requires_grad = False
         return linear
 
     def apply_other(self, module: "torch.nn.Module") -> "torch.nn.Module":
-        if self.type != PeftType.none and self.freeze_others:
+        if self.freeze_others:
             for parameter in module.parameters():
                 parameter.requires_grad = False
         return module
 
     def apply_weight(self, parameter: "ParameterMeta") -> "ParameterMeta":
-        if self.type != PeftType.none and self.freeze_others:
+        if self.freeze_others:
             parameter.requires_grad = False
         return parameter
 
     def _validate(self) -> None:
-        if self.layers is None:
-            with self._set_implicit_default():
-                # Setting the default layers only whee PeFT is enabled
-                # so they don't appear when serializing the default transformer config.
-                self.layers = (
-                    [TransformerSubLayerName.query, TransformerSubLayerName.value_]
-                    if self.type == PeftType.lora
-                    else []
+        if TransformerSubLayerName.mlp_1 in self.layers or TransformerSubLayerName.mlp_2 in self.layers:
+            # TODO: Add MLP support.
+            raise NotImplementedError("LoRA not supported for MLP.")
+        if TransformerSubLayerName.dense in self.layers:
+            # TODO: Support InputParallelLinear (different output format).
+            raise NotImplementedError("LoRA not supported for attention dense layer.")
+        if (
+            sum(
+                name in self.layers
+                for name in (
+                    TransformerSubLayerName.key_value,
+                    TransformerSubLayerName.key,
+                    TransformerSubLayerName.value_,
                 )
-        if self.type != PeftType.none:
-            if TransformerSubLayerName.mlp_1 in self.layers or TransformerSubLayerName.mlp_2 in self.layers:
-                # TODO: Add MLP support.
-                raise NotImplementedError("LoRA not supported for MLP.")
-            if TransformerSubLayerName.dense in self.layers:
-                # TODO: Support InputParallelLinear (different output format).
-                raise NotImplementedError("LoRA not supported for attention dense layer.")
-            if (
-                sum(
-                    name in self.layers
-                    for name in (
-                        TransformerSubLayerName.key_value,
-                        TransformerSubLayerName.key,
-                        TransformerSubLayerName.value_,
-                    )
-                )
-                > 1
-            ):
-                raise ValueError(
-                    f"{TransformerSubLayerName.key_value.value}, {TransformerSubLayerName.key.value} and {TransformerSubLayerName.value_.value} are mutually exclusive."
-                )
+            )
+            > 1
+        ):
+            raise ValueError(
+                f"{TransformerSubLayerName.key_value.value}, {TransformerSubLayerName.key.value} and {TransformerSubLayerName.value_.value} are mutually exclusive."
+            )
+
+
+TransformerPeftConfig.register_subclass("none", TransformerNoPeftConfig)
+TransformerPeftConfig.register_subclass("lora", TransformerLoRAConfig)
 
 
 @config_class()
 class TransformerConfig(BaseModelConfig):
     _abstract = False
     normalization: NormalizationConfig = Field(
-        default_factory=NormalizationConfig,
+        default_factory=LayerNormalizationConfig,
         desc="Configuration for the normalization layers architecture.",
         hint=FieldHint.architecture,
     )
     rotary: RotaryConfig = Field(
-        default_factory=RotaryConfig,
+        default_factory=NoRotaryConfig,
         desc="Configuration for the rotary positional embeddings.",
         hint=FieldHint.architecture,
     )
     peft: TransformerPeftConfig = Field(
-        default_factory=TransformerPeftConfig,
+        default_factory=TransformerNoPeftConfig,
         desc="Configuration for the parameter-efficient fine tuning.",
         hint=FieldHint.architecture,
     )
@@ -635,7 +649,7 @@ class TransformerConfig(BaseModelConfig):
             default,
             "use_rotary_embeddings",
             ("rotary", "type"),
-            lambda x: RotaryEmbeddingType.default if x else RotaryEmbeddingType.none,
+            lambda x: "default" if x else "none",
         )
         cls._handle_renamed_field(default, "rotary_embedding_scale", ("rotary", "theta"), lambda x: math.exp(-x))
         cls._handle_renamed_field(default, "triton_rotary", ("rotary", "triton"))

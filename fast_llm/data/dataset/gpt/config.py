@@ -508,16 +508,15 @@ class GPTTestSlowDatasetConfig(GPTSampledDatasetConfig):
         return GPTRandomDatasetConfig().build_and_sample(sampling)
 
 
-# Add old names to the config registry for backward compatibility.
-# TODO v0.x: remove.
-Config._registry["dummy"] = GPTRandomDatasetConfig
-Config._registry["memmap"] = GPTMemmapDatasetConfig
-Config._registry["concatenated"] = GPTConcatenatedDatasetConfig
-Config._registry["slice"] = GPTDatasetSliceConfig
-Config._registry["sampled"] = GPTSampledDatasetUpdateConfig
-Config._registry["blended"] = GPTBlendedDatasetConfig
-Config._registry["file"] = GPTDatasetFromFileConfig
-Config._registry["concatenated_memmap"] = GPTConcatenatedMemmapConfig
-Config._registry["fim"] = GPTFimSampledDatasetConfig
-Config._registry["legacy"] = GPTLegacyDatasetConfig
-Config._registry["test_slow"] = GPTTestSlowDatasetConfig
+# Add user-friendly names for the configs.
+GPTSampledDatasetConfig.register_subclass("dummy", GPTRandomDatasetConfig)
+GPTSampledDatasetConfig.register_subclass("memmap", GPTMemmapDatasetConfig)
+GPTSampledDatasetConfig.register_subclass("concatenated", GPTConcatenatedDatasetConfig)
+GPTSampledDatasetConfig.register_subclass("slice", GPTDatasetSliceConfig)
+GPTSampledDatasetConfig.register_subclass("sampled", GPTSampledDatasetUpdateConfig)
+GPTSampledDatasetConfig.register_subclass("blended", GPTBlendedDatasetConfig)
+GPTSampledDatasetConfig.register_subclass("file", GPTDatasetFromFileConfig)
+GPTSampledDatasetConfig.register_subclass("concatenated_memmap", GPTConcatenatedMemmapConfig)
+GPTSampledDatasetConfig.register_subclass("fim", GPTFimSampledDatasetConfig)
+GPTSampledDatasetConfig.register_subclass("legacy", GPTLegacyDatasetConfig)
+GPTSampledDatasetConfig.register_subclass("test_slow", GPTTestSlowDatasetConfig)
