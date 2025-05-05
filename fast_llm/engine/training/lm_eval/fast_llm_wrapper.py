@@ -9,7 +9,6 @@ import transformers
 from tqdm.auto import tqdm
 import torch
 import torch.nn.functional as F
-import torch.distributed as dist
 
 
 # make lazy
@@ -32,6 +31,8 @@ from fast_llm.models.auto import model_registry
 from fast_llm.engine.inference.huggingface import HuggingfaceBaseModelForCausalLM
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.engine.distributed.config import DistributedConfig
+
+from fast_llm.core.distributed import scatter_object_list, gather_object
 
 
 eval_logger = logging.getLogger(__name__)
@@ -61,7 +62,7 @@ class FastLLMWrapper(TemplateLM):
         if dist_config.sequence_data_rank == 0 and dist_config.pipeline_rank == 0 and dist_config.tensor_rank == 0:
             self.group = self._distributed.batch_data_group
         else:
-            self.group = dist.GroupMember.NON_GROUP_MEMBER
+            self.group = torch.distributed.GroupMember.NON_GROUP_MEMBER
 
         # TODO: clean code which does not used parts from HFLM
         backend = "causal"
@@ -71,12 +72,6 @@ class FastLLMWrapper(TemplateLM):
         peft = None
 
         # set some inputs which are expected in HFLM but are set by our model config
-        # TODO: do _batch_config public read only property
-        max_length = model._inference_runner._batch_config.sequence_length
-        # batch_size = model._batch_config.micro_batch_size
-        batch_size = model._inference_runner._batch_config.batch_size
-        max_batch_size = batch_size
-
         self.backend = backend
 
         # set tokenizer object
@@ -110,91 +105,115 @@ class FastLLMWrapper(TemplateLM):
                 " token will be used as Gemma underperforms without it."
             )
 
-        self._max_length = max_length
+        self._max_length = model._inference_runner._batch_config.sequence_length
         self.pretrained = model
         self.delta = delta
         self.peft = peft
         self.revision = revision
+
         self.batch_schedule = 1
         self.batch_sizes = {}
-        self.max_batch_size = max_batch_size
-
-        if str(batch_size).startswith("auto"):
-            batch_size = batch_size.split(":")
-            self.batch_size_per_gpu = batch_size[0]
-            self.batch_schedule = float(batch_size[1]) if len(batch_size) > 1 else 1
-        else:
-            self.batch_size_per_gpu = int(batch_size)
+        self.batch_size_per_gpu = 16  # model._inference_runner._batch_config.micro_batch_size
+        self.batch_size = self.batch_size_per_gpu * dist_config.batch_data_parallel
+        self.max_batch_size = self.batch_size
 
         self.custom_prefix_token_id = prefix_token_id
         if prefix_token_id is not None:
             eval_logger.info(f"Loglikelihood prefix token id used in evaluation: {self.prefix_token_id}")
 
     def _model_invoke(
-        self, inputs, attn_mask, labels, max_length, stop, generate: bool, continue_generate: bool, **generation_kwargs
+        self,
+        input_ids,
+        attention_mask,
+        labels,
+        max_length,
+        stop,
+        generate: bool,
+        continue_generate: bool,
+        **generation_kwargs,
     ):
         if self.group is None or (world_size := self.group.size()) == 1:
             # Must not be called with continue_generate false on one process
             assert continue_generate
-            return self._model_invoke_inner(inputs, attn_mask, labels, max_length, stop, generate, **generation_kwargs)
+            return self._model_invoke_inner(
+                input_ids, attention_mask, labels, max_length, stop, generate, **generation_kwargs
+            )
 
         rank = self.group.rank()
         assert rank == 0
 
         if continue_generate:
-            assert inputs is not None
+            assert input_ids is not None
             if generate:
                 assert max_length is not None and stop is not None
 
-            step = len(inputs) // world_size
+            # always divide by batch_size, if not full batch, some ranks will get less work or not at all
+            step = self.batch_size // world_size
 
-            inputs = [inputs[i * step : (i + 1) * step] for i in range(world_size)]
-            attn_mask = [
-                attn_mask[i * step : (i + 1) * step] if attn_mask is not None else None for i in range(world_size)
+            input_ids = [input_ids[i * step : (i + 1) * step] for i in range(world_size)]
+            attention_mask = [
+                attention_mask[i * step : (i + 1) * step] if attention_mask is not None else None
+                for i in range(world_size)
             ]
             labels = [labels[i * step : (i + 1) * step] if labels is not None else None for i in range(world_size)]
 
             scatter_list = [
-                [inputs[i], attn_mask[i], labels[i], max_length, stop, generate, continue_generate, generation_kwargs]
+                [
+                    input_ids[i],
+                    attention_mask[i],
+                    labels[i],
+                    max_length,
+                    stop,
+                    generate,
+                    continue_generate,
+                    generation_kwargs,
+                ]
                 for i in range(world_size)
             ]
         else:
             scatter_list = [[None, None, None, None, None, None, False, None] for _ in range(world_size)]
 
         obj_list = [None]
-        dist.scatter_object_list(
+        scatter_object_list(
+            self._distributed.device,
             obj_list,
             scatter_list,
-            # TODO: figure out how to get proper global rank as Fast-llm groups crash here with
-            # Group <torch.distributed.distributed_c10d.ProcessGroupNCCL object at 0x7fff26cc7070> is not registered, please create group with torch.distributed.new_group API
-            # src=dist.get_global_rank(self.group, 0),
-            src=0,
+            group_src=0,
             group=self.group,
         )
-        inputs, attn_mask, labels, max_length, stop, generate, continue_generate, generation_kwargs = tuple(
+        input_ids, attention_mask, labels, max_length, stop, generate, continue_generate, generation_kwargs = tuple(
             obj_list[0]
         )
 
         if continue_generate == False:
             return
 
-        res = self._model_invoke_inner(inputs, attn_mask, labels, max_length, stop, generate, **generation_kwargs)
+        assert len(input_ids) > 0
+
+        res = self._model_invoke_inner(
+            input_ids, attention_mask, labels, max_length, stop, generate, **generation_kwargs
+        )
 
         gather_list = [None] * world_size
-        dist.gather_object(
+        gather_object(
+            self._distributed.device,
             res,
             gather_list,
-            # TODO: make proper rank mapping
-            # dst=dist.get_global_rank(self.group, 0),
-            dst=0,
+            group_dst=0,
             group=self.group,
         )
 
-        return gather_list
+        # If it was model generate tensors could be of different length
+        # so we aggregate results to list instead of a tensor
+        if generate:
+            res = sum((el.tolist() for el in gather_list), [])
+        else:
+            res = torch.cat(gather_list, dim=0)
+
+        return res
 
     def worker_model_invoke(self):
         assert self.group is not None
-        print(self.group)
         # if isinstance(self.group, dist.ProcessGroup):
         if not isinstance(self.group, int):
             assert self.group.size() > 1 and self.group.rank() != 0
@@ -202,38 +221,39 @@ class FastLLMWrapper(TemplateLM):
             while True:
                 scatter_list = None
                 obj_list = [None]
-                dist.scatter_object_list(
+                scatter_object_list(
+                    self._distributed.device,
                     obj_list,
                     scatter_list,
-                    # TODO: figure out how to get proper global rank as Fast-llm groups crash here with
-                    # Group <torch.distributed.distributed_c10d.ProcessGroupNCCL object at 0x7fff26cc7070> is not registered, please create group with torch.distributed.new_group API
-                    # src=dist.get_global_rank(self.group, 0),
-                    src=0,
+                    group_src=0,
                     group=self.group,
                 )
-                inputs, attn_mask, labels, max_length, stop, generate, continue_generate, generation_kwargs = tuple(
-                    obj_list[0]
+                input_ids, attention_mask, labels, max_length, stop, generate, continue_generate, generation_kwargs = (
+                    tuple(obj_list[0])
                 )
 
                 if continue_generate == False:
                     break
 
-                res = self._model_invoke_inner(
-                    inputs, attn_mask, labels, max_length, stop, generate, **generation_kwargs
-                )
+                # if some data was received, work, otherwise return empty tensor
+                if len(input_ids) > 0:
+                    res = self._model_invoke_inner(
+                        input_ids, attention_mask, labels, max_length, stop, generate, **generation_kwargs
+                    )
+                else:
+                    res = input_ids
 
                 gather_list = None
-                dist.gather_object(
+                gather_object(
+                    self._distributed.device,
                     res,
                     gather_list,
-                    # TODO: make proper rank mapping
-                    # dst=dist.get_global_rank(self.group, 0),
-                    dst=0,
+                    group_dst=0,
                     group=self.group,
                 )
         else:
             # TODO: implement distributed model support
-            assert self.group == dist.GroupMember.NON_GROUP_MEMBER
+            assert self.group == torch.distributed.GroupMember.NON_GROUP_MEMBER
         safe_barrier(self._distributed.world_group, "lm_eval_end")
 
     def stop_workers(self):
@@ -242,26 +262,37 @@ class FastLLMWrapper(TemplateLM):
         self._model_invoke(None, None, None, None, None, None, continue_generate=False)
         safe_barrier(self._distributed.world_group, "lm_eval_end")
 
-    def _model_invoke_inner(self, inputs, attn_mask, labels, max_length, stop, generate: bool, **generation_kwargs):
+    def _model_invoke_inner(
+        self, input_ids, attention_mask, labels, max_length, stop, generate: bool, **generation_kwargs
+    ):
         if generate:
-            return self._model_generate_inner(inputs, max_length, stop, **generation_kwargs)
+            return self._model_generate_inner(input_ids, attention_mask, max_length, stop, **generation_kwargs)
         else:
-            return self._model_call_inner(inputs, attn_mask, labels)
+            return self._model_call_inner(input_ids, attention_mask, labels)
 
-    def _model_call(self, inps, attn_mask=None, labels=None):
-        return self._model_invoke(inps, attn_mask, labels, None, None, generate=False, continue_generate=True)
-
-    def _model_generate(self, context, max_length, stop, **generation_kwargs):
+    def _model_call(self, input_ids, attention_mask=None, labels=None):
         return self._model_invoke(
-            context, None, None, max_length, stop, generate=True, continue_generate=True, **generation_kwargs
+            input_ids, attention_mask, labels, None, None, generate=False, continue_generate=True
         )
 
-    def _model_call_inner(self, inps, attn_mask=None, labels=None):
+    def _model_generate(self, input_ids, attention_mask, max_length, stop, **generation_kwargs):
+        return self._model_invoke(
+            input_ids,
+            attention_mask,
+            None,
+            max_length,
+            stop,
+            generate=True,
+            continue_generate=True,
+            **generation_kwargs,
+        )
+
+    def _model_call_inner(self, input_ids, attention_mask=None, labels=None):
         """
-        :param inps: torch.Tensor
+        :param input_ids: torch.Tensor
             A torch tensor of shape [batch, (sequence_ctx + sequence_cont)] or of shape
             [batch, sequence_ctx]. the size of sequence may vary from call to call
-        :param attn_mask: torch.Tensor, optional
+        :param attention_mask: torch.Tensor, optional
             A torch tensor of shape [batch, (sequence_ctx + sequence_cont)]. Only passed
             (and must be passed) if self.AUTO_MODEL_CLASS is transformers.AutoModelForSeq2SeqLM
         :param labels: torch.Tensor, optional
@@ -273,11 +304,11 @@ class FastLLMWrapper(TemplateLM):
         """
         # TODO: do we need no_grad for our model?
         with torch.no_grad():
-            if attn_mask is not None or labels is not None:
-                assert attn_mask is not None and labels is not None
+            if attention_mask is not None or labels is not None:
+                assert attention_mask is not None and labels is not None
                 return self.model(
-                    input_ids=inps,
-                    attention_mask=attn_mask,
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
                     labels=labels,
                     position_ids=None,
                     past_key_values=None,
@@ -289,7 +320,7 @@ class FastLLMWrapper(TemplateLM):
                 ).logits
             else:
                 return self.model(
-                    input_ids=inps,
+                    input_ids=input_ids,
                     attention_mask=None,
                     position_ids=None,
                     past_key_values=None,
@@ -301,7 +332,7 @@ class FastLLMWrapper(TemplateLM):
                     return_dict=True,
                 ).logits
 
-    def _model_generate_inner(self, context, max_length, stop, **generation_kwargs):
+    def _model_generate_inner(self, input_ids, attention_mask, max_length, stop, **generation_kwargs):
         # temperature = 0.0 if not set
         # if do_sample is false and temp==0.0:
         # remove temperature, as do_sample=False takes care of this
@@ -316,15 +347,26 @@ class FastLLMWrapper(TemplateLM):
         if do_sample is False and generation_kwargs.get("temperature") == 0.0:
             generation_kwargs.pop("temperature")
         # build stopping criteria
-        stopping_criteria = stop_sequences_criteria(self.tokenizer, stop, context.shape[1], context.shape[0])
-        return self.model.generate(
-            input_ids=context,
-            max_length=max_length,
-            stopping_criteria=stopping_criteria,
-            pad_token_id=self.tokenizer.pad_token_id,
-            use_cache=False,
-            **generation_kwargs,
-        )
+        stopping_criteria = stop_sequences_criteria(self.tokenizer, stop, input_ids.shape[1], input_ids.shape[0])
+        if attention_mask is None:
+            return self.model.generate(
+                input_ids=input_ids,
+                max_length=max_length,
+                stopping_criteria=stopping_criteria,
+                pad_token_id=self.tokenizer.pad_token_id,
+                use_cache=False,
+                **generation_kwargs,
+            )
+        else:
+            return self.model.generate(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                max_length=max_length,
+                stopping_criteria=stopping_criteria,
+                pad_token_id=self.tokenizer.pad_token_id,
+                use_cache=False,
+                **generation_kwargs,
+            )
 
     @property
     def config(self):
@@ -371,9 +413,10 @@ class FastLLMWrapper(TemplateLM):
     def max_gen_toks(self) -> int:
         return 256
 
-    @property
-    def batch_size(self):
-        return self.batch_size_per_gpu
+    # TODO: check removing this does not affect lm_eval
+    # @property
+    # def batch_size(self):
+    #     return self.batch_size_per_gpu
 
     @property
     def device(self):
@@ -694,7 +737,7 @@ class FastLLMWrapper(TemplateLM):
                 batched_conts = pad_and_concat(padding_len_cont, conts)  # [batch, padding_len_cont]
                 batched_encoder_mask = pad_and_concat(padding_len_inp, encoder_attns)  # [batch, padding_len_inp]
                 call_kwargs = {
-                    "attn_mask": batched_encoder_mask,
+                    "attention_mask": batched_encoder_mask,
                     "labels": batched_conts,
                 }
 
@@ -798,6 +841,7 @@ class FastLLMWrapper(TemplateLM):
         )
         chunks = re_ords.get_batched(n=batch_size, batch_fn=batch_fn)
         eos = self.tok_decode(self.eot_token_id, skip_special_tokens=False)
+
         for chunk in chunks:
             contexts, all_gen_kwargs = zip(*chunk)
             # we assume all gen kwargs in the batch are the same
@@ -827,30 +871,32 @@ class FastLLMWrapper(TemplateLM):
                 max_ctx_len = self.max_length
 
             # encode, pad, and truncate contexts for this batch
-            context_enc, attn_masks = self.tok_batch_encode(
+            input_ids, attention_mask = self.tok_batch_encode(
                 contexts,
                 left_truncate_len=max_ctx_len,
                 truncation=self.truncation,
             )
-            context_enc = context_enc.to(self.device)
-            attn_masks = attn_masks.to(self.device)
+            input_ids = input_ids.to(self.device)
+            attention_mask = attention_mask.to(self.device)
 
             if "max_length" not in kwargs:
-                kwargs["max_length"] = context_enc.shape[1] + max_gen_toks
+                kwargs["max_length"] = input_ids.shape[1] + max_gen_toks
 
             # perform batched generation
             cont = self._model_generate(
-                context=context_enc,
-                attention_mask=attn_masks,
+                input_ids=input_ids,
+                attention_mask=attention_mask,
                 stop=until,
                 **kwargs,
             )
 
-            cont_toks_list = cont.tolist()
+            # cont_toks_list = cont.tolist()
+            cont_toks_list = cont
+
             for cont_toks, context in zip(cont_toks_list, contexts):
                 # discard context + left-padding toks if using causal decoder-only LM
                 if self.backend == "causal":
-                    cont_toks = cont_toks[context_enc.shape[1] :]
+                    cont_toks = cont_toks[input_ids.shape[1] :]
 
                 s = self.tok_decode(cont_toks)
 

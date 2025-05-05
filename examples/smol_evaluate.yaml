@@ -27,7 +27,7 @@ training:
 batch:
   micro_batch_size: 16
   sequence_length: 4096
-  batch_size: 16
+  batch_size: 32
 data:
   tokenizer:
     path: /mnt/checkpoints/pretrained_models/SmolLM2-135M-Instruct
