@@ -27,7 +27,8 @@ class InferenceRunner(abc.ABC):
         
         assert isinstance(fast_llm_model, self.model_class)
         self._fast_llm_model = fast_llm_model
-        if has_training_args:
+        if False:
+        #if has_training_args:
             self._trainer_config = trainer_config
             self._schedule_config = self._trainer_config.schedule
             self._batch_config = self._trainer_config.batch
