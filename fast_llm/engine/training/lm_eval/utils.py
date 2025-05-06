@@ -73,15 +73,13 @@ def prepare_lm_eval_simple_eval_params(
     # utils.setup_logging(args.verbosity)
     # eval_logger = logging.getLogger(__name__)
 
-    os.environ["TOKENIZERS_PARALLELISM"] = "false"
-
     # update the evaluation tracker args with the output path and the HF token
+    evaluation_tracker_args = ""
     if args.output_path:
         args.output_path = str(pathlib.Path(args.output_path) / f"runs/{run_index}/{completed_steps}")
-        args.hf_hub_log_args += f",output_path={args.output_path}"
-    if os.environ.get("HF_TOKEN", None):
-        args.hf_hub_log_args += f",token={os.environ.get('HF_TOKEN')}"
-    evaluation_tracker_args = lm_eval.utils.simple_parse_args_string(args.hf_hub_log_args)
+        evaluation_tracker_args += f",output_path={args.output_path}"
+
+    evaluation_tracker_args = lm_eval.utils.simple_parse_args_string(evaluation_tracker_args)
     evaluation_tracker = lm_eval.loggers.EvaluationTracker(**evaluation_tracker_args)
 
     if args.predict_only:
@@ -103,11 +101,6 @@ def prepare_lm_eval_simple_eval_params(
     ) | (args.metadata if isinstance(args.metadata, dict) else lm_eval.utils.simple_parse_args_string(args.metadata))
 
     task_manager = lm_eval.tasks.TaskManager(include_path=args.include_path, metadata=metadata)
-
-    if "push_samples_to_hub" in evaluation_tracker_args and not args.log_samples:
-        eval_logger.warning(
-            "Pushing samples to the Hub requires --log_samples to be set. Samples will not be pushed to the Hub."
-        )
 
     if args.limit:
         eval_logger.warning(
@@ -167,19 +160,6 @@ def prepare_lm_eval_simple_eval_params(
                     " to troubleshoot task registration issues."
                 )
 
-    # Respect user's value passed in via CLI, otherwise default to True and add to comma-separated model args
-    if args.trust_remote_code:
-        eval_logger.info(
-            "Passed `--trust_remote_code`, setting environment variable `HF_DATASETS_TRUST_REMOTE_CODE=true`"
-        )
-        # HACK: import datasets and override its HF_DATASETS_TRUST_REMOTE_CODE value internally,
-        # because it's already been determined based on the prior env var before launching our
-        # script--`datasets` gets imported by lm_eval internally before these lines can update the env.
-        import datasets
-
-        datasets.config.HF_DATASETS_TRUST_REMOTE_CODE = True
-
-        args.model_args = args.model_args + ",trust_remote_code=True"
     (
         eval_logger.info(f"Selected Tasks: {task_names}")
         if eval_logger.getEffectiveLevel() >= logging.INFO
