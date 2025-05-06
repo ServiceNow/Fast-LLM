@@ -8,7 +8,14 @@ from fast_llm.engine.config_utils.tensor_space import TensorSpace
 from fast_llm.functional.config import TritonConfig
 from fast_llm.functional.triton.mlp import mlp_autograd, torch_mlp_activation, triton_mlp_activation_autograd
 from fast_llm.layers.common.linear import LinearBase
-from fast_llm.layers.transformer.config import TransformerConfig, TransformerDimNames, TransformerSubLayerName
+from fast_llm.layers.transformer.config import (
+    TransformerConfig,
+    TransformerDimNames,
+    TransformerKwargs,
+    TransformerSubLayerName,
+    VisionTransformerConfig,
+)
+from fast_llm.layers.vision_encoder.config import VisionTransformerDimNames, VisionTransformerKwargs
 from fast_llm.tensor import init_normal_, init_zeros_
 from fast_llm.utils import Assert
 
@@ -17,6 +24,13 @@ class MLPBase(Layer, ABC):
     def __init__(self, config: TransformerConfig, tensor_space: TensorSpace, name: str = "mlp"):
         super().__init__()
         self._name = name
+
+        if isinstance(config, VisionTransformerConfig):
+            self._transformer_dim_names = VisionTransformerDimNames
+            self._transformer_kwargs = VisionTransformerKwargs
+        elif isinstance(config, TransformerConfig):
+            self._transformer_dim_names = TransformerDimNames
+            self._transformer_kwargs = TransformerKwargs
 
         init_method_1 = init_normal_(
             std=config.init_method_std_mlp_1,
@@ -29,8 +43,8 @@ class MLPBase(Layer, ABC):
             max_val=config.init_method_max_mlp_2,
         )
 
-        hidden_dim = tensor_space.get_tensor_dim(TransformerDimNames.hidden)
-        self._intermediate_dim = tensor_space.get_tensor_dim(TransformerDimNames.composite_expert_mlp)
+        hidden_dim = tensor_space.get_tensor_dim(self._transformer_dim_names.hidden)
+        self._intermediate_dim = tensor_space.get_tensor_dim(self._transformer_dim_names.composite_expert_mlp)
         self._sequence_parallel = tensor_space.distributed_config.sequence_tensor_parallel
         self._recompute_level = config.mlp_recompute_level
 
@@ -41,7 +55,7 @@ class MLPBase(Layer, ABC):
         # So both layers' weights have shape (num_experts [* gate_up] * ffn, hidden_size)
         self.layer_1 = LinearBase(
             hidden_dim,
-            tensor_space.get_tensor_dim(TransformerDimNames.composite_gated_expert_mlp),
+            tensor_space.get_tensor_dim(self._transformer_dim_names.composite_gated_expert_mlp),
             bias=config.add_mlp_bias,
             weight_init_method=init_method_1,
             bias_init_method=init_method_1 if config.random_bias_init else init_zeros_,

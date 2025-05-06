@@ -1,20 +1,55 @@
-from fast_llm.config import Config, Field, FieldHint, config_class
-from fast_llm.engine.base_model.config import BaseModelArchitectureConfig
+from fast_llm.config import Config, Field, FieldHint, FieldUpdate, config_class
+from fast_llm.engine.base_model.config import BaseModelArchitectureConfig, BaseModelConfig
 from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
 from fast_llm.functional.config import ActivationType
 from fast_llm.layers.common.config import NormalizationConfig
+from fast_llm.layers.transformer.config import TransformerArchitectureConfig, VisionTransformerConfig
 
 
 class VisionEncoderDimNames:
     out_channels = "vision_out_channels"
-    intermediate_size = "vision_intermediate_size"
+    adapter_size = "vision_adapter_size"
     patch_size = "vision_patch_size"
     kv_channels = "vision_kv_channels"
 
 
-class VisionModelKwargs:
+class VisionTransformerDimNames:
+    # A set of common tensor dim names packed into a namespace.
+    # Input dimensions (variable)
+    # TODO: Does batch belong here?
+    batch = "vit_batch"
+    # TODO: Distinguish micro-sequence?
+    sequence_q = "vit_sequence_q"
+    sequence_q_tp = "vit_sequence_q_tp"
+    sequence_k = "vit_sequence_k"
+    hidden = "vit_hidden"
+    # Self-attention dimensions
+    head_groups = "vit_head_groups"
+    group_heads = "vit_group_heads"
+    key_and_value = "vit_key_value"
+    kv_channels = "vit_kv_channels"
+    composite_heads = "vit_composite_heads"
+    composite_query = "vit_composite_query"
+    composite_key_value = "vit_composite_key_value"
+    composite_dense = "vit_composite_dense"
+    # MLP dimensions
+    mlp = "vit_mlp"
+    gate_and_up = "vit_gate_and_up"
+    composite_gated_mlp = "vit_composite_gated_mlp"
+    experts = "vit_experts"
+    top_experts = "vit_top_experts"
+    shared_experts = "vit_shared_experts"
+    unshared_experts = "vit_unshared_experts"
+    composite_expert_mlp = "vit_composite_expert_mlp"
+    composite_gated_expert_mlp = "vit_composite_gated_expert_mlp"
+    composite_shared_expert_mlp = "vit_composite_shared_expert_mlp"
+    composite_gated_shared_expert_mlp = "vit_composite_gated_shared_expert_mlp"
+
+
+class VisionEncoderKwargs:
     patch_size = "patch_size"
     images = "images"
+    image_patches = "image_patches"
     image_positions = "image_positions"
     image_size = "image_size"
     image_sizes = "image_sizes"
@@ -24,56 +59,34 @@ class VisionModelKwargs:
     rope_theta = "vit_rope_theta"
     rotary_inv_freq = "vit_rotary_inv_freq"
     kv_channels = "vit_kv_channels"
+    max_image_tokens = "max_image_tokens"
+    patch_embeddings = "patch_embeddings"
+    hidden_dims = "vit_hidden_dims"
 
 
-@config_class()
-class VisionEncoderArchitectureConfig(BaseModelArchitectureConfig):
-    _abstract = False
-    """
-    Configuration class for the vision encoder, which transforms images into embeddings
-    """
-    path: str | None = Field(default=None, desc="Path to a pretrained vision encoder model.", hint=FieldHint.optional)
-    pre_norm: NormalizationConfig = Field(
-        default_factory=NormalizationConfig,
-    )
-    hidden_size: int = Field(
-        default=1024, desc="The size of the hidden layers in the transformer model.", hint=FieldHint.optional
-    )
-    intermediate_size: int = Field(
-        default=4096,
-        desc="The size of the intermediate (feed-forward) layers in the transformer model.",
-        hint=FieldHint.optional,
-    )
-    num_hidden_layers: int = Field(
-        default=24, desc="The number of hidden layers in the transformer model.", hint=FieldHint.optional
-    )
-    num_attention_heads: int = Field(
-        default=16, desc="The number of attention heads for the multi-head attention layers.", hint=FieldHint.optional
-    )
-    num_channels: int = Field(
-        default=3, desc="Number of channels in the input image, typically 3 for RGB.", hint=FieldHint.optional
-    )
-    image_size: int = Field(
-        default=1024, desc="The size of the input images (assumed square).", hint=FieldHint.optional
-    )
-    patch_size: int = Field(default=16, desc="The size of the image patches to be encoded.", hint=FieldHint.optional)
-    hidden_act: str = Field(
-        default="gelu", desc="The activation function used in the hidden layers.", hint=FieldHint.optional
-    )
-    attention_dropout: float = Field(
-        default=0.0, desc="The dropout probability for attention layers.", hint=FieldHint.optional
-    )
-    rope_theta: float = Field(
-        default=10000.0, desc="The base value for rotary position embeddings.", hint=FieldHint.optional
-    )
-    initializer_range: float = Field(
-        default=0.02, desc="The standard deviation of the normal initializer.", hint=FieldHint.optional
-    )
-    activation_type: ActivationType = Field(
-        default=ActivationType.silu,
-        desc="The activation function used in the hidden layers. Default: SiLU.",
-        hint=FieldHint.optional,
-    )
+# TODO Soham: do we need all of them?
+class VisionTransformerKwargs:
+    rotary_freq_q = "vit_rotary_freq_q"
+    rotary_freq_k = "vit_rotary_freq_k"
+    attention_mask = "vit_attention_mask"
+    attention_mask_value = "vit_attention_mask_value"
+    sequence_lengths = "vit_sequence_lengths"
+    cu_seqlens_q = "vit_cu_seqlens_q"
+    cu_seqlens_k = "vit_cu_seqlens_k"
+    max_seqlen_q = "vit_max_seqlen_q"
+    max_seqlen_k = "vit_max_seqlen_k"
+    # TODO: Review these
+    presents = "vit_presents"
+    past_key_values = "vit_past_key_values"
+    sequence_first = "vit_sequence_first"
+    hidden_dims = "vit_hidden_dims"
+    sequence_q_dim = "vit_sequence_q_dim"
+    sequence_k_dim = "vit_sequence_k_dim"
+    sequence_length = "vit_sequence_length"
+    micro_batch_size = "vit_micro_batch_size"
+    # TODO: Move
+    grad_output = "vit_grad_output"
+    patch_position_ids = "patch_position_ids"
 
 
 @config_class()
@@ -116,35 +129,70 @@ class ImageNormalizationConfig(Config):
 
 
 @config_class()
-class VisionArchitectureConfig(BaseModelArchitectureConfig):
+class VisionEncoderArchitectureConfig(BaseModelArchitectureConfig):
     _abstract = False
 
-    encoder: VisionEncoderArchitectureConfig = Field(
-        default_factory=VisionEncoderArchitectureConfig,
-        desc="Configuration for the vision encoder that transforms images into embeddings.",
+    transformer: TransformerArchitectureConfig = Field(
+        default_factory=TransformerArchitectureConfig,
+        desc="Configuration for the vision transformer architecture.",
+        hint=FieldHint.core,
+    )
+    patch_size: int = Field(
+        default=16,
+        desc="Patch size for the image encoder.",
+        hint=FieldHint.core,
+    )
+    patch_norm: NormalizationConfig = Field(
+        default_factory=NormalizationConfig,
+        desc="Configuration for the normalization layers applied to the image patches.",
         hint=FieldHint.optional,
     )
     adapter_size: int = Field(
         default=5120,
         desc="Intermediate size for the adapter linear layers. Assuming 2 linear layers",
-        hint=FieldHint.optional,
+        hint=FieldHint.core,
     )
     adapter_activation_type: ActivationType = Field(
         default=ActivationType.gelu,
         desc="The intermediate activation type for multi-modal adapter. Default: GeLU.",
         hint=FieldHint.core,
     )
-    normalization: ImageNormalizationConfig = Field(
+
+    def setup_tensor_space(self, tensor_space: TensorSpace):
+        tensor_space.add_tensor_dim(TensorDim(VisionEncoderDimNames.out_channels, self.transformer.hidden_size))
+        tensor_space.add_tensor_dim(TensorDim(VisionEncoderDimNames.adapter_size, self.adapter_size))
+        tensor_space.add_tensor_dim(TensorDim(VisionEncoderDimNames.patch_size, self.patch_size))
+        # TODO Soham: add a check for presence of kv channels parameter (head_dim)
+        tensor_space.add_tensor_dim(
+            TensorDim(
+                VisionEncoderDimNames.kv_channels, self.transformer.hidden_size // self.transformer.num_attention_heads
+            )
+        )
+        self.transformer.setup_tensor_space(tensor_space, type="vision")
+
+
+@config_class()
+class VisionEncoderConfig(VisionEncoderArchitectureConfig, BaseModelConfig):
+    transformer: VisionTransformerConfig = FieldUpdate(
+        default_factory=VisionTransformerConfig,
+        desc="Configuration for the transformer architecture.",
+        hint=FieldHint.core,
+    )
+    patch_norm: NormalizationConfig = FieldUpdate(
+        default_factory=NormalizationConfig,
+        desc="Configuration for the normalization layers applied to the image patches.",
+        hint=FieldHint.optional,
+    )
+    image_normalization: ImageNormalizationConfig = Field(
         default_factory=ImageNormalizationConfig,
         desc="Configuration for the normalization layers applied to the image patches.",
         hint=FieldHint.optional,
     )
+    adapter_activation_type: ActivationType = FieldUpdate(
+        default=ActivationType.gelu,
+        desc="The intermediate activation type for multi-modal adapter. Default: GeLU.",
+        hint=FieldHint.core,
+    )
 
     def setup_tensor_space(self, tensor_space: TensorSpace):
-        tensor_space.add_tensor_dim(TensorDim(VisionEncoderDimNames.out_channels, self.encoder.hidden_size))
-        tensor_space.add_tensor_dim(TensorDim(VisionEncoderDimNames.intermediate_size, self.adapter_size))
-        tensor_space.add_tensor_dim(TensorDim(VisionEncoderDimNames.patch_size, self.encoder.patch_size))
-        # TODO Soham: add a check for kv channels
-        tensor_space.add_tensor_dim(
-            TensorDim(VisionEncoderDimNames.kv_channels, self.encoder.hidden_size // self.encoder.num_attention_heads)
-        )
+        super().setup_tensor_space(tensor_space)

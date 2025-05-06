@@ -84,6 +84,7 @@ class TransformerKwargs:
     sequence_q_dim = "sequence_q_dim"
     sequence_k_dim = "sequence_k_dim"
     sequence_length = "sequence_length"
+    micro_batch_size = "micro_batch_size"
     # TODO: Move
     grad_output = "grad_output"
 
@@ -98,6 +99,8 @@ class RotaryEmbeddingType(str, enum.Enum):
     default = "default"
     llama3 = "llama3"
     yarn = "yarn"
+    # TODO Soham: generic name?
+    pixtral = "pixtral"
 
 
 @config_class()
@@ -164,6 +167,15 @@ class RotaryArchitectureConfig(BaseModelArchitectureConfig):
 @config_class()
 class RotaryConfig(RotaryArchitectureConfig, BaseModelConfig):
     pass
+
+
+@config_class()
+class VisionRotaryConfig(RotaryConfig):
+    type: RotaryEmbeddingType = Field(
+        default=RotaryEmbeddingType.pixtral,
+        desc="The type of rotary embedding to use. Choices: none, default, llama3, yarn, pixtral.",
+        hint=FieldHint.feature,
+    )
 
 
 class AddLinearBiasChoices(str, enum.Enum):
@@ -398,63 +410,73 @@ class TransformerArchitectureConfig(BaseModelArchitectureConfig):
         cls._handle_renamed_field(default, "triton_rotary", ("rotary", "triton"))
         return super()._from_dict(default, strict, flat)
 
-    def setup_tensor_space(self, tensor_space: TensorSpace) -> None:
+    def setup_tensor_space(self, tensor_space: TensorSpace, type: str | None = None) -> None:
         tensor = tensor_space.distributed_config.get_distributed_dim(DistributedDimNames.tensor)
 
+        if type == "vision":
+            # TODO Soham: better way to get around circular imports?
+            from fast_llm.layers.vision_encoder.config import VisionTransformerDimNames
+
+            transformer_dim_names = VisionTransformerDimNames
+        else:
+            transformer_dim_names = TransformerDimNames
+
         # Hidden dimension
-        tensor_space.add_tensor_dim(TensorDim(TransformerDimNames.hidden, self.hidden_size))
+        tensor_space.add_tensor_dim(TensorDim(transformer_dim_names.hidden, self.hidden_size))
 
         # Self-attention dimensions
         tensor_space.add_tensor_dim(
             head_groups := TensorDim(
-                TransformerDimNames.head_groups, self.head_groups, tensor if self.head_groups > 1 else None
+                transformer_dim_names.head_groups, self.head_groups, tensor if self.head_groups > 1 else None
             )
         )
         tensor_space.add_tensor_dim(
             group_heads := TensorDim(
-                TransformerDimNames.group_heads,
+                transformer_dim_names.group_heads,
                 div(self.num_attention_heads, self.head_groups),
                 None if self.head_groups > 1 else tensor,
             )
         )
-        tensor_space.add_tensor_dim(key_and_value := TensorDim(TransformerDimNames.key_and_value, 2))
-        tensor_space.add_tensor_dim(kv_channels := TensorDim(TransformerDimNames.kv_channels, self.kv_channels))
+        tensor_space.add_tensor_dim(key_and_value := TensorDim(transformer_dim_names.key_and_value, 2))
+        tensor_space.add_tensor_dim(kv_channels := TensorDim(transformer_dim_names.kv_channels, self.kv_channels))
         tensor_space.add_tensor_dim(
-            CompositeTensorDim(TransformerDimNames.composite_heads, (head_groups, group_heads))
+            CompositeTensorDim(transformer_dim_names.composite_heads, (head_groups, group_heads))
         )
         tensor_space.add_tensor_dim(
-            CompositeTensorDim(TransformerDimNames.composite_query, (head_groups, group_heads, kv_channels))
+            CompositeTensorDim(transformer_dim_names.composite_query, (head_groups, group_heads, kv_channels))
         )
         tensor_space.add_tensor_dim(
-            CompositeTensorDim(TransformerDimNames.composite_key_value, (key_and_value, head_groups, kv_channels))
+            CompositeTensorDim(transformer_dim_names.composite_key_value, (key_and_value, head_groups, kv_channels))
         )
         tensor_space.add_tensor_dim(
-            CompositeTensorDim(TransformerDimNames.composite_dense, (head_groups, group_heads, kv_channels))
+            CompositeTensorDim(transformer_dim_names.composite_dense, (head_groups, group_heads, kv_channels))
         )
 
         # MLP dimensions
-        tensor_space.add_tensor_dim(mlp := TensorDim(TransformerDimNames.mlp, self.ffn_hidden_size, tensor))
-        tensor_space.add_tensor_dim(gate_and_up := TensorDim(TransformerDimNames.gate_and_up, 2 if self.gated else 1))
-        tensor_space.add_tensor_dim(CompositeTensorDim(TransformerDimNames.composite_gated_mlp, (gate_and_up, mlp)))
-        tensor_space.add_tensor_dim(experts := TensorDim(TransformerDimNames.experts, self.num_experts))
-        tensor_space.add_tensor_dim(CompositeTensorDim(TransformerDimNames.composite_expert_mlp, (experts, mlp)))
+        tensor_space.add_tensor_dim(mlp := TensorDim(transformer_dim_names.mlp, self.ffn_hidden_size, tensor))
         tensor_space.add_tensor_dim(
-            CompositeTensorDim(TransformerDimNames.composite_gated_expert_mlp, (experts, gate_and_up, mlp))
+            gate_and_up := TensorDim(transformer_dim_names.gate_and_up, 2 if self.gated else 1)
         )
-        tensor_space.add_tensor_dim(TensorDim(TransformerDimNames.top_experts, self.num_experts_per_token))
-        tensor_space.add_tensor_dim(TensorDim(TransformerDimNames.unshared_experts, self.num_unshared_experts))
+        tensor_space.add_tensor_dim(CompositeTensorDim(transformer_dim_names.composite_gated_mlp, (gate_and_up, mlp)))
+        tensor_space.add_tensor_dim(experts := TensorDim(transformer_dim_names.experts, self.num_experts))
+        tensor_space.add_tensor_dim(CompositeTensorDim(transformer_dim_names.composite_expert_mlp, (experts, mlp)))
+        tensor_space.add_tensor_dim(
+            CompositeTensorDim(transformer_dim_names.composite_gated_expert_mlp, (experts, gate_and_up, mlp))
+        )
+        tensor_space.add_tensor_dim(TensorDim(transformer_dim_names.top_experts, self.num_experts_per_token))
+        tensor_space.add_tensor_dim(TensorDim(transformer_dim_names.unshared_experts, self.num_unshared_experts))
 
         # shared_experts
         if self.num_shared_experts:
             tensor_space.add_tensor_dim(
-                shared_experts := TensorDim(TransformerDimNames.shared_experts, self.num_shared_experts)
+                shared_experts := TensorDim(transformer_dim_names.shared_experts, self.num_shared_experts)
             )
             tensor_space.add_tensor_dim(
-                CompositeTensorDim(TransformerDimNames.composite_shared_expert_mlp, (shared_experts, mlp))
+                CompositeTensorDim(transformer_dim_names.composite_shared_expert_mlp, (shared_experts, mlp))
             )
             tensor_space.add_tensor_dim(
                 CompositeTensorDim(
-                    TransformerDimNames.composite_gated_shared_expert_mlp, (shared_experts, gate_and_up, mlp)
+                    transformer_dim_names.composite_gated_shared_expert_mlp, (shared_experts, gate_and_up, mlp)
                 )
             )
 
@@ -656,6 +678,11 @@ class TransformerConfig(TransformerArchitectureConfig, BaseModelConfig):
         " Reduces memory usage, but increases fragmentation and requires CPU synchronisation. Not recommended.",
         hint=FieldHint.expert,
     )
+    causal: bool = Field(
+        default=True,
+        desc="Use causal attention. Turn this off only for bidirectional attention e.g., in Vision Transformer.",
+        hint=FieldHint.feature,
+    )
 
     def _validate(self) -> None:
         if self.init_method_std is None:
@@ -718,3 +745,30 @@ class TransformerConfig(TransformerArchitectureConfig, BaseModelConfig):
             Assert.is_(self.window_size, None)
 
         return use_flash_attention
+
+
+@config_class()
+class VisionRotaryConfig(RotaryConfig):
+    type: RotaryEmbeddingType = Field(
+        default=RotaryEmbeddingType.pixtral,
+        desc="The type of rotary embedding to use. Choices: none, default, llama3, yarn, pixtral.",
+        hint=FieldHint.feature,
+    )
+
+
+@config_class()
+class VisionTransformerConfig(TransformerConfig):
+    """
+    Configuration for the Vision Transformer (ViT) model.
+    """
+
+    causal: bool = FieldUpdate(
+        default=False,
+        desc="Use causal attention. Turn this off only for bidirectional attention e.g., in Vision Transformer.",
+        hint=FieldHint.feature,
+    )
+    rotary: VisionRotaryConfig = FieldUpdate(
+        default_factory=VisionRotaryConfig,
+        desc="Configuration for the rotary positional embeddings.",
+        hint=FieldHint.feature,
+    )

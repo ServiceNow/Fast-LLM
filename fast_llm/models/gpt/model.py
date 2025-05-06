@@ -27,7 +27,10 @@ from fast_llm.layers.transformer.preprocessing import (
     RotaryEmbeddingPreprocessor,
 )
 from fast_llm.layers.transformer.transformer import TransformerLayer
-from fast_llm.layers.vision_encoder.config import VisionEncoderDimNames, VisionModelKwargs
+from fast_llm.layers.transformer.vision_transformer import VisionTransformerLayer
+from fast_llm.layers.vision_encoder.adapter import VisionAdapter
+from fast_llm.layers.vision_encoder.config import VisionEncoderDimNames, VisionEncoderKwargs, VisionTransformerDimNames
+from fast_llm.layers.vision_encoder.encoder import PatchConv
 from fast_llm.layers.vision_encoder.preprocessing import VisionPreprocessor
 from fast_llm.models.gpt.config import GPTBaseModelConfig, GPTModelConfig
 from fast_llm.models.gpt.megatron import get_init_megatron
@@ -76,6 +79,10 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
 
         if self._config.vision_encoder:
             self._vision_preprocessor = VisionPreprocessor(self._config.vision_encoder, self._tensor_space)
+            if self._config.vision_encoder.transformer.rotary.enabled:
+                self._vision_rotary_embedding_preprocessor = RotaryEmbeddingPreprocessor(
+                    self._config.vision_encoder.transformer.rotary, self._tensor_space
+                )
 
     def get_output_layers(self) -> list[Layer]:
         return [
@@ -99,22 +106,35 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             ]
         ]
 
+    def get_vision_layers(self) -> list[Layer]:
+        patch_conv = PatchConv(self._config.vision_encoder, self._tensor_space)
+        vit_layers = [
+            VisionTransformerLayer(self._config.vision_encoder.transformer, self._tensor_space, layer_index=idx + 1)
+            for idx in range(self._config.vision_encoder.transformer.num_layers)
+        ]
+        return [
+            patch_conv,
+            *vit_layers,
+            VisionAdapter(self._config.vision_encoder, self._tensor_space),
+            MultiModalEmbedding(self._config, self._tensor_space),
+        ]
+
     def get_layers(self) -> list[Layer]:
         if self._config.transformer.num_layers == 0:
             Assert.eq(self._config.prediction_heads, 1)
             return [
-                (
-                    LanguageModelEmbedding(self._config, self._tensor_space)
+                *(
+                    [LanguageModelEmbedding(self._config, self._tensor_space)]
                     if self._config.vision_encoder is None
-                    else MultiModalEmbedding(self._config, self._tensor_space)
+                    else self.get_vision_layers(self._config, self._tensor_space)
                 ),
                 LanguageModelHead(self._config, self._tensor_space, 0),
             ]
         return [
-            (
-                LanguageModelEmbedding(self._config, self._tensor_space)
+            *(
+                [LanguageModelEmbedding(self._config, self._tensor_space)]
                 if self._config.vision_encoder is None
-                else MultiModalEmbedding(self._config, self._tensor_space)
+                else self.get_vision_layers()
             ),
             *[
                 TransformerLayer(
@@ -152,24 +172,24 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
         if self._config.vision_encoder:
             image_size = batch_meta.max_image_size
             image_mean = [
-                self._config.vision_encoder.normalization.mean_r,
-                self._config.vision_encoder.normalization.mean_g,
-                self._config.vision_encoder.normalization.mean_b,
+                self._config.vision_encoder.image_normalization.mean_r,
+                self._config.vision_encoder.image_normalization.mean_g,
+                self._config.vision_encoder.image_normalization.mean_b,
             ]
             image_std = [
-                self._config.vision_encoder.normalization.std_r,
-                self._config.vision_encoder.normalization.std_g,
-                self._config.vision_encoder.normalization.std_b,
+                self._config.vision_encoder.image_normalization.std_r,
+                self._config.vision_encoder.image_normalization.std_g,
+                self._config.vision_encoder.image_normalization.std_b,
             ]
-            image_rescale_factor = self._config.vision_encoder.normalization.rescale_factor
+            image_rescale_factor = self._config.vision_encoder.image_normalization.rescale_factor
             vision_kwargs = {
-                VisionModelKwargs.patch_size: self._config.vision_encoder.encoder.patch_size,
-                VisionModelKwargs.image_size: image_size,
-                VisionModelKwargs.image_mean: image_mean,
-                VisionModelKwargs.image_std: image_std,
-                VisionModelKwargs.image_rescale_factor: image_rescale_factor,
-                VisionModelKwargs.rope_theta: self._config.vision_encoder.encoder.rope_theta,
-                VisionModelKwargs.kv_channels: self._tensor_space.get_tensor_dim(
+                VisionEncoderKwargs.patch_size: batch_meta.patch_size,
+                VisionEncoderKwargs.image_size: image_size,
+                VisionEncoderKwargs.image_mean: image_mean,
+                VisionEncoderKwargs.image_std: image_std,
+                VisionEncoderKwargs.image_rescale_factor: image_rescale_factor,
+                VisionEncoderKwargs.rope_theta: self._config.vision_encoder.transformer.rotary.theta,
+                VisionEncoderKwargs.kv_channels: self._tensor_space.get_tensor_dim(
                     VisionEncoderDimNames.kv_channels
                 ).size,
             }
@@ -218,6 +238,18 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             if sequence_first
             else (batch_dim, hidden_sequence_q_dim, hidden_dim)
         )
+        if self._config.vision_encoder:
+            vision_hidden_dim = self._tensor_space.get_tensor_dim(VisionTransformerDimNames.hidden)
+            vision_hidden_dims = (
+                (hidden_sequence_q_dim, batch_dim, vision_hidden_dim)
+                if sequence_first
+                else (batch_dim, hidden_sequence_q_dim, vision_hidden_dim)
+            )
+            vision_kwargs.update(
+                {
+                    VisionEncoderKwargs.hidden_dims: vision_hidden_dims,
+                }
+            )
 
         common_kwargs = {
             LanguageModelKwargs.phase: phase,
@@ -225,6 +257,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             TransformerKwargs.hidden_dims: hidden_dims,
             TransformerKwargs.sequence_length: sequence_length,
             TransformerKwargs.sequence_q_dim: sequence_q_dim,
+            TransformerKwargs.micro_batch_size: micro_batch_size,
         }
         common_kwargs.update(vision_kwargs)
 
@@ -253,6 +286,9 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                 self._position_embedding_preprocessor.preprocess_meta(kwargs)
             if self._config.transformer.rotary.enabled:
                 self._rotary_embedding_preprocessor.preprocess_meta(kwargs)
+            if self._config.vision_encoder:
+                if self._config.vision_encoder.transformer.rotary.enabled:
+                    self._vision_rotary_embedding_preprocessor.preprocess_meta(kwargs)
             if not self._use_flash_attention:
                 self._backup_attention_preprocessor.preprocess_meta(kwargs)
             preprocessed_meta.append((tokens, kwargs))
@@ -294,6 +330,11 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             self._rotary_embedding_preprocessor.create_tensors(sequence_length)
         if not self._use_flash_attention:
             self._backup_attention_preprocessor.create_tensors(sequence_length)
+        if self._config.vision_encoder and self._config.vision_encoder.transformer.rotary.enabled:
+            max_num_patches = (
+                common_kwargs[VisionEncoderKwargs.image_size] // common_kwargs[VisionEncoderKwargs.patch_size]
+            )
+            self._vision_rotary_embedding_preprocessor.create_tensors(sequence_length, max_num_patches)
 
         preprocessed = []
         presents = None
@@ -342,32 +383,38 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                                 else:
                                     labels[i, start : end + 1] = -100
                 kwargs[LanguageModelKwargs.labels] = labels
-            if batch.images is not None:
-                kwargs[VisionModelKwargs.images] = [
-                    img.to(device=self._tensor_space.distributed.device, dtype=torch.uint8, non_blocking=True)
-                    for images in batch.images
-                    for img in images
-                ]
-                kwargs[VisionModelKwargs.image_positions] = batch.image_positions
-                if self._config.vision_encoder:
-                    self._vision_preprocessor.preprocess(kwargs)
             if self._config.use_absolute_position_embeddings:
                 self._position_embedding_preprocessor.preprocess(kwargs)
             if self._config.transformer.rotary.enabled:
                 self._rotary_embedding_preprocessor.preprocess(kwargs)
             if not self._use_flash_attention:
                 self._backup_attention_preprocessor.preprocess(kwargs)
-            preprocessed.append((tokens, kwargs))
+            if batch.images is not None:
+                kwargs[VisionEncoderKwargs.images] = [
+                    [
+                        img.to(device=self._tensor_space.distributed.device, dtype=torch.uint8, non_blocking=True)
+                        for img in images
+                    ]
+                    for images in batch.images
+                ]
+                kwargs[VisionEncoderKwargs.image_positions] = batch.image_positions
+                if self._config.vision_encoder:
+                    self._vision_preprocessor.preprocess(kwargs)
+                    self._vision_rotary_embedding_preprocessor.preprocess(kwargs)
+                kwargs[LanguageModelKwargs.tokens] = tokens
+                preprocessed.append((kwargs[VisionEncoderKwargs.image_patches], kwargs))
+            else:
+                preprocessed.append((tokens, kwargs))
 
         return preprocessed
 
     @property
     def embedding(self) -> LanguageModelEmbedding:
-        return self.layers[self._config.vision_encoder is not None]
+        return self.layers[self._config.vision_encoder.transformer.num_layers + 2]
 
     @property
     def transformer_layers(self) -> list[TransformerLayer]:
-        return self.layers[(self._config.vision_encoder is not None) + 1 : -1]
+        return self.layers[self._config.vision_encoder.transformer.num_layers + 3 : -1]
 
     @property
     def model_head(self) -> LanguageModelHead:

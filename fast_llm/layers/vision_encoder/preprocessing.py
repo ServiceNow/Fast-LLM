@@ -5,7 +5,12 @@ import torch
 import torchvision.transforms.v2.functional as F
 
 from fast_llm.engine.config_utils.tensor_space import TensorSpace
-from fast_llm.layers.vision_encoder.config import VisionArchitectureConfig, VisionModelKwargs
+from fast_llm.layers.transformer.config import TransformerKwargs
+from fast_llm.layers.vision_encoder.config import (
+    VisionEncoderArchitectureConfig,
+    VisionEncoderKwargs,
+    VisionTransformerKwargs,
+)
 from fast_llm.utils import div
 
 
@@ -23,11 +28,11 @@ def get_resize_dims(height: int, width: int, max_height: int, max_width: int, pa
     If the image is smaller, it will be resized to the nearest multiple of the patch size.
     """
     ratio = max(height / max_height, width / max_width)
-    return (
-        (int(height / ratio), int(width / ratio))
-        if ratio > 1
-        else (patch_size * math.ceil(height / patch_size), patch_size * math.ceil(width / patch_size))
-    )
+    if ratio > 1:
+        # Resize to fit within max dimensions
+        height = int(height / ratio)
+        width = int(width / ratio)
+    return patch_size * math.ceil(height / patch_size), patch_size * math.ceil(width / patch_size)
 
 
 def resize(image: torch.Tensor, max_height: int, max_width: int, patch_size: int) -> tuple[int, int]:
@@ -72,42 +77,128 @@ def create_inv_freqs(rope_theta: int, kv_channels: int, image_size: int, patch_s
     return torch.cat((inv_freq, inv_freq), dim=-1)
 
 
+def position_ids_in_meshgrid(image_sizes: list[torch.Tensor], max_size: int, patch_size: int) -> torch.Tensor:
+    positions = []
+    for h, w in image_sizes:
+        patch_height = h // patch_size
+        patch_width = w // patch_size
+        mesh = torch.meshgrid(torch.arange(patch_height), torch.arange(patch_width), indexing="ij")
+        h_grid, v_grid = torch.stack(mesh, dim=-1).reshape(-1, 2).chunk(2, -1)
+        ids = h_grid * max_size + v_grid
+        positions.append(ids[:, 0])
+    return positions
+
+
+def position_ids_in_meshgrid(height, width, max_size, patch_size) -> torch.Tensor:
+    patch_height = height // patch_size
+    patch_width = width // patch_size
+    mesh = torch.meshgrid(torch.arange(patch_height), torch.arange(patch_width), indexing="ij")
+    h_grid, v_grid = torch.stack(mesh, dim=-1).reshape(-1, 2).chunk(2, -1)
+    ids = h_grid * max_size + v_grid
+    return ids[:, 0]
+
+
 class VisionPreprocessor:
-    def __init__(self, config: VisionArchitectureConfig, tensor_space: TensorSpace):
+    def __init__(self, config: VisionEncoderArchitectureConfig, tensor_space: TensorSpace):
         self._config = config
         self._tensor_space = tensor_space
         self._distributed_config = self._tensor_space.distributed_config
 
     def preprocess(self, kwargs: dict[str, typing.Any]) -> None:
-        images = kwargs.get("images")
-        im_height = kwargs.get(VisionModelKwargs.image_size)
-        im_width = kwargs.get(VisionModelKwargs.image_size)
-        patch_size = kwargs[VisionModelKwargs.patch_size]
+        images = kwargs.get(VisionEncoderKwargs.images)
+        im_height = kwargs.get(VisionEncoderKwargs.image_size)
+        im_width = kwargs.get(VisionEncoderKwargs.image_size)
+        patch_size = kwargs[VisionEncoderKwargs.patch_size]
         image_sizes = [
-            get_resize_dims(im.size(1), im.size(2), im_height, im_width, patch_size=patch_size) for im in images
+            [get_resize_dims(im.size(1), im.size(2), im_height, im_width, patch_size=patch_size) for im in ims]
+            for ims in images
         ]
-        kwargs[VisionModelKwargs.image_sizes] = image_sizes
+        kwargs[VisionEncoderKwargs.image_sizes] = image_sizes
         images = [
-            pad(
+            [
                 normalize(
-                    resize(image, im_height, im_width, patch_size) / kwargs[VisionModelKwargs.image_rescale_factor],
-                    mean=kwargs[VisionModelKwargs.image_mean],
-                    std=kwargs[VisionModelKwargs.image_std],
-                ),
-                max_height=im_height,
-                max_width=im_width,
-            )
-            for image in images
+                    resize(image, im_height, im_width, patch_size).to(
+                        dtype=self._tensor_space.distributed_config.training_dtype.torch
+                    )
+                    / kwargs[VisionEncoderKwargs.image_rescale_factor],
+                    mean=kwargs[VisionEncoderKwargs.image_mean],
+                    std=kwargs[VisionEncoderKwargs.image_std],
+                )
+                for image in imgs
+            ]
+            for imgs in images
         ]
-        images = torch.stack(images, dim=0).to(
-            # TODO Soham: is this needed?
-            device=self._tensor_space.distributed.device,
-            dtype=self._distributed_config.training_dtype.torch,
-        )
-        kwargs[VisionModelKwargs.images] = images
-        kwargs[VisionModelKwargs.rotary_inv_freq] = create_inv_freqs(
-            kwargs[VisionModelKwargs.rope_theta],
-            kwargs[VisionModelKwargs.kv_channels],
+        # position_ids = position_ids_in_meshgrid(image_sizes, im_height, patch_size)
+        patches = []
+        patch_position_ids = []
+        cu_seqlens = [0]
+        max_seqlen = -1
+        for imgs, sizes in zip(images, image_sizes):
+            # TODO Soham: should this be micro_sequence_length?
+            # sum(
+            #     get_num_patches(*size, patch_size) for size in sizes
+            # )
+            seq_patches = []
+            for image, size in zip(imgs, sizes):
+                seqlen = get_num_patches(*size, patch_size)
+                if seqlen > max_seqlen:
+                    max_seqlen = seqlen
+                cu_seqlens.append(cu_seqlens[-1] + seqlen)
+                seq_patches.append(
+                    torch.cat(
+                        [
+                            torch.nn.functional.unfold(image, kernel_size=patch_size, stride=patch_size).T.reshape(
+                                -1, 3, patch_size, patch_size
+                            ),
+                        ]
+                    )
+                )
+            padding_size = kwargs[TransformerKwargs.sequence_length] - cu_seqlens[-1]
+            if padding_size > max_seqlen:
+                max_seqlen = padding_size
+            cu_seqlens.append(kwargs[TransformerKwargs.sequence_length])
+            patches.append(
+                torch.cat(
+                    [
+                        *seq_patches,
+                        torch.zeros(padding_size, 3, patch_size, patch_size).to(
+                            dtype=self._tensor_space.distributed_config.training_dtype.torch,
+                            device=self._tensor_space.distributed.device,
+                        ),
+                    ]
+                )
+            )
+            position_ids = torch.cat(
+                [position_ids_in_meshgrid(*size, im_height // patch_size, patch_size) for size in sizes]
+            ).to(device=self._tensor_space.distributed.device)
+            # We pad at the end instead of padding at the position in meshgrid because flash attention does not support custom attention masks
+            patch_position_ids.append(
+                torch.cat(
+                    [
+                        position_ids,
+                        torch.full((padding_size,), 0).to(device=self._tensor_space.distributed.device),
+                    ]
+                )
+            )
+            # TODO Soham: remove
+            assert patches[-1].size(0) == kwargs[TransformerKwargs.sequence_length]
+        patches = torch.cat(patches)
+        patch_position_ids = torch.cat(patch_position_ids)
+        kwargs[VisionEncoderKwargs.image_patches] = patches
+        kwargs[VisionEncoderKwargs.rotary_inv_freq] = create_inv_freqs(
+            kwargs[VisionEncoderKwargs.rope_theta],
+            kwargs[VisionEncoderKwargs.kv_channels],
             im_height,
             patch_size,
         ).to(device=self._tensor_space.distributed.device)
+        kwargs[VisionEncoderKwargs.max_image_tokens] = div(im_height * im_width, patch_size**2)
+        kwargs[VisionTransformerKwargs.patch_position_ids] = patch_position_ids
+        # TODO Soham: handle sequence data parallel
+        kwargs[VisionTransformerKwargs.cu_seqlens_q] = torch.tensor(
+            cu_seqlens, device=self._tensor_space.distributed.device, dtype=torch.int32
+        )
+        kwargs[VisionTransformerKwargs.cu_seqlens_k] = torch.tensor(
+            cu_seqlens, device=self._tensor_space.distributed.device, dtype=torch.int32
+        )
+        kwargs[VisionTransformerKwargs.max_seqlen_q] = max_seqlen
+        kwargs[VisionTransformerKwargs.max_seqlen_k] = max_seqlen

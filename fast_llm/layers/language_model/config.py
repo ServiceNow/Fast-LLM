@@ -6,7 +6,7 @@ from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
 from fast_llm.engine.distributed.config import DistributedDimNames
 from fast_llm.functional.config import CrossEntropyImpl
 from fast_llm.layers.transformer.config import TransformerArchitectureConfig, TransformerConfig
-from fast_llm.layers.vision_encoder.config import VisionArchitectureConfig
+from fast_llm.layers.vision_encoder.config import VisionEncoderArchitectureConfig, VisionEncoderConfig
 from fast_llm.utils import Assert
 
 
@@ -34,6 +34,7 @@ class LanguageModelKwargs:
     position_ids = "position_ids"
     # TODO: These are generic
     labels = "labels"
+    tokens = "tokens"
     phase = "phase"
 
 
@@ -44,7 +45,7 @@ class LanguageModelArchitectureConfig(BaseModelArchitectureConfig):
         desc="Configuration for the transformer architecture.",
         hint=FieldHint.core,
     )
-    vision_encoder: None | VisionArchitectureConfig = Field(
+    vision_encoder: None | VisionEncoderArchitectureConfig = Field(
         default=None,
         desc="Configuration for the vision encoder that transforms images into embeddings.",
         hint=FieldHint.optional,
@@ -130,7 +131,7 @@ class LanguageModelBaseConfig(LanguageModelArchitectureConfig, BaseModelConfig):
     architecture_class = LanguageModelArchitectureConfig
 
     transformer: TransformerConfig = FieldUpdate(default_factory=TransformerConfig)
-    vision_encoder: None | VisionArchitectureConfig = FieldUpdate(
+    vision_encoder: None | VisionEncoderConfig = FieldUpdate(
         default=None,
         desc="Configuration for the vision encoder that transforms images into embeddings.",
         hint=FieldHint.optional,
@@ -215,16 +216,3 @@ class LanguageModelBaseConfig(LanguageModelArchitectureConfig, BaseModelConfig):
 
         if self.vision_encoder is not None:
             self.vision_encoder.setup_tensor_space(tensor_space)
-
-
-class MultiModalBaseConfig(BaseModelConfig):
-    language_model: LanguageModelBaseConfig = Field(
-        default_factory=LanguageModelBaseConfig,
-        desc="Configuration for the language model.",
-        hint=FieldHint.core,
-    )
-    vision_model: VisionArchitectureConfig = Field(
-        default_factory=VisionArchitectureConfig,
-        desc="Configuration for the vision inputs.",
-        hint=FieldHint.core,
-    )

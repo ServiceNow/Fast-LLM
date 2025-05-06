@@ -8,9 +8,15 @@ from fast_llm.engine.base_model.base_model import Layer
 from fast_llm.engine.config_utils.run import log_pipeline_parallel_main_rank
 from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
 from fast_llm.layers.transformer.attention import Attention
-from fast_llm.layers.transformer.config import TransformerConfig, TransformerDimNames, TransformerKwargs
+from fast_llm.layers.transformer.config import (
+    TransformerConfig,
+    TransformerDimNames,
+    TransformerKwargs,
+    VisionTransformerConfig,
+)
 from fast_llm.layers.transformer.mixture_of_experts import MixtureOfExpertMLP
 from fast_llm.layers.transformer.mlp import MLP
+from fast_llm.layers.vision_encoder.config import VisionTransformerDimNames, VisionTransformerKwargs
 from fast_llm.logging import log_distributed_grad, log_distributed_tensor, log_memory_usage
 from fast_llm.tensor import TensorMeta
 
@@ -30,6 +36,12 @@ class TransformerLayer(Layer):
         return_input: bool = False,
     ):
         super().__init__()
+        if isinstance(config, VisionTransformerConfig):
+            self._transformer_dim_names = VisionTransformerDimNames
+            self._transformer_kwargs = VisionTransformerKwargs
+        elif isinstance(config, TransformerConfig):
+            self._transformer_dim_names = TransformerDimNames
+            self._transformer_kwargs = TransformerKwargs
         self._config = config
         self._tensor_space = tensor_space
         self._dropout_p = self._config.hidden_dropout
@@ -39,7 +51,7 @@ class TransformerLayer(Layer):
         self._layer_index = layer_index
         self._debug_mode = self._config.debug_transformer or self._config.debug_transformer_memory
 
-        hidden_dim = self._tensor_space.get_tensor_dim(TransformerDimNames.hidden)
+        hidden_dim = self._tensor_space.get_tensor_dim(self._transformer_dim_names.hidden)
         self.norm_1 = self._config.normalization.get_layer(hidden_dim)
         self.norm_2 = self._config.normalization.get_layer(hidden_dim)
 
@@ -66,7 +78,7 @@ class TransformerLayer(Layer):
         return f"Transformer layer {self._layer_index}"
 
     def _get_meta(self, tensor: torch.Tensor, name: str, kwargs: dict):
-        dims = kwargs[TransformerKwargs.hidden_dims]
+        dims = kwargs[self._transformer_kwargs.hidden_dims]
         if self._return_input:
             dims = (TensorDim("stacked_input_output", 2),) + dims
         return TensorMeta.from_dims(dims, tensor_name=f"{self.name} {name}", dtype=tensor.dtype)
