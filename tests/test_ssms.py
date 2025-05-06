@@ -29,7 +29,6 @@ except ImportError:
         None,
         None,
         None,
-        None,
     )
     # Mamba not installed, skipping tests
 
