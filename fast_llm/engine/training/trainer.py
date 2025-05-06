@@ -24,7 +24,7 @@ from fast_llm.engine.optimizer.optimizer import Optimizer
 from fast_llm.engine.schedule.runner import ScheduleRunner
 from fast_llm.engine.schedule.schedule import Schedule
 from fast_llm.engine.training.config import TrainerConfig, TrainingCheckpointBaseConfig, TrainingCheckpointConfig
-from fast_llm.engine.training.evaluator import Evaluator
+from fast_llm.engine.training.evaluator import EvaluatorRunner
 from fast_llm.engine.training.wandb import Wandb
 from fast_llm.logging import format_metrics, get_memory_usage_mib, log_memory_usage
 from fast_llm.utils import Assert
@@ -45,7 +45,7 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
 
     _is_evaluation_only: bool
 
-    _evaluator: Evaluator
+    _evaluator_runner: EvaluatorRunner
 
     def __init__(self, config: TrainerConfig):
         super().__init__(config)
@@ -110,7 +110,7 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
         else:
             self._samples_per_split = {}
 
-        self._evaluator = Evaluator(
+        self._evaluator_runner = EvaluatorRunner(
             config=self._config,
             get_tflops_func=self.get_tflops,
         )
@@ -159,14 +159,14 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
             }
             | {
                 dataset_name: self._get_sampling_parameters({"num_samples": samples})
-                for dataset_name, samples in self._evaluator.get_datasets_samples().items()
+                for dataset_name, samples in self._evaluator_runner.get_datasets_samples().items()
             },
             None if run.experiment_directory is None else run.experiment_directory / "dataset_cache",
             timeout=self._config.training.timeout,
         )
 
         # Must be called with all arguments set up
-        self._evaluator.setup(
+        self._evaluator_runner.setup(
             distributed=self._distributed,
             run=self._run,
             multi_stage=self._multi_stage,
@@ -221,7 +221,7 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
         else:
             metrics = {}
             done = True
-            self._evaluator.run(
+            self._evaluator_runner.run(
                 metrics=metrics,
                 done=done,
                 completed_steps=0,
@@ -363,7 +363,7 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
 
                 # Evaluation
                 # TODO: Adjust valid iterator length.
-                self._evaluator.run(
+                self._evaluator_runner.run(
                     metrics=metrics,
                     done=done,
                     completed_steps=self._completed_steps,

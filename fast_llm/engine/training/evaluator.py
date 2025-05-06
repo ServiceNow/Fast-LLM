@@ -20,9 +20,9 @@ from fast_llm.engine.schedule.runner import ScheduleRunner
 from fast_llm.engine.schedule.schedule import Schedule
 from fast_llm.engine.training.config import (
     TrainerConfig,
-    EvaluationConfig,
-    EvaluationLossConfig,
-    EvaluationHarnessConfig,
+    EvaluatorConfig,
+    EvaluatorLossConfig,
+    EvaluatorLmEvalConfig,
 )
 from fast_llm.engine.training.wandb import Wandb
 from fast_llm.logging import format_metrics, get_memory_usage_mib, log_memory_usage
@@ -36,8 +36,8 @@ from lm_eval.evaluator import simple_evaluate as lm_eval_simple_evaluate
 logger = logging.getLogger(__name__)
 
 
-class Evaluation[ConfigType: EvaluationConfig](Configurable[ConfigType], abc.ABC):
-    config_class: typing.ClassVar[type[EvaluationConfig]] = EvaluationConfig
+class Evaluator[ConfigType: EvaluatorConfig](Configurable[ConfigType], abc.ABC):
+    config_class: typing.ClassVar[type[EvaluatorConfig]] = EvaluatorConfig
 
     _is_setup: bool = False
 
@@ -45,10 +45,10 @@ class Evaluation[ConfigType: EvaluationConfig](Configurable[ConfigType], abc.ABC
     def build(
         cls,
         name: str,
-        eval_config: EvaluationLossConfig,
+        eval_config: EvaluatorLossConfig,
         trainer_config: TrainerConfig,
         get_tflops_func: callable,
-    ) -> "Evaluation":
+    ) -> "Evaluator":
         return cls(
             name=name,
             eval_config=eval_config,
@@ -89,13 +89,13 @@ class Evaluation[ConfigType: EvaluationConfig](Configurable[ConfigType], abc.ABC
         """
 
 
-class EvaluationLoss[ConfigType: EvaluationLossConfig](Evaluation[ConfigType]):
-    config_class: typing.ClassVar[type[EvaluationLossConfig]] = EvaluationLossConfig
+class EvaluatorLoss[ConfigType: EvaluatorLossConfig](Evaluator[ConfigType]):
+    config_class: typing.ClassVar[type[EvaluatorLossConfig]] = EvaluatorLossConfig
 
     def __init__(
         self,
         name: str,
-        eval_config: EvaluationLossConfig,
+        eval_config: EvaluatorLossConfig,
         trainer_config: TrainerConfig,
         get_tflops_func: callable,
     ):
@@ -244,13 +244,13 @@ class EvaluationLoss[ConfigType: EvaluationLossConfig](Evaluation[ConfigType]):
         )
 
 
-class EvaluationHarness[ConfigType: EvaluationHarnessConfig](Evaluation[ConfigType]):
-    config_class: typing.ClassVar[type[EvaluationHarnessConfig]] = EvaluationHarnessConfig
+class EvaluatorLmEval[ConfigType: EvaluatorLmEvalConfig](Evaluator[ConfigType]):
+    config_class: typing.ClassVar[type[EvaluatorLmEvalConfig]] = EvaluatorLmEvalConfig
 
     def __init__(
         self,
         name: str,
-        eval_config: EvaluationHarnessConfig,
+        eval_config: EvaluatorLmEvalConfig,
         trainer_config: TrainerConfig,
         get_tflops_func: callable,
     ):
@@ -351,7 +351,7 @@ class EvaluationHarness[ConfigType: EvaluationHarnessConfig](Evaluation[ConfigTy
 
 
 # NOTE: This is not a standalone runnable; it's a submodule of Trainer used for code encapsulation.
-class Evaluator:
+class EvaluatorRunner:
     _is_setup: bool = False
 
     def __init__(
@@ -361,7 +361,7 @@ class Evaluator:
     ):
         self._config = config
         self._evaluations = [
-            eval_config.get_evaluation_class().build(
+            eval_config.get_evaluator_class().build(
                 name=name,
                 eval_config=eval_config,
                 trainer_config=config,

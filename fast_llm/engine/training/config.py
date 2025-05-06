@@ -33,7 +33,7 @@ from fast_llm.utils import Assert, Registry
 if typing.TYPE_CHECKING:
     from fast_llm.engine.inference.runner import InferenceRunner
     from fast_llm.engine.training.trainer import Trainer
-    from fast_llm.engine.training.evaluator import Evaluation, EvaluationLoss, EvaluationHarness
+    from fast_llm.engine.training.evaluator import Evaluator, EvaluatorLoss, EvaluatorLmEval
 
 
 @config_class()
@@ -154,10 +154,10 @@ class WandbConfig(Config):
 
 
 @config_class()
-class EvaluationConfig(IntervalConfig):
+class EvaluatorConfig(IntervalConfig):
     _abstract: typing.ClassVar[bool] = True
     # TODO: Generalize dynamic types?
-    _registry: typing.ClassVar[Registry[str, type["EvaluationConfig"]]] = Registry[str, type["EvaluationConfig"]](
+    _registry: typing.ClassVar[Registry[str, type["EvaluatorConfig"]]] = Registry[str, type["EvaluationConfig"]](
         "evaluation_class", {}
     )
     type_: typing.ClassVar[str | None] = None
@@ -168,7 +168,7 @@ class EvaluationConfig(IntervalConfig):
     )
 
     @classmethod
-    def get_evaluation_class(cls) -> "Evaluation":
+    def get_evaluator_class(cls) -> "Evaluator":
         raise NotImplementedError
 
     def _validate(self) -> None:
@@ -191,7 +191,7 @@ class EvaluationConfig(IntervalConfig):
             #       If 'type' is not provided, it falls back to 'loss'.
             type_ = "loss"
             default["type"] = type_
-            actual_cls = EvaluationLossConfig
+            actual_cls = EvaluatorLossConfig
             # actual_cls = cls
         else:
             if type_ not in cls._registry:
@@ -215,12 +215,12 @@ class EvaluationConfig(IntervalConfig):
                     f"Registry {cls._registry.name} already contains type {cls.type_}."
                     f" Make sure all classes either have a unique or `None` type."
                 )
-            EvaluationConfig._registry[cls.type_] = cls
+            EvaluatorConfig._registry[cls.type_] = cls
         super().__init_subclass__()
 
 
 @config_class()
-class EvaluationLossConfig(EvaluationConfig):
+class EvaluatorLossConfig(EvaluatorConfig):
     _abstract: typing.ClassVar[bool] = False
     type_: typing.ClassVar[str | None] = "loss"
 
@@ -241,14 +241,14 @@ class EvaluationLossConfig(EvaluationConfig):
         return (self.get_count(training_iterations) + extra_evaluations) * self.iterations if self.enabled() else 0
 
     @classmethod
-    def get_evaluation_class(cls) -> type["EvaluationLoss"]:
-        from fast_llm.engine.training.evaluator import EvaluationLoss
+    def get_evaluator_class(cls) -> type["EvaluatorLoss"]:
+        from fast_llm.engine.training.evaluator import EvaluatorLoss
 
-        return EvaluationLoss
+        return EvaluatorLoss
 
 
 @config_class()
-class EvaluationHarnessConfig(EvaluationConfig):
+class EvaluatorLmEvalConfig(EvaluatorConfig):
     _abstract: typing.ClassVar[bool] = False
     type_: typing.ClassVar[str | None] = "lm_eval"
 
@@ -288,10 +288,10 @@ class EvaluationHarnessConfig(EvaluationConfig):
     )
 
     @classmethod
-    def get_evaluation_class(cls) -> type["EvaluationHarness"]:
-        from fast_llm.engine.training.evaluator import EvaluationHarness
+    def get_evaluator_class(cls) -> type["EvaluatorLmEval"]:
+        from fast_llm.engine.training.evaluator import EvaluatorLmEval
 
-        return EvaluationHarness
+        return EvaluatorLmEval
 
 
 @config_class()
@@ -403,7 +403,7 @@ class ShutdownConfig(IntervalConfig):
 
 @config_class()
 class TrainingConfig(Config):
-    evaluations: dict[str, EvaluationConfig] = Field(
+    evaluations: dict[str, EvaluatorConfig] = Field(
         default_factory=dict,
         desc="A dictionary of evaluation dataset names and their configurations for the validation phase.",
         hint=FieldHint.core,
