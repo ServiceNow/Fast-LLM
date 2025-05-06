@@ -42,39 +42,40 @@ class HybridSSMBaseModel[ConfigType: HybridSSMBaseModelConfig](GPTBaseModel[Conf
         layers = [LanguageModelHead(self._config, self._tensor_space, prediction_distance=0)]
 
         if self._config.prediction_heads > 1:
-            for i, head_type in enumerate(self._config.mtp_heads):
-                if head_type == "t":
+            block_type = self._config.default_mtp_type or self._config.hybrid_block_layout[-1]
+            for i in range(1, self._config.prediction_heads):
+                if block_type == "t":
                     layers.append(
                         TransformerLayer(
                             self._config.transformer,
                             self._tensor_space,
                             layer_index=len(self._config.hybrid_block_layout),
-                            return_input=i != self._config.prediction_heads - 2,
+                            return_input=i != self._config.prediction_heads - 1,
                         )
                     )
-                elif head_type == "m2":
+                elif block_type == "m2":
                     mamba_block = self.SSM_BLOCK_CLS(
                         config_transformer=self._config.transformer,
                         config_ssm=self._config.ssm,
                         mixer_cls=DiscreteMamba2,
                         layer_index=len(self._config.hybrid_block_layout),
                         tensor_space=self._tensor_space,
-                        return_input=i != self._config.prediction_heads - 2,
+                        return_input=i != self._config.prediction_heads - 1,
                     )
                     layers.append(mamba_block)
-                elif head_type == "m":
+                elif block_type == "m":
                     mamba_block = self.SSM_BLOCK_CLS(
                         config_transformer=self._config.transformer,
                         config_ssm=self._config.ssm,
                         mixer_cls=MambaLayer,
                         layer_index=len(self._config.hybrid_block_layout),
                         tensor_space=self._tensor_space,
-                        return_input=i != self._config.prediction_heads - 2,
+                        return_input=i != self._config.prediction_heads - 1,
                     )
                     layers.append(mamba_block)
                 else:
-                    raise ValueError(f"Invalid block type: {head_type}. Must be 't' or 'm' or 'm2'")
-                layers.append(LanguageModelHead(self._config, self._tensor_space, prediction_distance=i + 1))
+                    raise ValueError(f"Invalid block type: {block_type}. Must be 't' or 'm' or 'm2'")
+                layers.append(LanguageModelHead(self._config, self._tensor_space, prediction_distance=i))
 
         return layers
 

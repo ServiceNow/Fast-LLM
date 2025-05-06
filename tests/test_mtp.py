@@ -8,20 +8,20 @@ from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.layers.language_model.config import LanguageModelKwargs, LanguageModelLossNames
 from fast_llm.layers.language_model.embedding import WORD_EMBEDDINGS_WEIGHT
-from fast_llm.layers.language_model.head import OUTPUT_WEIGHTS
-from fast_llm.layers.transformer.config import TransformerConfig, TransformerKwargs
+from fast_llm.layers.language_model.head import OUTPUT_WEIGHTS, LanguageModelHead
+from fast_llm.layers.transformer.config import TransformerKwargs
+from fast_llm.layers.transformer.transformer import TransformerLayer
 from fast_llm.models.gpt.config import GPTBaseModelConfig
 from fast_llm.models.gpt.model import GPTBaseModel
 from fast_llm.utils import Assert
-from tests.common import requires_cuda
+from tests.common import get_hybrid_config, materialize_meta_tensors, requires_cuda
 
 try:
-    from fast_llm.layers.ssm.config import SSMConfig
     from fast_llm.layers.ssm.discrete_mamba2 import DiscreteMamba2
     from fast_llm.layers.ssm.mamba_layer import MambaLayer
-    from fast_llm.models.ssm.model import HybridSSMBaseModel, HybridSSMBaseModelConfig
+    from fast_llm.models.ssm.model import HybridSSMBaseModel
 except ImportError:
-    MambaLayer, HybridSSMBaseModel, HybridSSMBaseModelConfig, DiscreteMamba2 = (
+    MambaLayer, HybridSSMBaseModel, DiscreteMamba2 = (
         None,
         None,
         None,
@@ -39,30 +39,6 @@ HIDDEN_SIZE = 256
 VOCAB_SIZE = 500
 
 
-def materialize_meta_tensors(model, tensor_space):
-    # Materialize parameters that are on meta device
-    for name, param in model.named_parameters():
-        if param.device.type == "meta":
-            # Check if the parameter is a custom tensor type
-            if hasattr(param, "tensor_name") and hasattr(param, "init_parameter"):
-                param_data = param.new_empty(param.shape, device="cuda")
-                # Initialize param_data
-                param.init_parameter(param_data, tensor_space.distributed)
-                # Replace the parameter in the module
-                module_path, param_name = name.rsplit(".", 1) if "." in name else (None, name)
-                module = model
-                if module_path is not None:
-                    for part in module_path.split("."):
-                        module = getattr(module, part)
-                param = torch.nn.Parameter(param_data, requires_grad=param.requires_grad)
-                # TODO: add param_grad_is_zero etc., grad_buffer, etc., see test_mlp_recomputation
-                param.grad = None
-                param.grad_buffer = torch.empty_like(param)
-                param.param_grad_is_zero = True
-                module._parameters[param_name] = param
-    return model
-
-
 @pytest.fixture
 def distributed_config():
     return DistributedConfig(
@@ -77,22 +53,6 @@ def distributed_config():
 @pytest.fixture
 def distributed(distributed_config):
     return Distributed(config=distributed_config)
-
-
-def get_hybrid_config(hybrid_block_layout=["t", "m"], mtp_heads=["t"]):
-    config = HybridSSMBaseModelConfig(
-        transformer=TransformerConfig(num_layers=len(hybrid_block_layout)),
-        ssm=SSMConfig(),
-        hybrid_block_layout=hybrid_block_layout,
-        mtp_heads=mtp_heads,
-        prediction_heads=len(mtp_heads) + 1,
-        init_method_std_embed=0.02,
-        init_method_min_embed=-0.02,
-        init_method_max_embed=0.02,
-        use_position_embeddings=True,
-        tie_word_embeddings=False,
-    )
-    return config
 
 
 @requires_cuda
@@ -173,15 +133,19 @@ def test_transformer_mtp(config_dict: dict[str, typing.Any]):
 @requires_cuda
 @pytest.mark.skipif(not run_hybrid_test, reason="No CUDA available or Mamba not installed")
 @pytest.mark.parametrize(
-    ("hybrid_block_layout", "mtp_heads"),
+    ("hybrid_block_layout", "prediction_heads", "default_mtp_type"),
     [
-        (["m", "t"], ["t"]),
-        (["t", "m2"], ["m2", "m"]),
-        (["t", "m"], ["m", "t", "m2"]),
+        (["m", "t"], 1, None),
+        (["t", "m"], 2, None),
+        (["m", "t"], 2, None),
+        (["t", "m2"], 3, None),
+        (["t", "m2"], 3, "m"),
     ],
 )
-def test_hybrid_model_mtp(distributed_config, hybrid_block_layout, mtp_heads):
-    hybrid_config = get_hybrid_config(hybrid_block_layout=hybrid_block_layout, mtp_heads=mtp_heads)
+def test_hybrid_model_mtp(distributed_config, hybrid_block_layout, prediction_heads, default_mtp_type):
+    hybrid_config = get_hybrid_config(
+        hybrid_block_layout=hybrid_block_layout, prediction_heads=prediction_heads, default_mtp_type=default_mtp_type
+    )
     model = HybridSSMBaseModel(hybrid_config, distributed_config)
     distributed = Distributed(distributed_config)
     model.setup(distributed)
@@ -189,15 +153,29 @@ def test_hybrid_model_mtp(distributed_config, hybrid_block_layout, mtp_heads):
     materialize_meta_tensors(model, tensor_space)
     model.to("cuda")
 
+    num_heads, num_mtp_blocks = 0, 0
+    str_block_mapping = {"t": TransformerLayer, "m": MambaLayer, "m2": DiscreteMamba2}
+    mtp_block_type = default_mtp_type or hybrid_block_layout[-1]
+    for block in model.get_output_layers():
+        if isinstance(block, LanguageModelHead):
+            num_heads += 1
+        else:
+            block = getattr(block, "mixer", block)
+            Assert.custom(
+                lambda _: isinstance(block, str_block_mapping[mtp_block_type]),
+                f"Block {block} is not of type {str_block_mapping[mtp_block_type]}",
+            )
+            num_mtp_blocks += 1
+    Assert.eq(num_heads, prediction_heads)
+    Assert.eq(num_mtp_blocks, prediction_heads - 1)
+
     batch_size = 2
     seq_length = 32
     x = torch.randint(0, 49152, (batch_size, seq_length), device="cuda")
     position_ids = torch.arange(seq_length, device="cuda", dtype=torch.int64)
     attention_mask = torch.ones((1, 1, 1, 1), device="cuda", dtype=torch.bool)  # will be broadcasted to right shape
     labels = torch.randint(0, 49152, (batch_size, seq_length + model._config.prediction_heads - 1), device="cuda")
-    losses = {
-        LanguageModelLossNames.multi_token_prediction_loss(i): [] for i in range(len(model._config.mtp_heads) + 1)
-    }
+    losses = {LanguageModelLossNames.multi_token_prediction_loss(i): [] for i in range(model._config.prediction_heads)}
     kwargs = {
         "position_ids": position_ids,
         TransformerKwargs.sequence_first: False,
@@ -220,7 +198,7 @@ def test_hybrid_model_mtp(distributed_config, hybrid_block_layout, mtp_heads):
     loss = sum(
         [
             sum(losses[LanguageModelLossNames.multi_token_prediction_loss(i)])
-            for i in range(len(model._config.mtp_heads) + 1)
+            for i in range(model._config.prediction_heads)
         ]
     )
     loss.backward()
