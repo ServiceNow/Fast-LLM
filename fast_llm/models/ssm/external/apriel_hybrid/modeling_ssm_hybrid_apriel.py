@@ -21,7 +21,10 @@ from transformers.pytorch_utils import ALL_LAYERNORM_LAYERS
 from transformers.utils import LossKwargs, add_start_docstrings, add_start_docstrings_to_model_forward, logging
 from transformers.utils.generic import ModelOutput
 
-from fast_llm.models.ssm.external.configuration_ssm_hybrid_apriel import ROPE_INIT_FUNCTIONS, AprielSSMHybridConfig
+from fast_llm.models.ssm.external.apriel_hybrid.configuration_ssm_hybrid_apriel import (
+    ROPE_INIT_FUNCTIONS,
+    AprielSSMHybridConfig,
+)
 
 logger = logging.get_logger(__name__)
 
@@ -875,7 +878,7 @@ class AprielSSMHybridModel(AprielSSMPreTrainedModel):
         factory_kwargs = {"device": device, "dtype": dtype}
         self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size, self.padding_idx, **factory_kwargs)
         blocks = []
-        for layer_idx, type in enumerate(config.ssm_block_pattern):
+        for layer_idx, type in enumerate(config.hybrid_block_layout):
             if type == "m2d":
                 blocks.append(AprielSSMDecoderLayer(config, layer_idx, **factory_kwargs))
             elif type == "t":
@@ -1169,11 +1172,12 @@ class AprielSSMHybridForCausalLM(AprielSSMPreTrainedModel, GenerationMixin):
         **kwargs: Unpack[KwargsForCausalLM],
     ) -> Union[tuple, CausalLMOutputWithPast]:
 
-        outputs = self.model(
+        outputs: BaseModelOutputWithPast = self.model(
             input_ids,
             return_hidden_states=return_hidden_states,
             inference_params=inference_params,
             position_ids=position_ids,
+            return_dict=True,
         )
 
         if outputs["last_hidden_state"] is not None and return_logits:
@@ -1185,8 +1189,8 @@ class AprielSSMHybridForCausalLM(AprielSSMPreTrainedModel, GenerationMixin):
         return CustomMambaCausalLMOutput(
             loss=None,
             logits=outputs["logits"],
-            all_hidden_states=outputs["all_hidden_states"],
-            last_hidden_state=outputs["last_hidden_state"],
+            all_hidden_states=outputs.hidden_states,
+            last_hidden_state=outputs.last_hidden_state,
         )
 
     def generate(self, *args, **kwargs):

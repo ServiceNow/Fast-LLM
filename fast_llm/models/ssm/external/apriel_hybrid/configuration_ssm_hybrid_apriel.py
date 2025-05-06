@@ -344,7 +344,7 @@ class AprielSSMHybridConfig(PretrainedConfig):
     >>> configuration = model.config
     ```"""
 
-    model_type = "apriel"
+    model_type = "apriel_ssm_hybrid"
     keys_to_ignore_at_inference = ["past_key_values"]
     # Default tensor parallel plan for base model `AprielModel`
     base_model_tp_plan = {
@@ -386,7 +386,7 @@ class AprielSSMHybridConfig(PretrainedConfig):
         attention_dropout=0.0,
         mlp_bias=False,
         head_dim=None,
-        ssm_block_pattern=["m2d"],
+        hybrid_block_layout=["m2d"],
         ssm_cfg=None,
         **kwargs,
     ):
@@ -413,10 +413,10 @@ class AprielSSMHybridConfig(PretrainedConfig):
         self.attention_dropout = attention_dropout
         self.mlp_bias = mlp_bias
         self.head_dim = head_dim if head_dim is not None else self.hidden_size // self.num_attention_heads
-        self.ssm_block_pattern = ssm_block_pattern
-        if len(ssm_block_pattern) == 1:
-            self.ssm_block_pattern = [ssm_block_pattern[0]] * self.num_hidden_layers
-        assert len(self.ssm_block_pattern) == self.num_hidden_layers
+        self.hybrid_block_layout = hybrid_block_layout
+        if len(hybrid_block_layout) == 1:
+            self.hybrid_block_layout = [hybrid_block_layout[0]] * self.num_hidden_layers
+        assert len(self.hybrid_block_layout) == self.num_hidden_layers
         # Validate the correctness of rotary position embeddings parameters
         # BC: if there is a 'type' field, copy it it to 'rope_type'.
         if self.rope_scaling is not None and "type" in self.rope_scaling:

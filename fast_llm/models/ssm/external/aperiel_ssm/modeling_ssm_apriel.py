@@ -19,7 +19,7 @@ from transformers.pytorch_utils import ALL_LAYERNORM_LAYERS
 from transformers.utils import LossKwargs, add_start_docstrings, add_start_docstrings_to_model_forward, logging
 from transformers.utils.generic import ModelOutput
 
-from fast_llm.models.ssm.external.configuration_ssm_apriel import AprielSSMConfig
+from fast_llm.models.ssm.external.aperiel_ssm.configuration_ssm_apriel import AprielSSMConfig
 
 logger = logging.get_logger(__name__)
 
@@ -172,7 +172,7 @@ class DiscreteMamba2(nn.Module):
             **factory_kwargs,
         )
         self.z_bias = (
-            nn.Parameter(torch.zeros(self.d_inner, device=device)) if not bias else 0
+            nn.Parameter(torch.zeros(self.d_inner, **factory_kwargs)) if not bias else 0
         )  # make sure z_bias always exists
 
         # Convolutional layer
@@ -197,7 +197,7 @@ class DiscreteMamba2(nn.Module):
             raise ValueError(f"Unknown activation {self.activation}")
 
         # D "skip" parameter
-        self.D = nn.Parameter(torch.ones(self.n_v_heads, device=device))
+        self.D = nn.Parameter(torch.ones(self.n_v_heads, **factory_kwargs))
         self.D._optim = {"weight_decay": 0.0}
 
         # out_proj
@@ -670,7 +670,7 @@ class AprielSSMForCausalLM(AprielSSMPreTrainedModel, GenerationMixin):
 
     def __init__(self, config, device=None, dtype=None, **kwargs):
         super().__init__(config, device=device, dtype=dtype, **kwargs)
-        self.model = AprielSSMModel(config)
+        self.model = AprielSSMModel(config, device=device, dtype=dtype)
         self.vocab_size = config.vocab_size
         factory_kwargs = {"device": device, "dtype": dtype}
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False, **factory_kwargs)

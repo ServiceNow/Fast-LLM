@@ -23,11 +23,17 @@ logger = logging.getLogger(__name__)
 class HybridSSMArchitectureConfig(LanguageModelArchitectureConfig):
     _abstract = False
 
-    hybrid_block_layout: list[str] = Field(
-        default_factory=lambda: [SSMBlockType.mamba2_discrete.value],
+    hybrid_block_layout: list[str] | None = Field(
+        default=None,
         desc=f"Pattern of blocks to use in the model. Availabel types: {SSMBlockType.__members__.values()}",
         hint=FieldHint.core,
     )
+
+    def _validate(self):
+        if self.hybrid_block_layout is None:
+            with self._set_implicit_default():
+                self.hybrid_block_layout = [SSMBlockType.mamba2_discrete.value]
+        super()._validate()
 
 
 @config_class()
@@ -133,6 +139,17 @@ class AprielSSMHuggingfaceCheckpointFormat(CheckpointFormat):
         return AprielSSMHuggingfaceCheckpointHandler
 
 
+class AprielSSMHHybridHuggingfaceCheckpointFormat(CheckpointFormat):
+    support_optimizer: typing.ClassVar[bool] = False
+    name: typing.ClassVar[str] = "apriel_ssm_hybrid"
+
+    @classmethod
+    def get_handler_class(cls) -> type[CheckpointHandler]:
+        from fast_llm.models.ssm.conversion import AprielSSMHHybridHuggingfaceCheckpointHandler
+
+        return AprielSSMHHybridHuggingfaceCheckpointHandler
+
+
 @config_class()
 class HybridSSMModelConfig(FastLLMModelConfig):
     _abstract = False
@@ -141,6 +158,7 @@ class HybridSSMModelConfig(FastLLMModelConfig):
     checkpoint_formats = FastLLMModelConfig.checkpoint_formats + (
         LLambaHuggingfaceCheckpointFormat,
         AprielSSMHuggingfaceCheckpointFormat,
+        AprielSSMHHybridHuggingfaceCheckpointFormat,
     )
 
     @classmethod
