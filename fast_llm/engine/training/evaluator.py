@@ -27,7 +27,7 @@ from fast_llm.engine.training.config import (
 from fast_llm.engine.training.wandb import Wandb
 from fast_llm.logging import format_metrics, get_memory_usage_mib, log_memory_usage
 from fast_llm.utils import Assert
-from fast_llm.engine.training.lm_eval.fast_llm_wrapper import FastLLMWrapper
+from fast_llm.engine.training.lm_eval.fast_llm_wrapper import FastLLMLmEvalWrapper
 from fast_llm.engine.training.lm_eval.utils import prepare_lm_eval_simple_eval_params, process_lm_eval_results
 
 # from fast_llm.engine.training.lm_eval.evaluator import simple_evaluate as lm_eval_simple_evaluate
@@ -281,7 +281,7 @@ class EvaluationHarness[ConfigType: EvaluationHarnessConfig](Evaluation[ConfigTy
         # as lm_eval.simple_evaluate will take it for results['config']['model']
         self._hf_model.config.name_or_path = type(self._hf_model).__name__
 
-        self._flm_wrapper = FastLLMWrapper(
+        self._flm_wrapper = FastLLMLmEvalWrapper(
             model=self._hf_model,
             tokenizer=self._data.tokenizer.tokenizer,
             truncation=self._eval_config.truncation,

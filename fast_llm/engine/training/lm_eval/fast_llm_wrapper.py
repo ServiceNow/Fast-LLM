@@ -1,9 +1,7 @@
 import logging
-import pathlib
 import copy
 import jinja2
 
-from typing import Optional, Union, Any, List, Tuple, Dict
 
 import transformers
 from tqdm.auto import tqdm
@@ -12,22 +10,13 @@ import torch.nn.functional as F
 
 
 # make lazy
-from lm_eval import utils
-from lm_eval.api.model import TemplateLM
-from lm_eval.api.instance import Instance
-from lm_eval.api.model import CacheHook
-from lm_eval.models.utils import (
-    Collator,
-    configure_pad_token,
-    handle_stop_sequences,
-    pad_and_concat,
-    stop_sequences_criteria,
-)
+import lm_eval.api.instance
+import lm_eval.models.utils
+import lm_eval.api.model
+import lm_eval.utils
+
 
 from fast_llm.core.distributed import safe_barrier
-from fast_llm.engine.checkpoint.config import CheckpointLoadConfig
-from fast_llm.engine.multi_stage.config import FastLLMModelConfig
-from fast_llm.models.auto import model_registry
 from fast_llm.engine.inference.huggingface import HuggingfaceBaseModelForCausalLM
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.engine.distributed.config import DistributedConfig
@@ -38,18 +27,17 @@ from fast_llm.core.distributed import scatter_object_list, gather_object
 eval_logger = logging.getLogger(__name__)
 
 
-# move to fast_llm
-class FastLLMWrapper(TemplateLM):
+class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
     _DEFAULT_MAX_LENGTH = 2048
 
     def __init__(
         self,
         model: HuggingfaceBaseModelForCausalLM,
         tokenizer: transformers.PreTrainedTokenizer | transformers.PreTrainedTokenizerFast,
-        truncation: Optional[bool] = False,
+        truncation: bool | None = False,
         logits_cache: bool = True,
-        add_bos_token: Optional[bool] = False,
-        prefix_token_id: Optional[int] = None,
+        add_bos_token: bool | None = False,
+        prefix_token_id: int | None = None,
     ):
         super().__init__()
         # This is for lm_eval sake, we always run lm_eval on one main rank
@@ -94,7 +82,7 @@ class FastLLMWrapper(TemplateLM):
         self.logits_cache = logits_cache
         self.vocab_size = self.tokenizer.vocab_size
         # select (or create) a pad token to use
-        self.tokenizer = configure_pad_token(self.tokenizer, model_config=self.config)
+        self.tokenizer = lm_eval.models.utils.configure_pad_token(self.tokenizer, model_config=self.config)
 
         self.add_bos_token = add_bos_token
         # TODO: do we support gemma models?
@@ -347,7 +335,9 @@ class FastLLMWrapper(TemplateLM):
         if do_sample is False and generation_kwargs.get("temperature") == 0.0:
             generation_kwargs.pop("temperature")
         # build stopping criteria
-        stopping_criteria = stop_sequences_criteria(self.tokenizer, stop, input_ids.shape[1], input_ids.shape[0])
+        stopping_criteria = lm_eval.models.utils.stop_sequences_criteria(
+            self.tokenizer, stop, input_ids.shape[1], input_ids.shape[0]
+        )
         if attention_mask is None:
             return self.model.generate(
                 input_ids=input_ids,
@@ -434,7 +424,7 @@ class FastLLMWrapper(TemplateLM):
     def tokenizer_name(self) -> str:
         return self.tokenizer.name_or_path.replace("/", "__")
 
-    def tok_encode(self, string: str, left_truncate_len=None, add_special_tokens=None) -> List[int]:
+    def tok_encode(self, string: str, left_truncate_len=None, add_special_tokens=None) -> list[int]:
         """ """
         # default for None - empty dict, use predefined tokenizer param
         # used for all models except for CausalLM or predefined value
@@ -458,11 +448,11 @@ class FastLLMWrapper(TemplateLM):
 
     def tok_batch_encode(
         self,
-        strings: List[str],
+        strings: list[str],
         padding_side: str = "left",
         left_truncate_len: int = None,
         truncation: bool = False,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         # encode a batch of strings. converts to tensors and pads automatically, unlike tok_encode.
         old_padding_side = self.tokenizer.padding_side
         self.tokenizer.padding_side = padding_side
@@ -508,7 +498,9 @@ class FastLLMWrapper(TemplateLM):
 
         return logits
 
-    def loglikelihood_rolling(self, requests: List[Instance], disable_tqdm: bool = False) -> List[float]:
+    def loglikelihood_rolling(
+        self, requests: list[lm_eval.api.instance.Instance], disable_tqdm: bool = False
+    ) -> list[float]:
         adaptive_batch_size = None
         if self.batch_size == "auto":
             # using rolling window with maximum context
@@ -527,10 +519,10 @@ class FastLLMWrapper(TemplateLM):
                 disable=(disable_tqdm or (self.rank != 0)),
             )
         ):
-            rolling_token_windows: List[Tuple[List[int], List[int]]] = list(
+            rolling_token_windows: list[tuple[list[int], list[int]]] = list(
                 map(
-                    utils.make_disjoint_window,
-                    utils.get_rolling_token_windows(
+                    lm_eval.utils.make_disjoint_window,
+                    lm_eval.utils.get_rolling_token_windows(
                         token_list=self.tok_encode(string),
                         prefix_token=self.prefix_token_id,
                         max_seq_len=self.max_length,
@@ -605,14 +597,14 @@ class FastLLMWrapper(TemplateLM):
 
     def _loglikelihood_tokens(
         self,
-        requests: List[Tuple[Tuple[str, str], List[int], List[int]]],
+        requests: list[tuple[tuple[str, str], list[int], list[int]]],
         disable_tqdm: bool = False,
         override_bs: int = None,
-    ) -> List[Tuple[float, bool]]:
+    ) -> list[tuple[float, bool]]:
         # TODO: implement some kind of efficient-request-middleware that lumps together requests with the same context
         res = []
 
-        def _collate(req: Tuple[Tuple[str, str], List[int], List[int]]):
+        def _collate(req: tuple[tuple[str, str], list[int], list[int]]):
             """Defines the key for the sorted method"""
             # the negative sign on len(toks) sorts descending - this has a few advantages:
             # - time estimates will always be over not underestimates, which is more useful for planning
@@ -624,7 +616,7 @@ class FastLLMWrapper(TemplateLM):
             toks = req[1] + req[2]
             return -len(toks), tuple(toks)
 
-        def _lookup_one_token_cont(req: Tuple[Tuple[str, str], List[int], List[int]]):
+        def _lookup_one_token_cont(req: tuple[tuple[str, str], list[int], list[int]]):
             """Defines the key to group and lookup one-token continuations"""
             # Use with group_by="contexts" (optional)"
             # allows for the creation of a lookup, so we can reuse logits in case of one-token continuations.
@@ -632,7 +624,7 @@ class FastLLMWrapper(TemplateLM):
             # groups requests by context+continuation[:-1] and infer on one request/group.
             return req[-2] + req[-1][:-1]
 
-        re_ord = Collator(
+        re_ord = lm_eval.models.utils.Collator(
             requests,
             sort_fn=_collate,
             group_by="contexts" if self.backend == "causal" and self.logits_cache else None,
@@ -730,12 +722,18 @@ class FastLLMWrapper(TemplateLM):
             # create encoder attn mask and batched conts, if seq2seq
             call_kwargs = {}
             if self.backend == "causal":
-                batched_inps = pad_and_concat(padding_len_inp, inps, padding_side="right")  # [batch, padding_len_inp]
+                batched_inps = lm_eval.models.utils.pad_and_concat(
+                    padding_len_inp, inps, padding_side="right"
+                )  # [batch, padding_len_inp]
             elif self.backend == "seq2seq":
                 # TODO: left-pad encoder inps and mask?
-                batched_inps = pad_and_concat(padding_len_inp, inps)  # [batch, padding_len_inp]
-                batched_conts = pad_and_concat(padding_len_cont, conts)  # [batch, padding_len_cont]
-                batched_encoder_mask = pad_and_concat(padding_len_inp, encoder_attns)  # [batch, padding_len_inp]
+                batched_inps = lm_eval.models.utils.pad_and_concat(padding_len_inp, inps)  # [batch, padding_len_inp]
+                batched_conts = lm_eval.models.utils.pad_and_concat(
+                    padding_len_cont, conts
+                )  # [batch, padding_len_cont]
+                batched_encoder_mask = lm_eval.models.utils.pad_and_concat(
+                    padding_len_inp, encoder_attns
+                )  # [batch, padding_len_inp]
                 call_kwargs = {
                     "attention_mask": batched_encoder_mask,
                     "labels": batched_conts,
@@ -795,10 +793,10 @@ class FastLLMWrapper(TemplateLM):
 
         return re_ord.get_original(res)
 
-    def generate_until(self, requests: List[Instance], disable_tqdm: bool = False) -> List[str]:
+    def generate_until(self, requests: list[lm_eval.api.instance.Instance], disable_tqdm: bool = False) -> list[str]:
         res = []
 
-        def _collate(req: Tuple[str, dict]):
+        def _collate(req: tuple[str, dict]):
             """Defines the key for the sorted method"""
             # the negative sign on len(toks) sorts descending - this has a few advantages:
             # - time estimates will always be over not underestimates, which is more useful for planning
@@ -833,7 +831,7 @@ class FastLLMWrapper(TemplateLM):
         # so that we don't try to execute e.g. greedy sampling and temp=0.8 sampling
         # in the same batch.
         # group_fn=lambda x: x[1] -> x=(context, gen_kwargs)
-        re_ords = Collator(
+        re_ords = lm_eval.models.utils.Collator(
             [reg.args for reg in requests],
             sort_fn=_collate,
             group_by="gen_kwargs",
@@ -851,7 +849,7 @@ class FastLLMWrapper(TemplateLM):
             if isinstance(gen_kwargs, dict):
                 kwargs = copy.deepcopy(gen_kwargs)  # edge case for repeats > 1
                 # add EOS token to stop sequences
-                until = handle_stop_sequences(kwargs.pop("until", None), eos=eos)
+                until = lm_eval.models.utils.handle_stop_sequences(kwargs.pop("until", None), eos=eos)
             else:
                 raise ValueError(f"Expected `kwargs` to be of type `dict` but got {type(gen_kwargs)}")
             if "max_gen_toks" in kwargs.keys():
@@ -918,7 +916,7 @@ class FastLLMWrapper(TemplateLM):
 
         return res
 
-    def apply_chat_template(self, chat_history: List[Dict[str, str]], add_generation_prompt: bool = True) -> str:
+    def apply_chat_template(self, chat_history: list[dict[str, str]], add_generation_prompt: bool = True) -> str:
         """
         Method to apply a chat template to a list of chat history between user and model.
         """
