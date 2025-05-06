@@ -303,6 +303,8 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                     # We set label indices to -100 for masked spans, inline with ignore_index in torch.nn.CrossEntropyLoss
                     # TODO: take ignore_index from config
                 if batch.loss_masking_spans is not None:
+                    # avoid changing input tokens
+                    labels = labels.clone()
                     for i, spans in enumerate(batch.loss_masking_spans):
                         if not spans.numel():
                             continue
