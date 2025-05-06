@@ -1,15 +1,20 @@
+import enum
 import typing
 
 import torch
+import torch.nn.attention.flex_attention
+import dataclasses
 
 from fast_llm.core.distributed import set_generator
 from fast_llm.core.ops import gather_op, reduce_op, reduce_scatter_op, swap_mult_dim
 from fast_llm.engine.config_utils.tensor_space import TensorSpace
 from fast_llm.functional.autograd import wrap_forward_backward
 from fast_llm.functional.rotary import apply_rotary_embeddings
+from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.functional.triton.rotary import triton_rotary_autograd_
 from fast_llm.layers.common.linear import InputParallelLinear, OutputParallelLinear
 from fast_llm.layers.transformer.config import (
+    AttentionImplementation,
     TransformerConfig,
     TransformerDimNames,
     TransformerKwargs,
@@ -88,7 +93,6 @@ class Attention(torch.nn.Module):
         self._layer_index = layer_index
         self._sequence_parallel = self._tensor_space.distributed_config.sequence_tensor_parallel
         self._debug_transformer = self._config.debug_transformer
-        self._use_flash_attention = self._config.do_use_flash_attention(self._tensor_space.distributed_config)
 
         init_method_qkv = init_normal_(
             std=self._config.init_method_std_qkv,
@@ -148,7 +152,12 @@ class Attention(torch.nn.Module):
         self.dense = self._config.peft.apply_linear(self.dense, TransformerSubLayerName.dense)
 
     def _attn_fused(
-        self, query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, mask: torch.Tensor, mask_value: torch.Tensor
+        self,
+        query: torch.Tensor,
+        key: torch.Tensor,
+        value: torch.Tensor,
+        mask: torch.Tensor,
+        mask_value: torch.Tensor,
     ) -> torch.Tensor:
         # Backup attention (inefficient)
         b, sq, hidden = query.shape
@@ -352,47 +361,133 @@ class Attention(torch.nn.Module):
 
         window_size = self._decide_window_size()
 
-        if self._use_flash_attention:
-            assert _flash_available
-            with set_generator(self._tensor_space.distributed.tp_generator):
-                if (cu_seqlens_q := kwargs.get(TransformerKwargs.cu_seqlens_q, None)) is not None:
+        if self._debug_transformer:
+            assert query.shape == (
+                self._tensor_space.get_tensor_dim(TransformerDimNames.batch).size,
+                self._tensor_space.get_tensor_dim(TransformerDimNames.sequence_q).size,
+                self._local_heads,
+                self._kv_channels,
+            ), f"Query shape mismatch: {query.shape}"
+            assert key.shape == (
+                self._tensor_space.get_tensor_dim(TransformerDimNames.batch).size,
+                self._tensor_space.get_tensor_dim(TransformerDimNames.sequence_k).size,
+                self._local_head_groups,
+                self._kv_channels,
+            ), f"Key shape mismatch: {key.shape}"
+            assert value.shape == (
+                self._tensor_space.get_tensor_dim(TransformerDimNames.batch).size,
+                self._tensor_space.get_tensor_dim(TransformerDimNames.sequence_k).size,
+                self._local_head_groups,
+                self._kv_channels,
+            ), f"Value shape mismatch: {value.shape}"
+
+        attention_implementation = self._config.select_attention_implementation(
+            require_variable_length=TransformerKwargs.sequence_lengths in kwargs,
+            require_blocks=TransformerKwargs.block_lengths in kwargs,
+            require_dropout=self._config.attention_dropout > 0.0,
+            has_half_precision=(
+                self._tensor_space.distributed_config.training_dtype
+                in (
+                    DataType.float16,
+                    DataType.bfloat16,
+                )
+            ),
+        )
+        match attention_implementation:
+            case AttentionImplementation.FLASH:
+                with set_generator(self._tensor_space.distributed.tp_generator):
+                    input_ = _flash_attn_func(
+                        q=query,
+                        k=key,
+                        v=value,
+                        window_size=(-1, -1) if window_size is None else (window_size - 1, 0),
+                        dropout_p=self._config.attention_dropout if self.training else 0.0,
+                        causal=True,
+                        softmax_scale=self._softmax_scale,
+                    )  # type: ignore
+                    input_ = input_.flatten(-2)
+            case AttentionImplementation.FLASH_VARLEN:
+                with set_generator(self._tensor_space.distributed.tp_generator):
                     out_dims = query.size()
                     query = query.view(-1, query.size(-2), query.size(-1))
                     key = key.view(-1, key.size(-2), key.size(-1))
                     value = value.view(-1, value.size(-2), value.size(-1))
                     input_ = _flash_attn_varlen_func(
-                        query,
-                        key,
-                        value,
-                        cu_seqlens_q=cu_seqlens_q,
-                        cu_seqlens_k=kwargs.get(TransformerKwargs.cu_seqlens_k),
-                        max_seqlen_q=kwargs.get(TransformerKwargs.max_seqlen_q),
-                        max_seqlen_k=kwargs.get(TransformerKwargs.max_seqlen_k),
+                        q=query,
+                        k=key,
+                        v=value,
+                        cu_seqlens_q=kwargs[TransformerKwargs.cu_seqlens_q],
+                        cu_seqlens_k=kwargs[TransformerKwargs.cu_seqlens_k],
+                        max_seqlen_q=kwargs[TransformerKwargs.max_seqlen_q],
+                        max_seqlen_k=kwargs[TransformerKwargs.max_seqlen_k],
                         dropout_p=self._config.attention_dropout if self.training else 0.0,
                         window_size=(-1, -1) if window_size is None else (window_size - 1, 0),
                         causal=True,
                         softmax_scale=self._softmax_scale,
-                    ).view(*out_dims)
-                else:
-                    input_ = _flash_attn_func(
+                    )  # type: ignore
+                    input_ = input_.view(*out_dims)
+            case AttentionImplementation.FLEX:
+                input_ = torch.nn.attention.flex_attention.flex_attention(
+                    query=query,
+                    key=key,
+                    value=value,
+                    block_mask=kwargs.get(TransformerKwargs.block_mask),
+                    scale=self._softmax_scale,
+                    enable_gqa=self._local_heads != self._local_head_groups,
+                )  # type: ignore
+            case AttentionImplementation.FLEX_VARLEN:
+                cu_seqlens_q = kwargs[TransformerKwargs.cu_seqlens_q]
+                cu_seqlens_k = kwargs[TransformerKwargs.cu_seqlens_k]
+                seqs = cu_seqlens_q.numel() - 1
+                assert (
+                    cu_seqlens_k.numel() - 1 == seqs
+                ), "cu_seqlens_q and cu_seqlens_k must have the same number of sequences"
+                out_dims = query.size()
+                query = query.view(-1, query.size(-2), query.size(-1))
+                key = key.view(-1, key.size(-2), key.size(-1))
+                value = value.view(-1, value.size(-2), value.size(-1))
+                query_chunks, key_chunks, value_chunks = [], [], []
+                for i in range(seqs):
+                    query_chunks.append(query[cu_seqlens_q[i] : cu_seqlens_q[i + 1]].transpose(0, 1))
+                    key_chunks.append(key[cu_seqlens_k[i] : cu_seqlens_k[i + 1]].transpose(0, 1))
+                    value_chunks.append(value[cu_seqlens_k[i] : cu_seqlens_k[i + 1]].transpose(0, 1))
+                query_nt = torch.nested.as_nested_tensor(query_chunks, layout=torch.jagged)
+                key_nt = torch.nested.as_nested_tensor(key_chunks, layout=torch.jagged)
+                value_nt = torch.nested.as_nested_tensor(value_chunks, layout=torch.jagged)
+                input_ = torch.nn.attention.flex_attention.flex_attention(
+                    query=query_nt,
+                    key=key_nt,
+                    value=value_nt,
+                    block_mask=kwargs.get(TransformerKwargs.block_mask),
+                    scale=self._softmax_scale,
+                    enable_gqa=self._local_heads != self._local_head_groups,
+                )  # type: ignore
+                input_ = input_.values().transpose(0, 1)
+                input_ = input_.view(*out_dims)
+            case AttentionImplementation.SDPA:
+                with set_generator(self._tensor_space.distributed.tp_generator):
+                    input_ = torch.nn.functional.scaled_dot_product_attention(
                         query,
                         key,
                         value,
-                        window_size=(-1, -1) if window_size is None else (window_size - 1, 0),
+                        attn_mask=kwargs.get(TransformerKwargs.attention_mask),
                         dropout_p=self._config.attention_dropout if self.training else 0.0,
-                        causal=True,
-                        softmax_scale=self._softmax_scale,
+                        is_causal=TransformerKwargs.attention_mask not in kwargs,
+                        scale=self._softmax_scale,
+                        enable_gqa=self._local_heads != self._local_head_groups,
                     )
-            input_ = input_.flatten(-2)
-        else:
-            # TODO: Avoid the flattens.
-            input_ = self._attn_fused(
-                query.flatten(-2),
-                key.flatten(-2),
-                value.flatten(-2),
-                kwargs[TransformerKwargs.attention_mask],
-                kwargs[TransformerKwargs.attention_mask_value],
-            )
+                    input_ = input_.flatten(-2)
+            case AttentionImplementation.BACKUP:
+                # TODO: Avoid the flattening.
+                input_ = self._attn_fused(
+                    query.flatten(-2),
+                    key.flatten(-2),
+                    value.flatten(-2),
+                    kwargs[TransformerKwargs.attention_mask],
+                    kwargs[TransformerKwargs.attention_mask_value],
+                )
+            case _:
+                raise ValueError(f"Unknown attention implementation: {self._attention_implementation}")
 
         if self._debug_transformer:
             self._debug_log(query, "query", self._QUERY_DIMS, kwargs)

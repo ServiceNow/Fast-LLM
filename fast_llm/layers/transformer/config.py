@@ -1,3 +1,4 @@
+from curses import flash
 import enum
 import functools
 import logging
@@ -71,6 +72,8 @@ class TransformerKwargs:
     cu_seqlens_k = "cu_seqlens_k"
     max_seqlen_q = "max_seqlen_q"
     max_seqlen_k = "max_seqlen_k"
+    block_lengths = "block_lengths"
+    block_mask = "block_mask"
     # TODO: Review these
     presents = "presents"
     past_key_values = "past_key_values"
@@ -242,6 +245,19 @@ class TransformerPeftConfig(PeftConfig):
                 raise ValueError(
                     f"{TransformerSubLayerName.key_value.value}, {TransformerSubLayerName.key.value} and {TransformerSubLayerName.value_.value} are mutually exclusive."
                 )
+
+
+class AttentionImplementation(enum.StrEnum):
+    """
+    The implementation of the attention layer to use.
+    """
+
+    FLASH = "flash_attention"
+    FLASH_VARLEN = "flash_attention_with_variable_length"
+    FLEX = "flex_attention"
+    FLEX_VARLEN = "flex_attention_with_variable_length"
+    SDPA = "scaled_dot_product_attention"
+    BACKUP = "backup_attention"
 
 
 @config_class()
@@ -435,7 +451,9 @@ class TransformerConfig(BaseModelConfig):
     )
     # Use flash attention if possible (fp16 or bf16)
     use_flash_attention: bool = Field(
-        default=True, desc="Enable Flash Attention if possible.", hint=FieldHint.optional
+        default=True,
+        desc="Enable Flash Attention if possible.",
+        hint=FieldHint.optional,
     )
     window_size: int | None = Field(
         default=None,
@@ -449,7 +467,6 @@ class TransformerConfig(BaseModelConfig):
         hint=FieldHint.optional,
         valid=skip_valid_if_none(check_field(Assert.geq, 0)),
     )
-    # normalization_implementation: NormalizationImplementation = NormalizationImplementation.auto
     mlp_recompute_level: MLPRecomputeLevel = Field(
         default=MLPRecomputeLevel.none,
         desc="Set which of the MLP intermediate activations will be recomputed during the backward passes. This provides a trade-off between memory and speed.",
@@ -595,7 +612,7 @@ class TransformerConfig(BaseModelConfig):
             Assert.geq(self.mlp_lr_scale, 0)
 
     @functools.cached_property
-    def projection_size(self):
+    def projection_size(self) -> int:
         assert self._validated
         return self.num_attention_heads * self.kv_channels
 
@@ -701,14 +718,76 @@ class TransformerConfig(BaseModelConfig):
                 )
             )
 
-    def do_use_flash_attention(self, distributed_config: DistributedConfig) -> bool:
-        use_flash_attention = self.use_flash_attention and distributed_config.training_dtype in (
-            DataType.float16,
-            DataType.bfloat16,
+    # def do_use_flash_attention(self, distributed_config: DistributedConfig) -> bool:
+    #     use_flash_attention = self.use_flash_attention and distributed_config.training_dtype in (
+    #         DataType.float16,
+    #         DataType.bfloat16,
+    #     )
+
+    #     # Config parameter `window_size` only can be used with flash attention
+    #     if not use_flash_attention:
+    #         Assert.is_(self.window_size, None)
+
+    #     return use_flash_attention
+
+    def select_attention_implementation(
+        self,
+        *,
+        require_variable_length: bool,
+        require_blocks: bool,
+        require_dropout: bool,
+        has_half_precision: bool,
+    ) -> AttentionImplementation:
+        preference: list[AttentionImplementation] = []
+        if self.use_flash_attention and has_half_precision:
+            preference.extend([AttentionImplementation.FLASH, AttentionImplementation.FLASH_VARLEN])
+        preference.extend(
+            [
+                AttentionImplementation.FLEX,
+                AttentionImplementation.FLEX_VARLEN,
+                AttentionImplementation.SDPA,
+                AttentionImplementation.BACKUP,
+            ]
         )
 
-        # Config parameter `window_size` only can be used with flash attention
-        if not use_flash_attention:
-            Assert.is_(self.window_size, None)
+        _supports_varlen = {
+            AttentionImplementation.FLASH_VARLEN,
+            AttentionImplementation.FLEX_VARLEN,
+            AttentionImplementation.SDPA,
+            AttentionImplementation.BACKUP,
+        }
+        _supports_blocks = {
+            AttentionImplementation.FLEX_VARLEN,
+            AttentionImplementation.SDPA,
+            AttentionImplementation.BACKUP,
+        }
+        _supports_dropout = {
+            AttentionImplementation.FLASH,
+            AttentionImplementation.FLASH_VARLEN,
+            AttentionImplementation.SDPA,
+            AttentionImplementation.BACKUP,
+        }
+        _needs_half = {AttentionImplementation.FLASH, AttentionImplementation.FLASH_VARLEN}
 
-        return use_flash_attention
+        if require_blocks:
+            require_variable_length = True
+
+        for impl in preference:
+            if require_variable_length and impl not in _supports_varlen:
+                continue
+            if require_blocks and impl not in _supports_blocks:
+                continue
+            if require_dropout and impl not in _supports_dropout:
+                continue
+            if impl in _needs_half and not has_half_precision:
+                continue
+            return impl
+
+        raise ValueError(
+            f"Cannot find a suitable attention implementation for the given requirements: "
+            f"require_variable_length={require_variable_length}, "
+            f"require_blocks={require_blocks}, "
+            f"require_dropout={require_dropout}, "
+            f"has_half_precision={has_half_precision}, "
+            f"use_flash_attention={self.use_flash_attention}"
+        )
