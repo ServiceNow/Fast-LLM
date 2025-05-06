@@ -53,6 +53,7 @@ class FieldHint:
     """
 
     core = "core"
+    architecture = "architecture"
     optional = "optional"
     performance = "performance"
     stability = "stability"
@@ -69,6 +70,7 @@ class FieldHint:
 
 FieldHintImportance = {
     FieldHint.core: 0,
+    FieldHint.architecture: 0,
     FieldHint.optional: 10,
     FieldHint.performance: 20,
     FieldHint.stability: 20,
@@ -95,6 +97,7 @@ class FieldVerboseLevel:
 
 FieldHintDoc = {
     FieldHint.core: "A core configuration parameter that is expected to always be provided explicitly.",
+    FieldHint.architecture: "A base model configuration parameters that shouldn't be modified when loading a pretrained model.",
     FieldHint.optional: "An optional parameter that may be ignored as the default tends to be good enough.",
     FieldHint.performance: "An optional parameter related to computational performance.",
     FieldHint.stability: "An optional parameter related to numerical precision and computational stability.",

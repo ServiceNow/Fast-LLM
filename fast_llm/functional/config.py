@@ -34,7 +34,7 @@ class MLPRecomputeLevel(str, enum.Enum):
         return self in (MLPRecomputeLevel.full, MLPRecomputeLevel.activation_and_input)
 
 
-class ActivationType(str, enum.Enum):
+class ActivationType(enum.StrEnum):
     """
     An enum for the available activation types for the MLP layer.
     """

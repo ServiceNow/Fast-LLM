@@ -6,7 +6,7 @@ import torch._dynamo  # noqa
 
 from fast_llm.config import Configurable
 from fast_llm.core.distributed import check_parallel_match
-from fast_llm.engine.base_model.base_model import BaseModel
+from fast_llm.engine.base_model.base_model import BaseModel, Layer
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
 from fast_llm.engine.distributed.distributed import Distributed
@@ -29,7 +29,7 @@ class StageBase(Configurable[StageConfig]):
         self,
         *,
         config: StageConfig,
-        base_model: BaseModel,
+        base_model: BaseModel | list[Layer],
         distributed_config: DistributedConfig,
         begin: int,
         end: int,
@@ -153,6 +153,7 @@ class StageBase(Configurable[StageConfig]):
                 weight_buffer=weight_buffer,
                 grad_buffer=grad_buffer,
                 sequence_tensor_parallel=self._distributed_config.sequence_tensor_parallel,
+                device=self._distributed.device,
             )
 
         if self._mode.support_forward:

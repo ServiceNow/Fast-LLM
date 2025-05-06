@@ -12,11 +12,9 @@ from fast_llm.config import Configurable
 from fast_llm.core.distributed import safe_barrier
 from fast_llm.data.data.abstract import Data
 from fast_llm.data.dataset.config import SamplingParameters
-from fast_llm.engine.base_model.config import Preprocessor
 from fast_llm.engine.config_utils.run import Run, is_main_rank, log_main_rank, log_pipeline_parallel_main_rank
 from fast_llm.engine.distributed.config import PhaseType
 from fast_llm.engine.distributed.distributed import Distributed
-from fast_llm.engine.inference.runner import InferenceRunner
 from fast_llm.engine.multi_stage.config import StageMode
 from fast_llm.engine.optimizer.config import ParamGroup
 from fast_llm.engine.optimizer.optimizer import Optimizer
@@ -55,9 +53,7 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
             self._reference_models[name] = self._config.get_inference_runner_class()(
                 reference_config.model.get_model_class()(reference_config.model)
             )
-            self._multi_stage.base_model.add_preprocessor(
-                self._get_reference_model_preprocessor(name, self._reference_models[name])
-            )
+            self._multi_stage.base_model.add_reference_model(name, self._reference_models[name])
 
         phase: PhaseType
         self._runner = ScheduleRunner(
@@ -562,6 +558,3 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
     def get_tflops(self, phase: PhaseType, elapsed_time_per_iteration) -> tuple[int, int]:
         # TODO: Do in model, automate/generalize, get other stats
         pass
-
-    def _get_reference_model_preprocessor(self, name: str, inference_runner: InferenceRunner) -> Preprocessor:
-        raise NotImplementedError()

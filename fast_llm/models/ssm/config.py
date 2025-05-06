@@ -8,32 +8,33 @@ from fast_llm.engine.checkpoint.config import CheckpointFormat, CheckpointHandle
 from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig, PretrainedFastLLMModelConfig
 from fast_llm.engine.training.config import TrainerConfig
-from fast_llm.layers.language_model.config import LanguageModelArchitectureConfig, LanguageModelBaseConfig
-from fast_llm.layers.ssm.config import SSMDimNames
+from fast_llm.layers.language_model.config import LanguageModelBaseConfig
+from fast_llm.layers.ssm.config import SSMConfig, SSMDimNames
 from fast_llm.models.gpt.config import GPTBatchConfig
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
+    from fast_llm.models.ssm.huggingface import HuggingfaceHybridSSMModelForCausalLM
     from fast_llm.models.ssm.model import HybridSSMModel
+    from fast_llm.models.ssm.trainer import SSMTrainer
 
 logger = logging.getLogger(__name__)
 
 
-@config_class
-class HybridSSMArchitectureConfig(LanguageModelArchitectureConfig):
+@config_class()
+class HybridSSMBaseModelConfig(LanguageModelBaseConfig):
     _abstract = False
 
+    ssm: SSMConfig = Field(
+        default_factory=SSMConfig,
+        desc="Configuration for the transformer architecture.",
+        hint=FieldHint.architecture,
+    )
     hybrid_block_layout: list[str] = Field(
         default_factory=lambda: ["m2"],
         desc="Pattern of blocks to use in the model. 't' for Transformer, 'm' for Mamba1, 'm2' for Descrete Mamba2.",
-        hint=FieldHint.core,
+        hint=FieldHint.architecture,
     )
-
-
-@config_class()
-class HybridSSMBaseModelConfig(LanguageModelBaseConfig, HybridSSMArchitectureConfig):
-    architecture_class = HybridSSMArchitectureConfig
-
     use_megatron_initialization: bool = Field(
         default=False, desc="Exactly match the initialization of a Megatron model.", hint=FieldHint.testing
     )  # TODO: is this needed?
