@@ -46,7 +46,7 @@ class BaseBlock(Layer, abc.ABC):
         self._create_mixer()
 
         self.mlp = (MixtureOfExpertMLP if self._config.num_experts > 1 else MLP)(
-            self._config, self._tensor_space, f"{self.name} mlp"
+            self._config, self._tensor_space, f"{self.name} mlp", layer_index=layer_index
         )
 
         # PEFT.
