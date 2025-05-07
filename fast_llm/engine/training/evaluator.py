@@ -1,4 +1,5 @@
 import abc
+import dataclasses
 import logging
 import math
 import pathlib
@@ -36,6 +37,20 @@ from lm_eval.evaluator import simple_evaluate as lm_eval_simple_evaluate
 logger = logging.getLogger(__name__)
 
 
+@dataclasses.dataclass
+class TrainingProgressInfo:
+    done: bool
+    completed_steps: int
+    consumed_samples: int
+    consumed_tokens: int
+
+
+@dataclasses.dataclass
+class EvaluationMetrics:
+    metrics: dict[str, any] = dataclasses.field(default_factory=dict)
+    formatted_metrics: str | None = None
+
+
 class Evaluator[ConfigType: EvaluatorConfig](Configurable[ConfigType], abc.ABC):
     config_class: typing.ClassVar[type[EvaluatorConfig]] = EvaluatorConfig
 
@@ -70,11 +85,8 @@ class Evaluator[ConfigType: EvaluatorConfig](Configurable[ConfigType], abc.ABC):
     @abc.abstractmethod
     def run(
         self,
-        done: bool,
-        completed_steps: int,
-        consumed_samples: int,
-        consumed_tokens: int,
-    ) -> tuple[dict[str, any], str | None]: ...
+        training_progress_info: TrainingProgressInfo | None = None,
+    ) -> EvaluationMetrics: ...
 
     @abc.abstractmethod
     def get_dataset_samples(self) -> tuple[str, int] | None:
@@ -137,12 +149,21 @@ class EvaluatorLoss[ConfigType: EvaluatorLossConfig](Evaluator[ConfigType]):
 
     def run(
         self,
-        done: bool,
-        completed_steps: int,
-        consumed_samples: int,
-        consumed_tokens: int,
-    ) -> tuple[dict[str, any], str | None]:
+        training_progress_info: TrainingProgressInfo | None = None,
+    ) -> EvaluationMetrics:
         assert self._is_setup
+
+        if training_progress_info is None:
+            done = True
+            completed_steps = 0
+            consumed_samples = 0
+            consumed_tokens = 0
+        else:
+            done = training_progress_info.done
+            completed_steps = training_progress_info.completed_steps
+            consumed_samples = training_progress_info.consumed_samples
+            consumed_tokens = training_progress_info.consumed_tokens
+
         metrics = {}
         formatted_metrics = None
         if self._samples is not None and (done or self._eval_config.enabled(completed_steps)):
@@ -173,7 +194,7 @@ class EvaluatorLoss[ConfigType: EvaluatorLossConfig](Evaluator[ConfigType]):
                 dataset_name=self._name,
             )
 
-        return metrics, formatted_metrics
+        return EvaluationMetrics(metrics, formatted_metrics)
 
     def _evaluate_loss(
         self,
@@ -293,14 +314,23 @@ class EvaluatorLmEval[ConfigType: EvaluatorLmEvalConfig](Evaluator[ConfigType]):
 
     def run(
         self,
-        done: bool,
-        completed_steps: int,
-        consumed_samples: int,
-        consumed_tokens: int,
-    ) -> tuple[dict[str, any], str | None]:
+        training_progress_info: TrainingProgressInfo | None = None,
+    ) -> EvaluationMetrics:
         assert self._is_setup
+
+        if training_progress_info is None:
+            done = True
+            completed_steps = 0
+            consumed_samples = 0
+            consumed_tokens = 0
+        else:
+            done = training_progress_info.done
+            completed_steps = training_progress_info.completed_steps
+            consumed_samples = training_progress_info.consumed_samples
+            consumed_tokens = training_progress_info.consumed_tokens
+
         if not (done or self._eval_config.enabled(completed_steps)):
-            return {}, None
+            return EvaluationMetrics()
 
         # completed_steps is added to output_path like output_path/runs/run_index/completed_steps/
 
@@ -344,7 +374,7 @@ class EvaluatorLmEval[ConfigType: EvaluatorLmEvalConfig](Evaluator[ConfigType]):
         safe_barrier(self._distributed.world_group, f"Evaluation Harness Run end")
 
         # lm_eval logs to disc, wandb and prints to screen itself
-        return {}, None
+        return EvaluationMetrics()
 
     def get_dataset_samples(self) -> tuple[str, int] | None:
         return None
@@ -393,26 +423,23 @@ class EvaluatorRunner:
     def run(
         self,
         metrics: dict[str:any],
-        done: bool,
-        completed_steps: int,
-        consumed_samples: int,
-        consumed_tokens: int,
+        training_progress_info: TrainingProgressInfo | None = None,
     ):
         assert self._is_setup
         formatted_metrics = []
         for evaluation in self._evaluations:
-            this_metrics, this_formatted_metrics = evaluation.run(
-                done, completed_steps, consumed_samples, consumed_tokens
-            )
-            if len(this_metrics) == 0:
+            evaluation_metrics = evaluation.run(training_progress_info)
+            if len(evaluation_metrics.metrics) == 0:
                 continue
-            for k, v in this_metrics.items():
+            for k, v in evaluation_metrics.metrics.items():
                 metrics[k] = v
-            if this_formatted_metrics is not None:
-                formatted_metrics.append(this_formatted_metrics)
+            if evaluation_metrics.formatted_metrics is not None:
+                formatted_metrics.append(evaluation_metrics.formatted_metrics)
 
         if len(formatted_metrics) > 0:
             formatted_metrics = "\n".join(formatted_metrics)
             log_main_rank(formatted_metrics)
-            if self._config.training.wandb.alert.enabled(completed_steps):
+            if self._config.training.wandb.alert.enabled(
+                0 if training_progress_info is None else training_progress_info.completed_steps
+            ):
                 self._wandb.alert("Validation results", formatted_metrics, "INFO")
