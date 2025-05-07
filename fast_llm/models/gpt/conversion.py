@@ -36,8 +36,10 @@ from fast_llm.models.gpt.config import (
     MTPLlamaGPTHuggingfaceCheckpointFormat,
     Qwen2GPTHuggingfaceCheckpointFormat,
     Starcoder2GPTHuggingfaceCheckpointFormat,
+    DiffusionDreamGPTHuggingfaceCheckpointFormat,
 )
 from fast_llm.models.gpt.external.mtp_llama.configuration_mtp_llama import MTPLlamaConfig
+from fast_llm.models.gpt.external.diffusion_dream.configuration_dream import DreamConfig
 from fast_llm.models.gpt.model import GPTModel
 from fast_llm.tensor import SafeTensorSlice
 from fast_llm.utils import Assert
@@ -668,6 +670,88 @@ class MTPLlamaHuggingfaceCheckpointHandler(CustomModelingExportMixin, CommonLlam
 
         return converters
 
+class DiffusionDreamHuggingfaceCheckpointHandler(CustomModelingExportMixin, CommonHuggingfaceCheckpointHandler):
+    
+    from fast_llm.models.gpt.external.diffusion_dream import configuration_dream, modeling_dream
+    
+    format: typing.ClassVar[type[CheckpointFormat]] = DiffusionDreamGPTHuggingfaceCheckpointFormat
+    modeling_file = modeling_dream.__file__
+    configuration_file = configuration_dream.__file__
+    configuration_cls: typing.ClassVar[type[PretrainedConfig]] = DreamConfig
+
+    @classmethod
+    def _create_config_converters(cls) -> list[ParamConverter]:
+        return super()._create_config_converters() + [
+            ConstantExportParamConverter(export_names=(("architectures",),), export_value=["DreamModel"]),
+            ConstantExportParamConverter(
+                export_names=(("auto_map",),),
+                export_value={
+                    "AutoConfig": "configuration_dream.DreamConfig",
+                    "AutoModel": "modeling_dream.DreamModel",
+                },
+            ),
+        ]
+            #### WIP: LUKE
+            
+    #         ConstantExportParamConverter(export_names=(("attention_bias",),), export_value=False),
+    #         ConstantExportParamConverter(export_names=(("mlp_bias",),), export_value=False),
+    #         RenameParamConverter(
+    #             fast_llm_names=(("prediction_heads",),),
+    #             export_names=(("prediction_heads",),),
+    #         ),
+    #     ]
+
+    # def _get_mlp_converters(self, fast_llm_prefix: str, hf_prefix: str) -> list[WeightConverter]:
+    #     transformer_config: TransformerConfig = self._model.config.base_model.transformer
+    #     return [
+    #         *self._get_weight_and_bias_converters(
+    #             f"{fast_llm_prefix}.mlp.layer_1",
+    #             (f"{hf_prefix}.mlp.gate_proj", f"{hf_prefix}.mlp.up_proj"),
+    #             transformer_config.add_mlp_bias,
+    #             SplitWeightConverter,
+    #         ),
+    #         *self._get_weight_and_bias_converters(
+    #             f"{fast_llm_prefix}.mlp.layer_2",
+    #             f"{hf_prefix}.mlp.down_proj",
+    #             transformer_config.add_mlp_bias,
+    #             MLPLayer2Converter,
+    #         ),
+    #     ]
+
+    # # Override base method to handle the MTP heads
+    # def _create_lm_head_converters(self) -> list[WeightConverter]:
+    #     num_layers = self._model.config.base_model.transformer.num_layers
+    #     prediction_heads = self._model.config.base_model.prediction_heads
+    #     norm_bias: bool = self._model.config.base_model.transformer.normalization.type == NormalizationType.layer_norm
+    #     converters = []
+
+    #     # Next-token prediction head
+    #     # Transformer layer is already handled in the transformer layer converters
+    #     # Final norm
+    #     converters += self._get_weight_and_bias_converters(
+    #         f"layers.{num_layers + 1}.final_norm", "model.mtp_norms.0", norm_bias
+    #     )
+    #     # Multi-token prediction head
+    #     for i in range(1, prediction_heads):
+    #         mtp_transformer_layer_index = num_layers - 1 + 2 * i
+    #         # MTP transformer layer
+    #         converters += self._create_transformer_layer_converters(
+    #             f"layers.{mtp_transformer_layer_index + 1}",
+    #             f"model.mtp_heads.{i - 1}",
+    #         )
+    #         # MTP output norm
+    #         converters += self._get_weight_and_bias_converters(
+    #             f"layers.{mtp_transformer_layer_index + 2}.final_norm",
+    #             f"model.mtp_norms.{i}",
+    #             norm_bias,
+    #         )
+    #     # Output weights
+    #     if self._model.config.base_model.tie_word_embeddings:
+    #         converters.append(IgnoreImportWeightConverter((), "lm_head.weight"))
+    #     else:
+    #         converters.append(WeightConverter(f"layers.{num_layers + 1}.output_weights", "lm_head.weight"))
+
+    #     return converters
 
 class AutoGPTHuggingfaceCheckpointHandler(
     AutoStateDictCheckpointHandler, HuggingfaceStateDictCheckpointHandler, abc.ABC
@@ -680,4 +764,5 @@ class AutoGPTHuggingfaceCheckpointHandler(
         MistralGPTHuggingfaceCheckpointFormat.name: MistralHuggingfaceCheckpointHandler,
         MixtralGPTHuggingfaceCheckpointFormat.name: MixtralHuggingfaceCheckpointHandler,
         MTPLlamaGPTHuggingfaceCheckpointFormat.name: MTPLlamaHuggingfaceCheckpointHandler,
+        DiffusionDreamGPTHuggingfaceCheckpointFormat.name: DiffusionDreamHuggingfaceCheckpointHandler,
     }
