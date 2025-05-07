@@ -318,11 +318,6 @@ class Config:
 
     # A registry for all the config classes.
     _registry: typing.ClassVar[Registry[str, type[typing.Self]]]
-    type: str | None = Field(
-        default=None,
-        desc="The config class name.",
-        hint=FieldHint.core,
-    )
 
     def __setattr__(self, key: str, value: typing.Any) -> None:
         """
@@ -987,6 +982,13 @@ class Config:
                 else:
                     # dataclasses expects an annotation, so we use the one from the base class.
                     cls.__annotations__[name] = base_class_field.type
+
+    # Type for the field. At the end of class definition to avoid shadowing builtin.
+    type: str | None = Field(
+        default=None,
+        desc="The config class name.",
+        hint=FieldHint.core,
+    )
 
 
 class Configurable[ConfigType: Config]:
