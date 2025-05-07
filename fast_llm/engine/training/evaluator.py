@@ -56,15 +56,6 @@ class Evaluator[ConfigType: EvaluatorConfig](Configurable[ConfigType], abc.ABC):
 
     _is_setup: bool = False
 
-    @classmethod
-    def build(
-        cls,
-        name: str,
-        eval_config: EvaluatorConfig,
-        trainer_config: TrainerConfig,
-    ) -> "Evaluator":
-        return cls(name=name, eval_config=eval_config, trainer_config=trainer_config)
-
     def setup(
         self,
         distributed: Distributed,
@@ -106,14 +97,15 @@ class EvaluatorLoss[ConfigType: EvaluatorLossConfig](Evaluator[ConfigType]):
         eval_config: EvaluatorLossConfig,
         trainer_config: TrainerConfig,
     ):
+        super().__init__(eval_config)
+
         self._name = name
-        self._eval_config = eval_config
         self._trainer_config = trainer_config
 
-        steps = self._eval_config.get_iteration_count(
+        steps = self._config.get_iteration_count(
             self._trainer_config.training.train_iters,
-            # There may be an extra evaluation after the last training step.
-            not self._eval_config.enabled(self._trainer_config.training.train_iters),
+            # There may be an extra evaluation after the last training step.s
+            not self._config.enabled(self._trainer_config.training.train_iters),
         )
 
         self._samples = self._trainer_config.batch.batch_size * steps if steps > 0 else None
@@ -166,7 +158,7 @@ class EvaluatorLoss[ConfigType: EvaluatorLossConfig](Evaluator[ConfigType]):
 
         metrics = {}
         formatted_metrics = None
-        if self._samples is not None and (done or self._eval_config.enabled(completed_steps)):
+        if self._samples is not None and (done or self._config.enabled(completed_steps)):
 
             if self._evaluation_iterator is None:
                 self._evaluation_iterator = self._get_data_iterator(
@@ -181,7 +173,7 @@ class EvaluatorLoss[ConfigType: EvaluatorLossConfig](Evaluator[ConfigType]):
             metrics[metric_key] = self._evaluate_loss(
                 data_iterator=self._evaluation_iterator,
                 phase=phase,
-                num_iters=self._eval_config.iterations,
+                num_iters=self._config.iterations,
                 begin_iter=self._get_completed_evaluation_steps(completed_steps),
                 completed_steps=completed_steps,
                 consumed_samples=consumed_samples,
@@ -252,7 +244,7 @@ class EvaluatorLoss[ConfigType: EvaluatorLossConfig](Evaluator[ConfigType]):
 
     def _get_completed_evaluation_steps(self, completed_steps: int) -> int:
         # Number of evaluations steps performed before the current step
-        return self._eval_config.get_iteration_count(completed_steps - 1)
+        return self._config.get_iteration_count(completed_steps - 1)
 
     def _get_data_iterator(
         self, completed_steps: int = 0, prefetch_factor: int | None = None
@@ -275,8 +267,9 @@ class EvaluatorLmEval[ConfigType: EvaluatorLmEvalConfig](Evaluator[ConfigType]):
         eval_config: EvaluatorLmEvalConfig,
         trainer_config: TrainerConfig,
     ):
+        super().__init__(eval_config)
+
         self._name = name
-        self._eval_config = eval_config
         self._trainer_config = trainer_config
 
     def setup(
@@ -305,10 +298,10 @@ class EvaluatorLmEval[ConfigType: EvaluatorLmEvalConfig](Evaluator[ConfigType]):
         self._flm_wrapper = FastLLMLmEvalWrapper(
             model=self._hf_model,
             tokenizer=self._data.tokenizer.tokenizer,
-            truncation=self._eval_config.truncation,
-            logits_cache=self._eval_config.logits_cache,
-            add_bos_token=self._eval_config.add_bos_token,
-            prefix_token_id=self._eval_config.prefix_token_id,
+            truncation=self._config.truncation,
+            logits_cache=self._config.logits_cache,
+            add_bos_token=self._config.add_bos_token,
+            prefix_token_id=self._config.prefix_token_id,
         )
         self._is_setup = True
 
@@ -329,14 +322,14 @@ class EvaluatorLmEval[ConfigType: EvaluatorLmEvalConfig](Evaluator[ConfigType]):
             consumed_samples = training_progress_info.consumed_samples
             consumed_tokens = training_progress_info.consumed_tokens
 
-        if not (done or self._eval_config.enabled(completed_steps)):
+        if not (done or self._config.enabled(completed_steps)):
             return EvaluationMetrics()
 
         # completed_steps is added to output_path like output_path/runs/run_index/completed_steps/
 
         if self._run.is_main_rank:
             args, simple_eval_kwargs = prepare_lm_eval_simple_eval_params(
-                self._eval_config.cli_args, completed_steps, self._run.index
+                self._config.cli_args, completed_steps, self._run.index
             )
             simple_eval_kwargs["model"] = self._flm_wrapper
 
@@ -390,11 +383,7 @@ class EvaluatorRunner:
     ):
         self._config = config
         self._evaluations = [
-            eval_config.get_evaluator_class().build(
-                name=name,
-                eval_config=eval_config,
-                trainer_config=config,
-            )
+            eval_config.get_evaluator(name=name, trainer_config=config)
             for name, eval_config in config.training.evaluations.items()
         ]
 

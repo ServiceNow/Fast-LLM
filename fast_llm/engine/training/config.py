@@ -167,9 +167,9 @@ class EvaluatorConfig(IntervalConfig):
         hint=FieldHint.core,
     )
 
-    @classmethod
-    def get_evaluator_class(cls) -> "Evaluator":
-        raise NotImplementedError
+    @abc.abstractmethod
+    def get_evaluator(self, name: str,  trainer_config: "TrainerConfig") -> "Evaluator":
+        pass
 
     def _validate(self) -> None:
         if self.type is None:
@@ -240,11 +240,10 @@ class EvaluatorLossConfig(EvaluatorConfig):
         # Number of completed validation iterations
         return (self.get_count(training_iterations) + extra_evaluations) * self.iterations if self.enabled() else 0
 
-    @classmethod
-    def get_evaluator_class(cls) -> type["EvaluatorLoss"]:
+    def get_evaluator(self, name: str,  trainer_config: "TrainerConfig") -> "EvaluatorLoss":
         from fast_llm.engine.training.evaluator import EvaluatorLoss
 
-        return EvaluatorLoss
+        return EvaluatorLoss(name, self, trainer_config)
 
 
 @config_class()
@@ -287,11 +286,10 @@ class EvaluatorLmEvalConfig(EvaluatorConfig):
         " passed to the Fast-LLM lm_eval model wrapper.",
     )
 
-    @classmethod
-    def get_evaluator_class(cls) -> type["EvaluatorLmEval"]:
+    def get_evaluator(self, name: str,  trainer_config: "TrainerConfig") -> "EvaluatorLmEval":
         from fast_llm.engine.training.evaluator import EvaluatorLmEval
 
-        return EvaluatorLmEval
+        return EvaluatorLmEval(name, self, trainer_config)
 
 
 @config_class()
