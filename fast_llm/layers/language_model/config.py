@@ -34,6 +34,7 @@ class LanguageModelKwargs:
     # TODO: These are generic
     labels = "labels"
     phase = "phase"
+    loss_mask = "loss_mask"
 
 
 @config_class()
