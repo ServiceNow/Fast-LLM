@@ -100,19 +100,19 @@ class HybridSSMBaseModelConfig(LanguageModelBaseConfig):
         if self.hybrid_block_layout is None:
             with self._set_implicit_default():
                 self.hybrid_block_layout = [SSMBlockType.mamba2_discrete.value]
-        len_block_layout = len(self.hybrid_block_layout)
-        if len_block_layout != self.transformer.num_layers:
-            if self.transformer.num_layers % len_block_layout != 0:
+
+        if len(self.hybrid_block_layout) != self.transformer.num_layers:
+            if self.transformer.num_layers % len(self.hybrid_block_layout) != 0:
                 raise ValueError(
-                    f"hybrid_block_layout length {len_block_layout} does not match num_layers {self.transformer.num_layers}"
+                    f"hybrid_block_layout length {len(self.hybrid_block_layout)} does not match num_layers {self.transformer.num_layers}"
                 )
-            num_repeats = int(self.transformer.num_layers // len_block_layout)
+            num_repeats = int(self.transformer.num_layers // len(self.hybrid_block_layout))
             logger.warning(
-                f"hybrid_block_layout length {len_block_layout} does not match num_layers {self.transformer.num_layers}, will repeat {self.hybrid_block_layout} {num_repeats} times"
+                f"hybrid_block_layout length {len(self.hybrid_block_layout)} does not match num_layers {self.transformer.num_layers}, will repeat {self.hybrid_block_layout} {num_repeats} times"
             )
             self.hybrid_block_layout = self.hybrid_block_layout * num_repeats
 
-        Assert.eq(len_block_layout, self.transformer.num_layers)
+        Assert.eq(len(self.hybrid_block_layout), self.transformer.num_layers)
         Assert.custom(
             lambda _: all(block_type in SSMBlockType.__members__.values() for block_type in self.hybrid_block_layout),
             f"Invalid block type: {self.hybrid_block_layout}. Must be one of {SSMBlockType.__members__.values()}",
