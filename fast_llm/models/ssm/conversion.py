@@ -141,7 +141,7 @@ class CommonSSMHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandle
         ]
 
     def _create_weight_converters(self) -> list[WeightConverter]:
-        converters = super()._create_weight_converters()
+        converters = super()._create_weight_converters() or []
 
         num_layers = self._model.config.base_model.transformer.num_layers
         ssm_bias: bool = self._model.config.base_model.ssm.add_bias_linear
