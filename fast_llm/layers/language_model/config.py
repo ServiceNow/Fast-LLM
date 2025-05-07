@@ -45,8 +45,9 @@ class LanguageModelArchitectureConfig(BaseModelArchitectureConfig):
         desc="Configuration for the transformer architecture.",
         hint=FieldHint.core,
     )
-    vision_encoder: None | VisionEncoderArchitectureConfig = Field(
-        default=None,
+    # TODO Soham: make this None by default. Need to figure out how to handle this in the config (see )
+    vision_encoder: VisionEncoderArchitectureConfig = Field(
+        default_factory=VisionEncoderArchitectureConfig,
         desc="Configuration for the vision encoder that transforms images into embeddings.",
         hint=FieldHint.optional,
     )
@@ -131,8 +132,9 @@ class LanguageModelBaseConfig(LanguageModelArchitectureConfig, BaseModelConfig):
     architecture_class = LanguageModelArchitectureConfig
 
     transformer: TransformerConfig = FieldUpdate(default_factory=TransformerConfig)
-    vision_encoder: None | VisionEncoderConfig = FieldUpdate(
-        default=None,
+    # TODO Soham: make this None by default. Need to figure out how to handle this in the config
+    vision_encoder: VisionEncoderConfig = FieldUpdate(
+        default_factory=VisionEncoderConfig,
         desc="Configuration for the vision encoder that transforms images into embeddings.",
         hint=FieldHint.optional,
     )

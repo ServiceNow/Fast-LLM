@@ -63,7 +63,7 @@ class PatchConv(Layer):
     ) -> torch.Tensor:
         hidden_dims = kwargs[VisionEncoderKwargs.hidden_dims]
         if isinstance(input_, TensorMeta):
-            return TensorMeta.from_dims(hidden_dims)
+            return TensorMeta.from_dims(hidden_dims, tensor_name="patch conv output", dtype=input_.dtype)
         # we don't need images after this point
         # image_patches = kwargs.pop(VisionEncoderKwargs.image_patches)
         patch_embeddings = self.norm(self.conv(input_))

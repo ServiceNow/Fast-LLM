@@ -4,13 +4,16 @@ import typing
 import torch
 import torchvision.transforms.v2.functional as F
 
-from fast_llm.engine.config_utils.tensor_space import TensorSpace
+from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
 from fast_llm.layers.transformer.config import TransformerKwargs
 from fast_llm.layers.vision_encoder.config import (
     VisionEncoderArchitectureConfig,
+    VisionEncoderDimNames,
     VisionEncoderKwargs,
+    VisionTransformerDimNames,
     VisionTransformerKwargs,
 )
+from fast_llm.tensor import TensorMeta
 from fast_llm.utils import div
 
 
@@ -103,6 +106,21 @@ class VisionPreprocessor:
         self._config = config
         self._tensor_space = tensor_space
         self._distributed_config = self._tensor_space.distributed_config
+
+    def preprocess_meta(self, kwargs: dict[str, typing.Any]) -> None:
+        # kwargs[VisionEncoderDimNames]
+        kwargs[VisionEncoderKwargs.image_patches_meta] = TensorMeta.from_dims(
+            (
+                TensorDim(
+                    VisionTransformerDimNames.batch,
+                    kwargs[TransformerKwargs.micro_batch_size] * kwargs[TransformerKwargs.sequence_q_dim].size,
+                ),
+                TensorDim(VisionEncoderDimNames.in_channels, 3),
+                TensorDim(VisionEncoderDimNames.patch_size, kwargs[VisionEncoderKwargs.patch_size]),
+                TensorDim(VisionEncoderDimNames.patch_size, kwargs[VisionEncoderKwargs.patch_size]),
+            ),
+            dtype=self._distributed_config.training_dtype.torch,
+        )
 
     def preprocess(self, kwargs: dict[str, typing.Any]) -> None:
         images = kwargs.get(VisionEncoderKwargs.images)

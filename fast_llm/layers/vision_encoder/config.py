@@ -7,6 +7,7 @@ from fast_llm.layers.transformer.config import TransformerArchitectureConfig, Vi
 
 
 class VisionEncoderDimNames:
+    in_channels = "vision_in_channels"
     out_channels = "vision_out_channels"
     adapter_size = "vision_adapter_size"
     patch_size = "vision_patch_size"
@@ -62,6 +63,7 @@ class VisionEncoderKwargs:
     max_image_tokens = "max_image_tokens"
     patch_embeddings = "patch_embeddings"
     hidden_dims = "vit_hidden_dims"
+    image_patches_meta = "vit_image_patches_meta"
 
 
 # TODO Soham: do we need all of them?

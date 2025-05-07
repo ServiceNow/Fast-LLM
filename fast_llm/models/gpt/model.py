@@ -286,12 +286,16 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                 self._position_embedding_preprocessor.preprocess_meta(kwargs)
             if self._config.transformer.rotary.enabled:
                 self._rotary_embedding_preprocessor.preprocess_meta(kwargs)
-            if self._config.vision_encoder:
-                if self._config.vision_encoder.transformer.rotary.enabled:
-                    self._vision_rotary_embedding_preprocessor.preprocess_meta(kwargs)
             if not self._use_flash_attention:
                 self._backup_attention_preprocessor.preprocess_meta(kwargs)
-            preprocessed_meta.append((tokens, kwargs))
+            if self._config.vision_encoder:
+                self._vision_preprocessor.preprocess_meta(kwargs)
+                if self._config.vision_encoder.transformer.rotary.enabled:
+                    self._vision_rotary_embedding_preprocessor.preprocess_meta(kwargs)
+                # patch_dimensions are (batch * sequence_length) x 3 x patch_size x patch_size
+                preprocessed_meta.append((kwargs[VisionEncoderKwargs.image_patches_meta], kwargs))
+            else:
+                preprocessed_meta.append((tokens, kwargs))
 
         return preprocessed_meta
 
