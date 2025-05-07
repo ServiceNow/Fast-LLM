@@ -68,6 +68,12 @@ class GPTHuggingfaceDatasetConfig(Config):
     images: None | str = Field(
         default=None, desc="Field containing images relevant to a document", hint=FieldHint.optional
     )
+    audio_positions: None | str = Field(
+        default=None, desc="Field containing audio positions within a document", hint=FieldHint.optional
+    )
+    audio: None | str = Field(
+        default=None, desc="Field containing audio relevant to a document", hint=FieldHint.optional
+    )
     data_type: DataType | None = Field(
         default=None,
         desc="Data type of the dataset field."

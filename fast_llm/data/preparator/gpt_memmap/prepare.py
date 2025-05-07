@@ -50,22 +50,25 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
         #     np.array(self._tokenizer.tokenize(text), dtype=self._data_type.numpy)
         #     for text in batch[self._config.dataset.field]
         # ]
-        input_ids, image_token_positions = map(
+        input_ids, image_token_positions, audio_token_positions = map(
             list,
             zip(
                 *[
                     (
                         np.array(input_ids, dtype=self._data_type.numpy),
                         np.array(image_token_positions, dtype=np.int32),
+                        np.array(audio_token_positions, dtype=np.int32),
                     )
-                    for input_ids, image_token_positions in [
+                    for input_ids, image_token_positions, audio_token_positions in [
                         self._tokenizer.tokenize(
                             text,
                             im_char_positions,
+                            aud_char_positions,
                         )
-                        for text, im_char_positions in zip(
+                        for text, im_char_positions, aud_char_positions in zip(
                             batch[self._config.dataset.field],
                             batch.get(self._config.dataset.image_positions, itertools.repeat(None)),
+                            batch.get(self._config.dataset.audio_positions, itertools.repeat(None)),
                         )
                     ]
                 ]
@@ -82,6 +85,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
         return {
             "input_ids": input_ids,
             "image_positions": image_token_positions,
+            "audio_token_positions": audio_token_positions,
             "num_tokens": num_tokens,
             "num_pixels": num_pixels,
         }
@@ -143,6 +147,8 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
                     # [np.array(im) for im in item["images"]] if self._config.dataset.images else None,
                     item["images"] if self._config.dataset.images else None,
                     item["image_positions"] if self._config.dataset.image_positions else None,
+                    np.array(item[self._config.dataset.audio]) if self._config.dataset.audio else None,
+                    item[self._config.dataset.audio_positions] if self._config.dataset.audio_positions else None,
                 )
             # if "token_spans" in shard_dataset.column_names and self._config.dataset.loss_masking_spans is not None:
             #     for item in tqdm.tqdm(shard_dataset, desc=f"Saving shard {shard_idx}", unit="docs"):
@@ -167,15 +173,19 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
         )
 
     def _load_dataset(self) -> datasets.Dataset:
-        dataset = datasets.load_dataset(
-            path=self._config.dataset.path,
-            name=self._config.dataset.config_name,
-            data_dir=self._config.dataset.data_directory,
-            data_files=self._config.dataset.data_files,
-            split=self._config.dataset.split,
-            num_proc=self._config.loading_workers,
-            trust_remote_code=self._config.dataset.trust_remote_code,
-        )
+        try:
+            dataset = datasets.load_dataset(
+                path=self._config.dataset.path,
+                name=self._config.dataset.config_name,
+                data_dir=self._config.dataset.data_directory,
+                data_files=self._config.dataset.data_files,
+                split=self._config.dataset.split,
+                num_proc=self._config.loading_workers,
+                trust_remote_code=self._config.dataset.trust_remote_code,
+            )
+        except:
+            # backup if dataset is saved in arrow format (can we auto-detect this?)
+            dataset = datasets.load_from_disk(dataset_path=self._config.dataset.data_directory)
         assert isinstance(dataset, datasets.Dataset)
         return dataset
 

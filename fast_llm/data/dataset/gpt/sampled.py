@@ -33,6 +33,8 @@ class GPTSample:
     loss_masking_spans: np.ndarray | None = None
     images: np.ndarray | None = None
     image_positions: np.ndarray | None = None
+    audio: np.ndarray | None = None
+    audio_positions: np.ndarray | None = None
     sequence_lengths: np.ndarray | None = None
 
 

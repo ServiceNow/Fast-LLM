@@ -258,6 +258,10 @@ class GPTMemmapDataset(GPTIndexedDataset):
         image_lengths = []
         im_positions = []
         total_images = 0
+        n_audio = []
+        audio_lengths = []
+        aud_positions = []
+        total_audio = 0
         pointers = []
         offset = 0
         # number of spans for each document
@@ -295,6 +299,14 @@ class GPTMemmapDataset(GPTIndexedDataset):
                         bin_stream.write(pixels.tobytes(order="C"))
                         total_im_size += pixels.size
                     im_positions.append(document.image_positions)
+                if document.audio:
+                    n_audio.append(len(document.audio))
+                    total_audio += len(document.audio)
+                    for audio in document.audio:
+                        audio_lengths.append(len(audio))
+                        bin_stream.write(audio.to_bytes(order="C"))
+                        # total_aud_size +=
+                    aud_positions.append(document.audio_positions)
 
                 # Update metadata
                 doc_length = len(document.token_ids)
