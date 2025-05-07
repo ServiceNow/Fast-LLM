@@ -13,7 +13,7 @@ from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
 from fast_llm.layers.language_model.config import LanguageModelKwargs, LanguageModelLossNames
 from fast_llm.layers.language_model.embedding import WORD_EMBEDDINGS_WEIGHT, LanguageModelEmbedding
 from fast_llm.layers.language_model.head import OUTPUT_WEIGHTS, LanguageModelHead
-from fast_llm.layers.language_model.preprocessing import PositionEmbeddingPreprocessor
+from fast_llm.layers.language_model.preprocessing import PositionEmbeddingPreprocessor, PreferenceSpanPreprocessor
 from fast_llm.layers.transformer.config import (
     RoutingType,
     TransformerDimNames,
@@ -69,6 +69,9 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             self._preprocessors.append(FlashAttnVarlenPreprocessor(self._config.transformer, self._tensor_space))
         else:
             self._preprocessors.append(BackupAttentionPreprocessor(self._config.transformer, self._tensor_space))
+
+        if self._config.enable_dpo:  # TODO better way to pass in?
+            self._preprocessors.append(PreferenceSpanPreprocessor(self._config, self._tensor_space))
 
     def get_output_layers(self) -> list[Layer]:
         layers = []
@@ -283,6 +286,10 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                 tokens = batch.token_ids[:, sequence_k - sequence_q : sequence_k].contiguous()
             if batch.sequence_lengths is not None:
                 kwargs_meta[TransformerKwargs.sequence_lengths] = batch.sequence_lengths
+            if batch.chosen_spans is not None:
+                kwargs_meta[LanguageModelKwargs.chosen_spans] = batch.chosen_spans
+            if batch.rejected_spans is not None:
+                kwargs_meta[LanguageModelKwargs.rejected_spans] = batch.rejected_spans
 
             # TODO: Add pasts/presents to meta input?
             # Use lists as pointers so `past_key_values` is populated during the previous micro_sequence.
@@ -294,7 +301,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                 TransformerKwargs.presents: presents,
             }
             if phase != PhaseType.inference:
-                sequence_offset = sequence_k - sequence_q + 1
+                sequence_offset = sequence_k - sequence_q + 1  # +1 for shift in labels
                 if sequence_first:
                     labels = batch.token_ids[sequence_offset : sequence_k + prediction_heads]
                 else:
@@ -312,6 +319,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                             (spans[:, 0] <= sequence_k + prediction_heads - 1) & (spans[:, 1] >= sequence_offset)
                         ]
                         if valid_spans.numel():
+                            # if span is partially within the sequence, truncate parts of spans that are outside of the sequence
                             valid_spans[:, 0].clamp_(min=sequence_offset)
                             valid_spans[:, 1].clamp_(max=sequence_k + prediction_heads - 1)
                             valid_spans -= sequence_offset

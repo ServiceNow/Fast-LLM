@@ -73,6 +73,7 @@ class GPTSamplingParameters(SamplingParameters):
     sequence_length: int
     vocab_size: int
     use_loss_masking_spans: bool = False
+    use_preference_loss_spans: bool = False
     cross_document_attention: bool = True
     # How many extra tokens to add to the sequence length.
     # This is used to provide labels even for the last tokens in the sequence.
