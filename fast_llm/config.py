@@ -257,7 +257,7 @@ def _process_config_class(cls: type["Config"]):
     return cls
 
 
-def config_class(cls=None):
+def config_class[T: Config]() -> typing.Callable[[type[T]], type[T]]:
     """
     Fast-LLM replacement for the default dataclass wrapper. Performs additional verifications.
     """
@@ -283,13 +283,7 @@ def config_class(cls=None):
         cls.__init__ = __init__
         return wrapped
 
-    # See if we're being called as @config_class or @config_class().
-    if cls is None:
-        # We're called with parens.
-        return wrap
-
-    # We're called as @config_class without parens.
-    return wrap(cls)
+    return wrap
 
 
 @dataclasses.dataclass()
