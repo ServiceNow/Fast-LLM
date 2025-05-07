@@ -8,38 +8,39 @@ from fast_llm.engine.checkpoint.config import CheckpointFormat, CheckpointHandle
 from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig, PretrainedFastLLMModelConfig
 from fast_llm.engine.training.config import TrainerConfig
-from fast_llm.layers.language_model.config import LanguageModelArchitectureConfig, LanguageModelBaseConfig
-from fast_llm.layers.ssm.config import SSMBlockType, SSMDimNames
+from fast_llm.layers.language_model.config import LanguageModelBaseConfig
+from fast_llm.layers.ssm.config import SSMBlockType, SSMConfig, SSMDimNames
 from fast_llm.models.gpt.config import GPTBatchConfig, PretrainedGPTModelConfig
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
+    from fast_llm.models.gpt.model import GPTInferenceRunner
+    from fast_llm.models.ssm.huggingface import HuggingfaceHybridSSMModelForCausalLM
     from fast_llm.models.ssm.model import HybridSSMModel
+    from fast_llm.models.ssm.trainer import SSMTrainer
 
 logger = logging.getLogger(__name__)
 
 
-@config_class
-class HybridSSMArchitectureConfig(LanguageModelArchitectureConfig):
+@config_class()
+class HybridSSMBaseModelConfig(LanguageModelBaseConfig):
     _abstract = False
 
+    ssm: SSMConfig = Field(
+        default_factory=SSMConfig,
+        desc="Configuration for the transformer architecture.",
+        hint=FieldHint.architecture,
+    )
     hybrid_block_layout: list[str] | None = Field(
         default=None,
         desc=f"Pattern of blocks to use in the model. Availabel types: {SSMBlockType.__members__.values()}",
         hint=FieldHint.core,
     )
-
-    def _validate(self):
-        if self.hybrid_block_layout is None:
-            with self._set_implicit_default():
-                self.hybrid_block_layout = [SSMBlockType.mamba2_discrete.value]
-        super()._validate()
-
-
-@config_class()
-class HybridSSMBaseModelConfig(LanguageModelBaseConfig, HybridSSMArchitectureConfig):
-    architecture_class = HybridSSMArchitectureConfig
-
+    default_mtp_type: str | None = Field(
+        default=None,
+        desc="Multi-token prediction mixer to use in the model. 't' for Transformer, 'm' for Mamba1, 'm2' for discrete Mamba2. If None, will use the last block type in `hybrid_block_layout`.",
+        hint=FieldHint.optional,
+    )
     use_megatron_initialization: bool = Field(
         default=False, desc="Exactly match the initialization of a Megatron model.", hint=FieldHint.testing
     )  # TODO: is this needed?
@@ -96,22 +97,29 @@ class HybridSSMBaseModelConfig(LanguageModelBaseConfig, HybridSSMArchitectureCon
             tensor_space.add_tensor_dim(TensorDim(SSMDimNames.conv_dim, conv_dim))
 
     def _validate(self):
-        if len(self.hybrid_block_layout) != self.transformer.num_layers:
-            len_block_layout = len(self.hybrid_block_layout)
+        if self.hybrid_block_layout is None:
+            with self._set_implicit_default():
+                self.hybrid_block_layout = [SSMBlockType.mamba2_discrete.value]
+        len_block_layout = len(self.hybrid_block_layout)
+        if len_block_layout != self.transformer.num_layers:
             if self.transformer.num_layers % len_block_layout != 0:
                 raise ValueError(
-                    f"hybrid_block_layout length {len(self.hybrid_block_layout)} does not match num_layers {self.transformer.num_layers}"
+                    f"hybrid_block_layout length {len_block_layout} does not match num_layers {self.transformer.num_layers}"
                 )
             num_repeats = int(self.transformer.num_layers // len_block_layout)
             logger.warning(
-                f"hybrid_block_layout length {len(self.hybrid_block_layout)} does not match num_layers {self.transformer.num_layers}, will repeat {self.hybrid_block_layout} {num_repeats} times"
+                f"hybrid_block_layout length {len_block_layout} does not match num_layers {self.transformer.num_layers}, will repeat {self.hybrid_block_layout} {num_repeats} times"
             )
             self.hybrid_block_layout = self.hybrid_block_layout * num_repeats
 
-        Assert.eq(len(self.hybrid_block_layout), self.transformer.num_layers)
+        Assert.eq(len_block_layout, self.transformer.num_layers)
         Assert.custom(
             lambda _: all(block_type in SSMBlockType.__members__.values() for block_type in self.hybrid_block_layout),
             f"Invalid block type: {self.hybrid_block_layout}. Must be one of {SSMBlockType.__members__.values()}",
+        )
+        Assert.custom(
+            lambda _: self.default_mtp_type in SSMBlockType.__members__.values() or self.default_mtp_type is None,
+            f"Invalid MTP type: {self.default_mtp_type}. Must be one of {SSMBlockType.__members__.values()} or None",
         )
 
         super()._validate()
@@ -218,6 +226,4 @@ class HybridTrainerConfig(PretrainedHybridSSMModelConfig, TrainerConfig):
 
     @classmethod
     def get_inference_runner_class(cls) -> type["GPTInferenceRunner"]:
-        from fast_llm.models.gpt.model import GPTInferenceRunner
-
-        return GPTInferenceRunner
+        raise NotImplementedError
