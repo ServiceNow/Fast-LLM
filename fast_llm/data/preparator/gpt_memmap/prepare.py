@@ -24,7 +24,7 @@ from fast_llm.data.dataset.gpt.config import (
 from fast_llm.data.dataset.gpt.memmap import GPTMemmapDataset
 from fast_llm.data.dataset.gpt.sampled import GPTSample
 from fast_llm.data.preparator.config import DatasetPreparator
-from fast_llm.data.preparator.gpt_memmap.config import GPTMemmapDatasetPreparatorConfig
+from fast_llm.data.preparator.gpt_memmap.config import GPTMemmapDatasetPreparatorConfig, TextColumnConfig
 from fast_llm.data.tokenizer import Tokenizer
 from fast_llm.engine.config_utils.data_type import DataType, get_unsigned_integer_type
 from fast_llm.utils import Assert, normalize_probabilities, padded_cumsum
@@ -37,11 +37,13 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
 
     _tokenizer: Tokenizer
     _data_type: DataType
+    _data_column: str
+    _loss_masking_spans_column: str | None
 
     def _tokenize_batch(self, batch: dict[str, list[typing.Any]]) -> dict[str, list[typing.Any]]:
         input_ids = [
             np.array(self._tokenizer.tokenize(text), dtype=self._data_type.numpy)
-            for text in batch[self._config.dataset.field]
+            for text in batch[self._data_column]
         ]
         num_tokens = [len(x) for x in input_ids]
         return {
@@ -61,7 +63,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
                     for input_ids, token_spans in [
                         self._tokenizer.tokenize_with_spans(text, char_spans)
                         for text, char_spans in zip(
-                            batch[self._config.dataset.field], batch[self._config.dataset.loss_masking_spans]
+                            batch[self._data_column], batch[self._loss_masking_spans_column]
                         )
                     ]
                 ]
@@ -80,7 +82,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
         shard_output_path = self._config.output_path / prefix
 
         def _document_generator():
-            if "token_spans" in shard_dataset.column_names and self._config.dataset.loss_masking_spans is not None:
+            if "token_spans" in shard_dataset.column_names and self._loss_masking_spans_column is not None:
                 for item in tqdm.tqdm(shard_dataset, desc=f"Saving shard {shard_idx}", unit="docs"):
                     yield GPTSample(
                         np.array(item["input_ids"], dtype=self._data_type.numpy),
@@ -176,6 +178,12 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
             else self._config.dataset.data_type
         )
 
+        if isinstance(self._config.dataset.data_source, TextColumnConfig):
+            self._data_column = self._config.dataset.data_source.input_column
+            self._loss_masking_spans_column = self._config.dataset.data_source.loss_masking_spans_column
+        else:
+            raise ValueError(f"Dataset data_source set incorrectly. data_source: '{self._config.dataset.data_source}'.")
+
         # Initialize distributed processing
         if self._config.distributed.world_size > 1:
             torch.distributed.init_process_group(
@@ -212,11 +220,11 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
             num_shards=self._config.distributed.world_size,
             index=self._config.distributed.rank,
         )
-        if self._config.dataset.field not in dataset.column_names:
-            raise ValueError(f"Dataset does not have field '{self._config.dataset.field}'.")
-        if self._config.dataset.loss_masking_spans is not None:
-            if self._config.dataset.loss_masking_spans not in dataset.column_names:
-                raise ValueError(f"Dataset does not have spans field '{self._config.dataset.loss_masking_spans}'.")
+        if self._data_column not in dataset.column_names:
+            raise ValueError(f"Dataset does not have field '{self._data_column}'.")
+        if self._loss_masking_spans_column is not None:
+            if self._loss_masking_spans_column not in dataset.column_names:
+                raise ValueError(f"Dataset does not have spans field '{self._loss_masking_spans_column}'.")
             tokenize_fn = self._tokenize_batch_with_spans
         else:
             tokenize_fn = self._tokenize_batch
