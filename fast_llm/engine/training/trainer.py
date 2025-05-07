@@ -110,10 +110,7 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
         else:
             self._samples_per_split = {}
 
-        self._evaluator_runner = EvaluatorRunner(
-            config=self._config,
-            get_tflops_func=self.get_tflops,
-        )
+        self._evaluator_runner = EvaluatorRunner(config=self._config)
 
     def setup(self, distributed: Distributed, run: Run) -> None:
         assert distributed.config is self._config.model.distributed
@@ -173,6 +170,7 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
             runner=self._runner,
             data=self._data,
             wandb=self._wandb,
+            phase=PhaseType.inference if self._is_evaluation_only else PhaseType.validation,
         )
 
         self._is_setup = True
@@ -312,7 +310,12 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
                         remaining_time = average_time_per_iteration * (
                             self._config.training.train_iters - self._completed_steps
                         )
-                        model_tflops, hardware_tflops = self.get_tflops(PhaseType.training, time_per_iteration)
+                        model_tflops, hardware_tflops = self._multi_stage.get_tflops(
+                            PhaseType.training,
+                            time_per_iteration,
+                            self._config.batch.batch_size,
+                            self._config.batch.sequence_length,
+                        )
                         metrics_key = PhaseType.training.value
                         metrics[metrics_key] = {
                             "train_iters": self._config.training.train_iters,
@@ -518,11 +521,6 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
             iteration = -1
         iteration = self._run.broadcast_int(iteration)
         return iteration if iteration >= 0 else None
-
-    @abc.abstractmethod
-    def get_tflops(self, phase: PhaseType, elapsed_time_per_iteration) -> tuple[int, int]:
-        # TODO: Do in model, automate/generalize, get other stats
-        pass
 
     def _get_reference_model_preprocessor(self, name: str, inference_runner: InferenceRunner) -> Preprocessor:
         raise NotImplementedError()

@@ -45,16 +45,10 @@ class Evaluator[ConfigType: EvaluatorConfig](Configurable[ConfigType], abc.ABC):
     def build(
         cls,
         name: str,
-        eval_config: EvaluatorLossConfig,
+        eval_config: EvaluatorConfig,
         trainer_config: TrainerConfig,
-        get_tflops_func: callable,
     ) -> "Evaluator":
-        return cls(
-            name=name,
-            eval_config=eval_config,
-            trainer_config=trainer_config,
-            get_tflops_func=get_tflops_func,
-        )
+        return cls(name=name, eval_config=eval_config, trainer_config=trainer_config)
 
     def setup(
         self,
@@ -63,6 +57,7 @@ class Evaluator[ConfigType: EvaluatorConfig](Configurable[ConfigType], abc.ABC):
         multi_stage: FastLLMModel,
         runner: ScheduleRunner,
         data: Data,
+        phase: PhaseType,
     ) -> None:
         # TODO: check if objects passed are actually set up themselves, if appropriate
         self._distributed = distributed
@@ -70,6 +65,7 @@ class Evaluator[ConfigType: EvaluatorConfig](Configurable[ConfigType], abc.ABC):
         self._runner = runner
         self._multi_stage = multi_stage
         self._data = data
+        self._phase = phase
 
     @abc.abstractmethod
     def run(
@@ -97,12 +93,10 @@ class EvaluatorLoss[ConfigType: EvaluatorLossConfig](Evaluator[ConfigType]):
         name: str,
         eval_config: EvaluatorLossConfig,
         trainer_config: TrainerConfig,
-        get_tflops_func: callable,
     ):
         self._name = name
         self._eval_config = eval_config
         self._trainer_config = trainer_config
-        self._get_tflops_func = get_tflops_func
 
         steps = self._eval_config.get_iteration_count(
             self._trainer_config.training.train_iters,
@@ -121,8 +115,9 @@ class EvaluatorLoss[ConfigType: EvaluatorLossConfig](Evaluator[ConfigType]):
         multi_stage: FastLLMModel,
         runner: ScheduleRunner,
         data: Data,
+        phase: PhaseType,
     ) -> None:
-        super().setup(distributed, run, multi_stage, runner, data)
+        super().setup(distributed, run, multi_stage, runner, data, phase)
         self._loss_defs = self._multi_stage.base_model.loss_defs
         # Setup the schedule
         self._schedule = Schedule(
@@ -130,7 +125,7 @@ class EvaluatorLoss[ConfigType: EvaluatorLossConfig](Evaluator[ConfigType]):
             batch_config=self._trainer_config.batch,
             schedule_config=self._trainer_config.schedule,
             distributed_config=self._trainer_config.model.distributed,
-            phase=PhaseType.validation,
+            phase=PhaseType.inference if self._phase == PhaseType.inference else PhaseType.validation,
         )
 
         self._is_setup = True
@@ -160,10 +155,11 @@ class EvaluatorLoss[ConfigType: EvaluatorLossConfig](Evaluator[ConfigType]):
             #       maybe format each metric with evaluation_dataset_name prefix instead?
             # TODO: setting performance metrics per evaluation dataset
             #       maybe to set aggregate performance metrics for all evaluations datasets?
-            metric_key = f"{PhaseType.validation.value}.{self._name}"
+            phase = PhaseType.inference if self._phase == PhaseType.inference else PhaseType.validation
+            metric_key = f"{phase.value}.{self._name}"
             metrics[metric_key] = self._evaluate_loss(
                 data_iterator=self._evaluation_iterator,
-                phase=PhaseType.validation,
+                phase=phase,
                 num_iters=self._eval_config.iterations,
                 begin_iter=self._get_completed_evaluation_steps(completed_steps),
                 completed_steps=completed_steps,
@@ -173,7 +169,7 @@ class EvaluatorLoss[ConfigType: EvaluatorLossConfig](Evaluator[ConfigType]):
             formatted_metrics = format_metrics(
                 metrics[metric_key],
                 self._loss_defs,
-                PhaseType.validation,
+                phase,
                 dataset_name=self._name,
             )
 
@@ -206,7 +202,12 @@ class EvaluatorLoss[ConfigType: EvaluatorLossConfig](Evaluator[ConfigType]):
         )
         end_time = time.perf_counter()
         time_per_iteration = (end_time - begin_time) / num_iters
-        model_tflops, hardware_tflops = self._get_tflops_func(phase, time_per_iteration)
+        model_tflops, hardware_tflops = self._multi_stage.get_tflops(
+            phase,
+            time_per_iteration,
+            self._trainer_config.batch.batch_size,
+            self._trainer_config.batch.sequence_length,
+        )
         # TODO add other relevant eval metrics
         metrics = {
             "train_iters": self._trainer_config.training.train_iters,
@@ -252,12 +253,10 @@ class EvaluatorLmEval[ConfigType: EvaluatorLmEvalConfig](Evaluator[ConfigType]):
         name: str,
         eval_config: EvaluatorLmEvalConfig,
         trainer_config: TrainerConfig,
-        get_tflops_func: callable,
     ):
         self._name = name
         self._eval_config = eval_config
         self._trainer_config = trainer_config
-        self._get_tflops_func = get_tflops_func
 
     def setup(
         self,
@@ -266,8 +265,9 @@ class EvaluatorLmEval[ConfigType: EvaluatorLmEvalConfig](Evaluator[ConfigType]):
         multi_stage: FastLLMModel,
         runner: ScheduleRunner,
         data: Data,
+        phase: PhaseType,
     ) -> None:
-        super().setup(distributed, run, multi_stage, runner, data)
+        super().setup(distributed, run, multi_stage, runner, data, phase)
 
         # TODO: pass mini and batch size of the same length for lm_eval not to crash during training
         #       or implement min batch sequential awareness in fas_llm_wrapper for lm_eval
@@ -357,7 +357,6 @@ class EvaluatorRunner:
     def __init__(
         self,
         config: TrainerConfig,
-        get_tflops_func: callable,
     ):
         self._config = config
         self._evaluations = [
@@ -365,7 +364,6 @@ class EvaluatorRunner:
                 name=name,
                 eval_config=eval_config,
                 trainer_config=config,
-                get_tflops_func=get_tflops_func,
             )
             for name, eval_config in config.training.evaluations.items()
         ]
@@ -378,10 +376,11 @@ class EvaluatorRunner:
         runner: ScheduleRunner,
         data: Data,
         wandb: Wandb,
+        phase: PhaseType,
     ) -> None:
         self._wandb = wandb
         for evaluation in self._evaluations:
-            evaluation.setup(distributed, run, multi_stage, runner, data)
+            evaluation.setup(distributed, run, multi_stage, runner, data, phase)
         self._is_setup = True
 
     def get_datasets_samples(self) -> dict[str:int]:
