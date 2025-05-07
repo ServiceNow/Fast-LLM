@@ -96,8 +96,8 @@ class AprielSSMConfig(PretrainedConfig):
             "bias": False,
             "d_inner": 24 * self.head_dim,  # num_heads * head_dim
         }
-        if self.head_dim == self.ssm_cfg["d_inner"] // self.ssm_cfg["n_qk_heads"]:
-            logger.warning("Head dim is equal to d_inner // n_qk_heads.")
+        if self.head_dim != self.ssm_cfg["d_inner"] // self.ssm_cfg["n_qk_heads"]:
+            logger.warning("Head dim is not equal to d_inner // n_qk_heads.")
 
 
 __all__ = ["AprielConfig"]
