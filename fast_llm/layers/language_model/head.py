@@ -163,6 +163,8 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
                 # Target is reference model logits.
                 target = target.flatten(0, -2)
                 loss_mask = kwargs.get(LanguageModelKwargs.loss_mask)
+                if loss_mask is not None:
+                    loss_mask = loss_mask.flatten()
 
         if self._sequence_parallel_logits:
             target = split_op(target, self._tensor_space.distributed.tensor_group, 0)

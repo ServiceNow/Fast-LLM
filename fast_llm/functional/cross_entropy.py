@@ -38,7 +38,7 @@ def _torch_cross_entropy_forward_backward(
                 torch.nn.functional.cross_entropy(
                     logits_ if logits_scale_factor == 1 else logits_ * logits_scale_factor, target, reduction="none"
                 )
-                * loss_mask.unsqueeze(-1)
+                * loss_mask
             ).mean()
         if grad_output is None:
             grad = None
@@ -48,7 +48,7 @@ def _torch_cross_entropy_forward_backward(
     return loss.detach_(), grad
 
 
-# @torch.compile
+@torch.compile
 def _fused_softmax_base(
     logits: torch.Tensor, logits_scale_factor: float = 1.0, group: ProcessGroup | None = None, dim: int = -1
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -74,7 +74,7 @@ def _fused_softmax(
     return exp_logits / sum_exp_logits
 
 
-@torch.compile
+# @torch.compile
 def _fused_cross_entropy_forward_backward(
     logits: torch.Tensor,
     target: torch.Tensor,
@@ -113,6 +113,8 @@ def _fused_cross_entropy_forward_backward(
     else:
         # Target should be tensor-parallel already, no further manipulation needed.
         target_mask = None
+        if loss_mask is not None:
+            loss_mask = loss_mask.unsqueeze(-1)
 
     if grad_output is None:
         grad = None
@@ -128,9 +130,9 @@ def _fused_cross_entropy_forward_backward(
         grad = grad_base.mul((grad_output / logits.size(0)) / sum_exp_logits)
         if logits_scale_factor != 1.0:
             grad *= logits_scale_factor
-        grad = grad.to(logits.dtype)
         if loss_mask is not None:
-            grad = torch.where(loss_mask, grad.to(logits.dtype), 0)
+            grad *= loss_mask
+        grad = grad.to(logits.dtype)
 
     # loss = mean(log(sum_exp_logits) - sum(probabilities * logits))
     if target_format == TargetFormat.labels:

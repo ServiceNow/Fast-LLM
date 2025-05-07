@@ -179,9 +179,6 @@ class GPTTrainerConfig(PretrainedGPTModelConfig, TrainerConfig):
             Assert.eq(self.reference_models.keys(), {name})
         if self.model.base_model.use_absolute_position_embeddings:
             Assert.geq(self.model.base_model.num_absolute_position_embeddings, self.batch.sequence_length)
-        # if self.model.base_model.distillation_model is not None:
-        #     # TODO: Support loss masking for distillation?
-        #     assert not self.batch.use_loss_masking_spans
         for reference_model in self.reference_models.values():
             Assert.none(reference_model.model.base_model.distillation_model)
             # TODO: Support more LM head features.
@@ -211,7 +208,5 @@ class GPTTrainerConfig(PretrainedGPTModelConfig, TrainerConfig):
     @classmethod
     def get_inference_runner_class(cls) -> type["GPTInferenceRunner"]:
         from fast_llm.models.gpt.model import GPTInferenceRunner
-
-        # TODO" we dont have inference runner for SSM/Hybrid yet, should return None?
 
         return GPTInferenceRunner

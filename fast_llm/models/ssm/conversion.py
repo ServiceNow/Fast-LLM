@@ -45,10 +45,10 @@ class HybridModelCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
     _default_block_type: str = SSMBlockType.mamba2_discrete.value
 
     @classmethod
-    def _import_config(cls, config, architecture_only: bool = False):
+    def _import_config(cls, config):
         cls.num_layers = config["n_layer"] if "n_layer" in config else config["num_hidden_layers"]
         cls.block_pattern = config.get("hybrid_block_layout", None)
-        return super()._import_config(config, architecture_only)
+        return super()._import_config(config)
 
     @classmethod
     def _create_config_converters(cls) -> list[ParamConverter]:

@@ -226,4 +226,11 @@ class HybridTrainerConfig(PretrainedHybridSSMModelConfig, TrainerConfig):
 
     @classmethod
     def get_inference_runner_class(cls) -> type["GPTInferenceRunner"]:
-        raise NotImplementedError
+        from fast_llm.models.gpt.model import GPTInferenceRunner
+
+        # TODO: we dont have inference runner for SSM/Hybrid yet, should return None?
+        logger.warning(
+            "No inference runner for SSM/Hybrid yet, using GPTInferenceRunner for now, which does not support SSM/Hybrid"
+        )
+
+        return GPTInferenceRunner
