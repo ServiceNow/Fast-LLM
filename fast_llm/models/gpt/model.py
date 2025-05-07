@@ -315,11 +315,15 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                             valid_spans[:, 0].clamp_(min=sequence_offset)
                             valid_spans[:, 1].clamp_(max=sequence_k + prediction_heads - 1)
                             valid_spans -= sequence_offset
+                            loss_mask = torch.ones_like(labels, dtype=torch.bool)
                             for start, end in valid_spans:
                                 if sequence_first:
-                                    labels[start : end + 1, i] = -100
+                                    loss_mask[start : end + 1, i] = False
                                 else:
-                                    labels[i, start : end + 1] = -100
+                                    loss_mask[i, start : end + 1] = False
+                            if self._config.distillation_model is not None:
+                                kwargs[LanguageModelKwargs.loss_mask] = loss_mask
+                            labels = torch.where(loss_mask, labels, -100)
                 kwargs[LanguageModelKwargs.labels] = labels
             kwargs.update(reference_logits[i])
 
