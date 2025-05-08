@@ -28,6 +28,7 @@ class SourceSchemaConfig(Config):
     pass
 
 class TextColumnConfig(SourceSchemaConfig):
+    type: str = "text_column"
     input_column: str = Field(
         default="text",
         desc="Field of the dataset to use.",
