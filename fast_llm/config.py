@@ -311,7 +311,7 @@ class Config:
     _setting_implicit_default: bool | None = Field(init=False, repr=False)
 
     # A registry for all the config classes.
-    _registry: typing.ClassVar[Registry[str, type[typing.Self]]]
+    _registry: typing.ClassVar[Registry[str, type[typing.Self]]] = Registry[str, "type[Config]"]("Config", {})
 
     def __setattr__(self, key: str, value: typing.Any) -> None:
         """
@@ -900,7 +900,14 @@ class Config:
 
     @classmethod
     def register_subclass(cls, name: str, cls_: type[typing.Self]) -> None:
-        cls._registry[cls.__name__] = cls
+        Assert.custom(issubclass, cls_, cls)
+        if name in cls._registry:
+            old_cls = cls._registry[name]
+            if old_cls.__name__ == cls_.__name__ and cls._registry[name].__module__ == cls_.__module__:
+                del cls._registry[name]
+            else:
+                raise KeyError(f"{cls.__name__} class registry already has an entry {name} from class {cls.__name__}.")
+        cls._registry[name] = cls_
 
     @classmethod
     def get_subclass(cls, name):
@@ -927,13 +934,14 @@ class Config:
         """
         We need to postpone validation until the class has been processed by the dataclass wrapper.
         """
+        Assert.eq(cls.__name__, cls.__qualname__)
         cls._registry = Registry[str, type[cls]](cls.__name__, {})
-        Config._registry[cls.__name__] = cls
+        Config.register_subclass(cls.__name__, cls)
         short_name = cls.__name__.strip("Config")
         if short_name != cls.__name__:
-            Config._registry[short_name] = cls
+            Config.register_subclass(short_name, cls)
         for base_class in cls.__mro__:
-            if issubclass(base_class, Config):
+            if issubclass(base_class, Config) and base_class is not cls:
                 assert cls.__class_validated__, (
                     f"Parent class {get_type_name(base_class)} of config class {get_type_name(cls)} has not been validated."
                     f" Make sure to use the @config_class decorator."

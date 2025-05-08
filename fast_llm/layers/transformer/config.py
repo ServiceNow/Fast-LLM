@@ -103,12 +103,16 @@ class RotaryConfig(BaseModelConfig):
     def enabled(self) -> bool:
         return False
 
+    def get_frequencies(self, sequence_length: int, kv_channels: int, device="cuda") -> "torch.Tensor":
+        raise NotImplementedError()
+
 
 @config_class()
 class NoRotaryConfig(RotaryConfig):
     _abstract = False
 
 
+@config_class()
 class DefaultRotaryConfig(RotaryConfig):
     theta: float = Field(
         default=10000,
@@ -136,17 +140,76 @@ class DefaultRotaryConfig(RotaryConfig):
         if self.triton and not TritonConfig.TRITON_ENABLED:
             warnings.warn("Triton is disabled, but the triton rotary kernel will be used anyway.")
 
+    def get_frequencies(self, sequence_length: int, kv_channels: int, device="cuda") -> "torch.Tensor":
+        import torch
 
+        from fast_llm.functional.rotary import convert_rotary_complex_to_real
+
+        # Calculate the complex frequencies (https://blog.eleuther.ai/rotary-embeddings/)
+        # `exp(i * n * a) = cos(n * a) + i sin(n * a)`,
+        # `a = theta ** - (2 * (channel // 2) / kv_channels)`,
+        # where n is the position in the sequence.
+        # We preform the calculation in high precision because it matters for rotary embeddings.
+        positions = torch.arange(sequence_length, device=device, dtype=torch.float64)
+        angles = torch.outer(positions, self._get_angle_scales(kv_channels, device))
+        frequencies = torch.polar(torch.ones_like(angles), angles)[None, :, None, :].to(torch.complex64)
+        if not self.complex_format:
+            frequencies = convert_rotary_complex_to_real(
+                torch.view_as_real(frequencies).flatten(-2), kv_channels, 3
+            ).contiguous()
+        return frequencies
+
+    def _get_angle_scales(self, kv_channels: int, device="cuda") -> "torch.Tensor":
+        return self.theta ** -torch.arange(0, 1, 2 / kv_channels, device=device, dtype=torch.float64)
+
+
+@config_class()
 class Llama3RotaryConfig(DefaultRotaryConfig):
+    """
+    Llama3 scaling: https://github.com/meta-llama/llama-models/blob/baf7b01b6e62bc7126c7b558d2b67d4533142680/models/llama3/reference_impl/model.py#L45-L67
+    """
+
     # TODO: Add descriptions.
     scale_factor: float = Field(default=8.0, hint=FieldHint.feature)
     low_frequency_factor: float = Field(default=1.0, hint=FieldHint.feature)
     high_frequency_factor: float = Field(default=4.0, hint=FieldHint.feature)
     original_context_length: int = Field(default=8192, hint=FieldHint.feature)
 
+    def _validate(self) -> None:
+        super()._validate()
+        Assert.gt(self.high_frequency_factor, self.low_frequency_factor)
 
+    def _get_angle_scales(self, kv_channels: int, device="cuda") -> "torch.Tensor":
+        import torch
+
+        scales = super()._get_angle_scales(kv_channels, device)
+        low_frequency_wavelength = self.original_context_length / self.low_frequency_factor
+        high_frequency_wavelength = self.original_context_length / self.high_frequency_factor
+        new_scales = []
+        for scale in scales:
+            wavelength = 2 * math.pi / scale
+            if wavelength < high_frequency_wavelength:
+                new_scales.append(scale)
+            elif wavelength > low_frequency_wavelength:
+                new_scales.append(scale / self.scale_factor)
+            else:
+                smooth = (self.original_context_length / wavelength - self.low_frequency_factor) / (
+                    self.high_frequency_factor - self.low_frequency_factor
+                )
+                new_scales.append((1 - smooth) * scale / self.scale_factor + smooth * scale)
+        return torch.stack(new_scales)
+
+
+@config_class()
 class YarnRotaryConfig(DefaultRotaryConfig):
+    """
+    Yarn scaling:
+    https://github.com/huggingface/transformers/blob/006d9249ec0270ff6c4d3840979d23fe94bdc763/src/transformers/modeling_rope_utils.py#L163
+    [original paper](https://arxiv.org/abs/2309.00071)
+    """
+
     # TODO: Add descriptions.
+    scale_factor: float = Field(default=8.0, hint=FieldHint.feature)
     attention_factor: None | float = Field(
         default=None,
         hint=FieldHint.feature,
@@ -160,6 +223,47 @@ class YarnRotaryConfig(DefaultRotaryConfig):
         hint=FieldHint.feature,
     )
     original_context_length: int = Field(default=8192, hint=FieldHint.feature)
+
+    def _validate(self) -> None:
+        if self.attention_factor is None:
+            with self._set_implicit_default():
+                self.attention_factor = 0.1 * math.log(self.scale_factor) + 1.0
+        super()._validate()
+
+    def _linear_ramp_factor(self, min, max, dim):
+        import torch
+
+        if min == max:
+            max += 0.001  # Prevent singularity
+
+        linear_func = (torch.arange(dim, dtype=torch.float32) - min) / (max - min)
+        ramp_func = torch.clamp(linear_func, 0, 1)
+        return ramp_func
+
+    def get_frequencies(self, sequence_length: int, kv_channels: int, device="cuda") -> "torch.Tensor":
+        return super().get_frequencies(sequence_length, kv_channels, device) * self.attention_factor
+
+    def _get_angle_scales(self, kv_channels: int, device="cuda") -> "torch.Tensor":
+        import torch
+
+        scales = super()._get_angle_scales(kv_channels, device)
+        # TODO: max_position_embeddings or original_context_length?
+        # see https://huggingface.co/deepseek-ai/DeepSeek-V3/blob/main/modeling_deepseek.py#L304
+        low = max(self._get_correction(self.beta_slow, kv_channels), 0)
+        high = min(self._get_correction(self.beta_fast, kv_channels), kv_channels - 1)
+        if low == high:
+            high += 0.001  # Prevent singularity
+
+        # Get n-dimensional rotational scaling corrected for extrapolation
+        extrapolation_factor = torch.clamp(
+            (torch.arange(kv_channels, dtype=torch.float32, device=scales.device) - low) / (high - low), 0, 1
+        )
+        return scales / self.scale_factor * extrapolation_factor + scales * (1 - extrapolation_factor)
+
+    def _get_correction(self, beta: float, dim: int) -> float:
+        return math.floor(
+            dim * math.log(self.original_context_length / (beta * 2 * math.pi)) / (2 * math.log(self.theta))
+        )
 
 
 RotaryConfig.register_subclass("none", RotaryConfig)
@@ -185,6 +289,7 @@ class TransformerSubLayerName(str, enum.Enum):
     mlp_2 = "mlp_2"
 
 
+@config_class()
 class TransformerPeftConfig(PeftConfig):
     @abc.abstractmethod
     def apply_linear(self, linear: "LinearBase", layer_type: TransformerSubLayerName | None = None) -> "LinearLike":

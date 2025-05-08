@@ -24,7 +24,7 @@ MEMMAP_DTYPES_INV = {y: x for x, y in MEMMAP_DTYPES.items()}
 MEMMAP_INDEX_HEADER = b"MMIDIDX\x00\x00"
 
 
-@config_class
+@config_class()
 class GPTHuggingfaceDatasetConfig(Config):
     path: str = Field(
         default=None,
@@ -77,7 +77,7 @@ class GPTHuggingfaceDatasetConfig(Config):
     )
 
 
-@config_class
+@config_class()
 class DatasetPreparatorDistributedConfig(Config):
     # TODO: Unify with fast_llm.engine.distributed.config.DistributedConfig
 
