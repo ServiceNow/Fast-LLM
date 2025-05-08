@@ -65,7 +65,7 @@ class GPTHuggingfaceDatasetConfig(Config):
         desc="Split of the dataset to use.",
         hint=FieldHint.optional,
     )
-    data_source: SourceSchemaConfig = Field(
+    source_schema: SourceSchemaConfig = Field(
         default_factory=TextColumnConfig,
         desc="Configuration for the data source.",
         hint=FieldHint.optional,
