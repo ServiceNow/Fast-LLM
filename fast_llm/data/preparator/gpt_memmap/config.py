@@ -24,6 +24,7 @@ MEMMAP_DTYPES_INV = {y: x for x, y in MEMMAP_DTYPES.items()}
 MEMMAP_INDEX_HEADER = b"MMIDIDX\x00\x00"
 
 
+@config_class()
 class SourceSchemaConfig(Config):
     pass
 
@@ -53,7 +54,7 @@ class PromptCompletionConfig(SourceSchemaConfig):
     
 @config_class()
 class TextColumnConfig(SourceSchemaConfig):
-    type: str = "text_column"
+    type: typing.ClassVar[str] = "text_column"
     input_column: str = Field(
         default="text",
         desc="Field of the dataset to use.",
