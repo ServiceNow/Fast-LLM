@@ -178,11 +178,12 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
             else self._config.dataset.data_type
         )
 
-        if isinstance(self._config.dataset.data_source, TextColumnConfig):
-            self._data_column = self._config.dataset.data_source.input_column
-            self._loss_masking_spans_column = self._config.dataset.data_source.loss_masking_spans_column
+        # Set data column and loss masking spans column based on source schema
+        if isinstance(self._config.dataset.source_schema, TextColumnConfig):
+            self._data_column = self._config.dataset.source_schema.input_column
+            self._loss_masking_spans_column = self._config.dataset.source_schema.loss_masking_spans_column
         else:
-            raise ValueError(f"Dataset data_source set incorrectly. data_source: '{self._config.dataset.data_source}'.")
+            raise ValueError(f"Dataset source_schema set incorrectly. source_schema: '{self._config.dataset.data_source}'.")
 
         # Initialize distributed processing
         if self._config.distributed.world_size > 1:
