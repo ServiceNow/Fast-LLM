@@ -3,6 +3,7 @@ import math
 import typing
 
 import torch
+import torch.nn.attention.flex_attention
 
 from fast_llm.engine.base_model.config import Preprocessor
 from fast_llm.engine.config_utils.data_type import DataType
@@ -193,6 +194,48 @@ class RotaryEmbeddingPreprocessor(Preprocessor):
         )
 
 
+def _get_mask_mod(
+    cu_seqlens_q: torch.Tensor | None,
+    cu_seqlens_k: torch.Tensor | None,
+    block_ids_q: torch.Tensor | None,
+    block_ids_k: torch.Tensor | None,
+    window_size: tuple[int, int] = (-1, -1),
+) -> typing.Callable[[int, int, int, int], bool]:
+
+    if cu_seqlens_k is None:
+        cu_seqlens_k = cu_seqlens_q
+    if block_ids_k is None:
+        block_ids_k = block_ids_q
+    win_left, win_right = window_size
+
+    if cu_seqlens_q is not None and block_ids_q is not None:
+        block_ids_q = block_ids_q.view(-1, block_ids_q.size(1))
+    if cu_seqlens_k is not None and block_ids_k is not None:
+        block_ids_k = block_ids_k.view(-1, block_ids_k.size(1))
+
+    assert cu_seqlens_q is not None
+    assert cu_seqlens_k is not None
+    assert block_ids_q is not None
+    assert block_ids_k is not None
+
+    def _mask_mod(b: int, h: int, qi: int, ki: int) -> torch.Tensor:
+        abs_q = cu_seqlens_q[b] + qi
+        abs_k = cu_seqlens_k[b] + ki
+        bidirectional_ok = block_ids_q[abs_q] == block_ids_k[abs_k]
+
+        causal_ok = ki <= qi
+
+        window_ok = True
+        if win_left != -1:
+            window_ok &= ki >= qi - win_left
+        if win_right != -1:
+            window_ok &= ki <= qi + win_right
+
+        return window_ok & (bidirectional_ok | causal_ok)
+
+    return _mask_mod
+
+
 class AttentionPreprocessor(Preprocessor):
 
     def __init__(
@@ -203,6 +246,21 @@ class AttentionPreprocessor(Preprocessor):
         self._config = config
         self._tensor_space = tensor_space
         self._distributed_config = self._tensor_space.distributed_config
+
+    def _select_attention_implementation(self, kwargs: dict[str, typing.Any]) -> AttentionImplementation:
+        attention_implementation = self._config.select_attention_implementation(
+            require_variable_length=TransformerKwargs.sequence_lengths in kwargs,
+            require_blocks=TransformerKwargs.block_lengths in kwargs,
+            require_dropout=self._config.attention_dropout > 0.0,
+            has_half_precision=(
+                self._tensor_space.distributed_config.training_dtype
+                in (
+                    DataType.float16,
+                    DataType.bfloat16,
+                )
+            ),
+        )
+        return attention_implementation
 
     def _preprocess_varlen(self, batch, kwargs: dict[str, typing.Any]) -> None:
         """
@@ -277,6 +335,13 @@ class AttentionPreprocessor(Preprocessor):
             block_lengths := kwargs.get(TransformerKwargs.block_lengths)
         ) is None:
             return
+        torch.nn.attention.flex_attention.create_block_mask
+
+    def _preprocess_varlen_block_mask(self, batch, kwargs: dict[str, typing.Any]) -> None:
+        if (sequence_lengths := kwargs.get(TransformerKwargs.sequence_lengths)) is None and (
+            block_lengths := kwargs.get(TransformerKwargs.block_lengths)
+        ) is None:
+            return
         pass
 
     def _preprocess_attention_mask(self, batch, kwargs: dict[str, typing.Any]) -> None:
@@ -287,33 +352,64 @@ class AttentionPreprocessor(Preprocessor):
         pass
 
     def preprocess(self, batch, kwargs: dict[str, typing.Any]) -> None:
-        attention_implementation = self._config.select_attention_implementation(
-            require_variable_length=TransformerKwargs.sequence_lengths in kwargs,
-            require_blocks=TransformerKwargs.block_lengths in kwargs,
-            require_dropout=self._config.attention_dropout > 0.0,
-            has_half_precision=(
-                self._tensor_space.distributed_config.training_dtype
-                in (
-                    DataType.float16,
-                    DataType.bfloat16,
-                )
-            ),
-        )
-        match attention_implementation:
+        match self._select_attention_implementation(kwargs):
             case AttentionImplementation.FLASH:
                 pass
             case AttentionImplementation.FLASH_VARLEN:
                 self._preprocess_varlen(batch, kwargs)
             case AttentionImplementation.FLEX:
                 self._preprocess_blocks(batch, kwargs)
+                self._preprocess_block_mask(batch, kwargs)
             case AttentionImplementation.FLEX_VARLEN:
                 self._preprocess_varlen(batch, kwargs)
                 self._preprocess_blocks(batch, kwargs)
-                self._preprocess_block_mask(batch, kwargs)
+                self._preprocess_varlen_block_mask(batch, kwargs)
             case AttentionImplementation.SDPA:
+                self._preprocess_varlen(batch, kwargs)
+                self._preprocess_blocks(batch, kwargs)
                 self._preprocess_attention_mask(batch, kwargs)
             case AttentionImplementation.BACKUP:
+                self._preprocess_varlen(batch, kwargs)
+                self._preprocess_blocks(batch, kwargs)
                 self._preprocess_attention_mask(batch, kwargs)
+            case _:
+                raise ValueError(f"Unsupported attention implementation: {attention_implementation}")
+
+    def _preprocess_meta_attention_mask(self, kwargs: dict[str, typing.Any]) -> None:
+        if TransformerKwargs.sequence_lengths not in kwargs and TransformerKwargs.block_lengths not in kwargs:
+            return
+        scalar_dim = self._tensor_space.get_tensor_dim(DefaultDimNames.scalar)
+        kwargs[TransformerKwargs.attention_mask] = TensorMeta.from_dims(
+            (
+                scalar_dim,
+                scalar_dim,
+                kwargs[TransformerKwargs.sequence_q_dim],
+                scalar_dim,
+                kwargs[TransformerKwargs.sequence_k_dim],
+            ),
+            tensor_name=TransformerKwargs.attention_mask,
+            dtype=torch.bool,
+        )
+        kwargs[TransformerKwargs.attention_mask_value] = TensorMeta.from_dims(
+            (scalar_dim,),
+            tensor_name=TransformerKwargs.attention_mask_value,
+            dtype=self._tensor_space.distributed_config.training_dtype.torch,
+        )
+
+    def preprocess_meta(self, kwargs: dict[str, typing.Any]) -> None:
+        match self._select_attention_implementation(kwargs):
+            case AttentionImplementation.FLASH:
+                pass
+            case AttentionImplementation.FLASH_VARLEN:
+                pass
+            case AttentionImplementation.FLEX:
+                pass
+            case AttentionImplementation.FLEX_VARLEN:
+                pass
+            case AttentionImplementation.SDPA:
+                self._preprocess_meta_attention_mask(kwargs)
+            case AttentionImplementation.BACKUP:
+                self._preprocess_meta_attention_mask(kwargs)
             case _:
                 raise ValueError(f"Unsupported attention implementation: {attention_implementation}")
 
@@ -376,30 +472,4 @@ class BackupAttentionPreprocessor(Preprocessor):
         kwargs[TransformerKwargs.attention_mask_value] = self._mask_value
 
     def preprocess_meta(self, kwargs: dict[str, typing.Any]) -> None:
-        kwargs[TransformerKwargs.attention_mask] = TensorMeta.from_dims(
-            (
-                self._scalar_dim,
-                self._scalar_dim,
-                kwargs[TransformerKwargs.sequence_q_dim],
-                self._scalar_dim,
-                kwargs[TransformerKwargs.sequence_k_dim],
-            ),
-            tensor_name=TransformerKwargs.attention_mask,
-            dtype=torch.bool,
-        )
-        kwargs[TransformerKwargs.attention_mask_value] = TensorMeta.from_dims(
-            (self._scalar_dim,),
-            tensor_name=TransformerKwargs.attention_mask_value,
-            dtype=self._tensor_space.distributed_config.training_dtype.torch,
-        )
-
-
-class FlashAttnVarlenPreprocessor(Preprocessor):
-    def __init__(self, config: TransformerConfig, tensor_space: TensorSpace):
-        self._config = config
-        self._tensor_space = tensor_space
-        self._distributed_config = self._tensor_space.distributed_config
-        assert self._config.do_use_flash_attention(self._distributed_config)
-
-    def preprocess(self, batch, kwargs: dict[str, typing.Any]) -> None:
         pass
