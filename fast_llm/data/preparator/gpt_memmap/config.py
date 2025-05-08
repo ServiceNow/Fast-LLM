@@ -28,6 +28,30 @@ class SourceSchemaConfig(Config):
     pass
 
 @config_class()
+class PromptCompletionConfig(SourceSchemaConfig):
+    type: str = "prompt_completion"
+    prompt_column: str = Field(
+        default="prompt",
+        desc="Field of the dataset to use.",
+        hint=FieldHint.optional,
+    )
+    completion_column: str = Field(
+        default="completion",
+        desc="Field of the dataset to use.",
+        hint=FieldHint.optional,
+    )
+    delimiter: str = Field(
+        default=" ",
+        desc="Delimiter between prompt and completion.",
+        hint=FieldHint.optional,
+    )
+    set_loss_masking_for_prompt: bool = Field(
+        default=False,
+        desc="Create loss mask spans based on prompt.",
+        hint=FieldHint.optional,
+    )
+    
+@config_class()
 class TextColumnConfig(SourceSchemaConfig):
     type: str = "text_column"
     input_column: str = Field(

@@ -24,7 +24,7 @@ from fast_llm.data.dataset.gpt.config import (
 from fast_llm.data.dataset.gpt.memmap import GPTMemmapDataset
 from fast_llm.data.dataset.gpt.sampled import GPTSample
 from fast_llm.data.preparator.config import DatasetPreparator
-from fast_llm.data.preparator.gpt_memmap.config import GPTMemmapDatasetPreparatorConfig, TextColumnConfig
+from fast_llm.data.preparator.gpt_memmap.config import GPTMemmapDatasetPreparatorConfig, TextColumnConfig, PromptCompletionConfig
 from fast_llm.data.tokenizer import Tokenizer
 from fast_llm.engine.config_utils.data_type import DataType, get_unsigned_integer_type
 from fast_llm.utils import Assert, normalize_probabilities, padded_cumsum
@@ -181,6 +181,8 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
         if isinstance(self._config.dataset.data_source, TextColumnConfig):
             self._data_column = self._config.dataset.data_source.input_column
             self._loss_masking_spans_column = self._config.dataset.data_source.loss_masking_spans_column
+        elif isinstance(self._config.dataset.data_source, PromptCompletionConfig):
+            
         else:
             raise ValueError(f"Dataset data_source set incorrectly. data_source: '{self._config.dataset.data_source}'.")
 
