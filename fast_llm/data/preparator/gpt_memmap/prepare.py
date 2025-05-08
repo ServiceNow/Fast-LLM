@@ -178,13 +178,6 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
             else self._config.dataset.data_type
         )
 
-        # Set data column and loss masking spans column based on source schema
-        if isinstance(self._config.dataset.source_schema, TextColumnConfig):
-            self._data_column = self._config.dataset.source_schema.input_column
-            self._loss_masking_spans_column = self._config.dataset.source_schema.loss_masking_spans_column
-        else:
-            raise ValueError(f"Dataset source_schema set incorrectly. source_schema: '{self._config.dataset.data_source}'.")
-
         # Initialize distributed processing
         if self._config.distributed.world_size > 1:
             torch.distributed.init_process_group(
@@ -217,6 +210,45 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
                 torch.distributed.barrier()
 
         assert isinstance(dataset, datasets.Dataset)
+        
+        # Set data column and loss masking spans column based on source schema
+        source_schema = self._config.dataset.source_schema
+        if isinstance(source_schema, TextColumnConfig):
+            self._data_column = source_schema.input_column
+            self._loss_masking_spans_column = source_schema.loss_masking_spans_column
+        elif isinstance(source_schema, PromptCompletionConfig):
+            # Check for combining cols
+            Assert.incl(source_schema.prompt_column, dataset.column_names)
+            Assert.incl(source_schema.completion_column, dataset.column_names)
+            new_combined_column = f"{source_schema.prompt_column}_{source_schema.completion_column}"
+            logger.info(f"Combining fields {source_schema.prompt_column} + \
+                {source_schema.completion_column} = {new_combined_column}")
+            dataset = dataset.map(
+                lambda example: {
+                    new_combined_column: f"{example[source_schema.prompt_column]}{source_schema.delimiter}{source_schema.completion_column}"
+                },
+                batched=False,
+                desc="Combining fields",
+            )
+            logger.info(f"Sample after combining fields:\n{dataset[0]}")
+            self._data_column = new_combined_column
+            
+            if source_schema.set_loss_masking_for_prompt:
+                loss_masking_column = f"{source_schema.prompt_columns}_loss_masking_spans"
+                dataset = dataset.map(
+                    lambda example: {
+                        loss_masking_column: [
+                            (0, len(str(example[source_schema.prompt_column])) - 1)
+                        ]# spans are inclusive
+                    },
+                    batched=False,
+                    desc="Setting loss masking spans",
+                )
+                logger.info(f"Sample after setting loss masking spans:\n{dataset[0]}")
+                self._loss_masking_spans_column = loss_masking_column
+        else:
+            raise ValueError(f"Dataset source_schema set incorrectly. source_schema: '{self._config.dataset.data_source}'.")
+        
         dataset = dataset.shard(
             num_shards=self._config.distributed.world_size,
             index=self._config.distributed.rank,
