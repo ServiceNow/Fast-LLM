@@ -30,7 +30,7 @@ class SourceSchemaConfig(Config):
 
 @config_class()
 class PromptCompletionConfig(SourceSchemaConfig):
-    type: str = "prompt_completion"
+    type: typing.ClassVar[str] = "prompt_completion"
     prompt_column: str = Field(
         default="prompt",
         desc="Field of the dataset to use.",
@@ -42,7 +42,7 @@ class PromptCompletionConfig(SourceSchemaConfig):
         hint=FieldHint.optional,
     )
     delimiter: str = Field(
-        default=" ",
+        default="",
         desc="Delimiter between prompt and completion.",
         hint=FieldHint.optional,
     )

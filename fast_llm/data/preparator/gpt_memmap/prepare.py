@@ -217,7 +217,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
             self._data_column = source_schema.input_column
             self._loss_masking_spans_column = source_schema.loss_masking_spans_column
         elif isinstance(source_schema, PromptCompletionConfig):
-            # Check for combining cols
+            # Check for combining cols in dataset
             Assert.incl(source_schema.prompt_column, dataset.column_names)
             Assert.incl(source_schema.completion_column, dataset.column_names)
             new_combined_column = f"{source_schema.prompt_column}_{source_schema.completion_column}"
