@@ -43,7 +43,8 @@ class MultiModalEmbedding(LanguageModelEmbedding):
         image_positions = kwargs.get(VisionEncoderKwargs.image_positions)
         tokens = kwargs.get(LanguageModelKwargs.tokens)
         # get text embeddings
-        embeddings = super()._forward(tokens, position_ids)
+        # TODO Soham: cloning to avoid pytorch complaint about in-place operation. Can we do better?
+        embeddings = super()._forward(tokens, position_ids).clone()
         image_idx = 0
         for sample_idx, (positions, sizes) in enumerate(zip(image_positions, image_sizes)):
             image_embedding_offset = 0
