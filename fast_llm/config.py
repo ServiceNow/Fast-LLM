@@ -257,7 +257,7 @@ def _process_config_class(cls: type["Config"]):
     return cls
 
 
-def config_class(cls=None):
+def config_class[T: Config]() -> typing.Callable[[type[T]], type[T]]:
     """
     Fast-LLM replacement for the default dataclass wrapper. Performs additional verifications.
     """
@@ -283,13 +283,7 @@ def config_class(cls=None):
         cls.__init__ = __init__
         return wrapped
 
-    # See if we're being called as @config_class or @config_class().
-    if cls is None:
-        # We're called with parens.
-        return wrap
-
-    # We're called as @config_class without parens.
-    return wrap(cls)
+    return wrap
 
 
 @dataclasses.dataclass()
@@ -318,11 +312,6 @@ class Config:
 
     # A registry for all the config classes.
     _registry: typing.ClassVar[Registry[str, type[typing.Self]]]
-    type: str | None = Field(
-        default=None,
-        desc="The config class name.",
-        hint=FieldHint.core,
-    )
 
     def __setattr__(self, key: str, value: typing.Any) -> None:
         """
@@ -987,6 +976,13 @@ class Config:
                 else:
                     # dataclasses expects an annotation, so we use the one from the base class.
                     cls.__annotations__[name] = base_class_field.type
+
+    # Type for the field. At the end of class definition to avoid shadowing builtin.
+    type: str | None = Field(
+        default=None,
+        desc="The config class name.",
+        hint=FieldHint.core,
+    )
 
 
 class Configurable[ConfigType: Config]:
