@@ -27,6 +27,7 @@ MEMMAP_INDEX_HEADER = b"MMIDIDX\x00\x00"
 class SourceSchemaConfig(Config):
     pass
 
+@config_class()
 class TextColumnConfig(SourceSchemaConfig):
     input_column: str = Field(
         default="text",
@@ -38,7 +39,7 @@ class TextColumnConfig(SourceSchemaConfig):
         hint=FieldHint.optional
     )
 
-@config_class
+@config_class()
 class GPTHuggingfaceDatasetConfig(Config):
     path: str = Field(
         default=None,
@@ -88,7 +89,7 @@ class GPTHuggingfaceDatasetConfig(Config):
     )
 
 
-@config_class
+@config_class()
 class DatasetPreparatorDistributedConfig(Config):
     # TODO: Unify with fast_llm.engine.distributed.config.DistributedConfig
 

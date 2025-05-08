@@ -315,7 +315,7 @@ class PretrainedFastLLMModelConfig(Config):
         pass
 
 
-@config_class
+@config_class()
 class CheckpointMetadata(Config):
     # TODO: Make entries more flexible?
     #  I.e.. model / format / usage (ex. training) - specific entries instead of a generic metadata?
