@@ -407,7 +407,7 @@ class GPTSampledIndexedDataset(SampledDataset):
             # compute padding size
             padding = np.full((self._parameters.sequence_length + 1,), 0)
             padding[: len(sample.token_ids)] = sample.token_ids
-            sequence_lengths.append(self._parameters.sequence_length + 1 - len(sample.token_ids))
+            sequence_lengths.append(self._parameters.sequence_length - len(sample.token_ids))
             sample.token_ids = padding
 
             if not self._parameters.cross_document_attention:
