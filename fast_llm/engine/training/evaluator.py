@@ -330,7 +330,6 @@ class EvaluatorLoss[ConfigType: EvaluatorLossConfig](Evaluator[ConfigType]):
         )
 
 
-# TODO: refactor new from_trainer for hf wrapper and using of training_progress_info
 class EvaluatorLmEval[ConfigType: EvaluatorLmEvalConfig](Evaluator[ConfigType]):
     config_class: typing.ClassVar[type[EvaluatorLmEvalConfig]] = EvaluatorLmEvalConfig
 
