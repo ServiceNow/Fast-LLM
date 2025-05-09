@@ -17,7 +17,7 @@ from fast_llm.engine.schedule.schedule import Schedule
 from fast_llm.engine.training.config import TrainerConfig
 
 
-class HuggingfaceBaseModelForCausalLM(transformers.PreTrainedModel, transformers.generation.utils.GenerationMixin):
+class HuggingfaceBaseModel(transformers.PreTrainedModel):
     config_class: typing.ClassVar[type[HuggingfaceModelConfig]] = HuggingfaceModelConfig
     runner_class: typing.ClassVar[type[InferenceRunner]] = InferenceRunner
     config: HuggingfaceModelConfig
@@ -132,3 +132,7 @@ class HuggingfaceBaseModelForCausalLM(transformers.PreTrainedModel, transformers
 
     def _init_weights(self, module) -> None:
         raise NotImplementedError(module)
+
+
+class HuggingfaceBaseModelForCausalLM(HuggingfaceBaseModel, transformers.generation.utils.GenerationMixin):
+    pass
