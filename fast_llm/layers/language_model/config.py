@@ -146,6 +146,12 @@ class LanguageModelBaseConfig(BaseModelConfig):
         hint=FieldHint.feature,
         valid=skip_valid_if_none(check_field(Assert.geq, 0)),
     )
+    output_lr_scale: float | None = Field(
+        default=None,
+        desc="Custom learning rate scale for the output weights.",
+        doc="May be used to freeze the output weights by setting their scale to zero.",
+        hint=FieldHint.feature,
+    )
 
     def _validate(self) -> None:
         self.transformer.validate()
