@@ -4,10 +4,11 @@ import typing
 import torch
 import torchvision.transforms.v2.functional as F
 
+from fast_llm.engine.base_model.config import Preprocessor
 from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
 from fast_llm.layers.transformer.config import TransformerKwargs
 from fast_llm.layers.vision_encoder.config import (
-    VisionEncoderArchitectureConfig,
+    VisionEncoderConfig,
     VisionEncoderDimNames,
     VisionEncoderKwargs,
     VisionTransformerDimNames,
@@ -101,8 +102,8 @@ def position_ids_in_meshgrid(height, width, max_size, patch_size) -> torch.Tenso
     return ids[:, 0]
 
 
-class VisionPreprocessor:
-    def __init__(self, config: VisionEncoderArchitectureConfig, tensor_space: TensorSpace):
+class VisionPreprocessor(Preprocessor):
+    def __init__(self, config: VisionEncoderConfig, tensor_space: TensorSpace):
         self._config = config
         self._tensor_space = tensor_space
         self._distributed_config = self._tensor_space.distributed_config

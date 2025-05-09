@@ -278,7 +278,7 @@ class GPTSampledIndexedDataset(SampledDataset):
         # Equivalent to `torch.hstack((0, document_sizes[all_document_index].cumsum()[::TOKEN_CUMSUM_RATE]))`
         if unshuffled_epochs > 0:
             token_cumsum_unshuffled, unshuffled_tokens = self._get_token_cumsum(
-                document_sizes + image_token_sizes
+                document_sizes + image_token_sizes,
                 offset=0,
                 # TODO: Allowing for max 100% extra tokens for padding, is that enough?
                 dtype=get_unsigned_integer_type((2 - self._truncate_documents) * tokens_per_epoch * num_epochs),

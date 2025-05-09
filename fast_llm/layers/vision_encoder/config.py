@@ -1,9 +1,9 @@
-from fast_llm.config import Config, Field, FieldHint, FieldUpdate, config_class
-from fast_llm.engine.base_model.config import BaseModelArchitectureConfig, BaseModelConfig
+from fast_llm.config import Config, Field, FieldHint, config_class
+from fast_llm.engine.base_model.config import BaseModelConfig
 from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
 from fast_llm.functional.config import ActivationType
 from fast_llm.layers.common.config import NormalizationConfig
-from fast_llm.layers.transformer.config import TransformerArchitectureConfig, VisionTransformerConfig
+from fast_llm.layers.transformer.config import VisionTransformerConfig
 
 
 class VisionEncoderDimNames:
