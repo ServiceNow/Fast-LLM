@@ -9,6 +9,7 @@ from einops import rearrange, repeat
 from mamba_ssm.ops.triton.selective_state_update import selective_state_update
 from mamba_ssm.ops.triton.ssd_combined import mamba_chunk_scan_combined
 from torch import nn
+from transformers import GenerationMixin
 from transformers.activations import ACT2FN
 from transformers.cache_utils import Cache, DynamicCache, StaticCache
 from transformers.modeling_attn_mask_utils import AttentionMaskConverter
