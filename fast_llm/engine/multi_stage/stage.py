@@ -116,12 +116,18 @@ class Stage(StageBase):
             self._log_layer_forward(output, kwargs, i)
 
             # TODO: very slow and memory consuming, only use for debugging for now
-            # TODO: decide if and how we want to return 
+            # TODO: decide if and how we want to return
             #       HF transformer style details from forward properly
             if "output_hidden_states" in kwargs and kwargs["output_hidden_states"]:
+                # Last layer does not provide output
+                if output is not None:
+                    meta = self._meta_outputs[i]
+                    output_global, _ = meta.local_to_global(output.detach(), distributed=self._distributed)
+                else:
+                    output_global = None
                 kwargs["hidden_states"][self._layer_range[i]] = {
                     "layer_type": type(layer).__name__,
-                    "tensor": self._get_global_output_tensor(i, output),
+                    "tensor": output_global,
                 }
         return None if output is None else output.detach(), (input_, output)
 
@@ -196,16 +202,6 @@ class Stage(StageBase):
         # TODO: Frozen weights fsdps may not be invalidated on weight update.
         for fsdp in self._fsdps:
             fsdp.invalidate_buffer()
-
-    @torch._dynamo.disable  # noqa
-    def _get_global_output_tensor(
-        self,
-        i: int,
-        tensor: torch.Tensor,
-    ) -> typing.Tuple[torch.Tensor, bool]:
-        meta = self._meta_outputs[i]
-        tensor, _ = meta.local_to_global(tensor, distributed=self._distributed)
-        return tensor
 
     def _log_layer_forward(self, output: torch.Tensor, kwargs: dict[str, typing.Any], i: int) -> None:
         if (

@@ -397,8 +397,6 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ScheduleConfig]):
 
     def _forward(self, context: BatchContext, step: Step) -> None:
         input = self._get_forward_input(context, step)
-        if not "hidden_states" in context.batch[step.data_index]:
-            context.batch[step.data_index]["hidden_states"] = {}
         output, grad_context = self._stages[step.stage].forward(
             input,
             context.batch[step.data_index],

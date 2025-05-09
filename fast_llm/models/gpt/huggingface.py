@@ -97,6 +97,7 @@ class HuggingfaceGPTModelForCausalLM(HuggingfaceBaseModelForCausalLM):
 
         if output_hidden_states:
             kwargs["output_hidden_states"] = True
+            kwargs["hidden_states"] = {}
         else:
             kwargs["output_hidden_states"] = False
 
