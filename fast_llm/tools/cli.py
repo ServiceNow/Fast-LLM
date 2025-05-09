@@ -36,7 +36,6 @@ def fast_llm(args=None):
         if sys.gettrace():
             raise
         logger.critical(traceback.format_exc())
-        sys.exit(1)
 
 
 if __name__ == "__main__":

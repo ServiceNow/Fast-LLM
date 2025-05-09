@@ -35,12 +35,40 @@ class Tokenizer:
     def inv_vocab(self) -> dict[int, str]:
         return self._inv_vocab
 
-    def tokenize(self, text: str, begin=True, end=True) -> list[int]:
+    def _tokenize(self, text: str, begin=True, end=True) -> list[int]:
         return (
             ([self.bod_id] if begin else [])
             + self.tokenizer.encode(text, add_special_tokens=False)
             + ([self.eod_id] if end else [])
         )
+
+    def tokenize(self, text, image_positions=None):
+        if not image_positions:
+            return self._tokenize(text), [], []
+        image_idx = 0
+        char_pos = 0
+        token_ids = []
+        image_token_positions = []
+        beginning_of_text = True
+        while image_idx < len(image_positions):
+            if image_positions[image_idx] > len(text):
+                raise ValueError(
+                    f"Image position {image_positions[image_idx]} is greater than text length {len(text)}"
+                )
+            curr_text = text[char_pos : image_positions[image_idx]]
+            tokenized_text = self._tokenize(
+                curr_text, begin=beginning_of_text, end=image_positions[image_idx] >= len(text)
+            )
+            beginning_of_text = False
+            token_ids.extend(tokenized_text)
+            image_token_positions = len(token_ids)
+            char_pos = image_positions[image_idx]
+            image_idx += 1
+        if char_pos < len(text):
+            curr_text = text[char_pos:]
+            tokenized_text = self._tokenize(curr_text, begin=beginning_of_text, end=True)
+            token_ids.extend(tokenized_text)
+        return token_ids, image_token_positions
 
     def tokenize_with_spans(
         self, text: str, char_spans: list[tuple[int, int]]

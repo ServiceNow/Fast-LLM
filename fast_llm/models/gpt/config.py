@@ -51,11 +51,12 @@ class MistralGPTHuggingfaceCheckpointFormat(GPTHuggingfaceCheckpointFormat):
 class MixtralGPTHuggingfaceCheckpointFormat(GPTHuggingfaceCheckpointFormat):
     name: typing.ClassVar[str] = "mixtral"
 
-
 class MTPLlamaGPTHuggingfaceCheckpointFormat(GPTHuggingfaceCheckpointFormat):
     name: typing.ClassVar[str] = "mtp_llama"
     trust_remote_code: typing.ClassVar[bool] = True
 
+class LlavaGPTHuggingfaceCheckpointFormat(GPTHuggingfaceCheckpointFormat):
+    name: typing.ClassVar[str] = "llava"
 
 @config_class()
 class GPTBatchConfig(BatchConfig):
@@ -138,6 +139,7 @@ class GPTModelConfig(FastLLMModelConfig):
         MistralGPTHuggingfaceCheckpointFormat,
         MixtralGPTHuggingfaceCheckpointFormat,
         MTPLlamaGPTHuggingfaceCheckpointFormat,
+        LlavaGPTHuggingfaceCheckpointFormat,
     )
 
     @classmethod

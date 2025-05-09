@@ -5,7 +5,7 @@ import math
 import typing
 import warnings
 
-from fast_llm.config import Field, FieldHint, check_field, config_class, skip_valid_if_none
+from fast_llm.config import Field, FieldHint, FieldUpdate, check_field, config_class, skip_valid_if_none
 from fast_llm.engine.base_model.config import BaseModelConfig
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.engine.config_utils.tensor_space import CompositeTensorDim, TensorDim, TensorSpace
@@ -79,6 +79,7 @@ class TransformerKwargs:
     sequence_q_dim = "sequence_q_dim"
     sequence_k_dim = "sequence_k_dim"
     sequence_length = "sequence_length"
+    micro_batch_size = "micro_batch_size"
     # TODO: Move
     grad_output = "grad_output"
 
@@ -93,6 +94,8 @@ class RotaryEmbeddingType(str, enum.Enum):
     default = "default"
     llama3 = "llama3"
     yarn = "yarn"
+    # TODO Soham: generic name?
+    pixtral = "pixtral"
 
 
 @config_class()
@@ -157,6 +160,14 @@ class RotaryConfig(BaseModelConfig):
         if self.triton and not TritonConfig.TRITON_ENABLED:
             warnings.warn("Triton is disabled, but the triton rotary kernel will be used anyway.")
 
+
+@config_class()
+class VisionRotaryConfig(RotaryConfig):
+    type: RotaryEmbeddingType = Field(
+        default=RotaryEmbeddingType.pixtral,
+        desc="The type of rotary embedding to use. Choices: none, default, llama3, yarn, pixtral.",
+        hint=FieldHint.feature,
+    )
 
 class AddLinearBiasChoices(str, enum.Enum):
     nowhere = "nowhere"
@@ -526,6 +537,11 @@ class TransformerConfig(BaseModelConfig):
         " Reduces memory usage, but increases fragmentation and requires CPU synchronisation. Not recommended.",
         hint=FieldHint.expert,
     )
+    causal: bool = Field(
+        default=True,
+        desc="Use causal attention. Turn this off only for bidirectional attention e.g., in Vision Transformer.",
+        hint=FieldHint.feature,
+    )
 
     def _validate(self) -> None:
         with self._set_implicit_default():
@@ -641,7 +657,14 @@ class TransformerConfig(BaseModelConfig):
         cls._handle_renamed_field(default, "triton_rotary", ("rotary", "triton"))
         return super()._from_dict(default, strict, flat)
 
-    def setup_tensor_space(self, tensor_space: TensorSpace) -> None:
+    def setup_tensor_space(self, tensor_space: TensorSpace, type: str | None = None) -> None:
+        if type == "vision":
+            # TODO Soham: better way to get around circular imports? Maybe add a type class variable to TransformerConfig?
+            from fast_llm.layers.vision_encoder.config import VisionTransformerDimNames
+
+            transformer_dim_names = VisionTransformerDimNames
+        else:
+            transformer_dim_names = TransformerDimNames
         tensor = tensor_space.distributed_config.get_distributed_dim(DistributedDimNames.tensor)
 
         # Hidden dimension
@@ -712,3 +735,30 @@ class TransformerConfig(BaseModelConfig):
             Assert.is_(self.window_size, None)
 
         return use_flash_attention
+
+
+@config_class()
+class VisionRotaryConfig(RotaryConfig):
+    type: RotaryEmbeddingType = Field(
+        default=RotaryEmbeddingType.pixtral,
+        desc="The type of rotary embedding to use. Choices: none, default, llama3, yarn, pixtral.",
+        hint=FieldHint.feature,
+    )
+
+
+@config_class()
+class VisionTransformerConfig(TransformerConfig):
+    """
+    Configuration for the Vision Transformer (ViT) model.
+    """
+
+    causal: bool = FieldUpdate(
+        default=False,
+        desc="Use causal attention. Turn this off only for bidirectional attention e.g., in Vision Transformer.",
+        hint=FieldHint.feature,
+    )
+    rotary: VisionRotaryConfig = FieldUpdate(
+        default_factory=VisionRotaryConfig,
+        desc="Configuration for the rotary positional embeddings.",
+        hint=FieldHint.feature,
+    )
