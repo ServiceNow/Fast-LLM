@@ -431,7 +431,7 @@ class AprielSSMHybridConfig(PretrainedConfig):
             **kwargs,
         )
 
-        self.ssm_cfg = ssm_cfg or {
+        ssm_defaults = {
             "d_state": 64,
             "n_v_heads": 24,
             "n_qk_heads": 24,
@@ -439,8 +439,10 @@ class AprielSSMHybridConfig(PretrainedConfig):
             "chunk_size": 128,
             "activation": "identity",
             "bias": False,
+            "d_conv": 4,
             "d_inner": 24 * self.head_dim,  # num_heads * head_dim
         }
-
-
-__all__ = ["AprielConfig"]
+        self.ssm_cfg = ssm_cfg or ssm_defaults
+        for k, v in ssm_defaults.items():
+            if k not in self.ssm_cfg:
+                self.ssm_cfg[k] = v

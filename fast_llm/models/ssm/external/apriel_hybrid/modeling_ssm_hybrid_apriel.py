@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Callable, Optional, Union
+from typing import Any, Callable, Optional, Union
 
 import torch
 import torch.nn.functional as F
@@ -8,7 +8,6 @@ from causal_conv1d import causal_conv1d_fn, causal_conv1d_update
 from einops import rearrange, repeat
 from mamba_ssm.ops.triton.selective_state_update import selective_state_update
 from mamba_ssm.ops.triton.ssd_combined import mamba_chunk_scan_combined
-from mamba_ssm.utils.generation import GenerationMixin
 from torch import nn
 from transformers.activations import ACT2FN
 from transformers.cache_utils import Cache, DynamicCache, StaticCache
@@ -29,14 +28,133 @@ from fast_llm.models.ssm.external.apriel_hybrid.configuration_ssm_hybrid_apriel 
 logger = logging.get_logger(__name__)
 
 
+# Copied from https://github.com/huggingface/transformers/blob/main/src/transformers/models/jamba/modeling_jamba.py
+class HybridMambaAttentionDynamicCache(DynamicCache):
+    """
+    A dynamic cache that can handle both the attention cache (which has a seq_len dimension) and the mamba cache
+    (which has a constant shape regardless of seq_len).
+    This cache has two sets of lists of tensors: `key_cache` and `value_cache` for attention cache and `conv_states`
+    and `ssm_states` for mamba cache. Each of these lists has `num_layers` tensors. The expected shape for each tensor
+    For attention layers, `key_cache` and `value_cache` have a shape of `(batch_size, num_heads, seq_len, head_dim)`,
+    while `conv_states` and `ssm_states` have a shape of `(batch_size, 0)` (empty tensors).
+    For mamba layers, `key_cache` and `value_cache` have a shape of `(batch_size, 0)` (empty tensors),
+    while `conv_states` represents the convolution state and has a shape of `(batch_size, d_inner, d_conv)`,
+    and `ssm_states` represents the ssm state and has a shape of `(batch_size, d_inner, d_state)`.
+    """
+
+    def __init__(self, config: AprielSSMHybridConfig, batch_size, dtype=torch.float16, device=None):
+        super().__init__()
+        self.dtype = dtype
+        self.hybrid_override_pattern = config.hybrid_block_layout
+        self.has_previous_state = False  # only used by mamba
+        intermediate_size = config.ssm_cfg["d_inner"]
+        ssm_state_size = config.ssm_cfg["d_state"]
+        conv_kernel_size = config.ssm_cfg["d_conv"]
+        self.n_qk_heads = config.ssm_cfg["n_qk_heads"]
+        assert intermediate_size % self.n_qk_heads == 0, "d_inner must be divisible by n_qk_heads"
+        self.head_d = intermediate_size // self.n_qk_heads
+        self.conv_states = []
+        self.ssm_states = []
+        self.transformer_layers = []
+        for i in range(config.num_hidden_layers):
+            if self.hybrid_override_pattern[i] == "m2d":
+                # Mamba layer
+                self.conv_states += [
+                    torch.zeros(
+                        batch_size,
+                        conv_kernel_size,
+                        intermediate_size + 2 * self.n_qk_heads * ssm_state_size,
+                        device=device,
+                        dtype=dtype,
+                    ).transpose(1, 2)
+                ]
+                self.ssm_states += [
+                    torch.zeros(batch_size, self.n_qk_heads, self.head_d, ssm_state_size, device=device, dtype=dtype)
+                ]
+            else:
+                # Attention or MLP layer
+                self.conv_states += [torch.tensor([[]] * batch_size, device=device)]
+                self.ssm_states += [torch.tensor([[]] * batch_size, device=device)]
+                self.transformer_layers.append(i)
+
+        self.key_cache = [torch.tensor([[]] * batch_size, device=device) for _ in range(config.num_hidden_layers)]
+        self.value_cache = [torch.tensor([[]] * batch_size, device=device) for _ in range(config.num_hidden_layers)]
+
+    def update(
+        self,
+        key_states: torch.Tensor,
+        value_states: torch.Tensor,
+        layer_idx: int,
+        cache_kwargs: Optional[dict[str, Any]] = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        # Update the cache
+        if self.key_cache[layer_idx].shape[-1] == 0:
+            self.key_cache[layer_idx] = key_states
+            self.value_cache[layer_idx] = value_states
+        else:
+            self.key_cache[layer_idx] = torch.cat([self.key_cache[layer_idx], key_states], dim=2)
+            self.value_cache[layer_idx] = torch.cat([self.value_cache[layer_idx], value_states], dim=2)
+
+        return self.key_cache[layer_idx], self.value_cache[layer_idx]
+
+    def reorder_cache(self, beam_idx: torch.LongTensor):
+        """Reorders the cache for beam search, given the selected beam indices."""
+        for layer_idx in range(len(self.key_cache)):
+            device = self.key_cache[layer_idx].device
+            self.key_cache[layer_idx] = self.key_cache[layer_idx].index_select(0, beam_idx.to(device))
+            device = self.value_cache[layer_idx].device
+            self.value_cache[layer_idx] = self.value_cache[layer_idx].index_select(0, beam_idx.to(device))
+
+            device = self.conv_states[layer_idx].device
+            self.conv_states[layer_idx] = self.conv_states[layer_idx].index_select(0, beam_idx.to(device))
+            device = self.ssm_states[layer_idx].device
+            self.ssm_states[layer_idx] = self.ssm_states[layer_idx].index_select(0, beam_idx.to(device))
+
+    def get_seq_length(self, layer_idx: Optional[int] = 0) -> int:
+        """Returns the sequence length of the cached states. A layer index can be optionally passed."""
+        # take any layer that contains cache and not empty tensor
+        layer_idx = self.transformer_layers[0] if layer_idx not in self.transformer_layers else layer_idx
+        if len(self.key_cache) <= layer_idx:
+            return 0
+        return self.key_cache[layer_idx].shape[-2]
+
+    def to_legacy_cache(self) -> tuple[tuple[torch.Tensor], tuple[torch.Tensor]]:
+        raise NotImplementedError("HybridMambaAttentionDynamicCache does not have a legacy cache equivalent.")
+
+    @classmethod
+    def from_legacy_cache(cls, past_key_values: Optional[tuple[tuple[torch.FloatTensor]]] = None) -> "DynamicCache":
+        raise NotImplementedError("HybridMambaAttentionDynamicCache does not have a legacy cache equivalent.")
+
+    # Copied from modeling_mamba2.py
+    def update_conv_state(
+        self, layer_idx: int, new_conv_state: torch.Tensor, cache_init: bool = False
+    ) -> torch.Tensor:
+        if cache_init:
+            self.conv_states[layer_idx] = new_conv_state.to(self.conv_states.device)
+        else:
+            self.conv_states[layer_idx] = self.conv_states[layer_idx].roll(shifts=-1, dims=-1)
+            self.conv_states[layer_idx][:, :, -1] = new_conv_state[:, 0, :].to(self.conv_states.device)
+        return self.conv_states[layer_idx]
+
+    def update_ssm_state(self, layer_idx: int, new_ssm_state: torch.Tensor):
+        self.ssm_states[layer_idx] = new_ssm_state.to(self.ssm_states.device)
+        return self.ssm_states[layer_idx]
+
+    def reset(self):
+        self.conv_states.zero_()
+        self.ssm_states.zero_()
+
+
 @dataclass
-class CustomMambaCausalLMOutput(ModelOutput):
+class AprielHybridCausalOutput(ModelOutput):
     """Custom output class for MambaLMHeadModel."""
 
     loss: Optional[torch.FloatTensor] = None
     logits: Optional[torch.FloatTensor] = None
     all_hidden_states: Optional[tuple[torch.FloatTensor, ...]] = None
     last_hidden_state: Optional[torch.FloatTensor] = None
+    attention_weights: Optional[torch.FloatTensor] = None
+    past_key_values: Optional[HybridMambaAttentionDynamicCache] = None
 
 
 class AprielRMSNorm(nn.Module):
@@ -333,6 +451,7 @@ def materialize_mixer(A_log, B, C, D):
     return T
 
 
+# This is from LLmaba/Mohawk: https://github.com/cartesia-ai/edge/blob/main/cartesia-pytorch/cartesia_pytorch/Llamba/mixers/discrete_mamba2.py
 class DiscreteMamba2(nn.Module):
     def __init__(
         self,
@@ -424,7 +543,14 @@ class DiscreteMamba2(nn.Module):
     def state_to_tensor(self):
         return self.layer.state_to_tensor
 
-    def forward(self, u, return_mixer_matrix=False, inference_params=None, **kwargs):
+    def forward(
+        self,
+        u,
+        return_mixer_matrix=False,
+        past_key_value: Optional[HybridMambaAttentionDynamicCache] = None,
+        cache_position: Optional[torch.LongTensor] = None,
+        **kwargs,
+    ):
         """
         u: (B, L, D)
         Returns: same shape as u
@@ -433,16 +559,17 @@ class DiscreteMamba2(nn.Module):
         # assert state is None
         batch, seqlen, dim = u.shape
 
-        state = None
-        if inference_params is not None:
-            state = self._get_states_from_cache(inference_params, batch)
-            if inference_params.seqlen_offset > 0:
+        ssm_state, conv_state = None, None
+        if past_key_value is not None:
+            ssm_state, conv_state = self._get_states_from_cache(past_key_value, batch)
+            if cache_position[0] > 0:
                 # States are updated inplace
-                out, _ = self.step(u, state)
+                u = u.squeeze(1) if len(u.shape) == 3 else u
+                out, _ = self.step(u, ssm_state, conv_state)
                 return {"hidden_states": out}
 
         # Hacky way to initialize state during inference
-        chunk_size = self.chunk_size if state is None else seqlen
+        chunk_size = self.chunk_size if ssm_state is None else seqlen
 
         # Pad input to nearest multiple of chunklen
         padded_len = (1 + (seqlen - 1) // chunk_size) * chunk_size
@@ -460,11 +587,11 @@ class DiscreteMamba2(nn.Module):
             dim=-1,
         )
 
-        if state is not None:
+        if ssm_state is not None:
             # If we just take xBC[:, :, -self.d_conv :], it will error if seqlen < self.d_conv
             # Instead F.pad will pad with zeros if seqlen < self.d_conv, and truncate otherwise.
             xBC_t = rearrange(xBC[:, :seqlen, :], "b l d -> b d l")
-            state["conv"].copy_(F.pad(xBC_t, (self.d_conv - xBC_t.shape[-1], 0)))  # Update state (B D W)
+            conv_state.copy_(F.pad(xBC_t, (self.d_conv - xBC_t.shape[-1], 0)))  # Update state (B D W)
 
         # Convolutional layer
         xBC = self.convolutional_forward(xBC, padded_len)
@@ -493,12 +620,12 @@ class DiscreteMamba2(nn.Module):
             C=C,
             chunk_size=chunk_size,
             # initial_states=(state["ssm"] if state is not None else None), # currently not supported by mamba_ssm.utils.generation
-            return_final_states=(state is not None),
+            return_final_states=(ssm_state is not None),
         )
 
-        if state is not None:
-            y, ssm_state = result
-            state["ssm"].copy_(ssm_state)
+        if ssm_state is not None:
+            y, ssm_state_update = result
+            ssm_state.copy_(ssm_state_update)
         else:
             y = result
 
@@ -513,7 +640,7 @@ class DiscreteMamba2(nn.Module):
             outputs["transfer_matrix"] = materialize_mixer(A_log=A_log, B=B, C=C, D=self.D)[..., :seqlen, :seqlen]
         return outputs
 
-    def step(self, u, state, **kwargs):
+    def step(self, u, ssm_state, conv_state, **kwargs):
         """
         u: (B D)
         state: dict of states
@@ -521,7 +648,7 @@ class DiscreteMamba2(nn.Module):
         """
 
         # Project input
-        xBCzA_log = self.in_proj(u.squeeze(1))
+        xBCzA_log = self.in_proj(u)
         xBC, z, A_log = torch.split(
             xBCzA_log,
             [
@@ -532,8 +659,8 @@ class DiscreteMamba2(nn.Module):
             dim=-1,
         )
 
-        xBC, conv_state = self.convolutional_step(xBC, state["conv"])
-        state["conv"].copy_(conv_state)  # update state in place
+        xBC, conv_state = self.convolutional_step(xBC, conv_state)
+        conv_state.copy_(conv_state)  # update state in place
 
         x, B, C = torch.split(
             xBC,
@@ -549,7 +676,7 @@ class DiscreteMamba2(nn.Module):
         B = rearrange(B, "b (h s) -> b h s", h=self.n_qk_heads)
         C = rearrange(C, "b (h s) -> b h s", h=self.n_qk_heads)
 
-        state["ssm"] = state["ssm"].to(x.dtype)
+        ssm_state = ssm_state.to(x.dtype)
         zeros = torch.zeros((self.n_v_heads, self.headdim), device=A_log.device).to(dtype=x.dtype)
         ones = torch.ones((self.n_v_heads, self.headdim, self.d_state), device=A_log.device).to(dtype=x.dtype)
         y = selective_state_update(
@@ -559,7 +686,7 @@ class DiscreteMamba2(nn.Module):
             A=-ones,
             B=B,
             C=C,
-            state=state["ssm"],  # will be updated in place
+            state=ssm_state,  # will be updated in place
             dt_bias=zeros,
             D=zeros,
         )
@@ -570,7 +697,7 @@ class DiscreteMamba2(nn.Module):
         # Norm and gate
         out = self.out_proj(y * F.silu(z + self.z_bias))
 
-        return out, state
+        return out, ssm_state
 
     def allocate_inference_cache(self, batch_size, max_seqlen, dtype=None, **kwargs):
         device = self.in_proj.weight.device
@@ -602,16 +729,17 @@ class DiscreteMamba2(nn.Module):
         """
         assert self.layer_idx is not None
         # Allocate memory if not exists
-        if self.layer_idx not in inference_params.key_value_memory_dict:
-            inference_params.key_value_memory_dict[self.layer_idx] = self.allocate_inference_cache(
-                batch_size, inference_params.max_seqlen, dtype=torch.float32
-            )
+        # if self.layer_idx not in inference_params.ssm_states:
+        #     inference_params.key_value_memory_dict[self.layer_idx] = self.allocate_inference_cache(
+        #         batch_size, inference_params.max_seqlen, dtype=torch.float32
+        #     )
         # Get states
-        states = inference_params.key_value_memory_dict[self.layer_idx]
+        ssm_states = inference_params.ssm_states[self.layer_idx]
+        conv_states = inference_params.conv_states[self.layer_idx]
         if initialize_states:
-            states["conv"].zero_()
-            states["ssm"].zero_()
-        return states
+            ssm_states.zero_()
+            conv_states.zero_()
+        return ssm_states, conv_states
 
     def convolutional_forward(self, xBC, padded_len):
         if causal_conv1d_fn is None or self.activation not in [
@@ -724,7 +852,7 @@ class AprielSSMDecoderLayer(nn.Module):
         self.post_attention_layernorm = AprielRMSNorm(config.hidden_size, eps=config.rms_norm_eps, **factory_kwargs)
 
     def forward(
-        self, hidden_states: torch.Tensor, inference_params=None, **kwargs
+        self, hidden_states: torch.Tensor, **kwargs
     ) -> tuple[torch.FloatTensor, Optional[tuple[torch.FloatTensor, torch.FloatTensor]]]:
 
         outputs = {}
@@ -734,7 +862,7 @@ class AprielSSMDecoderLayer(nn.Module):
 
         mixer_outputs = self.mixer(
             hidden_states,
-            inference_params=inference_params,
+            **kwargs,
         )
 
         hidden_states = mixer_outputs["hidden_states"].to(residual.dtype) + residual
@@ -878,6 +1006,7 @@ class AprielSSMHybridModel(AprielSSMPreTrainedModel):
         factory_kwargs = {"device": device, "dtype": dtype}
         self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size, self.padding_idx, **factory_kwargs)
         blocks = []
+        logger.info(f"Loading hyubrid model with the following layout: {config.hybrid_block_layout}")
         for layer_idx, type in enumerate(config.hybrid_block_layout):
             if type == "m2d":
                 blocks.append(AprielSSMDecoderLayer(config, layer_idx, **factory_kwargs))
@@ -913,7 +1042,7 @@ class AprielSSMHybridModel(AprielSSMPreTrainedModel):
         input_ids: torch.LongTensor = None,
         attention_mask: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
-        past_key_values: Optional[Cache] = None,
+        past_key_values: Optional[HybridMambaAttentionDynamicCache] = None,
         inputs_embeds: Optional[torch.FloatTensor] = None,
         use_cache: Optional[bool] = None,
         output_attentions: Optional[bool] = None,
@@ -943,7 +1072,11 @@ class AprielSSMHybridModel(AprielSSMPreTrainedModel):
             inputs_embeds = self.embed_tokens(input_ids)
 
         if use_cache and past_key_values is None:
-            past_key_values = DynamicCache()
+            # past_key_values = HybridMambaAttentionDynamicCache()
+            logger.warning_once(
+                "Hybrid Apriel requires an initialized `HybridMambaAttentionDynamicCache` to return a cache. None was "
+                "provided, so no cache will be returned."
+            )
 
         if cache_position is None:
             past_seen_tokens = past_key_values.get_seq_length() if past_key_values is not None else 0
@@ -1133,12 +1266,11 @@ class AprielSSMHybridForCausalLM(AprielSSMPreTrainedModel, GenerationMixin):
     _tp_plan = {"lm_head": "colwise_rep"}
     _pp_plan = {"lm_head": (["hidden_states"], ["logits"])}
 
-    def __init__(self, config, device=None, dtype=None, **kwargs):
-        super().__init__(config, device=device, dtype=dtype, **kwargs)
+    def __init__(self, config, **kwargs):
+        super().__init__(config, **kwargs)
         self.model = AprielSSMHybridModel(config)
         self.vocab_size = config.vocab_size
-        factory_kwargs = {"device": device, "dtype": dtype}
-        self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False, **factory_kwargs)
+        self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
 
         # Initialize weights and apply final processing
         self.post_init()
@@ -1161,23 +1293,82 @@ class AprielSSMHybridForCausalLM(AprielSSMPreTrainedModel, GenerationMixin):
     def get_decoder(self):
         return self.model
 
+    def prepare_inputs_for_generation(
+        self,
+        input_ids,
+        past_key_values=None,
+        attention_mask=None,
+        inputs_embeds=None,
+        output_router_logits=False,
+        cache_position=None,
+        position_ids=None,
+        use_cache=True,
+        **kwargs,
+    ):
+        # Overwritten -- has a unique cache type, `HybridMambaAttentionDynamicCache`
+
+        empty_past_kv = past_key_values is None
+
+        # If we have cache: let's slice `input_ids` through `cache_position`, to keep only the unprocessed tokens
+        # Exception 1: when passing input_embeds, input_ids may be missing entries
+        # Exception 2: some generation methods do special slicing of input_ids, so we don't need to do it here
+        # Exception 3: with synced GPUs cache_position may go out of bounds, but we only want dummy token in that case.
+        #              (we can't check exception 3 while compiling)
+        if not empty_past_kv:
+            if inputs_embeds is not None or cache_position[-1] >= input_ids.shape[1]:  # Exception 1  # Exception 3
+                input_ids = input_ids[:, -cache_position.shape[0] :]
+            elif input_ids.shape[1] != cache_position.shape[0]:  # Default case (the "else", a no op, is Exception 2)
+                input_ids = input_ids[:, cache_position]
+        else:
+            past_key_values = HybridMambaAttentionDynamicCache(
+                self.config, input_ids.shape[0], self.dtype, device=self.device
+            )
+
+        if attention_mask is not None and position_ids is None:
+            # create position_ids on the fly for batch generation
+            position_ids = attention_mask.long().cumsum(-1) - 1
+            position_ids.masked_fill_(attention_mask == 0, 1)
+            if not empty_past_kv:
+                position_ids = position_ids[:, -input_ids.shape[1] :]
+
+        # if `inputs_embeds` are passed, we only want to use them in the 1st generation step
+        if inputs_embeds is not None and empty_past_kv:
+            model_inputs = {"inputs_embeds": inputs_embeds}
+        else:
+            model_inputs = {"input_ids": input_ids.contiguous()}  # `contiguous()` needed for compilation use cases
+
+        model_inputs.update(
+            {
+                "position_ids": position_ids,
+                "past_key_values": past_key_values,
+                "use_cache": use_cache,
+                "attention_mask": attention_mask,
+                "output_router_logits": output_router_logits,
+                # "logits_to_keep": self.config.num_logits_to_keep,
+                "cache_position": cache_position,
+            }
+        )
+        return model_inputs
+
     def forward(
         self,
         input_ids: torch.LongTensor = None,
         position_ids=None,
         return_hidden_states=False,
         return_logits=True,
-        inference_params=None,
         num_last_tokens=0,
+        past_key_values: Optional[HybridMambaAttentionDynamicCache] = None,
         **kwargs: Unpack[KwargsForCausalLM],
     ) -> Union[tuple, CausalLMOutputWithPast]:
 
+        # past_key_values is None if prepare_inputs_for_generation is not called, which is the case when we evaluate without calling generate (non-generation tasks)
+        # Its generally ok if cache is nto instantiated in this case, since we do single pass per sample anyways, a warning will be triggered in the model
         outputs: BaseModelOutputWithPast = self.model(
             input_ids,
             return_hidden_states=return_hidden_states,
-            inference_params=inference_params,
             position_ids=position_ids,
-            return_dict=True,
+            past_key_values=past_key_values,
+            **kwargs,
         )
 
         if outputs["last_hidden_state"] is not None and return_logits:
@@ -1186,22 +1377,17 @@ class AprielSSMHybridForCausalLM(AprielSSMPreTrainedModel, GenerationMixin):
         else:
             outputs["logits"] = None
 
-        return CustomMambaCausalLMOutput(
+        return AprielHybridCausalOutput(
             loss=None,
             logits=outputs["logits"],
             all_hidden_states=outputs.hidden_states,
             last_hidden_state=outputs.last_hidden_state,
+            past_key_values=outputs.past_key_values,
         )
-
-    def generate(self, *args, **kwargs):
-        """
-        This is a wrapper to make sure we comply with the HF generation interface for eval harness
-        """
-        return super().generate(*args, **kwargs)
 
 
 __all__ = [
-    "AprielSSMForCausalLM",
-    "AprielModel",
+    "AprielSSMHybridForCausalLM",
+    "AprielSSMHybridModel",
     "AprielSSMPreTrainedModel",
 ]
