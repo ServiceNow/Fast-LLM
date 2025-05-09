@@ -5,12 +5,8 @@ from fast_llm.engine.base_model.config import BaseModelConfig
 from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
 from fast_llm.engine.distributed.config import DistributedDimNames
 from fast_llm.functional.config import CrossEntropyImpl
-<<<<<<< HEAD
-from fast_llm.layers.transformer.config import TransformerArchitectureConfig, TransformerConfig
-from fast_llm.layers.vision_encoder.config import VisionEncoderArchitectureConfig, VisionEncoderConfig
-=======
 from fast_llm.layers.transformer.config import TransformerConfig
->>>>>>> main
+from fast_llm.layers.vision_encoder.config import VisionEncoderConfig
 from fast_llm.utils import Assert
 
 
