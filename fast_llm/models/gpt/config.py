@@ -1,5 +1,5 @@
+import functools
 import typing
-from functools import cached_property
 
 from fast_llm.config import Field, FieldHint, FieldUpdate, check_field, config_class
 from fast_llm.data.data.gpt.config import GPTDataConfig
@@ -7,7 +7,7 @@ from fast_llm.engine.checkpoint.config import CheckpointFormat, CheckpointHandle
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig, PretrainedFastLLMModelConfig
 from fast_llm.engine.schedule.config import BatchConfig
 from fast_llm.engine.training.config import TrainerConfig
-from fast_llm.layers.language_model.config import LanguageModelArchitectureConfig, LanguageModelBaseConfig
+from fast_llm.layers.language_model.config import LanguageModelBaseConfig
 from fast_llm.models.gpt.megatron import set_megatron_distributed_seeds
 from fast_llm.utils import Assert, div
 
@@ -58,23 +58,6 @@ class MTPLlamaGPTHuggingfaceCheckpointFormat(GPTHuggingfaceCheckpointFormat):
 
 
 @config_class()
-class GPTArchitectureConfig(LanguageModelArchitectureConfig):
-    _abstract = False
-
-    @classmethod
-    def _from_dict(
-        cls,
-        default: dict[str, typing.Any],
-        strict: bool = True,
-        flat: bool = False,
-    ) -> typing.Self:
-        # TODO v0.3: Remove backward compatibility fix
-        if "transposed_mlp_weight" in default:
-            assert default.pop("transposed_mlp_weight")
-        return super()._from_dict(default, strict, flat)
-
-
-@config_class()
 class GPTBatchConfig(BatchConfig):
     sequence_length: int = Field(
         default=2048,
@@ -106,14 +89,15 @@ class GPTBatchConfig(BatchConfig):
                 self.micro_sequence_length = self.sequence_length
         super()._validate()
 
-    @cached_property
+    @functools.cached_property
     def micro_batch_splits(self) -> int:
+        assert self._validated
         return div(self.sequence_length, self.micro_sequence_length)
 
 
 @config_class()
-class GPTBaseModelConfig(LanguageModelBaseConfig, GPTArchitectureConfig):
-    architecture_class = GPTArchitectureConfig
+class GPTBaseModelConfig(LanguageModelBaseConfig):
+    _abstract = False
 
     # Debug, to get an exact match with megatron init.
     use_megatron_initialization: bool = Field(
@@ -128,6 +112,8 @@ class GPTBaseModelConfig(LanguageModelBaseConfig, GPTArchitectureConfig):
         flat: bool = False,
     ) -> typing.Self:
         # TODO v0.3: Remove backward compatibility fix
+        if "transposed_mlp_weight" in default:
+            assert default.pop("transposed_mlp_weight")
         if "match_megatron" in default:
             assert "use_megatron_initialization" not in default
             default["use_megatron_initialization"] = default.pop("match_megatron")
@@ -193,38 +179,12 @@ class GPTTrainerConfig(PretrainedGPTModelConfig, TrainerConfig):
             Assert.eq(self.reference_models.keys(), {name})
         if self.model.base_model.use_absolute_position_embeddings:
             Assert.geq(self.model.base_model.num_absolute_position_embeddings, self.batch.sequence_length)
-        if self.model.base_model.distillation_model is not None:
-            # TODO: Support loss masking for distillation?
-            assert not self.batch.use_loss_masking_spans
         for reference_model in self.reference_models.values():
             Assert.none(reference_model.model.base_model.distillation_model)
             # TODO: Support more LM head features.
             Assert.none(reference_model.model.base_model.cross_entropy_splits)
             Assert.eq(reference_model.model.base_model.parallel_embeddings, self.model.base_model.parallel_embeddings)
             Assert.geq(reference_model.model.base_model.prediction_heads, self.model.base_model.prediction_heads)
-            # TODO: Support distinct preprocessing
-            reference_model.model.base_model.transformer.rotary.compare(
-                self.model.base_model.transformer.rotary,
-                NotImplementedError,
-            )
-            Assert.eq(
-                reference_model.model.base_model.use_absolute_position_embeddings,
-                self.model.base_model.use_absolute_position_embeddings,
-            )
-            if reference_model.model.base_model.use_absolute_position_embeddings:
-                assert self.model.base_model.use_absolute_position_embeddings
-                Assert.geq(
-                    reference_model.model.base_model.num_absolute_position_embeddings, self.batch.sequence_length
-                )
-            use_flash = reference_model.model.base_model.transformer.do_use_flash_attention(
-                reference_model.model.distributed
-            )
-            Assert.eq(use_flash, self.model.base_model.transformer.do_use_flash_attention(self.model.distributed))
-            if use_flash:
-                Assert.eq(
-                    reference_model.model.base_model.transformer.window_size,
-                    self.model.base_model.transformer.window_size,
-                )
 
     @classmethod
     def _from_dict(

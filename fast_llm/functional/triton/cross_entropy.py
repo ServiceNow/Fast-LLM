@@ -57,6 +57,7 @@ def triton_cross_entropy_forward_backward_kernel(
 def triton_cross_entropy_from_distribution_forward_backward_kernel(
     logits_ptr,
     target_ptr,
+    loss_mask_ptr,
     grad_logits_ptr,
     losses_ptr,
     grad_losses,
@@ -72,6 +73,14 @@ def triton_cross_entropy_from_distribution_forward_backward_kernel(
     block_idx = tl.program_id(0).to(tl.int64)
     col_offsets = tl.arange(0, block_size)
     mask = col_offsets < n_cols
+
+    if loss_mask_ptr is not None:
+        loss_mask = tl.load(loss_mask_ptr + block_idx)
+        if loss_mask == 0:
+            tl.store(losses_ptr + block_idx, 0)
+            if grad_losses is not None:
+                tl.store(grad_logits_ptr + block_idx * grad_logits_stride_0 + col_offsets, 0, mask=mask)
+            return
 
     logits = tl.load(logits_ptr + block_idx * logits_stride_0 + col_offsets, mask=mask, other=-float("inf")).to(
         tl.float32
@@ -104,12 +113,15 @@ def triton_cross_entropy_from_distribution_forward_backward_kernel(
         grad_logits = grad_losses * (exp_logits / sum_exp_logits - target)
         if logits_scale_factor != 1.0:
             grad_logits *= logits_scale_factor
+        if loss_mask_ptr is not None:
+            grad_logits = grad_logits
         tl.store(grad_logits_ptr + block_idx * grad_logits_stride_0 + col_offsets, grad_logits, mask=mask)
 
 
 def triton_cross_entropy_forward_backward(
     logits: torch.Tensor,
     target: torch.Tensor,
+    loss_mask: torch.Tensor | None,
     grad_output: float | None,
     logits_scale_factor: float,
     target_format: TargetFormat,
@@ -146,9 +158,12 @@ def triton_cross_entropy_forward_backward(
             num_warps=num_warps,
         )
     else:
+        if loss_mask is not None:
+            assert loss_mask.is_contiguous()
         triton_cross_entropy_from_distribution_forward_backward_kernel[(n_rows,)](
             logits,
             target,
+            loss_mask,
             grad_logits,
             losses,
             None if grad_output is None else grad_output / n_rows,

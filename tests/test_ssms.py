@@ -13,25 +13,24 @@ from fast_llm.engine.schedule.config import ScheduleConfig
 from fast_llm.engine.schedule.runner import ScheduleRunner
 from fast_llm.engine.schedule.schedule import Schedule
 from fast_llm.layers.language_model.config import LanguageModelKwargs, LanguageModelLossNames
-from fast_llm.layers.transformer.config import TransformerConfig, TransformerKwargs
+from fast_llm.layers.transformer.config import TransformerKwargs
 from fast_llm.models.gpt.config import GPTBatchConfig, LlamaGPTHuggingfaceCheckpointFormat
 from fast_llm.models.ssm.config import LLambaHuggingfaceCheckpointFormat
+from tests.common import get_hybrid_config, materialize_meta_tensors
 
 try:
-    from fast_llm.layers.ssm.config import SSMConfig
     from fast_llm.layers.ssm.discrete_mamba2 import DiscreteMamba2
     from fast_llm.layers.ssm.llamba_block import LlambaBlock
     from fast_llm.layers.ssm.mamba_layer import MambaLayer
-    from fast_llm.models.ssm.model import HybridSSMBaseModel, HybridSSMBaseModelConfig, HybridSSMModel
+    from fast_llm.models.ssm.model import HybridSSMBaseModel, HybridSSMModel
 except ImportError:
-    MambaLayer, LlambaBlock, HybridSSMBaseModel, HybridSSMBaseModelConfig, DiscreteMamba2 = (
-        None,
+    MambaLayer, LlambaBlock, HybridSSMBaseModel, DiscreteMamba2 = (
         None,
         None,
         None,
         None,
     )
-    # Mamba not isntalled, skipping tests
+    # Mamba not installed, skipping tests
 
 try:
     from cartesia_pytorch.Llamba.llamba import LlambaLMHeadModel as LMHeadModel
@@ -39,30 +38,6 @@ except ImportError:
     LMHeadModel = None
 
 run_test = MambaLayer is not None and torch.cuda.is_available()
-
-
-def materialize_meta_tensors(model, tensor_space):
-    # Materialize parameters that are on meta device
-    for name, param in model.named_parameters():
-        if param.device.type == "meta":
-            # Check if the parameter is a custom tensor type
-            if hasattr(param, "tensor_name") and hasattr(param, "init_parameter"):
-                param_data = param.new_empty(param.shape, device="cuda")
-                # Initialize param_data
-                param.init_parameter(param_data, tensor_space.distributed)
-                # Replace the parameter in the module
-                module_path, param_name = name.rsplit(".", 1) if "." in name else (None, name)
-                module = model
-                if module_path is not None:
-                    for part in module_path.split("."):
-                        module = getattr(module, part)
-                param = torch.nn.Parameter(param_data, requires_grad=param.requires_grad)
-                # TODO: add param_grad_is_zero etc., grad_buffer, etc., see test_mlp_recomputation
-                param.grad = None
-                param.grad_buffer = torch.empty_like(param)
-                param.param_grad_is_zero = True
-                module._parameters[param_name] = param
-    return model
 
 
 @pytest.fixture
@@ -79,20 +54,6 @@ def distributed_config():
 @pytest.fixture
 def distributed(distributed_config):
     return Distributed(config=distributed_config)
-
-
-def get_hybrid_config(hybrid_block_layout=["t", "m", "t", "m"]):
-    config = HybridSSMBaseModelConfig(
-        transformer=TransformerConfig(num_layers=len(hybrid_block_layout)),
-        ssm=SSMConfig(),
-        hybrid_block_layout=hybrid_block_layout,
-        init_method_std_embed=0.02,
-        init_method_min_embed=-0.02,
-        init_method_max_embed=0.02,
-        use_position_embeddings=True,
-        tie_word_embeddings=False,
-    )
-    return config
 
 
 def get_hf_llamba_out(input_ids, path, format):
@@ -185,7 +146,7 @@ def test_load_from_llamba_checkpoint(distributed_config):
         (["m", "t"], MambaLayer),
         (["m2", "t"], DiscreteMamba2),
     ],
-    ids=["mamba", "descrete_mamba2"],
+    ids=["mamba", "discrete_mamba2"],
 )
 def test_mamba_layer(distributed_config, distributed, hybrid_block_layout, LAYER_CLS):
     hybrid_config = get_hybrid_config(hybrid_block_layout=hybrid_block_layout)
@@ -248,12 +209,12 @@ def test_mamba_block(distributed_config, distributed):
 
 @pytest.mark.skipif(not run_test, reason="No CUDA available or Mamba not installed")
 @pytest.mark.parametrize(
-    "hybrid_block_layout",
+    ("hybrid_block_layout"),
     [
         (["m", "t"]),
         (["m2", "t"]),
     ],
-    ids=["mamba", "descrete_mamba2"],
+    ids=["mamba", "discrete_mamba2"],
 )
 def test_hybrid_model_train_with_fast_mode(distributed_config, hybrid_block_layout):
     hybrid_config = get_hybrid_config(hybrid_block_layout=hybrid_block_layout)
@@ -275,7 +236,7 @@ def test_hybrid_model_train_with_fast_mode(distributed_config, hybrid_block_layo
         x,
         {
             "position_ids": position_ids,
-            TransformerKwargs.sequence_first: True,
+            TransformerKwargs.sequence_first: False,
             TransformerKwargs.attention_mask: attention_mask,
             TransformerKwargs.attention_mask_value: -100,
             TransformerKwargs.grad_output: True,

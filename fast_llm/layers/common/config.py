@@ -2,7 +2,7 @@ import enum
 import typing
 
 from fast_llm.config import Field, FieldHint, check_field, config_class
-from fast_llm.engine.base_model.config import BaseModelArchitectureConfig, BaseModelConfig
+from fast_llm.engine.base_model.config import BaseModelConfig
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
@@ -34,41 +34,27 @@ class NormalizationType(str, enum.Enum):
 
 
 @config_class()
-class NormalizationArchitectureConfig(BaseModelArchitectureConfig):
+class NormalizationConfig(BaseModelConfig):
     _abstract = False
-    # TODO: Remove "normalization" from names once we have fully nested configs?
+
     # Normalization type
     type: NormalizationType = Field(
         default=NormalizationType.layer_norm,
         desc="The type of normalization to use, for example Layer Norm or RMS Norm.",
-        hint=FieldHint.core,
+        hint=FieldHint.architecture,
     )
     # TODO: Rename to normalization_epsilon
     epsilon: float = Field(
-        default=1e-5, desc="Regularizer for the division.", hint=FieldHint.stability, valid=check_field(Assert.gt, 0)
+        default=1e-5,
+        desc="Regularizer for the division.",
+        hint=FieldHint.architecture,
+        valid=check_field(Assert.gt, 0),
     )
     zero_centered: bool = Field(
         default=False,
         desc="Write the normalization weight as `w = 1 + w'`, to improve numerical accuracy when close to one.",
-        hint=FieldHint.stability,
+        hint=FieldHint.architecture,
     )
-
-    @classmethod
-    def _from_dict(
-        cls,
-        default: dict[str, typing.Any],
-        strict: bool = True,
-        flat: bool = False,
-    ) -> typing.Self:
-        # TODO v0.3: Remove.
-        cls._handle_renamed_field(default, "normalization_type", "type")
-        cls._handle_renamed_field(default, "layer_norm_eps", "epsilon")
-        cls._handle_renamed_field(default, "zero_centered_normalization", "zero_centered")
-        return super()._from_dict(default, strict, flat)
-
-
-@config_class()
-class NormalizationConfig(NormalizationArchitectureConfig, BaseModelConfig):
     implementation: NormalizationImplementation = Field(
         default=NormalizationImplementation.auto,
         desc="The implementation to use for the normalization layer.",
@@ -113,6 +99,9 @@ class NormalizationConfig(NormalizationArchitectureConfig, BaseModelConfig):
         strict: bool = True,
         flat: bool = False,
     ) -> typing.Self:
+        cls._handle_renamed_field(default, "normalization_type", "type")
+        cls._handle_renamed_field(default, "layer_norm_eps", "epsilon")
+        cls._handle_renamed_field(default, "zero_centered_normalization", "zero_centered")
         cls._handle_renamed_field(default, "normalization_implementation", "implementation")
         cls._handle_renamed_field(default, "layer_norm_init_range", "initialization_range")
         return super()._from_dict(default, strict, flat)
@@ -125,13 +114,8 @@ class PeftType(str, enum.Enum):
 
 
 @config_class()
-class PeftArchitectureConfig(BaseModelArchitectureConfig):
+class PeftConfig(BaseModelConfig):
     _abstract = False
-
-
-@config_class()
-class PeftConfig(PeftArchitectureConfig, BaseModelConfig):
-    # TODO: Architecture/non-architecture split might not make much sense here.
 
     type: PeftType = Field(
         default=PeftType.none,

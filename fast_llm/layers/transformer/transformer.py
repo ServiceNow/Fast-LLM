@@ -23,7 +23,6 @@ class BaseBlock(Layer, abc.ABC):
     A transformer-like decoder base block block with abstract mixer.
     """
 
-    name = "Transformer layer"
     _mixer_module_name = "self_attn"
 
     def __init__(
@@ -137,7 +136,7 @@ class BaseBlock(Layer, abc.ABC):
 
 
 class TransformerLayer(BaseBlock):
-    name = "Transformer layer"
+    _name = "Transformer layer"
     _mixer_module_name = "self_attn"
 
     def __init__(

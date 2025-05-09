@@ -2,13 +2,7 @@ import typing
 
 from fast_llm.config import FieldUpdate, config_class
 from fast_llm.data.data.gpt.config import GPTDataConfig
-from fast_llm.models.gpt.config import (
-    GPTArchitectureConfig,
-    GPTBaseModelConfig,
-    GPTModelConfig,
-    GPTTrainerConfig,
-    PretrainedGPTModelConfig,
-)
+from fast_llm.models.gpt.config import GPTBaseModelConfig, GPTModelConfig, GPTTrainerConfig, PretrainedGPTModelConfig
 
 if typing.TYPE_CHECKING:
     from fast_llm.models.custom.huggingface import HuggingfaceCustomModelForCausalLM
@@ -23,15 +17,9 @@ class CustomDataConfig(GPTDataConfig):
 
 
 @config_class()
-class CustomArchitectureConfig(GPTArchitectureConfig):
-    # TODO: Add custom base model architecture config parameters, if any.
-    pass
-
-
-@config_class()
-class CustomBaseModelConfig(GPTBaseModelConfig, CustomArchitectureConfig):
+class CustomBaseModelConfig(GPTBaseModelConfig):
     # TODO: Add custom other base model config parameters, if any.
-    architecture_class = CustomArchitectureConfig
+    pass
 
 
 @config_class()

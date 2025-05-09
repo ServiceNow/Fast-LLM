@@ -12,11 +12,9 @@ from fast_llm.config import Configurable
 from fast_llm.core.distributed import safe_barrier
 from fast_llm.data.data.abstract import Data
 from fast_llm.data.dataset.config import SamplingParameters
-from fast_llm.engine.base_model.config import Preprocessor
 from fast_llm.engine.config_utils.run import Run, is_main_rank, log_main_rank, log_pipeline_parallel_main_rank
 from fast_llm.engine.distributed.config import PhaseType
 from fast_llm.engine.distributed.distributed import Distributed
-from fast_llm.engine.inference.runner import InferenceRunner
 from fast_llm.engine.multi_stage.config import StageMode
 from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
 from fast_llm.engine.optimizer.config import ParamGroup
@@ -147,9 +145,7 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
             self._reference_models[name] = self._config.get_inference_runner_class()(
                 reference_config.model.get_model_class()(reference_config.model)
             )
-            self._multi_stage.base_model.add_preprocessor(
-                self._get_reference_model_preprocessor(name, self._reference_models[name])
-            )
+            self._multi_stage.base_model.add_reference_model(name, self._reference_models[name])
 
         self._runner = ScheduleRunner(
             config=self._config.schedule,
@@ -608,5 +604,4 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
         iteration = self._run.broadcast_int(iteration)
         return iteration if iteration >= 0 else None
 
-    def _get_reference_model_preprocessor(self, name: str, inference_runner: InferenceRunner) -> Preprocessor:
-        raise NotImplementedError()
+

@@ -28,7 +28,7 @@ from fast_llm.functional.rotary import convert_rotary_complex_to_real, convert_r
 from fast_llm.layers.common.config import NormalizationType
 from fast_llm.layers.transformer.config import RotaryEmbeddingType, RoutingType, TransformerConfig
 from fast_llm.models.gpt.config import (
-    GPTArchitectureConfig,
+    GPTBaseModelConfig,
     GPTModelConfig,
     LlamaGPTHuggingfaceCheckpointFormat,
     MistralGPTHuggingfaceCheckpointFormat,
@@ -50,7 +50,7 @@ logger = logging.getLogger(__name__)
 
 class QueryWeightConverter(WeightConverter):
     # Hf uses the real format for rotary embeddings.
-    _config: GPTArchitectureConfig
+    _config: GPTBaseModelConfig
 
     def export_weight(
         self, weight: tuple[torch.Tensor | SafeTensorSlice, ...]
@@ -71,7 +71,7 @@ class QueryWeightConverter(WeightConverter):
 
 class KeyValueWeightConverter(WeightConverter):
     # Hf uses the real format for rotary embeddings, and keeps the key and value separate.
-    _config: GPTArchitectureConfig
+    _config: GPTBaseModelConfig
 
     def export_weight(
         self, weight: tuple[torch.Tensor | SafeTensorSlice, ...]
@@ -95,7 +95,7 @@ class KeyValueWeightConverter(WeightConverter):
 class MLPLayer2Converter(WeightConverter):
     # Similar to SplitWeightConverter, but handles the optional MLP transpose.
     # Still ok for non-gated (trivial split) and biases (trivial 1d transpose)
-    _config: GPTArchitectureConfig
+    _config: GPTBaseModelConfig
 
     def export_weight(
         self, weight: tuple[torch.Tensor | SafeTensorSlice, ...]
@@ -407,7 +407,11 @@ class RopeScalingParamConverter(ParamConverter):
 
     def import_params(self, export_values: tuple[typing.Any, ...]) -> tuple[typing.Any, ...]:
         (export_value,) = export_values
-        if export_value is None or (rope_type := export_value[self._HUGGINGFACE_NAMES[0]]) == "default":
+        if (
+            export_value is None
+            or export_value is MISSING
+            or (rope_type := export_value[self._HUGGINGFACE_NAMES[0]]) == "default"
+        ):
             return (RotaryEmbeddingType.default,) + (DEFAULT,) * 7
         elif rope_type == RotaryEmbeddingType.llama3:
             return ("llama3", *[export_value.get(key, DEFAULT) for key in self._HUGGINGFACE_NAMES[1:]])
