@@ -4,19 +4,28 @@ training:
     interval: 10
   evaluations:
     gsm8k:
-      type: lm_eval
-      cli_args:
-        - --tasks
-        - gsm8k
-        - --output_path
-        - /mnt/checkpoints/test/denis/smol_eval_experiment/lm_eval
-    # stack_3b:
-    #   type: loss
-    #   iterations: 10
-    #   interval: 10
-    # fineweb:
-    #   iterations: 10
-    #   interval: 10
+      interval:
+        interval: 10
+      evaluator:
+        type: lm_eval
+        cli_args:
+          - --tasks
+          - gsm8k
+          - --output_path
+          - /mnt/checkpoints/test/denis/smol_eval_experiment/lm_eval
+    stack_3b:
+      interval:
+        interval: 10
+      evaluator:
+        type: loss
+        iterations: 10
+        dataset_name: stack_3b
+    fineweb:
+      interval:
+        interval: 10
+      evaluator:
+        iterations: 10
+        dataset_name: fineweb
   checkpoint:
     interval: 1000
     keep: 5
