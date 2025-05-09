@@ -699,28 +699,28 @@ class DiscreteMamba2(nn.Module):
 
         return out, ssm_state
 
-    def allocate_inference_cache(self, batch_size, max_seqlen, dtype=None, **kwargs):
-        device = self.in_proj.weight.device
-        # conv_state:
-        conv_dtype = self.conv1d.weight.dtype if dtype is None else dtype
-        conv_state = torch.zeros(
-            batch_size,
-            self.d_conv,
-            self.conv1d.weight.shape[0],
-            device=device,
-            dtype=conv_dtype,
-        ).transpose(1, 2)
-        # ssm_state:
-        ssm_dtype = self.in_proj.weight.dtype if dtype is None else dtype
-        ssm_state = torch.zeros(
-            batch_size,
-            self.n_v_heads,
-            self.headdim,
-            self.d_state,
-            device=device,
-            dtype=ssm_dtype,
-        )
-        return {"conv": conv_state, "ssm": ssm_state}
+    # def allocate_inference_cache(self, batch_size, max_seqlen, dtype=None, **kwargs):
+    #     device = self.in_proj.weight.device
+    #     # conv_state:
+    #     conv_dtype = self.conv1d.weight.dtype if dtype is None else dtype
+    #     conv_state = torch.zeros(
+    #         batch_size,
+    #         self.d_conv,
+    #         self.conv1d.weight.shape[0],
+    #         device=device,
+    #         dtype=conv_dtype,
+    #     ).transpose(1, 2)
+    #     # ssm_state:
+    #     ssm_dtype = self.in_proj.weight.dtype if dtype is None else dtype
+    #     ssm_state = torch.zeros(
+    #         batch_size,
+    #         self.n_v_heads,
+    #         self.headdim,
+    #         self.d_state,
+    #         device=device,
+    #         dtype=ssm_dtype,
+    #     )
+    #     return {"conv": conv_state, "ssm": ssm_state}
 
     def _get_states_from_cache(self, inference_params, batch_size, initialize_states=False):
         """
@@ -800,7 +800,6 @@ class AprielDecoderLayer(nn.Module):
         use_cache: Optional[bool] = False,
         cache_position: Optional[torch.LongTensor] = None,
         position_embeddings: Optional[tuple[torch.Tensor, torch.Tensor]] = None,  # necessary, but kept here for BC
-        inference_params=None,  # just to be compatible with SSM block
         **kwargs: Unpack[FlashAttentionKwargs],
     ) -> tuple[torch.FloatTensor, Optional[tuple[torch.FloatTensor, torch.FloatTensor]]]:
         residual = hidden_states
@@ -878,11 +877,11 @@ class AprielSSMDecoderLayer(nn.Module):
 
         return outputs
 
-    def allocate_inference_cache(self, batch_size, max_seqlen, dtype=None, **kwargs):
-        """Allocate inference cache for the model."""
-        if getattr(self.mixer, "allocate_inference_cache", None) is None:
-            return
-        return self.mixer.allocate_inference_cache(batch_size, max_seqlen, dtype=dtype, **kwargs)
+    # def allocate_inference_cache(self, batch_size, max_seqlen, dtype=None, **kwargs):
+    #     """Allocate inference cache for the model."""
+    #     if getattr(self.mixer, "allocate_inference_cache", None) is None:
+    #         return
+    #     return self.mixer.allocate_inference_cache(batch_size, max_seqlen, dtype=dtype, **kwargs)
 
 
 APRIEL_START_DOCSTRING = r"""
@@ -920,9 +919,9 @@ class AprielSSMPreTrainedModel(PreTrainedModel):
             if module.padding_idx is not None:
                 module.weight.data[module.padding_idx].zero_()
 
-    def allocate_inference_cache(self, *args, **kwargs):
-        """Allocate inference cache for the model."""
-        return getattr(self, self.base_model_prefix).allocate_inference_cache(*args, **kwargs)
+    # def allocate_inference_cache(self, *args, **kwargs):
+    #     """Allocate inference cache for the model."""
+    #     return getattr(self, self.base_model_prefix).allocate_inference_cache(*args, **kwargs)
 
 
 APRIEL_INPUTS_DOCSTRING = r"""
@@ -1028,13 +1027,13 @@ class AprielSSMHybridModel(AprielSSMPreTrainedModel):
     def set_input_embeddings(self, value):
         self.embed_tokens = value
 
-    def allocate_inference_cache(self, *args, **kwargs):
-        """Allocate inference cache for the model."""
-        cache = {}
-        for i, layer in enumerate(self.layers):
-            if isinstance(layer, AprielSSMDecoderLayer):
-                cache[i] = layer.allocate_inference_cache(*args, **kwargs)
-        return cache
+    # def allocate_inference_cache(self, *args, **kwargs):
+    #     """Allocate inference cache for the model."""
+    #     cache = {}
+    #     for i, layer in enumerate(self.layers):
+    #         if isinstance(layer, AprielSSMDecoderLayer):
+    #             cache[i] = layer.allocate_inference_cache(*args, **kwargs)
+    #     return cache
 
     @add_start_docstrings_to_model_forward(APRIEL_INPUTS_DOCSTRING)
     def forward(
