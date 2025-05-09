@@ -326,8 +326,11 @@ class TransformerPeftConfig(PeftConfig):
 
 
 @config_class()
-class TransformerNoPeftConfig(TransformerPeftConfig, NoPeftConfig):
+class TransformerNoPeftConfig(NoPeftConfig, TransformerPeftConfig):
     _abstract = False
+
+    def apply_linear(self, linear: "LinearBase", layer_type: TransformerSubLayerName | None = None) -> "LinearLike":
+        return super().apply_linear(linear)
 
     def apply_other(self, module: "torch.nn.Module") -> "torch.nn.Module":
         return module

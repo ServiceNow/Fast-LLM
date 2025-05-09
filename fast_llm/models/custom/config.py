@@ -2,6 +2,8 @@ import typing
 
 from fast_llm.config import FieldUpdate, config_class
 from fast_llm.data.data.gpt.config import GPTDataConfig
+from fast_llm.engine.config_utils.runnable import RunnableConfig
+from fast_llm.engine.multi_stage.config import FastLLMModelConfig
 from fast_llm.models.gpt.config import GPTBaseModelConfig, GPTModelConfig, GPTTrainerConfig, PretrainedGPTModelConfig
 
 if typing.TYPE_CHECKING:
@@ -57,3 +59,7 @@ class CustomTrainerConfig(PretrainedCustomModelConfig, GPTTrainerConfig):
         from fast_llm.models.custom.trainer import CustomTrainer
 
         return CustomTrainer
+
+
+FastLLMModelConfig.register_subclass("gpt_custom", GPTModelConfig)
+RunnableConfig.register_subclass("train_gpt_custom", GPTTrainerConfig)

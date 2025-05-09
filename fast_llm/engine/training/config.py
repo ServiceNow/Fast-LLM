@@ -255,7 +255,6 @@ class TrainingExportConfig(TrainingCheckpointBaseConfig, CheckpointStateSaveConf
     offset = FieldUpdate(desc="Offset for the first export.")
     callback: CallbackConfig = FieldUpdate(desc="Callback (shell script) to run after export.")
 
-    @abc.abstractmethod
     def get_save_directory(self, experiment_directory: pathlib.Path) -> pathlib.Path:
         return experiment_directory / "export" / self.format.name
 

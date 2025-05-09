@@ -147,6 +147,9 @@ class Field(dataclasses.Field):
             raise ValueError("cannot specify both default and default_factory")
         if isinstance(default_factory, type) and issubclass(default_factory, Config):
             raise ValueError("Config classes should not be used as `default_factory`")
+        if not init:
+            # Non-init fields cause errors when printed before validation.
+            repr = False
         super().__init__(
             default=default,
             default_factory=default_factory,
@@ -275,12 +278,9 @@ def config_class[T: Config]() -> typing.Callable[[type[T]], type[T]]:
 class ConfigMeta(abc.ABCMeta):
     def __call__(cls: "type[Config]", **kwargs):
         # Always go through `_from_dict` for correct dynamic class selection and nested config instantiation.
-        print("AIKDNJOINF", cls)
         if not kwargs.pop("_from_dict_check", False):
-            print("AAA")
-            with NoAutoValidate():
-                return cls._from_dict(kwargs)
-        print("BBB", kwargs)
+            # with NoAutoValidate():
+            return cls._from_dict(kwargs)
         return super().__call__(**kwargs)
 
 

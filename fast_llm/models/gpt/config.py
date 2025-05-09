@@ -4,6 +4,7 @@ import typing
 from fast_llm.config import Field, FieldHint, FieldUpdate, check_field, config_class
 from fast_llm.data.data.gpt.config import GPTDataConfig
 from fast_llm.engine.checkpoint.config import CheckpointFormat, CheckpointHandler
+from fast_llm.engine.config_utils.runnable import RunnableConfig
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig, PretrainedFastLLMModelConfig
 from fast_llm.engine.schedule.config import BatchConfig
 from fast_llm.engine.training.config import TrainerConfig
@@ -210,3 +211,7 @@ class GPTTrainerConfig(PretrainedGPTModelConfig, TrainerConfig):
         from fast_llm.models.gpt.model import GPTInferenceRunner
 
         return GPTInferenceRunner
+
+
+FastLLMModelConfig.register_subclass("gpt", GPTModelConfig)
+RunnableConfig.register_subclass("train_gpt", GPTTrainerConfig)

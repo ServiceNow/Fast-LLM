@@ -5,6 +5,7 @@ import typing
 from fast_llm.config import Field, FieldHint, FieldUpdate, config_class
 from fast_llm.data.data.gpt.config import GPTDataConfig
 from fast_llm.engine.checkpoint.config import CheckpointFormat, CheckpointHandler
+from fast_llm.engine.config_utils.runnable import RunnableConfig
 from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig, PretrainedFastLLMModelConfig
 from fast_llm.engine.training.config import TrainerConfig
@@ -166,3 +167,7 @@ class HybridTrainerConfig(PretrainedHybridSSMModelConfig, TrainerConfig):
         from fast_llm.models.ssm.trainer import SSMTrainer
 
         return SSMTrainer
+
+
+FastLLMModelConfig.register_subclass("hybrid_ssm", HybridSSMModelConfig)
+RunnableConfig.register_subclass("train_hybrid_ssm", HybridTrainerConfig)

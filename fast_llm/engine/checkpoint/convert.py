@@ -19,23 +19,13 @@ logger = logging.getLogger(__name__)
 
 
 @config_class()
-class ConversionConfig(RunnableConfig):
+class ConvertConfig(RunnableConfig):
     input: CheckpointLoadConfig = Field()
     output: CheckpointSaveConfig = Field()
     use_cpu: bool = Field(default=False)
     exist_ok: bool = Field(default=False)
     layers_per_step: int | None = Field(default=None)
-    model_config_class: type[FastLLMModelConfig] = Field(default=None)
-
-    @classmethod
-    def _get_parser(cls):
-        parser = super()._get_parser()
-        parser.add_argument(
-            "model_type",
-            choices=model_registry.keys(),
-            help="The Fast-LLM model type to use. Must be defined in the model registry in `fast_llm.models.auto`.",
-        )
-        return parser
+    model: type[FastLLMModelConfig] = Field(default=None)
 
     @classmethod
     def _from_parsed_args(cls, parsed: argparse.Namespace, unparsed: list[str]):
@@ -44,9 +34,11 @@ class ConversionConfig(RunnableConfig):
         return config
 
     def _validate(self):
-        assert self.model_config_class is not None
-        self.input.setup(self.model_config_class)
-        self.output.setup(self.model_config_class)
+        assert self.model is not None
+        if isinstance(self.model, str):
+            self.model = FastLLMModelConfig.get_subclass(self.model)
+        self.input.setup(self.model)
+        self.output.setup(self.model)
         super()._validate()
 
     def _convert_model_partial(
@@ -160,5 +152,4 @@ class ConversionConfig(RunnableConfig):
             logger.info(f">>> All done!")
 
 
-if __name__ == "__main__":
-    ConversionConfig.parse_and_run()
+RunnableConfig.register_subclass("convert", ConvertConfig)
