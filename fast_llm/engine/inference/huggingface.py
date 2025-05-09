@@ -132,6 +132,3 @@ class HuggingfaceBaseModelForCausalLM(transformers.PreTrainedModel, transformers
 
     def _init_weights(self, module) -> None:
         raise NotImplementedError(module)
-
-    def can_generate(self):
-        return True
