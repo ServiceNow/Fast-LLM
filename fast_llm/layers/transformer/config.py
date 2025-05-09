@@ -304,6 +304,14 @@ class TransformerPeftConfig(PeftConfig):
     def apply_linear(self, linear: "LinearBase", layer_type: TransformerSubLayerName | None = None) -> "LinearLike":
         pass
 
+    @abc.abstractmethod
+    def apply_other(self, module: "torch.nn.Module") -> "torch.nn.Module":
+        pass
+
+    @abc.abstractmethod
+    def apply_weight(self, parameter: "ParameterMeta") -> "ParameterMeta":
+        pass
+
     @classmethod
     def _from_dict(
         cls,
