@@ -20,9 +20,7 @@ logger = logging.getLogger(__name__)
 
 @config_class()
 class RunConfig(Config):
-    tensor_logs: TensorLogsConfig = Field(
-        default_factory=TensorLogsConfig, desc="Configuration for debug tensor logs.", hint=FieldHint.logging
-    )
+    tensor_logs: TensorLogsConfig = Field(desc="Configuration for debug tensor logs.", hint=FieldHint.logging)
     # TODO v0.3: Adjust (now only affects logging to file).
     structured_logs: bool = Field(
         default=True, desc="Configure logging to the Fast-LLM format.", hint=FieldHint.logging
@@ -70,9 +68,7 @@ class RunConfig(Config):
 
 @config_class()
 class ExperimentConfig(RunnableConfig):
-    run: RunConfig = Field(
-        default_factory=RunConfig, desc="Global properties for the experiment.", hint=FieldHint.core
-    )
+    run: RunConfig = Field(desc="Global properties for the experiment.", hint=FieldHint.core)
 
     def _show(
         self,

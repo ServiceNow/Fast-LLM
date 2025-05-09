@@ -20,6 +20,9 @@ logger = logging.getLogger(__name__)
 class RunnableConfig(Config):
     @classmethod
     def parse_and_run(cls, args=None) -> None:
+        if len(args) >= 1 and "=" not in args[0]:
+            # Make the `type=` part optional.
+            args = [f"type={args[0]}"] + args[1:]
         parsed, unparsed = cls._get_parser().parse_known_args(args)
         with NoAutoValidate():
             config: "RunnableConfig" = cls._from_parsed_args(parsed, unparsed)

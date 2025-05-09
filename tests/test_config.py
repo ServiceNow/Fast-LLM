@@ -44,17 +44,17 @@ def run_without_import(cmd: str):
 
 
 def test_validate_train_gpt_without_import():
-    run_without_import("main(['train', 'gpt', '-v'])")
+    run_without_import("main(['train_gpt', '-v'])")
 
 
 def test_validate_prepare_gpt_memmap_without_import():
     run_without_import(
-        "main(['prepare', 'gpt_memmap', '-v', 'dataset.path=test', 'output_path=test', 'tokenizer.path=test'])"
+        "main(['prepare_gpt_memmap', '-v', 'dataset.path=test', 'output_path=test', 'tokenizer.path=test'])"
     )
 
 
 def test_validate_convert_gpt_without_import():
-    run_without_import("main(['convert', 'gpt', '-v'])")
+    run_without_import("main(['convert', 'model=gpt', '-v'])")
 
 
 def test_validate_example_config():

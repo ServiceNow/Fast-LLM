@@ -5,7 +5,7 @@ import tempfile
 import numpy as np
 import pytest
 
-from fast_llm.data.dataset.gpt.config import GPTIndexedDatasetConfig
+from fast_llm.data.dataset.gpt.config import GPTBlendedDatasetConfig, GPTDatasetSliceConfig, GPTIndexedDatasetConfig
 from fast_llm.data.dataset.gpt.memmap import GPTMemmapDataset
 from fast_llm.data.dataset.gpt.sampled import GPTSample
 from fast_llm.data.preparator.gpt_memmap.config import MEMMAP_DTYPES, GPTMemmapDatasetPreparatorConfig
@@ -77,12 +77,12 @@ def test_absent_metadata_local():
 
 
 DATASET_DICT_0 = {
-    "type": "mock_memmap",
+    "type": MockGPTMemmapDatasetConfig.__name__,
     "num_documents": 500,
     "num_tokens_per_document": 300,
 }
 DATASET_DICT_1 = {
-    "type": "mock_memmap",
+    "type": MockGPTMemmapDatasetConfig.__name__,
     "num_documents": 1500,
     "num_tokens_per_document": 100,
 }
@@ -101,13 +101,13 @@ def test_split_dataset():
         config,
         {
             "training": {
-                "type": "slice",
+                "type": GPTDatasetSliceConfig.__name__,
                 "dataset": dataset_config_0.to_dict(),
                 "begin": 0,
                 "end": 0.75,
             },
             "validation": {
-                "type": "slice",
+                "type": GPTDatasetSliceConfig.__name__,
                 "dataset": dataset_config_0.to_dict(),
                 "begin": 0.75,
                 "end": 1,
@@ -147,11 +147,11 @@ def test_split_datasets_1():
         config,
         {
             "training": {
-                "type": "blended",
+                "type": GPTBlendedDatasetConfig.__name__,
                 "datasets": [
                     dataset_config_0.to_dict(),
                     {
-                        "type": "slice",
+                        "type": GPTDatasetSliceConfig.__name__,
                         "dataset": dataset_config_1.to_dict(),
                         "begin": 0,
                         "end": 0.5,
@@ -160,7 +160,7 @@ def test_split_datasets_1():
                 "weights": [2 / 3, 1 / 3],
             },
             "validation": {
-                "type": "slice",
+                "type": GPTDatasetSliceConfig.__name__,
                 "dataset": dataset_config_1.to_dict(),
                 "begin": 0.5,
                 "end": 1,

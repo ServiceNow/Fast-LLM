@@ -74,12 +74,10 @@ class GradientScalerConfig(Config):
 class OptimizerConfig(Config):
 
     learning_rate: LearningRateScheduleConfig = Field(
-        default_factory=LearningRateScheduleConfig,
         desc="A schedule for the learning rate.",
         hint=FieldHint.core,
     )
     gradient_scaler: GradientScalerConfig = Field(
-        default_factory=GradientScalerConfig,
         desc="Configuration for the fixed or dynamic gradient scaling.",
         hint=FieldHint.feature,
     )
