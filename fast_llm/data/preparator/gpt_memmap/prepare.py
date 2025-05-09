@@ -232,20 +232,19 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
             )
             logger.info(f"Sample after combining fields:\n{dataset[0]}")
             self._data_column = new_combined_column
-            
-            if source_schema.set_loss_masking_for_prompt:
-                loss_masking_column = f"{source_schema.prompt_columns}_loss_masking_spans"
-                dataset = dataset.map(
-                    lambda example: {
-                        loss_masking_column: [
-                            (0, len(str(example[source_schema.prompt_column])) - 1)
-                        ]# spans are inclusive
-                    },
-                    batched=False,
-                    desc="Setting loss masking spans",
-                )
-                logger.info(f"Sample after setting loss masking spans:\n{dataset[0]}")
-                self._loss_masking_spans_column = loss_masking_column
+            # Set loss masking spans (handle chat template prior to this)         
+            loss_masking_column = f"{source_schema.prompt_columns}_loss_masking_spans"
+            dataset = dataset.map(
+                lambda example: {
+                    loss_masking_column: [
+                        (0, len(str(example[source_schema.prompt_column])) - 1)
+                    ]# spans are inclusive
+                },
+                batched=False,
+                desc="Setting loss masking spans",
+            )
+            logger.info(f"Sample after setting loss masking spans:\n{dataset[0]}")
+            self._loss_masking_spans_column = loss_masking_column
         else:
             raise ValueError(f"Dataset source_schema set incorrectly. source_schema: '{self._config.dataset.data_source}'.")
         

@@ -46,11 +46,6 @@ class PromptCompletionConfig(SourceSchemaConfig):
         desc="Delimiter between prompt and completion.",
         hint=FieldHint.optional,
     )
-    set_loss_masking_for_prompt: bool = Field(
-        default=False,
-        desc="Create loss mask spans based on prompt.",
-        hint=FieldHint.optional,
-    )
     
 @config_class()
 class TextColumnConfig(SourceSchemaConfig):
