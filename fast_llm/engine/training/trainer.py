@@ -24,7 +24,7 @@ from fast_llm.engine.optimizer.optimizer import Optimizer
 from fast_llm.engine.schedule.runner import ScheduleRunner
 from fast_llm.engine.schedule.schedule import Schedule
 from fast_llm.engine.training.config import TrainerConfig, TrainingCheckpointBaseConfig, TrainingCheckpointConfig
-from fast_llm.engine.training.evaluator import EvaluatorRunner, TrainingProgressInfo
+from fast_llm.engine.training.evaluator import EvaluatorRunner, TrainingProgress
 from fast_llm.engine.training.wandb import Wandb
 from fast_llm.logging import format_metrics, get_memory_usage_mib, log_memory_usage
 from fast_llm.utils import Assert
@@ -160,8 +160,10 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
                 for dataset_name, samples in datasets.items()
             }
             | {
-                dataset_name: self._get_sampling_parameters({"num_samples": samples})
-                for dataset_name, samples in self._evaluator_runner.get_datasets_samples().items()
+                eval_sampling_params.dataset_name: self._get_sampling_parameters(
+                    {"num_samples": eval_sampling_params.num_samples}
+                )
+                for eval_sampling_params in self._evaluator_runner.get_sampling_parameters()
             },
             None if run.experiment_directory is None else run.experiment_directory / "dataset_cache",
             timeout=self._config.training.timeout,
@@ -367,7 +369,7 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
                 # TODO: Adjust valid iterator length.
                 self._evaluator_runner.run(
                     metrics=metrics,
-                    training_progress_info=TrainingProgressInfo(
+                    training_progress=TrainingProgress(
                         done=done,
                         completed_steps=self._completed_steps,
                         consumed_samples=self._consumed_samples,
