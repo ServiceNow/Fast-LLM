@@ -111,7 +111,6 @@ class GPTIndexedDatasetConfig(GPTSamplableDatasetConfig, IndexedDatasetConfig):
 @config_class()
 class GPTRandomDatasetConfig(GPTSamplableDatasetConfig):
     _abstract: typing.ClassVar[bool] = False
-    type_: typing.ClassVar[str | None] = "random"
     name: str = Field(
         default="dummy",
         desc="The name of the dataset.",
@@ -127,7 +126,6 @@ class GPTRandomDatasetConfig(GPTSamplableDatasetConfig):
 @config_class()
 class GPTMemmapDatasetConfig(GPTIndexedDatasetConfig):
     _abstract: typing.ClassVar[bool] = False
-    type_: typing.ClassVar[str | None] = "memmap"
     path: pathlib.Path = Field(
         default=None,
         desc="The path to the dataset, excluding the `.bin` or `.idx` suffix.",
@@ -153,7 +151,6 @@ class GPTMemmapDatasetConfig(GPTIndexedDatasetConfig):
 @config_class()
 class GPTConcatenatedDatasetConfig(ConcatenatedDatasetConfig, GPTIndexedDatasetConfig):
     _abstract: typing.ClassVar[bool] = False
-    type_: typing.ClassVar[str | None] = "concatenated"
     datasets: list[GPTIndexedDatasetConfig] = FieldUpdate()
 
     def build(self) -> "GPTConcatenatedDataset":
@@ -165,7 +162,6 @@ class GPTConcatenatedDatasetConfig(ConcatenatedDatasetConfig, GPTIndexedDatasetC
 @config_class()
 class GPTDatasetSliceConfig(DatasetSliceConfig, GPTIndexedDatasetConfig):
     _abstract: typing.ClassVar[bool] = False
-    type_: typing.ClassVar[str | None] = "slice"
     dataset: GPTIndexedDatasetConfig = FieldUpdate()
 
     def build(self) -> "GPTDatasetSlice":
@@ -177,22 +173,19 @@ class GPTDatasetSliceConfig(DatasetSliceConfig, GPTIndexedDatasetConfig):
 @config_class()
 class GPTSampledDatasetUpdateConfig(SampledDatasetUpdateConfig, GPTSampledDatasetConfig):
     _abstract = False
-    type_: typing.ClassVar[str | None] = "sampled"
-    sampling: GPTSamplingConfig = FieldUpdate(default_factory=GPTSamplingConfig)
-    dataset: GPTSampledDatasetConfig = FieldUpdate(default_factory=GPTSampledDatasetConfig)
+    sampling: GPTSamplingConfig = FieldUpdate()
+    dataset: GPTSampledDatasetConfig = FieldUpdate()
 
 
 @config_class()
 class GPTBlendedDatasetConfig(BlendedDatasetConfig, GPTSampledDatasetConfig):
     _abstract: typing.ClassVar[bool] = False
-    type_: typing.ClassVar[str | None] = "blended"
     datasets: list[GPTSampledDatasetConfig] = FieldUpdate()
 
 
 @config_class()
 class GPTDatasetFromFileConfig(GPTSamplableDatasetConfig):
     _abstract: typing.ClassVar[bool] = False
-    type_: typing.ClassVar[str | None] = "file"
     path: pathlib.Path = Field(
         default=None,
         desc="The path to a dataset config file.",
@@ -232,7 +225,6 @@ class GPTDatasetFromFileConfig(GPTSamplableDatasetConfig):
 class GPTConcatenatedMemmapConfig(GPTIndexedDatasetConfig):
     # TODO v0.3: Remove.
     _abstract: typing.ClassVar[bool] = False
-    type_: typing.ClassVar[str | None] = "concatenated_memmap"
     path: pathlib.Path = Field(
         default=None,
         desc="The path to a dataset directory.",
@@ -342,7 +334,6 @@ class GPTFimSampledDatasetConfig(GPTSampledDatasetConfig, FimConfig):
     """
 
     _abstract: typing.ClassVar[bool] = False
-    type_: typing.ClassVar[str | None] = "fim"
 
     dataset: GPTSampledDatasetConfig = Field(
         default=None,
@@ -398,7 +389,6 @@ class GPTLegacyConfig(Config):
         valid=_validate_path,
     )
     fim: FimConfig = Field(
-        default_factory=FimConfig,
         desc="Configuration for Fill In the Middle (FIM).",
         hint=FieldHint.feature,
     )
@@ -407,7 +397,6 @@ class GPTLegacyConfig(Config):
 @config_class()
 class GPTLegacyDatasetConfig(GPTSampledDatasetConfig, GPTLegacyConfig):
     _abstract: typing.ClassVar[bool] = False
-    type_: typing.ClassVar[str | None] = "legacy"
 
     def build_and_sample(self, sampling: GPTSamplingData) -> SampledDataset:
 
@@ -494,7 +483,6 @@ class GPTTestSlowDatasetConfig(GPTSampledDatasetConfig):
 
     # TODO: This belongs to a testing plugin.
     _abstract: typing.ClassVar[bool] = False
-    type_: typing.ClassVar[str | None] = "test_slow"
     sleep: float = Field(
         default=1,
         desc="Sleep time during build, in seconds.",
@@ -510,6 +498,7 @@ class GPTTestSlowDatasetConfig(GPTSampledDatasetConfig):
 
 # Add user-friendly names for the configs.
 GPTSampledDatasetConfig.register_subclass("dummy", GPTRandomDatasetConfig)
+GPTSampledDatasetConfig.register_subclass("random", GPTRandomDatasetConfig)
 GPTSampledDatasetConfig.register_subclass("memmap", GPTMemmapDatasetConfig)
 GPTSampledDatasetConfig.register_subclass("concatenated", GPTConcatenatedDatasetConfig)
 GPTSampledDatasetConfig.register_subclass("slice", GPTDatasetSliceConfig)

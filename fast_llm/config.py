@@ -1,3 +1,4 @@
+import abc
 import contextlib
 import copy
 import dataclasses
@@ -14,7 +15,6 @@ import yaml
 from fast_llm.utils import Assert, Registry, Tag, compare_nested, get_type_name, header, log
 
 logger = logging.getLogger(__name__)
-
 
 _AUTO_VALIDATE = True
 
@@ -146,7 +146,7 @@ class Field(dataclasses.Field):
         if default is not dataclasses.MISSING and default_factory is not dataclasses.MISSING:
             raise ValueError("cannot specify both default and default_factory")
         if isinstance(default_factory, type) and issubclass(default_factory, Config):
-            default_factory = _ConfigFactory(default_factory)
+            raise ValueError("Config classes should not be used as `default_factory`")
         super().__init__(
             default=default,
             default_factory=default_factory,
@@ -223,20 +223,6 @@ def skip_valid_if_none(fn, *args, **kwargs):
     return valid
 
 
-class _ConfigFactory:
-    """
-    A dataclass default factory that prevents early validation.
-    Validation is still done through the parent config if needed.
-    """
-
-    def __init__(self, factory: typing.Callable[[], "Config"] | type["Config"]):
-        self._factory = factory
-
-    def __call__(self):
-        with NoAutoValidate():
-            return self._factory()
-
-
 class ValidationError(ValueError):
     pass
 
@@ -286,8 +272,20 @@ def config_class[T: Config]() -> typing.Callable[[type[T]], type[T]]:
     return wrap
 
 
+class ConfigMeta(abc.ABCMeta):
+    def __call__(cls: "type[Config]", **kwargs):
+        # Always go through `_from_dict` for correct dynamic class selection and nested config instantiation.
+        print("AIKDNJOINF", cls)
+        if not kwargs.pop("_from_dict_check", False):
+            print("AAA")
+            with NoAutoValidate():
+                return cls._from_dict(kwargs)
+        print("BBB", kwargs)
+        return super().__call__(**kwargs)
+
+
 @dataclasses.dataclass()
-class Config:
+class Config(metaclass=ConfigMeta):
     """
     An advanced `dataclass` with basic type checking, validation and argparse support.
     Typically, a subclass will:
@@ -336,7 +334,7 @@ class Config:
                     )
             else:
                 field = self.get_field(key)
-                if field.init and field._field_type != dataclasses._FIELD_CLASSVAR:
+                if field.init and field._field_type == dataclasses._FIELD:
                     # Adding to explicit field list except within `_set_implicit_default` context,
                     # during dataclass initialization (`_setting_implicit_default` not yet set)
                     # and during automated config validation (`_setting_implicit_default=None`)
@@ -385,15 +383,29 @@ class Config:
         Can be extended to add custom post-processing (typically before the super() call)
         and validation (typically after)
         """
-        self._check_abstract()
+        # Should be handled in `from_dict`, but can fail if instantiating directly.
+        try:
+            expected_class = self.get_subclass(self.type)
+        except KeyError as e:
+            # Delayed instantiation error in `from_dict`.
+            raise ValidationError(*e.args)
+
+        if expected_class is not None:
+            # Should be handled in `from_dict`, but can fail if instantiating directly.
+            Assert.is_(self.__class__, expected_class)
+
+        if self._abstract:
+            raise ValidationError(f"{type(self).__name__} is abstract")
+        if not self.__class_validated__:
+            raise ValidationError(
+                f"{type(self).__name__} hasn't been validated. Make sure to use the @config_class decorator."
+            )
         errors = []
         with self._set_implicit_default(None):
             # Set the type field, or override it to the provided type with the actual class for clarity and safety.
             self.type = self.__class__.__name__
-            # Should be handled in `from_dict`, but can fail if instantiating directly.
-            Assert.is_(self._registry[self.type], self.__class__)
             for name, field in self.fields():
-                if not field.init or field._field_type == dataclasses._FIELD_CLASSVAR:  # noqa
+                if not field.init or field._field_type != dataclasses._FIELD:  # noqa
                     continue
                 value = getattr(self, name)
                 if isinstance(value, Tag):
@@ -618,11 +630,7 @@ class Config:
         all_fields: bool = False,
         serializable: bool = True,
     ) -> None:
-        if (
-            field is not None
-            and (not field.init or field._field_type == dataclasses._FIELD_CLASSVAR)
-            and not all_fields
-        ):
+        if field is not None and (not field.init or field._field_type != dataclasses._FIELD) and not all_fields:
             # Exclude class variables and derived fields unless requested explicitly.
             return
         explicit_field = (
@@ -728,18 +736,7 @@ class Config:
             for keys, value in update.items():
                 set_nested_dict_value(default, keys, value, update_type)
 
-        type_ = default.get("type")
-        if type_ is None:
-            actual_cls = cls
-        else:
-            if type_ not in cls._registry:
-                raise ValueError(f"Unknown config type {type_}.")
-            actual_cls = cls._registry[type_]
-            if not issubclass(actual_cls, cls):
-                raise ValueError(
-                    f"Config class {actual_cls.__name__} (from type {type_}) is not a subclass of {cls.__name__}"
-                )
-        return actual_cls._from_dict(default, strict=strict)
+        return cls._from_dict(default, strict=strict)
 
     @classmethod
     def from_flat_dict(
@@ -758,16 +755,24 @@ class Config:
         flat: bool = False,
     ) -> typing.Self:
         # TODO v0.3: Remove flat format
-        out_arg_dict = {}
+        out_arg_dict = {"_from_dict_check": True}
 
         # TODO v0.3: Remove backward compatibility fix
         if "__class__" in default:
             del default["__class__"]
 
+        try:
+            actual_cls = cls.get_subclass(default.get("type"))
+            if actual_cls is not None and actual_cls is not cls:
+                return actual_cls._from_dict(default, strict=strict, flat=flat)
+        except KeyError:
+            # Postpone error to validation.
+            pass
+
         # Do not validate yet in case the root class sets cross-dependencies in validation.
         with NoAutoValidate():
             for name, field in cls.fields():
-                if not field.init or field._field_type == dataclasses._FIELD_CLASSVAR:  # noqa
+                if not field.init or field._field_type != dataclasses._FIELD:  # noqa
                     continue
                 if flat:
                     if isinstance(field.type, type) and issubclass(field.type, Config):
@@ -890,17 +895,9 @@ class Config:
             )
 
     @classmethod
-    def _check_abstract(cls) -> None:
-        if cls._abstract:
-            raise ValidationError(f"{cls.__name__} is abstract")
-        if not cls.__class_validated__:
-            raise ValidationError(
-                f"{cls.__name__} hasn't been validated. Make sure to use the @config_class decorator."
-            )
-
-    @classmethod
     def register_subclass(cls, name: str, cls_: type[typing.Self]) -> None:
         Assert.custom(issubclass, cls_, cls)
+        assert not cls_._abstract
         if name in cls._registry:
             old_cls = cls._registry[name]
             if old_cls.__name__ == cls_.__name__ and cls._registry[name].__module__ == cls_.__module__:
@@ -910,8 +907,10 @@ class Config:
         cls._registry[name] = cls_
 
     @classmethod
-    def get_subclass(cls, name):
+    def get_subclass(cls, name: str | None):
         # TODO: Make it case-insensitive?
+        if name is None:
+            return None
         cls_ = None
         for base_class in cls.__mro__:
             if issubclass(base_class, Config) and name in base_class._registry:
@@ -922,7 +921,7 @@ class Config:
                 elif base_class._registry[name] is not cls_:
                     # We explicitly prevent ambiguous classes to ensure safe and unambiguous serialization.
                     # TODO: Only really need to avoid conflict with `Config`'s registry, relax this a bit?
-                    raise RuntimeError(
+                    raise KeyError(
                         f"Ambiguous type `{name}` for base class {cls.__name__}."
                         f" ({cls_.__name__} vs {base_class._registry[name]})"
                     )
@@ -936,10 +935,11 @@ class Config:
         """
         Assert.eq(cls.__name__, cls.__qualname__)
         cls._registry = Registry[str, type[cls]](cls.__name__, {})
-        Config.register_subclass(cls.__name__, cls)
-        short_name = cls.__name__.strip("Config")
-        if short_name != cls.__name__:
-            Config.register_subclass(short_name, cls)
+        if not cls._abstract:
+            Config.register_subclass(cls.__name__, cls)
+            short_name = cls.__name__.strip("Config")
+            if short_name != cls.__name__:
+                Config.register_subclass(short_name, cls)
         for base_class in cls.__mro__:
             if issubclass(base_class, Config) and base_class is not cls:
                 assert cls.__class_validated__, (
@@ -986,10 +986,10 @@ class Config:
                     cls.__annotations__[name] = base_class_field.type
 
     # Type for the field. At the end of class definition to avoid shadowing builtin.
-    type: str | None = Field(
+    type: str = Field(
         default=None,
         desc="The config class name.",
-        hint=FieldHint.core,
+        hint=FieldHint.feature,
     )
 
 

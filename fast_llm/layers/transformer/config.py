@@ -12,13 +12,7 @@ from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.engine.config_utils.tensor_space import CompositeTensorDim, TensorDim, TensorSpace
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
 from fast_llm.functional.config import ActivationType, MLPRecomputeLevel, TritonConfig
-from fast_llm.layers.common.config import (
-    LayerNormalizationConfig,
-    LoRAConfig,
-    NoPeftConfig,
-    NormalizationConfig,
-    PeftConfig,
-)
+from fast_llm.layers.common.config import LoRAConfig, NoPeftConfig, NormalizationConfig, PeftConfig
 from fast_llm.utils import Assert, div
 
 if typing.TYPE_CHECKING:
@@ -99,6 +93,18 @@ class TransformerLossNames:
 class RotaryConfig(BaseModelConfig):
     # TODO: Move rotary to its own submodule.
 
+    @classmethod
+    def _from_dict(
+        cls,
+        default: dict[str, typing.Any],
+        strict: bool = True,
+        flat: bool = False,
+    ) -> typing.Self:
+        if cls is RotaryConfig and cls.get_subclass(default.get("type")) is None:
+            # Default subclass.
+            return DefaultRotaryConfig._from_dict(default, strict, flat)
+        return super()._from_dict(default, strict=strict, flat=flat)
+
     @property
     def enabled(self) -> bool:
         return False
@@ -114,6 +120,7 @@ class NoRotaryConfig(RotaryConfig):
 
 @config_class()
 class DefaultRotaryConfig(RotaryConfig):
+    _abstract = False
     theta: float = Field(
         default=10000,
         desc="Scale for the rotary positional embeddings",
@@ -160,6 +167,8 @@ class DefaultRotaryConfig(RotaryConfig):
         return frequencies
 
     def _get_angle_scales(self, kv_channels: int, device="cuda") -> "torch.Tensor":
+        import torch
+
         return self.theta ** -torch.arange(0, 1, 2 / kv_channels, device=device, dtype=torch.float64)
 
 
@@ -266,7 +275,7 @@ class YarnRotaryConfig(DefaultRotaryConfig):
         )
 
 
-RotaryConfig.register_subclass("none", RotaryConfig)
+RotaryConfig.register_subclass("none", NoRotaryConfig)
 RotaryConfig.register_subclass("default", DefaultRotaryConfig)
 RotaryConfig.register_subclass("llama3", Llama3RotaryConfig)
 RotaryConfig.register_subclass("yarn", YarnRotaryConfig)
@@ -295,10 +304,28 @@ class TransformerPeftConfig(PeftConfig):
     def apply_linear(self, linear: "LinearBase", layer_type: TransformerSubLayerName | None = None) -> "LinearLike":
         pass
 
+    @classmethod
+    def _from_dict(
+        cls,
+        default: dict[str, typing.Any],
+        strict: bool = True,
+        flat: bool = False,
+    ) -> typing.Self:
+        if cls is TransformerPeftConfig and cls.get_subclass(default.get("type")) is None:
+            # Default subclass.
+            return TransformerNoPeftConfig._from_dict(default, strict, flat)
+        return super()._from_dict(default, strict=strict, flat=flat)
+
 
 @config_class()
 class TransformerNoPeftConfig(TransformerPeftConfig, NoPeftConfig):
     _abstract = False
+
+    def apply_other(self, module: "torch.nn.Module") -> "torch.nn.Module":
+        return module
+
+    def apply_weight(self, parameter: "ParameterMeta") -> "ParameterMeta":
+        return parameter
 
 
 @config_class()
@@ -367,17 +394,14 @@ TransformerPeftConfig.register_subclass("lora", TransformerLoRAConfig)
 class TransformerConfig(BaseModelConfig):
     _abstract = False
     normalization: NormalizationConfig = Field(
-        default_factory=LayerNormalizationConfig,
         desc="Configuration for the normalization layers architecture.",
         hint=FieldHint.architecture,
     )
     rotary: RotaryConfig = Field(
-        default_factory=NoRotaryConfig,
         desc="Configuration for the rotary positional embeddings.",
         hint=FieldHint.architecture,
     )
     peft: TransformerPeftConfig = Field(
-        default_factory=TransformerNoPeftConfig,
         desc="Configuration for the parameter-efficient fine tuning.",
         hint=FieldHint.architecture,
     )

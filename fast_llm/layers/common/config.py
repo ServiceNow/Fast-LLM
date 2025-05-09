@@ -34,6 +34,18 @@ class NormalizationConfig(BaseModelConfig):
     def get_layer(self, hidden_dim: "TensorDim") -> "torch.nn.Module":
         pass
 
+    @classmethod
+    def _from_dict(
+        cls,
+        default: dict[str, typing.Any],
+        strict: bool = True,
+        flat: bool = False,
+    ) -> typing.Self:
+        if cls is NormalizationConfig and cls.get_subclass(default.get("type")) is None:
+            # Default subclass.
+            return LayerNormalizationConfig._from_dict(default, strict, flat)
+        return super()._from_dict(default, strict=strict, flat=flat)
+
 
 @config_class()
 class NoNormalizationConfig(NormalizationConfig):
@@ -45,7 +57,7 @@ class NoNormalizationConfig(NormalizationConfig):
 
 
 @config_class()
-class LayerNormBaseConfig(NormalizationConfig):
+class LayerNormalizationBaseConfig(NormalizationConfig):
     """
     Common configuration for layer norm and rms norm
     """
@@ -112,7 +124,7 @@ class LayerNormBaseConfig(NormalizationConfig):
 
 
 @config_class()
-class LayerNormalizationConfig(LayerNormBaseConfig):
+class LayerNormalizationConfig(LayerNormalizationBaseConfig):
     _abstract = False
 
     @property
@@ -123,7 +135,7 @@ class LayerNormalizationConfig(LayerNormBaseConfig):
 
 
 @config_class()
-class RMSNormalizationConfig(LayerNormBaseConfig):
+class RMSNormalizationConfig(LayerNormalizationBaseConfig):
     _abstract = False
 
     @property
