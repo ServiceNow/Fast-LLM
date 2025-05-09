@@ -25,9 +25,9 @@ class GPTRandomSampledDataset(SampledDataset):
     def __init__(self, sampling: GPTSamplingData, name: str):
         self._name = name
         self._seed = sampling.config.seed
-        self._sequence_length = sampling.sequence_length
-        self._vocab_size = sampling.vocab_size
-        self._num_samples = sampling.num_samples
+        self._sequence_length = sampling.parameters.sequence_length
+        self._vocab_size = sampling.parameters.vocab_size
+        self._num_samples = sampling.parameters.num_samples
 
     def __len__(self) -> int:
         return self._num_samples

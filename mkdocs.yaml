@@ -176,6 +176,8 @@ nav:
   - Reference:
     - User Guide:
       - Configuration: user_guide/configuration.md
+      - Multi-Stage: user_guide/multi-stage.md
+      - Parallelism: user_guide/parallelism.md
     - Developer Guide:
       - Configuration: developer_guide/configuration.md
       - Model:

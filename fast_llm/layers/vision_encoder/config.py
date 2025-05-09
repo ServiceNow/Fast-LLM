@@ -7,6 +7,7 @@ from fast_llm.layers.transformer.config import TransformerArchitectureConfig, Vi
 
 
 class VisionEncoderDimNames:
+    in_channels = "vision_in_channels"
     out_channels = "vision_out_channels"
     adapter_size = "vision_adapter_size"
     patch_size = "vision_patch_size"
@@ -62,6 +63,7 @@ class VisionEncoderKwargs:
     max_image_tokens = "max_image_tokens"
     patch_embeddings = "patch_embeddings"
     hidden_dims = "vit_hidden_dims"
+    image_patches_meta = "vit_image_patches_meta"
 
 
 # TODO Soham: do we need all of them?
@@ -129,11 +131,11 @@ class ImageNormalizationConfig(Config):
 
 
 @config_class()
-class VisionEncoderArchitectureConfig(BaseModelArchitectureConfig):
+class VisionEncoderConfig(BaseModelConfig):
     _abstract = False
 
-    transformer: TransformerArchitectureConfig = Field(
-        default_factory=TransformerArchitectureConfig,
+    transformer: VisionTransformerConfig = Field(
+        default_factory=VisionTransformerConfig,
         desc="Configuration for the vision transformer architecture.",
         hint=FieldHint.core,
     )
@@ -157,6 +159,11 @@ class VisionEncoderArchitectureConfig(BaseModelArchitectureConfig):
         desc="The intermediate activation type for multi-modal adapter. Default: GeLU.",
         hint=FieldHint.core,
     )
+    image_normalization: ImageNormalizationConfig = Field(
+        default_factory=ImageNormalizationConfig,
+        desc="Configuration for the normalization layers applied to the image patches.",
+        hint=FieldHint.optional,
+    )
 
     def setup_tensor_space(self, tensor_space: TensorSpace):
         tensor_space.add_tensor_dim(TensorDim(VisionEncoderDimNames.out_channels, self.transformer.hidden_size))
@@ -169,30 +176,4 @@ class VisionEncoderArchitectureConfig(BaseModelArchitectureConfig):
             )
         )
         self.transformer.setup_tensor_space(tensor_space, type="vision")
-
-
-@config_class()
-class VisionEncoderConfig(VisionEncoderArchitectureConfig, BaseModelConfig):
-    transformer: VisionTransformerConfig = FieldUpdate(
-        default_factory=VisionTransformerConfig,
-        desc="Configuration for the transformer architecture.",
-        hint=FieldHint.core,
-    )
-    patch_norm: NormalizationConfig = FieldUpdate(
-        default_factory=NormalizationConfig,
-        desc="Configuration for the normalization layers applied to the image patches.",
-        hint=FieldHint.optional,
-    )
-    image_normalization: ImageNormalizationConfig = Field(
-        default_factory=ImageNormalizationConfig,
-        desc="Configuration for the normalization layers applied to the image patches.",
-        hint=FieldHint.optional,
-    )
-    adapter_activation_type: ActivationType = FieldUpdate(
-        default=ActivationType.gelu,
-        desc="The intermediate activation type for multi-modal adapter. Default: GeLU.",
-        hint=FieldHint.core,
-    )
-
-    def setup_tensor_space(self, tensor_space: TensorSpace):
         super().setup_tensor_space(tensor_space)

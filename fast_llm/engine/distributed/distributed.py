@@ -33,6 +33,7 @@ class Distributed[ConfigType: DistributedConfig](Configurable[ConfigType]):
 
     def __init__(self, config: DistributedConfig, use_cpu: bool = False):
         super().__init__(config)
+        assert self._config.reference_config is None
         self._use_cpu = use_cpu
 
         if self._use_cpu:
@@ -147,6 +148,13 @@ class Distributed[ConfigType: DistributedConfig](Configurable[ConfigType]):
         self._process_groups[distributed_dim.name] = group
         distributed_dim.setup(group)
         return group
+
+    def check_config(self, config: DistributedConfig) -> None:
+        # Allows using this `Distributed` on a model with a distributed config that is a copy of `self._config`
+        if config.reference_config is None:
+            Assert.is_(config, self._config)
+        else:
+            Assert.is_(config.reference_config, self._config)
 
     def set_step(self, step: int, phase: PhaseType) -> None:
         """

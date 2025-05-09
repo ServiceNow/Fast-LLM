@@ -84,6 +84,6 @@ def test_varlen_preprocessor():
             TransformerKwargs.sequence_length: sequence_length,
             TransformerKwargs.sequence_lengths: sequence_lengths,
         }
-        varlen_preprocessor.preprocess(kwargs)
+        varlen_preprocessor.preprocess(None, kwargs)
         Assert.all_equal(kwargs[TransformerKwargs.cu_seqlens_q], cumulative_sequences_q[micro_seq_idx])
         Assert.all_equal(kwargs[TransformerKwargs.cu_seqlens_k], cumulative_sequences_k[micro_seq_idx])

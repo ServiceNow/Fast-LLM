@@ -27,6 +27,9 @@ class TensorDim:
             f")"
         )
 
+    def __eq__(self, other):
+        return isinstance(other, self.__class__) and self.__dict__ == other.__dict__
+
     @property
     def name(self) -> str:
         return self._name
@@ -119,8 +122,9 @@ class TensorSpace:
         self.add_tensor_dim(TensorDim(DefaultDimNames.scalar, 1))
 
     def setup(self, distributed: "Distributed") -> None:
-        assert distributed.config is self._distributed_config
         assert not self._is_setup
+        if distributed.config is not self._distributed_config:
+            distributed.config.compare(self._distributed_config, ValueError)
         self._is_setup = True
         self._distributed = distributed
 

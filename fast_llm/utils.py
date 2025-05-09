@@ -71,11 +71,16 @@ def rms_diff(x: "torch.Tensor", y: "torch.Tensor") -> "torch.Tensor":
 
 
 class Tag:
+    __slots__ = ("value",)
+
     def __init__(self, value: str):
         self.value = value
 
     def __repr__(self) -> str:
         return self.value
+
+    def __deepcopy__(self, memodict: dict[str, typing.Any]) -> typing.Self:
+        return self
 
 
 class Assert:
@@ -86,7 +91,7 @@ class Assert:
     @staticmethod
     def eq(x, *args, msg=None):
         for arg in args:
-            assert x == arg, f"{x} != {arg} " + f"| {msg}" if msg else ""
+            assert x == arg, f"{x} != {arg} " + (f"| {msg}" if msg else "")
 
     @staticmethod
     def is_(x, y):
@@ -139,7 +144,17 @@ class Assert:
     @staticmethod
     def rms_close(x, y, threshold):
         rms = rms_diff(x, y).item()
-        assert rms <= threshold, f"Rms diff too big ({rms} > {threshold}) between tensors {x} and {y}"
+        assert rms <= threshold, f"Rms diff too big ({rms:.3e} > {threshold:.3e}) between tensors {x} and {y}"
+
+    @staticmethod
+    def rms_close_relative(x, y, threshold, min_threshold=0):
+        import torch
+
+        Assert.eq(x.shape, y.shape)
+        scale = (torch.sum(x**2 + y**2) / (2 * x.numel())) ** 0.5
+        threshold = max(threshold * scale, min_threshold)
+        rms = rms_diff(x, y).item()
+        assert rms <= threshold, f"Rms diff too big ({rms:.3e} > {threshold:.3e}) between tensors {x} and {y}"
 
     @staticmethod
     def all_equal(x, y):
@@ -151,7 +166,7 @@ class Assert:
 
         neq = x != y
         if neq.any().item():  # noqa
-            index = torch.where(neq)  # noqa
+            index = None if x.numel() == 1 else torch.where(neq)  # noqa
             raise AssertionError(
                 f"Tensors have {index[0].numel()} different entries out of "
                 f"{x.numel()}: {x[index]} != {y[index]} at index {torch.stack(index, -1)}"
@@ -249,40 +264,6 @@ def normalize_probabilities(p: "npt.ArrayLike", return_array: bool = False) -> "
     return out if return_array else out.tolist()
 
 
-def set_nested_dict_value[
-    KeyType, ValueType
-](d: dict[KeyType, ValueType], keys: KeyType | tuple[KeyType, ...], value: ValueType) -> None:
-    if isinstance(keys, tuple):
-        for key in keys[:-1]:
-            d = d.setdefault(key, {})
-            assert isinstance(d, dict)
-        d[keys[-1]] = value
-    else:
-        d[keys] = value
-
-
-def get_nested_dict_value[
-    KeyType, ValueType
-](d: dict[KeyType, ValueType], keys: KeyType | tuple[KeyType, ...]) -> ValueType:
-    if isinstance(keys, tuple):
-        for key in keys:
-            d = d[key]
-        return d
-    else:
-        return d[keys]
-
-
-def pop_nested_dict_value[
-    KeyType, ValueType
-](d: dict[KeyType, ValueType], keys: KeyType | tuple[KeyType, ...]) -> ValueType:
-    if isinstance(keys, tuple):
-        for key in keys[:-1]:
-            d = d[key]
-        return d.pop(keys[-1])
-    else:
-        return d.pop(keys)
-
-
 class InvalidObject:
     """
     Store an error and raise it if accessed.
@@ -323,3 +304,35 @@ def try_decorate(get_decorator: Callable, _return_decorator: bool = True) -> Cal
         return out
 
     return new_decorator
+
+
+def compare_nested(config_a, config_b, errors: list | None = None, prefix: tuple = ()):
+    if errors is None:
+        errors = []
+    # Check for equality of both values and types.
+    if type(config_a) != type(config_b):
+        errors.append(f"Type mismatch for key `{".".join(prefix)}`: {type(config_a)} != {type(config_b)}")
+    if isinstance(config_a, dict):
+        for key in config_a.keys() | config_b.keys():
+            key_ = prefix + (key,)
+            if key not in config_a:
+                errors.append(f"Key `{".".join(key_)}` missing in lhs.")
+            elif key not in config_b:
+                errors.append(f"Key `{".".join(key_)}` missing in rhs.")
+            else:
+                compare_nested(config_a[key], config_b[key], errors, key_)
+    elif isinstance(config_a, (list, tuple, set)):
+        if len(config_a) != len(config_b):
+            errors.append(f"Length mismatch for key `{".".join(prefix)}`: {len(config_a)} != {len(config_b)}.")
+        else:
+            for i in range(len(config_a)):
+                compare_nested(config_a[i], config_b[i], errors, prefix + (str(i),))
+    elif config_a != config_b and config_a is not config_b:
+        # `is not` needed for special cases like `math.nan`
+        errors.append(f"Different value for key `{".".join(prefix)}`: {config_a} != {config_b}.")
+    return errors
+
+
+def check_equal_nested(config_a, config_b):
+    if errors := compare_nested(config_a, config_b):
+        raise ValueError("\n".join(errors))

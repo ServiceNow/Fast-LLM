@@ -4,6 +4,7 @@ import enum
 import logging
 import pathlib
 import typing
+import warnings
 
 import yaml
 
@@ -78,15 +79,10 @@ class FastLLMCheckpointFormat(CheckpointFormat):
         return FastLLMCheckpointHandler
 
 
-class ModelConfigType(str, enum.Enum):
+class ModelConfigType(enum.StrEnum):
     none = "none"
-    architecture = "architecture"
     model = "model"
     fast_llm = "fast_llm"
-
-    @property
-    def load_architecture(self) -> bool:
-        return self != ModelConfigType.none
 
     @property
     def load_base_model(self) -> bool:
@@ -164,8 +160,9 @@ class CheckpointStateSaveConfigBase(CheckpointSaveConfigBase, CheckpointStateCon
 
     def _validate(self) -> None:
         if self.optimizer_state is None:
-            # TODO: Make sure it's a type
-            self.optimizer_state = self.format.support_optimizer
+            with self._set_implicit_default():
+                # TODO: Make sure it's a type
+                self.optimizer_state = self.format.support_optimizer
         super()._validate()
         if self.optimizer_state:
             assert self.format.support_optimizer
@@ -200,21 +197,29 @@ class CheckpointSaveConfig(CheckpointSaveMetadataConfig, CheckpointStateSaveConf
 @config_class()
 class CheckpointLoadMetadataConfig(CheckpointPathConfigBase):
     _abstract = False
-
+    # TODO: Set default to model? (Not backward compatible)
     load_config: ModelConfigType = Field(
-        default=ModelConfigType.architecture,
+        default=ModelConfigType.model,
         desc="Configuration to save/load.",
         hint=FieldHint.core,
     )
 
     def _validate(self) -> None:
+        if self.load_config == "architecture":
+            raise NotImplementedError("load_config==`architecture` is no longer supported.")
         super()._validate()
+        if (
+            self.format in (DistributedCheckpointFormat, FastLLMCheckpointFormat)
+            and "load_config" not in self._explicit_fields
+        ):
+            warnings.warn(
+                "The default behaviour for model configuration loading has changed (May 2025)."
+                "All model parameters are now loaded, not just the architecture parameters."
+                "Please make sure this doesn't lead to unexpected breaking changes."
+                "Suppress this warning by setting `load_config = model` explicitly.",
+            )
         if self.format.enforce_architecture_match:
-            assert self.load_config.load_architecture
-
-    @property
-    def compare_log_fn(self):
-        return ValueError if self.load_config.load_architecture else logger.warning
+            assert self.load_config.load_base_model
 
 
 @config_class()
@@ -236,11 +241,27 @@ class CheckpointHandler(abc.ABC):
     def __init__(self, model: "FastLLMModel"):
         self._model = model
 
-    # TODO: save_metadata?
+    @classmethod
+    @abc.abstractmethod
+    def save_metadata(cls, config: CheckpointSaveMetadataConfig, metadata: "CheckpointMetadata"):
+        pass
+
+    @classmethod
+    def load_metadata(cls, config: CheckpointLoadMetadataConfig) -> "CheckpointMetadata":
+        updates = {}
+        metadata = cls._load_metadata(config)
+        if not config.load_config.load_fast_llm:
+            updates[("config", "multi_stage")] = {}
+            updates[("config", "distributed")] = {}
+        if not config.load_config.load_base_model:
+            updates[("config", "base_model")] = {}
+        if updates:
+            metadata = metadata.to_copy(updates)
+        return metadata
 
     @classmethod
     @abc.abstractmethod
-    def load_metadata(cls, config: CheckpointLoadMetadataConfig) -> "CheckpointMetadata":
+    def _load_metadata(cls, config: CheckpointLoadMetadataConfig) -> "CheckpointMetadata":
         pass
 
     @abc.abstractmethod
@@ -248,7 +269,7 @@ class CheckpointHandler(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def load(self, config: CheckpointLoadConfig, metadata: "CheckpointMetadata"):
+    def load(self, config: CheckpointLoadConfig) -> dict[str, typing.Any] | None:
         pass
 
     def get_shard_names(self, config: CheckpointStateConfigBase) -> tuple[str, ...]:

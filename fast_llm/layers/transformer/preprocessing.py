@@ -4,6 +4,7 @@ import typing
 
 import torch
 
+from fast_llm.engine.base_model.config import Preprocessor
 from fast_llm.engine.config_utils.tensor_space import DefaultDimNames, TensorDim, TensorSpace
 from fast_llm.functional.rotary import convert_rotary_complex_to_real
 from fast_llm.layers.transformer.config import (
@@ -162,8 +163,7 @@ def get_2d_rotary_frequencies(
 
     return frequencies
 
-
-class RotaryEmbeddingPreprocessor:
+class RotaryEmbeddingPreprocessor(Preprocessor):
     _scalar_dim: TensorDim
     _mask: torch.Tensor
     _mask_value: torch.Tensor
@@ -194,7 +194,7 @@ class RotaryEmbeddingPreprocessor:
         self._kv_channels_dim = self._tensor_space.get_tensor_dim(self._transformer_dim_names.kv_channels)
         self._tensor_cache_max_sequence_length: int = -1
 
-    def create_tensors(self, sequence_length: int, num_patches: None | int = None) -> None:
+    def _create_tensors(self, sequence_length: int, num_patches: None | int = None) -> None:
         if sequence_length <= self._tensor_cache_max_sequence_length:
             return
         self._tensor_cache_max_sequence_length = sequence_length
@@ -215,7 +215,8 @@ class RotaryEmbeddingPreprocessor:
                 device=self._tensor_space.distributed.device,
             )
 
-    def preprocess(self, kwargs: dict[str, typing.Any]) -> None:
+    def preprocess(self, batch, kwargs: dict[str, typing.Any]) -> None:
+        self._create_tensors(kwargs[TransformerKwargs.sequence_length])
         sequence_k = kwargs[TransformerKwargs.sequence_k_dim].size
         sequence_q = kwargs[TransformerKwargs.sequence_q_dim].size
         if self._config.type == RotaryEmbeddingType.pixtral:
@@ -250,7 +251,7 @@ class RotaryEmbeddingPreprocessor:
         )
 
 
-class BackupAttentionPreprocessor:
+class BackupAttentionPreprocessor(Preprocessor):
     _scalar_dim: TensorDim
     _kv_channels_dim: TensorDim
     _rotary_embedding_frequencies: torch.Tensor
@@ -275,7 +276,7 @@ class BackupAttentionPreprocessor:
         assert not self._config.do_use_flash_attention(self._distributed_config)
         self._scalar_dim = self._tensor_space.get_tensor_dim(DefaultDimNames.scalar)
 
-    def create_tensors(self, sequence_length: int) -> None:
+    def _create_tensors(self, sequence_length: int) -> None:
         if sequence_length <= self._tensor_cache_max_sequence_length:
             return
         self._tensor_cache_max_sequence_length = sequence_length
@@ -295,7 +296,8 @@ class BackupAttentionPreprocessor:
             device=self._tensor_space.distributed.device,
         )
 
-    def preprocess(self, kwargs: dict[str, typing.Any]) -> None:
+    def preprocess(self, batch, kwargs: dict[str, typing.Any]) -> None:
+        self._create_tensors(kwargs[TransformerKwargs.sequence_length])
         sequence_k = kwargs[TransformerKwargs.sequence_k_dim].size
         sequence_q = kwargs[TransformerKwargs.sequence_q_dim].size
         kwargs[self._transformer_kwargs.attention_mask] = self._mask[
@@ -331,7 +333,7 @@ class BackupAttentionPreprocessor:
         )
 
 
-class FlashAttnVarlenPreprocessor:
+class FlashAttnVarlenPreprocessor(Preprocessor):
     def __init__(self, config: TransformerConfig, tensor_space: TensorSpace):
         self._config = config
         self._tensor_space = tensor_space
@@ -344,7 +346,7 @@ class FlashAttnVarlenPreprocessor:
             self._transformer_dim_names = TransformerDimNames
             self._transformer_kwargs = TransformerKwargs
 
-    def preprocess(self, kwargs: dict[str, typing.Any]) -> None:
+    def preprocess(self, batch, kwargs: dict[str, typing.Any]) -> None:
         """
         Prepares cu_seqlens_q and cu_seqlens_k for flash_attn_varlen_func:
         https://github.com/Dao-AILab/flash-attention/blob/main/flash_attn/flash_attn_interface.py#L1375
@@ -354,7 +356,9 @@ class FlashAttnVarlenPreprocessor:
         also contain previous tokens from the first document in micro-sequence.
         We use individual sequence lengths of each document to (optionally) find the micro-sequences in the batch and compute the cumulative lengths.
         """
-        sequence_lengths = kwargs.get(self._transformer_kwargs.sequence_lengths)
+        if TransformerKwargs.sequence_lengths not in kwargs:
+            return
+        sequence_lengths = kwargs[TransformerKwargs.sequence_lengths]
         sequence_k = kwargs[TransformerKwargs.sequence_k_dim].size
         sequence_q = kwargs[TransformerKwargs.sequence_q_dim].size
         if sequence_q < kwargs[TransformerKwargs.sequence_length]:

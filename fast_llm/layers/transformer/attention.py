@@ -74,7 +74,8 @@ class Attention(torch.nn.Module):
             self._transformer_kwargs = TransformerKwargs
         self._config = config
         self._tensor_space = tensor_space
-        # Assert.in_range_incl(layer_index, 1, self._config.num_layers)
+        # TODO Soham: fix assert
+        # Assert.in_range_incl(layer_index, 1, max(self._config.num_layers, 1))
         self._layer_index = layer_index
         self._sequence_parallel = self._tensor_space.distributed_config.sequence_tensor_parallel
         self._debug_transformer = self._config.debug_transformer
