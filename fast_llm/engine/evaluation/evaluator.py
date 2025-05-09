@@ -1,37 +1,32 @@
 import abc
 import dataclasses
 import logging
-import math
-import pathlib
-import shutil
 import time
 import typing
 
-import torch
 
 from fast_llm.config import Configurable
 from fast_llm.core.distributed import safe_barrier
 from fast_llm.data.data.abstract import Data
-from fast_llm.engine.config_utils.run import Run, is_main_rank, log_main_rank, log_pipeline_parallel_main_rank
+from fast_llm.engine.config_utils.run import Run, log_main_rank
 from fast_llm.engine.distributed.config import PhaseType
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
 
 from fast_llm.engine.schedule.runner import ScheduleRunner
 from fast_llm.engine.schedule.schedule import Schedule
-from fast_llm.engine.training.config import (
-    TrainingEvaluatorConfig,
+from fast_llm.engine.evaluation.config import (
     EvaluatorConfigBase,
     EvaluatorConfig,
     EvaluatorLossConfig,
     EvaluatorLmEvalConfig,
-    WandbConfig,
+    
 )
+from fast_llm.engine.training.config import WandbConfig
 from fast_llm.engine.training.wandb import Wandb
-from fast_llm.logging import format_metrics, get_memory_usage_mib, log_memory_usage
-from fast_llm.utils import Assert
-from fast_llm.engine.training.lm_eval.fast_llm_wrapper import FastLLMLmEvalWrapper
-from fast_llm.engine.training.lm_eval.utils import prepare_lm_eval_simple_eval_params, process_lm_eval_results
+from fast_llm.logging import format_metrics, get_memory_usage_mib
+from fast_llm.engine.evaluation.lm_eval.fast_llm_wrapper import FastLLMLmEvalWrapper
+from fast_llm.engine.evaluation.lm_eval.utils import prepare_lm_eval_simple_eval_params, process_lm_eval_results
 from fast_llm.engine.schedule.config import BatchConfig
 
 # from fast_llm.engine.training.lm_eval.evaluator import simple_evaluate as lm_eval_simple_evaluate
@@ -110,77 +105,6 @@ class Evaluator[ConfigType: EvaluatorConfig](Configurable[ConfigType], abc.ABC):
         or None if the evaluation does not rely on Fast-LLM data or
         if the evaluation is skipped for this run.
         """
-
-
-class TrainingEvaluator[ConfigType: TrainingEvaluatorConfig](Evaluator[ConfigType]):
-    config_class: typing.ClassVar[type[TrainingEvaluatorConfig]] = TrainingEvaluatorConfig
-
-    evaluator: Evaluator
-
-    def __init__(
-        self,
-        name: str,
-        eval_config: TrainingEvaluatorConfig,
-        batch_config: BatchConfig,
-        data_load_num_proc: int,
-        train_iters: int | None = None,
-    ):
-        super().__init__(name, eval_config, batch_config, data_load_num_proc, train_iters)
-
-        self._train_iters = 0 if self._train_iters is None else self._train_iters
-
-        self.evaluator = eval_config.evaluator.get_evaluator(name, batch_config, data_load_num_proc, train_iters)
-
-    def setup(
-        self,
-        distributed: Distributed,
-        run: Run,
-        multi_stage: FastLLMModel,
-        runner: ScheduleRunner,
-        data: Data,
-        phase: PhaseType,
-    ) -> None:
-        self.evaluator.setup(
-            distributed,
-            run,
-            multi_stage,
-            runner,
-            data,
-            phase,
-        )
-
-    def run(
-        self,
-        training_progress: TrainingProgress | None = None,
-        run_index: int | None = None,
-    ) -> EvaluationMetrics:
-        # Run index must be None because it is defined here to be passed to actual evaluator
-        assert run_index is None
-
-        # Training progress can be None as it can be run in a training
-        #  run without training, just evaluation
-        if training_progress is None:
-            done = True
-            completed_steps = 0
-        else:
-            done = training_progress.done
-            completed_steps = training_progress.completed_steps
-
-        if done or self.config.interval.enabled(completed_steps):
-            return self.evaluator.run(training_progress, run_index=self._config.get_run_count(completed_steps - 1))
-        else:
-            return EvaluationMetrics()
-
-    def get_sampling_parameters(self) -> EvaluatorSamplingParameters | None:
-        name_samples = self.evaluator.get_sampling_parameters()
-        if name_samples is None:
-            return None
-        run_count = self._config.get_run_count(
-            self._train_iters,
-            # There may be an extra evaluation after the last training step.s
-            not self._config.interval.enabled(self._train_iters),
-        )
-        return EvaluatorSamplingParameters(name_samples.dataset_name, name_samples.num_samples * run_count)
 
 
 class EvaluatorLoss[ConfigType: EvaluatorLossConfig](Evaluator[ConfigType]):

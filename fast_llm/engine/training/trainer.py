@@ -21,15 +21,98 @@ from fast_llm.engine.multi_stage.config import StageMode
 from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
 from fast_llm.engine.optimizer.config import ParamGroup
 from fast_llm.engine.optimizer.optimizer import Optimizer
+from fast_llm.engine.schedule.config import BatchConfig
 from fast_llm.engine.schedule.runner import ScheduleRunner
 from fast_llm.engine.schedule.schedule import Schedule
-from fast_llm.engine.training.config import TrainerConfig, TrainingCheckpointBaseConfig, TrainingCheckpointConfig
-from fast_llm.engine.training.evaluator import EvaluatorRunner, TrainingProgress
+from fast_llm.engine.training.config import (
+    TrainerConfig,
+    TrainingCheckpointBaseConfig,
+    TrainingCheckpointConfig,
+    TrainingEvaluatorConfig,
+)
 from fast_llm.engine.training.wandb import Wandb
+from fast_llm.engine.evaluation.evaluator import (
+    Evaluator,
+    EvaluatorRunner,
+    EvaluationMetrics,
+    EvaluatorSamplingParameters,
+    TrainingProgress,
+)
 from fast_llm.logging import format_metrics, get_memory_usage_mib, log_memory_usage
 from fast_llm.utils import Assert
 
 logger = logging.getLogger(__name__)
+
+
+class TrainingEvaluator[ConfigType: TrainingEvaluatorConfig](Evaluator[ConfigType]):
+    config_class: typing.ClassVar[type[TrainingEvaluatorConfig]] = TrainingEvaluatorConfig
+
+    evaluator: Evaluator
+
+    def __init__(
+        self,
+        name: str,
+        eval_config: TrainingEvaluatorConfig,
+        batch_config: BatchConfig,
+        data_load_num_proc: int,
+        train_iters: int | None = None,
+    ):
+        super().__init__(name, eval_config, batch_config, data_load_num_proc, train_iters)
+
+        self._train_iters = 0 if self._train_iters is None else self._train_iters
+
+        self.evaluator = eval_config.evaluator.get_evaluator(name, batch_config, data_load_num_proc, train_iters)
+
+    def setup(
+        self,
+        distributed: Distributed,
+        run: Run,
+        multi_stage: FastLLMModel,
+        runner: ScheduleRunner,
+        data: Data,
+        phase: PhaseType,
+    ) -> None:
+        self.evaluator.setup(
+            distributed,
+            run,
+            multi_stage,
+            runner,
+            data,
+            phase,
+        )
+
+    def run(
+        self,
+        training_progress: TrainingProgress | None = None,
+        run_index: int | None = None,
+    ) -> EvaluationMetrics:
+        # Run index must be None because it is defined here to be passed to actual evaluator
+        assert run_index is None
+
+        # Training progress can be None as it can be run in a training
+        #  run without training, just evaluation
+        if training_progress is None:
+            done = True
+            completed_steps = 0
+        else:
+            done = training_progress.done
+            completed_steps = training_progress.completed_steps
+
+        if done or self.config.interval.enabled(completed_steps):
+            return self.evaluator.run(training_progress, run_index=self._config.get_run_count(completed_steps - 1))
+        else:
+            return EvaluationMetrics()
+
+    def get_sampling_parameters(self) -> EvaluatorSamplingParameters | None:
+        name_samples = self.evaluator.get_sampling_parameters()
+        if name_samples is None:
+            return None
+        run_count = self._config.get_run_count(
+            self._train_iters,
+            # There may be an extra evaluation after the last training step.s
+            not self._config.interval.enabled(self._train_iters),
+        )
+        return EvaluatorSamplingParameters(name_samples.dataset_name, name_samples.num_samples * run_count)
 
 
 class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
