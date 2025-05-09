@@ -13,6 +13,7 @@ from fast_llm.engine.schedule.config import ScheduleConfig
 from fast_llm.engine.schedule.runner import ScheduleRunner
 from fast_llm.engine.schedule.schedule import Schedule
 from fast_llm.layers.language_model.config import LanguageModelKwargs, LanguageModelLossNames
+from fast_llm.layers.ssm.config import SSMBlockType
 from fast_llm.layers.transformer.config import TransformerKwargs
 from fast_llm.models.gpt.config import GPTBatchConfig, LlamaGPTHuggingfaceCheckpointFormat
 from fast_llm.models.ssm.config import AprielSSMHHybridHuggingfaceCheckpointFormat, LLambaHuggingfaceCheckpointFormat
@@ -182,53 +183,13 @@ def test_load_from_hybridssm_checkpoint(distributed_config):
                 param_sum += torch.sum(fsdp._weight_shard).item()
     assert torch.abs(torch.tensor(param_sum) - parameter_sum_hf) < 1e-1
 
-    # # model = GPTModel.from_pretrained(checkpoint_config)
-    # assert model.config.base_model.vocab_size == vocab_size
-    # schedule_config = ScheduleConfig()
-    # with NoAutoValidate():
-    #     batch_config = GPTBatchConfig(micro_batch_size=batch_size, sequence_length=seq_length)
-    # batch_config.setup(distributed_config)
-    # batch_config.validate()
-    # schedule_runner = ScheduleRunner(
-    #     config=schedule_config,
-    #     multi_stage=model,
-    #     distributed_config=model.distributed.config,
-    # )
-    # schedule = Schedule(
-    #     multi_stage=model,
-    #     batch_config=batch_config,
-    #     schedule_config=schedule_config,
-    #     distributed_config=model.distributed.config,
-    #     phase=PhaseType.inference,
-    # )
-    # schedule_runner.setup(model.distributed, optimizer=None)
-    # from fast_llm.layers.transformer.config import RotaryConfig, RotaryEmbeddingType
-    # from fast_llm.layers.transformer.preprocessing import get_rotary_frequencies
-
-    # rotary_config = RotaryConfig(type=RotaryEmbeddingType.default, theta=10000.0)  # or whatever type your model uses
-    # frequencies = get_rotary_frequencies(rotary_config, seq_length, 4096, device="cuda")
-
-    # from types import SimpleNamespace
-
-    # batch = SimpleNamespace(
-    #     token_ids=x,
-    #     sequence_lengths=[[seq_length, seq_length]],
-    # )
-    # input_data = [batch]
-    # losses, success, metrics = schedule_runner.run_step(
-    #     iter(input_data), schedule, iteration=0, return_metrics=True, preprocessed=False
-    # )
-
-    # logits = input_data[0][1]["logits"].cpu()
-    # assert torch.allclose(logits, hf_logits, atol=1e-2)
-
 
 @pytest.mark.skipif(not run_test, reason="No CUDA available or Mamba not installed")
 @pytest.mark.parametrize(
     "hybrid_block_layout,LAYER_CLS",
     [
-        (["m", "t"], MambaLayer),
-        (["m2d", "t"], DiscreteMamba2),
+        ([SSMBlockType.mamba, SSMBlockType.transformer], MambaLayer),
+        ([SSMBlockType.mamba2_discrete, SSMBlockType.transformer], DiscreteMamba2),
     ],
     ids=["mamba", "discrete_mamba2"],
 )
