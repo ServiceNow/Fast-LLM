@@ -4,7 +4,7 @@ training:
     interval: 10
   evaluations:
     gsm8k:
-      interval:
+      run_interval:
         interval: 10
       evaluator:
         type: lm_eval
@@ -14,14 +14,14 @@ training:
           - --output_path
           - /mnt/checkpoints/test/denis/smol_eval_experiment/lm_eval
     stack_3b:
-      interval:
+      run_interval:
         interval: 10
       evaluator:
         type: loss
         iterations: 10
         dataset_name: stack_3b
     fineweb:
-      interval:
+      run_interval:
         interval: 10
       evaluator:
         iterations: 10

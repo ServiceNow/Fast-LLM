@@ -155,12 +155,12 @@ class WandbConfig(Config):
 
 @config_class()
 class TrainingEvaluatorConfig(EvaluatorConfigBase):
-    interval: IntervalConfig = Field(default_factory=IntervalConfig)
+    run_interval: IntervalConfig = Field(default_factory=IntervalConfig)
     evaluator: EvaluatorConfig = Field(default_factory=EvaluatorConfig)
 
     def get_run_count(self, training_iterations: int, extra_evaluations: int = 0):
         # Number of completed evaluation runs
-        return (self.interval.get_count(training_iterations) + extra_evaluations) if self.interval.enabled() else 0
+        return (self.run_interval.get_count(training_iterations) + extra_evaluations) if self.run_interval.enabled() else 0
 
     def get_evaluator(
         self,
@@ -172,6 +172,19 @@ class TrainingEvaluatorConfig(EvaluatorConfigBase):
         from fast_llm.engine.training.trainer import TrainingEvaluator
 
         return TrainingEvaluator(name, self, batch_config, data_load_num_proc, train_iters)
+    
+    @classmethod
+    def _from_dict(
+        cls,
+        default: dict[str, typing.Any],
+        strict: bool = True,
+        flat: bool = False,
+    ) -> typing.Self:
+        # TODO v0.x: Remove backward compatibility.
+        cls._handle_renamed_field(default, "interval", ("run_interval", "interval"))
+        cls._handle_renamed_field(default, "offset", ("run_interval", "offset"))
+        cls._handle_renamed_field(default, "iterations", ("evaluator", "iterations"))
+        return super()._from_dict(default, strict, flat)
 
 
 @config_class()
