@@ -233,7 +233,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
             logger.info(f"Sample after combining fields:\n{dataset[0]}")
             self._data_column = new_combined_column
             # Set loss masking spans (handle chat template prior to this)         
-            loss_masking_column = f"{source_schema.prompt_columns}_loss_masking_spans"
+            loss_masking_column = f"{source_schema.prompt_column}_loss_masking_spans"
             dataset = dataset.map(
                 lambda example: {
                     loss_masking_column: [
