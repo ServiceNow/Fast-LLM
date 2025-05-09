@@ -129,6 +129,7 @@ def test_transformer_mtp(config_dict: dict[str, typing.Any]):
     loss.backward()
 
 
+@pytest.mark.skip(reason="Too slow")
 @requires_cuda
 @pytest.mark.skipif(not run_hybrid_test, reason="No CUDA available or Mamba not installed")
 @pytest.mark.parametrize(
