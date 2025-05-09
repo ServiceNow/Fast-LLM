@@ -37,7 +37,10 @@ def test_gpt_fim():
     get_test_dataset()
     # The test tokenizer doesn't have fim tokens, so we work around it.
     sampling_config = get_sampling_data(
-        8, sequence_length=5, tokenizer=Tokenizer(TokenizerConfig.from_dict({"path": TOKENIZER_PATH}))
+        8,
+        sequence_length=5,
+        tokenizer=Tokenizer(TokenizerConfig.from_dict({"path": TOKENIZER_PATH})),
+        vocab_size=49157,
     )
     sampled = get_dataset_config(
         {
@@ -73,6 +76,7 @@ def test_gpt_fim_data():
         8,
         sequence_length=5,
         expected_samples=GPT_FIM_SAMPLES,
+        vocab_size=49157,
     )
 
 
@@ -89,4 +93,5 @@ def test_gpt_fim_data_legacy():
         sequence_length=5,
         expected_samples=GPT_FIM_SAMPLES_LEGACY,
         legacy=True,
+        vocab_size=49157,
     )

@@ -13,13 +13,17 @@ import yaml
 
 from fast_llm.data.dataset.gpt.memmap import GPTMemmapDataset
 from fast_llm.data.dataset.gpt.sampled import GPTSample
+from fast_llm.layers.ssm.config import SSMConfig
+from fast_llm.layers.transformer.config import TransformerConfig
 from fast_llm.models.gpt.config import (
     LlamaGPTHuggingfaceCheckpointFormat,
     MistralGPTHuggingfaceCheckpointFormat,
     MixtralGPTHuggingfaceCheckpointFormat,
+    MTPLlamaGPTHuggingfaceCheckpointFormat,
     Qwen2GPTHuggingfaceCheckpointFormat,
     Starcoder2GPTHuggingfaceCheckpointFormat,
 )
+from fast_llm.models.ssm.config import HybridSSMBaseModelConfig, LLambaHuggingfaceCheckpointFormat
 from fast_llm.tools.train import CliTrainingConfig
 from tests.compare_tensor_logs import CompareConfig, compare_tensor_logs
 
@@ -200,6 +204,10 @@ CONFIG_LLAMA_MTP_FAST_LLM = CONFIG_LLAMA_FAST_LLM + [
 ]
 CONFIG_LLAMA_MTP_COMMON = CONFIG_LLAMA_MTP_FAST_LLM + ["model.distributed.training_dtype=bf16"]
 
+CONFIG_LLAMBA_FAST_LLM = CONFIG_LLAMA_FAST_LLM + ["model.base_model.hybrid_block_layout==['t','m']"]
+CONFIG_LLAMBA_MEGATRON = CONFIG_LLAMA_MEGATRON + []
+CONFIG_LLAMBA_COMMON = CONFIG_LLAMBA_FAST_LLM
+
 _CONFIGS = {
     "gpt2": ("gpt", CONFIG_GPT2_FAST_LLM, CONFIG_GPT2_MEGATRON, CONFIG_GPT2_COMMON, None),
     "sc1": ("gpt", CONFIG_SC1_FAST_LLM, CONFIG_SC1_MEGATRON, CONFIG_SC1_COMMON, None),
@@ -252,6 +260,13 @@ _CONFIGS = {
         CONFIG_MIXTRAL_COMMON,
         MixtralGPTHuggingfaceCheckpointFormat,
     ),
+    "llamba": (
+        "hybrid_ssm",
+        CONFIG_LLAMBA_FAST_LLM,
+        CONFIG_LLAMBA_MEGATRON,
+        CONFIG_LLAMBA_COMMON,
+        LLambaHuggingfaceCheckpointFormat,
+    ),
     "mixtral-yarn": (
         "gpt",
         CONFIG_MIXTRAL_YARN_FAST_LLM,
@@ -264,10 +279,9 @@ _CONFIGS = {
         CONFIG_LLAMA_MTP_FAST_LLM,
         CONFIG_LLAMA_MTP_MEGATRON,
         CONFIG_LLAMA_MTP_COMMON,
-        LlamaGPTHuggingfaceCheckpointFormat,
+        MTPLlamaGPTHuggingfaceCheckpointFormat,
     ),
 }
-
 
 TEST_MODEL_TYPE, CONFIG_FAST_LLM, CONFIG_GPT2, CONFIG_COMMON, HUGGINGFACE_CHECKPOINT_FORMAT = _CONFIGS[TEST_MODEL]
 
@@ -381,7 +395,9 @@ def run_test_script(
         script = [model_type, *script, f"run.experiment_dir={path}"]
     header = ["Megatron-LM/pretrain_gpt.py"] if is_megatron else ["--no-python", "fast-llm", "train"]
     command = [
-        "torchrun",
+        "python",
+        "-m",
+        "torch.distributed.run",
         f"--nproc-per-node={num_gpus}",
         *header,
         *script,
@@ -394,7 +410,7 @@ def run_test_script(
         if num_gpus == 1 and not is_megatron:
             CliTrainingConfig.parse_and_run(script)
         else:
-            completed_proc = subprocess.run(command, env=env)
+            completed_proc = subprocess.run(command, env=env, timeout=60)
             if completed_proc.returncode:
                 raise RuntimeError(f"Process failed with return code {completed_proc.returncode}")
     if compare:
@@ -405,3 +421,43 @@ def run_test_script(
             TEST_RESULTS_PATH / name / ARTIFACT_PATH,
             config,
         )
+
+
+def materialize_meta_tensors(model, tensor_space):
+    # Materialize parameters that are on meta device
+    for name, param in model.named_parameters():
+        if param.device.type == "meta":
+            # Check if the parameter is a custom tensor type
+            if hasattr(param, "tensor_name") and hasattr(param, "init_parameter"):
+                param_data = param.new_empty(param.shape, device="cuda")
+                # Initialize param_data
+                param.init_parameter(param_data, tensor_space.distributed)
+                # Replace the parameter in the module
+                module_path, param_name = name.rsplit(".", 1) if "." in name else (None, name)
+                module = model
+                if module_path is not None:
+                    for part in module_path.split("."):
+                        module = getattr(module, part)
+                param = torch.nn.Parameter(param_data, requires_grad=param.requires_grad)
+                # TODO: add param_grad_is_zero etc., grad_buffer, etc., see test_mlp_recomputation
+                param.grad = None
+                param.grad_buffer = torch.empty_like(param)
+                param.param_grad_is_zero = True
+                module._parameters[param_name] = param
+    return model
+
+
+def get_hybrid_config(hybrid_block_layout=["t", "m"], prediction_heads=1, default_mtp_type=None):
+    config = HybridSSMBaseModelConfig(
+        transformer=TransformerConfig(num_layers=len(hybrid_block_layout)),
+        ssm=SSMConfig(),
+        hybrid_block_layout=hybrid_block_layout,
+        prediction_heads=prediction_heads,
+        default_mtp_type=default_mtp_type,
+        init_method_std_embed=0.02,
+        init_method_min_embed=-0.02,
+        init_method_max_embed=0.02,
+        use_position_embeddings=True,
+        tie_word_embeddings=False,
+    )
+    return config
