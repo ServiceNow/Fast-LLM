@@ -229,6 +229,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
                 },
                 batched=False,
                 desc="Combining fields",
+                num_proc=self._config.loading_workers,
             )
             logger.info(f"Sample after combining fields:\n{dataset[0]}")
             self._data_column = new_combined_column
@@ -237,11 +238,12 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
             dataset = dataset.map(
                 lambda example: {
                     loss_masking_column: [
-                        (0, len(str(example[source_schema.prompt_column])) - 1)
+                        (0, len(example[source_schema.prompt_column]) - 1)
                     ]# spans are inclusive
                 },
                 batched=False,
                 desc="Setting loss masking spans",
+                num_proc=self._config.loading_workers,
             )
             logger.info(f"Sample after setting loss masking spans:\n{dataset[0]}")
             self._loss_masking_spans_column = loss_masking_column
