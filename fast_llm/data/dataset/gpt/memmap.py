@@ -59,6 +59,9 @@ class GPTMemmapDataset(GPTIndexedDataset):
             if self._version >= 4:
                 self._has_images = struct.unpack("<B", stream.read(1))[0]
 
+            if self._version >= 5:
+                self._has_audio = struct.unpack("<B", stream.read(1))[0]
+
             self._dtype = MEMMAP_DTYPES[struct.unpack("<B", stream.read(1))[0]].numpy
             self._num_documents = struct.unpack("<Q", stream.read(8))[0]
             _ = struct.unpack("<Q", stream.read(8))[0]
@@ -137,6 +140,37 @@ class GPTMemmapDataset(GPTIndexedDataset):
                     )
                 )
                 images_seen += n_images
+            offset = offset + self._n_images.nbytes + 3 * self._n_images.sum() * np.dtype(np.int32).itemsize
+        if self._has_audio and self._version >= 5:
+            self._n_audio = np.frombuffer(
+                self._index_bin_buffer, dtype=np.int32, count=self._num_documents, offset=offset
+            )
+            self._audio_lengths = []
+            self._audio_positions = []
+            audio_seen = 0
+
+            offset = offset + self._n_audio.nbytes
+            for n_audio in self._n_audio:
+                self._audio_lengths.append(
+                    np.frombuffer(
+                        self._index_bin_buffer,
+                        dtype=np.int32,
+                        count=n_audio,
+                        offset=offset + audio_seen * np.dtype(np.int32).itemsize,
+                    ).reshape(-1, 2)
+                )
+                # self._num_pixels += self._image_lengths[-1].prod(axis=1, initial=3).sum()
+                self._audio_positions.append(
+                    np.frombuffer(
+                        self._index_bin_buffer,
+                        dtype=np.int32,
+                        count=n_audio,
+                        offset=offset
+                        + self._n_audio.sum() * np.dtype(np.int32).itemsize
+                        + audio_seen * np.dtype(np.int32).itemsize,
+                    )
+                )
+                audio_seen += n_audio
 
         self._bin_buffer_mmap = np.memmap(self._prefix.with_suffix(".bin"), mode="r", order="C")
         self._bin_buffer = memoryview(self._bin_buffer_mmap)
@@ -193,8 +227,30 @@ class GPTMemmapDataset(GPTIndexedDataset):
                 n_pixels = image_length.prod(initial=3)
                 images.append(pixels[start : start + n_pixels].reshape(3, image_length[0], image_length[1]))
                 start += n_pixels
+
+        if self._has_audio:
+            audio_positions = self._audio_positions[idx]
+            all_audio = np.frombuffer(
+                self._bin_buffer,
+                dtype=np.dtype(np.float32),
+                count=self._audio_lengths[idx].sum(),
+                offset=self._pointers[idx]
+                + self._document_sizes[idx] * np.dtype(self._dtype).itemsize
+                + self._image_lengths.prod(initial=3) * np.dtype(np.uint8).itemsize,
+            )
+            audio = []
+            start = 0
+            for audio_length in self._audio_lengths[idx]:
+                audio.append(all_audio[start : start + audio_length])
+                start += audio_length
         # TODO Soham: return loss_masking_spans
-        return GPTSample(token_ids=token_ids, images=images, image_positions=image_positions)
+        return GPTSample(
+            token_ids=token_ids,
+            images=images,
+            image_positions=image_positions,
+            audio=audio,
+            audio_positions=audio_positions,
+        )
 
     # def get(
     #     self, idx: int, offset: int = 0, length: int | None = None, use_loss_masking_spans: bool = False
@@ -231,6 +287,10 @@ class GPTMemmapDataset(GPTIndexedDataset):
     def has_images(self) -> bool:
         return self._has_images
 
+    @property
+    def has_audio(self) -> bool:
+        return self._has_audio
+
     # TODO: image sizes
     def get_document_sizes(self) -> tuple[np.ndarray, np.ndarray]:
         """
@@ -238,7 +298,7 @@ class GPTMemmapDataset(GPTIndexedDataset):
         The resulting array could be very large, so this method should be called cautiously,
         and derived classes should try to avoid holding the whole array im memory.
         """
-        return self._document_sizes, self._image_lengths
+        return self._document_sizes, self._image_lengths, self._audio_lengths
 
     def get_document_size(self, index: int, patch_size: list[int]) -> int:
         # return self._document_sizes[index].item() + (
@@ -246,7 +306,10 @@ class GPTMemmapDataset(GPTIndexedDataset):
         #     if self._has_images
         #     else 0
         # )
-        return self._document_sizes[index].item(), self._image_lengths[index] if self._has_images else []
+        docsize = self._document_sizes[index].item()
+        imagesize = self._image_lengths[index] if self._has_images else []
+        audiosize = self._audio_lengths if self._has_audio else 0
+        return docsize, imagesize, audiosize
 
     @classmethod
     def write_dataset(cls, prefix: pathlib.Path | str, documents: typing.Iterable[GPTSample]):
@@ -285,6 +348,7 @@ class GPTMemmapDataset(GPTIndexedDataset):
                 # Write document to binary file
                 bin_stream.write(document.token_ids.tobytes(order="C"))
                 total_im_size = 0
+                total_aud_size = 0
                 if document.images:
                     n_images.append(len(document.images))
                     total_images += len(document.images)
@@ -299,13 +363,13 @@ class GPTMemmapDataset(GPTIndexedDataset):
                         bin_stream.write(pixels.tobytes(order="C"))
                         total_im_size += pixels.size
                     im_positions.append(document.image_positions)
-                if document.audio:
+                if document.audio is not None:
                     n_audio.append(len(document.audio))
                     total_audio += len(document.audio)
                     for audio in document.audio:
                         audio_lengths.append(len(audio))
-                        bin_stream.write(audio.to_bytes(order="C"))
-                        # total_aud_size +=
+                        bin_stream.write(audio.tobytes(order="C"))
+                        total_aud_size += audio.size
                     aud_positions.append(document.audio_positions)
 
                 # Update metadata
@@ -315,7 +379,11 @@ class GPTMemmapDataset(GPTIndexedDataset):
                 if document.loss_masking_spans is not None:
                     num_spans.append(len(document.loss_masking_spans))
                     spans.append(document.loss_masking_spans)
-                offset += doc_length * np.dtype(dtype).itemsize + total_im_size * np.dtype(np.uint8).itemsize
+                offset += (
+                    doc_length * np.dtype(dtype).itemsize
+                    + total_im_size * np.dtype(np.uint8).itemsize
+                    + total_aud_size * np.dtype(np.float32).itemsize
+                )
                 num_documents += 1
 
         # Finalize metadata arrays
@@ -329,10 +397,21 @@ class GPTMemmapDataset(GPTIndexedDataset):
 
         if total_images:
             n_images = np.array(n_images, dtype=np.int32)
+            image_lengths = np.stack(image_lengths, dtype=np.int32)
+            im_positions = np.array(im_positions, dtype=np.int32)
         else:
             n_images = np.array([])
-        image_lengths = np.stack(image_lengths, dtype=np.int32)
-        im_positions = np.array(im_positions, dtype=np.int32)
+            image_lengths = np.array([])
+            im_positions = np.array([])
+
+        if total_audio:
+            n_audio = np.array(n_audio, dtype=np.int32)
+            audio_lengths = np.array(audio_lengths, dtype=np.int32)
+            aud_positions = np.array(aud_positions, dtype=np.int32)
+        else:
+            n_audio = np.array([])
+            audio_lengths = np.array([])
+            aud_positions = np.array([])
 
         # Write the index file (.idx)
         with prefix.with_suffix(".idx").open("wb") as idx_stream:
@@ -340,7 +419,7 @@ class GPTMemmapDataset(GPTIndexedDataset):
             # Indicates the version
             # Version 2 onwards optionally add loss-masking spans
             # Version 4 onwards optionally add images
-            idx_stream.write(struct.pack("<Q", 4))
+            idx_stream.write(struct.pack("<Q", 5))
             # Flag to indicate whether loss-masking spans are present
             idx_stream.write(struct.pack("<B", 1 if spans.size > 0 else 0))
             # Placeholder flag for preference spans
@@ -367,5 +446,11 @@ class GPTMemmapDataset(GPTIndexedDataset):
             idx_stream.write(image_lengths.tobytes(order="C"))
             # Position of each image in the document
             idx_stream.write(im_positions.tobytes(order="C"))
+            # Number of audio per document
+            idx_stream.write(n_audio.tobytes(order="C"))
+            # Audio lengths
+            idx_stream.write(audio_lengths.tobytes(order="C"))
+            # Position of each audio in the document
+            idx_stream.write(aud_positions.tobytes(order="C"))
             # Document indices, unused but needed for compatibility with Megatron-LM
             idx_stream.write(np.arange(num_documents + 1, dtype=np.int64).tobytes(order="C"))

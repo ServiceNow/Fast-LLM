@@ -23,6 +23,9 @@ class GPTTrainer[ConfigType: GPTTrainerConfig](Trainer[ConfigType]):
             cross_document_attention=self._config.batch.cross_document_attention,
             patch_size=self._config.batch.patch_size,
             max_image_size=self._config.batch.max_image_size,
+            aud_downsampling_k=self._config.batch.aud_downsampling_k,
+            aud_padding_duration=self._config.batch.aud_padding_duration,
+            aud_sampling_rate=self._config.batch.aud_sampling_rate,
         )
 
     def get_tflops(self, phase: PhaseType, elapsed_time_per_iteration) -> tuple[int, int]:

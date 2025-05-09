@@ -66,6 +66,21 @@ class BatchConfig(Config):
         desc="Applies attention to tokens from other documents in the packed sequence. Set to False for masking attention to other documents.",
         hint=FieldHint.feature,
     )
+    aud_downsampling_k: int = Field(
+        default=5,
+        desc="Audio downsampling k parameter.",
+        hint=FieldHint.feature,
+    )
+    aud_padding_duration: int = Field(
+        default=-1,
+        desc="Audio padding duration in seconds.",
+        hint=FieldHint.feature,
+    )
+    aud_sampling_rate: int = Field(
+        default=16000,
+        desc="Audio sampling rate to use.",
+        hint=FieldHint.feature,
+    )
     _distributed: DistributedConfig = Field(
         init=False,
         desc="Pointer to a distributed configuration, required to know the data-parallel split of the batch.",

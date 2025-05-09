@@ -75,6 +75,9 @@ class GPTSamplingData(SamplingData):
     cross_document_attention: bool = True
     patch_size: int | None = None
     image_size: int | None = None
+    aud_downsampling_k: int | None = None
+    aud_padding_duration: int | None = None
+    aud_sampling_rate: int | None = None
 
 
 @config_class()

@@ -92,6 +92,9 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
         cross_document_attention: bool = True,
         patch_size: list[int] | None = None,
         max_image_size: int | None = None,
+        aud_downsampling_k: int | None = None,
+        aud_padding_duration: int | None = None,
+        aud_sampling_rate: int | None = None,
     ):
         """
         Create the data and gather some basic information on the dataset(s).
@@ -103,6 +106,9 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
         self._cross_document_attention = cross_document_attention
         self._patch_size = patch_size
         self._max_image_size = max_image_size
+        self._aud_downsampling_k = aud_downsampling_k
+        self._aud_padding_duration = aud_padding_duration
+        self._aud_sampling_rate = aud_sampling_rate
 
     def setup(
         self,
@@ -152,6 +158,9 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
                     cross_document_attention=self._cross_document_attention,
                     patch_size=self._patch_size,
                     image_size=self._max_image_size,
+                    aud_downsampling_k=self._aud_downsampling_k,
+                    aud_padding_duration=self._aud_padding_duration,
+                    aud_sampling_rate=self._aud_sampling_rate,
                 )
                 dataset = self._config.datasets[dataset_name].build_and_sample(sampling)
                 self._datasets[dataset_name] = DatasetMonitor(dataset, self._config.data_sample_warn_time_ms)

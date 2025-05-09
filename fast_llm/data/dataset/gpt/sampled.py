@@ -94,6 +94,9 @@ class GPTSampledIndexedDataset(SampledDataset):
         self._sequence_length = sampling.sequence_length
         self._patch_size = sampling.patch_size
         self._image_size = sampling.image_size
+        self._aud_downsampling_k = sampling.aud_downsampling_k
+        self._aud_padding_duration = sampling.aud_padding_duration
+        self._aud_sampling_rate = sampling.aud_sampling_rate
         self._cross_document_attention = sampling.cross_document_attention
         self._config = sampling.config
         self._truncate_documents = sampling.truncate_documents
@@ -138,12 +141,21 @@ class GPTSampledIndexedDataset(SampledDataset):
         """
         # Get the document sizes, the main information needed for sampling.
         # TODO Soham: verify numpy correctness
-        document_sizes, image_sizes = self._indexed_dataset.get_document_sizes()
+        document_sizes, image_sizes, audio_sizes = self._indexed_dataset.get_document_sizes()
         document_sizes = torch.from_numpy(document_sizes).to(self._device)
         image_token_sizes = torch.zeros_like(document_sizes).to(self._device)
         # TODO Soham: handle max image size
         for i, sizes in enumerate(image_sizes):
             image_token_sizes[i] = sum((sizes[:, 0] // self._patch_size) * (sizes[:, 1] // self._patch_size))
+
+        # compute audio token sizes
+        if self._aud_padding_duration > 0 and len(audio_sizes) > 0:
+            self._aud_padding_duration * self._aud_sampling_rate
+        # 2. mel spectogram
+
+        # 3. convolution
+
+        # 4. downsampling
 
         documents_per_epoch = document_sizes.numel()
         tokens_per_epoch = document_sizes.sum().item() + image_token_sizes.sum().item()

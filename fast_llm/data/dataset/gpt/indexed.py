@@ -45,8 +45,12 @@ class GPTDatasetSlice[IndexedDatasetType: GPTIndexedDataset](DatasetSlice[Indexe
 
     def get_document_sizes(self) -> np.ndarray:
         # TODO: This can be really big.
-        doc_sizes, im_sizes = self._dataset.get_document_sizes()
-        return doc_sizes[self._begin : self._end], im_sizes[self._begin : self._end]
+        doc_sizes, im_sizes, aud_sizes = self._dataset.get_document_sizes()
+        return (
+            doc_sizes[self._begin : self._end],
+            im_sizes[self._begin : self._end],
+            aud_sizes[self._begin : self._end],
+        )
 
     def get_document_size(self, index: int, patch_size: list[int]) -> int:
         return self._dataset.get_document_size(self._begin + index, patch_size)
