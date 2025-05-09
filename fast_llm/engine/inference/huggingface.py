@@ -30,18 +30,10 @@ class HuggingfaceBaseModelForCausalLM(transformers.PreTrainedModel, transformers
         self,
         config: HuggingfaceModelConfig,
         fast_llm_model: FastLLMModel,
-        trainer_config: TrainerConfig | None = None,
+        micro_batch_size: int | None = None,
         runner: ScheduleRunner | None = None,
         **kwargs,
     ):
-        """
-        Initializes the HuggingfaceBaseModelForCausalLM either in standalone mode (single GPU inference)
-        or integrated training mode (with runner from training loop).
-
-        - If `trainer_config` and `runner` are both provided → assumes training mode.
-        - If both are omitted → assumes standalone mode with default configs.
-        - Any other combination will raise.
-        """
         assert self.runner_class.model_class.config_class is config.model_config_class
         assert config.fast_llm_config is fast_llm_model.config
         assert isinstance(config, self.config_class)
@@ -54,7 +46,7 @@ class HuggingfaceBaseModelForCausalLM(transformers.PreTrainedModel, transformers
         super().__init__(config, **kwargs)
         config.fast_llm_config = fast_llm_config
 
-        self._inference_runner = self.runner_class(fast_llm_model, trainer_config, runner)
+        self._inference_runner = self.runner_class(fast_llm_model, micro_batch_size, runner)
 
         # A model can be created from pretrained which setup it in the current HF wrapper api
         # or set from training loop and also is setup, so, do not accept not setup model
@@ -88,11 +80,21 @@ class HuggingfaceBaseModelForCausalLM(transformers.PreTrainedModel, transformers
         raise NotImplementedError()
 
     @classmethod
-    def from_fast_llm_model_in_training(
-        cls, fast_llm_model: FastLLMModel, trainer_config: TrainerConfig, runner: ScheduleRunner, **kwargs
+    def from_model(
+        cls,
+        fast_llm_model: FastLLMModel,
+        micro_batch_size: int | None = None,
+        runner: ScheduleRunner | None = None,
+        **kwargs,
     ):
         config = cls.config_class(fast_llm_model.config)
-        return cls(config, fast_llm_model, trainer_config=trainer_config, runner=runner, **kwargs)
+        return cls(
+            config,
+            fast_llm_model,
+            micro_batch_size=micro_batch_size,
+            runner=runner,
+            **kwargs,
+        )
 
     @classmethod
     def from_pretrained(

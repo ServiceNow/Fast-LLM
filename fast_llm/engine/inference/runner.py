@@ -17,37 +17,33 @@ class InferenceRunner(abc.ABC):
     def __init__(
         self,
         fast_llm_model: FastLLMModel,
-        trainer_config: TrainerConfig | None = None,
+        micro_batch_size: int | None = None,
         runner: ScheduleRunner | None = None,
     ):
-        has_training_args = trainer_config is not None and runner is not None
-        has_partial_args = (trainer_config is None) != (runner is None)
-        if has_partial_args:
-            raise ValueError("Both trainer_config and runner must be provided together or not at all.")
-        
         assert isinstance(fast_llm_model, self.model_class)
         self._fast_llm_model = fast_llm_model
-        if False:
-        #if has_training_args:
-            self._trainer_config = trainer_config
-            self._schedule_config = self._trainer_config.schedule
-            self._batch_config = self._trainer_config.batch
-            self._runner = runner
-            # External runner from training loop must be already setup
-            assert runner._is_setup
-        else:
+
+        with NoAutoValidate():
+            self._batch_config = self.batch_config_class(micro_batch_size=micro_batch_size)
+        self._batch_config.setup(self._fast_llm_model.config.distributed)
+        self._batch_config.validate()
+
+        if runner is None:
             # We only need a basic schedule and don't care about dimensions.
             self._schedule_config = ScheduleConfig()
             # TODO: Sort things out.
-            with NoAutoValidate():
-                self._batch_config = self.batch_config_class()
-            self._batch_config.setup(self._fast_llm_model.config.distributed)
-            self._batch_config.validate()
+
             self._runner = ScheduleRunner(
                 config=self._schedule_config,
                 multi_stage=self._fast_llm_model,
                 distributed_config=self._fast_llm_model.config.distributed,
             )
+        else:
+            self._schedule_config = runner.config
+            self._runner = runner
+            # External runner from training loop must be already setup
+            assert runner._is_setup
+
         # TODO: Random state? (Distributed.set_step)
         self._schedule = Schedule(
             multi_stage=self._fast_llm_model,
