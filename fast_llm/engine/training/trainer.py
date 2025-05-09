@@ -319,13 +319,6 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
 
                 done = self._completed_steps >= self._config.training.train_iters
 
-                stop = done or self._config.training.shutdown.enabled(self._completed_steps)
-
-                if interrupter.enabled:
-                    stop = stop or allreduce_scalar(
-                        interrupter.interrupted, torch.int32, self._distributed.world_group
-                    )
-
                 # Evaluation
                 # TODO: Adjust valid iterator length.
                 if PhaseType.validation in self._samples_per_split and (
@@ -373,11 +366,19 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
                 if is_main_rank() and metrics:
                     self._wandb.log_metrics(self._completed_steps, metrics)
 
-                if self._config.training.checkpoint.enabled(None if stop else self._completed_steps):
-                    self._save_checkpoint(self._config.training.checkpoint, metrics)
+                stop = done or self._config.training.shutdown.enabled(self._completed_steps)
 
                 if self._config.training.export.enabled(None if done else self._completed_steps):
                     self._save_checkpoint(self._config.training.export, metrics)
+
+                if interrupter.enabled:
+                    stop = stop or allreduce_scalar(
+                        interrupter.interrupted, torch.int32, self._distributed.world_group
+                    )
+
+                if self._config.training.checkpoint.enabled(None if stop else self._completed_steps):
+                    self._save_checkpoint(self._config.training.checkpoint, metrics)
+
             # The profiler calls the trace_fn at the end and this could lead to
             profiler.step()
         return done, metrics

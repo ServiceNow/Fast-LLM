@@ -340,22 +340,22 @@ def check_equal_nested(config_a, config_b):
 
 
 class Interrupter:
-    def __init__(self, enabled: bool = True, signals: typing.Sequence[int] = (signal.SIGINT, signal.SIGKILL)):
+    def __init__(self, enabled: bool = True, signals: typing.Sequence[int] = (signal.SIGINT, signal.SIGTERM)):
         self._enabled = enabled
         self._signals = signals
 
     def __enter__(self):
+        self._interrupted = False
         self._old_signals = (
             {signum: signal.signal(signum, self._handle_signal) for signum in self._signals} if self._enabled else {}
         )
-        self._interrupted = False
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         for signum, handler in self._old_signals.items():
             signal.signal(signum, handler)
 
     def _handle_signal(self, signum, frame):
-        logger.info(f"Interrupt signal {signum} received.")
+        logger.info(f"Interrupt signal {signal.Signals(signum).name} received.")
         if self._interrupted:
             # Raise for a repeated signal, ex. if a user really wants to ctrl-C.
             self._old_signals[signum](signum, frame)
