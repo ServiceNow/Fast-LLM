@@ -68,7 +68,6 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
                 self._get_reference_model_preprocessor(name, self._reference_models[name])
             )
 
-        phase: PhaseType
         self._runner = ScheduleRunner(
             config=self._config.schedule,
             multi_stage=self._multi_stage,
@@ -110,7 +109,13 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
         else:
             self._samples_per_split = {}
 
-        self._evaluator_runner = EvaluatorRunner(config=self._config)
+        self._evaluator_runner = EvaluatorRunner(
+            evaluator_configs=self._config.training.evaluations,
+            batch_config=self._config.batch,
+            data_load_num_proc=self._config.training.num_workers,
+            train_iters=self._config.training.train_iters,
+            wandb_config=self._config.training.wandb,
+        )
 
     def setup(self, distributed: Distributed, run: Run) -> None:
         assert distributed.config is self._config.model.distributed

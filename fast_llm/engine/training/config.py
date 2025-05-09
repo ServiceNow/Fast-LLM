@@ -154,7 +154,20 @@ class WandbConfig(Config):
 
 
 @config_class()
-class EvaluatorConfig(IntervalConfig):
+class EvaluatorConfigBase(Config):
+    @abc.abstractmethod
+    def get_evaluator(
+        self,
+        name: str,
+        batch_config: BatchConfig,
+        data_load_num_proc: int,
+        train_iters: int | None = None,
+    ) -> "Evaluator":
+        pass
+
+
+@config_class()
+class EvaluatorConfig(EvaluatorConfigBase):
     _abstract: typing.ClassVar[bool] = True
     # TODO: Generalize dynamic types?
     _registry: typing.ClassVar[Registry[str, type["EvaluatorConfig"]]] = Registry[str, type["EvaluationConfig"]](
@@ -166,10 +179,6 @@ class EvaluatorConfig(IntervalConfig):
         desc="The type of evaluation.",
         hint=FieldHint.core,
     )
-
-    @abc.abstractmethod
-    def get_evaluator(self, name: str,  trainer_config: "TrainerConfig") -> "Evaluator":
-        pass
 
     def _validate(self) -> None:
         if self.type is None:
@@ -220,15 +229,31 @@ class EvaluatorConfig(IntervalConfig):
 
 
 @config_class()
+class TrainingEvaluatorConfig(EvaluatorConfigBase):
+    interval: IntervalConfig = Field(default_factory=IntervalConfig)
+    evaluator: EvaluatorConfig = Field(default_factory=EvaluatorConfig)
+
+    def get_run_count(self, training_iterations: int, extra_evaluations: int = 0):
+        # Number of completed evaluation runs
+        return (self.interval.get_count(training_iterations) + extra_evaluations) if self.interval.enabled() else 0
+
+    def get_evaluator(
+        self,
+        name: str,
+        batch_config: BatchConfig,
+        data_load_num_proc: int,
+        train_iters: int | None = None,
+    ) -> "Evaluator":
+        from fast_llm.engine.training.evaluator import TrainingEvaluator
+
+        return TrainingEvaluator(name, self, batch_config, data_load_num_proc, train_iters)
+
+
+@config_class()
 class EvaluatorLossConfig(EvaluatorConfig):
     _abstract: typing.ClassVar[bool] = False
     type_: typing.ClassVar[str | None] = "loss"
 
-    interval = FieldUpdate(
-        desc="The number of training iterations between each evaluation phase."
-        " Setting to None will disable evaluation."
-    )
-    offset = FieldUpdate(desc="Offset for the first evaluation phase.")
     iterations: int | None = Field(
         default=None,
         desc="Number of iterations for each evaluation phase. Setting to None will disable.",
@@ -236,26 +261,24 @@ class EvaluatorLossConfig(EvaluatorConfig):
         valid=skip_valid_if_none(check_field(Assert.gt, 0)),
     )
 
-    def get_iteration_count(self, training_iterations: int, extra_evaluations: int = 0):
-        # Number of completed validation iterations
-        return (self.get_count(training_iterations) + extra_evaluations) * self.iterations if self.enabled() else 0
+    dataset_name: str | None = Field(default=None)
 
-    def get_evaluator(self, name: str,  trainer_config: "TrainerConfig") -> "EvaluatorLoss":
+    def get_evaluator(
+        self,
+        name: str,
+        batch_config: BatchConfig,
+        data_load_num_proc: int,
+        train_iters: int | None = None,
+    ) -> "EvaluatorLoss":
         from fast_llm.engine.training.evaluator import EvaluatorLoss
 
-        return EvaluatorLoss(name, self, trainer_config)
+        return EvaluatorLoss(name, self, batch_config, data_load_num_proc, train_iters)
 
 
 @config_class()
 class EvaluatorLmEvalConfig(EvaluatorConfig):
     _abstract: typing.ClassVar[bool] = False
     type_: typing.ClassVar[str | None] = "lm_eval"
-
-    interval = FieldUpdate(
-        desc="The number of training iterations between each evaluation phase."
-        " Setting to None will disable evaluation."
-    )
-    offset = FieldUpdate(desc="Offset for the first evaluation phase.")
 
     cli_args: list[str] = Field(
         default_factory=lambda: [],
@@ -286,10 +309,16 @@ class EvaluatorLmEvalConfig(EvaluatorConfig):
         " passed to the Fast-LLM lm_eval model wrapper.",
     )
 
-    def get_evaluator(self, name: str,  trainer_config: "TrainerConfig") -> "EvaluatorLmEval":
+    def get_evaluator(
+        self,
+        name: str,
+        batch_config: BatchConfig,
+        data_load_num_proc: int,
+        train_iters: int | None = None,
+    ) -> "EvaluatorLmEval":
         from fast_llm.engine.training.evaluator import EvaluatorLmEval
 
-        return EvaluatorLmEval(name, self, trainer_config)
+        return EvaluatorLmEval(name, self, batch_config, data_load_num_proc, train_iters)
 
 
 @config_class()
@@ -401,7 +430,7 @@ class ShutdownConfig(IntervalConfig):
 
 @config_class()
 class TrainingConfig(Config):
-    evaluations: dict[str, EvaluatorConfig] = Field(
+    evaluations: dict[str, TrainingEvaluatorConfig] = Field(
         default_factory=dict,
         desc="A dictionary of evaluation dataset names and their configurations for the validation phase.",
         hint=FieldHint.core,

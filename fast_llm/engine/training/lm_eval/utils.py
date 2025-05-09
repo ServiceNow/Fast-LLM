@@ -203,11 +203,10 @@ def process_lm_eval_results(
     args: argparse.Namespace,
     results: dict[str, any],
     evaluation_tracker: lm_eval.loggers.EvaluationTracker,
-    completed_steps: int,
-    consumed_samples: int,
-    consumed_tokens: int,
+    completed_steps: int | None,
 ) -> None:
     if results is not None:
+        completed_steps = 0 if completed_steps is None else completed_steps
         import wandb
 
         if args.log_samples:
