@@ -138,18 +138,27 @@ class GPTSampledIndexedDataset(SampledDataset):
         document_sizes, image_sizes, audio_sizes = self._indexed_dataset.get_document_sizes()
         document_sizes = torch.from_numpy(document_sizes).to(self._device)
         image_token_sizes = torch.zeros_like(document_sizes).to(self._device)
+        audio_token_sizes = torch.zeros_like(document_sizes).to(self._device)
         # TODO Soham: handle max image size
         for i, sizes in enumerate(image_sizes):
             image_token_sizes[i] = sum((sizes[:, 0] // self._patch_size) * (sizes[:, 1] // self._patch_size))
 
         # compute audio token sizes
-        if self._aud_padding_duration > 0 and len(audio_sizes) > 0:
-            self._aud_padding_duration * self._aud_sampling_rate
-        # 2. mel spectogram
+        audio_sizes = torch.tensor(audio_sizes)
 
-        # 3. convolution
+        # account for padding
+        if len(audio_sizes) > 0 and self._parameters.aud_padding_duration > 0:
+            raw_audio_seq_length = self._parameters.aud_padding_duration * self._parameters.aud_sampling_rate
+            audio_sizes.fill_(raw_audio_seq_length)  # set all audio sizes to padded amount
+            long_audio_filter = audio_sizes > raw_audio_seq_length  # filter audio that is too long
+        else:
+            audio_sizes > self._parameters.sequence_length + 1
 
-        # 4. downsampling
+        # account for mel spectogram, convolution, downsampling k
+        audio_token_sizes = audio_sizes / 160  # default hop length
+        audio_token_sizes = audio_token_sizes // (
+            2 * self._parameters.aud_downsampling_k
+        )  # convolution (2) * downsampling
 
         documents_per_epoch = document_sizes.numel()
         tokens_per_epoch = document_sizes.sum().item() + image_token_sizes.sum().item()
