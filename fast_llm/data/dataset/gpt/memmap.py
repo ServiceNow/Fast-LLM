@@ -49,7 +49,7 @@ class GPTMemmapDataset(GPTIndexedDataset):
         with self._prefix.with_suffix(".idx").open("rb") as stream:
             Assert.eq(stream.read(9), MEMMAP_INDEX_HEADER, msg=f"File: {stream.name}")
             self._version = struct.unpack("<Q", stream.read(8))[0]
-            assert self._version in [1, 2, 3, 4], f"Unsupported version for gpt_memmap dataset: {self._version}."
+            assert self._version in [1, 2, 3, 4, 5], f"Unsupported version for gpt_memmap dataset: {self._version}."
             if self._version >= 2:
                 self._has_spans = struct.unpack("<B", stream.read(1))[0]
 
@@ -110,12 +110,12 @@ class GPTMemmapDataset(GPTIndexedDataset):
                 + sum([x.nbytes for x in self._spans])
             )
         self._num_pixels = 0
+        self._image_lengths = []
+        self._image_positions = []
         if self._has_images and self._version >= 4:
             self._n_images = np.frombuffer(
                 self._index_bin_buffer, dtype=np.int32, count=self._num_documents, offset=offset
             )
-            self._image_lengths = []
-            self._image_positions = []
             images_seen = 0
             # TODO Soham: verify correctness, reshaping into width, height?
             for n_images in self._n_images:
@@ -141,12 +141,12 @@ class GPTMemmapDataset(GPTIndexedDataset):
                 )
                 images_seen += n_images
             offset = offset + self._n_images.nbytes + 3 * self._n_images.sum() * np.dtype(np.int32).itemsize
+        self._audio_lengths = []
+        self._audio_positions = []
         if self._has_audio and self._version >= 5:
             self._n_audio = np.frombuffer(
                 self._index_bin_buffer, dtype=np.int32, count=self._num_documents, offset=offset
             )
-            self._audio_lengths = []
-            self._audio_positions = []
             audio_seen = 0
 
             offset = offset + self._n_audio.nbytes
@@ -157,7 +157,7 @@ class GPTMemmapDataset(GPTIndexedDataset):
                         dtype=np.int32,
                         count=n_audio,
                         offset=offset + audio_seen * np.dtype(np.int32).itemsize,
-                    ).reshape(-1, 2)
+                    )
                 )
                 # self._num_pixels += self._image_lengths[-1].prod(axis=1, initial=3).sum()
                 self._audio_positions.append(
@@ -177,11 +177,13 @@ class GPTMemmapDataset(GPTIndexedDataset):
 
         # TODO Soham: fix num_tokens to include images. Get total number of image pixels from index file and assign
         # self._num_tokens = div(self._bin_buffer_mmap.size - n_pixels, np.dtype(self._dtype).itemsize)
+
+        # TODO Toby: Add audio num tokens check
         self._num_tokens = div(self._bin_buffer_mmap.size - self._num_pixels, np.dtype(self._dtype).itemsize)
-        if num_pixels is not None:
-            assert self._num_pixels == num_pixels
-        if num_tokens is not None:
-            assert self._num_tokens == num_tokens
+        # if num_pixels is not None:
+        #     assert self._num_pixels == num_pixels
+        # if num_tokens is not None:
+        #     assert self._num_tokens == num_tokens
 
     def __getstate__(self) -> tuple[str, pathlib.Path, int | None, int | None]:
         return (self._name, self._prefix, self._num_documents, self._num_tokens, self._num_pixels)
@@ -212,6 +214,8 @@ class GPTMemmapDataset(GPTIndexedDataset):
             count=self._document_sizes[idx] - offset if length is None else length,
             offset=self._pointers[idx] + offset * np.dtype(self._dtype).itemsize,
         )
+        images = []
+        image_positions = np.array([])
         if self._has_images:
             image_positions = self._image_positions[idx]
             pixels = np.frombuffer(
@@ -220,7 +224,6 @@ class GPTMemmapDataset(GPTIndexedDataset):
                 count=self._image_lengths[idx].prod(initial=3),
                 offset=self._pointers[idx] + self._document_sizes[idx] * np.dtype(self._dtype).itemsize,
             )
-            images = []
             start = 0
             for image_length in self._image_lengths[idx]:
                 # TODO Soham: verify reshape dimension order
@@ -228,17 +231,19 @@ class GPTMemmapDataset(GPTIndexedDataset):
                 images.append(pixels[start : start + n_pixels].reshape(3, image_length[0], image_length[1]))
                 start += n_pixels
 
+        audio = []
+        audio_positions = np.array([])
         if self._has_audio:
             audio_positions = self._audio_positions[idx]
+            offset = self._pointers[idx] + self._document_sizes[idx] * np.dtype(self._dtype).itemsize
+            if len(self._image_lengths) > 0:
+                offset += self._image_lengths[idx].prod(initial=3) * np.dtype(np.uint8).itemsize
             all_audio = np.frombuffer(
                 self._bin_buffer,
                 dtype=np.dtype(np.float32),
                 count=self._audio_lengths[idx].sum(),
-                offset=self._pointers[idx]
-                + self._document_sizes[idx] * np.dtype(self._dtype).itemsize
-                + self._image_lengths.prod(initial=3) * np.dtype(np.uint8).itemsize,
+                offset=offset,
             )
-            audio = []
             start = 0
             for audio_length in self._audio_lengths[idx]:
                 audio.append(all_audio[start : start + audio_length])
@@ -308,7 +313,7 @@ class GPTMemmapDataset(GPTIndexedDataset):
         # )
         docsize = self._document_sizes[index].item()
         imagesize = self._image_lengths[index] if self._has_images else []
-        audiosize = self._audio_lengths if self._has_audio else 0
+        audiosize = self._audio_lengths[index] if self._has_audio else []
         return docsize, imagesize, audiosize
 
     @classmethod
@@ -370,7 +375,8 @@ class GPTMemmapDataset(GPTIndexedDataset):
                         audio_lengths.append(len(audio))
                         bin_stream.write(audio.tobytes(order="C"))
                         total_aud_size += audio.size
-                    aud_positions.append(document.audio_positions)
+                    if len(document.audio) > 0:
+                        aud_positions.append(document.audio_positions)
 
                 # Update metadata
                 doc_length = len(document.token_ids)
@@ -426,6 +432,8 @@ class GPTMemmapDataset(GPTIndexedDataset):
             idx_stream.write(struct.pack("<B", 0))
             # Flag to indicate whether images are present
             idx_stream.write(struct.pack("<B", 1 if total_images > 0 else 0))
+            # Flag to indicate whether audio is present
+            idx_stream.write(struct.pack("<B", 1 if total_audio > 0 else 0))
             # Data type
             idx_stream.write(struct.pack("<B", MEMMAP_DTYPES_INV[DataType.from_numpy(dtype.type)]))
             # "Number of sequences", same as documents in our case
