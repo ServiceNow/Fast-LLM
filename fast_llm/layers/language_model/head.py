@@ -104,6 +104,7 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
                 min_val=config.init_method_min_embed,
                 max_val=config.init_method_max_embed,
             ),
+            lr_scale=config.output_lr_scale,
         )
 
     def forward(
