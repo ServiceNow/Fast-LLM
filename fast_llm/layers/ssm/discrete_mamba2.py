@@ -9,6 +9,7 @@ from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
 from fast_llm.layers.common.linear import Linear
 from fast_llm.layers.ssm.config import SSMConfig, SSMDimNames
 from fast_llm.tensor import ParameterMeta, init_ones_, init_uniform_, init_zeros_, kaiming_init_
+from fast_llm.utils import get_lr_scale
 
 """
 This code is adapted fropm https://github.com/cartesia-ai/edge/blob/main/cartesia-pytorch/cartesia_pytorch/Llamba/mixers/discrete_mamba2.py
@@ -44,6 +45,8 @@ class DiscreteMamba2(torch.nn.Module):
         bias = config.add_bias_linear
         self.layer_idx = layer_idx
         self._return_input = return_input
+        layer_lr_scale = config.per_layer_lr_scale[layer_idx] if config.per_layer_lr_scale else None
+        mamba_layer_lr_scale = get_lr_scale(self.config.mamba_lr_scale, layer_lr_scale)
 
         td_inner = tensor_space.get_tensor_dim(SSMDimNames.inner_dim)
         td_state = tensor_space.get_tensor_dim(SSMDimNames.state_dim)
@@ -73,6 +76,7 @@ class DiscreteMamba2(torch.nn.Module):
                 (td_inner,),
                 weight_decay=False,
                 init_method=init_zeros_,
+                lr_scale=mamba_layer_lr_scale,
             )
             if not bias
             else 0.0
@@ -84,14 +88,18 @@ class DiscreteMamba2(torch.nn.Module):
             init_method=init_uniform_(
                 1 / math.sqrt(td_conv.size * td_conv_kernel.size), 1 / math.sqrt(td_conv.size * td_conv_kernel.size)
             ),  # see https://github.com/pytorch/pytorch/blob/1eba9b3aa3c43f86f4a2c807ac8e12c4a7767340/torch/nn/modules/conv.py#L180C53-L180C67
+            lr_scale=mamba_layer_lr_scale,
         )
-        self.conv1d_bias = ParameterMeta.from_dims((td_conv,), init_method=bias_init_method(self.conv1d_weight))
+        self.conv1d_bias = ParameterMeta.from_dims(
+            (td_conv,), init_method=bias_init_method(self.conv1d_weight), lr_scale=mamba_layer_lr_scale
+        )
 
         # D "skip" parameter
         self.D = ParameterMeta.from_dims(
             (td_n_qk_heads,),
             weight_decay=False,
             init_method=init_ones_,
+            lr_scale=mamba_layer_lr_scale,
         )
 
         # out_proj
@@ -100,6 +108,7 @@ class DiscreteMamba2(torch.nn.Module):
             td_model,
             bias=bias,
             weight_init_method=kaiming_init_(td_inner.size),
+            lr_scale=mamba_layer_lr_scale,
         )
 
     @property

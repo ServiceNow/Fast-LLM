@@ -11,7 +11,7 @@ from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.engine.config_utils.tensor_space import CompositeTensorDim, TensorDim, TensorSpace
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
 from fast_llm.functional.config import ActivationType, MLPRecomputeLevel, TritonConfig
-from fast_llm.layers.common.config import NormalizationConfig, PeftConfig, PeftType
+from fast_llm.layers.common.config import LLMBlockConfig, NormalizationConfig, PeftConfig, PeftType
 from fast_llm.utils import Assert, div
 
 if typing.TYPE_CHECKING:
@@ -245,7 +245,7 @@ class TransformerPeftConfig(PeftConfig):
 
 
 @config_class()
-class TransformerConfig(BaseModelConfig):
+class TransformerConfig(LLMBlockConfig):
     _abstract = False
     normalization: NormalizationConfig = Field(
         default_factory=NormalizationConfig,
@@ -494,12 +494,6 @@ class TransformerConfig(BaseModelConfig):
         default=None,
         desc="Custom learning rate scale for each expert.",
         doc="May be used to freeze some experts by setting their scale to zero.",
-        hint=FieldHint.feature,
-    )
-    per_layer_lr_scale: list[float] | None = Field(
-        default=None,
-        desc="Custom learning rate scale for each layer.",
-        doc="May be used to freeze some layers by setting their scale to zero.",
         hint=FieldHint.feature,
     )
     router_lr_scale: float | None = Field(

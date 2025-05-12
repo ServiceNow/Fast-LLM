@@ -1,9 +1,8 @@
 import enum
 
-from fast_llm.config import Field, FieldHint, check_field, config_class
-from fast_llm.engine.base_model.config import BaseModelConfig
+from fast_llm.config import Field, FieldHint, check_field, config_class, skip_valid_if_none
 from fast_llm.functional.config import ActivationType
-from fast_llm.layers.common.config import NormalizationConfig
+from fast_llm.layers.common.config import LLMBlockConfig, NormalizationConfig
 from fast_llm.utils import Assert
 
 
@@ -34,7 +33,7 @@ class SSMBlockType(str, enum.Enum):
 
 
 @config_class()
-class SSMConfig(BaseModelConfig):
+class SSMConfig(LLMBlockConfig):
     _abstract = False
 
     # Normalization
@@ -121,6 +120,12 @@ class SSMConfig(BaseModelConfig):
         default=None,
         desc="Inner dimension for Mamba2 blocks.",
         hint=FieldHint.core,
+    )
+    mamba_lr_scale: float = Field(
+        default=None,
+        desc="Learning rate scale for Mamba blocks.",
+        hint=FieldHint.feature,
+        valid=skip_valid_if_none(check_field(Assert.geq, 0)),
     )
 
     def _validate(self) -> None:
