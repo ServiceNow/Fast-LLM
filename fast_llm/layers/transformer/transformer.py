@@ -38,8 +38,8 @@ class BaseBlock(Layer, abc.ABC):
         self._layer_index = layer_index
         self._debug_mode = self._config.debug_transformer or self._config.debug_transformer_memory
         hidden_dim = self._tensor_space.get_tensor_dim(TransformerDimNames.hidden)
-        # layer_lr_scale = config.per_layer_lr_scale[layer_index] if config.per_layer_lr_scale else None
-        # we dont want to freeze norm layers here
+        # Note, layer_lr_scale does not impact the norms
+        # TODO: add a seperate norm_lr_scale
         self.norm_1 = self._config.normalization.get_layer(hidden_dim)
         self.norm_2 = self._config.normalization.get_layer(hidden_dim)
 
