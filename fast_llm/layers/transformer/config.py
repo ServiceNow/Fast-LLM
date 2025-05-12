@@ -169,6 +169,7 @@ class VisionRotaryConfig(RotaryConfig):
         hint=FieldHint.feature,
     )
 
+
 class AddLinearBiasChoices(str, enum.Enum):
     nowhere = "nowhere"
     everywhere = "everywhere"
@@ -668,59 +669,61 @@ class TransformerConfig(BaseModelConfig):
         tensor = tensor_space.distributed_config.get_distributed_dim(DistributedDimNames.tensor)
 
         # Hidden dimension
-        tensor_space.add_tensor_dim(TensorDim(TransformerDimNames.hidden, self.hidden_size))
+        tensor_space.add_tensor_dim(TensorDim(transformer_dim_names.hidden, self.hidden_size))
 
         # Self-attention dimensions
         tensor_space.add_tensor_dim(
             head_groups := TensorDim(
-                TransformerDimNames.head_groups, self.head_groups, tensor if self.head_groups > 1 else None
+                transformer_dim_names.head_groups, self.head_groups, tensor if self.head_groups > 1 else None
             )
         )
         tensor_space.add_tensor_dim(
             group_heads := TensorDim(
-                TransformerDimNames.group_heads,
+                transformer_dim_names.group_heads,
                 div(self.num_attention_heads, self.head_groups),
                 None if self.head_groups > 1 else tensor,
             )
         )
-        tensor_space.add_tensor_dim(key_and_value := TensorDim(TransformerDimNames.key_and_value, 2))
-        tensor_space.add_tensor_dim(kv_channels := TensorDim(TransformerDimNames.kv_channels, self.kv_channels))
+        tensor_space.add_tensor_dim(key_and_value := TensorDim(transformer_dim_names.key_and_value, 2))
+        tensor_space.add_tensor_dim(kv_channels := TensorDim(transformer_dim_names.kv_channels, self.kv_channels))
         tensor_space.add_tensor_dim(
-            CompositeTensorDim(TransformerDimNames.composite_heads, (head_groups, group_heads))
+            CompositeTensorDim(transformer_dim_names.composite_heads, (head_groups, group_heads))
         )
         tensor_space.add_tensor_dim(
-            CompositeTensorDim(TransformerDimNames.composite_query, (head_groups, group_heads, kv_channels))
+            CompositeTensorDim(transformer_dim_names.composite_query, (head_groups, group_heads, kv_channels))
         )
         tensor_space.add_tensor_dim(
-            CompositeTensorDim(TransformerDimNames.composite_key_value, (key_and_value, head_groups, kv_channels))
+            CompositeTensorDim(transformer_dim_names.composite_key_value, (key_and_value, head_groups, kv_channels))
         )
         tensor_space.add_tensor_dim(
-            CompositeTensorDim(TransformerDimNames.composite_dense, (head_groups, group_heads, kv_channels))
+            CompositeTensorDim(transformer_dim_names.composite_dense, (head_groups, group_heads, kv_channels))
         )
 
         # MLP dimensions
-        tensor_space.add_tensor_dim(mlp := TensorDim(TransformerDimNames.mlp, self.ffn_hidden_size, tensor))
-        tensor_space.add_tensor_dim(gate_and_up := TensorDim(TransformerDimNames.gate_and_up, 2 if self.gated else 1))
-        tensor_space.add_tensor_dim(CompositeTensorDim(TransformerDimNames.composite_gated_mlp, (gate_and_up, mlp)))
-        tensor_space.add_tensor_dim(experts := TensorDim(TransformerDimNames.experts, self.num_experts))
-        tensor_space.add_tensor_dim(CompositeTensorDim(TransformerDimNames.composite_expert_mlp, (experts, mlp)))
+        tensor_space.add_tensor_dim(mlp := TensorDim(transformer_dim_names.mlp, self.ffn_hidden_size, tensor))
         tensor_space.add_tensor_dim(
-            CompositeTensorDim(TransformerDimNames.composite_gated_expert_mlp, (experts, gate_and_up, mlp))
+            gate_and_up := TensorDim(transformer_dim_names.gate_and_up, 2 if self.gated else 1)
         )
-        tensor_space.add_tensor_dim(TensorDim(TransformerDimNames.top_experts, self.num_experts_per_token))
-        tensor_space.add_tensor_dim(TensorDim(TransformerDimNames.unshared_experts, self.num_unshared_experts))
+        tensor_space.add_tensor_dim(CompositeTensorDim(transformer_dim_names.composite_gated_mlp, (gate_and_up, mlp)))
+        tensor_space.add_tensor_dim(experts := TensorDim(transformer_dim_names.experts, self.num_experts))
+        tensor_space.add_tensor_dim(CompositeTensorDim(transformer_dim_names.composite_expert_mlp, (experts, mlp)))
+        tensor_space.add_tensor_dim(
+            CompositeTensorDim(transformer_dim_names.composite_gated_expert_mlp, (experts, gate_and_up, mlp))
+        )
+        tensor_space.add_tensor_dim(TensorDim(transformer_dim_names.top_experts, self.num_experts_per_token))
+        tensor_space.add_tensor_dim(TensorDim(transformer_dim_names.unshared_experts, self.num_unshared_experts))
 
         # shared_experts
         if self.num_shared_experts:
             tensor_space.add_tensor_dim(
-                shared_experts := TensorDim(TransformerDimNames.shared_experts, self.num_shared_experts)
+                shared_experts := TensorDim(transformer_dim_names.shared_experts, self.num_shared_experts)
             )
             tensor_space.add_tensor_dim(
-                CompositeTensorDim(TransformerDimNames.composite_shared_expert_mlp, (shared_experts, mlp))
+                CompositeTensorDim(transformer_dim_names.composite_shared_expert_mlp, (shared_experts, mlp))
             )
             tensor_space.add_tensor_dim(
                 CompositeTensorDim(
-                    TransformerDimNames.composite_gated_shared_expert_mlp, (shared_experts, gate_and_up, mlp)
+                    transformer_dim_names.composite_gated_shared_expert_mlp, (shared_experts, gate_and_up, mlp)
                 )
             )
 

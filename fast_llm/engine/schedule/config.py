@@ -55,7 +55,7 @@ class BatchConfig(Config):
         desc="Patch size for each image token",
         hint=FieldHint.optional,
     )
-    max_image_size: int | None = Field(
+    image_size: int | None = Field(
         default=None,
         desc="Maximum image height and width",
         hint=FieldHint.optional,

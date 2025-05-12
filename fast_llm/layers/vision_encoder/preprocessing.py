@@ -123,7 +123,7 @@ class VisionPreprocessor(Preprocessor):
             dtype=self._distributed_config.training_dtype.torch,
         )
 
-    def preprocess(self, kwargs: dict[str, typing.Any]) -> None:
+    def preprocess(self, tokens, kwargs: dict[str, typing.Any]) -> None:
         images = kwargs.get(VisionEncoderKwargs.images)
         im_height = kwargs.get(VisionEncoderKwargs.image_size)
         im_width = kwargs.get(VisionEncoderKwargs.image_size)

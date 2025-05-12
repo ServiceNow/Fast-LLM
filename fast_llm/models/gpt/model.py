@@ -77,14 +77,10 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             self._preprocessors.append(BackupAttentionPreprocessor(self._config.transformer, self._tensor_space))
 
         if self._config.vision_encoder:
-            self._preprocessors.append(
-                VisionPreprocessor(self._config.vision_encoder, self._tensor_space)
-            )
+            self._preprocessors.append(VisionPreprocessor(self._config.vision_encoder, self._tensor_space))
             if self._config.vision_encoder.transformer.rotary.enabled:
                 self._preprocessors.append(
-                     RotaryEmbeddingPreprocessor(
-                        self._config.vision_encoder.transformer.rotary, self._tensor_space
-                    )
+                    RotaryEmbeddingPreprocessor(self._config.vision_encoder.transformer.rotary, self._tensor_space)
                 )
             # self._vision_preprocessor = VisionPreprocessor(self._config.vision_encoder, self._tensor_space)
             # if self._config.vision_encoder.transformer.rotary.enabled:
@@ -167,7 +163,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             micro_sequence_length = sequence_length
 
         if self._config.vision_encoder:
-            image_size = batch_meta.max_image_size
+            image_size = batch_meta.image_size
             image_mean = [
                 self._config.vision_encoder.image_normalization.mean_r,
                 self._config.vision_encoder.image_normalization.mean_g,
@@ -411,8 +407,6 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                 kwargs[LanguageModelKwargs.labels] = labels
             kwargs.update(reference_logits[i])
 
-            for preprocessor in self._preprocessors:
-                preprocessor.preprocess(tokens, kwargs)
             if batch.images is not None:
                 kwargs[VisionEncoderKwargs.images] = [
                     [
@@ -423,7 +417,12 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                 ]
                 kwargs[VisionEncoderKwargs.image_positions] = batch.image_positions
                 kwargs[LanguageModelKwargs.tokens] = tokens
-                preprocessed.append((kwargs[VisionEncoderKwargs.image_patches], kwargs))
+
+            for preprocessor in self._preprocessors:
+                preprocessor.preprocess(tokens, kwargs)
+            image_patches = kwargs.get(VisionEncoderKwargs.image_patches, None)
+            if image_patches is not None:
+                preprocessed.append((image_patches, kwargs))
             else:
                 preprocessed.append((tokens, kwargs))
 

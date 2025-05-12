@@ -176,4 +176,3 @@ class VisionEncoderConfig(BaseModelConfig):
             )
         )
         self.transformer.setup_tensor_space(tensor_space, type="vision")
-        super().setup_tensor_space(tensor_space)

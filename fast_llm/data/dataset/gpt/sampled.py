@@ -138,7 +138,9 @@ class GPTSampledIndexedDataset(SampledDataset):
         image_token_sizes = torch.zeros_like(document_sizes).to(self._device)
         # TODO Soham: handle max image size
         for i, sizes in enumerate(image_sizes):
-            image_token_sizes[i] = sum((sizes[:, 0] // self._patch_size) * (sizes[:, 1] // self._patch_size))
+            image_token_sizes[i] = sum(
+                (sizes[:, 0] // self._parameters.patch_size) * (sizes[:, 1] // self._parameters.patch_size)
+            )
 
         documents_per_epoch = document_sizes.numel()
         tokens_per_epoch = document_sizes.sum().item() + image_token_sizes.sum().item()
@@ -195,7 +197,7 @@ class GPTSampledIndexedDataset(SampledDataset):
             "num_samples": self._parameters.num_samples,
             "unshuffled_epochs": unshuffled_epochs,
             "sequence_length": self._parameters.sequence_length,
-            "patch_size": self._patch_size,
+            "patch_size": self._parameters.patch_size,
             "truncate_documents": self._truncate_documents,
             "config": self._config.to_dict(),
         }
@@ -405,12 +407,19 @@ class GPTSampledIndexedDataset(SampledDataset):
             else:
                 document_index = self._document_shuffling[document_sampling_index - self._unshuffled_documents].item()
 
-            document_size, image_lengths = self._indexed_dataset.get_document_size(document_index, self._patch_size)
+            document_size, image_lengths = self._indexed_dataset.get_document_size(
+                document_index, self._parameters.patch_size
+            )
 
             image_sizes = [
                 get_num_patches(
-                    *get_resize_dims(*image_length, self._image_size, self._image_size, self._patch_size),
-                    self._patch_size,
+                    *get_resize_dims(
+                        *image_length,
+                        self._parameters.image_size,
+                        self._parameters.image_size,
+                        self._parameters.patch_size,
+                    ),
+                    self._parameters.patch_size,
                 )
                 for image_length in image_lengths
             ]
