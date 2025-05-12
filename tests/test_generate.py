@@ -93,14 +93,12 @@ def _generate_with_params(
     }
 
 
-def _compare_gen_outputs(outputs: dict[str, list], min_matching_tokens: int | None = None):
+def _compare_gen_outputs(outputs: dict[str, list[torch.Tensor]], min_matching_tokens: int | None = None):
     for hf_output, fast_llm_output in zip(outputs["hf"], outputs["fast_llm"]):
         if min_matching_tokens is not None:
             hf_output = hf_output[:min_matching_tokens]
             fast_llm_output = fast_llm_output[:min_matching_tokens]
-        assert len(hf_output) == len(fast_llm_output) and all(
-            hf_char == fast_llm_char for hf_char, fast_llm_char in zip(hf_output, fast_llm_output)
-        )
+        assert torch.equal(hf_output, fast_llm_output)
 
 
 @pytest.fixture(scope="module")

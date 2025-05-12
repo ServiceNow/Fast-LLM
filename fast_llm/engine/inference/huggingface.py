@@ -62,8 +62,6 @@ class HuggingfacePreTrainedModel(transformers.PreTrainedModel):
 
         # Transformers needs to be able to inspect the base model.
         self.fast_llm_base_model = fast_llm_model.base_model
-        # # TODO: Support distributed models?
-        # assert fast_llm_model.config.distributed.world_size == 1
 
         with transformers.modeling_utils.no_init_weights():
             self.post_init()
