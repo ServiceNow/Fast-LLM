@@ -121,7 +121,7 @@ class SSMConfig(LLMBlockConfig):
         desc="Inner dimension for Mamba2 blocks.",
         hint=FieldHint.core,
     )
-    mamba_lr_scale: float = Field(
+    mamba_lr_scale: float | None = Field(
         default=None,
         desc="Learning rate scale for Mamba blocks.",
         hint=FieldHint.feature,

@@ -11,6 +11,7 @@ if typing.TYPE_CHECKING:
     from fast_llm.layers.common.normalization import LayerNorm, RMSNorm
 
 
+@config_class()
 class LLMBlockConfig(BaseModelConfig):
     _abstract = False
 
