@@ -1,4 +1,3 @@
-import argparse
 import json
 import logging
 import math
@@ -9,7 +8,6 @@ from fast_llm.engine.checkpoint.config import CheckpointLoadConfig, CheckpointSa
 from fast_llm.engine.config_utils.runnable import RunnableConfig
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig, StageMode
 from fast_llm.functional.config import TritonConfig
-from fast_llm.models.auto import model_registry
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
@@ -26,12 +24,6 @@ class ConvertConfig(RunnableConfig):
     exist_ok: bool = Field(default=False)
     layers_per_step: int | None = Field(default=None)
     model: type[FastLLMModelConfig] = Field(default=None)
-
-    @classmethod
-    def _from_parsed_args(cls, parsed: argparse.Namespace, unparsed: list[str]):
-        config = super()._from_parsed_args(parsed, unparsed)
-        config.model_config_class = model_registry[parsed.model_type]
-        return config
 
     def _validate(self):
         assert self.model is not None

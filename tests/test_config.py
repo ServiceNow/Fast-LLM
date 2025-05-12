@@ -11,8 +11,7 @@ from fast_llm.engine.checkpoint.config import CheckpointSaveMetadataConfig, Mode
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.layers.transformer.config import TransformerConfig
-from fast_llm.models.auto import trainer_registry
-from fast_llm.models.gpt.config import GPTModelConfig, PretrainedGPTModelConfig
+from fast_llm.models.gpt.config import GPTModelConfig, GPTTrainerConfig, PretrainedGPTModelConfig
 from fast_llm.utils import Assert, check_equal_nested
 from tests.common import TEST_RESULTS_PATH
 
@@ -61,7 +60,7 @@ def test_validate_example_config():
     fast_llm_config_dict = yaml.safe_load(
         (pathlib.Path(__file__).parents[1] / "examples" / "mistral.yaml").read_text()
     )
-    trainer_registry["gpt"].from_dict(fast_llm_config_dict)
+    GPTTrainerConfig.from_dict(fast_llm_config_dict)
 
 
 def test_do_use_flash_attention():

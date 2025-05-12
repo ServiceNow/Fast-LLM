@@ -19,13 +19,17 @@ logger = logging.getLogger(__name__)
 @config_class()
 class RunnableConfig(Config):
     @classmethod
-    def parse_and_run(cls, args=None) -> None:
-        if len(args) >= 1 and "=" not in args[0]:
-            # Make the `type=` part optional.
-            args = [f"type={args[0]}"] + args[1:]
-        parsed, unparsed = cls._get_parser().parse_known_args(args)
+    def parse_and_run(cls, args: list[str] | None = None) -> None:
+        if args is None:
+            args = sys.argv[1:]
+        cls_ = cls
+        while len(args) >= 1 and "=" not in args[0]:
+            # Allow chained dynamic type selection without the `type=`, ex. `train gpt`.
+            cls_ = cls_.get_subclass(args[0])
+            args = args[1:]
+        parsed, unparsed = cls_._get_parser().parse_known_args([f"type={cls_.__name__}"] + args)
         with NoAutoValidate():
-            config: "RunnableConfig" = cls._from_parsed_args(parsed, unparsed)
+            config: "RunnableConfig" = cls_._from_parsed_args(parsed, unparsed)
         try:
             config.configure_logging()
             config.validate()
