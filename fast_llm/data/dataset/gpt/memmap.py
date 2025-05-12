@@ -163,7 +163,6 @@ class GPTMemmapDataset(GPTIndexedDataset):
             self._index_bin_buffer_mmap._mmap.close()  # noqa
             del self._index_bin_buffer_mmap
 
-    # TODO Soham: get images
     def get(
         self,
         idx: int,

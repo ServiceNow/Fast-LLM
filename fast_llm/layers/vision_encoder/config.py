@@ -144,6 +144,11 @@ class VisionEncoderConfig(BaseModelConfig):
         desc="Patch size for the image encoder.",
         hint=FieldHint.core,
     )
+    conv_bias: bool = Field(
+        default=False,
+        desc="Whether to use bias in the convolutional layer.",
+        hint=FieldHint.optional,
+    )
     patch_norm: NormalizationConfig = Field(
         default_factory=NormalizationConfig,
         desc="Configuration for the normalization layers applied to the image patches.",
@@ -169,6 +174,7 @@ class VisionEncoderConfig(BaseModelConfig):
         tensor_space.add_tensor_dim(TensorDim(VisionEncoderDimNames.out_channels, self.transformer.hidden_size))
         tensor_space.add_tensor_dim(TensorDim(VisionEncoderDimNames.adapter_size, self.adapter_size))
         tensor_space.add_tensor_dim(TensorDim(VisionEncoderDimNames.patch_size, self.patch_size))
+        tensor_space.add_tensor_dim(TensorDim(VisionEncoderDimNames.in_channels, 3))
         # TODO Soham: add a check for presence of kv channels parameter (head_dim)
         tensor_space.add_tensor_dim(
             TensorDim(

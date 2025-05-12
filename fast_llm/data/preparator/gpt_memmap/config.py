@@ -180,7 +180,6 @@ class GPTMemmapDatasetPreparatorConfig(DatasetPreparatorConfig):
         hint=FieldHint.optional,
     )
 
-    # TODO Soham: move tokenizer validation to MultiModalDataProcessor
     def _validate(self) -> None:
         assert self.tokenizer.path is not None
         if self.dataset.data_type is not None:

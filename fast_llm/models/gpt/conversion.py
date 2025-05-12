@@ -728,7 +728,9 @@ class LlavaHuggingfaceCheckpointHandler(MistralHuggingfaceCheckpointHandler):
         return vision_transformer_converters
 
     def _create_vision_encoder_weight_converters(self) -> list[WeightConverter]:
-        patch_conv_converter = WeightConverter("layers.0.conv.weight", "vision_tower.patch_conv.weight")
+        patch_conv_converters = [WeightConverter("layers.0.weight", "vision_tower.patch_conv.weight")]
+        if self._model.config.base_model.vision_encoder.conv_bias:
+            patch_conv_converters.append(WeightConverter("layers.0.bias", "vision_tower.patch_conv.bias"))
         layernorm_converters = [
             WeightConverter("layers.0.norm.weight", "vision_tower.ln_pre.weight"),
         ]
@@ -745,7 +747,7 @@ class LlavaHuggingfaceCheckpointHandler(MistralHuggingfaceCheckpointHandler):
             WeightConverter(f"layers.{offset}.layer_2.bias", "multi_modal_projector.linear_2.bias"),
         ]
 
-        return [patch_conv_converter] + layernorm_converters + vision_transformer_converters + adapter_converters
+        return patch_conv_converters + layernorm_converters + vision_transformer_converters + adapter_converters
 
     def _create_weight_converters(self) -> list[WeightConverter]:
         vision_encoder_converter = self._create_vision_encoder_weight_converters()
