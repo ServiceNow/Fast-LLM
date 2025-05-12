@@ -24,13 +24,13 @@ class AprielSSMWrapper(HFLM):
 
     def _get_config(self, pretrained: str, **kwargs) -> None:
         """Get the model configuration."""
-        from fast_llm.models.ssm.external.aperiel_ssm.configuration_ssm_apriel import AprielSSMConfig
+        from fast_llm.models.ssm.external.apriel_ssm.configuration_ssm_apriel import AprielSSMConfig
 
         self._config = AprielSSMConfig.from_pretrained(pretrained)
 
     def _create_model(self, pretrained: str, dtype: Optional[Union[str, torch.dtype]] = "float16", **kwargs) -> None:
         """Create the model."""
-        from fast_llm.models.ssm.external.aperiel_ssm.modeling_ssm_apriel import AprielSSMForCausalLM
+        from fast_llm.models.ssm.external.apriel_ssm.modeling_ssm_apriel import AprielSSMForCausalLM
 
         self._model = AprielSSMForCausalLM.from_pretrained(
             pretrained,
