@@ -336,3 +336,21 @@ def compare_nested(config_a, config_b, errors: list | None = None, prefix: tuple
 def check_equal_nested(config_a, config_b):
     if errors := compare_nested(config_a, config_b):
         raise ValueError("\n".join(errors))
+
+
+def get_lr_scale(
+    lr_scale: float | None | tuple[float | None, ...], layer_lr_scale: float | None
+) -> float | None | tuple[float | None, ...]:
+    """
+    Combine module and layer lr_scale.
+    If one is None, return the other.
+    """
+    if lr_scale is None:
+        return layer_lr_scale
+    if layer_lr_scale is None:
+        return lr_scale
+    if isinstance(lr_scale, float):
+        return lr_scale * layer_lr_scale
+    if isinstance(lr_scale, tuple):
+        return tuple(lrs * layer_lr_scale if lrs is not None else layer_lr_scale for lrs in lr_scale)
+    raise ValueError(f"Invalid lr_scale: {lr_scale} (type {type(lr_scale)})")
