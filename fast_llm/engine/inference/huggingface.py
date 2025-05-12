@@ -55,7 +55,7 @@ class HuggingfacePreTrainedModel(transformers.PreTrainedModel):
         # We only support data parallel for now
         assert (
             fast_llm_model.distributed.config.model_parallel == 1
-            and fast_llm_model.distributed.config.sequence_tensor_parallel == 1
+            and fast_llm_model.distributed.config.sequence_data_parallel == 1
         )
 
         self._inference_runner.setup()
