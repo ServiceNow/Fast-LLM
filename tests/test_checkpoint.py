@@ -32,7 +32,7 @@ from tests.common import (
 from tests.compare_tensor_logs import CompareConfig, compare_logged_tensor
 
 TEST_MODEL_CONFIG_CLS = model_registry[TEST_MODEL_TYPE]
-TEST_MODEL_HF_CLS = TEST_MODEL_CONFIG_CLS.get_huggingface_model_class()
+TEST_MODEL_HF_CLS = TEST_MODEL_CONFIG_CLS.get_huggingface_model_for_causal_lm_class()
 TEST_MODEL_CLS = TEST_MODEL_CONFIG_CLS.get_model_class()
 TEST_BASE_MODEL_CONFIG_CLS = TEST_MODEL_CONFIG_CLS.get_base_model_config_class()
 
