@@ -1,3 +1,4 @@
+import logging
 import math
 
 import causal_conv1d
@@ -10,6 +11,8 @@ from fast_llm.layers.common.linear import Linear
 from fast_llm.layers.ssm.config import SSMConfig, SSMDimNames
 from fast_llm.tensor import ParameterMeta, init_ones_, init_uniform_, init_zeros_, kaiming_init_
 from fast_llm.utils import get_lr_scale
+
+logger = logging.getLogger(__name__)
 
 """
 This code is adapted fropm https://github.com/cartesia-ai/edge/blob/main/cartesia-pytorch/cartesia_pytorch/Llamba/mixers/discrete_mamba2.py
@@ -47,6 +50,7 @@ class DiscreteMamba2(torch.nn.Module):
         self._return_input = return_input
         layer_lr_scale = config.per_layer_lr_scale[layer_idx] if config.per_layer_lr_scale else None
         mamba_layer_lr_scale = get_lr_scale(self.config.mamba_lr_scale, layer_lr_scale)
+        logger.info(f"Setting lr_scale for layer {layer_idx} of type {type(self)}: {mamba_layer_lr_scale}")
 
         td_inner = tensor_space.get_tensor_dim(SSMDimNames.inner_dim)
         td_state = tensor_space.get_tensor_dim(SSMDimNames.state_dim)
