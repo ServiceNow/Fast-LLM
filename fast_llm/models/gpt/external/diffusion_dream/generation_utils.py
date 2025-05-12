@@ -434,7 +434,6 @@ class DreamGenerationMixin:
 
         # pad input_ids to max_length
         x = F.pad(input_ids, (0, max_length - input_ids.shape[1]), value=mask_token_id)
-        completed_seqs = []
 
         if attention_mask is not None and torch.any(attention_mask == 0.0):
             # we do not mask the [MASK] tokens so value = 1.0
@@ -452,9 +451,6 @@ class DreamGenerationMixin:
             attention_mask = "full"
 
         timesteps = torch.linspace(1, eps, steps + 1, device=x.device)
-
-        # print(f"attention_mask: {attention_mask.shape if type(attention_mask) != str else attention_mask} {attention_mask}")
-        # print(f"tok_idx: {tok_idx.shape if tok_idx is not None else tok_idx} {tok_idx}")
         
         # this allows user-defined token control of the intermediate steps
         input_ids_length = input_ids.shape[1]
@@ -462,21 +458,12 @@ class DreamGenerationMixin:
         
         x = generation_tokens_hook_func(None, x, None, input_ids_length)
         for i in range(steps):
-            # mask_index = (x == mask_token_id)
             
             logits = self(x, attention_mask, tok_idx).logits
             logits = torch.cat([logits[:,:1], logits[:, :-1]], dim=1)
 
             # this allows user-defined logits control of the intermediate steps
             logits = generation_logits_hook_func(i, x, logits)
-
-            # mask_logits = logits[mask_index]
-            # TODO: Above is an temporary fix; each sequence can have different lengths of mask tokens after 1st round
-            # we cannot create a matrix around that with a shape of [bs_size, num_mask_tokens, vocab_size]
-            # therefore we are treating all mask tokens from the batch as a single sequence
-            # and finding confidence based on the whole batch
-            # i.e when we un-mask tokens some sequences might not get any tokens un-masked in that round
-            # ideally we un-mask some tokens for each sequence - this might require a loop around the batch or an updated confidence calculation
             
             t = timesteps[i]
             s = timesteps[i + 1]
@@ -509,7 +496,7 @@ class DreamGenerationMixin:
                     num_mask_token = mask_index.sum()
                     # og: number_transfer_tokens = int(num_mask_token * (1 - s / t)) if i < steps - 1 else int(num_mask_token)
                     # number_transfer_tokens =  num_mask_token if num_mask_token <= batch_size else ceil(num_mask_token * (1 - s / t)) if i < steps - 1 else num_mask_token
-                    number_transfer_tokens =  num_mask_token if num_mask_token <= batch_size else ceil(num_mask_token * (1 - s / t)) if i < steps - 1 else num_mask_token
+                    number_transfer_tokens =  num_mask_token if num_mask_token <= 1 else ceil(num_mask_token * (1 - s / t)) if i < steps - 1 else num_mask_token
                     
                     # print(f"number_transfer_tokens: {number_transfer_tokens} num_mask_token: {num_mask_token}")
                     # print(f"step: {i} batch: {b} confidence: {confidence} x0: {x0}")
@@ -529,25 +516,8 @@ class DreamGenerationMixin:
 
             # this allows user-defined token control of the intermediate steps
             x = generation_tokens_hook_func(i, x, logits, input_ids_length)
-            # TODO: remove sequences when they are complete i.e without any [MASK] tokens
-            # This wld speed up rest of the batch
-            # current even completed sequences are in the forward pass till everything is done
-            # Separate completed sequences (without any [MASK] tokens)
-            
-            # current_completed_sequences = x[~torch.any(x == mask_token_id, dim=1)]
-            # # x = x[torch.any(x == mask_token_id, dim=1)]
-
-            # if len(current_completed_sequences) > 0:
-            #     completed_seqs.append(current_completed_sequences.clone())
-
-            # print("completed_seqs", len(completed_seqs))
-            # # If all sequences are completed, combine everything back to x
-            # if x.shape[0] == 0:
-            #     x = torch.cat(completed_seqs, dim=0)
-            #     break
             
             if not torch.any(x == mask_token_id):
-                # print("unmasked all tokens in current x exiting")
                 break
 
             
@@ -561,7 +531,7 @@ class DreamGenerationMixin:
                 attention_mask_tmp.unsqueeze(1).unsqueeze(-2),
                 attention_mask_tmp.unsqueeze(1).unsqueeze(-1),
             )
-            # print(f"attention_mask: {attention_mask_tmp.shape} {attention_mask_tmp}")
+            
             attention_mask = attention_mask_tmp
 
             if histories is not None:
@@ -574,198 +544,3 @@ class DreamGenerationMixin:
             )
         else:
             return x
-
-# Fully batched implementation - WIP : Cannot proceed without a solution for varying lengths of mask tokens - bucz of early stopping
-    # def _sample(
-    #     self,
-    #     input_ids: torch.LongTensor,
-    #     attention_mask: Optional[torch.LongTensor],
-    #     generation_config: DreamGenerationConfig,
-    #     generation_tokens_hook_func,
-    #     generation_logits_hook_func
-    # ) -> Union[DreamModelOutput, torch.LongTensor]:
-    #     # init values
-    #     output_history = generation_config.output_history
-    #     return_dict_in_generate = generation_config.return_dict_in_generate
-    #     max_length = generation_config.max_length
-    #     mask_token_id = generation_config.mask_token_id
-    #     steps = generation_config.steps
-    #     eps = generation_config.eps
-    #     alg = generation_config.alg
-    #     alg_temp = generation_config.alg_temp
-    #     temperature = generation_config.temperature
-    #     top_p = generation_config.top_p
-    #     top_k = generation_config.top_k
-
-    #     histories = [] if (return_dict_in_generate and output_history) else None
-        
-    #     pad_token_id = generation_config.pad_token_id
-    #     eos_token_id = generation_config.eos_token_id
-
-    #     # pad input_ids to max_length
-    #     x = F.pad(input_ids, (0, max_length - input_ids.shape[1]), value=mask_token_id)
-    #     completed_seqs = []
-
-    #     if attention_mask is not None and torch.any(attention_mask == 0.0):
-    #         # we do not mask the [MASK] tokens so value = 1.0
-    #         attention_mask = F.pad(attention_mask, (0, max_length - attention_mask.shape[1]), value=1.0)
-    #         tok_idx = attention_mask.long().cumsum(-1) - 1
-    #         tok_idx.masked_fill_(attention_mask == 0, 1)
-    #         # attention_mask is of shape [B, N]
-    #         # broadcast to [B, 1, N, N]
-    #         attention_mask = torch.logical_and(
-    #             attention_mask.unsqueeze(1).unsqueeze(-2),
-    #             attention_mask.unsqueeze(1).unsqueeze(-1),
-    #         )
-    #     else:
-    #         tok_idx = None
-    #         attention_mask = "full"
-
-    #     timesteps = torch.linspace(1, eps, steps + 1, device=x.device)
-
-    #     # print(f"attention_mask: {attention_mask.shape if type(attention_mask) != str else attention_mask} {attention_mask}")
-    #     # print(f"tok_idx: {tok_idx.shape if tok_idx is not None else tok_idx} {tok_idx}")
-        
-    #     # this allows user-defined token control of the intermediate steps
-    #     input_ids_length = input_ids.shape[1]
-    #     batch_size = input_ids.shape[0]
-        
-    #     x = generation_tokens_hook_func(None, x, None, input_ids_length)
-    #     for i in range(steps):
-    #         # mask_index = (x == mask_token_id)
-            
-    #         logits = self(x, attention_mask, tok_idx).logits
-    #         print(f"logits 0: {logits.shape}")
-    #         logits = torch.cat([logits[:,:1], logits[:, :-1]], dim=1)
-    #         print(f"logits 1: {logits.shape}")
-
-    #         # this allows user-defined logits control of the intermediate steps
-    #         logits = generation_logits_hook_func(i, x, logits)
-
-    #         # mask_logits = logits[mask_index]
-    #         # TODO: Above is an temporary fix; each sequence can have different lengths of mask tokens after 1st round
-    #         # we cannot create a matrix around that with a shape of [bs_size, num_mask_tokens, vocab_size]
-    #         # therefore we are treating all mask tokens from the batch as a single sequence
-    #         # and finding confidence based on the whole batch
-    #         # i.e when we un-mask tokens some sequences might not get any tokens un-masked in that round
-    #         # ideally we un-mask some tokens for each sequence - this might require a loop around the batch or an updated confidence calculation
-            
-    #         t = timesteps[i]
-    #         s = timesteps[i + 1]
-
-    #         # print(f"x {x.shape}")
-    #         mask_index = (x == mask_token_id)
-    #         print(f"mask_index: {mask_index.shape} {mask_index}")
-    #         # mask_logits = logits[mask_index].reshape(batch_size, -1, logits.shape[-1])
-    #         # print(f"mask_logits: {mask_logits.shape} ")
-    
-    #         if alg == 'origin':
-    #             # p_transfer = 1 - s / t if i < steps - 1 else 1
-    #             # x0 = torch.zeros_like(x[mask_index], device=self.device, dtype=torch.long) + mask_token_id
-    #             # transfer_index_t_s = torch.rand(*x0.shape, device=self.device) < p_transfer
-    #             # _, x0[transfer_index_t_s]= sample_tokens(mask_logits[transfer_index_t_s], temperature=temperature, top_p=top_p, top_k=top_k)
-    #             # x[mask_index] = x0.clone()
-    #             raise RuntimeError("batch origin alg is not supported")
-    #         else:
-    #             if alg == 'maskgit_plus':
-    #                 # confidence, x0 = sample_tokens(mask_logits, temperature=temperature, top_p=top_p, top_k=top_k)
-    #                 raise RuntimeError(f"Unknown alg: {alg}")
-    #             elif alg == 'topk_margin':
-    #                 raise RuntimeError(f"Unknown alg: {alg}")
-    #                 # confidence, x0 = sample_tokens(mask_logits, temperature=temperature, top_p=top_p, top_k=top_k, margin_confidence=True)
-    #             elif alg == 'entropy':
-    #                 confidence, x0 = batch_sample_tokens(logits, mask_index, temperature, top_p=top_p, top_k=top_k, neg_entropy=True)
-    #             else:
-    #                 raise RuntimeError(f"Unknown alg: {alg}")
-                
-    #             num_mask_token = mask_index.sum(dim=1)
-    #             # og: number_transfer_tokens = int(num_mask_token * (1 - s / t)) if i < steps - 1 else int(num_mask_token)
-    #             # number_transfer_tokens =  num_mask_token if num_mask_token <= batch_size else ceil(num_mask_token * (1 - s / t)) if i < steps - 1 else num_mask_token
-    #             number_transfer_tokens = torch.where(
-    #                 num_mask_token <= 1,
-    #                 num_mask_token,
-    #                 torch.ceil(num_mask_token * (1 - s / t)) if i < steps - 1 else num_mask_token
-    #             ).int()
-                
-    #             # print(f"num_mask_token: {num_mask_token} number_transfer_tokens: {number_transfer_tokens}")
-    #             # print(f"step: {i} batch: {batch_size} confidence: {confidence.shape} {confidence} x0: {x0.shape}")
-                
-    #             # TODO: if number_transfer_tokens > 0: number_transfer_tokens is matrix now some seq's might not have any tokens to unmask
-    #             if alg_temp is None or alg_temp == 0:
-    #                 transfer_index_list = []
-    #                 for conf, num_tokens in zip(confidence, number_transfer_tokens):
-    #                     # print(f"conf: {conf.shape} num_tokens: {num_tokens}")
-    #                     _, transfer_index = torch.topk(conf, num_tokens)
-    #                     transfer_index_list.append(transfer_index)
-    #                 transfer_index = torch.stack(transfer_index_list, dim=0)
-    #                 # print(f"transfer_index: {transfer_index.shape} {transfer_index}")
-    #             else:
-    #                 confidence = confidence / alg_temp
-    #                 confidence = F.softmax(confidence, dim=-1)
-                    
-    #                 transfer_index = torch.multinomial(confidence, num_samples=number_transfer_tokens)
-    #             # print(f"transfer_index: {transfer_index.shape} {transfer_index}")
-    #             transfer_index = transfer_index.clamp(0, x0.size(0) - 1)
-    #             # print(f"transfer_index: {transfer_index.shape} {transfer_index}")
-    #             x0_ = torch.zeros_like(x0, device=self.device, dtype=torch.long) + mask_token_id
-    #             # print(f"x0_: {x0_.shape} x0: {x0.shape}")
-    #             # Ensure transfer_index values are within bounds
-    #             # The code `transfer_index` appears to be a function or variable name in Python.
-    #             # Without seeing the implementation of the function or how the variable is used in the
-    #             # code, it is not possible to determine exactly what it is doing. If you provide more
-    #             # context or the implementation of `transfer_index`, I can help explain its purpose
-    #             # and functionality.
-                
-    #             x0_[transfer_index] = x0[transfer_index].clone()
-    #             # print(f"x0_: {x0_.shape} {x0_}")
-    #             # print(f"x[mask_index]: {x[mask_index].shape} {x[mask_index]}")
-    #             x[mask_index] = x0_.flatten()
-                        
-
-    #         # this allows user-defined token control of the intermediate steps
-    #         x = generation_tokens_hook_func(i, x, logits, input_ids_length)
-    #         # TODO: remove sequences when they are complete i.e without any [MASK] tokens
-    #         # This wld speed up rest of the batch
-    #         # current even completed sequences are in the forward pass till everything is done
-    #         # Separate completed sequences (without any [MASK] tokens)
-            
-    #         # current_completed_sequences = x[~torch.any(x == mask_token_id, dim=1)]
-    #         # # x = x[torch.any(x == mask_token_id, dim=1)]
-
-    #         # if len(current_completed_sequences) > 0:
-    #         #     completed_seqs.append(current_completed_sequences.clone())
-
-    #         # print("completed_seqs", len(completed_seqs))
-    #         # # If all sequences are completed, combine everything back to x
-    #         # if x.shape[0] == 0:
-    #         #     x = torch.cat(completed_seqs, dim=0)
-    #         #     break
-            
-    #         if not torch.any(x == mask_token_id):
-    #             # print("unmasked all tokens in current x exiting")
-    #             break
-
-            
-    #         # Update attention mask based on pad_token_id and eos_token_id
-    #         attention_mask_tmp = torch.where(
-    #             (x == pad_token_id) | (x == eos_token_id),
-    #             torch.tensor(0, device=x.device, dtype=torch.bool),
-    #             torch.tensor(1, device=x.device, dtype=torch.bool)
-    #         )
-    #         attention_mask_tmp = torch.logical_and(
-    #             attention_mask_tmp.unsqueeze(1).unsqueeze(-2),
-    #             attention_mask_tmp.unsqueeze(1).unsqueeze(-1),
-    #         )
-    #         # print(f"attention_mask: {attention_mask_tmp.shape} {attention_mask_tmp}")
-    #         attention_mask = attention_mask_tmp
-
-    #         if histories is not None:
-    #             histories.append(x.clone())
-        
-    #     if return_dict_in_generate:
-    #         return DreamModelOutput(
-    #             sequences=x,
-    #             history=histories,
-    #         )
-    #     else:
-    #         return x
