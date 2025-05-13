@@ -108,6 +108,8 @@ class GPTMemmapDataset(GPTIndexedDataset):
                 + sum([x.nbytes for x in self._spans])
             )
         self._num_pixels = 0
+        self._image_lengths = None
+        self._image_positions = None
         if self._has_images and self._version >= 4:
             self._n_images = np.frombuffer(
                 self._index_bin_buffer, dtype=np.int32, count=self._num_documents, offset=offset

@@ -44,12 +44,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
     def _process_batch(self, batch: dict[str, list[typing.Any]]) -> dict[str, list[typing.Any]]:
         pass
 
-    # TODO Soham: can we merged tokenize_batch and tokenize_batch_with_spans?
     def _tokenize_batch(self, batch: dict[str, list[typing.Any]]) -> dict[str, list[typing.Any]]:
-        # input_ids = [
-        #     np.array(self._tokenizer.tokenize(text), dtype=self._data_type.numpy)
-        #     for text in batch[self._config.dataset.field]
-        # ]
         input_ids, token_spans, image_token_positions = map(
             list,
             zip(
@@ -85,6 +80,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
         return {
             "input_ids": input_ids,
             "image_positions": image_token_positions,
+            "token_spans": token_spans,
             "num_tokens": num_tokens,
             "num_pixels": num_pixels,
         }
@@ -282,12 +278,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
         )
         if self._config.dataset.field not in dataset.column_names:
             raise ValueError(f"Dataset does not have field '{self._config.dataset.field}'.")
-        if self._config.dataset.loss_masking_spans is not None:
-            if self._config.dataset.loss_masking_spans not in dataset.column_names:
-                raise ValueError(f"Dataset does not have spans field '{self._config.dataset.loss_masking_spans}'.")
-            tokenize_fn = self._tokenize_batch_with_spans
-        else:
-            tokenize_fn = self._tokenize_batch
+        tokenize_fn = self._tokenize_batch
         # Avoid decoding bytes to images unless asked
         if self._config.dataset.images is not None:
             dataset = dataset.cast_column("images", datasets.Sequence(datasets.Image(decode=False)))
@@ -336,7 +327,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
             # Create the config file(s) on rank 0
             if self._config.splits:
                 for split_name, split_config in self._split_and_blend_dataset_configs(
-                    dataset_configs, self._config.splits, self._config.output_path
+                    dataset_configs, self._config.splits, self._config.output_path, self._config.image_patch_size
                 ).items():
                     self._save_dataset_config(
                         split_config, self._config.output_path / f"fast_llm_config_{split_name}.yaml"
@@ -376,7 +367,11 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
 
     @classmethod
     def _split_and_blend_dataset_configs(
-        cls, dataset_configs: list[GPTMemmapDatasetConfig], splits: dict[str, int | float], output_path: pathlib.Path
+        cls,
+        dataset_configs: list[GPTMemmapDatasetConfig],
+        splits: dict[str, int | float],
+        output_path: pathlib.Path,
+        image_patch_size: int,
     ) -> dict[str, GPTSampledDatasetConfig]:
         split_cumsum = padded_cumsum(normalize_probabilities(list(splits.values()), return_array=True)).tolist()
         dataset_sizes = [dataset_config.num_tokens for dataset_config in dataset_configs]
@@ -406,11 +401,20 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
                     # Part of the dataset belongs to the split.
                     # TODO: Somehow getting a segfault when merging two lines below (numpy bug?).
                     dataset = dataset_config.to_copy({"path": output_path / dataset_config.path}).build()
-                    # TODO Soham: handle pixels (could still work with number of tokens?)
-                    sizes_cumsum = dataset.get_document_sizes()[0].cumsum()
-                    Assert.eq(sizes_cumsum[-1], dataset_config.num_tokens)
-                    begin_index = _get_nearest_split(sizes_cumsum, split_begin_in_dataset * dataset_config.num_tokens)
-                    end_index = _get_nearest_split(sizes_cumsum, split_end_in_dataset * dataset_config.num_tokens)
+                    text_sizes, image_sizes = dataset.get_document_sizes()
+                    tokens_cumsum = text_sizes.cumsum()
+                    Assert.eq(tokens_cumsum[-1], dataset_config.num_tokens)
+                    if image_sizes:
+                        num_pixels_cumsum = np.cumsum([x.prod(axis=1).sum() for x in image_sizes])
+                        # We use the patch sizes only for the purposes of even splitting and blending weights.
+                        # We can always use a different patch size for training without any significant impact
+                        # Unless the patch size used at training time is significantly different from the one used here
+                        image_tokens_cumsum = num_pixels_cumsum // (image_patch_size**2)
+                        tokens_cumsum += image_tokens_cumsum
+                        num_pixels_cumsum = num_pixels_cumsum * 3
+                    Assert.eq(num_pixels_cumsum[-1], dataset_config.num_pixels)
+                    begin_index = _get_nearest_split(tokens_cumsum, split_begin_in_dataset * tokens_cumsum[-1])
+                    end_index = _get_nearest_split(tokens_cumsum, split_end_in_dataset * tokens_cumsum[-1])
                     if end_index > begin_index:
                         datasets_in_split.append(
                             GPTDatasetSliceConfig.from_dict(
@@ -423,8 +427,8 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
                             )
                         )
                         dataset_tokens_in_split.append(
-                            sizes_cumsum[end_index - 1].item()
-                            - (sizes_cumsum[begin_index - 1].item() if begin_index > 0 else 0)
+                            tokens_cumsum[end_index - 1].item()
+                            - (tokens_cumsum[begin_index - 1].item() if begin_index > 0 else 0)
                         )
 
                 # [else] None of the dataset belongs to the split.

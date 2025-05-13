@@ -46,8 +46,6 @@ class Tokenizer:
         """
         Tokenize the input text and return the tokenized input_ids along with token spans.
         """
-        # if not image_positions and not char_spans:
-        #     return self._tokenize(text), [], []
         if not image_positions:
             image_positions = []
         if not char_spans:

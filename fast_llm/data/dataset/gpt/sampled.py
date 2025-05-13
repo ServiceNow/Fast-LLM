@@ -93,7 +93,6 @@ class GPTSampledIndexedDataset(SampledDataset):
         self._truncate_documents = sampling.truncate_documents
         self._device = torch.device("cuda" if self._config.gpu else "cpu")
 
-        # TODO Soham: use something else for this check, introducing has_images for just this check might be unnecessary.
         if self._indexed_dataset.has_images and self._truncate_documents:
             raise RuntimeError(
                 "Truncating documents with images is not yet supported. Please turn off truncation to use images."
