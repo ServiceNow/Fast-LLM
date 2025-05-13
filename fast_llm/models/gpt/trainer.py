@@ -30,6 +30,8 @@ class GPTTrainer[ConfigType: GPTTrainerConfig](Trainer[ConfigType]):
                 "use_loss_masking_spans": self._config.batch.use_loss_masking_spans,
                 "cross_document_attention": self._config.batch.cross_document_attention,
                 "extra_tokens": self._config.model.base_model.prediction_heads,
+                "patch_size": self._config.batch.patch_size,
+                "image_size": self._config.batch.image_size,
             }
         )
         return parameters if _return_dict else GPTSamplingParameters(**parameters)

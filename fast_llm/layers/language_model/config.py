@@ -6,6 +6,7 @@ from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
 from fast_llm.engine.distributed.config import DistributedDimNames
 from fast_llm.functional.config import CrossEntropyImpl
 from fast_llm.layers.transformer.config import TransformerConfig
+from fast_llm.layers.vision_encoder.config import VisionEncoderConfig
 from fast_llm.utils import Assert
 
 
@@ -33,6 +34,7 @@ class LanguageModelKwargs:
     position_ids = "position_ids"
     # TODO: These are generic
     labels = "labels"
+    tokens = "tokens"
     phase = "phase"
     loss_mask = "loss_mask"
 
@@ -43,6 +45,12 @@ class LanguageModelBaseConfig(BaseModelConfig):
         default_factory=TransformerConfig,
         desc="Configuration for the transformer architecture.",
         hint=FieldHint.architecture,
+    )
+    # TODO Soham: make this None by default. Need to figure out how to handle this in the config (see )
+    vision_encoder: VisionEncoderConfig = Field(
+        default_factory=VisionEncoderConfig,
+        desc="Configuration for the vision encoder that transforms images into embeddings.",
+        hint=FieldHint.optional,
     )
     max_position_embeddings: int = Field(
         default=2048,
@@ -167,6 +175,8 @@ class LanguageModelBaseConfig(BaseModelConfig):
         # TODO: Need both?
         tensor_space.add_tensor_dim(TensorDim(LanguageModelDimNames.vocab, self.vocab_size))
         tensor_space.add_tensor_dim(TensorDim(LanguageModelDimNames.vocab_tp, self.vocab_size, tensor))
+        if self.vision_encoder is not None:
+            self.vision_encoder.setup_tensor_space(tensor_space)
 
     @property
     def num_absolute_position_embeddings(self) -> int:
