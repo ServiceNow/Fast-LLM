@@ -4,10 +4,11 @@ title: How to Generate with a Fast-LLM Model
 
 Fast-LLM models support `generate` and `forward` operations through Hugging Face–compatible wrappers.
 
-> ⚠️ Limitations:
-> - No support for `cache`, `past_key_values`, `labels`, `attention` outputs, or `inputs_embeds`
-> - `position_ids` are ignored and reconstructed from the attention mask
-> - Only **data-parallel** generation is supported
+⚠️ Limitations:
+
+- No support for `cache`, `past_key_values`, `labels`, `attention` outputs, or `inputs_embeds`
+- `position_ids` are ignored and reconstructed from the attention mask
+- **model-parallel** and **sequence-data-parallel** generation is **not** supported
 
 ---
 
