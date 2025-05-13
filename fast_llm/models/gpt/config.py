@@ -59,6 +59,10 @@ class MTPLlamaGPTHuggingfaceCheckpointFormat(GPTHuggingfaceCheckpointFormat):
 class DiffusionDreamGPTHuggingfaceCheckpointFormat(GPTHuggingfaceCheckpointFormat):
     name: typing.ClassVar[str] = "diffusion_dream"
     trust_remote_code: typing.ClassVar[bool] = True
+    
+class DiffusionLlamaGPTHuggingfaceCheckpointFormat(GPTHuggingfaceCheckpointFormat):
+    name: typing.ClassVar[str] = "diffusion_llama"
+    trust_remote_code: typing.ClassVar[bool] = True
 
 
 @config_class()

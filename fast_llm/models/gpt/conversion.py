@@ -37,9 +37,11 @@ from fast_llm.models.gpt.config import (
     Qwen2GPTHuggingfaceCheckpointFormat,
     Starcoder2GPTHuggingfaceCheckpointFormat,
     DiffusionDreamGPTHuggingfaceCheckpointFormat,
+    DiffusionLlamaGPTHuggingfaceCheckpointFormat,
 )
 from fast_llm.models.gpt.external.mtp_llama.configuration_mtp_llama import MTPLlamaConfig
 from fast_llm.models.gpt.external.diffusion_dream.configuration_dream import DreamConfig
+from fast_llm.models.gpt.external.diffusion_llama.configuration_diffusion_llama import DiffusionLlamaConfig
 from fast_llm.models.gpt.model import GPTModel
 from fast_llm.tensor import SafeTensorSlice
 from fast_llm.utils import Assert
@@ -704,6 +706,41 @@ class DiffusionDreamHuggingfaceCheckpointHandler(CustomModelingExportMixin, Qwen
 
     def _get_mlp_converters(self, fast_llm_prefix: str, hf_prefix: str) -> list[WeightConverter]:
         return super()._get_mlp_converters(fast_llm_prefix, hf_prefix) 
+    
+class DiffusionLlamaHuggingfaceCheckpointHandler(CustomModelingExportMixin, LlamaHuggingfaceCheckpointHandler):
+    
+    from fast_llm.models.gpt.external.diffusion_llama import configuration_diffusion_llama, modeling_diffusion_llama
+    
+    format: typing.ClassVar[type[CheckpointFormat]] = DiffusionLlamaGPTHuggingfaceCheckpointFormat
+    modeling_file = modeling_diffusion_llama.__file__
+    configuration_file = configuration_diffusion_llama.__file__
+    configuration_cls: typing.ClassVar[type[PretrainedConfig]] = DiffusionLlamaConfig
+
+    @classmethod
+    def _create_config_converters(cls) -> list[ParamConverter]:
+        return super()._create_config_converters() + [
+            
+            ConstantExportParamConverter(export_names=(("architectures",),), export_value=["DiffusionLlamaModel"]),
+            ConstantExportParamConverter(
+                export_names=(("auto_map",),),
+                export_value={
+                    "AutoConfig": "configuration_diffusion_llama.DiffusionLlamaConfig",
+                    "AutoModel": "modeling_diffusion_llama.DiffusionLlamaModel",
+                },
+            ),
+            RenameParamConverter(
+                fast_llm_names=(("mask_token_id",),),
+                export_names=(("mask_token_id",),),
+            ),
+            RenameParamConverter(
+                fast_llm_names=(("pad_token_id",),),
+                export_names=(("pad_token_id",),),
+            ),
+        ]
+            
+
+    def _get_mlp_converters(self, fast_llm_prefix: str, hf_prefix: str) -> list[WeightConverter]:
+        return super()._get_mlp_converters(fast_llm_prefix, hf_prefix) 
 
 
 class AutoGPTHuggingfaceCheckpointHandler(
@@ -718,4 +755,5 @@ class AutoGPTHuggingfaceCheckpointHandler(
         MixtralGPTHuggingfaceCheckpointFormat.name: MixtralHuggingfaceCheckpointHandler,
         MTPLlamaGPTHuggingfaceCheckpointFormat.name: MTPLlamaHuggingfaceCheckpointHandler,
         DiffusionDreamGPTHuggingfaceCheckpointFormat.name: DiffusionDreamHuggingfaceCheckpointHandler,
+        DiffusionLlamaGPTHuggingfaceCheckpointFormat.name: DiffusionLlamaHuggingfaceCheckpointHandler,
     }
