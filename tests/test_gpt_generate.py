@@ -138,8 +138,8 @@ def _test_for_batches(
     fast_llm_model,
     tokenizer,
     max_new_tokens,
-    min_matching_tokens_batch_seize_1,
-    min_matching_tokens_batch_seize_2,
+    min_matching_tokens_batch_size_1,
+    min_matching_tokens_batch_size_2,
 ):
     inputs = _prepare_data(tokenizer, use_batch_size2=False)
     outputs = _generate(
@@ -148,7 +148,7 @@ def _test_for_batches(
         fast_llm_model,
         max_new_tokens=max_new_tokens,
     )
-    _compare_gen_outputs(outputs, min_matching_tokens=min_matching_tokens_batch_seize_1)
+    _compare_gen_outputs(outputs, min_matching_tokens=min_matching_tokens_batch_size_1)
 
     inputs = _prepare_data(tokenizer, use_batch_size2=True)
     outputs = _generate(
@@ -157,7 +157,7 @@ def _test_for_batches(
         fast_llm_model,
         max_new_tokens=max_new_tokens,
     )
-    _compare_gen_outputs(outputs, min_matching_tokens=min_matching_tokens_batch_seize_2)
+    _compare_gen_outputs(outputs, min_matching_tokens=min_matching_tokens_batch_size_2)
 
 
 @pytest.fixture(scope="module")
@@ -172,7 +172,7 @@ def model_and_tokenizer():
 @pytest.mark.slow
 @requires_cuda
 @pytest.mark.parametrize(
-    "use_flash_attention, use_bf16, max_new_tokens, min_matching_tokens_batch_seize_1, min_matching_tokens_batch_seize_2",
+    "use_flash_attention, use_bf16, max_new_tokens, min_matching_tokens_batch_size_1, min_matching_tokens_batch_size_2",
     [
         # No flash attention + no bf16
         (False, False, 10, 10, 10),
@@ -187,8 +187,8 @@ def test_generate(
     use_flash_attention,
     use_bf16,
     max_new_tokens,
-    min_matching_tokens_batch_seize_1,
-    min_matching_tokens_batch_seize_2,
+    min_matching_tokens_batch_size_1,
+    min_matching_tokens_batch_size_2,
 ):
     model_path, tokenizer, fast_llm_checkpoint_format = model_and_tokenizer
     hf_model = _get_hf_model(model_path, use_flash_attention, use_bf16)
@@ -199,8 +199,8 @@ def test_generate(
         fast_llm_model,
         tokenizer,
         max_new_tokens,
-        min_matching_tokens_batch_seize_1,
-        min_matching_tokens_batch_seize_2,
+        min_matching_tokens_batch_size_1,
+        min_matching_tokens_batch_size_2,
     )
 
 
@@ -210,8 +210,8 @@ def test_generate_from_model(
     model_and_tokenizer,
 ):
     max_new_tokens = 10
-    min_matching_tokens_batch_seize_1 = 10
-    min_matching_tokens_batch_seize_2 = 10
+    min_matching_tokens_batch_size_1 = 10
+    min_matching_tokens_batch_size_2 = 10
 
     # Use flash attention for speed
     model_path, tokenizer, fast_llm_checkpoint_format = model_and_tokenizer
@@ -223,6 +223,6 @@ def test_generate_from_model(
         fast_llm_model,
         tokenizer,
         max_new_tokens,
-        min_matching_tokens_batch_seize_1,
-        min_matching_tokens_batch_seize_2,
+        min_matching_tokens_batch_size_1,
+        min_matching_tokens_batch_size_2,
     )
