@@ -204,6 +204,8 @@ def test_generate(
     )
 
 
+@pytest.mark.slow
+@requires_cuda
 def test_generate_from_model(
     model_and_tokenizer,
 ):
