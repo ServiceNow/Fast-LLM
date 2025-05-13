@@ -3,7 +3,7 @@ import typing
 import torch
 
 from fast_llm.engine.base_model.base_model import Layer
-from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
+from fast_llm.engine.config_utils.tensor_space import TensorSpace
 from fast_llm.layers.vision_encoder.config import VisionEncoderConfig, VisionEncoderDimNames, VisionEncoderKwargs
 from fast_llm.tensor import ParameterMeta, TensorMeta, init_normal_
 
@@ -38,21 +38,25 @@ def generate_block_attention_mask(patch_embeds_list, tensor):
 class PatchConv(Layer):
     def __init__(self, config: VisionEncoderConfig, tensor_space: TensorSpace):
         super().__init__()
-        # TODO Soham: device=meta
-        with torch.device("meta"):
-            self.conv = torch.nn.Conv2d(
-                in_channels=3,
-                out_channels=config.transformer.hidden_size,
-                kernel_size=config.patch_size,
-                stride=config.patch_size,
-                bias=False,
-                dtype=tensor_space.distributed_config.training_dtype.torch,
+        self._tensor_space = tensor_space
+        # TODO Soham: lr_scale
+        self.weight = ParameterMeta.from_dims(
+            (
+                self._tensor_space.get_tensor_dim(VisionEncoderDimNames.out_channels),
+                self._tensor_space.get_tensor_dim(VisionEncoderDimNames.in_channels),
+                self._tensor_space.get_tensor_dim(VisionEncoderDimNames.patch_size),
+                self._tensor_space.get_tensor_dim(VisionEncoderDimNames.patch_size),
+            ),
+            init_method=init_normal_(),
+        )
+        if config.conv_bias:
+            self.bias = ParameterMeta.from_dims(
+                (self._tensor_space.get_tensor_dim(VisionEncoderDimNames.out_channels),)
             )
-            self.conv.weight = ParameterMeta.from_dims(
-                tuple(TensorDim(f"patch_conv_weight_{idx}", size) for idx, size in enumerate(self.conv.weight.shape)),
-                init_method=init_normal_(),
-            )
+        else:
+            self.bias = None
         self.norm = config.patch_norm.get_layer(tensor_space.get_tensor_dim(VisionEncoderDimNames.out_channels))
+        self.stride = config.patch_size
 
     def forward(
         self,
@@ -64,10 +68,7 @@ class PatchConv(Layer):
         hidden_dims = kwargs[VisionEncoderKwargs.hidden_dims]
         if isinstance(input_, TensorMeta):
             return TensorMeta.from_dims(hidden_dims, tensor_name="patch conv output", dtype=input_.dtype)
-        # we don't need images after this point
-        # image_patches = kwargs.pop(VisionEncoderKwargs.image_patches)
-        patch_embeddings = self.norm(self.conv(input_))
+        input_ = torch.nn.functional.conv2d(input_, self.weight, self.bias, stride=self.stride)
+        patch_embeddings = self.norm(input_.flatten(1))
         patch_embeddings = patch_embeddings.reshape(*(x.size for x in hidden_dims))
-        # Hack to pass patch embeddings to the next layer
-        # kwargs[VisionEncoderKwargs.patch_embeddings] = patch_embeddings
         return patch_embeddings

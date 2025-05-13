@@ -167,7 +167,7 @@ class LanguageModelBaseConfig(BaseModelConfig):
                 raise NotImplementedError("Multi-token prediction not supported with distillation.")
 
     def setup_tensor_space(self, tensor_space: TensorSpace) -> None:
-        self.transformer.setup_tensor_space(tensor_space, type="vision" if self.vision_encoder is not None else None)
+        self.transformer.setup_tensor_space(tensor_space)
         tensor = tensor_space.distributed_config.get_distributed_dim(DistributedDimNames.tensor)
 
         # Embedding dimensions

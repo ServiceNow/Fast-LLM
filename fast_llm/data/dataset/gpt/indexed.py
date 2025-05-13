@@ -11,7 +11,6 @@ if typing.TYPE_CHECKING:
 
 
 class GPTIndexedDataset(IndexedDataset):
-    # TODO Soham: should we change this to include images?
     @abc.abstractmethod
     def get_document_sizes(self) -> np.ndarray:
         """
@@ -52,8 +51,8 @@ class GPTDatasetSlice[IndexedDatasetType: GPTIndexedDataset](DatasetSlice[Indexe
             aud_sizes[self._begin : self._end],
         )
 
-    def get_document_size(self, index: int, patch_size: list[int]) -> int:
-        return self._dataset.get_document_size(self._begin + index, patch_size)
+    def get_document_size(self, index: int) -> int:
+        return self._dataset.get_document_size(self._begin + index)
 
     @property
     def has_images(self) -> bool:

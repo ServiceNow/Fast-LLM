@@ -42,76 +42,121 @@ class Tokenizer:
             + ([self.eod_id] if end else [])
         )
 
-    def tokenize(self, text, image_positions=None, audio_positions=None):
+    def tokenize(
+        self, text: str, char_spans=None, image_positions=None, audio_positions=None
+    ) -> tuple[list[int], list[tuple[int, int]]]:
+        """
+        Tokenize the input text and return the tokenized input_ids along with token spans.
+        """
         image_positions = image_positions or []
         audio_positions = audio_positions or []
+        char_spans = char_spans or []
+
         if len(set(image_positions).intersection(audio_positions)) > 0:
             raise ValueError("Image and audio can not have the same position.")
         multimodal_positions = sorted(image_positions + audio_positions)
-        if not multimodal_positions:
-            return self._tokenize(text), [], []
-        multimodel_idx = 0
+
+        mm_idx = 0
         char_pos = 0
         token_ids = []
         image_token_positions = []
         audio_token_positions = []
+        token_spans = []
         beginning_of_text = True
-        while multimodel_idx < len(multimodal_positions):
-            multimodal_char_pos = multimodal_positions[multimodel_idx]
-            multimodal_type = "image" if multimodal_char_pos in image_positions else "audio"
+        multimodal_position = multimodal_positions[mm_idx] if mm_idx < len(multimodal_positions) else float("inf")
+        for start, end in char_spans:
+            # tokenize text, compute mm token position before span
+            while multimodal_position <= start:
+                # tokenize text before mm position
+                tokenized_text = self._tokenize(text[char_pos:multimodal_position], begin=beginning_of_text, end=False)
+                beginning_of_text = False
+                token_ids.extend(tokenized_text)
 
-            if multimodal_char_pos > len(text):
-                raise ValueError(
-                    f"{multimodal_type.capitalize()} position {multimodal_char_pos} is greater than text length {len(text)}"
+                # update mm token positions
+                multimodal_type = "image" if multimodal_position in multimodal_positions else "audio"
+                if multimodal_type == "image":
+                    image_token_positions.append(len(token_ids))
+                else:
+                    audio_token_positions.append(len(token_ids))
+
+                # updates
+                mm_idx += 1
+                char_pos = multimodal_position
+                multimodal_position = (
+                    multimodal_positions[mm_idx] if mm_idx < len(multimodal_positions) else float("inf")
                 )
-            curr_text = text[char_pos:multimodal_char_pos]
-            tokenized_text = self._tokenize(curr_text, begin=beginning_of_text, end=multimodal_char_pos >= len(text))
+
+            # tokenize remaining text before span
+            if char_pos < start:
+                self._tokenize(text[char_pos:start], begin=beginning_of_text, end=False)
+                beginning_of_text = False
+                token_ids.extend(tokenized_text)
+
+            char_pos = start
+            span_length = 0
+            token_start = len(token_ids)
+
+            # tokenize text, compute mm token position within span
+            while multimodal_position <= end:
+                # tokenize text before mm position
+                tokenized_text = self._tokenize(text[char_pos:multimodal_position], begin=beginning_of_text, end=False)
+                beginning_of_text = False
+                token_ids.extend(tokenized_text)
+
+                # update mm token positions
+                multimodal_type = "image" if multimodal_position in multimodal_positions else "audio"
+                if multimodal_type == "image":
+                    image_token_positions.append(len(token_ids))
+                else:
+                    audio_token_positions.append(len(token_ids))
+
+                # updates
+                span_length += len(tokenized_text)
+                char_pos = multimodal_position
+                mm_idx += 1
+                multimodal_position = (
+                    multimodal_positions[mm_idx] if mm_idx < len(multimodal_positions) else float("inf")
+                )
+
+            # tokenize remaining text until end of span
+            if char_pos < end:
+                if end >= len(text) - 1:
+                    tokenized_text = self._tokenize(text[char_pos : end + 1], begin=beginning_of_text, end=True)
+                else:
+                    tokenized_text = self._tokenize(text[char_pos : end + 1], begin=beginning_of_text, end=False)
+                beginning_of_text = False
+                token_ids.extend(tokenized_text)
+                span_length += len(tokenized_text)
+                char_pos = end + 1
+
+            # update token spans
+            token_spans.append((token_start, token_start + span_length - 1))
+
+        # tokenize text, compute mm token position after all spans
+        while multimodal_position <= len(text):
+            # tokenize text before mm position
+            multimodal_position = multimodal_positions[mm_idx]
+            tokenized_text = self._tokenize(text[char_pos:multimodal_position], begin=beginning_of_text, end=False)
             beginning_of_text = False
             token_ids.extend(tokenized_text)
 
-            # store multimodal token positions
+            # update mm token positions
+            multimodal_type = "image" if multimodal_position in multimodal_positions else "audio"
             if multimodal_type == "image":
                 image_token_positions.append(len(token_ids))
             else:
                 audio_token_positions.append(len(token_ids))
-            char_pos = multimodal_char_pos
-            multimodel_idx += 1
-        if char_pos < len(text):
-            curr_text = text[char_pos:]
-            tokenized_text = self._tokenize(curr_text, begin=beginning_of_text, end=True)
-            token_ids.extend(tokenized_text)
-        return token_ids, image_token_positions, audio_token_positions
 
-    def tokenize_with_spans(
-        self, text: str, char_spans: list[tuple[int, int]]
-    ) -> tuple[list[int], list[tuple[int, int]]]:
-        """
-        Perform span-aware tokenization and return the tokenized input_ids along with token spans.
-        """
-        input_ids = []
-        token_spans = []
-        char_pos = 0
-        beginning_of_text = True
-        for start, end in char_spans:
-            if char_pos < start:
-                curr_text = text[char_pos:start]
-                tokenized_text = self.tokenize(curr_text, begin=beginning_of_text, end=False)
-                beginning_of_text = False
-                input_ids.extend(tokenized_text)
-            curr_text = text[start : end + 1]
-            if end >= len(text) - 1:
-                tokenized_text = self.tokenize(curr_text, begin=beginning_of_text, end=True)
-            else:
-                tokenized_text = self.tokenize(curr_text, begin=beginning_of_text, end=False)
-            beginning_of_text = False
-            token_spans.append((len(input_ids), len(input_ids) + len(tokenized_text) - 1))
-            input_ids.extend(tokenized_text)
-            char_pos = end + 1
-        if char_pos < len(text):
-            curr_text = text[char_pos:]
-            tokenized_text = self.tokenize(curr_text, begin=beginning_of_text, end=True)
-            input_ids.extend(tokenized_text)
-        return input_ids, token_spans
+            # updates
+            char_pos = multimodal_position
+            mm_idx += 1
+            multimodal_position = multimodal_positions[mm_idx] if mm_idx < len(multimodal_positions) else float("inf")
+
+        # tokenize text after all spans
+        tokenized_text = self._tokenize(text[char_pos:], begin=beginning_of_text, end=True)
+        token_ids.extend(tokenized_text)
+
+        return token_ids, token_spans, image_token_positions, audio_token_positions
 
     def detokenize(self, token_ids: int | list[int] | np.ndarray | torch.Tensor) -> str:
         return self.tokenizer.decode(token_ids)

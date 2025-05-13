@@ -162,9 +162,6 @@ class StageBase(Configurable[StageConfig]):
                 nonlocal i
                 for key in module._parameters:
                     meta = typing.cast(ParameterMeta, module._parameters[key])
-                    # TODO Soham: clean way to get around check?
-                    if meta is None:
-                        continue
                     module._parameters[key] = self.get_parameter_buffer(meta.tensor_name)
                     i += 1
 

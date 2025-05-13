@@ -15,7 +15,11 @@ from fast_llm.layers.transformer.config import (
     TransformerKwargs,
     VisionTransformerConfig,
 )
-from fast_llm.layers.vision_encoder.config import VisionTransformerDimNames, VisionTransformerKwargs
+from fast_llm.layers.vision_encoder.config import (
+    VisionEncoderKwargs,
+    VisionTransformerDimNames,
+    VisionTransformerKwargs,
+)
 from fast_llm.tensor import TensorMeta
 
 logger = logging.getLogger(__name__)
@@ -163,6 +167,7 @@ def get_2d_rotary_frequencies(
 
     return frequencies
 
+
 class RotaryEmbeddingPreprocessor(Preprocessor):
     _scalar_dim: TensorDim
     _mask: torch.Tensor
@@ -216,7 +221,11 @@ class RotaryEmbeddingPreprocessor(Preprocessor):
             )
 
     def preprocess(self, batch, kwargs: dict[str, typing.Any]) -> None:
-        self._create_tensors(kwargs[TransformerKwargs.sequence_length])
+        if self._config.type == RotaryEmbeddingType.pixtral:
+            max_num_patches = kwargs[VisionEncoderKwargs.image_size] // kwargs[VisionEncoderKwargs.patch_size]
+            self._create_tensors(kwargs[TransformerKwargs.sequence_length], max_num_patches)
+        else:
+            self._create_tensors(kwargs[TransformerKwargs.sequence_length])
         sequence_k = kwargs[TransformerKwargs.sequence_k_dim].size
         sequence_q = kwargs[TransformerKwargs.sequence_q_dim].size
         if self._config.type == RotaryEmbeddingType.pixtral:

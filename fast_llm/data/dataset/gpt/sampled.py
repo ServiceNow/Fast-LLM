@@ -95,10 +95,9 @@ class GPTSampledIndexedDataset(SampledDataset):
         self._truncate_documents = sampling.truncate_documents
         self._device = torch.device("cuda" if self._config.gpu else "cpu")
 
-        # TODO Soham: use something else for this check, introducing has_images for just this check might be unnecessary.
         if self._indexed_dataset.has_images and self._truncate_documents:
             raise RuntimeError(
-                "Truncating documents with images is not supported. Please turn off truncation to use images."
+                "Truncating documents with images is not yet supported. Please turn off truncation to use images."
             )
         if self._indexed_dataset.has_audio and self._truncate_documents:
             raise RuntimeError(
@@ -170,17 +169,25 @@ class GPTSampledIndexedDataset(SampledDataset):
         Create a `GPTSampledDataset` with the requested parameters.
         """
         # Get the document sizes, the main information needed for sampling.
-        # TODO Soham: verify numpy correctness
-        document_sizes, image_sizes, audio_sizes = self._indexed_dataset.get_document_sizes()
+        document_sizes, image_sizes = self._indexed_dataset.get_document_sizes()
         document_sizes = torch.from_numpy(document_sizes).to(self._device)
-        image_token_sizes = torch.zeros_like(document_sizes).to(self._device)
-        audio_token_sizes = torch.zeros_like(document_sizes).to(self._device)
-        long_audio_filter = torch.zeros_like(document_sizes, dtype=torch.bool)
-        # TODO Soham: handle max image size
+        image_token_sizes = []
         for i, sizes in enumerate(image_sizes):
-            image_token_sizes[i] = sum(
-                (sizes[:, 0] // self._parameters.patch_size) * (sizes[:, 1] // self._parameters.patch_size)
+            image_token_sizes.append(
+                sum(
+                    get_num_patches(
+                        *get_resize_dims(
+                            *size,
+                            self._parameters.image_size,
+                            self._parameters.image_size,
+                            self._parameters.patch_size,
+                        ),
+                        self._parameters.patch_size,
+                    )
+                    for size in sizes
+                )
             )
+        image_token_sizes = torch.tensor(image_token_sizes).to(self._device)
 
         for i, sizes in enumerate(audio_sizes):
             audio_token_size_arr, to_filter = self._compute_audio_token_size(sizes)
@@ -480,32 +487,33 @@ class GPTSampledIndexedDataset(SampledDataset):
             else:
                 document_index = self._document_shuffling[document_sampling_index - self._unshuffled_documents].item()
 
-            document_size, image_lengths, audio_lengths = self._indexed_dataset.get_document_size(
-                document_index, self._parameters.patch_size
-            )
+            text_size, image_lengths, audio_lengths = self._indexed_dataset.get_document_size(document_index)
 
             image_sizes = [
                 get_num_patches(
-                    *get_resize_dims(*image_length, self._image_size, self._image_size, self._parameters.patch_size),
+                    *get_resize_dims(
+                        *image_length,
+                        self._parameters.image_size,
+                        self._parameters.image_size,
+                        self._parameters.patch_size,
+                    ),
                     self._parameters.patch_size,
                 )
                 for image_length in image_lengths
             ]
             image_tokens = sum(image_sizes)
+            document_size = text_size + image_tokens
 
             audio_token_size_arr, _ = self._compute_audio_token_size(audio_lengths)
             audio_tokens = audio_token_size_arr.sum()
 
             if not self._truncate_documents:
-                if document_size + image_tokens + audio_tokens > self._parameters.sequence_length + 1:
+                if document_size > self._parameters.sequence_length + 1:
                     # Document too long, ignore
                     document_sampling_index += 1
                     continue
                 tokens_in_sample = token_count % (self._parameters.sequence_length + 1)
-                if (
-                    document_size + image_tokens + audio_tokens + tokens_in_sample
-                    > self._parameters.sequence_length + 1
-                ):
+                if document_size + tokens_in_sample > self._parameters.sequence_length + 1:
                     # Document belongs to the next sample, need to account for padding.
                     padding_size = self._parameters.sequence_length + 1 - tokens_in_sample
                     if token_count > token_start:
@@ -521,10 +529,10 @@ class GPTSampledIndexedDataset(SampledDataset):
                         token_count += padding_size
 
             # Determine if the document belongs to the requested sample.
-            if token_count + document_size + image_tokens + audio_tokens >= token_start:
+            if token_count + document_size >= token_start:
                 # Determine which part of the document belong to the sample, and add it to the list.
                 token_start_index_in_document = max(token_start - token_count, 0)
-                token_end_index_in_document = min(token_end - token_count, document_size)
+                token_end_index_in_document = min(token_end - token_count, text_size)
                 sample = self._indexed_dataset.get(
                     document_index,
                     offset=token_start_index_in_document,
@@ -558,6 +566,7 @@ class GPTSampledIndexedDataset(SampledDataset):
                 token_ids.append(sample.token_ids[start_pos:])
                 images.append(sample.images)
                 audio.append(self.apply_audio_padding(sample.audio))
+
                 # TODO Soham: add offsets for loss masking spans
                 if self._parameters.use_loss_masking_spans:
                     for loss_masking_span in sample.loss_masking_spans:
@@ -571,7 +580,7 @@ class GPTSampledIndexedDataset(SampledDataset):
 
             # Go to the next document.
             document_sampling_index += 1
-            token_count += document_size + image_tokens + audio_tokens
+            token_count += document_size
 
         sequence_lengths = (
             np.array([ids.size - (idx == len(token_ids) - 1) for idx, ids in enumerate(token_ids)], dtype=np.int32)
@@ -680,7 +689,7 @@ class LegacyGPTSampledIndexedDataset(SampledDataset):
         Create a `GPTSampledDataset` with the requested parameters.
         """
         logger.info(f" > Sampling dataset {self._indexed_dataset.name} ...")
-        document_sizes = self._indexed_dataset.get_document_sizes()
+        document_sizes, _ = self._indexed_dataset.get_document_sizes()
         num_documents = len(document_sizes)
         num_tokens = document_sizes.sum()
         np_rng = np.random.RandomState(seed=self._config.seed)

@@ -179,6 +179,11 @@ class GPTMemmapDatasetPreparatorConfig(DatasetPreparatorConfig):
         desc="Tokenizer configuration.",
         hint=FieldHint.feature,
     )
+    image_patch_size: int = Field(
+        default=16,
+        desc="Patch size for images. This is used solely for computing the number of tokens in an image to get an even split.",
+        hint=FieldHint.optional,
+    )
     splits: dict[str, float] | None = Field(
         default=None,
         desc="Split the output dataset into multiple ones (ex, train/valid/test) with the specified ratios."
@@ -186,7 +191,6 @@ class GPTMemmapDatasetPreparatorConfig(DatasetPreparatorConfig):
         hint=FieldHint.optional,
     )
 
-    # TODO Soham: move tokenizer validation to MultiModalDataProcessor
     def _validate(self) -> None:
         assert self.tokenizer.path is not None
         if self.dataset.data_type is not None:
