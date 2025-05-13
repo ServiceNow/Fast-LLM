@@ -52,6 +52,7 @@ class Tokenizer:
         token_spans = []
         char_pos = 0
         beginning_of_text = True
+        
         for start, end in char_spans:
             if char_pos < start:
                 curr_text = text[char_pos:start]

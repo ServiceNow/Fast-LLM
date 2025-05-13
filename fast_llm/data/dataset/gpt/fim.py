@@ -20,8 +20,11 @@ class GPTFimDataset(SampledDataset):
     ):
         if sampling.parameters.use_loss_masking_spans:
             raise NotImplementedError("FIM is currently not compatible with loss masking.")
+        if sampling.parameters.use_preference_loss_spans:
+            raise NotImplementedError("FIM is currently not compatible with preference loss masking.")
         self._config = config
         self._dataset = dataset
+
         self._seed = sampling.config.seed
         self._tokenizer = sampling.tokenizer
         if self._tokenizer is None:
