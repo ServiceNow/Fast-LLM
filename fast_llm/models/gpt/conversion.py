@@ -167,20 +167,16 @@ class CommonHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
 
     def _create_weight_converters(
         self,
-        hf_base_prefix: str = "",
-        fast_llm_offset: int = 1,
     ) -> list[WeightConverter]:
         converters = []
         num_layers = self._model.config.base_model.transformer.num_layers
 
         # Embeddings
         converters.append(
-            WeightConverter(
-                f"layers.{fast_llm_offset - 1}.word_embeddings_weight", f"{hf_base_prefix}model.embed_tokens.weight"
-            )
+            WeightConverter(f"layers.{num_layers - 1}.word_embeddings_weight", f"model.embed_tokens.weight")
         )
 
-        converters += self._create_lm_head_converters(hf_base_prefix, fast_llm_offset)
+        converters += self._create_lm_head_converters()
 
         for i in range(num_layers):
             converters += self._create_transformer_layer_converters(f"layers.{i+1}", f"model.layers.{i}")
@@ -565,196 +561,111 @@ class LlavaHuggingfaceCheckpointHandler(MistralHuggingfaceCheckpointHandler):
 
     @classmethod
     def _create_config_converters(cls) -> list[ParamConverter]:
+        # lm_converters = super()._create_config_converters()
         lm_converters = super()._create_config_converters()
-        lm_converters[-2] = ConstantExportParamConverter(
-            export_names=(("architectures",),), export_value=["LlavaForConditionalGeneration"]
-        )
-        # TODO Soham: cleaner way to get language model config converters
-        for converter in lm_converters:
-            if isinstance(converter, (RenameParamConverter, MappedConfigParamConverter, RopeScalingParamConverter)):
-                # Llava uses a different name for the text config
-                # if converter.fast_llm_names[0][0] == "transformer":
+        for idx, converter in enumerate(lm_converters):
+            if converter.export_names == (("model_type",),):
+                continue
+            elif converter.export_names == (("architectures",),):
+                ignore_index = idx
+            if converter.export_names:
                 converter.export_names = (("text_config", *converter.export_names[0]), *converter.export_names[1:])
-            # if converter.fast_llm_names[0][0] == "transformer":
-            #     converter.export_names[0] = ("text_config", *converter.export_names[0])
-        return lm_converters + [
-            # Multimodal adapter
-            RenameParamConverter(
-                fast_llm_names=(("vision_encoder", "adapter_size"),),
-                export_names=(("text_config", "hidden_size"),),
-            ),
-            # Image processing and conv layer
-            # TODO Soham: these options are not in the fast-llm model config. They're read from BatchConfig currently
-            # RenameParamConverter(
-            #     fast_llm_names=(("vision_encoder", "encoder", "image_size"),),
-            #     export_names=(
-            #         (
-            #             "vision_config",
-            #             "image_size",
-            #         ),
-            #     ),
-            # ),
-            # RenameParamConverter(
-            #     fast_llm_names=(("vision_encoder", "encoder", "patch_size"),),
-            #     export_names=(
-            #         (
-            #             "vision_config",
-            #             "patch_size",
-            #         ),
-            #     ),
-            # ),
-            ConstantImportParamConverter(
-                fast_llm_names=(("vision_encoder", "patch_norm", "type"),),
-                fast_llm_value=NormalizationType.rms_norm,
-            ),
-            ConstantImportParamConverter(
-                fast_llm_names=(("vision_encoder", "transformer", "normalization", "type"),),
-                fast_llm_value=NormalizationType.rms_norm,
-            ),
-            # Vision Transformer
-            RenameParamConverter(
-                fast_llm_names=(("vision_encoder", "transformer", "num_layers"),),
-                export_names=(
-                    (
-                        "vision_config",
-                        "num_hidden_layers",
+
+        return (
+            lm_converters[:ignore_index]
+            + lm_converters[ignore_index + 1 :]
+            + [
+                ConstantExportParamConverter(
+                    export_names=(("architectures",),), export_value=["LlavaForConditionalGeneration"]
+                ),
+                # Vision Adapter
+                RenameParamConverter(
+                    fast_llm_names=(("vision_encoder", "adapter_size"),),
+                    export_names=(("text_config", "hidden_size"),),
+                ),
+                ConstantImportParamConverter(
+                    fast_llm_names=(("vision_encoder", "patch_norm", "type"),),
+                    fast_llm_value=NormalizationType.rms_norm,
+                ),
+                ConstantImportParamConverter(
+                    fast_llm_names=(("vision_encoder", "transformer", "normalization", "type"),),
+                    fast_llm_value=NormalizationType.rms_norm,
+                ),
+                # Vision Transformer
+                RenameParamConverter(
+                    fast_llm_names=(("vision_encoder", "transformer", "num_layers"),),
+                    export_names=(
+                        (
+                            "vision_config",
+                            "num_hidden_layers",
+                        ),
                     ),
                 ),
-            ),
-            RenameParamConverter(
-                fast_llm_names=(("vision_encoder", "transformer", "hidden_size"),),
-                export_names=(
-                    (
-                        "vision_config",
-                        "hidden_size",
+                RenameParamConverter(
+                    fast_llm_names=(("vision_encoder", "transformer", "hidden_size"),),
+                    export_names=(
+                        (
+                            "vision_config",
+                            "hidden_size",
+                        ),
                     ),
                 ),
-            ),
-            RenameParamConverter(
-                fast_llm_names=(("vision_encoder", "transformer", "num_attention_heads"),),
-                export_names=(
-                    (
-                        "vision_config",
-                        "num_attention_heads",
+                RenameParamConverter(
+                    fast_llm_names=(("vision_encoder", "transformer", "num_attention_heads"),),
+                    export_names=(
+                        (
+                            "vision_config",
+                            "num_attention_heads",
+                        ),
                     ),
                 ),
-            ),
-            RenameParamConverter(
-                fast_llm_names=(("vision_encoder", "transformer", "head_groups"),),
-                export_names=(
-                    (
-                        "vision_config",
-                        "num_key_value_heads",
+                RenameParamConverter(
+                    fast_llm_names=(("vision_encoder", "transformer", "head_groups"),),
+                    export_names=(
+                        (
+                            "vision_config",
+                            "num_key_value_heads",
+                        ),
                     ),
                 ),
-            ),
-            RenameParamConverter(
-                fast_llm_names=(("vision_encoder", "transformer", "ffn_hidden_size"),),
-                export_names=(
-                    (
-                        "vision_config",
-                        "intermediate_size",
+                RenameParamConverter(
+                    fast_llm_names=(("vision_encoder", "transformer", "ffn_hidden_size"),),
+                    export_names=(
+                        (
+                            "vision_config",
+                            "intermediate_size",
+                        ),
                     ),
                 ),
-            ),
-            MappedConfigParamConverter(
-                fast_llm_names=(("vision_encoder", "transformer", "activation_type"),),
-                export_names=(
-                    (
-                        "vision_config",
-                        "hidden_act",
+                MappedConfigParamConverter(
+                    fast_llm_names=(("vision_encoder", "transformer", "activation_type"),),
+                    export_names=(
+                        (
+                            "vision_config",
+                            "hidden_act",
+                        ),
                     ),
+                    fast_llm_value=ActivationType.from_hf_name,
+                    export_value=lambda activation_type: activation_type.hf_name,
                 ),
-                fast_llm_value=ActivationType.from_hf_name,
-                export_value=lambda activation_type: activation_type.hf_name,
-            ),
-            ConstantImportParamConverter(
-                fast_llm_names=(("vision_encoder", "transformer", "gated"),), fast_llm_value=True
-            ),
-            MappedConfigParamConverter(
-                fast_llm_names=(("vision_encoder", "adapter_activation_type"),),
-                export_names=(("projector_hidden_act",),),
-                fast_llm_value=ActivationType.from_hf_name,
-                export_value=lambda activation_type: activation_type.hf_name,
-            ),
-            ConstantImportParamConverter(
-                fast_llm_names=(("vision_encoder", "transformer", "add_linear_biases"),), fast_llm_value=False
-            ),
-            # TODO Soham: add this config param for completeness?
-            # RenameParamConverter(
-            #     fast_llm_names=(("vision_encoder", "encoder", "num_channels"),),
-            #     export_names=(
-            #         (
-            #             "vision_config",
-            #             "num_channels",
-            #         ),
-            #     ),
-            # ),
-            # RenameParamConverter(
-            #     fast_llm_names=(("vision_encoder", "transformer", "attention_dropout"),),
-            #     export_names=(
-            #         (
-            #             "vision_config",
-            #             "attention_dropout",
-            #         ),
-            #     ),
-            # ),
-            RenameParamConverter(
-                fast_llm_names=(("vision_encoder", "transformer", "rotary", "theta"),),
-                export_names=(("vision_config", "rope_theta"),),
-            ),
-            # TODO Soham: add this config param in vision encoder for completeness?
-            # RenameParamConverter(
-            #     fast_llm_names=(("vision_encoder", "transformer", "initializer_range"),),
-            #     export_names=(("vision_config", "initializer_range"),),
-            # ),
-        ]
-
-    def _create_vision_transformer_converters(self) -> list[WeightConverter]:
-        num_layers = self._model.config.base_model.vision_encoder.transformer.num_layers
-        vision_transformer_converters = []
-        for layer in range(num_layers):
-            # TODO Soham: check if args are correct
-            vision_transformer_converters.extend(
-                self._create_vision_transformer_layer_converters(
-                    layer,
-                    ignore_export=False,
-                    hf_base_prefix="vision_tower.transformer.layers.",
-                    fast_llm_offset=1,
-                    type="vision",
-                )
-            )
-
-        return vision_transformer_converters
-
-    def _create_vision_encoder_weight_converters(self) -> list[WeightConverter]:
-        patch_conv_converters = [WeightConverter("layers.0.weight", "vision_tower.patch_conv.weight")]
-        if self._model.config.base_model.vision_encoder.conv_bias:
-            patch_conv_converters.append(WeightConverter("layers.0.bias", "vision_tower.patch_conv.bias"))
-        layernorm_converters = [
-            WeightConverter("layers.0.norm.weight", "vision_tower.ln_pre.weight"),
-        ]
-        if self._model.config.base_model.vision_encoder.patch_norm.type == NormalizationType.layer_norm:
-            layernorm_converters.append(WeightConverter("layers.0.norm.bias", "vision_tower.ln_pre.bias"))
-
-        vision_transformer_converters = self._create_vision_transformer_converters()
-        offset = self._model.config.base_model.vision_encoder.transformer.num_layers + 1
-        adapter_converters = [
-            WeightConverter(f"layers.{offset}.layer_1.weight", "multi_modal_projector.linear_1.weight"),
-            WeightConverter(f"layers.{offset}.layer_1.bias", "multi_modal_projector.linear_1.bias"),
-            # TODO Soham: add bias based on config
-            WeightConverter(f"layers.{offset}.layer_2.weight", "multi_modal_projector.linear_2.weight"),
-            WeightConverter(f"layers.{offset}.layer_2.bias", "multi_modal_projector.linear_2.bias"),
-        ]
-
-        return patch_conv_converters + layernorm_converters + vision_transformer_converters + adapter_converters
-
-    def _create_weight_converters(self) -> list[WeightConverter]:
-        vision_encoder_converter = self._create_vision_encoder_weight_converters()
-        offset = self._model.config.base_model.vision_encoder.transformer.num_layers + 3
-        # TODO Soham: call _create_transformer_layer_converters with llava's custom offset
-        lm_converters = super()._create_weight_converters(hf_base_prefix="language_model.", fast_llm_offset=offset)
-        return vision_encoder_converter + lm_converters
+                ConstantImportParamConverter(
+                    fast_llm_names=(("vision_encoder", "transformer", "gated"),), fast_llm_value=True
+                ),
+                MappedConfigParamConverter(
+                    fast_llm_names=(("vision_encoder", "adapter_activation_type"),),
+                    export_names=(("projector_hidden_act",),),
+                    fast_llm_value=ActivationType.from_hf_name,
+                    export_value=lambda activation_type: activation_type.hf_name,
+                ),
+                ConstantImportParamConverter(
+                    fast_llm_names=(("vision_encoder", "transformer", "add_linear_biases"),), fast_llm_value=False
+                ),
+                RenameParamConverter(
+                    fast_llm_names=(("vision_encoder", "transformer", "rotary", "theta"),),
+                    export_names=(("vision_config", "rope_theta"),),
+                ),
+            ]
+        )
 
     def _create_vision_transformer_layer_converters(
         self,
@@ -849,6 +760,59 @@ class LlavaHuggingfaceCheckpointHandler(MistralHuggingfaceCheckpointHandler):
                 self._model.config.base_model,
             ),
         ]
+
+    def _create_vision_transformer_converters(self) -> list[WeightConverter]:
+        num_layers = self._model.config.base_model.vision_encoder.transformer.num_layers
+        vision_transformer_converters = []
+        for layer in range(num_layers):
+            # TODO Soham: check if args are correct
+            vision_transformer_converters.extend(
+                self._create_vision_transformer_layer_converters(
+                    layer,
+                    ignore_export=False,
+                    hf_base_prefix="vision_tower.transformer.layers.",
+                    fast_llm_offset=1,
+                    type="vision",
+                )
+            )
+
+        return vision_transformer_converters
+
+    def _create_vision_encoder_weight_converters(self) -> list[WeightConverter]:
+        patch_conv_converters = [WeightConverter("layers.0.weight", "vision_tower.patch_conv.weight")]
+        if self._model.config.base_model.vision_encoder.conv_bias:
+            patch_conv_converters.append(WeightConverter("layers.0.bias", "vision_tower.patch_conv.bias"))
+        layernorm_converters = [
+            WeightConverter("layers.0.norm.weight", "vision_tower.ln_pre.weight"),
+        ]
+        if self._model.config.base_model.vision_encoder.patch_norm.type == NormalizationType.layer_norm:
+            layernorm_converters.append(WeightConverter("layers.0.norm.bias", "vision_tower.ln_pre.bias"))
+
+        vision_transformer_converters = self._create_vision_transformer_converters()
+        offset = self._model.config.base_model.vision_encoder.transformer.num_layers + 1
+        adapter_converters = [
+            WeightConverter(f"layers.{offset}.layer_1.weight", "multi_modal_projector.linear_1.weight"),
+            WeightConverter(f"layers.{offset}.layer_1.bias", "multi_modal_projector.linear_1.bias"),
+            # TODO Soham: add bias based on config
+            WeightConverter(f"layers.{offset}.layer_2.weight", "multi_modal_projector.linear_2.weight"),
+            WeightConverter(f"layers.{offset}.layer_2.bias", "multi_modal_projector.linear_2.bias"),
+        ]
+
+        return patch_conv_converters + layernorm_converters + vision_transformer_converters + adapter_converters
+
+    def _create_weight_converters(self) -> list[WeightConverter]:
+        vision_encoder_converter = self._create_vision_encoder_weight_converters()
+        offset = self._model.config.base_model.vision_encoder.transformer.num_layers + 3
+        # Embeddings
+        lm_converters = [
+            WeightConverter(f"layers.{offset - 1}.word_embeddings_weight", f"language_model.model.embed_tokens.weight")
+        ]
+        for i in range(self._model.config.base_model.transformer.num_layers):
+            lm_converters += self._create_transformer_layer_converters(
+                fast_llm_layer_name=f"layers.{i + offset}", hf_layer_name=f"language_model.model.layers.{i}"
+            )
+        lm_converters += self._create_lm_head_converters(hf_base_prefix="language_model.", fast_llm_offset=offset)
+        return vision_encoder_converter + lm_converters
 
 
 class MixtralHuggingfaceCheckpointHandler(CommonLlamaHuggingfaceCheckpointHandler):
