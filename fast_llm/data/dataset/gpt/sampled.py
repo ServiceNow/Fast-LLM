@@ -135,12 +135,24 @@ class GPTSampledIndexedDataset(SampledDataset):
         # TODO Soham: verify numpy correctness
         document_sizes, image_sizes = self._indexed_dataset.get_document_sizes()
         document_sizes = torch.from_numpy(document_sizes).to(self._device)
-        image_token_sizes = torch.zeros_like(document_sizes).to(self._device)
+        image_token_sizes = []
         # TODO Soham: handle max image size
         for i, sizes in enumerate(image_sizes):
-            image_token_sizes[i] = sum(
-                (sizes[:, 0] // self._parameters.patch_size) * (sizes[:, 1] // self._parameters.patch_size)
+            image_token_sizes.append(
+                sum(
+                    get_num_patches(
+                        *get_resize_dims(
+                            *size,
+                            self._parameters.image_size,
+                            self._parameters.image_size,
+                            self._parameters.patch_size,
+                        ),
+                        self._parameters.patch_size,
+                    )
+                    for size in sizes
+                )
             )
+        image_token_sizes = image_token_sizes.to(self._device)
 
         documents_per_epoch = document_sizes.numel()
         tokens_per_epoch = document_sizes.sum().item() + image_token_sizes.sum().item()
