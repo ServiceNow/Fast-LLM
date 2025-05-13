@@ -96,7 +96,7 @@ class GPTSampledIndexedDataset(SampledDataset):
         # TODO Soham: use something else for this check, introducing has_images for just this check might be unnecessary.
         if self._indexed_dataset.has_images and self._truncate_documents:
             raise RuntimeError(
-                "Truncating documents with images is not supported. Please turn off truncation to use images."
+                "Truncating documents with images is not yet supported. Please turn off truncation to use images."
             )
 
         if sampling.cache_directory is None:
@@ -132,11 +132,9 @@ class GPTSampledIndexedDataset(SampledDataset):
         Create a `GPTSampledDataset` with the requested parameters.
         """
         # Get the document sizes, the main information needed for sampling.
-        # TODO Soham: verify numpy correctness
         document_sizes, image_sizes = self._indexed_dataset.get_document_sizes()
         document_sizes = torch.from_numpy(document_sizes).to(self._device)
         image_token_sizes = []
-        # TODO Soham: handle max image size
         for i, sizes in enumerate(image_sizes):
             image_token_sizes.append(
                 sum(
@@ -476,7 +474,6 @@ class GPTSampledIndexedDataset(SampledDataset):
                     start_pos = im_position
                 token_ids.append(sample.token_ids[start_pos:])
                 images.append(sample.images)
-                # TODO Soham: add offsets for loss masking spans
                 if self._parameters.use_loss_masking_spans:
                     for loss_masking_span in sample.loss_masking_spans:
                         span = np.clip(
