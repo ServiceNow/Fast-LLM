@@ -11,7 +11,6 @@ if typing.TYPE_CHECKING:
 
 
 class GPTIndexedDataset(IndexedDataset):
-    # TODO Soham: should we change this to include images?
     @abc.abstractmethod
     def get_document_sizes(self) -> np.ndarray:
         """

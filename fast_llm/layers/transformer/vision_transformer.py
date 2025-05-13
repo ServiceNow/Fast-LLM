@@ -37,19 +37,3 @@ class VisionTransformerLayer(TransformerLayer):
         if self._return_input:
             dims = (TensorDim("stacked_input_output", 2),) + dims
         return TensorMeta.from_dims(dims, tensor_name=f"{self.name} {name}", dtype=tensor.dtype)
-
-    # TODO Soham: remove this since we only need to call the parent method
-    # def forward(
-    #     self,
-    #     input_: torch.Tensor,
-    #     kwargs: dict[str, typing.Any],
-    #     losses: dict[str, typing.Any] | None = None,
-    #     metrics: dict[str, typing.Any] | None = None,
-    # ) -> torch.Tensor:
-    #     if isinstance(input_, TensorMeta):
-    #         return self._get_meta(input_, "output", kwargs)
-    #     # Hack for now to compute the patch embeddings
-    #     kwargs[VisionTransformerKwargs.patch_embeddings] = super().forward(
-    #         kwargs.pop(VisionTransformerKwargs.patch_embeddings), kwargs, losses, metrics
-    #     )
-    #     return input_
