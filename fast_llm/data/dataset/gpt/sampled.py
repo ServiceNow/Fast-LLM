@@ -150,7 +150,7 @@ class GPTSampledIndexedDataset(SampledDataset):
                     for size in sizes
                 )
             )
-        image_token_sizes = image_token_sizes.to(self._device)
+        image_token_sizes = torch.tensor(image_token_sizes).to(self._device)
 
         documents_per_epoch = document_sizes.numel()
         tokens_per_epoch = document_sizes.sum().item() + image_token_sizes.sum().item()
@@ -417,7 +417,7 @@ class GPTSampledIndexedDataset(SampledDataset):
             else:
                 document_index = self._document_shuffling[document_sampling_index - self._unshuffled_documents].item()
 
-            document_size, image_lengths = self._indexed_dataset.get_document_size(document_index)
+            text_size, image_lengths = self._indexed_dataset.get_document_size(document_index)
 
             image_sizes = [
                 get_num_patches(
@@ -432,7 +432,7 @@ class GPTSampledIndexedDataset(SampledDataset):
                 for image_length in image_lengths
             ]
             image_tokens = sum(image_sizes)
-            document_size += image_tokens
+            document_size = text_size + image_tokens
 
             if not self._truncate_documents:
                 if document_size > self._parameters.sequence_length + 1:
@@ -456,7 +456,7 @@ class GPTSampledIndexedDataset(SampledDataset):
             if token_count + document_size >= token_start:
                 # Determine which part of the document belong to the sample, and add it to the list.
                 token_start_index_in_document = max(token_start - token_count, 0)
-                token_end_index_in_document = min(token_end - token_count, document_size)
+                token_end_index_in_document = min(token_end - token_count, text_size)
                 sample = self._indexed_dataset.get(
                     document_index,
                     offset=token_start_index_in_document,
