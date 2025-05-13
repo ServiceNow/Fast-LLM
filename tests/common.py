@@ -22,6 +22,8 @@ from fast_llm.models.gpt.config import (
     MTPLlamaGPTHuggingfaceCheckpointFormat,
     Qwen2GPTHuggingfaceCheckpointFormat,
     Starcoder2GPTHuggingfaceCheckpointFormat,
+    DiffusionDreamGPTHuggingfaceCheckpointFormat,
+    DiffusionLlamaGPTHuggingfaceCheckpointFormat,
 )
 from fast_llm.models.ssm.config import HybridSSMBaseModelConfig, LLambaHuggingfaceCheckpointFormat
 from fast_llm.tools.train import CliTrainingConfig
@@ -280,6 +282,20 @@ _CONFIGS = {
         CONFIG_LLAMA_MTP_MEGATRON,
         CONFIG_LLAMA_MTP_COMMON,
         MTPLlamaGPTHuggingfaceCheckpointFormat,
+    ),
+    "dream": (
+        "gpt",
+        CONFIG_QWEN2_FAST_LLM,
+        CONFIG_QWEN2_MEGATRON,
+        CONFIG_QWEN2_COMMON,
+        DiffusionDreamGPTHuggingfaceCheckpointFormat,
+    ),
+    "diffusion-llama": (
+        "gpt",
+        CONFIG_LLAMA_YARN_FAST_LLM,
+        CONFIG_LLAMA_YARN_MEGATRON,
+        CONFIG_LLAMA_YARN_COMMON,
+        DiffusionLlamaGPTHuggingfaceCheckpointFormat,
     ),
 }
 
