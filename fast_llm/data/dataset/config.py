@@ -174,10 +174,12 @@ class SampledDatasetUpdateConfig(SampledDatasetConfig):
 
     _abstract = True
     sampling: SamplingConfig = Field(
+        default_factory=SamplingConfig,
         desc="Optional override to sampling configuration parameters.",
         hint=FieldHint.core,
     )
     dataset: SampledDatasetConfig = Field(
+        default_factory=SampledDatasetConfig,
         desc="The dataset to sample from.",
         hint=FieldHint.core,
     )

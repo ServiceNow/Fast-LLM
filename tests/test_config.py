@@ -31,7 +31,7 @@ def run_without_import(cmd: str):
                 "sys.path=[p for p in sys.path if not any(x in p for x in ('site-packages', 'dist-packages', '.egg'))]",
                 # We still want to enable imports from within Fast-llm
                 f"sys.path.append('{repo_path}')",
-                "from fast_llm.tools.cli import fast_llm as main",
+                "from fast_llm.cli import fast_llm_main as main",
                 cmd,
             ]
         ),
@@ -110,7 +110,7 @@ def test_pretrained_config(load_config: ModelConfigType):
                     "rotary": {"type": "default"},
                     "num_layers": 12,  # Default
                     "hidden_size": 1024,  # Default
-                    "window_size": 32,  # Non-architecture
+                    "window_size": 32,
                     "ffn_hidden_size": 4096,  # Implicit default, default value
                     "activation_type": "silu",  # Implicit default, non-default value
                     "head_groups": 4,
@@ -131,7 +131,7 @@ def test_pretrained_config(load_config: ModelConfigType):
         "transformer": {
             # rotary: Don't override nested.
             "normalization": {"implementation": "triton"},  # Update non-default nested
-            "peft": {"freeze_others": False},  # Update default nested, non-architecture
+            "peft": {"type": "lora", "freeze_others": False},  # Update default nested, change type
             "hidden_size": 512,  # Override, affects derived value (kv channels)
             "head_groups": 1,  # Override to default
         },
@@ -156,9 +156,9 @@ def test_pretrained_config(load_config: ModelConfigType):
     if load_config in (ModelConfigType.fast_llm, ModelConfigType.model):
         expected_config["base_model"] = {
             "transformer": {
-                "normalization": {"type": "rms_norm", "implementation": "triton"},
-                "rotary": {"type": "default"},
-                "peft": {"freeze_others": False},
+                "normalization": {"type": "RMSNormalizationConfig", "implementation": "triton"},
+                "rotary": {"type": "DefaultRotaryConfig"},
+                "peft": {"type": "TransformerLoRAConfig", "freeze_others": False},
                 "num_layers": 12,
                 "hidden_size": 512,
                 "ffn_hidden_size": 4096,
@@ -170,6 +170,8 @@ def test_pretrained_config(load_config: ModelConfigType):
             "vocab_size": 1000,
         }
     else:
+        base_model_update["transformer"]["normalization"]["type"] = "RMSNormalizationConfig"
+        base_model_update["transformer"]["rotary"]["type"] = "DefaultRotaryConfig"
         expected_config["base_model"] = base_model_update
 
     check_equal_nested(serialized_config, expected_config)

@@ -58,7 +58,7 @@ class ExampleVerboseConfig(Config):
 
 @config_class()
 class ExampleNestedConfig(ExampleConfig):
-    nested_field: ExampleConfig = Field(hint=FieldHint.core)
+    nested_field: ExampleConfig = Field(default_factory=ExampleConfig, hint=FieldHint.core)
 
 
 def check_config(

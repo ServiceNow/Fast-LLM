@@ -121,6 +121,7 @@ class GPTMemmapDatasetPreparatorConfig(DatasetPreparatorConfig):
         hint=FieldHint.core,
     )
     distributed: DatasetPreparatorDistributedConfig = Field(
+        default_factory=FimConfig,
         desc="Configuration for distributed processing.",
         hint=FieldHint.feature,
     )
@@ -149,10 +150,12 @@ class GPTMemmapDatasetPreparatorConfig(DatasetPreparatorConfig):
         valid=check_field(Assert.geq, 1),
     )
     dataset: GPTHuggingfaceDatasetConfig = Field(
+        default_factory=GPTHuggingfaceDatasetConfig,
         desc="Configuration for the dataset.",
         hint=FieldHint.feature,
     )
     tokenizer: TokenizerConfig = Field(
+        default_factory=TokenizerConfig,
         desc="Configuration for the tokenizer.",
         hint=FieldHint.feature,
     )
@@ -177,3 +180,4 @@ class GPTMemmapDatasetPreparatorConfig(DatasetPreparatorConfig):
 
 
 RunnableConfig.register_subclass("prepare_gpt_memmap", GPTMemmapDatasetPreparatorConfig)
+DatasetPreparatorConfig.register_subclass("gpt_memmap", GPTMemmapDatasetPreparatorConfig)

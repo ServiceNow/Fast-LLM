@@ -27,6 +27,7 @@ class GPTDataConfig(DataConfig, GPTLegacyConfig):
     _abstract = False
 
     tokenizer: TokenizerConfig = Field(
+        default_factory=TokenizerConfig,
         desc="Configuration for the tokenizer (for FIM).",
         hint=FieldHint.feature,
     )
@@ -36,7 +37,7 @@ class GPTDataConfig(DataConfig, GPTLegacyConfig):
         desc="Configuration for the dataset(s).",
         hint=FieldHint.core,
     )
-    sampling: GPTSamplingConfig = FieldUpdate()
+    sampling: GPTSamplingConfig = FieldUpdate(default_factory=GPTSamplingConfig)
     data_sample_warn_time_ms: float = Field(
         default=1000,
         desc="Warn if a sample takes too long to load.",

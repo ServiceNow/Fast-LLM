@@ -9,4 +9,6 @@ class DataConfig(Config):
     _abstract = True
     _sampling_config_class: typing.ClassVar[type[SamplingData]]
 
-    sampling: SamplingConfig = Field(desc="Default configuration for dataset sampling.")
+    sampling: SamplingConfig = Field(
+        default_factory=SamplingConfig, desc="Default configuration for dataset sampling."
+    )

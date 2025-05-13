@@ -23,7 +23,7 @@ class RunnableConfig(Config):
         if args is None:
             args = sys.argv[1:]
         cls_ = cls
-        while len(args) >= 1 and "=" not in args[0]:
+        while len(args) >= 1 and "=" not in args[0] and not args[0].startswith("-"):
             # Allow chained dynamic type selection without the `type=`, ex. `train gpt`.
             cls_ = cls_.get_subclass(args[0])
             args = args[1:]
