@@ -32,8 +32,13 @@ class HybridSSMBaseModelConfig(LanguageModelBaseConfig):
     )
     hybrid_block_layout: list[str] = Field(
         default_factory=lambda: ["m2"],
-        desc="Pattern of blocks to use in the model. 't' for Transformer, 'm' for Mamba1, 'm2' for Descrete Mamba2.",
+        desc="Pattern of blocks to use in the model. 't' for Transformer, 'm' for Mamba1, 'm2' for Discrete Mamba2",
         hint=FieldHint.architecture,
+    )
+    default_mtp_type: str | None = Field(
+        default=None,
+        desc="Multi-token prediction mixer to use in the model. 't' for Transformer, 'm' for Mamba1, 'm2' for discrete Mamba2. If None, will use the last block type in `hybrid_block_layout`.",
+        hint=FieldHint.optional,
     )
     use_megatron_initialization: bool = Field(
         default=False, desc="Exactly match the initialization of a Megatron model.", hint=FieldHint.testing
@@ -66,7 +71,7 @@ class HybridSSMBaseModelConfig(LanguageModelBaseConfig):
         tensor_space.add_tensor_dim(TensorDim(SSMDimNames.conv_kernel_size, self.ssm.conv_kernel_dimension))
         tensor_space.add_tensor_dim(TensorDim(SSMDimNames.inner_proj_mamba, d_inner * 2))
 
-        if "m2" in self.hybrid_block_layout:
+        if "m2" in self.hybrid_block_layout or self.default_mtp_type == "m2":
             # Mamba2 specific dimensions
             # as per https://github.com/cartesia-ai/edge/blob/a0e121ebed3d2324c6d762b0e211a08d62583681/cartesia-pytorch/cartesia_pytorch/Llamba/mixers/discrete_mamba2.py#L66C3-L66C4
             headdim = d_inner // self.ssm.n_v_heads
@@ -84,22 +89,26 @@ class HybridSSMBaseModelConfig(LanguageModelBaseConfig):
             tensor_space.add_tensor_dim(TensorDim(SSMDimNames.conv_dim, conv_dim))
 
     def _validate(self):
-        if len(self.hybrid_block_layout) != self.transformer.num_layers:
-            len_block_layout = len(self.hybrid_block_layout)
+        len_block_layout = len(self.hybrid_block_layout)
+        if len_block_layout != self.transformer.num_layers:
             if self.transformer.num_layers % len_block_layout != 0:
                 raise ValueError(
-                    f"hybrid_block_layout length {len(self.hybrid_block_layout)} does not match num_layers {self.transformer.num_layers}"
+                    f"hybrid_block_layout length {len_block_layout} does not match num_layers {self.transformer.num_layers}"
                 )
             num_repeats = int(self.transformer.num_layers // len_block_layout)
             logger.warning(
-                f"hybrid_block_layout length {len(self.hybrid_block_layout)} does not match num_layers {self.transformer.num_layers}, will repeat {self.hybrid_block_layout} {num_repeats} times"
+                f"hybrid_block_layout length {len_block_layout} does not match num_layers {self.transformer.num_layers}, will repeat {self.hybrid_block_layout} {num_repeats} times"
             )
             self.hybrid_block_layout = self.hybrid_block_layout * num_repeats
 
-        Assert.eq(len(self.hybrid_block_layout), self.transformer.num_layers)
+        Assert.eq(len_block_layout, self.transformer.num_layers)
         Assert.custom(
             lambda _: all(block_type in ["t", "m", "m2"] for block_type in self.hybrid_block_layout),
             f"Invalid block type: {self.hybrid_block_layout}. Must be 't' or 'm' or 'm2'",
+        )
+        Assert.custom(
+            lambda _: self.default_mtp_type in ["t", "m", "m2", None],
+            f"Invalid MTP type: {self.default_mtp_type}. Must be 't' or 'm' or 'm2' or None",
         )
 
         super()._validate()

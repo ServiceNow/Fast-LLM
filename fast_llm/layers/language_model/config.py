@@ -36,6 +36,7 @@ class LanguageModelKwargs:
     phase = "phase"
     chosen_spans = "chosen_spans"
     rejected_spans = "rejected_spans"
+    loss_mask = "loss_mask"
 
 
 @config_class()

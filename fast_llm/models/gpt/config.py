@@ -180,10 +180,6 @@ class GPTTrainerConfig(PretrainedGPTModelConfig, TrainerConfig):
         distillation_model = self.model.base_model.distillation_model
         dpo_reference_model = self.model.base_model.dpo_reference_model
 
-        if distillation_model is not None:
-            # TODO: Support loss masking for distillation?
-            assert not self.batch.use_loss_masking_spans
-
         if self.model.base_model.enable_dpo:
             assert dpo_reference_model is not None
             Assert.none(distillation_model)
