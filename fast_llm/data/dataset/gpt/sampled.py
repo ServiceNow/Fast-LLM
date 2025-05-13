@@ -434,14 +434,15 @@ class GPTSampledIndexedDataset(SampledDataset):
                 for image_length in image_lengths
             ]
             image_tokens = sum(image_sizes)
+            document_size += image_tokens
 
             if not self._truncate_documents:
-                if document_size + image_tokens > self._parameters.sequence_length + 1:
+                if document_size > self._parameters.sequence_length + 1:
                     # Document too long, ignore
                     document_sampling_index += 1
                     continue
                 tokens_in_sample = token_count % (self._parameters.sequence_length + 1)
-                if document_size + image_tokens + tokens_in_sample > self._parameters.sequence_length + 1:
+                if document_size + tokens_in_sample > self._parameters.sequence_length + 1:
                     # Document belongs to the next sample, need to account for padding.
                     padding_size = self._parameters.sequence_length + 1 - tokens_in_sample
                     if token_count > token_start:
@@ -454,7 +455,7 @@ class GPTSampledIndexedDataset(SampledDataset):
                         token_count += padding_size
 
             # Determine if the document belongs to the requested sample.
-            if token_count + document_size + image_tokens >= token_start:
+            if token_count + document_size >= token_start:
                 # Determine which part of the document belong to the sample, and add it to the list.
                 token_start_index_in_document = max(token_start - token_count, 0)
                 token_end_index_in_document = min(token_end - token_count, document_size)
@@ -488,7 +489,7 @@ class GPTSampledIndexedDataset(SampledDataset):
 
             # Go to the next document.
             document_sampling_index += 1
-            token_count += document_size + image_tokens
+            token_count += document_size
 
         sequence_lengths = (
             np.array([ids.size - (idx == len(token_ids) - 1) for idx, ids in enumerate(token_ids)], dtype=np.int32)
