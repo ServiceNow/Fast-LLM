@@ -1,9 +1,7 @@
+import huggingface_hub
 import pytest
 import torch
-
-import huggingface_hub
-
-from transformers import AutoTokenizer, AutoModelForCausalLM
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from fast_llm.engine.checkpoint.config import CheckpointLoadConfig
 from fast_llm.engine.distributed.distributed import Distributed
@@ -11,9 +9,7 @@ from fast_llm.engine.schedule.config import ScheduleConfig
 from fast_llm.engine.schedule.runner import ScheduleRunner
 from fast_llm.models.gpt.config import LlamaGPTHuggingfaceCheckpointFormat, PretrainedGPTModelConfig
 from fast_llm.models.gpt.huggingface import HuggingfaceGPTModelForCausalLM
-
-
-from tests.common import requires_cuda, TEST_RESULTS_PATH
+from tests.common import TEST_RESULTS_PATH, requires_cuda
 
 
 def _prepare_checkpoint(model: str) -> str:
