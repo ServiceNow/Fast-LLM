@@ -93,18 +93,6 @@ class TransformerLossNames:
 class RotaryConfig(BaseModelConfig):
     # TODO: Move rotary to its own submodule.
 
-    @classmethod
-    def _from_dict(
-        cls,
-        default: dict[str, typing.Any],
-        strict: bool = True,
-        flat: bool = False,
-    ) -> typing.Self:
-        if cls is RotaryConfig and cls.get_subclass(default.get("type")) is None:
-            # Default subclass.
-            return DefaultRotaryConfig._from_dict(default, strict, flat)
-        return super()._from_dict(default, strict=strict, flat=flat)
-
     @property
     def enabled(self) -> bool:
         return False
@@ -312,18 +300,6 @@ class TransformerPeftConfig(PeftConfig):
     def apply_weight(self, parameter: "ParameterMeta") -> "ParameterMeta":
         pass
 
-    @classmethod
-    def _from_dict(
-        cls,
-        default: dict[str, typing.Any],
-        strict: bool = True,
-        flat: bool = False,
-    ) -> typing.Self:
-        if cls is TransformerPeftConfig and cls.get_subclass(default.get("type")) is None:
-            # Default subclass.
-            return TransformerNoPeftConfig._from_dict(default, strict, flat)
-        return super()._from_dict(default, strict=strict, flat=flat)
-
 
 @config_class()
 class TransformerNoPeftConfig(NoPeftConfig, TransformerPeftConfig):
@@ -405,14 +381,17 @@ TransformerPeftConfig.register_subclass("lora", TransformerLoRAConfig)
 class TransformerConfig(BaseModelConfig):
     _abstract = False
     normalization: NormalizationConfig = Field(
+        default_factory=NormalizationConfig,
         desc="Configuration for the normalization layers architecture.",
         hint=FieldHint.architecture,
     )
     rotary: RotaryConfig = Field(
+        default_factory=RotaryConfig,
         desc="Configuration for the rotary positional embeddings.",
         hint=FieldHint.architecture,
     )
     peft: TransformerPeftConfig = Field(
+        default_factory=TransformerPeftConfig,
         desc="Configuration for the parameter-efficient fine tuning.",
         hint=FieldHint.architecture,
     )

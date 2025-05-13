@@ -288,10 +288,10 @@ class TrainingConfig(Config):
         default_factory=MetricsLogsConfig, desc="Configuration for metric logging.", hint=FieldHint.core
     )
     checkpoint: TrainingCheckpointConfig = Field(
-        default_factory=MetricsLogsConfig, desc="Configuration for checkpoints.", hint=FieldHint.core
+        default_factory=TrainingCheckpointConfig, desc="Configuration for checkpoints.", hint=FieldHint.core
     )
     export: TrainingExportConfig = Field(
-        default_factory=MetricsLogsConfig, desc="Configuration for exports.", hint=FieldHint.core
+        default_factory=TrainingExportConfig, desc="Configuration for exports.", hint=FieldHint.core
     )
     shutdown: ShutdownConfig = Field(
         default_factory=ShutdownConfig, desc="Configuration for automated shutdown.", hint=FieldHint.core
