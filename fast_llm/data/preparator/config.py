@@ -24,6 +24,3 @@ class DatasetPreparator[ConfigType: DatasetPreparatorConfig](Configurable[Config
     @abc.abstractmethod
     def run(self) -> None:
         raise NotImplementedError
-
-
-RunnableConfig.register_subclass("prepare", DatasetPreparatorConfig)

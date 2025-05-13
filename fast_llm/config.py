@@ -143,8 +143,10 @@ class Field(dataclasses.Field):
         metadata=None,
         kw_only=dataclasses.MISSING,
     ):
-        if (default is dataclasses.MISSING) == (default_factory is dataclasses.MISSING):
-            raise ValueError("Fields should define exactly one of `default` or `default_factory`.")
+        if default is not dataclasses.MISSING and default_factory is not dataclasses.MISSING:
+            raise ValueError("cannot specify both default and default_factory")
+        if isinstance(default_factory, type) and issubclass(default_factory, Config):
+            raise ValueError("Config classes should not be used as `default_factory`")
         if not init:
             # Non-init fields cause errors when printed before validation.
             repr = False
@@ -780,9 +782,9 @@ class Config(metaclass=ConfigMeta):
                 else:
                     # Check for nested configs to instantiate.
                     try:
-                        if name in default:
-                            out_arg_dict[name] = cls._from_dict_nested(default[name], field.type, strict)
-
+                        value = cls._from_dict_nested(default.pop(name, MISSING), field.type, strict)
+                        if value is not MISSING:
+                            out_arg_dict[name] = value
                     except FieldTypeError as e:
                         raise FieldTypeError(
                             f"Invalid field type `{get_type_name(field.type)}` in class {cls._get_class_name()}: "
@@ -815,8 +817,11 @@ class Config(metaclass=ConfigMeta):
                 raise FieldTypeError(f"Unsupported __origin__ `{origin}`")
         elif not isinstance(type_, type):
             raise FieldTypeError(f"Not a type: {type_}.")
-        elif issubclass(type_, Config) and isinstance(value, dict):
-            value = type_._from_dict(value, strict)
+        elif issubclass(type_, Config):
+            if value is MISSING:
+                value = {}
+            if isinstance(value, dict):
+                value = type_._from_dict(value, strict)
         return value
 
     @classmethod
@@ -888,11 +893,11 @@ class Config(metaclass=ConfigMeta):
                 f"Config comparison errors:\n  " + "\n".join(errors),
                 log_fn=log_fn,
             )
-        return None
 
     @classmethod
     def register_subclass(cls, name: str, cls_: type[typing.Self]) -> None:
         Assert.custom(issubclass, cls_, cls)
+        assert not cls_._abstract
         if name in cls._registry:
             old_cls = cls._registry[name]
             if old_cls.__name__ == cls_.__name__ and cls._registry[name].__module__ == cls_.__module__:

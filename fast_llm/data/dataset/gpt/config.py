@@ -173,8 +173,8 @@ class GPTDatasetSliceConfig(DatasetSliceConfig, GPTIndexedDatasetConfig):
 @config_class()
 class GPTSampledDatasetUpdateConfig(SampledDatasetUpdateConfig, GPTSampledDatasetConfig):
     _abstract = False
-    sampling: GPTSamplingConfig = FieldUpdate(default_factory=GPTSamplingConfig)
-    dataset: GPTSampledDatasetConfig = FieldUpdate(default_factory=GPTSampledDatasetConfig)
+    sampling: GPTSamplingConfig = FieldUpdate()
+    dataset: GPTSampledDatasetConfig = FieldUpdate()
 
 
 @config_class()
@@ -389,7 +389,6 @@ class GPTLegacyConfig(Config):
         valid=_validate_path,
     )
     fim: FimConfig = Field(
-        default_factory=FimConfig,
         desc="Configuration for Fill In the Middle (FIM).",
         hint=FieldHint.feature,
     )

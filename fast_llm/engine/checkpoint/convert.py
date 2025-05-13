@@ -18,8 +18,8 @@ logger = logging.getLogger(__name__)
 
 @config_class()
 class ConvertConfig(RunnableConfig):
-    input: CheckpointLoadConfig = Field(default_factory=CheckpointLoadConfig)
-    output: CheckpointSaveConfig = Field(default_factory=CheckpointSaveConfig)
+    input: CheckpointLoadConfig = Field()
+    output: CheckpointSaveConfig = Field()
     use_cpu: bool = Field(default=False)
     exist_ok: bool = Field(default=False)
     layers_per_step: int | None = Field(default=None)

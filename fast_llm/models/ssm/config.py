@@ -5,7 +5,6 @@ import typing
 from fast_llm.config import Field, FieldHint, FieldUpdate, config_class
 from fast_llm.data.data.gpt.config import GPTDataConfig
 from fast_llm.engine.checkpoint.config import CheckpointFormat, CheckpointHandler
-from fast_llm.engine.config_utils.runnable import RunnableConfig
 from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig, PretrainedFastLLMModelConfig
 from fast_llm.engine.training.config import TrainerConfig
@@ -27,7 +26,6 @@ class HybridSSMBaseModelConfig(LanguageModelBaseConfig):
     _abstract = False
 
     ssm: SSMConfig = Field(
-        default_factory=SSMConfig,
         desc="Configuration for the transformer architecture.",
         hint=FieldHint.architecture,
     )
@@ -130,7 +128,7 @@ class LLambaHuggingfaceCheckpointFormat(CheckpointFormat):
 class HybridSSMModelConfig(FastLLMModelConfig):
     _abstract = False
     model_name: typing.ClassVar[str] = "hybrid_ssm"
-    base_model: HybridSSMBaseModelConfig = FieldUpdate(default_factory=HybridSSMBaseModelConfig)
+    base_model: HybridSSMBaseModelConfig = FieldUpdate()
     checkpoint_formats = FastLLMModelConfig.checkpoint_formats + (LLambaHuggingfaceCheckpointFormat,)
 
     @classmethod
@@ -155,13 +153,13 @@ class HybridSSMModelConfig(FastLLMModelConfig):
 @config_class()
 class PretrainedHybridSSMModelConfig(PretrainedFastLLMModelConfig):
     _abstract = False
-    model: HybridSSMModelConfig = FieldUpdate(default_factory=HybridSSMModelConfig)
+    model: HybridSSMModelConfig = FieldUpdate()
 
 
 @config_class()
 class HybridSSMTrainerConfig(PretrainedHybridSSMModelConfig, TrainerConfig):
-    data: GPTDataConfig = FieldUpdate(default_factory=GPTDataConfig)
-    batch: GPTBatchConfig = FieldUpdate(default_factory=GPTBatchConfig)
+    data: GPTDataConfig = FieldUpdate()
+    batch: GPTBatchConfig = FieldUpdate()
 
     @classmethod
     def get_trainer_class(cls) -> type["HybridSSMTrainer"]:
@@ -171,5 +169,4 @@ class HybridSSMTrainerConfig(PretrainedHybridSSMModelConfig, TrainerConfig):
 
 
 FastLLMModelConfig.register_subclass("hybrid_ssm", HybridSSMModelConfig)
-RunnableConfig.register_subclass("train_hybrid_ssm", HybridSSMTrainerConfig)
 TrainerConfig.register_subclass("hybrid_ssm", HybridSSMTrainerConfig)

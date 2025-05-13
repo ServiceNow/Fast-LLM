@@ -2,7 +2,6 @@ import typing
 
 from fast_llm.config import FieldUpdate, config_class
 from fast_llm.data.data.gpt.config import GPTDataConfig
-from fast_llm.engine.config_utils.runnable import RunnableConfig
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig
 from fast_llm.engine.training.config import TrainerConfig
 from fast_llm.models.gpt.config import GPTBaseModelConfig, GPTModelConfig, GPTTrainerConfig, PretrainedGPTModelConfig
@@ -29,7 +28,7 @@ class CustomBaseModelConfig(GPTBaseModelConfig):
 class CustomModelConfig(GPTModelConfig):
     # TODO: Add custom model config parameters, if any (typically none).
     model_name: typing.ClassVar[str] = "gpt_custom"
-    base_model: CustomBaseModelConfig = FieldUpdate(default_factory=CustomBaseModelConfig)
+    base_model: CustomBaseModelConfig = FieldUpdate()
 
     @classmethod
     def get_model_class(cls) -> type["CustomModel"]:
@@ -46,14 +45,14 @@ class CustomModelConfig(GPTModelConfig):
 
 @config_class()
 class PretrainedCustomModelConfig(PretrainedGPTModelConfig):
-    model: CustomModelConfig = FieldUpdate(default_factory=CustomModelConfig)
+    model: CustomModelConfig = FieldUpdate()
 
 
 @config_class()
 class CustomTrainerConfig(PretrainedCustomModelConfig, GPTTrainerConfig):
     # TODO: Add custom trainer config parameters, if any (typically none).
-    data: CustomDataConfig = FieldUpdate(default_factory=CustomDataConfig)
-    reference_models: dict[str, PretrainedCustomModelConfig] = FieldUpdate(default_factory=PretrainedCustomModelConfig)
+    data: CustomDataConfig = FieldUpdate()
+    reference_models: dict[str, PretrainedCustomModelConfig] = FieldUpdate()
 
     @classmethod
     def get_trainer_class(cls) -> type["CustomTrainer"]:
@@ -63,5 +62,4 @@ class CustomTrainerConfig(PretrainedCustomModelConfig, GPTTrainerConfig):
 
 
 FastLLMModelConfig.register_subclass("gpt_custom", GPTModelConfig)
-RunnableConfig.register_subclass("train_gpt_custom", CustomTrainerConfig)
 TrainerConfig.register_subclass("gpt_custom", CustomTrainerConfig)
