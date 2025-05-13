@@ -50,21 +50,24 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
         #     np.array(self._tokenizer.tokenize(text), dtype=self._data_type.numpy)
         #     for text in batch[self._config.dataset.field]
         # ]
-        input_ids, image_token_positions = map(
+        input_ids, token_spans, image_token_positions = map(
             list,
             zip(
                 *[
                     (
                         np.array(input_ids, dtype=self._data_type.numpy),
+                        np.array(token_spans, dtype=np.int32).reshape(-1, 2),
                         np.array(image_token_positions, dtype=np.int32),
                     )
-                    for input_ids, image_token_positions in [
+                    for input_ids, token_spans, image_token_positions in [
                         self._tokenizer.tokenize(
                             text,
+                            loss_mask_spans,
                             im_char_positions,
                         )
-                        for text, im_char_positions in zip(
+                        for text, loss_mask_spans, im_char_positions in zip(
                             batch[self._config.dataset.field],
+                            batch.get(self._config.dataset.loss_masking_spans, itertools.repeat(None)),
                             batch.get(self._config.dataset.image_positions, itertools.repeat(None)),
                         )
                     ]
