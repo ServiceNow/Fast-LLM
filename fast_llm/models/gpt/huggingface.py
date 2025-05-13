@@ -61,9 +61,8 @@ class HuggingfaceGPTModelForCausalLM(HuggingfaceBaseModelForCausalLM):
         if labels is not None:
             raise NotImplementedError()
 
-        # NOTE: We are ignoring position_ids as we reconstruct them from attention_mask via sequence_lenghts.
+        # NOTE: We are ignoring position_ids as we reconstruct them from attention_mask via sequence_lengths.
         if attention_mask is not None:
-
             # First non zero indexes or zero index if the row is all zeros (invalid row)
             first_non_zero_indexes = attention_mask.argmax(dim=1)
 
@@ -112,7 +111,7 @@ class HuggingfaceGPTModelForCausalLM(HuggingfaceBaseModelForCausalLM):
             hidden_states = kwargs["hidden_states"]
 
         if not return_dict:
-            # TODO: check hidden state go before past in the tuple
+            # TODO: Then implementing cache, check hidden state goes before past in the tuple
             if output_hidden_states:
                 outputs = (logits, hidden_states)
             else:
@@ -127,8 +126,3 @@ class HuggingfaceGPTModelForCausalLM(HuggingfaceBaseModelForCausalLM):
             hidden_states=hidden_states,
             past_key_values=kwargs[TransformerKwargs.presents],
         )
-
-    # def prepare_inputs_for_generation(
-    #     self, input_ids, past_key_values=None, attention_mask=None, inputs_embeds=None, **kwargs
-    # ):
-    #     raise NotImplementedError()

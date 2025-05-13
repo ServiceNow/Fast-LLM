@@ -17,14 +17,13 @@ class InferenceRunner(abc.ABC):
     def __init__(
         self,
         fast_llm_model: FastLLMModel,
-        micro_batch_size: int | None = None,
         runner: ScheduleRunner | None = None,
     ):
         assert isinstance(fast_llm_model, self.model_class)
         self._fast_llm_model = fast_llm_model
 
         with NoAutoValidate():
-            self._batch_config = self.batch_config_class(micro_batch_size=micro_batch_size)
+            self._batch_config = self.batch_config_class()
         self._batch_config.setup(self._fast_llm_model.config.distributed)
         self._batch_config.validate()
 

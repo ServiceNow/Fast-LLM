@@ -28,12 +28,14 @@ class HuggingfacePreTrainedModel(transformers.PreTrainedModel):
 
     def __init__(
         self,
-        config: HuggingfaceModelConfig,
         fast_llm_model: FastLLMModel,
-        micro_batch_size: int | None = None,
+        config: HuggingfaceModelConfig | None = None,
         runner: ScheduleRunner | None = None,
         **kwargs,
     ):
+        if config is None:
+            config = self.config_class(fast_llm_model.config)
+
         assert self.runner_class.model_class.config_class is config.model_config_class
         assert config.fast_llm_config is fast_llm_model.config
         assert isinstance(config, self.config_class)
@@ -46,7 +48,7 @@ class HuggingfacePreTrainedModel(transformers.PreTrainedModel):
         super().__init__(config, **kwargs)
         config.fast_llm_config = fast_llm_config
 
-        self._inference_runner = self.runner_class(fast_llm_model, micro_batch_size, runner)
+        self._inference_runner = self.runner_class(fast_llm_model, runner)
 
         # A model can be created from pretrained which set it up in the current HF wrapper api
         # or set existing model which  also must be setup, so, do not accept not setup model
@@ -83,23 +85,6 @@ class HuggingfacePreTrainedModel(transformers.PreTrainedModel):
         raise NotImplementedError()
 
     @classmethod
-    def from_model(
-        cls,
-        fast_llm_model: FastLLMModel,
-        micro_batch_size: int | None = None,
-        runner: ScheduleRunner | None = None,
-        **kwargs,
-    ):
-        config = cls.config_class(fast_llm_model.config)
-        return cls(
-            config,
-            fast_llm_model,
-            micro_batch_size=micro_batch_size,
-            runner=runner,
-            **kwargs,
-        )
-
-    @classmethod
     def from_pretrained(
         cls,
         pretrained_model_name_or_path: str | os.PathLike | CheckpointLoadConfig,
@@ -124,14 +109,13 @@ class HuggingfacePreTrainedModel(transformers.PreTrainedModel):
             pretrained_model_name_or_path,
             *updates,
             optimizer_state_names=optimizer_state_names,
-            # setup=setup,
+            setup=True,
             mode=mode,
             use_cpu=use_cpu,
             stage_filter=stage_filter,
         )
 
-        config = cls.config_class(fast_llm_model.config)
-        return cls(config, fast_llm_model, **kwargs)
+        return cls(fast_llm_model, **kwargs)
 
     def _init_weights(self, module) -> None:
         raise NotImplementedError(module)
