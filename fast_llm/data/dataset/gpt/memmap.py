@@ -268,7 +268,6 @@ class GPTMemmapDataset(GPTIndexedDataset):
     def has_images(self) -> bool:
         return self._has_images
 
-    # TODO: image sizes
     def get_document_sizes(self) -> tuple[np.ndarray, np.ndarray]:
         """
         The size of each document in the dataset.
@@ -277,12 +276,7 @@ class GPTMemmapDataset(GPTIndexedDataset):
         """
         return self._document_sizes, self._image_lengths
 
-    def get_document_size(self, index: int, patch_size: list[int]) -> int:
-        # return self._document_sizes[index].item() + (
-        #     sum((h // patch_size[0]) * (w // patch_size[1]) for h, w in self._image_lengths[index])
-        #     if self._has_images
-        #     else 0
-        # )
+    def get_document_size(self, index: int) -> int:
         return self._document_sizes[index].item(), self._image_lengths[index] if self._has_images else []
 
     @classmethod

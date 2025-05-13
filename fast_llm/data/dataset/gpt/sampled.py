@@ -407,9 +407,7 @@ class GPTSampledIndexedDataset(SampledDataset):
             else:
                 document_index = self._document_shuffling[document_sampling_index - self._unshuffled_documents].item()
 
-            document_size, image_lengths = self._indexed_dataset.get_document_size(
-                document_index, self._parameters.patch_size
-            )
+            document_size, image_lengths = self._indexed_dataset.get_document_size(document_index)
 
             image_sizes = [
                 get_num_patches(
@@ -582,7 +580,7 @@ class LegacyGPTSampledIndexedDataset(SampledDataset):
         Create a `GPTSampledDataset` with the requested parameters.
         """
         logger.info(f" > Sampling dataset {self._indexed_dataset.name} ...")
-        document_sizes = self._indexed_dataset.get_document_sizes()
+        document_sizes, _ = self._indexed_dataset.get_document_sizes()
         num_documents = len(document_sizes)
         num_tokens = document_sizes.sum()
         np_rng = np.random.RandomState(seed=self._config.seed)
