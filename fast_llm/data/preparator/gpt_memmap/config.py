@@ -121,7 +121,7 @@ class GPTMemmapDatasetPreparatorConfig(DatasetPreparatorConfig):
         hint=FieldHint.core,
     )
     distributed: DatasetPreparatorDistributedConfig = Field(
-        default_factory=DatasetPreparatorDistributedConfig,
+        default_factory=FimConfig,
         desc="Configuration for distributed processing.",
         hint=FieldHint.feature,
     )

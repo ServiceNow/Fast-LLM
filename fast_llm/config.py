@@ -143,10 +143,9 @@ class Field(dataclasses.Field):
         metadata=None,
         kw_only=dataclasses.MISSING,
     ):
-        if init:
-            if (default is dataclasses.MISSING) == (default_factory is dataclasses.MISSING):
-                raise ValueError("Fields should define exactly one of `default` or `default_factory`.")
-        else:
+        if (default is dataclasses.MISSING) == (default_factory is dataclasses.MISSING):
+            raise ValueError("Fields should define exactly one of `default` or `default_factory`.")
+        if not init:
             # Non-init fields cause errors when printed before validation.
             repr = False
         super().__init__(
@@ -782,7 +781,7 @@ class Config(metaclass=ConfigMeta):
                     # Check for nested configs to instantiate.
                     try:
                         if name in default:
-                            out_arg_dict[name] = cls._from_dict_nested(default.pop(name), field.type, strict)
+                            out_arg_dict[name] = cls._from_dict_nested(default[name], field.type, strict)
 
                     except FieldTypeError as e:
                         raise FieldTypeError(
