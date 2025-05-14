@@ -387,7 +387,6 @@ class LLamaRotaryParamConverter(ParamConverter):
 
     def export_params(self, fast_llm_values: tuple[typing.Any, ...]) -> tuple[typing.Any, ...]:
         (rotary_config,) = fast_llm_values
-        serialized_config = rotary_config.to_dict()
         if type(rotary_config) is DefaultRotaryConfig:
             rotary_scaling = {
                 "rope_type": "default",
@@ -395,23 +394,23 @@ class LLamaRotaryParamConverter(ParamConverter):
         elif type(rotary_config) is Llama3RotaryConfig:
             rotary_scaling = {
                 "rope_type": "llama3",
-                "factor": serialized_config["scale_factor"],
-                "low_freq_factor": serialized_config["low_frequency_factor"],
-                "high_freq_factor": serialized_config["high_frequency_factor"],
-                "original_max_position_embeddings": serialized_config["original_context_length"],
+                "factor": rotary_config.scale_factor,
+                "low_freq_factor": rotary_config.low_frequency_factor,
+                "high_freq_factor": rotary_config.high_frequency_factor,
+                "original_max_position_embeddings": rotary_config.original_context_length,
             }
         elif type(rotary_config) is YarnRotaryConfig:
             rotary_scaling = {
                 "rope_type": "yarn",
-                "attention_factor": serialized_config["attention_factor"],
-                "beta_fast": serialized_config["beta_fast"],
-                "beta_slow": serialized_config["beta_slow"],
-                "original_max_position_embeddings": serialized_config["original_context_length"],
+                "attention_factor": rotary_config.attention_factor,
+                "beta_fast": rotary_config.beta_fast,
+                "beta_slow": rotary_config.beta_slow,
+                "original_max_position_embeddings": rotary_config.original_context_length,
             }
         else:
             raise ValueError(f"Unsupported rotary type: {type(rotary_config).__name__}")
 
-        return serialized_config["theta"], rotary_scaling
+        return rotary_config.theta, rotary_scaling
 
     def import_params(self, export_values: tuple[typing.Any, ...]) -> tuple[typing.Any, ...]:
         rotary_theta, rope_scaling = export_values

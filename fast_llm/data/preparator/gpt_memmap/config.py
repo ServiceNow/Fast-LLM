@@ -177,3 +177,4 @@ class GPTMemmapDatasetPreparatorConfig(DatasetPreparatorConfig):
 
 
 RunnableConfig.register_subclass("prepare_gpt_memmap", GPTMemmapDatasetPreparatorConfig)
+DatasetPreparatorConfig.register_subclass("gpt_memmap", GPTMemmapDatasetPreparatorConfig)

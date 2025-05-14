@@ -5,6 +5,7 @@ import typing
 from fast_llm.config import Field, FieldHint, FieldUpdate, config_class
 from fast_llm.data.data.gpt.config import GPTDataConfig
 from fast_llm.engine.checkpoint.config import CheckpointFormat, CheckpointHandler
+from fast_llm.engine.config_utils.runnable import RunnableConfig
 from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig, PretrainedFastLLMModelConfig
 from fast_llm.engine.training.config import TrainerConfig
@@ -30,7 +31,7 @@ class HybridSSMBaseModelConfig(LanguageModelBaseConfig):
         hint=FieldHint.architecture,
     )
     hybrid_block_layout: list[str] = Field(
-        default_factory=lambda: ["m2"],
+        default=("m2",),
         desc="Pattern of blocks to use in the model. 't' for Transformer, 'm' for Mamba1, 'm2' for Discrete Mamba2",
         hint=FieldHint.architecture,
     )
@@ -124,7 +125,7 @@ class LLambaHuggingfaceCheckpointFormat(CheckpointFormat):
         return LLambaHuggingfaceCheckpointHandler
 
 
-@config_class()
+@config_class(dynamic_type={FastLLMModelConfig: "hybrid_ssm"})
 class HybridSSMModelConfig(FastLLMModelConfig):
     _abstract = False
     model_name: typing.ClassVar[str] = "hybrid_ssm"
@@ -156,7 +157,7 @@ class PretrainedHybridSSMModelConfig(PretrainedFastLLMModelConfig):
     model: HybridSSMModelConfig = FieldUpdate()
 
 
-@config_class()
+@config_class(dynamic_type={RunnableConfig: "train_hybrid_ssm", TrainerConfig: "hybrid_ssm"})
 class HybridSSMTrainerConfig(PretrainedHybridSSMModelConfig, TrainerConfig):
     data: GPTDataConfig = FieldUpdate()
     batch: GPTBatchConfig = FieldUpdate()
@@ -166,7 +167,3 @@ class HybridSSMTrainerConfig(PretrainedHybridSSMModelConfig, TrainerConfig):
         from fast_llm.models.ssm.trainer import HybridSSMTrainer
 
         return HybridSSMTrainer
-
-
-FastLLMModelConfig.register_subclass("hybrid_ssm", HybridSSMModelConfig)
-TrainerConfig.register_subclass("hybrid_ssm", HybridSSMTrainerConfig)

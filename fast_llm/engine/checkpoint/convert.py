@@ -65,7 +65,7 @@ class ConvertConfig(RunnableConfig):
                 f"Output path {self.output.path} already exists and has been processed. Skipping model conversion..."
             )
             return
-        model_class = self.model_config_class.get_model_class()
+        model_class = self.model.get_model_class()
         if self.layers_per_step is None:
             self._convert_model_partial(model_class, self.output)
         else:

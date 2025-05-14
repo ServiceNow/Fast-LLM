@@ -114,7 +114,7 @@ def test_convert_distributed_to_fast_llm():
                 path=_CONVERT_PATH / "fast_llm_0",
                 format=FastLLMCheckpointFormat,
             ),
-            model_config_class=TEST_MODEL_CONFIG_CLS,
+            model=TEST_MODEL_CONFIG_CLS,
         )
     )
 
@@ -133,7 +133,7 @@ def test_convert_fast_llm_to_huggingface():
                 path=_CONVERT_PATH / "huggingface_0",
                 format=HUGGINGFACE_CHECKPOINT_FORMAT,
             ),
-            model_config_class=TEST_MODEL_CONFIG_CLS,
+            model=TEST_MODEL_CONFIG_CLS,
         )
     )
 
@@ -150,7 +150,7 @@ def test_convert_huggingface_to_distributed():
                 path=_CONVERT_PATH / "distributed_0",
                 format=DistributedCheckpointFormat,
             ),
-            model_config_class=TEST_MODEL_CONFIG_CLS,
+            model=TEST_MODEL_CONFIG_CLS,
         )
     )
 
@@ -169,7 +169,7 @@ def test_convert_distributed_to_huggingface():
                 path=_CONVERT_PATH / "huggingface_1",
                 format=HUGGINGFACE_CHECKPOINT_FORMAT,
             ),
-            model_config_class=TEST_MODEL_CONFIG_CLS,
+            model=TEST_MODEL_CONFIG_CLS,
         )
     )
 
@@ -186,7 +186,7 @@ def test_convert_huggingface_to_fast_llm():
                 path=_CONVERT_PATH / "fast_llm_1",
                 format=FastLLMCheckpointFormat,
             ),
-            model_config_class=TEST_MODEL_CONFIG_CLS,
+            model=TEST_MODEL_CONFIG_CLS,
         )
     )
 
@@ -203,7 +203,7 @@ def test_convert_fast_llm_to_distributed():
                 path=_CONVERT_PATH / "distributed_1",
                 format=DistributedCheckpointFormat,
             ),
-            model_config_class=TEST_MODEL_CONFIG_CLS,
+            model=TEST_MODEL_CONFIG_CLS,
         )
     )
 

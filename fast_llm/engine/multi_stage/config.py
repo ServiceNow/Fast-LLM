@@ -372,13 +372,9 @@ class CheckpointMetadata(Config):
         if "fast_llm_version" not in default:
             default["fast_llm_version"] = "0"
 
-        # Determine the model config class.
-        from fast_llm.models.auto import model_registry
-
         model_config_class = default["model"]
         if isinstance(model_config_class, str):
-            Assert.incl(model_config_class, model_registry)
-            model_config_class = model_registry[model_config_class]
+            model_config_class = FastLLMModelConfig.get_subclass(default["model"])
             default["model"] = model_config_class
 
         # TODO v0.3: Remove backward compatibility.

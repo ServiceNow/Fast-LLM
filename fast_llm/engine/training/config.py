@@ -23,6 +23,7 @@ from fast_llm.engine.checkpoint.config import (
     DistributedCheckpointFormat,
 )
 from fast_llm.engine.config_utils.run import ExperimentConfig
+from fast_llm.engine.config_utils.runnable import RunnableConfig
 from fast_llm.engine.multi_stage.config import PretrainedFastLLMModelConfig
 from fast_llm.engine.optimizer.config import OptimizerConfig
 from fast_llm.engine.schedule.config import BatchConfig, ScheduleConfig
@@ -120,7 +121,7 @@ class WandbAlertConfig(IntervalConfig):
         "The update may be posted by email and/or slack depending on the Wandb account configuration.",
         hint=FieldHint.feature,
     )
-    post_alerts: bool = Field(init=False, repr=False)
+    post_alerts: bool = Field(init=False)
 
     def _validate(self) -> None:
         if self.status_updates is None:
@@ -420,3 +421,6 @@ class TrainerConfig(PretrainedFastLLMModelConfig, ExperimentConfig):
             old_setup()
 
         object.__setattr__(pretrained, "_setup", new_setup)
+
+
+RunnableConfig.register_subclass("train", TrainerConfig)

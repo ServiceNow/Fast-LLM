@@ -137,7 +137,6 @@ class Field(dataclasses.Field):
         default=dataclasses.MISSING,
         default_factory=dataclasses.MISSING,
         init: bool = True,
-        repr: bool = True,
         hash=None,
         compare: bool = True,
         metadata=None,
@@ -147,14 +146,11 @@ class Field(dataclasses.Field):
             raise ValueError("cannot specify both default and default_factory")
         if isinstance(default_factory, type) and issubclass(default_factory, Config):
             raise ValueError("Config classes should not be used as `default_factory`")
-        if not init:
-            # Non-init fields cause errors when printed before validation.
-            repr = False
         super().__init__(
             default=default,
             default_factory=default_factory,
             init=init,
-            repr=repr,
+            repr=False,
             hash=hash,
             compare=compare,
             metadata=metadata,
@@ -246,7 +242,9 @@ def _process_config_class(cls: type["Config"]):
     return cls
 
 
-def config_class[T: Config]() -> typing.Callable[[type[T]], type[T]]:
+def config_class[
+    T: Config
+](dynamic_type: "dict[type[Config], str]|None" = None) -> typing.Callable[[type[T]], type[T]]:
     """
     Fast-LLM replacement for the default dataclass wrapper. Performs additional verifications.
     """
@@ -256,7 +254,7 @@ def config_class[T: Config]() -> typing.Callable[[type[T]], type[T]]:
         if hasattr(cls, "__post_init__"):
             raise TypeError(f"`__post_init__` should not be implemented for `Config` classes")
 
-        wrapped = _process_config_class(dataclasses.dataclass(cls, kw_only=True))
+        wrapped = _process_config_class(dataclasses.dataclass(cls, kw_only=True, repr=False))
 
         wrapped_init = cls.__init__
 
@@ -269,7 +267,12 @@ def config_class[T: Config]() -> typing.Callable[[type[T]], type[T]]:
             if _AUTO_VALIDATE:
                 self.validate()
 
-        cls.__init__ = __init__
+        wrapped.__init__ = __init__
+
+        if dynamic_type is not None:
+            for cls_, name in dynamic_type.items():
+                cls_.register_subclass(name, wrapped)
+
         return wrapped
 
     return wrap
@@ -284,7 +287,7 @@ class ConfigMeta(abc.ABCMeta):
         return super().__call__(**kwargs)
 
 
-@dataclasses.dataclass()
+@dataclasses.dataclass(kw_only=True, repr=False)
 class Config(metaclass=ConfigMeta):
     """
     An advanced `dataclass` with basic type checking, validation and argparse support.
@@ -299,14 +302,14 @@ class Config(metaclass=ConfigMeta):
     # Set to true to prevent instantiation.
     _abstract: typing.ClassVar[bool] = False
     # Keep track of whether an instance has been validated
-    _validated: bool = Field(init=False, repr=False)
+    _validated: bool = Field(init=False)
     # Keep track of unknown fields so they can be reported during validation.
-    _unknown_fields: dict[str, typing.Any] = Field(init=False, repr=False)
+    _unknown_fields: dict[str, typing.Any] = Field(init=False)
     # Keep track of explicitly set fields to ensure they get serialized and used as config updates.
-    _explicit_fields: set[str] = Field(init=False, repr=False)
+    _explicit_fields: set[str] = Field(init=False)
     # Used within `_set_implicit_default` to set implicit defaults for fields
     # without them being automatically added to `_explicit_fields`.
-    _setting_implicit_default: bool | None = Field(init=False, repr=False)
+    _setting_implicit_default: bool | None = Field(init=False)
 
     # A registry for all the config classes.
     _registry: typing.ClassVar[Registry[str, type[typing.Self]]] = Registry[str, "type[Config]"]("Config", {})
@@ -359,7 +362,7 @@ class Config(metaclass=ConfigMeta):
         yield
         self._setting_implicit_default = False
 
-    def validate[T](self: T, *, _is_validating: bool = False) -> T:
+    def validate[T: Config](self: T, *, _is_validating: bool = False) -> T:
         """
         Validate a class and mark it as read-only
         This should not be overridden in derived classes.
@@ -481,12 +484,6 @@ class Config(metaclass=ConfigMeta):
             raise FieldTypeError(f"Not a type.")
         elif issubclass(type_, Config):
             cls._validate_element_type(value, type_, strict=False)
-            # If the value belongs to a proper subclass of `type_`,
-            #   we need an explicitly set `type` field for serialization to remember the actual config class.
-            if type(value) != type_:
-                if value.type is None:
-                    value.type = value.__class__.__name__
-                value._explicit_fields.add("type")
 
             value.validate(_is_validating=True)
         else:
@@ -693,6 +690,9 @@ class Config(metaclass=ConfigMeta):
     ) -> T:
         return self.from_dict(self, *updates, strict=strict, update_type=update_type)
 
+    def __repr__(self):
+        return self.to_logs(log_fn=str)
+
     def to_logs[
         T
     ](
@@ -893,11 +893,11 @@ class Config(metaclass=ConfigMeta):
                 f"Config comparison errors:\n  " + "\n".join(errors),
                 log_fn=log_fn,
             )
+        return None
 
     @classmethod
     def register_subclass(cls, name: str, cls_: type[typing.Self]) -> None:
         Assert.custom(issubclass, cls_, cls)
-        assert not cls_._abstract
         if name in cls._registry:
             old_cls = cls._registry[name]
             if old_cls.__name__ == cls_.__name__ and cls._registry[name].__module__ == cls_.__module__:
@@ -970,7 +970,6 @@ class Config(metaclass=ConfigMeta):
                         valid=value.pop("valid", base_class_field.valid),
                         default=value.pop("default", base_class_field.default),
                         default_factory=value.pop("default_factory", base_class_field.default_factory),
-                        repr=value.pop("repr", base_class_field.repr),
                         hash=value.pop("hash", base_class_field.hash),
                         compare=value.pop("compare", base_class_field.compare),
                         metadata=value.pop("metadata", base_class_field.metadata),

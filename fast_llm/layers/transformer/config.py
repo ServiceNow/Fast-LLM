@@ -375,6 +375,7 @@ class TransformerLoRAConfig(LoRAConfig, TransformerPeftConfig):
         return parameter
 
     def _validate(self) -> None:
+        super()._validate()
         if TransformerSubLayerName.mlp_1 in self.layers or TransformerSubLayerName.mlp_2 in self.layers:
             # TODO: Add MLP support.
             raise NotImplementedError("LoRA not supported for MLP.")
