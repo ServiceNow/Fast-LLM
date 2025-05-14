@@ -1,3 +1,4 @@
+import abc
 import contextlib
 import copy
 import dataclasses
@@ -137,7 +138,6 @@ class Field(dataclasses.Field):
         default=dataclasses.MISSING,
         default_factory=dataclasses.MISSING,
         init: bool = True,
-        repr: bool = True,
         hash=None,
         compare: bool = True,
         metadata=None,
@@ -146,12 +146,12 @@ class Field(dataclasses.Field):
         if default is not dataclasses.MISSING and default_factory is not dataclasses.MISSING:
             raise ValueError("cannot specify both default and default_factory")
         if isinstance(default_factory, type) and issubclass(default_factory, Config):
-            default_factory = _ConfigFactory(default_factory)
+            raise ValueError("Config classes should not be used as `default_factory`")
         super().__init__(
             default=default,
             default_factory=default_factory,
             init=init,
-            repr=repr,
+            repr=False,
             hash=hash,
             compare=compare,
             metadata=metadata,
@@ -223,20 +223,6 @@ def skip_valid_if_none(fn, *args, **kwargs):
     return valid
 
 
-class _ConfigFactory:
-    """
-    A dataclass default factory that prevents early validation.
-    Validation is still done through the parent config if needed.
-    """
-
-    def __init__(self, factory: typing.Callable[[], "Config"] | type["Config"]):
-        self._factory = factory
-
-    def __call__(self):
-        with NoAutoValidate():
-            return self._factory()
-
-
 class ValidationError(ValueError):
     pass
 
@@ -257,7 +243,7 @@ def _process_config_class(cls: type["Config"]):
     return cls
 
 
-def config_class(cls=None):
+def config_class[T: Config]() -> typing.Callable[[type[T]], type[T]]:
     """
     Fast-LLM replacement for the default dataclass wrapper. Performs additional verifications.
     """
@@ -280,20 +266,23 @@ def config_class(cls=None):
             if _AUTO_VALIDATE:
                 self.validate()
 
-        cls.__init__ = __init__
+        wrapped.__init__ = __init__
         return wrapped
 
-    # See if we're being called as @config_class or @config_class().
-    if cls is None:
-        # We're called with parens.
-        return wrap
-
-    # We're called as @config_class without parens.
-    return wrap(cls)
+    return wrap
 
 
-@dataclasses.dataclass()
-class Config:
+class ConfigMeta(abc.ABCMeta):
+    def __call__(cls: "type[Config]", **kwargs):
+        # Always go through `_from_dict` for correct dynamic class selection and nested config instantiation.
+        if not kwargs.pop("_from_dict_check", False):
+            # with NoAutoValidate():
+            return cls._from_dict(kwargs)
+        return super().__call__(**kwargs)
+
+
+@dataclasses.dataclass(kw_only=True, repr=False)
+class Config(metaclass=ConfigMeta):
     """
     An advanced `dataclass` with basic type checking, validation and argparse support.
     Typically, a subclass will:
@@ -307,14 +296,14 @@ class Config:
     # Set to true to prevent instantiation.
     _abstract: typing.ClassVar[bool] = False
     # Keep track of whether an instance has been validated
-    _validated: bool = Field(init=False, repr=False)
+    _validated: bool = Field(init=False)
     # Keep track of unknown fields so they can be reported during validation.
-    _unknown_fields: dict[str, typing.Any] = Field(init=False, repr=False)
+    _unknown_fields: dict[str, typing.Any] = Field(init=False)
     # Keep track of explicitly set fields to ensure they get serialized and used as config updates.
-    _explicit_fields: set[str] = Field(init=False, repr=False)
+    _explicit_fields: set[str] = Field(init=False)
     # Used within `_set_implicit_default` to set implicit defaults for fields
     # without them being automatically added to `_explicit_fields`.
-    _setting_implicit_default: bool | None = Field(init=False, repr=False)
+    _setting_implicit_default: bool | None = Field(init=False)
 
     def __setattr__(self, key: str, value: typing.Any) -> None:
         """
@@ -339,7 +328,7 @@ class Config:
                     )
             else:
                 field = self.get_field(key)
-                if field.init and field._field_type != dataclasses._FIELD_CLASSVAR:
+                if field.init and field._field_type == dataclasses._FIELD:
                     # Adding to explicit field list except within `_set_implicit_default` context,
                     # during dataclass initialization (`_setting_implicit_default` not yet set)
                     # and during automated config validation (`_setting_implicit_default=None`)
@@ -358,13 +347,13 @@ class Config:
         super().__delattr__(key)
 
     @contextlib.contextmanager
-    def _set_implicit_default(self, _value: bool | int = True):
+    def _set_implicit_default(self, _value: bool | None = True):
         assert self._setting_implicit_default is False
         self._setting_implicit_default = _value
         yield
         self._setting_implicit_default = False
 
-    def validate[T](self: T, *, _is_validating: bool = False) -> T:
+    def validate[T: Config](self: T, *, _is_validating: bool = False) -> T:
         """
         Validate a class and mark it as read-only
         This should not be overridden in derived classes.
@@ -388,11 +377,16 @@ class Config:
         Can be extended to add custom post-processing (typically before the super() call)
         and validation (typically after)
         """
-        self._check_abstract()
+        if self._abstract:
+            raise ValidationError(f"{type(self).__name__} is abstract")
+        if not self.__class_validated__:
+            raise ValidationError(
+                f"{type(self).__name__} hasn't been validated. Make sure to use the @config_class decorator."
+            )
         errors = []
         with self._set_implicit_default(None):
             for name, field in self.fields():
-                if not field.init or field._field_type == dataclasses._FIELD_CLASSVAR:  # noqa
+                if not field.init or field._field_type != dataclasses._FIELD:  # noqa
                     continue
                 value = getattr(self, name)
                 if isinstance(value, Tag):
@@ -610,11 +604,7 @@ class Config:
         all_fields: bool = False,
         serializable: bool = True,
     ) -> None:
-        if (
-            field is not None
-            and (not field.init or field._field_type == dataclasses._FIELD_CLASSVAR)
-            and not all_fields
-        ):
+        if field is not None and (not field.init or field._field_type != dataclasses._FIELD) and not all_fields:
             # Exclude class variables and derived fields unless requested explicitly.
             return
         explicit_field = (
@@ -676,6 +666,9 @@ class Config:
         update_type: UpdateType = UpdateType.override,
     ) -> T:
         return self.from_dict(self, *updates, strict=strict, update_type=update_type)
+
+    def __repr__(self):
+        return self.to_logs(log_fn=str)
 
     def to_logs[
         T
@@ -739,7 +732,7 @@ class Config:
         flat: bool = False,
     ) -> typing.Self:
         # TODO v0.3: Remove flat format
-        out_arg_dict = {}
+        out_arg_dict = {"_from_dict_check": True}
 
         # TODO v0.3: Remove backward compatibility fix
         if "__class__" in default:
@@ -748,7 +741,7 @@ class Config:
         # Do not validate yet in case the root class sets cross-dependencies in validation.
         with NoAutoValidate():
             for name, field in cls.fields():
-                if not field.init or field._field_type == dataclasses._FIELD_CLASSVAR:  # noqa
+                if not field.init or field._field_type != dataclasses._FIELD:  # noqa
                     continue
                 if flat:
                     if isinstance(field.type, type) and issubclass(field.type, Config):
@@ -869,22 +862,15 @@ class Config:
                 f"Config comparison errors:\n  " + "\n".join(errors),
                 log_fn=log_fn,
             )
-
-    @classmethod
-    def _check_abstract(cls) -> None:
-        if cls._abstract:
-            raise ValidationError(f"{cls.__name__} is abstract")
-        if not cls.__class_validated__:
-            raise ValidationError(
-                f"{cls.__name__} hasn't been validated. Make sure to use the @config_class decorator."
-            )
+        return None
 
     def __init_subclass__(cls):
         """
         We need to postpone validation until the class has been processed by the dataclass wrapper.
         """
+        Assert.eq(cls.__name__, cls.__qualname__)
         for base_class in cls.__mro__:
-            if issubclass(base_class, Config):
+            if issubclass(base_class, Config) and base_class is not cls:
                 assert cls.__class_validated__, (
                     f"Parent class {get_type_name(base_class)} of config class {get_type_name(cls)} has not been validated."
                     f" Make sure to use the @config_class decorator."
@@ -913,7 +899,6 @@ class Config:
                         valid=value.pop("valid", base_class_field.valid),
                         default=value.pop("default", base_class_field.default),
                         default_factory=value.pop("default_factory", base_class_field.default_factory),
-                        repr=value.pop("repr", base_class_field.repr),
                         hash=value.pop("hash", base_class_field.hash),
                         compare=value.pop("compare", base_class_field.compare),
                         metadata=value.pop("metadata", base_class_field.metadata),

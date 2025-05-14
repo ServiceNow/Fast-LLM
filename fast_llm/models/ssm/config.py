@@ -26,7 +26,6 @@ class HybridSSMBaseModelConfig(LanguageModelBaseConfig):
     _abstract = False
 
     ssm: SSMConfig = Field(
-        default_factory=SSMConfig,
         desc="Configuration for the transformer architecture.",
         hint=FieldHint.architecture,
     )
@@ -129,7 +128,7 @@ class LLambaHuggingfaceCheckpointFormat(CheckpointFormat):
 class HybridSSMModelConfig(FastLLMModelConfig):
     _abstract = False
     model_name: typing.ClassVar[str] = "hybrid_ssm"
-    base_model: HybridSSMBaseModelConfig = FieldUpdate(default_factory=HybridSSMBaseModelConfig)
+    base_model: HybridSSMBaseModelConfig = FieldUpdate()
     checkpoint_formats = FastLLMModelConfig.checkpoint_formats + (LLambaHuggingfaceCheckpointFormat,)
 
     @classmethod
@@ -154,13 +153,13 @@ class HybridSSMModelConfig(FastLLMModelConfig):
 @config_class()
 class PretrainedHybridSSMModelConfig(PretrainedFastLLMModelConfig):
     _abstract = False
-    model: HybridSSMModelConfig = FieldUpdate(default_factory=HybridSSMModelConfig)
+    model: HybridSSMModelConfig = FieldUpdate()
 
 
 @config_class()
 class HybridTrainerConfig(PretrainedHybridSSMModelConfig, TrainerConfig):
-    data: GPTDataConfig = FieldUpdate(default_factory=GPTDataConfig)
-    batch: GPTBatchConfig = FieldUpdate(default_factory=GPTBatchConfig)
+    data: GPTDataConfig = FieldUpdate()
+    batch: GPTBatchConfig = FieldUpdate()
 
     @classmethod
     def get_trainer_class(cls) -> type["SSMTrainer"]:

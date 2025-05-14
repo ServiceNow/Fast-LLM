@@ -26,7 +26,7 @@ class CustomBaseModelConfig(GPTBaseModelConfig):
 class CustomModelConfig(GPTModelConfig):
     # TODO: Add custom model config parameters, if any (typically none).
     model_name: typing.ClassVar[str] = "gpt_custom"
-    base_model: CustomBaseModelConfig = FieldUpdate(default_factory=CustomBaseModelConfig)
+    base_model: CustomBaseModelConfig = FieldUpdate()
 
     @classmethod
     def get_model_class(cls) -> type["CustomModel"]:
@@ -43,14 +43,14 @@ class CustomModelConfig(GPTModelConfig):
 
 @config_class()
 class PretrainedCustomModelConfig(PretrainedGPTModelConfig):
-    model: CustomModelConfig = FieldUpdate(default_factory=CustomModelConfig)
+    model: CustomModelConfig = FieldUpdate()
 
 
 @config_class()
 class CustomTrainerConfig(PretrainedCustomModelConfig, GPTTrainerConfig):
     # TODO: Add custom trainer config parameters, if any (typically none).
-    data: CustomDataConfig = FieldUpdate(default_factory=CustomDataConfig)
-    reference_models: dict[str, PretrainedCustomModelConfig] = FieldUpdate(default_factory=PretrainedCustomModelConfig)
+    data: CustomDataConfig = FieldUpdate()
+    reference_models: dict[str, PretrainedCustomModelConfig] = FieldUpdate()
 
     @classmethod
     def get_trainer_class(cls) -> type["CustomTrainer"]:

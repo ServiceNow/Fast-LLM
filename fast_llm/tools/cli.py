@@ -21,7 +21,7 @@ def fast_llm(args=None):
         if parsed.subcommand == "train":
             from fast_llm.tools.train import CliTrainingConfig as Runnable
         elif parsed.subcommand == "convert":
-            from fast_llm.tools.convert import ConversionConfig as Runnable
+            from fast_llm.tools.convert import ConvertConfig as Runnable
         elif parsed.subcommand == "prepare":
             from fast_llm.tools.prepare_dataset import PrepareDatasetConfig as Runnable
         else:
