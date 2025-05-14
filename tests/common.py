@@ -63,7 +63,8 @@ CONFIG_BASE_FAST_LLM = [
     f"model.multi_stage.debug_param_init={_LOG_LEVEL}",
     f"model.multi_stage.debug_layer_outputs={_LOG_LEVEL}",
     f"model.multi_stage.debug_layer_gradients={_LOG_LEVEL}",
-    f"model.multi_stage.debug_all_param_gradients={_LOG_LEVEL}",
+    # f"model.multi_stage.debug_all_param_gradients={_LOG_LEVEL}",
+    f"model.multi_stage.debug_all_param_gradients=0",
     "model.multi_stage.debug_tensor_parallel=True",
     "model.distributed.reproducible_init=True",
     "model.distributed.timeout=10",
@@ -201,6 +202,11 @@ CONFIG_MIXTRAL_YARN_COMMON = CONFIG_MIXTRAL_YARN_FAST_LLM + ["model.distributed.
 CONFIG_LLAMA_MTP_MEGATRON = None
 CONFIG_LLAMA_MTP_FAST_LLM = CONFIG_LLAMA_FAST_LLM + [
     "model.base_model.prediction_heads=4",
+    "model.base_model.embeddings_lr_scale=0",
+    "model.base_model.transformer.per_layer_lr_scale=[0.1,0.0000001,0.0000001,1,1,.1]",
+    # "model.base_model.output_lr_scale=0",
+    # "model.base_model.prediction_loss_coefficient=[1, .5, .5, 0]",
+    # "model.base_model.cross_entropy_splits=4",
 ]
 CONFIG_LLAMA_MTP_COMMON = CONFIG_LLAMA_MTP_FAST_LLM + ["model.distributed.training_dtype=bf16"]
 
