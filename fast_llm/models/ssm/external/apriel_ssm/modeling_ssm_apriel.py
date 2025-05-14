@@ -225,7 +225,9 @@ class DiscreteMamba2(nn.Module):
             state = self._get_states_from_cache(inference_params, batch)
             if inference_params.seqlen_offset > 0:
                 # States are updated inplace
+                u = u.squeeze(1) if len(u.shape) == 3 else u
                 out, _ = self.step(u, state)
+                out = out.unsqueeze(1) if len(u.shape) == 2 else out
                 return {"hidden_states": out}
 
         # Hacky way to initialize state during inference

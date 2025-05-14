@@ -29,6 +29,175 @@ from fast_llm.models.ssm.external.apriel_hybrid.configuration_ssm_hybrid_apriel 
 logger = logging.get_logger(__name__)
 
 
+class HybridMambaAttentionStaticCache(Cache):
+    def __init__(self, config: AprielSSMHybridConfig, batch_size, max_length, dtype=torch.float16, device=None):
+        super().__init__()  # config, batch_size, max_length, device, dtype)
+        self.dtype = dtype
+        self.hybrid_override_pattern = config.hybrid_block_layout
+        self.has_previous_state = False  # only used by mamba
+        intermediate_size = config.ssm_cfg["d_inner"]
+        ssm_state_size = config.ssm_cfg["d_state"]
+        conv_kernel_size = config.ssm_cfg["d_conv"]
+        self.n_qk_heads = config.ssm_cfg["n_qk_heads"]
+        assert intermediate_size % self.n_qk_heads == 0, "d_inner must be divisible by n_qk_heads"
+        self.head_d = intermediate_size // self.n_qk_heads
+        self.conv_states = []
+        self.ssm_states = []
+        self.transformer_layers = []
+        self.key_cache: list[torch.Tensor] = []
+        self.value_cache: list[torch.Tensor] = []
+
+        self.batch_size = batch_size
+        self.head_dim = (
+            config.head_dim if hasattr(config, "head_dim") else config.hidden_size // config.num_attention_heads
+        )
+        self.max_cache_len = config.max_position_embeddings if max_length is None else max_length
+
+        self.num_key_value_heads = (
+            config.num_attention_heads
+            if getattr(config, "num_key_value_heads", None) is None
+            else config.num_key_value_heads
+        )
+        cache_shape = (self.batch_size, self.num_key_value_heads, max_length, self.head_dim)
+
+        for i in range(config.num_hidden_layers):
+            if self.hybrid_override_pattern[i] == "m2d":
+                # Mamba layer
+                new_layer_conv_state = torch.zeros(
+                    batch_size,
+                    conv_kernel_size,
+                    intermediate_size + 2 * self.n_qk_heads * ssm_state_size,
+                    device=device,
+                    dtype=dtype,
+                ).transpose(1, 2)
+
+                new_layer_ssm_state = torch.zeros(
+                    batch_size, self.n_qk_heads, self.head_d, ssm_state_size, device=device, dtype=dtype
+                )
+                new_layer_key_cache = None  # torch.zeros((0,), dtype=dtype, device=device)
+                new_layer_value_cache = None  # torch.zeros((0,), dtype=dtype, device=device)
+            else:
+                # Attention or MLP layer
+                new_layer_conv_state = None  # torch.tensor((0,), dtype=dtype, device=device)
+                new_layer_ssm_state = None  # torch.tensor((0,), dtype=dtype, device=device)
+                new_layer_key_cache = torch.zeros(cache_shape, dtype=dtype, device=device)
+                new_layer_value_cache = torch.zeros(cache_shape, dtype=dtype, device=device)
+                self.transformer_layers.append(i)
+
+            # if not is_torchdynamo_compiling():
+            #     self.register_buffer(f"key_cache_{i}", torch.zeros(cache_shape, dtype=dtype, device=device))
+            #     self.register_buffer(f"value_cache_{i}", torch.zeros(cache_shape, dtype=dtype, device=device))
+            #     new_layer_key_cache = getattr(self, f"key_cache_{i}")
+            #     new_layer_value_cache = getattr(self, f"value_cache_{i}")
+            #     torch._dynamo.mark_static_address(new_layer_key_cache)
+            #     torch._dynamo.mark_static_address(new_layer_value_cache)
+            #     self.register_buffer(f"conv_states_{i}", new_layer_conv_state)
+            #     self.register_buffer(f"ssm_states_{i}", new_layer_ssm_state)
+            #     torch._dynamo.mark_static_address(new_layer_conv_state)
+            #     torch._dynamo.mark_static_address(new_layer_ssm_state)
+            #     new_layer_ssm_state = getattr(self, f"ssm_states_{i}")
+            #     new_layer_conv_state = getattr(self, f"conv_states_{i}")
+
+            self.key_cache.append(new_layer_key_cache)
+            self.value_cache.append(new_layer_value_cache)
+            self.conv_states.append(new_layer_conv_state)
+            self.ssm_states.append(new_layer_ssm_state)
+
+    def update(
+        self,
+        key_states: torch.Tensor,
+        value_states: torch.Tensor,
+        layer_idx: int,
+        cache_kwargs: Optional[dict[str, Any]] = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """
+        Updates the cache with the new `key_states` and `value_states` for the layer `layer_idx`.
+        It is VERY important to index using a tensor, otherwise you introduce a copy to the device.
+
+        Parameters:
+            key_states (`torch.Tensor`):
+                The new key states to cache.
+            value_states (`torch.Tensor`):
+                The new value states to cache.
+            layer_idx (`int`):
+                The index of the layer to cache the states for.
+            cache_kwargs (`Dict[str, Any]`, `optional`):
+                Additional arguments for the cache subclass. The `StaticCache` needs the `cache_position` input
+                to know how where to write in the cache.
+
+        Return:
+            A tuple containing the updated key and value states.
+        """
+
+        cache_position = cache_kwargs.get("cache_position")
+
+        k_out = self.key_cache[layer_idx]
+        v_out = self.value_cache[layer_idx]
+        key_states = key_states.to(k_out.dtype)
+        value_states = value_states.to(v_out.dtype)
+
+        if cache_position is None:
+            k_out.copy_(key_states)
+            v_out.copy_(value_states)
+        else:
+            # Note: here we use `tensor.index_copy_(dim, index, tensor)` that is equivalent to
+            # `tensor[:, :, index] = tensor`, but the first one is compile-friendly and it does explicitly an in-place
+            # operation, that avoids copies and uses less memory.
+            try:
+                k_out.index_copy_(2, cache_position, key_states)
+                v_out.index_copy_(2, cache_position, value_states)
+            except NotImplementedError:
+                # The operator 'aten::index_copy.out' is not currently implemented for the MPS device.
+                k_out[:, :, cache_position] = key_states
+                v_out[:, :, cache_position] = value_states
+
+        return k_out, v_out
+
+    def reorder_cache(self, beam_idx: torch.LongTensor):
+        """Reorders the cache for beam search, given the selected beam indices."""
+        for layer_idx in range(len(self.key_cache)):
+            device = self.key_cache[layer_idx].device
+            self.key_cache[layer_idx] = self.key_cache[layer_idx].index_select(0, beam_idx.to(device))
+            device = self.value_cache[layer_idx].device
+            self.value_cache[layer_idx] = self.value_cache[layer_idx].index_select(0, beam_idx.to(device))
+
+            device = self.conv_states[layer_idx].device
+            self.conv_states[layer_idx] = self.conv_states[layer_idx].index_select(0, beam_idx.to(device))
+            device = self.ssm_states[layer_idx].device
+            self.ssm_states[layer_idx] = self.ssm_states[layer_idx].index_select(0, beam_idx.to(device))
+
+    def get_seq_length(self, layer_idx: Optional[int] = None) -> int:
+        """Returns the sequence length of the cached states that were seen by the model."""
+        # Occupied cache == any slot in the 3rd dim (sequence length) holds a non-zero value. To save on compute, let's
+        # limit the check to the first batch member and head dimension.
+        # TODO: deprecate this function in favor of `cache_position`
+        if layer_idx is None:
+            layer_idx = self.transformer_layers[0]
+        return (self.key_cache[layer_idx][0, 0].any(dim=-1)).sum()
+
+    def get_max_cache_shape(self) -> Optional[int]:
+        return self.max_cache_len
+
+    # Copied from modeling_mamba2.py
+    def update_conv_state(
+        self, layer_idx: int, new_conv_state: torch.Tensor, cache_init: bool = False
+    ) -> torch.Tensor:
+        if cache_init:
+            self.conv_states[layer_idx] = new_conv_state.to(self.conv_states.device)
+        else:
+            self.conv_states[layer_idx] = self.conv_states[layer_idx].roll(shifts=-1, dims=-1)
+            self.conv_states[layer_idx][:, :, -1] = new_conv_state[:, 0, :].to(self.conv_states.device)
+        return self.conv_states[layer_idx]
+
+    def update_ssm_state(self, layer_idx: int, new_ssm_state: torch.Tensor):
+        self.ssm_states[layer_idx] = new_ssm_state.to(self.ssm_states.device)
+        return self.ssm_states[layer_idx]
+
+    def reset(self):
+        self.conv_states.zero_()
+        self.ssm_states.zero_()
+
+
 # Copied from https://github.com/huggingface/transformers/blob/main/src/transformers/models/jamba/modeling_jamba.py
 class HybridMambaAttentionDynamicCache(DynamicCache):
     """
@@ -110,14 +279,6 @@ class HybridMambaAttentionDynamicCache(DynamicCache):
             self.conv_states[layer_idx] = self.conv_states[layer_idx].index_select(0, beam_idx.to(device))
             device = self.ssm_states[layer_idx].device
             self.ssm_states[layer_idx] = self.ssm_states[layer_idx].index_select(0, beam_idx.to(device))
-
-    def get_seq_length(self, layer_idx: Optional[int] = 0) -> int:
-        """Returns the sequence length of the cached states. A layer index can be optionally passed."""
-        # take any layer that contains cache and not empty tensor
-        layer_idx = self.transformer_layers[0] if layer_idx not in self.transformer_layers else layer_idx
-        if len(self.key_cache) <= layer_idx:
-            return 0
-        return self.key_cache[layer_idx].shape[-2]
 
     def to_legacy_cache(self) -> tuple[tuple[torch.Tensor], tuple[torch.Tensor]]:
         raise NotImplementedError("HybridMambaAttentionDynamicCache does not have a legacy cache equivalent.")
@@ -549,7 +710,7 @@ class DiscreteMamba2(nn.Module):
         u,
         return_mixer_matrix=False,
         past_key_value: Optional[HybridMambaAttentionDynamicCache] = None,
-        cache_position: Optional[torch.LongTensor] = None,
+        inference_params=None,
         **kwargs,
     ):
         """
@@ -563,10 +724,12 @@ class DiscreteMamba2(nn.Module):
         ssm_state, conv_state = None, None
         if past_key_value is not None:
             ssm_state, conv_state = self._get_states_from_cache(past_key_value, batch)
-            if cache_position[0] > 0:
+            if inference_params is not None and inference_params.seqlen_offset > 0:
                 # States are updated inplace
+                # TODO: make sure inference_params with seqlen_offset are properly initialized
                 u = u.squeeze(1) if len(u.shape) == 3 else u
-                out, _ = self.step(u, ssm_state, conv_state)
+                out, _, _ = self.step(u, ssm_state, conv_state)
+                out = out.unsqueeze(1) if len(u.shape) == 2 else out
                 return {"hidden_states": out}
 
         # Hacky way to initialize state during inference
@@ -660,8 +823,8 @@ class DiscreteMamba2(nn.Module):
             dim=-1,
         )
 
-        xBC, conv_state = self.convolutional_step(xBC, conv_state)
-        conv_state.copy_(conv_state)  # update state in place
+        xBC, conv_state_new = self.convolutional_step(xBC, conv_state)
+        conv_state.copy_(conv_state_new)  # update state in place
 
         x, B, C = torch.split(
             xBC,
@@ -698,7 +861,7 @@ class DiscreteMamba2(nn.Module):
         # Norm and gate
         out = self.out_proj(y * F.silu(z + self.z_bias))
 
-        return out, ssm_state
+        return out, ssm_state, conv_state
 
     # def allocate_inference_cache(self, batch_size, max_seqlen, dtype=None, **kwargs):
     #     device = self.in_proj.weight.device
@@ -908,6 +1071,13 @@ class AprielSSMPreTrainedModel(PreTrainedModel):
     config_class = AprielSSMHybridConfig
     base_model_prefix = "model"
     _no_split_modules = ["AprielDecoderLayer", "AprielSSMDecoderLayer"]
+    _supports_flash_attn_2 = True
+    _supports_sdpa = True
+    _supports_flex_attn = True
+    _supports_cache_class = True
+    _supports_quantized_cache = True
+    _supports_static_cache = True
+    _supports_attention_backend = True
 
     def _init_weights(self, module):
         std = self.config.initializer_range
@@ -1018,6 +1188,7 @@ class AprielSSMHybridModel(AprielSSMPreTrainedModel):
         self.norm = AprielRMSNorm(config.hidden_size, eps=config.rms_norm_eps, **factory_kwargs)
         self.gradient_checkpointing = False
         self.rotary_emb = AprielRotaryEmbedding(config=config)
+        self.has_transformer_layers = any(type == "t" for type in config.hybrid_block_layout)
 
         # Initialize weights and apply final processing
         self.post_init()
@@ -1078,23 +1249,25 @@ class AprielSSMHybridModel(AprielSSMPreTrainedModel):
                 "provided, so no cache will be returned."
             )
 
-        if cache_position is None:
+        if cache_position is None and self.has_transformer_layers:
             past_seen_tokens = past_key_values.get_seq_length() if past_key_values is not None else 0
             cache_position = torch.arange(
                 past_seen_tokens, past_seen_tokens + inputs_embeds.shape[1], device=inputs_embeds.device
             )
 
-        if position_ids is None:
+        if position_ids is None and self.has_transformer_layers:
             position_ids = cache_position.unsqueeze(0)
 
-        causal_mask = self._update_causal_mask(
-            attention_mask, inputs_embeds, cache_position, past_key_values, output_attentions
+        causal_mask = (
+            self._update_causal_mask(attention_mask, inputs_embeds, cache_position, past_key_values, output_attentions)
+            if self.has_transformer_layers
+            else None
         )
 
         hidden_states = inputs_embeds
 
         # create position embeddings to be shared across the decoder layers
-        position_embeddings = self.rotary_emb(hidden_states, position_ids)
+        position_embeddings = self.rotary_emb(hidden_states, position_ids) if self.has_transformer_layers else None
 
         # decoder layers
         all_hidden_states = () if output_hidden_states else None
@@ -1152,7 +1325,9 @@ class AprielSSMHybridModel(AprielSSMPreTrainedModel):
         # order to dispatch on Flash Attention 2. This feature is not compatible with static cache, as SDPA will fail
         # to infer the attention mask.
         past_seen_tokens = past_key_values.get_seq_length() if past_key_values is not None else 0
-        using_static_cache = isinstance(past_key_values, StaticCache)
+        using_static_cache = isinstance(past_key_values, StaticCache) or isinstance(
+            past_key_values, HybridMambaAttentionStaticCache
+        )
 
         # When output attentions is True, sdpa implementation's forward method calls the eager implementation's forward
         if self.config._attn_implementation == "sdpa" and not using_static_cache and not output_attentions:
