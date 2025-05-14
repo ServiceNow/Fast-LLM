@@ -133,23 +133,26 @@ class GPTSampledIndexedDataset(SampledDataset):
         # Get the document sizes, the main information needed for sampling.
         document_sizes, image_sizes = self._indexed_dataset.get_document_sizes()
         document_sizes = torch.from_numpy(document_sizes).to(self._device)
-        image_token_sizes = []
-        for i, sizes in enumerate(image_sizes):
-            image_token_sizes.append(
-                sum(
-                    get_num_patches(
-                        *get_resize_dims(
-                            *size,
-                            self._parameters.image_size,
-                            self._parameters.image_size,
+        if image_sizes:
+            image_token_sizes = []
+            for i, sizes in enumerate(image_sizes):
+                image_token_sizes.append(
+                    sum(
+                        get_num_patches(
+                            *get_resize_dims(
+                                *size,
+                                self._parameters.image_size,
+                                self._parameters.image_size,
+                                self._parameters.patch_size,
+                            ),
                             self._parameters.patch_size,
-                        ),
-                        self._parameters.patch_size,
+                        )
+                        for size in sizes
                     )
-                    for size in sizes
                 )
-            )
-        image_token_sizes = torch.tensor(image_token_sizes).to(self._device)
+            image_token_sizes = torch.tensor(image_token_sizes).to(self._device)
+        else:
+            image_token_sizes = torch.zeros_like(document_sizes)
 
         documents_per_epoch = document_sizes.numel()
         tokens_per_epoch = document_sizes.sum().item() + image_token_sizes.sum().item()
@@ -463,16 +466,20 @@ class GPTSampledIndexedDataset(SampledDataset):
                     use_loss_masking_spans=self._parameters.use_loss_masking_spans,
                 )
                 start_pos = 0
-                for idx, im_position in enumerate(sample.image_positions):
-                    # image_positions.append(im_positions + len(token_ids) + image_tokens_added)
-                    # Add placeholders for image tokens
-                    token_ids.append(sample.token_ids[start_pos:im_position])
-                    token_ids.append(np.full((image_sizes[idx],), -100, dtype=np.int64))
-                    image_positions.append(im_position + len(token_ids) + image_tokens_added)
-                    image_tokens_added += image_tokens
-                    start_pos = im_position
+                if sample.image_positions:
+                    for idx, im_position in enumerate(sample.image_positions):
+                        # image_positions.append(im_positions + len(token_ids) + image_tokens_added)
+                        # Add placeholders for image tokens
+                        token_ids.append(sample.token_ids[start_pos:im_position])
+                        token_ids.append(np.full((image_sizes[idx],), -100, dtype=np.int64))
+                        image_positions.append(im_position + len(token_ids) + image_tokens_added)
+                        image_tokens_added += image_tokens
+                        start_pos = im_position
                 token_ids.append(sample.token_ids[start_pos:])
-                images.append(sample.images)
+                if sample.images:
+                    images.append(sample.images)
+                else:
+                    images.append([])
                 if self._parameters.use_loss_masking_spans:
                     for loss_masking_span in sample.loss_masking_spans:
                         span = np.clip(
