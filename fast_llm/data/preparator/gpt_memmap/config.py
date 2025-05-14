@@ -30,7 +30,7 @@ class SourceSchemaConfig(Config):
 
 @config_class()
 class TextColumnConfig(SourceSchemaConfig):
-    type: typing.ClassVar[str] = "text_column"
+    type: typing.ClassVar[str] = "text_column" #TODO: Register TestColumnConfig for this type for dynamic loading PR #245
     input_column: str = Field(
         default="text",
         desc="Field of the dataset to use.",
