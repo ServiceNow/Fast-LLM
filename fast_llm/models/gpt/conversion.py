@@ -718,15 +718,6 @@ class DiffusionDreamHuggingfaceCheckpointHandler(CustomModelingExportMixin, Comm
                     "AutoModel": "modeling_dream.DreamModel",
                 },
             ),
-            # TODO: include when the mask diffusion training is implemented
-            # RenameParamConverter(
-            #     fast_llm_names=(("mask_token_id",),),
-            #     export_names=(("mask_token_id",),),
-            # ),
-            # RenameParamConverter(
-            #     fast_llm_names=(("pad_token_id",),),
-            #     export_names=(("pad_token_id",),),
-            # ),
         ]
             
 
@@ -772,14 +763,11 @@ class DiffusionLlamaHuggingfaceCheckpointHandler(CustomModelingExportMixin, Comm
                     "AutoConfig": "configuration_diffusion_llama.DiffusionLlamaConfig",
                     "AutoModel": "modeling_diffusion_llama.DiffusionLlamaModel",
                 },),
-            # TODO: include when the mask diffusion training is implemented
+            # TODO: include when the mask diffusion training is implemented;
+            # since the imported model (llama) for CPT doesn't have it but the exported model (diffusion llama) does need to have this token.
             # RenameParamConverter(
             #     fast_llm_names=(("mask_token_id",),),
             #     export_names=(("mask_token_id",),),
-            # ),
-            # RenameParamConverter(
-            #     fast_llm_names=(("pad_token_id",),),
-            #     export_names=(("pad_token_id",),),
             # ),
         ]
             
