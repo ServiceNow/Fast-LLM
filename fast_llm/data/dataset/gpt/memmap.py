@@ -209,6 +209,7 @@ class GPTMemmapDataset(GPTIndexedDataset):
             offset=self._pointers[idx] + offset * np.dtype(self._dtype).itemsize,
         )
         images = None
+        image_positions = None
         if self._has_images:
             # Truncations with images are not yet supported
             image_positions = self._image_positions[idx]

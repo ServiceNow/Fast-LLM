@@ -153,7 +153,6 @@ class VisionPreprocessor(Preprocessor):
         cu_seqlens = [0]
         max_seqlen = -1
         for imgs, sizes in zip(images, image_sizes):
-            # TODO Soham: should this be micro_sequence_length?
             # sum(
             #     get_num_patches(*size, patch_size) for size in sizes
             # )
@@ -172,6 +171,7 @@ class VisionPreprocessor(Preprocessor):
                         ]
                     )
                 )
+            # TODO Soham: should this be micro_sequence_length?
             padding_size = kwargs[TransformerKwargs.sequence_length] - cu_seqlens[-1]
             if padding_size > max_seqlen:
                 max_seqlen = padding_size

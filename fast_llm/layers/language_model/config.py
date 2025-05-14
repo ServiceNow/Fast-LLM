@@ -175,7 +175,7 @@ class LanguageModelBaseConfig(BaseModelConfig):
         # TODO: Need both?
         tensor_space.add_tensor_dim(TensorDim(LanguageModelDimNames.vocab, self.vocab_size))
         tensor_space.add_tensor_dim(TensorDim(LanguageModelDimNames.vocab_tp, self.vocab_size, tensor))
-        if self.vision_encoder is not None:
+        if self.vision_encoder.enabled:
             self.vision_encoder.setup_tensor_space(tensor_space)
 
     @property

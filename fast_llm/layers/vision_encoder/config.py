@@ -1,3 +1,5 @@
+import enum
+
 from fast_llm.config import Config, Field, FieldHint, config_class
 from fast_llm.engine.base_model.config import BaseModelConfig
 from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
@@ -130,10 +132,20 @@ class ImageNormalizationConfig(Config):
     )
 
 
+class VisionEncoderType(str, enum.Enum):
+    none = "none"
+    pixtral = "pixtral"
+
+
 @config_class()
 class VisionEncoderConfig(BaseModelConfig):
     _abstract = False
 
+    type: VisionEncoderType = Field(
+        default=VisionEncoderType.none,
+        desc="Type of the vision encoder. Choices: none, pixtral.",
+        hint=FieldHint.architecture,
+    )
     transformer: VisionTransformerConfig = Field(
         default_factory=VisionTransformerConfig,
         desc="Configuration for the vision transformer architecture.",
@@ -182,3 +194,7 @@ class VisionEncoderConfig(BaseModelConfig):
             )
         )
         self.transformer.setup_tensor_space(tensor_space, type="vision")
+
+    @property
+    def enabled(self) -> bool:
+        return self.type != VisionEncoderType.none

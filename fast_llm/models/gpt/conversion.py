@@ -27,6 +27,7 @@ from fast_llm.functional.config import ActivationType
 from fast_llm.functional.rotary import convert_rotary_complex_to_real, convert_rotary_real_to_complex
 from fast_llm.layers.common.config import NormalizationType
 from fast_llm.layers.transformer.config import RotaryEmbeddingType, RoutingType, TransformerConfig
+from fast_llm.layers.vision_encoder.config import VisionEncoderType
 from fast_llm.models.gpt.config import (
     GPTBaseModelConfig,
     GPTModelConfig,
@@ -172,9 +173,7 @@ class CommonHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
         num_layers = self._model.config.base_model.transformer.num_layers
 
         # Embeddings
-        converters.append(
-            WeightConverter(f"layers.{num_layers - 1}.word_embeddings_weight", f"model.embed_tokens.weight")
-        )
+        converters.append(WeightConverter(f"layers.0.word_embeddings_weight", f"model.embed_tokens.weight"))
 
         converters += self._create_lm_head_converters()
 
@@ -250,7 +249,7 @@ class CommonHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
             converters += self._get_mlp_converters(f"{fast_llm_layer_name}", f"{hf_layer_name}")
         return converters
 
-    def _create_lm_head_converters(self, hf_base_prefix: str, fast_llm_offset: int = 1) -> list[WeightConverter]:
+    def _create_lm_head_converters(self, hf_base_prefix: str = "", fast_llm_offset: int = 1) -> list[WeightConverter]:
         num_layers = self._model.config.base_model.transformer.num_layers
         prediction_heads = self._model.config.base_model.prediction_heads
         norm_bias: bool = self._model.config.base_model.transformer.normalization.type == NormalizationType.layer_norm
@@ -575,6 +574,9 @@ class LlavaHuggingfaceCheckpointHandler(MistralHuggingfaceCheckpointHandler):
             lm_converters[:ignore_index]
             + lm_converters[ignore_index + 1 :]
             + [
+                ConstantImportParamConverter(
+                    fast_llm_names=(("vision_encoder", "type"),), fast_llm_value=VisionEncoderType.pixtral
+                ),
                 ConstantExportParamConverter(
                     export_names=(("architectures",),), export_value=["LlavaForConditionalGeneration"]
                 ),
