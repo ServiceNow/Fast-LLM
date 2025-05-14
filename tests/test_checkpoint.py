@@ -17,7 +17,7 @@ from fast_llm.engine.checkpoint.config import (
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig, StageMode
 from fast_llm.engine.multi_stage.multi_stage import ShardName
 from fast_llm.models.auto import model_registry
-from fast_llm.tools.convert import ConversionConfig
+from fast_llm.tools.convert import ConvertConfig
 from tests.common import (
     CONFIG_COMMON,
     FORCE_REUSE_RESULTS,
@@ -90,7 +90,7 @@ def test_resume():
     )
 
 
-def _run_conversion(config: ConversionConfig):
+def _run_conversion(config: ConvertConfig):
     if config.output.path.is_dir() and not REUSE_RESULTS:
         shutil.rmtree(config.output.path)
     if not config.output.path.is_dir():
@@ -106,7 +106,7 @@ _CONVERT_PATH = TEST_RESULTS_PATH / f"test_{TEST_MODEL}_convert_model"
 @pytest.mark.depends(on=["test_checkpoint_and_eval"])
 def test_convert_distributed_to_fast_llm():
     _run_conversion(
-        ConversionConfig(
+        ConvertConfig(
             input=CheckpointLoadConfig(
                 path=_CKPT_PATH,
                 format=DistributedCheckpointFormat,
@@ -125,7 +125,7 @@ def test_convert_fast_llm_to_huggingface():
     if HUGGINGFACE_CHECKPOINT_FORMAT is None:
         pytest.skip(f"Conversion not supported for {TEST_MODEL}")
     _run_conversion(
-        ConversionConfig(
+        ConvertConfig(
             input=CheckpointLoadConfig(
                 path=_CONVERT_PATH / "fast_llm_0",
                 format=FastLLMCheckpointFormat,
@@ -142,7 +142,7 @@ def test_convert_fast_llm_to_huggingface():
 @pytest.mark.depends(on=["test_convert_fast_llm_to_huggingface"])
 def test_convert_huggingface_to_distributed():
     _run_conversion(
-        ConversionConfig(
+        ConvertConfig(
             input=CheckpointLoadConfig(
                 path=_CONVERT_PATH / "huggingface_0",
                 format=HUGGINGFACE_CHECKPOINT_FORMAT,
@@ -161,7 +161,7 @@ def test_convert_distributed_to_huggingface():
     if HUGGINGFACE_CHECKPOINT_FORMAT is None:
         pytest.skip(f"Conversion not supported for {TEST_MODEL}")
     _run_conversion(
-        ConversionConfig(
+        ConvertConfig(
             input=CheckpointLoadConfig(
                 path=_CKPT_PATH,
                 format=DistributedCheckpointFormat,
@@ -178,7 +178,7 @@ def test_convert_distributed_to_huggingface():
 @pytest.mark.depends(on=["test_convert_distributed_to_huggingface"])
 def test_convert_huggingface_to_fast_llm():
     _run_conversion(
-        ConversionConfig(
+        ConvertConfig(
             input=CheckpointLoadConfig(
                 path=_CONVERT_PATH / "huggingface_1",
                 format=HUGGINGFACE_CHECKPOINT_FORMAT,
@@ -195,7 +195,7 @@ def test_convert_huggingface_to_fast_llm():
 @pytest.mark.depends(on=["test_convert_huggingface_to_fast_llm"])
 def test_convert_fast_llm_to_distributed():
     _run_conversion(
-        ConversionConfig(
+        ConvertConfig(
             input=CheckpointLoadConfig(
                 path=_CONVERT_PATH / "fast_llm_1",
                 format=FastLLMCheckpointFormat,
