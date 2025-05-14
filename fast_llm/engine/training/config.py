@@ -275,7 +275,7 @@ class ShutdownConfig(IntervalConfig):
     )
 
 
-@config_class()
+@config_class(dynamic_type={RunnableConfig: "train"})
 class TrainingConfig(Config):
     evaluations: dict[str, EvaluationConfig] = Field(
         default_factory=dict,
@@ -421,6 +421,3 @@ class TrainerConfig(PretrainedFastLLMModelConfig, ExperimentConfig):
             old_setup()
 
         object.__setattr__(pretrained, "_setup", new_setup)
-
-
-RunnableConfig.register_subclass("train", TrainerConfig)

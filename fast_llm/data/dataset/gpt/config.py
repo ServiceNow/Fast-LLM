@@ -108,7 +108,7 @@ class GPTIndexedDatasetConfig(GPTSamplableDatasetConfig, IndexedDatasetConfig):
         raise NotImplementedError()
 
 
-@config_class()
+@config_class(dynamic_type={GPTSampledDatasetConfig: "random"})
 class GPTRandomDatasetConfig(GPTSamplableDatasetConfig):
     _abstract: typing.ClassVar[bool] = False
     name: str = Field(
@@ -123,7 +123,7 @@ class GPTRandomDatasetConfig(GPTSamplableDatasetConfig):
         return GPTRandomDataset(self.name)
 
 
-@config_class()
+@config_class(dynamic_type={GPTSampledDatasetConfig: "memmap"})
 class GPTMemmapDatasetConfig(GPTIndexedDatasetConfig):
     _abstract: typing.ClassVar[bool] = False
     path: pathlib.Path = Field(
@@ -148,7 +148,7 @@ class GPTMemmapDatasetConfig(GPTIndexedDatasetConfig):
         return GPTMemmapDataset(str(self.path).replace("/", "__"), self.path, self.num_documents, self.num_tokens)
 
 
-@config_class()
+@config_class(dynamic_type={GPTSampledDatasetConfig: "concatenated"})
 class GPTConcatenatedDatasetConfig(ConcatenatedDatasetConfig, GPTIndexedDatasetConfig):
     _abstract: typing.ClassVar[bool] = False
     datasets: list[GPTIndexedDatasetConfig] = FieldUpdate()
@@ -159,7 +159,7 @@ class GPTConcatenatedDatasetConfig(ConcatenatedDatasetConfig, GPTIndexedDatasetC
         return self._build(GPTConcatenatedDataset)
 
 
-@config_class()
+@config_class(dynamic_type={GPTSampledDatasetConfig: "slice"})
 class GPTDatasetSliceConfig(DatasetSliceConfig, GPTIndexedDatasetConfig):
     _abstract: typing.ClassVar[bool] = False
     dataset: GPTIndexedDatasetConfig = FieldUpdate()
@@ -170,20 +170,20 @@ class GPTDatasetSliceConfig(DatasetSliceConfig, GPTIndexedDatasetConfig):
         return self._build(GPTDatasetSlice)
 
 
-@config_class()
+@config_class(dynamic_type={GPTSampledDatasetConfig: "sampled"})
 class GPTSampledDatasetUpdateConfig(SampledDatasetUpdateConfig, GPTSampledDatasetConfig):
     _abstract = False
     sampling: GPTSamplingConfig = FieldUpdate()
     dataset: GPTSampledDatasetConfig = FieldUpdate()
 
 
-@config_class()
+@config_class(dynamic_type={GPTSampledDatasetConfig: "blended"})
 class GPTBlendedDatasetConfig(BlendedDatasetConfig, GPTSampledDatasetConfig):
     _abstract: typing.ClassVar[bool] = False
     datasets: list[GPTSampledDatasetConfig] = FieldUpdate()
 
 
-@config_class()
+@config_class(dynamic_type={GPTSampledDatasetConfig: "file"})
 class GPTDatasetFromFileConfig(GPTSamplableDatasetConfig):
     _abstract: typing.ClassVar[bool] = False
     path: pathlib.Path = Field(
@@ -221,7 +221,8 @@ class GPTDatasetFromFileConfig(GPTSamplableDatasetConfig):
         return config
 
 
-@config_class()
+# Add user-friendly names for the configs.
+@config_class(dynamic_type={GPTSampledDatasetConfig: "concatenated_memmap"})
 class GPTConcatenatedMemmapConfig(GPTIndexedDatasetConfig):
     # TODO v0.3: Remove.
     _abstract: typing.ClassVar[bool] = False
@@ -327,7 +328,7 @@ class FimConfig(Config):
     )
 
 
-@config_class()
+@config_class(dynamic_type={GPTSampledDatasetConfig: "fim"})
 class GPTFimSampledDatasetConfig(GPTSampledDatasetConfig, FimConfig):
     """
     Configuration for FIM.
@@ -394,7 +395,7 @@ class GPTLegacyConfig(Config):
     )
 
 
-@config_class()
+@config_class(dynamic_type={GPTSampledDatasetConfig: "legacy"})
 class GPTLegacyDatasetConfig(GPTSampledDatasetConfig, GPTLegacyConfig):
     _abstract: typing.ClassVar[bool] = False
 
@@ -475,7 +476,7 @@ class GPTLegacyDatasetConfig(GPTSampledDatasetConfig, GPTLegacyConfig):
         return GPTSampledDatasetConfig.from_dict(dataset_config).build_and_sample(sampling)
 
 
-@config_class()
+@config_class(dynamic_type={GPTSampledDatasetConfig: "test_slow"})
 class GPTTestSlowDatasetConfig(GPTSampledDatasetConfig):
     """
     A mock dataset that mimics a slow dataset creation on one rank, which may trigger a timeout.
@@ -494,18 +495,3 @@ class GPTTestSlowDatasetConfig(GPTSampledDatasetConfig):
         if sampling.distributed.config.rank == 0:
             time.sleep(self.sleep)
         return GPTRandomDatasetConfig().build_and_sample(sampling)
-
-
-# Add user-friendly names for the configs.
-GPTSampledDatasetConfig.register_subclass("dummy", GPTRandomDatasetConfig)
-GPTSampledDatasetConfig.register_subclass("random", GPTRandomDatasetConfig)
-GPTSampledDatasetConfig.register_subclass("memmap", GPTMemmapDatasetConfig)
-GPTSampledDatasetConfig.register_subclass("concatenated", GPTConcatenatedDatasetConfig)
-GPTSampledDatasetConfig.register_subclass("slice", GPTDatasetSliceConfig)
-GPTSampledDatasetConfig.register_subclass("sampled", GPTSampledDatasetUpdateConfig)
-GPTSampledDatasetConfig.register_subclass("blended", GPTBlendedDatasetConfig)
-GPTSampledDatasetConfig.register_subclass("file", GPTDatasetFromFileConfig)
-GPTSampledDatasetConfig.register_subclass("concatenated_memmap", GPTConcatenatedMemmapConfig)
-GPTSampledDatasetConfig.register_subclass("fim", GPTFimSampledDatasetConfig)
-GPTSampledDatasetConfig.register_subclass("legacy", GPTLegacyDatasetConfig)
-GPTSampledDatasetConfig.register_subclass("test_slow", GPTTestSlowDatasetConfig)

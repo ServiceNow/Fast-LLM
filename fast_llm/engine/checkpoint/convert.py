@@ -16,7 +16,7 @@ if typing.TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-@config_class()
+@config_class(dynamic_type={RunnableConfig: "convert"})
 class ConvertConfig(RunnableConfig):
     input: CheckpointLoadConfig = Field()
     output: CheckpointSaveConfig = Field()
@@ -142,6 +142,3 @@ class ConvertConfig(RunnableConfig):
             # All good!
             (self.output.path / "ok").open("w")
             logger.info(f">>> All done!")
-
-
-RunnableConfig.register_subclass("convert", ConvertConfig)

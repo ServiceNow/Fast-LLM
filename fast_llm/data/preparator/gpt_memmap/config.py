@@ -111,7 +111,7 @@ class DatasetPreparatorDistributedConfig(Config):
         Assert.in_range(self.rank, 0, self.world_size)
 
 
-@config_class()
+@config_class(dynamic_type={RunnableConfig: "prepare_gpt_memmap", DatasetPreparatorConfig: "gpt_memmap"})
 class GPTMemmapDatasetPreparatorConfig(DatasetPreparatorConfig):
     preparator_name: typing.ClassVar[str] = "gpt_memmap"
 
@@ -174,7 +174,3 @@ class GPTMemmapDatasetPreparatorConfig(DatasetPreparatorConfig):
         from fast_llm.data.preparator.gpt_memmap.prepare import GPTMemmapDatasetPreparator
 
         return GPTMemmapDatasetPreparator
-
-
-RunnableConfig.register_subclass("prepare_gpt_memmap", GPTMemmapDatasetPreparatorConfig)
-DatasetPreparatorConfig.register_subclass("gpt_memmap", GPTMemmapDatasetPreparatorConfig)

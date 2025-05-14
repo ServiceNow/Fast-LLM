@@ -47,7 +47,7 @@ class NormalizationConfig(BaseModelConfig):
         return super()._from_dict(default, strict=strict, flat=flat)
 
 
-@config_class()
+@config_class(dynamic_type={NormalizationConfig: "none"})
 class NoNormalizationConfig(NormalizationConfig):
     _abstract = False
 
@@ -123,7 +123,7 @@ class LayerNormalizationBaseConfig(NormalizationConfig):
         return super()._from_dict(default, strict, flat)
 
 
-@config_class()
+@config_class(dynamic_type={NormalizationConfig: "layer_norm"})
 class LayerNormalizationConfig(LayerNormalizationBaseConfig):
     _abstract = False
 
@@ -134,7 +134,7 @@ class LayerNormalizationConfig(LayerNormalizationBaseConfig):
         return LayerNorm
 
 
-@config_class()
+@config_class(dynamic_type={NormalizationConfig: "rms_norm"})
 class RMSNormalizationConfig(LayerNormalizationBaseConfig):
     _abstract = False
 
@@ -143,11 +143,6 @@ class RMSNormalizationConfig(LayerNormalizationBaseConfig):
         from fast_llm.layers.common.normalization import RMSNorm
 
         return RMSNorm
-
-
-NormalizationConfig.register_subclass("none", NoNormalizationConfig)
-NormalizationConfig.register_subclass("layer_norm", LayerNormalizationConfig)
-NormalizationConfig.register_subclass("rms_norm", RMSNormalizationConfig)
 
 
 @config_class()

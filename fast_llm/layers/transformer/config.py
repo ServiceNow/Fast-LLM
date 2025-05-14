@@ -113,12 +113,12 @@ class RotaryConfig(BaseModelConfig):
         raise NotImplementedError()
 
 
-@config_class()
+@config_class(dynamic_type={RotaryConfig: "none"})
 class NoRotaryConfig(RotaryConfig):
     _abstract = False
 
 
-@config_class()
+@config_class(dynamic_type={RotaryConfig: "default"})
 class DefaultRotaryConfig(RotaryConfig):
     _abstract = False
     theta: float = Field(
@@ -172,7 +172,7 @@ class DefaultRotaryConfig(RotaryConfig):
         return self.theta ** -torch.arange(0, 1, 2 / kv_channels, device=device, dtype=torch.float64)
 
 
-@config_class()
+@config_class(dynamic_type={RotaryConfig: "llama3"})
 class Llama3RotaryConfig(DefaultRotaryConfig):
     """
     Llama3 scaling: https://github.com/meta-llama/llama-models/blob/baf7b01b6e62bc7126c7b558d2b67d4533142680/models/llama3/reference_impl/model.py#L45-L67
@@ -209,7 +209,7 @@ class Llama3RotaryConfig(DefaultRotaryConfig):
         return torch.stack(new_scales)
 
 
-@config_class()
+@config_class(dynamic_type={RotaryConfig: "yarn"})
 class YarnRotaryConfig(DefaultRotaryConfig):
     """
     Yarn scaling:
@@ -275,12 +275,6 @@ class YarnRotaryConfig(DefaultRotaryConfig):
         )
 
 
-RotaryConfig.register_subclass("none", NoRotaryConfig)
-RotaryConfig.register_subclass("default", DefaultRotaryConfig)
-RotaryConfig.register_subclass("llama3", Llama3RotaryConfig)
-RotaryConfig.register_subclass("yarn", YarnRotaryConfig)
-
-
 class AddLinearBiasChoices(str, enum.Enum):
     nowhere = "nowhere"
     everywhere = "everywhere"
@@ -325,7 +319,7 @@ class TransformerPeftConfig(PeftConfig):
         return super()._from_dict(default, strict=strict, flat=flat)
 
 
-@config_class()
+@config_class(dynamic_type={TransformerPeftConfig: "none"})
 class TransformerNoPeftConfig(NoPeftConfig, TransformerPeftConfig):
     _abstract = False
 
@@ -339,7 +333,7 @@ class TransformerNoPeftConfig(NoPeftConfig, TransformerPeftConfig):
         return parameter
 
 
-@config_class()
+@config_class(dynamic_type={TransformerPeftConfig: "lora"})
 class TransformerLoRAConfig(LoRAConfig, TransformerPeftConfig):
     layers: list[TransformerSubLayerName] = Field(
         default=(TransformerSubLayerName.query, TransformerSubLayerName.value_),
@@ -396,10 +390,6 @@ class TransformerLoRAConfig(LoRAConfig, TransformerPeftConfig):
             raise ValueError(
                 f"{TransformerSubLayerName.key_value.value}, {TransformerSubLayerName.key.value} and {TransformerSubLayerName.value_.value} are mutually exclusive."
             )
-
-
-TransformerPeftConfig.register_subclass("none", TransformerNoPeftConfig)
-TransformerPeftConfig.register_subclass("lora", TransformerLoRAConfig)
 
 
 @config_class()
