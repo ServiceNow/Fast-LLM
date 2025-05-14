@@ -185,6 +185,9 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                 VisionEncoderKwargs.kv_channels: self._tensor_space.get_tensor_dim(
                     VisionEncoderDimNames.kv_channels
                 ).size,
+                VisionEncoderKwargs.out_channels: self._tensor_space.get_tensor_dim(
+                    VisionEncoderDimNames.out_channels
+                ).size,
             }
         else:
             vision_kwargs = {}

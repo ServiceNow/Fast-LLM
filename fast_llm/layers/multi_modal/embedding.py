@@ -62,9 +62,14 @@ class MultiModalEmbedding(LanguageModelEmbedding):
                 image_embedding_offset = 0
                 for position, size in zip(positions, sizes):
                     num_image_tokens = get_num_patches(*size, self._config.vision_encoder.patch_size)
-                    embeddings[sample_idx, position : position + num_image_tokens] = input_[
-                        sample_idx, image_embedding_offset : image_embedding_offset + num_image_tokens
-                    ]
+                    if self._sequence_parallel:
+                        embeddings[position : position + num_image_tokens, sample_idx] = input_[
+                            image_embedding_offset : image_embedding_offset + num_image_tokens, sample_idx
+                        ]
+                    else:
+                        embeddings[sample_idx, position : position + num_image_tokens] = input_[
+                            sample_idx, image_embedding_offset : image_embedding_offset + num_image_tokens
+                        ]
                     image_embedding_offset += num_image_tokens
             if self._sequence_parallel:
                 embeddings = split(embeddings, group=group, dim=0)

@@ -5,6 +5,7 @@ import torch
 from fast_llm.core.ops import split
 from fast_llm.engine.base_model.base_model import Layer
 from fast_llm.engine.config_utils.tensor_space import TensorSpace
+from fast_llm.layers.transformer.config import TransformerKwargs
 from fast_llm.layers.vision_encoder.config import VisionEncoderConfig, VisionEncoderDimNames, VisionEncoderKwargs
 from fast_llm.tensor import ParameterMeta, TensorMeta, init_normal_
 
@@ -61,25 +62,6 @@ class PatchConv(Layer):
         self.norm = config.patch_norm.get_layer(tensor_space.get_tensor_dim(VisionEncoderDimNames.out_channels))
         self.stride = config.patch_size
 
-    @torch.compile
-    def _forward(
-        self,
-        input_: torch.Tensor,
-        hidden_dims: tuple[TensorMeta, ...],
-    ):
-        group = self._tensor_space.distributed.tensor_group
-        input_ = torch.nn.functional.conv2d(input_, self.weight, self.bias, stride=self.stride)
-        patch_embeddings = self.norm(input_.flatten(1))
-        batch_dim, sequence_q_dim, hidden_dim = hidden_dims
-        if self._sequence_parallel:
-            patch_embeddings = patch_embeddings.reshape(
-                sequence_q_dim.global_size, batch_dim.size, hidden_dim.global_size
-            )
-            patch_embeddings = split(patch_embeddings, group=group, dim=0)
-        else:
-            patch_embeddings = patch_embeddings.reshape(batch_dim.size, sequence_q_dim.size, hidden_dim.size)
-        return patch_embeddings
-
     def forward(
         self,
         input_: torch.Tensor,
@@ -90,5 +72,15 @@ class PatchConv(Layer):
         hidden_dims = kwargs[VisionEncoderKwargs.hidden_dims]
         if isinstance(input_, TensorMeta):
             return TensorMeta.from_dims(hidden_dims, tensor_name="patch conv output", dtype=input_.dtype)
-
-        return self._forward(input_, hidden_dims)
+        micro_batch_size = kwargs[TransformerKwargs.micro_batch_size]
+        sequence_length = kwargs[TransformerKwargs.sequence_length]
+        out_channels = kwargs[VisionEncoderKwargs.out_channels]
+        reshape_dims = (micro_batch_size, sequence_length, out_channels)
+        group = self._tensor_space.distributed.tensor_group
+        input_ = torch.nn.functional.conv2d(input_, self.weight, self.bias, stride=self.stride)
+        patch_embeddings = self.norm(input_.flatten(1))
+        patch_embeddings = patch_embeddings.view(reshape_dims)
+        if self._sequence_parallel:
+            patch_embeddings = patch_embeddings.permute(1, 0, 2).contiguous()
+            patch_embeddings = split(patch_embeddings, group=group, dim=0)
+        return patch_embeddings

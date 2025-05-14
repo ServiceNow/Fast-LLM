@@ -66,6 +66,7 @@ class VisionEncoderKwargs:
     patch_embeddings = "patch_embeddings"
     hidden_dims = "vit_hidden_dims"
     image_patches_meta = "vit_image_patches_meta"
+    out_channels = "vit_out_channels"
 
 
 # TODO Soham: do we need all of them?
