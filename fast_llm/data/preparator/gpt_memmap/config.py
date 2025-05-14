@@ -69,7 +69,7 @@ class GPTHuggingfaceDatasetConfig(Config):
         hint=FieldHint.optional,
     )
     source_schema: SourceSchemaConfig = Field(
-        default_factory=TextColumnConfig,
+        #TODO: Default should be from subclass TextColumnConfig (waiting for PR #245)
         desc="Configuration for the data source.",
         hint=FieldHint.optional,
     )
