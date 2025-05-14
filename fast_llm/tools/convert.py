@@ -40,7 +40,7 @@ class ConvertConfig(RunnableConfig):
     @classmethod
     def _from_parsed_args(cls, parsed: argparse.Namespace, unparsed: list[str]):
         config = super()._from_parsed_args(parsed, unparsed)
-        config.model_config_class = model_registry[parsed.model_type]
+        config.model = model_registry[parsed.model_type]
         return config
 
     def _validate(self):
