@@ -41,7 +41,7 @@ from transformers.modeling_rope_utils import ROPE_INIT_FUNCTIONS, dynamic_rope_u
 from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS, PreTrainedModel
 from transformers.processing_utils import Unpack
 from transformers.pytorch_utils import ALL_LAYERNORM_LAYERS
-from transformers.utils import LossKwargs, auto_docstring, can_return_tuple, is_torch_flex_attn_available, logging
+from transformers.utils import LossKwargs, can_return_tuple, is_torch_flex_attn_available, logging # auto_docstring
 from .configuration_diffusion_llama import DiffusionLlamaConfig
 from .generation_utils import DreamGenerationMixin
 
@@ -393,7 +393,7 @@ class LlamaDecoderLayer(nn.Module):
         return outputs
 
 
-@auto_docstring
+# @auto_docstring
 class DiffusionLlamaPreTrainedModel(PreTrainedModel):
     config_class = DiffusionLlamaConfig
     base_model_prefix = "model"
@@ -475,7 +475,7 @@ class DiffusionLlamaPreTrainedModel(PreTrainedModel):
     #     )
     #     return _model
 
-@auto_docstring
+# @auto_docstring
 class DiffusionLlamaBaseModel(DiffusionLlamaPreTrainedModel):
     def __init__(self, config: DiffusionLlamaConfig):
         super().__init__(config)
@@ -500,7 +500,7 @@ class DiffusionLlamaBaseModel(DiffusionLlamaPreTrainedModel):
         self.embed_tokens = value
 
     @can_return_tuple
-    @auto_docstring
+    # @auto_docstring
     def forward(
         self,
         input_ids: Optional[torch.LongTensor] = None,
@@ -725,7 +725,7 @@ class DiffusionLlamaBaseModel(DiffusionLlamaPreTrainedModel):
 # class KwargsForCausalLM(FlashAttentionKwargs, LossKwargs): ...
 
 
-@auto_docstring
+# @auto_docstring
 class DiffusionLlamaModel(DiffusionLlamaPreTrainedModel, DreamGenerationMixin):
     _tied_weights_keys = ["lm_head.weight"]
     _tp_plan = {"lm_head": "colwise_rep"}
@@ -759,7 +759,7 @@ class DiffusionLlamaModel(DiffusionLlamaPreTrainedModel, DreamGenerationMixin):
         return self.model
 
     @can_return_tuple
-    @auto_docstring
+    # @auto_docstring
     def forward(
         self,
         input_ids: Optional[torch.LongTensor] = None,

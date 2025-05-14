@@ -23,7 +23,7 @@ logger = logging.get_logger(__name__)
 
 
 class DreamConfig(PretrainedConfig):
-    model_type = "Dream"
+    model_type = "dream"
     keys_to_ignore_at_inference = ["past_key_values"]
 
     def __init__(
@@ -47,7 +47,8 @@ class DreamConfig(PretrainedConfig):
         max_window_layers=28,
         attention_dropout=0.0,
         mask_token_id=151666,
-        pad_token_id=151643,
+        # pad_token_id=151643, # Error: AssertionError: Padding_idx must be within num_embeddings ..torch/nn/modules/sparse.py:154: AssertionError
+        pad_token_id=None,
         **kwargs,
     ):
         self.vocab_size = vocab_size
