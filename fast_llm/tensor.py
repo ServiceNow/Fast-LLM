@@ -234,9 +234,8 @@ class ParameterMeta(TensorMeta):
         self.allow_no_grad = allow_no_grad
 
         self.lr_scale = lr_scale if isinstance(lr_scale, tuple) else (lr_scale,)
-        # TODO: re-enable when fixed?
-        # self.requires_grad = requires_grad and any(lr_scale_ != 0 for lr_scale_ in self.lr_scale)
-        self.requires_grad = requires_grad
+        # TODO: note, this pevents the tes_checkpoints to pass for MODEL=llama-mtp, they pass with `self.requires_grad=requires_grad` instead. However, the model export seem to work as expected, at least for hybrid SSM.
+        self.requires_grad = requires_grad and any(lr_scale_ != 0 for lr_scale_ in self.lr_scale)
         # Ensure the parameter is split in chunks of equal size.
         Assert.multiple(self.dims[0].size, len(self.lr_scale))
 

@@ -203,10 +203,7 @@ CONFIG_LLAMA_MTP_MEGATRON = None
 CONFIG_LLAMA_MTP_FAST_LLM = CONFIG_LLAMA_FAST_LLM + [
     "model.base_model.prediction_heads=4",
     "model.base_model.embeddings_lr_scale=0",
-    "model.base_model.transformer.per_layer_lr_scale=[0.1,0.0000001,0.0000001,1,1,.1]",
-    # "model.base_model.output_lr_scale=0",
-    # "model.base_model.prediction_loss_coefficient=[1, .5, .5, 0]",
-    # "model.base_model.cross_entropy_splits=4",
+    "model.base_model.transformer.per_layer_lr_scale=[0.1,0,0,1,1,.1]",
 ]
 CONFIG_LLAMA_MTP_COMMON = CONFIG_LLAMA_MTP_FAST_LLM + ["model.distributed.training_dtype=bf16"]
 
