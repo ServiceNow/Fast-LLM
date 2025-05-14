@@ -14,10 +14,6 @@ from fast_llm.engine.checkpoint.config import (
     FastLLMCheckpointFormat,
     ModelConfigType,
 )
-from fast_llm.models.gpt.config import (
-    DiffusionDreamGPTHuggingfaceCheckpointFormat,
-    DiffusionLlamaGPTHuggingfaceCheckpointFormat,
-)
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig, StageMode
 from fast_llm.engine.multi_stage.multi_stage import ShardName
 from fast_llm.models.auto import model_registry
@@ -37,7 +33,6 @@ from tests.compare_tensor_logs import CompareConfig, compare_logged_tensor
 
 TEST_MODEL_CONFIG_CLS = model_registry[TEST_MODEL_TYPE]
 TEST_MODEL_HF_CLS = TEST_MODEL_CONFIG_CLS.get_huggingface_model_class()
-#if not isinstance(HUGGINGFACE_CHECKPOINT_FORMAT, DiffusionDreamGPTHuggingfaceCheckpointFormat) else transformers.AutoModel
 TEST_MODEL_CLS = TEST_MODEL_CONFIG_CLS.get_model_class()
 TEST_BASE_MODEL_CONFIG_CLS = TEST_MODEL_CONFIG_CLS.get_base_model_config_class()
 
@@ -126,9 +121,7 @@ def test_convert_distributed_to_fast_llm():
 
 
 @pytest.mark.depends(on=["test_convert_distributed_to_fast_llm"])
-def test_convert_fast_llm_to_huggingface():
-    print(f"Convert fast_llm to huggingface: {HUGGINGFACE_CHECKPOINT_FORMAT}")
-    
+def test_convert_fast_llm_to_huggingface():    
     if HUGGINGFACE_CHECKPOINT_FORMAT is None:
         pytest.skip(f"Conversion not supported for {TEST_MODEL}")
     _run_conversion(

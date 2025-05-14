@@ -771,8 +771,7 @@ class DiffusionLlamaHuggingfaceCheckpointHandler(CustomModelingExportMixin, Comm
                 export_value={
                     "AutoConfig": "configuration_diffusion_llama.DiffusionLlamaConfig",
                     "AutoModel": "modeling_diffusion_llama.DiffusionLlamaModel",
-                },
-            ),
+                },),
             # TODO: include when the mask diffusion training is implemented
             # RenameParamConverter(
             #     fast_llm_names=(("mask_token_id",),),

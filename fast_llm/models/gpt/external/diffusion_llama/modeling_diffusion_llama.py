@@ -37,13 +37,15 @@ from transformers.modeling_outputs import (
     SequenceClassifierOutputWithPast,
     TokenClassifierOutput,
 )
-from transformers.modeling_rope_utils import ROPE_INIT_FUNCTIONS, dynamic_rope_update
+from transformers.modeling_rope_utils import dynamic_rope_update
+
 from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS, PreTrainedModel
 from transformers.processing_utils import Unpack
 from transformers.pytorch_utils import ALL_LAYERNORM_LAYERS
 from transformers.utils import LossKwargs, can_return_tuple, is_torch_flex_attn_available, logging # auto_docstring
 from .configuration_diffusion_llama import DiffusionLlamaConfig
 from .generation_utils import DreamGenerationMixin
+from .configuration_diffusion_llama import ROPE_INIT_FUNCTIONS
 
 
 if is_torch_flex_attn_available():
@@ -733,7 +735,7 @@ class DiffusionLlamaModel(DiffusionLlamaPreTrainedModel, DreamGenerationMixin):
 
     def __init__(self, config):
         super().__init__(config)
-        self.model = DiffusionLlamaConfig(config)
+        self.model = DiffusionLlamaBaseModel(config)
         self.vocab_size = config.vocab_size
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
 

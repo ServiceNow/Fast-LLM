@@ -290,7 +290,7 @@ _CONFIGS = {
         CONFIG_QWEN2_COMMON,
         DiffusionDreamGPTHuggingfaceCheckpointFormat,
     ),
-    "diffusion-llama": (
+    "diffusion_llama": (
         "gpt",
         CONFIG_LLAMA_YARN_FAST_LLM,
         CONFIG_LLAMA_YARN_MEGATRON,

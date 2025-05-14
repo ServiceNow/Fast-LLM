@@ -47,8 +47,7 @@ class DreamConfig(PretrainedConfig):
         max_window_layers=28,
         attention_dropout=0.0,
         mask_token_id=151666,
-        # pad_token_id=151643, # Error: AssertionError: Padding_idx must be within num_embeddings ..torch/nn/modules/sparse.py:154: AssertionError
-        pad_token_id=None,
+        pad_token_id=151643, # vocab_size is set to 8192 for test cases this would fail on Embedding layer check: # pad_token_id=None, 
         **kwargs,
     ):
         self.vocab_size = vocab_size
