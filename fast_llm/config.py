@@ -151,6 +151,7 @@ class Field(dataclasses.Field):
             default=default,
             default_factory=default_factory,
             init=init,
+            repr=False,
             hash=hash,
             compare=compare,
             metadata=metadata,
