@@ -37,13 +37,13 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
 
     _tokenizer: Tokenizer
     _data_type: DataType
-    _data_column: str
+    _text_column: str
     _loss_masking_spans_column: str | None
 
     def _tokenize_batch(self, batch: dict[str, list[typing.Any]]) -> dict[str, list[typing.Any]]:
         input_ids = [
             np.array(self._tokenizer.tokenize(text), dtype=self._data_type.numpy)
-            for text in batch[self._data_column]
+            for text in batch[self._text_column]
         ]
         num_tokens = [len(x) for x in input_ids]
         return {
@@ -63,7 +63,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
                     for input_ids, token_spans in [
                         self._tokenizer.tokenize_with_spans(text, char_spans)
                         for text, char_spans in zip(
-                            batch[self._data_column], batch[self._loss_masking_spans_column]
+                            batch[self._text_column], batch[self._loss_masking_spans_column]
                         )
                     ]
                 ]
@@ -214,7 +214,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
         # Set data column and loss masking spans column based on source schema
         source_schema = self._config.dataset.source_schema
         if isinstance(source_schema, TextColumnConfig):
-            self._data_column = source_schema.input_column
+            self._text_column = source_schema.input_column
             self._loss_masking_spans_column = source_schema.loss_masking_spans_column
         elif isinstance(source_schema, PromptCompletionConfig):
             # Check for combining cols in dataset
@@ -232,7 +232,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
                 num_proc=self._config.loading_workers,
             )
             logger.info(f"Sample after combining fields:\n{dataset[0]}")
-            self._data_column = new_combined_column
+            self._text_column = new_combined_column
             # Set loss masking spans (handle chat template prior to this)         
             loss_masking_column = f"{source_schema.prompt_column}_loss_masking_spans"
             dataset = dataset.map(
@@ -254,8 +254,8 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
             num_shards=self._config.distributed.world_size,
             index=self._config.distributed.rank,
         )
-        if self._data_column not in dataset.column_names:
-            raise ValueError(f"Dataset does not have field '{self._data_column}'.")
+        if self._text_column not in dataset.column_names:
+            raise ValueError(f"Dataset does not have field '{self._text_column}'.")
         if self._loss_masking_spans_column is not None:
             if self._loss_masking_spans_column not in dataset.column_names:
                 raise ValueError(f"Dataset does not have spans field '{self._loss_masking_spans_column}'.")

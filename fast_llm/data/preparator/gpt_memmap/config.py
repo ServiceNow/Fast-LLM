@@ -30,7 +30,7 @@ class SourceSchemaConfig(Config):
 
 @config_class()
 class PromptCompletionConfig(SourceSchemaConfig):
-    type: typing.ClassVar[str] = "prompt_completion"
+    type: typing.ClassVar[str] = "prompt_completion" #TODO: Register PromptCompletionConfig for this type for dynamic loading PR #245
     prompt_column: str = Field(
         default="prompt",
         desc="Field of the dataset to use.",
@@ -49,7 +49,7 @@ class PromptCompletionConfig(SourceSchemaConfig):
     
 @config_class()
 class TextColumnConfig(SourceSchemaConfig):
-    type: typing.ClassVar[str] = "text_column"
+    type: typing.ClassVar[str] = "text_column" #TODO: Register TestColumnConfig for this type for dynamic loading PR #245
     input_column: str = Field(
         default="text",
         desc="Field of the dataset to use.",
@@ -88,7 +88,7 @@ class GPTHuggingfaceDatasetConfig(Config):
         hint=FieldHint.optional,
     )
     source_schema: SourceSchemaConfig = Field(
-        default_factory=TextColumnConfig,
+        #TODO: Default should be from subclass TextColumnConfig (waiting for PR #245)
         desc="Configuration for the data source.",
         hint=FieldHint.optional,
     )
