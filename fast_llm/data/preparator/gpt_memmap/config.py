@@ -29,6 +29,25 @@ class SourceSchemaConfig(Config):
     pass
 
 @config_class()
+class PromptCompletionConfig(SourceSchemaConfig):
+    type: typing.ClassVar[str] = "prompt_completion" #TODO: Register PromptCompletionConfig for this type for dynamic loading PR #245
+    prompt_column: str = Field(
+        default="prompt",
+        desc="Field of the dataset to use.",
+        hint=FieldHint.optional,
+    )
+    completion_column: str = Field(
+        default="completion",
+        desc="Field of the dataset to use.",
+        hint=FieldHint.optional,
+    )
+    delimiter: str = Field(
+        default="",
+        desc="Delimiter between prompt and completion.",
+        hint=FieldHint.optional,
+    )
+    
+@config_class()
 class TextColumnConfig(SourceSchemaConfig):
     type: typing.ClassVar[str] = "text_column" #TODO: Register TestColumnConfig for this type for dynamic loading PR #245
     input_column: str = Field(

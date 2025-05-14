@@ -24,7 +24,7 @@ from fast_llm.data.dataset.gpt.config import (
 from fast_llm.data.dataset.gpt.memmap import GPTMemmapDataset
 from fast_llm.data.dataset.gpt.sampled import GPTSample
 from fast_llm.data.preparator.config import DatasetPreparator
-from fast_llm.data.preparator.gpt_memmap.config import GPTMemmapDatasetPreparatorConfig, TextColumnConfig
+from fast_llm.data.preparator.gpt_memmap.config import GPTMemmapDatasetPreparatorConfig, TextColumnConfig, PromptCompletionConfig
 from fast_llm.data.tokenizer import Tokenizer
 from fast_llm.engine.config_utils.data_type import DataType, get_unsigned_integer_type
 from fast_llm.utils import Assert, normalize_probabilities, padded_cumsum
@@ -178,13 +178,6 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
             else self._config.dataset.data_type
         )
 
-        # Set data column and loss masking spans column based on source schema
-        if isinstance(self._config.dataset.source_schema, TextColumnConfig):
-            self._text_column = self._config.dataset.source_schema.input_column
-            self._loss_masking_spans_column = self._config.dataset.source_schema.loss_masking_spans_column
-        else:
-            raise ValueError(f"Dataset source_schema set incorrectly. source_schema: '{self._config.dataset.data_source}'.")
-
         # Initialize distributed processing
         if self._config.distributed.world_size > 1:
             torch.distributed.init_process_group(
@@ -217,6 +210,46 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
                 torch.distributed.barrier()
 
         assert isinstance(dataset, datasets.Dataset)
+        
+        # Set data column and loss masking spans column based on source schema
+        source_schema = self._config.dataset.source_schema
+        if isinstance(source_schema, TextColumnConfig):
+            self._text_column = source_schema.input_column
+            self._loss_masking_spans_column = source_schema.loss_masking_spans_column
+        elif isinstance(source_schema, PromptCompletionConfig):
+            # Check for combining cols in dataset
+            Assert.incl(source_schema.prompt_column, dataset.column_names)
+            Assert.incl(source_schema.completion_column, dataset.column_names)
+            new_combined_column = f"{source_schema.prompt_column}_{source_schema.completion_column}"
+            logger.info(f"Combining fields {source_schema.prompt_column} + \
+                {source_schema.completion_column} = {new_combined_column}")
+            dataset = dataset.map(
+                lambda example: {
+                    new_combined_column: f"{example[source_schema.prompt_column]}{source_schema.delimiter}{source_schema.completion_column}"
+                },
+                batched=False,
+                desc="Combining fields",
+                num_proc=self._config.loading_workers,
+            )
+            logger.info(f"Sample after combining fields:\n{dataset[0]}")
+            self._text_column = new_combined_column
+            # Set loss masking spans (handle chat template prior to this)         
+            loss_masking_column = f"{source_schema.prompt_column}_loss_masking_spans"
+            dataset = dataset.map(
+                lambda example: {
+                    loss_masking_column: [
+                        (0, len(example[source_schema.prompt_column]) - 1)
+                    ]# spans are inclusive
+                },
+                batched=False,
+                desc="Setting loss masking spans",
+                num_proc=self._config.loading_workers,
+            )
+            logger.info(f"Sample after setting loss masking spans:\n{dataset[0]}")
+            self._loss_masking_spans_column = loss_masking_column
+        else:
+            raise ValueError(f"Dataset source_schema set incorrectly. source_schema: '{self._config.dataset.data_source}'.")
+        
         dataset = dataset.shard(
             num_shards=self._config.distributed.world_size,
             index=self._config.distributed.rank,
