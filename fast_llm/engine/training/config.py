@@ -23,6 +23,7 @@ from fast_llm.engine.checkpoint.config import (
     DistributedCheckpointFormat,
 )
 from fast_llm.engine.config_utils.run import ExperimentConfig
+from fast_llm.engine.evaluation.config import EvaluatorConfig, EvaluatorConfigBase
 from fast_llm.engine.multi_stage.config import PretrainedFastLLMModelConfig
 from fast_llm.engine.optimizer.config import OptimizerConfig
 from fast_llm.engine.schedule.config import BatchConfig, ScheduleConfig
@@ -31,7 +32,7 @@ from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
     from fast_llm.engine.inference.runner import InferenceRunner
-    from fast_llm.engine.training.trainer import Trainer
+    from fast_llm.engine.training.trainer import Trainer, TrainingEvaluator
 
 
 @config_class()
@@ -152,22 +153,41 @@ class WandbConfig(Config):
 
 
 @config_class()
-class EvaluationConfig(IntervalConfig):
-    interval = FieldUpdate(
-        desc="The number of training iterations between each evaluation phase."
-        " Setting to None will disable evaluation."
-    )
-    offset = FieldUpdate(desc="Offset for the first evaluation phase.")
-    iterations: int | None = Field(
-        default=None,
-        desc="Number of iterations for each evaluation phase. Setting to None will disable.",
-        hint=FieldHint.feature,
-        valid=skip_valid_if_none(check_field(Assert.gt, 0)),
-    )
+class TrainingEvaluatorConfig(EvaluatorConfigBase):
+    run_interval: IntervalConfig = Field(default_factory=IntervalConfig)
+    evaluator: EvaluatorConfig = Field(default_factory=EvaluatorConfig)
 
-    def get_iteration_count(self, training_iterations: int, extra_evaluations: int = 0):
-        # Number of completed validation iterations
-        return (self.get_count(training_iterations) + extra_evaluations) * self.iterations if self.enabled() else 0
+    def get_run_count(self, training_iterations: int, extra_evaluations: int = 0):
+        # Number of completed evaluation runs
+        return (
+            (self.run_interval.get_count(training_iterations) + extra_evaluations)
+            if self.run_interval.enabled()
+            else 0
+        )
+
+    def get_evaluator(
+        self,
+        name: str,
+        batch_config: BatchConfig,
+        data_load_num_proc: int,
+        train_iters: int | None = None,
+    ) -> "TrainingEvaluator":
+        from fast_llm.engine.training.trainer import TrainingEvaluator
+
+        return TrainingEvaluator(name, self, batch_config, data_load_num_proc, train_iters)
+
+    @classmethod
+    def _from_dict(
+        cls,
+        default: dict[str, typing.Any],
+        strict: bool = True,
+        flat: bool = False,
+    ) -> typing.Self:
+        # TODO v0.x: Remove backward compatibility.
+        cls._handle_renamed_field(default, "interval", ("run_interval", "interval"))
+        cls._handle_renamed_field(default, "offset", ("run_interval", "offset"))
+        cls._handle_renamed_field(default, "iterations", ("evaluator", "iterations"))
+        return super()._from_dict(default, strict, flat)
 
 
 @config_class()
@@ -279,7 +299,7 @@ class ShutdownConfig(IntervalConfig):
 
 @config_class()
 class TrainingConfig(Config):
-    evaluations: dict[str, EvaluationConfig] = Field(
+    evaluations: dict[str, TrainingEvaluatorConfig] = Field(
         default_factory=dict,
         desc="A dictionary of evaluation dataset names and their configurations for the validation phase.",
         hint=FieldHint.core,
