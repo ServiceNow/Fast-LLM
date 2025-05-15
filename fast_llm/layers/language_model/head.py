@@ -158,19 +158,20 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
         # Loss mask for distillation. (Labels are already masked.)
         loss_mask = None
         if target is not None and not self._use_dpo_loss:
+            # MTP: Shift the labels
+            target_sequence_length = (
+                target.size(1 - kwargs[TransformerKwargs.sequence_first]) + 1 - self._config.prediction_heads
+            )
+            if TransformerKwargs.sequence_q_dim in kwargs:
+                Assert.eq(target_sequence_length, kwargs[TransformerKwargs.sequence_q_dim].size)
+            target_slice = slice(self._prediction_distance, self._prediction_distance + target_sequence_length)
+            target = target[target_slice] if kwargs[TransformerKwargs.sequence_first] else target[:, target_slice]
             if self._config.distillation_model is None:
-                # MTP: Shift the labels
-                target_sequence_length = (
-                    target.size(1 - kwargs[TransformerKwargs.sequence_first]) + 1 - self._config.prediction_heads
-                )
-                if TransformerKwargs.sequence_q_dim in kwargs:
-                    Assert.eq(target_sequence_length, kwargs[TransformerKwargs.sequence_q_dim].size)
-                target_slice = slice(self._prediction_distance, self._prediction_distance + target_sequence_length)
-                target = target[target_slice] if kwargs[TransformerKwargs.sequence_first] else target[:, target_slice]
                 target = target.flatten()
             else:
                 # Target is reference model logits.
                 target = target.flatten(0, -2)
+                # TODO: shift loss_mask as well for MTP?
                 loss_mask = kwargs.get(LanguageModelKwargs.loss_mask)
                 if loss_mask is not None:
                     loss_mask = loss_mask.flatten()

@@ -1,3 +1,4 @@
+import logging
 import typing
 
 from fast_llm.config import Field, FieldHint, check_field, config_class, skip_valid_if_none
@@ -7,6 +8,8 @@ from fast_llm.engine.distributed.config import DistributedDimNames
 from fast_llm.functional.config import CrossEntropyImpl
 from fast_llm.layers.transformer.config import TransformerConfig
 from fast_llm.utils import Assert
+
+logger = logging.getLogger(__name__)
 
 
 class LanguageModelDimNames:
@@ -192,7 +195,9 @@ class LanguageModelBaseConfig(BaseModelConfig):
             Assert.leq(self.init_method_min_embed, self.init_method_max_embed)
         if self.distillation_model is not None:
             if self.prediction_heads > 1:
-                raise NotImplementedError("Multi-token prediction not supported with distillation.")
+                logger.warning(
+                    "Will use reference model to distill multiple prediction heads. Experimental feature, may not work as expected."
+                )
         if isinstance(self.prediction_loss_coefficient, list):
             Assert.eq(len(self.prediction_loss_coefficient), self.prediction_heads)
             for coeff in self.prediction_loss_coefficient:
