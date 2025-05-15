@@ -2,14 +2,14 @@ from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.engine.training.config import TrainerConfig
 from fast_llm.engine.training.trainer import Trainer
 from fast_llm.layers.transformer.transformer import TransformerLayer
-from fast_llm.tools.train import CliTrainingConfig
 from fast_llm.utils import Assert
 from tests.common import CONFIG_COMMON, requires_cuda
 
 
 def _get_trainer_from_args(args: list[str], model_type: str = "gpt") -> Trainer:
-    parsed, unparsed = CliTrainingConfig._get_parser().parse_known_args([model_type] + args)
-    config: TrainerConfig = CliTrainingConfig._from_parsed_args(parsed, unparsed)
+    cls = TrainerConfig.get_subclass(model_type)
+    parsed, unparsed = cls._get_parser().parse_known_args(args)
+    config: TrainerConfig = cls._from_parsed_args(parsed, unparsed)
     distributed = Distributed(config.model.distributed)
     trainer = config.get_trainer_class()(config=config)
     trainer.setup(distributed, config.get_run(distributed))

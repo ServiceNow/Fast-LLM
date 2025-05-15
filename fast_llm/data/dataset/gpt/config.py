@@ -92,7 +92,7 @@ class GPTSamplingData(SamplingData):
     truncate_documents: bool = True
 
 
-@config_class(registry=True)
+@config_class()
 class GPTSampledDatasetConfig(SampledDatasetConfig):
     pass
 
