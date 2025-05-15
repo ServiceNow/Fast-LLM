@@ -274,6 +274,7 @@ def config_class[
 
         if dynamic_type is not None:
             for cls_, name in dynamic_type.items():
+                print(cls_, name, wrapped)
                 cls_.register_subclass(name, wrapped)
 
         return wrapped
@@ -899,7 +900,7 @@ class Config(metaclass=ConfigMeta):
     def register_subclass(cls, name: str, cls_: type[typing.Self]) -> None:
         Assert.custom(issubclass, cls_, cls)
         if cls._registry is None:
-            raise NotImplementedError(f"Subclass `{name}` doesn't have a registry..")
+            raise NotImplementedError(f"Subclass `{cls.__name__}` doesn't have a registry..")
         if name in cls._registry:
             old_cls = cls._registry[name]
             if old_cls.__name__ == cls_.__name__ and cls._registry[name].__module__ == cls_.__module__:
@@ -979,6 +980,13 @@ class Config(metaclass=ConfigMeta):
                 else:
                     # dataclasses expects an annotation, so we use the one from the base class.
                     cls.__annotations__[name] = base_class_field.type
+
+    # Type for the field. At the end of class definition to avoid shadowing builtin.
+    type: str | None = Field(
+        default=None,
+        desc="The config class name.",
+        hint=FieldHint.feature,
+    )
 
 
 class Configurable[ConfigType: Config]:
