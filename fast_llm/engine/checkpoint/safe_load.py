@@ -155,10 +155,9 @@ class SafeLoad:
                     for parameter_name, counter in zip(counter_per_parameter, counter_tensor.tolist())
                 }
             for parameter_name, counter in counter_per_parameter.items():
-                parameter_size = (
-                    self._model.get_parameter_stage(parameter_name)
-                    .get_parameter_meta(parameter_name)
-                    .global_shape.numel()
+                parameter_meta = self._model.get_parameter_stage(parameter_name).get_parameter_meta(parameter_name)
+                parameter_size = parameter_meta.global_shape.numel() * (
+                    1 if parameter_meta.is_tensor_parallel else self._distributed.tensor_group.size()
                 )
                 if counter != parameter_size:
                     errors.append(
