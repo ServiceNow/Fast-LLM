@@ -358,7 +358,7 @@ class Config:
         super().__delattr__(key)
 
     @contextlib.contextmanager
-    def _set_implicit_default(self, _value: bool | int = True):
+    def _set_implicit_default(self, _value: bool | None = True):
         assert self._setting_implicit_default is False
         self._setting_implicit_default = _value
         yield
