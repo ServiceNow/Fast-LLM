@@ -26,6 +26,23 @@ MEMMAP_INDEX_HEADER = b"MMIDIDX\x00\x00"
 
 
 @config_class()
+class SourceSchemaConfig(Config):
+    pass
+
+@config_class()
+class TextColumnConfig(SourceSchemaConfig):
+    type: typing.ClassVar[str] = "text_column" #TODO: Register TestColumnConfig for this type for dynamic loading PR #245
+    input_column: str = Field(
+        default="text",
+        desc="Field of the dataset to use.",
+        hint=FieldHint.optional,
+    )
+    loss_masking_spans_column: None | str = Field(
+        default=None, desc="Field containing character spans to mask for loss computation",
+        hint=FieldHint.optional
+    )
+
+@config_class()
 class GPTHuggingfaceDatasetConfig(Config):
     path: str = Field(
         default=None,
@@ -52,13 +69,10 @@ class GPTHuggingfaceDatasetConfig(Config):
         desc="Split of the dataset to use.",
         hint=FieldHint.optional,
     )
-    field: str = Field(
-        default="text",
-        desc="Field of the dataset to use.",
+    source_schema: SourceSchemaConfig = Field(
+        #TODO: Default should be from subclass TextColumnConfig (waiting for PR #245)
+        desc="Configuration for the data source.",
         hint=FieldHint.optional,
-    )
-    loss_masking_spans: None | str = Field(
-        default=None, desc="Field containing character spans to mask for loss computation", hint=FieldHint.optional
     )
     data_type: DataType | None = Field(
         default=None,
