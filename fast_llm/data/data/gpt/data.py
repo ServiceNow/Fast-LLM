@@ -34,6 +34,8 @@ class GPTBatch:
     sequence_lengths: list[torch.Tensor] | None = None
     images: list[torch.Tensor] | None = None
     image_positions: list[torch.Tensor] | None = None
+    audio: list[torch.Tensor] | None = None
+    audio_positions: list[torch.Tensor] | None = None
 
 
 def gpt_data_collate_fn(batch: list[GPTSample], sampling_parameters: GPTSamplingParameters) -> GPTBatch:
@@ -54,16 +56,33 @@ def gpt_data_collate_fn(batch: list[GPTSample], sampling_parameters: GPTSampling
             batch_images.append(None)
     batch_image_positions = []
     for sample in batch:
-        if sample.image_positions is not None:
+        if sample.image_positions is not None and len(sample.image_positions) > 0:
             batch_image_positions.append(torch.from_numpy(sample.image_positions))
         else:
             batch_image_positions.append(None)
+
+    has_audio = False
+    batch_audio = []
+    for sample in batch:
+        if sample.audio is not None and len(sample.audio_positions) > 0:
+            batch_audio.append([torch.from_numpy(image) for image in sample.audio])
+            has_audio = True
+        else:
+            batch_audio.append(None)
+    batch_audio_positions = []
+    for sample in batch:
+        if sample.audio_positions is not None:
+            batch_audio_positions.append(torch.from_numpy(sample.audio_positions))
+        else:
+            batch_audio_positions.append(None)
     return GPTBatch(
         token_ids=torch.from_numpy(stacked_ids),
         loss_masking_spans=stacked_spans,
         sequence_lengths=sequence_lengths,
         images=batch_images if has_images else None,
         image_positions=batch_image_positions if has_images else None,
+        audio=batch_audio if has_audio else None,
+        audio_positions=batch_image_positions if has_audio else None,
     )
 
 

@@ -111,8 +111,8 @@ class GPTMemmapDataset(GPTIndexedDataset):
                 + sum([x.nbytes for x in self._spans])
             )
         self._num_pixels = 0
-        self._image_lengths = None
-        self._image_positions = None
+        self._image_lengths = []
+        self._image_positions = []
         if self._has_images and self._version >= 4:
             self._n_images = np.frombuffer(
                 self._index_bin_buffer, dtype=np.int32, count=self._num_documents, offset=offset
@@ -266,7 +266,7 @@ class GPTMemmapDataset(GPTIndexedDataset):
         if self._has_audio:
             audio_positions = self._audio_positions[idx]
             offset = self._pointers[idx] + self._document_sizes[idx] * np.dtype(self._dtype).itemsize
-            if len(self._image_lengths) > 0:
+            if self._has_images and len(self._image_lengths) > 0:
                 offset += self._image_lengths[idx].prod(initial=3) * np.dtype(np.uint8).itemsize
             all_audio = np.frombuffer(
                 self._bin_buffer,
@@ -340,7 +340,7 @@ class GPTMemmapDataset(GPTIndexedDataset):
         """
         return self._document_sizes, self._image_lengths, self._audio_lengths
 
-    def get_document_size(self, index: int, patch_size: list[int]) -> int:
+    def get_document_size(self, index: int) -> int:
         # return self._document_sizes[index].item() + (
         #     sum((h // patch_size[0]) * (w // patch_size[1]) for h, w in self._image_lengths[index])
         #     if self._has_images

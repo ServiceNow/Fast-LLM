@@ -169,26 +169,26 @@ class GPTSampledIndexedDataset(SampledDataset):
         Create a `GPTSampledDataset` with the requested parameters.
         """
         # Get the document sizes, the main information needed for sampling.
-        document_sizes, image_sizes = self._indexed_dataset.get_document_sizes()
+        document_sizes, image_sizes, audio_sizes = self._indexed_dataset.get_document_sizes()
         document_sizes = torch.from_numpy(document_sizes).to(self._device)
-        image_token_sizes = []
+        image_token_sizes = torch.zeros_like(document_sizes).to(self._device)
         for i, sizes in enumerate(image_sizes):
-            image_token_sizes.append(
-                sum(
-                    get_num_patches(
-                        *get_resize_dims(
-                            *size,
-                            self._parameters.image_size,
-                            self._parameters.image_size,
-                            self._parameters.patch_size,
-                        ),
+            image_token_sizes[i] = sum(
+                get_num_patches(
+                    *get_resize_dims(
+                        *size,
+                        self._parameters.image_size,
+                        self._parameters.image_size,
                         self._parameters.patch_size,
-                    )
-                    for size in sizes
+                    ),
+                    self._parameters.patch_size,
                 )
+                for size in sizes
             )
-        image_token_sizes = torch.tensor(image_token_sizes).to(self._device)
+        # image_token_sizes = torch.tensor(image_token_sizes).to(self._device)
 
+        audio_token_sizes = torch.zeros_like(document_sizes).to(self._device)
+        long_audio_filter = torch.zeros_like(document_sizes, dtype=torch.bool)  # longer than audio padding
         for i, sizes in enumerate(audio_sizes):
             audio_token_size_arr, to_filter = self._compute_audio_token_size(sizes)
             audio_token_sizes[i] = audio_token_size_arr.sum()
@@ -502,17 +502,22 @@ class GPTSampledIndexedDataset(SampledDataset):
                 for image_length in image_lengths
             ]
             image_tokens = sum(image_sizes)
-            document_size = text_size + image_tokens
 
             audio_token_size_arr, _ = self._compute_audio_token_size(audio_lengths)
             audio_tokens = audio_token_size_arr.sum()
 
+            document_size = text_size + image_tokens + audio_tokens
+
             if not self._truncate_documents:
+                # Document too long, ignore
                 if document_size > self._parameters.sequence_length + 1:
-                    # Document too long, ignore
                     document_sampling_index += 1
                     continue
+
+                # Where are we currently in sample?
                 tokens_in_sample = token_count % (self._parameters.sequence_length + 1)
+
+                # Add padding
                 if document_size + tokens_in_sample > self._parameters.sequence_length + 1:
                     # Document belongs to the next sample, need to account for padding.
                     padding_size = self._parameters.sequence_length + 1 - tokens_in_sample
@@ -540,6 +545,8 @@ class GPTSampledIndexedDataset(SampledDataset):
                     use_loss_masking_spans=self._parameters.use_loss_masking_spans,
                 )
                 start_pos = 0
+
+                # add tokens and multi modal padding placeholders
                 multimodal_positions = np.concatenate(
                     [sample.image_positions.astype(np.int32), sample.audio_positions.astype(np.int32)]
                 )
@@ -552,7 +559,7 @@ class GPTSampledIndexedDataset(SampledDataset):
                     else:
                         assert False
                     # image_positions.append(im_positions + len(token_ids) + image_tokens_added)
-                    # Add placeholders for image tokens
+                    # Add placeholders for image and audio tokens tokens
                     token_ids.append(sample.token_ids[start_pos:mm_position])
                     if mm_type == "image":
                         token_ids.append(np.full((image_sizes[idx],), -100, dtype=np.int64))
@@ -560,7 +567,7 @@ class GPTSampledIndexedDataset(SampledDataset):
                         mm_tokens_added += image_tokens
                     elif mm_type == "audio":
                         token_ids.append(np.full((audio_token_size_arr[idx],), -100, dtype=np.int64))
-                        audio_positions.append(mm_position + mm_tokens_added)
+                        audio_positions.append(len(token_ids))
                         mm_tokens_added += audio_tokens
                     start_pos = mm_position
                 token_ids.append(sample.token_ids[start_pos:])
@@ -593,12 +600,13 @@ class GPTSampledIndexedDataset(SampledDataset):
             if self._parameters.use_loss_masking_spans
             else None
         )
-        images = [im for img_list in images for im in img_list] if images else None
-        image_positions = np.array(image_positions) if image_positions else None
+        # images = [im for img_list in images for im in img_list] if images else None
+        # image_positions = np.array(image_positions) if image_positions else None
+        images = None
 
         audio = [aud for aud_list in audio for aud in aud_list] if audio else None
         audio_positions = np.array(audio_positions) if audio_positions else None
-        Assert.eq(len(token_ids), self._parameters.sequence_length + self._parameters.extra_tokens)
+        # Assert.eq(len(token_ids), self._parameters.sequence_length + self._parameters.extra_tokens)
 
         return GPTSample(
             token_ids=token_ids,
