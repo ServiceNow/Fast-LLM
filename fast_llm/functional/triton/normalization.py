@@ -176,6 +176,9 @@ def triton_normalization_forward(
     training: bool,
     zero_centered: bool,
 ) -> tuple[torch.Tensor, list[typing.Any]] | None:
+    # Note: Converting input automatically to training dtype to match Apex behaviour,
+    #  needed for full precision residual.
+    # TODO: Review this?
     assert weight.shape == input_.shape[-1:]
     if bias is not None:
         assert weight.shape == bias.shape
@@ -183,7 +186,7 @@ def triton_normalization_forward(
     n_rows = input_.shape[:-1].numel()
     n_cols = weight.numel()
 
-    output = torch.empty_like(input_)
+    output = torch.empty_like(input_, dtype=weight.dtype)
     inv_var = torch.empty(n_rows, dtype=torch.float32, device="cuda")
 
     block_size = triton.next_power_of_2(n_cols)

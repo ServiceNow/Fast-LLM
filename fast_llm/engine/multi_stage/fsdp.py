@@ -167,7 +167,8 @@ class FSDP:
         grad_shard: torch.Tensor | None,
         weight_buffer: torch.Tensor | None,
         grad_buffer: torch.Tensor | None,
-        sequence_tensor_parallel: bool = False,
+        sequence_tensor_parallel: bool,
+        device: torch.device | None,
     ) -> None:
         assert not self._is_setup
         self._is_setup = True
@@ -176,11 +177,19 @@ class FSDP:
 
         # Validate and set the shards and buffers
         if self._mode.on_device:
-            self._weight_shard = self._weight_shard_meta.validate(weight_shard)
+            self._weight_shard = (
+                torch.empty_like(self._weight_shard_meta, device=device)
+                if weight_shard is None
+                else self._weight_shard_meta.validate(weight_shard)
+            )
         else:
             Assert.none(weight_shard)
         if self._mode.support_forward:
-            self._weight_buffer = self._weight_buffer_meta.validate(weight_buffer)
+            self._weight_buffer = (
+                torch.empty_like(self._weight_buffer_meta, device=device)
+                if weight_buffer is None
+                else self._weight_buffer_meta.validate(weight_buffer)
+            )
             # Pre-compute the local shard for restore ops.
             self._weight_buffer_local_shard = self._weight_buffer[
                 self._fsdp_dim.rank * self._shard_size : (self._fsdp_dim.rank + 1) * self._shard_size
@@ -189,8 +198,16 @@ class FSDP:
             Assert.none(weight_buffer)
 
         if self._mode.support_backward:
-            self._grad_shard = self._grad_shard_meta.validate(grad_shard)
-            self._grad_buffer = self._grad_buffer_meta.validate(grad_buffer)
+            self._grad_shard = (
+                torch.empty_like(self._grad_shard_meta, device=device)
+                if grad_shard is None
+                else self._grad_shard_meta.validate(grad_shard)
+            )
+            self._grad_buffer = (
+                torch.empty_like(self._grad_buffer_meta, device=device)
+                if grad_buffer is None
+                else self._grad_buffer_meta.validate(grad_buffer)
+            )
             # Pre-compute the local shard for reduce ops.
             self._grad_buffer_local_shard = self._grad_buffer[
                 self._fsdp_dim.rank * self._shard_size : (self._fsdp_dim.rank + 1) * self._shard_size

@@ -50,19 +50,21 @@ def triton_mlp_activation_forward_kernel(
 
     input_ = tl.load(input_ptr, mask=mask).to(tl.float32)
 
-    if activation_type == _TritonActivationType.gelu.value:
+    if activation_type == _TritonActivationType.gelu:
         tanh_input = 0.79788456 * input_ * (1 + 0.044715 * input_ * input_)
         tanh = 1 - 2 / (1 + tl.exp(2 * tanh_input))
         out = input_ * 0.5 * (1.0 + tanh)
-    elif activation_type == _TritonActivationType.silu.value:
+    elif activation_type == _TritonActivationType.silu:
         out = input_ / (1 + tl.exp(-input_))
-    elif activation_type == _TritonActivationType.relu.value:
+    elif activation_type == _TritonActivationType.relu:
         out = tl.where(input_ > 0, input_, 0)
     elif activation_type == _TritonActivationType.squared_relu:
         relu_out = tl.where(input_ > 0, input_, 0)
         out = relu_out * relu_out
+    elif activation_type == _TritonActivationType.identity:
+        out = input_
     else:
-        raise NotImplementedError()
+        tl.static_assert(False, activation_type)
 
     if gated:
         other = tl.load(input_ptr + n_cols, mask=mask)
@@ -124,7 +126,7 @@ def triton_mlp_activation_backward_kernel(
         if gated or recompute:
             out = input_
     else:
-        raise NotImplementedError()
+        tl.static_assert(False, activation_type)
 
     if gated:
         other = tl.load(input_ptr + n_cols, mask=mask)

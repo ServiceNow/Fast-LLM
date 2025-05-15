@@ -4,6 +4,7 @@ import enum
 import logging
 import pathlib
 import typing
+import warnings
 
 import yaml
 
@@ -78,15 +79,10 @@ class FastLLMCheckpointFormat(CheckpointFormat):
         return FastLLMCheckpointHandler
 
 
-class ModelConfigType(str, enum.Enum):
+class ModelConfigType(enum.StrEnum):
     none = "none"
-    architecture = "architecture"
     model = "model"
     fast_llm = "fast_llm"
-
-    @property
-    def load_architecture(self) -> bool:
-        return self != ModelConfigType.none
 
     @property
     def load_base_model(self) -> bool:
@@ -203,15 +199,27 @@ class CheckpointLoadMetadataConfig(CheckpointPathConfigBase):
     _abstract = False
     # TODO: Set default to model? (Not backward compatible)
     load_config: ModelConfigType = Field(
-        default=ModelConfigType.architecture,
+        default=ModelConfigType.model,
         desc="Configuration to save/load.",
         hint=FieldHint.core,
     )
 
     def _validate(self) -> None:
+        if self.load_config == "architecture":
+            raise NotImplementedError("load_config==`architecture` is no longer supported.")
         super()._validate()
+        if (
+            self.format in (DistributedCheckpointFormat, FastLLMCheckpointFormat)
+            and "load_config" not in self._explicit_fields
+        ):
+            warnings.warn(
+                "The default behaviour for model configuration loading has changed (May 2025)."
+                "All model parameters are now loaded, not just the architecture parameters."
+                "Please make sure this doesn't lead to unexpected breaking changes."
+                "Suppress this warning by setting `load_config = model` explicitly.",
+            )
         if self.format.enforce_architecture_match:
-            assert self.load_config.load_architecture
+            assert self.load_config.load_base_model
 
 
 @config_class()
@@ -245,10 +253,8 @@ class CheckpointHandler(abc.ABC):
         if not config.load_config.load_fast_llm:
             updates[("config", "multi_stage")] = {}
             updates[("config", "distributed")] = {}
-        if not config.load_config.load_architecture:
+        if not config.load_config.load_base_model:
             updates[("config", "base_model")] = {}
-        elif not config.load_config.load_base_model:
-            updates[("config", "base_model")] = metadata.config.base_model.get_architecture().to_dict()
         if updates:
             metadata = metadata.to_copy(updates)
         return metadata

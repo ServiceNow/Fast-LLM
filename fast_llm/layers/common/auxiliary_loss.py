@@ -16,7 +16,7 @@ class AuxiliaryLoss(torch.autograd.Function):
 def calculate_z_loss(logits: torch.Tensor, logits_scale_factor: float = 1.0) -> torch.Tensor:
     if logits_scale_factor != 1.0:
         logits *= logits_scale_factor
-    return torch.mean(torch.square(torch.logsumexp(logits, dim=-1)))
+    return torch.mean(torch.logsumexp(logits, dim=-1) ** 2)
 
 
 def z_loss(
