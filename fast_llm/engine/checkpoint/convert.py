@@ -1,4 +1,3 @@
-import argparse
 import json
 import logging
 import math
@@ -9,7 +8,6 @@ from fast_llm.engine.checkpoint.config import CheckpointLoadConfig, CheckpointSa
 from fast_llm.engine.config_utils.runnable import RunnableConfig
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig, StageMode
 from fast_llm.functional.config import TritonConfig
-from fast_llm.models.auto import model_registry
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
@@ -18,7 +16,7 @@ if typing.TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-@config_class()
+@config_class(dynamic_type={RunnableConfig: "convert"})
 class ConvertConfig(RunnableConfig):
     input: CheckpointLoadConfig = Field()
     output: CheckpointSaveConfig = Field()
@@ -27,24 +25,10 @@ class ConvertConfig(RunnableConfig):
     layers_per_step: int | None = Field(default=None)
     model: type[FastLLMModelConfig] = Field(default=None)
 
-    @classmethod
-    def _get_parser(cls):
-        parser = super()._get_parser()
-        parser.add_argument(
-            "model_type",
-            choices=model_registry.keys(),
-            help="The Fast-LLM model type to use. Must be defined in the model registry in `fast_llm.models.auto`.",
-        )
-        return parser
-
-    @classmethod
-    def _from_parsed_args(cls, parsed: argparse.Namespace, unparsed: list[str]):
-        config = super()._from_parsed_args(parsed, unparsed)
-        config.model = model_registry[parsed.model_type]
-        return config
-
     def _validate(self):
         assert self.model is not None
+        if isinstance(self.model, str):
+            self.model = FastLLMModelConfig.get_subclass(self.model)
         self.input.setup(self.model)
         self.output.setup(self.model)
         super()._validate()
@@ -158,7 +142,3 @@ class ConvertConfig(RunnableConfig):
             # All good!
             (self.output.path / "ok").open("w")
             logger.info(f">>> All done!")
-
-
-if __name__ == "__main__":
-    ConvertConfig.parse_and_run()

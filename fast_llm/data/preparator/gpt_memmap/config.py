@@ -6,6 +6,7 @@ from fast_llm.config import Config, Field, FieldHint, check_field, config_class
 from fast_llm.data.config import TokenizerConfig
 from fast_llm.data.preparator.config import DatasetPreparatorConfig
 from fast_llm.engine.config_utils.data_type import DataType
+from fast_llm.engine.config_utils.runnable import RunnableConfig
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
@@ -24,7 +25,7 @@ MEMMAP_DTYPES_INV = {y: x for x, y in MEMMAP_DTYPES.items()}
 MEMMAP_INDEX_HEADER = b"MMIDIDX\x00\x00"
 
 
-@config_class()
+@config_class(dynamic_type={RunnableConfig: "prepare_gpt_memmap", DatasetPreparatorConfig: "gpt_memmap"})
 class GPTHuggingfaceDatasetConfig(Config):
     path: str = Field(
         default=None,
