@@ -222,3 +222,29 @@ def test_generate_from_model(
         min_matching_tokens_batch_size_1,
         min_matching_tokens_batch_size_2,
     )
+
+
+@pytest.mark.slow
+@requires_cuda
+def test_forward_return_hidden_states(
+    model_and_tokenizer,
+):
+    # Use flash attention for speed
+    model_path, tokenizer, fast_llm_checkpoint_format = model_and_tokenizer
+    fast_llm_model = _get_fast_llm_model(model_path, True, True, fast_llm_checkpoint_format)
+
+    inputs_ids = torch.randint(1, tokenizer.vocab_size, [1, 10], dtype=torch.int64).cuda()
+
+    # TODO: hidden states have differences between HF and Fast-LLM despite resulting in the similar logits,
+    #       decide if to leave as it.
+    # hf_model = _get_hf_model(model_path, True, True)
+    # res_hf = hf_model.forward(input_ids=inputs_ids, output_hidden_states=True, return_dict=True, use_cache=False)
+
+    res_fast_llm = fast_llm_model.forward(
+        input_ids=inputs_ids, output_hidden_states=True, return_dict=True, use_cache=False
+    )
+
+    # hidden_states include embeddings layer
+    assert (
+        len(res_fast_llm.hidden_states) - 1 == fast_llm_model.config.fast_llm_config.base_model.transformer.num_layers
+    )

@@ -5,7 +5,7 @@ from torch._C._distributed_c10d import ReduceOp  # noqa
 from torch.distributed import all_reduce
 
 from fast_llm.config import Configurable
-from fast_llm.core.ops import gather_op, split_op
+from fast_llm.core.ops import split_op
 from fast_llm.engine.base_model.base_model import Layer
 from fast_llm.engine.config_utils.tensor_space import DefaultDimNames, TensorDim, TensorSpace
 from fast_llm.engine.distributed.config import DistributedDimNames
@@ -183,9 +183,17 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
             if "output_hidden_states" in kwargs and kwargs["output_hidden_states"]:
                 # The last hidden layer output is returned normalized in the HF Transformers-style output, at least for LLama style models.
                 # So, if needed, we gather the data after normalization and set it as the output of the previous layer.
-                group = self._tensor_space.distributed.tensor_group if self._parallel_embeddings else None
-                sequence_parallel = self._sequence_parallel and self._parallel_embeddings
-                hidden_state = gather_op(ln_output.detach(), group, dim=0) if sequence_parallel else ln_output.detach()
+                dims = list(kwargs[TransformerKwargs.hidden_dims])
+                sequence_index = 1 - int(kwargs[TransformerKwargs.sequence_first])
+                dims[sequence_index] = (
+                    TensorDim(
+                        TransformerDimNames.sequence_q_tp, dims[sequence_index].global_size, DistributedDimNames.tensor
+                    )
+                    if self._sequence_parallel_logits
+                    else TensorDim(TransformerDimNames.sequence_q, dims[sequence_index].global_size)
+                )
+                meta = TensorMeta.from_dims(tuple(dims), tensor_name="transformer hidden_state", dtype=ln_output.dtype)
+                hidden_state, _ = meta.local_to_global(ln_output.detach(), distributed=self._tensor_space.distributed)
                 kwargs["hidden_states"][len(kwargs["hidden_states"]) - 1]["tensor"] = hidden_state
 
         grad_output = kwargs[TransformerKwargs.grad_output] / (
