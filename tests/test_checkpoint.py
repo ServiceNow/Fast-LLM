@@ -89,6 +89,23 @@ def test_resume():
     )
 
 
+@pytest.mark.depends(on=["test_checkpoint_and_eval"])
+def test_resume_frozen():
+    run_test_script(
+        f"test_{TEST_MODEL}_resume_frozen",
+        CONFIG_COMMON
+        + [
+            "training.checkpoint.interval=1",
+            "training.evaluations.validation.interval=2",
+            "training.evaluations.validation.iterations=1",
+            "model.base_model.transformer.mlp_lr_scale=0.",
+        ],
+        compare=f"test_{TEST_MODEL}_checkpoint_and_eval",
+        prepare_fn=_prepare_resume_fn,
+        compare_fn=_compare_resume_fn,
+    )
+
+
 def _run_conversion(config: ConversionConfig):
     if config.output.path.is_dir() and not REUSE_RESULTS:
         shutil.rmtree(config.output.path)
