@@ -35,7 +35,7 @@ class CustomModelConfig(GPTModelConfig):
         return CustomModel
 
     @classmethod
-    def get_huggingface_model_class(cls) -> type["HuggingfaceCustomModelForCausalLM"]:
+    def get_huggingface_model_for_causal_lm_class(cls) -> type["HuggingfaceCustomModelForCausalLM"]:
         from fast_llm.models.custom.huggingface import HuggingfaceCustomModelForCausalLM
 
         return HuggingfaceCustomModelForCausalLM

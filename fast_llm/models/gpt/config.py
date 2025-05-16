@@ -147,7 +147,7 @@ class GPTModelConfig(FastLLMModelConfig):
         return GPTModel
 
     @classmethod
-    def get_huggingface_model_class(cls) -> type["HuggingfaceGPTModelForCausalLM"]:
+    def get_huggingface_model_for_causal_lm_class(cls) -> type["HuggingfaceGPTModelForCausalLM"]:
         from fast_llm.models.gpt.huggingface import HuggingfaceGPTModelForCausalLM
 
         return HuggingfaceGPTModelForCausalLM

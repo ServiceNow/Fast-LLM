@@ -239,7 +239,10 @@ class BackupAttentionPreprocessor(Preprocessor):
         ]
         if (sequence_lengths := kwargs.get(TransformerKwargs.sequence_lengths, None)) is not None:
             seq_ids = torch.stack(
-                [torch.cat([torch.arange(x) for x in sample_lens]) for sample_lens in sequence_lengths]
+                [
+                    torch.cat([torch.full((x,), i) for i, x in enumerate(sample_lens)])
+                    for sample_lens in sequence_lengths
+                ]
             )
             document_mask = (seq_ids[:, None, :] == seq_ids[:, :, None]).to(self._tensor_space.distributed.device)
             kwargs[TransformerKwargs.attention_mask] = (

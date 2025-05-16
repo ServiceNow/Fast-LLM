@@ -180,6 +180,22 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
         with torch.enable_grad():
             ln_output = self.final_norm(input_)
 
+            if "output_hidden_states" in kwargs and kwargs["output_hidden_states"]:
+                # The last hidden layer output is returned normalized in the HF Transformers-style output, at least for LLama style models.
+                # So, if needed, we gather the data after normalization and set it as the output of the previous layer.
+                dims = list(kwargs[TransformerKwargs.hidden_dims])
+                sequence_index = 1 - int(kwargs[TransformerKwargs.sequence_first])
+                dims[sequence_index] = (
+                    TensorDim(
+                        TransformerDimNames.sequence_q_tp, dims[sequence_index].global_size, DistributedDimNames.tensor
+                    )
+                    if self._sequence_parallel_logits
+                    else TensorDim(TransformerDimNames.sequence_q, dims[sequence_index].global_size)
+                )
+                meta = TensorMeta.from_dims(tuple(dims), tensor_name="transformer hidden_state", dtype=ln_output.dtype)
+                hidden_state, _ = meta.local_to_global(ln_output.detach(), distributed=self._tensor_space.distributed)
+                kwargs["hidden_states"][len(kwargs["hidden_states"]) - 1]["tensor"] = hidden_state
+
         grad_output = kwargs[TransformerKwargs.grad_output] / (
             self._group_size if self._sequence_parallel_logits else 1
         )
