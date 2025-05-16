@@ -455,7 +455,10 @@ class FSDP:
             for shard_name, shard in shards.items():
                 # Shards can be empty (frozen weights)
                 if shard.numel() == 0:
-                    Assert.eq(loaded_shards[shard_name].numel(), 0)
+                    continue
+                if loaded_shards[shard_name].numel() == 0:
+                    shard[begin:end][overlap_mask] = 0
+                    counter += overlap_count
                     continue
                 shard[begin:end][overlap_mask] = loaded_shards[shard_name][overlap_index_map_masked]
                 counter += overlap_count
