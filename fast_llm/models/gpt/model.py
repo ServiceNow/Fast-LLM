@@ -10,6 +10,8 @@ from fast_llm.engine.config_utils.tensor_space import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames, PhaseType
 from fast_llm.engine.inference.runner import InferenceRunner
 from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
+from fast_llm.layers.audio_encoder.config import AudioEncoderKwargs
+from fast_llm.layers.audio_encoder.preprocessing import AudioPreprocessor
 from fast_llm.layers.language_model.config import LanguageModelKwargs, LanguageModelLossNames
 from fast_llm.layers.language_model.embedding import WORD_EMBEDDINGS_WEIGHT, LanguageModelEmbedding
 from fast_llm.layers.language_model.head import OUTPUT_WEIGHTS, LanguageModelHead
@@ -82,11 +84,8 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                 self._preprocessors.append(
                     RotaryEmbeddingPreprocessor(self._config.vision_encoder.transformer.rotary, self._tensor_space)
                 )
-            # self._vision_preprocessor = VisionPreprocessor(self._config.vision_encoder, self._tensor_space)
-            # if self._config.vision_encoder.transformer.rotary.enabled:
-            #     self._vision_rotary_embedding_preprocessor = RotaryEmbeddingPreprocessor(
-            #         self._config.vision_encoder.transformer.rotary, self._tensor_space
-            #     )
+        if self._config.audio_encoder:
+            self._preprocessors.append(AudioPreprocessor(self._config.audio_encoder, self._tensor_space))
 
     def get_output_layers(self) -> list[Layer]:
         layers = []
@@ -418,6 +417,17 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                 kwargs[VisionEncoderKwargs.image_positions] = batch.image_positions
                 kwargs[LanguageModelKwargs.tokens] = tokens
 
+            if batch.audio is not None:
+                kwargs[AudioEncoderKwargs.audio] = [
+                    [
+                        aud.to(device=self._tensor_space.distributed.device, dtype=torch.uint8, non_blocking=True)
+                        for aud in audio
+                    ]
+                    for audio in batch.audio
+                ]
+                kwargs[AudioEncoderKwargs.audio_positions] = batch.audio_positions
+                kwargs[LanguageModelKwargs.tokens] = tokens
+
             for preprocessor in self._preprocessors:
                 preprocessor.preprocess(tokens, kwargs)
             image_patches = kwargs.get(VisionEncoderKwargs.image_patches, None)
@@ -448,7 +458,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
         if self._config.tie_word_embeddings:
             return {
                 WORD_EMBEDDINGS_WEIGHT: (
-                    self.embedding.word_embeddings_weight,
+                    self.layers[0].word_embeddings_weight,
                     (self._config.vision_encoder is not None, *self.model_head_indices),
                 )
             }

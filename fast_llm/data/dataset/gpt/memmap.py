@@ -411,7 +411,7 @@ class GPTMemmapDataset(GPTIndexedDataset):
                         bin_stream.write(audio.tobytes(order="C"))
                         total_aud_size += audio.size
                     if len(document.audio) > 0:
-                        aud_positions.append(document.audio_positions)
+                        aud_positions += document.audio_positions
 
                 # Update metadata
                 doc_length = len(document.token_ids)

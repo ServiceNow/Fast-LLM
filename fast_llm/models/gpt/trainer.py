@@ -32,9 +32,9 @@ class GPTTrainer[ConfigType: GPTTrainerConfig](Trainer[ConfigType]):
                 "extra_tokens": self._config.model.base_model.prediction_heads,
                 "patch_size": self._config.batch.patch_size,
                 "image_size": self._config.batch.image_size,
-                "aud_downsampling_k": self._config.batch.aud_downsampling_k,
+                "aud_downsampling_k": self._config.model.base_model.audio_encoder.aud_downsampling_k,
                 "aud_padding_duration": self._config.batch.aud_padding_duration,
-                "aud_sampling_rate": self._config.batch.aud_sampling_rate,
+                "aud_sampling_rate": self._config.model.base_model.audio_encoder.aud_sampling_rate,
             }
         )
         return parameters if _return_dict else GPTSamplingParameters(**parameters)

@@ -765,3 +765,16 @@ class VisionTransformerConfig(TransformerConfig):
         desc="Configuration for the rotary positional embeddings.",
         hint=FieldHint.feature,
     )
+
+
+@config_class()
+class AudioTransformerConfig(TransformerConfig):
+    """
+    Configuration for the Audio Transformer model.
+    """
+
+    causal: bool = FieldUpdate(
+        default=False,
+        desc="Use causal attention. Turn this off only for bidirectional attention e.g., in Vision Transformer.",
+        hint=FieldHint.feature,
+    )

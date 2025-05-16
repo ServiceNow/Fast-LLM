@@ -73,7 +73,7 @@ class Tokenizer:
                 token_ids.extend(tokenized_text)
 
                 # update mm token positions
-                multimodal_type = "image" if multimodal_position in multimodal_positions else "audio"
+                multimodal_type = "image" if multimodal_position in image_positions else "audio"
                 if multimodal_type == "image":
                     image_token_positions.append(len(token_ids))
                 else:
@@ -104,7 +104,7 @@ class Tokenizer:
                 token_ids.extend(tokenized_text)
 
                 # update mm token positions
-                multimodal_type = "image" if multimodal_position in multimodal_positions else "audio"
+                multimodal_type = "image" if multimodal_position in image_positions else "audio"
                 if multimodal_type == "image":
                     image_token_positions.append(len(token_ids))
                 else:
@@ -141,7 +141,7 @@ class Tokenizer:
             token_ids.extend(tokenized_text)
 
             # update mm token positions
-            multimodal_type = "image" if multimodal_position in multimodal_positions else "audio"
+            multimodal_type = "image" if multimodal_position in image_positions else "audio"
             if multimodal_type == "image":
                 image_token_positions.append(len(token_ids))
             else:

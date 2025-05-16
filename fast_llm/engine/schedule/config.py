@@ -60,20 +60,9 @@ class BatchConfig(Config):
         desc="Maximum image height and width",
         hint=FieldHint.optional,
     )
-    # Audio inputs
-    aud_downsampling_k: int = Field(
-        default=5,
-        desc="Audio downsampling k parameter.",
-        hint=FieldHint.feature,
-    )
     aud_padding_duration: int = Field(
         default=-1,
         desc="Audio padding duration in seconds.",
-        hint=FieldHint.feature,
-    )
-    aud_sampling_rate: int = Field(
-        default=16000,
-        desc="Audio sampling rate to use.",
         hint=FieldHint.feature,
     )
 
