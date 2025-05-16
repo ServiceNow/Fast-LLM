@@ -59,22 +59,6 @@ class HuggingfacePreTrainedModel(transformers.PreTrainedModel):
         with transformers.modeling_utils.no_init_weights():
             self.post_init()
 
-    def forward(
-        self,
-        input_ids: torch.Tensor | None = None,
-        attention_mask: torch.Tensor | None = None,
-        position_ids: torch.Tensor | None = None,
-        past_key_values=None,
-        inputs_embeds: torch.FloatTensor | None = None,
-        labels: torch.LongTensor | None = None,
-        use_cache: bool | None = None,
-        output_attentions: bool | None = None,
-        output_hidden_states: bool | None = None,
-        return_dict: bool | None = None,
-    ) -> tuple | transformers.modeling_outputs.CausalLMOutputWithPast:
-        # Meant to be overridden in derived classes
-        raise NotImplementedError()
-
     @classmethod
     def from_pretrained(
         cls,
@@ -113,4 +97,18 @@ class HuggingfacePreTrainedModel(transformers.PreTrainedModel):
 
 
 class HuggingfaceBaseModelForCausalLM(HuggingfacePreTrainedModel, transformers.generation.utils.GenerationMixin):
-    pass
+    def forward(
+        self,
+        input_ids: torch.Tensor | None = None,
+        attention_mask: torch.Tensor | None = None,
+        position_ids: torch.Tensor | None = None,
+        past_key_values=None,
+        inputs_embeds: torch.FloatTensor | None = None,
+        labels: torch.LongTensor | None = None,
+        use_cache: bool | None = None,
+        output_attentions: bool | None = None,
+        output_hidden_states: bool | None = None,
+        return_dict: bool | None = None,
+    ) -> tuple | transformers.modeling_outputs.CausalLMOutputWithPast:
+        # Meant to be overridden in derived classes
+        raise NotImplementedError()
