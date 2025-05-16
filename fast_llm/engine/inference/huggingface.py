@@ -12,6 +12,7 @@ from fast_llm.engine.inference.runner import InferenceRunner
 from fast_llm.engine.multi_stage.config import StageMode
 from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
 from fast_llm.engine.schedule.runner import ScheduleRunner
+from fast_llm.utils import Assert
 
 
 class HuggingfacePreTrainedModel(transformers.PreTrainedModel):
@@ -46,10 +47,8 @@ class HuggingfacePreTrainedModel(transformers.PreTrainedModel):
         assert fast_llm_model.is_setup
 
         # We only support data parallel for now
-        assert (
-            fast_llm_model.distributed.config.model_parallel == 1
-            and fast_llm_model.distributed.config.sequence_data_parallel == 1
-        )
+        Assert.eq(fast_llm_model.distributed.config.model_parallel, 1)
+        Assert.eq(fast_llm_model.distributed.config.sequence_data_parallel, 1)
 
         self._inference_runner.setup()
 
