@@ -36,6 +36,11 @@ if typing.TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+class ShardName:
+    weights = "weights"
+    grads = "grads"
+
+
 class StageMode(str, enum.Enum):
     # Allow forward and backward passes and optimizer.
     # TODO: Add mode for forward and backward but not optimizer?
