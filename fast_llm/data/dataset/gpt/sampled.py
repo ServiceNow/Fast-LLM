@@ -412,6 +412,7 @@ class GPTSampledIndexedDataset(SampledDataset):
         images = []
         image_positions = []
         image_tokens_added = 0
+        text_tokens_added = 0
         while token_count < token_end:
             # Find the document index in the dataset.
             if document_sampling_index < self._unshuffled_documents:
@@ -471,11 +472,13 @@ class GPTSampledIndexedDataset(SampledDataset):
                         # image_positions.append(im_positions + len(token_ids) + image_tokens_added)
                         # Add placeholders for image tokens
                         token_ids.append(sample.token_ids[start_pos:im_position])
+                        text_tokens_added += len(token_ids[-1])
                         token_ids.append(np.full((image_sizes[idx],), -100, dtype=np.int64))
                         image_positions.append(im_position + len(token_ids) + image_tokens_added)
                         image_tokens_added += image_tokens
                         start_pos = im_position
                 token_ids.append(sample.token_ids[start_pos:])
+                text_tokens_added += len(token_ids[-1])
                 if sample.images:
                     images.append(sample.images)
                 else:
