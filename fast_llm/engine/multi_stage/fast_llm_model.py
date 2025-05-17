@@ -4,10 +4,12 @@ import typing
 from fast_llm.config import UpdateType
 from fast_llm.core.distributed import broadcast
 from fast_llm.engine.checkpoint.config import CheckpointLoadConfig, CheckpointSaveConfig
+from fast_llm.engine.config_utils.run import log_pipeline_parallel_main_rank
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig, StageMode
 from fast_llm.engine.multi_stage.multi_stage import MultiStageModel
 from fast_llm.functional.triton.pointwise import triton_fill
+from fast_llm.logging import log_memory_usage
 from fast_llm.utils import Assert
 
 logger = logging.getLogger(__name__)
@@ -38,6 +40,7 @@ class FastLLMModel[ConfigType: FastLLMModelConfig](MultiStageModel[ConfigType]):
         # TODO: Handle barriers, ok file, etc. here
         converter = config.format.get_handler_class()(self)
         metadata = converter.load(config)
+        log_pipeline_parallel_main_rank(lambda: log_memory_usage(f"After loading from converter", str))
         self._finalize_load(reset_optimizer=not config.optimizer_state)
         return metadata
 

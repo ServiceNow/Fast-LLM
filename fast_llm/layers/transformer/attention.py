@@ -4,6 +4,7 @@ import torch
 
 from fast_llm.core.distributed import set_generator
 from fast_llm.core.ops import gather_op, reduce_op, reduce_scatter_op, swap_mult_dim
+from fast_llm.engine.config_utils.run import log_pipeline_parallel_main_rank
 from fast_llm.engine.config_utils.tensor_space import TensorSpace
 from fast_llm.functional.autograd import wrap_forward_backward
 from fast_llm.functional.rotary import apply_rotary_embeddings
@@ -17,7 +18,7 @@ from fast_llm.layers.transformer.config import (
     VisionTransformerConfig,
 )
 from fast_llm.layers.vision_encoder.config import VisionTransformerDimNames, VisionTransformerKwargs
-from fast_llm.logging import log_distributed_grad, log_distributed_tensor
+from fast_llm.logging import log_distributed_grad, log_distributed_tensor, log_memory_usage
 from fast_llm.tensor import TensorMeta, init_normal_, init_zeros_
 from fast_llm.utils import Assert
 
@@ -69,9 +70,11 @@ class Attention(torch.nn.Module):
         if isinstance(config, VisionTransformerConfig):
             self._transformer_dim_names = VisionTransformerDimNames
             self._transformer_kwargs = VisionTransformerKwargs
+            self.name = "vision transformer attention"
         elif isinstance(config, TransformerConfig):
             self._transformer_dim_names = TransformerDimNames
             self._transformer_kwargs = TransformerKwargs
+            self.name = "transformer attention"
         self._config = config
         self._tensor_space = tensor_space
         # TODO Soham: fix assert
@@ -79,6 +82,7 @@ class Attention(torch.nn.Module):
         self._layer_index = layer_index
         self._sequence_parallel = self._tensor_space.distributed_config.sequence_tensor_parallel
         self._debug_transformer = self._config.debug_transformer
+        self._debug_transformer_memory = self._config.debug_transformer_memory
         self._causal = self._config.causal
         self._use_flash_attention = self._config.do_use_flash_attention(self._tensor_space.distributed_config)
 
@@ -248,11 +252,18 @@ class Attention(torch.nn.Module):
                 distributed=self._tensor_space.distributed,
             )
 
+    def _debug_memory_log(self, name: str):
+        log_pipeline_parallel_main_rank(lambda: log_memory_usage(f"{self.name} {name}", str))
+
     def _query_key_value_forward(
-        self, input_: torch.Tensor, sequence_first: bool
+        self, input_: torch.Tensor, sequence_first: bool, kwargs: dict[str, typing.Any]
     ) -> tuple[torch.Tensor, torch.Tensor, dict[str, typing.Any]]:
+        if self._debug_transformer_memory:
+            self._debug_memory_log("Begin QKV Forward")
         key_value, key_value_context = self.key_value.forward_only(input_)
 
+        if self._debug_transformer_memory:
+            self._debug_memory_log("KV Forward")
         handle = None
 
         if self._head_groups == 1 and self._sequence_parallel:
@@ -270,6 +281,8 @@ class Attention(torch.nn.Module):
             )
 
         query, query_context = self.query.forward_only(input_)
+        if self._debug_transformer_memory:
+            self._debug_memory_log("Q Forward")
 
         if handle:
             handle.wait()
@@ -281,7 +294,7 @@ class Attention(torch.nn.Module):
         return query, key_value, context
 
     def _query_key_value_backward(
-        self, query_grad: torch.Tensor, key_value_grad: torch.Tensor, context: dict
+        self, query_grad: torch.Tensor, key_value_grad: torch.Tensor, context: dict, kwargs: dict[str, typing.Any]
     ) -> torch.Tensor:
         # TODO: De-allocate qkv grads quicker.
         handle = None
@@ -321,7 +334,7 @@ class Attention(torch.nn.Module):
 
     def forward(self, input_: torch.Tensor, kwargs: dict[str, typing.Any]) -> tuple[torch.Tensor, torch.Tensor | None]:
         sequence_first = kwargs[TransformerKwargs.sequence_first]
-        query, key_value = self._query_key_value(input_, sequence_first)
+        query, key_value = self._query_key_value(input_, sequence_first, kwargs)
 
         # TODO: Move the rest to function.
 
