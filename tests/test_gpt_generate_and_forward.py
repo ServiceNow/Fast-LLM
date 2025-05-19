@@ -165,7 +165,7 @@ def model_and_tokenizer():
     return model_path, tokenizer, fast_llm_checkpoint_format
 
 
-@pytest.mark.slow
+@pytest.mark.extra_slow
 @requires_cuda
 @pytest.mark.parametrize(
     "use_flash_attention, use_bf16, max_new_tokens, min_matching_tokens_batch_size_1, min_matching_tokens_batch_size_2",
@@ -200,7 +200,7 @@ def test_generate(
     )
 
 
-@pytest.mark.slow
+@pytest.mark.extra_slow
 @requires_cuda
 def test_generate_from_model(
     model_and_tokenizer,
@@ -224,7 +224,7 @@ def test_generate_from_model(
     )
 
 
-@pytest.mark.slow
+@pytest.mark.extra_slow
 @requires_cuda
 def test_forward_return_hidden_states(
     model_and_tokenizer,
