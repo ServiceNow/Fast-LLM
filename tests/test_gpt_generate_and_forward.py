@@ -33,6 +33,22 @@ def _prepare_data(tokenizer, use_batch_size2: bool):
     return inputs
 
 
+def _prepare_rand_data(vocab_size, use_batch_size2: bool):
+    inputs = torch.randint(
+        1,
+        vocab_size,
+        [2 if use_batch_size2 else 1, 10],
+        dtype=torch.int64,
+        generator=torch.Generator().manual_seed(42),
+    ).cuda()
+    attention_mask = torch.ones_like(inputs)
+    # simulate left padding on one of the rows
+    if use_batch_size2:
+        inputs[1, :5] = 0
+        attention_mask[1, :5] = 0
+    return {"input_ids": inputs, "attention_mask": attention_mask}
+
+
 def _get_hf_model(model_path: str, use_flash_attention: bool, use_bf16: bool):
     hf_kwargs = {}
     if use_flash_attention:
@@ -132,12 +148,15 @@ def _compare_gen_outputs(outputs: dict[str, list[torch.Tensor]], min_matching_to
 def _test_for_batches(
     hf_model,
     fast_llm_model,
-    tokenizer,
     max_new_tokens,
     min_matching_tokens_batch_size_1,
     min_matching_tokens_batch_size_2,
+    tokenizer=None,
 ):
-    inputs = _prepare_data(tokenizer, use_batch_size2=False)
+    if tokenizer is not None:
+        inputs = _prepare_data(tokenizer, use_batch_size2=False)
+    else:
+        inputs = _prepare_rand_data(fast_llm_model.config.fast_llm_config.base_model.vocab_size, use_batch_size2=False)
     outputs = _generate(
         inputs,
         hf_model,
@@ -146,7 +165,10 @@ def _test_for_batches(
     )
     _compare_gen_outputs(outputs, min_matching_tokens=min_matching_tokens_batch_size_1)
 
-    inputs = _prepare_data(tokenizer, use_batch_size2=True)
+    if tokenizer is not None:
+        inputs = _prepare_data(tokenizer, use_batch_size2=True)
+    else:
+        inputs = _prepare_rand_data(fast_llm_model.config.fast_llm_config.base_model.vocab_size, use_batch_size2=True)
     outputs = _generate(
         inputs,
         hf_model,
@@ -163,6 +185,42 @@ def model_and_tokenizer():
     model_path = _prepare_checkpoint(model)
     tokenizer = AutoTokenizer.from_pretrained(model_path)
     return model_path, tokenizer, fast_llm_checkpoint_format
+
+
+@pytest.fixture(scope="module")
+def small_model():
+    from .common import _CONFIGS, TEST_RESULTS_PATH, run_test_script
+
+    _, _, _, common_config, fast_llm_checkpoint_format = _CONFIGS["llama"]
+    run_test_script(
+        f"test_llama_generate_and_forward",
+        common_config
+        + ["training.checkpoint.interval=1", "training.export.format=llama", "training.export.interval=1"],
+    )
+    return TEST_RESULTS_PATH / "test_llama_generate_and_forward/export/llama/2", fast_llm_checkpoint_format
+
+
+def _test_generate(
+    model_path,
+    fast_llm_checkpoint_format,
+    use_flash_attention,
+    use_bf16,
+    max_new_tokens,
+    min_matching_tokens_batch_size_1,
+    min_matching_tokens_batch_size_2,
+    tokenizer=None,
+):
+    hf_model = _get_hf_model(model_path, use_flash_attention, use_bf16)
+    fast_llm_model = _get_fast_llm_model(model_path, use_flash_attention, use_bf16, fast_llm_checkpoint_format)
+
+    _test_for_batches(
+        hf_model,
+        fast_llm_model,
+        max_new_tokens,
+        min_matching_tokens_batch_size_1,
+        min_matching_tokens_batch_size_2,
+        tokenizer=tokenizer,
+    )
 
 
 @pytest.mark.extra_slow
@@ -187,16 +245,67 @@ def test_generate(
     min_matching_tokens_batch_size_2,
 ):
     model_path, tokenizer, fast_llm_checkpoint_format = model_and_tokenizer
-    hf_model = _get_hf_model(model_path, use_flash_attention, use_bf16)
-    fast_llm_model = _get_fast_llm_model(model_path, use_flash_attention, use_bf16, fast_llm_checkpoint_format)
+    _test_generate(
+        model_path,
+        fast_llm_checkpoint_format,
+        use_flash_attention,
+        use_bf16,
+        max_new_tokens,
+        min_matching_tokens_batch_size_1,
+        min_matching_tokens_batch_size_2,
+        tokenizer=tokenizer,
+    )
+
+
+@pytest.mark.slow
+@requires_cuda
+@pytest.mark.parametrize(
+    "use_flash_attention, use_bf16, max_new_tokens, min_matching_tokens_batch_size_1, min_matching_tokens_batch_size_2",
+    [
+        # No flash attention + no bf16
+        (False, False, 10, 10, 10),
+        # No flash attention + with bf16
+        (False, True, 10, 10, 10),
+        # Flash attention must be paired with bf16
+        (True, True, 10, 10, 10),
+    ],
+)
+def test_small_generate(
+    small_model,
+    use_flash_attention,
+    use_bf16,
+    max_new_tokens,
+    min_matching_tokens_batch_size_1,
+    min_matching_tokens_batch_size_2,
+):
+    model_path, fast_llm_checkpoint_format = small_model
+    _test_generate(
+        model_path,
+        fast_llm_checkpoint_format,
+        use_flash_attention,
+        use_bf16,
+        max_new_tokens,
+        min_matching_tokens_batch_size_1,
+        min_matching_tokens_batch_size_2,
+    )
+
+
+def _test_generate_from_model(model_path, tokenizer, fast_llm_checkpoint_format):
+    max_new_tokens = 10
+    min_matching_tokens_batch_size_1 = 10
+    min_matching_tokens_batch_size_2 = 10
+
+    # Use flash attention for speed
+    hf_model = _get_hf_model(model_path, True, True)
+    fast_llm_model = _get_fast_llm_model_from_model(model_path, True, True, fast_llm_checkpoint_format)
 
     _test_for_batches(
         hf_model,
         fast_llm_model,
-        tokenizer,
         max_new_tokens,
         min_matching_tokens_batch_size_1,
         min_matching_tokens_batch_size_2,
+        tokenizer=tokenizer,
     )
 
 
@@ -205,41 +314,39 @@ def test_generate(
 def test_generate_from_model(
     model_and_tokenizer,
 ):
-    max_new_tokens = 10
-    min_matching_tokens_batch_size_1 = 10
-    min_matching_tokens_batch_size_2 = 10
-
-    # Use flash attention for speed
     model_path, tokenizer, fast_llm_checkpoint_format = model_and_tokenizer
-    hf_model = _get_hf_model(model_path, True, True)
-    fast_llm_model = _get_fast_llm_model_from_model(model_path, True, True, fast_llm_checkpoint_format)
-
-    _test_for_batches(
-        hf_model,
-        fast_llm_model,
-        tokenizer,
-        max_new_tokens,
-        min_matching_tokens_batch_size_1,
-        min_matching_tokens_batch_size_2,
-    )
+    _test_generate_from_model(model_path, tokenizer, fast_llm_checkpoint_format)
 
 
-@pytest.mark.extra_slow
+@pytest.mark.slow
 @requires_cuda
-def test_forward_return_hidden_states(
-    model_and_tokenizer,
+def test_small_generate_from_model(
+    small_model,
+):
+    model_path, fast_llm_checkpoint_format = small_model
+    _test_generate_from_model(model_path, None, fast_llm_checkpoint_format)
+
+
+def _test_forward_return_hidden_states(
+    model_path,
+    fast_llm_checkpoint_format,
+    vocab_size: int | None = None,
 ):
     # Use flash attention for speed
-    model_path, tokenizer, fast_llm_checkpoint_format = model_and_tokenizer
-    fast_llm_model = _get_fast_llm_model(model_path, True, True, fast_llm_checkpoint_format)
-
-    inputs_ids = torch.randint(1, tokenizer.vocab_size, [1, 10], dtype=torch.int64).cuda()
-
     # TODO: hidden states have differences between HF and Fast-LLM despite resulting in the similar logits,
     #       decide if to leave as it.
     # hf_model = _get_hf_model(model_path, True, True)
-    # res_hf = hf_model.forward(input_ids=inputs_ids, output_hidden_states=True, return_dict=True, use_cache=False)
+    fast_llm_model = _get_fast_llm_model(model_path, True, True, fast_llm_checkpoint_format)
 
+    inputs_ids = torch.randint(
+        1,
+        fast_llm_model.config.fast_llm_config.base_model.vocab_size if vocab_size is None else vocab_size,
+        [1, 10],
+        dtype=torch.int64,
+        generator=torch.Generator().manual_seed(42),
+    ).cuda()
+
+    # res_hf = hf_model.forward(input_ids=inputs_ids, output_hidden_states=True, return_dict=True, use_cache=False)
     res_fast_llm = fast_llm_model.forward(
         input_ids=inputs_ids, output_hidden_states=True, return_dict=True, use_cache=False
     )
@@ -248,3 +355,19 @@ def test_forward_return_hidden_states(
     assert (
         len(res_fast_llm.hidden_states) - 1 == fast_llm_model.config.fast_llm_config.base_model.transformer.num_layers
     )
+
+
+@pytest.mark.extra_slow
+@requires_cuda
+def test_forward_return_hidden_states(
+    model_and_tokenizer,
+):
+    model_path, tokenizer, fast_llm_checkpoint_format = model_and_tokenizer
+    _test_forward_return_hidden_states(model_path, fast_llm_checkpoint_format, tokenizer.vocab_size)
+
+
+@pytest.mark.slow
+@requires_cuda
+def test_small_forward_return_hidden_states(small_model):
+    model_path, fast_llm_checkpoint_format = small_model
+    _test_forward_return_hidden_states(model_path, fast_llm_checkpoint_format)
