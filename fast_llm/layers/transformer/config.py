@@ -95,7 +95,7 @@ class RotaryEmbeddingType(str, enum.Enum):
     yarn = "yarn"
 
 
-@config_class()
+@config_class(registry=True)
 class RotaryConfig(BaseModelConfig):
     _abstract = False
     type: RotaryEmbeddingType = Field(
@@ -158,6 +158,12 @@ class RotaryConfig(BaseModelConfig):
             warnings.warn("Triton is disabled, but the triton rotary kernel will be used anyway.")
 
 
+for name in RotaryEmbeddingType:
+    # We need this because we are using the reserved field name `type`.
+    # TODO: Implement proper dynamic typing.
+    RotaryConfig.register_subclass(name.value, RotaryConfig)
+
+
 class AddLinearBiasChoices(str, enum.Enum):
     nowhere = "nowhere"
     everywhere = "everywhere"
@@ -175,7 +181,7 @@ class TransformerSubLayerName(str, enum.Enum):
     mlp_2 = "mlp_2"
 
 
-@config_class()
+@config_class(registry=True)
 class TransformerPeftConfig(PeftConfig):
     layers: list[TransformerSubLayerName] = Field(
         default=None,
@@ -244,21 +250,24 @@ class TransformerPeftConfig(PeftConfig):
                 )
 
 
+for name in PeftType:
+    # We need this because we are using the reserved field name `type`.
+    # TODO: Implement proper dynamic typing.
+    TransformerPeftConfig.register_subclass(name.value, TransformerPeftConfig)
+
+
 @config_class()
 class TransformerConfig(LLMBlockConfig):
     _abstract = False
     normalization: NormalizationConfig = Field(
-        default_factory=NormalizationConfig,
         desc="Configuration for the normalization layers architecture.",
         hint=FieldHint.architecture,
     )
     rotary: RotaryConfig = Field(
-        default_factory=RotaryConfig,
         desc="Configuration for the rotary positional embeddings.",
         hint=FieldHint.architecture,
     )
     peft: TransformerPeftConfig = Field(
-        default_factory=TransformerPeftConfig,
         desc="Configuration for the parameter-efficient fine tuning.",
         hint=FieldHint.architecture,
     )

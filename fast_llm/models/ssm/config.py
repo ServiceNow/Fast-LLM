@@ -27,7 +27,6 @@ class HybridSSMBaseModelConfig(LanguageModelBaseConfig):
     _abstract = False
 
     ssm: SSMConfig = Field(
-        default_factory=SSMConfig,
         desc="Configuration for the transformer architecture.",
         hint=FieldHint.architecture,
     )
@@ -191,7 +190,7 @@ class HybridSSMModelConfig(FastLLMModelConfig):
 @config_class()
 class PretrainedHybridSSMModelConfig(PretrainedFastLLMModelConfig):
     _abstract = False
-    model: HybridSSMModelConfig = FieldUpdate(default_factory=HybridSSMModelConfig)
+    model: HybridSSMModelConfig = FieldUpdate()
 
 
 @config_class()

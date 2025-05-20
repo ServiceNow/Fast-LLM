@@ -252,6 +252,7 @@ def test_mamba_block(distributed_config, distributed):
     assert not torch.isinf(hidden_states).any()
 
 
+@pytest.mark.slow
 @pytest.mark.skipif(not run_test, reason="No CUDA available or Mamba not installed")
 @pytest.mark.parametrize(
     ("hybrid_block_layout"),
