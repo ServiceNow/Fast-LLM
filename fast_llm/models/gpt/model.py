@@ -190,7 +190,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
         if isinstance(batch_meta, GPTBatchConfig) and self._config.distill_from_next_token:
             # Reference models process longer sequences to provide targets for additional prediction heads
             reference_batch_meta = batch_meta.to_copy(
-                updates={"sequence_length": batch_meta.sequence_length + self._config.prediction_heads - 1}
+                {"sequence_length": batch_meta.sequence_length + self._config.prediction_heads - 1}
             )
             reference_batch_meta.validate()
         else:
