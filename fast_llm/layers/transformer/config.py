@@ -28,60 +28,109 @@ class RoutingType(str, enum.Enum):
     sinkhorn = "sinkhorn"
 
 
-class TransformerDimNames:
-    # A set of common tensor dim names packed into a namespace.
-    # Input dimensions (variable)
-    # TODO: Does batch belong here?
-    batch = "batch"
-    # TODO: Distinguish micro-sequence?
-    sequence_q = "sequence_q"
-    sequence_q_tp = "sequence_q_tp"
-    sequence_k = "sequence_k"
-    hidden = "hidden"
-    # Self-attention dimensions
-    head_groups = "head_groups"
-    group_heads = "group_heads"
-    key_and_value = "key_value"
-    kv_channels = "kv_channels"
-    composite_heads = "composite_heads"
-    composite_query = "composite_query"
-    composite_key_value = "composite_key_value"
-    composite_dense = "composite_dense"
-    # MLP dimensions
-    mlp = "mlp"
-    gate_and_up = "gate_and_up"
-    composite_gated_mlp = "composite_gated_mlp"
-    experts = "experts"
-    top_experts = "top_experts"
-    shared_experts = "shared_experts"
-    unshared_experts = "unshared_experts"
-    composite_expert_mlp = "composite_expert_mlp"
-    composite_gated_expert_mlp = "composite_gated_expert_mlp"
-    composite_shared_expert_mlp = "composite_shared_expert_mlp"
-    composite_gated_shared_expert_mlp = "composite_gated_shared_expert_mlp"
+class BaseTransformerDimNames:
+    _kwargs_attributes = {
+        "batch": "batch",
+        "sequence_q": "sequence_q",
+        "sequence_q_tp": "sequence_q_tp",
+        "sequence_k": "sequence_k",
+        "hidden": "hidden",
+        "head_groups": "head_groups",
+        "group_heads": "group_heads",
+        "key_and_value": "key_value",
+        "kv_channels": "kv_channels",
+        "composite_heads": "composite_heads",
+        "composite_query": "composite_query",
+        "composite_key_value": "composite_key_value",
+        "composite_dense": "composite_dense",
+        "mlp": "mlp",
+        "gate_and_up": "gate_and_up",
+        "composite_gated_mlp": "composite_gated_mlp",
+        "experts": "experts",
+        "top_experts": "top_experts",
+        "shared_experts": "shared_experts",
+        "unshared_experts": "unshared_experts",
+        "composite_expert_mlp": "composite_expert_mlp",
+        "composite_gated_expert_mlp": "composite_gated_expert_mlp",
+        "composite_shared_expert_mlp": "composite_shared_expert_mlp",
+        "composite_gated_shared_expert_mlp": "composite_gated_shared_expert_mlp",
+    }
+
+    def __init_subclass__(cls, prefix="", **kwargs):
+        super().__init_subclass__(**kwargs)
+        cls._prefix = prefix
+        for attr, value in BaseTransformerDimNames._kwargs_attributes.items():
+            setattr(cls, value, f"{cls._prefix}_{value}")
 
 
-class TransformerKwargs:
-    rotary_freq_q = "rotary_freq_q"
-    rotary_freq_k = "rotary_freq_k"
-    attention_mask = "attention_mask"
-    attention_mask_value = "attention_mask_value"
-    sequence_lengths = "sequence_lengths"
-    cu_seqlens_q = "cu_seqlens_q"
-    cu_seqlens_k = "cu_seqlens_k"
-    max_seqlen_q = "max_seqlen_q"
-    max_seqlen_k = "max_seqlen_k"
-    # TODO: Review these
-    presents = "presents"
-    past_key_values = "past_key_values"
-    sequence_first = "sequence_first"
-    hidden_dims = "hidden_dims"
-    sequence_q_dim = "sequence_q_dim"
-    sequence_k_dim = "sequence_k_dim"
-    sequence_length = "sequence_length"
-    micro_batch_size = "micro_batch_size"
-    # TODO: Move
-    grad_output = "grad_output"
+class TransformerDimNames(BaseTransformerDimNames, prefix=""):
+    pass
+
+
+class VisionTransformerDimNames(BaseTransformerDimNames, prefix="image_encoder"):
+    pass
+
+
+class BaseTransformerKwargs:
+    _kwargs_attributes = {
+        "rotary_freq_q": "rotary_freq_q",
+        "rotary_freq_k": "rotary_freq_k",
+        "attention_mask": "attention_mask",
+        "attention_mask_value": "attention_mask_value",
+        "sequence_lengths": "sequence_lengths",
+        "cu_seqlens_q": "cu_seqlens_q",
+        "cu_seqlens_k": "cu_seqlens_k",
+        "max_seqlen_q": "max_seqlen_q",
+        "max_seqlen_k": "max_seqlen_k",
+        "presents": "presents",
+        "past_key_values": "past_key_values",
+        "sequence_first": "sequence_first",
+        "hidden_dims": "hidden_dims",
+        "sequence_q_dim": "sequence_q_dim",
+        "sequence_k_dim": "sequence_k_dim",
+        "sequence_length": "sequence_length",
+        "micro_batch_size": "micro_batch_size",
+        "grad_output": "grad_output",
+    }
+
+    _prefix = ""
+
+    def __init_subclass__(cls, prefix="", **kwargs):
+        super().__init_subclass__(**kwargs)
+        cls._prefix = prefix
+        for attr, value in BaseTransformerKwargs._kwargs_attributes.items():
+            setattr(cls, value, f"{cls._prefix}_{value}")
+
+
+class TransformerKwargs(BaseTransformerKwargs, prefix=""):
+    pass
+
+
+class VisionTransformerKwargs(BaseTransformerKwargs, prefix="image_encoder"):
+    patch_position_ids = "patch_position_ids"
+
+
+# class TransformerKwargs:
+#     rotary_freq_q = "rotary_freq_q"
+#     rotary_freq_k = "rotary_freq_k"
+#     attention_mask = "attention_mask"
+#     attention_mask_value = "attention_mask_value"
+#     sequence_lengths = "sequence_lengths"
+#     cu_seqlens_q = "cu_seqlens_q"
+#     cu_seqlens_k = "cu_seqlens_k"
+#     max_seqlen_q = "max_seqlen_q"
+#     max_seqlen_k = "max_seqlen_k"
+#     # TODO: Review these
+#     presents = "presents"
+#     past_key_values = "past_key_values"
+#     sequence_first = "sequence_first"
+#     hidden_dims = "hidden_dims"
+#     sequence_q_dim = "sequence_q_dim"
+#     sequence_k_dim = "sequence_k_dim"
+#     sequence_length = "sequence_length"
+#     micro_batch_size = "micro_batch_size"
+#     # TODO: Move
+#     grad_output = "grad_output"
 
 
 class TransformerLossNames:
@@ -96,6 +145,11 @@ class RotaryEmbeddingType(str, enum.Enum):
     yarn = "yarn"
     # TODO Soham: generic name?
     pixtral = "pixtral"
+
+
+class TransformerType(str, enum.Enum):
+    lm_decoder = "lm_decoder"
+    image_encoder = "image_encoder"
 
 
 @config_class()
@@ -160,6 +214,14 @@ class RotaryConfig(BaseModelConfig):
         if self.triton and not TritonConfig.TRITON_ENABLED:
             warnings.warn("Triton is disabled, but the triton rotary kernel will be used anyway.")
 
+    @property
+    def _transformer_dim_names(self) -> TransformerDimNames:
+        return TransformerDimNames
+
+    @property
+    def _transformer_kwargs(self) -> TransformerKwargs:
+        return TransformerKwargs
+
 
 @config_class()
 class VisionRotaryConfig(RotaryConfig):
@@ -168,6 +230,14 @@ class VisionRotaryConfig(RotaryConfig):
         desc="The type of rotary embedding to use. Choices: none, default, llama3, yarn, pixtral.",
         hint=FieldHint.feature,
     )
+
+    @property
+    def _transformer_dim_names(self) -> VisionTransformerDimNames:
+        return VisionTransformerDimNames
+
+    @property
+    def _transformer_kwargs(self) -> VisionTransformerKwargs:
+        return VisionTransformerKwargs
 
 
 class AddLinearBiasChoices(str, enum.Enum):
@@ -259,6 +329,11 @@ class TransformerPeftConfig(PeftConfig):
 @config_class()
 class TransformerConfig(BaseModelConfig):
     _abstract = False
+    transformer_type: TransformerType = Field(
+        default=TransformerType.lm_decoder,
+        desc="Type of the transformer. Choices: lm_decoder, image_encoder.",
+        hint=FieldHint.architecture,
+    )
     normalization: NormalizationConfig = Field(
         default_factory=NormalizationConfig,
         desc="Configuration for the normalization layers architecture.",
@@ -658,72 +733,71 @@ class TransformerConfig(BaseModelConfig):
         cls._handle_renamed_field(default, "triton_rotary", ("rotary", "triton"))
         return super()._from_dict(default, strict, flat)
 
-    def setup_tensor_space(self, tensor_space: TensorSpace, type: str | None = None) -> None:
-        if type == "vision":
-            # TODO Soham: better way to get around circular imports? Maybe add a type class variable to TransformerConfig?
-            from fast_llm.layers.vision_encoder.config import VisionTransformerDimNames
-
-            transformer_dim_names = VisionTransformerDimNames
-        else:
-            transformer_dim_names = TransformerDimNames
+    def setup_tensor_space(self, tensor_space: TensorSpace) -> None:
         tensor = tensor_space.distributed_config.get_distributed_dim(DistributedDimNames.tensor)
 
         # Hidden dimension
-        tensor_space.add_tensor_dim(TensorDim(transformer_dim_names.hidden, self.hidden_size))
+        tensor_space.add_tensor_dim(TensorDim(self.transformer_dim_names.hidden, self.hidden_size))
 
         # Self-attention dimensions
         tensor_space.add_tensor_dim(
             head_groups := TensorDim(
-                transformer_dim_names.head_groups, self.head_groups, tensor if self.head_groups > 1 else None
+                self.transformer_dim_names.head_groups, self.head_groups, tensor if self.head_groups > 1 else None
             )
         )
         tensor_space.add_tensor_dim(
             group_heads := TensorDim(
-                transformer_dim_names.group_heads,
+                self.transformer_dim_names.group_heads,
                 div(self.num_attention_heads, self.head_groups),
                 None if self.head_groups > 1 else tensor,
             )
         )
-        tensor_space.add_tensor_dim(key_and_value := TensorDim(transformer_dim_names.key_and_value, 2))
-        tensor_space.add_tensor_dim(kv_channels := TensorDim(transformer_dim_names.kv_channels, self.kv_channels))
+        tensor_space.add_tensor_dim(key_and_value := TensorDim(self.transformer_dim_names.key_and_value, 2))
+        tensor_space.add_tensor_dim(kv_channels := TensorDim(self.transformer_dim_names.kv_channels, self.kv_channels))
         tensor_space.add_tensor_dim(
-            CompositeTensorDim(transformer_dim_names.composite_heads, (head_groups, group_heads))
+            CompositeTensorDim(self.transformer_dim_names.composite_heads, (head_groups, group_heads))
         )
         tensor_space.add_tensor_dim(
-            CompositeTensorDim(transformer_dim_names.composite_query, (head_groups, group_heads, kv_channels))
+            CompositeTensorDim(self.transformer_dim_names.composite_query, (head_groups, group_heads, kv_channels))
         )
         tensor_space.add_tensor_dim(
-            CompositeTensorDim(transformer_dim_names.composite_key_value, (key_and_value, head_groups, kv_channels))
+            CompositeTensorDim(
+                self.transformer_dim_names.composite_key_value, (key_and_value, head_groups, kv_channels)
+            )
         )
         tensor_space.add_tensor_dim(
-            CompositeTensorDim(transformer_dim_names.composite_dense, (head_groups, group_heads, kv_channels))
+            CompositeTensorDim(self.transformer_dim_names.composite_dense, (head_groups, group_heads, kv_channels))
         )
 
         # MLP dimensions
-        tensor_space.add_tensor_dim(mlp := TensorDim(transformer_dim_names.mlp, self.ffn_hidden_size, tensor))
+        tensor_space.add_tensor_dim(mlp := TensorDim(self.transformer_dim_names.mlp, self.ffn_hidden_size, tensor))
         tensor_space.add_tensor_dim(
-            gate_and_up := TensorDim(transformer_dim_names.gate_and_up, 2 if self.gated else 1)
+            gate_and_up := TensorDim(self.transformer_dim_names.gate_and_up, 2 if self.gated else 1)
         )
-        tensor_space.add_tensor_dim(CompositeTensorDim(transformer_dim_names.composite_gated_mlp, (gate_and_up, mlp)))
-        tensor_space.add_tensor_dim(experts := TensorDim(transformer_dim_names.experts, self.num_experts))
-        tensor_space.add_tensor_dim(CompositeTensorDim(transformer_dim_names.composite_expert_mlp, (experts, mlp)))
         tensor_space.add_tensor_dim(
-            CompositeTensorDim(transformer_dim_names.composite_gated_expert_mlp, (experts, gate_and_up, mlp))
+            CompositeTensorDim(self.transformer_dim_names.composite_gated_mlp, (gate_and_up, mlp))
         )
-        tensor_space.add_tensor_dim(TensorDim(transformer_dim_names.top_experts, self.num_experts_per_token))
-        tensor_space.add_tensor_dim(TensorDim(transformer_dim_names.unshared_experts, self.num_unshared_experts))
+        tensor_space.add_tensor_dim(experts := TensorDim(self.transformer_dim_names.experts, self.num_experts))
+        tensor_space.add_tensor_dim(
+            CompositeTensorDim(self.transformer_dim_names.composite_expert_mlp, (experts, mlp))
+        )
+        tensor_space.add_tensor_dim(
+            CompositeTensorDim(self.transformer_dim_names.composite_gated_expert_mlp, (experts, gate_and_up, mlp))
+        )
+        tensor_space.add_tensor_dim(TensorDim(self.transformer_dim_names.top_experts, self.num_experts_per_token))
+        tensor_space.add_tensor_dim(TensorDim(self.transformer_dim_names.unshared_experts, self.num_unshared_experts))
 
         # shared_experts
         if self.num_shared_experts:
             tensor_space.add_tensor_dim(
-                shared_experts := TensorDim(transformer_dim_names.shared_experts, self.num_shared_experts)
+                shared_experts := TensorDim(self.transformer_dim_names.shared_experts, self.num_shared_experts)
             )
             tensor_space.add_tensor_dim(
-                CompositeTensorDim(transformer_dim_names.composite_shared_expert_mlp, (shared_experts, mlp))
+                CompositeTensorDim(self.transformer_dim_names.composite_shared_expert_mlp, (shared_experts, mlp))
             )
             tensor_space.add_tensor_dim(
                 CompositeTensorDim(
-                    transformer_dim_names.composite_gated_shared_expert_mlp, (shared_experts, gate_and_up, mlp)
+                    self.transformer_dim_names.composite_gated_shared_expert_mlp, (shared_experts, gate_and_up, mlp)
                 )
             )
 
@@ -738,6 +812,14 @@ class TransformerConfig(BaseModelConfig):
             Assert.is_(self.window_size, None)
 
         return use_flash_attention
+
+    @property
+    def _transformer_kwargs(self) -> TransformerKwargs:
+        return TransformerKwargs
+
+    @property
+    def _transformer_dim_names(self) -> TransformerDimNames:
+        return TransformerDimNames
 
 
 @config_class()
@@ -755,6 +837,11 @@ class VisionTransformerConfig(TransformerConfig):
     Configuration for the Vision Transformer (ViT) model.
     """
 
+    transformer_type: TransformerType = FieldUpdate(
+        default=TransformerType.image_encoder,
+        desc="Type of the transformer. Choices: lm_decoder, image_encoder.",
+        hint=FieldHint.architecture,
+    )
     causal: bool = FieldUpdate(
         default=False,
         desc="Use causal attention. Turn this off only for bidirectional attention e.g., in Vision Transformer.",
@@ -765,3 +852,11 @@ class VisionTransformerConfig(TransformerConfig):
         desc="Configuration for the rotary positional embeddings.",
         hint=FieldHint.feature,
     )
+
+    @property
+    def _transformer_kwargs(self) -> VisionTransformerKwargs:
+        return VisionTransformerKwargs
+
+    @property
+    def _transformer_dim_names(self) -> VisionTransformerDimNames:
+        return VisionTransformerDimNames

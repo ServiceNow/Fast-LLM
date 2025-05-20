@@ -46,7 +46,6 @@ class LanguageModelBaseConfig(BaseModelConfig):
         desc="Configuration for the transformer architecture.",
         hint=FieldHint.architecture,
     )
-    # TODO Soham: make this None by default. Need to figure out how to handle this in the config (see )
     vision_encoder: VisionEncoderConfig = Field(
         default_factory=VisionEncoderConfig,
         desc="Configuration for the vision encoder that transforms images into embeddings.",

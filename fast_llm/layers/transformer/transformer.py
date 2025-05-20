@@ -9,15 +9,9 @@ from fast_llm.engine.base_model.base_model import Layer
 from fast_llm.engine.config_utils.run import log_pipeline_parallel_main_rank
 from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
 from fast_llm.layers.transformer.attention import Attention
-from fast_llm.layers.transformer.config import (
-    TransformerConfig,
-    TransformerDimNames,
-    TransformerKwargs,
-    VisionTransformerConfig,
-)
+from fast_llm.layers.transformer.config import TransformerConfig, TransformerDimNames, TransformerKwargs
 from fast_llm.layers.transformer.mixture_of_experts import MixtureOfExpertMLP
 from fast_llm.layers.transformer.mlp import MLP
-from fast_llm.layers.vision_encoder.config import VisionTransformerDimNames, VisionTransformerKwargs
 from fast_llm.logging import log_distributed_grad, log_distributed_tensor, log_memory_usage
 from fast_llm.tensor import TensorMeta
 
@@ -35,12 +29,8 @@ class BaseBlock(Layer, abc.ABC):
         self, config: TransformerConfig, tensor_space: TensorSpace, layer_index: int, return_input: bool = False
     ):
         super().__init__()
-        if isinstance(config, VisionTransformerConfig):
-            self._transformer_dim_names = VisionTransformerDimNames
-            self._transformer_kwargs = VisionTransformerKwargs
-        elif isinstance(config, TransformerConfig):
-            self._transformer_dim_names = TransformerDimNames
-            self._transformer_kwargs = TransformerKwargs
+        self._transformer_dim_names = config._transformer_dim_names
+        self._transformer_kwargs = config._transformer_kwargs
         self._config: TransformerConfig = config
         self._tensor_space: TensorSpace = tensor_space
         self._dropout_p: float = self._config.hidden_dropout
@@ -79,6 +69,14 @@ class BaseBlock(Layer, abc.ABC):
     @property
     def name(self) -> str:
         return f"{self._name} {self._layer_index}"
+
+    @property
+    def _transformer_kwargs(self) -> TransformerKwargs:
+        return TransformerKwargs
+
+    @property
+    def _transformer_dim_names(self) -> TransformerDimNames:
+        return TransformerDimNames
 
     def _get_meta(self, tensor: torch.Tensor, name: str, kwargs: dict):
         dims = kwargs[self._transformer_kwargs.hidden_dims]

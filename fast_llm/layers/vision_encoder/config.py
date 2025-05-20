@@ -16,39 +16,6 @@ class VisionEncoderDimNames:
     kv_channels = "vision_kv_channels"
 
 
-class VisionTransformerDimNames:
-    # A set of common tensor dim names packed into a namespace.
-    # Input dimensions (variable)
-    # TODO: Does batch belong here?
-    batch = "vit_batch"
-    # TODO: Distinguish micro-sequence?
-    sequence_q = "vit_sequence_q"
-    sequence_q_tp = "vit_sequence_q_tp"
-    sequence_k = "vit_sequence_k"
-    hidden = "vit_hidden"
-    # Self-attention dimensions
-    head_groups = "vit_head_groups"
-    group_heads = "vit_group_heads"
-    key_and_value = "vit_key_value"
-    kv_channels = "vit_kv_channels"
-    composite_heads = "vit_composite_heads"
-    composite_query = "vit_composite_query"
-    composite_key_value = "vit_composite_key_value"
-    composite_dense = "vit_composite_dense"
-    # MLP dimensions
-    mlp = "vit_mlp"
-    gate_and_up = "vit_gate_and_up"
-    composite_gated_mlp = "vit_composite_gated_mlp"
-    experts = "vit_experts"
-    top_experts = "vit_top_experts"
-    shared_experts = "vit_shared_experts"
-    unshared_experts = "vit_unshared_experts"
-    composite_expert_mlp = "vit_composite_expert_mlp"
-    composite_gated_expert_mlp = "vit_composite_gated_expert_mlp"
-    composite_shared_expert_mlp = "vit_composite_shared_expert_mlp"
-    composite_gated_shared_expert_mlp = "vit_composite_gated_shared_expert_mlp"
-
-
 class VisionEncoderKwargs:
     patch_size = "patch_size"
     images = "images"
@@ -67,31 +34,6 @@ class VisionEncoderKwargs:
     hidden_dims = "vit_hidden_dims"
     image_patches_meta = "vit_image_patches_meta"
     out_channels = "vit_out_channels"
-
-
-# TODO Soham: do we need all of them?
-class VisionTransformerKwargs:
-    rotary_freq_q = "vit_rotary_freq_q"
-    rotary_freq_k = "vit_rotary_freq_k"
-    attention_mask = "vit_attention_mask"
-    attention_mask_value = "vit_attention_mask_value"
-    sequence_lengths = "vit_sequence_lengths"
-    cu_seqlens_q = "vit_cu_seqlens_q"
-    cu_seqlens_k = "vit_cu_seqlens_k"
-    max_seqlen_q = "vit_max_seqlen_q"
-    max_seqlen_k = "vit_max_seqlen_k"
-    # TODO: Review these
-    presents = "vit_presents"
-    past_key_values = "vit_past_key_values"
-    sequence_first = "vit_sequence_first"
-    hidden_dims = "vit_hidden_dims"
-    sequence_q_dim = "vit_sequence_q_dim"
-    sequence_k_dim = "vit_sequence_k_dim"
-    sequence_length = "vit_sequence_length"
-    micro_batch_size = "vit_micro_batch_size"
-    # TODO: Move
-    grad_output = "vit_grad_output"
-    patch_position_ids = "patch_position_ids"
 
 
 @config_class()
@@ -194,7 +136,7 @@ class VisionEncoderConfig(BaseModelConfig):
                 VisionEncoderDimNames.kv_channels, self.transformer.hidden_size // self.transformer.num_attention_heads
             )
         )
-        self.transformer.setup_tensor_space(tensor_space, type="vision")
+        self.transformer.setup_tensor_space(tensor_space)
 
     @property
     def enabled(self) -> bool:

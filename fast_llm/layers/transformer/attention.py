@@ -9,14 +9,7 @@ from fast_llm.functional.autograd import wrap_forward_backward
 from fast_llm.functional.rotary import apply_rotary_embeddings
 from fast_llm.functional.triton.rotary import triton_rotary_autograd_
 from fast_llm.layers.common.linear import InputParallelLinear, OutputParallelLinear
-from fast_llm.layers.transformer.config import (
-    TransformerConfig,
-    TransformerDimNames,
-    TransformerKwargs,
-    TransformerSubLayerName,
-    VisionTransformerConfig,
-)
-from fast_llm.layers.vision_encoder.config import VisionTransformerDimNames, VisionTransformerKwargs
+from fast_llm.layers.transformer.config import TransformerConfig, TransformerKwargs, TransformerSubLayerName
 from fast_llm.logging import log_distributed_grad, log_distributed_tensor
 from fast_llm.tensor import TensorMeta, init_normal_, init_zeros_
 from fast_llm.utils import Assert
@@ -66,12 +59,8 @@ class Attention(torch.nn.Module):
         layer_index,
     ):
         super().__init__()
-        if isinstance(config, VisionTransformerConfig):
-            self._transformer_dim_names = VisionTransformerDimNames
-            self._transformer_kwargs = VisionTransformerKwargs
-        elif isinstance(config, TransformerConfig):
-            self._transformer_dim_names = TransformerDimNames
-            self._transformer_kwargs = TransformerKwargs
+        self._transformer_dim_names = config._transformer_dim_names
+        self._transformer_kwargs = config._transformer_kwargs
         self._config = config
         self._tensor_space = tensor_space
         # TODO Soham: fix assert

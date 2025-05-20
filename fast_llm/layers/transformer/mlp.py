@@ -8,14 +8,7 @@ from fast_llm.engine.config_utils.tensor_space import TensorSpace
 from fast_llm.functional.config import TritonConfig
 from fast_llm.functional.triton.mlp import mlp_autograd, torch_mlp_activation, triton_mlp_activation_autograd
 from fast_llm.layers.common.linear import LinearBase
-from fast_llm.layers.transformer.config import (
-    TransformerConfig,
-    TransformerDimNames,
-    TransformerKwargs,
-    TransformerSubLayerName,
-    VisionTransformerConfig,
-)
-from fast_llm.layers.vision_encoder.config import VisionTransformerDimNames, VisionTransformerKwargs
+from fast_llm.layers.transformer.config import TransformerConfig, TransformerSubLayerName
 from fast_llm.tensor import init_normal_, init_zeros_
 from fast_llm.utils import Assert
 
@@ -25,12 +18,8 @@ class MLPBase(Layer, ABC):
         super().__init__()
         self._name = name
 
-        if isinstance(config, VisionTransformerConfig):
-            self._transformer_dim_names = VisionTransformerDimNames
-            self._transformer_kwargs = VisionTransformerKwargs
-        elif isinstance(config, TransformerConfig):
-            self._transformer_dim_names = TransformerDimNames
-            self._transformer_kwargs = TransformerKwargs
+        self._transformer_dim_names = config._transformer_dim_names
+        self._transformer_kwargs = config._transformer_kwargs
 
         init_method_1 = init_normal_(
             std=config.init_method_std_mlp_1,
