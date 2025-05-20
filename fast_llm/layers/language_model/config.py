@@ -178,6 +178,12 @@ class LanguageModelBaseConfig(BaseModelConfig):
         doc="If not provided, all heads are equally weighted.",
         hint=FieldHint.feature,
     )
+    distill_from_next_token: bool = Field(
+        default=False,
+        desc="Use the next-token prediction-head as the target for distillation.",
+        doc="If set to True, the model will use the reference's next-token prediction-head as the target for distilling all its prediction-heads.",
+        hint=FieldHint.feature,
+    )
 
     def _validate(self) -> None:
         self.transformer.validate()
@@ -195,6 +201,7 @@ class LanguageModelBaseConfig(BaseModelConfig):
             Assert.leq(self.init_method_min_embed, self.init_method_max_embed)
         if self.distillation_model is not None:
             if self.prediction_heads > 1:
+                Assert.eq(self.distill_from_next_token, True)
                 logger.warning(
                     "Will use reference model to distill multiple prediction heads. Experimental feature, may not work as expected."
                 )

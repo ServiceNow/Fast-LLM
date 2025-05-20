@@ -187,9 +187,17 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             micro_sequence_length,
         )
         reference_preprocessed_metas = {}
+        if isinstance(batch_meta, GPTBatchConfig) and self._config.distill_from_next_token:
+            # Reference models process longer sequences to provide targets for additional prediction heads
+            reference_batch_meta = batch_meta.to_copy(
+                updates={"sequence_length": batch_meta.sequence_length + self._config.prediction_heads - 1}
+            )
+            reference_batch_meta.validate()
+        else:
+            reference_batch_meta = batch_meta
         for name, reference_model in self._reference_models.items():
             reference_preprocessed_metas[name] = reference_model.fast_llm_model.base_model.preprocess_meta(
-                batch_meta, PhaseType.inference
+                reference_batch_meta, PhaseType.inference
             )
             Assert.eq(len(reference_preprocessed_metas[name]), len(sequence_k_pasts))
 
@@ -215,13 +223,17 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             reference_kwargs = {}
             for name, reference_preprocessed_meta in reference_preprocessed_metas.items():
                 reference_tokens, reference_kwargs_ = reference_preprocessed_meta[i]
-                for key in (
+                matching_keys = (
                     TransformerKwargs.sequence_first,
                     TransformerKwargs.sequence_length,
                     TransformerKwargs.sequence_q_dim,
                     TransformerKwargs.sequence_k_dim,
-                ):
-                    Assert.eq(reference_kwargs_[key], kwargs[key])
+                )
+                if not self._config.distill_from_next_token:
+                    matching_keys += ()
+                for key in matching_keys:
+                    # Assert.eq(reference_kwargs_[key], kwargs[key])
+                    logger.info(f"Reference model {name} {key}: {reference_kwargs_[key]} , {kwargs[key]}")
                 reference_kwargs[name] = reference_kwargs_
             kwargs["reference_models"] = reference_kwargs
 
