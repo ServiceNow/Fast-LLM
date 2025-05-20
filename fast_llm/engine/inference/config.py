@@ -1,3 +1,4 @@
+import copy
 import logging
 import os
 import pathlib
@@ -35,6 +36,22 @@ class HuggingfaceModelConfig(transformers.PretrainedConfig):
             super().save_pretrained(save_directory, push_to_hub, **kwargs)
         finally:
             transformers.configuration_utils.CONFIG_NAME = _backup
+
+    def __deepcopy__(self, memo):
+        # Hugging Face's PretrainedModel will deep copy the config
+        # when `generate` is enabled. However, `fast_llm_config`
+        # cannot be deep copied if the world size is greater than 1,
+        # as it will contain references to process groups.
+        # Therefore, we copy it by reference instead.
+        cls = self.__class__
+        copied = cls.__new__(cls)
+        memo[id(self)] = copied
+        for k, v in self.__dict__.items():
+            if k == "fast_llm_config":
+                setattr(copied, k, v)  # Keep the same reference
+            else:
+                setattr(copied, k, copy.deepcopy(v, memo))
+        return copied
 
     @classmethod
     def _get_config_dict(
