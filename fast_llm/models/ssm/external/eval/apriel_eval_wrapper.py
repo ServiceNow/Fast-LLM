@@ -92,5 +92,89 @@ class AprielHybridSSMWrapper(HFLM):
         )
 
     def _model_generate(self, context, max_length, stop, **generation_kwargs):
-        # FOR now evaluating with non-generation tasks
-        raise NotImplementedError("Generation not implemented yet for AprielHybridSSMWrapper")
+
+        stopping_criteria = lm_eval.models.utils.stop_sequences_criteria(
+            self.tokenizer,
+            stop,
+            context.shape[1],
+            context.shape[0],
+        )
+
+        generation_kwargs["temperature"] = generation_kwargs.get("temperature", 0.0)
+        do_sample = generation_kwargs.get("do_sample", None)
+
+        # The temperature has to be a strictly positive float -- if it is 0.0, use greedy decoding strategies
+        if generation_kwargs.get("temperature") == 0.0 and do_sample is None:
+            generation_kwargs["do_sample"] = do_sample = False
+        if do_sample is False and generation_kwargs.get("temperature") == 0.0:
+            generation_kwargs.pop("temperature")
+        return self.model.generate(
+            input_ids=context,
+            max_length=max_length,
+            stopping_criteria=stopping_criteria,
+            use_cache=True,
+            **generation_kwargs,
+        )
+
+
+@register_model("apriel_hybrid_ssm_15b")
+class AprielHybridSSMWrapper(HFLM):
+    """Wrapper for AprielHybridSSM model for compatibility with lm-evaluation-harness."""
+
+    def __init__(self, pretrained, **kwargs) -> None:
+        if "backend" in kwargs:
+            assert kwargs["backend"] == "causal"
+
+        super().__init__(
+            pretrained=pretrained,
+            backend=kwargs.pop("backend", "causal"),
+            tokenizer=kwargs.pop("tokenizer", "/mnt/checkpoints/upstream/Mistral-Nemo-Base-2407/"),
+            max_length=kwargs.pop("max_length", 4096),
+            **kwargs,
+        )
+
+    def _get_config(self, pretrained: str, **kwargs) -> None:
+        """Get the model configuration."""
+        from fast_llm.models.ssm.external.apriel_15b_hybrid.configuration_ssm_hybrid_apriel15b import (
+            AprielSSMHybridConfig,
+        )
+
+        self._config = AprielSSMHybridConfig.from_pretrained(pretrained, trust_remote_code=True)
+
+    def _create_model(self, pretrained: str, dtype: Optional[Union[str, torch.dtype]] = "float16", **kwargs) -> None:
+        """Create the model."""
+        from fast_llm.models.ssm.external.apriel_15b_hybrid.modeling_ssm_hybrid_apriel15b import (
+            AprielSSMHybridForCausalLM,
+        )
+
+        self._model = AprielSSMHybridForCausalLM.from_pretrained(
+            pretrained,
+            device=self._device,
+            torch_dtype=torch.bfloat16 if dtype == "auto" else lm_eval.models.utils.get_dtype(dtype),
+            **kwargs,
+        )
+
+    def _model_generate(self, context, max_length, stop, **generation_kwargs):
+
+        stopping_criteria = lm_eval.models.utils.stop_sequences_criteria(
+            self.tokenizer,
+            stop,
+            context.shape[1],
+            context.shape[0],
+        )
+
+        generation_kwargs["temperature"] = generation_kwargs.get("temperature", 0.0)
+        do_sample = generation_kwargs.get("do_sample", None)
+
+        # The temperature has to be a strictly positive float -- if it is 0.0, use greedy decoding strategies
+        if generation_kwargs.get("temperature") == 0.0 and do_sample is None:
+            generation_kwargs["do_sample"] = do_sample = False
+        if do_sample is False and generation_kwargs.get("temperature") == 0.0:
+            generation_kwargs.pop("temperature")
+        return self.model.generate(
+            input_ids=context,
+            max_length=max_length,
+            stopping_criteria=stopping_criteria,
+            use_cache=True,
+            **generation_kwargs,
+        )
