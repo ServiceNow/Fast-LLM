@@ -172,20 +172,26 @@ class GPTSampledIndexedDataset(SampledDataset):
         document_sizes, image_sizes, audio_sizes = self._indexed_dataset.get_document_sizes()
         document_sizes = torch.from_numpy(document_sizes).to(self._device)
         image_token_sizes = torch.zeros_like(document_sizes).to(self._device)
-        for i, sizes in enumerate(image_sizes):
-            image_token_sizes[i] = sum(
-                get_num_patches(
-                    *get_resize_dims(
-                        *size,
-                        self._parameters.image_size,
-                        self._parameters.image_size,
-                        self._parameters.patch_size,
-                    ),
-                    self._parameters.patch_size,
+        if image_sizes:
+            image_token_sizes = []
+            for i, sizes in enumerate(image_sizes):
+                image_token_sizes.append(
+                    sum(
+                        get_num_patches(
+                            *get_resize_dims(
+                                *size,
+                                self._parameters.image_size,
+                                self._parameters.image_size,
+                                self._parameters.patch_size,
+                            ),
+                            self._parameters.patch_size,
+                        )
+                        for size in sizes
+                    )
                 )
-                for size in sizes
-            )
-        # image_token_sizes = torch.tensor(image_token_sizes).to(self._device)
+            image_token_sizes = torch.tensor(image_token_sizes).to(self._device)
+        else:
+            image_token_sizes = torch.zeros_like(document_sizes)
 
         audio_token_sizes = torch.zeros_like(document_sizes).to(self._device)
         long_audio_filter = torch.zeros_like(document_sizes, dtype=torch.bool)  # longer than audio padding

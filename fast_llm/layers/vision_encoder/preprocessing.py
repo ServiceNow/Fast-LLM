@@ -152,17 +152,19 @@ class VisionPreprocessor(Preprocessor):
         patch_position_ids = []
         cu_seqlens = [0]
         max_seqlen = -1
+        sequence_first = kwargs.get(TransformerKwargs.sequence_first)
         for imgs, sizes in zip(images, image_sizes):
-            # TODO Soham: should this be micro_sequence_length?
             # sum(
             #     get_num_patches(*size, patch_size) for size in sizes
             # )
             seq_patches = []
+            sample_cu_seqlen = 0
             for image, size in zip(imgs, sizes):
                 seqlen = get_num_patches(*size, patch_size)
                 if seqlen > max_seqlen:
                     max_seqlen = seqlen
                 cu_seqlens.append(cu_seqlens[-1] + seqlen)
+                sample_cu_seqlen += seqlen
                 seq_patches.append(
                     torch.cat(
                         [
@@ -172,7 +174,8 @@ class VisionPreprocessor(Preprocessor):
                         ]
                     )
                 )
-            padding_size = kwargs[TransformerKwargs.sequence_length] - cu_seqlens[-1]
+            # TODO Soham: should this be micro_sequence_length?
+            padding_size = kwargs[TransformerKwargs.sequence_length] - sample_cu_seqlen
             if padding_size > max_seqlen:
                 max_seqlen = padding_size
             cu_seqlens.append(kwargs[TransformerKwargs.sequence_length])

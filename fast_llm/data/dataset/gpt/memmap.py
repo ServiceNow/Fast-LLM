@@ -245,7 +245,7 @@ class GPTMemmapDataset(GPTIndexedDataset):
             offset=self._pointers[idx] + offset * np.dtype(self._dtype).itemsize,
         )
         images = None
-        image_positions = np.array([])
+        image_positions = None
         if self._has_images:
             # Truncations with images are not yet supported
             image_positions = self._image_positions[idx]
@@ -261,8 +261,8 @@ class GPTMemmapDataset(GPTIndexedDataset):
                 images.append(pixels[start : start + n_pixels].reshape(3, image_length[0], image_length[1]))
                 start += n_pixels
 
-        audio = []
-        audio_positions = np.array([])
+        audio = None
+        audio_positions = None
         if self._has_audio:
             audio_positions = self._audio_positions[idx]
             offset = self._pointers[idx] + self._document_sizes[idx] * np.dtype(self._dtype).itemsize

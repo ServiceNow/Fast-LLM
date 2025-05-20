@@ -47,8 +47,8 @@ class GPTDatasetSlice[IndexedDatasetType: GPTIndexedDataset](DatasetSlice[Indexe
         doc_sizes, im_sizes, aud_sizes = self._dataset.get_document_sizes()
         return (
             doc_sizes[self._begin : self._end],
-            im_sizes[self._begin : self._end],
-            aud_sizes[self._begin : self._end],
+            im_sizes[self._begin : self._end] if im_sizes else [],
+            aud_sizes[self._begin : self._end] if aud_sizes else [],
         )
 
     def get_document_size(self, index: int) -> int:

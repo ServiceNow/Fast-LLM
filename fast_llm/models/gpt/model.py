@@ -78,7 +78,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
         else:
             self._preprocessors.append(BackupAttentionPreprocessor(self._config.transformer, self._tensor_space))
 
-        if self._config.vision_encoder:
+        if self._config.vision_encoder.enabled:
             self._preprocessors.append(VisionPreprocessor(self._config.vision_encoder, self._tensor_space))
             if self._config.vision_encoder.transformer.rotary.enabled:
                 self._preprocessors.append(
@@ -128,7 +128,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
         return [
             *(
                 [LanguageModelEmbedding(self._config, self._tensor_space)]
-                if self._config.vision_encoder is None
+                if not self._config.vision_encoder.enabled
                 else self.get_vision_layers()
             ),
             *[
@@ -161,7 +161,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                 sequence_length -= self._config.prediction_heads
             micro_sequence_length = sequence_length
 
-        if self._config.vision_encoder:
+        if self._config.vision_encoder.enabled:
             image_size = batch_meta.image_size
             image_mean = [
                 self._config.vision_encoder.image_normalization.mean_r,
@@ -183,6 +183,9 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                 VisionEncoderKwargs.rope_theta: self._config.vision_encoder.transformer.rotary.theta,
                 VisionEncoderKwargs.kv_channels: self._tensor_space.get_tensor_dim(
                     VisionEncoderDimNames.kv_channels
+                ).size,
+                VisionEncoderKwargs.out_channels: self._tensor_space.get_tensor_dim(
+                    VisionEncoderDimNames.out_channels
                 ).size,
             }
         else:
@@ -230,7 +233,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             if sequence_first
             else (batch_dim, hidden_sequence_q_dim, hidden_dim)
         )
-        if self._config.vision_encoder:
+        if self._config.vision_encoder.enabled:
             vision_hidden_dim = self._tensor_space.get_tensor_dim(VisionTransformerDimNames.hidden)
             vision_hidden_dims = (
                 (hidden_sequence_q_dim, batch_dim, vision_hidden_dim)
@@ -297,7 +300,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                 reference_kwargs[name] = reference_kwargs_
             kwargs["reference_models"] = reference_kwargs
 
-            if self._config.vision_encoder:
+            if self._config.vision_encoder.enabled:
                 # patch_dimensions are (batch * sequence_length) x 3 x patch_size x patch_size
                 preprocessed_meta.append((kwargs[VisionEncoderKwargs.image_patches_meta], kwargs))
             else:
@@ -440,11 +443,17 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
 
     @property
     def embedding(self) -> LanguageModelEmbedding:
-        return self.layers[self._config.vision_encoder.transformer.num_layers + 2]
+        if self._config.vision_encoder.enabled:
+            return self.layers[self._config.vision_encoder.transformer.num_layers + 2]
+        else:
+            return self.layers[0]
 
     @property
     def transformer_layers(self) -> list[TransformerLayer]:
-        return self.layers[self._config.vision_encoder.transformer.num_layers + 3 : -1]
+        if self._config.vision_encoder.enabled:
+            return self.layers[self._config.vision_encoder.transformer.num_layers + 3 : -1]
+        else:
+            return self.layers[1:-1]
 
     @property
     def model_head(self) -> LanguageModelHead:
@@ -459,7 +468,11 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             return {
                 WORD_EMBEDDINGS_WEIGHT: (
                     self.layers[0].word_embeddings_weight,
-                    (self._config.vision_encoder is not None, *self.model_head_indices),
+                    # TODO Soham: make embedding layer index a property
+                    (
+                        self._config.vision_encoder.enabled * (self._config.vision_encoder.transformer.num_layers + 2),
+                        *self.model_head_indices,
+                    ),
                 )
             }
         elif self._config.prediction_heads > 1:
