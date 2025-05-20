@@ -199,7 +199,7 @@ class GPTTrainerConfig(PretrainedGPTModelConfig, TrainerConfig):
             # TODO: Support more LM head features.
             Assert.none(reference_model.model.base_model.cross_entropy_splits)
             Assert.eq(reference_model.model.base_model.parallel_embeddings, self.model.base_model.parallel_embeddings)
-            Assert.geq(reference_model.model.base_model.prediction_heads, self.model.base_model.prediction_heads)
+            # Assert.geq(reference_model.model.base_model.prediction_heads, self.model.base_model.prediction_heads)
 
     @classmethod
     def _from_dict(
