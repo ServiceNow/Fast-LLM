@@ -59,6 +59,12 @@ class GPTHuggingfaceDatasetConfig(Config):
     loss_masking_spans: None | str = Field(
         default=None, desc="Field containing character spans to mask for loss computation", hint=FieldHint.optional
     )
+    chosen_text: None | str = Field(
+        default=None, desc="Field containing chosen text for preference optimization", hint=FieldHint.optional
+    )
+    rejected_text: None | str = Field(
+        default=None, desc="Field containing rejected text for preference optimization", hint=FieldHint.optional
+    )
     data_type: DataType | None = Field(
         default=None,
         desc="Data type of the dataset field."
