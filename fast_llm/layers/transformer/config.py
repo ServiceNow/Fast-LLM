@@ -170,6 +170,15 @@ class VisionRotaryConfig(RotaryConfig):
     )
 
 
+# @config_class()
+# class AudioRotaryConfig(RotaryConfig):
+#     type: RotaryEmbeddingType = Field(
+#         default=RotaryEmbeddingType.none,
+#         desc="The type of rotary embedding to use. Choices: none, default, llama3, yarn, pixtral.",
+#         hint=FieldHint.feature,
+#     )
+
+
 class AddLinearBiasChoices(str, enum.Enum):
     nowhere = "nowhere"
     everywhere = "everywhere"
@@ -664,6 +673,10 @@ class TransformerConfig(BaseModelConfig):
             from fast_llm.layers.vision_encoder.config import VisionTransformerDimNames
 
             transformer_dim_names = VisionTransformerDimNames
+        elif type == "audio":
+            from fast_llm.layers.audio_encoder.config import AudioTransformerDimNames
+
+            transformer_dim_names = AudioTransformerDimNames
         else:
             transformer_dim_names = TransformerDimNames
         tensor = tensor_space.distributed_config.get_distributed_dim(DistributedDimNames.tensor)
@@ -775,6 +788,11 @@ class AudioTransformerConfig(TransformerConfig):
 
     causal: bool = FieldUpdate(
         default=False,
-        desc="Use causal attention. Turn this off only for bidirectional attention e.g., in Vision Transformer.",
+        desc="Use causal attention. Turn this off only for bidirectional attention e.g., in Audio Transformer.",
         hint=FieldHint.feature,
     )
+    # rotary: AudioRotaryConfig = FieldUpdate(
+    #     default_factory=AudioRotaryConfig,
+    #     desc="Configuration for the rotary positional embeddings.",
+    #     hint=FieldHint.feature,
+    # )

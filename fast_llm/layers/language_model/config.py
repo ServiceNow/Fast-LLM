@@ -48,12 +48,12 @@ class LanguageModelBaseConfig(BaseModelConfig):
         hint=FieldHint.architecture,
     )
     # TODO Soham: make this None by default. Need to figure out how to handle this in the config (see )
-    vision_encoder: VisionEncoderConfig | None = Field(
+    vision_encoder: VisionEncoderConfig = Field(
         default_factory=VisionEncoderConfig,
         desc="Configuration for the vision encoder that transforms images into embeddings.",
         hint=FieldHint.optional,
     )
-    audio_encoder: AudioEncoderConfig | None = Field(
+    audio_encoder: AudioEncoderConfig = Field(
         default_factory=AudioEncoderConfig,
         desc="Configuration for the audio encoder that transforms audio into embeddings.",
         hint=FieldHint.optional,

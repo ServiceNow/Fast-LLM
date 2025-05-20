@@ -35,18 +35,16 @@ class DatasetMonitor(SampledDataset):
 
     def __getitem__(self, idx) -> typing.Any:
         start_time = time.perf_counter()
-        try:
-            sample = self._dataset[idx]
-            sample_time = (time.perf_counter() - start_time) * 1000
-            if sample_time > self._data_sample_warn_time_ms:
-                logger.warning(
-                    f"Sample {idx} from dataset {self._dataset.name})" f" took {sample_time:,.2f} ms to load"
-                )
-            return sample
+        # try:
+        sample = self._dataset[idx]
+        sample_time = (time.perf_counter() - start_time) * 1000
+        if sample_time > self._data_sample_warn_time_ms:
+            logger.warning(f"Sample {idx} from dataset {self._dataset.name})" f" took {sample_time:,.2f} ms to load")
+        return sample
 
-        except Exception:
-            logger.error(f"Failed to get sample {idx} from dataset {self._dataset.name}")
-            raise
+        # except Exception as e:
+        #     logger.error(f"Failed to get sample {idx} from dataset {self._dataset.name}")
+        #     raise
 
     @property
     def name(self) -> str:

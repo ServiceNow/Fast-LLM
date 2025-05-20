@@ -10,13 +10,16 @@ from fast_llm.engine.config_utils.tensor_space import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames, PhaseType
 from fast_llm.engine.inference.runner import InferenceRunner
 from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
+from fast_llm.layers.audio_encoder.adapter import AudioAdapter
 from fast_llm.layers.audio_encoder.config import AudioEncoderKwargs
+from fast_llm.layers.audio_encoder.encoder import AudioConv
 from fast_llm.layers.audio_encoder.preprocessing import AudioPreprocessor
 from fast_llm.layers.language_model.config import LanguageModelKwargs, LanguageModelLossNames
 from fast_llm.layers.language_model.embedding import WORD_EMBEDDINGS_WEIGHT, LanguageModelEmbedding
 from fast_llm.layers.language_model.head import OUTPUT_WEIGHTS, LanguageModelHead
 from fast_llm.layers.language_model.preprocessing import PositionEmbeddingPreprocessor
 from fast_llm.layers.multi_modal.embedding import MultiModalEmbedding
+from fast_llm.layers.transformer.audio_transformer import AudioTransformerLayer
 from fast_llm.layers.transformer.config import (
     RoutingType,
     TransformerDimNames,
@@ -84,7 +87,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                 self._preprocessors.append(
                     RotaryEmbeddingPreprocessor(self._config.vision_encoder.transformer.rotary, self._tensor_space)
                 )
-        if self._config.audio_encoder:
+        if self._config.audio_encoder.enabled:
             self._preprocessors.append(AudioPreprocessor(self._config.audio_encoder, self._tensor_space))
 
     def get_output_layers(self) -> list[Layer]:
@@ -124,12 +127,33 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             MultiModalEmbedding(self._config, self._tensor_space),
         ]
 
+    def get_audio_layers(self) -> list[Layer]:
+        audio_conv = AudioConv(self._config.audio_encoder, self._tensor_space)
+        audio_layers = [
+            AudioTransformerLayer(self._config.audio_encoder.transformer, self._tensor_space, layer_index=idx + 1)
+            for idx in range(self._config.audio_encoder.transformer.num_layers)
+        ]
+        return [
+            audio_conv,
+            *audio_layers,
+            AudioAdapter(self._config.audio_encoder, self._tensor_space),
+            MultiModalEmbedding(self._config, self._tensor_space),
+        ]
+
+    def get_multimodal_layers(self) -> list[Layer]:
+        if self._config.vision_encoder.enabled:
+            return self.get_vision_layers()
+        elif self._config.audio_encoder.enabled:
+            return self.get_audio_layers()
+        else:
+            assert False
+
     def get_layers(self) -> list[Layer]:
         return [
             *(
                 [LanguageModelEmbedding(self._config, self._tensor_space)]
-                if not self._config.vision_encoder.enabled
-                else self.get_vision_layers()
+                if not self._config.vision_encoder.enabled and not self._config.audio_encoder.enabled
+                else self.get_multimodal_layers()
             ),
             *[
                 TransformerLayer(
@@ -423,7 +447,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             if batch.audio is not None:
                 kwargs[AudioEncoderKwargs.audio] = [
                     [
-                        aud.to(device=self._tensor_space.distributed.device, dtype=torch.uint8, non_blocking=True)
+                        aud.to(device=self._tensor_space.distributed.device, dtype=torch.float32, non_blocking=True)
                         for aud in audio
                     ]
                     for audio in batch.audio
@@ -434,8 +458,11 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             for preprocessor in self._preprocessors:
                 preprocessor.preprocess(tokens, kwargs)
             image_patches = kwargs.get(VisionEncoderKwargs.image_patches, None)
+            audio_mel = kwargs.get(AudioEncoderKwargs.audio_mel, None)
             if image_patches is not None:
                 preprocessed.append((image_patches, kwargs))
+            elif audio_mel is not None:
+                preprocessed.append((audio_mel, kwargs))
             else:
                 preprocessed.append((tokens, kwargs))
 

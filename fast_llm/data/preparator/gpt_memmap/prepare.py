@@ -150,7 +150,11 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
                     # [np.array(im) for im in item["images"]] if self._config.dataset.images else None,
                     item["images"] if self._config.dataset.images else None,
                     item["image_positions"] if self._config.dataset.image_positions else None,
-                    np.array(item[self._config.dataset.audio]) if self._config.dataset.audio else None,
+                    (
+                        np.array(item[self._config.dataset.audio], dtype=np.float32)
+                        if self._config.dataset.audio
+                        else None
+                    ),
                     item[self._config.dataset.audio_positions] if self._config.dataset.audio_positions else None,
                 )
             # if "token_spans" in shard_dataset.column_names and self._config.dataset.loss_masking_spans is not None:

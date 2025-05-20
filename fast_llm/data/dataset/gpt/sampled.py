@@ -554,13 +554,19 @@ class GPTSampledIndexedDataset(SampledDataset):
 
                 # add tokens and multi modal padding placeholders
                 multimodal_positions = np.concatenate(
-                    [sample.image_positions.astype(np.int32), sample.audio_positions.astype(np.int32)]
-                )
+                    [
+                        arr.astype(np.int32)
+                        for arr in (sample.image_positions, sample.audio_positions)
+                        if arr is not None
+                    ]
+                ) or np.array([], dtype=np.int32)
                 multimodal_positions.sort()
                 for idx, mm_position in enumerate(multimodal_positions):
-                    if mm_position in sample.image_positions:  # TODO Toby: use enum
+                    if (
+                        sample.image_positions is not None and mm_position in sample.image_positions
+                    ):  # TODO Toby: use enum
                         mm_type = "image"
-                    elif mm_position in sample.audio_positions:
+                    elif sample.audio_positions is not None and mm_position in sample.audio_positions:
                         mm_type = "audio"
                     else:
                         assert False
@@ -572,8 +578,8 @@ class GPTSampledIndexedDataset(SampledDataset):
                         image_positions.append(mm_position + len(token_ids) + mm_tokens_added)
                         mm_tokens_added += image_tokens
                     elif mm_type == "audio":
+                        audio_positions.append(sum(t.size for t in token_ids))
                         token_ids.append(np.full((audio_token_size_arr[idx],), -100, dtype=np.int64))
-                        audio_positions.append(len(token_ids))
                         mm_tokens_added += audio_tokens
                     start_pos = mm_position
                 token_ids.append(sample.token_ids[start_pos:])

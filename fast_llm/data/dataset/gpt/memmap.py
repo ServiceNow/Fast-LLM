@@ -261,11 +261,17 @@ class GPTMemmapDataset(GPTIndexedDataset):
                 images.append(pixels[start : start + n_pixels].reshape(3, image_length[0], image_length[1]))
                 start += n_pixels
 
-        audio = None
+        audio = []
         audio_positions = None
         if self._has_audio:
             audio_positions = self._audio_positions[idx]
-            offset = self._pointers[idx] + self._document_sizes[idx] * np.dtype(self._dtype).itemsize
+            # increment offset by documents and images
+            offset = (
+                self._pointers[idx]
+                + offset * np.dtype(self._dtype).itemsize
+                + self._document_sizes[idx] * np.dtype(self._dtype).itemsize
+            )
+
             if self._has_images and len(self._image_lengths) > 0:
                 offset += self._image_lengths[idx].prod(initial=3) * np.dtype(np.uint8).itemsize
             all_audio = np.frombuffer(
