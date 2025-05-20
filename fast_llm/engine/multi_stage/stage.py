@@ -172,7 +172,7 @@ class Stage(StageBase):
                     level=self._config.debug_param_gradients,
                     global_=False,
                 )
-            if self._config.debug_all_param_gradients:
+            if self._config.debug_all_param_gradients and fsdp.requires_grad:
                 fsdp.log_shard(
                     name="gradient",
                     shard=fsdp.grad_shard,
