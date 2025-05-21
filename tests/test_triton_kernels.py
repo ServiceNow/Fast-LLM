@@ -199,26 +199,31 @@ def test_triton_mlp_activation(gated, activation_type, recompute):
 @requires_cuda
 @pytest.mark.slow
 @pytest.mark.parametrize(
-    ("num_columns", "grad_output", "logits_scale_factor"),
+    ("num_columns", "grad_output", "logits_scale_factor", "loss_masking"),
     (
-        (8192, 1.0, 1.0),  # Simple
-        (5000, 1.0, 1.0),  # Not a power of 2
-        (5000, None, 1.0),  # No grad
-        (5000, 1.0, 4.0),  # Loss scaling
-        (5000, 4.0, 1.0),  # Grad scaling
-        (65536, 1.0, 1.0),  # Max block size
-        (65537, 1.0, 1.0),  # Above max block size
+        (8192, 1.0, 1.0, False),  # Simple
+        (5000, 1.0, 1.0, False),  # Not a power of 2
+        (5000, None, 1.0, False),  # No grad
+        (5000, 1.0, 4.0, False),  # Loss scaling
+        (5000, 4.0, 1.0, False),  # Grad scaling
+        (5000, 1.0, 1.0, True),  # Loss masking
+        (65536, 1.0, 1.0, False),  # Max block size
+        (65537, 1.0, 1.0, False),  # Above max block size
     ),
 )
 @pytest.mark.parametrize("target_format", (TargetFormat.labels, TargetFormat.logits, TargetFormat.probabilities))
-def test_cross_entropy(num_columns, grad_output, logits_scale_factor, target_format):
+def test_cross_entropy(num_columns, grad_output, logits_scale_factor, loss_masking, target_format):
     # TODO: Test tensor-parallel implementation.
     assert TritonConfig.TRITON_ENABLED
     # We want something moderately close to the target for the test to be meaningful
     logits_var = torch.randn(256, num_columns, dtype=torch.bfloat16, device="cuda") / 3
+    loss_mask = torch.randint(0, 2, (256,), dtype=torch.bool, device="cuda") if loss_masking else None
     if target_format == TargetFormat.labels:
         target = torch.randint(0, num_columns, (256,), dtype=torch.int64, device="cuda")
         logits = (torch.nn.functional.one_hot(target, num_columns) + logits_var).requires_grad_()
+        if loss_masking:
+            logits = torch.where(loss_mask.unsqueeze(-1), logits, -100)
+            loss_mask = None
     else:
         target = torch.randn(256, num_columns, dtype=torch.bfloat16, device="cuda")
         logits = (target + logits_var).requires_grad_()
@@ -228,6 +233,7 @@ def test_cross_entropy(num_columns, grad_output, logits_scale_factor, target_for
     kwargs = {
         "logits": logits,
         "target": target,
+        "loss_mask": loss_mask,
         "grad_output": grad_output,
         "logits_scale_factor": logits_scale_factor,
         "target_format": target_format,

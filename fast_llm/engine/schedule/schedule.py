@@ -203,6 +203,7 @@ class Schedule(abc.ABC):
             Assert.incl(step.type_, (StepType.forward, StepType.backward))
             step.global_index = i
             # TODO: More configurable placement?
+
             step.pipeline_rank = step.stage % self._distributed.pipeline_parallel
             step.local_index = len(self._device_steps[step.pipeline_rank])
             self._device_steps[step.pipeline_rank].append(step)
@@ -222,6 +223,7 @@ class Schedule(abc.ABC):
         Assert.empty(step_map)
 
         # Related steps
+
         for i, step in enumerate(self._steps):
             if self._is_training:
                 if step.type_ == StepType.forward:
@@ -229,6 +231,7 @@ class Schedule(abc.ABC):
                         step.backward_step = self.get_step(StepType.backward, *step.map_index[1:])
                 else:
                     step.forward_step = self.get_step(StepType.forward, *step.map_index[1:])
+
             if step.type_ == StepType.forward and step.stage == 0:
                 step.prev_step = None
             elif step.type_ == StepType.backward and step.stage == self._num_stages - 1:

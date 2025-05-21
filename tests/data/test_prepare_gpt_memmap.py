@@ -39,6 +39,43 @@ def test_write_memmap_dataset(dtype):
             ), f"Mismatch for document {i}: {document} != {dataset.get(i)}."
 
 
+@pytest.mark.parametrize("dtype", MEMMAP_DTYPES.values())
+def test_write_memmap_preference_dataset(dtype):
+    def generate_valid_span(max_seq_length):
+        span = np.random.choice(np.arange(0, max_seq_length - 1), size=2, replace=False)
+        return np.sort(span)
+
+    vocab_size = 1000
+    max_seq_length = 8192
+    num_samples = 100
+
+    documents = [
+        GPTSample(
+            token_ids=np.random.randint(vocab_size, size=max_seq_length).astype(dtype),
+            chosen_span=generate_valid_span(max_seq_length=max_seq_length),
+            rejected_span=generate_valid_span(max_seq_length=max_seq_length),
+        )
+        for _ in range(num_samples)
+    ]
+    with tempfile.TemporaryDirectory() as temp_dir:
+        prefix = pathlib.Path(temp_dir)
+        GPTMemmapDataset.write_dataset(prefix=prefix, documents=documents)
+        dataset = GPTMemmapDataset(name="foo", prefix=prefix)
+        for i, document in enumerate(documents):
+            dataset_item = dataset.get(i, use_preference_loss_spans=True)
+            assert np.array_equal(
+                dataset_item.token_ids, document.token_ids, equal_nan=True
+            ), f"Token ids mismatch for document {i}: {document} != {dataset.get(i)}."
+
+            assert np.array_equal(
+                dataset_item.chosen_span, document.chosen_span, equal_nan=True
+            ), f"Chosen loss masking spans mismatch for document {i}: {document.chosen_span} != {dataset.get(i).chosen_span}."
+
+            assert np.array_equal(
+                dataset_item.rejected_span, document.rejected_span, equal_nan=True
+            ), f"Rejected loss masking spans mismatch for document {i}: {document.rejected_span} != {dataset.get(i).rejected_span}."
+
+
 def test_load_metadata_from_hub():
     with tempfile.TemporaryDirectory(suffix="test") as local_folder:
         get_preparator(local_folder, "lhoestq/demo1")._save_croissant_metadata()

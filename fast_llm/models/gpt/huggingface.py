@@ -8,7 +8,7 @@ import transformers.modeling_outputs
 from fast_llm.data.data.gpt.data import GPTBatch
 from fast_llm.engine.distributed.config import PhaseType
 from fast_llm.engine.inference.config import HuggingfaceModelConfig
-from fast_llm.engine.inference.huggingface import HuggingfacePreTrainedModel
+from fast_llm.engine.inference.huggingface import HuggingfaceBaseModelForCausalLM
 from fast_llm.layers.transformer.config import TransformerKwargs
 from fast_llm.models.gpt.config import GPTModelConfig
 from fast_llm.models.gpt.model import GPTBaseModel, GPTInferenceRunner
@@ -22,7 +22,7 @@ class HuggingfaceGPTModelConfig(HuggingfaceModelConfig):
     fast_llm_config: GPTModelConfig
 
 
-class HuggingfaceGPTModelForCausalLM(HuggingfacePreTrainedModel):
+class HuggingfaceGPTModelForCausalLM(HuggingfaceBaseModelForCausalLM):
     config_class = HuggingfaceGPTModelConfig
     config: HuggingfaceGPTModelConfig
     runner_class: typing.ClassVar[type[GPTInferenceRunner]] = GPTInferenceRunner
@@ -55,21 +55,32 @@ class HuggingfaceGPTModelForCausalLM(HuggingfacePreTrainedModel):
 
         if output_attentions:
             raise NotImplementedError()
-        if output_hidden_states:
-            raise NotImplementedError()
-        if attention_mask is not None:
-            raise NotImplementedError()
-        if position_ids is not None:
-            raise NotImplementedError()
         if inputs_embeds is not None:
             raise NotImplementedError()
         if labels is not None:
             raise NotImplementedError()
 
+        # NOTE: We are ignoring position_ids as we reconstruct them from attention_mask via sequence_lengths.
+        if attention_mask is not None:
+            # First non zero indexes or zero index if the row is all zeros (invalid row)
+            first_non_zero_indexes = attention_mask.argmax(dim=1)
+
+            # Check if the sequence is left-padded and if the remaining ones are continuous 1-ns
+            assert (attention_mask.sum(axis=1) == (attention_mask.shape[1] - first_non_zero_indexes)).all()
+
+            sequence_lenghts = [
+                torch.tensor(
+                    [attention_mask.shape[1]] if el == 0 else [el, attention_mask.shape[1] - el], dtype=torch.int64
+                )
+                for el in first_non_zero_indexes.tolist()
+            ]
+        else:
+            sequence_lenghts = None
+
         # Iteration serves as a random seed, using random module because it's not seeded by Fast LLM
         iteration = random.randint(0, 2**32)
         batch = self.fast_llm_base_model.preprocess(
-            GPTBatch(input_ids), phase=PhaseType.inference, iteration=iteration
+            GPTBatch(input_ids, sequence_lengths=sequence_lenghts), phase=PhaseType.inference, iteration=iteration
         )
         ((input_, kwargs),) = batch
 
@@ -82,23 +93,35 @@ class HuggingfaceGPTModelForCausalLM(HuggingfacePreTrainedModel):
             # The transformers will save the present keys and values to this list.
             kwargs[TransformerKwargs.presents] = []
 
+        if output_hidden_states:
+            kwargs["output_hidden_states"] = True
+            kwargs["hidden_states"] = {}
+        else:
+            kwargs["output_hidden_states"] = False
+
         self._inference_runner.forward(input_, kwargs, iteration=iteration)
 
         # TODO: Make a proper way of returning the model output.
         logits = kwargs["logits"]
 
+        # TODO: convert hidden state form dict to list to be the same as with HFs
+        hidden_states = None
+        if output_hidden_states:
+            hidden_states = kwargs["hidden_states"]
+
         if not return_dict:
-            outputs = (logits,)
+            # TODO: Then implementing cache, check hidden state goes before past in the tuple
+            if output_hidden_states:
+                outputs = (logits, hidden_states)
+            else:
+                outputs = (logits,)
+
             if use_cache:
                 outputs += (kwargs[TransformerKwargs.presents],)
             return outputs
 
         return transformers.modeling_outputs.CausalLMOutputWithPast(
             logits=logits,
+            hidden_states=hidden_states,
             past_key_values=kwargs[TransformerKwargs.presents],
         )
-
-    def prepare_inputs_for_generation(
-        self, input_ids, past_key_values=None, attention_mask=None, inputs_embeds=None, **kwargs
-    ):
-        raise NotImplementedError()

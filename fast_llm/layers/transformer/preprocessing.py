@@ -260,6 +260,58 @@ class AttentionPreprocessor(Preprocessor):
                 )
             ),
         )
+
+    def _create_tensors(self, sequence_length: int) -> None:
+        if sequence_length <= self._tensor_cache_max_sequence_length:
+            return
+        self._tensor_cache_max_sequence_length = sequence_length
+
+        self._mask = torch.ones(
+            (sequence_length, sequence_length),
+            dtype=torch.bool,
+            device=self._tensor_space.distributed.device,
+        ).tril_()
+
+        if self._config.window_size is not None:
+            self._mask.triu_(-self._config.window_size + 1)
+        self._mask_value = torch.full(
+            [],
+            torch.finfo(self._distributed_config.training_dtype.torch).min,
+            dtype=self._distributed_config.training_dtype.torch,
+            device=self._tensor_space.distributed.device,
+        )
+
+    def preprocess(self, batch, kwargs: dict[str, typing.Any]) -> None:
+        self._create_tensors(kwargs[TransformerKwargs.sequence_length])
+        sequence_k = kwargs[TransformerKwargs.sequence_k_dim].size
+        sequence_q = kwargs[TransformerKwargs.sequence_q_dim].size
+        kwargs[TransformerKwargs.attention_mask] = self._mask[
+            None, None, sequence_k - sequence_q : sequence_k, None, :sequence_k
+        ]
+        if (sequence_lengths := kwargs.get(TransformerKwargs.sequence_lengths, None)) is not None:
+            seq_ids = torch.stack(
+                [
+                    torch.cat([torch.full((x,), i) for i, x in enumerate(sample_lens)])
+                    for sample_lens in sequence_lengths
+                ]
+            )
+            document_mask = (seq_ids[:, None, :] == seq_ids[:, :, None]).to(self._tensor_space.distributed.device)
+            kwargs[TransformerKwargs.attention_mask] = (
+                kwargs[TransformerKwargs.attention_mask]
+                & document_mask[:, None, sequence_k - sequence_q : sequence_k, None, :sequence_k]
+            )
+        kwargs[TransformerKwargs.attention_mask_value] = self._mask_value
+
+    def preprocess_meta(self, kwargs: dict[str, typing.Any]) -> None:
+        kwargs[TransformerKwargs.attention_mask] = TensorMeta.from_dims(
+            (
+                self._scalar_dim,
+                self._scalar_dim,
+                kwargs[TransformerKwargs.sequence_q_dim],
+                self._scalar_dim,
+                kwargs[TransformerKwargs.sequence_k_dim],
+            ),
+        )
         return attention_implementation
 
     def _preprocess_varlen(self, batch, kwargs: dict[str, typing.Any]) -> None:
@@ -342,14 +394,12 @@ class AttentionPreprocessor(Preprocessor):
             block_lengths := kwargs.get(TransformerKwargs.block_lengths)
         ) is None:
             return
-        pass
 
     def _preprocess_attention_mask(self, batch, kwargs: dict[str, typing.Any]) -> None:
         if (sequence_lengths := kwargs.get(TransformerKwargs.sequence_lengths)) is None and (
             block_lengths := kwargs.get(TransformerKwargs.block_lengths)
         ) is None:
             return
-        pass
 
     def preprocess(self, batch, kwargs: dict[str, typing.Any]) -> None:
         match self._select_attention_implementation(kwargs):
