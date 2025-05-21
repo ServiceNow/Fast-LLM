@@ -7,6 +7,7 @@ from fast_llm.engine.checkpoint.config import CheckpointFormat
 from fast_llm.engine.checkpoint.external import (
     ConstantExportParamConverter,
     ConstantImportParamConverter,
+    IgnoreImportParamConverter,
     IgnoreImportWeightConverter,
     MappedConfigParamConverter,
     ParamConverter,
@@ -23,6 +24,7 @@ from fast_llm.models.gpt.conversion import CommonLlamaHuggingfaceCheckpointHandl
 from fast_llm.models.ssm.config import (
     AprielSSMHHybridHuggingfaceCheckpointFormat,
     AprielSSMHuggingfaceCheckpointFormat,
+    AprielThinkerSSMHHybridHuggingfaceCheckpointFormat,
     HybridSSMModelConfig,
     LLambaHuggingfaceCheckpointFormat,
 )
@@ -550,6 +552,62 @@ class AprielSSMHHybridHuggingfaceCheckpointHandler(
             ),
             ConstantExportParamConverter(export_names=(("attention_bias",),), export_value=False),
             ConstantExportParamConverter(export_names=(("mlp_bias",),), export_value=False),
+        ]
+
+    def _get_mlp_converters(self, fast_llm_prefix: str, hf_prefix: str) -> list[WeightConverter]:
+        linear_bias: bool = self._model.config.base_model.transformer.add_linear_biases
+        return [
+            *self._get_weight_and_bias_converters(
+                f"{fast_llm_prefix}.mlp.layer_1",
+                (f"{hf_prefix}.mlp.gate_proj", f"{hf_prefix}.mlp.up_proj"),
+                linear_bias,
+                SplitWeightConverter,
+            ),
+            *self._get_weight_and_bias_converters(
+                f"{fast_llm_prefix}.mlp.layer_2",
+                f"{hf_prefix}.mlp.down_proj",
+                linear_bias,
+                MLPLayer2Converter,
+            ),
+        ]
+
+    @classmethod
+    def _load_config(cls, directory: pathlib.Path | str) -> dict:
+        if not os.path.exists(directory / "config.json"):
+            raise FileNotFoundError(f"config.json not found in {directory}")
+        with open(directory / "config.json") as f:
+            config = json.load(f)
+        Assert.eq(config["model_type"], cls.get_huggingface_model_type())
+        return config
+
+    @classmethod
+    def _save_config(cls, directory: pathlib.Path | str, config: dict[str, typing.Any]) -> None:
+        with open(directory / "config.json", "w") as f:
+            json.dump(config, f)
+
+
+class AprielThinkerSSMHHybridHuggingfaceCheckpointHandler(
+    HybridModelCheckpointHandler,  # handles the block structure parameter
+    CommonSSMHuggingfaceCheckpointHandler,  # handles the SSM layers
+    CommonLlamaHuggingfaceCheckpointHandler,  # handles the LLama layers
+):
+    """
+    Lamba-like configs, models that interleave LLama like layers with LLamba-like SSM layers.
+    """
+
+    _model: HybridSSMModel
+    _model_class: typing.ClassVar[FastLLMModelConfig] = HybridSSMModelConfig
+    format: typing.ClassVar[type[CheckpointFormat]] = AprielThinkerSSMHHybridHuggingfaceCheckpointFormat
+    _default_block_type: str = SSMBlockType.mamba2_discrete.value
+
+    @classmethod
+    def _create_config_converters(cls) -> list[ParamConverter]:
+        return super()._create_config_converters() + [
+            RenameParamConverter(
+                fast_llm_names=(("ssm", "d_inner"),),
+                export_names=(("ssm_cfg", "d_inner"),),
+            ),
+            IgnoreImportParamConverter(export_names=(("sliding_window",),), ignore_export_value=None),
         ]
 
     def _get_mlp_converters(self, fast_llm_prefix: str, hf_prefix: str) -> list[WeightConverter]:
