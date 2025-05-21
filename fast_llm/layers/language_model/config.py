@@ -42,7 +42,6 @@ class LanguageModelKwargs:
 @config_class()
 class LanguageModelBaseConfig(BaseModelConfig):
     transformer: TransformerConfig = Field(
-        default_factory=TransformerConfig,
         desc="Configuration for the transformer architecture.",
         hint=FieldHint.architecture,
     )

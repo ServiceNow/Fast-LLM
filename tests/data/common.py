@@ -31,7 +31,6 @@ def get_sampling_data(
     *,
     seed: int = 54983,
     cache_directory: pathlib.Path | None = None,
-    distributed: Distributed = Distributed(DistributedConfig(), use_cpu=True),
     phase=PhaseType.training,
     sequence_length: int = 512,
     vocab_size=TEST_VOCAB_SIZE,
@@ -41,6 +40,7 @@ def get_sampling_data(
     truncate_documents=True,
 ) -> GPTSamplingData:
     # Config with convenient defaults.
+    distributed = Distributed(DistributedConfig(), use_cpu=True)
     return GPTSamplingData(
         config=GPTSamplingConfig(
             seed=seed,

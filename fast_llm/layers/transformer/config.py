@@ -248,17 +248,14 @@ class TransformerPeftConfig(PeftConfig):
 class TransformerConfig(BaseModelConfig):
     _abstract = False
     normalization: NormalizationConfig = Field(
-        default_factory=NormalizationConfig,
         desc="Configuration for the normalization layers architecture.",
         hint=FieldHint.architecture,
     )
     rotary: RotaryConfig = Field(
-        default_factory=RotaryConfig,
         desc="Configuration for the rotary positional embeddings.",
         hint=FieldHint.architecture,
     )
     peft: TransformerPeftConfig = Field(
-        default_factory=TransformerPeftConfig,
         desc="Configuration for the parameter-efficient fine tuning.",
         hint=FieldHint.architecture,
     )
