@@ -9,7 +9,7 @@ from fast_llm.engine.base_model.base_model import Layer
 from fast_llm.engine.config_utils.run import log_pipeline_parallel_main_rank
 from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
 from fast_llm.layers.transformer.attention import Attention
-from fast_llm.layers.transformer.config import TransformerConfig, TransformerDimNames, TransformerKwargs
+from fast_llm.layers.transformer.config import TransformerConfig
 from fast_llm.layers.transformer.mixture_of_experts import MixtureOfExpertMLP
 from fast_llm.layers.transformer.mlp import MLP
 from fast_llm.logging import log_distributed_grad, log_distributed_tensor, log_memory_usage
@@ -69,14 +69,6 @@ class BaseBlock(Layer, abc.ABC):
     @property
     def name(self) -> str:
         return f"{self._name} {self._layer_index}"
-
-    @property
-    def _transformer_kwargs(self) -> TransformerKwargs:
-        return TransformerKwargs
-
-    @property
-    def _transformer_dim_names(self) -> TransformerDimNames:
-        return TransformerDimNames
 
     def _get_meta(self, tensor: torch.Tensor, name: str, kwargs: dict):
         dims = kwargs[self._transformer_kwargs.hidden_dims]
@@ -157,3 +149,11 @@ class TransformerLayer(BaseBlock):
 
     def _create_mixer(self):
         self.self_attn = Attention(self._config, self._tensor_space, self._layer_index)
+
+    # @property
+    # def _transformer_kwargs(self) -> TransformerKwargs:
+    #     return TransformerKwargs
+
+    # @property
+    # def _transformer_dim_names(self) -> TransformerDimNames:
+    #     return TransformerDimNames

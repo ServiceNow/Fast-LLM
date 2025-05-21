@@ -6,14 +6,8 @@ import torchvision.transforms.v2.functional as F
 
 from fast_llm.engine.base_model.config import Preprocessor
 from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
-from fast_llm.layers.transformer.config import TransformerKwargs
-from fast_llm.layers.vision_encoder.config import (
-    VisionEncoderConfig,
-    VisionEncoderDimNames,
-    VisionEncoderKwargs,
-    VisionTransformerDimNames,
-    VisionTransformerKwargs,
-)
+from fast_llm.layers.transformer.config import TransformerKwargs, VisionTransformerDimNames, VisionTransformerKwargs
+from fast_llm.layers.vision_encoder.config import VisionEncoderConfig, VisionEncoderDimNames, VisionEncoderKwargs
 from fast_llm.tensor import TensorMeta
 from fast_llm.utils import div
 
@@ -152,7 +146,7 @@ class VisionPreprocessor(Preprocessor):
         patch_position_ids = []
         cu_seqlens = [0]
         max_seqlen = -1
-        sequence_first = kwargs.get(TransformerKwargs.sequence_first)
+        kwargs.get(TransformerKwargs.sequence_first)
         for imgs, sizes in zip(images, image_sizes):
             # sum(
             #     get_num_patches(*size, patch_size) for size in sizes

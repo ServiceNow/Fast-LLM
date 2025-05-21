@@ -251,12 +251,6 @@ class BackupAttentionPreprocessor(Preprocessor):
         config: TransformerConfig,
         tensor_space: TensorSpace,
     ):
-        # if isinstance(config, VisionTransformerConfig):
-        #     self._transformer_dim_names = VisionTransformerDimNames
-        #     self._transformer_kwargs = VisionTransformerKwargs
-        # elif isinstance(config, TransformerConfig):
-        #     self._transformer_dim_names = TransformerDimNames
-        #     self._transformer_kwargs = TransformerKwargs
         self._transformer_dim_names = config._transformer_dim_names
         self._transformer_kwargs = config._transformer_kwargs
         self._config = config
@@ -328,12 +322,6 @@ class FlashAttnVarlenPreprocessor(Preprocessor):
         self._tensor_space = tensor_space
         self._distributed_config = self._tensor_space.distributed_config
         assert self._config.do_use_flash_attention(self._distributed_config)
-        # if isinstance(config, VisionTransformerConfig):
-        #     self._transformer_dim_names = VisionTransformerDimNames
-        #     self._transformer_kwargs = VisionTransformerKwargs
-        # elif isinstance(config, TransformerConfig):
-        #     self._transformer_dim_names = TransformerDimNames
-        #     self._transformer_kwargs = TransformerKwargs
         self._transformer_dim_names = config._transformer_dim_names
         self._transformer_kwargs = config._transformer_kwargs
 

@@ -20,6 +20,7 @@ from fast_llm.layers.transformer.config import (
     TransformerDimNames,
     TransformerKwargs,
     TransformerLossNames,
+    VisionTransformerDimNames,
 )
 from fast_llm.layers.transformer.preprocessing import (
     BackupAttentionPreprocessor,
@@ -29,7 +30,7 @@ from fast_llm.layers.transformer.preprocessing import (
 from fast_llm.layers.transformer.transformer import TransformerLayer
 from fast_llm.layers.transformer.vision_transformer import VisionTransformerLayer
 from fast_llm.layers.vision_encoder.adapter import VisionAdapter
-from fast_llm.layers.vision_encoder.config import VisionEncoderDimNames, VisionEncoderKwargs, VisionTransformerDimNames
+from fast_llm.layers.vision_encoder.config import VisionEncoderKwargs
 from fast_llm.layers.vision_encoder.encoder import PatchConv
 from fast_llm.layers.vision_encoder.preprocessing import VisionPreprocessor
 from fast_llm.models.gpt.config import GPTBaseModelConfig, GPTBatchConfig, GPTModelConfig

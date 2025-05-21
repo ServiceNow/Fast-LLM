@@ -119,6 +119,11 @@ class VisionEncoderConfig(BaseModelConfig):
         desc="The intermediate activation type for multi-modal adapter. Default: GeLU.",
         hint=FieldHint.core,
     )
+    adapter_bias: bool = Field(
+        default=True,
+        desc="Whether to use bias in the adapter linear layer.",
+        hint=FieldHint.optional,
+    )
     image_normalization: ImageNormalizationConfig = Field(
         default_factory=ImageNormalizationConfig,
         desc="Configuration for the normalization layers applied to the image patches.",
