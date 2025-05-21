@@ -572,6 +572,12 @@ class PixtralHuggingfaceCheckpointHandler(TransformerWeightConverterMixin, Huggi
     @classmethod
     def _create_config_converters(cls) -> list[ParamConverter]:
         return super()._create_config_converters() + [
+            ConstantImportParamConverter(
+                fast_llm_names=(("patch_norm", "type"),), fast_llm_value=NormalizationType.rms_norm
+            ),
+            ConstantImportParamConverter(
+                fast_llm_names=(("transformer", "normalization", "type"),), fast_llm_value=NormalizationType.rms_norm
+            ),
             ConstantExportParamConverter(export_names=(("architectures",),), export_value=["PixtralVisionModel"]),
             ConstantImportParamConverter(fast_llm_names=(("type",),), fast_llm_value=VisionEncoderType.pixtral),
             ConstantImportParamConverter(fast_llm_names=(("transformer", "causal"),), fast_llm_value=False),
@@ -646,6 +652,8 @@ class PixtralHuggingfaceCheckpointHandler(TransformerWeightConverterMixin, Huggi
                 export_names=(("rope_theta",),),
             ),
             RenameParamConverter(fast_llm_names=(("patch_size",),), export_names=(("patch_size",),)),
+            ConstantImportParamConverter(fast_llm_names=(("transformer", "gated"),), fast_llm_value=True),
+            ConstantImportParamConverter(fast_llm_names=(("transformer", "add_linear_biases"),), fast_llm_value=False),
         ]
 
     def _get_transformer_mlp_converters(self, fast_llm_prefix: str, hf_prefix: str) -> list[WeightConverter]:
@@ -802,6 +810,10 @@ class LlavaHuggingfaceCheckpointHandler(TransformerWeightConverterMixin, Hugging
                 export_names=(("projector_hidden_act",),),
                 fast_llm_value=ActivationType.from_hf_name,
                 export_value=lambda activation_type: activation_type.hf_name,
+            ),
+            RenameParamConverter(
+                fast_llm_names=(("vision_encoder", "adapter_size"),),
+                export_names=(("projector_intermediate_size",),),
             ),
         ]
 
