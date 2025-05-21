@@ -155,6 +155,7 @@ class LayerNorm(torch.nn.Module):
         weight_init_method=None,
         bias_init_method=init_zeros_,
         zero_centered: bool = False,
+        lr_scale: float | None = None,
     ):
         super().__init__()
         assert hidden_dim.parallel_dim is None
@@ -193,12 +194,14 @@ class LayerNorm(torch.nn.Module):
             init_method=weight_init_method,
             weight_decay=False,
             auto_grad_accumulation=implementation == NormalizationImplementation.torch,
+            lr_scale=lr_scale,
         )
         self.bias = ParameterMeta.from_dims(
             (hidden_dim,),
             init_method=bias_init_method,
             weight_decay=False,
             auto_grad_accumulation=implementation == NormalizationImplementation.torch,
+            lr_scale=lr_scale,
         )
         self.normalized_shape = self.weight.shape
 
@@ -236,6 +239,7 @@ class RMSNorm(torch.nn.Module):
         implementation: NormalizationImplementation = NormalizationImplementation.auto,
         weight_init_method=None,
         zero_centered: bool = False,
+        lr_scale: float | None = None,
     ):
         super().__init__()
         assert hidden_dim.parallel_dim is None
@@ -269,6 +273,7 @@ class RMSNorm(torch.nn.Module):
             init_method=weight_init_method,
             weight_decay=False,
             auto_grad_accumulation=True,
+            lr_scale=lr_scale,
         )
         self.normalized_shape = self.weight.shape
 

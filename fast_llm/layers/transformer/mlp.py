@@ -10,13 +10,14 @@ from fast_llm.functional.triton.mlp import mlp_autograd, torch_mlp_activation, t
 from fast_llm.layers.common.linear import LinearBase
 from fast_llm.layers.transformer.config import TransformerConfig, TransformerDimNames, TransformerSubLayerName
 from fast_llm.tensor import init_normal_, init_zeros_
-from fast_llm.utils import Assert
+from fast_llm.utils import Assert, get_lr_scale
 
 
 class MLPBase(Layer, ABC):
-    def __init__(self, config: TransformerConfig, tensor_space: TensorSpace, name: str = "mlp"):
+    def __init__(self, config: TransformerConfig, tensor_space: TensorSpace, name: str = "mlp", layer_index: int = 0):
         super().__init__()
         self._name = name
+        self._layer_index = layer_index
 
         init_method_1 = init_normal_(
             std=config.init_method_std_mlp_1,
@@ -38,6 +39,10 @@ class MLPBase(Layer, ABC):
         self._activation_type = config.activation_type
         self._activation_fn = triton_mlp_activation_autograd if TritonConfig.TRITON_ENABLED else torch_mlp_activation
 
+        layer_lr_scale = config.per_layer_lr_scale[layer_index] if config.per_layer_lr_scale else None
+        lr_scale = tuple(config.mlp_lr_scale) if isinstance(config.mlp_lr_scale, list) else config.mlp_lr_scale
+        lr_scale = get_lr_scale(lr_scale, layer_lr_scale)
+
         # So both layers' weights have shape (num_experts [* gate_up] * ffn, hidden_size)
         self.layer_1 = LinearBase(
             hidden_dim,
@@ -45,7 +50,7 @@ class MLPBase(Layer, ABC):
             bias=config.add_mlp_bias,
             weight_init_method=init_method_1,
             bias_init_method=init_method_1 if config.random_bias_init else init_zeros_,
-            lr_scale=tuple(config.mlp_lr_scale) if isinstance(config.mlp_lr_scale, list) else config.mlp_lr_scale,
+            lr_scale=lr_scale,
         )
         self.layer_2 = LinearBase(
             self._intermediate_dim,
@@ -55,7 +60,7 @@ class MLPBase(Layer, ABC):
             bias_init_method=init_method_2 if config.random_bias_init else init_zeros_,
             auto_bias_grad_accumulation=tensor_space.distributed_config.tensor_parallel > 1,
             transposed_weight=True,
-            lr_scale=tuple(config.mlp_lr_scale) if isinstance(config.mlp_lr_scale, list) else config.mlp_lr_scale,
+            lr_scale=lr_scale,
         )
 
         # PEFT.
@@ -64,7 +69,7 @@ class MLPBase(Layer, ABC):
 
 
 class MLP(MLPBase):
-    def __init__(self, config: TransformerConfig, tensor_space: TensorSpace, name: str = "mlp"):
+    def __init__(self, config: TransformerConfig, tensor_space: TensorSpace, name: str = "mlp", layer_index: int = 0):
         Assert.eq(config.num_experts, 1)
         super().__init__(config, tensor_space, name)
 

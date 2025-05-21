@@ -120,19 +120,19 @@ def create_schedule_from_config(config: LearningRateScheduleConfig) -> LearningR
         begin_step = 0
         for stage_arg_str in config.schedule.split(";"):
             try:
-                for stage_type, num_steps, lr, *stage_args in stage_arg_str.split(","):
-                    assert begin_step is not None
-                    num_steps = int(num_steps)
-                    end_step = None if num_steps < 0 else begin_step + num_steps
-                    kwargs = {"begin_step": begin_step, "end_step": end_step, "lr": float(lr)}
-                    if len(stage_args) > 0:
-                        kwargs["end_lr"] = float(stage_args[0])
-                    if len(stage_args) > 1:
-                        kwargs["power"] = float(stage_args[1])
-                    if len(stage_args) > 2:
-                        raise ValueError(stage_args[2:])
-                    stages.append(_STAGE_TYPE_MAP[stage_type](**kwargs))
-                    begin_step = end_step
+                stage_type, num_steps, lr, *stage_args = stage_arg_str.split(",")
+                assert begin_step is not None
+                num_steps = int(num_steps)
+                end_step = None if num_steps < 0 else begin_step + num_steps
+                kwargs = {"begin_step": begin_step, "end_step": end_step, "lr": float(lr)}
+                if len(stage_args) > 0:
+                    kwargs["end_lr"] = float(stage_args[0])
+                if len(stage_args) > 1:
+                    kwargs["power"] = float(stage_args[1])
+                if len(stage_args) > 2:
+                    raise ValueError(stage_args[2:])
+                stages.append(_STAGE_TYPE_MAP[stage_type](**kwargs))
+                begin_step = end_step
             except Exception:
                 raise ValueError(f'Cannot parse optimizer stage definition "{stage_arg_str}"')
     return LearningRateSchedule(stages)
