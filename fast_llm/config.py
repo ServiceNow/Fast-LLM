@@ -12,7 +12,7 @@ import warnings
 
 import yaml
 
-from fast_llm.utils import Assert, Tag, compare_nested, get_type_name, header, log
+from fast_llm.utils import Assert, Registry, Tag, compare_nested, get_type_name, header, log
 
 logger = logging.getLogger(__name__)
 
@@ -243,7 +243,9 @@ def _process_config_class(cls: type["Config"]):
     return cls
 
 
-def config_class[T: Config]() -> typing.Callable[[type[T]], type[T]]:
+def config_class[
+    T: Config
+](registry: bool = False, dynamic_type: "dict[type[Config], str]|None" = None) -> typing.Callable[[type[T]], type[T]]:
     """
     Fast-LLM replacement for the default dataclass wrapper. Performs additional verifications.
     """
@@ -253,7 +255,7 @@ def config_class[T: Config]() -> typing.Callable[[type[T]], type[T]]:
         if hasattr(cls, "__post_init__"):
             raise TypeError(f"`__post_init__` should not be implemented for `Config` classes")
 
-        wrapped = _process_config_class(dataclasses.dataclass(cls, kw_only=True))
+        wrapped = _process_config_class(dataclasses.dataclass(cls, kw_only=True, repr=False))
 
         wrapped_init = cls.__init__
 
@@ -267,6 +269,14 @@ def config_class[T: Config]() -> typing.Callable[[type[T]], type[T]]:
                 self.validate()
 
         wrapped.__init__ = __init__
+
+        wrapped._registry = Registry[str, type[wrapped]](wrapped.__name__, {}) if registry else None
+
+        if dynamic_type is not None:
+            for cls_, name in dynamic_type.items():
+                print(cls_, name, wrapped)
+                cls_.register_subclass(name, wrapped)
+
         return wrapped
 
     return wrap
@@ -304,6 +314,9 @@ class Config(metaclass=ConfigMeta):
     # Used within `_set_implicit_default` to set implicit defaults for fields
     # without them being automatically added to `_explicit_fields`.
     _setting_implicit_default: bool | None = Field(init=False)
+
+    # A registry for all the config classes.
+    _registry: typing.ClassVar[Registry[str, type[typing.Self]] | None] = None
 
     def __setattr__(self, key: str, value: typing.Any) -> None:
         """
@@ -358,6 +371,17 @@ class Config(metaclass=ConfigMeta):
         Validate a class and mark it as read-only
         This should not be overridden in derived classes.
         """
+        # Should be handled in `from_dict`, but can fail if instantiating directly.
+        try:
+            expected_class = self.get_subclass(self.type)
+        except KeyError as e:
+            # Delayed instantiation error in `from_dict`.
+            raise ValidationError(*e.args)
+
+        if expected_class is not None:
+            # Should be handled in `from_dict`, but can fail if instantiating directly.
+            Assert.is_(self.__class__, expected_class)
+
         if not self._validated:
             try:
                 self._validate()
@@ -738,6 +762,14 @@ class Config(metaclass=ConfigMeta):
         if "__class__" in default:
             del default["__class__"]
 
+        try:
+            actual_cls = cls.get_subclass(default.get("type"))
+            if actual_cls is not None and actual_cls is not cls:
+                return actual_cls._from_dict(default, strict=strict, flat=flat)
+        except KeyError:
+            # Postpone error to validation.
+            pass
+
         # Do not validate yet in case the root class sets cross-dependencies in validation.
         with NoAutoValidate():
             for name, field in cls.fields():
@@ -864,6 +896,42 @@ class Config(metaclass=ConfigMeta):
             )
         return None
 
+    @classmethod
+    def register_subclass(cls, name: str, cls_: type[typing.Self]) -> None:
+        Assert.custom(issubclass, cls_, cls)
+        if cls._registry is None:
+            raise NotImplementedError(f"Subclass `{cls.__name__}` doesn't have a registry..")
+        if name in cls._registry:
+            old_cls = cls._registry[name]
+            if old_cls.__name__ == cls_.__name__ and cls._registry[name].__module__ == cls_.__module__:
+                del cls._registry[name]
+            else:
+                raise KeyError(f"{cls.__name__} class registry already has an entry {name} from class {cls.__name__}.")
+        cls._registry[name] = cls_
+
+    @classmethod
+    def get_subclass(cls, name: str | None):
+        # TODO: Make it case-insensitive?
+        if name is None:
+            return None
+        cls_ = None
+        for base_class in cls.__mro__:
+            if issubclass(base_class, Config) and base_class._registry is not None and name in base_class._registry:
+                if cls_ is None:
+                    cls_ = base_class._registry[name]
+                    if not issubclass(cls_, cls):
+                        raise KeyError(f" {cls_.__name__} is not a subclass of {cls.__name__} (from type {name})")
+                elif base_class._registry[name] is not cls_:
+                    # We explicitly prevent ambiguous classes to ensure safe and unambiguous serialization.
+                    # TODO: Only really need to avoid conflict with `Config`'s registry, relax this a bit?
+                    raise KeyError(
+                        f"Ambiguous type `{name}` for base class {cls.__name__}."
+                        f" ({cls_.__name__} vs {base_class._registry[name]})"
+                    )
+        if cls_ is None:
+            raise KeyError(f"Unknown type {name} for base class {cls.__name__}")
+        return cls_
+
     def __init_subclass__(cls):
         """
         We need to postpone validation until the class has been processed by the dataclass wrapper.
@@ -912,6 +980,13 @@ class Config(metaclass=ConfigMeta):
                 else:
                     # dataclasses expects an annotation, so we use the one from the base class.
                     cls.__annotations__[name] = base_class_field.type
+
+    # Type for the field. At the end of class definition to avoid shadowing builtin.
+    type: str | None = Field(
+        default=None,
+        desc="The config class name.",
+        hint=FieldHint.feature,
+    )
 
 
 class Configurable[ConfigType: Config]:
