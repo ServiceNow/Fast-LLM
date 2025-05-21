@@ -467,9 +467,9 @@ class Attention(torch.nn.Module):
             case AttentionImplementation.SDPA:
                 with set_generator(self._tensor_space.distributed.tp_generator):
                     input_ = torch.nn.functional.scaled_dot_product_attention(
-                        query,
-                        key,
-                        value,
+                        query=query,
+                        key=key,
+                        value=value,
                         attn_mask=kwargs.get(TransformerKwargs.attention_mask),
                         dropout_p=self._config.attention_dropout if self.training else 0.0,
                         is_causal=TransformerKwargs.attention_mask not in kwargs,
@@ -480,11 +480,11 @@ class Attention(torch.nn.Module):
             case AttentionImplementation.BACKUP:
                 # TODO: Avoid the flattening.
                 input_ = self._attn_fused(
-                    query.flatten(-2),
-                    key.flatten(-2),
-                    value.flatten(-2),
-                    kwargs[TransformerKwargs.attention_mask],
-                    kwargs[TransformerKwargs.attention_mask_value],
+                    query=query.flatten(-2),
+                    key=key.flatten(-2),
+                    value=value.flatten(-2),
+                    mask=kwargs[TransformerKwargs.attention_mask],
+                    mask_value=kwargs[TransformerKwargs.attention_mask_value],
                 )
             case _:
                 raise ValueError(f"Unknown attention implementation: {self._attention_implementation}")

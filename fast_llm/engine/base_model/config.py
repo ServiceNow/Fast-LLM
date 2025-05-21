@@ -42,6 +42,7 @@ class BaseModelConfig(Config):
             assert isinstance(field, Field), f"{name}, {field}"
             if field.hint == FieldHint.architecture:
                 architecture[name] = self._serialize_architecture_field(getattr(self, name, MISSING))
+        return architecture
 
     def _serialize_architecture_field(self, value: typing.Any) -> typing.Any:
         if isinstance(value, BaseModelConfig):

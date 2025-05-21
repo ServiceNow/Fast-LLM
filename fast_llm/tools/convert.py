@@ -19,13 +19,13 @@ logger = logging.getLogger(__name__)
 
 
 @config_class()
-class ConversionConfig(RunnableConfig):
-    input: CheckpointLoadConfig = Field(default_factory=CheckpointLoadConfig)
-    output: CheckpointSaveConfig = Field(default_factory=CheckpointSaveConfig)
+class ConvertConfig(RunnableConfig):
+    input: CheckpointLoadConfig = Field()
+    output: CheckpointSaveConfig = Field()
     use_cpu: bool = Field(default=False)
     exist_ok: bool = Field(default=False)
     layers_per_step: int | None = Field(default=None)
-    model_config_class: type[FastLLMModelConfig] = Field(default=None)
+    model: type[FastLLMModelConfig] = Field(default=None)
 
     @classmethod
     def _get_parser(cls):
@@ -40,13 +40,13 @@ class ConversionConfig(RunnableConfig):
     @classmethod
     def _from_parsed_args(cls, parsed: argparse.Namespace, unparsed: list[str]):
         config = super()._from_parsed_args(parsed, unparsed)
-        config.model_config_class = model_registry[parsed.model_type]
+        config.model = model_registry[parsed.model_type]
         return config
 
     def _validate(self):
-        assert self.model_config_class is not None
-        self.input.setup(self.model_config_class)
-        self.output.setup(self.model_config_class)
+        assert self.model is not None
+        self.input.setup(self.model)
+        self.output.setup(self.model)
         super()._validate()
 
     def _convert_model_partial(
@@ -81,7 +81,7 @@ class ConversionConfig(RunnableConfig):
                 f"Output path {self.output.path} already exists and has been processed. Skipping model conversion..."
             )
             return
-        model_class = self.model_config_class.get_model_class()
+        model_class = self.model.get_model_class()
         if self.layers_per_step is None:
             self._convert_model_partial(model_class, self.output)
         else:
@@ -161,4 +161,4 @@ class ConversionConfig(RunnableConfig):
 
 
 if __name__ == "__main__":
-    ConversionConfig.parse_and_run()
+    ConvertConfig.parse_and_run()
