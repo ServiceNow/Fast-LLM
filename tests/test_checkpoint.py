@@ -27,7 +27,6 @@ from tests.common import (
     TEST_MODEL_TYPE,
     TEST_RESULTS_PATH,
     requires_cuda,
-    run_test_script,
 )
 from tests.compare_tensor_logs import CompareConfig, compare_logged_tensor
 
@@ -41,7 +40,7 @@ WEIGHT_SHARD_SAVE_NAME = f"{ShardName.weights}_shard"
 
 @requires_cuda
 @pytest.mark.depends()
-def test_checkpoint_and_eval():
+def test_checkpoint_and_eval(run_test_script):
     # A baseline config (single-gpu, bf16, flash-attn).
     run_test_script(
         f"test_{TEST_MODEL}_checkpoint_and_eval",
@@ -75,7 +74,7 @@ def _compare_resume_fn(test_path: pathlib.Path, compare_path: pathlib.Path):
 
 
 @pytest.mark.depends(on=["test_checkpoint_and_eval"])
-def test_resume():
+def test_resume(run_test_script):
     run_test_script(
         f"test_{TEST_MODEL}_resume",
         CONFIG_COMMON
@@ -418,7 +417,7 @@ def test_run_converted_model():
 
 @pytest.mark.slow
 @pytest.mark.depends(on=["test_load_converted_distributed_checkpoint"])
-def test_load_pretrained_distributed_in_dp2():
+def test_load_pretrained_distributed_in_dp2(run_test_script):
     run_test_script(
         f"test_{TEST_MODEL}_load_pretrained_distributed_in_dp2",
         CONFIG_COMMON
@@ -434,7 +433,7 @@ def test_load_pretrained_distributed_in_dp2():
 
 
 @pytest.mark.depends(on=["test_load_converted_distributed_checkpoint"])
-def test_load_pretrained_distributed_with_config():
+def test_load_pretrained_distributed_with_config(run_test_script):
     run_test_script(
         f"test_{TEST_MODEL}_load_pretrained_distributed_with_config",
         CONFIG_COMMON
@@ -517,7 +516,7 @@ def test_load_distributed_checkpoint_dp2():
 
 @pytest.mark.slow
 @pytest.mark.depends(on=["test_load_converted_fast_llm_checkpoint", "test_load_pretrained_in_dp2_match_checkpoint"])
-def test_load_pretrained_fast_llm_in_dp2():
+def test_load_pretrained_fast_llm_in_dp2(run_test_script):
     run_test_script(
         f"test_{TEST_MODEL}_load_pretrained_fast_llm_in_dp2",
         CONFIG_COMMON
@@ -551,7 +550,7 @@ def test_load_pretrained_fast_llm_in_dp2():
 
 @pytest.mark.slow
 @pytest.mark.depends(on=["test_load_converted_huggingface_checkpoint", "test_load_pretrained_in_dp2_match_checkpoint"])
-def test_load_pretrained_huggingface_in_dp2():
+def test_load_pretrained_huggingface_in_dp2(run_test_script):
     run_test_script(
         f"test_{TEST_MODEL}_load_pretrained_huggingface_in_dp2",
         CONFIG_COMMON

@@ -257,6 +257,18 @@ class DistributedConfig(Config):
         desc="Pointer to the distributed config this one is an identical copy of.",
         hint=FieldHint.derived,
     )
+    gpu_ids: list[int] | None = Field(
+        default=None,
+        desc="Specify which GPU to use on each local rank."
+        " We recommend setting `CUDA_VISIBLE_DEVICES` instead when possible.",
+        hint=FieldHint.expert,
+    )
+    gpu_memory_limit_gb: int | None = Field(
+        default=None,
+        desc="Limit the memory usage on each GPU."
+        "Warning: the limit is be set globally and unset at deletion of the config object.",
+        hint=FieldHint.expert,
+    )
 
     def _validate(self) -> None:
         if self.world_size is None:
@@ -371,6 +383,8 @@ class DistributedConfig(Config):
             self.compare(self.reference_config, ValueError)
         Assert.in_range(self.rank, 0, self.world_size)
         Assert.in_range(self.local_rank, 0, self.local_world_size)
+        if self.gpu_ids is not None:
+            Assert.eq(len(self.gpu_ids), self.local_world_size)
 
     def _add_distributed_dim(self, distributed_dim: DistributedDim) -> None:
         if distributed_dim.name in self.distributed_dims:

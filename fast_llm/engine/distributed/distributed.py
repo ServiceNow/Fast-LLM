@@ -44,6 +44,10 @@ class Distributed[ConfigType: DistributedConfig](Configurable[ConfigType]):
             torch.cuda.init()
             self.device = torch.device(self._config.local_rank)
             torch.cuda.set_device(self.device)
+            if self._config.gpu_memory_limit_gb is not None:
+                torch.cuda.set_per_process_memory_fraction(
+                    self._config.gpu_memory_limit_gb * 1e9 / torch.cuda.mem_get_info(0)[1], self.device
+                )
 
         # We bypass `torch.distributed.init_process_group` which makes things way more complicated for no reason.
 
@@ -171,3 +175,7 @@ class Distributed[ConfigType: DistributedConfig](Configurable[ConfigType]):
         for group in self._process_groups.values():
             if group is not None and hasattr(group, "_shutdown"):
                 group._shutdown()  # noqa
+
+        if self._config.gpu_memory_limit_gb is not None:
+            # Not ideal, but better than nothing.
+            torch.cuda.set_per_process_memory_fraction(1, self.device)

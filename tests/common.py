@@ -350,28 +350,80 @@ def get_test_concatenated_memmap_dataset(
         index_file.open("w").writelines([str(path / f"dataset_{i}") + "\n" for i in range(num_files)])
 
 
-def run_test_script(
-    name: str,
-    script: list[str],
-    num_gpus: int = 1,
-    *,
-    model_type: str = TEST_MODEL_TYPE,
-    is_megatron: bool = False,
-    compare: str | None = None,
-    config: CompareConfig | None = None,
-    prepare_fn=None,
-    compare_fn=None,
-):
-    if torch.cuda.device_count() < num_gpus:
-        pytest.skip(f"Not enough GPUs to run test ({torch.cuda.device_count()}<{num_gpus})")
-    env = os.environ.copy()
-    if is_megatron:
+@pytest.fixture(scope="session")
+def run_fast_llm_train(get_test_resources):
+    def do_run_fast_llm_train(
+        model_type: str,
+        cli_args: list[str],
+        *,
+        force_separate_process: bool = False,
+        num_gpus: int = 1,
+        gpu_memory_gb: float = 5,
+    ):
+        with get_test_resources(
+            num_gpus=num_gpus, gpu_memory_gb=gpu_memory_gb, ports=2 if num_gpus > 1 else 0
+        ) as resources:
+            cli_args = [
+                *cli_args,
+                f"model.distributed.gpu_ids=[{",".join(resources["gpus"])}]",
+                f"model.distributed.gpu_memory_limit_gb={gpu_memory_gb}",
+            ]
+            if num_gpus > 1 or force_separate_process:
+                command = [
+                    "python",
+                    "-m",
+                    "torch.distributed.run",
+                    f"--nproc-per-node={num_gpus}",
+                    "--no-python",
+                    f"--rdzv-endpoint=localhost:{resources["ports"][0]}",
+                    f"--master-port={resources["ports"][1]}",
+                    "fast-llm",
+                    "train",
+                    model_type,
+                    *cli_args,
+                ]
+                print(" ".join(command))
+                completed_proc = subprocess.run(command, timeout=60)
+                if completed_proc.returncode:
+                    raise RuntimeError(f"Process failed with return code {completed_proc.returncode}")
+            else:
+                print(" ".join(["fast-llm", "train", model_type, *cli_args]))
+                CliTrainingConfig.parse_and_run([model_type, *cli_args])
+
+    return do_run_fast_llm_train
+
+
+@pytest.fixture(scope="session")
+def run_megatron_train(get_test_resources):
+    def do_run_megatron_train(
+        cli_args: list[str],
+        *,
+        gpu_memory_gb: float = 5,
+    ):
+        env = os.environ.copy()
         # Prevent Megatron from complaining.
         env["CUDA_DEVICE_MAX_CONNECTIONS"] = "1"
         env["NVTE_FLASH_ATTN"] = "0"
+
+        with get_test_resources(num_gpus=1, gpu_memory_gb=gpu_memory_gb) as resources:
+            if resources is not None:
+                env["CUDA_VISIBLE_DEVICES"] = ",".join(str(gpu) for gpu in resources["gpus"])
+            command = ["Megatron-LM/pretrain_gpt.py", *cli_args]
+            print(" ".join(command))
+            completed_proc = subprocess.run(command, env=env, timeout=60)
+            if completed_proc.returncode:
+                raise RuntimeError(f"Process failed with return code {completed_proc.returncode}")
+
+    return do_run_megatron_train
+
+
+def _get_run_test_path(name: str, is_megatron: bool) -> tuple[pathlib.Path, bool]:
+    # Prepare experiment directory.
     path = TEST_RESULTS_PATH.resolve() / name
     skip = False
     artifact_path = path / ARTIFACT_PATH
+    # Check is we can reuse an existing result.
+    # TODO: No longer important?
     if path.exists():
         assert path.is_dir()
         # TODO: Better way to check if the previous attempt succeeded.
@@ -384,43 +436,64 @@ def run_test_script(
         elif FORCE_REUSE_RESULTS:
             raise RuntimeError(artifact_path)
         else:
+            # Make sure the directory is empty.
             shutil.rmtree(path)
     elif FORCE_REUSE_RESULTS:
         raise RuntimeError(path)
-    if prepare_fn is not None:
-        skip = prepare_fn(TEST_RESULTS_PATH / name, None if compare is None else TEST_RESULTS_PATH / compare, skip)
-    if is_megatron:
-        script = [*script, f"--structured-logs-dir={path}", f"--data-cache-path={path}"]
-    else:
-        script = [model_type, *script, f"run.experiment_dir={path}"]
-    header = ["Megatron-LM/pretrain_gpt.py"] if is_megatron else ["--no-python", "fast-llm", "train"]
-    command = [
-        "python",
-        "-m",
-        "torch.distributed.run",
-        f"--nproc-per-node={num_gpus}",
-        *header,
-        *script,
-    ]
-    print(" ".join(command))
-    if skip:
-        print("Reusing existing run.")
-    else:
-        get_test_dataset()
-        if num_gpus == 1 and not is_megatron:
-            CliTrainingConfig.parse_and_run(script)
+    return path, skip
+
+
+torch.cuda.init
+
+
+@pytest.fixture(scope="session")
+def run_test_script(run_fast_llm_train, run_megatron_train):
+    def do_run_test_script(
+        name: str,
+        cli_args: list[str],
+        *,
+        model_type: str = TEST_MODEL_TYPE,
+        num_gpus: int = 1,
+        gpu_memory_gb: float = 5,
+        force_separate_process: bool = False,
+        is_megatron: bool = False,
+        compare: str | None = None,
+        config: CompareConfig | None = None,
+        prepare_fn=None,
+        compare_fn=None,
+    ):
+        # Prepare experiment directory.
+        path, skip = _get_run_test_path(name, is_megatron)
+        if prepare_fn is not None:
+            skip = prepare_fn(TEST_RESULTS_PATH / name, None if compare is None else TEST_RESULTS_PATH / compare, skip)
+        if skip:
+            print("Reusing existing run.")
         else:
-            completed_proc = subprocess.run(command, env=env, timeout=60)
-            if completed_proc.returncode:
-                raise RuntimeError(f"Process failed with return code {completed_proc.returncode}")
-    if compare:
-        if compare_fn is not None:
-            compare_fn(TEST_RESULTS_PATH / name, TEST_RESULTS_PATH / compare)
-        compare_tensor_logs(
-            TEST_RESULTS_PATH / compare / ARTIFACT_PATH,
-            TEST_RESULTS_PATH / name / ARTIFACT_PATH,
-            config,
-        )
+            get_test_dataset()
+            if is_megatron:
+                assert model_type == "gpt"
+                run_megatron_train(
+                    [*cli_args, f"--structured-logs-dir={path}", f"--data-cache-path={path}"],
+                    gpu_memory_gb=gpu_memory_gb,
+                )
+            else:
+                run_fast_llm_train(
+                    model_type,
+                    [*cli_args, f"run.experiment_dir={path}"],
+                    force_separate_process=force_separate_process,
+                    num_gpus=num_gpus,
+                    gpu_memory_gb=gpu_memory_gb,
+                )
+        if compare:
+            if compare_fn is not None:
+                compare_fn(TEST_RESULTS_PATH / name, TEST_RESULTS_PATH / compare)
+            compare_tensor_logs(
+                TEST_RESULTS_PATH / compare / ARTIFACT_PATH,
+                TEST_RESULTS_PATH / name / ARTIFACT_PATH,
+                config,
+            )
+
+    return do_run_test_script
 
 
 def materialize_meta_tensors(model, tensor_space):
