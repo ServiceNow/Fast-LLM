@@ -14,8 +14,7 @@ from fast_llm.engine.checkpoint.config import (
     FastLLMCheckpointFormat,
     ModelConfigType,
 )
-from fast_llm.engine.multi_stage.config import FastLLMModelConfig, StageMode
-from fast_llm.engine.multi_stage.multi_stage import ShardName
+from fast_llm.engine.multi_stage.config import FastLLMModelConfig, ShardName, StageMode
 from fast_llm.models.auto import model_registry
 from fast_llm.tools.convert import ConversionConfig
 from tests.common import (
@@ -76,6 +75,7 @@ def _compare_resume_fn(test_path: pathlib.Path, compare_path: pathlib.Path):
 
 @pytest.mark.depends(on=["test_checkpoint_and_eval"])
 def test_resume():
+    # Resume from iteration=1 and compare outputs with the baseline run.
     run_test_script(
         f"test_{TEST_MODEL}_resume",
         CONFIG_COMMON
@@ -87,6 +87,24 @@ def test_resume():
         compare=f"test_{TEST_MODEL}_checkpoint_and_eval",
         prepare_fn=_prepare_resume_fn,
         compare_fn=_compare_resume_fn,
+    )
+
+
+@pytest.mark.depends(on=["test_checkpoint_and_eval"])
+def test_resume_frozen():
+    # Resume with frozen mlp. No comparison.
+    run_test_script(
+        f"test_{TEST_MODEL}_resume_frozen",
+        CONFIG_COMMON
+        + [
+            "training.checkpoint.interval=1",
+            "training.evaluations.validation.interval=2",
+            "training.evaluations.validation.iterations=1",
+            "model.base_model.transformer.mlp_lr_scale=0.",
+        ],
+        compare=f"test_{TEST_MODEL}_checkpoint_and_eval",
+        prepare_fn=_prepare_resume_fn,
+        do_compare=False,
     )
 
 

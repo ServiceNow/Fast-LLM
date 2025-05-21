@@ -10,7 +10,7 @@ from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.engine.config_utils.tensor_space import TensorDim
 from fast_llm.engine.distributed.config import DistributedDim
 from fast_llm.engine.distributed.distributed import Distributed
-from fast_llm.engine.multi_stage.config import SHARD_PAD_TO_MULTIPLE, StageMode
+from fast_llm.engine.multi_stage.config import SHARD_PAD_TO_MULTIPLE, ShardName, StageMode
 from fast_llm.functional.triton.pointwise import triton_add, triton_copy
 from fast_llm.logging import log_distributed_tensor
 from fast_llm.tensor import ParameterMeta, SafeTensorSlice, TensorMeta
@@ -246,13 +246,14 @@ class FSDP:
                     )
                 self._parameter_buffers[parameter_name] = parameter_buffer
 
-    def reset_shard_pad(self, shard: torch.Tensor) -> int:
+    def reset_shard_pad(self, shard: torch.Tensor, shard_name: str) -> int:
         assert self._is_setup
         assert self._mode.on_device
         # TODO: Needed?
         # Prevent nans with the padded values
         # Also ensures a correct parameter count in loading context.
-        self._weight_shard_meta.validate(shard)
+        shard_meta = self._weight_shard_meta if shard_name == ShardName.weights else self._grad_shard_meta
+        shard_meta.validate(shard)
         if self._shard_pad > 0:
             shard[-self._shard_pad :].zero_()
             return self._shard_pad
@@ -452,5 +453,12 @@ class FSDP:
             begin, end = self._parameter_range_in_shard(name)
 
             for shard_name, shard in shards.items():
+                # Shards can be empty (frozen weights)
+                if shard.numel() == 0:
+                    continue
+                if loaded_shards[shard_name].numel() == 0:
+                    shard[begin:end][overlap_mask] = 0
+                    counter += overlap_count
+                    continue
                 shard[begin:end][overlap_mask] = loaded_shards[shard_name][overlap_index_map_masked]
                 counter += overlap_count

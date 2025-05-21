@@ -12,6 +12,7 @@ from fast_llm.engine.inference.runner import InferenceRunner
 from fast_llm.engine.multi_stage.config import StageMode
 from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
 from fast_llm.engine.schedule.runner import ScheduleRunner
+from fast_llm.utils import Assert
 
 
 class HuggingfacePreTrainedModel(transformers.PreTrainedModel):
@@ -52,10 +53,8 @@ class HuggingfacePreTrainedModel(transformers.PreTrainedModel):
         assert fast_llm_model.is_setup
 
         # We only support data parallel for now
-        assert (
-            fast_llm_model.distributed.config.model_parallel == 1
-            and fast_llm_model.distributed.config.sequence_data_parallel == 1
-        )
+        Assert.eq(fast_llm_model.distributed.config.model_parallel, 1)
+        Assert.eq(fast_llm_model.distributed.config.sequence_data_parallel, 1)
 
         self._inference_runner.setup()
 
@@ -64,22 +63,6 @@ class HuggingfacePreTrainedModel(transformers.PreTrainedModel):
 
         with transformers.modeling_utils.no_init_weights():
             self.post_init()
-
-    def forward(
-        self,
-        input_ids: torch.Tensor | None = None,
-        attention_mask: torch.Tensor | None = None,
-        position_ids: torch.Tensor | None = None,
-        past_key_values=None,
-        inputs_embeds: torch.FloatTensor | None = None,
-        labels: torch.LongTensor | None = None,
-        use_cache: bool | None = None,
-        output_attentions: bool | None = None,
-        output_hidden_states: bool | None = None,
-        return_dict: bool | None = None,
-    ) -> tuple | transformers.modeling_outputs.CausalLMOutputWithPast:
-        # Meant to be overridden in derived classes
-        raise NotImplementedError()
 
     @classmethod
     def from_pretrained(
@@ -119,4 +102,18 @@ class HuggingfacePreTrainedModel(transformers.PreTrainedModel):
 
 
 class HuggingfaceBaseModelForCausalLM(HuggingfacePreTrainedModel, transformers.generation.utils.GenerationMixin):
-    pass
+    def forward(
+        self,
+        input_ids: torch.Tensor | None = None,
+        attention_mask: torch.Tensor | None = None,
+        position_ids: torch.Tensor | None = None,
+        past_key_values=None,
+        inputs_embeds: torch.FloatTensor | None = None,
+        labels: torch.LongTensor | None = None,
+        use_cache: bool | None = None,
+        output_attentions: bool | None = None,
+        output_hidden_states: bool | None = None,
+        return_dict: bool | None = None,
+    ) -> tuple | transformers.modeling_outputs.CausalLMOutputWithPast:
+        # Meant to be overridden in derived classes
+        raise NotImplementedError()

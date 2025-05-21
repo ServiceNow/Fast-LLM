@@ -14,7 +14,7 @@ from fast_llm.tensor import ParameterMeta, TensorMeta, accumulate_gradient
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
-    from fast_llm.core.distributed import ProcessGroup
+    pass
 
 logger = logging.getLogger(__name__)
 
@@ -123,12 +123,10 @@ class Stage(StageBase):
                 if output is not None:
                     meta = self._meta_outputs[i]
                     output_global, _ = meta.local_to_global(output.detach(), distributed=self._distributed)
-                else:
-                    output_global = None
-                kwargs["hidden_states"][self._layer_range[i]] = {
-                    "layer_type": type(layer).__name__,
-                    "tensor": output_global,
-                }
+                    kwargs["hidden_states"][self._layer_range[i]] = {
+                        "layer_type": type(layer).__name__,
+                        "tensor": output_global,
+                    }
         return None if output is None else output.detach(), (input_, output)
 
     def backward(
@@ -174,7 +172,7 @@ class Stage(StageBase):
                     level=self._config.debug_param_gradients,
                     global_=False,
                 )
-            if self._config.debug_all_param_gradients:
+            if self._config.debug_all_param_gradients and fsdp.requires_grad:
                 fsdp.log_shard(
                     name="gradient",
                     shard=fsdp.grad_shard,

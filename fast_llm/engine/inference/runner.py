@@ -7,6 +7,7 @@ from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
 from fast_llm.engine.schedule.config import BatchConfig, ScheduleConfig
 from fast_llm.engine.schedule.runner import ScheduleRunner
 from fast_llm.engine.schedule.schedule import Schedule
+from fast_llm.utils import Assert
 
 
 class InferenceRunner(abc.ABC):
@@ -58,6 +59,9 @@ class InferenceRunner(abc.ABC):
     def setup(self):
         if not self._runner._is_setup:
             self._runner.setup(self._fast_llm_model.distributed)
+        else:
+            # Means external runner was passed, check it has the same distributed class as the model
+            Assert.is_(self._runner._distributed, self._fast_llm_model.distributed)
 
     def forward(
         self, input_, kwargs: dict, *, iteration: int = 1, return_metrics: bool = False
