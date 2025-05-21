@@ -14,6 +14,7 @@ from fast_llm.engine.schedule.runner import ScheduleRunner
 from fast_llm.engine.schedule.schedule import Schedule
 from fast_llm.models.gpt.config import GPTBatchConfig, LlamaGPTHuggingfaceCheckpointFormat, PretrainedGPTModelConfig
 from tests.common import requires_cuda
+from tests.test_gpt_generate_and_forward import model_and_tokenizer  # noqa: F401
 
 
 def _get_model_runner_schedule(
