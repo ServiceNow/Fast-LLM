@@ -21,6 +21,7 @@ from fast_llm.layers.transformer.config import (
     TransformerKwargs,
     TransformerLossNames,
     VisionTransformerDimNames,
+    VisionTransformerKwargs,
 )
 from fast_llm.layers.transformer.preprocessing import (
     BackupAttentionPreprocessor,
@@ -30,7 +31,7 @@ from fast_llm.layers.transformer.preprocessing import (
 from fast_llm.layers.transformer.transformer import TransformerLayer
 from fast_llm.layers.transformer.vision_transformer import VisionTransformerLayer
 from fast_llm.layers.vision_encoder.adapter import VisionAdapter
-from fast_llm.layers.vision_encoder.config import VisionEncoderKwargs
+from fast_llm.layers.vision_encoder.config import VisionEncoderDimNames, VisionEncoderKwargs
 from fast_llm.layers.vision_encoder.encoder import PatchConv
 from fast_llm.layers.vision_encoder.preprocessing import VisionPreprocessor
 from fast_llm.models.gpt.config import GPTBaseModelConfig, GPTBatchConfig, GPTModelConfig
@@ -244,7 +245,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             )
             vision_kwargs.update(
                 {
-                    VisionEncoderKwargs.hidden_dims: vision_hidden_dims,
+                    VisionTransformerKwargs.hidden_dims: vision_hidden_dims,
                 }
             )
 

@@ -99,7 +99,7 @@ class BaseTransformerKwargs:
         super().__init_subclass__(**kwargs)
         cls._prefix = prefix
         for attr, value in BaseTransformerKwargs._kwargs_attributes.items():
-            setattr(cls, value, f"{cls._prefix}_{value}")
+            setattr(cls, value, f"{cls._prefix}_{value}" if cls._prefix else value)
 
 
 class TransformerKwargs(BaseTransformerKwargs, prefix=""):
@@ -822,15 +822,6 @@ class TransformerConfig(BaseModelConfig):
     @property
     def _transformer_dim_names(self) -> TransformerDimNames:
         return TransformerDimNames
-
-
-@config_class()
-class VisionRotaryConfig(RotaryConfig):
-    type: RotaryEmbeddingType = Field(
-        default=RotaryEmbeddingType.pixtral,
-        desc="The type of rotary embedding to use. Choices: none, default, llama3, yarn, pixtral.",
-        hint=FieldHint.feature,
-    )
 
 
 @config_class()
