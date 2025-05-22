@@ -599,6 +599,25 @@ class AprielThinkerSSMHHybridHuggingfaceCheckpointHandler(
     _model_class: typing.ClassVar[FastLLMModelConfig] = HybridSSMModelConfig
     format: typing.ClassVar[type[CheckpointFormat]] = AprielThinkerSSMHHybridHuggingfaceCheckpointFormat
     _default_block_type: str = SSMBlockType.mamba2_discrete.value
+    _hf_prefix: str = "model"
+
+    def _create_weight_converters(self) -> list[WeightConverter]:
+        converters = super()._create_weight_converters()
+        # num_layers = self._model.config.base_model.transformer.num_layers
+        # # Embedding and output
+        # if self._model.config.base_model.tie_word_embeddings:
+        #     converters.append(
+        #         WeightConverter("layers.0.word_embeddings_weight", f"{self._hf_prefix}.embedding.weight")
+        #     )
+        #     converters.append(IgnoreImportWeightConverter((), f"{self._hf_prefix}.lm_head.weight"))
+        # else:
+        #     converters.append(
+        #         WeightConverter("layers.0.word_embeddings_weight", f"{self._hf_prefix}.embedding.weight")
+        #     )
+        #     converters.append(
+        #         WeightConverter(f"layers.{num_layers + 1}.output_weights", f"{self._hf_prefix}.lm_head.weight")
+        #     )
+        return converters
 
     @classmethod
     def _create_config_converters(cls) -> list[ParamConverter]:

@@ -51,13 +51,13 @@ class HybridSSMBaseModelConfig(LanguageModelBaseConfig):
         Some of these can be setup directly in the layer config, but keeping them here for clarity.
         """
         super().setup_tensor_space(tensor_space)
-        if (
-            not SSMBlockType.mamba2_discrete.value in self.hybrid_block_layout
-            and not SSMBlockType.mamba.value in self.hybrid_block_layout
-        ):
-            raise ValueError(
-                f"Block pattern must contain at least one '{SSMBlockType.mamba2_discrete.value}' or '{SSMBlockType.mamba.value}', use gpt model for transformer only architectures"
-            )
+        # if (
+        #     not SSMBlockType.mamba2_discrete.value in self.hybrid_block_layout
+        #     and not SSMBlockType.mamba.value in self.hybrid_block_layout
+        # ):
+        #     raise ValueError(
+        #         f"Block pattern must contain at least one '{SSMBlockType.mamba2_discrete.value}' or '{SSMBlockType.mamba.value}', use gpt model for transformer only architectures"
+        #     )
 
         if self.ssm.dt_rank is None:
             mamba_dt_rank = math.ceil(self.transformer.hidden_size / 16)
