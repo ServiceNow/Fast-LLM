@@ -157,12 +157,6 @@ class GPTMemmapDatasetPreparatorConfig(DatasetPreparatorConfig):
         hint=FieldHint.optional,
         valid=check_field(Assert.geq, 1),
     )
-    tokenize_batch_size: int = Field(
-        default=1000,
-        desc="Batch size for tokenization.",
-        hint=FieldHint.optional,
-        valid=check_field(Assert.geq, 1),
-    )
     saving_workers: int = Field(
         default=1,
         desc="Number of processes for saving the data.",
@@ -176,7 +170,7 @@ class GPTMemmapDatasetPreparatorConfig(DatasetPreparatorConfig):
     )
     tokenizer: TokenizerConfig = Field(
         default_factory=TokenizerConfig,
-        desc="Tokenizer configuration.",
+        desc="Configuration for the tokenizer.",
         hint=FieldHint.feature,
     )
     image_patch_size: int = Field(

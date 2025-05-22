@@ -1,11 +1,12 @@
 import enum
 
-from fast_llm.config import Config, Field, FieldHint, config_class
+from fast_llm.config import Config, Field, FieldHint, check_field, config_class, skip_valid_if_none
 from fast_llm.engine.base_model.config import BaseModelConfig
 from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
 from fast_llm.functional.config import ActivationType
 from fast_llm.layers.common.config import NormalizationConfig
 from fast_llm.layers.transformer.config import VisionTransformerConfig
+from fast_llm.utils import Assert
 
 
 class VisionEncoderDimNames:
@@ -119,10 +120,27 @@ class VisionEncoderConfig(BaseModelConfig):
         desc="The intermediate activation type for multi-modal adapter. Default: GeLU.",
         hint=FieldHint.core,
     )
+    adapter_bias: bool = Field(
+        default=True,
+        desc="Whether to use bias in the adapter linear layer.",
+        hint=FieldHint.optional,
+    )
     image_normalization: ImageNormalizationConfig = Field(
         default_factory=ImageNormalizationConfig,
         desc="Configuration for the normalization layers applied to the image patches.",
         hint=FieldHint.optional,
+    )
+    adapter_lr_scale: float | None = Field(
+        default=None,
+        desc="Custom learning rate scale for the adapter weights.",
+        hint=FieldHint.feature,
+        valid=skip_valid_if_none(check_field(Assert.geq, 0)),
+    )
+    conv_lr_scale: float | None = Field(
+        default=None,
+        desc="Custom learning rate scale for the convolutional layer weights.",
+        hint=FieldHint.feature,
+        valid=skip_valid_if_none(check_field(Assert.geq, 0)),
     )
 
     def setup_tensor_space(self, tensor_space: TensorSpace):
@@ -130,12 +148,6 @@ class VisionEncoderConfig(BaseModelConfig):
         tensor_space.add_tensor_dim(TensorDim(VisionEncoderDimNames.adapter_size, self.adapter_size))
         tensor_space.add_tensor_dim(TensorDim(VisionEncoderDimNames.patch_size, self.patch_size))
         tensor_space.add_tensor_dim(TensorDim(VisionEncoderDimNames.in_channels, 3))
-        # TODO Soham: add a check for presence of kv channels parameter (head_dim)
-        tensor_space.add_tensor_dim(
-            TensorDim(
-                VisionEncoderDimNames.kv_channels, self.transformer.hidden_size // self.transformer.num_attention_heads
-            )
-        )
         self.transformer.setup_tensor_space(tensor_space)
 
     @property

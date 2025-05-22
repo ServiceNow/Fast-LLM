@@ -25,6 +25,8 @@ from fast_llm.layers.transformer.config import (
     TransformerDimNames,
     TransformerKwargs,
     TransformerLossNames,
+    VisionTransformerDimNames,
+    VisionTransformerKwargs,
 )
 from fast_llm.layers.transformer.preprocessing import (
     BackupAttentionPreprocessor,
@@ -34,8 +36,8 @@ from fast_llm.layers.transformer.preprocessing import (
 from fast_llm.layers.transformer.transformer import TransformerLayer
 from fast_llm.layers.transformer.vision_transformer import VisionTransformerLayer
 from fast_llm.layers.vision_encoder.adapter import VisionAdapter
-from fast_llm.layers.vision_encoder.config import VisionEncoderDimNames, VisionEncoderKwargs, VisionTransformerDimNames
-from fast_llm.layers.vision_encoder.encoder import PatchConv
+from fast_llm.layers.vision_encoder.config import VisionEncoderDimNames, VisionEncoderKwargs
+from fast_llm.layers.vision_encoder.patch_conv import PatchConv
 from fast_llm.layers.vision_encoder.preprocessing import VisionPreprocessor
 from fast_llm.models.gpt.config import GPTBaseModelConfig, GPTBatchConfig, GPTModelConfig
 from fast_llm.models.gpt.megatron import get_init_megatron
@@ -199,14 +201,14 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             ]
             image_rescale_factor = self._config.vision_encoder.image_normalization.rescale_factor
             vision_kwargs = {
-                VisionEncoderKwargs.patch_size: batch_meta.patch_size,
+                VisionEncoderKwargs.patch_size: self._config.vision_encoder.patch_size,
                 VisionEncoderKwargs.image_size: image_size,
                 VisionEncoderKwargs.image_mean: image_mean,
                 VisionEncoderKwargs.image_std: image_std,
                 VisionEncoderKwargs.image_rescale_factor: image_rescale_factor,
                 VisionEncoderKwargs.rope_theta: self._config.vision_encoder.transformer.rotary.theta,
                 VisionEncoderKwargs.kv_channels: self._tensor_space.get_tensor_dim(
-                    VisionEncoderDimNames.kv_channels
+                    VisionTransformerDimNames.kv_channels
                 ).size,
                 VisionEncoderKwargs.out_channels: self._tensor_space.get_tensor_dim(
                     VisionEncoderDimNames.out_channels
@@ -266,7 +268,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             )
             vision_kwargs.update(
                 {
-                    VisionEncoderKwargs.hidden_dims: vision_hidden_dims,
+                    VisionTransformerKwargs.hidden_dims: vision_hidden_dims,
                 }
             )
 

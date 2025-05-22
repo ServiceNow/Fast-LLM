@@ -5,7 +5,7 @@ import torch
 from fast_llm.core.ops import split
 from fast_llm.engine.base_model.base_model import Layer
 from fast_llm.engine.config_utils.tensor_space import TensorSpace
-from fast_llm.layers.transformer.config import TransformerKwargs
+from fast_llm.layers.transformer.config import TransformerKwargs, VisionTransformerKwargs
 from fast_llm.layers.vision_encoder.config import VisionEncoderConfig, VisionEncoderDimNames, VisionEncoderKwargs
 from fast_llm.tensor import ParameterMeta, TensorMeta, init_normal_
 
@@ -43,6 +43,7 @@ class PatchConv(Layer):
         self._tensor_space = tensor_space
         self._distributed_config = tensor_space.distributed_config
         self._sequence_parallel = self._distributed_config.sequence_tensor_parallel
+        self._lr_scale = config.adapter_lr_scale
         # TODO Soham: lr_scale
         self.weight = ParameterMeta.from_dims(
             (
@@ -52,10 +53,13 @@ class PatchConv(Layer):
                 self._tensor_space.get_tensor_dim(VisionEncoderDimNames.patch_size),
             ),
             init_method=init_normal_(),
+            lr_scale=self._lr_scale,
         )
         if config.conv_bias:
             self.bias = ParameterMeta.from_dims(
-                (self._tensor_space.get_tensor_dim(VisionEncoderDimNames.out_channels),)
+                (self._tensor_space.get_tensor_dim(VisionEncoderDimNames.out_channels),),
+                init_method=init_normal_(),
+                lr_sclae=self._lr_scale,
             )
         else:
             self.bias = None
@@ -69,7 +73,7 @@ class PatchConv(Layer):
         losses: dict[str, typing.Any] | None = None,
         metrics: dict | None = None,
     ) -> torch.Tensor:
-        hidden_dims = kwargs[VisionEncoderKwargs.hidden_dims]
+        hidden_dims = kwargs[VisionTransformerKwargs.hidden_dims]
         if isinstance(input_, TensorMeta):
             return TensorMeta.from_dims(hidden_dims, tensor_name="patch conv output", dtype=input_.dtype)
         micro_batch_size = kwargs[TransformerKwargs.micro_batch_size]

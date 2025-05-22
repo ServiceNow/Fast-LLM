@@ -46,7 +46,7 @@ class Tokenizer:
         self, text: str, char_spans=None, image_positions=None, audio_positions=None
     ) -> tuple[list[int], list[tuple[int, int]]]:
         """
-        Tokenize the input text and return the tokenized input_ids along with token spans.
+        Tokenize the input text and return the tokenized input_ids and if provided, token spans and image positions.
         """
         image_positions = image_positions or []
         audio_positions = audio_positions or []

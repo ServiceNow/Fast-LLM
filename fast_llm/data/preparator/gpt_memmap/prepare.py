@@ -146,8 +146,6 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
                         if self._config.dataset.loss_masking_spans
                         else None
                     ),
-                    # [np.array(Image.open(pathlib.Path(self._config.dataset.path) / path)) for path in item["image_paths"]] if self._config.dataset.image_paths else None,
-                    # [np.array(im) for im in item["images"]] if self._config.dataset.images else None,
                     item["images"] if self._config.dataset.images else None,
                     item["image_positions"] if self._config.dataset.image_positions else None,
                     (
@@ -157,15 +155,6 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
                     ),
                     item[self._config.dataset.audio_positions] if self._config.dataset.audio_positions else None,
                 )
-            # if "token_spans" in shard_dataset.column_names and self._config.dataset.loss_masking_spans is not None:
-            #     for item in tqdm.tqdm(shard_dataset, desc=f"Saving shard {shard_idx}", unit="docs"):
-            #         yield GPTSample(
-            #             np.array(item["input_ids"], dtype=self._data_type.numpy),
-            #             np.array(item["token_spans"], dtype=np.int32).reshape(-1, 2),
-            #         )
-            # else:
-            #     for item in tqdm.tqdm(shard_dataset, desc=f"Saving shard {shard_idx}", unit="docs"):
-            #         yield GPTSample(np.array(item["input_ids"], dtype=self._data_type.numpy))
 
         GPTMemmapDataset.write_dataset(prefix=shard_output_path, documents=_document_generator())
 
@@ -297,7 +286,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
         if self._config.dataset.field not in dataset.column_names:
             raise ValueError(f"Dataset does not have field '{self._config.dataset.field}'.")
         tokenize_fn = self._tokenize_batch
-        # Avoid decoding bytes to images unless asked
+        # decoding bytes to images is slow and should be done only when needed
         if self._config.dataset.images is not None:
             dataset = dataset.cast_column("images", datasets.Sequence(datasets.Image(decode=False)))
 

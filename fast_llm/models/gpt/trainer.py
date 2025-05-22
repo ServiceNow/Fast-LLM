@@ -30,13 +30,18 @@ class GPTTrainer[ConfigType: GPTTrainerConfig](Trainer[ConfigType]):
                 "use_loss_masking_spans": self._config.batch.use_loss_masking_spans,
                 "cross_document_attention": self._config.batch.cross_document_attention,
                 "extra_tokens": self._config.model.base_model.prediction_heads,
-                "patch_size": self._config.batch.patch_size,
-                "image_size": self._config.batch.image_size,
                 "aud_downsampling_k": self._config.model.base_model.audio_encoder.aud_downsampling_k,
                 "aud_padding_duration": self._config.batch.aud_padding_duration,
                 "aud_sampling_rate": self._config.model.base_model.audio_encoder.aud_sampling_rate,
             }
         )
+        if self._config.model.base_model.vision_encoder.enabled:
+            parameters.update(
+                {
+                    "patch_size": self._config.model.base_model.vision_encoder.patch_size,
+                    "image_size": self._config.batch.image_size,
+                }
+            )
         return parameters if _return_dict else GPTSamplingParameters(**parameters)
 
     def get_tflops(self, phase: PhaseType, elapsed_time_per_iteration) -> tuple[int, int]:

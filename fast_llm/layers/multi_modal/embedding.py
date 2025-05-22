@@ -55,7 +55,6 @@ class MultiModalEmbedding(LanguageModelEmbedding):
             embeddings = reduce_forward(embeddings, group)
             if self._use_absolute_position_embeddings:
                 embeddings = embeddings + torch.nn.functional.embedding(position_ids, self.position_embeddings_weight)
-            # TODO Soham: avoid cloning?
             embeddings = embeddings.clone()
             input_ = gather(input_, group, dim=0)
             for sample_idx, (positions, sizes) in enumerate(zip(image_positions, image_sizes)):
@@ -82,7 +81,6 @@ class MultiModalEmbedding(LanguageModelEmbedding):
                 # for positions in image_positions:
                 #     if positions > self._distributed_config.tensor_rank
             embeddings = torch.embedding(self.word_embeddings_weight, tokens)
-            # TODO Soham: avoid cloning?
             embeddings = embeddings.clone()
             for sample_idx, (positions, sizes) in enumerate(zip(image_positions, image_sizes)):
                 image_embedding_offset = 0
@@ -116,7 +114,6 @@ class MultiModalEmbedding(LanguageModelEmbedding):
                 tensor_name="Embedding output",
                 dtype=self._residual_dtype,
             )
-        # image_embeddings = kwargs.pop(VisionEncoderKwargs.patch_embeddings)
         position_ids = kwargs.get(LanguageModelKwargs.position_ids)
         image_sizes = kwargs.get(VisionEncoderKwargs.image_sizes)
         image_positions = kwargs.get(VisionEncoderKwargs.image_positions)
