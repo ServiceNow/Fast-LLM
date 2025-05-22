@@ -1,17 +1,16 @@
 import math
 
-import pytest
 import torch
 
 from fast_llm.config import NoAutoValidate
 from fast_llm.data.data.gpt.data import GPTBatch
 from fast_llm.engine.distributed.config import PhaseType
 from fast_llm.engine.distributed.distributed import Distributed
-from fast_llm.engine.optimizer.config import OptimizerConfig, ParamGroup
-from fast_llm.engine.optimizer.optimizer import Optimizer
+from fast_llm.engine.optimizer.config import OptimizerConfig
 from fast_llm.engine.schedule.config import ScheduleConfig
 from fast_llm.engine.schedule.runner import ScheduleRunner
 from fast_llm.engine.schedule.schedule import Schedule
+from fast_llm.layers.language_model.config import LanguageModelKwargs
 from fast_llm.models.gpt.config import GPTBatchConfig, LlamaGPTHuggingfaceCheckpointFormat, PretrainedGPTModelConfig
 from tests.common import requires_cuda
 from tests.test_gpt_generate_and_forward import model_and_tokenizer  # noqa: F401
@@ -59,17 +58,6 @@ def _get_model_runner_schedule(
         phase=phase,
     )
 
-    if phase == PhaseType.validation:
-        schedule_trainer = Schedule(
-            multi_stage=multi_stage,
-            batch_config=batch_config,
-            schedule_config=schedule_config,
-            distributed_config=config.model.distributed,
-            phase=PhaseType.training,
-        )
-    else:
-        schedule_trainer = None
-
     runner = ScheduleRunner(
         config=schedule_config,
         multi_stage=multi_stage,
@@ -81,46 +69,16 @@ def _get_model_runner_schedule(
     with torch.no_grad():
         multi_stage.setup(distributed)
 
-    # Setup the optimizer.
-    if phase == PhaseType.inference:
-        optimizer = None
-    else:
-        zero_effect_optimizer_updates = {
-            ("learning_rate", "base"): 0.0,
-            ("learning_rate", "minimum"): 0.0,
-            ("learning_rate", "decay_style"): "constant",
-            ("learning_rate", "decay_iterations"): 100,
-            ("learning_rate", "warmup_iterations"): 0,
-            ("gradient_scaler", "initial"): 1.0,  # small value so it does not explode
-            ("gradient_scaler", "constant"): 1.0,  # disables dynamic scaling if your code uses this
-            ("weight_decay",): 0.0,  # disables weight decay
-            ("beta_1",): 0.0,  # disables momentum
-            ("beta_2",): 0.0,  # disables second moment
-            ("epsilon",): 1.0,  # high epsilon can suppress tiny updates
-            ("gradient_norm_clipping",): 1e-12,  # essentially no clipping
-            ("default_learning_rate_scale",): 0.0,  # scaling factor to zero everything
-        }
-        optimizer_config = OptimizerConfig.from_dict({}, zero_effect_optimizer_updates)
-        param_groups, grads_for_norm = multi_stage.get_param_groups(ParamGroup)
-        optimizer = Optimizer(
-            optimizer_config,
-            param_groups=param_groups,
-            grads_for_norm=grads_for_norm,
-            distributed=distributed,
-        )
-
     with torch.no_grad():
-        runner.setup(distributed, optimizer)
+        runner.setup(distributed)
 
     multi_stage.load_checkpoint(config.pretrained)
-    if phase == PhaseType.validation:
-        optimizer.reset_state()
 
-    return multi_stage, runner, schedule, schedule_trainer, batch_config
+    return multi_stage, runner, schedule, batch_config
 
 
 def _test_for_phase(model_path, fast_llm_checkpoint_format, phase):
-    model, runner, schedule, schedule_training, batch_config = _get_model_runner_schedule(
+    model, runner, schedule, batch_config = _get_model_runner_schedule(
         model_path, True, True, fast_llm_checkpoint_format, phase
     )
 
@@ -134,17 +92,22 @@ def _test_for_phase(model_path, fast_llm_checkpoint_format, phase):
         )
     )
 
-    if phase == PhaseType.validation:
-        # Needs to run at least once as otherwise getting exception about non existent param
-        # AttributeError: 'Parameter' object has no attribute 'param_grad_is_zero'
-        iter_losses, _, _ = runner.run_step(iter((inputs,)), schedule_training, iteration=1)
+    iteration = 1
 
-    iter_losses, _, _ = runner.run_step(iter((inputs,)), schedule, iteration=1)
+    # we need to set phase to validation here so preprocess would crate labels from input
+    # so it is the same process for validation and inference phases
+    # otherwise we can add labels manually after preprocess for inference phase
+    batch = model.base_model.preprocess(inputs, phase=PhaseType.validation, iteration=iteration)
+    ((inputs_, kwargs),) = batch
+    kwargs[LanguageModelKwargs.phase] = phase
+    iter_losses, _, _ = runner.run_step(
+        iter((((inputs_, kwargs),),)), schedule, iteration=iteration, preprocessed=True
+    )
 
     return iter_losses
 
 
-@pytest.mark.extra_slow
+# @pytest.mark.extra_slow
 @requires_cuda
 def test_loss_validation_vs_inference(model_and_tokenizer):
     model_path, _, fast_llm_checkpoint_format = model_and_tokenizer
