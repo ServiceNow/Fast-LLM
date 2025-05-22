@@ -470,17 +470,18 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
 
     @property
     def embedding(self) -> LanguageModelEmbedding:
-        if self._config.vision_encoder.enabled:
-            return self.layers[self._config.vision_encoder.transformer.num_layers + 2]
-        else:
-            return self.layers[0]
+        return self.layers[self.embedding_layer_index]
 
     @property
     def transformer_layers(self) -> list[TransformerLayer]:
+        return self.layers[self.embedding_layer_index + 1 : -1]
+
+    @property
+    def embedding_layer_index(self) -> int:
         if self._config.vision_encoder.enabled:
-            return self.layers[self._config.vision_encoder.transformer.num_layers + 3 : -1]
+            return self._config.vision_encoder.transformer.num_layers + 2
         else:
-            return self.layers[1:-1]
+            return 0
 
     @property
     def model_head(self) -> LanguageModelHead:
@@ -494,12 +495,8 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
         if self._config.tie_word_embeddings:
             return {
                 WORD_EMBEDDINGS_WEIGHT: (
-                    self.layers[0].word_embeddings_weight,
-                    # TODO Soham: make embedding layer index a property
-                    (
-                        self._config.vision_encoder.enabled * (self._config.vision_encoder.transformer.num_layers + 2),
-                        *self.model_head_indices,
-                    ),
+                    self.embedding.word_embeddings_weight,
+                    (self.embedding_layer_index, *self.model_head_indices),
                 )
             }
         elif self._config.prediction_heads > 1:

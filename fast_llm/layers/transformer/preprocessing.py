@@ -7,19 +7,8 @@ import torch
 from fast_llm.engine.base_model.config import Preprocessor
 from fast_llm.engine.config_utils.tensor_space import DefaultDimNames, TensorDim, TensorSpace
 from fast_llm.functional.rotary import convert_rotary_complex_to_real
-from fast_llm.layers.transformer.config import (
-    RotaryConfig,
-    RotaryEmbeddingType,
-    TransformerConfig,
-    TransformerDimNames,
-    TransformerKwargs,
-    VisionTransformerConfig,
-)
-from fast_llm.layers.vision_encoder.config import (
-    VisionEncoderKwargs,
-    VisionTransformerDimNames,
-    VisionTransformerKwargs,
-)
+from fast_llm.layers.transformer.config import RotaryConfig, RotaryEmbeddingType, TransformerConfig, TransformerKwargs
+from fast_llm.layers.vision_encoder.config import VisionEncoderKwargs
 from fast_llm.tensor import TensorMeta
 
 logger = logging.getLogger(__name__)
@@ -178,19 +167,8 @@ class RotaryEmbeddingPreprocessor(Preprocessor):
         config: RotaryConfig,
         tensor_space: TensorSpace,
     ):
-        # if isinstance(config, TransformerConfig):
-        #     self._transformer_dim_names = TransformerDimNames
-        #     self._transformer_kwargs = TransformerKwargs
-        # elif isinstance(config, VisionTransformerConfig):
-        #     self._transformer_dim_names = VisionTransformerDimNames
-        #     self._transformer_kwargs = VisionTransformerKwargs
-        # TODO Soham: better way to do this?
-        if config.type == RotaryEmbeddingType.pixtral:
-            self._transformer_dim_names = VisionTransformerDimNames
-            self._transformer_kwargs = VisionTransformerKwargs
-        else:
-            self._transformer_dim_names = TransformerDimNames
-            self._transformer_kwargs = TransformerKwargs
+        self._transformer_dim_names = config._transformer_dim_names
+        self._transformer_kwargs = config._transformer_kwargs
         self._config = config
         assert self._config.enabled
         self._tensor_space = tensor_space
@@ -273,12 +251,14 @@ class BackupAttentionPreprocessor(Preprocessor):
         config: TransformerConfig,
         tensor_space: TensorSpace,
     ):
-        if isinstance(config, VisionTransformerConfig):
-            self._transformer_dim_names = VisionTransformerDimNames
-            self._transformer_kwargs = VisionTransformerKwargs
-        elif isinstance(config, TransformerConfig):
-            self._transformer_dim_names = TransformerDimNames
-            self._transformer_kwargs = TransformerKwargs
+        # if isinstance(config, VisionTransformerConfig):
+        #     self._transformer_dim_names = VisionTransformerDimNames
+        #     self._transformer_kwargs = VisionTransformerKwargs
+        # elif isinstance(config, TransformerConfig):
+        #     self._transformer_dim_names = TransformerDimNames
+        #     self._transformer_kwargs = TransformerKwargs
+        self._transformer_dim_names = config._transformer_dim_names
+        self._transformer_kwargs = config._transformer_kwargs
         self._config = config
         self._tensor_space = tensor_space
         self._distributed_config = self._tensor_space.distributed_config
@@ -348,12 +328,14 @@ class FlashAttnVarlenPreprocessor(Preprocessor):
         self._tensor_space = tensor_space
         self._distributed_config = self._tensor_space.distributed_config
         assert self._config.do_use_flash_attention(self._distributed_config)
-        if isinstance(config, VisionTransformerConfig):
-            self._transformer_dim_names = VisionTransformerDimNames
-            self._transformer_kwargs = VisionTransformerKwargs
-        elif isinstance(config, TransformerConfig):
-            self._transformer_dim_names = TransformerDimNames
-            self._transformer_kwargs = TransformerKwargs
+        # if isinstance(config, VisionTransformerConfig):
+        #     self._transformer_dim_names = VisionTransformerDimNames
+        #     self._transformer_kwargs = VisionTransformerKwargs
+        # elif isinstance(config, TransformerConfig):
+        #     self._transformer_dim_names = TransformerDimNames
+        #     self._transformer_kwargs = TransformerKwargs
+        self._transformer_dim_names = config._transformer_dim_names
+        self._transformer_kwargs = config._transformer_kwargs
 
     def preprocess(self, batch, kwargs: dict[str, typing.Any]) -> None:
         """

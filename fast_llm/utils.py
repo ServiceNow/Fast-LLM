@@ -336,3 +336,10 @@ def compare_nested(config_a, config_b, errors: list | None = None, prefix: tuple
 def check_equal_nested(config_a, config_b):
     if errors := compare_nested(config_a, config_b):
         raise ValueError("\n".join(errors))
+
+
+def prefix_class_vars(cls, prefix: str, base_cls: type):
+    for attr, value in vars(base_cls).items():
+        if not attr.startswith("__") and isinstance(value, str) and not hasattr(cls, attr):
+            setattr(cls, attr, prefix + value)
+    return cls

@@ -486,6 +486,7 @@ class GPTSampledIndexedDataset(SampledDataset):
         image_positions = []
         audio_positions = []
         mm_tokens_added = 0
+        text_tokens_added = 0
         while token_count < token_end:
             # Find the document index in the dataset.
             if document_sampling_index < self._unshuffled_documents:
@@ -574,6 +575,7 @@ class GPTSampledIndexedDataset(SampledDataset):
                     # Add placeholders for image and audio tokens tokens
                     token_ids.append(sample.token_ids[start_pos:mm_position])
                     if mm_type == "image":
+                        text_tokens_added += len(token_ids[-1])
                         token_ids.append(np.full((image_sizes[idx],), -100, dtype=np.int64))
                         image_positions.append(mm_position + len(token_ids) + mm_tokens_added)
                         mm_tokens_added += image_tokens
@@ -583,10 +585,18 @@ class GPTSampledIndexedDataset(SampledDataset):
                         mm_tokens_added += audio_tokens
                     start_pos = mm_position
                 token_ids.append(sample.token_ids[start_pos:])
-                images.append(sample.images)
-                audio.append(self.apply_audio_padding(sample.audio))
 
                 # TODO Soham: add offsets for loss masking spans
+                text_tokens_added += len(token_ids[-1])
+                if sample.images:
+                    images.append(sample.images)
+                else:
+                    images.append([])
+                if sample.audio:
+                    audio.append(self.apply_audio_padding(sample.audio))
+                else:
+                    audio.append([])
+
                 if self._parameters.use_loss_masking_spans:
                     for loss_masking_span in sample.loss_masking_spans:
                         span = np.clip(

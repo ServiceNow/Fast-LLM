@@ -1,36 +1,21 @@
 import torch
 
-from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
-from fast_llm.layers.transformer.config import TransformerConfig
+from fast_llm.engine.config_utils.tensor_space import TensorDim
 from fast_llm.layers.transformer.transformer import TransformerLayer
 from fast_llm.layers.vision_encoder.config import VisionTransformerDimNames, VisionTransformerKwargs
 from fast_llm.tensor import TensorMeta
 
 
 class VisionTransformerLayer(TransformerLayer):
-    """
-    A vision transformer layer to encode image patches
-    """
-
-    def __init__(
-        self,
-        config: TransformerConfig,
-        tensor_space: TensorSpace,
-        layer_index: int,
-        return_input: bool = False,
-    ):
-        super().__init__(config, tensor_space, layer_index, return_input)
-
-        hidden_dim = self._tensor_space.get_tensor_dim(VisionTransformerDimNames.hidden)
-        self.norm_1 = self._config.normalization.get_layer(hidden_dim)
-        self.norm_2 = self._config.normalization.get_layer(hidden_dim)
-
-        self.norm_1 = self._config.peft.apply_other(self.norm_1)
-        self.norm_2 = self._config.peft.apply_other(self.norm_2)
+    _name: str = "Vision transformer layer"
 
     @property
-    def name(self) -> str:
-        return f"Vision transformer layer {self._layer_index}"
+    def _transformer_kwargs(self) -> VisionTransformerKwargs:
+        return VisionTransformerKwargs
+
+    @property
+    def _transformer_dim_names(self) -> VisionTransformerDimNames:
+        return VisionTransformerDimNames
 
     def _get_meta(self, tensor: torch.Tensor, name: str, kwargs: dict):
         dims = kwargs[VisionTransformerKwargs.hidden_dims]
