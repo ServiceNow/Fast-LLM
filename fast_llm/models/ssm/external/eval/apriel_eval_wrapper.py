@@ -118,7 +118,7 @@ class AprielHybridSSMWrapper(HFLM):
 
 
 @register_model("apriel_hybrid_ssm_15b")
-class AprielHybridSSMWrapper(HFLM):
+class AprielHybrid15bSSMWrapper(HFLM):
     """Wrapper for AprielHybridSSM model for compatibility with lm-evaluation-harness."""
 
     def __init__(self, pretrained, **kwargs) -> None:
