@@ -130,6 +130,11 @@ class VisionEncoderConfig(BaseModelConfig):
         desc="Configuration for the normalization layers applied to the image patches.",
         hint=FieldHint.optional,
     )
+    image_break_token: int | None = Field(
+        default=None,
+        desc="Token id to separate image rows. If None, no token id is applied is applied.",
+        hint=FieldHint.optional,
+    )
     adapter_lr_scale: float | None = Field(
         default=None,
         desc="Custom learning rate scale for the adapter weights.",

@@ -19,6 +19,16 @@ def get_num_patches(height: int, width: int, patch_size: int) -> tuple[int, int]
     return div(height, patch_size) * div(width, patch_size)
 
 
+def get_num_image_tokens(height: int, width: int, patch_size: int, image_break: bool) -> int:
+    """
+    Calculate the number of image tokens.
+    If image_break is True, we consider 1 additional token after every row of patches.
+    """
+    height_patches = div(height, patch_size)
+    width_patches = div(width, patch_size)
+    return height_patches * (width_patches + image_break)
+
+
 def get_resize_dims(height: int, width: int, max_height: int, max_width: int, patch_size: int) -> tuple[int, int]:
     """
     Calculate the new dimensions for resizing an image while maintaining the aspect ratio.
