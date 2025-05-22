@@ -20,7 +20,6 @@ class VisionAdapter(Layer):
         super().__init__()
         input_dim = tensor_space.get_tensor_dim(VisionEncoderDimNames.out_channels)
         self._activation_type = config.adapter_activation_type
-        # TODO Soham: Make them OutputParallelLinear instead? How would this work with parallelism?
         self.layer_1 = Linear(
             input_dim,
             tensor_space.get_tensor_dim(VisionEncoderDimNames.adapter_size),

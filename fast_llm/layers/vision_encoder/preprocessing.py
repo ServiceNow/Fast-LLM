@@ -103,7 +103,6 @@ class VisionPreprocessor(Preprocessor):
         self._distributed_config = self._tensor_space.distributed_config
 
     def preprocess_meta(self, kwargs: dict[str, typing.Any]) -> None:
-        # kwargs[VisionEncoderDimNames]
         kwargs[VisionEncoderKwargs.image_patches_meta] = TensorMeta.from_dims(
             (
                 TensorDim(
@@ -141,16 +140,12 @@ class VisionPreprocessor(Preprocessor):
             ]
             for imgs in images
         ]
-        # position_ids = position_ids_in_meshgrid(image_sizes, im_height, patch_size)
         patches = []
         patch_position_ids = []
         cu_seqlens = [0]
         max_seqlen = -1
         kwargs.get(TransformerKwargs.sequence_first)
         for imgs, sizes in zip(images, image_sizes):
-            # sum(
-            #     get_num_patches(*size, patch_size) for size in sizes
-            # )
             seq_patches = []
             sample_cu_seqlen = 0
             for image, size in zip(imgs, sizes):

@@ -149,11 +149,3 @@ class TransformerLayer(BaseBlock):
 
     def _create_mixer(self):
         self.self_attn = Attention(self._config, self._tensor_space, self._layer_index)
-
-    # @property
-    # def _transformer_kwargs(self) -> TransformerKwargs:
-    #     return TransformerKwargs
-
-    # @property
-    # def _transformer_dim_names(self) -> TransformerDimNames:
-    #     return TransformerDimNames

@@ -114,7 +114,6 @@ class MultiModalEmbedding(LanguageModelEmbedding):
                 tensor_name="Embedding output",
                 dtype=self._residual_dtype,
             )
-        # image_embeddings = kwargs.pop(VisionEncoderKwargs.patch_embeddings)
         position_ids = kwargs.get(LanguageModelKwargs.position_ids)
         image_sizes = kwargs.get(VisionEncoderKwargs.image_sizes)
         image_positions = kwargs.get(VisionEncoderKwargs.image_positions)

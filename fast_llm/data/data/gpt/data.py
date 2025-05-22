@@ -51,13 +51,13 @@ def gpt_data_collate_fn(batch: list[GPTSample], sampling_parameters: GPTSampling
             batch_images.append([torch.from_numpy(image) for image in sample.images])
             has_images = True
         else:
-            batch_images.append(None)
+            batch_images.append([])
     batch_image_positions = []
     for sample in batch:
         if sample.image_positions is not None:
             batch_image_positions.append(torch.from_numpy(sample.image_positions))
         else:
-            batch_image_positions.append(None)
+            batch_image_positions.append([])
     return GPTBatch(
         token_ids=torch.from_numpy(stacked_ids),
         loss_masking_spans=stacked_spans,

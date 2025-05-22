@@ -110,29 +110,6 @@ class VisionTransformerKwargs(BaseTransformerKwargs, prefix="image_encoder"):
     patch_position_ids = "patch_position_ids"
 
 
-# class TransformerKwargs:
-#     rotary_freq_q = "rotary_freq_q"
-#     rotary_freq_k = "rotary_freq_k"
-#     attention_mask = "attention_mask"
-#     attention_mask_value = "attention_mask_value"
-#     sequence_lengths = "sequence_lengths"
-#     cu_seqlens_q = "cu_seqlens_q"
-#     cu_seqlens_k = "cu_seqlens_k"
-#     max_seqlen_q = "max_seqlen_q"
-#     max_seqlen_k = "max_seqlen_k"
-#     # TODO: Review these
-#     presents = "presents"
-#     past_key_values = "past_key_values"
-#     sequence_first = "sequence_first"
-#     hidden_dims = "hidden_dims"
-#     sequence_q_dim = "sequence_q_dim"
-#     sequence_k_dim = "sequence_k_dim"
-#     sequence_length = "sequence_length"
-#     micro_batch_size = "micro_batch_size"
-#     # TODO: Move
-#     grad_output = "grad_output"
-
-
 class TransformerLossNames:
     load_balancing_loss = "load_balancing_loss"
     router_z_loss = "router_z_loss"

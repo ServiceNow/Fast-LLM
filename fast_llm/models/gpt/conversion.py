@@ -115,8 +115,7 @@ class MLPLayer2Converter(WeightConverter):
         return (merged_weight.t().contiguous(),)
 
 
-class TransformerWeightConverterMixin:
-
+class WeightAndBiasConverterMixin:
     def _get_weight_and_bias_converters(
         self,
         fast_llm_prefix: str | tuple[str, ...],
@@ -143,6 +142,83 @@ class TransformerWeightConverterMixin:
                     self._model.config.base_model,
                 )
             )
+        return converters
+
+
+class CommonHuggingfaceCheckpointHandler(WeightAndBiasConverterMixin, HuggingfaceStateDictCheckpointHandler):
+    _model: GPTModel
+    _model_class: typing.ClassVar[FastLLMModelConfig] = GPTModelConfig
+    """
+    Common converter for llama-based huggingface models (llama, starcoder2, mistral, mixtral)
+    """
+
+    @classmethod
+    def _create_config_converters(cls) -> list[ParamConverter]:
+        return super()._create_config_converters() + [
+            ConstantImportParamConverter(fast_llm_names=(("use_position_embeddings",),), fast_llm_value=False),
+            RenameParamConverter(
+                fast_llm_names=(("transformer", "rotary", "theta"),), export_names=(("rope_theta",),)
+            ),
+            MappedConfigParamConverter(
+                fast_llm_names=(("transformer", "activation_type"),),
+                export_names=(("hidden_act",),),
+                fast_llm_value=ActivationType.from_hf_name,
+                export_value=lambda activation_type: activation_type.hf_name,
+            ),
+            RenameParamConverter(
+                fast_llm_names=(("transformer", "num_layers"),),
+                export_names=(("num_hidden_layers",),),
+            ),
+            RenameParamConverter(
+                fast_llm_names=(("transformer", "hidden_size"),),
+                export_names=(("hidden_size",),),
+            ),
+            RenameParamConverter(
+                fast_llm_names=(("transformer", "num_attention_heads"),),
+                export_names=(("num_attention_heads",),),
+            ),
+            RenameParamConverter(
+                fast_llm_names=(("transformer", "head_groups"),),
+                export_names=(("num_key_value_heads",),),
+            ),
+            RenameParamConverter(
+                fast_llm_names=(("transformer", "ffn_hidden_size"),),
+                export_names=(("intermediate_size",),),
+            ),
+            RenameParamConverter(
+                fast_llm_names=(("vocab_size",),),
+                export_names=(("vocab_size",),),
+            ),
+            RenameParamConverter(
+                fast_llm_names=(("tie_word_embeddings",),),
+                export_names=(("tie_word_embeddings",),),
+            ),
+        ]
+
+    @abc.abstractmethod
+    def _get_mlp_converters(self, fast_llm_prefix: str, hf_prefix: str) -> list[WeightConverter]:
+        pass
+
+    def _create_weight_converters(
+        self,
+        hf_base_prefix: str = "",
+        offset: int = 0,
+    ) -> list[WeightConverter]:
+        converters = []
+        num_layers = self._model.config.base_model.transformer.num_layers
+
+        # Embeddings
+        converters.append(
+            WeightConverter(f"layers.{offset}.word_embeddings_weight", f"{hf_base_prefix}model.embed_tokens.weight")
+        )
+
+        converters += self._create_lm_head_converters(hf_base_prefix, offset=offset)
+
+        for i in range(num_layers):
+            converters += self._create_transformer_layer_converters(
+                f"layers.{i+offset+1}", f"{hf_base_prefix}model.layers.{i}"
+            )
+
         return converters
 
     def _create_lm_head_converters(self, hf_base_prefix: str = "", offset: int = 0) -> list[WeightConverter]:
@@ -247,83 +323,6 @@ class TransformerWeightConverterMixin:
             converters += [IgnoreExportWeightConverter(f"{fast_llm_layer_name}.mlp.router.weight", ())]
         else:
             converters += self._get_mlp_converters(f"{fast_llm_layer_name}", f"{hf_layer_name}")
-        return converters
-
-
-class CommonHuggingfaceCheckpointHandler(TransformerWeightConverterMixin, HuggingfaceStateDictCheckpointHandler):
-    _model: GPTModel
-    _model_class: typing.ClassVar[FastLLMModelConfig] = GPTModelConfig
-    """
-    Common converter for llama-based huggingface models (llama, starcoder2, mistral, mixtral)
-    """
-
-    @classmethod
-    def _create_config_converters(cls) -> list[ParamConverter]:
-        return super()._create_config_converters() + [
-            ConstantImportParamConverter(fast_llm_names=(("use_position_embeddings",),), fast_llm_value=False),
-            RenameParamConverter(
-                fast_llm_names=(("transformer", "rotary", "theta"),), export_names=(("rope_theta",),)
-            ),
-            MappedConfigParamConverter(
-                fast_llm_names=(("transformer", "activation_type"),),
-                export_names=(("hidden_act",),),
-                fast_llm_value=ActivationType.from_hf_name,
-                export_value=lambda activation_type: activation_type.hf_name,
-            ),
-            RenameParamConverter(
-                fast_llm_names=(("transformer", "num_layers"),),
-                export_names=(("num_hidden_layers",),),
-            ),
-            RenameParamConverter(
-                fast_llm_names=(("transformer", "hidden_size"),),
-                export_names=(("hidden_size",),),
-            ),
-            RenameParamConverter(
-                fast_llm_names=(("transformer", "num_attention_heads"),),
-                export_names=(("num_attention_heads",),),
-            ),
-            RenameParamConverter(
-                fast_llm_names=(("transformer", "head_groups"),),
-                export_names=(("num_key_value_heads",),),
-            ),
-            RenameParamConverter(
-                fast_llm_names=(("transformer", "ffn_hidden_size"),),
-                export_names=(("intermediate_size",),),
-            ),
-            RenameParamConverter(
-                fast_llm_names=(("vocab_size",),),
-                export_names=(("vocab_size",),),
-            ),
-            RenameParamConverter(
-                fast_llm_names=(("tie_word_embeddings",),),
-                export_names=(("tie_word_embeddings",),),
-            ),
-        ]
-
-    @abc.abstractmethod
-    def _get_mlp_converters(self, fast_llm_prefix: str, hf_prefix: str) -> list[WeightConverter]:
-        pass
-
-    def _create_weight_converters(
-        self,
-        hf_base_prefix: str = "",
-        offset: int = 0,
-    ) -> list[WeightConverter]:
-        converters = []
-        num_layers = self._model.config.base_model.transformer.num_layers
-
-        # Embeddings
-        converters.append(
-            WeightConverter(f"layers.{offset}.word_embeddings_weight", f"{hf_base_prefix}model.embed_tokens.weight")
-        )
-
-        converters += self._create_lm_head_converters(hf_base_prefix, offset=offset)
-
-        for i in range(num_layers):
-            converters += self._create_transformer_layer_converters(
-                f"layers.{i+offset+1}", f"{hf_base_prefix}model.layers.{i}"
-            )
-
         return converters
 
 
@@ -565,7 +564,7 @@ class MistralHuggingfaceCheckpointHandler(CommonLlamaHuggingfaceCheckpointHandle
         ]
 
 
-class PixtralHuggingfaceCheckpointHandler(TransformerWeightConverterMixin, HuggingfaceStateDictCheckpointHandler):
+class PixtralHuggingfaceCheckpointHandler(WeightAndBiasConverterMixin, HuggingfaceStateDictCheckpointHandler):
     format: typing.ClassVar[type[CheckpointFormat]] = PixtralGPTHuggingfaceCheckpointFormat
     _model_class: typing.ClassVar[FastLLMModelConfig] = GPTModelConfig
 
@@ -770,7 +769,7 @@ class PixtralHuggingfaceCheckpointHandler(TransformerWeightConverterMixin, Huggi
         return self._model.config.base_model.vision_encoder.transformer.num_layers + 2
 
 
-class LlavaHuggingfaceCheckpointHandler(TransformerWeightConverterMixin, HuggingfaceStateDictCheckpointHandler):
+class LlavaHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
     format: typing.ClassVar[type[CheckpointFormat]] = LlavaGPTHuggingfaceCheckpointFormat
     _model_class: typing.ClassVar[FastLLMModelConfig] = GPTModelConfig
 

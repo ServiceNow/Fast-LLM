@@ -191,7 +191,7 @@ class Attention(torch.nn.Module):
         )
 
     @property
-    def query_dims(self):
+    def _query_dims(self):
         return (
             self._transformer_dim_names.batch,
             self._transformer_dim_names.sequence_q,
@@ -200,7 +200,7 @@ class Attention(torch.nn.Module):
         )
 
     @property
-    def kv_dims(self):
+    def _kv_dims(self):
         return (
             self._transformer_dim_names.batch,
             self._transformer_dim_names.sequence_q,
@@ -209,7 +209,7 @@ class Attention(torch.nn.Module):
         )
 
     @property
-    def context_dims(self):
+    def _context_dims(self):
         return (
             self._transformer_dim_names.batch,
             self._transformer_dim_names.sequence_q,
@@ -346,11 +346,11 @@ class Attention(torch.nn.Module):
 
         if self._config.rotary.enabled:
             if self._debug_transformer:
-                self._debug_log(query, "query_rotary_input", self.query_dims, kwargs)
+                self._debug_log(query, "query_rotary_input", self._query_dims, kwargs)
                 self._debug_log(
                     key,
                     "key_rotary_input",
-                    self.kv_dims,
+                    self._kv_dims,
                     kwargs,
                 )
             rotary_fn = triton_rotary_autograd_ if self._config.rotary.triton else apply_rotary_embeddings
@@ -402,20 +402,20 @@ class Attention(torch.nn.Module):
             )
 
         if self._debug_transformer:
-            self._debug_log(query, "query", self.query_dims, kwargs)
+            self._debug_log(query, "query", self._query_dims, kwargs)
             self._debug_log(
                 key,
                 "key",
-                self.kv_dims,
+                self._kv_dims,
                 kwargs,
             )
             self._debug_log(
                 value,
                 "value",
-                self.kv_dims,
+                self._kv_dims,
                 kwargs,
             )
-            self._debug_log(input_, "context", self.context_dims, kwargs)
+            self._debug_log(input_, "context", self._context_dims, kwargs)
 
         if sequence_first:
             # TODO: Optimize (is contiguous avoidable? Transpose dense output?)

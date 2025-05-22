@@ -44,7 +44,7 @@ class Tokenizer:
 
     def tokenize(self, text: str, char_spans=None, image_positions=None) -> tuple[list[int], list[tuple[int, int]]]:
         """
-        Tokenize the input text and return the tokenized input_ids along with token spans.
+        Tokenize the input text and return the tokenized input_ids and if provided, token spans and image positions.
         """
         if not image_positions:
             image_positions = []

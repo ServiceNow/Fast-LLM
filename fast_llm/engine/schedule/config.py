@@ -50,11 +50,6 @@ class BatchConfig(Config):
         hint=FieldHint.setup,
     )
     # Image inputs
-    patch_size: int | None = Field(
-        default=None,
-        desc="Patch size for each image token",
-        hint=FieldHint.optional,
-    )
     image_size: int | None = Field(
         default=None,
         desc="Maximum image height and width",

@@ -9,14 +9,6 @@ from fast_llm.tensor import TensorMeta
 class VisionTransformerLayer(TransformerLayer):
     _name: str = "Vision transformer layer"
 
-    # @property
-    # def _transformer_kwargs(self) -> VisionTransformerKwargs:
-    #     return VisionTransformerKwargs
-
-    # @property
-    # def _transformer_dim_names(self) -> VisionTransformerDimNames:
-    #     return VisionTransformerDimNames
-
     def _get_meta(self, tensor: torch.Tensor, name: str, kwargs: dict):
         dims = kwargs[VisionTransformerKwargs.hidden_dims]
         if self._return_input:
