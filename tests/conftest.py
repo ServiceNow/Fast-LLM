@@ -23,16 +23,40 @@ def pytest_addoption(parser):
     parser.addoption("--skip-slow", action="store_true")
 
 
+_CUDA_CONTEXT_SIZE_GB = 0.7
+
+
 def pytest_configure(config):
     config.addinivalue_line("markers", "slow: Test is slow.")
     config.addinivalue_line("markers", "xdist_lock(num_gpus=None, gpu_memory_gb=None, timeout=None): Use gpu lock")
 
     num_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 0
-    config.lock_adapter = GPULock(
-        pathlib.Path(tempfile.gettempdir()) / "pytest_xdist_locks.json" if hasattr(config, "workerinput") else None,
-        num_gpus,
-        torch.cuda.mem_get_info(0)[1] / 1e9 if num_gpus > 0 else 0,
-    )
+    is_parallel = hasattr(config, "workerinput")
+    if is_parallel:
+        worker_name = config.workerinput["workerid"]
+        assert worker_name.startswith("gw")
+        worker_id = int(worker_name[2:])
+    else:
+        worker_id = 0
+    if num_gpus > 0:
+        gpu_memory_gb = torch.cuda.mem_get_info(0)[1] / 1e9
+        if is_parallel:
+            max_workers = int(gpu_memory_gb / _CUDA_CONTEXT_SIZE_GB / 2)
+            num_workers = config.workerinput["workercount"]
+            # Limit number of workers to avoid trouble.
+            # Raise only in one worker to limit verboseness.
+            # TODO: Raise in main process instead of worker?
+
+            if num_workers > max_workers and worker_id == 0:
+                raise ValueError(
+                    "The cuda context of parallel test workers requires more than half of the available GPU memory."
+                    f"Please reduce it to {max_workers} or less."
+                )
+            gpu_memory_gb -= _CUDA_CONTEXT_SIZE_GB * num_workers
+    else:
+        gpu_memory_gb = 0
+    lock_path = pathlib.Path(tempfile.gettempdir()) / "pytest_xdist_locks.json" if is_parallel else None
+    config.lock_adapter = GPULock(lock_path, num_gpus, gpu_memory_gb, worker_id)
 
 
 def pytest_collection_modifyitems(config, items):
@@ -46,14 +70,16 @@ def pytest_collection_modifyitems(config, items):
 class GPULock:
     _MAX_PORT_RETRIES = 100
 
-    def __init__(self, lock_file: pathlib.Path | None, num_gpus: int, gpu_memory_gb: float):
-        self._lock_file = lock_file
+    def __init__(self, lock_path: pathlib.Path | None, num_gpus: int, gpu_memory_gb: float, worker_id: int):
+        self._lock_path = lock_path
         self._file_handle = None
         self._owned_keys: set[str] = set()
         self._num_gpus = num_gpus
         self._gpu_memory_gb = gpu_memory_gb
-        if self._lock_file is not None:
-            # Reset the lock if set in previous run.
+        if self._lock_path is not None and worker_id == 0:
+            # Create or reset the lock file.
+            with self._lock_path.open("w") as f:
+                json.dump({"gpus": {i: 0 for i in range(self._num_gpus)}, "ports": []}, f)
             try:
                 assert self._acquire_file_lock()
                 self._write_locks({})
@@ -63,12 +89,12 @@ class GPULock:
 
     def _acquire_file_lock(self) -> bool:
         """Acquire exclusive lock on the file."""
-        if self._lock_file is None:
+        if self._lock_path is None:
             # Lock is disabled, ignore.
             return True
         if self._file_handle is None:
             try:
-                self._file_handle = open(self._lock_file, "r+")
+                self._file_handle = self._lock_path.open("r+")
             except OSError:
                 time.sleep(0.1)
                 return False
@@ -93,7 +119,7 @@ class GPULock:
 
     def _read_locks(self) -> dict[str, typing.Any]:
         """Read current locks states."""
-        if self._lock_file is None or not self._lock_file.is_file():
+        if self._lock_path is None or not self._lock_path.is_file():
             # Lock is disabled, ignore.
             return {}
         self._file_handle.seek(0)
@@ -102,22 +128,27 @@ class GPULock:
 
     def _write_locks(self, locks: dict[str, list[str]]) -> None:
         """Write locks state."""
-        if self._lock_file is None:
+        if self._lock_path is None:
             # Lock is disabled, ignore.
             return
         self._file_handle.seek(0)
         self._file_handle.truncate()
-        json.dump(
-            {lock_key: list(locked_resources) for lock_key, locked_resources in locks.items()}, self._file_handle
-        )
+        json.dump(locks, self._file_handle)
         self._file_handle.flush()
-        os.fsync(self._file_handle.fileno())  # Ensure physical write
+        # Ensure physical write
+        os.fsync(self._file_handle.fileno())
 
     def acquire(
         self, test_id: str, num_gpus: int, gpu_memory_gb: float, ports: int = 0, timeout: float = 60
     ) -> dict[str, typing.Any]:
         if num_gpus > self._num_gpus or gpu_memory_gb > self._gpu_memory_gb:
-            pytest.skip("GPU resources unavailable.")
+            pytest.skip("Not enough GPUs.")
+        if gpu_memory_gb > self._gpu_memory_gb:
+            pytest.fail(
+                f"Not enough GPU memory: needed = {gpu_memory_gb}, available = {self._gpu_memory_gb}."
+                "If the available memory is too low, consider reducing the number of parallel tests."
+            )
+
         end_time = time.time() + timeout
 
         while time.time() < end_time:
@@ -130,8 +161,6 @@ class GPULock:
             owned = {}
 
             if num_gpus > 0:
-                if "gpus" not in locks:
-                    locks["gpus"] = {i: 0 for i in range(self._num_gpus)}
 
                 # Try a random gpu first to spread the workload:
                 gpu_shift = random.randrange(self._num_gpus)
@@ -160,8 +189,6 @@ class GPULock:
 
             if ports > 0:
                 # Get free ports, and lock them for other tests.
-                if "ports" not in locks:
-                    locks["ports"] = []
 
                 owned["ports"] = []
 
@@ -205,7 +232,7 @@ class GPULock:
     def release(self, test_id: str) -> None:
         """Release lock with guaranteed cleanup."""
         if not self._acquire_file_lock():
-            raise BlockingIOError(f"Unable to flock file: {self._lock_file}")
+            raise BlockingIOError(f"Unable to flock file: {self._lock_path}")
         try:
             locks = self._read_locks()
             self._release(locks, test_id)
