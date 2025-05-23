@@ -94,12 +94,7 @@ class GPULock:
         if self._lock_path is not None and worker_id == 0:
             # Create or reset the lock file.
             with self._lock_path.open("w") as f:
-                json.dump({"gpus": {i: 0 for i in range(self._num_gpus)}, "ports": []}, f)
-            try:
-                assert self._acquire_file_lock()
-                self._write_locks({})
-            finally:
-                self._release_file_lock()
+                json.dump({"gpus": {i: 0 for i in range(self._num_gpus)}, "ports": [], "owners": {}}, f)
         atexit.register(self._release_all_locks)
 
     def _acquire_file_lock(self) -> bool:
@@ -217,8 +212,6 @@ class GPULock:
                 if len(owned["ports"]) != ports:
                     raise RuntimeError(f"Could not get {ports} ports.")
 
-            if "owners" not in locks:
-                locks["owners"] = {}
             assert test_id not in locks["owners"]
 
             self._write_locks(locks)
