@@ -40,8 +40,8 @@ class SafeLoad:
             triton_fill(self_shard, math.nan)
         # Reset and count shard pads
         for _, fsdp, fsdp_shards in self._model.split_shards_by_fsdp(self._self_shards):
-            for fsdp_shard in fsdp_shards.values():
-                self._loaded += fsdp.reset_shard_pad(fsdp_shard)
+            for shard_name, fsdp_shard in fsdp_shards.items():
+                self._loaded += fsdp.reset_shard_pad(fsdp_shard, shard_name)
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
