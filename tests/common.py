@@ -443,9 +443,6 @@ def _get_run_test_path(name: str, is_megatron: bool) -> tuple[pathlib.Path, bool
     return path, skip
 
 
-torch.cuda.init
-
-
 @pytest.fixture(scope="session")
 def run_test_script(run_fast_llm_train, run_megatron_train):
     def do_run_test_script(
@@ -461,6 +458,7 @@ def run_test_script(run_fast_llm_train, run_megatron_train):
         config: CompareConfig | None = None,
         prepare_fn=None,
         compare_fn=None,
+        do_compare: bool = True,
     ):
         # Prepare experiment directory.
         path, skip = _get_run_test_path(name, is_megatron)
@@ -484,7 +482,7 @@ def run_test_script(run_fast_llm_train, run_megatron_train):
                     num_gpus=num_gpus,
                     gpu_memory_gb=gpu_memory_gb,
                 )
-        if compare:
+        if compare and do_compare:
             if compare_fn is not None:
                 compare_fn(TEST_RESULTS_PATH / name, TEST_RESULTS_PATH / compare)
             compare_tensor_logs(

@@ -21,6 +21,12 @@ from tests.common import run_test_script, run_megatron_train, run_fast_llm_train
 
 def pytest_addoption(parser):
     parser.addoption("--skip-slow", action="store_true")
+    parser.addoption(
+        "--run-extra-slow",
+        action="store_true",
+        default=False,
+        help="Run tests marked as extra_slow",
+    )
 
 
 _CUDA_CONTEXT_SIZE_GB = 0.7
@@ -28,6 +34,9 @@ _CUDA_CONTEXT_SIZE_GB = 0.7
 
 def pytest_configure(config):
     config.addinivalue_line("markers", "slow: Test is slow.")
+    config.addinivalue_line(
+        "markers", "extra_slow: Mark test as extra slow and skip unless --run-extra-slow is given."
+    )
     config.addinivalue_line("markers", "xdist_lock(num_gpus=None, gpu_memory_gb=None, timeout=None): Use gpu lock")
 
     num_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 0
@@ -65,6 +74,12 @@ def pytest_collection_modifyitems(config, items):
         for item in items:
             if "slow" in item.keywords:
                 item.add_marker(skip_slow)
+
+    if not config.getoption("--run-extra-slow"):
+        skip_extra_slow = pytest.mark.skip(reason="need --run-extra-slow option to run")
+        for item in items:
+            if "extra_slow" in item.keywords:
+                item.add_marker(skip_extra_slow)
 
 
 class GPULock:
