@@ -9,9 +9,9 @@ from fast_llm.layers.language_model.config import LanguageModelBaseConfig, Langu
 from fast_llm.layers.language_model.embedding import LanguageModelEmbedding
 from fast_llm.layers.transformer.config import TransformerKwargs
 from fast_llm.layers.vision_encoder.config import VisionEncoderKwargs
-from fast_llm.layers.vision_encoder.preprocessing import get_num_patches
+from fast_llm.layers.vision_encoder.preprocessing import get_num_image_tokens
 from fast_llm.tensor import TensorMeta
-from fast_llm.utils import Assert
+from fast_llm.utils import Assert, div
 
 
 class MultiModalEmbedding(LanguageModelEmbedding):
@@ -60,15 +60,32 @@ class MultiModalEmbedding(LanguageModelEmbedding):
             for sample_idx, (positions, sizes) in enumerate(zip(image_positions, image_sizes)):
                 image_embedding_offset = 0
                 for position, size in zip(positions, sizes):
-                    num_image_tokens = get_num_patches(*size, self._config.vision_encoder.patch_size)
-                    if self._sequence_parallel:
-                        embeddings[position : position + num_image_tokens, sample_idx] = input_[
-                            image_embedding_offset : image_embedding_offset + num_image_tokens, sample_idx
-                        ]
-                    else:
-                        embeddings[sample_idx, position : position + num_image_tokens] = input_[
-                            sample_idx, image_embedding_offset : image_embedding_offset + num_image_tokens
-                        ]
+                    num_image_tokens = get_num_image_tokens(*size, self._config.vision_encoder.patch_size)
+                    # Calculate the patch dimensions
+                    patch_width = div(size[0], self._config.vision_encoder.patch_size)
+                    patch_height = div(size[1], self._config.vision_encoder.patch_size)
+
+                    # Process row by row for both sequence parallel and non-parallel cases
+                    for row in range(patch_height):
+                        # Calculate source and destination starting positions
+                        row_start_src = image_embedding_offset + row * patch_width
+                        row_start_dst = position + row * (patch_width + 1)
+
+                        # Always use full patch_width
+                        tokens_in_row = patch_width
+
+                        if self._sequence_parallel:
+                            # Copy with dimensions swapped for sequence parallel case
+                            embeddings[row_start_dst : row_start_dst + tokens_in_row, sample_idx] = input_[
+                                row_start_src : row_start_src + tokens_in_row, sample_idx
+                            ]
+                        else:
+                            # Copy with normal dimension ordering
+                            embeddings[sample_idx, row_start_dst : row_start_dst + tokens_in_row] = input_[
+                                sample_idx, row_start_src : row_start_src + tokens_in_row
+                            ]
+
+                    # Move to the next image in the input tensor
                     image_embedding_offset += num_image_tokens
             if self._sequence_parallel:
                 embeddings = split(embeddings, group=group, dim=0)
@@ -85,10 +102,27 @@ class MultiModalEmbedding(LanguageModelEmbedding):
             for sample_idx, (positions, sizes) in enumerate(zip(image_positions, image_sizes)):
                 image_embedding_offset = 0
                 for position, size in zip(positions, sizes):
-                    num_image_tokens = get_num_patches(*size, self._config.vision_encoder.patch_size)
-                    embeddings[sample_idx, position : position + num_image_tokens] = input_[
-                        sample_idx, image_embedding_offset : image_embedding_offset + num_image_tokens
-                    ]
+                    num_image_tokens = get_num_image_tokens(
+                        *size,
+                        self._config.vision_encoder.patch_size,
+                        image_break=self._config.vision_encoder.image_break_token is not None,
+                    )
+                    # Calculate the patch dimensions
+                    patch_width = div(size[0], self._config.vision_encoder.patch_size)
+                    patch_height = div(size[1], self._config.vision_encoder.patch_size)
+
+                    # Process row by row
+                    for row in range(patch_height):
+                        # Calculate source and destination starting positions
+                        row_start_src = image_embedding_offset + row * patch_width
+                        row_start_dst = position + row * (patch_width + 1)
+
+                        # Copy row by row
+                        embeddings[sample_idx, row_start_dst : row_start_dst + patch_width] = input_[
+                            sample_idx, row_start_src : row_start_src + patch_width
+                        ]
+
+                    # Move to the next image in the input tensor
                     image_embedding_offset += num_image_tokens
 
             if self._use_absolute_position_embeddings:

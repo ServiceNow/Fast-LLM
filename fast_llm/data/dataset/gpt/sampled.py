@@ -146,7 +146,7 @@ class GPTSampledIndexedDataset(SampledDataset):
                                 self._parameters.patch_size,
                             ),
                             self._parameters.patch_size,
-                            break_token=self._parameters.image_break_token is not None,
+                            image_break=self._parameters.image_break_token is not None,
                         )
                         for size in sizes
                     )
@@ -433,7 +433,7 @@ class GPTSampledIndexedDataset(SampledDataset):
                         self._parameters.patch_size,
                     ),
                     self._parameters.patch_size,
-                    break_token=self._parameters.image_break_token is not None,
+                    image_break=self._parameters.image_break_token is not None,
                 )
                 for image_length in image_lengths
             ]
@@ -476,6 +476,7 @@ class GPTSampledIndexedDataset(SampledDataset):
                         # Add placeholders for image tokens
                         token_ids.append(sample.token_ids[start_pos:im_position])
                         text_tokens_added += len(token_ids[-1])
+                        image_positions.append(text_tokens_added + im_position + image_tokens_added)
                         # token_ids.append(np.full((image_sizes[idx],), -100, dtype=np.int64))
                         if self._parameters.image_break_token is not None:
                             # Calculate patch dimensions for the image
@@ -491,12 +492,12 @@ class GPTSampledIndexedDataset(SampledDataset):
 
                             # Calculate the token count considering break tokens
                             tokens_per_row = num_patches_w
-                            total_tokens = num_patches_h * tokens_per_row + (
+                            resized_image_tokens = num_patches_h * tokens_per_row + (
                                 num_patches_h - 1
                             )  # Add break tokens after each row except last
 
                             # Create image token placeholder array
-                            image_token_array = np.full((total_tokens,), -100, dtype=np.int64)
+                            image_token_array = np.full((resized_image_tokens,), -100, dtype=np.int64)
 
                             # Add break tokens after each row except the last row
                             for row in range(num_patches_h - 1):
@@ -506,13 +507,11 @@ class GPTSampledIndexedDataset(SampledDataset):
                             token_ids.append(image_token_array)
 
                             # Update image_tokens_added to reflect actual number of tokens added
-                            image_tokens_added += total_tokens
+                            image_tokens_added += resized_image_tokens
                         else:
                             # Just add placeholders for all image tokens without break tokens
                             token_ids.append(np.full((image_sizes[idx],), -100, dtype=np.int64))
                             image_tokens_added += image_sizes[idx]
-                        image_positions.append(im_position + len(token_ids) + image_tokens_added)
-                        image_tokens_added += image_tokens
                         start_pos = im_position
                 token_ids.append(sample.token_ids[start_pos:])
                 text_tokens_added += len(token_ids[-1])

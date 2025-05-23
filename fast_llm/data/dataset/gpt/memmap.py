@@ -10,7 +10,7 @@ from fast_llm.data.dataset.gpt.indexed import GPTIndexedDataset
 from fast_llm.data.dataset.gpt.sampled import GPTSample
 from fast_llm.data.preparator.gpt_memmap.config import MEMMAP_DTYPES, MEMMAP_DTYPES_INV, MEMMAP_INDEX_HEADER
 from fast_llm.engine.config_utils.data_type import DataType
-from fast_llm.layers.vision_encoder.preprocessing import get_num_patches, get_resize_dims
+from fast_llm.layers.vision_encoder.preprocessing import get_num_image_tokens, get_resize_dims
 from fast_llm.utils import Assert, div
 
 
@@ -201,6 +201,7 @@ class GPTMemmapDataset(GPTIndexedDataset):
         use_loss_masking_spans: bool = False,
         patch_size: int | None = None,
         image_size: int | None = None,
+        image_break: bool = False,
     ) -> GPTSample:
         token_ids = np.frombuffer(
             self._bin_buffer,
@@ -239,9 +240,10 @@ class GPTMemmapDataset(GPTIndexedDataset):
                     additional_tokens = 0
                     image_position = image_positions[image_idx] if image_idx < len(image_positions) else float("inf")
                     while image_position >= span[0] and image_position <= span[1]:
-                        image_tokens = get_num_patches(
+                        image_tokens = get_num_image_tokens(
                             get_resize_dims(*self._image_lengths[idx][image_idx], image_size, image_size, patch_size),
                             patch_size,
+                            image_break=image_break,
                         )
                         additional_tokens += image_tokens
                         image_idx += 1
