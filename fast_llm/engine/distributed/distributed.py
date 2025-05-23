@@ -178,4 +178,4 @@ class Distributed[ConfigType: DistributedConfig](Configurable[ConfigType]):
 
         if self._config.gpu_memory_limit_gb is not None:
             # Not ideal, but better than nothing.
-            torch.cuda.set_per_process_memory_fraction(1, self.device)
+            torch.cuda.set_per_process_memory_fraction(1.0, self.device)

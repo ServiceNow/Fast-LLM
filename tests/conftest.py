@@ -2,7 +2,6 @@ import atexit
 import contextlib
 import fcntl
 import json
-import logging
 import os
 import pathlib
 import random
@@ -97,27 +96,25 @@ class GPULock:
                 json.dump({"gpus": {i: 0 for i in range(self._num_gpus)}, "ports": [], "owners": {}}, f)
         atexit.register(self._release_all_locks)
 
-    def _acquire_file_lock(self) -> bool:
+    def _acquire_file_lock(self):
         """Acquire exclusive lock on the file."""
         if self._lock_path is None:
             # Lock is disabled, ignore.
-            return True
+            return
         if self._file_handle is None:
-            try:
-                self._file_handle = self._lock_path.open("r+")
-            except OSError:
-                time.sleep(0.1)
-                return False
+            # Raises OSError?
+            self._file_handle = self._lock_path.open("r+")
 
         start_time = time.time()
-        while time.time() - start_time < 5:
+        while True:
             try:
                 fcntl.flock(self._file_handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 self._file_handle.seek(0)
-                return True
+                return
             except BlockingIOError:
+                if time.time() - start_time > 5:
+                    raise
                 time.sleep(0.1)
-        return False
 
     def _release_file_lock(self) -> None:
         """Release exclusive lock on the file."""
@@ -161,65 +158,73 @@ class GPULock:
 
         end_time = time.time() + timeout
 
-        while time.time() < end_time:
-            if not self._acquire_file_lock():
+        while True:
+            try:
+                self._acquire_file_lock()
+                locks = self._read_locks()
+                owned = {}
+
+                if num_gpus > 0:
+
+                    # Try a random gpu first to spread the workload:
+                    gpu_shift = random.randrange(self._num_gpus)
+                    gpu_ids = []
+                    for i in range(self._num_gpus):
+                        index = (gpu_shift + i) % self._num_gpus
+                        if locks["gpus"][str(index)] + gpu_memory_gb <= self._gpu_memory_gb:
+                            gpu_ids.append(i)
+                            if len(gpu_ids) == num_gpus:
+                                break
+
+                    if len(gpu_ids) < num_gpus:
+                        if time.time() > end_time:
+                            available = {id: self._gpu_memory_gb - used for id, used in locks["gpus"]}
+                            raise BlockingIOError(
+                                f"Failed to acquire GPU resources."
+                                f" Requested {num_gpus} GPUs with {gpu_memory_gb} GBs,"
+                                f" available = {available}, used =  {locks["gpus"]}."
+                            )
+                        continue
+
+                    for i in gpu_ids:
+                        locks["gpus"][str(i)] += gpu_memory_gb
+                        # Enforce memory constraint.
+                        # TODO: Make it work in subprocesses.
+                        torch.cuda.set_per_process_memory_fraction(gpu_memory_gb / self._gpu_memory_gb, i)
+
+                    torch.cuda.set_device(gpu_ids[0])
+
+                    owned["gpus"] = {i: gpu_memory_gb for i in gpu_ids}
+
+                if ports > 0:
+                    # Get free ports, and lock them for other tests.
+
+                    owned["ports"] = []
+
+                    for _ in range(ports + self._MAX_PORT_RETRIES):
+                        port = get_free_port()
+                        if port not in locks["ports"]:
+                            locks["ports"].append(port)
+                            owned["ports"].append(port)
+                            if len(owned["ports"]) == ports:
+                                break
+                    if len(owned["ports"]) != ports:
+                        raise RuntimeError(f"Could not get {ports} ports.")
+
+                assert test_id not in locks["owners"]
+
+                self._write_locks(locks)
+                self._owned_keys.add(test_id)
+                return owned
+
+            except OSError:
+                if time.time() > end_time:
+                    raise
+            finally:
+                self._release_file_lock()
                 time.sleep(0.1)
-                continue
 
-            locks = self._read_locks()
-
-            owned = {}
-
-            if num_gpus > 0:
-
-                # Try a random gpu first to spread the workload:
-                gpu_shift = random.randrange(self._num_gpus)
-                gpu_ids = []
-                for i in range(self._num_gpus):
-                    index = (gpu_shift + i) % self._num_gpus
-                    if locks["gpus"][index] + gpu_memory_gb <= self._gpu_memory_gb:
-                        gpu_ids.append(i)
-                        if len(gpu_ids) == num_gpus:
-                            break
-
-                if len(gpu_ids) < num_gpus:
-                    self._release_file_lock()
-                    time.sleep(1)
-                    continue
-
-                for i in gpu_ids:
-                    locks["gpus"][i] += gpu_memory_gb
-                    # Enforce memory constraint.
-                    # TODO: Make it work in subprocesses.
-                    torch.cuda.set_per_process_memory_fraction(gpu_memory_gb / self._gpu_memory_gb, i)
-
-                torch.cuda.set_device(gpu_ids[0])
-
-                owned["gpus"] = {i: gpu_memory_gb for i in gpu_ids}
-
-            if ports > 0:
-                # Get free ports, and lock them for other tests.
-
-                owned["ports"] = []
-
-                for _ in range(ports + self._MAX_PORT_RETRIES):
-                    port = get_free_port()
-                    if port not in locks["ports"]:
-                        locks["ports"].append(port)
-                        owned["ports"].append(port)
-                        if len(owned["ports"]) == ports:
-                            break
-                if len(owned["ports"]) != ports:
-                    raise RuntimeError(f"Could not get {ports} ports.")
-
-            assert test_id not in locks["owners"]
-
-            self._write_locks(locks)
-            self._owned_keys.add(test_id)
-            self._release_file_lock()
-            return owned
-        self._release_file_lock()
-        raise RuntimeError("Failed to acquire resource lock.")
+        assert False
 
     def _release(self, locks: dict[str, typing.Any], test_id: str) -> None:
         if "owners" in locks and test_id in locks["owners"]:
@@ -239,9 +244,8 @@ class GPULock:
 
     def release(self, test_id: str) -> None:
         """Release lock with guaranteed cleanup."""
-        if not self._acquire_file_lock():
-            raise BlockingIOError(f"Unable to flock file: {self._lock_path}")
         try:
+            self._acquire_file_lock()
             locks = self._read_locks()
             self._release(locks, test_id)
             self._owned_keys.discard(test_id)
@@ -250,23 +254,16 @@ class GPULock:
 
     def _release_all_locks(self) -> None:
         """Clean up file handles and locks."""
-        if getattr(self, "_is_cleaned", False) or not self._owned_keys:
-            return
-
         try:
-            if not self._acquire_file_lock():
-                logging.warning("Cleanup failed - could not acquire lock")
-                return
-            try:
-                locks = self._read_locks()
-                for test_id in list(self._owned_keys):
-                    self._release(locks, test_id)
-                self._write_locks(locks)
-                self._owned_keys.clear()
-                self._is_cleaned = True
-            finally:
-                self._release_file_lock()
+            self._acquire_file_lock()
+            locks = self._read_locks()
+            for test_id in list(self._owned_keys):
+                self._release(locks, test_id)
+            self._write_locks(locks)
+            self._owned_keys.clear()
+            self._is_cleaned = True
         finally:
+            self._release_file_lock()
             if self._file_handle:
                 try:
                     self._file_handle.close()

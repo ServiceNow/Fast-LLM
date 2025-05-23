@@ -365,7 +365,7 @@ def run_fast_llm_train(get_test_resources):
         ) as resources:
             cli_args = [
                 *cli_args,
-                f"model.distributed.gpu_ids=[{",".join(resources["gpus"])}]",
+                f"model.distributed.gpu_ids=[{",".join(str(gpu_id) for gpu_id in resources["gpus"])}]",
                 f"model.distributed.gpu_memory_limit_gb={gpu_memory_gb}",
             ]
             if num_gpus > 1 or force_separate_process:
@@ -408,7 +408,8 @@ def run_megatron_train(get_test_resources):
         with get_test_resources(num_gpus=1, gpu_memory_gb=gpu_memory_gb) as resources:
             if resources is not None:
                 env["CUDA_VISIBLE_DEVICES"] = ",".join(str(gpu) for gpu in resources["gpus"])
-            command = ["Megatron-LM/pretrain_gpt.py", *cli_args]
+            # Torchrun needed because Megatron really wants to initialize distributed.
+            command = ["python", "-m", "torch.distributed.run", "Megatron-LM/pretrain_gpt.py", *cli_args]
             print(" ".join(command))
             completed_proc = subprocess.run(command, env=env, timeout=60)
             if completed_proc.returncode:

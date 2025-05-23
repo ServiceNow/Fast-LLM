@@ -318,8 +318,7 @@ def test_generate_from_model(
 @pytest.mark.slow
 @requires_cuda
 def test_small_generate_from_model(small_model):
-    model_path, fast_llm_checkpoint_format = small_model
-    _test_generate_from_model(model_path, None, fast_llm_checkpoint_format)
+    _test_generate_from_model(small_model, None, HUGGINGFACE_CHECKPOINT_FORMAT)
 
 
 def _test_forward_return_hidden_states(
