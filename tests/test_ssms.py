@@ -139,6 +139,7 @@ def test_load_from_llamba_checkpoint(distributed_config):
     assert torch.allclose(logits, hf_logits, atol=1e-2)
 
 
+# TODO: Speed up this test or bring it back as an integration test.
 @pytest.mark.skip(reason="Too slow.")
 @pytest.mark.skipif(not run_test, reason="No CUDA available or Mamba not installed")
 @pytest.mark.parametrize(

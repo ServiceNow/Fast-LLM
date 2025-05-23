@@ -2,6 +2,7 @@ import itertools
 import logging
 import math
 import signal
+import socket
 import typing
 from typing import Callable
 
@@ -368,3 +369,11 @@ class Interrupter:
     @property
     def interrupted(self):
         return self._interrupted
+
+
+def get_free_port():
+    sock = socket.socket()
+    sock.bind(("", 0))
+    port = sock.getsockname()[1]
+    sock.close()
+    return port
