@@ -26,7 +26,7 @@ def get_num_image_tokens(height: int, width: int, patch_size: int, image_break: 
     """
     height_patches = div(height, patch_size)
     width_patches = div(width, patch_size)
-    return height_patches * (width_patches + image_break) - 1
+    return height_patches * width_patches + (height_patches - 1 if image_break else 0)
 
 
 def get_resize_dims(height: int, width: int, max_height: int, max_width: int, patch_size: int) -> tuple[int, int]:

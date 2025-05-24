@@ -476,19 +476,19 @@ class GPTSampledIndexedDataset(SampledDataset):
                         # Add placeholders for image tokens
                         token_ids.append(sample.token_ids[start_pos:im_position])
                         text_tokens_added += len(token_ids[-1])
-                        image_positions.append(text_tokens_added + im_position + image_tokens_added)
+                        image_positions.append(text_tokens_added + image_tokens_added)
                         # token_ids.append(np.full((image_sizes[idx],), -100, dtype=np.int64))
                         if self._parameters.image_break_token is not None:
                             # Calculate patch dimensions for the image
-                            width, height = get_resize_dims(
+                            height, width = get_resize_dims(
                                 image_lengths[idx][0],
                                 image_lengths[idx][1],
                                 self._parameters.image_size,
                                 self._parameters.image_size,
                                 self._parameters.patch_size,
                             )
-                            num_patches_w = math.ceil(width / self._parameters.patch_size)
                             num_patches_h = math.ceil(height / self._parameters.patch_size)
+                            num_patches_w = math.ceil(width / self._parameters.patch_size)
 
                             # Calculate the token count considering break tokens
                             tokens_per_row = num_patches_w
