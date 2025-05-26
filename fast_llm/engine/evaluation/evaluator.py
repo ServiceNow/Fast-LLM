@@ -116,7 +116,7 @@ class EvaluatorLoss[ConfigType: EvaluatorLossConfig](Evaluator[ConfigType]):
             batch_config=self._batch_config,
             schedule_config=runner.config,
             distributed_config=distributed.config,
-            phase=PhaseType.inference if self._phase == PhaseType.inference else PhaseType.validation,
+            phase=PhaseType.validation,
         )
 
         self._loss_defs = self._multi_stage.base_model.loss_defs
@@ -147,7 +147,7 @@ class EvaluatorLoss[ConfigType: EvaluatorLossConfig](Evaluator[ConfigType]):
         #       maybe format each metric with evaluation_dataset_name prefix instead?
         # TODO: setting performance metrics per evaluation dataset
         #       maybe to set aggregate performance metrics for all evaluations datasets?
-        phase = PhaseType.inference if self._phase == PhaseType.inference else PhaseType.validation
+        phase = PhaseType.validation
         metric_key = f"{phase.value}.{self._name}"
         metrics[metric_key] = self._evaluate_loss(
             data_iterator=self._evaluation_iterator,
