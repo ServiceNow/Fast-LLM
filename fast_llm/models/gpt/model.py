@@ -21,8 +21,8 @@ from fast_llm.layers.transformer.config import (
     TransformerLossNames,
 )
 from fast_llm.layers.transformer.preprocessing import (
+    FastAttentionPreprocessor,
     BackupAttentionPreprocessor,
-    FlashAttnVarlenPreprocessor,
     RotaryEmbeddingPreprocessor,
 )
 from fast_llm.layers.transformer.transformer import TransformerLayer
@@ -52,7 +52,6 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
         distributed_config: DistributedConfig,
     ):
         super().__init__(config, distributed_config)
-        self._use_flash_attention = self._config.transformer.do_use_flash_attention(distributed_config)
         if self._config.use_megatron_initialization:
             for param in self.parameters():
                 Assert.custom(isinstance, param, ParameterMeta)
@@ -65,8 +64,8 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             self._preprocessors.append(
                 RotaryEmbeddingPreprocessor(self._config.transformer.rotary, self._tensor_space)
             )
-        if self._use_flash_attention:
-            self._preprocessors.append(FlashAttnVarlenPreprocessor(self._config.transformer, self._tensor_space))
+        if self._config.transformer.use_fast_attention:
+            self._preprocessors.append(FastAttentionPreprocessor(self._config.transformer, self._tensor_space))
         else:
             self._preprocessors.append(BackupAttentionPreprocessor(self._config.transformer, self._tensor_space))
 

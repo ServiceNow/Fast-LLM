@@ -6,11 +6,11 @@ import torch
 import torch.nn.attention.flex_attention
 
 from fast_llm.engine.base_model.config import Preprocessor
-from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.engine.config_utils.tensor_space import DefaultDimNames, TensorDim, TensorSpace
 from fast_llm.functional.rotary import convert_rotary_complex_to_real
 from fast_llm.layers.transformer.config import (
-    AttentionImplementation,
+    ATTENTION_IMPLEMENTATION_SPECS,
+    AttentionMode,
     RotaryConfig,
     RotaryEmbeddingType,
     TransformerConfig,
@@ -18,6 +18,7 @@ from fast_llm.layers.transformer.config import (
     TransformerKwargs,
 )
 from fast_llm.tensor import TensorMeta
+
 
 logger = logging.getLogger(__name__)
 
@@ -194,50 +195,188 @@ class RotaryEmbeddingPreprocessor(Preprocessor):
         )
 
 
-def _get_mask_mod(
+class MaskMod(typing.Protocol):
+    """Callable type for masking functions.
+    Should take (batch, head, q_idx, kv_idx) and return a boolean mask tensor.
+    """
+
+    def __call__(
+        self,
+        b: torch.Tensor,
+        h: torch.Tensor,
+        q_idx: torch.Tensor,
+        kv_idx: torch.Tensor,
+    ) -> torch.Tensor: ...
+
+
+def _build_seq_idx(cu_seqlens: torch.Tensor, total_length: torch.types.Number) -> torch.Tensor:
+    """Maps each token position to its sequence index based on provided offsets.
+    Used to relate flat token indices to their sequence in a packed batch.
+    """
+    range_tensor = torch.arange(total_length, device=cu_seqlens.device, dtype=torch.int32)
+    seq_idx = torch.searchsorted(cu_seqlens, range_tensor, right=True) - 1
+    return seq_idx
+
+
+def _varlen_mask_mod_adapter(
+    orig_mask_mod: MaskMod,
+    cu_seqlens_q: torch.Tensor | None,
+    cu_seqlens_k: torch.Tensor | None,
+    allow_inter_sequence_attention: bool = False,
+) -> MaskMod:
+    """Lift a fixed-length predicate to packed (variable-length) sequences.
+
+    Translates per-sequence indices to relative indices inside each document and
+    blocks attention across different documents if cumulative sequence lengths
+    are provided. If not, the original mask is returned.
+    """
+    if cu_seqlens_q is None:
+        return orig_mask_mod
+    if cu_seqlens_k is None:
+        cu_seqlens_k = cu_seqlens_q
+    q_seq_idx = _build_seq_idx(cu_seqlens_q, cu_seqlens_q[-1])
+    if cu_seqlens_q is cu_seqlens_k:
+        kv_seq_idx = q_seq_idx
+    else:
+        kv_seq_idx = _build_seq_idx(cu_seqlens_k, cu_seqlens_k[-1])
+
+    def _varlen_mask_mod(b: torch.Tensor, h: torch.Tensor, q_idx: torch.Tensor, kv_idx: torch.Tensor) -> torch.Tensor:
+        b_varlen = q_seq_idx[q_idx]
+        q_varlen = q_idx - cu_seqlens_q[q_seq_idx[q_idx]]
+        kv_varlen = kv_idx - cu_seqlens_k[kv_seq_idx[kv_idx]]
+
+        mask = orig_mask_mod(b_varlen, h, q_varlen, kv_varlen)
+
+        # don't allow inter-sequence attention if requested
+        if not allow_inter_sequence_attention:
+            is_same_sequence = q_seq_idx[q_idx] == kv_seq_idx[kv_idx]
+            return mask & is_same_sequence
+
+        return mask
+
+    return _varlen_mask_mod
+
+
+def _window_mask_mod_adapter(
+    orig_mask_mod: MaskMod,
+    window_size: tuple[int, int] = (-1, -1),
+) -> MaskMod:
+    """Lift a fixed-length predicate to a windowed predicate.
+
+    Translates per-sequence indices to relative indices inside each document and
+    blocks attention across different documents. If no window is specified, the original
+    mask is returned.
+    """
+    win_left, win_right = window_size
+    if win_left == -1 and win_right == -1:
+        return orig_mask_mod
+    if win_left == -1 and win_right != -1:
+
+        def _window_mask_mod(
+            b: torch.Tensor, h: torch.Tensor, q_idx: torch.Tensor, kv_idx: torch.Tensor
+        ) -> torch.Tensor:
+            return orig_mask_mod(b, h, q_idx, kv_idx) & (kv_idx <= q_idx + win_right)
+
+    elif win_left != -1 and win_right == -1:
+
+        def _window_mask_mod(
+            b: torch.Tensor, h: torch.Tensor, q_idx: torch.Tensor, kv_idx: torch.Tensor
+        ) -> torch.Tensor:
+            return orig_mask_mod(b, h, q_idx, kv_idx) & (kv_idx >= q_idx - win_left)
+
+    else:
+
+        def _window_mask_mod(
+            b: torch.Tensor, h: torch.Tensor, q_idx: torch.Tensor, kv_idx: torch.Tensor
+        ) -> torch.Tensor:
+            return orig_mask_mod(b, h, q_idx, kv_idx) & ((kv_idx >= q_idx - win_left) & (kv_idx <= q_idx + win_right))
+
+    return _window_mask_mod
+
+
+def _causal_mask_mod(b: torch.Tensor, h: torch.Tensor, q_idx: torch.Tensor, kv_idx: torch.Tensor) -> torch.Tensor:
+    """Standard left-to-right causal mask."""
+    return kv_idx <= q_idx
+
+
+def _bidirectional_mask_mod(
+    b: torch.Tensor, h: torch.Tensor, q_idx: torch.Tensor, kv_idx: torch.Tensor
+) -> torch.Tensor:
+    """Fully bidirectional mask (all tokens can attend to all others)."""
+    return True  # type: ignore
+
+
+def _varlen_to_abs_idx(cu_seq_lens: torch.Tensor | None, b: torch.Tensor, rel_idx: torch.Tensor):
+    """Converts relative sequence indices to absolute batch indices."""
+    return rel_idx if cu_seq_lens is None else cu_seq_lens[b] + rel_idx
+
+
+def _causal_or_block_bidirectional_mask_mod(
     cu_seqlens_q: torch.Tensor | None,
     cu_seqlens_k: torch.Tensor | None,
     block_ids_q: torch.Tensor | None,
     block_ids_k: torch.Tensor | None,
-    window_size: tuple[int, int] = (-1, -1),
-) -> typing.Callable[[int, int, int, int], bool]:
+) -> MaskMod:
+    """Creates a mask that allows full (bidirectional) attention within blocks,
+    but defaults to causal attention otherwise. Block id -1 disables bidirectional attention.
+    """
+    if block_ids_q is None:
+        return _causal_mask_mod
 
-    if cu_seqlens_k is None:
-        cu_seqlens_k = cu_seqlens_q
     if block_ids_k is None:
         block_ids_k = block_ids_q
-    win_left, win_right = window_size
 
-    if cu_seqlens_q is not None and block_ids_q is not None:
-        block_ids_q = block_ids_q.view(-1, block_ids_q.size(1))
-    if cu_seqlens_k is not None and block_ids_k is not None:
-        block_ids_k = block_ids_k.view(-1, block_ids_k.size(1))
+    def _mask_mod(b: torch.Tensor, h: torch.Tensor, q_idx: torch.Tensor, kv_idx: torch.Tensor) -> torch.Tensor:
+        abs_q_idx = _varlen_to_abs_idx(cu_seqlens_q, b, q_idx)
+        abs_kv_idx = _varlen_to_abs_idx(cu_seqlens_k, b, kv_idx)
 
-    assert cu_seqlens_q is not None
-    assert cu_seqlens_k is not None
-    assert block_ids_q is not None
-    assert block_ids_k is not None
+        bid_q = block_ids_q[abs_q_idx]
+        bid_k = block_ids_k[abs_kv_idx]
 
-    def _mask_mod(b: int, h: int, qi: int, ki: int) -> torch.Tensor:
-        abs_q = cu_seqlens_q[b] + qi
-        abs_k = cu_seqlens_k[b] + ki
-        bidirectional_ok = block_ids_q[abs_q] == block_ids_k[abs_k]
+        # Allow bidirectional attention only when both tokens share the *same*
+        # non-negative block id.  Any -1 disables the bidirectional attention and
+        # defaults to causal attention.
+        bidirectional_ok = (bid_q != -1) & (bid_k != -1) & (bid_q == bid_k)
 
-        causal_ok = ki <= qi
+        causal_ok = _causal_mask_mod(b, h, q_idx, kv_idx)
 
-        window_ok = True
-        if win_left != -1:
-            window_ok &= ki >= qi - win_left
-        if win_right != -1:
-            window_ok &= ki <= qi + win_right
-
-        return window_ok & (bidirectional_ok | causal_ok)
+        return bidirectional_ok | causal_ok
 
     return _mask_mod
 
 
-class AttentionPreprocessor(Preprocessor):
+def _get_mask_mod(
+    cu_seqlens_q: torch.Tensor | None = None,
+    cu_seqlens_k: torch.Tensor | None = None,
+    block_ids_q: torch.Tensor | None = None,
+    block_ids_k: torch.Tensor | None = None,
+    window_size: tuple[int, int] = (-1, -1),
+    attention_mode: AttentionMode = AttentionMode.causal,
+) -> MaskMod:
+    """
+    Constructs a composite mask function based on attention mode,
+    sequence lengths, block ids, and windowing.
+    """
+    if cu_seqlens_k is None:
+        cu_seqlens_k = cu_seqlens_q
 
+    match attention_mode:
+        case AttentionMode.causal:
+            _mask_mod = _causal_mask_mod
+        case AttentionMode.bidirectional:
+            _mask_mod = _bidirectional_mask_mod
+        case AttentionMode.causal_or_block_bidirectional:
+            _mask_mod = _causal_or_block_bidirectional_mask_mod(cu_seqlens_q, cu_seqlens_k, block_ids_q, block_ids_k)
+        case _:
+            raise ValueError(f"Unsupported attention mode: {attention_mode}")
+
+    _mask_mod = _varlen_mask_mod_adapter(_mask_mod, cu_seqlens_q, cu_seqlens_k)
+    _mask_mod = _window_mask_mod_adapter(_mask_mod, window_size)
+
+    return _mask_mod
+
+
+class FastAttentionPreprocessor(Preprocessor):
     def __init__(
         self,
         config: TransformerConfig,
@@ -247,76 +386,16 @@ class AttentionPreprocessor(Preprocessor):
         self._tensor_space = tensor_space
         self._distributed_config = self._tensor_space.distributed_config
 
-    def _select_attention_implementation(self, kwargs: dict[str, typing.Any]) -> AttentionImplementation:
-        attention_implementation = self._config.select_attention_implementation(
-            require_variable_length=TransformerKwargs.sequence_lengths in kwargs,
-            require_blocks=TransformerKwargs.block_lengths in kwargs,
-            require_dropout=self._config.attention_dropout > 0.0,
-            has_half_precision=(
-                self._tensor_space.distributed_config.training_dtype
-                in (
-                    DataType.float16,
-                    DataType.bfloat16,
-                )
-            ),
-        )
+        try:
+            import flash_attn.flash_attn_interface
 
-    def _create_tensors(self, sequence_length: int) -> None:
-        if sequence_length <= self._tensor_cache_max_sequence_length:
-            return
-        self._tensor_cache_max_sequence_length = sequence_length
-
-        self._mask = torch.ones(
-            (sequence_length, sequence_length),
-            dtype=torch.bool,
-            device=self._tensor_space.distributed.device,
-        ).tril_()
-
-        if self._config.window_size is not None:
-            self._mask.triu_(-self._config.window_size + 1)
-        self._mask_value = torch.full(
-            [],
-            torch.finfo(self._distributed_config.training_dtype.torch).min,
-            dtype=self._distributed_config.training_dtype.torch,
-            device=self._tensor_space.distributed.device,
-        )
-
-    def preprocess(self, batch, kwargs: dict[str, typing.Any]) -> None:
-        self._create_tensors(kwargs[TransformerKwargs.sequence_length])
-        sequence_k = kwargs[TransformerKwargs.sequence_k_dim].size
-        sequence_q = kwargs[TransformerKwargs.sequence_q_dim].size
-        kwargs[TransformerKwargs.attention_mask] = self._mask[
-            None, None, sequence_k - sequence_q : sequence_k, None, :sequence_k
-        ]
-        if (sequence_lengths := kwargs.get(TransformerKwargs.sequence_lengths, None)) is not None:
-            seq_ids = torch.stack(
-                [
-                    torch.cat([torch.full((x,), i) for i, x in enumerate(sample_lens)])
-                    for sample_lens in sequence_lengths
-                ]
-            )
-            document_mask = (seq_ids[:, None, :] == seq_ids[:, :, None]).to(self._tensor_space.distributed.device)
-            kwargs[TransformerKwargs.attention_mask] = (
-                kwargs[TransformerKwargs.attention_mask]
-                & document_mask[:, None, sequence_k - sequence_q : sequence_k, None, :sequence_k]
-            )
-        kwargs[TransformerKwargs.attention_mask_value] = self._mask_value
-
-    def preprocess_meta(self, kwargs: dict[str, typing.Any]) -> None:
-        kwargs[TransformerKwargs.attention_mask] = TensorMeta.from_dims(
-            (
-                self._scalar_dim,
-                self._scalar_dim,
-                kwargs[TransformerKwargs.sequence_q_dim],
-                self._scalar_dim,
-                kwargs[TransformerKwargs.sequence_k_dim],
-            ),
-        )
-        return attention_implementation
+            self._flash_available = True
+        except ImportError:
+            self._flash_available = False
 
     def _preprocess_varlen(self, batch, kwargs: dict[str, typing.Any]) -> None:
         """
-        Prepares cu_seqlens_q and cu_seqlens_k for flash_attn_varlen_func:
+        Prepares cu_seqlens_q and cu_seqlens_k for variable length attention.
         https://github.com/Dao-AILab/flash-attention/blob/main/flash_attn/flash_attn_interface.py#L1375
         cu_seqlens_q and cu_seqlens_k are cumulative sequence lengths for the query and key/value tensors, respectively.
         Assumes a flattened batch of documents. In absence of sequence_data_parallelism, cu_seqlens_q = cu_seqlens_k.
@@ -378,96 +457,68 @@ class AttentionPreprocessor(Preprocessor):
         kwargs[TransformerKwargs.max_seqlen_q] = seqlens_q.max()
         kwargs[TransformerKwargs.max_seqlen_k] = seqlens_k.max()
 
-    def _preprocess_blocks(self, batch, kwargs: dict[str, typing.Any]) -> None:
-        if (block_lengths := kwargs.get(TransformerKwargs.block_lengths)) is None:
-            return
-
     def _preprocess_block_mask(self, batch, kwargs: dict[str, typing.Any]) -> None:
-        if (sequence_lengths := kwargs.get(TransformerKwargs.sequence_lengths)) is None and (
-            block_lengths := kwargs.get(TransformerKwargs.block_lengths)
-        ) is None:
-            return
-        torch.nn.attention.flex_attention.create_block_mask
+        cu_seqlens_q = kwargs.get(TransformerKwargs.cu_seqlens_q)
+        cu_seqlens_k = kwargs.get(TransformerKwargs.cu_seqlens_k)
+        block_ids_q = kwargs.get(TransformerKwargs.block_ids_q)
+        block_ids_k = kwargs.get(TransformerKwargs.block_ids_k)
+        window_size = (-1, -1) if self._config.window_size is None else (self._config.window_size - 1, 0)
 
-    def _preprocess_varlen_block_mask(self, batch, kwargs: dict[str, typing.Any]) -> None:
-        if (sequence_lengths := kwargs.get(TransformerKwargs.sequence_lengths)) is None and (
-            block_lengths := kwargs.get(TransformerKwargs.block_lengths)
-        ) is None:
-            return
+        mask_mod = _get_mask_mod(
+            cu_seqlens_q=cu_seqlens_q,
+            cu_seqlens_k=cu_seqlens_k,
+            block_ids_q=block_ids_q,
+            block_ids_k=block_ids_k,
+            window_size=window_size,
+            attention_mode=kwargs.get(TransformerKwargs.attention_mode, AttentionMode.causal),
+        )
 
-    def _preprocess_attention_mask(self, batch, kwargs: dict[str, typing.Any]) -> None:
-        if (sequence_lengths := kwargs.get(TransformerKwargs.sequence_lengths)) is None and (
-            block_lengths := kwargs.get(TransformerKwargs.block_lengths)
-        ) is None:
-            return
+        if cu_seqlens_q is not None:
+            batch_size = cu_seqlens_q.numel() - 1
+            if cu_seqlens_k is not None:
+                assert cu_seqlens_k.numel() - 1 == batch_size, "cu_seqlens_k must have same shape as cu_seqlens_q"
+            seqlen_q = cu_seqlens_q[-1]
+            if cu_seqlens_k is not None:
+                seqlen_k = cu_seqlens_k[-1]
+            else:
+                seqlen_k = seqlen_q
+        else:
+            batch_size = self._tensor_space.get_tensor_dim(TransformerDimNames.batch).size
+            seqlen_q = kwargs[TransformerKwargs.sequence_q_dim].size
+            seqlen_k = kwargs[TransformerKwargs.sequence_k_dim].size
+
+        head_groups = self._tensor_space.get_tensor_dim(TransformerDimNames.head_groups).size
+        heads_per_group = self._tensor_space.get_tensor_dim(TransformerDimNames.group_heads).size
+        query_heads = head_groups * heads_per_group
+
+        block_mask = torch.nn.attention.flex_attention.create_block_mask(
+            mask_mod=mask_mod,
+            B=batch_size,
+            H=query_heads,
+            Q_LEN=seqlen_q,
+            KV_LEN=seqlen_k,
+            device=self._tensor_space.distributed.device,
+            BLOCK_SIZE=torch.nn.attention.flex_attention._DEFAULT_SPARSE_BLOCK_SIZE,
+            _compile=False,  # TODO: switch on compilation once we have a working version
+        )
+
+        kwargs[TransformerKwargs.block_mask] = block_mask
 
     def preprocess(self, batch, kwargs: dict[str, typing.Any]) -> None:
-        match self._select_attention_implementation(kwargs):
-            case AttentionImplementation.FLASH:
-                pass
-            case AttentionImplementation.FLASH_VARLEN:
-                self._preprocess_varlen(batch, kwargs)
-            case AttentionImplementation.FLEX:
-                self._preprocess_blocks(batch, kwargs)
-                self._preprocess_block_mask(batch, kwargs)
-            case AttentionImplementation.FLEX_VARLEN:
-                self._preprocess_varlen(batch, kwargs)
-                self._preprocess_blocks(batch, kwargs)
-                self._preprocess_varlen_block_mask(batch, kwargs)
-            case AttentionImplementation.SDPA:
-                self._preprocess_varlen(batch, kwargs)
-                self._preprocess_blocks(batch, kwargs)
-                self._preprocess_attention_mask(batch, kwargs)
-            case AttentionImplementation.BACKUP:
-                self._preprocess_varlen(batch, kwargs)
-                self._preprocess_blocks(batch, kwargs)
-                self._preprocess_attention_mask(batch, kwargs)
-            case _:
-                raise ValueError(f"Unsupported attention implementation: {attention_implementation}")
-
-    def _preprocess_meta_attention_mask(self, kwargs: dict[str, typing.Any]) -> None:
-        if TransformerKwargs.sequence_lengths not in kwargs and TransformerKwargs.block_lengths not in kwargs:
-            return
-        scalar_dim = self._tensor_space.get_tensor_dim(DefaultDimNames.scalar)
-        kwargs[TransformerKwargs.attention_mask] = TensorMeta.from_dims(
-            (
-                scalar_dim,
-                scalar_dim,
-                kwargs[TransformerKwargs.sequence_q_dim],
-                scalar_dim,
-                kwargs[TransformerKwargs.sequence_k_dim],
-            ),
-            tensor_name=TransformerKwargs.attention_mask,
-            dtype=torch.bool,
+        attention_implementation = self._config.select_attention_implementation(
+            require_variable_length=TransformerKwargs.sequence_lengths in kwargs,
+            training_dtype=self._tensor_space.distributed_config.training_dtype,
+            flash_available=self._flash_available,
         )
-        kwargs[TransformerKwargs.attention_mask_value] = TensorMeta.from_dims(
-            (scalar_dim,),
-            tensor_name=TransformerKwargs.attention_mask_value,
-            dtype=self._tensor_space.distributed_config.training_dtype.torch,
-        )
-
-    def preprocess_meta(self, kwargs: dict[str, typing.Any]) -> None:
-        match self._select_attention_implementation(kwargs):
-            case AttentionImplementation.FLASH:
-                pass
-            case AttentionImplementation.FLASH_VARLEN:
-                pass
-            case AttentionImplementation.FLEX:
-                pass
-            case AttentionImplementation.FLEX_VARLEN:
-                pass
-            case AttentionImplementation.SDPA:
-                self._preprocess_meta_attention_mask(kwargs)
-            case AttentionImplementation.BACKUP:
-                self._preprocess_meta_attention_mask(kwargs)
-            case _:
-                raise ValueError(f"Unsupported attention implementation: {attention_implementation}")
+        attention_implementation_spec = ATTENTION_IMPLEMENTATION_SPECS[attention_implementation]
+        if attention_implementation_spec.variable_length:
+            self._preprocess_varlen(batch, kwargs)
+        if attention_implementation_spec.flex:
+            self._preprocess_block_mask(batch, kwargs)
 
 
 class BackupAttentionPreprocessor(Preprocessor):
     _scalar_dim: TensorDim
-    _kv_channels_dim: TensorDim
-    _rotary_embedding_frequencies: torch.Tensor
     _mask: torch.Tensor
     _mask_value: torch.Tensor
     _tensor_cache_max_sequence_length: int = -1
@@ -476,11 +527,10 @@ class BackupAttentionPreprocessor(Preprocessor):
         self,
         config: TransformerConfig,
         tensor_space: TensorSpace,
-    ) -> None:
+    ):
         self._config = config
         self._tensor_space = tensor_space
         self._distributed_config = self._tensor_space.distributed_config
-        assert not self._config.do_use_flash_attention(self._distributed_config)
         self._scalar_dim = self._tensor_space.get_tensor_dim(DefaultDimNames.scalar)
 
     def _create_tensors(self, sequence_length: int) -> None:
@@ -512,7 +562,10 @@ class BackupAttentionPreprocessor(Preprocessor):
         ]
         if (sequence_lengths := kwargs.get(TransformerKwargs.sequence_lengths, None)) is not None:
             seq_ids = torch.stack(
-                [torch.cat([torch.arange(x) for x in sample_lens]) for sample_lens in sequence_lengths]
+                [
+                    torch.cat([torch.full((x,), i) for i, x in enumerate(sample_lens)])
+                    for sample_lens in sequence_lengths
+                ]
             )
             document_mask = (seq_ids[:, None, :] == seq_ids[:, :, None]).to(self._tensor_space.distributed.device)
             kwargs[TransformerKwargs.attention_mask] = (
@@ -522,4 +575,19 @@ class BackupAttentionPreprocessor(Preprocessor):
         kwargs[TransformerKwargs.attention_mask_value] = self._mask_value
 
     def preprocess_meta(self, kwargs: dict[str, typing.Any]) -> None:
-        pass
+        kwargs[TransformerKwargs.attention_mask] = TensorMeta.from_dims(
+            (
+                self._scalar_dim,
+                self._scalar_dim,
+                kwargs[TransformerKwargs.sequence_q_dim],
+                self._scalar_dim,
+                kwargs[TransformerKwargs.sequence_k_dim],
+            ),
+            tensor_name=TransformerKwargs.attention_mask,
+            dtype=torch.bool,
+        )
+        kwargs[TransformerKwargs.attention_mask_value] = TensorMeta.from_dims(
+            (self._scalar_dim,),
+            tensor_name=TransformerKwargs.attention_mask_value,
+            dtype=self._tensor_space.distributed_config.training_dtype.torch,
+        )

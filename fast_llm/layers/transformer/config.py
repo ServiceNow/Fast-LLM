@@ -1,4 +1,5 @@
-from curses import flash
+import collections
+import dataclasses
 import enum
 import functools
 import logging
@@ -62,9 +63,16 @@ class TransformerDimNames:
     composite_gated_shared_expert_mlp = "composite_gated_shared_expert_mlp"
 
 
+class AttentionMode(str, enum.Enum):
+    causal = "causal"
+    bidirectional = "bidirectional"
+    causal_or_block_bidirectional = "causal_or_block_bidirectional"
+
+
 class TransformerKwargs:
     rotary_freq_q = "rotary_freq_q"
     rotary_freq_k = "rotary_freq_k"
+    attention_mode = "attention_mode"
     attention_mask = "attention_mask"
     attention_mask_value = "attention_mask_value"
     sequence_lengths = "sequence_lengths"
@@ -72,6 +80,8 @@ class TransformerKwargs:
     cu_seqlens_k = "cu_seqlens_k"
     max_seqlen_q = "max_seqlen_q"
     max_seqlen_k = "max_seqlen_k"
+    block_ids_q = "block_ids_q"
+    block_ids_k = "block_ids_k"
     block_mask = "block_mask"
     # TODO: Review these
     presents = "presents"
@@ -252,21 +262,64 @@ class TransformerPeftConfig(PeftConfig):
                 )
 
 
-class AttentionImplementation(enum.StrEnum):
-    """
-    The implementation of the attention layer to use.
-    """
-
-    FLASH = "flash_attention"
-    FLASH_VARLEN = "flash_attention_with_variable_length"
-    FLEX = "flex_attention"
-    FLEX_VARLEN = "flex_attention_with_variable_length"
-    SDPA = "scaled_dot_product_attention"
-    BACKUP = "backup_attention"
 for name in PeftType:
     # We need this because we are using the reserved field name `type`.
     # TODO: Implement proper dynamic typing.
     TransformerPeftConfig.register_subclass(name.value, TransformerPeftConfig)
+
+
+class AttentionImplementation(enum.StrEnum):
+    FLASH = "flash_attention"
+    FLASH_VARLEN = "flash_attention_with_variable_length"
+    FLEX = "flex_attention"
+    FLEX_VARLEN = "flex_attention_with_variable_length"
+    BACKUP = "backup_attention"
+
+
+@dataclasses.dataclass
+class AttentionImplementationSpec:
+    needs_flash: bool = False
+    flex: bool = False
+    fast: bool = True
+    variable_length: bool = False
+    dropout: bool = True
+    dtypes: set[DataType] = dataclasses.field(default_factory=lambda: set({DataType.float16, DataType.bfloat16}))
+    modes: set[AttentionMode] = dataclasses.field(
+        default_factory=lambda: set({AttentionMode.causal, AttentionMode.bidirectional})
+    )
+    variable_window: bool = False
+
+
+ATTENTION_IMPLEMENTATION_SPECS = {
+    AttentionImplementation.FLASH: AttentionImplementationSpec(
+        needs_flash=True,
+        variable_window=True,
+    ),
+    AttentionImplementation.FLASH_VARLEN: AttentionImplementationSpec(
+        needs_flash=True,
+        variable_length=True,
+        variable_window=True,
+    ),
+    AttentionImplementation.FLEX: AttentionImplementationSpec(
+        flex=True,
+        dropout=False,
+        dtypes={DataType.float16, DataType.bfloat16, DataType.float32},
+        modes={AttentionMode.causal, AttentionMode.bidirectional, AttentionMode.causal_or_block_bidirectional},
+    ),
+    AttentionImplementation.FLEX_VARLEN: AttentionImplementationSpec(
+        flex=True,
+        variable_length=True,
+        dropout=False,
+        dtypes={DataType.float16, DataType.bfloat16, DataType.float32},
+        modes={AttentionMode.causal, AttentionMode.bidirectional, AttentionMode.causal_or_block_bidirectional},
+    ),
+    AttentionImplementation.BACKUP: AttentionImplementationSpec(
+        fast=False,
+        dropout=True,
+        dtypes={DataType.float16, DataType.bfloat16, DataType.float32},
+        variable_window=True,
+    ),
+}
 
 
 @config_class()
@@ -455,11 +508,16 @@ class TransformerConfig(BaseModelConfig):
         desc="Store the residuals for the transformer in full precision (`optimization_dtype`).",
         hint=FieldHint.stability,
     )
-    # Use flash attention if possible (fp16 or bf16)
-    use_flash_attention: bool = Field(
+    use_fast_attention: bool = Field(
         default=True,
-        desc="Enable Flash Attention if possible.",
+        desc="Use fast attention implementation, FlashAttention if available or FlexAttention otherwise. If False, standard PyTorch attention will be used.",
         hint=FieldHint.optional,
+    )
+    attention_mode: AttentionMode = Field(
+        default=AttentionMode.causal,
+        desc="The attention mode to use. Choices: causal, bidirectional, causal_or_block_bidirectional.",
+        hint=FieldHint.architecture,
+        valid=check_field(Assert.incl, AttentionMode),
     )
     window_size: int | None = Field(
         default=None,
@@ -724,76 +782,49 @@ class TransformerConfig(BaseModelConfig):
                 )
             )
 
-    # def do_use_flash_attention(self, distributed_config: DistributedConfig) -> bool:
-    #     use_flash_attention = self.use_flash_attention and distributed_config.training_dtype in (
-    #         DataType.float16,
-    #         DataType.bfloat16,
-    #     )
-
-    #     # Config parameter `window_size` only can be used with flash attention
-    #     if not use_flash_attention:
-    #         Assert.is_(self.window_size, None)
-
-    #     return use_flash_attention
-
     def select_attention_implementation(
         self,
         *,
         require_variable_length: bool,
-        require_blocks: bool,
-        require_dropout: bool,
-        has_half_precision: bool,
+        training_dtype: DataType,
+        flash_available: bool,
     ) -> AttentionImplementation:
-        preference: list[AttentionImplementation] = []
-        if self.use_flash_attention and has_half_precision:
-            preference.extend([AttentionImplementation.FLASH, AttentionImplementation.FLASH_VARLEN])
-        preference.extend(
-            [
-                AttentionImplementation.FLEX,
-                AttentionImplementation.FLEX_VARLEN,
-                AttentionImplementation.SDPA,
-                AttentionImplementation.BACKUP,
-            ]
-        )
+        def eligible(spec: AttentionImplementationSpec) -> bool:
+            if self.use_fast_attention and not spec.fast:
+                return False
+            if not flash_available and spec.needs_flash:
+                return False
+            if require_variable_length and not spec.variable_length:
+                return False
+            if self.attention_dropout > 0 and not spec.dropout:
+                return False
+            if self.attention_mode not in spec.modes:
+                return False
+            if training_dtype not in spec.dtypes:
+                return False
+            if self.max_window_layers is not None and not spec.variable_window:
+                return False
+            return True
 
-        _supports_varlen = {
-            AttentionImplementation.FLASH_VARLEN,
-            AttentionImplementation.FLEX_VARLEN,
-            AttentionImplementation.SDPA,
-            AttentionImplementation.BACKUP,
-        }
-        _supports_blocks = {
-            AttentionImplementation.FLEX_VARLEN,
-            AttentionImplementation.SDPA,
-            AttentionImplementation.BACKUP,
-        }
-        _supports_dropout = {
+        preference = [
             AttentionImplementation.FLASH,
             AttentionImplementation.FLASH_VARLEN,
-            AttentionImplementation.SDPA,
+            AttentionImplementation.FLEX,
+            AttentionImplementation.FLEX_VARLEN,
             AttentionImplementation.BACKUP,
-        }
-        _needs_half = {AttentionImplementation.FLASH, AttentionImplementation.FLASH_VARLEN}
-
-        if require_blocks:
-            require_variable_length = True
+        ]
 
         for impl in preference:
-            if require_variable_length and impl not in _supports_varlen:
-                continue
-            if require_blocks and impl not in _supports_blocks:
-                continue
-            if require_dropout and impl not in _supports_dropout:
-                continue
-            if impl in _needs_half and not has_half_precision:
-                continue
-            return impl
+            if eligible(ATTENTION_IMPLEMENTATION_SPECS[impl]):
+                return impl
 
         raise ValueError(
             f"Cannot find a suitable attention implementation for the given requirements: "
+            f"use_fast_attention={self.use_fast_attention}, "
             f"require_variable_length={require_variable_length}, "
-            f"require_blocks={require_blocks}, "
-            f"require_dropout={require_dropout}, "
-            f"has_half_precision={has_half_precision}, "
-            f"use_flash_attention={self.use_flash_attention}"
+            f"training_dtype={training_dtype}, "
+            f"flash_available={flash_available}, "
+            f"attention_mode={self.attention_mode}, "
+            f"attention_dropout={self.attention_dropout}, "
+            f"max_window_layers={self.max_window_layers}"
         )

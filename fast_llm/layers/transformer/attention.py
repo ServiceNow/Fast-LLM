@@ -3,7 +3,6 @@ import typing
 
 import torch
 import torch.nn.attention.flex_attention
-import dataclasses
 
 from fast_llm.core.distributed import set_generator
 from fast_llm.core.ops import gather_op, reduce_op, reduce_scatter_op, swap_mult_dim
@@ -15,6 +14,7 @@ from fast_llm.functional.triton.rotary import triton_rotary_autograd_
 from fast_llm.layers.common.linear import InputParallelLinear, OutputParallelLinear
 from fast_llm.layers.transformer.config import (
     AttentionImplementation,
+    AttentionMode,
     TransformerConfig,
     TransformerDimNames,
     TransformerKwargs,
@@ -58,10 +58,6 @@ class AttachGrad(torch.autograd.Function):
 
 
 class Attention(torch.nn.Module):
-    """
-    A self-attention layer.
-    """
-
     _QUERY_DIMS = (
         TransformerDimNames.batch,
         TransformerDimNames.sequence_q,
@@ -383,15 +379,8 @@ class Attention(torch.nn.Module):
 
         attention_implementation = self._config.select_attention_implementation(
             require_variable_length=TransformerKwargs.sequence_lengths in kwargs,
-            require_blocks=TransformerKwargs.block_lengths in kwargs,
-            require_dropout=self._config.attention_dropout > 0.0,
-            has_half_precision=(
-                self._tensor_space.distributed_config.training_dtype
-                in (
-                    DataType.float16,
-                    DataType.bfloat16,
-                )
-            ),
+            training_dtype=self._tensor_space.distributed_config.training_dtype,
+            flash_available=_flash_available,
         )
         match attention_implementation:
             case AttentionImplementation.FLASH:
@@ -402,7 +391,7 @@ class Attention(torch.nn.Module):
                         v=value,
                         window_size=(-1, -1) if window_size is None else (window_size - 1, 0),
                         dropout_p=self._config.attention_dropout if self.training else 0.0,
-                        causal=True,
+                        causal=kwargs[TransformerKwargs.attention_mode] == AttentionMode.causal,
                         softmax_scale=self._softmax_scale,
                     )  # type: ignore
                     input_ = input_.flatten(-2)
@@ -422,7 +411,7 @@ class Attention(torch.nn.Module):
                         max_seqlen_k=kwargs[TransformerKwargs.max_seqlen_k],
                         dropout_p=self._config.attention_dropout if self.training else 0.0,
                         window_size=(-1, -1) if window_size is None else (window_size - 1, 0),
-                        causal=True,
+                        causal=kwargs[TransformerKwargs.attention_mode] == AttentionMode.causal,
                         softmax_scale=self._softmax_scale,
                     )  # type: ignore
                     input_ = input_.view(*out_dims)
@@ -443,40 +432,42 @@ class Attention(torch.nn.Module):
                     cu_seqlens_k.numel() - 1 == seqs
                 ), "cu_seqlens_q and cu_seqlens_k must have the same number of sequences"
                 out_dims = query.size()
-                query = query.view(-1, query.size(-2), query.size(-1))
-                key = key.view(-1, key.size(-2), key.size(-1))
-                value = value.view(-1, value.size(-2), value.size(-1))
-                query_chunks, key_chunks, value_chunks = [], [], []
-                for i in range(seqs):
-                    query_chunks.append(query[cu_seqlens_q[i] : cu_seqlens_q[i + 1]].transpose(0, 1))
-                    key_chunks.append(key[cu_seqlens_k[i] : cu_seqlens_k[i + 1]].transpose(0, 1))
-                    value_chunks.append(value[cu_seqlens_k[i] : cu_seqlens_k[i + 1]].transpose(0, 1))
-                query_nt = torch.nested.as_nested_tensor(query_chunks, layout=torch.jagged)
-                key_nt = torch.nested.as_nested_tensor(key_chunks, layout=torch.jagged)
-                value_nt = torch.nested.as_nested_tensor(value_chunks, layout=torch.jagged)
+
+                def _nested_from_jagged(values: torch.Tensor, offsets: torch.Tensor, max_seqlen: int) -> torch.Tensor:
+                    values = values.view(-1, values.size(-2), values.size(-1))
+                    values = torch.nested.nested_tensor_from_jagged(
+                        values=values,
+                        offsets=offsets,
+                        jagged_dim=1,
+                        max_seqlen=max_seqlen,
+                    )
+                    return values.permute(0, 2, 1, 3)
+
+                query = _nested_from_jagged(
+                    values=query,
+                    offsets=cu_seqlens_q,
+                    max_seqlen=kwargs[TransformerKwargs.max_seqlen_q],
+                )  # (ndocs, nheads_q, *, headdim)
+                key = _nested_from_jagged(
+                    values=key,
+                    offsets=cu_seqlens_k,
+                    max_seqlen=kwargs[TransformerKwargs.max_seqlen_k],
+                )  # (ndocs, nheads_k, *, headdim)
+                value = _nested_from_jagged(
+                    values=value,
+                    offsets=cu_seqlens_k,
+                    max_seqlen=kwargs[TransformerKwargs.max_seqlen_k],
+                )  # (ndocs, nheads_k, *, headdim)
                 input_ = torch.nn.attention.flex_attention.flex_attention(
-                    query=query_nt,
-                    key=key_nt,
-                    value=value_nt,
+                    query=query,
+                    key=key,
+                    value=value,
                     block_mask=kwargs.get(TransformerKwargs.block_mask),
                     scale=self._softmax_scale,
                     enable_gqa=self._local_heads != self._local_head_groups,
                 )  # type: ignore
                 input_ = input_.values().transpose(0, 1)
                 input_ = input_.view(*out_dims)
-            case AttentionImplementation.SDPA:
-                with set_generator(self._tensor_space.distributed.tp_generator):
-                    input_ = torch.nn.functional.scaled_dot_product_attention(
-                        query=query,
-                        key=key,
-                        value=value,
-                        attn_mask=kwargs.get(TransformerKwargs.attention_mask),
-                        dropout_p=self._config.attention_dropout if self.training else 0.0,
-                        is_causal=TransformerKwargs.attention_mask not in kwargs,
-                        scale=self._softmax_scale,
-                        enable_gqa=self._local_heads != self._local_head_groups,
-                    )
-                    input_ = input_.flatten(-2)
             case AttentionImplementation.BACKUP:
                 # TODO: Avoid the flattening.
                 input_ = self._attn_fused(
