@@ -37,7 +37,6 @@ tokenizer = AutoTokenizer.from_pretrained(model_path)
 
 # Optional: updates to Fast-LLM config before loading the model
 updates = {
-    ("base_model", "transformer", "use_flash_attention"): True,
     ("distributed", "training_dtype"): "bf16"
 }
 

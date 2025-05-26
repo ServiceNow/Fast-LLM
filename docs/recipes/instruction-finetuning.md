@@ -157,8 +157,6 @@ pretrained:
   model_weights: yes
 model:
   base_model:
-    transformer:
-      use_flash_attention: yes
     cross_entropy_impl: fused
   multi_stage:
     zero_stage: 3

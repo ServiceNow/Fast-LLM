@@ -315,6 +315,7 @@ ATTENTION_IMPLEMENTATION_SPECS = {
     ),
     AttentionImplementation.BACKUP: AttentionImplementationSpec(
         fast=False,
+        variable_length=True,
         dropout=True,
         dtypes={DataType.float16, DataType.bfloat16, DataType.float32},
         variable_window=True,
@@ -790,7 +791,7 @@ class TransformerConfig(BaseModelConfig):
         flash_available: bool,
     ) -> AttentionImplementation:
         def eligible(spec: AttentionImplementationSpec) -> bool:
-            if self.use_fast_attention and not spec.fast:
+            if spec.fast != self.use_fast_attention:
                 return False
             if not flash_available and spec.needs_flash:
                 return False
@@ -816,6 +817,16 @@ class TransformerConfig(BaseModelConfig):
 
         for impl in preference:
             if eligible(ATTENTION_IMPLEMENTATION_SPECS[impl]):
+                print(
+                    f"Selected attention implementation: {impl} for "
+                    f"use_fast_attention={self.use_fast_attention}, "
+                    f"require_variable_length={require_variable_length}, "
+                    f"training_dtype={training_dtype}, "
+                    f"flash_available={flash_available}, "
+                    f"attention_mode={self.attention_mode}, "
+                    f"attention_dropout={self.attention_dropout}, "
+                    f"max_window_layers={self.max_window_layers}"
+                )
                 return impl
 
         raise ValueError(

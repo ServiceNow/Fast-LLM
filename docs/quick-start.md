@@ -475,10 +475,6 @@ Fast-LLM ships with a `prepare` command that will download and preprocess the da
 
 Next, we'll create a configuration file for Fast-LLM.
 
-!!! warning "FlashAttention"
-
-    Fast-LLM uses FlashAttention by default. If you're using Volta GPUs, you must disable FlashAttention by setting `use_flash_attention: no` in the configuration file, as shown below.
-
 !!! warning "Micro-Batch Size"
 
     The `micro_batch_size` in the configuration below is optimized for 80GB GPUs. If you're using GPUs with less memory, you will need to lower this value. Alternatively, you can decrease the `sequence_length` to reduce the memory footprint.
@@ -524,10 +520,8 @@ Save the following as `fast-llm-tutorial/train-config.yaml`:
       model_weights: no  # (8)!
     model:
       base_model:
-        transformer:
-          use_flash_attention: yes  # (9)!
       distributed:
-        training_dtype: bf16  # (10)!
+        training_dtype: bf16  # (9)!
     run:
       experiment_dir: fast-llm-tutorial/experiment
     ```
@@ -540,8 +534,7 @@ Save the following as `fast-llm-tutorial/train-config.yaml`:
     6.  Location of the dataset metadata files generated in Step 4.
     7.  Format of the pretrained model. Since SmolLM is a Llama model, we set this to `llama`.
     8.  We'll train SmolLM2-135M from scratch. You can set to `yes` to continue training from a checkpoint (if you put one in the model directory).
-    9.  By default, Fast-LLM uses FlashAttention for faster training. If you're using Volta GPUs, set this to `no`.
-    10. `bf16` (bfloat16, or Brain Floating Point 16) is supported on Ampere GPUs and higher. On Volta GPUs, use `fp16` (half-precision floating point) for training instead of `bf16`.
+    9. `bf16` (bfloat16, or Brain Floating Point 16) is supported on Ampere GPUs and higher. On Volta GPUs, use `fp16` (half-precision floating point) for training instead of `bf16`.
 
 === "Big"
 
@@ -593,13 +586,11 @@ Save the following as `fast-llm-tutorial/train-config.yaml`:
       model_weights: yes  # (10)!
     model:
       base_model:
-        transformer:
-          use_flash_attention: yes  # (11)!
-        cross_entropy_impl: fused  # (12)!
+        cross_entropy_impl: fused  # (11)!
       multi_stage:
-        zero_stage: 2  # (13)!
+        zero_stage: 2  # (12)!
       distributed:
-        training_dtype: bf16  # (14)!
+        training_dtype: bf16  # (13)!
     run:
       experiment_dir: fast-llm-tutorial/experiment
     ```
@@ -614,10 +605,9 @@ Save the following as `fast-llm-tutorial/train-config.yaml`:
     8.  We are using a cosine decay schedule with linear warmup. After reaching the peak learning rate `base` at `warmup_iterations`, the learning rate will decay to `minimum` at `decay_iterations`, following a cosine curve. The minimum learning rate should be 1/10th of the base learning rate per Chinchilla.
     9.  Format of the pretrained model. Since it's a Llama model, we set this to `llama`.
     10.  We want to continue training Llama-3.1-8B from a checkpoint. If you're training from scratch, set this to `no`.
-    11.  By default, Fast-LLM uses FlashAttention for faster training. If you're using Volta GPUs, set this to `no`.
-    12.  Configure Fast-LLM to use the fused cross-entropy loss implementation rather than the default Triton implementation for models with a large vocabulary size such as Llama-3.1-8B. This avoids issues with block size limitations in our current Triton code.
-    13.  We are using ZeRO stage 2 for this tutorial. You can set this to `1`, `2`, or `3` for ZeRO-1, ZeRO-2, or ZeRO-3, respectively.
-    14.  `bf16` (bfloat16, or Brain Floating Point 16) is supported on Ampere GPUs and higher. On Volta GPUs, use `fp16` (half-precision floating point) for training instead of `bf16`.
+    11.  Configure Fast-LLM to use the fused cross-entropy loss implementation rather than the default Triton implementation for models with a large vocabulary size such as Llama-3.1-8B. This avoids issues with block size limitations in our current Triton code.
+    12.  We are using ZeRO stage 2 for this tutorial. You can set this to `1`, `2`, or `3` for ZeRO-1, ZeRO-2, or ZeRO-3, respectively.
+    13.  `bf16` (bfloat16, or Brain Floating Point 16) is supported on Ampere GPUs and higher. On Volta GPUs, use `fp16` (half-precision floating point) for training instead of `bf16`.
 
 ## 🔑 (Optional) Step 6: Add Your Weights & Biases API Key
 

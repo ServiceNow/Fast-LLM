@@ -7,27 +7,8 @@ from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.layers.transformer.attention import Attention
 from fast_llm.layers.transformer.config import TransformerConfig, TransformerDimNames, TransformerKwargs
-from fast_llm.layers.transformer.preprocessing import FlashAttnVarlenPreprocessor
+from fast_llm.layers.transformer.preprocessing import FastAttentionPreprocessor, BackupAttentionPreprocessor
 from fast_llm.utils import Assert
-
-
-# def test_decide_window_size():
-#     attention = unittest.mock.Mock(spec=Attention)
-#     attention._decide_window_size = Attention._decide_window_size.__get__(attention)  # Attach real method
-
-#     # Arrange - Case 1: window_size is returned (layer_index >= max_window_layers)
-#     attention._config = TransformerConfig(window_size=512, max_window_layers=2)
-#     attention._layer_index = 2
-#     assert attention._decide_window_size() == 512
-
-#     # Arrange - Case 2: window_size is None (layer_index < max_window_layers)
-#     attention._config = TransformerConfig(window_size=512, max_window_layers=2)
-#     attention._layer_index = 1
-#     assert attention._decide_window_size() is None
-
-#     # Arrange - Case 3: max_window_layers is None (always return window_size)
-#     attention._config = TransformerConfig(window_size=512, max_window_layers=None)
-#     assert attention._decide_window_size() == 512
 
 
 def test_attention_constructor():
@@ -67,14 +48,14 @@ def test_varlen_preprocessor():
         num_layers=2,
         num_attention_heads=2,
         hidden_size=16,
-        use_flash_attention=True,
+        # use_fast_attention=True,
     )
     distributed_cfg = DistributedConfig(training_dtype="bfloat16")
     distributed = Distributed(distributed_cfg, use_cpu=True)
     tensor_space = TensorSpace(distributed_config=distributed_cfg)
     tensor_space.setup(distributed)
     transformer_cfg.setup_tensor_space(tensor_space)
-    varlen_preprocessor = FlashAttnVarlenPreprocessor(transformer_cfg, tensor_space=tensor_space)
+    varlen_preprocessor = FastAttentionPreprocessor(transformer_cfg, tensor_space=tensor_space)
     for micro_seq_idx in range(int(sequence_length / micro_sequence_length)):
         kwargs = {
             TransformerKwargs.sequence_q_dim: TensorDim(TransformerDimNames.sequence_k, micro_sequence_length),

@@ -64,10 +64,10 @@ def _get_fast_llm_model(
 ):
     updates = {}
     if use_flash_attention:
-        updates[("base_model", "transformer", "use_flash_attention")] = True
+        updates[("base_model", "transformer", "use_fast_attention")] = True
         updates[("distributed", "training_dtype")] = "bf16"
     else:
-        updates[("base_model", "transformer", "use_flash_attention")] = False
+        updates[("base_model", "transformer", "use_fast_attention")] = False
         if use_bf16:
             updates[("distributed", "training_dtype")] = "bf16"
     return HuggingfaceGPTModelForCausalLM.from_pretrained(
@@ -90,10 +90,10 @@ def _get_fast_llm_model_from_model(
     }
 
     if use_flash_attention:
-        updates[("model", "base_model", "transformer", "use_flash_attention")] = True
+        updates[("model", "base_model", "transformer", "use_fast_attention")] = True
         updates[("model", "distributed", "training_dtype")] = "bf16"
     else:
-        updates[("model", "base_model", "transformer", "use_flash_attention")] = False
+        updates[("model", "base_model", "transformer", "use_fast_attention")] = False
         if use_bf16:
             updates[("model", "distributed", "training_dtype")] = "bf16"
 

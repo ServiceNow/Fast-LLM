@@ -72,8 +72,6 @@ This is not much different from a pretraining config. We will:
       model_weights: yes  # (5)!
     model:
       base_model:
-        transformer:
-          use_flash_attention: yes
         cross_entropy_impl: fused
       multi_stage:
         zero_stage: 2
@@ -127,8 +125,6 @@ This is not much different from a pretraining config. We will:
       model_weights: yes  # (5)!
     model:
       base_model:
-        transformer:
-          use_flash_attention: yes
         cross_entropy_impl: fused
       multi_stage:
         zero_stage: 2
