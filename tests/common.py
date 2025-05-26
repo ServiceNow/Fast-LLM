@@ -23,7 +23,7 @@ from fast_llm.models.gpt.config import (
     Qwen2GPTHuggingfaceCheckpointFormat,
     Starcoder2GPTHuggingfaceCheckpointFormat,
 )
-from fast_llm.models.ssm.config import HybridSSMBaseModelConfig, LLambaHuggingfaceCheckpointFormat
+from fast_llm.models.hybrid.config import HybridSSMBaseModelConfig, LLambaHuggingfaceCheckpointFormat
 from fast_llm.tools.train import CliTrainingConfig
 from tests.compare_tensor_logs import CompareConfig, compare_tensor_logs
 

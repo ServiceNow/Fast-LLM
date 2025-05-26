@@ -16,14 +16,18 @@ from fast_llm.layers.language_model.config import LanguageModelKwargs, LanguageM
 from fast_llm.layers.ssm.config import SSMBlockType
 from fast_llm.layers.transformer.config import TransformerKwargs
 from fast_llm.models.gpt.config import GPTBatchConfig, LlamaGPTHuggingfaceCheckpointFormat
-from fast_llm.models.ssm.config import AprielSSMHHybridHuggingfaceCheckpointFormat, LLambaHuggingfaceCheckpointFormat
+from fast_llm.models.hybrid.config import (
+    AprielSSMHHybridHuggingfaceCheckpointFormat,
+    LLambaHuggingfaceCheckpointFormat,
+)
 from tests.common import get_hybrid_config, materialize_meta_tensors
 
 try:
+    from blocks import LlambaBlock
+
     from fast_llm.layers.ssm.discrete_mamba2 import DiscreteMamba2
-    from fast_llm.layers.ssm.llamba_block import LlambaBlock
     from fast_llm.layers.ssm.mamba_layer import MambaLayer
-    from fast_llm.models.ssm.model import HybridSSMBaseModel, HybridSSMModel
+    from fast_llm.models.hybrid.model import HybridSSMBaseModel, HybridSSMModel
 except ImportError:
     MambaLayer, LlambaBlock, HybridSSMBaseModel, DiscreteMamba2 = (
         None,
@@ -140,7 +144,7 @@ def test_load_from_llamba_checkpoint(distributed_config):
 
 
 def get_hf_apriel_hybrid_out(input_ids, path, format):
-    from fast_llm.models.ssm.external.apriel_hybrid.modeling_ssm_hybrid_apriel import AprielSSMHybridForCausalLM
+    from fast_llm.models.hybrid.external.apriel_hybrid.modeling_ssm_hybrid_apriel import AprielSSMHybridForCausalLM
 
     model = AprielSSMHybridForCausalLM.from_pretrained(path, strict=True).to("cuda")
     parameter_sum = sum(p.detach().cpu().numpy().sum() for p in model.parameters())

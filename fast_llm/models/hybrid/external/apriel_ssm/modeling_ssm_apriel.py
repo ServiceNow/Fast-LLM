@@ -19,7 +19,7 @@ from transformers.pytorch_utils import ALL_LAYERNORM_LAYERS
 from transformers.utils import LossKwargs, add_start_docstrings, add_start_docstrings_to_model_forward, logging
 from transformers.utils.generic import ModelOutput
 
-from fast_llm.models.ssm.external.apriel_ssm.configuration_ssm_apriel import AprielSSMConfig
+from fast_llm.models.hybrid.external.apriel_ssm.configuration_ssm_apriel import AprielSSMConfig
 
 logger = logging.get_logger(__name__)
 

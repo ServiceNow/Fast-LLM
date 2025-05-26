@@ -1,11 +1,12 @@
 import typing
+import warnings
 
 from fast_llm.config import Field, FieldHint, check_field, config_class, skip_valid_if_none
 from fast_llm.engine.base_model.config import BaseModelConfig
 from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
 from fast_llm.engine.distributed.config import DistributedDimNames
-from fast_llm.functional.config import CrossEntropyImpl
-from fast_llm.layers.transformer.config import TransformerConfig
+from fast_llm.functional.config import CrossEntropyImpl, TritonConfig
+from fast_llm.layers.common.config import NormalizationConfig
 from fast_llm.utils import Assert
 
 
@@ -41,10 +42,10 @@ class LanguageModelKwargs:
 
 @config_class()
 class LanguageModelBaseConfig(BaseModelConfig):
-    transformer: TransformerConfig = Field(
-        desc="Configuration for the transformer architecture.",
-        hint=FieldHint.architecture,
-    )
+    """
+    Base config for language models.
+    """
+
     max_position_embeddings: int = Field(
         default=2048,
         desc="Number of absolute position embeddings, if applicable.",
@@ -58,8 +59,8 @@ class LanguageModelBaseConfig(BaseModelConfig):
         valid=check_field(Assert.gt, 0),
     )
     use_position_embeddings: bool = Field(
-        default=None,
-        desc="Enable absolute position embeddings. Default: Enable unless using rotary embeddings.",
+        default=True,
+        desc="Enable absolute position embeddings.",  # Default: Enable unless using rotary embeddings.",
         hint=FieldHint.architecture,
     )
     tie_word_embeddings: bool = Field(
@@ -174,18 +175,49 @@ class LanguageModelBaseConfig(BaseModelConfig):
         doc="If not provided, all heads are equally weighted.",
         hint=FieldHint.feature,
     )
+    # rotary: RotaryConfig = Field(
+    #     desc="Configuration for the rotary positional embeddings.",
+    #     hint=FieldHint.architecture,
+    # )
+    full_precision_residual: bool = Field(
+        default=False,
+        desc="Store the residuals for the transformer in full precision (`optimization_dtype`).",
+        hint=FieldHint.stability,
+    )
+    debug: bool = Field(
+        default=False,
+        desc="Enable debug mode.",
+        hint=FieldHint.testing,
+    )
+    embeddings_hidden_dropout: bool = Field(
+        default=0.0,
+        desc="Dropout applied to the embeddings.",
+        hint=FieldHint.feature,
+        valid=check_field(Assert.geq, 0),
+    )
+    head_normalization: NormalizationConfig = Field(
+        desc="Configuration for the normalization in the head.",
+        hint=FieldHint.architecture,
+    )
 
     def _validate(self) -> None:
-        self.transformer.validate()
-        with self._set_implicit_default():
-            if self.use_position_embeddings is None:
-                self.use_position_embeddings = not self.transformer.rotary.enabled
-            if self.init_method_std_embed is None:
-                self.init_method_std_embed = self.transformer.init_method_std
-            if self.init_method_max_embed is None:
-                self.init_method_max_embed = self.transformer.init_method_max
-            if self.init_method_min_embed is None:
-                self.init_method_min_embed = self.transformer.init_method_min
+        # # self.transformer.validate()
+        # with self._set_implicit_default():
+        #     if self.use_position_embeddings is None:
+        #         self.use_position_embeddings = not self.rotary.enabled
+        #     if self.init_method_std_embed is None:
+        #         self.init_method_std_embed = self.transformer.init_method_std
+        #     if self.init_method_max_embed is None:
+        #         self.init_method_max_embed = self.transformer.init_method_max
+        #     if self.init_method_min_embed is None:
+        #         self.init_method_min_embed = self.transformer.init_method_min
+
+        if not TritonConfig.TRITON_ENABLED:
+            warnings.warn("Triton is disabled, but triton rotary kernel will be used anyway.")
+        Assert.geq(
+            self.embeddings_hidden_dropout, 0
+        )  # Do we need to check it here again given that its is already asserted in the config field?
+
         super()._validate()
         if self.init_method_max_embed is not None and self.init_method_min_embed is not None:
             Assert.leq(self.init_method_min_embed, self.init_method_max_embed)
@@ -198,7 +230,7 @@ class LanguageModelBaseConfig(BaseModelConfig):
                 Assert.geq(coeff, 0)
 
     def setup_tensor_space(self, tensor_space: TensorSpace) -> None:
-        self.transformer.setup_tensor_space(tensor_space)
+        # self.transformer.setup_tensor_space(tensor_space)
         tensor = tensor_space.distributed_config.get_distributed_dim(DistributedDimNames.tensor)
 
         # Embedding dimensions

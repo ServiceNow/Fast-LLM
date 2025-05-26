@@ -7,8 +7,9 @@ from fast_llm.core.distributed import set_generator
 from fast_llm.core.ops import reduce_forward, split
 from fast_llm.engine.base_model.base_model import Layer
 from fast_llm.engine.config_utils.tensor_space import TensorSpace
+from fast_llm.layers.common.config import LLMDimNames
 from fast_llm.layers.language_model.config import LanguageModelBaseConfig, LanguageModelDimNames, LanguageModelKwargs
-from fast_llm.layers.transformer.config import TransformerDimNames, TransformerKwargs
+from fast_llm.layers.transformer.config import TransformerKwargs
 from fast_llm.tensor import ParameterMeta, TensorMeta, init_normal_
 from fast_llm.utils import Assert
 
@@ -37,16 +38,16 @@ class LanguageModelEmbedding[ConfigType: LanguageModelBaseConfig](Configurable[L
         self._tensor_space = tensor_space
         self._residual_dtype = (
             self._distributed_config.optimization_dtype
-            if config.transformer.full_precision_residual
+            if config.full_precision_residual
             else self._distributed_config.training_dtype
         ).torch
         self._group_size = self._distributed_config.tensor_parallel
         self._sequence_parallel = self._distributed_config.sequence_tensor_parallel
         self._parallel_embeddings = tensor_space.distributed_config.tensor_parallel > 1 and config.parallel_embeddings
-        self._dropout_p = config.transformer.hidden_dropout
+        self._dropout_p = config.embeddings_hidden_dropout
         self._use_absolute_position_embeddings = config.use_absolute_position_embeddings
 
-        hidden_dim = tensor_space.get_tensor_dim(TransformerDimNames.hidden)
+        hidden_dim = tensor_space.get_tensor_dim(LLMDimNames.input_hidden)
         vocab_dim = tensor_space.get_tensor_dim(
             LanguageModelDimNames.vocab_tp if self._parallel_embeddings else LanguageModelDimNames.vocab
         )
@@ -76,12 +77,12 @@ class LanguageModelEmbedding[ConfigType: LanguageModelBaseConfig](Configurable[L
                 lr_scale=config.embeddings_lr_scale,
             )
 
-        # PEFT.
-        self.word_embeddings_weight = self._config.transformer.peft.apply_weight(self.word_embeddings_weight)
-        if hasattr(self, "position_embeddings_weight"):
-            self.position_embeddings_weight = self._config.transformer.peft.apply_weight(
-                self.position_embeddings_weight
-            )
+        # PEFT: layer freezing should be done by explicitly setting embeddings_lr_scale to 0.0
+        # self.word_embeddings_weight = self._config.peft.apply_weight(self.word_embeddings_weight)
+        # if hasattr(self, "position_embeddings_weight"):
+        #     self.position_embeddings_weight = self._config.peft.apply_weight(
+        #         self.position_embeddings_weight
+        #     )
 
     @torch.compile
     def _forward(self, input_: torch.Tensor, position_ids: torch.Tensor | None) -> torch.Tensor:

@@ -24,13 +24,13 @@ class AprielSSMWrapper(HFLM):
 
     def _get_config(self, pretrained: str, **kwargs) -> None:
         """Get the model configuration."""
-        from fast_llm.models.ssm.external.apriel_ssm.configuration_ssm_apriel import AprielSSMConfig
+        from fast_llm.models.hybrid.external.apriel_ssm.configuration_ssm_apriel import AprielSSMConfig
 
         self._config = AprielSSMConfig.from_pretrained(pretrained)
 
     def _create_model(self, pretrained: str, dtype: Optional[Union[str, torch.dtype]] = "float16", **kwargs) -> None:
         """Create the model."""
-        from fast_llm.models.ssm.external.apriel_ssm.modeling_ssm_apriel import AprielSSMForCausalLM
+        from fast_llm.models.hybrid.external.apriel_ssm.modeling_ssm_apriel import AprielSSMForCausalLM
 
         self._model = AprielSSMForCausalLM.from_pretrained(
             pretrained,
@@ -76,13 +76,13 @@ class AprielHybridSSMWrapper(HFLM):
 
     def _get_config(self, pretrained: str, **kwargs) -> None:
         """Get the model configuration."""
-        from fast_llm.models.ssm.external.apriel_hybrid.configuration_ssm_hybrid_apriel import AprielSSMHybridConfig
+        from fast_llm.models.hybrid.external.apriel_hybrid.configuration_ssm_hybrid_apriel import AprielSSMHybridConfig
 
         self._config = AprielSSMHybridConfig.from_pretrained(pretrained, trust_remote_code=True)
 
     def _create_model(self, pretrained: str, dtype: Optional[Union[str, torch.dtype]] = "float16", **kwargs) -> None:
         """Create the model."""
-        from fast_llm.models.ssm.external.apriel_hybrid.modeling_ssm_hybrid_apriel import AprielSSMHybridForCausalLM
+        from fast_llm.models.hybrid.external.apriel_hybrid.modeling_ssm_hybrid_apriel import AprielSSMHybridForCausalLM
 
         self._model = AprielSSMHybridForCausalLM.from_pretrained(
             pretrained,
@@ -135,7 +135,7 @@ class AprielHybridSSMWrapper(HFLM):
 
     def _get_config(self, pretrained: str, **kwargs) -> None:
         """Get the model configuration."""
-        from fast_llm.models.ssm.external.apriel_15b_hybrid.configuration_ssm_hybrid_apriel15b import (
+        from fast_llm.models.hybrid.external.apriel_15b_hybrid.configuration_ssm_hybrid_apriel15b import (
             AprielSSMHybridConfig,
         )
 
@@ -143,7 +143,7 @@ class AprielHybridSSMWrapper(HFLM):
 
     def _create_model(self, pretrained: str, dtype: Optional[Union[str, torch.dtype]] = "float16", **kwargs) -> None:
         """Create the model."""
-        from fast_llm.models.ssm.external.apriel_15b_hybrid.modeling_ssm_hybrid_apriel15b import (
+        from fast_llm.models.hybrid.external.apriel_15b_hybrid.modeling_ssm_hybrid_apriel15b import (
             AprielSSMHybridForCausalLM,
         )
 

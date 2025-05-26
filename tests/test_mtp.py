@@ -20,7 +20,7 @@ from tests.common import get_hybrid_config, materialize_meta_tensors, requires_c
 try:
     from fast_llm.layers.ssm.discrete_mamba2 import DiscreteMamba2
     from fast_llm.layers.ssm.mamba_layer import MambaLayer
-    from fast_llm.models.ssm.model import HybridSSMBaseModel
+    from fast_llm.models.hybrid.model import HybridSSMBaseModel
 except ImportError:
     MambaLayer, HybridSSMBaseModel, DiscreteMamba2 = (
         None,

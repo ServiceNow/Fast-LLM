@@ -56,14 +56,15 @@ class MambaLayer(torch.nn.Module):
     def __init__(
         self,
         config: SSMConfig,
-        layer_idx: int,
         tensor_space: TensorSpace,
+        layer_index: int,
+        name: str = "",
         return_input: bool = False,
     ):
         factory_kwargs = {}
         super().__init__()
         self.config: SSMConfig = config
-        self.layer_idx = layer_idx
+        self.layer_idx = layer_index
 
         self._debug_mode = config.debug_ssm
 
@@ -72,17 +73,17 @@ class MambaLayer(torch.nn.Module):
         td_inner_proj = tensor_space.get_tensor_dim(
             SSMDimNames.inner_proj_mamba
         )  # TensorDim("D_inner_2", self.d_inner * 2)
-        tdt_rank = tensor_space.get_tensor_dim(SSMDimNames.dt_rank)
-        td_x_proj = tensor_space.get_tensor_dim(SSMDimNames.x_proj_dim)
-        td_state = tensor_space.get_tensor_dim(SSMDimNames.state_dim)
-        td_model = tensor_space.get_tensor_dim(SSMDimNames.model_dim)
-        td_conv_kernel = tensor_space.get_tensor_dim(SSMDimNames.conv_kernel_size)
+        tdt_rank = tensor_space.get_tensor_dim(f"{SSMDimNames.dt_rank}_{name}")
+        td_x_proj = tensor_space.get_tensor_dim(f"{SSMDimNames.x_proj_dim}_{name}")
+        td_state = tensor_space.get_tensor_dim(f"{SSMDimNames.state_dim}_{name}")
+        td_model = tensor_space.get_tensor_dim(f"{SSMDimNames.model_dim}_{name}")
+        td_conv_kernel = tensor_space.get_tensor_dim(f"{SSMDimNames.conv_kernel_size}_{name}")
         self.d_conv = td_conv_kernel.size
         self.d_inner = td_inner.size
         self.d_state = td_state.size
         self.d_model = td_model.size
         self.dt_rank = tdt_rank.size
-        layer_lr_scale = config.per_layer_lr_scale[layer_idx] if config.per_layer_lr_scale else None
+        layer_lr_scale = config.per_layer_lr_scale[layer_index] if config.per_layer_lr_scale else None
         mamba_layer_lr_scale = get_lr_scale(self.config.mamba_lr_scale, layer_lr_scale)
 
         self.in_proj_weight = ParameterMeta.from_dims(

@@ -15,6 +15,7 @@ from fast_llm.functional.cross_entropy import cross_entropy_forward_backward
 from fast_llm.functional.dpo import compute_dpo_loss
 from fast_llm.functional.linear import output_parallel_linear_backward, output_parallel_linear_forward
 from fast_llm.layers.common.auxiliary_loss import AuxiliaryLoss, z_loss
+from fast_llm.layers.common.config import LLMDimNames
 from fast_llm.layers.language_model.config import (
     LanguageModelBaseConfig,
     LanguageModelDimNames,
@@ -44,7 +45,7 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
         prediction_distance: int,
     ):
         super().__init__(config)
-        self._debug_transformer = config.transformer.debug_transformer
+        self._debug_transformer = config.debug
         self._tie_word_embeddings = config.tie_word_embeddings
         self._tensor_space = tensor_space
 
@@ -58,13 +59,13 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
         if self._cross_entropy_splits is not None and self._sequence_parallel:
             assert not self._parallel_embeddings
 
-        hidden_dim = self._tensor_space.get_tensor_dim(TransformerDimNames.hidden)
+        hidden_dim = self._tensor_space.get_tensor_dim(LLMDimNames.output_hidden)
 
         self._loss_coefficient = (
             config.prediction_loss_coefficient[prediction_distance] if config.prediction_loss_coefficient else 1.0
         )
         self._loss_name = LanguageModelLossNames.multi_token_prediction_loss(prediction_distance)
-        self.final_norm = config.transformer.normalization.get_layer(hidden_dim)
+        self.final_norm = config.head_normalization.get_layer(hidden_dim)
         self._logits_scale_factor = config.logits_scale_factor
         self._z_loss_factor = config.logit_z_loss
 
@@ -92,12 +93,12 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
 
         self._forward = wrap_forward_backward(self._forward_backward, grad_is_context)
 
-        # PEFT.
-        self.final_norm = self._config.transformer.peft.apply_other(self.final_norm)
-        if hasattr(self, "output_weights"):
-            self.output_weights = self._config.transformer.peft.apply_weight(self.output_weights)
+        # PEFT: layer freezing should be done by explicitly setting output_lr_scale to 0.0
+        # self.final_norm = self._config.transformer.peft.apply_other(self.final_norm)
+        # if hasattr(self, "output_weights"):
+        #     self.output_weights = self._config.transformer.peft.apply_weight(self.output_weights)
 
-    def _init_output_weights(self, hidden_dim: TensorDim, config) -> None:
+    def _init_output_weights(self, hidden_dim: TensorDim, config: LanguageModelBaseConfig) -> None:
         # Only the first head defines the output weights
         if self._tie_word_embeddings or self._prediction_distance > 0:
             return

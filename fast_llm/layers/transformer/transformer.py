@@ -8,6 +8,7 @@ from fast_llm.core.distributed import set_generator
 from fast_llm.engine.base_model.base_model import Layer
 from fast_llm.engine.config_utils.run import log_pipeline_parallel_main_rank
 from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
+from fast_llm.layers.common.config import BaseBlockConfig
 from fast_llm.layers.transformer.attention import Attention
 from fast_llm.layers.transformer.config import TransformerConfig, TransformerDimNames, TransformerKwargs
 from fast_llm.layers.transformer.mixture_of_experts import MixtureOfExpertMLP
@@ -26,32 +27,37 @@ class BaseBlock(Layer, abc.ABC):
     _mixer_module_name = "self_attn"
 
     def __init__(
-        self, config: TransformerConfig, tensor_space: TensorSpace, layer_index: int, return_input: bool = False
+        self,
+        config: BaseBlockConfig,
+        tensor_space: TensorSpace,
+        layer_index: int,
+        block_name: str = "",
+        return_input: bool = False,
     ):
         super().__init__()
         self._config: TransformerConfig = config
         self._tensor_space: TensorSpace = tensor_space
         self._dropout_p: float = self._config.hidden_dropout
+        self.block_name = block_name  # this name is used for tensor space setup and corresponds to the block name in the hybrid setup or to "" in the old setup (GPT Model)
         # For multi-token prediction, return a stack of shared_hidden and transformer_output.
         self._return_input: bool = return_input
 
         self._layer_index = layer_index
-        self._debug_mode = self._config.debug_transformer or self._config.debug_transformer_memory
-        hidden_dim = self._tensor_space.get_tensor_dim(TransformerDimNames.hidden)
+        self._debug_mode = self._config.debug_block or self._config.debug_block_memory
+        hidden_dim = self._tensor_space.get_tensor_dim(f"{TransformerDimNames.hidden}_{block_name}")
         # Note, layer_lr_scale does not impact the norms
-        # TODO: add a seperate norm_lr_scale
-        self.norm_1 = self._config.normalization.get_layer(hidden_dim)
-        self.norm_2 = self._config.normalization.get_layer(hidden_dim)
+        self.norm_1 = self._config.normalization.get_layer(hidden_dim, lr_scale=self._config.norm_lr_scale)
+        self.norm_2 = self._config.normalization.get_layer(hidden_dim, lr_scale=self._config.norm_lr_scale)
 
         self._create_mixer()
 
         self.mlp = (MixtureOfExpertMLP if self._config.num_experts > 1 else MLP)(
-            self._config, self._tensor_space, f"{self.name} mlp", layer_index=layer_index
+            self._config, self._tensor_space, f"{self.block_name} mlp", layer_index=layer_index
         )
 
-        # PEFT.
-        self.norm_1 = self._config.peft.apply_other(self.norm_1)
-        self.norm_2 = self._config.peft.apply_other(self.norm_2)
+        # PEFT. Layer freezing must be explicit now.
+        # self.norm_1 = self._config.peft.apply_other(self.norm_1)
+        # self.norm_2 = self._config.peft.apply_other(self.norm_2)
 
     @abc.abstractmethod
     def _create_mixer(self):
@@ -67,7 +73,7 @@ class BaseBlock(Layer, abc.ABC):
 
     @property
     def name(self) -> str:
-        return f"{self._name} {self._layer_index}"
+        return f"{self.__class__.__name__} {self.block_name} {self._layer_index}"
 
     def _get_meta(self, tensor: torch.Tensor, name: str, kwargs: dict):
         dims = kwargs[TransformerKwargs.hidden_dims]
@@ -76,21 +82,21 @@ class BaseBlock(Layer, abc.ABC):
         return TensorMeta.from_dims(dims, tensor_name=f"{self.name} {name}", dtype=tensor.dtype)
 
     def _debug_log(self, tensor: torch.Tensor | None, name: str, kwargs: dict[str, typing.Any], *, bias=None) -> None:
-        if self._config.debug_transformer_memory:
+        if self._config.debug_block_memory:
             log_pipeline_parallel_main_rank(lambda: log_memory_usage(f"{self.name} {name}", str))
-        if self._config.debug_transformer and tensor is not None:
+        if self._config.debug_block and tensor is not None:
             # TODO: Local vs global
             log_distributed_tensor(
                 "",
                 tensor if bias is None else tensor + bias,
-                level=self._config.debug_transformer,
+                level=self._config.debug_block,
                 meta=self._get_meta(tensor, name, kwargs),
                 distributed=self._tensor_space.distributed,
             )
             log_distributed_grad(
                 "",
                 tensor,
-                level=self._config.debug_transformer,
+                level=self._config.debug_block,
                 meta=self._get_meta(tensor, name + " grad", kwargs),
                 distributed=self._tensor_space.distributed,
             )
@@ -138,13 +144,17 @@ class BaseBlock(Layer, abc.ABC):
 
 
 class TransformerLayer(BaseBlock):
-    _name = "Transformer layer"
     _mixer_module_name = "self_attn"
 
     def __init__(
-        self, config: TransformerConfig, tensor_space: TensorSpace, layer_index: int, return_input: bool = False
+        self,
+        config: TransformerConfig,
+        tensor_space: TensorSpace,
+        layer_index: int,
+        block_name: str = "",
+        return_input: bool = False,
     ):
-        super().__init__(config, tensor_space, layer_index, return_input)
+        super().__init__(config, tensor_space, layer_index, block_name, return_input)
 
     def _create_mixer(self):
-        self.self_attn = Attention(self._config, self._tensor_space, self._layer_index)
+        self.self_attn = Attention(self._config, self._tensor_space, self._layer_index, self.block_name)

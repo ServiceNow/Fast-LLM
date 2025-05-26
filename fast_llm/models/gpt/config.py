@@ -4,10 +4,13 @@ import typing
 from fast_llm.config import Field, FieldHint, FieldUpdate, check_field, config_class
 from fast_llm.data.data.gpt.config import GPTDataConfig
 from fast_llm.engine.checkpoint.config import CheckpointFormat, CheckpointHandler
+from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig, PretrainedFastLLMModelConfig
 from fast_llm.engine.schedule.config import BatchConfig
 from fast_llm.engine.training.config import TrainerConfig
+from fast_llm.layers.common.config import LLMDimNames
 from fast_llm.layers.language_model.config import LanguageModelBaseConfig
+from fast_llm.layers.transformer.config import TransformerConfig
 from fast_llm.models.gpt.megatron import set_megatron_distributed_seeds
 from fast_llm.utils import Assert, div
 
@@ -97,11 +100,21 @@ class GPTBatchConfig(BatchConfig):
 
 @config_class()
 class GPTBaseModelConfig(LanguageModelBaseConfig):
+    """
+    Base model config for GPT models.
+    This model is built exclusively from transformer layers which share the same config.
+    """
+
     _abstract = False
 
     # Debug, to get an exact match with megatron init.
     use_megatron_initialization: bool = Field(
         default=False, desc="Exactly match the initialization of a Megatron model.", hint=FieldHint.testing
+    )
+
+    transformer: TransformerConfig = Field(
+        desc="Configuration for the transformer architecture.",
+        hint=FieldHint.architecture,
     )
 
     @classmethod
@@ -124,8 +137,32 @@ class GPTBaseModelConfig(LanguageModelBaseConfig):
             del default["fused_mlp"]
         return super()._from_dict(default, strict, flat)
 
+    def _validate(self) -> None:
+        if self.debug:
+            self.transformer.debug_block = True
+            self.transformer.debug_block_memory = True
+        self.transformer.validate()
+        self.use_position_embeddings = not self.transformer.rotary.enabled
+        self.embeddings_hidden_dropout = self.transformer.hidden_dropout  # legacy behavior
+        self.head_normalization = self.transformer.normalization  # legacy behavior
+        with self._set_implicit_default():
+            if self.init_method_std_embed is None:
+                self.init_method_std_embed = self.transformer.init_method_std
+            if self.init_method_max_embed is None:
+                self.init_method_max_embed = self.transformer.init_method_max
+            if self.init_method_min_embed is None:
+                self.init_method_min_embed = self.transformer.init_method_min
+        super()._validate()
 
-@config_class()
+    def setup_tensor_space(self, tensor_space: TensorSpace) -> None:
+        self.transformer.setup_tensor_space(tensor_space)
+        # Mark the input hidden dimension of the model
+        tensor_space.add_tensor_dim(TensorDim(LLMDimNames.input_hidden, self.transformer.hidden_size))
+        # Mark the output hidden dimension of the model, which is the same for GPT models
+        tensor_space.add_tensor_dim(TensorDim(LLMDimNames.output_hidden, self.transformer.hidden_size))
+        super().setup_tensor_space(tensor_space)
+
+
 class GPTModelConfig(FastLLMModelConfig):
     _abstract = False
     model_name: typing.ClassVar[str] = "gpt"

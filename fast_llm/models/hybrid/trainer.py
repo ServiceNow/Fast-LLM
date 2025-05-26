@@ -1,8 +1,8 @@
 import typing
 
 from fast_llm.models.gpt.trainer import GPTTrainer
-from fast_llm.models.ssm.config import HybridTrainerConfig
-from fast_llm.models.ssm.model import HybridSSMModel
+from fast_llm.models.hybrid.config import HybridTrainerConfig
+from fast_llm.models.hybrid.model import HybridSSMModel
 
 
 class SSMTrainer[ConfigType: HybridTrainerConfig](GPTTrainer[ConfigType]):

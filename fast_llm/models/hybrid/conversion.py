@@ -20,13 +20,13 @@ from fast_llm.functional.config import ActivationType
 from fast_llm.layers.common.config import NormalizationType
 from fast_llm.layers.ssm.config import SSMBlockType
 from fast_llm.models.gpt.conversion import CommonLlamaHuggingfaceCheckpointHandler, MLPLayer2Converter
-from fast_llm.models.ssm.config import (
+from fast_llm.models.hybrid.config import (
     AprielSSMHHybridHuggingfaceCheckpointFormat,
     AprielSSMHuggingfaceCheckpointFormat,
     HybridSSMModelConfig,
     LLambaHuggingfaceCheckpointFormat,
 )
-from fast_llm.models.ssm.model import HybridSSMModel
+from fast_llm.models.hybrid.model import HybridSSMModel
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:

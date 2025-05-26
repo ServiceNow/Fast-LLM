@@ -1,6 +1,6 @@
 from lm_eval.__main__ import cli_evaluate
 
-from fast_llm.models.ssm.external.eval.apriel_eval_wrapper import (  # noqa: F401
+from fast_llm.models.hybrid.external.eval.apriel_eval_wrapper import (  # noqa: F401
     AprielHybridSSMWrapper,
     AprielSSMWrapper,
 )

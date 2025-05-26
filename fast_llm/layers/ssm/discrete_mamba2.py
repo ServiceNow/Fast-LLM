@@ -31,8 +31,9 @@ class DiscreteMamba2(torch.nn.Module):
     def __init__(
         self,
         config: SSMConfig,
-        layer_idx: int,
+        layer_index: int,
         tensor_space: TensorSpace,
+        name: str = "",
         return_input: bool = False,
     ):
         """
@@ -46,20 +47,20 @@ class DiscreteMamba2(torch.nn.Module):
         super().__init__()
         self.config: SSMConfig = config
         bias = config.add_bias_linear
-        self.layer_idx = layer_idx
+        self.layer_idx = layer_index
         self._return_input = return_input
-        layer_lr_scale = config.per_layer_lr_scale[layer_idx] if config.per_layer_lr_scale else None
+        layer_lr_scale = config.per_layer_lr_scale[layer_index] if config.per_layer_lr_scale else None
         mamba_layer_lr_scale = get_lr_scale(self.config.mamba_lr_scale, layer_lr_scale)
-        logger.info(f"Setting lr_scale for layer {layer_idx} of type {type(self)}: {mamba_layer_lr_scale}")
+        logger.info(f"Setting lr_scale for layer {layer_index} of type {type(self)}: {mamba_layer_lr_scale}")
 
-        td_inner = tensor_space.get_tensor_dim(SSMDimNames.inner_dim)
-        td_state = tensor_space.get_tensor_dim(SSMDimNames.state_dim)
-        td_model = tensor_space.get_tensor_dim(SSMDimNames.model_dim)
-        td_conv = tensor_space.get_tensor_dim(SSMDimNames.conv_dim)
-        td_n_qk_heads = tensor_space.get_tensor_dim(SSMDimNames.qk_heads)
-        td_n_v_heads = tensor_space.get_tensor_dim(SSMDimNames.v_heads)
-        td_conv_kernel = tensor_space.get_tensor_dim(SSMDimNames.conv_kernel_size)
-        td_inner_proj = tensor_space.get_tensor_dim(SSMDimNames.inner_proj_mamba2)
+        td_inner = tensor_space.get_tensor_dim(f"{SSMDimNames.inner_dim}_{name}")
+        td_state = tensor_space.get_tensor_dim(f"{SSMDimNames.state_dim}_{name}")
+        td_model = tensor_space.get_tensor_dim(f"{SSMDimNames.model_dim}_{name}")
+        td_conv = tensor_space.get_tensor_dim(f"{SSMDimNames.conv_dim}_{name}")
+        td_n_qk_heads = tensor_space.get_tensor_dim(f"{SSMDimNames.qk_heads}_{name}")
+        td_n_v_heads = tensor_space.get_tensor_dim(f"{SSMDimNames.v_heads}_{name}")
+        td_conv_kernel = tensor_space.get_tensor_dim(f"{SSMDimNames.conv_kernel_size}_{name}")
+        td_inner_proj = tensor_space.get_tensor_dim(f"{SSMDimNames.inner_proj_mamba2}_{name}")
 
         self.d_model = td_model.size
         self.d_inner = td_inner.size

@@ -62,9 +62,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
         if self._config.use_absolute_position_embeddings:
             self._preprocessors.append(PositionEmbeddingPreprocessor(self._config, self._tensor_space))
         if self._config.transformer.rotary.enabled:
-            self._preprocessors.append(
-                RotaryEmbeddingPreprocessor(self._config.transformer.rotary, self._tensor_space)
-            )
+            self._preprocessors.append(RotaryEmbeddingPreprocessor(self._config.rotary, self._tensor_space))
         if self._use_flash_attention:
             self._preprocessors.append(FlashAttnVarlenPreprocessor(self._config.transformer, self._tensor_space))
         else:
