@@ -1,16 +1,18 @@
 import pytest
 
-from tests.common import CONFIG_COMMON, TEST_MODEL
+from tests.common import CONFIG_COMMON, TEST_MODEL, requires_cuda, requires_multi_gpu
 
 CONFIG_MS = CONFIG_COMMON + ["batch.micro_sequence_length=256"]
 
 
 # TODO: Compare grads with simple
+@requires_cuda
 def test_model_ms256(run_test_script):
     # Micro-sequence baseline
     run_test_script(f"test_{TEST_MODEL}_ms256", CONFIG_MS)
 
 
+@requires_multi_gpu(2)
 @pytest.mark.slow
 @pytest.mark.depends(on=["test_model_ms256"])
 def test_model_pp2s2_ms256(run_test_script):
@@ -23,6 +25,7 @@ def test_model_pp2s2_ms256(run_test_script):
     )
 
 
+@requires_multi_gpu(8)
 @pytest.mark.slow
 @pytest.mark.skip
 @pytest.mark.depends(on=["test_model_ms256"])

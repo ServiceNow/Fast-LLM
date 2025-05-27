@@ -1,16 +1,18 @@
 import pytest
 
-from tests.common import CONFIG_COMMON, TEST_MODEL
+from tests.common import CONFIG_COMMON, TEST_MODEL, requires_cuda, requires_multi_gpu
 
 CONFIG_SF = CONFIG_COMMON + ["model.base_model.sequence_first=True"]
 
 
+@requires_cuda
 # TODO: Compare grads with simple
 def test_model_sf(run_test_script):
     # Sequence-first baseline.
     run_test_script(f"test_{TEST_MODEL}_sf", CONFIG_SF)
 
 
+@requires_multi_gpu(2)
 @pytest.mark.slow
 @pytest.mark.depends(on=["test_model_sf"])
 def test_model_sp2(run_test_script):
@@ -23,6 +25,7 @@ def test_model_sp2(run_test_script):
     )
 
 
+@requires_multi_gpu(2)
 @pytest.mark.slow
 @pytest.mark.depends(on=["test_model_sf"])
 def test_model_sdp2(run_test_script):
@@ -35,6 +38,7 @@ def test_model_sdp2(run_test_script):
     )
 
 
+@requires_multi_gpu(2)
 @pytest.mark.slow
 @pytest.mark.depends(on=["test_model_sf"])
 def test_model_sp2_ce4(run_test_script):

@@ -1,6 +1,6 @@
 import pytest
 
-from tests.common import CONFIG_COMMON, TEST_MODEL
+from tests.common import CONFIG_COMMON, TEST_MODEL, requires_cuda, requires_multi_gpu
 from tests.compare_tensor_logs import CompareConfig
 
 CONFIG_DF = CONFIG_COMMON + ["batch.depth_first_micro_batches=4"]
@@ -9,11 +9,13 @@ CONFIG_BF_DF = CONFIG_COMMON + ["batch.depth_first_micro_batches=2", "batch.brea
 
 
 # TODO: Compare grads with simple
+@requires_cuda
 def test_model_df4(run_test_script):
     # Depth-first gradient accumulation baseline.
     run_test_script(f"test_{TEST_MODEL}_df4", CONFIG_DF)
 
 
+@requires_multi_gpu(2)
 @pytest.mark.slow
 @pytest.mark.depends(on=["test_model_df4"])
 def test_model_df4_z3(run_test_script):
@@ -27,18 +29,21 @@ def test_model_df4_z3(run_test_script):
     )
 
 
+@requires_cuda
 @pytest.mark.depends(on=["test_model_df4"], scope="session")
 def test_model_bf4(run_test_script):
     # Breadth-first gradient accumulation baseline.
     run_test_script(f"test_{TEST_MODEL}_bf4", CONFIG_BF, compare=f"test_{TEST_MODEL}_df4")
 
 
+@requires_cuda
 @pytest.mark.depends(on=["test_model_df4", "test_model_bf4"])
 def test_model_bf2_df2(run_test_script):
     # Mixed gradient accumulation baseline.
     run_test_script(f"test_{TEST_MODEL}_bf2_df2", CONFIG_BF_DF, compare=f"test_{TEST_MODEL}_df4")
 
 
+@requires_multi_gpu(2)
 @pytest.mark.slow
 @pytest.mark.depends(on=["test_model_bf4"])
 def test_model_pp2s2_bf4(run_test_script):
@@ -51,6 +56,7 @@ def test_model_pp2s2_bf4(run_test_script):
     )
 
 
+@requires_multi_gpu(2)
 @pytest.mark.slow
 @pytest.mark.depends(on=["test_model_bf4"])
 def test_model_pp2s1_bf4(run_test_script):
@@ -64,6 +70,7 @@ def test_model_pp2s1_bf4(run_test_script):
     )
 
 
+@requires_multi_gpu(8)
 @pytest.mark.slow
 @pytest.mark.depends(on=["test_model_bf4"])
 def test_model_dp2_tp2_pp2s2_bf4(run_test_script):

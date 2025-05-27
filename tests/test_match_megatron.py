@@ -12,10 +12,13 @@ from tests.common import (
     CONFIG_SC2_FAST_LLM,
     CONFIG_SC2_MEGATRON,
     DATASET_PREFIX,
+    requires_cuda,
+    requires_multi_gpu,
 )
 from tests.compare_tensor_logs import CompareConfig
 
 
+@requires_multi_gpu(1)
 @pytest.mark.slow
 @pytest.mark.skip(reason="Skipping mostly redundant test")
 def test_sc1_meg(run_test_script):
@@ -29,6 +32,7 @@ CONFIG_MATCH_MEGATRON = [
 ]
 
 
+@requires_cuda
 @pytest.mark.depends(on=["test_sc1_meg"])
 def test_sc1_match_meg(run_test_script):
     # Starcoder 1 (GPT2 with MQA) with Fast-llm.
@@ -48,6 +52,7 @@ def test_sc1_match_meg(run_test_script):
     )
 
 
+@requires_multi_gpu(1)
 @pytest.mark.slow
 @pytest.mark.skip(reason="Skipping mostly redundant test")
 @pytest.mark.depends(on=["test_sc1_match_meg"])
@@ -56,6 +61,7 @@ def test_sc2_meg(run_test_script):
     run_test_script("test_sc2_meg", CONFIG_SC2_MEGATRON + ["--micro-batch-size=8"], is_megatron=True)
 
 
+@requires_cuda
 @pytest.mark.depends(on=["test_sc2_meg"])
 def test_sc2_match_meg(run_test_script):
     # Starcoder 2 (GPT2 with MQA and RoPE) with Fast-llm.
@@ -77,12 +83,14 @@ def test_sc2_match_meg(run_test_script):
     )
 
 
+@requires_multi_gpu(1)
 @pytest.mark.slow
 def test_gpt2_meg(run_test_script):
     # GPT2 (MHA, layer norm, absolute embeddings) with Megatron.
     run_test_script("test_gpt2_meg", CONFIG_GPT2_MEGATRON + ["--micro-batch-size=8"], is_megatron=True)
 
 
+@requires_cuda
 @pytest.mark.depends(on=["test_gpt2_meg"])
 def test_gpt2_match_meg(run_test_script):
     # GPT2 (MHA, layer norm, absolute embeddings) with Fast-llm.
@@ -102,6 +110,7 @@ def test_gpt2_match_meg(run_test_script):
     )
 
 
+@requires_multi_gpu(1)
 @pytest.mark.slow
 def test_mistral_meg(run_test_script):
     # Mistral with Megatron.
@@ -109,6 +118,7 @@ def test_mistral_meg(run_test_script):
     run_test_script("test_mistral_meg", CONFIG_LLAMA_MEGATRON + ["--micro-batch-size=8"], is_megatron=True)
 
 
+@requires_cuda
 @pytest.mark.depends(on=["test_mistral_meg"])
 def test_mistral_match_meg(run_test_script):
     # Mistral with Fast-LLM.
@@ -128,6 +138,7 @@ def test_mistral_match_meg(run_test_script):
     )
 
 
+@requires_multi_gpu(1)
 @pytest.mark.slow
 def test_mixtral_meg(run_test_script):
     # Mistral with Megatron.
@@ -135,6 +146,7 @@ def test_mixtral_meg(run_test_script):
     run_test_script("test_mixtral_meg", CONFIG_MIXTRAL_MEGATRON + ["--micro-batch-size=8"], is_megatron=True)
 
 
+@requires_cuda
 @pytest.mark.depends(on=["test_mixtral_meg"])
 def test_mixtral_match_meg(run_test_script):
     # Mistral with Fast-LLM.

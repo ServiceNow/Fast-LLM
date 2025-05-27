@@ -7,7 +7,7 @@ import torch
 from fast_llm.config import NoAutoValidate
 from fast_llm.engine.checkpoint.config import CheckpointLoadConfig
 from fast_llm.engine.config_utils.tensor_space import TensorSpace
-from fast_llm.engine.distributed.config import DistributedConfig, PhaseType
+from fast_llm.engine.distributed.config import PhaseType
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.engine.schedule.config import ScheduleConfig
 from fast_llm.engine.schedule.runner import ScheduleRunner
@@ -16,7 +16,7 @@ from fast_llm.layers.language_model.config import LanguageModelKwargs, LanguageM
 from fast_llm.layers.transformer.config import TransformerKwargs
 from fast_llm.models.gpt.config import GPTBatchConfig, LlamaGPTHuggingfaceCheckpointFormat
 from fast_llm.models.ssm.config import LLambaHuggingfaceCheckpointFormat
-from tests.common import get_hybrid_config, materialize_meta_tensors
+from tests.common import get_hybrid_config, materialize_meta_tensors, requires_cuda
 
 try:
     from fast_llm.layers.ssm.discrete_mamba2 import DiscreteMamba2
@@ -40,22 +40,6 @@ except ImportError:
 run_test = MambaLayer is not None and torch.cuda.is_available()
 
 
-@pytest.fixture
-def distributed_config():
-    return DistributedConfig(
-        tensor_parallel=1,
-        pipeline_parallel=1,
-        sequence_data_parallel=1,
-        local_world_size=1,
-        world_size=1,
-    )
-
-
-@pytest.fixture
-def distributed(distributed_config):
-    return Distributed(config=distributed_config)
-
-
 def get_hf_llamba_out(input_ids, path, format):
     if format == LLambaHuggingfaceCheckpointFormat:
         from cartesia_pytorch.Llamba.llamba import LlambaLMHeadModel as LMHeadModel
@@ -73,18 +57,20 @@ def get_hf_llamba_out(input_ids, path, format):
     return output, parameter_sum
 
 
+@requires_cuda
 @pytest.mark.slow
 @pytest.mark.skipif(
     not run_test or LMHeadModel is None,
     reason=f"Skipping because one of the following: cartesia_pytorch.Llamba not installed or no CUDA available or Mamba not installed",
 )
-def test_load_from_llamba_checkpoint(distributed_config):
+def test_load_from_llamba_checkpoint(get_distributed_config):
     """
     Test to check whether the of Fast-LLM and Huggingface checkpoint loading for Llamba-1B produce the same results.
     """
     vocab_size = 128256  # from https://huggingface.co/cartesia-ai/Llamba-1B/blob/main/config.json
     batch_size = 2
     seq_length = 32
+    distributed_config = get_distributed_config()
 
     path = pathlib.Path("/mnt/checkpoints_fml/pretrained_models/Llamba-1B")
     format = LLambaHuggingfaceCheckpointFormat
@@ -139,6 +125,7 @@ def test_load_from_llamba_checkpoint(distributed_config):
     assert torch.allclose(logits, hf_logits, atol=1e-2)
 
 
+@requires_cuda
 # TODO: Speed up this test or bring it back as an integration test.
 @pytest.mark.skip(reason="Too slow.")
 @pytest.mark.skipif(not run_test, reason="No CUDA available or Mamba not installed")
@@ -150,8 +137,10 @@ def test_load_from_llamba_checkpoint(distributed_config):
     ],
     ids=["mamba", "discrete_mamba2"],
 )
-def test_mamba_layer(distributed_config, distributed, hybrid_block_layout, LAYER_CLS):
+def test_mamba_layer(get_distributed_config, hybrid_block_layout, LAYER_CLS):
     hybrid_config = get_hybrid_config(hybrid_block_layout=hybrid_block_layout)
+    distributed_config = get_distributed_config()
+    distributed = Distributed(distributed_config)
     tensor_space = TensorSpace(distributed_config=distributed_config)
     hybrid_config.setup_tensor_space(tensor_space)
     layer = LAYER_CLS(hybrid_config.ssm, layer_idx=0, tensor_space=tensor_space)
@@ -175,9 +164,12 @@ def test_mamba_layer(distributed_config, distributed, hybrid_block_layout, LAYER
     assert not torch.isinf(output).any()
 
 
+@requires_cuda
 @pytest.mark.skipif(not run_test, reason="No CUDA available or Mamba not installed")
-def test_mamba_block(distributed_config, distributed):
+def test_mamba_block(get_distributed_config):
     hybrid_config = get_hybrid_config(hybrid_block_layout=["m", "t"])
+    distributed_config = get_distributed_config()
+    distributed = Distributed(distributed_config)
     tensor_space = TensorSpace(distributed_config=distributed_config)
     tensor_space.setup(distributed)
     hybrid_config.setup_tensor_space(tensor_space)
@@ -209,6 +201,7 @@ def test_mamba_block(distributed_config, distributed):
     assert not torch.isinf(hidden_states).any()
 
 
+@requires_cuda
 @pytest.mark.slow
 @pytest.mark.skipif(not run_test, reason="No CUDA available or Mamba not installed")
 @pytest.mark.parametrize(
@@ -219,8 +212,9 @@ def test_mamba_block(distributed_config, distributed):
     ],
     ids=["mamba", "discrete_mamba2"],
 )
-def test_hybrid_model_train_with_fast_mode(distributed_config, hybrid_block_layout):
+def test_hybrid_model_train_with_fast_mode(get_distributed_config, hybrid_block_layout):
     hybrid_config = get_hybrid_config(hybrid_block_layout=hybrid_block_layout)
+    distributed_config = get_distributed_config()
     model = HybridSSMBaseModel(hybrid_config, distributed_config)
     distributed = Distributed(distributed_config)
     model.setup(distributed)

@@ -42,7 +42,7 @@ class Distributed[ConfigType: DistributedConfig](Configurable[ConfigType]):
         else:
             Assert.in_range_incl(self._config.local_world_size, 1, torch.cuda.device_count())
             torch.cuda.init()
-            self.device = torch.device(self._config.local_rank)
+            self.device = self._config.device
             torch.cuda.set_device(self.device)
             if self._config.gpu_memory_limit_gb is not None:
                 torch.cuda.set_per_process_memory_fraction(

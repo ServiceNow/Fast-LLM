@@ -1,8 +1,9 @@
 import pytest
 
-from tests.common import CONFIG_COMMON, CONFIG_FAST_LLM, TEST_MODEL
+from tests.common import CONFIG_COMMON, CONFIG_FAST_LLM, TEST_MODEL, requires_cuda, requires_multi_gpu
 
 
+@requires_cuda
 def test_model_safe(run_test_script):
     # The safest possible config, identical to the one in test_match_megatron except for the initialization.
     run_test_script(
@@ -16,6 +17,7 @@ def test_model_safe(run_test_script):
     )
 
 
+@requires_cuda
 @pytest.mark.depends(on=["test_model_safe"])
 def test_model(run_test_script):
     # A baseline config (single-gpu, bf16, flash-attn).
@@ -25,6 +27,7 @@ def test_model(run_test_script):
     )
 
 
+@requires_multi_gpu(2)
 @pytest.mark.slow
 @pytest.mark.depends(on=["test_model"])
 def test_model_dp2(run_test_script):
@@ -32,6 +35,7 @@ def test_model_dp2(run_test_script):
     run_test_script(f"test_{TEST_MODEL}_dp2", CONFIG_COMMON, num_gpus=2, compare=f"test_{TEST_MODEL}")
 
 
+@requires_multi_gpu(2)
 @pytest.mark.slow
 def test_model_dp2_timeout(run_test_script):
     # Test sampling timeout
@@ -58,6 +62,7 @@ def test_model_dp2_timeout(run_test_script):
     )
 
 
+@requires_multi_gpu(2)
 @pytest.mark.slow
 @pytest.mark.depends(on=["test_model"])
 def test_model_tp2(run_test_script):
@@ -70,6 +75,7 @@ def test_model_tp2(run_test_script):
     )
 
 
+@requires_cuda
 @pytest.mark.depends(on=["test_model"])
 def test_model_ce4(run_test_script):
     # Cross-entropy splits.
@@ -80,6 +86,7 @@ def test_model_ce4(run_test_script):
     )
 
 
+@requires_multi_gpu(2)
 @pytest.mark.slow
 @pytest.mark.depends(on=["test_model"])
 def test_model_dp2_z2(run_test_script):
@@ -92,6 +99,7 @@ def test_model_dp2_z2(run_test_script):
     )
 
 
+@requires_multi_gpu(2)
 @pytest.mark.slow
 @pytest.mark.depends(on=["test_model"])
 def test_model_dp2_z3(run_test_script):

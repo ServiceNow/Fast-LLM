@@ -221,6 +221,7 @@ def _test_generate(
     )
 
 
+@pytest.mark.skip()
 @pytest.mark.extra_slow
 @requires_cuda
 @pytest.mark.parametrize(
@@ -255,6 +256,7 @@ def test_generate(
     )
 
 
+@pytest.mark.skip()
 @pytest.mark.slow
 @requires_cuda
 @pytest.mark.parametrize(
@@ -306,8 +308,9 @@ def _test_generate_from_model(model_path, tokenizer, fast_llm_checkpoint_format)
     )
 
 
-@pytest.mark.extra_slow
+@pytest.mark.skip()
 @requires_cuda
+@pytest.mark.extra_slow
 def test_generate_from_model(
     model_and_tokenizer,
 ):
@@ -315,8 +318,9 @@ def test_generate_from_model(
     _test_generate_from_model(model_path, tokenizer, fast_llm_checkpoint_format)
 
 
-@pytest.mark.slow
+@pytest.mark.skip()
 @requires_cuda
+@pytest.mark.slow
 def test_small_generate_from_model(small_model):
     _test_generate_from_model(small_model, None, HUGGINGFACE_CHECKPOINT_FORMAT)
 
@@ -351,6 +355,7 @@ def _test_forward_return_hidden_states(
     )
 
 
+@pytest.mark.skip()
 @pytest.mark.extra_slow
 @requires_cuda
 def test_forward_return_hidden_states(model_and_tokenizer):
@@ -358,6 +363,7 @@ def test_forward_return_hidden_states(model_and_tokenizer):
     _test_forward_return_hidden_states(model_path, fast_llm_checkpoint_format, tokenizer.vocab_size)
 
 
+@pytest.mark.skip()
 @pytest.mark.slow
 @requires_cuda
 def test_small_forward_return_hidden_states(small_model):

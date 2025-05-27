@@ -13,6 +13,7 @@ import yaml
 
 from fast_llm.data.dataset.gpt.memmap import GPTMemmapDataset
 from fast_llm.data.dataset.gpt.sampled import GPTSample
+from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.layers.ssm.config import SSMConfig
 from fast_llm.layers.transformer.config import TransformerConfig
 from fast_llm.models.gpt.config import (
@@ -25,6 +26,7 @@ from fast_llm.models.gpt.config import (
 )
 from fast_llm.models.ssm.config import HybridSSMBaseModelConfig, LLambaHuggingfaceCheckpointFormat
 from fast_llm.tools.train import CliTrainingConfig
+from fast_llm.utils import Assert
 from tests.compare_tensor_logs import CompareConfig, compare_tensor_logs
 
 # FIXME: figure out correct import of megatron modules without this hack
@@ -286,7 +288,22 @@ _CONFIGS = {
 TEST_MODEL_TYPE, CONFIG_FAST_LLM, CONFIG_GPT2, CONFIG_COMMON, HUGGINGFACE_CHECKPOINT_FORMAT = _CONFIGS[TEST_MODEL]
 
 
-requires_cuda = pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is not available")
+requires_cuda = pytest.mark.get_test_resources()
+requires_multi_gpu = lambda num_gpus: pytest.mark.get_test_resources(num_gpus=num_gpus, ports=2, timeout=60)
+
+
+@pytest.fixture(scope="session")
+def get_distributed_config(get_test_resources):
+    def _get_distributed_config():
+        owned_test_resources = get_test_resources()
+        return DistributedConfig.from_dict(
+            {
+                "gpu_ids": list(owned_test_resources["gpus"]),
+                "gpu_memory_limit_gb": next(iter(owned_test_resources["gpus"].values())),
+            }
+        )
+
+    return _get_distributed_config
 
 
 def get_test_dataset(
@@ -358,37 +375,36 @@ def run_fast_llm_train(get_test_resources):
         *,
         force_separate_process: bool = False,
         num_gpus: int = 1,
-        gpu_memory_gb: float = 5,
     ):
-        with get_test_resources(
-            num_gpus=num_gpus, gpu_memory_gb=gpu_memory_gb, ports=2 if num_gpus > 1 else 0
-        ) as resources:
-            cli_args = [
+        owned_test_resources = get_test_resources()
+        gpu_memory_gb = next(iter(owned_test_resources["gpus"].values()))
+        cli_args = [
+            *cli_args,
+            f"model.distributed.gpu_ids=[{",".join(str(gpu_id) for gpu_id in owned_test_resources["gpus"])}]",
+            f"model.distributed.gpu_memory_limit_gb={gpu_memory_gb}",
+        ]
+        Assert.eq(num_gpus, len(owned_test_resources["gpus"]))
+        if num_gpus > 1 or force_separate_process:
+            command = [
+                "python",
+                "-m",
+                "torch.distributed.run",
+                f"--nproc-per-node={num_gpus}",
+                "--no-python",
+                f"--rdzv-endpoint=localhost:{owned_test_resources["ports"][0]}",
+                f"--master-port={owned_test_resources["ports"][1]}",
+                "fast-llm",
+                "train",
+                model_type,
                 *cli_args,
-                f"model.distributed.gpu_ids=[{",".join(str(gpu_id) for gpu_id in resources["gpus"])}]",
-                f"model.distributed.gpu_memory_limit_gb={gpu_memory_gb}",
             ]
-            if num_gpus > 1 or force_separate_process:
-                command = [
-                    "python",
-                    "-m",
-                    "torch.distributed.run",
-                    f"--nproc-per-node={num_gpus}",
-                    "--no-python",
-                    f"--rdzv-endpoint=localhost:{resources["ports"][0]}",
-                    f"--master-port={resources["ports"][1]}",
-                    "fast-llm",
-                    "train",
-                    model_type,
-                    *cli_args,
-                ]
-                print(" ".join(command))
-                completed_proc = subprocess.run(command, timeout=60)
-                if completed_proc.returncode:
-                    raise RuntimeError(f"Process failed with return code {completed_proc.returncode}")
-            else:
-                print(" ".join(["fast-llm", "train", model_type, *cli_args]))
-                CliTrainingConfig.parse_and_run([model_type, *cli_args])
+            print(" ".join(command))
+            completed_proc = subprocess.run(command, timeout=60)
+            if completed_proc.returncode:
+                raise RuntimeError(f"Process failed with return code {completed_proc.returncode}")
+        else:
+            print(" ".join(["fast-llm", "train", model_type, *cli_args]))
+            CliTrainingConfig.parse_and_run([model_type, *cli_args])
 
     return do_run_fast_llm_train
 
@@ -398,22 +414,29 @@ def run_megatron_train(get_test_resources):
     def do_run_megatron_train(
         cli_args: list[str],
         *,
-        gpu_memory_gb: float = 5,
+        num_gpus: int = 1,
     ):
+        owned_test_resources = get_test_resources()
         env = os.environ.copy()
         # Prevent Megatron from complaining.
         env["CUDA_DEVICE_MAX_CONNECTIONS"] = "1"
         env["NVTE_FLASH_ATTN"] = "0"
-
-        with get_test_resources(num_gpus=1, gpu_memory_gb=gpu_memory_gb) as resources:
-            if resources is not None:
-                env["CUDA_VISIBLE_DEVICES"] = ",".join(str(gpu) for gpu in resources["gpus"])
-            # Torchrun needed because Megatron really wants to initialize distributed.
-            command = ["python", "-m", "torch.distributed.run", "Megatron-LM/pretrain_gpt.py", *cli_args]
-            print(" ".join(command))
-            completed_proc = subprocess.run(command, env=env, timeout=60)
-            if completed_proc.returncode:
-                raise RuntimeError(f"Process failed with return code {completed_proc.returncode}")
+        env["CUDA_VISIBLE_DEVICES"] = ",".join(str(gpu) for gpu in owned_test_resources["gpus"])
+        Assert.eq(1, len(owned_test_resources["gpus"]), num_gpus)
+        # Torchrun needed because Megatron really wants to initialize distributed.
+        command = [
+            "python",
+            "-m",
+            "torch.distributed.run",
+            f"--rdzv-endpoint=localhost:{owned_test_resources["ports"][0]}",
+            f"--master-port={owned_test_resources["ports"][1]}",
+            "Megatron-LM/pretrain_gpt.py",
+            *cli_args,
+        ]
+        print(" ".join(command))
+        completed_proc = subprocess.run(command, env=env, timeout=60)
+        if completed_proc.returncode:
+            raise RuntimeError(f"Process failed with return code {completed_proc.returncode}")
 
     return do_run_megatron_train
 
@@ -452,7 +475,6 @@ def run_test_script(run_fast_llm_train, run_megatron_train):
         *,
         model_type: str = TEST_MODEL_TYPE,
         num_gpus: int = 1,
-        gpu_memory_gb: float = 5,
         force_separate_process: bool = False,
         is_megatron: bool = False,
         compare: str | None = None,
@@ -473,7 +495,7 @@ def run_test_script(run_fast_llm_train, run_megatron_train):
                 assert model_type == "gpt"
                 run_megatron_train(
                     [*cli_args, f"--structured-logs-dir={path}", f"--data-cache-path={path}"],
-                    gpu_memory_gb=gpu_memory_gb,
+                    num_gpus=num_gpus,
                 )
             else:
                 run_fast_llm_train(
@@ -481,7 +503,6 @@ def run_test_script(run_fast_llm_train, run_megatron_train):
                     [*cli_args, f"run.experiment_dir={path}"],
                     force_separate_process=force_separate_process,
                     num_gpus=num_gpus,
-                    gpu_memory_gb=gpu_memory_gb,
                 )
         if compare and do_compare:
             if compare_fn is not None:

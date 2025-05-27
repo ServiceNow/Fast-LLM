@@ -26,6 +26,7 @@ from tests.common import (
     TEST_MODEL_TYPE,
     TEST_RESULTS_PATH,
     requires_cuda,
+    requires_multi_gpu,
 )
 from tests.compare_tensor_logs import CompareConfig, compare_logged_tensor
 
@@ -72,6 +73,7 @@ def _compare_resume_fn(test_path: pathlib.Path, compare_path: pathlib.Path):
             shutil.copy(compare_path / path, test_path / path)
 
 
+@requires_cuda
 @pytest.mark.depends(on=["test_checkpoint_and_eval"])
 def test_resume(run_test_script):
     # Resume from iteration=1 and compare outputs with the baseline run.
@@ -89,8 +91,9 @@ def test_resume(run_test_script):
     )
 
 
+@requires_cuda
 @pytest.mark.depends(on=["test_checkpoint_and_eval"])
-def test_resume_frozen():
+def test_resume_frozen(run_test_script):
     # Resume with frozen mlp. No comparison.
     run_test_script(
         f"test_{TEST_MODEL}_resume_frozen",
@@ -120,6 +123,7 @@ _CKPT_PATH = TEST_RESULTS_PATH / f"test_{TEST_MODEL}_checkpoint_and_eval" / "che
 _CONVERT_PATH = TEST_RESULTS_PATH / f"test_{TEST_MODEL}_convert_model"
 
 
+@requires_cuda
 @pytest.mark.depends(on=["test_checkpoint_and_eval"])
 def test_convert_distributed_to_fast_llm():
     _run_conversion(
@@ -137,6 +141,7 @@ def test_convert_distributed_to_fast_llm():
     )
 
 
+@requires_cuda
 @pytest.mark.depends(on=["test_convert_distributed_to_fast_llm"])
 def test_convert_fast_llm_to_huggingface():
     if HUGGINGFACE_CHECKPOINT_FORMAT is None:
@@ -156,6 +161,7 @@ def test_convert_fast_llm_to_huggingface():
     )
 
 
+@requires_cuda
 @pytest.mark.depends(on=["test_convert_fast_llm_to_huggingface"])
 def test_convert_huggingface_to_distributed():
     _run_conversion(
@@ -173,6 +179,7 @@ def test_convert_huggingface_to_distributed():
     )
 
 
+@requires_cuda
 @pytest.mark.depends(on=["test_checkpoint_and_eval"])
 def test_convert_distributed_to_huggingface():
     if HUGGINGFACE_CHECKPOINT_FORMAT is None:
@@ -192,6 +199,7 @@ def test_convert_distributed_to_huggingface():
     )
 
 
+@requires_cuda
 @pytest.mark.depends(on=["test_convert_distributed_to_huggingface"])
 def test_convert_huggingface_to_fast_llm():
     _run_conversion(
@@ -209,6 +217,7 @@ def test_convert_huggingface_to_fast_llm():
     )
 
 
+@requires_cuda
 @pytest.mark.depends(on=["test_convert_huggingface_to_fast_llm"])
 def test_convert_fast_llm_to_distributed():
     _run_conversion(
@@ -226,6 +235,7 @@ def test_convert_fast_llm_to_distributed():
     )
 
 
+@requires_cuda
 @pytest.mark.depends(on=["test_convert_huggingface_to_distributed", "test_convert_fast_llm_to_distributed"])
 def test_converted_distributed():
     # Compare the fast llm weights
@@ -242,6 +252,7 @@ def test_converted_distributed():
         assert (w[key] == w1[key]).all(), (w[key], w1[key])
 
 
+@requires_cuda
 @pytest.mark.depends(on=["test_convert_distributed_to_fast_llm", "test_convert_huggingface_to_fast_llm"])
 def test_converted_fast_llm():
     s0 = safetensors.torch.load_file(_CONVERT_PATH / "fast_llm_0" / "model_0.safetensors")
@@ -252,6 +263,7 @@ def test_converted_fast_llm():
         assert (s0[key] == s1[key]).all(), (key, s0, s1)
 
 
+@requires_cuda
 @pytest.mark.depends(on=["test_convert_fast_llm_to_huggingface", "test_convert_distributed_to_huggingface"])
 def test_converted_huggingface():
     h0 = safetensors.torch.load_file(_CONVERT_PATH / "huggingface_0" / "model_0.safetensors")
@@ -270,6 +282,7 @@ def _compare_architectures(config_ref: FastLLMModelConfig, config_test: FastLLMM
     config_ref.base_model.compare_architecture(config_test.base_model)
 
 
+@requires_cuda
 @pytest.mark.depends(on=["test_converted_distributed"])
 def test_load_pretrained_distributed_checkpoint():
     config = TEST_MODEL_CONFIG_CLS.from_dict(
@@ -290,6 +303,7 @@ def test_load_pretrained_distributed_checkpoint():
         assert (state_shards[f"{shard_name}_shard"] == model.get_shard(shard_name)).all()
 
 
+@requires_cuda
 @pytest.mark.depends(on=["test_load_pretrained_distributed_checkpoint"])
 def test_load_converted_distributed_checkpoint():
     config_ref = TEST_MODEL_CONFIG_CLS.from_pretrained(
@@ -385,6 +399,7 @@ def test_load_converted_huggingface_checkpoint():
     assert (weight_shard == model.get_shard(ShardName.weights)).all()
 
 
+@requires_cuda
 @pytest.mark.depends(on=["test_load_converted_fast_llm_checkpoint", "test_load_converted_huggingface_checkpoint"])
 def test_run_converted_model():
     model_ref = TEST_MODEL_HF_CLS.from_pretrained(
@@ -433,6 +448,7 @@ def test_run_converted_model():
         raise ValueError(f"Comparison failed ({len(errors)} errors)")
 
 
+@requires_multi_gpu(2)
 @pytest.mark.slow
 @pytest.mark.depends(on=["test_load_converted_distributed_checkpoint"])
 def test_load_pretrained_distributed_in_dp2(run_test_script):
@@ -450,6 +466,7 @@ def test_load_pretrained_distributed_in_dp2(run_test_script):
     )
 
 
+@requires_cuda
 @pytest.mark.depends(on=["test_load_converted_distributed_checkpoint"])
 def test_load_pretrained_distributed_with_config(run_test_script):
     run_test_script(
@@ -465,6 +482,7 @@ def test_load_pretrained_distributed_with_config(run_test_script):
     )
 
 
+@requires_cuda
 @pytest.mark.depends(on=["test_load_pretrained_distributed_in_dp2"])
 def test_load_pretrained_in_dp2_match_checkpoint():
     test_ckpt_path = TEST_RESULTS_PATH / f"test_{TEST_MODEL}_load_pretrained_distributed_in_dp2" / "checkpoint" / "1"
@@ -509,6 +527,7 @@ def test_load_pretrained_in_dp2_match_checkpoint():
         assert (stage_shard_test[stage_shard_ref.numel() :] == 0).all()  # noqa
 
 
+@requires_multi_gpu(2)
 @pytest.mark.slow
 @pytest.mark.depends(on=["test_load_pretrained_in_dp2_match_checkpoint"])
 def test_load_distributed_checkpoint_dp2():
@@ -532,6 +551,7 @@ def test_load_distributed_checkpoint_dp2():
     assert (weight_shard == model.get_shard(ShardName.weights)).all()
 
 
+@requires_multi_gpu(2)
 @pytest.mark.slow
 @pytest.mark.depends(on=["test_load_converted_fast_llm_checkpoint", "test_load_pretrained_in_dp2_match_checkpoint"])
 def test_load_pretrained_fast_llm_in_dp2(run_test_script):
@@ -566,6 +586,7 @@ def test_load_pretrained_fast_llm_in_dp2(run_test_script):
             assert (ref_shard[name] == test_shard[name]).all()
 
 
+@requires_multi_gpu(2)
 @pytest.mark.slow
 @pytest.mark.depends(on=["test_load_converted_huggingface_checkpoint", "test_load_pretrained_in_dp2_match_checkpoint"])
 def test_load_pretrained_huggingface_in_dp2(run_test_script):

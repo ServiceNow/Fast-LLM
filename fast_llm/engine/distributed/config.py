@@ -1,4 +1,5 @@
 import enum
+import functools
 import logging
 import os
 import typing
@@ -8,6 +9,8 @@ from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.utils import Assert, div, log
 
 if typing.TYPE_CHECKING:
+    import torch
+
     from fast_llm.core.distributed import ProcessGroup
 
 
@@ -263,7 +266,7 @@ class DistributedConfig(Config):
         " We recommend setting `CUDA_VISIBLE_DEVICES` instead when possible.",
         hint=FieldHint.expert,
     )
-    gpu_memory_limit_gb: int | None = Field(
+    gpu_memory_limit_gb: float | None = Field(
         default=None,
         desc="Limit the memory usage on each GPU."
         "Warning: the limit is be set globally and unset at deletion of the config object.",
@@ -385,6 +388,12 @@ class DistributedConfig(Config):
         Assert.in_range(self.local_rank, 0, self.local_world_size)
         if self.gpu_ids is not None:
             Assert.eq(len(self.gpu_ids), self.local_world_size)
+
+    @functools.cached_property
+    def device(self) -> "torch.device":
+        import torch
+
+        return torch.device(self.local_rank if self.gpu_ids is None else self.gpu_ids[self.local_rank])
 
     def _add_distributed_dim(self, distributed_dim: DistributedDim) -> None:
         if distributed_dim.name in self.distributed_dims:
