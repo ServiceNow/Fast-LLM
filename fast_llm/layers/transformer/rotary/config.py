@@ -26,12 +26,8 @@ class RotaryConfig(BaseModelConfig):
     ) -> typing.Self:
         if cls is RotaryConfig and cls.get_subclass(default.get("type")) is None:
             # Default subclass.
-            return DefaultRotaryConfig._from_dict(default, strict, flat)
+            return NoRotaryConfig._from_dict(default, strict, flat)
         return super()._from_dict(default, strict=strict, flat=flat)
-
-    @property
-    def enabled(self) -> bool:
-        return False
 
     def build(self, tensor_space: TensorSpace | None = None) -> "Rotary":
         return self._get_configurable_class()(self, tensor_space)
@@ -67,10 +63,6 @@ class DefaultRotaryConfig(RotaryConfig):
         desc="Enable the triton implementation of the rotary embeddings. Affects the model layout.",
         hint=FieldHint.architecture,
     )
-
-    @property
-    def enabled(self) -> bool:
-        return True
 
     @property
     def complex_format(self) -> bool:
