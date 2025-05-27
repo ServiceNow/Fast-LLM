@@ -13,6 +13,7 @@ from fast_llm.config import (
     NoAutoValidate,
     check_field,
     config_class,
+    set_nested_dict_value,
     skip_valid_if_none,
 )
 from fast_llm.data.data.config import DataConfig
@@ -153,8 +154,8 @@ class WandbConfig(Config):
 
 @config_class()
 class TrainingEvaluatorConfig(EvaluatorConfigBase):
-    run_interval: IntervalConfig = Field(default_factory=IntervalConfig)
-    evaluator: EvaluatorConfig = Field(default_factory=EvaluatorConfig)
+    run_interval: IntervalConfig = Field(desc="Specifies how frequently the evaluator is executed during training")
+    evaluator: EvaluatorConfig = Field(desc="Evaluator to run")
 
     def get_run_count(self, training_iterations: int, extra_evaluations: int = 0):
         # Number of completed evaluation runs
@@ -183,6 +184,8 @@ class TrainingEvaluatorConfig(EvaluatorConfigBase):
         flat: bool = False,
     ) -> typing.Self:
         # TODO v0.x: Remove backward compatibility.
+        if "interval" in default or "offset" in default or "iterations" in default:
+            set_nested_dict_value(default, ("evaluator", "type"), "loss")
         cls._handle_renamed_field(default, "interval", ("run_interval", "interval"))
         cls._handle_renamed_field(default, "offset", ("run_interval", "offset"))
         cls._handle_renamed_field(default, "iterations", ("evaluator", "iterations"))
