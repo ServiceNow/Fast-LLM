@@ -10,16 +10,12 @@ from fast_llm.engine.config_utils.tensor_space import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames, PhaseType
 from fast_llm.engine.inference.runner import InferenceRunner
 from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
+from fast_llm.layers.common.config import RoutingType
 from fast_llm.layers.language_model.config import LanguageModelKwargs, LanguageModelLossNames
 from fast_llm.layers.language_model.embedding import WORD_EMBEDDINGS_WEIGHT, LanguageModelEmbedding
 from fast_llm.layers.language_model.head import OUTPUT_WEIGHTS, LanguageModelHead
 from fast_llm.layers.language_model.preprocessing import PositionEmbeddingPreprocessor, PreferenceSpanPreprocessor
-from fast_llm.layers.transformer.config import (
-    RoutingType,
-    TransformerDimNames,
-    TransformerKwargs,
-    TransformerLossNames,
-)
+from fast_llm.layers.transformer.config import TransformerDimNames, TransformerKwargs, TransformerLossNames
 from fast_llm.layers.transformer.preprocessing import (
     BackupAttentionPreprocessor,
     FlashAttnVarlenPreprocessor,

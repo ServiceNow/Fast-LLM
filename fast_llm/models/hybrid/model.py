@@ -6,26 +6,23 @@ from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
 from fast_llm.layers.language_model.embedding import LanguageModelEmbedding
 from fast_llm.layers.language_model.head import LanguageModelHead
-from fast_llm.layers.ssm.discrete_mamba2 import DiscreteMamba2
-from fast_llm.layers.ssm.mamba_layer import MambaLayer
-from fast_llm.layers.transformer.transformer import TransformerLayer
 from fast_llm.models.gpt.model import GPTBaseModel
-from fast_llm.models.hybrid.config import HybridSSMBaseModelConfig, HybridSSMModelConfig
+from fast_llm.models.hybrid.config import HybridBaseModelConfig, HybridSSMModelConfig
 
 logger = logging.getLogger(__name__)
 
 
-class HybridSSMBaseModel[ConfigType: HybridSSMBaseModelConfig](GPTBaseModel[ConfigType]):
+class HybridSSMBaseModel[ConfigType: HybridBaseModelConfig](GPTBaseModel[ConfigType]):
     """
     A hybrid model that can interleave Transformer, Mamba and other blocks.
     """
 
-    config_class: typing.ClassVar[type[HybridSSMBaseModelConfig]] = HybridSSMBaseModelConfig
+    config_class: typing.ClassVar[type[HybridBaseModelConfig]] = HybridBaseModelConfig
     _is_setup: bool = False
 
     def __init__(
         self,
-        config: HybridSSMBaseModelConfig,
+        config: HybridBaseModelConfig,
         distributed_config: DistributedConfig,
     ):
 
@@ -39,39 +36,19 @@ class HybridSSMBaseModel[ConfigType: HybridSSMBaseModelConfig](GPTBaseModel[Conf
         layers = [LanguageModelHead(self._config, self._tensor_space, prediction_distance=0)]
 
         if self._config.prediction_heads > 1:
-            block_type = self._config.default_mtp_type or self._config.hybrid_block_layout[-1]
+            block_name = self._config.default_mtp_type
+            assert block_name in self._config.blocks, f"Block {block_name} not found in config"
+            BLOCK_CLS = self._config.blocks[block_name].block_class
             for i in range(1, self._config.prediction_heads):
-                if block_type == SSMBlockType.transformer.value:
-                    layers.append(
-                        TransformerLayer(
-                            self._config.transformer,
-                            self._tensor_space,
-                            layer_index=len(self._config.hybrid_block_layout),
-                            return_input=i != self._config.prediction_heads - 1,
-                        )
-                    )
-                elif block_type == SSMBlockType.mamba2_discrete.value:
-                    mamba_block = self.SSM_BLOCK_CLS(
-                        config_transformer=self._config.transformer,
-                        config_ssm=self._config.ssm,
-                        mixer_cls=DiscreteMamba2,
+                layers.append(
+                    BLOCK_CLS(
+                        self._config.blocks[block_name],
+                        self._tensor_space,
                         layer_index=len(self._config.hybrid_block_layout),
-                        tensor_space=self._tensor_space,
                         return_input=i != self._config.prediction_heads - 1,
+                        block_name=block_name,
                     )
-                    layers.append(mamba_block)
-                elif block_type == SSMBlockType.mamba.value:
-                    mamba_block = self.SSM_BLOCK_CLS(
-                        config_transformer=self._config.transformer,
-                        config_ssm=self._config.ssm,
-                        mixer_cls=MambaLayer,
-                        layer_index=len(self._config.hybrid_block_layout),
-                        tensor_space=self._tensor_space,
-                        return_input=i != self._config.prediction_heads - 1,
-                    )
-                    layers.append(mamba_block)
-                else:
-                    raise ValueError(f"Invalid block type: {block_type}. Must be {SSMBlockType.__members__}")
+                )
                 layers.append(LanguageModelHead(self._config, self._tensor_space, prediction_distance=i))
 
         return layers

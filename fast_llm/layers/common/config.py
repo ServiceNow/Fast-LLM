@@ -156,15 +156,89 @@ class PeftType(str, enum.Enum):
     lora = "lora"
 
 
-@config_class()
+@config_class(registry=True)
 class PeftConfig(BaseModelConfig):
-    _abstract = False
+    _abstract = True
 
     type: PeftType = Field(
         default=PeftType.none,
         desc="The type of parameter-efficient fine tuning to use Only LoRA is supported at the moment.",
         hint=FieldHint.core,
     )
+
+    # @classmethod
+    # def get_subclass(cls, name: str):
+    #     return super().get_subclass(name)
+
+    def validate(self: typing.Self, *, _is_validating: bool = False):
+        """
+        Validate a class and mark it as read-only
+        This should not be overridden in derived classes.
+        """
+        # Should be handled in `from_dict`, but can fail if instantiating directly.
+        try:
+            expected_class = self.get_subclass(self.type)
+        except KeyError as e:
+            # Delayed instantiation error in `from_dict`.
+            raise ValueError(*e.args)
+
+        if expected_class is not None:
+            # Should be handled in `from_dict`, but can fail if instantiating directly.
+            # Assert.is_(expected_class, self.__class__)
+            Assert.custom(issubclass, expected_class, self.__class__)
+
+        if not self._validated:
+            try:
+                self._validate()
+            except Exception as e:
+                raise type(e)("\n".join(e.args)) from None
+            self._validated = True
+        return self
+
+
+@config_class(dynamic_type={PeftConfig: "none"})
+class EmptyPeftConfig(PeftConfig):
+    """
+    A dummy PeftConfig that does nothing.
+    """
+
+    _abstract = False
+
+    def apply_linear(self, linear: "LinearBase", **kwargs) -> "LinearLike":
+        return linear
+
+    def validate(self: typing.Self, *, _is_validating: bool = False):
+        """
+        Validate a class and mark it as read-only
+        This should not be overridden in derived classes.
+        """
+        # Should be handled in `from_dict`, but can fail if instantiating directly.
+        try:
+            expected_class = self.get_subclass(self.type)
+        except KeyError as e:
+            # Delayed instantiation error in `from_dict`.
+            raise ValueError(*e.args)
+
+        if expected_class is not None:
+            # Should be handled in `from_dict`, but can fail if instantiating directly.
+            Assert.is_(self.__class__, expected_class)
+
+        if not self._validated:
+            try:
+                self._validate()
+            except Exception as e:
+                raise type(e)("\n".join(e.args)) from None
+            self._validated = True
+        return self
+
+
+@config_class(dynamic_type={PeftConfig: "lora"})
+class LoRAConfig(PeftConfig):
+    """
+    LoRA configuration.
+    """
+
+    _abstract = False
     rank: int = Field(
         default=8,
         desc="The LoRA rank, i.e. the size of the intermediate dimension.",
@@ -182,23 +256,18 @@ class PeftConfig(BaseModelConfig):
     )
 
     def apply_linear(self, linear: "LinearBase", **kwargs) -> "LinearLike":
-        if self.type == PeftType.none:
-            return linear
-        elif self.type == PeftType.lora:
-            from fast_llm.layers.common.peft import lora_linear
+        from fast_llm.layers.common.peft import lora_linear
 
-            # TODO: Init method?
-            return lora_linear(
-                linear,
-                linear.weight.param_init_method,
-                linear.weight.param_init_method,
-                self.rank,
-                self.alpha,
-                self.dropout,
-                **kwargs,
-            )
-        else:
-            raise NotImplementedError(self.type)
+        # TODO: Init method?
+        return lora_linear(
+            linear,
+            linear.weight.param_init_method,
+            linear.weight.param_init_method,
+            self.rank,
+            self.alpha,
+            self.dropout,
+            **kwargs,
+        )
 
 
 class RoutingType(str, enum.Enum):
@@ -212,18 +281,18 @@ class AddLinearBiasChoices(str, enum.Enum):
     only_attn_qkv = "only_attn_qkv"
 
 
-class BaseBlockSubLayerName(str, enum.Enum):
+class BaseBlockSubLayerName:
     mlp_1 = "mlp_1"
     mlp_2 = "mlp_2"
 
 
-@config_class(registry=True)
-class BaseBlockPeftConfig(PeftConfig):
+@config_class(dynamic_type={PeftConfig: "base_lora"})
+class BaseBlockLoRAConfig(LoRAConfig):
     """
-    Peft Cofnig that applies to transformer layer. If this is used with GPTBaseModel it is reused for all transformer layers.
-    Note, this has no effect on the embedding layer,
-    if you want to freeze the embeddings (and other layers outside the transformer) you need to do so explicitly by setting embedding lr_scale to 0.
+    TODO: Add support for MLP.
     """
+
+    _abstract = False
 
     layers: list[BaseBlockSubLayerName] = Field(
         default=None,
@@ -232,31 +301,30 @@ class BaseBlockPeftConfig(PeftConfig):
     )
 
     def apply_linear(self, linear: "LinearBase", layer_type: BaseBlockSubLayerName | None = None) -> "LinearLike":
-        if self.type != PeftType.none:
-            if layer_type is None or self.layers is None or layer_type in self.layers:
-                return super().apply_linear(linear)
+        if layer_type is None or self.layers is None or layer_type in self.layers:
+            return super().apply_linear(linear)
         return linear
 
     def _validate(self) -> None:
         if self.layers is None:
             with self._set_implicit_default():
                 self.layers = []
-        if self.type != PeftType.none:
-            if BaseBlockSubLayerName.mlp_1 in self.layers or BaseBlockSubLayerName.mlp_2 in self.layers:
-                # TODO: Add MLP support.
-                raise NotImplementedError("LoRA not supported for MLP.")
+        if BaseBlockSubLayerName.mlp_1 in self.layers or BaseBlockSubLayerName.mlp_2 in self.layers:
+            # TODO: Add MLP support.
+            raise NotImplementedError("LoRA not supported for MLP.")
 
 
-for name in PeftType:
-    # We need this because we are using the reserved field name `type`.
-    # TODO: Implement proper dynamic typing.
-    BaseBlockPeftConfig.register_subclass(name.value, BaseBlockPeftConfig)
+# for name in PeftType:
+#     # We need this because we are using the reserved field name `type`.
+#     # TODO: Implement proper dynamic typing.
+#     BaseBlockPeftConfig.register_subclass(name.value, BaseBlockPeftConfig)
 
 
 @config_class()
 class BaseBlockConfig(BaseModelConfig):
+
     _abstract = True
-    peft: BaseBlockPeftConfig = Field(
+    peft: PeftConfig = Field(
         desc="Configuration for the parameter-efficient fine tuning.",
         hint=FieldHint.architecture,
     )

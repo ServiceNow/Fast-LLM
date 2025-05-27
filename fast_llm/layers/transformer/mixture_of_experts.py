@@ -10,9 +10,9 @@ from fast_llm.engine.config_utils.tensor_space import TensorSpace
 from fast_llm.functional.triton.mlp import mlp_autograd, mlp_autograd_looped
 from fast_llm.functional.triton.sparse_copy import get_sparse_map
 from fast_llm.layers.common.auxiliary_loss import AuxiliaryLoss, z_loss
+from fast_llm.layers.common.config import RoutingType
 from fast_llm.layers.common.linear import Linear
 from fast_llm.layers.transformer.config import (
-    RoutingType,
     TransformerConfig,
     TransformerDimNames,
     TransformerKwargs,

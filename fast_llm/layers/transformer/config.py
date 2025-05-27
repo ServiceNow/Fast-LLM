@@ -13,10 +13,10 @@ from fast_llm.engine.distributed.config import DistributedConfig, DistributedDim
 from fast_llm.functional.config import TritonConfig
 from fast_llm.layers.common.config import (
     BaseBlockConfig,
-    BaseBlockPeftConfig,
+    BaseBlockLoRAConfig,
     BaseBlockSubLayerName,
     LLMDimNames,
-    PeftType,
+    PeftConfig,
 )
 from fast_llm.utils import Assert, div
 
@@ -152,11 +152,11 @@ class TransformerSubLayerName(BaseBlockSubLayerName):
     dense = "dense"
 
 
-@config_class(registry=True)
-class TransformerPeftConfig(BaseBlockPeftConfig):
+@config_class(dynamic_type={PeftConfig: "transformer_lora"})
+class TransformerLoRaConfig(BaseBlockLoRAConfig):
     """
-    Peft Cofnig that applies to transformer layer. If this is used with GPTBaseModel it is reused for all transformer layers.
-    Note, this does not freeze layers!
+    LoRa config that applies to transformer layer. If this is used with GPTBaseModel it is reused for all transformer layers.
+    Note, this does not freeze layers.
     If you want to freeze weights, you need to do so explicitly by setting the corresponding layer's lr_scales (embeddings/mlp etc.) to 0.
     """
 
@@ -165,74 +165,49 @@ class TransformerPeftConfig(BaseBlockPeftConfig):
         desc="The layers on which to apply LoRA.",
         hint=FieldHint.feature,
     )
-    freeze_others: bool = Field(
-        default=True,
-        desc="Whether to freeze other layers during training.",
-    )
 
     def apply_linear(self, linear: "LinearBase", layer_type: TransformerSubLayerName | None = None) -> "LinearLike":
-        if self.type != PeftType.none:
-            if layer_type is None or self.layers is None or layer_type in self.layers:
-                if layer_type == TransformerSubLayerName.key:
-                    return super().apply_linear(linear, out_channel_end=div(linear._out_dim.global_size, 2))
-                elif layer_type == TransformerSubLayerName.value_:
-                    return super().apply_linear(linear, out_channel_begin=div(linear._out_dim.global_size, 2))
-                else:
-                    return super().apply_linear(linear)
-            elif self.freeze_others:
-                linear.weight.requires_grad = False
+        if layer_type is None or self.layers is None or layer_type in self.layers:
+            if layer_type == TransformerSubLayerName.key:
+                return super().apply_linear(linear, out_channel_end=div(linear._out_dim.global_size, 2))
+            elif layer_type == TransformerSubLayerName.value_:
+                return super().apply_linear(linear, out_channel_begin=div(linear._out_dim.global_size, 2))
+            else:
+                return super().apply_linear(linear)
+            # elif self.freeze_others:
+            #     linear.weight.requires_grad = False
         return linear
 
-    # def apply_other(self, module: "torch.nn.Module") -> "torch.nn.Module":
-    #     warnings.warn("TransformerPeftConfig.apply_other is deprecated. Use explicit layer freezing using e.g. learning rate scaling parameters.")
-    #     # if self.type != PeftType.none and self.freeze_others:
-    #     #     for parameter in module.parameters():
-    #     #         parameter.requires_grad = False
-    #     # return module
-
-    # def apply_weight(self, parameter: "ParameterMeta") -> "ParameterMeta":
-    #     if self.type != PeftType.none and self.freeze_others:
-    #         warnings.warn(
-    #             "Freezing weights with TransformerPeftConfig. Note, this does not freeze the embeddings or output heads, those must be frozen explicitly using  their lr_scales."
-    #         )
-    #         parameter.requires_grad = False
-    #     return parameter
-
     def _validate(self) -> None:
-        super()._validate()
         if self.layers is None:
             with self._set_implicit_default():
                 # Setting the default layers only whee PeFT is enabled
                 # so they don't appear when serializing the default transformer config.
-                self.layers = (
-                    [TransformerSubLayerName.query, TransformerSubLayerName.value_]
-                    if self.type == PeftType.lora
-                    else []
+                self.layers = [TransformerSubLayerName.query, TransformerSubLayerName.value_]
+        super()._validate()
+        if TransformerSubLayerName.dense in self.layers:
+            # TODO: Support InputParallelLinear (different output format).
+            raise NotImplementedError("LoRA not supported for attention dense layer.")
+        if (
+            sum(
+                name in self.layers
+                for name in (
+                    TransformerSubLayerName.key_value,
+                    TransformerSubLayerName.key,
+                    TransformerSubLayerName.value_,
                 )
-        if self.type != PeftType.none:
-            if TransformerSubLayerName.dense in self.layers:
-                # TODO: Support InputParallelLinear (different output format).
-                raise NotImplementedError("LoRA not supported for attention dense layer.")
-            if (
-                sum(
-                    name in self.layers
-                    for name in (
-                        TransformerSubLayerName.key_value,
-                        TransformerSubLayerName.key,
-                        TransformerSubLayerName.value_,
-                    )
-                )
-                > 1
-            ):
-                raise ValueError(
-                    f"{TransformerSubLayerName.key_value.value}, {TransformerSubLayerName.key.value} and {TransformerSubLayerName.value_.value} are mutually exclusive."
-                )
+            )
+            > 1
+        ):
+            raise ValueError(
+                f"{TransformerSubLayerName.key_value.value}, {TransformerSubLayerName.key.value} and {TransformerSubLayerName.value_.value} are mutually exclusive."
+            )
 
 
-for name in PeftType:
-    # We need this because we are using the reserved field name `type`.
-    # TODO: Implement proper dynamic typing.
-    TransformerPeftConfig.register_subclass(name.value, TransformerPeftConfig)
+# for name in PeftType:
+#     # We need this because we are using the reserved field name `type`.
+#     # TODO: Implement proper dynamic typing.
+#     TransformerPeftConfig.register_subclass(name.value, TransformerPeftConfig)
 
 
 @config_class()
@@ -246,10 +221,10 @@ class TransformerConfig(BaseBlockConfig):
         desc="Configuration for the rotary positional embeddings.",
         hint=FieldHint.architecture,
     )
-    peft: TransformerPeftConfig = Field(
-        desc="Configuration for the parameter-efficient fine tuning.",
-        hint=FieldHint.architecture,
-    )
+    # peft: PeftConfig = FieldUpdate(
+    #     desc="Configuration for the parameter-efficient fine tuning.",
+    #     hint=FieldHint.architecture,
+    # )
     attention_lr_scale: float | None = Field(
         default=None,
         desc="Custom learning rate scale for the Attention projection weights.",
@@ -303,12 +278,12 @@ class TransformerConfig(BaseBlockConfig):
     )
 
     def _validate(self) -> None:
-        super()._validate()
         with self._set_implicit_default():
             if self.kv_channels is None:
                 self.kv_channels = div(self.hidden_size, self.num_attention_heads)
         Assert.multiple(self.num_attention_heads, self.head_groups)
         Assert.geq(self.attention_dropout, 0)
+        super()._validate()
 
     #     with self._set_implicit_default():
     #         if self.ffn_hidden_size is None:

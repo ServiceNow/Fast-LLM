@@ -1,10 +1,10 @@
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.layers.ssm.config import SSMConfig
 from fast_llm.layers.transformer.config import TransformerConfig
-from fast_llm.models.hybrid.config import HybridSSMBaseModelConfig, MambaBlockConfig, TransformerBlockConfig
+from fast_llm.models.hybrid.config import HybridBaseModelConfig, MambaBlockConfig, TransformerBlockConfig
 from fast_llm.models.hybrid.model import HybridSSMBaseModel
 
-config = HybridSSMBaseModelConfig(
+config = HybridBaseModelConfig(
     blocks={
         "transformer_block": TransformerBlockConfig(
             transformer=TransformerConfig(

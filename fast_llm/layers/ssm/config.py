@@ -1,8 +1,6 @@
-import enum
-
 from fast_llm.config import Field, FieldHint, check_field, config_class, skip_valid_if_none
 from fast_llm.functional.config import ActivationType
-from fast_llm.layers.common.config import LLMBlockConfig, NormalizationConfig
+from fast_llm.layers.common.config import BaseBlockConfig, NormalizationConfig
 from fast_llm.utils import Assert
 
 
@@ -21,19 +19,8 @@ class SSMDimNames:
     v_heads = "v_heads"  # Number of V heads
 
 
-class SSMBlockType(str, enum.Enum):
-    """
-    An enum for the available mamba types for the MLP layer.
-    """
-
-    mamba = "m"
-    mamba2_discrete = "m2d"
-    mamba2 = "m2"
-    transformer = "t"
-
-
 @config_class()
-class SSMConfig(LLMBlockConfig):
+class SSMConfig(BaseBlockConfig):
     _abstract = False
 
     # Normalization

@@ -1,3 +1,4 @@
+import enum
 import logging
 import math
 import typing
@@ -12,7 +13,7 @@ from fast_llm.engine.multi_stage.config import FastLLMModelConfig, PretrainedFas
 from fast_llm.engine.training.config import TrainerConfig
 from fast_llm.layers.common.config import LLMDimNames
 from fast_llm.layers.language_model.config import LanguageModelBaseConfig
-from fast_llm.layers.ssm.config import SSMBlockType, SSMConfig, SSMDimNames
+from fast_llm.layers.ssm.config import SSMConfig, SSMDimNames
 from fast_llm.layers.transformer.config import TransformerConfig
 from fast_llm.layers.transformer.transformer import BaseBlock, TransformerLayer
 from fast_llm.models.gpt.config import GPTBatchConfig, PretrainedGPTModelConfig
@@ -28,7 +29,7 @@ logger = logging.getLogger(__name__)
 
 
 @config_class(registry=True)
-class BlockConfig(Config):
+class HybridBlockConfig(Config):
     _abstract = True
     block_class: typing.ClassVar[type[BaseBlock]]
     # config: TransformerConfig | SSMConfig
@@ -48,8 +49,8 @@ class BlockConfig(Config):
         raise NotImplementedError()
 
 
-@config_class(dynamic_type={BlockConfig: "transformer"})
-class TransformerBlockConfig(BlockConfig, TransformerConfig):
+@config_class(dynamic_type={HybridBlockConfig: "transformer"})
+class TransformerBlockConfig(HybridBlockConfig, TransformerConfig):
     _abstract = False
     block_class: typing.ClassVar[type[BaseBlock]] = TransformerLayer
 
@@ -57,8 +58,8 @@ class TransformerBlockConfig(BlockConfig, TransformerConfig):
         TransformerConfig.setup_tensor_space(self, tensor_space, block_name)
 
 
-@config_class(dynamic_type={BlockConfig: "discrete_mamba2"})
-class DiscreteMamba2BlockConfig(BlockConfig, SSMConfig):
+@config_class(dynamic_type={HybridBlockConfig: "discrete_mamba2"})
+class DiscreteMamba2BlockConfig(HybridBlockConfig, SSMConfig):
     _abstract = False
     block_class: typing.ClassVar[type[BaseBlock]] = LlambaBlock
 
@@ -98,8 +99,8 @@ class DiscreteMamba2BlockConfig(BlockConfig, SSMConfig):
         tensor_space.add_tensor_dim(TensorDim(f"{SSMDimNames.conv_dim}_{block_name}", conv_dim))
 
 
-@config_class(dynamic_type={BlockConfig: "mamba"})
-class MambaBlockConfig(BlockConfig, SSMConfig):
+@config_class(dynamic_type={HybridBlockConfig: "mamba"})
+class MambaBlockConfig(HybridBlockConfig, SSMConfig):
     _abstract = False
     block_class: typing.ClassVar[type[BaseBlock]] = LlambaOneBlock
 
@@ -127,22 +128,39 @@ class MambaBlockConfig(BlockConfig, SSMConfig):
         tensor_space.add_tensor_dim(TensorDim(f"{SSMDimNames.inner_proj_mamba}_{name}", d_inner * 2))
 
 
+class HybridBlockType(str, enum.Enum):
+    """
+    An enum for the available block types, legacy format.
+    """
+
+    m: MambaBlockConfig
+    m2d: LlambaBlock
+    t: TransformerBlockConfig
+
+
 @config_class()
-class HybridSSMBaseModelConfig(LanguageModelBaseConfig):
+class HybridBaseModelConfig(LanguageModelBaseConfig):
+    """
+    HybridBaseModelConfig is a configuration class for hybrid models.
+    Currently it supports two formats for architecture definition:
+     - the old and deprecated format with transformer and ssm fields (t, m2d, m), in wich case all blocks share the same config;
+     - and the new format with blocks field, in which case each block can have its own config.
+    """
+
     _abstract = False
     ############################################################################################
-    # Note, transformer and ssm are here for legacy reasons, we should migrate to blocks field
+    # Note, transformer and ssm are here for legacy reasons
     transformer: TransformerConfig = Field(
-        desc="Configuration for the transformer architecture. Note, having transformer and ssm fields in HybridSSMBaseModelConfig is depricated.",
+        desc="Configuration for the transformer architecture. Note, having transformer and ssm fields in HybridBaseModelConfig is depricated.",
         hint=FieldHint.architecture,
     )
 
     ssm: SSMConfig = Field(
-        desc="Configuration for the SSM architecture. Note, having transformer and ssm fields in HybridSSMBaseModelConfig is depricated.",
+        desc="Configuration for the SSM architecture. Note, having transformer and ssm fields in HybridBaseModelConfig is depricated.",
         hint=FieldHint.architecture,
     )
     ############################################################################################
-    blocks: dict[str, BlockConfig] = Field(
+    blocks: dict[str, HybridBlockConfig] = Field(
         default=None,
         desc="Named block configurations that can be referenced in block_pattern.",
         hint=FieldHint.architecture,
@@ -150,20 +168,20 @@ class HybridSSMBaseModelConfig(LanguageModelBaseConfig):
 
     hybrid_block_layout: list[str] | None = Field(
         default=None,
-        desc=f"Pattern of blocks to use in the model (still supports the previous depricated format with  {SSMBlockType.__members__.values()})",
+        desc=f"Pattern of blocks to use in the model (still supports the previous depricated format with {HybridBlockType.__members__.keys()})",
         hint=FieldHint.core,
     )
 
     default_mtp_type: str | None = Field(
         default=None,
-        desc="Multi-token prediction mixer to use in the model. 't' for Transformer, 'm' for Mamba1, 'm2' for discrete Mamba2. If None, will use the last block type in `hybrid_block_layout`.",
+        desc="Multi-token prediction mixer to use in the model. Can be either one of the blocks, or follow the depricated legacy format: 't' for Transformer, 'm' for Mamba1, 'm2' for discrete Mamba2. If None, will use the last block type in `hybrid_block_layout`.",
         hint=FieldHint.optional,
     )
-    # TODO: ideally these things should be move to LanguageModelBaseConfig?
+
     # TODO: currently num_layers is defined in TransformerConfig, but ideally this should be migrated to LanguageModelBaseConfig in the future.
-    # Hence, for now: the num_layers should be set in the first transformer block, if no transformer blocks used we will fallback to num_layers from here.
+    # Hence, for now: the num_layers can be set in the first transformer block, if no transformer blocks used we will fallback to num_layers parameter defined here.
     num_layers: int = Field(
-        default=12,
+        default=None,
         desc="Number of layers in the transformer.",
         hint=FieldHint.architecture,
         valid=check_field(Assert.geq, 0),
@@ -186,82 +204,114 @@ class HybridSSMBaseModelConfig(LanguageModelBaseConfig):
         super().setup_tensor_space(tensor_space)
 
     def _validate(self):
-        if self.blocks is not None and self.hybrid_block_layout is not None:
-            # Validate that all pattern entries refer to valid blocks
-            for block_name in self.hybrid_block_layout:
-                if block_name not in self.blocks:
-                    raise ValueError(f"Block name '{block_name}' in block_pattern not found in blocks dictionary")
-
-            first_transformer_block_config: TransformerBlockConfig | None = None
-
-            for block_name, block_config in self.blocks.items():
-                if isinstance(block_config, TransformerBlockConfig):
-                    if first_transformer_block_config is None:
-                        first_transformer_block_config = block_config
-                    else:
-                        logger.warning(
-                            f"Found multiple transformer blocks with different number of layers, using num_layers from the first transformer block for all"
-                        )
-                block_config._validate()
-
-            if first_transformer_block_config is not None:
-                num_layers = first_transformer_block_config.config.num_layers
-                logger.warning(
-                    f"TransformerBlockConfig overwrites BaseModelConfig num_layers, setting num_layers = {num_layers}"
-                )
-                self.num_layers = num_layers
-        else:
+        if self.blocks is None:
             logger.warning(
-                f"No transformer blocks found in blocks dictionary, using num_layers from BaseModelConfig: {self.num_layers} and falling back to old behavior with hybrid_block_layout containing any of {SSMBlockType.__members__.values()}"
+                f"Blocks not set, falling back to old behavior with hybrid_block_layout containing any of {HybridBlockType.__members__.keys()}"
             )
             if self.hybrid_block_layout is None:
                 with self._set_implicit_default():
-                    self.hybrid_block_layout = [SSMBlockType.mamba2_discrete.value]
-
-            if len(self.hybrid_block_layout) != self.transformer.num_layers:
-                if self.transformer.num_layers % len(self.hybrid_block_layout) != 0:
-                    raise ValueError(
-                        f"hybrid_block_layout length {len(self.hybrid_block_layout)} does not match num_layers {self.transformer.num_layers}"
+                    logger.warning(
+                        f"No hybrid_block_layout found in HybridBaseModelConfig, using default block {HybridBlockType.m2d}"
                     )
-                num_repeats = int(self.transformer.num_layers // len(self.hybrid_block_layout))
-                logger.warning(
-                    f"hybrid_block_layout length {len(self.hybrid_block_layout)} does not match num_layers {self.transformer.num_layers}, will repeat {self.hybrid_block_layout} {num_repeats} times"
-                )
-                self.hybrid_block_layout = self.hybrid_block_layout * num_repeats
+                    self.hybrid_block_layout = [HybridBlockType.m2d]
 
-            Assert.eq(len(self.hybrid_block_layout), self.transformer.num_layers)
+            # Legacy format with t, m, m2d, convert to new format
             Assert.custom(
                 lambda _: all(
-                    block_type in SSMBlockType.__members__.values() for block_type in self.hybrid_block_layout
+                    block_type in HybridBlockType.__members__.keys() for block_type in self.hybrid_block_layout
                 ),
-                f"Invalid block type: {self.hybrid_block_layout}. Must be one of {SSMBlockType.__members__.values()}",
+                f"Invalid block type: {self.hybrid_block_layout}. Must be one of {HybridBlockType.__members__.keys()}",
             )
-            Assert.custom(
-                lambda _: self.default_mtp_type in SSMBlockType.__members__.values() or self.default_mtp_type is None,
-                f"Invalid MTP type: {self.default_mtp_type}. Must be one of {SSMBlockType.__members__.values()} or None",
+            blocks = {}
+            for block_type in self.hybrid_block_layout:
+                if block_type not in blocks:
+                    hybrid_block_config_cls = HybridBlockType[block_type]
+                    if hybrid_block_config_cls == TransformerBlockConfig:
+                        blocks[block_type] = TransformerConfig.from_dict(self.transformer.to_dict())
+                    elif hybrid_block_config_cls == MambaBlockConfig:
+                        blocks[block_type] = SSMConfig.from_dict(self.ssm.to_dict())
+                    elif hybrid_block_config_cls == LlambaBlock:
+                        blocks[block_type] = SSMConfig.from_dict(self.ssm.to_dict())
+                    else:
+                        raise ValueError(f"Invalid block type: {block_type}")
+            self.blocks = blocks
+            self.hybrid_block_layout = [HybridBlockType[block_type] for block_type in self.hybrid_block_layout]
+
+        Assert.gt(len(self.hybrid_block_layout), 0, "No blocks found in hybrid_block_layout")
+        # Validate that all pattern entries refer to valid blocks
+        for block_name in self.hybrid_block_layout:
+            if block_name not in self.blocks:
+                raise ValueError(f"Block name '{block_name}' in block_pattern not found in blocks dictionary")
+
+        first_transformer_block_config: TransformerBlockConfig | None = None
+
+        for block_name, block_config in self.blocks.items():
+            if isinstance(block_config, TransformerBlockConfig):
+                if first_transformer_block_config is None:
+                    first_transformer_block_config = block_config
+                elif block_config.num_layers != first_transformer_block_config.num_layers:
+                    logger.warning(
+                        f"Found multiple transformer blocks with different number of layers, using num_layers from the first transformer block for all"
+                    )
+            block_config._validate()
+
+        # set num_layers from transformer block config if it exists and if num_layers is not set in HybridBaseModelConfig
+        # i.e. the resolution hierarchy for num_layers is: HybridBaseModelConfig.num_layers > TransformerBlockConfig.num_layers
+        if first_transformer_block_config is not None:
+            num_layers = first_transformer_block_config.num_layers
+            with self._set_implicit_default():
+                if self.num_layers is None:
+                    logger.warning(
+                        f"TransformerBlockConfig overwrites BaseModelConfig num_layers, setting num_layers = {num_layers}"
+                    )
+                self.num_layers = num_layers
+
+        # make sure that the hybrid_block_layout length matches the num_layers. If it doesn't, repeat the hybrid_block_layout;
+        if len(self.hybrid_block_layout) != self.num_layers:
+            if self.transformer.num_layers % len(self.hybrid_block_layout) != 0:
+                raise ValueError(
+                    f"hybrid_block_layout length {len(self.hybrid_block_layout)} does not match num_layers {self.transformer.num_layers}"
+                )
+            num_repeats = int(self.transformer.num_layers // len(self.hybrid_block_layout))
+            logger.warning(
+                f"hybrid_block_layout length {len(self.hybrid_block_layout)} does not match num_layers {self.transformer.num_layers}, will repeat {self.hybrid_block_layout} {num_repeats} times"
             )
-            # TODO: prepare hybrid_block_layout here
+            self.hybrid_block_layout = self.hybrid_block_layout * num_repeats
+
+        Assert.eq(len(self.hybrid_block_layout), self.transformer.num_layers)
 
         with self._set_implicit_default():
             if self.init_method_std_embed is None:
                 self.init_method_std_embed = (
-                    first_transformer_block_config.config.init_method_std
+                    first_transformer_block_config.init_method_std
                     if first_transformer_block_config is not None
                     else 0.02
                 )
             if self.init_method_max_embed is None:
                 self.init_method_max_embed = (
-                    first_transformer_block_config.config.init_method_max
+                    first_transformer_block_config.init_method_max
                     if first_transformer_block_config is not None
                     else 0.02
                 )
             if self.init_method_min_embed is None:
                 self.init_method_min_embed = (
-                    first_transformer_block_config.config.init_method_min
+                    first_transformer_block_config.init_method_min
                     if first_transformer_block_config is not None
                     else 0.02
                 )
 
+        if self.prediction_heads > 1:
+            with self._set_implicit_default():
+                if self.default_mtp_type is None:
+                    logger.warning(
+                        f"No default_mtp_type found in HybridBaseModelConfig, using the last block type in hybrid_block_layout: {self.hybrid_block_layout[-1]}"
+                    )
+                    self.default_mtp_type = self.hybrid_block_layout[-1]
+                else:
+                    if self.default_mtp_type not in self.hybrid_block_layout:
+                        raise ValueError(
+                            f"default_mtp_type {self.default_mtp_type} not found in hybrid_block_layout {self.hybrid_block_layout}"
+                        )
         super()._validate()
 
 
@@ -302,7 +352,7 @@ class AprielSSMHHybridHuggingfaceCheckpointFormat(CheckpointFormat):
 class HybridSSMModelConfig(FastLLMModelConfig):
     _abstract = False
     model_name: typing.ClassVar[str] = "hybrid_ssm"
-    base_model: HybridSSMBaseModelConfig = FieldUpdate()
+    base_model: HybridBaseModelConfig = FieldUpdate()
     checkpoint_formats = FastLLMModelConfig.checkpoint_formats + (
         LLambaHuggingfaceCheckpointFormat,
         AprielSSMHuggingfaceCheckpointFormat,

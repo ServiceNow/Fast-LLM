@@ -163,6 +163,7 @@ class GPTBaseModelConfig(LanguageModelBaseConfig):
         super().setup_tensor_space(tensor_space)
 
 
+@config_class()
 class GPTModelConfig(FastLLMModelConfig):
     _abstract = False
     model_name: typing.ClassVar[str] = "gpt"

@@ -23,7 +23,7 @@ from fast_llm.models.gpt.config import (
     Qwen2GPTHuggingfaceCheckpointFormat,
     Starcoder2GPTHuggingfaceCheckpointFormat,
 )
-from fast_llm.models.hybrid.config import HybridSSMBaseModelConfig, LLambaHuggingfaceCheckpointFormat
+from fast_llm.models.hybrid.config import HybridBaseModelConfig, LLambaHuggingfaceCheckpointFormat
 from fast_llm.tools.train import CliTrainingConfig
 from tests.compare_tensor_logs import CompareConfig, compare_tensor_logs
 
@@ -449,7 +449,7 @@ def materialize_meta_tensors(model, tensor_space):
 
 
 def get_hybrid_config(hybrid_block_layout=["t", "m"], prediction_heads=1, default_mtp_type=None):
-    config = HybridSSMBaseModelConfig(
+    config = HybridBaseModelConfig(
         transformer=TransformerConfig(num_layers=len(hybrid_block_layout)),
         ssm=SSMConfig(),
         hybrid_block_layout=hybrid_block_layout,
