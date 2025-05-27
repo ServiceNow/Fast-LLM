@@ -128,6 +128,7 @@ class HybridSSMBaseModelConfig(LanguageModelBaseConfig):
 class LLambaHuggingfaceCheckpointFormat(CheckpointFormat):
     support_optimizer: typing.ClassVar[bool] = False
     name: typing.ClassVar[str] = "llamba"
+    trust_remote_code: typing.ClassVar[bool] = True
 
     @classmethod
     def get_handler_class(cls) -> type[CheckpointHandler]:
@@ -194,7 +195,7 @@ class HybridSSMModelConfig(FastLLMModelConfig):
         return HybridSSMModel
 
     @classmethod
-    def get_huggingface_model_class(cls) -> type["HuggingfaceHybridSSMModelForCausalLM"]:
+    def get_huggingface_model_for_causal_lm_class(cls) -> type["HuggingfaceHybridSSMModelForCausalLM"]:
         from fast_llm.models.ssm.huggingface import HuggingfaceHybridSSMModelForCausalLM
 
         return HuggingfaceHybridSSMModelForCausalLM
@@ -244,11 +245,9 @@ class HybridTrainerConfig(PretrainedHybridSSMModelConfig, TrainerConfig):
 
     @classmethod
     def get_inference_runner_class(cls) -> type["GPTInferenceRunner"]:
-        from fast_llm.models.gpt.model import GPTInferenceRunner
+        from fast_llm.models.ssm.model import HybridSSMInferenceRunner
 
         # TODO: we dont have inference runner for SSM/Hybrid yet, should return None?
-        logger.warning(
-            "No inference runner for SSM/Hybrid yet, using GPTInferenceRunner for now, which does not support SSM/Hybrid"
-        )
+        logger.warning("No inference runner for SSM/Hybrid yet, using dummy class for now")
 
-        return GPTInferenceRunner
+        return HybridSSMInferenceRunner
