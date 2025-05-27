@@ -60,7 +60,11 @@ class MultiModalEmbedding(LanguageModelEmbedding):
             for sample_idx, (positions, sizes) in enumerate(zip(image_positions, image_sizes)):
                 image_embedding_offset = 0
                 for position, size in zip(positions, sizes):
-                    num_image_tokens = get_num_image_tokens(*size, self._config.vision_encoder.patch_size)
+                    num_image_tokens = get_num_image_tokens(
+                        *size,
+                        self._config.vision_encoder.patch_size,
+                        image_break=self._config.vision_encoder.image_break_token is not None,
+                    )
                     # Calculate the patch dimensions
                     patch_width = div(size[0], self._config.vision_encoder.patch_size)
                     patch_height = div(size[1], self._config.vision_encoder.patch_size)
@@ -97,7 +101,10 @@ class MultiModalEmbedding(LanguageModelEmbedding):
                 # TODO Soham: get image positions for current split. Maybe in preprocessing?
                 # for positions in image_positions:
                 #     if positions > self._distributed_config.tensor_rank
-            embeddings = torch.embedding(self.word_embeddings_weight, tokens)
+            # mask padded tokens
+            token_mask = tokens >= 0
+            masked_tokens = tokens * token_mask
+            embeddings = torch.embedding(self.word_embeddings_weight, masked_tokens) * token_mask.unsqueeze(2)
             embeddings = embeddings.clone()
             for sample_idx, (positions, sizes) in enumerate(zip(image_positions, image_sizes)):
                 image_embedding_offset = 0
