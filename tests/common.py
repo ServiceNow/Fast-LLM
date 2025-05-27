@@ -23,7 +23,11 @@ from fast_llm.models.gpt.config import (
     Qwen2GPTHuggingfaceCheckpointFormat,
     Starcoder2GPTHuggingfaceCheckpointFormat,
 )
-from fast_llm.models.ssm.config import HybridSSMBaseModelConfig, LLambaHuggingfaceCheckpointFormat
+from fast_llm.models.ssm.config import (
+    HybridSSMBaseModelConfig,
+    LLambaHuggingfaceCheckpointFormat,
+    MtpLLambaHuggingfaceCheckpointFormat,
+)
 from fast_llm.tools.train import CliTrainingConfig
 from tests.compare_tensor_logs import CompareConfig, compare_tensor_logs
 
@@ -208,6 +212,12 @@ CONFIG_LLAMBA_FAST_LLM = CONFIG_LLAMA_FAST_LLM + ["model.base_model.hybrid_block
 CONFIG_LLAMBA_MEGATRON = CONFIG_LLAMA_MEGATRON + []
 CONFIG_LLAMBA_COMMON = CONFIG_LLAMBA_FAST_LLM
 
+CONFIG_LLAMBA_MTP_FAST_LLM = CONFIG_LLAMBA_FAST_LLM + [
+    "model.base_model.prediction_heads=4",
+]
+CONFIG_LLAMBA_MTP_MEGATRON = None
+CONFIG_LLAMBA_MTP_COMMON = CONFIG_LLAMBA_FAST_LLM + ["model.distributed.training_dtype=bf16"]
+
 _CONFIGS = {
     "gpt2": ("gpt", CONFIG_GPT2_FAST_LLM, CONFIG_GPT2_MEGATRON, CONFIG_GPT2_COMMON, None),
     "sc1": ("gpt", CONFIG_SC1_FAST_LLM, CONFIG_SC1_MEGATRON, CONFIG_SC1_COMMON, None),
@@ -280,6 +290,13 @@ _CONFIGS = {
         CONFIG_LLAMA_MTP_MEGATRON,
         CONFIG_LLAMA_MTP_COMMON,
         MTPLlamaGPTHuggingfaceCheckpointFormat,
+    ),
+    "llamba-mtp": (
+        "hybrid_ssm",
+        CONFIG_LLAMBA_MTP_FAST_LLM,
+        CONFIG_LLAMBA_MTP_MEGATRON,
+        CONFIG_LLAMBA_MTP_COMMON,
+        MtpLLambaHuggingfaceCheckpointFormat,
     ),
 }
 

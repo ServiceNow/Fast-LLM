@@ -1,6 +1,6 @@
 import logging
 
-from fast_llm.engine.huggingface.config import HuggingfaceModelConfig
+from fast_llm.engine.inference.config import HuggingfaceModelConfig
 from fast_llm.models.gpt.huggingface import HuggingfaceGPTModelForCausalLM
 from fast_llm.models.ssm.config import HybridSSMModelConfig
 from fast_llm.models.ssm.model import HybridSSMModel
