@@ -189,7 +189,7 @@ class LanguageModelBaseConfig(BaseModelConfig):
         desc="Enable debug mode.",
         hint=FieldHint.testing,
     )
-    embeddings_hidden_dropout: bool = Field(
+    embeddings_hidden_dropout: float = Field(
         default=0.0,
         desc="Dropout applied to the embeddings.",
         hint=FieldHint.feature,

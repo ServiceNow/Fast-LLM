@@ -40,12 +40,13 @@ class HybridBlockConfig(Config):
         doc="May be used to freeze some layers by setting their scale to zero.",
         hint=FieldHint.feature,
     )
+    hidden_size: int = Field(
+        default=1024,
+        desc="Hidden size of the block.",
+        hint=FieldHint.architecture,
+    )
 
     def setup_tensor_space(self, tensor_space: "TensorSpace", block_name: str) -> None:
-        raise NotImplementedError()
-
-    @property
-    def hidden_size(self) -> int:
         raise NotImplementedError()
 
 
@@ -63,12 +64,6 @@ class DiscreteMamba2BlockConfig(HybridBlockConfig, SSMConfig):
     _abstract = False
     block_class: typing.ClassVar[type[BaseBlock]] = LlambaBlock
 
-    hidden_size: int = Field(
-        default=1024,
-        desc="Hidden size of the block.",
-        hint=FieldHint.architecture,
-    )
-
     # def _validate(self):
     #     self.config.validate()
 
@@ -76,6 +71,7 @@ class DiscreteMamba2BlockConfig(HybridBlockConfig, SSMConfig):
 
         d_inner = int(self.expansion_factor * self.hidden_size) if self.d_inner is None else self.d_inner
         # Hidden dimension
+        tensor_space.add_tensor_dim(TensorDim(f"{LLMDimNames.hidden}_{block_name}", self.hidden_size))
         tensor_space.add_tensor_dim(TensorDim(f"{SSMDimNames.model_dim}_{block_name}", self.hidden_size))
         # Mamba-specific dimensions
         tensor_space.add_tensor_dim(TensorDim(f"{SSMDimNames.inner_dim}_{block_name}", d_inner))
@@ -104,13 +100,7 @@ class MambaBlockConfig(HybridBlockConfig, SSMConfig):
     _abstract = False
     block_class: typing.ClassVar[type[BaseBlock]] = LlambaOneBlock
 
-    hidden_size: int = Field(
-        default=1024,
-        desc="Hidden size of the block.",
-        hint=FieldHint.architecture,
-    )
-
-    def setup_tensor_space(self, tensor_space: TensorSpace, name: str) -> None:
+    def setup_tensor_space(self, tensor_space: TensorSpace, block_name: str) -> None:
 
         if self.dt_rank is None:
             mamba_dt_rank = math.ceil(self.hidden_size / 16)
@@ -119,23 +109,28 @@ class MambaBlockConfig(HybridBlockConfig, SSMConfig):
 
         d_inner = int(self.expansion_factor * self.hidden_size) if self.d_inner is None else self.d_inner
         # Hidden dimension
-        tensor_space.add_tensor_dim(TensorDim(f"{SSMDimNames.model_dim}_{name}", self.hidden_size))
-        tensor_space.add_tensor_dim(TensorDim(f"{SSMDimNames.inner_dim}_{name}", d_inner))
-        tensor_space.add_tensor_dim(TensorDim(f"{SSMDimNames.state_dim}_{name}", self.state_size))
-        tensor_space.add_tensor_dim(TensorDim(f"{SSMDimNames.dt_rank}_{name}", mamba_dt_rank))
-        tensor_space.add_tensor_dim(TensorDim(f"{SSMDimNames.x_proj_dim}_{name}", mamba_dt_rank + self.state_size * 2))
-        tensor_space.add_tensor_dim(TensorDim(f"{SSMDimNames.conv_kernel_size}_{name}", self.conv_kernel_dimension))
-        tensor_space.add_tensor_dim(TensorDim(f"{SSMDimNames.inner_proj_mamba}_{name}", d_inner * 2))
+        tensor_space.add_tensor_dim(TensorDim(f"{LLMDimNames.hidden}_{block_name}", self.hidden_size))
+        tensor_space.add_tensor_dim(TensorDim(f"{SSMDimNames.model_dim}_{block_name}", self.hidden_size))
+        tensor_space.add_tensor_dim(TensorDim(f"{SSMDimNames.inner_dim}_{block_name}", d_inner))
+        tensor_space.add_tensor_dim(TensorDim(f"{SSMDimNames.state_dim}_{block_name}", self.state_size))
+        tensor_space.add_tensor_dim(TensorDim(f"{SSMDimNames.dt_rank}_{block_name}", mamba_dt_rank))
+        tensor_space.add_tensor_dim(
+            TensorDim(f"{SSMDimNames.x_proj_dim}_{block_name}", mamba_dt_rank + self.state_size * 2)
+        )
+        tensor_space.add_tensor_dim(
+            TensorDim(f"{SSMDimNames.conv_kernel_size}_{block_name}", self.conv_kernel_dimension)
+        )
+        tensor_space.add_tensor_dim(TensorDim(f"{SSMDimNames.inner_proj_mamba}_{block_name}", d_inner * 2))
 
 
-class HybridBlockType(str, enum.Enum):
+class HybridBlockType(enum.Enum):
     """
     An enum for the available block types, legacy format.
     """
 
-    m: MambaBlockConfig
-    m2d: LlambaBlock
-    t: TransformerBlockConfig
+    m = MambaBlockConfig
+    m2d = DiscreteMamba2BlockConfig
+    t = TransformerBlockConfig
 
 
 @config_class()
@@ -181,7 +176,7 @@ class HybridBaseModelConfig(LanguageModelBaseConfig):
     # TODO: currently num_layers is defined in TransformerConfig, but ideally this should be migrated to LanguageModelBaseConfig in the future.
     # Hence, for now: the num_layers can be set in the first transformer block, if no transformer blocks used we will fallback to num_layers parameter defined here.
     num_layers: int = Field(
-        default=None,
+        default=12,
         desc="Number of layers in the transformer.",
         hint=FieldHint.architecture,
         valid=check_field(Assert.geq, 0),
@@ -225,23 +220,22 @@ class HybridBaseModelConfig(LanguageModelBaseConfig):
             blocks = {}
             for block_type in self.hybrid_block_layout:
                 if block_type not in blocks:
-                    hybrid_block_config_cls = HybridBlockType[block_type]
+                    hybrid_block_config_cls = HybridBlockType[block_type].value
                     if hybrid_block_config_cls == TransformerBlockConfig:
-                        blocks[block_type] = TransformerConfig.from_dict(self.transformer.to_dict())
+                        blocks[block_type] = TransformerBlockConfig.from_dict(self.transformer.to_dict())
                     elif hybrid_block_config_cls == MambaBlockConfig:
-                        blocks[block_type] = SSMConfig.from_dict(self.ssm.to_dict())
-                    elif hybrid_block_config_cls == LlambaBlock:
-                        blocks[block_type] = SSMConfig.from_dict(self.ssm.to_dict())
+                        blocks[block_type] = MambaBlockConfig.from_dict(self.ssm.to_dict())
+                    elif hybrid_block_config_cls == DiscreteMamba2BlockConfig:
+                        blocks[block_type] = DiscreteMamba2BlockConfig.from_dict(self.ssm.to_dict())
                     else:
                         raise ValueError(f"Invalid block type: {block_type}")
             self.blocks = blocks
-            self.hybrid_block_layout = [HybridBlockType[block_type] for block_type in self.hybrid_block_layout]
 
-        Assert.gt(len(self.hybrid_block_layout), 0, "No blocks found in hybrid_block_layout")
+        Assert.gt(len(self.hybrid_block_layout), 0)
         # Validate that all pattern entries refer to valid blocks
         for block_name in self.hybrid_block_layout:
             if block_name not in self.blocks:
-                raise ValueError(f"Block name '{block_name}' in block_pattern not found in blocks dictionary")
+                raise ValueError(f"Block name '{block_name}' not found in blocks dictionary")
 
         first_transformer_block_config: TransformerBlockConfig | None = None
 
@@ -253,7 +247,7 @@ class HybridBaseModelConfig(LanguageModelBaseConfig):
                     logger.warning(
                         f"Found multiple transformer blocks with different number of layers, using num_layers from the first transformer block for all"
                     )
-            block_config._validate()
+            block_config.validate()
 
         # set num_layers from transformer block config if it exists and if num_layers is not set in HybridBaseModelConfig
         # i.e. the resolution hierarchy for num_layers is: HybridBaseModelConfig.num_layers > TransformerBlockConfig.num_layers

@@ -380,8 +380,8 @@ class Config(metaclass=ConfigMeta):
 
         if expected_class is not None:
             # Should be handled in `from_dict`, but can fail if instantiating directly.
-            Assert.is_(self.__class__, expected_class)
-
+            # TODO: is this ok? i.e. we want the assigned class to be a subclass of the expected class, not neccessarily exactly the same class.
+            Assert.custom(issubclass, expected_class, self.__class__)
         if not self._validated:
             try:
                 self._validate()

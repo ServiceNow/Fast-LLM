@@ -158,42 +158,13 @@ class PeftType(str, enum.Enum):
 
 @config_class(registry=True)
 class PeftConfig(BaseModelConfig):
-    _abstract = True
+    _abstract = False
 
     type: PeftType = Field(
         default=PeftType.none,
         desc="The type of parameter-efficient fine tuning to use Only LoRA is supported at the moment.",
         hint=FieldHint.core,
     )
-
-    # @classmethod
-    # def get_subclass(cls, name: str):
-    #     return super().get_subclass(name)
-
-    def validate(self: typing.Self, *, _is_validating: bool = False):
-        """
-        Validate a class and mark it as read-only
-        This should not be overridden in derived classes.
-        """
-        # Should be handled in `from_dict`, but can fail if instantiating directly.
-        try:
-            expected_class = self.get_subclass(self.type)
-        except KeyError as e:
-            # Delayed instantiation error in `from_dict`.
-            raise ValueError(*e.args)
-
-        if expected_class is not None:
-            # Should be handled in `from_dict`, but can fail if instantiating directly.
-            # Assert.is_(expected_class, self.__class__)
-            Assert.custom(issubclass, expected_class, self.__class__)
-
-        if not self._validated:
-            try:
-                self._validate()
-            except Exception as e:
-                raise type(e)("\n".join(e.args)) from None
-            self._validated = True
-        return self
 
 
 @config_class(dynamic_type={PeftConfig: "none"})
@@ -206,30 +177,6 @@ class EmptyPeftConfig(PeftConfig):
 
     def apply_linear(self, linear: "LinearBase", **kwargs) -> "LinearLike":
         return linear
-
-    def validate(self: typing.Self, *, _is_validating: bool = False):
-        """
-        Validate a class and mark it as read-only
-        This should not be overridden in derived classes.
-        """
-        # Should be handled in `from_dict`, but can fail if instantiating directly.
-        try:
-            expected_class = self.get_subclass(self.type)
-        except KeyError as e:
-            # Delayed instantiation error in `from_dict`.
-            raise ValueError(*e.args)
-
-        if expected_class is not None:
-            # Should be handled in `from_dict`, but can fail if instantiating directly.
-            Assert.is_(self.__class__, expected_class)
-
-        if not self._validated:
-            try:
-                self._validate()
-            except Exception as e:
-                raise type(e)("\n".join(e.args)) from None
-            self._validated = True
-        return self
 
 
 @config_class(dynamic_type={PeftConfig: "lora"})

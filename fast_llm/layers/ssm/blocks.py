@@ -28,7 +28,7 @@ class LlambaBlock(BaseBlock):
 
     def _create_mixer(self):
         self.mixer = DiscreteMamba2(
-            self._config, layer_idx=self._layer_index, tensor_space=self._tensor_space, name=self.block_name
+            self._config, layer_index=self._layer_index, tensor_space=self._tensor_space, name=self.block_name
         )
 
 
@@ -51,5 +51,5 @@ class LlambaOneBlock(BaseBlock):
 
     def _create_mixer(self):
         self.mixer = MambaLayer(
-            self._config, layer_idx=self._layer_index, tensor_space=self._tensor_space, name=self.block_name
+            self._config, layer_index=self._layer_index, tensor_space=self._tensor_space, name=self.block_name
         )

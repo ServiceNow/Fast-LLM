@@ -8,9 +8,9 @@ from fast_llm.core.distributed import set_generator
 from fast_llm.engine.base_model.base_model import Layer
 from fast_llm.engine.config_utils.run import log_pipeline_parallel_main_rank
 from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
-from fast_llm.layers.common.config import BaseBlockConfig
+from fast_llm.layers.common.config import BaseBlockConfig, LLMDimNames
 from fast_llm.layers.transformer.attention import Attention
-from fast_llm.layers.transformer.config import TransformerConfig, TransformerDimNames, TransformerKwargs
+from fast_llm.layers.transformer.config import TransformerConfig, TransformerKwargs
 from fast_llm.layers.transformer.mixture_of_experts import MixtureOfExpertMLP
 from fast_llm.layers.transformer.mlp import MLP
 from fast_llm.logging import log_distributed_grad, log_distributed_tensor, log_memory_usage
@@ -44,7 +44,7 @@ class BaseBlock(Layer, abc.ABC):
 
         self._layer_index = layer_index
         self._debug_mode = self._config.debug_block or self._config.debug_block_memory
-        hidden_dim = self._tensor_space.get_tensor_dim(f"{TransformerDimNames.hidden}_{block_name}")
+        hidden_dim = self._tensor_space.get_tensor_dim(f"{LLMDimNames.hidden}_{block_name}")
         # Note, layer_lr_scale does not impact the norms
         self.norm_1 = self._config.normalization.get_layer(hidden_dim, lr_scale=self._config.norm_lr_scale)
         self.norm_2 = self._config.normalization.get_layer(hidden_dim, lr_scale=self._config.norm_lr_scale)
@@ -52,7 +52,7 @@ class BaseBlock(Layer, abc.ABC):
         self._create_mixer()
 
         self.mlp = (MixtureOfExpertMLP if self._config.num_experts > 1 else MLP)(
-            self._config, self._tensor_space, f"{self.block_name} mlp", layer_index=layer_index
+            self._config, self._tensor_space, f"{self.block_name}", layer_index=layer_index
         )
 
         # PEFT. Layer freezing must be explicit now.

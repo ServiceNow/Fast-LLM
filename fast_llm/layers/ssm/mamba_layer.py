@@ -9,7 +9,6 @@ from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
 from fast_llm.layers.common.linear import Linear
 from fast_llm.layers.ssm.config import SSMConfig, SSMDimNames
 from fast_llm.tensor import ParameterMeta, init_ones_, kaiming_init_
-from fast_llm.utils import get_lr_scale
 
 """
 Note: this is mostly addapted from https://github.com/Zyphra/Zamba2, similar code is aslo in https://github.com/state-spaces/mamba.
@@ -69,9 +68,9 @@ class MambaLayer(torch.nn.Module):
         self._debug_mode = config.debug_ssm
 
         # Tensor dims:
-        td_inner = tensor_space.get_tensor_dim(SSMDimNames.inner_dim)
+        td_inner = tensor_space.get_tensor_dim(f"{SSMDimNames.inner_dim}_{name}")
         td_inner_proj = tensor_space.get_tensor_dim(
-            SSMDimNames.inner_proj_mamba
+            f"{SSMDimNames.inner_proj_mamba}_{name}"
         )  # TensorDim("D_inner_2", self.d_inner * 2)
         tdt_rank = tensor_space.get_tensor_dim(f"{SSMDimNames.dt_rank}_{name}")
         td_x_proj = tensor_space.get_tensor_dim(f"{SSMDimNames.x_proj_dim}_{name}")
@@ -83,8 +82,7 @@ class MambaLayer(torch.nn.Module):
         self.d_state = td_state.size
         self.d_model = td_model.size
         self.dt_rank = tdt_rank.size
-        layer_lr_scale = config.per_layer_lr_scale[layer_index] if config.per_layer_lr_scale else None
-        mamba_layer_lr_scale = get_lr_scale(self.config.mamba_lr_scale, layer_lr_scale)
+        mamba_layer_lr_scale = self.config.mamba_lr_scale
 
         self.in_proj_weight = ParameterMeta.from_dims(
             (td_inner_proj, td_model),
@@ -107,7 +105,7 @@ class MambaLayer(torch.nn.Module):
             td_x_proj,
             weight_init_method=kaiming_init_(td_inner.size),
             bias=False,
-            layer_lr_scale=mamba_layer_lr_scale,
+            lr_scale=mamba_layer_lr_scale,
             **factory_kwargs,
         )
         self.x_proj.weight.auto_grad_accumulation = True
