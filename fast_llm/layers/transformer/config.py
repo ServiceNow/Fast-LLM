@@ -75,6 +75,7 @@ class TransformerKwargs:
     attention_mode = "attention_mode"
     attention_mask = "attention_mask"
     attention_mask_value = "attention_mask_value"
+    attention_implementation = "attention_implementation"
     sequence_lengths = "sequence_lengths"
     cu_seqlens_q = "cu_seqlens_q"
     cu_seqlens_k = "cu_seqlens_k"
@@ -318,6 +319,7 @@ ATTENTION_IMPLEMENTATION_SPECS = {
         variable_length=True,
         dropout=True,
         dtypes={DataType.float16, DataType.bfloat16, DataType.float32},
+        modes={AttentionMode.causal},
         variable_window=True,
     ),
 }
@@ -817,16 +819,6 @@ class TransformerConfig(BaseModelConfig):
 
         for impl in preference:
             if eligible(ATTENTION_IMPLEMENTATION_SPECS[impl]):
-                print(
-                    f"Selected attention implementation: {impl} for "
-                    f"use_fast_attention={self.use_fast_attention}, "
-                    f"require_variable_length={require_variable_length}, "
-                    f"training_dtype={training_dtype}, "
-                    f"flash_available={flash_available}, "
-                    f"attention_mode={self.attention_mode}, "
-                    f"attention_dropout={self.attention_dropout}, "
-                    f"max_window_layers={self.max_window_layers}"
-                )
                 return impl
 
         raise ValueError(

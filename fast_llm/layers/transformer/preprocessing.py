@@ -505,10 +505,13 @@ class FastAttentionPreprocessor(Preprocessor):
         kwargs[TransformerKwargs.block_mask] = block_mask
 
     def preprocess(self, batch, kwargs: dict[str, typing.Any]) -> None:
-        attention_implementation = self._config.select_attention_implementation(
-            require_variable_length=TransformerKwargs.sequence_lengths in kwargs,
-            training_dtype=self._tensor_space.distributed_config.training_dtype,
-            flash_available=self._flash_available,
+        attention_implementation = kwargs.get(
+            TransformerKwargs.attention_implementation,
+            self._config.select_attention_implementation(
+                require_variable_length=TransformerKwargs.sequence_lengths in kwargs,
+                training_dtype=self._tensor_space.distributed_config.training_dtype,
+                flash_available=self._flash_available,
+            ),
         )
         attention_implementation_spec = ATTENTION_IMPLEMENTATION_SPECS[attention_implementation]
         if attention_implementation_spec.variable_length:

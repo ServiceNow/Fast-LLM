@@ -357,48 +357,43 @@ class Attention(torch.nn.Module):
 
         window_size = self._decide_window_size()
 
-        if self._debug_transformer:
-            assert query.shape == (
-                self._tensor_space.get_tensor_dim(TransformerDimNames.batch).size,
-                self._tensor_space.get_tensor_dim(TransformerDimNames.sequence_q).size,
-                self._local_heads,
-                self._kv_channels,
-            ), f"Query shape mismatch: {query.shape}"
-            assert key.shape == (
-                self._tensor_space.get_tensor_dim(TransformerDimNames.batch).size,
-                self._tensor_space.get_tensor_dim(TransformerDimNames.sequence_k).size,
-                self._local_head_groups,
-                self._kv_channels,
-            ), f"Key shape mismatch: {key.shape}"
-            assert value.shape == (
-                self._tensor_space.get_tensor_dim(TransformerDimNames.batch).size,
-                self._tensor_space.get_tensor_dim(TransformerDimNames.sequence_k).size,
-                self._local_head_groups,
-                self._kv_channels,
-            ), f"Value shape mismatch: {value.shape}"
-
-        attention_implementation = self._config.select_attention_implementation(
-            require_variable_length=TransformerKwargs.sequence_lengths in kwargs,
-            training_dtype=self._tensor_space.distributed_config.training_dtype,
-            flash_available=_flash_available,
+        attention_implementation = kwargs.get(
+            TransformerKwargs.attention_implementation,
+            self._config.select_attention_implementation(
+                require_variable_length=TransformerKwargs.sequence_lengths in kwargs,
+                training_dtype=self._tensor_space.distributed_config.training_dtype,
+                flash_available=_flash_available,
+            ),
         )
         match attention_implementation:
             case AttentionImplementation.FLASH:
                 with set_generator(self._tensor_space.distributed.tp_generator):
+                    attention_mode = self._config.attention_mode
+                    if attention_mode == AttentionMode.causal:
+                        causal = True
+                    elif attention_mode == AttentionMode.bidirectional:
+                        causal = False
+                    else:
+                        raise ValueError(f"Unsupported attention mode: {attention_mode}")
                     input_ = _flash_attn_func(
                         q=query,
                         k=key,
                         v=value,
                         window_size=(-1, -1) if window_size is None else (window_size - 1, 0),
                         dropout_p=self._config.attention_dropout if self.training else 0.0,
-                        causal=(
-                            kwargs.get(TransformerKwargs.attention_mode, AttentionMode.causal) == AttentionMode.causal
-                        ),
+                        causal=causal,
                         softmax_scale=self._softmax_scale,
                     )  # type: ignore
                     input_ = input_.flatten(-2)
             case AttentionImplementation.FLASH_VARLEN:
                 with set_generator(self._tensor_space.distributed.tp_generator):
+                    attention_mode = self._config.attention_mode
+                    if attention_mode == AttentionMode.causal:
+                        causal = True
+                    elif attention_mode == AttentionMode.bidirectional:
+                        causal = False
+                    else:
+                        raise ValueError(f"Unsupported attention mode: {attention_mode}")
                     out_dims = query.size()
                     query = query.view(-1, query.size(-2), query.size(-1))
                     key = key.view(-1, key.size(-2), key.size(-1))
@@ -413,21 +408,20 @@ class Attention(torch.nn.Module):
                         max_seqlen_k=kwargs[TransformerKwargs.max_seqlen_k],
                         dropout_p=self._config.attention_dropout if self.training else 0.0,
                         window_size=(-1, -1) if window_size is None else (window_size - 1, 0),
-                        causal=(
-                            kwargs.get(TransformerKwargs.attention_mode, AttentionMode.causal) == AttentionMode.causal
-                        ),
+                        causal=causal,
                         softmax_scale=self._softmax_scale,
                     )  # type: ignore
                     input_ = input_.view(*out_dims)
             case AttentionImplementation.FLEX:
                 input_ = torch.nn.attention.flex_attention.flex_attention(
-                    query=query,
-                    key=key,
-                    value=value,
-                    block_mask=kwargs.get(TransformerKwargs.block_mask),
+                    query=query.permute(0, 2, 1, 3),
+                    key=key.permute(0, 2, 1, 3),
+                    value=value.permute(0, 2, 1, 3),
+                    block_mask=kwargs[TransformerKwargs.block_mask],
                     scale=self._softmax_scale,
                     enable_gqa=self._local_heads != self._local_head_groups,
                 )  # type: ignore
+                input_ = input_.permute(0, 2, 1, 3).flatten(-2)
             case AttentionImplementation.FLEX_VARLEN:
                 cu_seqlens_q = kwargs[TransformerKwargs.cu_seqlens_q]
                 cu_seqlens_k = kwargs[TransformerKwargs.cu_seqlens_k]
@@ -466,7 +460,7 @@ class Attention(torch.nn.Module):
                     query=query,
                     key=key,
                     value=value,
-                    block_mask=kwargs.get(TransformerKwargs.block_mask),
+                    block_mask=kwargs[TransformerKwargs.block_mask],
                     scale=self._softmax_scale,
                     enable_gqa=self._local_heads != self._local_head_groups,
                 )  # type: ignore
