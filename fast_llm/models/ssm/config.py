@@ -136,6 +136,11 @@ class LLambaHuggingfaceCheckpointFormat(CheckpointFormat):
         return LLambaHuggingfaceCheckpointHandler
 
 
+class MtpLLambaHuggingfaceCheckpointFormat(LLambaHuggingfaceCheckpointFormat):
+    name: typing.ClassVar[str] = "mtp_llamba"
+    trust_remote_code: typing.ClassVar[bool] = True
+
+
 class AprielSSMHuggingfaceCheckpointFormat(CheckpointFormat):
     support_optimizer: typing.ClassVar[bool] = False
     name: typing.ClassVar[str] = "apriel_ssm"
@@ -176,6 +181,7 @@ class HybridSSMModelConfig(FastLLMModelConfig):
     base_model: HybridSSMBaseModelConfig = FieldUpdate(default_factory=HybridSSMBaseModelConfig)
     checkpoint_formats = FastLLMModelConfig.checkpoint_formats + (
         LLambaHuggingfaceCheckpointFormat,
+        MtpLLambaHuggingfaceCheckpointFormat,
         AprielSSMHuggingfaceCheckpointFormat,
         AprielSSMHHybridHuggingfaceCheckpointFormat,
         AprielThinkerSSMHHybridHuggingfaceCheckpointFormat,

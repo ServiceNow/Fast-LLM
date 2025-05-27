@@ -15,7 +15,7 @@ from fast_llm.engine.checkpoint.external import (
     SplitWeightConverter,
     WeightConverter,
 )
-from fast_llm.engine.checkpoint.huggingface import HuggingfaceStateDictCheckpointHandler
+from fast_llm.engine.checkpoint.huggingface import CustomModelingExportMixin, HuggingfaceStateDictCheckpointHandler
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig
 from fast_llm.functional.config import ActivationType
 from fast_llm.layers.common.config import NormalizationType
@@ -27,7 +27,9 @@ from fast_llm.models.ssm.config import (
     AprielThinkerSSMHHybridHuggingfaceCheckpointFormat,
     HybridSSMModelConfig,
     LLambaHuggingfaceCheckpointFormat,
+    MtpLLambaHuggingfaceCheckpointFormat,
 )
+from fast_llm.models.ssm.external.llamba.configuration_mtp_llamba import MTPLlambaConfig
 from fast_llm.models.ssm.model import HybridSSMModel
 from fast_llm.utils import Assert
 
@@ -285,18 +287,7 @@ class LLambaHuggingfaceCheckpointHandler(CommonSSMHuggingfaceCheckpointHandler):
         ssm_bias: bool = self._model.config.base_model.ssm.add_bias_linear
 
         # Embedding and output
-        if self._model.config.base_model.tie_word_embeddings:
-            converters.append(
-                WeightConverter("layers.0.word_embeddings_weight", f"{self._hf_prefix}.embedding.weight")
-            )
-            converters.append(IgnoreImportWeightConverter((), f"{self._hf_prefix}.lm_head.weight"))
-        else:
-            converters.append(
-                WeightConverter("layers.0.word_embeddings_weight", f"{self._hf_prefix}.embedding.weight")
-            )
-            converters.append(
-                WeightConverter(f"layers.{num_layers + 1}.output_weights", f"{self._hf_prefix}.lm_head.weight")
-            )
+        converters += self._get_embedding_and_output_converters(num_layers)
 
         # Final norm
         converters += self._get_weight_and_bias_converters(
@@ -396,6 +387,16 @@ class LLambaHuggingfaceCheckpointHandler(CommonSSMHuggingfaceCheckpointHandler):
             )
         return converters
 
+    def _get_embedding_and_output_converters(self, num_layers: int) -> list[WeightConverter]:
+        converters = [WeightConverter("layers.0.word_embeddings_weight", f"{self._hf_prefix}.embedding.weight")]
+        if self._model.config.base_model.tie_word_embeddings:
+            converters.append(IgnoreImportWeightConverter((), f"{self._hf_prefix}.lm_head.weight"))
+        else:
+            converters.append(
+                WeightConverter(f"layers.{num_layers + 1}.output_weights", f"{self._hf_prefix}.lm_head.weight")
+            )
+        return converters
+
     @classmethod
     def _load_config(cls, directory: pathlib.Path | str) -> dict:
         if not os.path.exists(directory / "config.json"):
@@ -409,6 +410,105 @@ class LLambaHuggingfaceCheckpointHandler(CommonSSMHuggingfaceCheckpointHandler):
     def _save_config(cls, directory: pathlib.Path | str, config: dict[str, typing.Any]) -> None:
         with open(directory / "config.json", "w") as f:
             json.dump(config, f)
+
+
+class MtpLLambaHuggingfaceCheckpointHandler(CustomModelingExportMixin, LLambaHuggingfaceCheckpointHandler):
+    """
+    MTP LLamba checkpoint handler, used for MTP LLamba models.
+    """
+
+    from fast_llm.models.ssm.external.llamba import configuration_mtp_llamba, modeling_mtp_llamba
+
+    format: typing.ClassVar[type[CheckpointFormat]] = MtpLLambaHuggingfaceCheckpointFormat
+    modeling_file = modeling_mtp_llamba.__file__
+    configuration_file = configuration_mtp_llamba.__file__
+    _model_class: typing.ClassVar[FastLLMModelConfig] = MTPLlambaConfig
+
+    @classmethod
+    def _create_config_converters(cls) -> list[ParamConverter]:
+        return super()._create_config_converters() + [
+            ConstantExportParamConverter(
+                export_names=(("auto_map",),),
+                export_value={
+                    "AutoConfig": "configuration_mtp_llamba.MTPLlambaConfig",
+                    "AutoModelForCausalLM": "modeling_mtp_llamba.MTPLlambaLMHeadModel",
+                },
+            ),
+            RenameParamConverter(
+                fast_llm_names=(("prediction_heads",),),
+                export_names=(("prediction_heads",),),
+            ),
+        ]
+
+    # Override base method to handle the MTP heads
+    def _get_embedding_and_output_converters(self, num_layers: int) -> list[WeightConverter]:
+        prediction_heads = self._model.config.base_model.prediction_heads
+        converters = [WeightConverter("layers.0.word_embeddings_weight", f"{self._hf_prefix}.embedding.weight")]
+        ssm_bias: bool = self._model.config.base_model.ssm.add_bias_linear
+        norm_bias: bool = False
+
+        # Multi-token prediction
+        for i in range(1, prediction_heads):
+            mtp_layer_index = num_layers - 1 + 2 * i
+            converters += self._get_weight_and_bias_converters(
+                f"layers.{mtp_layer_index+1}.mixer.in_proj",
+                f"{self._hf_prefix}.mtp_heads.{i-1}.mixer.in_proj",
+                ssm_bias,
+            )
+            converters += self._get_weight_and_bias_converters(
+                f"layers.{mtp_layer_index+1}.mixer.out_proj",
+                f"{self._hf_prefix}.mtp_heads.{i-1}.mixer.out_proj",
+                ssm_bias,
+            )
+            converters.append(
+                WeightConverter(
+                    f"layers.{mtp_layer_index+1}.mixer.D",
+                    f"{self._hf_prefix}.mtp_heads.{i-1}.mixer.D",
+                    self._model.config.base_model,
+                )
+            )
+            converters.append(
+                WeightConverter(
+                    f"layers.{mtp_layer_index+1}.mixer.z_bias",
+                    f"{self._hf_prefix}.mtp_heads.{i-1}.mixer.z_bias",
+                    self._model.config.base_model,
+                )
+            )
+            converters.append(
+                WeightConverter(
+                    f"layers.{mtp_layer_index+1}.mixer.conv1d_weight",
+                    f"{self._hf_prefix}.mtp_heads.{i-1}.mixer.conv1d.weight",
+                    self._model.config.base_model,
+                )
+            )
+            converters.append(
+                WeightConverter(
+                    f"layers.{mtp_layer_index+1}.mixer.conv1d_bias",
+                    f"{self._hf_prefix}.mtp_heads.{i-1}.mixer.conv1d.bias",
+                    self._model.config.base_model,
+                )
+            )
+
+            # Norm
+            converters += self._get_weight_and_bias_converters(
+                f"layers.{mtp_layer_index+1}.norm_1", f"{self._hf_prefix}.mtp_heads.{i-1}.input_layernorm", norm_bias
+            )
+            converters += self._get_weight_and_bias_converters(
+                f"layers.{mtp_layer_index+1}.norm_2",
+                f"{self._hf_prefix}.mtp_heads.{i-1}.post_attention_layernorm",
+                norm_bias,
+            )
+
+            # MLP
+            converters += self._get_mlp_converters(f"{self._hf_prefix}.{mtp_layer_index+1}", f"model.mtp_heads.{i-1}")
+
+        # Output weights
+        if self._model.config.base_model.tie_word_embeddings:
+            converters.append(IgnoreImportWeightConverter((), "lm_head.weight"))
+        else:
+            converters.append(WeightConverter(f"layers.{num_layers + 1}.output_weights", "lm_head.weight"))
+
+        return converters
 
 
 class AprielSSMHuggingfaceCheckpointHandler(CommonSSMHuggingfaceCheckpointHandler):
