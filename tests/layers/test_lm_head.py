@@ -87,6 +87,7 @@ def test_lm_head(
     config_dict: dict[str, typing.Any],
     distributed_config_dict: dict[str, typing.Any],
     loss_masking: bool,
+    get_distributed_config,
 ):
     config = GPTBaseModelConfig.from_dict(
         {
@@ -101,7 +102,7 @@ def test_lm_head(
         config_dict,
         update_type=UpdateType.update,
     )
-    distributed_config = DistributedConfig.from_dict(distributed_config_dict)
+    distributed_config = DistributedConfig.from_dict(distributed_config_dict, get_distributed_config())
     distributed = Distributed(distributed_config)
     tensor_space = TensorSpace(distributed_config)
     config.setup_tensor_space(tensor_space)

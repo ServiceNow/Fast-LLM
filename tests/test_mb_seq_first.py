@@ -1,6 +1,6 @@
 import pytest
 
-from tests.common import CONFIG_COMMON, TEST_MODEL, run_test_script
+from tests.common import CONFIG_COMMON, TEST_MODEL, requires_cuda, requires_multi_gpu
 from tests.compare_tensor_logs import CompareConfig
 
 CONFIG_DF_SF = CONFIG_COMMON + ["batch.depth_first_micro_batches=4", "model.base_model.sequence_first=True"]
@@ -12,15 +12,17 @@ CONFIG_BF_DF_SF = CONFIG_COMMON + [
 ]
 
 
+@requires_cuda
 # TODO: Compare grads with simple
-def test_model_df4_sf():
+def test_model_df4_sf(run_test_script):
     # Sequence-first gradient accumulation baseline.
     run_test_script(f"test_{TEST_MODEL}_df4_sf", CONFIG_DF_SF)
 
 
+@requires_multi_gpu(4)
 @pytest.mark.slow
 @pytest.mark.depends(on=["test_model_df4_sf"])
-def test_model_dp2_sp2_df4():
+def test_model_dp2_sp2_df4(run_test_script):
     # Sequence-tensor-parallel with gradient accumulation.
     # TODO: Compiled cross-entropy broken for this config
     run_test_script(
@@ -36,10 +38,11 @@ def test_model_dp2_sp2_df4():
     )
 
 
+@requires_multi_gpu(8)
 @pytest.mark.slow
 @pytest.mark.skip(reason="Test is broken.")
 @pytest.mark.depends(on=["test_model_df4_sf"])
-def test_model_dp2_sp2_pp2s1():
+def test_model_dp2_sp2_pp2s1(run_test_script):
     # 3d-parallel with sequence-tensor-parallel.
     # TODO: Compiled cross-entropy broken for this config
     run_test_script(

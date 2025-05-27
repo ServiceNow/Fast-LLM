@@ -63,7 +63,7 @@ def distributed(distributed_config):
         {"prediction_heads": 5, "tie_word_embeddings": False},
     ),
 )
-def test_transformer_mtp(config_dict: dict[str, typing.Any]):
+def test_transformer_mtp(config_dict: dict[str, typing.Any], get_distributed_config):
     config = GPTBaseModelConfig.from_dict(
         {
             "transformer": {
@@ -75,7 +75,7 @@ def test_transformer_mtp(config_dict: dict[str, typing.Any]):
         config_dict,
         update_type=UpdateType.update,
     )
-    distributed_config = DistributedConfig.from_dict({})
+    distributed_config = get_distributed_config()
     distributed = Distributed(distributed_config)
     model = GPTBaseModel(config, distributed_config)
     model.setup(distributed)
