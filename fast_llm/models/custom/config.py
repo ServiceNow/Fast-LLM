@@ -2,9 +2,6 @@ import typing
 
 from fast_llm.config import FieldUpdate, config_class
 from fast_llm.data.data.gpt.config import GPTDataConfig
-from fast_llm.engine.config_utils.runnable import RunnableConfig
-from fast_llm.engine.multi_stage.config import FastLLMModelConfig
-from fast_llm.engine.training.config import TrainerConfig
 from fast_llm.models.gpt.config import GPTBaseModelConfig, GPTModelConfig, GPTTrainerConfig, PretrainedGPTModelConfig
 
 if typing.TYPE_CHECKING:
@@ -25,7 +22,7 @@ class CustomBaseModelConfig(GPTBaseModelConfig):
     pass
 
 
-@config_class(dynamic_type={FastLLMModelConfig: "gpt_custom"})
+@config_class()
 class CustomModelConfig(GPTModelConfig):
     # TODO: Add custom model config parameters, if any (typically none).
     model_name: typing.ClassVar[str] = "gpt_custom"
@@ -38,7 +35,7 @@ class CustomModelConfig(GPTModelConfig):
         return CustomModel
 
     @classmethod
-    def get_huggingface_model_class(cls) -> type["HuggingfaceCustomModelForCausalLM"]:
+    def get_huggingface_model_for_causal_lm_class(cls) -> type["HuggingfaceCustomModelForCausalLM"]:
         from fast_llm.models.custom.huggingface import HuggingfaceCustomModelForCausalLM
 
         return HuggingfaceCustomModelForCausalLM
@@ -49,7 +46,7 @@ class PretrainedCustomModelConfig(PretrainedGPTModelConfig):
     model: CustomModelConfig = FieldUpdate()
 
 
-@config_class(dynamic_type={RunnableConfig: "train_gpt_custom", TrainerConfig: "gpt_custom"})
+@config_class()
 class CustomTrainerConfig(PretrainedCustomModelConfig, GPTTrainerConfig):
     # TODO: Add custom trainer config parameters, if any (typically none).
     data: CustomDataConfig = FieldUpdate()

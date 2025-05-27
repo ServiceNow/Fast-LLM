@@ -4,7 +4,6 @@ import typing
 from fast_llm.config import Field, FieldHint, FieldUpdate, check_field, config_class
 from fast_llm.data.data.gpt.config import GPTDataConfig
 from fast_llm.engine.checkpoint.config import CheckpointFormat, CheckpointHandler
-from fast_llm.engine.config_utils.runnable import RunnableConfig
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig, PretrainedFastLLMModelConfig
 from fast_llm.engine.schedule.config import BatchConfig
 from fast_llm.engine.training.config import TrainerConfig
@@ -126,7 +125,7 @@ class GPTBaseModelConfig(LanguageModelBaseConfig):
         return super()._from_dict(default, strict, flat)
 
 
-@config_class(dynamic_type={FastLLMModelConfig: "gpt"})
+@config_class()
 class GPTModelConfig(FastLLMModelConfig):
     _abstract = False
     model_name: typing.ClassVar[str] = "gpt"
@@ -148,7 +147,7 @@ class GPTModelConfig(FastLLMModelConfig):
         return GPTModel
 
     @classmethod
-    def get_huggingface_model_class(cls) -> type["HuggingfaceGPTModelForCausalLM"]:
+    def get_huggingface_model_for_causal_lm_class(cls) -> type["HuggingfaceGPTModelForCausalLM"]:
         from fast_llm.models.gpt.huggingface import HuggingfaceGPTModelForCausalLM
 
         return HuggingfaceGPTModelForCausalLM
@@ -160,7 +159,7 @@ class PretrainedGPTModelConfig(PretrainedFastLLMModelConfig):
     model: GPTModelConfig = FieldUpdate()
 
 
-@config_class(dynamic_type={RunnableConfig: "train_gpt", TrainerConfig: "gpt"})
+@config_class()
 class GPTTrainerConfig(PretrainedGPTModelConfig, TrainerConfig):
     data: GPTDataConfig = FieldUpdate()
     batch: GPTBatchConfig = FieldUpdate()
@@ -174,14 +173,29 @@ class GPTTrainerConfig(PretrainedGPTModelConfig, TrainerConfig):
         if self.model.base_model.use_megatron_initialization:
             set_megatron_distributed_seeds(self.model.distributed)
         super()._validate()
-        if (name := self.model.base_model.distillation_model) is None:
-            Assert.empty(self.reference_models)
-        else:
-            Assert.eq(self.reference_models.keys(), {name})
+
         if self.model.base_model.use_absolute_position_embeddings:
             Assert.geq(self.model.base_model.num_absolute_position_embeddings, self.batch.sequence_length)
+
+        distillation_model = self.model.base_model.distillation_model
+        dpo_reference_model = self.model.base_model.dpo_reference_model
+
+        if self.model.base_model.enable_dpo:
+            assert dpo_reference_model is not None
+            Assert.none(distillation_model)
+        else:
+            Assert.none(dpo_reference_model)
+
+        if distillation_model is None and dpo_reference_model is None:
+            Assert.empty(self.reference_models)
+        else:
+            assert distillation_model is None or dpo_reference_model is None  # currently don't support both
+            expected_names = {name for name in (distillation_model, dpo_reference_model) if name is not None}
+            Assert.eq(self.reference_models.keys(), expected_names)
+
         for reference_model in self.reference_models.values():
             Assert.none(reference_model.model.base_model.distillation_model)
+            Assert.none(reference_model.model.base_model.dpo_reference_model)
             # TODO: Support more LM head features.
             Assert.none(reference_model.model.base_model.cross_entropy_splits)
             Assert.eq(reference_model.model.base_model.parallel_embeddings, self.model.base_model.parallel_embeddings)

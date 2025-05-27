@@ -13,7 +13,6 @@ import yaml
 
 from fast_llm.data.dataset.gpt.memmap import GPTMemmapDataset
 from fast_llm.data.dataset.gpt.sampled import GPTSample
-from fast_llm.engine.config_utils.runnable import RunnableConfig
 from fast_llm.layers.ssm.config import SSMConfig
 from fast_llm.layers.transformer.config import TransformerConfig
 from fast_llm.models.gpt.config import (
@@ -25,6 +24,7 @@ from fast_llm.models.gpt.config import (
     Starcoder2GPTHuggingfaceCheckpointFormat,
 )
 from fast_llm.models.ssm.config import HybridSSMBaseModelConfig, LLambaHuggingfaceCheckpointFormat
+from fast_llm.tools.train import CliTrainingConfig
 from tests.compare_tensor_logs import CompareConfig, compare_tensor_logs
 
 # FIXME: figure out correct import of megatron modules without this hack
@@ -361,6 +361,7 @@ def run_test_script(
     config: CompareConfig | None = None,
     prepare_fn=None,
     compare_fn=None,
+    do_compare: bool = True,
 ):
     if torch.cuda.device_count() < num_gpus:
         pytest.skip(f"Not enough GPUs to run test ({torch.cuda.device_count()}<{num_gpus})")
@@ -392,7 +393,7 @@ def run_test_script(
     if is_megatron:
         script = [*script, f"--structured-logs-dir={path}", f"--data-cache-path={path}"]
     else:
-        script = ["train", model_type, *script, f"run.experiment_dir={path}"]
+        script = [model_type, *script, f"run.experiment_dir={path}"]
     header = ["Megatron-LM/pretrain_gpt.py"] if is_megatron else ["--no-python", "fast-llm", "train"]
     command = [
         "python",
@@ -408,12 +409,12 @@ def run_test_script(
     else:
         get_test_dataset()
         if num_gpus == 1 and not is_megatron:
-            RunnableConfig.parse_and_run(script)
+            CliTrainingConfig.parse_and_run(script)
         else:
             completed_proc = subprocess.run(command, env=env, timeout=60)
             if completed_proc.returncode:
                 raise RuntimeError(f"Process failed with return code {completed_proc.returncode}")
-    if compare:
+    if compare and do_compare:
         if compare_fn is not None:
             compare_fn(TEST_RESULTS_PATH / name, TEST_RESULTS_PATH / compare)
         compare_tensor_logs(

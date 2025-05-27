@@ -5,7 +5,6 @@ import typing
 from fast_llm.config import Field, FieldHint, FieldUpdate, config_class
 from fast_llm.data.data.gpt.config import GPTDataConfig
 from fast_llm.engine.checkpoint.config import CheckpointFormat, CheckpointHandler
-from fast_llm.engine.config_utils.runnable import RunnableConfig
 from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig, PretrainedFastLLMModelConfig
 from fast_llm.engine.training.config import TrainerConfig
@@ -17,7 +16,7 @@ from fast_llm.utils import Assert
 if typing.TYPE_CHECKING:
     from fast_llm.models.ssm.huggingface import HuggingfaceHybridSSMModelForCausalLM
     from fast_llm.models.ssm.model import HybridSSMModel
-    from fast_llm.models.ssm.trainer import HybridSSMTrainer
+    from fast_llm.models.ssm.trainer import SSMTrainer
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +30,7 @@ class HybridSSMBaseModelConfig(LanguageModelBaseConfig):
         hint=FieldHint.architecture,
     )
     hybrid_block_layout: list[str] = Field(
-        default=("m2",),
+        default_factory=lambda: ["m2"],
         desc="Pattern of blocks to use in the model. 't' for Transformer, 'm' for Mamba1, 'm2' for Discrete Mamba2",
         hint=FieldHint.architecture,
     )
@@ -125,7 +124,7 @@ class LLambaHuggingfaceCheckpointFormat(CheckpointFormat):
         return LLambaHuggingfaceCheckpointHandler
 
 
-@config_class(dynamic_type={FastLLMModelConfig: "hybrid_ssm"})
+@config_class()
 class HybridSSMModelConfig(FastLLMModelConfig):
     _abstract = False
     model_name: typing.ClassVar[str] = "hybrid_ssm"
@@ -157,13 +156,13 @@ class PretrainedHybridSSMModelConfig(PretrainedFastLLMModelConfig):
     model: HybridSSMModelConfig = FieldUpdate()
 
 
-@config_class(dynamic_type={RunnableConfig: "train_hybrid_ssm", TrainerConfig: "hybrid_ssm"})
-class HybridSSMTrainerConfig(PretrainedHybridSSMModelConfig, TrainerConfig):
+@config_class()
+class HybridTrainerConfig(PretrainedHybridSSMModelConfig, TrainerConfig):
     data: GPTDataConfig = FieldUpdate()
     batch: GPTBatchConfig = FieldUpdate()
 
     @classmethod
-    def get_trainer_class(cls) -> type["HybridSSMTrainer"]:
-        from fast_llm.models.ssm.trainer import HybridSSMTrainer
+    def get_trainer_class(cls) -> type["SSMTrainer"]:
+        from fast_llm.models.ssm.trainer import SSMTrainer
 
-        return HybridSSMTrainer
+        return SSMTrainer

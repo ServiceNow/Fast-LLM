@@ -30,10 +30,15 @@ from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
-    from fast_llm.engine.inference.huggingface import HuggingfacePreTrainedModel
+    from fast_llm.engine.inference.huggingface import HuggingfaceBaseModelForCausalLM
     from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
 
 logger = logging.getLogger(__name__)
+
+
+class ShardName:
+    weights = "weights"
+    grads = "grads"
 
 
 class StageMode(str, enum.Enum):
@@ -242,7 +247,7 @@ class FastLLMModelConfig(Config):
         raise NotImplementedError
 
     @classmethod
-    def get_huggingface_model_class(cls) -> type["HuggingfacePreTrainedModel"]:
+    def get_huggingface_model_for_causal_lm_class(cls) -> type["HuggingfaceBaseModelForCausalLM"]:
         raise NotImplementedError
 
     @classmethod
@@ -372,9 +377,13 @@ class CheckpointMetadata(Config):
         if "fast_llm_version" not in default:
             default["fast_llm_version"] = "0"
 
+        # Determine the model config class.
+        from fast_llm.models.auto import model_registry
+
         model_config_class = default["model"]
         if isinstance(model_config_class, str):
-            model_config_class = FastLLMModelConfig.get_subclass(default["model"])
+            Assert.incl(model_config_class, model_registry)
+            model_config_class = model_registry[model_config_class]
             default["model"] = model_config_class
 
         # TODO v0.3: Remove backward compatibility.
