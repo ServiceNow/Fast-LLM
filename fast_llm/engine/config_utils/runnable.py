@@ -16,7 +16,7 @@ from fast_llm.engine.config_utils.logging import configure_logging
 logger = logging.getLogger(__name__)
 
 
-@config_class(registry=True)
+@config_class()
 class RunnableConfig(Config):
     @classmethod
     def parse_and_run(cls, args: list[str] | None = None) -> None:

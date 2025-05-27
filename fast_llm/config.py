@@ -16,7 +16,6 @@ from fast_llm.utils import Assert, Registry, Tag, compare_nested, get_type_name,
 
 logger = logging.getLogger(__name__)
 
-
 _AUTO_VALIDATE = True
 
 MISSING = Tag("<MISSING>")
@@ -245,7 +244,7 @@ def _process_config_class(cls: type["Config"]):
 
 def config_class[
     T: Config
-](registry: bool = False, dynamic_type: "dict[type[Config], str]|None" = None) -> typing.Callable[[type[T]], type[T]]:
+](dynamic_type: "dict[type[Config], str]|None" = None) -> typing.Callable[[type[T]], type[T]]:
     """
     Fast-LLM replacement for the default dataclass wrapper. Performs additional verifications.
     """
@@ -270,11 +269,8 @@ def config_class[
 
         wrapped.__init__ = __init__
 
-        wrapped._registry = Registry[str, type[wrapped]](wrapped.__name__, {}) if registry else None
-
         if dynamic_type is not None:
             for cls_, name in dynamic_type.items():
-                print(cls_, name, wrapped)
                 cls_.register_subclass(name, wrapped)
 
         return wrapped
@@ -316,7 +312,7 @@ class Config(metaclass=ConfigMeta):
     _setting_implicit_default: bool | None = Field(init=False)
 
     # A registry for all the config classes.
-    _registry: typing.ClassVar[Registry[str, type[typing.Self]] | None] = None
+    _registry: typing.ClassVar[Registry[str, type[typing.Self]]] = Registry[str, "type[Config]"]("Config", {})
 
     def __setattr__(self, key: str, value: typing.Any) -> None:
         """
@@ -371,17 +367,6 @@ class Config(metaclass=ConfigMeta):
         Validate a class and mark it as read-only
         This should not be overridden in derived classes.
         """
-        # Should be handled in `from_dict`, but can fail if instantiating directly.
-        try:
-            expected_class = self.get_subclass(self.type)
-        except KeyError as e:
-            # Delayed instantiation error in `from_dict`.
-            raise ValidationError(*e.args)
-
-        if expected_class is not None:
-            # Should be handled in `from_dict`, but can fail if instantiating directly.
-            Assert.is_(self.__class__, expected_class)
-
         if not self._validated:
             try:
                 self._validate()
@@ -401,6 +386,17 @@ class Config(metaclass=ConfigMeta):
         Can be extended to add custom post-processing (typically before the super() call)
         and validation (typically after)
         """
+        # Should be handled in `from_dict`, but can fail if instantiating directly.
+        try:
+            expected_class = self.get_subclass(self.type)
+        except KeyError as e:
+            # Delayed instantiation error in `from_dict`.
+            raise ValidationError(*e.args)
+
+        if expected_class is not None:
+            # Should be handled in `from_dict`, but can fail if instantiating directly.
+            Assert.is_(self.__class__, expected_class)
+
         if self._abstract:
             raise ValidationError(f"{type(self).__name__} is abstract")
         if not self.__class_validated__:
@@ -409,6 +405,8 @@ class Config(metaclass=ConfigMeta):
             )
         errors = []
         with self._set_implicit_default(None):
+            # Set the type field, or override it to the provided type with the actual class for clarity and safety.
+            self.type = self.__class__.__name__
             for name, field in self.fields():
                 if not field.init or field._field_type != dataclasses._FIELD:  # noqa
                     continue
@@ -486,6 +484,7 @@ class Config(metaclass=ConfigMeta):
             raise FieldTypeError(f"Not a type.")
         elif issubclass(type_, Config):
             cls._validate_element_type(value, type_, strict=False)
+
             value.validate(_is_validating=True)
         else:
             value = cls._validate_simple(value, type_)
@@ -737,7 +736,7 @@ class Config(metaclass=ConfigMeta):
             for keys, value in update.items():
                 set_nested_dict_value(default, keys, value, update_type)
 
-        return cls._from_dict(default, strict)
+        return cls._from_dict(default, strict=strict)
 
     @classmethod
     def from_flat_dict(
@@ -899,8 +898,6 @@ class Config(metaclass=ConfigMeta):
     @classmethod
     def register_subclass(cls, name: str, cls_: type[typing.Self]) -> None:
         Assert.custom(issubclass, cls_, cls)
-        if cls._registry is None:
-            raise NotImplementedError(f"Subclass `{cls.__name__}` doesn't have a registry..")
         if name in cls._registry:
             old_cls = cls._registry[name]
             if old_cls.__name__ == cls_.__name__ and cls._registry[name].__module__ == cls_.__module__:
@@ -916,7 +913,7 @@ class Config(metaclass=ConfigMeta):
             return None
         cls_ = None
         for base_class in cls.__mro__:
-            if issubclass(base_class, Config) and base_class._registry is not None and name in base_class._registry:
+            if issubclass(base_class, Config) and name in base_class._registry:
                 if cls_ is None:
                     cls_ = base_class._registry[name]
                     if not issubclass(cls_, cls):
@@ -937,6 +934,12 @@ class Config(metaclass=ConfigMeta):
         We need to postpone validation until the class has been processed by the dataclass wrapper.
         """
         Assert.eq(cls.__name__, cls.__qualname__)
+        cls._registry = Registry[str, type[cls]](cls.__name__, {})
+        if not cls._abstract:
+            Config.register_subclass(cls.__name__, cls)
+            short_name = cls.__name__.strip("Config")
+            if short_name != cls.__name__:
+                Config.register_subclass(short_name, cls)
         for base_class in cls.__mro__:
             if issubclass(base_class, Config) and base_class is not cls:
                 assert cls.__class_validated__, (
@@ -982,7 +985,7 @@ class Config(metaclass=ConfigMeta):
                     cls.__annotations__[name] = base_class_field.type
 
     # Type for the field. At the end of class definition to avoid shadowing builtin.
-    type: str | None = Field(
+    type: str = Field(
         default=None,
         desc="The config class name.",
         hint=FieldHint.feature,
