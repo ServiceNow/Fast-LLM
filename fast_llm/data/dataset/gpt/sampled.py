@@ -622,11 +622,10 @@ class GPTSampledIndexedDataset(SampledDataset):
             if self._parameters.use_loss_masking_spans
             else None
         )
-        # images = [im for img_list in images for im in img_list] if images else None
-        # image_positions = np.array(image_positions) if image_positions else None
-        images = None
+        images = [im for img_list in images for im in img_list] if images else None
+        image_positions = np.array(image_positions) if image_positions else None
 
-        audio = [aud for aud_list in audio for aud in aud_list] if audio else None
+        audio = [aud for aud_list in audio for aud in aud_list] if audio else None  # flatten
         audio_positions = np.array(audio_positions) if audio_positions else None
         # Assert.eq(len(token_ids), self._parameters.sequence_length + self._parameters.extra_tokens)
 

@@ -83,7 +83,7 @@ def gpt_data_collate_fn(batch: list[GPTSample], sampling_parameters: GPTSampling
         images=batch_images if has_images else None,
         image_positions=batch_image_positions if has_images else None,
         audio=batch_audio if has_audio else None,
-        audio_positions=batch_image_positions if has_audio else None,
+        audio_positions=batch_audio_positions if has_audio else None,
     )
 
 
