@@ -182,6 +182,8 @@ class LanguageModelBaseConfig(BaseModelConfig):
         tensor_space.add_tensor_dim(TensorDim(LanguageModelDimNames.vocab_tp, self.vocab_size, tensor))
         if self.vision_encoder.enabled:
             self.vision_encoder.setup_tensor_space(tensor_space)
+        if self.audio_encoder.enabled:
+            self.audio_encoder.setup_tensor_space(tensor_space)
 
     @property
     def num_absolute_position_embeddings(self) -> int:

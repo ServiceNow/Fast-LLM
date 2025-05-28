@@ -71,6 +71,10 @@ class VisionTransformerDimNames(BaseTransformerDimNames, prefix="image_encoder")
     pass
 
 
+class AudioTransformerDimNames(BaseTransformerDimNames, prefix="audio_encoder"):
+    pass
+
+
 class BaseTransformerKwargs:
     _kwargs_attributes = {
         "rotary_freq_q": "rotary_freq_q",
@@ -110,6 +114,10 @@ class VisionTransformerKwargs(BaseTransformerKwargs, prefix="image_encoder"):
     patch_position_ids = "patch_position_ids"
 
 
+class AudioTransformerKwargs(BaseTransformerKwargs, prefix="audio_encoder"):
+    pass
+
+
 class TransformerLossNames:
     load_balancing_loss = "load_balancing_loss"
     router_z_loss = "router_z_loss"
@@ -127,6 +135,7 @@ class RotaryEmbeddingType(str, enum.Enum):
 class TransformerType(str, enum.Enum):
     lm_decoder = "lm_decoder"
     image_encoder = "image_encoder"
+    audio_encoder = "audio_encoder"
 
 
 @config_class()
@@ -317,7 +326,7 @@ class TransformerConfig(BaseModelConfig):
     _abstract = False
     transformer_type: TransformerType = Field(
         default=TransformerType.lm_decoder,
-        desc="Type of the transformer. Choices: lm_decoder, image_encoder.",
+        desc="Type of the transformer. Choices: lm_decoder, image_encoder, audio_encoder.",
         hint=FieldHint.architecture,
     )
     normalization: NormalizationConfig = Field(
@@ -828,7 +837,7 @@ class VisionTransformerConfig(TransformerConfig):
 
     transformer_type: TransformerType = FieldUpdate(
         default=TransformerType.image_encoder,
-        desc="Type of the transformer. Choices: lm_decoder, image_encoder.",
+        desc="Type of the transformer. Choices: lm_decoder, image_encoder, audio_encoder.",
         hint=FieldHint.architecture,
     )
     causal: bool = FieldUpdate(
@@ -857,9 +866,19 @@ class AudioTransformerConfig(TransformerConfig):
     Configuration for the Audio Transformer model.
     """
 
+    transformer_type: TransformerType = FieldUpdate(
+        default=TransformerType.audio_encoder,
+        desc="Type of the transformer. Choices: lm_decoder, image_encoder, audio_encoder.",
+        hint=FieldHint.architecture,
+    )
     causal: bool = FieldUpdate(
         default=False,
         desc="Use causal attention. Turn this off only for bidirectional attention e.g., in Audio Transformer.",
+        hint=FieldHint.feature,
+    )
+    gated: bool = FieldUpdate(
+        default=False,
+        desc="MLP gating.",
         hint=FieldHint.feature,
     )
     # rotary: AudioRotaryConfig = FieldUpdate(
@@ -867,3 +886,11 @@ class AudioTransformerConfig(TransformerConfig):
     #     desc="Configuration for the rotary positional embeddings.",
     #     hint=FieldHint.feature,
     # )
+
+    @property
+    def _transformer_kwargs(self) -> AudioTransformerKwargs:
+        return AudioTransformerKwargs
+
+    @property
+    def _transformer_dim_names(self) -> AudioTransformerDimNames:
+        return AudioTransformerDimNames

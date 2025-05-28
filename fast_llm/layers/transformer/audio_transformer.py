@@ -1,15 +1,14 @@
 import torch
 
 from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
-from fast_llm.layers.audio_encoder.config import AudioTransformerDimNames, AudioTransformerKwargs
-from fast_llm.layers.transformer.config import TransformerConfig
+from fast_llm.layers.transformer.config import AudioTransformerDimNames, AudioTransformerKwargs, TransformerConfig
 from fast_llm.layers.transformer.transformer import TransformerLayer
 from fast_llm.tensor import TensorMeta
 
 
 class AudioTransformerLayer(TransformerLayer):
     """
-    A vision transformer layer to encode image patches
+    A audio transformer layer to encode image patches
     """
 
     def __init__(

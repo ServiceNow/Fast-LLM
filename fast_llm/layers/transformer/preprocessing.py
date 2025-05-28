@@ -280,9 +280,9 @@ class BackupAttentionPreprocessor(Preprocessor):
         )
 
     def preprocess(self, batch, kwargs: dict[str, typing.Any]) -> None:
-        self._create_tensors(kwargs[TransformerKwargs.sequence_length])
-        sequence_k = kwargs[TransformerKwargs.sequence_k_dim].size
-        sequence_q = kwargs[TransformerKwargs.sequence_q_dim].size
+        self._create_tensors(kwargs[self._transformer_kwargs.sequence_length])
+        sequence_k = kwargs[self._transformer_kwargs.sequence_k_dim].size
+        sequence_q = kwargs[self._transformer_kwargs.sequence_q_dim].size
         kwargs[self._transformer_kwargs.attention_mask] = self._mask[
             None, None, sequence_k - sequence_q : sequence_k, None, :sequence_k
         ]

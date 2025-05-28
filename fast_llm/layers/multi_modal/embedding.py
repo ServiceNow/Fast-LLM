@@ -5,6 +5,7 @@ import torch
 from fast_llm.core.distributed import set_generator
 from fast_llm.core.ops import gather, reduce_forward, split
 from fast_llm.engine.config_utils.tensor_space import TensorSpace
+from fast_llm.layers.audio_encoder.config import AudioEncoderKwargs
 from fast_llm.layers.language_model.config import LanguageModelBaseConfig, LanguageModelKwargs
 from fast_llm.layers.language_model.embedding import LanguageModelEmbedding
 from fast_llm.layers.transformer.config import TransformerKwargs
@@ -34,6 +35,7 @@ class MultiModalEmbedding(LanguageModelEmbedding):
         position_ids: torch.Tensor | None,
         image_positions: list[torch.Tensor] | None,
         image_sizes: list[list[tuple[int, int]]] | None,
+        audio_positions: list[torch.Tensor] | None,
     ) -> torch.Tensor:
         """
         Forward pass for the multi-modal embedding layer.
@@ -57,6 +59,7 @@ class MultiModalEmbedding(LanguageModelEmbedding):
                 embeddings = embeddings + torch.nn.functional.embedding(position_ids, self.position_embeddings_weight)
             embeddings = embeddings.clone()
             input_ = gather(input_, group, dim=0)
+            # TODO: Toby implement audio
             for sample_idx, (positions, sizes) in enumerate(zip(image_positions, image_sizes)):
                 image_embedding_offset = 0
                 for position, size in zip(positions, sizes):
@@ -91,6 +94,13 @@ class MultiModalEmbedding(LanguageModelEmbedding):
                     ]
                     image_embedding_offset += num_image_tokens
 
+            audio_position_idx = 0
+            for sample_idx, positions in enumerate(audio_positions):
+                for position in positions:
+                    num_audio_tokens = input_.shape[1]  # TODO: Toby better way to get this?
+                    embeddings[sample_idx, position : position + num_audio_tokens] = input_[audio_position_idx]
+                    audio_position_idx += 1
+
             if self._use_absolute_position_embeddings:
                 embeddings = embeddings + torch.nn.functional.embedding(position_ids, self.position_embeddings_weight)
         with set_generator(
@@ -114,9 +124,11 @@ class MultiModalEmbedding(LanguageModelEmbedding):
                 tensor_name="Embedding output",
                 dtype=self._residual_dtype,
             )
+        # TODO: How do we support both Audio and Vision?
         position_ids = kwargs.get(LanguageModelKwargs.position_ids)
-        image_sizes = kwargs.get(VisionEncoderKwargs.image_sizes)
-        image_positions = kwargs.get(VisionEncoderKwargs.image_positions)
+        image_sizes = kwargs.get(VisionEncoderKwargs.image_sizes, [])
+        image_positions = kwargs.get(VisionEncoderKwargs.image_positions, [])
+        audio_positions = kwargs.get(AudioEncoderKwargs.audio_positions, [])
         tokens = kwargs.get(LanguageModelKwargs.tokens)
 
-        return self._forward(input_, tokens, position_ids, image_positions, image_sizes)
+        return self._forward(input_, tokens, position_ids, image_positions, image_sizes, audio_positions)
