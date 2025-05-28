@@ -61,8 +61,10 @@ def pytest_configure(config):
         gpu_id = 0
     else:
         gpu_id = None
+
     gpu_memory = torch.cuda.mem_get_info(0)[1] if num_gpus > 0 else 0
-    torch.cuda.set_per_process_memory_fraction(MAX_TEST_MEMORY / gpu_memory, 0)
+    if num_gpus > 0:
+        torch.cuda.set_per_process_memory_fraction(MAX_TEST_MEMORY / gpu_memory, 0)
 
     num_workers = config.workerinput["workercount"] if is_parallel else 1
     memory_needed = (MAX_TEST_MEMORY + CUDA_CONTEXT_SIZE) * math.ceil(num_workers / num_gpus)
