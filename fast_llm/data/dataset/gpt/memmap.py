@@ -202,6 +202,7 @@ class GPTMemmapDataset(GPTIndexedDataset):
         patch_size: int | None = None,
         image_size: int | None = None,
         image_break: bool = False,
+        image_end: bool = False,
     ) -> GPTSample:
         token_ids = np.frombuffer(
             self._bin_buffer,
@@ -244,6 +245,7 @@ class GPTMemmapDataset(GPTIndexedDataset):
                             get_resize_dims(*self._image_lengths[idx][image_idx], image_size, image_size, patch_size),
                             patch_size,
                             image_break=image_break,
+                            image_end=image_end,
                         )
                         additional_tokens += image_tokens
                         image_idx += 1

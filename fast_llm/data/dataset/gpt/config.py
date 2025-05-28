@@ -77,6 +77,7 @@ class GPTSamplingParameters(SamplingParameters):
     patch_size: int | None = None
     image_size: int | None = None
     image_break_token: int | None = None
+    image_end_token: int | None = None
     # How many extra tokens to add to the sequence length.
     # This is used to provide labels even for the last tokens in the sequence.
     extra_tokens: int = 1

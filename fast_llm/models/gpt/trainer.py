@@ -38,6 +38,7 @@ class GPTTrainer[ConfigType: GPTTrainerConfig](Trainer[ConfigType]):
                     "patch_size": self._config.model.base_model.vision_encoder.patch_size,
                     "image_size": self._config.batch.image_size,
                     "image_break_token": self._config.model.base_model.vision_encoder.image_break_token,
+                    "image_end_token": self._config.model.base_model.vision_encoder.image_end_token,
                 }
             )
         return parameters if _return_dict else GPTSamplingParameters(**parameters)

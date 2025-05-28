@@ -6,6 +6,7 @@ import torchvision.transforms.v2.functional as F
 
 from fast_llm.engine.base_model.config import Preprocessor
 from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
+from fast_llm.layers.language_model.config import LanguageModelKwargs
 from fast_llm.layers.transformer.config import TransformerKwargs, VisionTransformerDimNames, VisionTransformerKwargs
 from fast_llm.layers.vision_encoder.config import VisionEncoderConfig, VisionEncoderDimNames, VisionEncoderKwargs
 from fast_llm.tensor import TensorMeta
@@ -19,14 +20,19 @@ def get_num_patches(height: int, width: int, patch_size: int) -> tuple[int, int]
     return div(height, patch_size) * div(width, patch_size)
 
 
-def get_num_image_tokens(height: int, width: int, patch_size: int, image_break: bool) -> int:
+def get_num_image_tokens(height: int, width: int, patch_size: int, image_break: bool, image_end: bool) -> int:
     """
     Calculate the number of image tokens.
     If image_break is True, we consider 1 additional token after every row of patches.
     """
     height_patches = div(height, patch_size)
     width_patches = div(width, patch_size)
-    return height_patches * width_patches + (height_patches - 1 if image_break else 0)
+    num_tokens = height_patches * width_patches
+    if image_break:
+        num_tokens += height_patches
+    elif image_end:
+        num_tokens += 1
+    return num_tokens
 
 
 def get_resize_dims(height: int, width: int, max_height: int, max_width: int, patch_size: int) -> tuple[int, int]:
@@ -150,16 +156,32 @@ class VisionPreprocessor(Preprocessor):
             ]
             for imgs in images
         ]
+        image_positions = kwargs.get(VisionEncoderKwargs.image_positions)
+
+        labels = kwargs[LanguageModelKwargs.labels]
+        if (self._config.image_break_token is not None) or (self._config.image_end_token is not None):
+            # If image break or end token is present, we need to replace image token ids to -100 in labels
+            # TODO: avoid double cloning labels in case of loss masking spans?
+            labels = labels.clone()
+
         patches = []
         patch_position_ids = []
         cu_seqlens = [0]
         max_seqlen = -1
         kwargs.get(TransformerKwargs.sequence_first)
-        for imgs, sizes in zip(images, image_sizes):
+        for idx, (imgs, sizes, positions) in enumerate(zip(images, image_sizes, image_positions)):
             seq_patches = []
             sample_cu_seqlen = 0
-            for image, size in zip(imgs, sizes):
+            for image, size, position in zip(imgs, sizes, positions):
                 seqlen = get_num_patches(*size, patch_size)
+                num_tokens = get_num_image_tokens(
+                    *size,
+                    patch_size=patch_size,
+                    image_break=self._config.image_break_token is not None,
+                    image_end=self._config.image_end_token is not None,
+                )
+                # set labels for image patches to -100
+                labels[idx, max(position - 1, 0) : position + num_tokens - 1] = -100
                 if seqlen > max_seqlen:
                     max_seqlen = seqlen
                 cu_seqlens.append(cu_seqlens[-1] + seqlen)
@@ -204,6 +226,7 @@ class VisionPreprocessor(Preprocessor):
             # TODO Soham: remove
             assert patches[-1].size(0) == kwargs[TransformerKwargs.sequence_length]
         patches = torch.cat(patches)
+        kwargs[LanguageModelKwargs.labels] = labels
         patch_position_ids = torch.cat(patch_position_ids)
         kwargs[VisionEncoderKwargs.image_patches] = patches
         kwargs[VisionEncoderKwargs.rotary_inv_freq] = create_inv_freqs(

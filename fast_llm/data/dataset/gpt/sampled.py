@@ -15,7 +15,7 @@ from fast_llm.data.dataset.gpt.indexed import GPTIndexedDataset
 from fast_llm.engine.config_utils.data_type import DataType, get_unsigned_integer_type
 from fast_llm.engine.config_utils.run import log_main_rank
 from fast_llm.layers.vision_encoder.preprocessing import get_num_image_tokens, get_resize_dims
-from fast_llm.utils import Assert
+from fast_llm.utils import Assert, div
 
 try:
     from fast_llm.csrc.data import build_padded_token_cumsum, build_sample_idx  # noqa
@@ -147,6 +147,7 @@ class GPTSampledIndexedDataset(SampledDataset):
                             ),
                             self._parameters.patch_size,
                             image_break=self._parameters.image_break_token is not None,
+                            image_end=self._parameters.image_end_token is not None,
                         )
                         for size in sizes
                     )
@@ -213,6 +214,7 @@ class GPTSampledIndexedDataset(SampledDataset):
             "patch_size": self._parameters.patch_size,
             "truncate_documents": self._truncate_documents,
             "image_break_token": self._parameters.image_break_token,
+            "image_end_token": self._parameters.image_end_token,
             "config": self._config.to_dict(),
         }
         if self._truncate_documents:
@@ -424,18 +426,23 @@ class GPTSampledIndexedDataset(SampledDataset):
 
             text_size, image_lengths = self._indexed_dataset.get_document_size(document_index)
 
-            image_sizes = [
-                get_num_image_tokens(
-                    *get_resize_dims(
-                        *image_length,
-                        self._parameters.image_size,
-                        self._parameters.image_size,
-                        self._parameters.patch_size,
-                    ),
+            resized_image_lengths = [
+                get_resize_dims(
+                    *image_length,
+                    self._parameters.image_size,
+                    self._parameters.image_size,
                     self._parameters.patch_size,
-                    image_break=self._parameters.image_break_token is not None,
                 )
                 for image_length in image_lengths
+            ]
+            image_sizes = [
+                get_num_image_tokens(
+                    *image_length,
+                    self._parameters.patch_size,
+                    image_break=self._parameters.image_break_token is not None,
+                    image_end=self._parameters.image_end_token is not None,
+                )
+                for image_length in resized_image_lengths
             ]
             image_tokens = sum(image_sizes)
             document_size = text_size + image_tokens
@@ -468,6 +475,8 @@ class GPTSampledIndexedDataset(SampledDataset):
                     offset=token_start_index_in_document,
                     length=token_end_index_in_document - token_start_index_in_document,
                     use_loss_masking_spans=self._parameters.use_loss_masking_spans,
+                    # image_break=self._parameters.image_break_token is not None,
+                    # image_end=self._parameters.image_end_token is not None,
                 )
                 start_pos = 0
                 if sample.image_positions:
@@ -477,41 +486,30 @@ class GPTSampledIndexedDataset(SampledDataset):
                         token_ids.append(sample.token_ids[start_pos:im_position])
                         text_tokens_added += len(token_ids[-1])
                         image_positions.append(text_tokens_added + image_tokens_added)
-                        # token_ids.append(np.full((image_sizes[idx],), -100, dtype=np.int64))
                         if self._parameters.image_break_token is not None:
-                            # Calculate patch dimensions for the image
-                            height, width = get_resize_dims(
-                                image_lengths[idx][0],
-                                image_lengths[idx][1],
-                                self._parameters.image_size,
-                                self._parameters.image_size,
-                                self._parameters.patch_size,
-                            )
-                            num_patches_h = math.ceil(height / self._parameters.patch_size)
-                            num_patches_w = math.ceil(width / self._parameters.patch_size)
-
-                            # Calculate the token count considering break tokens
-                            tokens_per_row = num_patches_w
-                            resized_image_tokens = num_patches_h * tokens_per_row + (
-                                num_patches_h - 1
-                            )  # Add break tokens after each row except last
+                            height, width = resized_image_lengths[idx]
+                            num_patches_h = div(height, self._parameters.patch_size)
+                            num_patches_w = div(width, self._parameters.patch_size)
 
                             # Create image token placeholder array
-                            image_token_array = np.full((resized_image_tokens,), -100, dtype=np.int64)
+                            image_token_array = np.full((image_sizes[idx],), -100, dtype=np.int64)
 
                             # Add break tokens after each row except the last row
                             for row in range(num_patches_h - 1):
-                                position = (row + 1) * tokens_per_row + row
+                                position = (row + 1) * num_patches_w + row
                                 image_token_array[position] = self._parameters.image_break_token
-
-                            token_ids.append(image_token_array)
-
-                            # Update image_tokens_added to reflect actual number of tokens added
-                            image_tokens_added += resized_image_tokens
+                            # add end token if specified, else break token
+                            last_row_position = num_patches_h * num_patches_w + num_patches_h - 1
+                            if self._parameters.image_end_token is not None:
+                                image_token_array[last_row_position] = self._parameters.image_end_token
+                            else:
+                                image_token_array[last_row_position] = self._parameters.image_break_token
                         else:
-                            # Just add placeholders for all image tokens without break tokens
-                            token_ids.append(np.full((image_sizes[idx],), -100, dtype=np.int64))
-                            image_tokens_added += image_sizes[idx]
+                            image_token_array = np.full((image_sizes[idx],), -100, dtype=np.int64)
+                            if self._parameters.image_end_token is not None:
+                                image_token_array[-1] = self._parameters.image_end_token
+                        token_ids.append(image_token_array)
+                        image_tokens_added += image_sizes[idx]
                         start_pos = im_position
                 token_ids.append(sample.token_ids[start_pos:])
                 text_tokens_added += len(token_ids[-1])

@@ -132,7 +132,12 @@ class VisionEncoderConfig(BaseModelConfig):
     )
     image_break_token: int | None = Field(
         default=None,
-        desc="Token id to separate image rows. If None, no token id is applied is applied.",
+        desc="Token id to separate image rows. If None, no token id is applied.",
+        hint=FieldHint.optional,
+    )
+    image_end_token: int | None = Field(
+        default=None,
+        desc="Token id to indicate the end of an image. If None, no token id is applied.",
         hint=FieldHint.optional,
     )
     adapter_lr_scale: float | None = Field(
