@@ -72,6 +72,12 @@ class WhisperGPTHuggingfaceCheckpointFormat(GPTHuggingfaceCheckpointFormat):
     name: typing.ClassVar[str] = "whisper"
 
 
+class AyraAudioModelGPTHuggingfaceCheckpointFormat(GPTHuggingfaceCheckpointFormat):
+    name: typing.ClassVar[str] = "ayra_audio"
+    audio_name: typing.ClassVar[str] = "whisper"
+    text_name: typing.ClassVar[str] = "llama"
+
+
 @config_class()
 class GPTBatchConfig(BatchConfig):
     sequence_length: int = Field(
@@ -156,6 +162,7 @@ class GPTModelConfig(FastLLMModelConfig):
         LlavaGPTHuggingfaceCheckpointFormat,
         WhisperGPTHuggingfaceCheckpointFormat,
         PixtralGPTHuggingfaceCheckpointFormat,
+        AyraAudioModelGPTHuggingfaceCheckpointFormat,
     )
 
     @classmethod

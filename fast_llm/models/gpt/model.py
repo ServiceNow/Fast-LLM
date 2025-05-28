@@ -21,6 +21,8 @@ from fast_llm.layers.language_model.preprocessing import PositionEmbeddingPrepro
 from fast_llm.layers.multi_modal.embedding import MultiModalEmbedding
 from fast_llm.layers.transformer.audio_transformer import AudioTransformerLayer
 from fast_llm.layers.transformer.config import (
+    AudioTransformerDimNames,
+    AudioTransformerKwargs,
     RoutingType,
     TransformerDimNames,
     TransformerKwargs,
@@ -217,6 +219,18 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
         else:
             vision_kwargs = {}
 
+        if self._config.audio_encoder.enabled:
+            audio_kwargs = {
+                AudioEncoderKwargs.kv_channels: self._tensor_space.get_tensor_dim(
+                    AudioTransformerDimNames.kv_channels
+                ).size,
+                AudioEncoderKwargs.out_channels: self._tensor_space.get_tensor_dim(
+                    AudioEncoderKwargs.out_channels
+                ).size,
+            }
+        else:
+            audio_kwargs = {}
+
         batch_data = self._tensor_space.distributed_config.get_distributed_dim(DistributedDimNames.batch_data)
         batch_dim = TensorDim(TransformerDimNames.batch, micro_batch_size * batch_data.size, batch_data)
 
@@ -272,6 +286,22 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                 }
             )
 
+        if self._config.audio_encoder.enabled:
+            audio_hidden_dim = self._tensor_space.get_tensor_dim(AudioTransformerDimNames.hidden)
+            audio_hidden_dims = (
+                (hidden_sequence_q_dim, batch_dim, audio_hidden_dim)
+                if sequence_first
+                else (batch_dim, hidden_sequence_q_dim, audio_hidden_dim)
+            )
+            audio_kwargs.update(
+                {
+                    AudioTransformerKwargs.hidden_dims: audio_hidden_dims,
+                    AudioTransformerKwargs.sequence_length: 1500,  # TODO: Toby Parameterize
+                    AudioTransformerKwargs.sequence_k_dim: 1500,
+                    AudioTransformerKwargs.sequence_q_dim: 1500,
+                }
+            )
+
         common_kwargs = {
             LanguageModelKwargs.phase: phase,
             TransformerKwargs.sequence_first: sequence_first,
@@ -281,6 +311,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             TransformerKwargs.micro_batch_size: micro_batch_size,
         }
         common_kwargs.update(vision_kwargs)
+        common_kwargs.update(audio_kwargs)
 
         sequence_k_pasts = range(
             sequence_q_dim.size * self._tensor_space.distributed_config.sequence_data_rank,
@@ -482,6 +513,8 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
     def embedding_layer_index(self) -> int:
         if self._config.vision_encoder.enabled:
             return self._config.vision_encoder.transformer.num_layers + 2
+        elif self._config.audio_encoder.enabled:
+            return self._config.audio_encoder.transformer.num_layers + 2
         else:
             return 0
 

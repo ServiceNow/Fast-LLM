@@ -32,6 +32,7 @@ from fast_llm.layers.common.config import NormalizationType
 from fast_llm.layers.transformer.config import RotaryEmbeddingType, RoutingType, TransformerConfig
 from fast_llm.layers.vision_encoder.config import VisionEncoderType
 from fast_llm.models.gpt.config import (
+    AyraAudioModelGPTHuggingfaceCheckpointFormat,
     GPTBaseModelConfig,
     GPTModelConfig,
     LlamaGPTHuggingfaceCheckpointFormat,
@@ -566,240 +567,212 @@ class MistralHuggingfaceCheckpointHandler(CommonLlamaHuggingfaceCheckpointHandle
         ]
 
 
-class WhisperHuggingfaceCheckpointHandler(MistralHuggingfaceCheckpointHandler):
+class WhisperHuggingfaceCheckpointHandler(WeightAndBiasConverterMixin, HuggingfaceStateDictCheckpointHandler):
     format: typing.ClassVar[type[CheckpointFormat]] = WhisperGPTHuggingfaceCheckpointFormat
+    _model_class: typing.ClassVar[FastLLMModelConfig] = GPTModelConfig
 
     @classmethod
     def _create_config_converters(cls) -> list[ParamConverter]:
-        # lm_converters = super()._create_config_converters()
-        lm_converters = super()._create_config_converters()
-        for idx, converter in enumerate(lm_converters):
-            if converter.export_names == (("model_type",),):
-                continue
-            elif converter.export_names == (("architectures",),):
-                ignore_index = idx
-            if converter.export_names:
-                converter.export_names = (("text_config", *converter.export_names[0]), *converter.export_names[1:])
+        return super()._create_config_converters() + [
+            # set default layernorm
+            ConstantImportParamConverter(
+                fast_llm_names=(("transformer", "normalization", "type"),), fast_llm_value=NormalizationType.layer_norm
+            ),
+            ConstantExportParamConverter(
+                export_names=(("architectures",),), export_value=["WhisperForConditionalGeneration"]
+            ),
+            ConstantImportParamConverter(fast_llm_names=(("type",),), fast_llm_value=AudioEncoderType.whisper),
+            # make transformer noncasual
+            ConstantImportParamConverter(fast_llm_names=(("transformer", "causal"),), fast_llm_value=False),
+            RenameParamConverter(
+                fast_llm_names=(
+                    (
+                        "transformer",
+                        "num_layers",
+                    ),
+                ),
+                export_names=(("num_hidden_layers",),),
+            ),
+            RenameParamConverter(
+                fast_llm_names=(
+                    (
+                        "transformer",
+                        "hidden_size",
+                    ),
+                ),
+                export_names=(("d_model",),),
+            ),
+            RenameParamConverter(
+                fast_llm_names=(
+                    (
+                        "transformer",
+                        "num_attention_heads",
+                    ),
+                ),
+                export_names=(("encoder_attention_heads",),),
+            ),
+            RenameParamConverter(
+                fast_llm_names=(
+                    (
+                        "transformer",
+                        "head_groups",
+                    ),
+                ),
+                export_names=(("encoder_attention_heads",),),
+            ),
+            RenameParamConverter(
+                fast_llm_names=(
+                    (
+                        "transformer",
+                        "ffn_hidden_size",
+                    ),
+                ),
+                export_names=(("encoder_ffn_dim",),),
+            ),
+            MappedConfigParamConverter(
+                fast_llm_names=(("transformer", "activation_type"),),
+                export_names=(("activation_function",),),
+                fast_llm_value=ActivationType.from_hf_name,
+                export_value=lambda activation_type: activation_type.hf_name,
+            ),
+            ConstantImportParamConverter(
+                fast_llm_names=(("transformer", "rotary", "type"),), fast_llm_value=RotaryEmbeddingType.none
+            ),
+            ConstantImportParamConverter(fast_llm_names=(("transformer", "gated"),), fast_llm_value=False),
+            ConstantImportParamConverter(fast_llm_names=(("transformer", "add_linear_biases"),), fast_llm_value=True),
+            RenameParamConverter(
+                fast_llm_names=(("num_mel_bins",),),
+                export_names=(("num_mel_bins",),),
+            ),
+            RenameParamConverter(
+                fast_llm_names=(("aud_downsampling_k",),),
+                export_names=(("encoder_projector_ds_rate",),),
+            ),
+        ]
 
-        return (
-            lm_converters[:ignore_index]
-            + lm_converters[ignore_index + 1 :]
-            + [
-                ConstantImportParamConverter(
-                    fast_llm_names=(("audio_encoder", "type"),), fast_llm_value=AudioEncoderType.whisper
-                ),
-                ConstantExportParamConverter(
-                    export_names=(("architectures",),), export_value=["WhisperForConditionalGeneration"]
-                ),
-                # Audio Adapter
-                # RenameParamConverter(
-                #     fast_llm_names=(("vision_encoder", "adapter_size"),),
-                #     export_names=(("text_config", "hidden_size"),),
-                # ),
-                # ConstantImportParamConverter(
-                #     fast_llm_names=(("vision_encoder", "patch_norm", "type"),),
-                #     fast_llm_value=NormalizationType.rms_norm,
-                # ),
-                # ConstantImportParamConverter(
-                #     fast_llm_names=(("vision_encoder", "transformer", "normalization", "type"),),
-                #     fast_llm_value=NormalizationType.rms_norm,
-                # ),
-                # Audio Transformer
-                RenameParamConverter(
-                    fast_llm_names=(("audio_encoder", "transformer", "num_layers"),),
-                    export_names=(("encoder_layers",),),
-                ),
-                RenameParamConverter(
-                    fast_llm_names=(("audio_encoder", "transformer", "hidden_size"),),
-                    export_names=(("d_model",),),
-                ),
-                RenameParamConverter(
-                    fast_llm_names=(("audio_encoder", "transformer", "num_attention_heads"),),
-                    export_names=(("encoder_attention_heads",),),
-                ),
-                # RenameParamConverter(
-                #     fast_llm_names=(("audio_encoder", "transformer", "head_groups"),),
-                #     export_names=(
-                #         (
-                #             "encoder_attention_heads",
-                #         ),
-                #     ),
-                # ),
-                RenameParamConverter(
-                    fast_llm_names=(("audio_encoder", "transformer", "ffn_hidden_size"),),
-                    export_names=(("encoder_ffn_dim",),),
-                ),
-                MappedConfigParamConverter(
-                    fast_llm_names=(("audio_encoder", "transformer", "activation_type"),),
-                    export_names=(("activation_function",),),
-                    fast_llm_value=ActivationType.from_hf_name,
-                    export_value=lambda activation_type: activation_type.hf_name,
-                ),
-                # ConstantImportParamConverter(
-                #     fast_llm_names=(("vision_encoder", "transformer", "gated"),), fast_llm_value=True
-                # ),
-                # MappedConfigParamConverter(
-                #     fast_llm_names=(("vision_encoder", "adapter_activation_type"),),
-                #     export_names=(("projector_hidden_act",),),
-                #     fast_llm_value=ActivationType.from_hf_name,
-                #     export_value=lambda activation_type: activation_type.hf_name,
-                # ),
-                # ConstantImportParamConverter(
-                #     fast_llm_names=(("vision_encoder", "transformer", "add_linear_biases"),), fast_llm_value=False
-                # ),
-                # RenameParamConverter(
-                #     fast_llm_names=(("vision_encoder", "transformer", "rotary", "theta"),),
-                #     export_names=(("vision_config", "rope_theta"),),
-                # ),
-            ]
-        )
+    def _get_transformer_mlp_converters(self, fast_llm_prefix: str, hf_prefix: str) -> list[WeightConverter]:
+        return [
+            WeightConverter(f"{fast_llm_prefix}.mlp.layer_1.weight", f"{hf_prefix}fc1.weight"),
+            WeightConverter(f"{fast_llm_prefix}.mlp.layer_1.bias", f"{hf_prefix}fc1.bias"),
+            WeightConverter(f"{fast_llm_prefix}.mlp.layer_2.weight", f"{hf_prefix}fc2.weight"),
+            WeightConverter(f"{fast_llm_prefix}.mlp.layer_2.bias", f"{hf_prefix}fc2.bias"),
+        ]
 
-    def _create_vision_transformer_layer_converters(
-        self,
-        i: int,
-        ignore_export: bool = False,
-        hf_base_prefix: str = "",
-        fast_llm_offset: int = 1,
-        type: str | None = None,
+    def _create_audio_transformer_layer_converters(
+        self, transformer_layer_index: int, fast_llm_offset: int = 1, hf_base_prefix: str = ""
     ) -> list[WeightConverter]:
-        if type is not None:
-            if type == "vision":
-                transformer_config: TransformerConfig = self._model.config.base_model.vision_encoder.transformer
-        else:
-            transformer_config: TransformerConfig = self._model.config.base_model.transformer
-        norm_bias: bool = self._model.config.base_model.transformer.normalization.type == NormalizationType.layer_norm
-        converters = []
-        names_bias_cls = [
+        # Vision transformer layer
+        transformer_config = self._model.config.base_model.audio_encoder.transformer
+        norm_bias: bool = transformer_config.normalization.type == NormalizationType.layer_norm
+        name_bias_cls = [
             # Self-attn
             (
-                f"layers.{i+fast_llm_offset}.self_attn.query",
-                f"vision_tower.transformer.layers.{i}.attention.q_proj",
+                f"layers.{fast_llm_offset + transformer_layer_index}.self_attn.query",
+                f"{hf_base_prefix}layers.{transformer_layer_index}.self_attn.q_proj",
                 transformer_config.add_attn_qkv_bias,
                 QueryWeightConverter,
             ),
             (
-                f"layers.{i+fast_llm_offset}.self_attn.key_value",
+                f"layers.{fast_llm_offset + transformer_layer_index}.self_attn.key_value",
                 (
-                    f"vision_tower.transformer.layers.{i}.attention.k_proj",
-                    f"vision_tower.transformer.layers.{i}.attention.v_proj",
+                    f"{hf_base_prefix}layers.{transformer_layer_index}.self_attn.k_proj",
+                    f"{hf_base_prefix}layers.{transformer_layer_index}.self_attn.v_proj",
                 ),
-                transformer_config.add_attn_qkv_bias,
+                transformer_config.add_attn_qkv_bias,  # TODO Toby: add permanent fix for key bias
                 KeyValueWeightConverter,
             ),
             (
-                f"layers.{i+fast_llm_offset}.self_attn.dense",
-                f"vision_tower.transformer.layers.{i}.attention.o_proj",
+                f"layers.{fast_llm_offset + transformer_layer_index}.self_attn.dense",
+                f"{hf_base_prefix}layers.{transformer_layer_index}.self_attn.out_proj",
                 transformer_config.add_attn_dense_bias,
                 WeightConverter,
             ),
             # Norm
             (
-                f"layers.{i+fast_llm_offset}.norm_1",
-                f"vision_tower.transformer.layers.{i}.attention_norm",
+                f"layers.{fast_llm_offset + transformer_layer_index}.norm_1",
+                f"{hf_base_prefix}layers.{transformer_layer_index}.self_attn_layer_norm",
                 norm_bias,
                 WeightConverter,
             ),
             (
-                f"layers.{i+fast_llm_offset}.norm_2",
-                f"vision_tower.transformer.layers.{i}.ffn_norm",
+                f"layers.{fast_llm_offset + transformer_layer_index}.norm_2",
+                f"{hf_base_prefix}layers.{transformer_layer_index}.final_layer_norm",
                 norm_bias,
                 WeightConverter,
             ),
         ]
-        for fast_llm_prefix, hf_prefix, use_bias, cls in names_bias_cls:
+        converters = []
+        for fast_llm_prefix, hf_prefix, use_bias, cls in name_bias_cls:
             converters += self._get_weight_and_bias_converters(
                 fast_llm_prefix,
-                () if ignore_export else hf_prefix,
+                hf_prefix,
                 use_bias,
-                cls=IgnoreExportWeightConverter if ignore_export else cls,
+                cls,
             )
-
         # MLP
-        if ignore_export:
-            converters += self._get_weight_and_bias_converters(
-                f"layers.{i+fast_llm_offset}.mlp.layer_1",
-                (),
-                transformer_config.add_mlp_bias,
-                cls=IgnoreExportWeightConverter,
-            )
-            converters += self._get_weight_and_bias_converters(
-                f"layers.{i+fast_llm_offset}.mlp.layer_2",
-                (),
-                transformer_config.add_mlp_bias,
-                cls=IgnoreExportWeightConverter,
-            )
-            converters += [IgnoreExportWeightConverter(f"layers.{i+fast_llm_offset}.mlp.router.weight", ())]
-        else:
-            converters += self._get_vision_transformer_mlp_converters(
-                f"layers.{i+fast_llm_offset}", f"vision_tower.transformer.layers.{i}"
-            )
+        converters += self._get_transformer_mlp_converters(
+            f"layers.{fast_llm_offset + transformer_layer_index}",
+            f"{hf_base_prefix}layers.{transformer_layer_index}.",
+        )
         return converters
 
-    def _get_vision_transformer_mlp_converters(self, fast_llm_prefix: str, hf_prefix: str) -> list[WeightConverter]:
-        return [
-            SplitWeightConverter(
-                f"{fast_llm_prefix}.mlp.layer_1.weight",
-                (f"{hf_prefix}.feed_forward.gate_proj.weight", f"{hf_prefix}.feed_forward.up_proj.weight"),
-            ),
-            MLPLayer2Converter(
-                f"{fast_llm_prefix}.mlp.layer_2.weight",
-                f"{hf_prefix}.feed_forward.down_proj.weight",
-                self._model.config.base_model,
-            ),
+    def _create_weight_converters(self, offset: int = 0, hf_base_prefix: str = "") -> list[WeightConverter]:
+        converters = []
+
+        # audio encoder conv
+        converters += [
+            WeightConverter(f"layers.{offset}.conv1_weight", f"{hf_base_prefix}conv1.weight"),
+            WeightConverter(f"layers.{offset}.conv2_weight", f"{hf_base_prefix}conv2.weight"),
         ]
 
-    def _create_vision_transformer_converters(self) -> list[WeightConverter]:
-        num_layers = self._model.config.base_model.vision_encoder.transformer.num_layers
-        vision_transformer_converters = []
-        for layer in range(num_layers):
-            # TODO Soham: check if args are correct
-            vision_transformer_converters.extend(
-                self._create_vision_transformer_layer_converters(
-                    layer,
-                    ignore_export=False,
-                    hf_base_prefix="vision_tower.transformer.layers.",
-                    fast_llm_offset=1,
-                    type="vision",
-                )
+        if self._model.config.base_model.audio_encoder.conv_bias:
+            converters += [
+                WeightConverter(f"layers.{offset}.conv1_bias", f"{hf_base_prefix}conv1.bias"),
+                WeightConverter(f"layers.{offset}.conv2_bias", f"{hf_base_prefix}conv2.bias"),
+            ]
+
+        # position embedding
+        converters.append(
+            WeightConverter(f"layers.{offset}.positional_embeddings", f"{hf_base_prefix}embed_positions.weight")
+        )
+
+        # transformer encoder layers
+        num_layers = self._model.config.base_model.audio_encoder.transformer.num_layers
+        for i in range(num_layers):
+            converters += self._create_audio_transformer_layer_converters(i, offset + 1, hf_base_prefix)
+
+        offset = offset + num_layers + 1
+
+        # add final layernorm
+        if self._model.config.base_model.audio_encoder.transformer.normalization.type == NormalizationType.layer_norm:
+            converters += [
+                WeightConverter(f"layers.{offset}.norm_1.weight", f"{hf_base_prefix}layer_norm.weight"),
+                WeightConverter(f"layers.{offset}.norm_2.weight", "encoder_projector.layer_norm.weight"),
+                WeightConverter(f"layers.{offset}.norm_1.bias", f"{hf_base_prefix}layer_norm.bias"),
+                WeightConverter(f"layers.{offset}.norm_2.bias", "encoder_projector.layer_norm.bias"),
+            ]
+
+        # multimodal projector
+        converters.extend(
+            [
+                WeightConverter(f"layers.{offset}.layer_1.weight", "encoder_projector.linear1.weight"),
+                WeightConverter(f"layers.{offset}.layer_2.weight", "encoder_projector.linear2.weight"),
+            ]
+        )
+        if self._model.config.base_model.audio_encoder.adapter_bias:
+            converters.extend(
+                [
+                    WeightConverter(f"layers.{offset}.layer_1.bias", "encoder_projector.linear1.bias"),
+                    WeightConverter(f"layers.{offset}.layer_2.bias", "encoder_projector.linear2.bias"),
+                ]
             )
 
-        return vision_transformer_converters
+        return converters
 
-    def _create_vision_encoder_weight_converters(self) -> list[WeightConverter]:
-        patch_conv_converters = [WeightConverter("layers.0.weight", "vision_tower.patch_conv.weight")]
-        if self._model.config.base_model.vision_encoder.conv_bias:
-            patch_conv_converters.append(WeightConverter("layers.0.bias", "vision_tower.patch_conv.bias"))
-        layernorm_converters = [
-            WeightConverter("layers.0.norm.weight", "vision_tower.ln_pre.weight"),
-        ]
-        if self._model.config.base_model.vision_encoder.patch_norm.type == NormalizationType.layer_norm:
-            layernorm_converters.append(WeightConverter("layers.0.norm.bias", "vision_tower.ln_pre.bias"))
-
-        vision_transformer_converters = self._create_vision_transformer_converters()
-        offset = self._model.config.base_model.vision_encoder.transformer.num_layers + 1
-        adapter_converters = [
-            WeightConverter(f"layers.{offset}.layer_1.weight", "multi_modal_projector.linear_1.weight"),
-            WeightConverter(f"layers.{offset}.layer_1.bias", "multi_modal_projector.linear_1.bias"),
-            # TODO Soham: add bias based on config
-            WeightConverter(f"layers.{offset}.layer_2.weight", "multi_modal_projector.linear_2.weight"),
-            WeightConverter(f"layers.{offset}.layer_2.bias", "multi_modal_projector.linear_2.bias"),
-        ]
-
-        return patch_conv_converters + layernorm_converters + vision_transformer_converters + adapter_converters
-
-    def _create_weight_converters(self) -> list[WeightConverter]:
-        vision_encoder_converter = self._create_vision_encoder_weight_converters()
-        offset = self._model.config.base_model.vision_encoder.transformer.num_layers + 3
-        # Embeddings
-        lm_converters = [
-            WeightConverter(f"layers.{offset - 1}.word_embeddings_weight", f"language_model.model.embed_tokens.weight")
-        ]
-        for i in range(self._model.config.base_model.transformer.num_layers):
-            lm_converters += self._create_transformer_layer_converters(
-                fast_llm_layer_name=f"layers.{i + offset}", hf_layer_name=f"language_model.model.layers.{i}"
-            )
-        lm_converters += self._create_lm_head_converters(hf_base_prefix="language_model.", fast_llm_offset=offset)
-        return vision_encoder_converter + lm_converters
+    @property
+    def num_layers(self) -> int:
+        # +2 for projector and conv layers
+        return self._model.config.base_model.audio_encoder.transformer.num_layers + 2
 
 
 class PixtralHuggingfaceCheckpointHandler(WeightAndBiasConverterMixin, HuggingfaceStateDictCheckpointHandler):
@@ -1005,6 +978,139 @@ class PixtralHuggingfaceCheckpointHandler(WeightAndBiasConverterMixin, Huggingfa
     def num_layers(self) -> int:
         # +2 for projector and conv layers
         return self._model.config.base_model.vision_encoder.transformer.num_layers + 2
+
+
+class AyraAudioModelHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
+    format: typing.ClassVar[type[CheckpointFormat]] = AyraAudioModelGPTHuggingfaceCheckpointFormat
+    _model_class: typing.ClassVar[FastLLMModelConfig] = GPTModelConfig
+
+    @classmethod
+    def _load_metadata(cls, config: CheckpointLoadMetadataConfig) -> CheckpointMetadata:
+        cfg_dict = cls._load_config(config.path)
+        kwargs = {}
+        if "text_config" in cfg_dict:
+            text_kwargs = cls._import_config(cfg_dict["text_config"])
+            kwargs.update(text_kwargs)
+        if "audio_config" in cfg_dict:
+            audio_kwargs = cls._import_config(cfg_dict["audio_config"])
+            audio_kwargs = {tuple(["audio_encoder"] + list(key)): value for key, value in audio_kwargs.items()}
+            kwargs.update(audio_kwargs)
+        kwargs.update(
+            cls._import_config(
+                {key: value for key, value in cfg_dict.items() if key not in ("text_config", "audio_config")}
+            )
+        )
+        imported_model_config = cls._model_class.get_base_model_config_class().from_dict({}, kwargs)
+        return CheckpointMetadata(
+            fast_llm_version=__version__,
+            model=cls._model_class,
+            format=config.format,
+            config=cls._model_class.from_dict({"base_model": imported_model_config.to_dict()}),
+            shards=["weights"],
+        )
+
+    @classmethod
+    def _create_config_converters(cls) -> list[ParamConverter]:
+        return super()._create_config_converters() + [
+            ConstantExportParamConverter(export_names=(("architectures",),), export_value=["AyraAudioModel"]),
+            # projector
+            MappedConfigParamConverter(
+                fast_llm_names=(("audio_encoder", "adapter_activation_type"),),
+                export_names=(("activation_function",),),
+                fast_llm_value=ActivationType.from_hf_name,
+                export_value=lambda activation_type: activation_type.hf_name,
+            ),
+            RenameParamConverter(
+                fast_llm_names=(("audio_encoder", "adapter_size"),),
+                export_names=(("adapter_size",),),
+            ),
+        ]
+
+    @classmethod
+    def _import_config(cls, config: dict[str, typing.Any]) -> GPTBaseModelConfig:
+        handler_cls = AutoGPTHuggingfaceCheckpointHandler.get_handler_class(config["model_type"])
+        kwargs = {}
+        for converter in handler_cls._create_config_converters():
+            try:
+                values = ()
+                for export_name in converter.export_names:
+                    try:
+                        value = get_nested_dict_value(config, export_name)
+                    except KeyError:
+                        value = MISSING
+                    values = values + (value,)
+                values = converter.import_params(values)
+                for fast_llm_name, value in zip(converter.fast_llm_names, values, strict=True):
+                    if value is MISSING:
+                        raise ValueError(f"Missing converted value for fast-llm parameter {fast_llm_name}")
+                    if fast_llm_name in kwargs:
+                        raise ValueError(f"Duplicate converted value for fast-llm parameter {fast_llm_name}")
+                    kwargs[fast_llm_name] = value
+            except Exception as e:
+                raise RuntimeError(f"Config conversion failed for converter {converter}", *e.args)
+
+        return kwargs
+
+    @classmethod
+    def _export_config(cls, config: BaseModelConfig) -> dict[str, typing.Any]:
+        # TODO Toby: implement for audio
+        exported_config = {}
+        vision_handler_cls = AutoGPTHuggingfaceCheckpointHandler.get_handler_class(cls.format.vision_name)
+        text_handler_cls = AutoGPTHuggingfaceCheckpointHandler.get_handler_class(cls.format.text_name)
+        for converter in vision_handler_cls._create_config_converters():
+            try:
+                values = converter.export_params(
+                    tuple(
+                        cls._get_fast_llm_attribute(config, ("vision_encoder",) + fast_llm_name)
+                        for fast_llm_name in converter.fast_llm_names
+                    )
+                )
+                for export_name, value in zip(converter.export_names, values, strict=True):
+                    if value is not MISSING:
+                        set_nested_dict_value(exported_config, ("vision_config",) + export_name, value)
+            except Exception as e:
+                raise RuntimeError(f"Config conversion failed for converter {converter}", *e.args)
+
+        for converter in text_handler_cls._create_config_converters():
+            try:
+                values = converter.export_params(
+                    tuple(
+                        cls._get_fast_llm_attribute(config, fast_llm_name)
+                        for fast_llm_name in converter.fast_llm_names
+                    )
+                )
+                for export_name, value in zip(converter.export_names, values, strict=True):
+                    if value is not MISSING:
+                        set_nested_dict_value(exported_config, ("text_config",) + export_name, value)
+            except Exception as e:
+                raise RuntimeError(f"Config conversion failed for converter {converter}", *e.args)
+
+        for converter in cls._create_config_converters():
+            try:
+                values = converter.export_params(
+                    tuple(
+                        cls._get_fast_llm_attribute(config, fast_llm_name)
+                        for fast_llm_name in converter.fast_llm_names
+                    )
+                )
+                for export_name, value in zip(converter.export_names, values, strict=True):
+                    if value is not MISSING:
+                        set_nested_dict_value(exported_config, export_name, value)
+            except Exception as e:
+                raise RuntimeError(f"Config conversion failed for converter {converter}", *e.args)
+
+        return exported_config
+
+    def _create_weight_converters(self):
+        audio_handler_cls = AutoGPTHuggingfaceCheckpointHandler.get_handler_class(self.format.audio_name)
+        audio_handler = audio_handler_cls(self._model)  # TODO Toby: are we calling this twice?
+        converters = audio_handler._create_weight_converters(hf_base_prefix="encoder.", offset=0)
+        text_handler_cls = AutoGPTHuggingfaceCheckpointHandler.get_handler_class(self.format.text_name)
+        text_handler = text_handler_cls(self._model)
+        converters.extend(
+            text_handler._create_weight_converters(hf_base_prefix="llm.", offset=audio_handler.num_layers)
+        )
+        return converters
 
 
 class LlavaHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
@@ -1275,5 +1381,5 @@ class AutoGPTHuggingfaceCheckpointHandler(
         LlavaGPTHuggingfaceCheckpointFormat.name: LlavaHuggingfaceCheckpointHandler,
         WhisperGPTHuggingfaceCheckpointFormat.name: WhisperHuggingfaceCheckpointHandler,
         PixtralGPTHuggingfaceCheckpointFormat.name: PixtralHuggingfaceCheckpointHandler,
-        # MultiModalGPTHuggingfaceCheckpointFormat.name: MultiModalHuggingfaceCheckpointHandler
+        AyraAudioModelGPTHuggingfaceCheckpointFormat.name: AyraAudioModelHuggingfaceCheckpointHandler,
     }
