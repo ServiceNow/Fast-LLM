@@ -14,7 +14,7 @@ from fast_llm.data.dataset.gpt.config import GPTSamplingData, ShufflingType
 from fast_llm.data.dataset.gpt.indexed import GPTIndexedDataset
 from fast_llm.engine.config_utils.data_type import DataType, get_unsigned_integer_type
 from fast_llm.engine.config_utils.run import log_main_rank
-from fast_llm.layers.vision_encoder.preprocessing import get_num_patches, get_resize_dims
+from fast_llm.layers.vision_encoder.preprocessing import get_num_image_tokens, get_resize_dims
 from fast_llm.utils import Assert
 
 try:
@@ -177,7 +177,7 @@ class GPTSampledIndexedDataset(SampledDataset):
             for i, sizes in enumerate(image_sizes):
                 image_token_sizes.append(
                     sum(
-                        get_num_patches(
+                        get_num_image_tokens(
                             *get_resize_dims(
                                 *size,
                                 self._parameters.image_size,
@@ -185,6 +185,7 @@ class GPTSampledIndexedDataset(SampledDataset):
                                 self._parameters.patch_size,
                             ),
                             self._parameters.patch_size,
+                            image_break=self._parameters.image_break_token is not None,
                         )
                         for size in sizes
                     )
@@ -276,6 +277,7 @@ class GPTSampledIndexedDataset(SampledDataset):
             "sequence_length": self._parameters.sequence_length,
             "patch_size": self._parameters.patch_size,
             "truncate_documents": self._truncate_documents,
+            "image_break_token": self._parameters.image_break_token,
             "config": self._config.to_dict(),
         }
         if self._truncate_documents:
@@ -497,7 +499,7 @@ class GPTSampledIndexedDataset(SampledDataset):
             text_size, image_lengths, audio_lengths = self._indexed_dataset.get_document_size(document_index)
 
             image_sizes = [
-                get_num_patches(
+                get_num_image_tokens(
                     *get_resize_dims(
                         *image_length,
                         self._parameters.image_size,
@@ -505,6 +507,7 @@ class GPTSampledIndexedDataset(SampledDataset):
                         self._parameters.patch_size,
                     ),
                     self._parameters.patch_size,
+                    image_break=self._parameters.image_break_token is not None,
                 )
                 for image_length in image_lengths
             ]
@@ -576,9 +579,42 @@ class GPTSampledIndexedDataset(SampledDataset):
                     token_ids.append(sample.token_ids[start_pos:mm_position])
                     if mm_type == "image":
                         text_tokens_added += len(token_ids[-1])
-                        token_ids.append(np.full((image_sizes[idx],), -100, dtype=np.int64))
-                        image_positions.append(mm_position + len(token_ids) + mm_tokens_added)
-                        mm_tokens_added += image_tokens
+                        image_positions.append(text_tokens_added + mm_tokens_added)
+                        # token_ids.append(np.full((image_sizes[idx],), -100, dtype=np.int64))
+                        if self._parameters.image_break_token is not None:
+                            # Calculate patch dimensions for the image
+                            height, width = get_resize_dims(
+                                image_lengths[idx][0],
+                                image_lengths[idx][1],
+                                self._parameters.image_size,
+                                self._parameters.image_size,
+                                self._parameters.patch_size,
+                            )
+                            num_patches_h = math.ceil(height / self._parameters.patch_size)
+                            num_patches_w = math.ceil(width / self._parameters.patch_size)
+
+                            # Calculate the token count considering break tokens
+                            tokens_per_row = num_patches_w
+                            resized_image_tokens = num_patches_h * tokens_per_row + (
+                                num_patches_h - 1
+                            )  # Add break tokens after each row except last
+
+                            # Create image token placeholder array
+                            image_token_array = np.full((resized_image_tokens,), -100, dtype=np.int64)
+
+                            # Add break tokens after each row except the last row
+                            for row in range(num_patches_h - 1):
+                                position = (row + 1) * tokens_per_row + row
+                                image_token_array[position] = self._parameters.image_break_token
+
+                            token_ids.append(image_token_array)
+
+                            # Update mm_tokens_added to reflect actual number of tokens added
+                            mm_tokens_added += resized_image_tokens
+                        else:
+                            # Just add placeholders for all image tokens without break tokens
+                            token_ids.append(np.full((image_sizes[idx],), -100, dtype=np.int64))
+                            mm_tokens_added += image_sizes[idx]
                     elif mm_type == "audio":
                         audio_positions.append(sum(t.size for t in token_ids))
                         token_ids.append(np.full((audio_token_size_arr[idx],), -100, dtype=np.int64))

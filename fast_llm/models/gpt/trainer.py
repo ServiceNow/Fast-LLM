@@ -37,6 +37,7 @@ class GPTTrainer[ConfigType: GPTTrainerConfig](Trainer[ConfigType]):
                 {
                     "patch_size": self._config.model.base_model.vision_encoder.patch_size,
                     "image_size": self._config.batch.image_size,
+                    "image_break_token": self._config.model.base_model.vision_encoder.image_break_token,
                 }
             )
         if self._config.model.base_model.audio_encoder.enabled:

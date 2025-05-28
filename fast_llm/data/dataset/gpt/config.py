@@ -79,6 +79,7 @@ class GPTSamplingParameters(SamplingParameters):
     aud_downsampling_k: int | None = None
     aud_padding_duration: int | None = None
     aud_sampling_rate: int | None = None
+    image_break_token: int | None = None
     # How many extra tokens to add to the sequence length.
     # This is used to provide labels even for the last tokens in the sequence.
     extra_tokens: int = 1
