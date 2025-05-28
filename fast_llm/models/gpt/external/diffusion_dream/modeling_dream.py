@@ -25,13 +25,16 @@ import os
 import torch
 import torch.utils.checkpoint
 from torch import nn
+from dataclasses import dataclass
 
 from transformers.activations import ACT2FN
 from transformers.cache_utils import Cache, DynamicCache
 from transformers.modeling_outputs import (
     BaseModelOutput,
+    BaseModelOutputWithPast,
     MaskedLMOutput,
 )
+from transformers.utils import ModelOutput
 from transformers.modeling_rope_utils import ROPE_INIT_FUNCTIONS
 from transformers.modeling_utils import PreTrainedModel
 from transformers.utils import (
@@ -47,6 +50,7 @@ from .generation_utils import DreamGenerationMixin, DreamGenerationConfig
 
 if is_flash_attn_2_available():
     from transformers.modeling_flash_attention_utils import _flash_attention_forward
+    from flash_attn import flash_attn_with_kvcache, flash_attn_func
 
 
 logger = logging.get_logger(__name__)
@@ -287,6 +291,7 @@ class DreamAttention(nn.Module):
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
         bsz, q_len, _ = hidden_states.size()
 
+        # Luke: Computing K and Vs for all tokens upto now q_len w/o using cache ?
         query_states = self.q_proj(hidden_states)
         key_states = self.k_proj(hidden_states)
         value_states = self.v_proj(hidden_states)
@@ -360,6 +365,7 @@ class DreamSdpaAttention(DreamAttention):
         use_cache: bool = False,
         cache_position: Optional[torch.LongTensor] = None,
         position_embeddings: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,  # will become mandatory in v4.46
+        is_causal: Optional[bool] = False,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
         if output_attentions:
             # TODO: Improve this warning with e.g. `model.config.attn_implementation = "manual"` once this is implemented.
@@ -378,10 +384,12 @@ class DreamSdpaAttention(DreamAttention):
 
         bsz, q_len, _ = hidden_states.size()
 
+        
         query_states = self.q_proj(hidden_states)
         key_states = self.k_proj(hidden_states)
         value_states = self.v_proj(hidden_states)
 
+        
         query_states = query_states.view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
         key_states = key_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
         value_states = value_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
@@ -396,18 +404,17 @@ class DreamSdpaAttention(DreamAttention):
             cos, sin = self.rotary_emb(value_states, position_ids)
         else:
             cos, sin = position_embeddings
+        
         query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
 
         if past_key_value is not None:
             cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}  # Specific to RoPE models
             key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
 
+        
         key_states = repeat_kv(key_states, self.num_key_value_groups)
         value_states = repeat_kv(value_states, self.num_key_value_groups)
 
-        # causal_mask = attention_mask
-        # if attention_mask is not None:  # no matter the length, we just slice it
-        #     causal_mask = attention_mask[:, :, :, : key_states.shape[-2]]
 
         # SDPA with memory-efficient backend is currently (torch==2.1.2) bugged with non-contiguous inputs with custom attn_mask,
         # Reference: https://github.com/pytorch/pytorch/issues/112577.
@@ -427,9 +434,9 @@ class DreamSdpaAttention(DreamAttention):
             value_states,
             attn_mask=attention_mask if isinstance(attention_mask, torch.Tensor) else None,
             dropout_p=self.attention_dropout if self.training else 0.0,
-            is_causal=False, # hard coded
-        )
-
+            is_causal=is_causal, 
+        )        
+        
         attn_output = attn_output.transpose(1, 2).contiguous()
         attn_output = attn_output.view(bsz, q_len, self.hidden_size)
 
@@ -437,6 +444,107 @@ class DreamSdpaAttention(DreamAttention):
 
         return attn_output, None, past_key_value
 
+class DreamFlashAttention(DreamAttention):
+    """
+    Dream attention module using Flash attention 2.
+    """
+
+    # Adapted from DreamAttention.forward
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        position_ids: Optional[torch.LongTensor] = None,
+        past_key_value: Optional[Cache] = None,
+        output_attentions: bool = False,
+        use_cache: bool = False,
+        cache_position: Optional[torch.LongTensor] = None,
+        position_embeddings: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,  # will become mandatory in v4.46
+        is_causal: Optional[bool] = False,
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
+        if output_attentions:
+            # TODO: Improve this warning with e.g. `model.config.attn_implementation = "manual"` once this is implemented.
+            logger.warning_once(
+                "DreamModel is using DreamFlashAttention, it does not support `output_attentions=True`. Falling back to the manual attention implementation, "
+            )
+            return super().forward(
+                hidden_states=hidden_states,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                past_key_value=past_key_value,
+                output_attentions=output_attentions,
+                use_cache=use_cache,
+            )
+
+        bsz, q_len, _ = hidden_states.size()
+        
+        query_states = self.q_proj(hidden_states)
+        key_states = self.k_proj(hidden_states)
+        value_states = self.v_proj(hidden_states)
+
+        
+        query_states = query_states.view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
+        key_states = key_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
+        value_states = value_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
+
+        # print(f"query_states {query_states.shape} key_states {key_states.shape} value_states {value_states.shape}")
+        if position_embeddings is None:
+            logger.warning_once(
+                "The attention layers in this model are transitioning from computing the RoPE embeddings internally "
+                "through `position_ids` (2D tensor with the indexes of the tokens), to using externally computed "
+                "`position_embeddings` (Tuple of tensors, containing cos and sin). In v4.46 `position_ids` will be "
+                "removed and `position_embeddings` will be mandatory."
+            )
+            cos, sin = self.rotary_emb(value_states, position_ids)
+        else:
+            cos, sin = position_embeddings
+        
+        query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
+
+        if past_key_value is not None:
+            cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}  # Specific to RoPE models
+            key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
+
+        
+        key_states = repeat_kv(key_states, self.num_key_value_groups)
+        value_states = repeat_kv(value_states, self.num_key_value_groups)
+
+
+        if query_states.device.type == "cuda" and attention_mask is not None:
+            query_states = query_states.contiguous()
+            key_states = key_states.contiguous()
+            value_states = value_states.contiguous()
+
+        # We dispatch to SDPA's Flash Attention or Efficient kernels via this `is_causal` if statement instead of an inline conditional assignment
+        # in SDPA to support both torch.compile's dynamic shapes and full graph options. An inline conditional prevents dynamic shapes from compiling.
+        # The q_len > 1 is necessary to match with AttentionMaskConverter.to_causal_4d that does not create a causal mask in case q_len == 1.
+        # is_causal = True if causal_mask is None and q_len > 1 else False
+
+        # attn_output_sdpa = torch.nn.functional.scaled_dot_product_attention(
+        #     query_states,
+        #     key_states,
+        #     value_states,
+        #     attn_mask=attention_mask if isinstance(attention_mask, torch.Tensor) else None,
+        #     dropout_p=self.attention_dropout if self.training else 0.0,
+        #     is_causal=False, # hard coded
+        # )        
+        
+        # print(f"query_states {query_states.shape} key_states {key_states.shape} value_states {value_states.shape}")
+        
+        # replacing with flash attention
+        attn_output = flash_attn_with_kvcache(
+            q=query_states.transpose(1, 2).contiguous(),
+            k_cache=key_states.transpose(1, 2).contiguous(),
+            v_cache=value_states.transpose(1, 2).contiguous(),
+            causal=is_causal, # hard coded
+            softmax_scale=1.0 / math.sqrt(self.head_dim),
+        )   
+
+        attn_output = attn_output.view(bsz, q_len, self.hidden_size)
+
+        attn_output = self.o_proj(attn_output)
+
+        return attn_output, None, past_key_value
 
 class DreamDecoderLayer(nn.Module):
     def __init__(self, config: DreamConfig, layer_idx: int):
@@ -450,7 +558,10 @@ class DreamDecoderLayer(nn.Module):
             )
         
         # self.self_attn = Dream_ATTENTION_CLASSES[config._attn_implementation](config, layer_idx)
-        self.self_attn = DreamSdpaAttention(config, layer_idx)
+        if config._attn_implementation == "flash_attention_2":
+            self.self_attn = DreamFlashAttention(config, layer_idx)
+        else:
+            self.self_attn = DreamSdpaAttention(config, layer_idx)
 
         self.mlp = DreamMLP(config)
         self.input_layernorm = DreamRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
@@ -490,6 +601,10 @@ class DreamDecoderLayer(nn.Module):
                 into the model
         """
 
+        # print(f"DreamDecoderLayer: past_key_value {past_key_value} use_cache {use_cache}")
+        
+        is_casual = kwargs.get("is_casual", False)
+        
         residual = hidden_states
 
         hidden_states = self.input_layernorm(hidden_states)
@@ -504,6 +619,7 @@ class DreamDecoderLayer(nn.Module):
             use_cache=use_cache,
             cache_position=cache_position,
             position_embeddings=position_embeddings,
+            is_causal=is_casual,
         )
         hidden_states = residual + hidden_states
 
@@ -521,6 +637,10 @@ class DreamDecoderLayer(nn.Module):
         if use_cache:
             outputs += (present_key_value,)
 
+        # When use_cache is True, outputs will have length:
+        # - 2 if output_attentions is False (hidden_states, present_key_value)
+        # - 3 if output_attentions is True (hidden_states, self_attn_weights, present_key_value)
+            # print(f"DreamDecoderLayer: outputs {len(outputs)}")
         return outputs
 
 class DreamPreTrainedModel(PreTrainedModel):
@@ -642,12 +762,15 @@ class DreamBaseModel(DreamPreTrainedModel):
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
         cache_position: Optional[torch.LongTensor] = None,
+        is_casual: Optional[bool] = False,
     ) -> Union[Tuple, BaseModelOutput]:
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
             output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
         )
         use_cache = use_cache if use_cache is not None else self.config.use_cache
+        
+        # print("DreamBaseModel: past_key_values", past_key_values, "use_cache", use_cache,)
 
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
@@ -711,6 +834,7 @@ class DreamBaseModel(DreamPreTrainedModel):
                     use_cache=use_cache,
                     cache_position=cache_position,
                     position_embeddings=position_embeddings,
+                    is_casual=is_casual,
                 )
 
             hidden_states = layer_outputs[0]
@@ -726,12 +850,54 @@ class DreamBaseModel(DreamPreTrainedModel):
 
         if not return_dict:
             return tuple(v for v in [hidden_states, all_hidden_states, all_self_attns] if v is not None)
-        return BaseModelOutput(
+        # return BaseModelOutput(
+        #     last_hidden_state=hidden_states,
+        #     hidden_states=all_hidden_states,
+        #     attentions=all_self_attns,
+        # )
+        if use_cache:
+            # print("past_key_values", past_key_values, "use_cache", use_cache, "layer_outputs", layer_outputs)
+            past_key_values = layer_outputs[-1]
+        return BaseModelOutputWithPast(
             last_hidden_state=hidden_states,
+            past_key_values=past_key_values,
             hidden_states=all_hidden_states,
             attentions=all_self_attns,
         )
+@dataclass
+class MaskedLMOutputWithPast(ModelOutput):
+    """
+    Base class for masked language models outputs with past.
 
+    Args:
+        loss (`torch.FloatTensor` of shape `(1,)`, *optional*, returned when `labels` is provided):
+            Masked language modeling (MLM) loss.
+        logits (`torch.FloatTensor` of shape `(batch_size, sequence_length, config.vocab_size)`):
+            Prediction scores of the language modeling head (scores for each vocabulary token before SoftMax).
+        hidden_states (`tuple(torch.FloatTensor)`, *optional*, returned when `output_hidden_states=True` is passed or when `config.output_hidden_states=True`):
+            Tuple of `torch.FloatTensor` (one for the output of the embeddings, if the model has an embedding layer, +
+            one for the output of each layer) of shape `(batch_size, sequence_length, hidden_size)`.
+
+            Hidden-states of the model at the output of each layer plus the optional initial embedding outputs.
+        attentions (`tuple(torch.FloatTensor)`, *optional*, returned when `output_attentions=True` is passed or when `config.output_attentions=True`):
+            Tuple of `torch.FloatTensor` (one for each layer) of shape `(batch_size, num_heads, sequence_length,
+            sequence_length)`.
+
+            Attentions weights after the attention softmax, used to compute the weighted average in the self-attention
+            heads.
+        past_key_values (`tuple(tuple(torch.FloatTensor))`, *optional*, returned when `use_cache=True` is passed or when `config.use_cache=True`):
+            Tuple of `tuple(torch.FloatTensor)` of length `config.n_layers`, with each tuple having 2 tensors of shape
+            `(batch_size, num_heads, sequence_length, embed_size_per_head)`)
+            
+            Contains pre-computed hidden-states (key and values in the self-attention blocks) that can be used (see
+            `past_key_values` input) to speed up sequential decoding.
+    """
+
+    loss: Optional[torch.FloatTensor] = None
+    logits: torch.FloatTensor = None
+    hidden_states: Optional[Tuple[torch.FloatTensor, ...]] = None
+    attentions: Optional[Tuple[torch.FloatTensor, ...]] = None
+    past_key_values: Optional[Tuple[Cache]] = None
 
 class DreamModel(DreamGenerationMixin, DreamPreTrainedModel):
     _tied_weights_keys = ["lm_head.weight"]
@@ -791,6 +957,7 @@ class DreamModel(DreamGenerationMixin, DreamPreTrainedModel):
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         # decoder outputs consists of (dec_features, layer_state, dec_hidden, dec_attn)
+        # print("DreamModel: past_key_values", past_key_values, "use_cache", use_cache)
         outputs = self.model(
             input_ids=input_ids,
             attention_mask=attention_mask,
@@ -802,6 +969,7 @@ class DreamModel(DreamGenerationMixin, DreamPreTrainedModel):
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
             cache_position=cache_position,
+            is_casual=loss_kwargs.get("is_casual", False),
         )
 
         hidden_states = outputs[0]
@@ -816,9 +984,10 @@ class DreamModel(DreamGenerationMixin, DreamPreTrainedModel):
             output = (logits,) + outputs[1:]
             return (loss,) + output if loss is not None else output
 
-        return MaskedLMOutput(
+        return MaskedLMOutputWithPast(
             loss=loss,
             logits=logits,
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
+            past_key_values=outputs.past_key_values,
         )
