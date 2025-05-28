@@ -199,6 +199,10 @@ class LanguageModelBaseConfig(BaseModelConfig):
         desc="Configuration for the normalization in the head.",
         hint=FieldHint.architecture,
     )
+    # Debug, to get an exact match with megatron init.
+    use_megatron_initialization: bool = Field(
+        default=False, desc="Exactly match the initialization of a Megatron model.", hint=FieldHint.testing
+    )
 
     def _validate(self) -> None:
         # # self.transformer.validate()
@@ -261,4 +265,8 @@ class LanguageModelBaseConfig(BaseModelConfig):
         cls._handle_renamed_field(default, "normalization_type", "type")
         cls._handle_renamed_field(default, "layer_norm_eps", "epsilon")
         cls._handle_renamed_field(default, "zero_centered_normalization", "zero_centered")
+
+        if "match_megatron" in default:
+            assert "use_megatron_initialization" not in default
+            default["use_megatron_initialization"] = default.pop("match_megatron")
         return super().from_flat_dict(default, strict)

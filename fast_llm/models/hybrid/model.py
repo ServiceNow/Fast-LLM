@@ -7,12 +7,12 @@ from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
 from fast_llm.layers.language_model.embedding import LanguageModelEmbedding
 from fast_llm.layers.language_model.head import LanguageModelHead
 from fast_llm.models.gpt.model import GPTBaseModel
-from fast_llm.models.hybrid.config import HybridBaseModelConfig, HybridSSMModelConfig
+from fast_llm.models.hybrid.config import HybridBaseModelConfig, HybridModelConfig
 
 logger = logging.getLogger(__name__)
 
 
-class HybridSSMBaseModel[ConfigType: HybridBaseModelConfig](GPTBaseModel[ConfigType]):
+class HybridBaseModel[ConfigType: HybridBaseModelConfig](GPTBaseModel[ConfigType]):
     """
     A hybrid model that can interleave Transformer, Mamba and other blocks.
     """
@@ -79,10 +79,10 @@ class HybridSSMBaseModel[ConfigType: HybridBaseModelConfig](GPTBaseModel[ConfigT
         return layers
 
 
-class HybridSSMModel[ConfigType: HybridSSMModelConfig](FastLLMModel[ConfigType]):
+class HybridModel[ConfigType: HybridModelConfig](FastLLMModel[ConfigType]):
     """
     A hybrid model that combines Transformer and SSM blocks.
     """
 
-    config_class: typing.ClassVar[type[HybridSSMModelConfig]] = HybridSSMModelConfig
-    base_model_class: typing.ClassVar[type[HybridSSMBaseModel]] = HybridSSMBaseModel
+    config_class: typing.ClassVar[type[HybridModelConfig]] = HybridModelConfig
+    base_model_class: typing.ClassVar[type[HybridBaseModel]] = HybridBaseModel

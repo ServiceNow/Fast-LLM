@@ -21,8 +21,8 @@ from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
     from fast_llm.models.gpt.model import GPTInferenceRunner
-    from fast_llm.models.hybrid.huggingface import HuggingfaceHybridSSMModelForCausalLM
-    from fast_llm.models.hybrid.model import HybridSSMModel
+    from fast_llm.models.hybrid.huggingface import HuggingfaceHybridModelForCausalLM
+    from fast_llm.models.hybrid.model import HybridModel
     from fast_llm.models.hybrid.trainer import SSMTrainer
 
 logger = logging.getLogger(__name__)
@@ -45,9 +45,6 @@ class HybridBlockConfig(Config):
         desc="Hidden size of the block.",
         hint=FieldHint.architecture,
     )
-
-    def setup_tensor_space(self, tensor_space: "TensorSpace", block_name: str) -> None:
-        raise NotImplementedError()
 
 
 @config_class(dynamic_type={HybridBlockConfig: "transformer"})
@@ -94,6 +91,8 @@ class DiscreteMamba2BlockConfig(HybridBlockConfig, SSMConfig):
         tensor_space.add_tensor_dim(TensorDim(f"{SSMDimNames.inner_proj_mamba2}_{block_name}", inner_proj_dim))
         tensor_space.add_tensor_dim(TensorDim(f"{SSMDimNames.conv_dim}_{block_name}", conv_dim))
 
+        SSMConfig.setup_tensor_space(self, tensor_space, block_name)
+
 
 @config_class(dynamic_type={HybridBlockConfig: "mamba"})
 class MambaBlockConfig(HybridBlockConfig, SSMConfig):
@@ -121,6 +120,8 @@ class MambaBlockConfig(HybridBlockConfig, SSMConfig):
             TensorDim(f"{SSMDimNames.conv_kernel_size}_{block_name}", self.conv_kernel_dimension)
         )
         tensor_space.add_tensor_dim(TensorDim(f"{SSMDimNames.inner_proj_mamba}_{block_name}", d_inner * 2))
+
+        SSMConfig.setup_tensor_space(self, tensor_space, block_name)
 
 
 class HybridBlockType(enum.Enum):
@@ -343,7 +344,7 @@ class AprielSSMHHybridHuggingfaceCheckpointFormat(CheckpointFormat):
 
 
 @config_class()
-class HybridSSMModelConfig(FastLLMModelConfig):
+class HybridModelConfig(FastLLMModelConfig):
     _abstract = False
     model_name: typing.ClassVar[str] = "hybrid_ssm"
     base_model: HybridBaseModelConfig = FieldUpdate()
@@ -354,32 +355,32 @@ class HybridSSMModelConfig(FastLLMModelConfig):
     )
 
     @classmethod
-    def get_model_class(cls) -> type["HybridSSMModel"]:
-        from fast_llm.models.hybrid.model import HybridSSMModel
+    def get_model_class(cls) -> type["HybridModel"]:
+        from fast_llm.models.hybrid.model import HybridModel
 
-        return HybridSSMModel
+        return HybridModel
 
     @classmethod
-    def get_huggingface_model_class(cls) -> type["HuggingfaceHybridSSMModelForCausalLM"]:
-        from fast_llm.models.hybrid.huggingface import HuggingfaceHybridSSMModelForCausalLM
+    def get_huggingface_model_for_causal_lm_class(cls) -> type["HuggingfaceHybridModelForCausalLM"]:
+        from fast_llm.models.hybrid.huggingface import HuggingfaceHybridModelForCausalLM
 
-        return HuggingfaceHybridSSMModelForCausalLM
+        return HuggingfaceHybridModelForCausalLM
 
     def _validate(self):
         logger.warning(
-            "HybridSSMModelConfig is being instantiated. This model is experimental and may not work as expected."
+            "HybridModelConfig is being instantiated. This model is experimental and may not work as expected."
         )
         super()._validate()
 
 
 @config_class()
-class PretrainedHybridSSMModelConfig(PretrainedFastLLMModelConfig):
+class PretrainedHybridModelConfig(PretrainedFastLLMModelConfig):
     _abstract = False
-    model: HybridSSMModelConfig = FieldUpdate()
+    model: HybridModelConfig = FieldUpdate()
 
 
 @config_class()
-class HybridTrainerConfig(PretrainedHybridSSMModelConfig, TrainerConfig):
+class HybridTrainerConfig(PretrainedHybridModelConfig, TrainerConfig):
     data: GPTDataConfig = FieldUpdate()
     batch: GPTBatchConfig = FieldUpdate()
     reference_models: dict[str, PretrainedGPTModelConfig] = FieldUpdate()

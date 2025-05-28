@@ -50,6 +50,6 @@ class LlambaOneBlock(BaseBlock):
         super().__init__(config, tensor_space, layer_index, block_name, return_input)
 
     def _create_mixer(self):
-        self.mixer = MambaLayer(
+        self.mamba1 = MambaLayer(
             self._config, layer_index=self._layer_index, tensor_space=self._tensor_space, name=self.block_name
         )

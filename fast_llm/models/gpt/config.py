@@ -107,11 +107,6 @@ class GPTBaseModelConfig(LanguageModelBaseConfig):
 
     _abstract = False
 
-    # Debug, to get an exact match with megatron init.
-    use_megatron_initialization: bool = Field(
-        default=False, desc="Exactly match the initialization of a Megatron model.", hint=FieldHint.testing
-    )
-
     transformer: TransformerConfig = Field(
         desc="Configuration for the transformer architecture.",
         hint=FieldHint.architecture,
@@ -127,9 +122,6 @@ class GPTBaseModelConfig(LanguageModelBaseConfig):
         # TODO v0.3: Remove backward compatibility fix
         if "transposed_mlp_weight" in default:
             assert default.pop("transposed_mlp_weight")
-        if "match_megatron" in default:
-            assert "use_megatron_initialization" not in default
-            default["use_megatron_initialization"] = default.pop("match_megatron")
         if "layer_norm_impl" in default:
             assert "normalization_implementation" not in default
             default["normalization_implementation"] = default.pop("layer_norm_impl")

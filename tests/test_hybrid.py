@@ -1,23 +1,31 @@
+import pathlib
+
 import pytest
 import torch
 
+from fast_llm.config import NoAutoValidate
+from fast_llm.engine.checkpoint.config import CheckpointLoadConfig
 from fast_llm.engine.config_utils.tensor_space import TensorSpace
-from fast_llm.engine.distributed.config import DistributedConfig
+from fast_llm.engine.distributed.config import DistributedConfig, PhaseType
 from fast_llm.engine.distributed.distributed import Distributed
+from fast_llm.engine.schedule.config import ScheduleConfig
+from fast_llm.engine.schedule.runner import ScheduleRunner
+from fast_llm.engine.schedule.schedule import Schedule
 from fast_llm.layers.language_model.config import LanguageModelKwargs, LanguageModelLossNames
 from fast_llm.layers.transformer.config import TransformerKwargs
-from fast_llm.models.gpt.config import LlamaGPTHuggingfaceCheckpointFormat
-from fast_llm.models.hybrid.config import LLambaHuggingfaceCheckpointFormat
+from fast_llm.models.gpt.config import GPTBatchConfig, LlamaGPTHuggingfaceCheckpointFormat
+from fast_llm.models.hybrid.config import (
+    AprielSSMHHybridHuggingfaceCheckpointFormat,
+    LLambaHuggingfaceCheckpointFormat,
+)
+from fast_llm.models.hybrid.model import HybridModel
 from tests.common import get_hybrid_config, materialize_meta_tensors
 
 try:
-    from blocks import LlambaBlock
-
-    from fast_llm.layers.ssm.discrete_mamba2 import DiscreteMamba2
     from fast_llm.layers.ssm.mamba_layer import MambaLayer
-    from fast_llm.models.hybrid.model import HybridSSMBaseModel
+    from fast_llm.models.hybrid.model import HybridBaseModel
 except ImportError:
-    MambaLayer, LlambaBlock, HybridSSMBaseModel, DiscreteMamba2 = (
+    MambaLayer, LlambaBlock, HybridBaseModel, DiscreteMamba2 = (
         None,
         None,
         None,
@@ -65,150 +73,115 @@ def get_hf_llamba_out(input_ids, path, format):
     return output, parameter_sum
 
 
-# @pytest.mark.slow
-# @pytest.mark.skipif(
-#     not run_test or LMHeadModel is None,
-#     reason=f"Skipping because one of the following: cartesia_pytorch.Llamba not installed or no CUDA available or Mamba not installed",
-# )
-# def test_load_from_llamba_checkpoint(distributed_config):
-#     """
-#     Test to check whether the of Fast-LLM and Huggingface checkpoint loading for Llamba-1B produce the same results.
-#     """
-#     vocab_size = 128256  # from https://huggingface.co/cartesia-ai/Llamba-1B/blob/main/config.json
-#     batch_size = 2
-#     seq_length = 32
+@pytest.mark.slow
+@pytest.mark.skipif(
+    not run_test or LMHeadModel is None,
+    reason=f"Skipping because one of the following: cartesia_pytorch.Llamba not installed or no CUDA available or Mamba not installed",
+)
+def test_load_from_llamba_checkpoint(distributed_config):
+    """
+    Test to check whether the of Fast-LLM and Huggingface checkpoint loading for Llamba-1B produce the same results.
+    """
+    vocab_size = 128256  # from https://huggingface.co/cartesia-ai/Llamba-1B/blob/main/config.json
+    batch_size = 2
+    seq_length = 32
 
-#     path = pathlib.Path("/mnt/checkpoints_fml/pretrained_models/Llamba-1B")
-#     format = LLambaHuggingfaceCheckpointFormat
+    path = pathlib.Path("/mnt/checkpoints_fml/pretrained_models/Llamba-1B")
+    format = LLambaHuggingfaceCheckpointFormat
 
-#     x = torch.randint(0, vocab_size, (batch_size, seq_length), device="cuda")
-#     hf_logits, parameter_sum_hf = get_hf_llamba_out(x, path, format)
-#     hf_logits = hf_logits["logits"].cpu()
+    x = torch.randint(0, vocab_size, (batch_size, seq_length), device="cuda")
+    hf_logits, parameter_sum_hf = get_hf_llamba_out(x, path, format)
+    hf_logits = hf_logits["logits"].cpu()
 
-#     # Create checkpoint load config
-#     checkpoint_config = CheckpointLoadConfig(path=path, format=format, model_weights=True, optimizer_state=False)
-#     # Initialize model
-#     model = HybridSSMModel.from_pretrained(checkpoint_config)
-#     param_sum = 0
-#     for stage in model.stages:
-#         for fsdp in stage.fsdps:
-#             if hasattr(fsdp, "_weight_shard"):
-#                 param_sum += torch.sum(fsdp._weight_shard).item()
-#     assert torch.abs(torch.tensor(param_sum) - parameter_sum_hf) < 1e-1
+    # Create checkpoint load config
+    checkpoint_config = CheckpointLoadConfig(path=path, format=format, model_weights=True, optimizer_state=False)
+    # Initialize model
+    model = HybridModel.from_pretrained(checkpoint_config)
+    param_sum = 0
+    for stage in model.stages:
+        for fsdp in stage.fsdps:
+            if hasattr(fsdp, "_weight_shard"):
+                param_sum += torch.sum(fsdp._weight_shard).item()
+    assert torch.abs(torch.tensor(param_sum) - parameter_sum_hf) < 1e-1
 
-#     # model = GPTModel.from_pretrained(checkpoint_config)
-#     assert model.config.base_model.vocab_size == vocab_size
-#     schedule_config = ScheduleConfig()
-#     with NoAutoValidate():
-#         batch_config = GPTBatchConfig(micro_batch_size=batch_size, sequence_length=seq_length)
-#     batch_config.setup(distributed_config)
-#     batch_config.validate()
-#     schedule_runner = ScheduleRunner(
-#         config=schedule_config,
-#         multi_stage=model,
-#         distributed_config=model.distributed.config,
-#     )
-#     schedule = Schedule(
-#         multi_stage=model,
-#         batch_config=batch_config,
-#         schedule_config=schedule_config,
-#         distributed_config=model.distributed.config,
-#         phase=PhaseType.inference,
-#     )
-#     schedule_runner.setup(model.distributed, optimizer=None)
+    # model = GPTModel.from_pretrained(checkpoint_config)
+    assert model.config.base_model.vocab_size == vocab_size
+    schedule_config = ScheduleConfig()
+    with NoAutoValidate():
+        batch_config = GPTBatchConfig(micro_batch_size=batch_size, sequence_length=seq_length)
+    batch_config.setup(distributed_config)
+    batch_config.validate()
+    schedule_runner = ScheduleRunner(
+        config=schedule_config,
+        multi_stage=model,
+        distributed_config=model.distributed.config,
+    )
+    schedule = Schedule(
+        multi_stage=model,
+        batch_config=batch_config,
+        schedule_config=schedule_config,
+        distributed_config=model.distributed.config,
+        phase=PhaseType.inference,
+    )
+    schedule_runner.setup(model.distributed, optimizer=None)
 
-#     common_kwargs = {
-#         TransformerKwargs.sequence_first: True,
-#         TransformerKwargs.grad_output: False,
-#     }
-#     input_data = [(x, common_kwargs)]
+    common_kwargs = {
+        TransformerKwargs.sequence_first: True,
+        TransformerKwargs.grad_output: False,
+    }
+    input_data = [(x, common_kwargs)]
 
-#     losses, success, metrics = schedule_runner.run_step(
-#         iter([input_data]), schedule, iteration=0, return_metrics=True, preprocessed=True
-#     )
+    losses, success, metrics = schedule_runner.run_step(
+        iter([input_data]), schedule, iteration=0, return_metrics=True, preprocessed=True
+    )
 
-#     logits = input_data[0][1]["logits"].cpu()
-#     assert torch.allclose(logits, hf_logits, atol=1e-2)
-
-
-# def get_hf_apriel_hybrid_out(input_ids, path, format):
-#     from fast_llm.models.hybrid.external.apriel_hybrid.modeling_ssm_hybrid_apriel import AprielSSMHybridForCausalLM
-
-#     model = AprielSSMHybridForCausalLM.from_pretrained(path, strict=True).to("cuda")
-#     parameter_sum = sum(p.detach().cpu().numpy().sum() for p in model.parameters())
-#     print(f"Parameter sum: {parameter_sum}")
-#     output = model(input_ids)
-#     del model
-#     torch.cuda.empty_cache()
-#     return output, parameter_sum
+    logits = input_data[0][1]["logits"].cpu()
+    assert torch.allclose(logits, hf_logits, atol=1e-2)
 
 
-# @pytest.mark.slow
-# @pytest.mark.skipif(
-#     not run_test
-#     and not pathlib.Path("/mnt/checkpoints/ssm/apriel_ssm_instruct_hybrid_ssm2nd_init_mambainlama_debug").exists(),
-#     reason=f"Skipping because no CUDA available or Mamba not installed",
-# )
-# def test_load_from_hybridssm_checkpoint(distributed_config):
-#     """
-#     Test to check whether the of Fast-LLM and Huggingface checkpoint loading for Llamba-1B produce the same results.
-#     """
-#     vocab_size = 131072  # from https://huggingface.co/cartesia-ai/Llamba-1B/blob/main/config.json
-#     batch_size = 2
-#     seq_length = 32
+def get_hf_apriel_hybrid_out(input_ids, path, format):
+    from fast_llm.models.hybrid.external.apriel_hybrid.modeling_ssm_hybrid_apriel import AprielSSMHybridForCausalLM
 
-#     path = pathlib.Path("/mnt/checkpoints/ssm/apriel_ssm_instruct_hybrid_ssm2nd_init_mambainlama_debug")
-#     format = AprielSSMHHybridHuggingfaceCheckpointFormat
-
-#     x = torch.randint(0, vocab_size, (batch_size, seq_length), device="cuda")
-#     hf_logits, parameter_sum_hf = get_hf_apriel_hybrid_out(x, path, format)
-#     hf_logits = hf_logits["logits"].cpu()
-
-#     # Create checkpoint load config
-#     checkpoint_config = CheckpointLoadConfig(path=path, format=format, model_weights=True, optimizer_state=False)
-#     # Initialize model
-#     model = HybridSSMModel.from_pretrained(checkpoint_config)
-#     param_sum = 0
-#     for stage in model.stages:
-#         for fsdp in stage.fsdps:
-#             if hasattr(fsdp, "_weight_shard"):
-#                 param_sum += torch.sum(fsdp._weight_shard).item()
-#     assert torch.abs(torch.tensor(param_sum) - parameter_sum_hf) < 1e-1
+    model = AprielSSMHybridForCausalLM.from_pretrained(path, strict=True).to("cuda")
+    parameter_sum = sum(p.detach().cpu().numpy().sum() for p in model.parameters())
+    print(f"Parameter sum: {parameter_sum}")
+    output = model(input_ids)
+    del model
+    torch.cuda.empty_cache()
+    return output, parameter_sum
 
 
-# test legacy behavior of using m and m2d
-# @pytest.mark.skipif(not run_test, reason="No CUDA available or Mamba not installed")
-# @pytest.mark.parametrize(
-#     "hybrid_block_layout,LAYER_CLS",
-#     [
-#         (["m"], MambaLayer),
-#         (["m2d"], DiscreteMamba2),
-#     ],
-#     ids=["mamba", "discrete_mamba2"],
-# )
-# def test_mamba_layer(distributed_config, distributed, hybrid_block_layout, LAYER_CLS):
-#     hybrid_config: HybridBaseModelConfig = get_hybrid_config(hybrid_block_layout=hybrid_block_layout)
-#     tensor_space = TensorSpace(distributed_config=distributed_config)
-#     hybrid_config.setup_tensor_space(tensor_space)
-#     layer = LAYER_CLS(hybrid_config.ssm, layer_index=0, tensor_space=tensor_space, name=hybrid_block_layout[0])
-#     tensor_space.setup(distributed)
-#     materialize_meta_tensors(layer, tensor_space)
-#     layer.to(distributed.device)
+@pytest.mark.slow
+@pytest.mark.skipif(
+    not run_test
+    and not pathlib.Path("/mnt/checkpoints/ssm/apriel_ssm_instruct_hybrid_ssm2nd_init_mambainlama_debug").exists(),
+    reason=f"Skipping because no CUDA available or Mamba not installed",
+)
+def test_load_from_hybridssm_checkpoint():
+    """
+    Test to check whether the of Fast-LLM and Huggingface checkpoint loading for Llamba-1B produce the same results.
+    """
+    vocab_size = 131072  # from https://huggingface.co/cartesia-ai/Llamba-1B/blob/main/config.json
+    batch_size = 2
+    seq_length = 32
 
-#     batch_size = 2
-#     seq_length = 32
-#     hidden_size = hybrid_config.transformer.hidden_size
-#     x = torch.randn(batch_size, seq_length, hidden_size, device=distributed.device)
+    path = pathlib.Path("/mnt/checkpoints/ssm/apriel_ssm_instruct_hybrid_ssm2nd_init_mambainlama_debug")
+    format = AprielSSMHHybridHuggingfaceCheckpointFormat
 
-#     # Run forward pass
-#     output, _ = layer(x, {})
+    x = torch.randint(0, vocab_size, (batch_size, seq_length), device="cuda")
+    hf_logits, parameter_sum_hf = get_hf_apriel_hybrid_out(x, path, format)
+    hf_logits = hf_logits["logits"].cpu()
 
-#     loss = output.sum()
-#     loss.backward()
-#     # Basic shape checkss
-#     assert output.shape == x.shape
-#     assert not torch.isnan(output).any()
-#     assert not torch.isinf(output).any()
+    # Create checkpoint load config
+    checkpoint_config = CheckpointLoadConfig(path=path, format=format, model_weights=True, optimizer_state=False)
+    # Initialize model
+    model = HybridModel.from_pretrained(checkpoint_config)
+    param_sum = 0
+    for stage in model.stages:
+        for fsdp in stage.fsdps:
+            if hasattr(fsdp, "_weight_shard"):
+                param_sum += torch.sum(fsdp._weight_shard).item()
+    assert torch.abs(torch.tensor(param_sum) - parameter_sum_hf) < 1e-1
 
 
 # test legacy behavior of using m and m2d
@@ -264,7 +237,7 @@ def test_mamba_block(distributed_config, distributed, hybrid_block_layout):
 )
 def test_hybrid_model_train_with_fast_mode(distributed_config, hybrid_block_layout):
     hybrid_config = get_hybrid_config(hybrid_block_layout=hybrid_block_layout)
-    model = HybridSSMBaseModel(hybrid_config, distributed_config)
+    model = HybridBaseModel(hybrid_config, distributed_config)
     distributed = Distributed(distributed_config)
     model.setup(distributed)
     tensor_space = model._tensor_space
@@ -311,7 +284,7 @@ def test_hybrid_model_train_with_fast_mode(distributed_config, hybrid_block_layo
 # @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA available")
 # def test_hybrid_model_inference(distributed_config, hybrid_config):
 #     hybrid_config.ssm.use_fast_path = False
-#     model = HybridSSMBaseModel(hybrid_config, distributed_config)
+#     model = HybridBaseModel(hybrid_config, distributed_config)
 #     distributed = Distributed(distributed_config)
 #     model.setup(distributed)
 #     tensor_space = model._tensor_space

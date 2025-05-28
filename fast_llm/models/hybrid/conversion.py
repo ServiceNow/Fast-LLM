@@ -23,10 +23,10 @@ from fast_llm.models.gpt.conversion import CommonLlamaHuggingfaceCheckpointHandl
 from fast_llm.models.hybrid.config import (
     AprielSSMHHybridHuggingfaceCheckpointFormat,
     AprielSSMHuggingfaceCheckpointFormat,
-    HybridSSMModelConfig,
+    HybridModelConfig,
     LLambaHuggingfaceCheckpointFormat,
 )
-from fast_llm.models.hybrid.model import HybridSSMModel
+from fast_llm.models.hybrid.model import HybridModel
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
@@ -40,8 +40,8 @@ class HybridModelCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
     If block_pattern is provided, it will export/import it as-is.
     """
 
-    _model: HybridSSMModel
-    _model_class: typing.ClassVar[FastLLMModelConfig] = HybridSSMModelConfig
+    _model: HybridModel
+    _model_class: typing.ClassVar[FastLLMModelConfig] = HybridModelConfig
     _default_block_type: str = SSMBlockType.mamba2_discrete.value
 
     @classmethod
@@ -67,8 +67,8 @@ class HybridModelCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
 
 
 class CommonSSMHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
-    _model: HybridSSMModel
-    _model_class: typing.ClassVar[FastLLMModelConfig] = HybridSSMModelConfig
+    _model: HybridModel
+    _model_class: typing.ClassVar[FastLLMModelConfig] = HybridModelConfig
 
     @classmethod
     def _create_config_converters(cls) -> list[ParamConverter]:
@@ -209,8 +209,8 @@ class CommonSSMHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandle
 
 
 class LLambaHuggingfaceCheckpointHandler(CommonSSMHuggingfaceCheckpointHandler):
-    _model: HybridSSMModel
-    _model_class: typing.ClassVar[FastLLMModelConfig] = HybridSSMModelConfig
+    _model: HybridModel
+    _model_class: typing.ClassVar[FastLLMModelConfig] = HybridModelConfig
     format: typing.ClassVar[type[CheckpointFormat]] = LLambaHuggingfaceCheckpointFormat
     _hf_prefix: str = "backbone"
 
@@ -414,8 +414,8 @@ class AprielSSMHuggingfaceCheckpointHandler(CommonSSMHuggingfaceCheckpointHandle
     Lamba-like configs, pure SSM models.
     """
 
-    _model: HybridSSMModel
-    _model_class: typing.ClassVar[FastLLMModelConfig] = HybridSSMModelConfig
+    _model: HybridModel
+    _model_class: typing.ClassVar[FastLLMModelConfig] = HybridModelConfig
     format: typing.ClassVar[type[CheckpointFormat]] = AprielSSMHuggingfaceCheckpointFormat
 
     @classmethod
@@ -536,8 +536,8 @@ class AprielSSMHHybridHuggingfaceCheckpointHandler(
     Lamba-like configs, models that interleave LLama like layers with LLamba-like SSM layers.
     """
 
-    _model: HybridSSMModel
-    _model_class: typing.ClassVar[FastLLMModelConfig] = HybridSSMModelConfig
+    _model: HybridModel
+    _model_class: typing.ClassVar[FastLLMModelConfig] = HybridModelConfig
     format: typing.ClassVar[type[CheckpointFormat]] = AprielSSMHHybridHuggingfaceCheckpointFormat
     _default_block_type: str = SSMBlockType.mamba2_discrete.value
 

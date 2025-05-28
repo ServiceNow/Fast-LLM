@@ -1,3 +1,4 @@
+import abc
 import enum
 import typing
 
@@ -158,13 +159,28 @@ class PeftType(str, enum.Enum):
 
 @config_class(registry=True)
 class PeftConfig(BaseModelConfig):
-    _abstract = False
 
     type: PeftType = Field(
         default=PeftType.none,
         desc="The type of parameter-efficient fine tuning to use Only LoRA is supported at the moment.",
         hint=FieldHint.core,
     )
+
+    @abc.abstractmethod
+    def apply_linear(self, linear: "LinearBase", **kwargs) -> "LinearLike":
+        pass
+
+    @classmethod
+    def _from_dict(
+        cls,
+        default: dict[str, typing.Any],
+        strict: bool = True,
+        flat: bool = False,
+    ) -> typing.Self:
+        if cls is PeftConfig and cls.get_subclass(default.get("type")) is None:
+            # Default subclass.
+            return EmptyPeftConfig._from_dict(default, strict, flat)
+        return super()._from_dict(default, strict=strict, flat=flat)
 
 
 @config_class(dynamic_type={PeftConfig: "none"})
@@ -175,8 +191,8 @@ class EmptyPeftConfig(PeftConfig):
 
     _abstract = False
 
-    def apply_linear(self, linear: "LinearBase", **kwargs) -> "LinearLike":
-        return linear
+    def apply_linear(self, *args, **kwargs) -> "LinearLike":
+        return args[0]
 
 
 @config_class(dynamic_type={PeftConfig: "lora"})
@@ -270,8 +286,9 @@ class BaseBlockLoRAConfig(LoRAConfig):
 @config_class()
 class BaseBlockConfig(BaseModelConfig):
 
-    _abstract = True
+    _abstract = False
     peft: PeftConfig = Field(
+        # default_factory=lambda: PeftConfig(type=PeftType.none),
         desc="Configuration for the parameter-efficient fine tuning.",
         hint=FieldHint.architecture,
     )

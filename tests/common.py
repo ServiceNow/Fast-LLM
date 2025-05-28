@@ -36,7 +36,7 @@ TEST_RESULTS_PATH = pathlib.Path(os.environ.get("TEST_RESULTS_PATH", "/tmp/fast_
 FORCE_REUSE_RESULTS = int(os.environ.get("FORCE_REUSE_RESULTS", 0)) != 0
 REUSE_RESULTS = FORCE_REUSE_RESULTS or int(os.environ.get("REUSE_RESULTS", 0)) != 0
 _LOG_LEVEL = int(os.environ.get("LOG_LEVEL", 13))
-TEST_MODEL = os.environ.get("MODEL", "llama")
+TEST_MODEL = os.environ.get("MODEL", "llamba")
 
 ARTIFACT_PATH = "runs/0/artifacts"
 
@@ -204,7 +204,7 @@ CONFIG_LLAMA_MTP_FAST_LLM = CONFIG_LLAMA_FAST_LLM + [
 ]
 CONFIG_LLAMA_MTP_COMMON = CONFIG_LLAMA_MTP_FAST_LLM + ["model.distributed.training_dtype=bf16"]
 
-CONFIG_LLAMBA_FAST_LLM = CONFIG_LLAMA_FAST_LLM + ["model.base_model.hybrid_block_layout==['t','m']"]
+CONFIG_LLAMBA_FAST_LLM = CONFIG_LLAMA_FAST_LLM + ["model.base_model.hybrid_block_layout=['m2d','m2d']"]
 CONFIG_LLAMBA_MEGATRON = CONFIG_LLAMA_MEGATRON + []
 CONFIG_LLAMBA_COMMON = CONFIG_LLAMBA_FAST_LLM
 
