@@ -144,7 +144,7 @@ class GPTSampledIndexedDataset(SampledDataset):
             sizes.fill(raw_audio_seq_length)  # set all audio sizes to padded amount
 
         # account for mel spectogram, convolution, downsampling k
-        audio_token_size_arr = sizes // 160  # default hop length TODO: check divisible?
+        audio_token_size_arr = sizes // 160  # default hop length TODO Toby: check divisible?
         audio_token_size_arr = audio_token_size_arr // (
             2 * self._parameters.aud_downsampling_k
         )  # convolution (2) * downsampling
@@ -557,24 +557,27 @@ class GPTSampledIndexedDataset(SampledDataset):
                 start_pos = 0
 
                 # add tokens and multi modal padding placeholders
-                multimodal_positions = np.concatenate(
-                    [
-                        arr.astype(np.int32)
-                        for arr in (sample.image_positions, sample.audio_positions)
-                        if arr is not None
-                    ]
-                ) or np.array([], dtype=np.int32)
-                multimodal_positions.sort()
-                for idx, mm_position in enumerate(multimodal_positions):
-                    if (
-                        sample.image_positions is not None and mm_position in sample.image_positions
-                    ):  # TODO Toby: use enum
-                        mm_type = "image"
-                    elif sample.audio_positions is not None and mm_position in sample.audio_positions:
-                        mm_type = "audio"
-                    else:
-                        assert False
-                    # image_positions.append(im_positions + len(token_ids) + image_tokens_added)
+                # multimodal_positions = np.concatenate(
+                #     [
+                #         arr.astype(np.int32)
+                #         for arr in (sample.image_positions, sample.audio_positions)
+                #         if arr is not None
+                #     ]
+                # ) or np.array([], dtype=np.int32)
+                # multimodal_positions.sort()
+
+                multimodal_positions = []
+                if sample.image_positions is not None:
+                    multimodal_positions.extend(
+                        [(pos, "image", idx) for idx, pos in enumerate(sample.image_positions)]
+                    )
+                if sample.audio_positions is not None:
+                    multimodal_positions.extend(
+                        [(pos, "audio", idx) for idx, pos in enumerate(sample.audio_positions)]
+                    )
+
+                multimodal_positions.sort(key=lambda x: x[0])
+                for global_idx, (mm_position, mm_type, source_idx) in enumerate(multimodal_positions):
                     # Add placeholders for image and audio tokens tokens
                     token_ids.append(sample.token_ids[start_pos:mm_position])
                     if mm_type == "image":
@@ -584,8 +587,8 @@ class GPTSampledIndexedDataset(SampledDataset):
                         if self._parameters.image_break_token is not None:
                             # Calculate patch dimensions for the image
                             height, width = get_resize_dims(
-                                image_lengths[idx][0],
-                                image_lengths[idx][1],
+                                image_lengths[source_idx][0],
+                                image_lengths[source_idx][1],
                                 self._parameters.image_size,
                                 self._parameters.image_size,
                                 self._parameters.patch_size,
@@ -613,11 +616,14 @@ class GPTSampledIndexedDataset(SampledDataset):
                             mm_tokens_added += resized_image_tokens
                         else:
                             # Just add placeholders for all image tokens without break tokens
-                            token_ids.append(np.full((image_sizes[idx],), -100, dtype=np.int64))
-                            mm_tokens_added += image_sizes[idx]
+                            token_ids.append(np.full((image_sizes[source_idx],), -100, dtype=np.int64))
+                            mm_tokens_added += image_sizes[source_idx]
                     elif mm_type == "audio":
-                        audio_positions.append(sum(t.size for t in token_ids))
-                        token_ids.append(np.full((audio_token_size_arr[idx],), -100, dtype=np.int64))
+                        audio_pos = sum(t.size for t in token_ids)  # includes mm tokens added already
+                        audio_positions.append(audio_pos)
+                        token_ids.append(
+                            np.full((audio_token_size_arr[source_idx],), -100, dtype=np.int64)
+                        )  # TODO Toby: index doesnt work here
                         mm_tokens_added += audio_tokens
                     start_pos = mm_position
                 token_ids.append(sample.token_ids[start_pos:])
@@ -634,7 +640,47 @@ class GPTSampledIndexedDataset(SampledDataset):
                     audio.append([])
 
                 if self._parameters.use_loss_masking_spans:
-                    for loss_masking_span in sample.loss_masking_spans:
+                    mm_idx = 0
+                    total_mm_tokens = 0
+                    for loss_masking_span in sample.loss_masking_spans:  # TODO: check these must be sorted
+                        mm_tokens_in_span = 0
+                        mm_position, mm_type, source_idx = (
+                            multimodal_positions[mm_idx]
+                            if mm_idx < len(multimodal_positions)
+                            else (float("inf"), _, _)
+                        )
+
+                        # increment mm_idx until span is reached
+                        while mm_position < loss_masking_span[0]:
+                            if mm_type == "image":
+                                num_mm_tokens = image_sizes[source_idx]
+                            elif mm_type == "audio":
+                                num_mm_tokens = audio_token_size_arr[source_idx]
+                            total_mm_tokens += num_mm_tokens
+                            mm_idx += 1
+                            mm_position, mm_type, source_idx = (
+                                multimodal_positions[mm_idx]
+                                if mm_idx < len(multimodal_positions)
+                                else (float("inf"), _, _)
+                            )
+
+                        # get all multimodal positions within span
+                        while mm_position >= loss_masking_span[0] and mm_position <= loss_masking_span[1]:
+                            if mm_type == "image":
+                                num_mm_tokens = image_sizes[source_idx]
+                            elif mm_type == "audio":
+                                num_mm_tokens = audio_token_size_arr[source_idx]
+                            mm_tokens_in_span += num_mm_tokens
+                            mm_idx += 1
+                            mm_position, mm_type, source_idx = (
+                                multimodal_positions[mm_idx]
+                                if mm_idx < len(multimodal_positions)
+                                else (float("inf"), _, _)
+                            )
+                        loss_masking_span[0] += total_mm_tokens  # increment by all mm tokens before span
+                        loss_masking_span[1] += total_mm_tokens + mm_tokens_in_span
+                        total_mm_tokens += mm_tokens_in_span
+
                         span = np.clip(
                             loss_masking_span + token_count - token_start,
                             0,
@@ -658,6 +704,7 @@ class GPTSampledIndexedDataset(SampledDataset):
             if self._parameters.use_loss_masking_spans
             else None
         )
+
         images = [im for img_list in images for im in img_list] if images else None
         image_positions = np.array(image_positions) if image_positions else None
 

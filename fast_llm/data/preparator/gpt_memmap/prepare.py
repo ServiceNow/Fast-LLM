@@ -93,44 +93,44 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
             "num_pixels": num_pixels,
         }
 
-    def _tokenize_batch_with_spans(self, batch: dict[str, list[typing.Any]]) -> dict[str, list[typing.Any]]:
-        input_ids, token_spans, images, image_token_positions = map(
-            list,
-            zip(
-                *[
-                    (
-                        np.array(input_ids, dtype=self._data_type.numpy),
-                        np.array(token_spans, dtype=np.int32).reshape(-1, 2),
-                        np.array(images, dtype=np.uint8),
-                        np.array(image_token_positions, dtype=np.int32),
-                    )
-                    for input_ids, token_spans, images, image_token_positions in [
-                        self._tokenizer.tokenize_with_spans(text, char_spans)
-                        for text, char_spans in zip(
-                            batch[self._config.dataset.field],
-                            batch.get(self._config.dataset.loss_masking_spans, itertools.repeat(None)),
-                            batch.get(self._config.dataset.images, itertools.repeat(None)),
-                            batch.get(self._config.dataset.image_positions, itertools.repeat(None)),
-                        )
-                    ]
-                ]
-            ),
-        )
-        num_tokens = [len(x) for x in input_ids]
-        num_pixels = [0] * len(input_ids)
-        for idx, images in enumerate(images):
-            for bytes_im in images:
-                with PIL.Image.open(io.BytesIO(bytes_im["bytes"])) as im:
-                    width, height = im.size
-                    num_pixels[idx] += width * height * 3
-        return {
-            "input_ids": input_ids,
-            "token_spans": token_spans,
-            "images": images,
-            "image_positions": image_token_positions,
-            "num_tokens": num_tokens,
-            "num_pixels": num_pixels,
-        }
+    # def _tokenize_batch_with_spans(self, batch: dict[str, list[typing.Any]]) -> dict[str, list[typing.Any]]:
+    #     input_ids, token_spans, images, image_token_positions = map(
+    #         list,
+    #         zip(
+    #             *[
+    #                 (
+    #                     np.array(input_ids, dtype=self._data_type.numpy),
+    #                     np.array(token_spans, dtype=np.int32).reshape(-1, 2),
+    #                     np.array(images, dtype=np.uint8),
+    #                     np.array(image_token_positions, dtype=np.int32),
+    #                 )
+    #                 for input_ids, token_spans, images, image_token_positions in [
+    #                     self._tokenizer.tokenize_with_spans(text, char_spans)
+    #                     for text, char_spans in zip(
+    #                         batch[self._config.dataset.field],
+    #                         batch.get(self._config.dataset.loss_masking_spans, itertools.repeat(None)),
+    #                         batch.get(self._config.dataset.images, itertools.repeat(None)),
+    #                         batch.get(self._config.dataset.image_positions, itertools.repeat(None)),
+    #                     )
+    #                 ]
+    #             ]
+    #         ),
+    #     )
+    #     num_tokens = [len(x) for x in input_ids]
+    #     num_pixels = [0] * len(input_ids)
+    #     for idx, images in enumerate(images):
+    #         for bytes_im in images:
+    #             with PIL.Image.open(io.BytesIO(bytes_im["bytes"])) as im:
+    #                 width, height = im.size
+    #                 num_pixels[idx] += width * height * 3
+    #     return {
+    #         "input_ids": input_ids,
+    #         "token_spans": token_spans,
+    #         "images": images,
+    #         "image_positions": image_token_positions,
+    #         "num_tokens": num_tokens,
+    #         "num_pixels": num_pixels,
+    #     }
 
     def _save_shard(self, args: tuple[int, datasets.Dataset]) -> GPTMemmapDatasetConfig:
         shard_idx, shard_dataset = args

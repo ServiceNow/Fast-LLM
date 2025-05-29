@@ -10,7 +10,6 @@ from fast_llm.data.dataset.gpt.indexed import GPTIndexedDataset
 from fast_llm.data.dataset.gpt.sampled import GPTSample
 from fast_llm.data.preparator.gpt_memmap.config import MEMMAP_DTYPES, MEMMAP_DTYPES_INV, MEMMAP_INDEX_HEADER
 from fast_llm.engine.config_utils.data_type import DataType
-from fast_llm.layers.vision_encoder.preprocessing import get_num_image_tokens, get_resize_dims
 from fast_llm.utils import Assert, div
 
 
@@ -108,7 +107,7 @@ class GPTMemmapDataset(GPTIndexedDataset):
             offset += (
                 self._num_spans.nbytes
                 + self._num_spans.sum() * 2 * np.dtype(np.int32).itemsize
-                + sum([x.nbytes for x in self._spans])
+                # + sum([x.nbytes for x in self._spans])
             )
         self._num_pixels = 0
         self._image_lengths = []
@@ -141,8 +140,8 @@ class GPTMemmapDataset(GPTIndexedDataset):
                 )
                 images_seen += n_images
             offset = offset + self._n_images.nbytes + 3 * self._n_images.sum() * np.dtype(np.int32).itemsize
-        self._audio_lengths = []
-        self._audio_positions = []
+        self._audio_lengths = []  # list of arrays
+        self._audio_positions = []  # list of arrays
         if self._has_audio and self._version >= 5:
             self._n_audio = np.frombuffer(
                 self._index_bin_buffer, dtype=np.int32, count=self._num_documents, offset=offset
@@ -267,19 +266,19 @@ class GPTMemmapDataset(GPTIndexedDataset):
         if self._has_audio:
             audio_positions = self._audio_positions[idx]
             # increment offset by documents and images
-            offset = (
+            aud_offset = (
                 self._pointers[idx]
                 + offset * np.dtype(self._dtype).itemsize
                 + self._document_sizes[idx] * np.dtype(self._dtype).itemsize
             )
 
             if self._has_images and len(self._image_lengths) > 0:
-                offset += self._image_lengths[idx].prod(initial=3) * np.dtype(np.uint8).itemsize
+                aud_offset += self._image_lengths[idx].prod(initial=3) * np.dtype(np.uint8).itemsize
             all_audio = np.frombuffer(
                 self._bin_buffer,
                 dtype=np.dtype(np.float32),
                 count=self._audio_lengths[idx].sum(),
-                offset=offset,
+                offset=aud_offset,
             )
             start = 0
             for audio_length in self._audio_lengths[idx]:
@@ -295,23 +294,37 @@ class GPTMemmapDataset(GPTIndexedDataset):
             ]
             sample_spans[:, 0] = np.maximum(sample_spans[:, 0], offset) - offset
             sample_spans[:, 1] = np.minimum(sample_spans[:, 1], offset + len(token_ids) - 1) - offset
-            if images:
-                image_idx = 0
-                for span in sample_spans:
-                    additional_tokens = 0
-                    image_position = image_positions[image_idx] if image_idx < len(image_positions) else float("inf")
-                    while image_position >= span[0] and image_position <= span[1]:
-                        image_tokens = get_num_image_tokens(
-                            get_resize_dims(*self._image_lengths[idx][image_idx], image_size, image_size, patch_size),
-                            patch_size,
-                            image_break=image_break,
-                        )
-                        additional_tokens += image_tokens
-                        image_idx += 1
-                        image_position = (
-                            image_positions[image_idx] if image_idx < len(image_positions) else float("inf")
-                        )
-                    span[1] += additional_tokens
+            # if images:
+            #     image_idx = 0
+            #     for span in sample_spans:
+            #         additional_tokens = 0
+            #         image_position = image_positions[image_idx] if image_idx < len(image_positions) else float("inf")
+            #         while image_position >= span[0] and image_position <= span[1]:
+            #             image_tokens = get_num_image_tokens(
+            #                 get_resize_dims(*self._image_lengths[idx][image_idx], image_size, image_size, patch_size),
+            #                 patch_size,
+            #                 image_break=image_break,
+            #             )
+            #             additional_tokens += image_tokens
+            #             image_idx += 1
+            #             image_position = (
+            #                 image_positions[image_idx] if image_idx < len(image_positions) else float("inf")
+            #             )
+            #         span[1] += additional_tokens
+            # if audio:
+            #     audio_idx = 0
+            #     for span in sample_spans:
+            #         additional_tokens = 0
+            #         audio_position = audio_positions[audio_idx] if audio_idx < len(audio_positions) else float("inf")
+            #         while audio_position >= span[0] and audio_position <= span[1]:
+            #             audio_tokens = ...
+            #             additional_tokens += audio_tokens
+            #             audio_idx += 1
+            #             audio_position = (
+            #                 audio_positions[audio_idx] if audio_idx < len(audio_positions) else float("inf")
+            #             )
+            #         span[1] += additional_tokens
+
         return GPTSample(
             token_ids=token_ids,
             images=images,
