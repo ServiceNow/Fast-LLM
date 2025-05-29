@@ -325,10 +325,11 @@ class GPTMemmapDataset(GPTIndexedDataset):
                     for image in document.images:
                         # assume 3 channels (RGB) for all images
                         with PIL.Image.open(io.BytesIO(image["bytes"])) as img:
-                            if img.mode == "L":
-                                # Convert grayscale to RGB
+                            if img.mode != "RGB":
+                                # Convert all images to RGB
                                 img = img.convert("RGB")
                             pixels = np.array(img).transpose(2, 0, 1)  # HWC to CHW
+                            assert pixels.dtype == np.uint8, f"Expected uint8 pixels, got {pixels.dtype}."
                         image_lengths.append(np.array(pixels.shape[1:]))
                         bin_stream.write(pixels.tobytes(order="C"))
                         total_im_size += pixels.size
