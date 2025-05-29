@@ -139,7 +139,7 @@ def test_convert_distributed_to_fast_llm():
 
 
 @pytest.mark.depends(on=["test_convert_distributed_to_fast_llm"])
-def test_convert_fast_llm_to_huggingface():
+def test_convert_fast_llm_to_huggingface():    
     if HUGGINGFACE_CHECKPOINT_FORMAT is None:
         pytest.skip(f"Conversion not supported for {TEST_MODEL}")
     _run_conversion(
@@ -409,7 +409,7 @@ def test_run_converted_model():
     )
     errors = []
     compare = CompareConfig()
-    model_as_hf = transformers.AutoModelForCausalLM.from_pretrained(
+    model_as_hf = transformers.AutoModel.from_pretrained(
         _CONVERT_PATH / "huggingface_0", trust_remote_code=HUGGINGFACE_CHECKPOINT_FORMAT.trust_remote_code
     ).cuda()
     for name, model in zip(
