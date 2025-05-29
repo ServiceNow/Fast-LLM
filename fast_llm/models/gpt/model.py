@@ -10,16 +10,12 @@ from fast_llm.engine.config_utils.tensor_space import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames, PhaseType
 from fast_llm.engine.inference.runner import InferenceRunner
 from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
+from fast_llm.layers.common.config import RoutingType
 from fast_llm.layers.language_model.config import LanguageModelKwargs, LanguageModelLossNames
 from fast_llm.layers.language_model.embedding import WORD_EMBEDDINGS_WEIGHT, LanguageModelEmbedding
 from fast_llm.layers.language_model.head import OUTPUT_WEIGHTS, LanguageModelHead
 from fast_llm.layers.language_model.preprocessing import PositionEmbeddingPreprocessor, PreferenceSpanPreprocessor
-from fast_llm.layers.transformer.config import (
-    RoutingType,
-    TransformerDimNames,
-    TransformerKwargs,
-    TransformerLossNames,
-)
+from fast_llm.layers.transformer.config import TransformerDimNames, TransformerKwargs, TransformerLossNames
 from fast_llm.layers.transformer.preprocessing import (
     BackupAttentionPreprocessor,
     FlashAttnVarlenPreprocessor,
@@ -62,9 +58,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
         if self._config.use_absolute_position_embeddings:
             self._preprocessors.append(PositionEmbeddingPreprocessor(self._config, self._tensor_space))
         if self._config.transformer.rotary.enabled:
-            self._preprocessors.append(
-                RotaryEmbeddingPreprocessor(self._config.transformer.rotary, self._tensor_space)
-            )
+            self._preprocessors.append(RotaryEmbeddingPreprocessor(self._config.rotary, self._tensor_space))
         if self._use_flash_attention:
             self._preprocessors.append(FlashAttnVarlenPreprocessor(self._config.transformer, self._tensor_space))
         else:
@@ -166,7 +160,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             sequence_first = self._config.sequence_first
             assert not (need_sequence_first and not sequence_first)
 
-        hidden_dim = self._tensor_space.get_tensor_dim(TransformerDimNames.hidden)
+        hidden_dim = self._tensor_space.get_tensor_dim(TransformerDimNames.input_hidden)
         hidden_dims = (
             (hidden_sequence_q_dim, batch_dim, hidden_dim)
             if sequence_first

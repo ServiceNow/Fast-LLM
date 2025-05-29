@@ -80,6 +80,7 @@ class Attention(torch.nn.Module):
         config: TransformerConfig,
         tensor_space: TensorSpace,
         layer_index,
+        block_name: str = "",
     ):
         super().__init__()
         self._config = config
@@ -87,7 +88,7 @@ class Attention(torch.nn.Module):
         Assert.in_range_incl(layer_index, 1, max(self._config.num_layers, 1))
         self._layer_index = layer_index
         self._sequence_parallel = self._tensor_space.distributed_config.sequence_tensor_parallel
-        self._debug_transformer = self._config.debug_transformer
+        self._debug_transformer = self._config.debug_block
         self._use_flash_attention = self._config.do_use_flash_attention(self._tensor_space.distributed_config)
 
         init_method_qkv = init_normal_(
@@ -101,45 +102,53 @@ class Attention(torch.nn.Module):
             max_val=self._config.init_method_max_attn_proj,
         )
 
-        self._kv_channels = self._tensor_space.get_tensor_dim(TransformerDimNames.kv_channels).size
-        self._head_groups = self._tensor_space.get_tensor_dim(TransformerDimNames.head_groups).global_size
-        self._local_head_groups = self._tensor_space.get_tensor_dim(TransformerDimNames.head_groups).size
-        self._local_heads_per_group = self._tensor_space.get_tensor_dim(TransformerDimNames.group_heads).size
+        self._kv_channels = self._tensor_space.get_tensor_dim(f"{TransformerDimNames.kv_channels}_{block_name}").size
+        self._head_groups = self._tensor_space.get_tensor_dim(
+            f"{TransformerDimNames.head_groups}_{block_name}"
+        ).global_size
+        self._local_head_groups = self._tensor_space.get_tensor_dim(
+            f"{TransformerDimNames.head_groups}_{block_name}"
+        ).size
+        self._local_heads_per_group = self._tensor_space.get_tensor_dim(
+            f"{TransformerDimNames.group_heads}_{block_name}"
+        ).size
         self._local_heads = self._local_head_groups * self._local_heads_per_group
         self._softmax_scale = self._kv_channels ** (-self._config.attention_softmax_scale_power)
 
-        hidden_dim = self._tensor_space.get_tensor_dim(TransformerDimNames.hidden)
+        hidden_dim = self._tensor_space.get_tensor_dim(f"{TransformerDimNames.hidden}_{block_name}")
+
+        attention_lr_scale = self._config.attention_lr_scale
 
         # TODO: Merge the query and key-value computations? (harder with sequence parallel.)
         self.query = OutputParallelLinear(
             hidden_dim,
-            self._tensor_space.get_tensor_dim(TransformerDimNames.composite_query),
+            self._tensor_space.get_tensor_dim(f"{TransformerDimNames.composite_query}_{block_name}"),
             bias=self._config.add_attn_qkv_bias,
             weight_init_method=init_method_qkv,
             bias_init_method=init_method_qkv if self._config.random_bias_init else init_zeros_,
             sequence_parallel=self._sequence_parallel,
-            lr_scale=self._config.attention_lr_scale,
+            lr_scale=attention_lr_scale,
         )
         self.key_value = OutputParallelLinear(
             hidden_dim,
-            self._tensor_space.get_tensor_dim(TransformerDimNames.composite_key_value),
+            self._tensor_space.get_tensor_dim(f"{TransformerDimNames.composite_key_value}_{block_name}"),
             bias=self._config.add_attn_qkv_bias,
             weight_init_method=init_method_qkv,
             bias_init_method=init_method_qkv if self._config.random_bias_init else init_zeros_,
             sequence_parallel=self._sequence_parallel,
-            lr_scale=self._config.attention_lr_scale,
+            lr_scale=attention_lr_scale,
         )
         self._query_key_value = wrap_forward_backward(self._query_key_value_forward, self._query_key_value_backward)
 
         # Output.
         self.dense = InputParallelLinear(
-            self._tensor_space.get_tensor_dim(TransformerDimNames.composite_dense),
+            self._tensor_space.get_tensor_dim(f"{TransformerDimNames.composite_dense}_{block_name}"),
             hidden_dim,
             bias=self._config.add_attn_dense_bias,
             weight_init_method=init_method_std_attn_proj,
             bias_init_method=init_method_std_attn_proj if self._config.random_bias_init else init_zeros_,
             sequence_parallel=self._sequence_parallel,
-            lr_scale=self._config.attention_lr_scale,
+            lr_scale=attention_lr_scale,
         )
 
         # PEFT.
