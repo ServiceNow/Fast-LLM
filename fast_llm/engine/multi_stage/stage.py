@@ -121,7 +121,7 @@ class Stage(StageBase):
         assert self._mode.support_backward
         input_, output = grad_context
         output.backward(output_grad)
-        return input_.grad
+        return input_.grad if input_.grad is not None else torch.zeros_like(input_)
 
     def restore_parameters(self) -> None:
         assert self._is_setup
