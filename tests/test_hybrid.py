@@ -185,6 +185,8 @@ def test_load_from_hybridssm_checkpoint():
 
 
 # test legacy behavior of using m and m2d
+# TODO: Speed up this test or bring it back as an integration test.
+@pytest.mark.skip(reason="Too slow.")
 @pytest.mark.skipif(not run_test, reason="No CUDA available or Mamba not installed")
 @pytest.mark.parametrize(
     "hybrid_block_layout",

@@ -108,7 +108,7 @@ def test_resume_frozen():
     )
 
 
-def _run_conversion(config: ConversionConfig):
+def _run_conversion(config: ConvertConfig):
     if config.output.path.is_dir() and not REUSE_RESULTS:
         shutil.rmtree(config.output.path)
     if not config.output.path.is_dir():

@@ -143,6 +143,12 @@ for name in RotaryEmbeddingType:
     RotaryConfig.register_subclass(name.value, RotaryConfig)
 
 
+class AddLinearBiasChoices(str, enum.Enum):
+    nowhere = "nowhere"
+    everywhere = "everywhere"
+    only_attn_qkv = "only_attn_qkv"
+
+
 class TransformerSubLayerName(BaseBlockSubLayerName):
     # TODO: Use this to replace AddLinearBiasChoices.
     query = "query"
@@ -202,12 +208,6 @@ class TransformerLoRaConfig(BaseBlockLoRAConfig):
             raise ValueError(
                 f"{TransformerSubLayerName.key_value.value}, {TransformerSubLayerName.key.value} and {TransformerSubLayerName.value_.value} are mutually exclusive."
             )
-
-
-# for name in PeftType:
-#     # We need this because we are using the reserved field name `type`.
-#     # TODO: Implement proper dynamic typing.
-#     TransformerPeftConfig.register_subclass(name.value, TransformerPeftConfig)
 
 
 @config_class()

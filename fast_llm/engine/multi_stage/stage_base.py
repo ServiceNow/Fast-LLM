@@ -316,7 +316,6 @@ class StageBase(Configurable[StageConfig]):
         """
         Given a global parameter tensor, set the associated slice of a local parameter shard.
         Return the size of the local slice.
-        TODO: Doesn't work
         """
         fsdp_index = self._fsdp_index[parameter_name]
         return self._fsdps[fsdp_index].import_state_tensor(parameter_name, shards[fsdp_index], tensor)
@@ -324,7 +323,6 @@ class StageBase(Configurable[StageConfig]):
     def _export_shard(
         self, shards: tuple[torch.Tensor], data_type: DataType | None = None
     ) -> typing.Generator[tuple[str, torch.Tensor], None, None]:
-        # TODO: Doesn't work
         for fsdp, shard in zip(self._fsdps, shards, strict=True):
             yield from fsdp.export_shard(shard, self._distributed, data_type)
 
