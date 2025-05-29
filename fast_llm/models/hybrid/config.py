@@ -30,9 +30,13 @@ logger = logging.getLogger(__name__)
 
 @config_class(registry=True)
 class HybridBlockConfig(Config):
-    _abstract = True
     block_class: typing.ClassVar[type[BaseBlock]]
-    # config: TransformerConfig | SSMConfig
+
+    type: str | None = Field(
+        default="transformer",
+        desc="The config class name.",
+        hint=FieldHint.feature,
+    )
 
     lr_scale: list[float] | None = Field(
         default=None,
@@ -45,6 +49,17 @@ class HybridBlockConfig(Config):
         desc="Hidden size of the block.",
         hint=FieldHint.architecture,
     )
+
+    @classmethod
+    def _from_dict(
+        cls,
+        default: dict[str, typing.Any],
+        strict: bool = True,
+        flat: bool = False,
+    ) -> typing.Self:
+        if cls is HybridBlockConfig and cls.get_subclass(default.get("type")) is None:
+            raise ValueError(f"Block type not set in {cls}")
+        return super()._from_dict(default, strict=strict, flat=flat)
 
 
 @config_class(dynamic_type={HybridBlockConfig: "transformer"})
@@ -177,7 +192,7 @@ class HybridBaseModelConfig(LanguageModelBaseConfig):
     # TODO: currently num_layers is defined in TransformerConfig, but ideally this should be migrated to LanguageModelBaseConfig in the future.
     # Hence, for now: the num_layers can be set in the first transformer block, if no transformer blocks used we will fallback to num_layers parameter defined here.
     num_layers: int = Field(
-        default=12,
+        default=None,
         desc="Number of layers in the transformer.",
         hint=FieldHint.architecture,
         valid=check_field(Assert.geq, 0),
@@ -252,13 +267,12 @@ class HybridBaseModelConfig(LanguageModelBaseConfig):
 
         # set num_layers from transformer block config if it exists and if num_layers is not set in HybridBaseModelConfig
         # i.e. the resolution hierarchy for num_layers is: HybridBaseModelConfig.num_layers > TransformerBlockConfig.num_layers
-        if first_transformer_block_config is not None:
+        if first_transformer_block_config is not None and self.num_layers is None:
             num_layers = first_transformer_block_config.num_layers
             with self._set_implicit_default():
-                if self.num_layers is None:
-                    logger.warning(
-                        f"TransformerBlockConfig overwrites BaseModelConfig num_layers, setting num_layers = {num_layers}"
-                    )
+                logger.warning(
+                    f"TransformerBlockConfig overwrites BaseModelConfig num_layers, setting num_layers = {num_layers}"
+                )
                 self.num_layers = num_layers
 
         # make sure that the hybrid_block_layout length matches the num_layers. If it doesn't, repeat the hybrid_block_layout;

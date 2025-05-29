@@ -266,7 +266,4 @@ class LanguageModelBaseConfig(BaseModelConfig):
         cls._handle_renamed_field(default, "layer_norm_eps", "epsilon")
         cls._handle_renamed_field(default, "zero_centered_normalization", "zero_centered")
 
-        if "match_megatron" in default:
-            assert "use_megatron_initialization" not in default
-            default["use_megatron_initialization"] = default.pop("match_megatron")
         return super().from_flat_dict(default, strict)
