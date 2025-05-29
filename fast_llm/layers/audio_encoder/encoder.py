@@ -14,8 +14,9 @@ class AudioConv(Layer):
         super().__init__()
         self._tensor_space = tensor_space
         self.dropout_p = config.encoder_dropout
+        self._conv_lr_scale = config.conv_lr_scale
+        self._pos_emb_lr_scale = config.pos_emb_lr_scale
 
-        # TODO Toby: lr_scale
         self.conv1_weight = ParameterMeta.from_dims(
             (
                 self._tensor_space.get_tensor_dim(AudioEncoderDimNames.out_channels),
@@ -23,8 +24,9 @@ class AudioConv(Layer):
                 self._tensor_space.get_tensor_dim(AudioEncoderDimNames.kernel_size),
             ),
             init_method=init_normal_(),
+            lr_scale=self._conv_lr_scale,
         )
-        self.conv1_stride = 1  # TODO: parameterize?
+        self.conv1_stride = 1  # TODO Toby: parameterize?
 
         self.conv2_weight = ParameterMeta.from_dims(
             (
@@ -33,15 +35,20 @@ class AudioConv(Layer):
                 self._tensor_space.get_tensor_dim(AudioEncoderDimNames.kernel_size),
             ),
             init_method=init_normal_(),
+            lr_scale=self._conv_lr_scale,
         )
-        self.conv2_stride = 2  # TODO: parameterize?
+        self.conv2_stride = 2  # TODO Toby: parameterize?
 
         if config.conv_bias:
             self.conv1_bias = ParameterMeta.from_dims(
-                (self._tensor_space.get_tensor_dim(AudioEncoderDimNames.out_channels),), init_method=init_normal_()
+                (self._tensor_space.get_tensor_dim(AudioEncoderDimNames.out_channels),),
+                init_method=init_normal_(),
+                lr_scale=self._conv_lr_scale,
             )
             self.conv2_bias = ParameterMeta.from_dims(
-                (self._tensor_space.get_tensor_dim(AudioEncoderDimNames.out_channels),), init_method=init_normal_()
+                (self._tensor_space.get_tensor_dim(AudioEncoderDimNames.out_channels),),
+                init_method=init_normal_(),
+                lr_scale=self._conv_lr_scale,
             )
         else:
             self.conv1_bias = None
@@ -53,6 +60,7 @@ class AudioConv(Layer):
                 self._tensor_space.get_tensor_dim(AudioEncoderDimNames.out_channels),
             ),
             init_method=init_normal_(),
+            lr_scale=self._pos_emb_lr_scale,
         )
 
     def forward(
@@ -66,7 +74,7 @@ class AudioConv(Layer):
         if isinstance(input_, TensorMeta):
             return TensorMeta.from_dims(hidden_dims, tensor_name="audio conv output", dtype=input_.dtype)
 
-        # TODO: check how to best cast dtype
+        # TODO Toby: check how to best cast dtype
         input_ = input_.to(self.conv1_weight.dtype)
 
         input_ = torch.nn.functional.conv1d(

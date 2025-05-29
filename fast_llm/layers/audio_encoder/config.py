@@ -1,10 +1,11 @@
 import enum
 
-from fast_llm.config import Field, FieldHint, config_class
+from fast_llm.config import Field, FieldHint, check_field, config_class, skip_valid_if_none
 from fast_llm.engine.base_model.config import BaseModelConfig
 from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
 from fast_llm.functional.config import ActivationType
 from fast_llm.layers.transformer.config import AudioTransformerConfig
+from fast_llm.utils import Assert
 
 
 class AudioEncoderDimNames:
@@ -68,6 +69,18 @@ class AudioEncoderConfig(BaseModelConfig):
         desc="Encoder convolution layer kernel size.",
         hint=FieldHint.core,
     )
+    conv_lr_scale: float | None = Field(
+        default=None,
+        desc="Custom learning rate scale for the convolutional layer weights.",
+        hint=FieldHint.feature,
+        valid=skip_valid_if_none(check_field(Assert.geq, 0)),
+    )
+    pos_emb_lr_scale: float | None = Field(
+        default=None,
+        desc="Custom learning rate scale for the position embedding layer weights.",
+        hint=FieldHint.feature,
+        valid=skip_valid_if_none(check_field(Assert.geq, 0)),
+    )
 
     # adapter configs
     adapter_size: int = Field(
@@ -84,6 +97,12 @@ class AudioEncoderConfig(BaseModelConfig):
         default=True,
         desc="Whether to use bias in the adapter layer.",
         hint=FieldHint.optional,
+    )
+    adapter_lr_scale: float | None = Field(
+        default=None,
+        desc="Custom learning rate scale for the adapter weights.",
+        hint=FieldHint.feature,
+        valid=skip_valid_if_none(check_field(Assert.geq, 0)),
     )
 
     # audio configs

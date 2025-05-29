@@ -22,11 +22,14 @@ class AudioAdapter(Layer):
         input_dim = tensor_space.get_tensor_dim(AudioEncoderDimNames.adapter_input)
         self._activation_type = config.adapter_activation_type
         self._use_adapter_bias = config.adapter_bias
+        self.lr_scale = config.adapter_lr_scale
 
         self.norm_1 = config.transformer.normalization.get_layer(audio_hidden_dim)
+        self.norm_1.lr_scale = self.lr_scale
         self.norm_2 = config.transformer.normalization.get_layer(
             tensor_space.get_tensor_dim(AudioEncoderDimNames.adapter_size)
         )
+        self.norm_2.lr_scale = self.lr_scale
 
         # TODO Soham: Make them OutputParallelLinear instead? How would this work with parallelism?
         self.layer_1 = Linear(
@@ -35,6 +38,7 @@ class AudioAdapter(Layer):
             bias=self._use_adapter_bias,
             weight_init_method=init_normal_(),
             bias_init_method=init_normal_(),
+            lr_scale=self.lr_scale,
         )
         self.layer_2 = Linear(
             tensor_space.get_tensor_dim(AudioEncoderDimNames.adapter_size),
@@ -42,6 +46,7 @@ class AudioAdapter(Layer):
             bias=self._use_adapter_bias,
             weight_init_method=init_normal_(),
             bias_init_method=init_normal_(),
+            lr_scale=self.lr_scale,
         )
 
         self.aud_downsampling_k = config.aud_downsampling_k
@@ -59,6 +64,7 @@ class AudioAdapter(Layer):
                 tensor_name="Audio adapter output",
                 dtype=input_.dtype,
             )
+        input_ = self.norm_1(input_)
         batch_size, seq_len, dim = input_.size()
 
         # Check if sequence length is divisible by downsampling rate.

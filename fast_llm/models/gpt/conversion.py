@@ -644,10 +644,6 @@ class WhisperHuggingfaceCheckpointHandler(WeightAndBiasConverterMixin, Huggingfa
                 fast_llm_names=(("num_mel_bins",),),
                 export_names=(("num_mel_bins",),),
             ),
-            RenameParamConverter(
-                fast_llm_names=(("aud_downsampling_k",),),
-                export_names=(("encoder_projector_ds_rate",),),
-            ),
         ]
 
     def _get_transformer_mlp_converters(self, fast_llm_prefix: str, hf_prefix: str) -> list[WeightConverter]:
@@ -1023,6 +1019,15 @@ class AyraAudioModelHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointH
             RenameParamConverter(
                 fast_llm_names=(("audio_encoder", "adapter_size"),),
                 export_names=(("adapter_size",),),
+            ),
+            RenameParamConverter(
+                fast_llm_names=(
+                    (
+                        "audio_encoder",
+                        "aud_downsampling_k",
+                    ),
+                ),
+                export_names=(("encoder_projector_ds_rate",),),
             ),
         ]
 
