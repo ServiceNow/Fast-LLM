@@ -403,7 +403,7 @@ class DreamGenerationMixin(GenerationMixin):
 
         block_size = kwargs.pop("block_size", None)
         use_cache = kwargs.pop("use_cache", False)
-        casual_cache = kwargs.pop("casual_cache", False)
+        causal_cache = kwargs.pop("causal_cache", False)
         
         
         if block_size is None:
@@ -417,16 +417,15 @@ class DreamGenerationMixin(GenerationMixin):
             )
             return result
         else:
-            if casual_cache:
+            if causal_cache:
                 # Block generation with casual KV Caching only works for Flash attention
-                result = self._sample_with_block_with_casual_kv(
+                result = self._sample_with_block_with_causal_kv(
                     input_ids,
                     attention_mask=attention_mask,
                     generation_config=generation_config,
                     generation_tokens_hook_func=generation_tokens_hook_func,
                     generation_logits_hook_func=generation_logits_hook_func,
                     block_size=block_size,
-                    use_cache=use_cache,
                 )
                 return result
             else:
@@ -534,7 +533,7 @@ class DreamGenerationMixin(GenerationMixin):
                     else:
                         raise RuntimeError(f"Unknown alg: {alg}")
                     num_mask_token = mask_index.sum()
-                    number_transfer_tokens =  num_mask_token if num_mask_token <= batch_size else ceil(num_mask_token * (1 - s / t)) if i < steps - 1 else num_mask_token
+                    number_transfer_tokens =  ceil(num_mask_token * (1 - s / t)) if i < steps - 1 else num_mask_token
                     
                     if number_transfer_tokens > 0:
                         if alg_temp is None or alg_temp == 0:
@@ -693,10 +692,10 @@ class DreamGenerationMixin(GenerationMixin):
                         else:
                             raise RuntimeError(f"Unknown alg: {alg}")
                         num_mask_token = mask_index.sum()
-                        number_transfer_tokens =  num_mask_token if num_mask_token <= batch_size else ceil(num_mask_token * (1 - s / t)) if i < steps - 1 else num_mask_token
+                        number_transfer_tokens = ceil(num_mask_token * (1 - s / t)) if i < steps - 1 else num_mask_token
                         
                         # print(f"block: {blk_indx} step: {i} batch: {b} confidence: {confidence} x0: {x0}")
-                        # print(f"number_transfer_tokens: {number_transfer_tokens} num_mask_token: {num_mask_token}")
+                        # print(f"number_transfer_tokens: {number_transfer_tokens} num_mask_token: {num_mask_token} ")
                         if number_transfer_tokens > 0:
                             if alg_temp is None or alg_temp == 0:
                                 _, transfer_index = torch.topk(confidence, number_transfer_tokens)
@@ -715,11 +714,12 @@ class DreamGenerationMixin(GenerationMixin):
 
                 if use_cache:
                     # 1. Update settled tokens
-                    x[:, past_length:] = x_input.clone()
+                    x[:, past_length:] = x_input
                     
                     # Prepare for next forward pass
                     # 2. Update past_key_values to include only settled tokens from previous blocks 
                     past_key_values = model_outputs.past_key_values
+                    # need to reset this since the Attention call will add new KVs
                     past_key_values.crop(settled_length)
                     # past_key_values are already set from the last forward pass
                     past_length = past_key_values.get_seq_length()
@@ -744,6 +744,8 @@ class DreamGenerationMixin(GenerationMixin):
                     )
                     
                     # Expand attention mask to include context/settled tokens
+                    # This is not perfect sine it ignores the pad tokens or eos that can exist in the settled tokens (context as well).
+                    # print(f"attention_mask_tmp: {attention_mask_tmp.shape}")
                     attention_mask_tmp = F.pad(attention_mask_tmp, 
                                                pad=(0, past_length, 0, 0, 0, 0, 0, 0),
                                                mode='constant',
@@ -775,7 +777,6 @@ class DreamGenerationMixin(GenerationMixin):
                 # print("unmasked all tokens in current x exiting")
                 break
             settled_length += block_size
-            
                 
         if return_dict_in_generate:
             return DreamModelOutput(
@@ -786,7 +787,7 @@ class DreamGenerationMixin(GenerationMixin):
             return x
         
 # block generation with casual kv cache for flash attention ONLY      
-    def _sample_with_block_with_casual_kv(
+    def _sample_with_block_with_causal_kv(
         self,
         input_ids: torch.LongTensor,
         attention_mask: Optional[torch.LongTensor],
@@ -861,6 +862,8 @@ class DreamGenerationMixin(GenerationMixin):
         # 3. Create new input for prediction
         x_input = x[:, past_length:].clone()
         
+        # print(f"settled_length: {settled_length} past_length: {past_length} x_input: {x_input.shape} past_key_values: {past_key_values.get_seq_length()}")
+        
         for blk_indx in range(num_of_blocks):
             current_block = (num_of_blocks - (blk_indx + 1)) * block_size
             
@@ -904,7 +907,7 @@ class DreamGenerationMixin(GenerationMixin):
                         else:
                             raise RuntimeError(f"Unknown alg: {alg}")
                         num_mask_token = mask_index.sum()
-                        number_transfer_tokens =  num_mask_token if num_mask_token <= batch_size else ceil(num_mask_token * (1 - s / t)) if i < steps - 1 else num_mask_token
+                        number_transfer_tokens = ceil(num_mask_token * (1 - s / t)) if i < steps - 1 else num_mask_token
                         
                         # print(f"block: {blk_indx} step: {i} batch: {b} confidence: {confidence} x0: {x0}")
                         # print(f"number_transfer_tokens: {number_transfer_tokens} num_mask_token: {num_mask_token}")
@@ -930,15 +933,14 @@ class DreamGenerationMixin(GenerationMixin):
                 # Prepare for next forward pass
                 
                 # 1. Update past_key_values to include only settled tokens from previous blocks 
-                past_key_values = model_outputs.past_key_values
-                past_key_values.crop(settled_length)
-                past_length = past_key_values.get_seq_length()
-                                    
-                # 2. Generic cache-dependent input preparation
-                # https://github.com/huggingface/transformers/blob/5f4ecf2d9f867a1255131d2461d75793c0cf1db2/src/transformers/generation/utils.py#L410C13-L410C53
-                x_input = x[:, past_length:].clone()
+                # past_key_values = model_outputs.past_key_values
                 
-
+                # needed bcuz Attention module adds them to cache so we need to remove them for next forward pass
+                # we can stop the Attention module from adding them with a param for speedup
+                past_key_values.crop(settled_length)
+                # past_length = past_key_values.get_seq_length()
+                # print(f"past_length: {past_length} x_input: {x_input.shape} past_length: {past_length} past_key_values: {past_key_values.get_seq_length()}")
+                
                 if histories is not None:
                     histories.append(x.clone())
                 
@@ -949,6 +951,9 @@ class DreamGenerationMixin(GenerationMixin):
             model_outputs = self(x_input, attention_mask=None, position_ids=None, use_cache=True, past_key_values=past_key_values, is_causal=True, cache_position=None)
             past_key_values = model_outputs.past_key_values
             past_key_values.crop(settled_length)
+            past_length = past_key_values.get_seq_length()
+            x_input = x[:, past_length:].clone()
+            # print(f"settled_length: {settled_length} past_length: {past_length} x_input: {x_input.shape} past_key_values: {past_key_values.get_seq_length()}")
                 
                 
         if return_dict_in_generate:
