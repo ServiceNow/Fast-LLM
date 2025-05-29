@@ -170,7 +170,13 @@ class VisionPreprocessor(Preprocessor):
         max_seqlen = -1
         kwargs.get(TransformerKwargs.sequence_first)
         for idx, (imgs, sizes, positions) in enumerate(zip(images, image_sizes, image_positions)):
-            seq_patches = []
+            # add an empty tensor for clean concatenation in case of no images
+            seq_patches = [
+                torch.tensor([]).to(
+                    dtype=self._tensor_space.distributed_config.training_dtype.torch,
+                    device=self._tensor_space.distributed.device,
+                )
+            ]
             sample_cu_seqlen = 0
             for image, size, position in zip(imgs, sizes, positions):
                 seqlen = get_num_patches(*size, patch_size)
@@ -211,9 +217,16 @@ class VisionPreprocessor(Preprocessor):
                     ]
                 )
             )
-            position_ids = torch.cat(
-                [position_ids_in_meshgrid(*size, im_height // patch_size, patch_size) for size in sizes]
-            ).to(device=self._tensor_space.distributed.device)
+            if sizes:
+                position_ids = torch.cat(
+                    [position_ids_in_meshgrid(*size, im_height // patch_size, patch_size) for size in sizes]
+                ).to(device=self._tensor_space.distributed.device)
+            else:
+                position_ids = torch.tensor(
+                    [],
+                    dtype=torch.int64,
+                    device=self._tensor_space.distributed.device,
+                )
             # We pad at the end instead of padding at the position in meshgrid because flash attention does not support custom attention masks
             patch_position_ids.append(
                 torch.cat(
