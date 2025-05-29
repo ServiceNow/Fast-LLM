@@ -620,12 +620,13 @@ class DreamGenerationMixin(GenerationMixin):
         # pad input_ids to max_length
         x = F.pad(input_ids, (0, max_length - input_ids.shape[1]), value=mask_token_id)
 
+        # TODO: Avoid this check and all future checks by always creating a mask
         # If any padding tokens i.e 0 in attention mask
         if attention_mask is not None and torch.any(attention_mask == 0.0):
             # we do not mask the [MASK] tokens so value = 1.0
             attention_mask = F.pad(attention_mask, (0, max_length - attention_mask.shape[1]), value=1.0)
-            tok_idx = attention_mask.long().cumsum(-1) - 1
-            tok_idx.masked_fill_(attention_mask == 0, 1)
+            tok_idx_base = attention_mask.long().cumsum(-1) - 1
+            tok_idx_base.masked_fill_(attention_mask == 0, 1)
             # Leave padding out "<|endoftext|>1+1=2 2+2=" -> [ 1,  0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14, 15, 16, 17]
             
             # attention_mask is of shape [B, N]
@@ -636,7 +637,7 @@ class DreamGenerationMixin(GenerationMixin):
                 attention_mask.unsqueeze(1).unsqueeze(-1),
             )
         else:
-            tok_idx = None
+            tok_idx_base = None
             attention_mask = "full"
 
         timesteps = torch.linspace(1, eps, steps + 1, device=x.device)
@@ -648,13 +649,14 @@ class DreamGenerationMixin(GenerationMixin):
         past_length = 0
         settled_length = input_ids_length
         x_input = x.clone()
+        tok_idx = tok_idx_base.clone() if tok_idx_base is not None else None
         
         for blk_indx in range(num_of_blocks):
             current_block = (num_of_blocks - (blk_indx + 1)) * block_size
             
             for i in range(steps):
                            
-                model_outputs = self(x_input, attention_mask, tok_idx, use_cache=use_cache, past_key_values=past_key_values, cache_position=None)
+                model_outputs = self(x_input, attention_mask, tok_idx, use_cache=use_cache, past_key_values=past_key_values)
                 
                 logits = model_outputs.logits
                 logits = torch.cat([logits[:,:1], logits[:, :-1]], dim=1)
@@ -716,6 +718,7 @@ class DreamGenerationMixin(GenerationMixin):
                     # 1. Update settled tokens
                     x[:, past_length:] = x_input
                     
+                    # TODO: We can avoid these updates by setting a flag in the Attention call to not set KVs for these forward passes and only set when we reach end of the block
                     # Prepare for next forward pass
                     # 2. Update past_key_values to include only settled tokens from previous blocks 
                     past_key_values = model_outputs.past_key_values
@@ -725,16 +728,16 @@ class DreamGenerationMixin(GenerationMixin):
                     past_length = past_key_values.get_seq_length()
                                        
                      
-                    # 3. Generic cache-dependent input preparation
+                    # 3. Generic cache-dependent input and position index
                     # https://github.com/huggingface/transformers/blob/5f4ecf2d9f867a1255131d2461d75793c0cf1db2/src/transformers/generation/utils.py#L410C13-L410C53
                     x_input = x[:, past_length:].clone()
-                    # This will use cache_position to determine the position of the new tokens
-                    tok_idx = None
+                    tok_idx = tok_idx_base[:, past_length:] if tok_idx is not None else None
                     
+                    # TODO: optimize this we don't need to compute this every forward pass maybe only change location where tokens are settled; adhering to early stopping
                     # 4. Set attention mask
-                    # Update attention mask based on pad_token_id and eos_token_id
+                    # Update attention mask based from the full x to capture past eos and pad tokens masks
                     attention_mask_tmp = torch.where(
-                        (x_input == pad_token_id) | (x_input == eos_token_id),
+                        (x == pad_token_id) | (x == eos_token_id),
                         torch.tensor(0, device=x.device, dtype=torch.bool),
                         torch.tensor(1, device=x.device, dtype=torch.bool)
                     )
@@ -743,15 +746,12 @@ class DreamGenerationMixin(GenerationMixin):
                         attention_mask_tmp.unsqueeze(1).unsqueeze(-1),
                     )
                     
-                    # Expand attention mask to include context/settled tokens
-                    # This is not perfect sine it ignores the pad tokens or eos that can exist in the settled tokens (context as well).
-                    # print(f"attention_mask_tmp: {attention_mask_tmp.shape}")
-                    attention_mask_tmp = F.pad(attention_mask_tmp, 
-                                               pad=(0, past_length, 0, 0, 0, 0, 0, 0),
-                                               mode='constant',
-                                               value=1)
+                    # Drop values from the 3rd dimension to the size of new x_input so that it current Qs (aka inputs)
+                    # [B, 1, Q_dim, K_dim]
+                    attention_mask_tmp = attention_mask_tmp[:, :, past_length:, :]
                     attention_mask = attention_mask_tmp
-                    # print(f"attention_mask: {attention_mask_tmp.shape} {attention_mask_tmp}")
+                    # print(f"attention_mask: {attention_mask_tmp.shape}")
+                    
                 else:
                     x = x_input
                     
@@ -767,11 +767,13 @@ class DreamGenerationMixin(GenerationMixin):
                         attention_mask_tmp.unsqueeze(1).unsqueeze(-1),
                     )
                     attention_mask = attention_mask_tmp
+                    # No need to update tok_idx since we are computing all KVs with original positions again
 
                 if histories is not None:
                     histories.append(x.clone())
                 
-
+                # print(f"x_input: {x_input.shape} tok_idx: {tok_idx.shape if tok_idx is not None else None} {tok_idx}")
+                
             # A block is completed update settled tokens length
             if not torch.any(x == mask_token_id):
                 # print("unmasked all tokens in current x exiting")
@@ -826,8 +828,8 @@ class DreamGenerationMixin(GenerationMixin):
         if attention_mask is not None and torch.any(attention_mask == 0.0):
             # we do not mask the [MASK] tokens so value = 1.0
             attention_mask = F.pad(attention_mask, (0, max_length - attention_mask.shape[1]), value=1.0)
-            tok_idx = attention_mask.long().cumsum(-1) - 1
-            tok_idx.masked_fill_(attention_mask == 0, 1)
+            tok_idx_base = attention_mask.long().cumsum(-1) - 1
+            tok_idx_base.masked_fill_(attention_mask == 0, 1)
             # Leave padding out "<|endoftext|>1+1=2 2+2=" -> [ 1,  0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14, 15, 16, 17]
             
             # attention_mask is of shape [B, N]
@@ -838,7 +840,7 @@ class DreamGenerationMixin(GenerationMixin):
                 attention_mask.unsqueeze(1).unsqueeze(-1),
             )
         else:
-            tok_idx = None
+            tok_idx_base = None
             attention_mask = "full"
 
         timesteps = torch.linspace(1, eps, steps + 1, device=x.device)
@@ -848,19 +850,20 @@ class DreamGenerationMixin(GenerationMixin):
 
         past_key_values = None
         past_length = 0
-        
+        tok_idx = tok_idx_base.clone() if tok_idx_base is not None else None
         x_input = x.clone()
         # initial settled length is the context/prompt length
         settled_length = input_ids_length        
         # 1. Do first forward pass to get past_key_values for context in casual attention
         # You need position_ids for the first forward pass since you want to avoid padding for following calls it can be recovered from cache length
-        model_outputs = self(x_input, attention_mask=attention_mask, position_ids=tok_idx, use_cache=True, past_key_values=past_key_values, is_causal=True, cache_position=None)
+        model_outputs = self(x_input, attention_mask=attention_mask, position_ids=tok_idx, use_cache=True, past_key_values=past_key_values, is_causal=True)
         past_key_values = model_outputs.past_key_values
         # 2. Crop past_key_values to include only context tokens
         past_key_values.crop(settled_length)
         past_length = past_key_values.get_seq_length()
         # 3. Create new input for prediction
         x_input = x[:, past_length:].clone()
+        tok_idx = tok_idx_base[:, past_length:] if tok_idx_base is not None else None
         
         # print(f"settled_length: {settled_length} past_length: {past_length} x_input: {x_input.shape} past_key_values: {past_key_values.get_seq_length()}")
         
@@ -868,7 +871,7 @@ class DreamGenerationMixin(GenerationMixin):
             current_block = (num_of_blocks - (blk_indx + 1)) * block_size
             
             for i in range(steps):
-                model_outputs = self(x_input, attention_mask=None, position_ids=None, use_cache=True, past_key_values=past_key_values, is_causal=False, cache_position=None)
+                model_outputs = self(x_input, attention_mask=None, position_ids=tok_idx, use_cache=True, past_key_values=past_key_values, is_causal=False)
                 
                 logits = model_outputs.logits
                 logits = torch.cat([logits[:,:1], logits[:, :-1]], dim=1)
@@ -948,11 +951,12 @@ class DreamGenerationMixin(GenerationMixin):
             if not torch.any(x == mask_token_id):
                 break
             settled_length += block_size
-            model_outputs = self(x_input, attention_mask=None, position_ids=None, use_cache=True, past_key_values=past_key_values, is_causal=True, cache_position=None)
+            model_outputs = self(x_input, attention_mask=None, position_ids=tok_idx, use_cache=True, past_key_values=past_key_values, is_causal=True)
             past_key_values = model_outputs.past_key_values
             past_key_values.crop(settled_length)
             past_length = past_key_values.get_seq_length()
             x_input = x[:, past_length:].clone()
+            tok_idx = tok_idx_base[:, past_length:] if tok_idx is not None else None
             # print(f"settled_length: {settled_length} past_length: {past_length} x_input: {x_input.shape} past_key_values: {past_key_values.get_seq_length()}")
                 
                 

@@ -487,7 +487,9 @@ class DreamFlashAttention(DreamAttention):
         key_states = key_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
         value_states = value_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
 
-        # print(f"query_states {query_states.shape} key_states {key_states.shape} value_states {value_states.shape}")
+        # print(f"hidden_states: {hidden_states.shape} query_states {query_states.shape} key_states {key_states.shape} value_states {value_states.shape}")
+        # print(f"position_ids {position_ids} {position_ids.shape}")
+        
         if position_embeddings is None:
             logger.warning_once(
                 "The attention layers in this model are transitioning from computing the RoPE embeddings internally "
@@ -504,16 +506,16 @@ class DreamFlashAttention(DreamAttention):
         if past_key_value is not None:
             cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}  # Specific to RoPE models
             key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
-
+        
         
         key_states = repeat_kv(key_states, self.num_key_value_groups)
         value_states = repeat_kv(value_states, self.num_key_value_groups)
 
 
-        if query_states.device.type == "cuda" and attention_mask is not None:
-            query_states = query_states.contiguous()
-            key_states = key_states.contiguous()
-            value_states = value_states.contiguous()
+        # if query_states.device.type == "cuda" and attention_mask is not None:
+        #     query_states = query_states.contiguous()
+        #     key_states = key_states.contiguous()
+        #     value_states = value_states.contiguous()
 
         # We dispatch to SDPA's Flash Attention or Efficient kernels via this `is_causal` if statement instead of an inline conditional assignment
         # in SDPA to support both torch.compile's dynamic shapes and full graph options. An inline conditional prevents dynamic shapes from compiling.
@@ -533,6 +535,7 @@ class DreamFlashAttention(DreamAttention):
         
         # replacing with flash attention
         attn_output = flash_attn_with_kvcache(
+            # q dim (batch_size, seqlen, nheads, headdim)
             q=query_states.transpose(1, 2).contiguous(),
             k_cache=key_states.transpose(1, 2).contiguous(),
             v_cache=value_states.transpose(1, 2).contiguous(),
