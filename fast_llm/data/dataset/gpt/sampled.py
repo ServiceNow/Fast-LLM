@@ -636,7 +636,8 @@ class GPTSampledIndexedDataset(SampledDataset):
                 else:
                     images.append([])
                 if sample.audio:
-                    audio.append(self.apply_audio_padding(sample.audio))
+                    # audio.append(self.apply_audio_padding(sample.audio))
+                    audio.append(sample.audio)
                 else:
                     audio.append([])
 
