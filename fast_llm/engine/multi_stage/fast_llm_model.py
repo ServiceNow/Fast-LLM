@@ -89,9 +89,8 @@ class FastLLMModel[ConfigType: FastLLMModelConfig](MultiStageModel[ConfigType]):
             stage.initialize_weights()
         for name, tied_parameter in self._tied_parameters.items():
             if tied_parameter.group is not None:
-                broadcast(
-                    self._stages[tied_parameter.main_stage].weight_shard, 0, tied_parameter.group, timeout=timeout
-                )
+                for fsdp in self._stages[tied_parameter.main_stage].fsdps:
+                    broadcast(fsdp.weight_shard, 0, tied_parameter.group, timeout=timeout)
         self._finalize_load(reset_optimizer=True)
 
     def _finalize_load(self, reset_optimizer: bool = True) -> None:
