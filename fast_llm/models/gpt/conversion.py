@@ -647,11 +647,26 @@ class WhisperHuggingfaceCheckpointHandler(WeightAndBiasConverterMixin, Huggingfa
         ]
 
     def _get_transformer_mlp_converters(self, fast_llm_prefix: str, hf_prefix: str) -> list[WeightConverter]:
+        # return [
+        #     WeightConverter(f"{fast_llm_prefix}.mlp.layer_1.weight", f"{hf_prefix}fc1.weight"),
+        #     WeightConverter(f"{fast_llm_prefix}.mlp.layer_1.bias", f"{hf_prefix}fc1.bias"),
+        #     WeightConverter(f"{fast_llm_prefix}.mlp.layer_2.weight", f"{hf_prefix}fc2.weight"),
+        #     WeightConverter(f"{fast_llm_prefix}.mlp.layer_2.bias", f"{hf_prefix}fc2.bias"),
+        # ]
+        transformer_config = self._model.config.base_model.audio_encoder.transformer
         return [
-            WeightConverter(f"{fast_llm_prefix}.mlp.layer_1.weight", f"{hf_prefix}fc1.weight"),
-            WeightConverter(f"{fast_llm_prefix}.mlp.layer_1.bias", f"{hf_prefix}fc1.bias"),
-            WeightConverter(f"{fast_llm_prefix}.mlp.layer_2.weight", f"{hf_prefix}fc2.weight"),
-            WeightConverter(f"{fast_llm_prefix}.mlp.layer_2.bias", f"{hf_prefix}fc2.bias"),
+            *self._get_weight_and_bias_converters(
+                f"{fast_llm_prefix}.mlp.layer_1",
+                f"{hf_prefix}fc1",
+                transformer_config.add_mlp_bias,
+                WeightConverter,
+            ),
+            *self._get_weight_and_bias_converters(
+                f"{fast_llm_prefix}.mlp.layer_2",
+                f"{hf_prefix}fc2",
+                transformer_config.add_mlp_bias,
+                MLPLayer2Converter,
+            ),
         ]
 
     def _create_audio_transformer_layer_converters(

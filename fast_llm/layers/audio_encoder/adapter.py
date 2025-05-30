@@ -77,10 +77,11 @@ class AudioAdapter(Layer):
         # Reshape: group every k frames together (concatenate along feature dimension).
         new_seq_len = seq_len // self.aud_downsampling_k
         input_ = input_.contiguous().view(batch_size, new_seq_len, dim * self.aud_downsampling_k)
-
-        res = self.layer_2(
-            self.norm_2(
-                torch_mlp_activation(input_=self.layer_1(input_), gated=False, activation_type=self._activation_type)
-            )
+        layer1_res = torch_mlp_activation(
+            input_=self.layer_1(input_), gated=False, activation_type=self._activation_type
         )
-        return res
+        torch.manual_seed(0)  # TODO Toby: remove after debugging
+        layer1_res_dropout = torch.nn.functional.dropout(layer1_res, 0.1)
+        layer1_res_norm = self.norm_2(layer1_res_dropout)
+        layer2_res = self.layer_2(layer1_res_norm)
+        return layer2_res

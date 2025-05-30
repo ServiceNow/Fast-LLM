@@ -479,10 +479,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
 
             if batch.audio is not None:
                 kwargs[AudioEncoderKwargs.audio] = [
-                    [
-                        aud.to(device=self._tensor_space.distributed.device, dtype=torch.float32, non_blocking=True)
-                        for aud in audio
-                    ]
+                    [aud.to(device="cpu", dtype=torch.float32, non_blocking=True) for aud in audio]
                     for audio in batch.audio
                 ]
                 kwargs[AudioEncoderKwargs.audio_positions] = batch.audio_positions
