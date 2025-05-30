@@ -3,12 +3,17 @@ import gc
 import click
 import torch
 from transformers import AutoConfig, AutoModelForCausalLM
+import transformers
 
-from fast_llm.models.ssm.external.apriel_15b_hybrid.configuration_ssm_hybrid_apriel15b import AprielSSMHybridConfig
-from fast_llm.models.ssm.external.apriel_15b_hybrid.modeling_ssm_hybrid_apriel15b import AprielSSMHybridForCausalLM
+# from fast_llm.models.ssm.external.apriel_15b_hybrid.configuration_ssm_hybrid_apriel15b import AprielSSMHybridConfig
+# from fast_llm.models.ssm.external.apriel_15b_hybrid.modeling_ssm_hybrid_apriel15b import AprielSSMHybridForCausalLM
+
+# from apriel_15b_hybrid.configuration_ssm_hybrid_apriel15b import AprielSSMHybridConfig
+# from apriel_15b_hybrid.modeling_ssm_hybrid_apriel15b import AprielSSMHybridForCausalLM
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
+print("Transformers version:", transformers.__version__)
 
 @click.command()
 @click.option("--identity_index", type=int, required=True)
