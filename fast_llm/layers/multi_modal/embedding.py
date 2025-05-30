@@ -48,11 +48,17 @@ class MultiModalEmbedding(LanguageModelEmbedding):
         """
         Assert.eq(position_ids is not None, self._use_absolute_position_embeddings)
         group = self._tensor_space.distributed.tensor_group
+        if self._sequence_parallel:
+            micro_seqlen = input_.size(0)
+            patch_start_offset = self._distributed_config.tensor_rank * micro_seqlen
+            patch_end_offset = (self._distributed_config.tensor_rank + 1) * micro_seqlen
+        else:
+            patch_start_offset = 0
+            patch_end_offset = input_.size(0)
         if self._parallel_embeddings:
             token_mask = (tokens >= self._vocab_start_index) * (tokens < self._vocab_end_index)
             masked_tokens = (tokens - self._vocab_start_index) * token_mask
             embeddings = torch.embedding(self.word_embeddings_weight, masked_tokens) * token_mask.unsqueeze(2)  # noqa
-            embeddings = reduce_forward(embeddings, group)
             if self._use_absolute_position_embeddings:
                 embeddings = embeddings + torch.nn.functional.embedding(position_ids, self.position_embeddings_weight)
             embeddings = embeddings.clone()
@@ -61,13 +67,18 @@ class MultiModalEmbedding(LanguageModelEmbedding):
                 image_embedding_offset = 0
                 for position, size in zip(positions, sizes):
                     num_patches = get_num_patches(*size, self._config.vision_encoder.patch_size)
+                    if image_embedding_offset + num_patches < patch_start_offset:
+                        continue
                     if self._config.vision_encoder.image_break_token is not None:
                         patch_width = div(size[0], self._config.vision_encoder.patch_size)
                         patch_height = div(size[1], self._config.vision_encoder.patch_size)
-
                         for row in range(patch_height):
                             row_start_src = image_embedding_offset + row * patch_width
                             row_start_dst = position + row * (patch_width + 1)
+                            if row_start_src > patch_end_offset:
+                                break
+                            if row_start_dst < patch_start_offset:
+                                continue
 
                             if self._sequence_parallel:
                                 # Copy with dimensions swapped for sequence parallel case
@@ -84,6 +95,9 @@ class MultiModalEmbedding(LanguageModelEmbedding):
                             sample_idx, image_embedding_offset : image_embedding_offset + num_patches
                         ]
                     image_embedding_offset += num_patches
+                    if image_embedding_offset > patch_end_offset:
+                        break
+            embeddings = reduce_forward(embeddings, group)
             if self._sequence_parallel:
                 embeddings = split(embeddings, group=group, dim=0)
         else:
