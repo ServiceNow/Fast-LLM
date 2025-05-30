@@ -24,6 +24,9 @@ def fast_llm(args=None):
             from fast_llm.tools.convert import ConversionConfig as Runnable
         elif parsed.subcommand == "prepare":
             from fast_llm.tools.prepare_dataset import PrepareDatasetConfig as Runnable
+        elif parsed.subcommand == "ssm_hybrid":
+            from fast_llm.models.ssm.external.make_hybrid_checkpoint_with_importance import main
+            main(args=unparsed)
         else:
             raise RuntimeError("Unknown subcommand")
         Runnable.parse_and_run(unparsed)
