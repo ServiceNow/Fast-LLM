@@ -15,7 +15,7 @@ def fast_llm(args=None):
     # (Pre-)configure logging
     configure_logging()
     parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument("subcommand", choices=["train", "convert", "prepare"])
+    parser.add_argument("subcommand", choices=["train", "convert", "prepare", "create_hybrid_checkpoint"])
     parsed, unparsed = parser.parse_known_args(args)
     try:
         if parsed.subcommand == "train":
@@ -24,7 +24,7 @@ def fast_llm(args=None):
             from fast_llm.tools.convert import ConversionConfig as Runnable
         elif parsed.subcommand == "prepare":
             from fast_llm.tools.prepare_dataset import PrepareDatasetConfig as Runnable
-        elif parsed.subcommand == "ssm_hybrid":
+        elif parsed.subcommand == "create_hybrid_checkpoint":
             from fast_llm.models.ssm.external.make_hybrid_checkpoint_with_importance import main
             main(args=unparsed)
         else:
