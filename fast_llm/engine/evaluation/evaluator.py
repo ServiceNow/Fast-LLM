@@ -256,7 +256,7 @@ class EvaluatorRunner:
         wandb_config: WandbConfig | None = None,
     ):
         self._wandb_config = wandb_config
-        self._evaluations = [
+        self._evaluators = [
             eval_config.get_evaluator(name, batch_config, data_load_num_proc, train_iters)
             for name, eval_config in evaluator_configs.items()
         ]
@@ -272,14 +272,14 @@ class EvaluatorRunner:
         phase: PhaseType,
     ) -> None:
         self._wandb = wandb
-        for evaluation in self._evaluations:
-            evaluation.setup(distributed, run, multi_stage, runner, data, phase)
+        for evaluator in self._evaluators:
+            evaluator.setup(distributed, run, multi_stage, runner, data, phase)
         self._is_setup = True
 
     def get_sampling_parameters(self) -> list[EvaluatorSamplingParameters]:
         return [
             sampling_params
-            for sampling_params in (evaluation.get_sampling_parameters() for evaluation in self._evaluations)
+            for sampling_params in (evaluator.get_sampling_parameters() for evaluator in self._evaluators)
             if sampling_params is not None
         ]
 
@@ -290,8 +290,8 @@ class EvaluatorRunner:
     ):
         assert self._is_setup
         formatted_metrics = []
-        for evaluation in self._evaluations:
-            evaluation_metrics = evaluation.run(training_progress)
+        for evaluator in self._evaluators:
+            evaluation_metrics = evaluator.run(training_progress)
             if len(evaluation_metrics.metrics) == 0:
                 continue
             for k, v in evaluation_metrics.metrics.items():

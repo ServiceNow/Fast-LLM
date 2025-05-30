@@ -26,6 +26,18 @@ class EvaluatorConfigBase(Config):
 class EvaluatorConfig(EvaluatorConfigBase):
     _abstract: typing.ClassVar[bool] = True
 
+    @classmethod
+    def _from_dict(
+        cls,
+        default: dict[str, typing.Any],
+        strict: bool = True,
+        flat: bool = False,
+    ) -> typing.Self:
+        # TODO v0.x: Remove backward compatibility.
+        if not "type" in default:
+            default["type"] = "loss"
+        return super()._from_dict(default, strict, flat)
+
 
 @config_class(dynamic_type={EvaluatorConfig: "loss"})
 class EvaluatorLossConfig(EvaluatorConfig):

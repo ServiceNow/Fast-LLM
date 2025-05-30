@@ -13,7 +13,6 @@ from fast_llm.config import (
     NoAutoValidate,
     check_field,
     config_class,
-    set_nested_dict_value,
     skip_valid_if_none,
 )
 from fast_llm.data.data.config import DataConfig
@@ -184,8 +183,6 @@ class TrainingEvaluatorConfig(EvaluatorConfigBase):
         flat: bool = False,
     ) -> typing.Self:
         # TODO v0.x: Remove backward compatibility.
-        if "interval" in default or "offset" in default or "iterations" in default:
-            set_nested_dict_value(default, ("evaluator", "type"), "loss")
         cls._handle_renamed_field(default, "interval", ("run_interval", "interval"))
         cls._handle_renamed_field(default, "offset", ("run_interval", "offset"))
         cls._handle_renamed_field(default, "iterations", ("evaluator", "iterations"))
@@ -299,7 +296,7 @@ class ShutdownConfig(IntervalConfig):
 
 @config_class()
 class TrainingConfig(Config):
-    evaluations: dict[str, TrainingEvaluatorConfig] = Field(
+    evaluators: dict[str, TrainingEvaluatorConfig] = Field(
         default_factory=dict,
         desc="A dictionary of evaluation dataset names and their configurations for the validation phase.",
         hint=FieldHint.core,
@@ -347,7 +344,8 @@ class TrainingConfig(Config):
         flat: bool = False,
     ) -> typing.Self:
         # TODO v0.x: Remove backward compatibility.
-        cls._handle_renamed_field(default, "validation", ("evaluations", "validation"))
+        cls._handle_renamed_field(default, "validation", ("evaluators", "validation"))
+        cls._handle_renamed_field(default, "evaluations", ("evaluators"))
         return super()._from_dict(default, strict, flat)
 
     def _validate(self) -> None:

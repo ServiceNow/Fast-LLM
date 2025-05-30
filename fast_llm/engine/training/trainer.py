@@ -189,7 +189,7 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
             self._samples_per_split = {}
 
         self._evaluator_runner = EvaluatorRunner(
-            evaluator_configs=self._config.training.evaluations,
+            evaluator_configs=self._config.training.evaluators,
             batch_config=self._config.batch,
             data_load_num_proc=self._config.training.num_workers,
             train_iters=self._config.training.train_iters,
@@ -583,7 +583,8 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
             config.get_load_config(checkpoint_directory, timeout=self._config.training.timeout)
         )
         assert metadata is not None
-        self._optimizer.load(metadata["optimizer"])
+        if not self._is_evaluation_only:
+            self._optimizer.load(metadata["optimizer"])
         if "schedules" in metadata:
             # Backward compatibility.
             self._completed_steps = metadata["schedules"][PhaseType.training.value]["completed_steps"]
