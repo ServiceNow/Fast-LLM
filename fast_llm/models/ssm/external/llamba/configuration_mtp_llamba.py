@@ -41,12 +41,12 @@ class MTPLlambaConfig(PretrainedConfig):
 
     """
 
-    model_type = "llamba"
+    model_type = "mtp_llamba"
 
     def __init__(
         self,
-        vocab_size: int,
-        d_model: int,
+        vocab_size: int = 32000,
+        d_model: int = 4096,
         tie_embeddings: bool = False,
         pad_vocab_size_multiple: int = 8,
         lm_head_bias: bool = False,
@@ -56,7 +56,7 @@ class MTPLlambaConfig(PretrainedConfig):
         mlp_cfg: dict = None,
         ssm_cfg: dict = None,
         prediction_heads=1,
-        state_update_kernel: StateUpdateKernel = StateUpdateKernel.cs,
+        state_update_kernel: str = "chunk_scan",  # StateUpdateKernel = StateUpdateKernel.cs,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -71,7 +71,7 @@ class MTPLlambaConfig(PretrainedConfig):
         self.norm_epsilon = norm_epsilon
         self.prediction_heads = prediction_heads
         assert (
-            state_update_kernel != StateUpdateKernel.ssu_verification
+            state_update_kernel != "ssu_verification"  # StateUpdateKernel.ssu_verification
         ), "Only chunk scan and standard modes are supported for now"
         self.state_update_kernel = state_update_kernel
 

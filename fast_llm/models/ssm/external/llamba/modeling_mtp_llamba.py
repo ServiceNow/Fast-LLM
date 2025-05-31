@@ -10,12 +10,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 from causal_conv1d import causal_conv1d_fn, causal_conv1d_update
 from einops import rearrange, repeat
-from huggingface_hub import PyTorchModelHubMixin
 from mamba_ssm.ops.triton.selective_state_update import selective_state_update
 from mamba_ssm.ops.triton.ssd_combined import mamba_chunk_scan_combined
-from mamba_ssm.utils.generation import GenerationMixin
 from torch import Tensor, nn
 from transformers.activations import ACT2FN
+from transformers.modeling_utils import PreTrainedModel
 from transformers.utils.generic import ModelOutput
 
 from .configuration_mtp_llamba import MTPLlambaConfig as LlambaConfig
@@ -81,11 +80,15 @@ class CustomMambaCausalLMOutput(ModelOutput):
     last_hidden_state: Optional[torch.FloatTensor] = None
 
 
-class MTPLlambaLMHeadModel(nn.Module, GenerationMixin, PyTorchModelHubMixin):
+class MTPLlambaLMHeadModel(PreTrainedModel):  # PyTorchModelHubMixin removed for now
     """MambaLM model with a language modeling head on top (linear layer)."""
 
+    config_class = LlambaConfig
+    base_model_prefix = "model"
+    supports_gradient_checkpointing = True
+
     def __init__(self, config, initializer_cfg=None, device=None, dtype=None, **kwargs) -> None:
-        super().__init__()
+        super().__init__(config)
 
         # Load config
         if not isinstance(config, LlambaConfig):
@@ -154,6 +157,7 @@ class MTPLlambaLMHeadModel(nn.Module, GenerationMixin, PyTorchModelHubMixin):
         position_ids=None,
         return_hidden_states=False,
         return_logits=True,
+        return_all_prediction_heads=False,
         inference_params=None,
         num_last_tokens=0,
     ):
@@ -186,17 +190,21 @@ class MTPLlambaLMHeadModel(nn.Module, GenerationMixin, PyTorchModelHubMixin):
         latents.append(hidden_states)
 
         # Process through MTP heads
-        for i, mtp_head in enumerate(self.mtp_heads):
-            mtp_outputs = mtp_head(
-                hidden_states_before_last,
-                inference_params=inference_params,
-                position_ids=position_ids,
-            )
-            mtp_hidden_states = mtp_outputs["hidden_states"]
-            latents.append(self.mtp_norms[i](mtp_hidden_states))
+        if return_all_prediction_heads:
+            for i, mtp_head in enumerate(self.mtp_heads):
+                mtp_outputs = mtp_head(
+                    hidden_states_before_last,
+                    inference_params=inference_params,
+                    position_ids=position_ids,
+                )
+                mtp_hidden_states = mtp_outputs["hidden_states"]
+                latents.append(self.mtp_norms[i](mtp_hidden_states))
 
-        # Stack the latents to get (batch_size, seq_len, num_prediction_heads, hidden_size)
-        stacked_latents = torch.stack(latents, dim=-2)
+            # Stack the latents to get (batch_size, seq_len, num_prediction_heads, hidden_size)
+            stacked_latents = torch.stack(latents, dim=-2)
+        else:
+            assert len(latents) == 1
+            stacked_latents = latents[0]
 
         if return_logits:
             if isinstance(self.lm_head, nn.Linear):

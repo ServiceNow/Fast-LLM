@@ -216,7 +216,7 @@ CONFIG_LLAMBA_MTP_FAST_LLM = CONFIG_LLAMBA_FAST_LLM + [
     "model.base_model.prediction_heads=4",
 ]
 CONFIG_LLAMBA_MTP_MEGATRON = None
-CONFIG_LLAMBA_MTP_COMMON = CONFIG_LLAMBA_FAST_LLM + ["model.distributed.training_dtype=bf16"]
+CONFIG_LLAMBA_MTP_COMMON = CONFIG_LLAMBA_MTP_FAST_LLM + ["model.distributed.training_dtype=bf16"]
 
 _CONFIGS = {
     "gpt2": ("gpt", CONFIG_GPT2_FAST_LLM, CONFIG_GPT2_MEGATRON, CONFIG_GPT2_COMMON, None),

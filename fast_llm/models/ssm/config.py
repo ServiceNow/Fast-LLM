@@ -141,6 +141,12 @@ class MtpLLambaHuggingfaceCheckpointFormat(LLambaHuggingfaceCheckpointFormat):
     name: typing.ClassVar[str] = "mtp_llamba"
     trust_remote_code: typing.ClassVar[bool] = True
 
+    @classmethod
+    def get_handler_class(cls) -> type[CheckpointHandler]:
+        from fast_llm.models.ssm.conversion import MtpLLambaHuggingfaceCheckpointHandler
+
+        return MtpLLambaHuggingfaceCheckpointHandler
+
 
 class AprielSSMHuggingfaceCheckpointFormat(CheckpointFormat):
     support_optimizer: typing.ClassVar[bool] = False
