@@ -205,7 +205,7 @@ class VisionPreprocessor(Preprocessor):
             padding_size = kwargs[TransformerKwargs.sequence_length] - sample_cu_seqlen
             if padding_size > max_seqlen:
                 max_seqlen = padding_size
-            cu_seqlens.append(kwargs[TransformerKwargs.sequence_length])
+            cu_seqlens.append(kwargs[TransformerKwargs.sequence_length] * (idx + 1))
             patches.append(
                 torch.cat(
                     [
