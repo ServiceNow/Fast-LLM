@@ -32,6 +32,7 @@ def main(index_to_swap: int, checkpoint=None):
     hybrid_block_layout = ["t"] * config_thinker.num_hidden_layers
     
     for i in range(index_to_swap + 1):
+        print(f"Swapping layer {layer_importance[i]} to m2d")
         hybrid_block_layout[layer_importance[i]] = "m2d"
     
     # checkpoint_model = AprielSSMHybridForCausalLM.from_pretrained(path_thinker)
