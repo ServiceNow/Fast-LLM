@@ -17,7 +17,6 @@ from transformers.modeling_flash_attention_utils import FlashAttentionKwargs
 from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast
 from transformers.modeling_utils import PreTrainedModel
 from transformers.models.mistral.modeling_mistral import (
-    MISTRAL_INPUTS_DOCSTRING,
     MistralDecoderLayer,
     MistralMLP,
     MistralModel,
@@ -781,7 +780,7 @@ class AprielSSMHybridModel(MistralModel):
         self.post_init()
 
     @can_return_tuple
-    @add_start_docstrings_to_model_forward(MISTRAL_INPUTS_DOCSTRING)
+    # @add_start_docstrings_to_model_forward(MISTRAL_INPUTS_DOCSTRING)
     def forward(
         self,
         input_ids: Optional[torch.LongTensor] = None,
