@@ -64,6 +64,7 @@ def main(index_to_swap: int, checkpoint=None):
         model_base = AprielSSMHybridForCausalLM.from_pretrained(path_base, trust_remote_code=True).to(torch.bfloat16)
 
     model_hybrid.load_state_dict(model_base.state_dict(), strict=False)
+    model_hybrid.to(torch.bfloat16)
     model_hybrid.save_pretrained(f"/mnt/checkpoints/ssm/iterative_hybrids/apriel_ssm_thinker15b_hybrid_{index_to_swap+1}ssm_leastimportant_32h_init_rand")
 
     # checkpoint = "ServiceNow-AI/Apriel-Nemotron-15b-Thinker"
