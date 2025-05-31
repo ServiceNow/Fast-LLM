@@ -26,7 +26,7 @@ class MultiModalEmbedding(LanguageModelEmbedding):
     ):
         super().__init__(config, tensor_space)
 
-    @torch.compile
+    # @torch.compile
     def _forward(
         self,
         input_: torch.Tensor,
