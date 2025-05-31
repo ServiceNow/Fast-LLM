@@ -56,7 +56,7 @@ def main(index_to_swap: int, checkpoint=None):
     
     model_hybrid = AprielSSMHybridForCausalLM(config_hybrid)
     
-    if checkpoint is not None:
+    if checkpoint is None:
         path_base = path_thinker
         model_base = MistralForCausalLM.from_pretrained(path_base).to(torch.bfloat16)
     else:
