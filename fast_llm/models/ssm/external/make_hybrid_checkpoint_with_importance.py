@@ -75,7 +75,7 @@ def main(index_to_swap: int, checkpoint=None):
     model_hybrid.to(torch.bfloat16)
     
     print(model_hybrid)
-    model_hybrid.save_pretrained(f"/mnt/checkpoints/ssm/iterative_hybrids-test/apriel_ssm_thinker15b_hybrid_{index_to_swap+1}ssm_leastimportant_32h_init_rand")
+    model_hybrid.save_pretrained(f"/mnt/checkpoints/ssm/iterative_hybrids/apriel_ssm_thinker15b_hybrid_{index_to_swap+1}ssm_leastimportant_32h_init_rand")
 
     # checkpoint = "ServiceNow-AI/Apriel-Nemotron-15b-Thinker"
     # config = AutoConfig.from_pretrained(checkpoint, trust_remote_code=True)
