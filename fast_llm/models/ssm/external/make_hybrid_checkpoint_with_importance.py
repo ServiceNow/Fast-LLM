@@ -5,6 +5,7 @@ import torch
 from transformers import AutoConfig, AutoModelForCausalLM
 import transformers
 from transformers import MistralForCausalLM
+
 from fast_llm.models.ssm.external.apriel_15b_hybrid.configuration_ssm_hybrid_apriel15b import AprielSSMHybridConfig
 from fast_llm.models.ssm.external.apriel_15b_hybrid.modeling_ssm_hybrid_apriel15b import AprielSSMHybridForCausalLM
 
@@ -40,7 +41,6 @@ def main(index_to_swap: int, checkpoint=None):
     # hybrid_block_layout[layer_importance[layer_index_to_swap]] = "m2d"
 
     config_hybrid = AprielSSMHybridConfig(
-        **config_thinker.to_dict(),
         hybrid_block_layout=hybrid_block_layout,
         ssm_cfg = {
                 "d_state": 64,
@@ -52,21 +52,30 @@ def main(index_to_swap: int, checkpoint=None):
                 "bias": False,
                 "d_conv": 4,
                 "d_inner": 32 * 128
-            }
+            },
+        **config_thinker.to_dict(),
     )
     
     model_hybrid = AprielSSMHybridForCausalLM(config_hybrid)
     
     if checkpoint is None:
+        print("Loading base model from thinker checkpoint")
         path_base = path_thinker
         model_base = MistralForCausalLM.from_pretrained(path_base).to(torch.bfloat16)
     else:
+        print(f"Loading base model from checkpoint: {checkpoint}")
         path_base = checkpoint
         model_base = AprielSSMHybridForCausalLM.from_pretrained(path_base, trust_remote_code=True).to(torch.bfloat16)
 
-    model_hybrid.load_state_dict(model_base.state_dict(), strict=False)
+    missing, unexpected = model_hybrid.load_state_dict(model_base.state_dict(), strict=False)
+    if missing:
+        print("Missing keys:", missing)
+    if unexpected:
+        print("Unexpected keys:", unexpected)
     model_hybrid.to(torch.bfloat16)
-    model_hybrid.save_pretrained(f"/mnt/checkpoints/ssm/iterative_hybrids/apriel_ssm_thinker15b_hybrid_{index_to_swap+1}ssm_leastimportant_32h_init_rand")
+    
+    print(model_hybrid)
+    model_hybrid.save_pretrained(f"/mnt/checkpoints/ssm/iterative_hybrids-test/apriel_ssm_thinker15b_hybrid_{index_to_swap+1}ssm_leastimportant_32h_init_rand")
 
     # checkpoint = "ServiceNow-AI/Apriel-Nemotron-15b-Thinker"
     # config = AutoConfig.from_pretrained(checkpoint, trust_remote_code=True)
