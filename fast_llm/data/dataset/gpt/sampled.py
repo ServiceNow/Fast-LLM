@@ -453,7 +453,7 @@ class GPTSampledIndexedDataset(SampledDataset):
                     document_sampling_index += 1
                     continue
                 tokens_in_sample = token_count % (self._parameters.sequence_length + 1)
-                if document_size + tokens_in_sample > self._parameters.sequence_length + 1:
+                if document_size + tokens_in_sample >= self._parameters.sequence_length + 1:
                     # Document belongs to the next sample, need to account for padding.
                     padding_size = self._parameters.sequence_length + 1 - tokens_in_sample
                     if token_count > token_start:
@@ -464,6 +464,7 @@ class GPTSampledIndexedDataset(SampledDataset):
                     else:
                         # Move on to the next sample.
                         token_count += padding_size
+                        continue
 
             # Determine if the document belongs to the requested sample.
             if token_count + document_size >= token_start:
