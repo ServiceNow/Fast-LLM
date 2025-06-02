@@ -537,7 +537,10 @@ class GPTSampledIndexedDataset(SampledDataset):
             if not self._parameters.cross_document_attention
             else None
         )
-        token_ids = np.concatenate(token_ids, dtype=np.int64)
+        try:
+            token_ids = np.concatenate(token_ids, dtype=np.int64)
+        except:
+            logger.error(f"Failed to concatenate token_ids for index {index} in dataset {self._indexed_dataset.name}.")
         loss_masking_spans = (
             (np.stack(loss_masking_spans, dtype=np.int32) if loss_masking_spans else np.array([]))
             if self._parameters.use_loss_masking_spans
