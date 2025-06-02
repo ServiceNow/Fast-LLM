@@ -240,6 +240,18 @@ class GPTMemmapDataset(GPTIndexedDataset):
                 for span in sample_spans:
                     additional_tokens = 0
                     image_position = image_positions[image_idx] if image_idx < len(image_positions) else float("inf")
+                    while image_position < span[0]:
+                        image_tokens = get_num_image_tokens(
+                            get_resize_dims(*self._image_lengths[idx][image_idx], image_size, image_size, patch_size),
+                            patch_size,
+                            image_break=image_break,
+                            image_end=image_end,
+                        )
+                        additional_tokens += image_tokens
+                        image_idx += 1
+                        image_position = (
+                            image_positions[image_idx] if image_idx < len(image_positions) else float("inf")
+                        )
                     while image_position >= span[0] and image_position <= span[1]:
                         image_tokens = get_num_image_tokens(
                             get_resize_dims(*self._image_lengths[idx][image_idx], image_size, image_size, patch_size),
