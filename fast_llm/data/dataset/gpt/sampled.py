@@ -14,6 +14,7 @@ from fast_llm.data.dataset.gpt.config import GPTSamplingData, ShufflingType
 from fast_llm.data.dataset.gpt.indexed import GPTIndexedDataset
 from fast_llm.engine.config_utils.data_type import DataType, get_unsigned_integer_type
 from fast_llm.engine.config_utils.run import log_main_rank
+from fast_llm.layers.audio_encoder.preprocessing import get_num_audio_tokens
 from fast_llm.layers.vision_encoder.preprocessing import get_num_image_tokens, get_resize_dims
 from fast_llm.utils import Assert, div
 
@@ -132,38 +133,6 @@ class GPTSampledIndexedDataset(SampledDataset):
             # No barrier yet to allow running in parallel.
             # There needs to be one before calling `__getitem__`, normally handled through `GPTData`.
 
-    def _compute_audio_token_size(self, sizes):
-        if len(sizes) == 0:  # sample has no audio
-            return sizes, False
-        to_filter = False
-        # account for padding
-        if self._parameters.aud_padding_duration > 0:
-            raw_audio_seq_length = self._parameters.aud_padding_duration * self._parameters.aud_sampling_rate
-            sizes = sizes.copy()  # original is read-only
-            to_filter = bool(np.any(sizes > raw_audio_seq_length))  # filter sample where any audio is too long
-            sizes.fill(raw_audio_seq_length)  # set all audio sizes to padded amount
-
-        # account for mel spectogram, convolution, downsampling k
-        audio_token_size_arr = sizes // 160  # default hop length TODO Toby: check divisible?
-        audio_token_size_arr = audio_token_size_arr // (
-            2 * self._parameters.aud_downsampling_k
-        )  # convolution (2) * downsampling
-        return audio_token_size_arr, to_filter
-
-    def apply_audio_padding(self, audio):
-        if len(audio) == 0:
-            return audio
-        # TODO Toby: check 2d
-        padded_audio = []
-        if self._parameters.aud_padding_duration > 0:
-            raw_audio_seq_length = self._parameters.aud_padding_duration * self._parameters.aud_sampling_rate
-            for aud in audio:
-                padded = np.pad(aud, (0, raw_audio_seq_length - len(aud)), mode="constant", constant_values=0)
-                padded_audio.append(padded)
-            return padded_audio
-        else:
-            return audio
-
     def _sample(self) -> None:
         """
         Create a `GPTSampledDataset` with the requested parameters.
@@ -198,7 +167,14 @@ class GPTSampledIndexedDataset(SampledDataset):
         audio_token_sizes = torch.zeros_like(document_sizes).to(self._device)
         long_audio_filter = torch.zeros_like(document_sizes, dtype=torch.bool)  # longer than audio padding
         for i, sizes in enumerate(audio_sizes):
-            audio_token_size_arr, to_filter = self._compute_audio_token_size(sizes)
+            audio_token_size_arr, to_filter = get_num_audio_tokens(
+                sizes,
+                self._parameters.aud_padding_duration,
+                self._parameters.aud_sampling_rate,
+                self._parameters.aud_downsampling_k,
+                self._parameters.audio_start_token,
+                self._parameters.audio_end_token,
+            )
             audio_token_sizes[i] = audio_token_size_arr.sum()
             long_audio_filter[i] = to_filter
 
@@ -371,7 +347,7 @@ class GPTSampledIndexedDataset(SampledDataset):
             unshuffled_tokens = 0
 
         if not self._truncate_documents:
-            yaml_data["unshuffled_tokens"] = unshuffled_tokens.item()
+            yaml_data["unshuffled_tokens"] = unshuffled_tokens.item() * unshuffled_epochs
         self._load_yaml_data(yaml_data)
         if self._yaml_path is not None:
             self._yaml_path.parent.mkdir(parents=True, exist_ok=True)
@@ -520,7 +496,14 @@ class GPTSampledIndexedDataset(SampledDataset):
             ]
             image_tokens = sum(image_sizes)
 
-            audio_token_size_arr, _ = self._compute_audio_token_size(audio_lengths)
+            audio_token_size_arr, _ = get_num_audio_tokens(
+                audio_lengths,
+                self._parameters.aud_padding_duration,
+                self._parameters.aud_sampling_rate,
+                self._parameters.aud_downsampling_k,
+                self._parameters.audio_start_token,
+                self._parameters.audio_end_token,
+            )
             audio_tokens = audio_token_size_arr.sum()
 
             document_size = text_size + image_tokens + audio_tokens
@@ -585,14 +568,16 @@ class GPTSampledIndexedDataset(SampledDataset):
                         [(pos, "audio", idx) for idx, pos in enumerate(sample.audio_positions)]
                     )
 
+                token_ids_per_sample = []
+                special_mm_tok_loss_masking_spans = np.empty((0, 2), dtype=np.int32)
                 multimodal_positions.sort(key=lambda x: x[0])
                 for global_idx, (mm_position, mm_type, source_idx) in enumerate(multimodal_positions):
                     # Add placeholders for image and audio tokens tokens
-                    token_ids.append(sample.token_ids[start_pos:mm_position])
+                    token_ids_per_sample.append(sample.token_ids[start_pos:mm_position])
+                    text_tokens_added += len(token_ids_per_sample[-1])
                     if mm_type == "image":
                         # image_positions.append(im_positions + len(token_ids) + image_tokens_added)
                         # Add placeholders for image tokens
-                        text_tokens_added += len(token_ids[-1])
                         image_positions.append(text_tokens_added + mm_tokens_added)
                         if self._parameters.image_break_token is not None:
                             height, width = resized_image_lengths[source_idx]
@@ -616,21 +601,55 @@ class GPTSampledIndexedDataset(SampledDataset):
                             image_token_array = np.full((image_sizes[source_idx],), -100, dtype=np.int64)
                             if self._parameters.image_end_token is not None:
                                 image_token_array[-1] = self._parameters.image_end_token
-                        token_ids.append(image_token_array)
+                        token_ids_per_sample.append(image_token_array)
                         mm_tokens_added += image_sizes[source_idx]
                     elif mm_type == "audio":
-                        audio_pos = sum(t.size for t in token_ids)  # includes mm tokens added already
+                        # audio_pos = sum(t.size for t in token_ids)  # includes mm tokens added already
+                        # compute audio position
+                        start_token_offset = int(self._parameters.audio_start_token is not None)
+                        audio_pos = text_tokens_added + mm_tokens_added + start_token_offset
                         audio_positions.append(audio_pos)
-                        token_ids.append(
-                            np.full((audio_token_size_arr[source_idx],), -100, dtype=np.int64)
-                        )  # TODO Toby: index doesnt work here
-                        mm_tokens_added += audio_tokens
+
+                        # compute number of special tokens
+                        num_audio_special_tokens = int(self._parameters.audio_start_token is not None) + int(
+                            self._parameters.audio_end_token is not None
+                        )
+
+                        # add start tokens
+                        if self._parameters.audio_start_token is not None:
+                            token_ids_per_sample.append(np.array([self._parameters.audio_start_token]))
+                            # add to loss masking spans
+                            special_mm_tok_loss_masking_spans = np.append(
+                                special_mm_tok_loss_masking_spans, [[audio_pos - 1, audio_pos - 1]], axis=0
+                            )
+                            # sample.loss_masking_spans = np.append(sample.loss_masking_spans, [[audio_pos-1, audio_pos-1]], axis=0)
+
+                        # add audio pad tokens
+                        num_audio_pad_tokens = audio_token_size_arr[source_idx]
+                        num_audio_pad_tokens -= num_audio_special_tokens  # ignore start/end tokens for padding
+                        audio_padding_tokens = np.full((num_audio_pad_tokens,), -100, dtype=np.int64)
+                        token_ids_per_sample.append(audio_padding_tokens)
+
+                        # add end token
+                        if self._parameters.audio_end_token is not None:
+                            token_ids_per_sample.append(np.array([self._parameters.audio_end_token]))
+                            # add to loss masking spans
+                            special_mm_tok_loss_masking_spans = np.append(
+                                special_mm_tok_loss_masking_spans,
+                                [[audio_pos + num_audio_pad_tokens, audio_pos + num_audio_pad_tokens]],
+                                axis=0,
+                            )
+                            # sample.loss_masking_spans = np.append(sample.loss_masking_spans, [[audio_pos + num_audio_pad_tokens, audio_pos + num_audio_pad_tokens]], axis=0)
+
+                        # update mm tokens added
+                        mm_tokens_added += num_audio_special_tokens + num_audio_pad_tokens
                     start_pos = mm_position
 
-                token_ids.append(sample.token_ids[start_pos:])
+                # add remaining text tokens
+                token_ids_per_sample.append(sample.token_ids[start_pos:])
+                text_tokens_added += len(token_ids_per_sample[-1])
 
-                # TODO Soham: add offsets for loss masking spans
-                text_tokens_added += len(token_ids[-1])
+                token_ids.append(np.concatenate(token_ids_per_sample))
                 if sample.images:
                     images.append(sample.images)
                 else:
@@ -643,22 +662,25 @@ class GPTSampledIndexedDataset(SampledDataset):
 
                 if self._parameters.use_loss_masking_spans:
                     mm_idx = 0
-                    total_mm_tokens = 0
-                    for loss_masking_span in sample.loss_masking_spans:  # TODO: check these must be sorted
-                        mm_tokens_in_span = 0
+                    mm_tokens_before_span = 0
+
+                    # sort by start of span
+                    sample.loss_masking_spans = sample.loss_masking_spans[sample.loss_masking_spans[:, 0].argsort()]
+                    for loss_masking_span in sample.loss_masking_spans:
+                        mm_tokens_within_span = 0
                         mm_position, mm_type, source_idx = (
                             multimodal_positions[mm_idx]
                             if mm_idx < len(multimodal_positions)
                             else (float("inf"), _, _)
                         )
 
-                        # increment mm_idx until span is reached
+                        # increment mm_idx until span is reached, track mm tokens before span
                         while mm_position < loss_masking_span[0]:
                             if mm_type == "image":
                                 num_mm_tokens = image_sizes[source_idx]
                             elif mm_type == "audio":
                                 num_mm_tokens = audio_token_size_arr[source_idx]
-                            total_mm_tokens += num_mm_tokens
+                            mm_tokens_before_span += num_mm_tokens
                             mm_idx += 1
                             mm_position, mm_type, source_idx = (
                                 multimodal_positions[mm_idx]
@@ -672,25 +694,33 @@ class GPTSampledIndexedDataset(SampledDataset):
                                 num_mm_tokens = image_sizes[source_idx]
                             elif mm_type == "audio":
                                 num_mm_tokens = audio_token_size_arr[source_idx]
-                            mm_tokens_in_span += num_mm_tokens
+                            mm_tokens_within_span += num_mm_tokens
                             mm_idx += 1
                             mm_position, mm_type, source_idx = (
                                 multimodal_positions[mm_idx]
                                 if mm_idx < len(multimodal_positions)
                                 else (float("inf"), _, _)
                             )
-                        loss_masking_span[0] += total_mm_tokens  # increment by all mm tokens before span
-                        loss_masking_span[1] += total_mm_tokens + mm_tokens_in_span
-                        total_mm_tokens += mm_tokens_in_span
+                        loss_masking_span[0] += mm_tokens_before_span  # increment by all mm tokens before span
+                        loss_masking_span[1] += mm_tokens_before_span + mm_tokens_within_span
+                        mm_tokens_before_span += mm_tokens_within_span
 
                         span = np.clip(
                             loss_masking_span + token_count - token_start,
                             0,
                             self._parameters.sequence_length + self._parameters.extra_tokens,
                         )
-                        if span[1] > span[0]:
+                        if span[1] >= span[0]:
                             loss_masking_spans.append(span)
 
+                    for span in special_mm_tok_loss_masking_spans:
+                        # span = np.clip(
+                        #     loss_masking_span + token_count - token_start,
+                        #     0,
+                        #     self._parameters.sequence_length + self._parameters.extra_tokens,
+                        # )
+                        if span[1] >= span[0]:
+                            loss_masking_spans.append(span)
             # Go to the next document.
             document_sampling_index += 1
             token_count += document_size

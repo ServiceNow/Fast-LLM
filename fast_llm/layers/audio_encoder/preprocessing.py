@@ -1,11 +1,53 @@
 import typing
 
+import numpy as np
 import torch
 from transformers import WhisperFeatureExtractor
 
 from fast_llm.engine.base_model.config import Preprocessor
 from fast_llm.engine.config_utils.tensor_space import TensorSpace
 from fast_llm.layers.audio_encoder.config import AudioEncoderConfig, AudioEncoderKwargs
+
+
+def get_num_audio_tokens(
+    sizes, aud_padding_duration, aud_sampling_rate, aud_downsampling_k, audio_start_token, audio_end_token
+):
+    if len(sizes) == 0:  # sample has no audio
+        return sizes, False
+    to_filter = False
+    # account for padding
+    if aud_padding_duration > 0:
+        raw_audio_seq_length = aud_padding_duration * aud_sampling_rate
+        sizes = sizes.copy()  # original is read-only
+        to_filter = bool(np.any(sizes > raw_audio_seq_length))  # filter sample where any audio is too long
+        sizes.fill(raw_audio_seq_length)  # set all audio sizes to padded amount
+
+    # account for mel spectogram, convolution, downsampling k
+    audio_token_size_arr = sizes // 160  # default hop length TODO Toby: check divisible?
+    audio_token_size_arr = audio_token_size_arr // (
+        2 * aud_downsampling_k
+    )  # convolution (2 stride) * downsampling  TODO Toby: make configurable convolution
+
+    if audio_start_token is not None:
+        audio_token_size_arr += 1
+    if audio_end_token is not None:
+        audio_token_size_arr += 1
+    return audio_token_size_arr, to_filter
+
+
+def apply_audio_padding(audio, aud_padding_duration, aud_sampling_rate):
+    if len(audio) == 0:
+        return audio
+    # TODO Toby: check 2d
+    padded_audio = []
+    if aud_padding_duration > 0:
+        raw_audio_seq_length = aud_padding_duration * aud_sampling_rate
+        for aud in audio:
+            padded = np.pad(aud, (0, raw_audio_seq_length - len(aud)), mode="constant", constant_values=0)
+            padded_audio.append(padded)
+        return padded_audio
+    else:
+        return audio
 
 
 class AudioPreprocessor(Preprocessor):

@@ -122,6 +122,18 @@ class AudioEncoderConfig(BaseModelConfig):
         hint=FieldHint.feature,
     )
 
+    # audio start/end tokens
+    audio_start_token: int | None = Field(
+        default=None,
+        desc="Token id for audio start.",
+        hint=FieldHint.optional,
+    )
+    audio_end_token: int | None = Field(
+        default=None,
+        desc="Token id for audio end.",
+        hint=FieldHint.optional,
+    )
+
     def setup_tensor_space(self, tensor_space: TensorSpace):
         tensor_space.add_tensor_dim(TensorDim(AudioEncoderDimNames.in_channels, self.num_mel_bins))
         tensor_space.add_tensor_dim(TensorDim(AudioEncoderDimNames.out_channels, self.transformer.hidden_size))

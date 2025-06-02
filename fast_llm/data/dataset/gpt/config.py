@@ -81,6 +81,8 @@ class GPTSamplingParameters(SamplingParameters):
     aud_sampling_rate: int | None = None
     image_break_token: int | None = None
     image_end_token: int | None = None
+    audio_start_token: int | None = None
+    audio_end_token: int | None = None
     # How many extra tokens to add to the sequence length.
     # This is used to provide labels even for the last tokens in the sequence.
     extra_tokens: int = 1
