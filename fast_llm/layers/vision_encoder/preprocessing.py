@@ -50,9 +50,22 @@ def get_resize_dims(height: int, width: int, max_height: int, max_width: int, pa
 
 
 def resize(image: torch.Tensor, max_height: int, max_width: int, patch_size: int) -> tuple[int, int]:
-    resize_dims = get_resize_dims(image.size(1), image.size(2), max_height, max_width, patch_size=patch_size)
+    target_height, target_width = get_resize_dims(
+        image.size(1), image.size(2), max_height, max_width, patch_size=patch_size
+    )
+    height, width = image.size(1), image.size(2)
+    while height > 2 * target_height or width > 2 * target_width:
+        # cap the resizing to half of the current size as a workaround for large images
+        # See pytorch issue: https://github.com/pytorch/pytorch/issues/103589
+        intermediate_max_width = max(target_width, width // 2)
+        intermediate_max_height = max(target_height, height // 2)
+        height, width = get_resize_dims(
+            height, width, intermediate_max_height, intermediate_max_width, patch_size=patch_size
+        )
+        image = F.resize(image, size=(height, width), interpolation=F.InterpolationMode.BICUBIC)
+
     # TODO: options for interpolation mode?
-    return F.resize(image, size=resize_dims, interpolation=F.InterpolationMode.BICUBIC)
+    return F.resize(image, size=(target_height, target_width), interpolation=F.InterpolationMode.BICUBIC)
 
 
 def normalize(image: torch.Tensor, mean: list[float], std: list[float]) -> torch.Tensor:
