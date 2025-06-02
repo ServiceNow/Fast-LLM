@@ -237,8 +237,9 @@ class GPTMemmapDataset(GPTIndexedDataset):
             sample_spans[:, 1] = np.minimum(sample_spans[:, 1], offset + len(token_ids) - 1) - offset
             if images:
                 image_idx = 0
+                prev_image_tokens = 0
                 for span in sample_spans:
-                    additional_tokens = 0
+                    span_image_tokens = 0
                     image_position = image_positions[image_idx] if image_idx < len(image_positions) else float("inf")
                     while image_position < span[0]:
                         image_tokens = get_num_image_tokens(
@@ -247,11 +248,12 @@ class GPTMemmapDataset(GPTIndexedDataset):
                             image_break=image_break,
                             image_end=image_end,
                         )
-                        additional_tokens += image_tokens
+                        span_image_tokens += image_tokens
                         image_idx += 1
                         image_position = (
                             image_positions[image_idx] if image_idx < len(image_positions) else float("inf")
                         )
+                        prev_image_tokens += image_tokens
                     while image_position >= span[0] and image_position <= span[1]:
                         image_tokens = get_num_image_tokens(
                             get_resize_dims(*self._image_lengths[idx][image_idx], image_size, image_size, patch_size),
@@ -259,12 +261,14 @@ class GPTMemmapDataset(GPTIndexedDataset):
                             image_break=image_break,
                             image_end=image_end,
                         )
-                        additional_tokens += image_tokens
+                        span_image_tokens += image_tokens
                         image_idx += 1
                         image_position = (
                             image_positions[image_idx] if image_idx < len(image_positions) else float("inf")
                         )
-                    span[1] += additional_tokens
+                    span[0] += prev_image_tokens
+                    span[1] += prev_image_tokens + span_image_tokens
+                    prev_image_tokens += span_image_tokens
         return GPTSample(
             token_ids=token_ids,
             images=images,
