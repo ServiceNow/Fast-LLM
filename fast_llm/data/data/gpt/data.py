@@ -117,8 +117,10 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
         self._datasets = {}
         for dataset_name, sampling_parameters in self._sampling_parameters.items():
             if self._tokenizer is not None:
-                # TODO: Too constraining?
-                Assert.eq(self._tokenizer.vocab_size, sampling_parameters.vocab_size)
+                # NOTE: Some models like Qwen2-1.5B-Instruct
+                # have vocab_size bigger in model config than in tokenizer
+                # TODO: Still, is it too constraining?
+                Assert.geq(sampling_parameters.vocab_size, self._tokenizer.vocab_size)
             if sampling_parameters.num_samples > 0:
                 sampling = GPTSamplingData(
                     config=self._config.sampling,
@@ -160,7 +162,6 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
         sampling_parameters = self._sampling_parameters[dataset_name]
         Assert.in_range_incl(batch_config.sequence_length, 1, sampling_parameters.sequence_length)
         log_main_rank(f"Initializing {dataset_name} dataset iterator from sample {consumed_samples}...")
-
         return iter(
             torch.utils.data.DataLoader(
                 self._datasets[dataset_name],  # noqa
