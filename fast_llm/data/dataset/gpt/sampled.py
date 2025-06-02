@@ -456,7 +456,7 @@ class GPTSampledIndexedDataset(SampledDataset):
                 if document_size + tokens_in_sample >= self._parameters.sequence_length + 1:
                     # Document belongs to the next sample, need to account for padding.
                     padding_size = self._parameters.sequence_length + 1 - tokens_in_sample
-                    if token_count > token_start:
+                    if token_count >= token_start:
                         # Add padding tokens to current sample
                         token_ids.append(np.full((padding_size,), -100, dtype=np.int64))
                         Assert.eq(token_count + padding_size, token_end)
