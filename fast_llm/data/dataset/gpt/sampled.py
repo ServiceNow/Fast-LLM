@@ -166,7 +166,7 @@ class GPTSampledIndexedDataset(SampledDataset):
                 " Please make sure Fast-LLM is installed correctly."
             )
             long_docs_filter = document_sizes + image_token_sizes > self._parameters.sequence_length + 1
-            ignored_documents = sum(long_docs_filter)
+            ignored_documents = long_docs_filter.sum()
             if ignored_documents:
                 log_main_rank(
                     f" > {ignored_documents}/{documents_per_epoch} documents are longer than {self._parameters.sequence_length+1} tokens and will be ignored.",
