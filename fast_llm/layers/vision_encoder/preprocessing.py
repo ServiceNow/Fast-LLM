@@ -137,6 +137,7 @@ class VisionPreprocessor(Preprocessor):
         im_height = kwargs.get(VisionEncoderKwargs.image_size)
         im_width = kwargs.get(VisionEncoderKwargs.image_size)
         patch_size = kwargs[VisionEncoderKwargs.patch_size]
+        image_positions = kwargs.get(VisionEncoderKwargs.image_positions)
         image_sizes = [
             [get_resize_dims(im.size(1), im.size(2), im_height, im_width, patch_size=patch_size) for im in ims]
             for ims in images
@@ -156,7 +157,6 @@ class VisionPreprocessor(Preprocessor):
             ]
             for imgs in images
         ]
-        image_positions = kwargs.get(VisionEncoderKwargs.image_positions)
 
         labels = kwargs[LanguageModelKwargs.labels]
         if (self._config.image_break_token is not None) or (self._config.image_end_token is not None):
@@ -239,9 +239,9 @@ class VisionPreprocessor(Preprocessor):
             # TODO Soham: remove
             assert patches[-1].size(0) == kwargs[TransformerKwargs.sequence_length]
         patches = torch.cat(patches)
-        kwargs[LanguageModelKwargs.labels] = labels
         patch_position_ids = torch.cat(patch_position_ids)
         kwargs[VisionEncoderKwargs.image_patches] = patches
+        kwargs[VisionTransformerKwargs.patch_position_ids] = patch_position_ids
         kwargs[VisionEncoderKwargs.rotary_inv_freq] = create_inv_freqs(
             kwargs[VisionEncoderKwargs.rope_theta],
             kwargs[VisionEncoderKwargs.kv_channels],
@@ -249,7 +249,6 @@ class VisionPreprocessor(Preprocessor):
             patch_size,
         ).to(device=self._tensor_space.distributed.device)
         kwargs[VisionEncoderKwargs.max_image_tokens] = div(im_height * im_width, patch_size**2)
-        kwargs[VisionTransformerKwargs.patch_position_ids] = patch_position_ids
         # TODO Soham: handle sequence data parallel
         kwargs[VisionTransformerKwargs.cu_seqlens_q] = torch.tensor(
             cu_seqlens, device=self._tensor_space.distributed.device, dtype=torch.int32
@@ -259,3 +258,4 @@ class VisionPreprocessor(Preprocessor):
         )
         kwargs[VisionTransformerKwargs.max_seqlen_q] = max_seqlen
         kwargs[VisionTransformerKwargs.max_seqlen_k] = max_seqlen
+        kwargs[LanguageModelKwargs.labels] = labels
