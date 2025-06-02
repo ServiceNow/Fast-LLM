@@ -466,15 +466,22 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                 kwargs[LanguageModelKwargs.labels] = labels
             kwargs.update(reference_logits[i])
 
-            if batch.images is not None:
+            if self._config.vision_encoder.enabled:
+                batch_images = (
+                    batch.images if batch.images is not None else [[]] * kwargs[TransformerKwargs.micro_batch_size]
+                )
                 kwargs[VisionEncoderKwargs.images] = [
                     [
                         img.to(device=self._tensor_space.distributed.device, dtype=torch.uint8, non_blocking=True)
                         for img in images
                     ]
-                    for images in batch.images
+                    for images in batch_images
                 ]
-                kwargs[VisionEncoderKwargs.image_positions] = batch.image_positions
+                kwargs[VisionEncoderKwargs.image_positions] = (
+                    batch.image_positions
+                    if batch.image_positions is not None
+                    else [[]] * kwargs[TransformerKwargs.micro_batch_size]
+                )
                 kwargs[LanguageModelKwargs.tokens] = tokens
 
             if batch.audio is not None:

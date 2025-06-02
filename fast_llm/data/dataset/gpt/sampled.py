@@ -190,9 +190,9 @@ class GPTSampledIndexedDataset(SampledDataset):
                 " Please make sure Fast-LLM is installed correctly."
             )
             long_docs_filter = (
-                document_sizes + image_token_sizes + audio_token_sizes > self._parameters.sequence_length + 1
+                document_sizes + image_token_sizes + +audio_token_sizes > self._parameters.sequence_length + 1
             )
-            ignored_documents = sum(long_docs_filter)
+            ignored_documents = long_docs_filter.sum()
             if ignored_documents:
                 log_main_rank(
                     f" > {ignored_documents}/{documents_per_epoch} documents are longer than {self._parameters.sequence_length+1} tokens and will be ignored.",
@@ -516,12 +516,10 @@ class GPTSampledIndexedDataset(SampledDataset):
 
                 # Where are we currently in sample?
                 tokens_in_sample = token_count % (self._parameters.sequence_length + 1)
-
-                # Add padding
-                if document_size + tokens_in_sample > self._parameters.sequence_length + 1:
+                if document_size + tokens_in_sample >= self._parameters.sequence_length + 1:
                     # Document belongs to the next sample, need to account for padding.
                     padding_size = self._parameters.sequence_length + 1 - tokens_in_sample
-                    if token_count > token_start:
+                    if token_count >= token_start:
                         # Add padding tokens to current sample
                         try:
                             token_ids.append(np.full((padding_size,), -100, dtype=np.int64))
@@ -532,6 +530,7 @@ class GPTSampledIndexedDataset(SampledDataset):
                     else:
                         # Move on to the next sample.
                         token_count += padding_size
+                        continue
 
             # Determine if the document belongs to the requested sample.
             if token_count + document_size >= token_start:

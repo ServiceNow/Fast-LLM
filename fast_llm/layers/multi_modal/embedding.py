@@ -27,7 +27,7 @@ class MultiModalEmbedding(LanguageModelEmbedding):
     ):
         super().__init__(config, tensor_space)
 
-    @torch.compile
+    # @torch.compile
     def _forward(
         self,
         input_: torch.Tensor,
@@ -50,13 +50,17 @@ class MultiModalEmbedding(LanguageModelEmbedding):
         """
         Assert.eq(position_ids is not None, self._use_absolute_position_embeddings)
         group = self._tensor_space.distributed.tensor_group
+        if self._sequence_parallel:
+            micro_seqlen = input_.size(0)
+            patch_start_offset = self._distributed_config.tensor_rank * micro_seqlen
+            patch_end_offset = (self._distributed_config.tensor_rank + 1) * micro_seqlen
+        else:
+            patch_start_offset = 0
+            patch_end_offset = input_.size(0)
         if self._parallel_embeddings:
             token_mask = (tokens >= self._vocab_start_index) * (tokens < self._vocab_end_index)
             masked_tokens = (tokens - self._vocab_start_index) * token_mask
             embeddings = torch.embedding(self.word_embeddings_weight, masked_tokens) * token_mask.unsqueeze(2)  # noqa
-            embeddings = reduce_forward(embeddings, group)
-            if self._use_absolute_position_embeddings:
-                embeddings = embeddings + torch.nn.functional.embedding(position_ids, self.position_embeddings_weight)
             embeddings = embeddings.clone()
             input_ = gather(input_, group, dim=0)
             # TODO: Toby implement audio
@@ -64,29 +68,59 @@ class MultiModalEmbedding(LanguageModelEmbedding):
                 image_embedding_offset = 0
                 for position, size in zip(positions, sizes):
                     num_patches = get_num_patches(*size, self._config.vision_encoder.patch_size)
+                    if image_embedding_offset + num_patches < patch_start_offset:
+                        continue
                     if self._config.vision_encoder.image_break_token is not None:
-                        patch_width = div(size[0], self._config.vision_encoder.patch_size)
-                        patch_height = div(size[1], self._config.vision_encoder.patch_size)
-
+                        patch_height = div(size[0], self._config.vision_encoder.patch_size)
+                        patch_width = div(size[1], self._config.vision_encoder.patch_size)
                         for row in range(patch_height):
                             row_start_src = image_embedding_offset + row * patch_width
                             row_start_dst = position + row * (patch_width + 1)
+                            if row_start_src > patch_end_offset:
+                                break
+                            if row_start_src + patch_width <= patch_start_offset:
+                                continue
 
+                            input_start_index = max(row_start_src, patch_start_offset) - patch_start_offset
+                            input_end_index = min(row_start_src + patch_width, patch_end_offset) - patch_start_offset
+                            embeddings_start_index = row_start_dst - max(patch_start_offset - row_start_src, 0)
+                            embeddings_end_index = (
+                                row_start_dst + patch_width - max(row_start_src + patch_width - patch_end_offset, 0)
+                            )
+                            # row_end_src = min(row_start_src + patch_width, patch_end_offset)
                             if self._sequence_parallel:
                                 # Copy with dimensions swapped for sequence parallel case
-                                embeddings[row_start_dst : row_start_dst + patch_width, sample_idx] = input_[
-                                    row_start_src : row_start_src + patch_width, sample_idx
+                                embeddings[embeddings_start_index:embeddings_end_index, sample_idx] = input_[
+                                    input_start_index:input_end_index, sample_idx
                                 ]
+                                tokens[embeddings_start_index:embeddings_end_index, sample_idx] = 10
                             else:
                                 # Copy with normal dimension ordering
-                                embeddings[sample_idx, row_start_dst : row_start_dst + patch_width] = input_[
-                                    sample_idx, row_start_src : row_start_src + patch_width
+                                embeddings[sample_idx, embeddings_start_index:embeddings_end_index] = input_[
+                                    sample_idx, input_start_index:input_end_index
                                 ]
+                                tokens[embeddings_start_index:embeddings_end_index, sample_idx] = 10
                     else:
-                        embeddings[sample_idx, position : position + num_patches] = input_[
-                            sample_idx, image_embedding_offset : image_embedding_offset + num_patches
+                        input_start_index = max(image_embedding_offset, patch_start_offset) - patch_start_offset
+                        input_end_index = (
+                            min(image_embedding_offset + num_patches, patch_end_offset) - patch_start_offset
+                        )
+                        embedding_start_index = position - max(patch_start_offset - image_embedding_offset, 0)
+                        embedding_end_index = (
+                            position + num_patches - max(image_embedding_offset + num_patches - patch_end_offset, 0)
+                        )
+                        embeddings[sample_idx, embedding_start_index:embedding_end_index] = input_[
+                            input_start_index:input_end_index, sample_idx
                         ]
+                        # embeddings[sample_idx, position : position + num_patches] = input_[
+                        #     sample_idx, image_embedding_offset : image_embedding_offset + num_patches
+                        # ]
                     image_embedding_offset += num_patches
+                    if image_embedding_offset > patch_end_offset:
+                        break
+            embeddings = reduce_forward(embeddings, group)
+            if self._use_absolute_position_embeddings:
+                embeddings = embeddings + torch.nn.functional.embedding(position_ids, self.position_embeddings_weight)
             if self._sequence_parallel:
                 embeddings = split(embeddings, group=group, dim=0)
         else:
@@ -107,8 +141,8 @@ class MultiModalEmbedding(LanguageModelEmbedding):
                 for position, size in zip(positions, sizes):
                     num_patches = get_num_patches(*size, self._config.vision_encoder.patch_size)
                     if self._config.vision_encoder.image_break_token is not None:
-                        patch_width = div(size[0], self._config.vision_encoder.patch_size)
-                        patch_height = div(size[1], self._config.vision_encoder.patch_size)
+                        patch_height = div(size[0], self._config.vision_encoder.patch_size)
+                        patch_width = div(size[1], self._config.vision_encoder.patch_size)
 
                         for row in range(patch_height):
                             row_start_src = image_embedding_offset + row * patch_width
