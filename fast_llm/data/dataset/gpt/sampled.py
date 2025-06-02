@@ -2,6 +2,7 @@ import dataclasses
 import logging
 import math
 import pathlib
+import time
 import typing
 import warnings
 
@@ -132,7 +133,10 @@ class GPTSampledIndexedDataset(SampledDataset):
         """
         # Get the document sizes, the main information needed for sampling.
         document_sizes, image_sizes = self._indexed_dataset.get_document_sizes()
+        # Perf counter: image_token_sizes computation
+        t0 = time.perf_counter()
         document_sizes = torch.from_numpy(document_sizes).to(self._device)
+        t1 = time.perf_counter()
         if image_sizes:
             image_token_sizes = []
             for i, sizes in enumerate(image_sizes):
@@ -152,9 +156,18 @@ class GPTSampledIndexedDataset(SampledDataset):
                         for size in sizes
                     )
                 )
-            image_token_sizes = torch.tensor(image_token_sizes).to(self._device)
+            t2 = time.perf_counter()
+            logger.info(f"[perf] [{self._indexed_dataset.name}] image_token_sizes computed in {t2-t0:.3f}s")
+            image_token_sizes = torch.tensor(image_token_sizes)
+            t3 = time.perf_counter()
+            image_token_sizes = image_token_sizes.to(self._device)
+            t4 = time.perf_counter()
+            logger.info(f"[perf] [{self._indexed_dataset.name}] image_token_sizes pushed to GPU in {t4-t3:.3f}s")
         else:
+            t2 = time.perf_counter()
             image_token_sizes = torch.zeros_like(document_sizes)
+            t4 = t3 = time.perf_counter()
+        logger.info(f"[perf] [{self._indexed_dataset.name}] document_sizes to GPU in {t1-t0:.3f}s")
 
         documents_per_epoch = document_sizes.numel()
         tokens_per_epoch = document_sizes.sum().item() + image_token_sizes.sum().item()
@@ -165,12 +178,14 @@ class GPTSampledIndexedDataset(SampledDataset):
                 "The C++ extension for dataset sampling is missing."
                 " Please make sure Fast-LLM is installed correctly."
             )
+            t5 = time.perf_counter()
             long_docs_filter = document_sizes + image_token_sizes > self._parameters.sequence_length + 1
+            t6 = time.perf_counter()
+            logger.info(f"[perf] [{self._indexed_dataset.name}] long_docs_filter computed in {t6-t5:.3f}s")
             ignored_documents = sum(long_docs_filter)
             if ignored_documents:
-                log_main_rank(
-                    f" > {ignored_documents}/{documents_per_epoch} documents are longer than {self._parameters.sequence_length+1} tokens and will be ignored.",
-                    log_fn=logger.warning,
+                logger.warning(
+                    f" > {ignored_documents}/{documents_per_epoch} documents are longer than {self._parameters.sequence_length+1} tokens and will be ignored."
                 )
             tokens_per_epoch = (document_sizes[~long_docs_filter] + image_token_sizes[~long_docs_filter]).sum().item()
             if tokens_per_epoch == 0:
@@ -313,6 +328,7 @@ class GPTSampledIndexedDataset(SampledDataset):
             yaml.safe_dump(yaml_data, self._yaml_path.open("w"))
 
         if shuffled_epochs > 0:
+            t7 = time.perf_counter()
             token_cumsum_shuffled, _ = self._get_token_cumsum(
                 document_sizes[
                     # Torch indexing only works with int32 or int64
@@ -327,6 +343,8 @@ class GPTSampledIndexedDataset(SampledDataset):
                 # TODO: Allowing for max 100% extra tokens for padding, is that enough?
                 dtype=get_unsigned_integer_type((2 - self._truncate_documents) * tokens_per_epoch * num_epochs),
             )
+            t8 = time.perf_counter()
+            logger.info(f"[perf] [{self._indexed_dataset.name}] token_cumsum for shuffled epochs in {t8-t7:.3f}s")
             self._token_cumsum_shuffled.save(token_cumsum_shuffled)
             self._document_shuffling.save(
                 document_shuffling[: (token_cumsum_shuffled.size + 1) * TOKEN_CUMSUM_RATE].numpy(
