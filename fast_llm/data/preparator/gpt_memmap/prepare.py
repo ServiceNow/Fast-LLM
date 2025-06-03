@@ -84,6 +84,11 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
                     width, height = im.size
                     num_pixels[idx] += width * height * 3
 
+        num_audio = [0] * len(input_ids)
+        for idx, audio_lst in enumerate(batch.get(self._config.dataset.audio, [])):
+            for audio in audio_lst:
+                num_audio[idx] += len(audio)
+
         return {
             "input_ids": input_ids,
             "image_positions": image_token_positions,
@@ -91,6 +96,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
             "token_spans": token_spans,
             "num_tokens": num_tokens,
             "num_pixels": num_pixels,
+            "num_audio": num_audio,
         }
 
     # def _tokenize_batch_with_spans(self, batch: dict[str, list[typing.Any]]) -> dict[str, list[typing.Any]]:
@@ -296,6 +302,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
             batched=True,
             num_proc=self._config.tokenize_workers,
             desc="Tokenizing batches",
+            # load_from_cache_file=False  # TODO Toby: remove
         )
 
         # Calculate total number of tokens
@@ -305,7 +312,13 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
             if self._config.dataset.images
             else 0
         )
+        total_audio = (
+            sum(tqdm.tqdm(tokenized_dataset["num_audio"], desc="Counting audio", unit="audio"))
+            if self._config.dataset.audio
+            else 0
+        )
         total_tokens += total_pixels // np.dtype(self._data_type.numpy).itemsize
+        total_tokens += total_audio * np.float32().itemsize // np.dtype(self._data_type.numpy).itemsize
 
         # Split dataset into shards based on number of tokens
         num_shards = int(np.ceil(total_tokens / self._config.tokens_per_shard))
