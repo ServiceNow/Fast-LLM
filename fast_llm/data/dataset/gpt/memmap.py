@@ -10,7 +10,6 @@ from fast_llm.data.dataset.gpt.indexed import GPTIndexedDataset
 from fast_llm.data.dataset.gpt.sampled import GPTSample
 from fast_llm.data.preparator.gpt_memmap.config import MEMMAP_DTYPES, MEMMAP_DTYPES_INV, MEMMAP_INDEX_HEADER
 from fast_llm.engine.config_utils.data_type import DataType
-from fast_llm.layers.vision_encoder.preprocessing import get_num_image_tokens, get_resize_dims
 from fast_llm.utils import Assert, div
 
 
@@ -235,40 +234,6 @@ class GPTMemmapDataset(GPTIndexedDataset):
             ]
             sample_spans[:, 0] = np.maximum(sample_spans[:, 0], offset) - offset
             sample_spans[:, 1] = np.minimum(sample_spans[:, 1], offset + len(token_ids) - 1) - offset
-            if images:
-                image_idx = 0
-                prev_image_tokens = 0
-                for span in sample_spans:
-                    span_image_tokens = 0
-                    image_position = image_positions[image_idx] if image_idx < len(image_positions) else float("inf")
-                    while image_position < span[0]:
-                        image_tokens = get_num_image_tokens(
-                            get_resize_dims(*self._image_lengths[idx][image_idx], image_size, image_size, patch_size),
-                            patch_size,
-                            image_break=image_break,
-                            image_end=image_end,
-                        )
-                        span_image_tokens += image_tokens
-                        image_idx += 1
-                        image_position = (
-                            image_positions[image_idx] if image_idx < len(image_positions) else float("inf")
-                        )
-                        prev_image_tokens += image_tokens
-                    while image_position >= span[0] and image_position <= span[1]:
-                        image_tokens = get_num_image_tokens(
-                            get_resize_dims(*self._image_lengths[idx][image_idx], image_size, image_size, patch_size),
-                            patch_size,
-                            image_break=image_break,
-                            image_end=image_end,
-                        )
-                        span_image_tokens += image_tokens
-                        image_idx += 1
-                        image_position = (
-                            image_positions[image_idx] if image_idx < len(image_positions) else float("inf")
-                        )
-                    span[0] += prev_image_tokens
-                    span[1] += prev_image_tokens + span_image_tokens
-                    prev_image_tokens += span_image_tokens
         return GPTSample(
             token_ids=token_ids,
             images=images,

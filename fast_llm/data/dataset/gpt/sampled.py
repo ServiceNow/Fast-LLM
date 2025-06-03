@@ -476,8 +476,6 @@ class GPTSampledIndexedDataset(SampledDataset):
                     offset=token_start_index_in_document,
                     length=token_end_index_in_document - token_start_index_in_document,
                     use_loss_masking_spans=self._parameters.use_loss_masking_spans,
-                    # image_break=self._parameters.image_break_token is not None,
-                    # image_end=self._parameters.image_end_token is not None,
                 )
                 start_pos = 0
                 if sample.image_positions:
@@ -520,12 +518,39 @@ class GPTSampledIndexedDataset(SampledDataset):
                     images.append([])
                 if self._parameters.use_loss_masking_spans:
                     for loss_masking_span in sample.loss_masking_spans:
+                        prev_image_tokens = 0
+                        image_idx = 0
+                        image_position = (
+                            sample.image_positions[image_idx]
+                            if image_idx < len(sample.image_positions)
+                            else float("inf")
+                        )
+                        while image_position < loss_masking_span[0]:
+                            prev_image_tokens += image_sizes[image_idx]
+                            image_idx += 1
+                            image_position = (
+                                sample.image_positions[image_idx]
+                                if image_idx < len(sample.image_positions)
+                                else float("inf")
+                            )
+                        span_image_tokens = 0
+                        while image_position <= loss_masking_span[1]:
+                            span_image_tokens += image_sizes[image_idx]
+                            image_idx += 1
+                            image_position = (
+                                sample.image_positions[image_idx]
+                                if image_idx < len(sample.image_positions)
+                                else float("inf")
+                            )
+                        loss_masking_span[0] += prev_image_tokens
+                        loss_masking_span[1] += prev_image_tokens + span_image_tokens
+                        prev_image_tokens += span_image_tokens
                         span = np.clip(
                             loss_masking_span + token_count - token_start,
                             0,
                             self._parameters.sequence_length + self._parameters.extra_tokens,
                         )
-                        if span[1] > span[0]:
+                        if span[1] >= span[0]:
                             loss_masking_spans.append(span)
 
             # Go to the next document.
