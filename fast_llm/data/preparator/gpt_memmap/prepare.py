@@ -294,7 +294,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
             self._loss_masking_spans_column = self._config.dataset.source_schema.loss_masking_spans_column
         else:
             raise ValueError(
-                f"Dataset source_schema set incorrectly. source_schema: '{self._config.dataset.data_source}'."
+                f"Dataset source_schema set incorrectly. source_schema: '{self._config.dataset.source_schema}'."
             )
 
         if self._text_column not in dataset.column_names:
