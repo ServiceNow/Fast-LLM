@@ -10,9 +10,9 @@ from fast_llm.engine.config_utils.tensor_space import TensorSpace
 from fast_llm.functional.triton.mlp import mlp_autograd, mlp_autograd_looped
 from fast_llm.functional.triton.sparse_copy import get_sparse_map
 from fast_llm.layers.common.auxiliary_loss import AuxiliaryLoss, z_loss
+from fast_llm.layers.common.config import RoutingType
 from fast_llm.layers.common.linear import Linear
 from fast_llm.layers.transformer.config import (
-    RoutingType,
     TransformerConfig,
     TransformerDimNames,
     TransformerKwargs,
@@ -21,7 +21,7 @@ from fast_llm.layers.transformer.config import (
 from fast_llm.layers.transformer.mlp import MLPBase
 from fast_llm.logging import log_distributed_grad, log_distributed_tensor, log_memory_usage
 from fast_llm.tensor import TensorMeta, init_normal_
-from fast_llm.utils import Assert
+from fast_llm.utils import Assert, get_lr_scale
 
 logger = logging.getLogger(__name__)
 
@@ -40,14 +40,14 @@ class MixtureOfExpertMLP(MLPBase):
 
     _group: ProcessGroup
 
-    def __init__(self, config: TransformerConfig, tensor_space: TensorSpace, name: str = "mlp"):
+    def __init__(self, config: TransformerConfig, tensor_space: TensorSpace, name: str = "mlp", layer_index: int = 0):
         Assert.gt(config.num_experts, 1)
         # TODO: Implement?
         assert not config.add_linear_biases, "Biases not supported for MoE."
         super().__init__(config, tensor_space, name)
         self._config = config
         self._tensor_space = tensor_space
-        self._debug_mode = self._config.debug_transformer or self._config.debug_transformer_memory
+        self._debug_mode = self._config.debug_block or self._config.debug_block_memory
 
         self._num_experts = config.num_experts
         self._experts_per_token = config.num_experts_per_token
@@ -59,6 +59,9 @@ class MixtureOfExpertMLP(MLPBase):
         self._z_loss_factor = config.expert_z_loss_coefficient
         self._moe_jitter_eps = config.moe_jitter_eps
 
+        layer_lr_scale = self._config.lr_scale if self._config.lr_scale else None
+        router_lr_scale = get_lr_scale(config.router_lr_scale, layer_lr_scale)
+
         self.router = Linear(
             tensor_space.get_tensor_dim(TransformerDimNames.hidden),
             tensor_space.get_tensor_dim(TransformerDimNames.unshared_experts),
@@ -66,7 +69,7 @@ class MixtureOfExpertMLP(MLPBase):
             weight_init_method=init_normal_(
                 std=config.init_method_std, min_val=config.init_method_min, max_val=config.init_method_max
             ),
-            lr_scale=config.router_lr_scale,
+            lr_scale=router_lr_scale,
         )
         dropless_moe = config.dropless_moe
         if dropless_moe and tensor_space.distributed_config.sequence_tensor_parallel:
@@ -226,15 +229,15 @@ class MixtureOfExpertMLP(MLPBase):
         kwargs: dict[str, typing.Any],
         global_: bool = True,
     ) -> None:
-        if self._config.debug_transformer_memory:
+        if self._config.debug_block_memory:
             log_pipeline_parallel_main_rank(lambda: log_memory_usage(f"{self._name} {name}", str))
-        if self._config.debug_transformer and tensor is not None:
+        if self._config.debug_block and tensor is not None:
             # TODO: Local vs global
             meta = self._get_meta(tensor, name, dim_name, kwargs)
             log_distributed_tensor(
                 "",
                 tensor.view_as(meta),
-                level=self._config.debug_transformer,
+                level=self._config.debug_block,
                 meta=meta,
                 distributed=self._tensor_space.distributed,
                 global_=global_,
@@ -243,7 +246,7 @@ class MixtureOfExpertMLP(MLPBase):
                 log_distributed_grad(
                     "",
                     tensor,
-                    level=self._config.debug_transformer,
+                    level=self._config.debug_block,
                     meta=self._get_meta(tensor, name + " grad", dim_name, kwargs),
                     distributed=self._tensor_space.distributed,
                     grad_fn=lambda tensor_: tensor_.view_as(meta),
