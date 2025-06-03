@@ -318,9 +318,6 @@ class Config(metaclass=ConfigMeta):
     # A registry for all the config classes.
     _registry: typing.ClassVar[Registry[str, type[typing.Self]] | None] = None
 
-    # A registry for all the config classes.
-    _registry: typing.ClassVar[Registry[str, type[typing.Self]]] = Registry[str, "type[Config]"]("Config", {})
-
     def __setattr__(self, key: str, value: typing.Any) -> None:
         """
         Make the class read-only after validation.
@@ -412,10 +409,6 @@ class Config(metaclass=ConfigMeta):
             )
         errors = []
         with self._set_implicit_default(None):
-            # Set the type field, or override it to the provided type with the actual class for clarity and safety.
-            self.type = self.__class__.__name__
-            # Should be handled in `from_dict`, but can fail if instantiating directly.
-            Assert.is_(self._registry[self.type], self.__class__)
             for name, field in self.fields():
                 if not field.init or field._field_type != dataclasses._FIELD:  # noqa
                     continue
@@ -493,13 +486,6 @@ class Config(metaclass=ConfigMeta):
             raise FieldTypeError(f"Not a type.")
         elif issubclass(type_, Config):
             cls._validate_element_type(value, type_, strict=False)
-            # If the value belongs to a proper subclass of `type_`,
-            #   we need an explicitly set `type` field for serialization to remember the actual config class.
-            if type(value) != type_:
-                if value.type is None:
-                    value.type = value.__class__.__name__
-                value._explicit_fields.add("type")
-
             value.validate(_is_validating=True)
         else:
             value = cls._validate_simple(value, type_)
@@ -751,18 +737,7 @@ class Config(metaclass=ConfigMeta):
             for keys, value in update.items():
                 set_nested_dict_value(default, keys, value, update_type)
 
-        type_ = default.get("type")
-        if type_ is None:
-            actual_cls = cls
-        else:
-            if type_ not in cls._registry:
-                raise ValueError(f"Unknown config type {type_}.")
-            actual_cls = cls._registry[type_]
-            if not issubclass(actual_cls, cls):
-                raise ValueError(
-                    f"Config class {actual_cls.__name__} (from type {type_}) is not a subclass of {cls.__name__}"
-                )
-        return actual_cls._from_dict(default, strict=strict)
+        return cls._from_dict(default, strict)
 
     @classmethod
     def from_flat_dict(
@@ -950,38 +925,6 @@ class Config(metaclass=ConfigMeta):
                     # We explicitly prevent ambiguous classes to ensure safe and unambiguous serialization.
                     # TODO: Only really need to avoid conflict with `Config`'s registry, relax this a bit?
                     raise KeyError(
-                        f"Ambiguous type `{name}` for base class {cls.__name__}."
-                        f" ({cls_.__name__} vs {base_class._registry[name]})"
-                    )
-        if cls_ is None:
-            raise KeyError(f"Unknown type {name} for base class {cls.__name__}")
-        return cls_
-
-    @classmethod
-    def register_subclass(cls, name: str, cls_: type[typing.Self]) -> None:
-        Assert.custom(issubclass, cls_, cls)
-        if name in cls._registry:
-            old_cls = cls._registry[name]
-            if old_cls.__name__ == cls_.__name__ and cls._registry[name].__module__ == cls_.__module__:
-                del cls._registry[name]
-            else:
-                raise KeyError(f"{cls.__name__} class registry already has an entry {name} from class {cls.__name__}.")
-        cls._registry[name] = cls_
-
-    @classmethod
-    def get_subclass(cls, name):
-        # TODO: Make it case-insensitive?
-        cls_ = None
-        for base_class in cls.__mro__:
-            if issubclass(base_class, Config) and name in base_class._registry:
-                if cls_ is None:
-                    cls_ = base_class._registry[name]
-                    if not issubclass(cls_, cls):
-                        raise KeyError(f" {cls_.__name__} is not a subclass of {cls.__name__} (from type {name})")
-                elif base_class._registry[name] is not cls_:
-                    # We explicitly prevent ambiguous classes to ensure safe and unambiguous serialization.
-                    # TODO: Only really need to avoid conflict with `Config`'s registry, relax this a bit?
-                    raise RuntimeError(
                         f"Ambiguous type `{name}` for base class {cls.__name__}."
                         f" ({cls_.__name__} vs {base_class._registry[name]})"
                     )

@@ -26,8 +26,6 @@ from fast_llm.utils import Assert
 
 logger = logging.getLogger(__name__)
 
-torch.distributed.gather
-
 
 class StateDictCheckpointHandler(CheckpointHandler):
     base_file_name: typing.ClassVar[str] = "model"

@@ -8,19 +8,18 @@ from fast_llm.engine.base_model.config import Preprocessor
 from fast_llm.engine.config_utils.tensor_space import DefaultDimNames, TensorDim, TensorSpace
 from fast_llm.functional.rotary import convert_rotary_complex_to_real
 from fast_llm.layers.transformer.config import (
-    Llama3RotaryConfig,
     RotaryConfig,
+    RotaryEmbeddingType,
     TransformerConfig,
     TransformerDimNames,
     TransformerKwargs,
-    YarnRotaryConfig,
 )
 from fast_llm.tensor import TensorMeta
 
 logger = logging.getLogger(__name__)
 
 
-def apply_llama3_scaling(config: Llama3RotaryConfig, frequencies: torch.Tensor) -> tuple[torch.Tensor, float]:
+def apply_llama3_scaling(config: RotaryConfig, frequencies: torch.Tensor) -> torch.Tensor:
     """
     Llama3 scaling: https://github.com/meta-llama/llama-models/blob/baf7b01b6e62bc7126c7b558d2b67d4533142680/models/llama3/reference_impl/model.py#L45-L67
     """
@@ -42,7 +41,7 @@ def apply_llama3_scaling(config: Llama3RotaryConfig, frequencies: torch.Tensor) 
     return torch.tensor(new_frequencies, dtype=frequencies.dtype, device=frequencies.device), 1.0
 
 
-def apply_yarn_scaling(config: YarnRotaryConfig, frequencies: torch.Tensor, kv_channels) -> tuple[torch.Tensor, float]:
+def apply_yarn_scaling(config: RotaryConfig, frequencies: torch.Tensor, kv_channels, sequence_length) -> torch.Tensor:
     """
     Yarn scaling:
     https://github.com/huggingface/transformers/blob/006d9249ec0270ff6c4d3840979d23fe94bdc763/src/transformers/modeling_rope_utils.py#L163
@@ -117,7 +116,7 @@ def get_rotary_frequencies(
     if config.type == RotaryEmbeddingType.llama3:
         frequencies, attention_scaling = apply_llama3_scaling(config, frequencies)
     elif config.type == RotaryEmbeddingType.yarn:
-        frequencies, attention_scaling = apply_yarn_scaling(config, frequencies, kv_channels)
+        frequencies, attention_scaling = apply_yarn_scaling(config, frequencies, kv_channels, sequence_length)
     else:
         attention_scaling = 1.0
     angles = torch.outer(positions, frequencies)

@@ -25,14 +25,8 @@ from fast_llm.engine.checkpoint.huggingface import CustomModelingExportMixin, Hu
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig
 from fast_llm.functional.config import ActivationType
 from fast_llm.functional.rotary import convert_rotary_complex_to_real, convert_rotary_real_to_complex
-from fast_llm.layers.common.config import LayerNormalizationConfig, RMSNormalizationConfig
-from fast_llm.layers.transformer.config import (
-    DefaultRotaryConfig,
-    Llama3RotaryConfig,
-    RoutingType,
-    TransformerConfig,
-    YarnRotaryConfig,
-)
+from fast_llm.layers.common.config import NormalizationType
+from fast_llm.layers.transformer.config import RotaryEmbeddingType, RoutingType, TransformerConfig
 from fast_llm.models.gpt.config import (
     GPTBaseModelConfig,
     GPTModelConfig,
@@ -190,7 +184,7 @@ class CommonHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
         self, fast_llm_layer_name: str, hf_layer_name: str, ignore_export: bool = False
     ) -> list[WeightConverter]:
         transformer_config: TransformerConfig = self._model.config.base_model.transformer
-        norm_bias: bool = isinstance(self._model.config.base_model.transformer.normalization, LayerNormalizationConfig)
+        norm_bias: bool = self._model.config.base_model.transformer.normalization.type == NormalizationType.layer_norm
         converters = []
         names_bias_cls = [
             # Self-attn
@@ -256,7 +250,7 @@ class CommonHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
     def _create_lm_head_converters(self) -> list[WeightConverter]:
         num_layers = self._model.config.base_model.transformer.num_layers
         prediction_heads = self._model.config.base_model.prediction_heads
-        norm_bias: bool = isinstance(self._model.config.base_model.transformer.normalization, LayerNormalizationConfig)
+        norm_bias: bool = self._model.config.base_model.transformer.normalization.type == NormalizationType.layer_norm
         converters = []
 
         # Next-token prediction head
@@ -324,11 +318,10 @@ class Starcoder2HuggingfaceCheckpointHandler(CommonHuggingfaceCheckpointHandler)
         return super()._create_config_converters() + [
             ConstantExportParamConverter(export_names=(("architectures",),), export_value=["Starcoder2ForCausalLM"]),
             ConstantImportParamConverter(
-                fast_llm_names=(("transformer", "rotary", "type"),), fast_llm_value=DefaultRotaryConfig
+                fast_llm_names=(("transformer", "rotary", "type"),), fast_llm_value=RotaryEmbeddingType.default
             ),
             ConstantImportParamConverter(
-                fast_llm_names=(("transformer", "normalization", "type"),),
-                fast_llm_value=LayerNormalizationConfig.__name__,
+                fast_llm_names=(("transformer", "normalization", "type"),), fast_llm_value=NormalizationType.layer_norm
             ),
             RenameParamConverter(
                 fast_llm_names=(("transformer", "normalization", "epsilon"),), export_names=(("norm_epsilon",),)
@@ -357,90 +350,75 @@ class CommonLlamaHuggingfaceCheckpointHandler(CommonHuggingfaceCheckpointHandler
     def _create_config_converters(cls) -> list[ParamConverter]:
         return super()._create_config_converters() + [
             ConstantImportParamConverter(
-                fast_llm_names=(("transformer", "normalization", "type"),),
-                fast_llm_value=RMSNormalizationConfig.__name__,
+                fast_llm_names=(("transformer", "normalization", "type"),), fast_llm_value=NormalizationType.rms_norm
             ),
             RenameParamConverter(
                 fast_llm_names=(("transformer", "normalization", "epsilon"),), export_names=(("rms_norm_eps",),)
             ),
             RenameParamConverter(
                 fast_llm_names=(("transformer", "kv_channels"),),
-                export_names=(("head_dim",),),
+                export_names=(("head_dim"),),
             ),
             ConstantImportParamConverter(fast_llm_names=(("transformer", "gated"),), fast_llm_value=True),
             ConstantImportParamConverter(fast_llm_names=(("transformer", "add_linear_biases"),), fast_llm_value=False),
-            LLamaRotaryParamConverter(
-                fast_llm_names=(("transformer", "rotary"),),
-                export_names=(
-                    ("rope_theta",),
-                    ("rope_scaling",),
+            RopeScalingParamConverter(
+                fast_llm_names=(
+                    ("transformer", "rotary", "type"),
+                    ("transformer", "rotary", "scale_factor"),
+                    ("transformer", "rotary", "low_frequency_factor"),
+                    ("transformer", "rotary", "high_frequency_factor"),
+                    ("transformer", "rotary", "original_context_length"),
+                    ("transformer", "rotary", "attention_factor"),
+                    ("transformer", "rotary", "beta_fast"),
+                    ("transformer", "rotary", "beta_slow"),
                 ),
+                export_names=(("rope_scaling",),),
             ),
         ]
 
 
 @dataclasses.dataclass
-class LLamaRotaryParamConverter(ParamConverter):
+class RopeScalingParamConverter(ParamConverter):
+    _HUGGINGFACE_NAMES = (
+        "rope_type",
+        "factor",
+        "low_freq_factor",
+        "high_freq_factor",
+        "original_max_position_embeddings",
+        "attention_factor",
+        "beta_fast",
+        "beta_slow",
+    )
+
     def __post_init__(self):
-        Assert.eq(len(self.fast_llm_names), 1)
-        Assert.eq(len(self.export_names), 2)
+        Assert.eq(len(self.fast_llm_names), 8)
+        Assert.eq(len(self.export_names), 1)
 
     def export_params(self, fast_llm_values: tuple[typing.Any, ...]) -> tuple[typing.Any, ...]:
-        (rotary_config,) = fast_llm_values
-        serialized_config = rotary_config.to_dict()
-        if type(rotary_config) is DefaultRotaryConfig:
-            rotary_scaling = {
-                "rope_type": "default",
-            }
-        elif type(rotary_config) is Llama3RotaryConfig:
-            rotary_scaling = {
-                "rope_type": "llama3",
-                "factor": serialized_config["scale_factor"],
-                "low_freq_factor": serialized_config["low_frequency_factor"],
-                "high_freq_factor": serialized_config["high_frequency_factor"],
-                "original_max_position_embeddings": serialized_config["original_context_length"],
-            }
-        elif type(rotary_config) is YarnRotaryConfig:
-            rotary_scaling = {
-                "rope_type": "yarn",
-                "attention_factor": serialized_config["attention_factor"],
-                "beta_fast": serialized_config["beta_fast"],
-                "beta_slow": serialized_config["beta_slow"],
-                "original_max_position_embeddings": serialized_config["original_context_length"],
-            }
+        rope_type, *parameters = fast_llm_values
+        if rope_type == RotaryEmbeddingType.default:
+            return (None,)
+        elif rope_type == RotaryEmbeddingType.llama3:
+            return ({key: value for key, value in zip(self._HUGGINGFACE_NAMES, ("llama3", *parameters), strict=True)},)
+        elif rope_type == RotaryEmbeddingType.yarn:
+            return ({key: value for key, value in zip(self._HUGGINGFACE_NAMES, ("yarn", *parameters), strict=True)},)
         else:
-            raise ValueError(f"Unsupported rotary type: {type(rotary_config).__name__}")
-
-        return serialized_config["theta"], rotary_scaling
+            raise ValueError(f"Unsupported rotary scaling type: {rope_type}")
 
     def import_params(self, export_values: tuple[typing.Any, ...]) -> tuple[typing.Any, ...]:
-        rotary_theta, rope_scaling = export_values
-        rotary_type = "default" if rope_scaling in (None, MISSING) else rope_scaling.get("rope_type", "default")
-        rotary_config = {
-            "type": rotary_type,
-            "theta": rotary_theta,
-        }
-        if rotary_type == "default":
-            pass
-        elif rotary_type == "llama3":
-            rotary_config.update(
-                {
-                    "scale_factor": rope_scaling.get("factor", DEFAULT),
-                    "low_frequency_factor": rope_scaling.get("low_freq_factor", DEFAULT),
-                    "high_frequency_factor": rope_scaling.get("high_freq_factor", DEFAULT),
-                    "original_context_length": rope_scaling.get("original_max_position_embeddings", DEFAULT),
-                }
-            )
-        elif rotary_type == "yarn":
-            rotary_config.update(
-                {
-                    "attention_factor": rope_scaling.get("attention_factor", DEFAULT),
-                    "beta_fast": rope_scaling.get("beta_fast", DEFAULT),
-                    "beta_slow": rope_scaling.get("beta_slow", DEFAULT),
-                    "original_context_length": rope_scaling.get("original_max_position_embeddings", DEFAULT),
-                }
-            )
-        return (rotary_config,)  # RotaryConfig.from_dict(rotary_config)
+        (export_value,) = export_values
+        if (
+            export_value is None
+            or export_value is MISSING
+            or (rope_type := export_value[self._HUGGINGFACE_NAMES[0]]) == "default"
+        ):
+            return (RotaryEmbeddingType.default,) + (DEFAULT,) * 7
+        elif rope_type == RotaryEmbeddingType.llama3:
+            return ("llama3", *[export_value.get(key, DEFAULT) for key in self._HUGGINGFACE_NAMES[1:]])
+        elif rope_type == RotaryEmbeddingType.yarn:
+            return ("yarn", *[export_value.get(key, DEFAULT) for key in self._HUGGINGFACE_NAMES[1:]])
+        else:
+            raise ValueError(f"Unsupported rotary scaling type: {rope_type}")
 
 
 class LlamaHuggingfaceCheckpointHandler(CommonLlamaHuggingfaceCheckpointHandler):
@@ -503,8 +481,7 @@ class Qwen2HuggingfaceCheckpointHandler(CommonHuggingfaceCheckpointHandler):
         return super()._create_config_converters() + [
             ConstantExportParamConverter(export_names=(("architectures",),), export_value=["Qwen2ForCausalLM"]),
             ConstantImportParamConverter(
-                fast_llm_names=(("transformer", "normalization", "type"),),
-                fast_llm_value=RMSNormalizationConfig.__name__,
+                fast_llm_names=(("transformer", "normalization", "type"),), fast_llm_value=NormalizationType.rms_norm
             ),
             RenameParamConverter(
                 fast_llm_names=(("transformer", "normalization", "epsilon"),), export_names=(("rms_norm_eps",),)
@@ -513,12 +490,18 @@ class Qwen2HuggingfaceCheckpointHandler(CommonHuggingfaceCheckpointHandler):
             ConstantImportParamConverter(
                 fast_llm_names=(("transformer", "add_linear_biases"),), fast_llm_value="only_attn_qkv"
             ),
-            LLamaRotaryParamConverter(
-                fast_llm_names=(("transformer", "rotary"),),
-                export_names=(
-                    ("rope_theta",),
-                    ("rope_scaling",),
+            RopeScalingParamConverter(
+                fast_llm_names=(
+                    ("transformer", "rotary", "type"),
+                    ("transformer", "rotary", "scale_factor"),
+                    ("transformer", "rotary", "low_frequency_factor"),
+                    ("transformer", "rotary", "high_frequency_factor"),
+                    ("transformer", "rotary", "original_context_length"),
+                    ("transformer", "rotary", "attention_factor"),
+                    ("transformer", "rotary", "beta_fast"),
+                    ("transformer", "rotary", "beta_slow"),
                 ),
+                export_names=(("rope_scaling",),),
             ),
             IgnoreImportQwen2SlidingWindowParamsConverter(),
         ]
@@ -654,7 +637,7 @@ class MTPLlamaHuggingfaceCheckpointHandler(CustomModelingExportMixin, CommonLlam
     def _create_lm_head_converters(self) -> list[WeightConverter]:
         num_layers = self._model.config.base_model.transformer.num_layers
         prediction_heads = self._model.config.base_model.prediction_heads
-        norm_bias: bool = isinstance(self._model.config.base_model.transformer.normalization, LayerNormalizationConfig)
+        norm_bias: bool = self._model.config.base_model.transformer.normalization.type == NormalizationType.layer_norm
         converters = []
 
         # Next-token prediction head

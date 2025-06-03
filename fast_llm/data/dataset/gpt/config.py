@@ -496,17 +496,3 @@ class GPTTestSlowDatasetConfig(GPTSampledDatasetConfig):
         if sampling.distributed.config.rank == 0:
             time.sleep(self.sleep)
         return GPTRandomDatasetConfig().build_and_sample(sampling)
-
-
-# Add user-friendly names for the configs.
-GPTSampledDatasetConfig.register_subclass("dummy", GPTRandomDatasetConfig)
-GPTSampledDatasetConfig.register_subclass("memmap", GPTMemmapDatasetConfig)
-GPTSampledDatasetConfig.register_subclass("concatenated", GPTConcatenatedDatasetConfig)
-GPTSampledDatasetConfig.register_subclass("slice", GPTDatasetSliceConfig)
-GPTSampledDatasetConfig.register_subclass("sampled", GPTSampledDatasetUpdateConfig)
-GPTSampledDatasetConfig.register_subclass("blended", GPTBlendedDatasetConfig)
-GPTSampledDatasetConfig.register_subclass("file", GPTDatasetFromFileConfig)
-GPTSampledDatasetConfig.register_subclass("concatenated_memmap", GPTConcatenatedMemmapConfig)
-GPTSampledDatasetConfig.register_subclass("fim", GPTFimSampledDatasetConfig)
-GPTSampledDatasetConfig.register_subclass("legacy", GPTLegacyDatasetConfig)
-GPTSampledDatasetConfig.register_subclass("test_slow", GPTTestSlowDatasetConfig)
