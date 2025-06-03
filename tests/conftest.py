@@ -2,8 +2,12 @@ import dataclasses
 import math
 import os
 
+import networkx
 import pytest
+import pytest_depends
+import pytest_depends.main
 import torch
+from xdist.scheduler import LoadGroupScheduling
 
 # Make fixtures available globally without import
 from tests.common import run_test_script  # isort: skip
@@ -56,7 +60,7 @@ def pytest_configure(config):
         assert not torch.cuda.is_initialized()
         # TODO: Support this?
         assert "CUDA_VISIBLE_DEVICES" not in os.environ
-        os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(str(gpu_id + i % num_gpus) for i in range(num_gpus))
+        os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(str((gpu_id + i) % num_gpus) for i in range(num_gpus))
     elif num_gpus > 0:
         gpu_id = 0
     else:
@@ -84,6 +88,7 @@ def pytest_configure(config):
     )
 
 
+@pytest.hookimpl(trylast=True)
 def pytest_collection_modifyitems(config, items):
     if config.getoption("--skip-slow"):
         skip_slow = pytest.mark.skip(reason="Skipping slow tests")
@@ -96,7 +101,35 @@ def pytest_collection_modifyitems(config, items):
             if "extra_slow" in item.keywords:
                 item.add_marker(skip_extra_slow)
 
+    manager: pytest_depends.DependencyManager = pytest_depends.managers[-1]
+    # Build the undirected graph as in `DependencyManager.sorted_items`.
+    dag = networkx.DiGraph()
+    for item in manager.items:
+        node_id = pytest_depends.clean_nodeid(item.nodeid)
+        dag.add_node(node_id)
+        for dependency in manager.dependencies[node_id].dependencies:
+            dag.add_edge(dependency, node_id)
+    # Mark dependency groups for xdist.
+    manager.groups = {}
+    for i, node_ids in enumerate(sorted(networkx.weakly_connected_components(dag), key=len, reverse=True)):
+        if len(node_ids) > 1:
+            for node_id in node_ids:
+                manager.nodeid_to_item[node_id]._nodeid = (
+                    f"{manager.nodeid_to_item[node_id]._nodeid}@dependency_group_{i}"
+                )
+
+    old_clean_nodeid = pytest_depends.main.clean_nodeid
+    # Hack into `clean_nodeid` so pytest_depends recognizes the renamed nodes.
+    pytest_depends.main.clean_nodeid = lambda nodeid: old_clean_nodeid(nodeid.split("@dependency_group_")[0])
+
 
 @pytest.fixture(scope="session")
 def worker_resources(request) -> WorkerResources:
     return request.config.worker_resources
+
+
+@pytest.mark.trylast
+def pytest_xdist_make_scheduler(config, log):
+    # Always use grouped load balancing to handle dependencies, and make it work with `-n`.
+    assert config.getvalue("dist") == "load"
+    return LoadGroupScheduling(config, log)

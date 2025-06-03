@@ -56,6 +56,7 @@ def ref_packed_get_batch_logps(
     return torch.tensor(chosen_logps), torch.tensor(rejected_logps)
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("batch_size", [1, 2, 4, 8])
 @pytest.mark.parametrize("seq_length", [1024, 4096, 8192])
 @pytest.mark.parametrize("vocab_size", [1000, 2000, 8000])

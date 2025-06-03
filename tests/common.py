@@ -32,7 +32,7 @@ sys.path.append(os.getcwd())
 
 # TODO: Use `pytest_addoption` instead?
 # Keep all results in one place to allow recovering them for debugging in case of failure.
-TEST_RESULTS_PATH = pathlib.Path(os.environ.get("TEST_RESULTS_PATH", "/tmp/fast_llm_tests"))
+TEST_RESULTS_PATH = pathlib.Path(os.environ.get("TEST_RESULTS_PATH", "/tmp/fast_llm_tests")).resolve()
 FORCE_REUSE_RESULTS = int(os.environ.get("FORCE_REUSE_RESULTS", 0)) != 0
 REUSE_RESULTS = FORCE_REUSE_RESULTS or int(os.environ.get("REUSE_RESULTS", 0)) != 0
 _LOG_LEVEL = int(os.environ.get("LOG_LEVEL", 13))
@@ -372,7 +372,7 @@ def run_test_script(worker_resources):
             # Prevent Megatron from complaining.
             env["CUDA_DEVICE_MAX_CONNECTIONS"] = "1"
             env["NVTE_FLASH_ATTN"] = "0"
-        path = TEST_RESULTS_PATH.resolve() / name
+        path = TEST_RESULTS_PATH / name
         skip = False
         artifact_path = path / ARTIFACT_PATH
         if path.exists():

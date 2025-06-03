@@ -9,8 +9,7 @@ from fast_llm.engine.schedule.config import ScheduleConfig
 from fast_llm.engine.schedule.runner import ScheduleRunner
 from fast_llm.models.gpt.config import LlamaGPTHuggingfaceCheckpointFormat, PretrainedGPTModelConfig
 from fast_llm.models.gpt.huggingface import HuggingfaceGPTModelForCausalLM
-from tests.common import HUGGINGFACE_CHECKPOINT_FORMAT, TEST_RESULTS_PATH, requires_cuda
-from tests.test_checkpoint import CONVERT_PATH
+from tests.common import CONFIG_COMMON, HUGGINGFACE_CHECKPOINT_FORMAT, TEST_MODEL, TEST_RESULTS_PATH, requires_cuda
 
 
 def _prepare_checkpoint(model: str) -> str:
@@ -245,8 +244,36 @@ def test_generate(
     )
 
 
+@requires_cuda
+def test_export_for_generate(run_test_script):
+    # Not really testing, anything, but handles dependencies more easily than a fixture.
+    run_test_script(
+        f"test_{TEST_MODEL}_export_for_generate",
+        CONFIG_COMMON
+        + [
+            "training.train_iters=0",
+            "training.export.interval=1",
+        ],
+    )
+
+
+@pytest.fixture(scope="module")
+def export_for_generate(run_test_script):
+    name = f"test_{TEST_MODEL}_export_for_generate"
+    run_test_script(
+        name,
+        CONFIG_COMMON
+        + [
+            "training.train_iters=0",
+            "training.export.interval=1",
+        ],
+    )
+    return TEST_RESULTS_PATH / name
+
+
 @pytest.mark.slow
 @requires_cuda
+@pytest.mark.depends(on=["test_export_for_generate"])
 @pytest.mark.parametrize(
     "use_flash_attention, use_bf16, max_new_tokens, min_matching_tokens_batch_size_1, min_matching_tokens_batch_size_2",
     [
@@ -266,7 +293,7 @@ def test_small_generate(
     min_matching_tokens_batch_size_2,
 ):
     _test_generate(
-        CONVERT_PATH / "huggingface_0",
+        TEST_RESULTS_PATH.resolve() / f"test_{TEST_MODEL}_export_for_generate",
         HUGGINGFACE_CHECKPOINT_FORMAT,
         use_flash_attention,
         use_bf16,
@@ -306,9 +333,9 @@ def test_generate_from_model(
 
 @requires_cuda
 @pytest.mark.slow
-@pytest.mark.depends(on=["test_checkpoint.py::test_convert_fast_llm_to_huggingface"])
+@pytest.mark.depends(on=["test_export_for_generate"])
 def test_small_generate_from_model():
-    _test_generate_from_model(CONVERT_PATH / "huggingface_0", None, HUGGINGFACE_CHECKPOINT_FORMAT)
+    _test_generate_from_model(f"test_{TEST_MODEL}_export_for_generate", None, HUGGINGFACE_CHECKPOINT_FORMAT)
 
 
 def _test_forward_return_hidden_states(
@@ -350,5 +377,6 @@ def test_forward_return_hidden_states(model_and_tokenizer):
 
 @pytest.mark.slow
 @requires_cuda
+@pytest.mark.depends(on=["test_export_for_generate"])
 def test_small_forward_return_hidden_states():
-    _test_forward_return_hidden_states(CONVERT_PATH / "huggingface_0", HUGGINGFACE_CHECKPOINT_FORMAT)
+    _test_forward_return_hidden_states(f"test_{TEST_MODEL}_export_for_generate", HUGGINGFACE_CHECKPOINT_FORMAT)

@@ -38,7 +38,6 @@ WEIGHT_SHARD_SAVE_NAME = f"{ShardName.weights}_shard"
 
 
 @requires_cuda
-@pytest.mark.depends()
 def test_checkpoint_and_eval(run_test_script):
     # A baseline config (single-gpu, bf16, flash-attn).
     run_test_script(
