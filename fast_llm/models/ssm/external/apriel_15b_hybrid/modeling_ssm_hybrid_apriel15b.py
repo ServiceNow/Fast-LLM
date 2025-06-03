@@ -16,15 +16,9 @@ from transformers.cache_utils import Cache, DynamicCache
 from transformers.modeling_flash_attention_utils import FlashAttentionKwargs
 from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast
 from transformers.modeling_utils import PreTrainedModel
-from transformers.models.mistral.modeling_mistral import (
-    MISTRAL_INPUTS_DOCSTRING,
-    MistralDecoderLayer,
-    MistralMLP,
-    MistralModel,
-    MistralRMSNorm,
-)
+from transformers.models.mistral.modeling_mistral import MistralDecoderLayer, MistralMLP, MistralModel, MistralRMSNorm
 from transformers.processing_utils import Unpack
-from transformers.utils import LossKwargs, add_start_docstrings_to_model_forward, can_return_tuple, logging
+from transformers.utils import LossKwargs, auto_docstring, can_return_tuple, logging
 from transformers.utils.generic import ModelOutput
 
 from fast_llm.models.ssm.external.apriel_15b_hybrid.configuration_ssm_hybrid_apriel15b import AprielSSMHybridConfig
@@ -780,7 +774,7 @@ class AprielSSMHybridModel(MistralModel):
         self.post_init()
 
     @can_return_tuple
-    @add_start_docstrings_to_model_forward(MISTRAL_INPUTS_DOCSTRING)
+    @auto_docstring
     def forward(
         self,
         input_ids: Optional[torch.LongTensor] = None,
