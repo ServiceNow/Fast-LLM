@@ -1075,19 +1075,19 @@ class AyraAudioModelHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointH
     def _export_config(cls, config: BaseModelConfig) -> dict[str, typing.Any]:
         # TODO Toby: implement for audio
         exported_config = {}
-        vision_handler_cls = AutoGPTHuggingfaceCheckpointHandler.get_handler_class(cls.format.vision_name)
+        audio_handler_class = AutoGPTHuggingfaceCheckpointHandler.get_handler_class(cls.format.audio_name)
         text_handler_cls = AutoGPTHuggingfaceCheckpointHandler.get_handler_class(cls.format.text_name)
-        for converter in vision_handler_cls._create_config_converters():
+        for converter in audio_handler_class._create_config_converters():
             try:
                 values = converter.export_params(
                     tuple(
-                        cls._get_fast_llm_attribute(config, ("vision_encoder",) + fast_llm_name)
+                        cls._get_fast_llm_attribute(config, ("audio_encoder",) + fast_llm_name)
                         for fast_llm_name in converter.fast_llm_names
                     )
                 )
                 for export_name, value in zip(converter.export_names, values, strict=True):
                     if value is not MISSING:
-                        set_nested_dict_value(exported_config, ("vision_config",) + export_name, value)
+                        set_nested_dict_value(exported_config, ("audio_config",) + export_name, value)
             except Exception as e:
                 raise RuntimeError(f"Config conversion failed for converter {converter}", *e.args)
 
