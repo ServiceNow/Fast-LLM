@@ -320,8 +320,8 @@ class BaseBlockConfig(BaseModelConfig):
         valid=check_field(Assert.gt, 0),
     )
 
-    lr_scale: float = Field(
-        default=1.0,
+    lr_scale: float | None = Field(
+        default=None,
         desc="Custom learning rate scale for full block. note, ",
         doc="May be used to freeze some layers by setting their scale to zero. Note, in non-hybrid models (GPT model) all layers share same config and setting lr_scale to 0 will freeze all layers. Consider using norm_lr_scale, mlp_lr_scale etc. instead.",
         hint=FieldHint.feature,

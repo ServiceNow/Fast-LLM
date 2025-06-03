@@ -15,6 +15,7 @@ from fast_llm.layers.transformer.mixture_of_experts import MixtureOfExpertMLP
 from fast_llm.layers.transformer.mlp import MLP
 from fast_llm.logging import log_distributed_grad, log_distributed_tensor, log_memory_usage
 from fast_llm.tensor import TensorMeta
+from fast_llm.utils import get_lr_scale
 
 logger = logging.getLogger(__name__)
 
@@ -46,11 +47,14 @@ class BaseBlock(Layer, abc.ABC):
         self._debug_mode = self._config.debug_block or self._config.debug_block_memory
         hidden_dim = self._tensor_space.get_tensor_dim(f"{LLMDimNames.hidden}_{block_name}")
         # Note, layer_lr_scale does not impact the norms
-        self.norm_1 = self._config.normalization.get_layer(hidden_dim, lr_scale=self._config.norm_lr_scale)
-        self.norm_2 = self._config.normalization.get_layer(hidden_dim, lr_scale=self._config.norm_lr_scale)
+
+        layer_lr_scale = self._config.lr_scale if self._config.lr_scale else None
+        norm_lr_scale = get_lr_scale(self._config.norm_lr_scale, layer_lr_scale)
+
+        self.norm_1 = self._config.normalization.get_layer(hidden_dim, lr_scale=norm_lr_scale)
+        self.norm_2 = self._config.normalization.get_layer(hidden_dim, lr_scale=norm_lr_scale)
 
         self._create_mixer()
-        self.lr_scale = self._config.lr_scale
 
         self.mlp = (MixtureOfExpertMLP if self._config.num_experts > 1 else MLP)(
             self._config, self._tensor_space, f"{self.block_name}", layer_index=layer_index

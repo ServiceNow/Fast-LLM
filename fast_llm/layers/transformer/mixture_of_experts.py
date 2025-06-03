@@ -47,7 +47,7 @@ class MixtureOfExpertMLP(MLPBase):
         super().__init__(config, tensor_space, name)
         self._config = config
         self._tensor_space = tensor_space
-        self._debug_mode = self._config.debug_transformer or self._config.debug_transformer_memory
+        self._debug_mode = self._config.debug_block or self._config.debug_block_memory
 
         self._num_experts = config.num_experts
         self._experts_per_token = config.num_experts_per_token
@@ -59,7 +59,7 @@ class MixtureOfExpertMLP(MLPBase):
         self._z_loss_factor = config.expert_z_loss_coefficient
         self._moe_jitter_eps = config.moe_jitter_eps
 
-        layer_lr_scale = config.per_layer_lr_scale[layer_index] if config.per_layer_lr_scale else None
+        layer_lr_scale = self._config.lr_scale if self._config.lr_scale else None
         router_lr_scale = get_lr_scale(config.router_lr_scale, layer_lr_scale)
 
         self.router = Linear(
@@ -229,15 +229,15 @@ class MixtureOfExpertMLP(MLPBase):
         kwargs: dict[str, typing.Any],
         global_: bool = True,
     ) -> None:
-        if self._config.debug_transformer_memory:
+        if self._config.debug_block_memory:
             log_pipeline_parallel_main_rank(lambda: log_memory_usage(f"{self._name} {name}", str))
-        if self._config.debug_transformer and tensor is not None:
+        if self._config.debug_block and tensor is not None:
             # TODO: Local vs global
             meta = self._get_meta(tensor, name, dim_name, kwargs)
             log_distributed_tensor(
                 "",
                 tensor.view_as(meta),
-                level=self._config.debug_transformer,
+                level=self._config.debug_block,
                 meta=meta,
                 distributed=self._tensor_space.distributed,
                 global_=global_,
@@ -246,7 +246,7 @@ class MixtureOfExpertMLP(MLPBase):
                 log_distributed_grad(
                     "",
                     tensor,
-                    level=self._config.debug_transformer,
+                    level=self._config.debug_block,
                     meta=self._get_meta(tensor, name + " grad", dim_name, kwargs),
                     distributed=self._tensor_space.distributed,
                     grad_fn=lambda tensor_: tensor_.view_as(meta),

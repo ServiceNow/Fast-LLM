@@ -11,7 +11,7 @@ from fast_llm.layers.common.config import BaseBlockConfig
 from fast_llm.layers.common.linear import LinearBase
 from fast_llm.layers.transformer.config import TransformerDimNames, TransformerSubLayerName
 from fast_llm.tensor import init_normal_, init_zeros_
-from fast_llm.utils import Assert
+from fast_llm.utils import Assert, get_lr_scale
 
 
 class MLPBase(Layer, ABC):
@@ -42,7 +42,9 @@ class MLPBase(Layer, ABC):
         self._activation_type = config.activation_type
         self._activation_fn = triton_mlp_activation_autograd if TritonConfig.TRITON_ENABLED else torch_mlp_activation
 
-        lr_scale = config.mlp_lr_scale
+        layer_lr_scale = config.lr_scale if config.lr_scale else None
+        mlp_lr_scale = tuple(config.lr_scale) if isinstance(config.lr_scale, list) else config.lr_scale
+        lr_scale = get_lr_scale(mlp_lr_scale, layer_lr_scale)
 
         # So both layers' weights have shape (num_experts [* gate_up] * ffn, hidden_size)
         self.layer_1 = LinearBase(

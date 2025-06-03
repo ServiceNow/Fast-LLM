@@ -10,6 +10,7 @@ from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
 from fast_llm.layers.common.linear import Linear
 from fast_llm.layers.ssm.config import SSMConfig, SSMDimNames
 from fast_llm.tensor import ParameterMeta, init_ones_, init_uniform_, init_zeros_, kaiming_init_
+from fast_llm.utils import get_lr_scale
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +49,9 @@ class DiscreteMamba2(torch.nn.Module):
         bias = config.add_bias_linear
         self.layer_idx = layer_index
         self._return_input = return_input
-        mamba_layer_lr_scale = self.config.mamba_lr_scale
+
+        layer_lr_scale = config.lr_scale if config.lr_scale else None
+        mamba_layer_lr_scale = get_lr_scale(self.config.mamba_lr_scale, layer_lr_scale)
         logger.info(f"Setting lr_scale for layer {layer_index} of type {type(self)}: {mamba_layer_lr_scale}")
 
         td_inner = tensor_space.get_tensor_dim(f"{SSMDimNames.inner_dim}_{name}")

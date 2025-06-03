@@ -17,7 +17,7 @@ from fast_llm.layers.transformer.config import (
 )
 from fast_llm.logging import log_distributed_grad, log_distributed_tensor
 from fast_llm.tensor import TensorMeta, init_normal_, init_zeros_
-from fast_llm.utils import Assert
+from fast_llm.utils import Assert, get_lr_scale
 
 try:
     from flash_attn.flash_attn_interface import flash_attn_func as _flash_attn_func  # noqa
@@ -117,7 +117,8 @@ class Attention(torch.nn.Module):
 
         hidden_dim = self._tensor_space.get_tensor_dim(f"{TransformerDimNames.hidden}_{block_name}")
 
-        attention_lr_scale = self._config.attention_lr_scale
+        layer_lr_scale = self._config.lr_scale if self._config.lr_scale else None
+        attention_lr_scale = get_lr_scale(self._config.attention_lr_scale, layer_lr_scale)
 
         # TODO: Merge the query and key-value computations? (harder with sequence parallel.)
         self.query = OutputParallelLinear(

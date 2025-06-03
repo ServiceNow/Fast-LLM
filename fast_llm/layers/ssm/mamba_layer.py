@@ -9,6 +9,7 @@ from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
 from fast_llm.layers.common.linear import Linear
 from fast_llm.layers.ssm.config import SSMConfig, SSMDimNames
 from fast_llm.tensor import ParameterMeta, init_ones_, kaiming_init_
+from fast_llm.utils import get_lr_scale
 
 """
 Note: this is mostly addapted from https://github.com/Zyphra/Zamba2, similar code is aslo in https://github.com/state-spaces/mamba.
@@ -82,7 +83,9 @@ class MambaLayer(torch.nn.Module):
         self.d_state = td_state.size
         self.d_model = td_model.size
         self.dt_rank = tdt_rank.size
-        mamba_layer_lr_scale = self.config.mamba_lr_scale
+
+        layer_lr_scale = self.config.lr_scale if self.config.lr_scale else None
+        mamba_layer_lr_scale = get_lr_scale(self.config.mamba_lr_scale, layer_lr_scale)
 
         self.in_proj_weight = ParameterMeta.from_dims(
             (td_inner_proj, td_model),
