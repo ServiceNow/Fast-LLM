@@ -11,6 +11,7 @@ from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.engine.multi_stage.config import StageConfig
 from fast_llm.engine.multi_stage.stage import Stage
 from fast_llm.functional.config import CrossEntropyImpl
+from fast_llm.layers.common.config import NormalizationType
 from fast_llm.layers.language_model.config import LanguageModelKwargs
 from fast_llm.layers.language_model.embedding import WORD_EMBEDDINGS_WEIGHT
 from fast_llm.layers.language_model.head import OUTPUT_WEIGHTS, LanguageModelHead
@@ -90,7 +91,7 @@ def test_lm_head(
     config = GPTBaseModelConfig.from_dict(
         {
             "transformer": {
-                "normalization": {"type": "rms_norm"},
+                "normalization": {"type": NormalizationType.rms_norm},
                 "hidden_size": HIDDEN_SIZE,
                 "num_layers": 0,
             },

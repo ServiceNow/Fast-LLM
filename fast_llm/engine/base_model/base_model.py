@@ -90,7 +90,7 @@ class BaseModel[ConfigType: BaseModelConfig](Configurable[ConfigType], Sequentia
         config: BaseModelConfig,
         distributed_config: DistributedConfig,
     ):
-        self._tensor_space = TensorSpace(distributed_config)
+        self._tensor_space: TensorSpace = TensorSpace(distributed_config)
         config.setup_tensor_space(self._tensor_space)
 
         super().__init__(config)

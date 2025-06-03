@@ -361,6 +361,7 @@ def run_test_script(
     config: CompareConfig | None = None,
     prepare_fn=None,
     compare_fn=None,
+    do_compare: bool = True,
 ):
     if torch.cuda.device_count() < num_gpus:
         pytest.skip(f"Not enough GPUs to run test ({torch.cuda.device_count()}<{num_gpus})")
@@ -413,7 +414,7 @@ def run_test_script(
             completed_proc = subprocess.run(command, env=env, timeout=60)
             if completed_proc.returncode:
                 raise RuntimeError(f"Process failed with return code {completed_proc.returncode}")
-    if compare:
+    if compare and do_compare:
         if compare_fn is not None:
             compare_fn(TEST_RESULTS_PATH / name, TEST_RESULTS_PATH / compare)
         compare_tensor_logs(
