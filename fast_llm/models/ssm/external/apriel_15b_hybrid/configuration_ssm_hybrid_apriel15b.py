@@ -10,6 +10,7 @@ class AprielSSMHybridConfig(MistralConfig):
     def __init__(self, hybrid_block_layout=["m2d"], ssm_cfg=None, **kwargs):
         super().__init__(**kwargs)
         self.hybrid_block_layout = hybrid_block_layout
+        self.head_dim = self.head_dim or self.hidden_size // self.num_attention_heads  # as in transformers 4.51.3
         self.ssm_cfg = ssm_cfg or {
             "d_state": 64,
             "n_v_heads": 24,
