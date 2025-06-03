@@ -6,6 +6,7 @@ from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
 from fast_llm.layers.language_model.embedding import LanguageModelEmbedding
 from fast_llm.layers.language_model.head import LanguageModelHead
+from fast_llm.layers.transformer.transformer import BaseBlock
 from fast_llm.models.gpt.model import GPTBaseModel
 from fast_llm.models.hybrid.config import HybridBaseModelConfig, HybridModelConfig
 
@@ -62,7 +63,7 @@ class HybridBaseModel[ConfigType: HybridBaseModelConfig](GPTBaseModel[ConfigType
 
         # Create blocks according to pattern
         for i, block_name in enumerate(self._config.hybrid_block_layout):
-            BLOCK_CLS = self._config.blocks[block_name].block_class
+            BLOCK_CLS: BaseBlock = self._config.blocks[block_name].block_class
             layers.append(
                 BLOCK_CLS(
                     self._config.blocks[block_name],

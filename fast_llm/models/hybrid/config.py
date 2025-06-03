@@ -30,24 +30,12 @@ logger = logging.getLogger(__name__)
 
 @config_class(registry=True)
 class HybridBlockConfig(Config):
+    _abstract = True
     block_class: typing.ClassVar[type[BaseBlock]]
-
     type: str | None = Field(
         default="transformer",
         desc="The config class name.",
         hint=FieldHint.feature,
-    )
-
-    lr_scale: list[float] | None = Field(
-        default=None,
-        desc="Custom learning rate scale for each layer.",
-        doc="May be used to freeze some layers by setting their scale to zero.",
-        hint=FieldHint.feature,
-    )
-    hidden_size: int = Field(
-        default=1024,
-        desc="Hidden size of the block.",
-        hint=FieldHint.architecture,
     )
 
     @classmethod

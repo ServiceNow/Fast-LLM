@@ -50,6 +50,7 @@ class BaseBlock(Layer, abc.ABC):
         self.norm_2 = self._config.normalization.get_layer(hidden_dim, lr_scale=self._config.norm_lr_scale)
 
         self._create_mixer()
+        self.lr_scale = self._config.lr_scale
 
         self.mlp = (MixtureOfExpertMLP if self._config.num_experts > 1 else MLP)(
             self._config, self._tensor_space, f"{self.block_name}", layer_index=layer_index
