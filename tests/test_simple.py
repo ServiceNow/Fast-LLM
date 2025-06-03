@@ -37,7 +37,7 @@ def test_model_dp2_timeout(run_test_script):
     # Test sampling timeout
     # TODO: Find a better way to test this
     run_test_script(
-        f"test_{TEST_MODEL}_dp2",
+        f"test_{TEST_MODEL}_dp2_timeout",
         CONFIG_COMMON
         + [
             # Use a short timeout
