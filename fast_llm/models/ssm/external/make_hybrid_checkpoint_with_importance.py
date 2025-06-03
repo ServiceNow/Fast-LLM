@@ -1,10 +1,7 @@
-import gc
-
 import click
 import torch
-from transformers import AutoConfig, AutoModelForCausalLM
 import transformers
-from transformers import MistralForCausalLM
+from transformers import AutoConfig, MistralForCausalLM
 
 from fast_llm.models.ssm.external.apriel_15b_hybrid.configuration_ssm_hybrid_apriel15b import AprielSSMHybridConfig
 from fast_llm.models.ssm.external.apriel_15b_hybrid.modeling_ssm_hybrid_apriel15b import AprielSSMHybridForCausalLM
@@ -16,48 +13,95 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 
 print("Transformers version:", transformers.__version__)
 
+
 @click.command()
 @click.option("--index_to_swap", type=int, required=True)
 @click.option("--checkpoint", type=str, required=True)
 def main(index_to_swap: int, checkpoint=None):
     print(f"index_to_swap: {index_to_swap}, checkpoint: {checkpoint}")
-    
+
     layer_importance = [
-        47, 39, 24, 20, 38, 30, 43, 36, 31, 37, 49, 32, 33, 35, 44, 45, 42, 22, 41, 40,
-        23, 21, 46, 29, 34, 27, 25, 28, 19, 26, 18, 17, 16, 13, 15, 14, 8, 9, 12, 6, 11,
-        48, 5, 10, 7, 3, 4, 1, 0
+        47,
+        39,
+        24,
+        20,
+        38,
+        30,
+        43,
+        36,
+        31,
+        37,
+        49,
+        32,
+        33,
+        35,
+        44,
+        45,
+        42,
+        22,
+        41,
+        40,
+        23,
+        21,
+        46,
+        29,
+        34,
+        27,
+        25,
+        28,
+        19,
+        26,
+        18,
+        17,
+        16,
+        13,
+        15,
+        14,
+        8,
+        9,
+        12,
+        6,
+        11,
+        48,
+        5,
+        10,
+        7,
+        3,
+        4,
+        1,
+        0,
     ]
-    
+
     path_thinker = "/mnt/checkpoints/upstream/Apriel-Nemotron-15b-Thinker"
     config_thinker = AutoConfig.from_pretrained(path_thinker)
     hybrid_block_layout = ["t"] * config_thinker.num_hidden_layers
-    
+
     for i in range(index_to_swap + 1):
         print(f"Swapping layer {layer_importance[i]} to m2d")
         hybrid_block_layout[layer_importance[i]] = "m2d"
-    
+
     # checkpoint_model = AprielSSMHybridForCausalLM.from_pretrained(path_thinker)
     # hybrid_block_layout = checkpoint_model.config.hyb_block_layout # ["t"] * config_thinker.num_hidden_layers
     # hybrid_block_layout[layer_importance[layer_index_to_swap]] = "m2d"
 
     config_hybrid = AprielSSMHybridConfig(
         hybrid_block_layout=hybrid_block_layout,
-        ssm_cfg = {
-                "d_state": 64,
-                "n_v_heads": 32,
-                "n_qk_heads": 32,
-                "expand": 1,
-                "chunk_size": 128,
-                "activation": "identity",
-                "bias": False,
-                "d_conv": 4,
-                "d_inner": 32 * 128
-            },
+        ssm_cfg={
+            "d_state": 64,
+            "n_v_heads": 32,
+            "n_qk_heads": 32,
+            "expand": 1,
+            "chunk_size": 128,
+            "activation": "identity",
+            "bias": False,
+            "d_conv": 4,
+            "d_inner": 32 * 128,
+        },
         **config_thinker.to_dict(),
     )
-    
+
     model_hybrid = AprielSSMHybridForCausalLM(config_hybrid)
-    
+
     if checkpoint is None:
         print("Loading base model from thinker checkpoint")
         path_base = path_thinker
@@ -73,9 +117,11 @@ def main(index_to_swap: int, checkpoint=None):
     if unexpected:
         print("Unexpected keys:", unexpected)
     model_hybrid.to(torch.bfloat16)
-    
+
     print(model_hybrid)
-    model_hybrid.save_pretrained(f"/mnt/checkpoints/ssm/iterative_hybrids/apriel_ssm_thinker15b_hybrid_{index_to_swap+1}ssm_leastimportant_32h_init_rand")
+    model_hybrid.save_pretrained(
+        f"/mnt/checkpoints/ssm/iterative_hybrids_only_new_layer_train/apriel_ssm_thinker15b_hybrid_{index_to_swap+1}ssm_leastimportant_32h_init_rand"
+    )
 
     # checkpoint = "ServiceNow-AI/Apriel-Nemotron-15b-Thinker"
     # config = AutoConfig.from_pretrained(checkpoint, trust_remote_code=True)
