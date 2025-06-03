@@ -28,18 +28,21 @@ MEMMAP_INDEX_HEADER = b"MMIDIDX\x00\x00"
 class SourceSchemaConfig(Config):
     pass
 
+
 @config_class()
 class TextColumnConfig(SourceSchemaConfig):
-    type: typing.ClassVar[str] = "text_column" #TODO: Register TestColumnConfig for this type for dynamic loading PR #245
+    type: typing.ClassVar[str] = (
+        "text_column"  # TODO: Register TestColumnConfig for this type for dynamic loading PR #245
+    )
     input_column: str = Field(
         default="text",
         desc="Field of the dataset to use.",
         hint=FieldHint.optional,
     )
     loss_masking_spans_column: None | str = Field(
-        default=None, desc="Field containing character spans to mask for loss computation",
-        hint=FieldHint.optional
+        default=None, desc="Field containing character spans to mask for loss computation", hint=FieldHint.optional
     )
+
 
 @config_class()
 class GPTHuggingfaceDatasetConfig(Config):
@@ -69,9 +72,18 @@ class GPTHuggingfaceDatasetConfig(Config):
         hint=FieldHint.optional,
     )
     source_schema: SourceSchemaConfig = Field(
-        #TODO: Default should be from subclass TextColumnConfig (waiting for PR #245)
+        # TODO: Default should be from subclass TextColumnConfig (waiting for PR #245)
         desc="Configuration for the data source.",
         hint=FieldHint.optional,
+    )
+    loss_masking_spans: None | str = Field(
+        default=None, desc="Field containing character spans to mask for loss computation", hint=FieldHint.optional
+    )
+    chosen_text: None | str = Field(
+        default=None, desc="Field containing chosen text for preference optimization", hint=FieldHint.optional
+    )
+    rejected_text: None | str = Field(
+        default=None, desc="Field containing rejected text for preference optimization", hint=FieldHint.optional
     )
     data_type: DataType | None = Field(
         default=None,
@@ -134,7 +146,6 @@ class GPTMemmapDatasetPreparatorConfig(DatasetPreparatorConfig):
         hint=FieldHint.core,
     )
     distributed: DatasetPreparatorDistributedConfig = Field(
-        default_factory=DatasetPreparatorDistributedConfig,
         desc="Configuration for distributed processing.",
         hint=FieldHint.feature,
     )
@@ -163,12 +174,10 @@ class GPTMemmapDatasetPreparatorConfig(DatasetPreparatorConfig):
         valid=check_field(Assert.geq, 1),
     )
     dataset: GPTHuggingfaceDatasetConfig = Field(
-        default_factory=GPTHuggingfaceDatasetConfig,
         desc="Configuration for the dataset.",
         hint=FieldHint.feature,
     )
     tokenizer: TokenizerConfig = Field(
-        default_factory=TokenizerConfig,
         desc="Configuration for the tokenizer.",
         hint=FieldHint.feature,
     )

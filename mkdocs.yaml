@@ -173,6 +173,7 @@ nav:
     - Continue training a model: recipes/continue-training.md
     - Upcycle Llama 3B to MoE: recipes/upcycle-llama-3b-to-moe.md
     - Instruction Finetuning: recipes/instruction-finetuning.md
+    - Generate: recipes/generate.md
   - Reference:
     - User Guide:
       - Configuration: user_guide/configuration.md

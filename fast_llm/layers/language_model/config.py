@@ -34,13 +34,14 @@ class LanguageModelKwargs:
     # TODO: These are generic
     labels = "labels"
     phase = "phase"
+    chosen_spans = "chosen_spans"
+    rejected_spans = "rejected_spans"
     loss_mask = "loss_mask"
 
 
 @config_class()
 class LanguageModelBaseConfig(BaseModelConfig):
     transformer: TransformerConfig = Field(
-        default_factory=TransformerConfig,
         desc="Configuration for the transformer architecture.",
         hint=FieldHint.architecture,
     )
@@ -86,6 +87,21 @@ class LanguageModelBaseConfig(BaseModelConfig):
     init_method_min_embed: float | None = Field(
         default=None,
         desc="Min value for clamping initialized weights of the vocabulary embedding and output (logits).",
+        hint=FieldHint.feature,
+    )
+    enable_dpo: bool | None = Field(
+        default=False,
+        desc="Whether to enable DPO loss",
+        hint=FieldHint.feature,
+    )
+    dpo_beta: float | None = Field(
+        default=1.0,
+        desc="Beta value for DPO loss.",
+        hint=FieldHint.feature,
+    )
+    dpo_reference_model: str | None = Field(
+        default=None,
+        desc="Name of the reference model to use for dpo.",
         hint=FieldHint.feature,
     )
     cross_entropy_impl: CrossEntropyImpl = Field(

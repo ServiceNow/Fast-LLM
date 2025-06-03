@@ -35,8 +35,8 @@ class NormalizationConfig(BaseModelConfig):
         pass
 
 
-@config_class()
-class NoNormalizationConfig(NormalizationConfig):
+@config_class(registry=True)
+class NormalizationConfig(BaseModelConfig):
     _abstract = False
 
     @abc.abstractmethod
@@ -111,31 +111,16 @@ class LayerNormBaseConfig(NormalizationConfig):
         return super()._from_dict(default, strict, flat)
 
 
-@config_class()
-class LayerNormalizationConfig(LayerNormBaseConfig):
-    _abstract = False
-
-    @property
-    def module_class(self):
-        from fast_llm.layers.common.normalization import LayerNorm
-
-        return LayerNorm
+for name in NormalizationType:
+    # We need this because we are using the reserved field name `type`.
+    # TODO: Implement proper dynamic typing.
+    NormalizationConfig.register_subclass(name.value, NormalizationConfig)
 
 
-@config_class()
-class RMSNormalizationConfig(LayerNormBaseConfig):
-    _abstract = False
-
-    @property
-    def module_class(self):
-        from fast_llm.layers.common.normalization import RMSNorm
-
-        return RMSNorm
-
-
-NormalizationConfig.register_subclass("none", NoNormalizationConfig)
-NormalizationConfig.register_subclass("layer_norm", LayerNormalizationConfig)
-NormalizationConfig.register_subclass("rms_norm", RMSNormalizationConfig)
+class PeftType(str, enum.Enum):
+    # TODO : Use a dynamic config type instead.
+    none = "none"
+    lora = "lora"
 
 
 @config_class()

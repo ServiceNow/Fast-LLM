@@ -73,6 +73,7 @@ class GPTSamplingParameters(SamplingParameters):
     sequence_length: int
     vocab_size: int
     use_loss_masking_spans: bool = False
+    use_preference_loss_spans: bool = False
     cross_document_attention: bool = True
     # How many extra tokens to add to the sequence length.
     # This is used to provide labels even for the last tokens in the sequence.
@@ -92,7 +93,7 @@ class GPTSamplingData(SamplingData):
     truncate_documents: bool = True
 
 
-@config_class()
+@config_class(registry=True)
 class GPTSampledDatasetConfig(SampledDatasetConfig):
     pass
 
@@ -108,10 +109,9 @@ class GPTIndexedDatasetConfig(GPTSamplableDatasetConfig, IndexedDatasetConfig):
         raise NotImplementedError()
 
 
-@config_class()
+@config_class(dynamic_type={GPTSampledDatasetConfig: "random"})
 class GPTRandomDatasetConfig(GPTSamplableDatasetConfig):
     _abstract: typing.ClassVar[bool] = False
-    type_: typing.ClassVar[str | None] = "random"
     name: str = Field(
         default="dummy",
         desc="The name of the dataset.",
@@ -124,10 +124,9 @@ class GPTRandomDatasetConfig(GPTSamplableDatasetConfig):
         return GPTRandomDataset(self.name)
 
 
-@config_class()
+@config_class(dynamic_type={GPTSampledDatasetConfig: "memmap"})
 class GPTMemmapDatasetConfig(GPTIndexedDatasetConfig):
     _abstract: typing.ClassVar[bool] = False
-    type_: typing.ClassVar[str | None] = "memmap"
     path: pathlib.Path = Field(
         default=None,
         desc="The path to the dataset, excluding the `.bin` or `.idx` suffix.",
@@ -150,10 +149,9 @@ class GPTMemmapDatasetConfig(GPTIndexedDatasetConfig):
         return GPTMemmapDataset(str(self.path).replace("/", "__"), self.path, self.num_documents, self.num_tokens)
 
 
-@config_class()
+@config_class(dynamic_type={GPTSampledDatasetConfig: "concatenated"})
 class GPTConcatenatedDatasetConfig(ConcatenatedDatasetConfig, GPTIndexedDatasetConfig):
     _abstract: typing.ClassVar[bool] = False
-    type_: typing.ClassVar[str | None] = "concatenated"
     datasets: list[GPTIndexedDatasetConfig] = FieldUpdate()
 
     def build(self) -> "GPTConcatenatedDataset":
@@ -162,10 +160,9 @@ class GPTConcatenatedDatasetConfig(ConcatenatedDatasetConfig, GPTIndexedDatasetC
         return self._build(GPTConcatenatedDataset)
 
 
-@config_class()
+@config_class(dynamic_type={GPTSampledDatasetConfig: "slice"})
 class GPTDatasetSliceConfig(DatasetSliceConfig, GPTIndexedDatasetConfig):
     _abstract: typing.ClassVar[bool] = False
-    type_: typing.ClassVar[str | None] = "slice"
     dataset: GPTIndexedDatasetConfig = FieldUpdate()
 
     def build(self) -> "GPTDatasetSlice":
@@ -174,25 +171,22 @@ class GPTDatasetSliceConfig(DatasetSliceConfig, GPTIndexedDatasetConfig):
         return self._build(GPTDatasetSlice)
 
 
-@config_class()
+@config_class(dynamic_type={GPTSampledDatasetConfig: "sampled"})
 class GPTSampledDatasetUpdateConfig(SampledDatasetUpdateConfig, GPTSampledDatasetConfig):
     _abstract = False
-    type_: typing.ClassVar[str | None] = "sampled"
-    sampling: GPTSamplingConfig = FieldUpdate(default_factory=GPTSamplingConfig)
-    dataset: GPTSampledDatasetConfig = FieldUpdate(default_factory=GPTSampledDatasetConfig)
+    sampling: GPTSamplingConfig = FieldUpdate()
+    dataset: GPTSampledDatasetConfig = FieldUpdate()
 
 
-@config_class()
+@config_class(dynamic_type={GPTSampledDatasetConfig: "blended"})
 class GPTBlendedDatasetConfig(BlendedDatasetConfig, GPTSampledDatasetConfig):
     _abstract: typing.ClassVar[bool] = False
-    type_: typing.ClassVar[str | None] = "blended"
     datasets: list[GPTSampledDatasetConfig] = FieldUpdate()
 
 
-@config_class()
+@config_class(dynamic_type={GPTSampledDatasetConfig: "file"})
 class GPTDatasetFromFileConfig(GPTSamplableDatasetConfig):
     _abstract: typing.ClassVar[bool] = False
-    type_: typing.ClassVar[str | None] = "file"
     path: pathlib.Path = Field(
         default=None,
         desc="The path to a dataset config file.",
@@ -228,11 +222,11 @@ class GPTDatasetFromFileConfig(GPTSamplableDatasetConfig):
         return config
 
 
-@config_class()
+# Add user-friendly names for the configs.
+@config_class(dynamic_type={GPTSampledDatasetConfig: "concatenated_memmap"})
 class GPTConcatenatedMemmapConfig(GPTIndexedDatasetConfig):
     # TODO v0.3: Remove.
     _abstract: typing.ClassVar[bool] = False
-    type_: typing.ClassVar[str | None] = "concatenated_memmap"
     path: pathlib.Path = Field(
         default=None,
         desc="The path to a dataset directory.",
@@ -335,14 +329,13 @@ class FimConfig(Config):
     )
 
 
-@config_class()
+@config_class(dynamic_type={GPTSampledDatasetConfig: "fim"})
 class GPTFimSampledDatasetConfig(GPTSampledDatasetConfig, FimConfig):
     """
     Configuration for FIM.
     """
 
     _abstract: typing.ClassVar[bool] = False
-    type_: typing.ClassVar[str | None] = "fim"
 
     dataset: GPTSampledDatasetConfig = Field(
         default=None,
@@ -398,16 +391,14 @@ class GPTLegacyConfig(Config):
         valid=_validate_path,
     )
     fim: FimConfig = Field(
-        default_factory=FimConfig,
         desc="Configuration for Fill In the Middle (FIM).",
         hint=FieldHint.feature,
     )
 
 
-@config_class()
+@config_class(dynamic_type={GPTSampledDatasetConfig: "legacy"})
 class GPTLegacyDatasetConfig(GPTSampledDatasetConfig, GPTLegacyConfig):
     _abstract: typing.ClassVar[bool] = False
-    type_: typing.ClassVar[str | None] = "legacy"
 
     def build_and_sample(self, sampling: GPTSamplingData) -> SampledDataset:
 
@@ -486,7 +477,7 @@ class GPTLegacyDatasetConfig(GPTSampledDatasetConfig, GPTLegacyConfig):
         return GPTSampledDatasetConfig.from_dict(dataset_config).build_and_sample(sampling)
 
 
-@config_class()
+@config_class(dynamic_type={GPTSampledDatasetConfig: "test_slow"})
 class GPTTestSlowDatasetConfig(GPTSampledDatasetConfig):
     """
     A mock dataset that mimics a slow dataset creation on one rank, which may trigger a timeout.
@@ -494,7 +485,6 @@ class GPTTestSlowDatasetConfig(GPTSampledDatasetConfig):
 
     # TODO: This belongs to a testing plugin.
     _abstract: typing.ClassVar[bool] = False
-    type_: typing.ClassVar[str | None] = "test_slow"
     sleep: float = Field(
         default=1,
         desc="Sleep time during build, in seconds.",
