@@ -71,12 +71,13 @@ def pytest_configure(config):
         torch.cuda.set_per_process_memory_fraction(MAX_TEST_MEMORY / gpu_memory, 0)
 
     num_workers = config.workerinput["workercount"] if is_parallel else 1
-    memory_needed = (MAX_TEST_MEMORY + CUDA_CONTEXT_SIZE) * math.ceil(num_workers / num_gpus)
-    if memory_needed > gpu_memory:
-        raise ValueError(
-            f"Not enough GPU memory to support this many parallel workers {num_workers}."
-            f"Please reduce the number of workers to {int(gpu_memory/(MAX_TEST_MEMORY + CUDA_CONTEXT_SIZE))*num_gpus} or less."
-        )
+    if num_gpus > 0:
+        memory_needed = (MAX_TEST_MEMORY + CUDA_CONTEXT_SIZE) * math.ceil(num_workers / num_gpus)
+        if memory_needed > gpu_memory:
+            raise ValueError(
+                f"Not enough GPU memory to support this many parallel workers {num_workers}."
+                f"Please reduce the number of workers to {int(gpu_memory/(MAX_TEST_MEMORY + CUDA_CONTEXT_SIZE))*num_gpus} or less."
+            )
 
     config.worker_resources = WorkerResources(
         worker_id=worker_id,
