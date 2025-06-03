@@ -248,27 +248,14 @@ def test_generate(
 def test_export_for_generate(run_test_script):
     # Not really testing, anything, but handles dependencies more easily than a fixture.
     run_test_script(
-        f"test_{TEST_MODEL}_export_for_generate",
+        f"test_{TEST_MODEL}_export_for_generate/export/{HUGGINGFACE_CHECKPOINT_FORMAT.name}/2",
         CONFIG_COMMON
         + [
-            "training.train_iters=0",
+            "training.train_iters=1",
+            f"training.export.format={HUGGINGFACE_CHECKPOINT_FORMAT.name}",
             "training.export.interval=1",
         ],
     )
-
-
-@pytest.fixture(scope="module")
-def export_for_generate(run_test_script):
-    name = f"test_{TEST_MODEL}_export_for_generate"
-    run_test_script(
-        name,
-        CONFIG_COMMON
-        + [
-            "training.train_iters=0",
-            "training.export.interval=1",
-        ],
-    )
-    return TEST_RESULTS_PATH / name
 
 
 @pytest.mark.slow
@@ -293,7 +280,7 @@ def test_small_generate(
     min_matching_tokens_batch_size_2,
 ):
     _test_generate(
-        TEST_RESULTS_PATH.resolve() / f"test_{TEST_MODEL}_export_for_generate",
+        TEST_RESULTS_PATH / f"test_{TEST_MODEL}_export_for_generate",
         HUGGINGFACE_CHECKPOINT_FORMAT,
         use_flash_attention,
         use_bf16,
