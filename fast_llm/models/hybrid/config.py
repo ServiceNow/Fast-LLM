@@ -2,6 +2,7 @@ import enum
 import logging
 import math
 import typing
+from abc import abstractmethod
 
 from blocks import LlambaBlock, LlambaOneBlock
 
@@ -37,6 +38,16 @@ class HybridBlockConfig(Config):
         desc="The config class name.",
         hint=FieldHint.feature,
     )
+
+    share_weights: bool = Field(
+        default=False,
+        desc="Whether to share weights between blocks. If True, blocks with the same name will share weights.",
+        hint=FieldHint.optional,
+    )
+
+    @abstractmethod
+    def setup_tensor_space(self, tensor_space: TensorSpace, block_name: str) -> None:
+        pass
 
     @classmethod
     def _from_dict(
@@ -243,8 +254,25 @@ class HybridBaseModelConfig(LanguageModelBaseConfig):
 
         first_transformer_block_config: TransformerBlockConfig | None = None
 
+        ### Weight sharing ###
+        # handle share_weights by renaming blocks with shared weights. Layer names are used for setting tensor dimensions.
+        blocks = {}
+        hybrid_block_layout = []
+        for i, block_name in enumerate(self.hybrid_block_layout):
+            block_config = self.blocks[block_name]
+            if not block_config.share_weights:
+                logger.info(f"Weight sharing disable for block {block_name}, renaming to {block_name}_{i}")
+                block_name = f"{block_name}_{i}"
+            else:
+                logger.info(f"Weight sharing enabled for block {block_name}")
+            blocks[block_name] = block_config
+            hybrid_block_layout.append(block_name)
+        self.blocks = blocks
+        self.hybrid_block_layout = hybrid_block_layout
+        ###\Weight sharing ###
+
         for block_name, block_config in self.blocks.items():
-            if isinstance(block_config, TransformerBlockConfig):
+            if isinstance(block_config, TransformerBlockConfig) and self.num_layers is None:
                 if first_transformer_block_config is None:
                     first_transformer_block_config = block_config
                 elif block_config.num_layers != first_transformer_block_config.num_layers:
@@ -265,17 +293,18 @@ class HybridBaseModelConfig(LanguageModelBaseConfig):
 
         # make sure that the hybrid_block_layout length matches the num_layers. If it doesn't, repeat the hybrid_block_layout;
         if len(self.hybrid_block_layout) != self.num_layers:
-            if self.transformer.num_layers % len(self.hybrid_block_layout) != 0:
+            if self.num_layers % len(self.hybrid_block_layout) != 0:
                 raise ValueError(
-                    f"hybrid_block_layout length {len(self.hybrid_block_layout)} does not match num_layers {self.transformer.num_layers}"
+                    f"hybrid_block_layout length {len(self.hybrid_block_layout)} does not match num_layers {self.num_layers}"
                 )
-            num_repeats = int(self.transformer.num_layers // len(self.hybrid_block_layout))
+            num_repeats = int(self.num_layers // len(self.hybrid_block_layout))
             logger.warning(
-                f"hybrid_block_layout length {len(self.hybrid_block_layout)} does not match num_layers {self.transformer.num_layers}, will repeat {self.hybrid_block_layout} {num_repeats} times"
+                f"hybrid_block_layout length {len(self.hybrid_block_layout)} does not match num_layers {self.num_layers}, will repeat {self.hybrid_block_layout} {num_repeats} times with weight sharing between repeats."
             )
             self.hybrid_block_layout = self.hybrid_block_layout * num_repeats
 
-        Assert.eq(len(self.hybrid_block_layout), self.transformer.num_layers)
+        Assert.eq(len(self.hybrid_block_layout), self.num_layers)
+        logger.info(f"Hybrid block layout: {self.hybrid_block_layout}")
 
         with self._set_implicit_default():
             if self.init_method_std_embed is None:
