@@ -287,6 +287,10 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
                 torch.distributed.barrier()
 
         assert isinstance(dataset, datasets.Dataset)
+        dataset = dataset.shard(
+            num_shards=self._config.distributed.world_size,
+            index=self._config.distributed.rank,
+        )
 
         # Set data column and loss masking spans column based on source schema
         source_schema = self._config.dataset.source_schema
@@ -326,21 +330,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
             self._loss_masking_spans_column = loss_masking_column
         else:
             raise ValueError(
-                f"Dataset source_schema set incorrectly. source_schema: '{self._config.dataset.data_source}'."
-            )
-
-        dataset = dataset.shard(
-            num_shards=self._config.distributed.world_size,
-            index=self._config.distributed.rank,
-        )
-
-        # Set data column and loss masking spans column based on source schema
-        if isinstance(self._config.dataset.source_schema, TextColumnConfig):
-            self._text_column = self._config.dataset.source_schema.input_column
-            self._loss_masking_spans_column = self._config.dataset.source_schema.loss_masking_spans_column
-        else:
-            raise ValueError(
-                f"Dataset source_schema set incorrectly. source_schema: '{self._config.dataset.data_source}'."
+                f"Dataset source_schema set incorrectly. source_schema: '{self._config.dataset.source_schema}'."
             )
 
         if self._text_column not in dataset.column_names:
