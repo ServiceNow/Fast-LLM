@@ -251,15 +251,6 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
             else self._config.dataset.data_type
         )
 
-        # Set data column and loss masking spans column based on source schema
-        if isinstance(self._config.dataset.source_schema, TextColumnConfig):
-            self._text_column = self._config.dataset.source_schema.input_column
-            self._loss_masking_spans_column = self._config.dataset.source_schema.loss_masking_spans_column
-        else:
-            raise ValueError(
-                f"Dataset source_schema set incorrectly. source_schema: '{self._config.dataset.data_source}'."
-            )
-
         # Initialize distributed processing
         if self._config.distributed.world_size > 1:
             torch.distributed.init_process_group(
@@ -296,24 +287,22 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
             num_shards=self._config.distributed.world_size,
             index=self._config.distributed.rank,
         )
+
+        # Set data column and loss masking spans column based on source schema
+        if isinstance(self._config.dataset.source_schema, TextColumnConfig):
+            self._text_column = self._config.dataset.source_schema.input_column
+            self._loss_masking_spans_column = self._config.dataset.source_schema.loss_masking_spans_column
+        else:
+            raise ValueError(
+                f"Dataset source_schema set incorrectly. source_schema: '{self._config.dataset.data_source}'."
+            )
+
         if self._text_column not in dataset.column_names:
             raise ValueError(f"Dataset does not have field '{self._text_column}'.")
+
         if self._loss_masking_spans_column is not None:
             if self._loss_masking_spans_column not in dataset.column_names:
                 raise ValueError(f"Dataset does not have spans field '{self._loss_masking_spans_column}'.")
-        if self._config.dataset.field not in dataset.column_names:
-            raise ValueError(f"Dataset does not have field '{self._config.dataset.field}'.")
-        if self._config.dataset.loss_masking_spans is not None and (
-            self._config.dataset.chosen_text is not None or self._config.dataset.rejected_text is not None
-        ):
-            raise ValueError(f"Can not enable both loss masking spans and chosen/rejected loss masking spans.")
-        if (self._config.dataset.chosen_text is None) != (self._config.dataset.rejected_text is None):
-            raise ValueError(f"Both chosen and rejected loss masking spans must be specified if one is specified.")
-
-        # route tokenize function
-        if self._config.dataset.loss_masking_spans is not None:
-            if self._config.dataset.loss_masking_spans not in dataset.column_names:
-                raise ValueError(f"Dataset does not have spans field '{self._config.dataset.loss_masking_spans}'.")
             tokenize_fn = self._tokenize_batch_with_spans
         elif self._config.dataset.chosen_text is not None and self._config.dataset.rejected_text is not None:
             if self._config.dataset.chosen_text not in dataset.column_names:
