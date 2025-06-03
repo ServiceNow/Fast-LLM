@@ -162,46 +162,12 @@ class GPTMemmapDataset(GPTIndexedDataset):
             self._index_bin_buffer_mmap._mmap.close()  # noqa
             del self._index_bin_buffer_mmap
 
-    # def get(
-    #     self,
-    #     idx: int,
-    #     offset: int = 0,
-    #     image_offset: int = 0,
-    #     length: int | None = None,
-    #     use_loss_masking_spans: bool = False,
-    # ):
-    #     token_ids = np.frombuffer(
-    #         self._bin_buffer,
-    #         dtype=self._dtype,
-    #         count=self._document_sizes[idx] - offset if length is None else length,
-    #         offset=self._pointers[idx] + offset * np.dtype(self._dtype).itemsize,
-    #     )
-    #     if self._has_images:
-    #         image_positions = self._image_positions[idx]
-    #         pixels = np.frombuffer(
-    #             self._bin_buffer,
-    #             dtype=np.dtype(np.uint8),
-    #             count=self._image_lengths[idx].prod(initial=3),
-    #             offset=self._pointers[idx] + self._document_sizes[idx] * np.dtype(self._dtype).itemsize,
-    #         )
-    #         images = []
-    #         start = 0
-    #         for image_length in self._image_lengths[idx]:
-    #             n_pixels = image_length.prod(initial=3)
-    #             images.append(pixels[start : start + n_pixels].reshape(3, image_length[0], image_length[1]))
-    #             start += n_pixels
-    #     return GPTSample(token_ids=token_ids, images=images, image_positions=image_positions)
-
     def get(
         self,
         idx: int,
         offset: int = 0,
         length: int | None = None,
         use_loss_masking_spans: bool = False,
-        patch_size: int | None = None,
-        image_size: int | None = None,
-        image_break: bool = False,
-        image_end: bool = False,
     ) -> GPTSample:
         token_ids = np.frombuffer(
             self._bin_buffer,
