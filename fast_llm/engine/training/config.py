@@ -120,7 +120,7 @@ class WandbAlertConfig(IntervalConfig):
         "The update may be posted by email and/or slack depending on the Wandb account configuration.",
         hint=FieldHint.feature,
     )
-    post_alerts: bool = Field(init=False, repr=False)
+    post_alerts: bool = Field(init=False)
 
     def _validate(self) -> None:
         if self.status_updates is None:
@@ -141,7 +141,6 @@ class MetricsLogsConfig(IntervalConfig):
 @config_class()
 class WandbConfig(Config):
     alert: WandbAlertConfig = Field(
-        default_factory=WandbAlertConfig,
         desc="Configuration for Wandb alerts."
         " The alerts may be posted by email and/or slack depending on the Wandb account configuration.",
         hint=FieldHint.core,
@@ -175,7 +174,6 @@ class TrainingCheckpointBaseConfig(IntervalConfig):
     _abstract = True
     save_name: typing.ClassVar[str] = "save"
     callback: CallbackConfig = Field(
-        default_factory=CallbackConfig,
         desc="Callback (shell script).",
         hint=FieldHint.core,
     )
@@ -257,7 +255,6 @@ class TrainingExportConfig(TrainingCheckpointBaseConfig, CheckpointStateSaveConf
     offset = FieldUpdate(desc="Offset for the first export.")
     callback: CallbackConfig = FieldUpdate(desc="Callback (shell script) to run after export.")
 
-    @abc.abstractmethod
     def get_save_directory(self, experiment_directory: pathlib.Path) -> pathlib.Path:
         return experiment_directory / "export" / self.format.name
 
@@ -284,19 +281,11 @@ class TrainingConfig(Config):
         desc="A dictionary of evaluation dataset names and their configurations for the validation phase.",
         hint=FieldHint.core,
     )
-    logs: MetricsLogsConfig = Field(
-        default_factory=MetricsLogsConfig, desc="Configuration for metric logging.", hint=FieldHint.core
-    )
-    checkpoint: TrainingCheckpointConfig = Field(
-        default_factory=MetricsLogsConfig, desc="Configuration for checkpoints.", hint=FieldHint.core
-    )
-    export: TrainingExportConfig = Field(
-        default_factory=MetricsLogsConfig, desc="Configuration for exports.", hint=FieldHint.core
-    )
-    shutdown: ShutdownConfig = Field(
-        default_factory=ShutdownConfig, desc="Configuration for automated shutdown.", hint=FieldHint.core
-    )
-    wandb: WandbConfig = Field(default_factory=WandbConfig, desc="Configuration for Wandb.", hint=FieldHint.core)
+    logs: MetricsLogsConfig = Field(desc="Configuration for metric logging.", hint=FieldHint.core)
+    checkpoint: TrainingCheckpointConfig = Field(desc="Configuration for checkpoints.", hint=FieldHint.core)
+    export: TrainingExportConfig = Field(desc="Configuration for exports.", hint=FieldHint.core)
+    shutdown: ShutdownConfig = Field(desc="Configuration for automated shutdown.", hint=FieldHint.core)
+    wandb: WandbConfig = Field(desc="Configuration for Wandb.", hint=FieldHint.core)
     train_iters: int = Field(
         default=0, desc="Total number of training iterations.", hint=FieldHint.core, valid=check_field(Assert.geq, 0)
     )
@@ -349,30 +338,23 @@ class TrainerConfig(PretrainedFastLLMModelConfig, ExperimentConfig):
     _abstract = True
     # TODO: Generalize data, schedule, logging, etc.
     training: TrainingConfig = Field(
-        default_factory=TrainingConfig,
         desc="Configuration for the training phases and global properties.",
         hint=FieldHint.core,
     )
     batch: BatchConfig = Field(
-        default_factory=BatchConfig,
         desc="Configuration for the training, validation and test batches.",
         hint=FieldHint.core,
     )
-    schedule: ScheduleConfig = Field(
-        default_factory=ScheduleConfig, desc="Configuration for the scheduling of each iteration.", hint=FieldHint.core
-    )
+    schedule: ScheduleConfig = Field(desc="Configuration for the scheduling of each iteration.", hint=FieldHint.core)
     data: DataConfig = Field(
-        default_factory=DataConfig,
         desc="Configuration for the dataset and model-independent preprocessing.",
         hint=FieldHint.core,
     )
     profiling: ProfilingConfig = Field(
-        default_factory=ProfilingConfig,
         desc="Configuration for the optional profiling of GPU and CPU CUDA operations.",
         hint=FieldHint.logging,
     )
     optimizer: OptimizerConfig = Field(
-        default_factory=OptimizerConfig,
         desc="Configuration for the training optimizer and learning rate schedule.",
         hint=FieldHint.core,
     )

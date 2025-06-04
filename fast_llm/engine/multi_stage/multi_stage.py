@@ -14,7 +14,7 @@ from fast_llm.engine.config_utils.run import log_main_rank, log_model_parallel_m
 from fast_llm.engine.config_utils.tensor_space import TensorDim
 from fast_llm.engine.distributed.config import DistributedDim, DistributedDimNames
 from fast_llm.engine.distributed.distributed import Distributed
-from fast_llm.engine.multi_stage.config import FastLLMModelConfig, StageMode
+from fast_llm.engine.multi_stage.config import FastLLMModelConfig, ShardName, StageMode
 from fast_llm.engine.multi_stage.fsdp import FSDP
 from fast_llm.engine.multi_stage.stage import Stage
 from fast_llm.engine.optimizer.config import ParamGroup
@@ -22,11 +22,6 @@ from fast_llm.tensor import ParameterMeta, SafeTensorSlice, TensorMeta
 from fast_llm.utils import Assert, get_unique
 
 logger = logging.getLogger(__name__)
-
-
-class ShardName:
-    weights = "weights"
-    grads = "grads"
 
 
 class MultiStageModel[ConfigType: FastLLMModelConfig](Configurable[ConfigType]):
