@@ -202,6 +202,9 @@ class GPTSampledIndexedDataset(SampledDataset):
         if self._yaml_path is not None and self._yaml_path.is_file():
             loaded_yaml_data = yaml.safe_load(self._yaml_path.open("r"))
             self._load_yaml_data(yaml_data)
+            # Hack to make sure unshuffled tokens are loaded
+            if not self._truncate_documents:
+                yaml_data["unshuffled_tokens"] = loaded_yaml_data.get["unshuffled_tokens"]
 
             if loaded_yaml_data != yaml_data:
                 raise RuntimeError(
@@ -529,8 +532,8 @@ class GPTSampledIndexedDataset(SampledDataset):
         elif "unshuffled_tokens" not in data:
             # Backward compatibility
             # TODO v0.x: Remove
-            assert not self._truncate_documents
-            data["unshuffled_tokens"] = data["dataset"]["tokens_per_epoch"] * data["unshuffled_epochs"]
+            assert self._truncate_documents
+            data["unshuffled_tokens"] = data["tokens_per_epoch"] * data["unshuffled_epochs"]
 
         self._unshuffled_tokens = data["unshuffled_tokens"]
         self._unshuffled_documents = data["unshuffled_epochs"] * self._documents_per_epoch
