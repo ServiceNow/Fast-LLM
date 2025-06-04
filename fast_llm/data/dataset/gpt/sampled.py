@@ -204,7 +204,7 @@ class GPTSampledIndexedDataset(SampledDataset):
             self._load_yaml_data(yaml_data)
             # Hack to make sure unshuffled tokens are loaded
             if not self._truncate_documents:
-                yaml_data["unshuffled_tokens"] = loaded_yaml_data.get["unshuffled_tokens"]
+                yaml_data["unshuffled_tokens"] = loaded_yaml_data["unshuffled_tokens"]
 
             if loaded_yaml_data != yaml_data:
                 raise RuntimeError(
