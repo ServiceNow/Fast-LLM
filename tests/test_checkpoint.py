@@ -139,7 +139,7 @@ def test_convert_distributed_to_fast_llm():
 
 
 @pytest.mark.depends(on=["test_convert_distributed_to_fast_llm"])
-def test_convert_fast_llm_to_huggingface():    
+def test_convert_fast_llm_to_huggingface():
     if HUGGINGFACE_CHECKPOINT_FORMAT is None:
         pytest.skip(f"Conversion not supported for {TEST_MODEL}")
     _run_conversion(
