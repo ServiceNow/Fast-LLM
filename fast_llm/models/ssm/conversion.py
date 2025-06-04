@@ -16,7 +16,7 @@ from fast_llm.engine.checkpoint.external import (
 from fast_llm.engine.checkpoint.huggingface import HuggingfaceStateDictCheckpointHandler
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig
 from fast_llm.functional.config import ActivationType
-from fast_llm.layers.common.config import NormalizationType
+from fast_llm.layers.common.config import RMSNormalizationConfig
 from fast_llm.models.gpt.conversion import MLPLayer2Converter
 from fast_llm.models.ssm.config import HybridSSMModelConfig, LLambaHuggingfaceCheckpointFormat
 from fast_llm.models.ssm.model import HybridSSMModel
@@ -51,7 +51,8 @@ class LLambaHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
                 fast_llm_names=(("ssm", "normalization", "epsilon"),), export_names=(("norm_epsilon",),)
             ),
             ConstantImportParamConverter(
-                fast_llm_names=(("transformer", "normalization", "type"),), fast_llm_value=NormalizationType.rms_norm
+                fast_llm_names=(("transformer", "normalization", "type"),),
+                fast_llm_value=RMSNormalizationConfig.__name__,
             ),
             RenameParamConverter(
                 fast_llm_names=(("vocab_size",),),

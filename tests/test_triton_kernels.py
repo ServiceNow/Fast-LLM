@@ -9,11 +9,6 @@ from fast_llm.functional.config import (
     TritonConfig,
 )
 from fast_llm.functional.cross_entropy import cross_entropy_forward_backward
-from fast_llm.functional.rotary import (
-    apply_rotary_embeddings,
-    convert_rotary_complex_to_real,
-    convert_rotary_real_to_complex,
-)
 from fast_llm.functional.triton.adam import triton_adam
 from fast_llm.functional.triton.mlp import (
     torch_mlp_activation,
@@ -28,8 +23,12 @@ from fast_llm.functional.triton.normalization import (
 from fast_llm.functional.triton.pointwise import triton_add, triton_copy, triton_fill
 from fast_llm.functional.triton.rotary import triton_rotary_
 from fast_llm.functional.triton.sparse_copy import get_sparse_map
-from fast_llm.layers.transformer.config import RotaryConfig, RotaryEmbeddingType
-from fast_llm.layers.transformer.preprocessing import get_rotary_frequencies
+from fast_llm.layers.transformer.rotary.config import DefaultRotaryConfig
+from fast_llm.layers.transformer.rotary.rotary import (
+    apply_rotary_embeddings,
+    convert_rotary_complex_to_real,
+    convert_rotary_real_to_complex,
+)
 from fast_llm.utils import Assert, rms_diff
 from tests.common import requires_cuda
 
@@ -92,8 +91,9 @@ def test_triton_rotary(batch_size, sequence_length, num_heads, kv_channels):
 
     y1 = apply_rotary_embeddings(
         x,
-        get_rotary_frequencies(
-            RotaryConfig(type=RotaryEmbeddingType.default, triton=False),
+        DefaultRotaryConfig(triton=False)
+        .build()
+        ._get_frequencies(
             sequence_length,
             kv_channels,
             device="cuda",
@@ -103,12 +103,7 @@ def test_triton_rotary(batch_size, sequence_length, num_heads, kv_channels):
     y2 = convert_rotary_real_to_complex(
         triton_rotary_(
             convert_rotary_complex_to_real(x, kv_channels, 3),
-            get_rotary_frequencies(
-                RotaryConfig(type=RotaryEmbeddingType.default, triton=True),
-                sequence_length,
-                kv_channels,
-                device="cuda",
-            ),
+            DefaultRotaryConfig(triton=True).build()._get_frequencies(sequence_length, kv_channels, device="cuda"),
         ),
         kv_channels,
         3,
