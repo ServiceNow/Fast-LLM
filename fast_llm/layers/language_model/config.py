@@ -59,7 +59,7 @@ class LanguageModelBaseConfig(BaseModelConfig):
         valid=check_field(Assert.gt, 0),
     )
     use_position_embeddings: bool = Field(
-        default=True,
+        default=None,
         desc="Enable absolute position embeddings.",  # Default: Enable unless using rotary embeddings.",
         hint=FieldHint.architecture,
     )
@@ -175,10 +175,6 @@ class LanguageModelBaseConfig(BaseModelConfig):
         doc="If not provided, all heads are equally weighted.",
         hint=FieldHint.feature,
     )
-    # rotary: RotaryConfig = Field(
-    #     desc="Configuration for the rotary positional embeddings.",
-    #     hint=FieldHint.architecture,
-    # )
     full_precision_residual: bool = Field(
         default=False,
         desc="Store the residuals for the transformer in full precision (`optimization_dtype`).",
@@ -190,12 +186,13 @@ class LanguageModelBaseConfig(BaseModelConfig):
         hint=FieldHint.testing,
     )
     embeddings_hidden_dropout: float = Field(
-        default=0.0,
+        default=None,
         desc="Dropout applied to the embeddings.",
         hint=FieldHint.feature,
         valid=check_field(Assert.geq, 0),
     )
-    head_normalization: NormalizationConfig = Field(
+    head_normalization: NormalizationConfig | None = Field(
+        default=None,
         desc="Configuration for the normalization in the head.",
         hint=FieldHint.architecture,
     )
@@ -205,16 +202,11 @@ class LanguageModelBaseConfig(BaseModelConfig):
     )
 
     def _validate(self) -> None:
-        # # self.transformer.validate()
-        # with self._set_implicit_default():
-        #     if self.use_position_embeddings is None:
-        #         self.use_position_embeddings = not self.rotary.enabled
-        #     if self.init_method_std_embed is None:
-        #         self.init_method_std_embed = self.transformer.init_method_std
-        #     if self.init_method_max_embed is None:
-        #         self.init_method_max_embed = self.transformer.init_method_max
-        #     if self.init_method_min_embed is None:
-        #         self.init_method_min_embed = self.transformer.init_method_min
+        with self._set_implicit_default():
+            if self.embeddings_hidden_dropout is None:
+                self.embeddings_hidden_dropout = 0.0
+            if self.head_normalization is None:
+                self.head_normalization = NormalizationConfig()
 
         if not TritonConfig.TRITON_ENABLED:
             warnings.warn("Triton is disabled, but triton rotary kernel will be used anyway.")
@@ -234,7 +226,6 @@ class LanguageModelBaseConfig(BaseModelConfig):
                 Assert.geq(coeff, 0)
 
     def setup_tensor_space(self, tensor_space: TensorSpace) -> None:
-        # self.transformer.setup_tensor_space(tensor_space)
         tensor = tensor_space.distributed_config.get_distributed_dim(DistributedDimNames.tensor)
 
         # Embedding dimensions

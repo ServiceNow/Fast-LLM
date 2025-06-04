@@ -1,4 +1,5 @@
 import functools
+import logging
 import typing
 
 from fast_llm.config import Field, FieldHint, FieldUpdate, check_field, config_class
@@ -13,6 +14,8 @@ from fast_llm.layers.language_model.config import LanguageModelBaseConfig
 from fast_llm.layers.transformer.config import TransformerConfig
 from fast_llm.models.gpt.megatron import set_megatron_distributed_seeds
 from fast_llm.utils import Assert, div
+
+logger = logging.getLogger(__name__)
 
 if typing.TYPE_CHECKING:
     from fast_llm.models.gpt.huggingface import HuggingfaceGPTModelForCausalLM
@@ -134,10 +137,14 @@ class GPTBaseModelConfig(LanguageModelBaseConfig):
             self.transformer.debug_block = True
             self.transformer.debug_block_memory = True
         self.transformer.validate()
-        self.use_position_embeddings = not self.transformer.rotary.enabled
-        self.embeddings_hidden_dropout = self.transformer.hidden_dropout  # legacy behavior
-        self.head_normalization = self.transformer.normalization  # legacy behavior
+
         with self._set_implicit_default():
+            if self.head_normalization is None:
+                self.head_normalization = self.transformer.normalization
+            if self.embeddings_hidden_dropout is None:
+                self.embeddings_hidden_dropout = self.transformer.hidden_dropout
+            if self.use_position_embeddings is None:
+                self.use_position_embeddings = not self.transformer.rotary.enabled
             if self.init_method_std_embed is None:
                 self.init_method_std_embed = self.transformer.init_method_std
             if self.init_method_max_embed is None:

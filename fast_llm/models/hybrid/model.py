@@ -38,14 +38,14 @@ class HybridBaseModel[ConfigType: HybridBaseModelConfig](GPTBaseModel[ConfigType
 
         if self._config.prediction_heads > 1:
             block_name = self._config.default_mtp_type
-            assert block_name in self._config.blocks, f"Block {block_name} not found in config"
-            BLOCK_CLS = self._config.blocks[block_name].block_class
+            assert block_name in self._config.registered_blocks, f"Block {block_name} not found in config"
+            BLOCK_CLS = self._config.registered_blocks[block_name].block_class
             for i in range(1, self._config.prediction_heads):
                 layers.append(
                     BLOCK_CLS(
-                        self._config.blocks[block_name],
+                        self._config.registered_blocks[block_name],
                         self._tensor_space,
-                        layer_index=len(self._config.hybrid_block_layout),
+                        layer_index=len(self._config.block_layout),
                         return_input=i != self._config.prediction_heads - 1,
                         block_name=block_name,
                     )
@@ -62,16 +62,14 @@ class HybridBaseModel[ConfigType: HybridBaseModelConfig](GPTBaseModel[ConfigType
         layers = [LanguageModelEmbedding(self._config, self._tensor_space)]
 
         # Create blocks according to pattern
-        for i, block_name in enumerate(self._config.hybrid_block_layout):
+        for i, block_name in enumerate(self._config.block_layout):
             BLOCK_CLS: BaseBlock = self._config.blocks[block_name].block_class
             layers.append(
                 BLOCK_CLS(
                     self._config.blocks[block_name],
                     self._tensor_space,
                     layer_index=i + 1,
-                    return_input=(
-                        i == len(self._config.hybrid_block_layout) - 1 and self._config.prediction_heads > 1
-                    ),
+                    return_input=(i == len(self._config.block_layout) - 1 and self._config.prediction_heads > 1),
                     block_name=block_name,
                 )
             )

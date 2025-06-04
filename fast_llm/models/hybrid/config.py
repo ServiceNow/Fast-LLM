@@ -3,8 +3,7 @@ import logging
 import math
 import typing
 from abc import abstractmethod
-
-from blocks import LlambaBlock, LlambaOneBlock
+from collections import Counter
 
 from fast_llm.config import Config, Field, FieldHint, FieldUpdate, check_field, config_class
 from fast_llm.data.data.gpt.config import GPTDataConfig
@@ -16,11 +15,11 @@ from fast_llm.layers.common.config import LLMDimNames
 from fast_llm.layers.language_model.config import LanguageModelBaseConfig
 from fast_llm.layers.ssm.config import SSMConfig, SSMDimNames
 from fast_llm.layers.transformer.config import TransformerConfig
-from fast_llm.layers.transformer.transformer import BaseBlock, TransformerLayer
 from fast_llm.models.gpt.config import GPTBatchConfig, PretrainedGPTModelConfig
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
+    from fast_llm.layers.transformer.transformer import BaseBlock
     from fast_llm.models.gpt.model import GPTInferenceRunner
     from fast_llm.models.hybrid.huggingface import HuggingfaceHybridModelForCausalLM
     from fast_llm.models.hybrid.model import HybridModel
@@ -29,10 +28,35 @@ if typing.TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _get_llamba_block():
+    """Lazy import to avoid loading heavy dependencies during config validation."""
+    from fast_llm.layers.ssm.blocks import LlambaBlock
+
+    return LlambaBlock
+
+
+def _get_llamba_one_block():
+    """Lazy import to avoid loading heavy dependencies during config validation."""
+    from fast_llm.layers.ssm.blocks import LlambaOneBlock
+
+    return LlambaOneBlock
+
+
+def _get_transformer_block():
+    """Lazy import to avoid loading heavy dependencies during config validation."""
+    from fast_llm.layers.transformer.transformer import TransformerLayer
+
+    return TransformerLayer
+
+
 @config_class(registry=True)
 class HybridBlockConfig(Config):
     _abstract = True
-    block_class: typing.ClassVar[type[BaseBlock]]
+
+    @abstractmethod
+    def block_class(self) -> type["BaseBlock"]:
+        raise NotImplementedError("Subclasses must implement block_class")
+
     type: str | None = Field(
         default="transformer",
         desc="The config class name.",
@@ -64,7 +88,10 @@ class HybridBlockConfig(Config):
 @config_class(dynamic_type={HybridBlockConfig: "transformer"})
 class TransformerBlockConfig(HybridBlockConfig, TransformerConfig):
     _abstract = False
-    block_class: typing.ClassVar[type[BaseBlock]] = TransformerLayer
+
+    @property
+    def block_class(self) -> type["BaseBlock"]:
+        return _get_transformer_block()
 
     def setup_tensor_space(self, tensor_space: "TensorSpace", block_name: str) -> None:
         TransformerConfig.setup_tensor_space(self, tensor_space, block_name)
@@ -73,7 +100,10 @@ class TransformerBlockConfig(HybridBlockConfig, TransformerConfig):
 @config_class(dynamic_type={HybridBlockConfig: "discrete_mamba2"})
 class DiscreteMamba2BlockConfig(HybridBlockConfig, SSMConfig):
     _abstract = False
-    block_class: typing.ClassVar[type[BaseBlock]] = LlambaBlock
+
+    @property
+    def block_class(self) -> type["BaseBlock"]:
+        return _get_llamba_block()
 
     # def _validate(self):
     #     self.config.validate()
@@ -111,7 +141,10 @@ class DiscreteMamba2BlockConfig(HybridBlockConfig, SSMConfig):
 @config_class(dynamic_type={HybridBlockConfig: "mamba"})
 class MambaBlockConfig(HybridBlockConfig, SSMConfig):
     _abstract = False
-    block_class: typing.ClassVar[type[BaseBlock]] = LlambaOneBlock
+
+    @property
+    def block_class(self) -> type["BaseBlock"]:
+        return _get_llamba_one_block()
 
     def setup_tensor_space(self, tensor_space: TensorSpace, block_name: str) -> None:
 
@@ -170,7 +203,7 @@ class HybridBaseModelConfig(LanguageModelBaseConfig):
         hint=FieldHint.architecture,
     )
     ############################################################################################
-    blocks: dict[str, HybridBlockConfig] = Field(
+    blocks: dict[str, HybridBlockConfig] | None = Field(
         default=None,
         desc="Named block configurations that can be referenced in block_pattern.",
         hint=FieldHint.architecture,
@@ -188,6 +221,18 @@ class HybridBaseModelConfig(LanguageModelBaseConfig):
         hint=FieldHint.optional,
     )
 
+    _hybrid_block_layout: list[str] | None = Field(
+        init=False,
+        desc="Internal representation of the block layout.",
+        hint=FieldHint.derived,
+    )
+
+    _blocks: dict[str, HybridBlockConfig] | None = Field(
+        init=False,
+        desc="Internal representation of the blocks.",
+        hint=FieldHint.derived,
+    )
+
     # TODO: currently num_layers is defined in TransformerConfig, but ideally this should be migrated to LanguageModelBaseConfig in the future.
     # Hence, for now: the num_layers can be set in the first transformer block, if no transformer blocks used we will fallback to num_layers parameter defined here.
     num_layers: int = Field(
@@ -196,6 +241,14 @@ class HybridBaseModelConfig(LanguageModelBaseConfig):
         hint=FieldHint.architecture,
         valid=check_field(Assert.geq, 0),
     )
+
+    @property
+    def block_layout(self) -> list[str]:
+        return self._hybrid_block_layout
+
+    @property
+    def registered_blocks(self) -> dict[str, HybridBlockConfig]:
+        return self._blocks
 
     def setup_tensor_space(self, tensor_space: TensorSpace) -> None:
         """
@@ -258,24 +311,31 @@ class HybridBaseModelConfig(LanguageModelBaseConfig):
         # handle share_weights by renaming blocks with shared weights. Layer names are used for setting tensor dimensions.
         blocks = {}
         hybrid_block_layout = []
+        block_count = Counter(self.hybrid_block_layout)
         for i, block_name in enumerate(self.hybrid_block_layout):
             block_config = self.blocks[block_name]
             if not block_config.share_weights:
-                logger.info(f"Weight sharing disable for block {block_name}, renaming to {block_name}_{i}")
-                block_name = f"{block_name}_{i}"
+                if block_count[block_name] > 1:
+                    logger.info(f"Weight sharing disabled for block {block_name}, renaming to {block_name}_{i}")
+                    block_name = f"{block_name}_{i}"
+                else:
+                    logger.info(f"Weight sharing disabled for block {block_name}, no renaming needed")
             else:
                 logger.info(f"Weight sharing enabled for block {block_name}")
             blocks[block_name] = block_config
             hybrid_block_layout.append(block_name)
-        self.blocks = blocks
-        self.hybrid_block_layout = hybrid_block_layout
+        with self._set_implicit_default():
+            # self.blocks = blocks
+            # self.hybrid_block_layout = hybrid_block_layout
+            self._hybrid_block_layout = hybrid_block_layout
+            self._blocks = blocks
         ###\Weight sharing ###
 
-        for block_name, block_config in self.blocks.items():
-            if isinstance(block_config, TransformerBlockConfig) and self.num_layers is None:
+        for block_name, block_config in self._blocks.items():
+            if isinstance(block_config, TransformerBlockConfig):
                 if first_transformer_block_config is None:
                     first_transformer_block_config = block_config
-                elif block_config.num_layers != first_transformer_block_config.num_layers:
+                elif self.num_layers is None and block_config.num_layers != first_transformer_block_config.num_layers:
                     logger.warning(
                         f"Found multiple transformer blocks with different number of layers, using num_layers from the first transformer block for all"
                     )
@@ -292,21 +352,32 @@ class HybridBaseModelConfig(LanguageModelBaseConfig):
                 self.num_layers = num_layers
 
         # make sure that the hybrid_block_layout length matches the num_layers. If it doesn't, repeat the hybrid_block_layout;
-        if len(self.hybrid_block_layout) != self.num_layers:
-            if self.num_layers % len(self.hybrid_block_layout) != 0:
+        if len(self._hybrid_block_layout) != self.num_layers:
+            if self.num_layers % len(self._hybrid_block_layout) != 0:
                 raise ValueError(
-                    f"hybrid_block_layout length {len(self.hybrid_block_layout)} does not match num_layers {self.num_layers}"
+                    f"hybrid_block_layout length {len(self._hybrid_block_layout)} does not match num_layers {self.num_layers}"
                 )
-            num_repeats = int(self.num_layers // len(self.hybrid_block_layout))
+            num_repeats = int(self.num_layers // len(self._hybrid_block_layout))
             logger.warning(
-                f"hybrid_block_layout length {len(self.hybrid_block_layout)} does not match num_layers {self.num_layers}, will repeat {self.hybrid_block_layout} {num_repeats} times with weight sharing between repeats."
+                f"hybrid_block_layout length {len(self._hybrid_block_layout)} does not match num_layers {self.num_layers}, will repeat {self.hybrid_block_layout} {num_repeats} times with weight sharing between repeats."
             )
-            self.hybrid_block_layout = self.hybrid_block_layout * num_repeats
+            self._hybrid_block_layout = self._hybrid_block_layout * num_repeats
 
-        Assert.eq(len(self.hybrid_block_layout), self.num_layers)
-        logger.info(f"Hybrid block layout: {self.hybrid_block_layout}")
+        Assert.eq(len(self._hybrid_block_layout), self.num_layers)
+        logger.info(f"Hybrid block layout: {self._hybrid_block_layout}")
 
         with self._set_implicit_default():
+            if self.use_position_embeddings is None:
+                if first_transformer_block_config is not None:
+                    self.use_position_embeddings = not first_transformer_block_config.rotary.enabled
+                    self.embeddings_hidden_dropout = first_transformer_block_config.hidden_dropout
+                else:
+                    self.use_position_embeddings = False
+                    self.embeddings_hidden_dropout = 0.0
+                    logger.warning(
+                        f"No transformer block config found in HybridBaseModelConfig, setting use_position_embeddings to False"
+                    )
+
             if self.init_method_std_embed is None:
                 self.init_method_std_embed = (
                     first_transformer_block_config.init_method_std

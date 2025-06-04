@@ -13,6 +13,7 @@ from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.layers.transformer.config import TransformerConfig
 from fast_llm.models.auto import trainer_registry
 from fast_llm.models.gpt.config import GPTModelConfig, PretrainedGPTModelConfig
+from fast_llm.models.hybrid.config import HybridBaseModelConfig
 from fast_llm.utils import Assert, check_equal_nested
 from tests.common import TEST_RESULTS_PATH
 
@@ -132,11 +133,11 @@ def test_pretrained_config(load_config: ModelConfigType):
         "transformer": {
             # rotary: Don't override nested.
             "normalization": {"implementation": "triton"},  # Update non-default nested
-            "peft": {"freeze_others": False},  # Update default nested, non-architecture
             "hidden_size": 512,  # Override, affects derived value (kv channels)
             "head_groups": 1,  # Override to default
         },
         "vocab_size": 1000,
+        "head_normalization": {"type": "rms_norm"},
     }
     pretrained_config = PretrainedGPTModelConfig.from_dict(
         {
@@ -159,7 +160,6 @@ def test_pretrained_config(load_config: ModelConfigType):
             "transformer": {
                 "normalization": {"type": "rms_norm", "implementation": "triton"},
                 "rotary": {"type": "default"},
-                "peft": {"freeze_others": False},
                 "num_layers": 12,
                 "hidden_size": 512,
                 "ffn_hidden_size": 4096,
@@ -169,8 +169,62 @@ def test_pretrained_config(load_config: ModelConfigType):
             },
             "tie_word_embeddings": False,
             "vocab_size": 1000,
+            "head_normalization": {"type": "rms_norm"},
         }
     else:
         expected_config["base_model"] = base_model_update
 
     check_equal_nested(serialized_config, expected_config)
+
+
+# TODO: add test for hybrid pretrained config as above
+def test_hybrid_block_modular_config():
+
+    config = {
+        "blocks": {
+            "bob_shared": {
+                "type": "transformer",
+                "hidden_size": 512,
+                "share_weights": True,
+            },
+            "mamba_non_shared": {
+                "type": "discrete_mamba2",
+                "state_size": 16,
+                "expansion_factor": 2,
+                "hidden_size": 512,
+                "share_weights": False,
+            },
+        },
+        "hybrid_block_layout": ["bob_shared", "mamba_non_shared", "bob_shared", "mamba_non_shared"],
+        "num_layers": 8,
+    }
+
+    modular_config = HybridBaseModelConfig.from_dict(config)
+    modular_config.validate()
+    Assert.eq(modular_config.hybrid_block_layout, ["bob_shared", "mamba_non_shared", "bob_shared", "mamba_non_shared"])
+    Assert.eq(
+        modular_config.block_layout,
+        [
+            "bob_shared",
+            "mamba_non_shared_1",
+            "bob_shared",
+            "mamba_non_shared_3",
+            "bob_shared",
+            "mamba_non_shared_1",
+            "bob_shared",
+            "mamba_non_shared_3",
+        ],
+    )  # with num_layers = 8, the block_layout should be 8 blocks with repeated pattern of ["bob_shared", "mamba_non_shared", "bob_shared", "mamba_non_shared"] with names abjusted for weight sharing
+    for block_name in modular_config.block_layout:
+        Assert.custom(
+            lambda _: block_name in modular_config.registered_blocks,
+            f"Block {block_name} not found in registered blocks",
+        )
+    serialized = modular_config.to_dict()
+    reconstructed = HybridBaseModelConfig.from_dict(serialized)
+    Assert.eq(reconstructed.to_dict(), config)
+    reconstructed.validate()
+
+
+if __name__ == "__main__":
+    pytest.main([__file__])

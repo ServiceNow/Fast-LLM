@@ -1,5 +1,6 @@
 import logging
 import math
+import typing
 
 import causal_conv1d
 import einops
@@ -8,9 +9,12 @@ import torch
 
 from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
 from fast_llm.layers.common.linear import Linear
-from fast_llm.layers.ssm.config import SSMConfig, SSMDimNames
+from fast_llm.layers.ssm.config import SSMDimNames
 from fast_llm.tensor import ParameterMeta, init_ones_, init_uniform_, init_zeros_, kaiming_init_
 from fast_llm.utils import get_lr_scale
+
+if typing.TYPE_CHECKING:
+    from fast_llm.layers.ssm.config import SSMConfig
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +34,7 @@ class DiscreteMamba2(torch.nn.Module):
 
     def __init__(
         self,
-        config: SSMConfig,
+        config: "SSMConfig",
         layer_index: int,
         tensor_space: TensorSpace,
         name: str = "",
@@ -45,7 +49,7 @@ class DiscreteMamba2(torch.nn.Module):
         """
         # factory_kwargs = {"device": "meta"}  # , "dtype": torch.bfloat16}
         super().__init__()
-        self.config: SSMConfig = config
+        self.config: "SSMConfig" = config
         bias = config.add_bias_linear
         self.layer_idx = layer_index
         self._return_input = return_input
