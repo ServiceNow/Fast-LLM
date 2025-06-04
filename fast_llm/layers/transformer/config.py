@@ -470,20 +470,16 @@ class TransformerArchitectureConfig(BaseModelArchitectureConfig):
 
 
 @config_class()
-class DiffusionMaskingConfig(Config):
+class DiffusionMaskingConfig(TransformerArchitectureConfig):
     """Configuration for diffusion-based masking in the transformer model.
     This config only contains model-specific parameters. For masking parameters,
     refer to fast_llm.data.dataset.gpt.config.DiffusionMaskingConfig."""
-    
+
     enabled: bool = Field(
-        default=False,
-        desc="Whether to use diffusion-based masking during training",
-        hint=FieldHint.feature
+        default=False, desc="Whether to use diffusion-based masking during training", hint=FieldHint.feature
     )
     bidirectional_attention: bool = Field(
-        default=True,
-        desc="Whether to use bidirectional attention for masked tokens",
-        hint=FieldHint.feature
+        default=True, desc="Whether to use bidirectional attention for masked tokens", hint=FieldHint.feature
     )
 
     def _validate(self) -> None:
@@ -498,7 +494,7 @@ class TransformerConfig(TransformerArchitectureConfig, BaseModelConfig):
     diffusion: DiffusionMaskingConfig = Field(
         default_factory=DiffusionMaskingConfig,
         desc="Configuration for diffusion-based masking",
-        hint=FieldHint.feature
+        hint=FieldHint.feature,
     )
     # Default: hidden_size**-0.5
     # TODO: Allow custom initialization (InitializationConfig?)

@@ -67,44 +67,35 @@ class GPTSamplingConfig(SamplingConfig):
 @config_class()
 class DiffusionMaskingConfig(Config):
     """Configuration for diffusion-based masking during data preparation."""
-    
+
     enabled: bool = Field(
-        default=False,
-        desc="Whether to use diffusion-based masking during training",
-        hint=FieldHint.feature
+        default=False, desc="Whether to use diffusion-based masking during training", hint=FieldHint.feature
     )
-    
+
     epsilon: float = Field(
-        default=1e-3,
-        desc="Minimum masking probability",
-        hint=FieldHint.performance,
-        valid=check_field(Assert.gt, 0)
+        default=1e-3, desc="Minimum masking probability", hint=FieldHint.performance, valid=check_field(Assert.gt, 0)
     )
-    
+
     max_mask_prob: float = Field(
-        default=0.15,
-        desc="Maximum masking probability",
-        hint=FieldHint.performance,
-        valid=check_field(Assert.gt, 0)
+        default=0.15, desc="Maximum masking probability", hint=FieldHint.performance, valid=check_field(Assert.gt, 0)
     )
 
     pad_prob: float = Field(
         default=0.01,
         desc="Probability of padding tokens for 1% of samples",
         hint=FieldHint.optional,
-        valid=check_field(Assert.geq, 0)
+        valid=check_field(Assert.geq, 0),
     )
-    
-    mask_token_id: int = Field(
-        default=103,
-        desc="Token ID to use for masking",
-        hint=FieldHint.required
-    )
+
+    mask_token_id: int = Field(default=103, desc="Token ID to use for masking", hint=FieldHint.optional)
 
     def _validate(self) -> None:
         super()._validate()
-        Assert.lt(self.epsilon, self.max_mask_prob, "epsilon must be less than max_mask_prob")
-        Assert.lt(self.max_mask_prob, 1.0, "max_mask_prob must be less than 1.0")
+        Assert.lt(self.epsilon, self.max_mask_prob)  # , "epsilon must be less than max_mask_prob")
+        Assert.lt(
+            self.max_mask_prob,
+            1.0,
+        )  #  "max_mask_prob must be less than 1.0")
         if self.enabled:
             Assert.is_not_none(self.mask_token_id, "mask_token_id must be set when masking is enabled")
 
@@ -122,11 +113,9 @@ class GPTSamplingParameters(SamplingParameters):
     # How many extra tokens to add to the sequence length.
     # This is used to provide labels even for the last tokens in the sequence.
     extra_tokens: int = 1
-    
+
     # Diffusion masking configuration
-    diffusion: DiffusionMaskingConfig = dataclasses.field(
-        default_factory=DiffusionMaskingConfig
-    )
+    diffusion: DiffusionMaskingConfig = dataclasses.field(default_factory=DiffusionMaskingConfig)
 
 
 @dataclasses.dataclass(kw_only=True)
