@@ -14,10 +14,9 @@ from fast_llm.engine.checkpoint.config import (
     FastLLMCheckpointFormat,
     ModelConfigType,
 )
-from fast_llm.engine.multi_stage.config import FastLLMModelConfig, StageMode
-from fast_llm.engine.multi_stage.multi_stage import ShardName
+from fast_llm.engine.multi_stage.config import FastLLMModelConfig, ShardName, StageMode
 from fast_llm.models.auto import model_registry
-from fast_llm.tools.convert import ConversionConfig
+from fast_llm.tools.convert import ConvertConfig
 from tests.common import (
     CONFIG_COMMON,
     FORCE_REUSE_RESULTS,
@@ -32,7 +31,7 @@ from tests.common import (
 from tests.compare_tensor_logs import CompareConfig, compare_logged_tensor
 
 TEST_MODEL_CONFIG_CLS = model_registry[TEST_MODEL_TYPE]
-TEST_MODEL_HF_CLS = TEST_MODEL_CONFIG_CLS.get_huggingface_model_class()
+TEST_MODEL_HF_CLS = TEST_MODEL_CONFIG_CLS.get_huggingface_model_for_causal_lm_class()
 TEST_MODEL_CLS = TEST_MODEL_CONFIG_CLS.get_model_class()
 TEST_BASE_MODEL_CONFIG_CLS = TEST_MODEL_CONFIG_CLS.get_base_model_config_class()
 
@@ -76,6 +75,7 @@ def _compare_resume_fn(test_path: pathlib.Path, compare_path: pathlib.Path):
 
 @pytest.mark.depends(on=["test_checkpoint_and_eval"])
 def test_resume():
+    # Resume from iteration=1 and compare outputs with the baseline run.
     run_test_script(
         f"test_{TEST_MODEL}_resume",
         CONFIG_COMMON
@@ -90,7 +90,25 @@ def test_resume():
     )
 
 
-def _run_conversion(config: ConversionConfig):
+@pytest.mark.depends(on=["test_checkpoint_and_eval"])
+def test_resume_frozen():
+    # Resume with frozen mlp. No comparison.
+    run_test_script(
+        f"test_{TEST_MODEL}_resume_frozen",
+        CONFIG_COMMON
+        + [
+            "training.checkpoint.interval=1",
+            "training.evaluations.validation.interval=2",
+            "training.evaluations.validation.iterations=1",
+            "model.base_model.transformer.mlp_lr_scale=0.",
+        ],
+        compare=f"test_{TEST_MODEL}_checkpoint_and_eval",
+        prepare_fn=_prepare_resume_fn,
+        do_compare=False,
+    )
+
+
+def _run_conversion(config: ConvertConfig):
     if config.output.path.is_dir() and not REUSE_RESULTS:
         shutil.rmtree(config.output.path)
     if not config.output.path.is_dir():
@@ -106,7 +124,7 @@ _CONVERT_PATH = TEST_RESULTS_PATH / f"test_{TEST_MODEL}_convert_model"
 @pytest.mark.depends(on=["test_checkpoint_and_eval"])
 def test_convert_distributed_to_fast_llm():
     _run_conversion(
-        ConversionConfig(
+        ConvertConfig(
             input=CheckpointLoadConfig(
                 path=_CKPT_PATH,
                 format=DistributedCheckpointFormat,
@@ -115,7 +133,7 @@ def test_convert_distributed_to_fast_llm():
                 path=_CONVERT_PATH / "fast_llm_0",
                 format=FastLLMCheckpointFormat,
             ),
-            model_config_class=TEST_MODEL_CONFIG_CLS,
+            model=TEST_MODEL_CONFIG_CLS,
         )
     )
 
@@ -125,7 +143,7 @@ def test_convert_fast_llm_to_huggingface():
     if HUGGINGFACE_CHECKPOINT_FORMAT is None:
         pytest.skip(f"Conversion not supported for {TEST_MODEL}")
     _run_conversion(
-        ConversionConfig(
+        ConvertConfig(
             input=CheckpointLoadConfig(
                 path=_CONVERT_PATH / "fast_llm_0",
                 format=FastLLMCheckpointFormat,
@@ -134,7 +152,7 @@ def test_convert_fast_llm_to_huggingface():
                 path=_CONVERT_PATH / "huggingface_0",
                 format=HUGGINGFACE_CHECKPOINT_FORMAT,
             ),
-            model_config_class=TEST_MODEL_CONFIG_CLS,
+            model=TEST_MODEL_CONFIG_CLS,
         )
     )
 
@@ -142,7 +160,7 @@ def test_convert_fast_llm_to_huggingface():
 @pytest.mark.depends(on=["test_convert_fast_llm_to_huggingface"])
 def test_convert_huggingface_to_distributed():
     _run_conversion(
-        ConversionConfig(
+        ConvertConfig(
             input=CheckpointLoadConfig(
                 path=_CONVERT_PATH / "huggingface_0",
                 format=HUGGINGFACE_CHECKPOINT_FORMAT,
@@ -151,7 +169,7 @@ def test_convert_huggingface_to_distributed():
                 path=_CONVERT_PATH / "distributed_0",
                 format=DistributedCheckpointFormat,
             ),
-            model_config_class=TEST_MODEL_CONFIG_CLS,
+            model=TEST_MODEL_CONFIG_CLS,
         )
     )
 
@@ -161,7 +179,7 @@ def test_convert_distributed_to_huggingface():
     if HUGGINGFACE_CHECKPOINT_FORMAT is None:
         pytest.skip(f"Conversion not supported for {TEST_MODEL}")
     _run_conversion(
-        ConversionConfig(
+        ConvertConfig(
             input=CheckpointLoadConfig(
                 path=_CKPT_PATH,
                 format=DistributedCheckpointFormat,
@@ -170,7 +188,7 @@ def test_convert_distributed_to_huggingface():
                 path=_CONVERT_PATH / "huggingface_1",
                 format=HUGGINGFACE_CHECKPOINT_FORMAT,
             ),
-            model_config_class=TEST_MODEL_CONFIG_CLS,
+            model=TEST_MODEL_CONFIG_CLS,
         )
     )
 
@@ -178,7 +196,7 @@ def test_convert_distributed_to_huggingface():
 @pytest.mark.depends(on=["test_convert_distributed_to_huggingface"])
 def test_convert_huggingface_to_fast_llm():
     _run_conversion(
-        ConversionConfig(
+        ConvertConfig(
             input=CheckpointLoadConfig(
                 path=_CONVERT_PATH / "huggingface_1",
                 format=HUGGINGFACE_CHECKPOINT_FORMAT,
@@ -187,7 +205,7 @@ def test_convert_huggingface_to_fast_llm():
                 path=_CONVERT_PATH / "fast_llm_1",
                 format=FastLLMCheckpointFormat,
             ),
-            model_config_class=TEST_MODEL_CONFIG_CLS,
+            model=TEST_MODEL_CONFIG_CLS,
         )
     )
 
@@ -195,7 +213,7 @@ def test_convert_huggingface_to_fast_llm():
 @pytest.mark.depends(on=["test_convert_huggingface_to_fast_llm"])
 def test_convert_fast_llm_to_distributed():
     _run_conversion(
-        ConversionConfig(
+        ConvertConfig(
             input=CheckpointLoadConfig(
                 path=_CONVERT_PATH / "fast_llm_1",
                 format=FastLLMCheckpointFormat,
@@ -204,7 +222,7 @@ def test_convert_fast_llm_to_distributed():
                 path=_CONVERT_PATH / "distributed_1",
                 format=DistributedCheckpointFormat,
             ),
-            model_config_class=TEST_MODEL_CONFIG_CLS,
+            model=TEST_MODEL_CONFIG_CLS,
         )
     )
 

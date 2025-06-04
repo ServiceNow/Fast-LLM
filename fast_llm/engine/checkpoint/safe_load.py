@@ -40,8 +40,8 @@ class SafeLoad:
             triton_fill(self_shard, math.nan)
         # Reset and count shard pads
         for _, fsdp, fsdp_shards in self._model.split_shards_by_fsdp(self._self_shards):
-            for fsdp_shard in fsdp_shards.values():
-                self._loaded += fsdp.reset_shard_pad(fsdp_shard)
+            for shard_name, fsdp_shard in fsdp_shards.items():
+                self._loaded += fsdp.reset_shard_pad(fsdp_shard, shard_name)
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
@@ -145,9 +145,21 @@ class SafeLoad:
                 elif counter is not None and counter > 0:
                     errors.append(f'Loaded off-device parameter : "{parameter_name}" for shard "{shard_name}"')
             if self._distributed.world_group is not None:
-                counter_tensor = torch.tensor(
-                    [counter or 0 for counter in counter_per_parameter.values()], dtype=torch.int64
-                ).to(self._distributed.device)
+                counter_list = []
+                for parameter_name, counter in counter_per_parameter.items():
+                    parameter_stage = self._model.get_parameter_stage(parameter_name)
+                    parameter_meta = parameter_stage.get_parameter_meta(parameter_name)
+                    if (
+                        counter is None
+                        or (not parameter_meta.is_tensor_parallel and self._distributed.config.tensor_rank != 0)
+                        or parameter_stage.is_tied_weight_copy
+                    ):
+                        # Ignore the counter from missing or duplicate tensors.
+                        counter = 0
+                    counter_list.append(counter)
+
+                counter_tensor = torch.tensor(counter_list, dtype=torch.int64).to(self._distributed.device)
+
                 add_ephemeral_timeout(self._distributed.world_group, self._timeout)
                 all_reduce(counter_tensor, group=self._distributed.world_group)
                 counter_per_parameter = {

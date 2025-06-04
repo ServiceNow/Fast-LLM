@@ -27,7 +27,7 @@ except ImportError as e:
     raise ImportError("Please install huggingface_hub to use this script") from e
 
 
-from fast_llm.tools.convert import ConversionConfig  # isort:skip
+from fast_llm.tools.convert import ConvertConfig  # isort:skip
 
 
 logger = logging.getLogger(__name__)
@@ -147,7 +147,7 @@ class PushConfig(RunnableConfig):
             for _, checkpoint_path in new_checkpoint_paths:
                 checkpoint_path_hf = checkpoint_path.with_name(checkpoint_path.name + "_hf")
                 # Block until the conversion is done
-                ConversionConfig(
+                ConvertConfig(
                     input=CheckpointLoadConfig(
                         path=checkpoint_path,
                         format=DistributedCheckpointFormat,

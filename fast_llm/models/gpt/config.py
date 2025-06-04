@@ -137,7 +137,7 @@ class GPTBaseModelConfig(LanguageModelBaseConfig):
 class GPTModelConfig(FastLLMModelConfig):
     _abstract = False
     model_name: typing.ClassVar[str] = "gpt"
-    base_model: GPTBaseModelConfig = FieldUpdate(default_factory=GPTBaseModelConfig)
+    base_model: GPTBaseModelConfig = FieldUpdate()
     checkpoint_formats: typing.ClassVar[tuple[type[CheckpointFormat], ...]] = FastLLMModelConfig.checkpoint_formats + (
         AutoGPTHuggingfaceCheckpointFormat,
         Starcoder2GPTHuggingfaceCheckpointFormat,
@@ -157,7 +157,7 @@ class GPTModelConfig(FastLLMModelConfig):
         return GPTModel
 
     @classmethod
-    def get_huggingface_model_class(cls) -> type["HuggingfaceGPTModelForCausalLM"]:
+    def get_huggingface_model_for_causal_lm_class(cls) -> type["HuggingfaceGPTModelForCausalLM"]:
         from fast_llm.models.gpt.huggingface import HuggingfaceGPTModelForCausalLM
 
         return HuggingfaceGPTModelForCausalLM
@@ -166,13 +166,13 @@ class GPTModelConfig(FastLLMModelConfig):
 @config_class()
 class PretrainedGPTModelConfig(PretrainedFastLLMModelConfig):
     _abstract = False
-    model: GPTModelConfig = FieldUpdate(default_factory=GPTModelConfig)
+    model: GPTModelConfig = FieldUpdate()
 
 
 @config_class()
 class GPTTrainerConfig(PretrainedGPTModelConfig, TrainerConfig):
-    data: GPTDataConfig = FieldUpdate(default_factory=GPTDataConfig)
-    batch: GPTBatchConfig = FieldUpdate(default_factory=GPTBatchConfig)
+    data: GPTDataConfig = FieldUpdate()
+    batch: GPTBatchConfig = FieldUpdate()
     # TODO: Use dynamic model type?
     reference_models: dict[str, PretrainedGPTModelConfig] = FieldUpdate()
 
