@@ -47,7 +47,7 @@ def test_checkpoint_and_eval():
         CONFIG_COMMON
         + [
             "training.checkpoint.interval=1",
-            "training.evaluators.validation.run_interval.interval=2",
+            "training.evaluators.validation.interval=2",
             "training.evaluators.validation.evaluator.iterations=1",
         ],
     )
@@ -81,7 +81,7 @@ def test_resume():
         CONFIG_COMMON
         + [
             "training.checkpoint.interval=1",
-            "training.evaluators.validation.run_interval.interval=2",
+            "training.evaluators.validation.interval=2",
             "training.evaluators.validation.evaluator.iterations=1",
         ],
         compare=f"test_{TEST_MODEL}_checkpoint_and_eval",
@@ -98,7 +98,7 @@ def test_resume_frozen():
         CONFIG_COMMON
         + [
             "training.checkpoint.interval=1",
-            "training.evaluators.validation.run_interval.interval=2",
+            "training.evaluators.validation.interval=2",
             "training.evaluators.validation.evaluator.iterations=1",
             "model.base_model.transformer.mlp_lr_scale=0.",
         ],

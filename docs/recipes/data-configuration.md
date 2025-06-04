@@ -138,15 +138,13 @@ Please note that the same dataset names must be used in the `training.evaluators
 training:
   evaluators:
     the_stack:
-      run_interval:
-        interval: 50
+      interval: 50
       evaluator:
         type: loss
         iterations: 25
         dataset_name: the_stack
     fineweb:
-      run_interval:
-        interval: 100
+      interval: 100
       evaluator:
         type: loss
         iterations: 15

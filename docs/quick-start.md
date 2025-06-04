@@ -494,8 +494,7 @@ Save the following as `fast-llm-tutorial/train-config.yaml`:
         interval: 10
       evaluators:
         validation:
-          run_interval:
-            interval: 100
+          interval: 100
           evaluator:
             type: loss
             iterations: 25
@@ -556,8 +555,7 @@ Save the following as `fast-llm-tutorial/train-config.yaml`:
         interval: 10
       evaluators:
         validation:
-          run_interval:
-            interval: 100
+          interval: 100
           evaluator:
             type: loss
             iterations: 25

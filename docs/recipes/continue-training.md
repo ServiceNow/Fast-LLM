@@ -40,8 +40,7 @@ This is not much different from a pretraining config. We will:
         interval: 10
       evaluators:
         validation:
-          run_interval:
-            interval: 100
+          interval: 100
           evaluator:
             type: loss
             iterations: 25
@@ -100,8 +99,7 @@ This is not much different from a pretraining config. We will:
         interval: 10
       evaluators:
         validation:
-          run_interval:
-            interval: 100
+          interval: 100
           evaluator:
             type: loss
             iterations: 25

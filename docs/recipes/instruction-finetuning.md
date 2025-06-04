@@ -116,8 +116,7 @@ training:
     interval: 1
   evaluators:
     validation:
-      run_interval:
-        interval: 100
+      interval: 100
       evaluator:
         type: loss
         iterations: 25
