@@ -45,7 +45,7 @@ class MTPLlambaConfig(PretrainedConfig):
 
     def __init__(
         self,
-        vocab_size: int = 32000,
+        vocab_size: int = 131072,
         d_model: int = 4096,
         tie_embeddings: bool = False,
         pad_vocab_size_multiple: int = 8,

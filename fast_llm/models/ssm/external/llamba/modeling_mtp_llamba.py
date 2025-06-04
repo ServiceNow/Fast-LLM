@@ -1,7 +1,5 @@
 # Copyright (c) 2024, Kevin Li, Aviv Bick.
 
-import json
-import os
 from dataclasses import dataclass
 from typing import Optional
 
@@ -225,23 +223,23 @@ class MTPLlambaLMHeadModel(PreTrainedModel):  # PyTorchModelHubMixin removed for
             last_hidden_state=stacked_latents,
         )
 
-    def save_pretrained(self, save_directory):
-        """
-        Minimal implementation of save_pretrained for MambaLMHeadModel.
-        Save the model and its configuration file to a directory.
-        """
-        # Ensure save_directory exists
-        if not os.path.exists(save_directory):
-            os.makedirs(save_directory)
+    # def save_pretrained(self, save_directory):
+    #     """
+    #     Minimal implementation of save_pretrained for MambaLMHeadModel.
+    #     Save the model and its configuration file to a directory.
+    #     """
+    #     # Ensure save_directory exists
+    #     if not os.path.exists(save_directory):
+    #         os.makedirs(save_directory)
 
-        # Save the model's state_dict
-        model_path = os.path.join(save_directory, "pytorch_model.bin")
-        torch.save(self.state_dict(), model_path)
+    #     # Save the model's state_dict
+    #     model_path = os.path.join(save_directory, "pytorch_model.bin")
+    #     torch.save(self.state_dict(), model_path)
 
-        # Save the configuration of the model
-        config_path = os.path.join(save_directory, "config.json")
-        with open(config_path, "w") as f:
-            json.dump(self.config.to_dict(), f)
+    #     # Save the configuration of the model
+    #     config_path = os.path.join(save_directory, "config.json")
+    #     with open(config_path, "w") as f:
+    #         json.dump(self.config.to_dict(), f)
 
 
 class MixerModel(nn.Module):

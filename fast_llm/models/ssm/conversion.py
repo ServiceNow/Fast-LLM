@@ -453,59 +453,59 @@ class MtpLLambaHuggingfaceCheckpointHandler(CustomModelingExportMixin, LLambaHug
             mtp_layer_index = num_layers + 2 * i
             converters += self._get_weight_and_bias_converters(
                 f"layers.{mtp_layer_index}.mixer.in_proj",
-                f"{self._hf_prefix}.mtp_heads.{i-1}.mixer.in_proj",
+                f"mtp_heads.{i-1}.mixer.in_proj",
                 ssm_bias,
             )
             converters += self._get_weight_and_bias_converters(
                 f"layers.{mtp_layer_index}.mixer.out_proj",
-                f"{self._hf_prefix}.mtp_heads.{i-1}.mixer.out_proj",
+                f"mtp_heads.{i-1}.mixer.out_proj",
                 ssm_bias,
             )
             converters.append(
                 WeightConverter(
                     f"layers.{mtp_layer_index}.mixer.D",
-                    f"{self._hf_prefix}.mtp_heads.{i-1}.mixer.D",
+                    f"mtp_heads.{i-1}.mixer.D",
                     self._model.config.base_model,
                 )
             )
             converters.append(
                 WeightConverter(
                     f"layers.{mtp_layer_index}.mixer.z_bias",
-                    f"{self._hf_prefix}.mtp_heads.{i-1}.mixer.z_bias",
+                    f"mtp_heads.{i-1}.mixer.z_bias",
                     self._model.config.base_model,
                 )
             )
             converters.append(
                 WeightConverter(
                     f"layers.{mtp_layer_index}.mixer.conv1d_weight",
-                    f"{self._hf_prefix}.mtp_heads.{i-1}.mixer.conv1d.weight",
+                    f"mtp_heads.{i-1}.mixer.conv1d.weight",
                     self._model.config.base_model,
                 )
             )
             converters.append(
                 WeightConverter(
                     f"layers.{mtp_layer_index}.mixer.conv1d_bias",
-                    f"{self._hf_prefix}.mtp_heads.{i-1}.mixer.conv1d.bias",
+                    f"mtp_heads.{i-1}.mixer.conv1d.bias",
                     self._model.config.base_model,
                 )
             )
 
             # Norm
             converters += self._get_weight_and_bias_converters(
-                f"layers.{mtp_layer_index}.norm_1", f"{self._hf_prefix}.mtp_heads.{i-1}.input_layernorm", norm_bias
+                f"layers.{mtp_layer_index}.norm_1", f"mtp_heads.{i-1}.input_layernorm", norm_bias
             )
             converters += self._get_weight_and_bias_converters(
                 f"layers.{mtp_layer_index}.norm_2",
-                f"{self._hf_prefix}.mtp_heads.{i-1}.post_attention_layernorm",
+                f"mtp_heads.{i-1}.post_attention_layernorm",
                 norm_bias,
             )
 
             # MLP
-            converters += self._get_mlp_converters(f"layers.{mtp_layer_index}", f"model.mtp_heads.{i-1}")
+            converters += self._get_mlp_converters(f"layers.{mtp_layer_index}", f"mtp_heads.{i-1}")
 
             # Final norm
             converters += self._get_weight_and_bias_converters(
-                f"layers.{mtp_layer_index+1}.final_norm", f"{self._hf_prefix}.mtp_norms.{i-1}", norm_bias
+                f"layers.{mtp_layer_index+1}.final_norm", f"mtp_norms.{i-1}", norm_bias
             )
 
         # Output weights
