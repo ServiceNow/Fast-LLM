@@ -109,7 +109,7 @@ def get_rotary_frequencies(
     # `exp(i * n * a) = cos(n * a) + i sin(n * a)`,
     # `a = theta ** - (2 * (channel // 2) / kv_channels)`,
     # where n is the position in the sequence.
-    # We preform the calculation in high precision because it matters for rotary embeddings.
+    # We perform the calculation in high precision because it matters for rotary embeddings.
     positions = torch.arange(sequence_length, device=device, dtype=torch.float64)
     frequencies = config.theta ** -torch.arange(0, 1, 2 / kv_channels, device=device, dtype=torch.float64)
     # Apply scaling
