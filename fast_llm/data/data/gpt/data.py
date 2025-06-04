@@ -34,14 +34,21 @@ class GPTBatch:
     sequence_lengths: list[torch.Tensor] | None = None
     images: list[torch.Tensor] | None = None
     image_positions: list[torch.Tensor] | None = None
+    chosen_spans: list[torch.Tensor] | None = None
+    rejected_spans: list[torch.Tensor] | None = None
 
 
 def gpt_data_collate_fn(batch: list[GPTSample], sampling_parameters: GPTSamplingParameters) -> GPTBatch:
     stacked_ids = np.stack([sample.token_ids for sample in batch])
     stacked_spans = None
     sequence_lengths = None
+    stacked_chosen_spans = None
+    stacked_rejected_spans = None
     if sampling_parameters.use_loss_masking_spans:
         stacked_spans = [torch.from_numpy(sample.loss_masking_spans) for sample in batch]
+    if sampling_parameters.use_preference_loss_spans:
+        stacked_chosen_spans = [torch.from_numpy(sample.chosen_span) for sample in batch]
+        stacked_rejected_spans = [torch.from_numpy(sample.rejected_span) for sample in batch]
     if not sampling_parameters.cross_document_attention:
         sequence_lengths = [torch.tensor(sample.sequence_lengths) for sample in batch]
     has_images = False
@@ -62,6 +69,8 @@ def gpt_data_collate_fn(batch: list[GPTSample], sampling_parameters: GPTSampling
         token_ids=torch.from_numpy(stacked_ids),
         loss_masking_spans=stacked_spans,
         sequence_lengths=sequence_lengths,
+        chosen_spans=stacked_chosen_spans,
+        rejected_spans=stacked_rejected_spans,
         images=batch_images if has_images else None,
         image_positions=batch_image_positions if has_images else None,
     )
@@ -169,6 +178,7 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
         sampling_parameters = self._sampling_parameters[dataset_name]
         Assert.in_range_incl(batch_config.sequence_length, 1, sampling_parameters.sequence_length)
         log_main_rank(f"Initializing {dataset_name} dataset iterator from sample {consumed_samples}...")
+
         return iter(
             torch.utils.data.DataLoader(
                 self._datasets[dataset_name],  # noqa

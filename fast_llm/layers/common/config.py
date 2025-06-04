@@ -33,7 +33,7 @@ class NormalizationType(str, enum.Enum):
     rms_norm = "rms_norm"
 
 
-@config_class()
+@config_class(registry=True)
 class NormalizationConfig(BaseModelConfig):
     _abstract = False
 
@@ -105,6 +105,12 @@ class NormalizationConfig(BaseModelConfig):
         cls._handle_renamed_field(default, "normalization_implementation", "implementation")
         cls._handle_renamed_field(default, "layer_norm_init_range", "initialization_range")
         return super()._from_dict(default, strict, flat)
+
+
+for name in NormalizationType:
+    # We need this because we are using the reserved field name `type`.
+    # TODO: Implement proper dynamic typing.
+    NormalizationConfig.register_subclass(name.value, NormalizationConfig)
 
 
 class PeftType(str, enum.Enum):

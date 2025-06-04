@@ -58,6 +58,7 @@ class Tokenizer:
         token_spans = []
         beginning_of_text = True
         image_position = image_positions[image_idx] if image_idx < len(image_positions) else float("inf")
+
         for start, end in char_spans:
             while image_position <= start:
                 tokenized_text = self._tokenize(text[char_pos:image_position], begin=beginning_of_text, end=False)

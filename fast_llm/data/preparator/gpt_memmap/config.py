@@ -24,7 +24,7 @@ MEMMAP_DTYPES_INV = {y: x for x, y in MEMMAP_DTYPES.items()}
 MEMMAP_INDEX_HEADER = b"MMIDIDX\x00\x00"
 
 
-@config_class
+@config_class()
 class GPTHuggingfaceDatasetConfig(Config):
     path: str = Field(
         default=None,
@@ -59,8 +59,11 @@ class GPTHuggingfaceDatasetConfig(Config):
     loss_masking_spans: None | str = Field(
         default=None, desc="Field containing character spans to mask for loss computation", hint=FieldHint.optional
     )
-    image_paths: None | str = Field(
-        default=None, desc="Field containing images within the document", hint=FieldHint.optional
+    chosen_text: None | str = Field(
+        default=None, desc="Field containing chosen text for preference optimization", hint=FieldHint.optional
+    )
+    rejected_text: None | str = Field(
+        default=None, desc="Field containing rejected text for preference optimization", hint=FieldHint.optional
     )
     image_positions: None | str = Field(
         default=None, desc="Field containing image positions within a document", hint=FieldHint.optional
@@ -86,7 +89,7 @@ class GPTHuggingfaceDatasetConfig(Config):
     )
 
 
-@config_class
+@config_class()
 class DatasetPreparatorDistributedConfig(Config):
     # TODO: Unify with fast_llm.engine.distributed.config.DistributedConfig
 
@@ -129,7 +132,6 @@ class GPTMemmapDatasetPreparatorConfig(DatasetPreparatorConfig):
         hint=FieldHint.core,
     )
     distributed: DatasetPreparatorDistributedConfig = Field(
-        default_factory=DatasetPreparatorDistributedConfig,
         desc="Configuration for distributed processing.",
         hint=FieldHint.feature,
     )
@@ -158,12 +160,10 @@ class GPTMemmapDatasetPreparatorConfig(DatasetPreparatorConfig):
         valid=check_field(Assert.geq, 1),
     )
     dataset: GPTHuggingfaceDatasetConfig = Field(
-        default_factory=GPTHuggingfaceDatasetConfig,
         desc="Configuration for the dataset.",
         hint=FieldHint.feature,
     )
     tokenizer: TokenizerConfig = Field(
-        default_factory=TokenizerConfig,
         desc="Configuration for the tokenizer.",
         hint=FieldHint.feature,
     )

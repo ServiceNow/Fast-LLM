@@ -85,43 +85,68 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
             "num_pixels": num_pixels,
         }
 
-    def _tokenize_batch_with_spans(self, batch: dict[str, list[typing.Any]]) -> dict[str, list[typing.Any]]:
-        input_ids, token_spans, images, image_token_positions = map(
+    def _tokenize_preference_batch_with_spans(self, batch: dict[str, list[typing.Any]]) -> dict[str, list[typing.Any]]:
+        packed_texts = []
+        chosen_spans = []
+        rejected_spans = []
+
+        for conv_history, chosen_text, rejected_text in zip(
+            batch[self._config.dataset.field],
+            batch[self._config.dataset.chosen_text],
+            batch[self._config.dataset.rejected_text],
+        ):
+            # compute chosen span
+            full_chosen_text = conv_history + chosen_text + self._tokenizer.tokenizer.eos_token
+            chosen_span = [len(conv_history), len(full_chosen_text) - 1]
+            offset = len(full_chosen_text)
+            chosen_spans.append(chosen_span)
+
+            # compute rejected span
+            full_rejected_text = self._tokenizer.tokenizer.bos_token + conv_history + rejected_text
+            rejected_span = [
+                offset + len(self._tokenizer.tokenizer.bos_token + conv_history),
+                offset + len(full_rejected_text) - 1,
+            ]
+            rejected_spans.append(rejected_span)
+
+            # pack texts
+            packed_text = full_chosen_text + full_rejected_text
+
+            assert (
+                packed_text[chosen_span[0] : chosen_span[1] + 1] == chosen_text + self._tokenizer.tokenizer.eos_token
+            ), f"{packed_text[chosen_span[0]: chosen_span[1] + 1]} does not match {chosen_text}"
+
+            assert (
+                packed_text[rejected_span[0] : rejected_span[1] + 1] == rejected_text
+            ), f"{packed_text[rejected_span[0]: rejected_span[1] + 1]} does not match {rejected_text}"
+            packed_texts.append(packed_text)
+
+        # tokenize with spans
+        input_ids, chosen_token_spans, rejected_token_spans = map(
             list,
             zip(
                 *[
                     (
                         np.array(input_ids, dtype=self._data_type.numpy),
-                        np.array(token_spans, dtype=np.int32).reshape(-1, 2),
-                        np.array(images, dtype=np.uint8),
-                        np.array(image_token_positions, dtype=np.int32),
+                        np.array(token_spans[0], dtype=np.int32),
+                        np.array(
+                            [token_spans[1][0], token_spans[1][1] + 1], dtype=np.int32
+                        ),  # adding 1 to end for eos token
                     )
-                    for input_ids, token_spans, images, image_token_positions in [
-                        self._tokenizer.tokenize_with_spans(text, char_spans)
-                        for text, char_spans in zip(
-                            batch[self._config.dataset.field],
-                            batch.get(self._config.dataset.loss_masking_spans, itertools.repeat(None)),
-                            batch.get(self._config.dataset.images, itertools.repeat(None)),
-                            batch.get(self._config.dataset.image_positions, itertools.repeat(None)),
-                        )
+                    for input_ids, token_spans in [
+                        self._tokenizer.tokenize_with_spans(text, [chosen_span, rejected_span])
+                        for text, chosen_span, rejected_span in zip(packed_texts, chosen_spans, rejected_spans)
                     ]
                 ]
             ),
         )
+
         num_tokens = [len(x) for x in input_ids]
-        num_pixels = [0] * len(input_ids)
-        for idx, images in enumerate(images):
-            for bytes_im in images:
-                with PIL.Image.open(io.BytesIO(bytes_im["bytes"])) as im:
-                    width, height = im.size
-                    num_pixels[idx] += width * height * 3
         return {
             "input_ids": input_ids,
-            "token_spans": token_spans,
-            "images": images,
-            "image_positions": image_token_positions,
+            "chosen_token_spans": chosen_token_spans,
+            "rejected_token_spans": rejected_token_spans,
             "num_tokens": num_tokens,
-            "num_pixels": num_pixels,
         }
 
     def _save_shard(self, args: tuple[int, datasets.Dataset]) -> GPTMemmapDatasetConfig:
@@ -140,6 +165,8 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
                     ),
                     item["images"] if self._config.dataset.images else None,
                     item["image_positions"] if self._config.dataset.image_positions else None,
+                    item.get("chosen_token_spans", None),
+                    item.get("rejected_token_spans", None),
                 )
 
         GPTMemmapDataset.write_dataset(prefix=shard_output_path, documents=_document_generator())
@@ -267,10 +294,25 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
         )
         if self._config.dataset.field not in dataset.column_names:
             raise ValueError(f"Dataset does not have field '{self._config.dataset.field}'.")
-        tokenize_fn = self._tokenize_batch
         # decoding bytes to images is slow and should be done only when needed
         if self._config.dataset.images is not None:
             dataset = dataset.cast_column("images", datasets.Sequence(datasets.Image(decode=False)))
+        if self._config.dataset.loss_masking_spans is not None and (
+            self._config.dataset.chosen_text is not None or self._config.dataset.rejected_text is not None
+        ):
+            raise ValueError(f"Can not enable both loss masking spans and chosen/rejected loss masking spans.")
+        if (self._config.dataset.chosen_text is None) != (self._config.dataset.rejected_text is None):
+            raise ValueError(f"Both chosen and rejected loss masking spans must be specified if one is specified.")
+
+        # route tokenize function
+        if self._config.dataset.chosen_text is not None and self._config.dataset.rejected_text is not None:
+            if self._config.dataset.chosen_text not in dataset.column_names:
+                raise ValueError(f"Dataset does not have chosen spans field '{self._config.dataset.chosen_text}'.")
+            if self._config.dataset.rejected_text not in dataset.column_names:
+                raise ValueError(f"Dataset does not have rejected spans field '{self._config.dataset.rejected_text}'.")
+            tokenize_fn = self._tokenize_preference_batch_with_spans
+        else:
+            tokenize_fn = self._tokenize_batch
 
         # Tokenize the dataset in parallel
         tokenized_dataset = dataset.map(
