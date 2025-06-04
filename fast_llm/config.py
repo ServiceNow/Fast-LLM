@@ -41,7 +41,7 @@ class NoAutoValidate:
 
 
 class UpdateType(str, enum.Enum):
-    # Override entries no matter what they contais.
+    # Override entries no matter what they contain.
     override = "override"
     # Override atomic entries and lists, but update dicts recursively by setting or overriding only the specified entries.
     update = "update"

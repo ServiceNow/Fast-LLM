@@ -11,7 +11,7 @@ from fast_llm.layers.ssm.config import SSMConfig, SSMDimNames
 from fast_llm.tensor import ParameterMeta, init_ones_, kaiming_init_
 
 """
-Note: this is mostly addapted from https://github.com/Zyphra/Zamba2, similar code is aslo in https://github.com/state-spaces/mamba.
+Note: this is mostly adapted from https://github.com/Zyphra/Zamba2, similar code is also in https://github.com/state-spaces/mamba.
 For now it only supports training and not inference.
 This works with triton 3.1.0
 """
@@ -20,7 +20,7 @@ This works with triton 3.1.0
 def init_A(d_state, d_inner) -> Callable[[ParameterMeta, torch.Tensor, torch.Generator], torch.Tensor]:
     def init_(meta: ParameterMeta, tensor: torch.Tensor, generator: torch.Generator):  # noqa
         # S4D real initialization
-        # TODO: adopt this innitialization to work for tensor parallel setting!
+        # TODO: adopt this initialization to work for tensor parallel setting!
         A = einops.repeat(torch.arange(1, d_state + 1, dtype=torch.float32), "n -> d n", d=d_inner).contiguous()
         A_log = torch.log(A)  # Keep A_log in fp32
         if tensor.shape != A_log.shape:
@@ -106,7 +106,7 @@ class MambaLayer(torch.nn.Module):
         )
         self.x_proj.weight.auto_grad_accumulation = True
 
-        # TODO: the weights are innitialized a bit differently here https://github.com/state-spaces/mamba/blob/0cce0fa645f100f00620ddf2333c2b7712abfdec/mamba_ssm/modules/mamba_simple.py#L82
+        # TODO: the weights are initialized a bit differently here https://github.com/state-spaces/mamba/blob/0cce0fa645f100f00620ddf2333c2b7712abfdec/mamba_ssm/modules/mamba_simple.py#L82
         self.dt_proj_weight = ParameterMeta.from_dims(
             (td_inner, tdt_rank),
             init_method=kaiming_init_(tdt_rank.size),
