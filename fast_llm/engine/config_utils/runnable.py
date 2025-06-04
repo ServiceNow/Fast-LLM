@@ -22,14 +22,12 @@ class RunnableConfig(Config):
     def parse_and_run(cls, args: list[str] | None = None) -> None:
         if args is None:
             args = sys.argv[1:]
-        cls_ = cls
-        while len(args) >= 1 and "=" not in args[0] and not args[0].startswith("-"):
+        if cls._first_arg_is_dynamic_type(args):
             # Allow chained dynamic type selection without the `type=`, ex. `train gpt`.
-            cls_ = cls_.get_subclass(args[0])
-            args = args[1:] + [f"type={args[0]}"]
-        parsed, unparsed = cls_._get_parser().parse_known_args(args)
+            return cls.get_subclass(args[0]).parse_and_run(args[1:])
+        parsed, unparsed = cls._get_parser().parse_known_args(args)
         with NoAutoValidate():
-            config: "RunnableConfig" = cls_._from_parsed_args(parsed, unparsed)
+            config: "RunnableConfig" = cls._from_parsed_args(parsed, unparsed)
         try:
             config.configure_logging()
             config.validate()
@@ -41,6 +39,10 @@ class RunnableConfig(Config):
             # We always want to show the config for debugging.
             config._show(parsed.verbose)
         runnable()
+
+    @classmethod
+    def _first_arg_is_dynamic_type(cls, args: list[str]) -> bool:
+        return len(args) >= 1 and "=" not in args[0] and not args[0].startswith("-")
 
     @classmethod
     def _get_parser(cls) -> argparse.ArgumentParser:

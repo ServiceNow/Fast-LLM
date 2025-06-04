@@ -89,14 +89,12 @@ def test_do_use_flash_attention():
         config.do_use_flash_attention(mock_distributed_config)
 
 
-@pytest.mark.parametrize(
-    ("cls", "default"),
-    ((GPTSamplingConfig, {}), (GPTModelConfig, {"distributed": {"world_size": 1, "rank": 0, "local_world_size": 1}})),
-)
-def test_serialize_default_config_updates(cls, default):
+@pytest.mark.parametrize("cls", (GPTSamplingConfig, GPTModelConfig))
+def test_serialize_default_config_updates(cls):
     # Config classes used as config updates should have a default that serializes to an empty dict
     #   so no value is incorrectly overridden.
-    check_equal_nested(cls.from_dict({}).to_dict(), default)
+    with NoAutoValidate():
+        check_equal_nested(cls.from_dict({}).to_dict(), {})
 
 
 @pytest.mark.parametrize("load_config", tuple(ModelConfigType))
@@ -148,7 +146,7 @@ def test_pretrained_config(load_config: ModelConfigType):
     )
     Assert.eq(pretrained_config.model.base_model.transformer.kv_channels, 64)
     serialized_config = pretrained_config.model.to_dict()
-    expected_config = {"distributed": DistributedConfig().to_dict()}
+    expected_config = {"type": "gpt", "distributed": DistributedConfig().to_dict()}
 
     if load_config == ModelConfigType.fast_llm:
         expected_config["multi_stage"] = {"zero_stage": 3}
@@ -175,6 +173,8 @@ def test_pretrained_config(load_config: ModelConfigType):
             "freeze_others": False,
             "layers": ["query", "value"],
         }
+        base_model_update["transformer"]["normalization"]["type"] = "layer_norm"
+        base_model_update["transformer"]["rotary"] = {"type": "none"}
         expected_config["base_model"] = base_model_update
 
     check_equal_nested(serialized_config, expected_config)

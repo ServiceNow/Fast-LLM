@@ -1,6 +1,6 @@
 import pytest
 
-from fast_llm.config import UpdateType
+from fast_llm.config import NoAutoValidate, UpdateType
 from fast_llm.utils import check_equal_nested
 from tests.config.common import ExampleNestedConfig
 
@@ -34,19 +34,17 @@ TEST_CONFIGS = (
 def test_update(base, update, updated, overridden) -> None:
     if overridden is None:
         overridden = updated
+    with NoAutoValidate():
+        update_config = ExampleNestedConfig.from_dict(update)
     check_equal_nested(ExampleNestedConfig.from_dict(base, update, update_type=UpdateType.update).to_dict(), updated)
     check_equal_nested(
-        ExampleNestedConfig.from_dict(base)
-        .to_copy(ExampleNestedConfig.from_dict(update), update_type=UpdateType.update)
-        .to_dict(),
+        ExampleNestedConfig.from_dict(base).to_copy(update_config, update_type=UpdateType.update).to_dict(),
         updated,
     )
     check_equal_nested(
         ExampleNestedConfig.from_dict(base, update, update_type=UpdateType.override).to_dict(), overridden
     )
     check_equal_nested(
-        ExampleNestedConfig.from_dict(base)
-        .to_copy(ExampleNestedConfig.from_dict(update), update_type=UpdateType.override)
-        .to_dict(),
+        ExampleNestedConfig.from_dict(base).to_copy(update_config, update_type=UpdateType.override).to_dict(),
         overridden,
     )

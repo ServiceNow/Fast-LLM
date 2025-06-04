@@ -274,6 +274,8 @@ def config_class[
 
         if dynamic_type is not None:
             for cls_, name in dynamic_type.items():
+                if cls.dynamic_type_name is None:
+                    cls.dynamic_type_name = name
                 cls_.register_subclass(name, wrapped)
 
         return wrapped
@@ -377,9 +379,18 @@ class Config(metaclass=ConfigMeta):
         Validate a class and mark it as read-only
         This should not be overridden in derived classes.
         """
-
-        if self.type is not None:
-            Assert.eq(self.type, self.dynamic_type_name)
+        try:
+            expected_class = self.get_subclass(self.type)
+        except KeyError as e:
+            # Delayed instantiation error in `from_dict`.
+            raise ValidationError(*e.args)
+        if expected_class is not None:
+            # Handled in `from_dict`, checking again for extra safety.
+            Assert.is_(self.__class__, expected_class)
+        if self.dynamic_type_name is not None:
+            # This also makes the type explicit.
+            # Done during validation so we don't accidentally use default subtypes as updates.
+            self.type = self.dynamic_type_name
 
         if not self._validated:
             try:
@@ -406,10 +417,6 @@ class Config(metaclass=ConfigMeta):
             raise ValidationError(
                 f"{type(self).__name__} hasn't been validated. Make sure to use the @config_class decorator."
             )
-        if self.dynamic_type_name is not None:
-            # This also makes the type explicit.
-            # Done during validation so we don't accidentally use default subtypes as updates.
-            self.type = self.dynamic_type_name
 
         errors = []
         with self._set_implicit_default(None):
@@ -735,6 +742,10 @@ class Config(metaclass=ConfigMeta):
             default = copy.deepcopy(default)
         for update in updates:
             if isinstance(update, Config):
+                if update._validated:
+                    # Try to prevent issues where fields are set and made explicit during validation, ex. `type`.
+                    # If this is intentional (and safe), the serialized config can be used as an argument instead.
+                    raise ValueError(f"Validated configs should not be used as update.")
                 update = update.to_dict(serialized=False)
             else:
                 update = copy.deepcopy(update)

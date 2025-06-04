@@ -1,3 +1,4 @@
+import argparse
 import json
 import logging
 import math
@@ -24,6 +25,27 @@ class ConvertConfig(RunnableConfig):
     exist_ok: bool = Field(default=False)
     layers_per_step: int | None = Field(default=None)
     model: type[FastLLMModelConfig] = Field(default=None)
+
+    @classmethod
+    def _get_parser(cls):
+        # TODO: Infer the model type from the loaded model instead?
+        parser = super()._get_parser()
+        parser.add_argument(
+            "model_type",
+            help="The Fast-LLM model type to use.",
+        )
+        return parser
+
+    @classmethod
+    def _from_parsed_args(cls, parsed: argparse.Namespace, unparsed: list[str]):
+        config = super()._from_parsed_args(parsed, unparsed)
+        config.model = parsed.model_type
+        return config
+
+    @classmethod
+    def _first_arg_is_dynamic_type(cls, args: list[str]) -> bool:
+        # The first arg defines the model type, not the converter class.
+        return False
 
     def _validate(self):
         assert self.model is not None
