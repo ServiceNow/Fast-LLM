@@ -218,6 +218,11 @@ class Registry[KeyType, ValueType]:
             raise KeyError(f"Entry {key} already in {self._name} registry")
         self._data[key] = value
 
+    def __delitem__(self, key: KeyType):
+        if key not in self:
+            raise KeyError(f"Entry {key} not found in {self._name} registry")
+        del self._data[key]
+
     def keys(self) -> list[KeyType]:
         return list(self._data)
 
