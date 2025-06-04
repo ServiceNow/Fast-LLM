@@ -144,7 +144,7 @@ class GPTSampledIndexedDataset(SampledDataset):
                 " Please make sure Fast-LLM is installed correctly."
             )
             long_docs_filter = document_sizes > self._parameters.sequence_length + 1
-            ignored_documents = sum(long_docs_filter)
+            ignored_documents = long_docs_filter.sum().item()
             if ignored_documents:
                 log_main_rank(
                     f" > {ignored_documents}/{documents_per_epoch} documents are longer than {self._parameters.sequence_length+1} tokens and will be ignored.",
@@ -202,8 +202,6 @@ class GPTSampledIndexedDataset(SampledDataset):
         if self._yaml_path is not None and self._yaml_path.is_file():
             loaded_yaml_data = yaml.safe_load(self._yaml_path.open("r"))
             self._load_yaml_data(yaml_data)
-            if not self._truncate_documents and not self._parameters.use_preference_loss_spans:
-                del loaded_yaml_data["unshuffled_tokens"]
 
             if loaded_yaml_data != yaml_data:
                 raise RuntimeError(
@@ -456,10 +454,10 @@ class GPTSampledIndexedDataset(SampledDataset):
                     document_sampling_index += 1
                     continue
                 tokens_in_sample = token_count % (self._parameters.sequence_length + 1)
-                if document_size + tokens_in_sample > self._parameters.sequence_length + 1:
+                if document_size + tokens_in_sample >= self._parameters.sequence_length + 1:
                     # Document belongs to the next sample, need to account for padding.
                     padding_size = self._parameters.sequence_length + 1 - tokens_in_sample
-                    if token_count > token_start:
+                    if token_count >= token_start:
                         # Add padding tokens to current sample
                         token_ids.append(np.full((padding_size,), -100, dtype=np.int64))
                         Assert.eq(token_count + padding_size, token_end)
@@ -487,7 +485,7 @@ class GPTSampledIndexedDataset(SampledDataset):
                             0,
                             self._parameters.sequence_length + self._parameters.extra_tokens,
                         )
-                        if span[1] > span[0]:
+                        if span[1] >= span[0]:
                             loss_masking_spans.append(span)
 
             # Go to the next document.
@@ -525,8 +523,8 @@ class GPTSampledIndexedDataset(SampledDataset):
         elif "unshuffled_tokens" not in data:
             # Backward compatibility
             # TODO v0.x: Remove
-            assert self._truncate_documents
-            data["unshuffled_tokens"] = data["tokens_per_epoch"] * data["unshuffled_epochs"]
+            assert not self._truncate_documents
+            data["unshuffled_tokens"] = data["dataset"]["tokens_per_epoch"] * data["unshuffled_epochs"]
 
         self._unshuffled_tokens = data["unshuffled_tokens"]
         self._unshuffled_documents = data["unshuffled_epochs"] * self._documents_per_epoch
