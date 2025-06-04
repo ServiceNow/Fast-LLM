@@ -290,7 +290,7 @@ class InvalidObject:
 
 def try_decorate(get_decorator: Callable, _return_decorator: bool = True) -> Callable:
     """
-    Try to decorate an object, but ignore the error until the object is actualy used.
+    Try to decorate an object, but ignore the error until the object is actually used.
     The wrapped decorator should always be instantiated before calling,
     i.e.. called as `@decorator()` rather than `@decorator`.
     """
