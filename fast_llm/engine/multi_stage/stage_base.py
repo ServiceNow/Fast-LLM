@@ -10,7 +10,7 @@ from fast_llm.engine.base_model.base_model import BaseModel, Layer
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
 from fast_llm.engine.distributed.distributed import Distributed
-from fast_llm.engine.multi_stage.config import StageConfig, StageMode
+from fast_llm.engine.multi_stage.config import ShardName, StageConfig, StageMode
 from fast_llm.engine.multi_stage.fsdp import FSDP
 from fast_llm.engine.optimizer.config import ParamGroup
 from fast_llm.logging import log_generator
@@ -209,7 +209,7 @@ class StageBase(Configurable[StageConfig]):
                     meta.init_parameter(parameter, self._distributed)
 
             if self.mode.on_device:
-                fsdp.reset_shard_pad(fsdp.weight_shard)
+                fsdp.reset_shard_pad(fsdp.weight_shard, ShardName.weights)
 
         if self._config.debug_param_init:
             log_generator("CPU generator after reset", torch.random.default_generator)
@@ -316,7 +316,6 @@ class StageBase(Configurable[StageConfig]):
         """
         Given a global parameter tensor, set the associated slice of a local parameter shard.
         Return the size of the local slice.
-        TODO: Doesn't work
         """
         fsdp_index = self._fsdp_index[parameter_name]
         return self._fsdps[fsdp_index].import_state_tensor(parameter_name, shards[fsdp_index], tensor)
@@ -324,7 +323,6 @@ class StageBase(Configurable[StageConfig]):
     def _export_shard(
         self, shards: tuple[torch.Tensor], data_type: DataType | None = None
     ) -> typing.Generator[tuple[str, torch.Tensor], None, None]:
-        # TODO: Doesn't work
         for fsdp, shard in zip(self._fsdps, shards, strict=True):
             yield from fsdp.export_shard(shard, self._distributed, data_type)
 
