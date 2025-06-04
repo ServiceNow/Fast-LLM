@@ -275,7 +275,7 @@ class ShutdownConfig(IntervalConfig):
     )
 
 
-@config_class(dynamic_type={RunnableConfig: "train"})
+@config_class()
 class TrainingConfig(Config):
     evaluations: dict[str, EvaluationConfig] = Field(
         default_factory=dict,
@@ -334,7 +334,7 @@ class TrainingConfig(Config):
         self.wandb.alert.assert_sub_interval(self.logs)
 
 
-@config_class()
+@config_class(registry=True, dynamic_type={RunnableConfig: "train"})
 class TrainerConfig(PretrainedFastLLMModelConfig, ExperimentConfig):
     _abstract = True
     # TODO: Generalize data, schedule, logging, etc.

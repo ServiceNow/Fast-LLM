@@ -250,7 +250,7 @@ def config_class[
     Fast-LLM replacement for the default dataclass wrapper. Performs additional verifications.
     """
 
-    def wrap(cls):
+    def wrap(cls: type[T]) -> type[T]:
         Assert.custom(issubclass, cls, Config)
         if hasattr(cls, "__post_init__"):
             raise TypeError(f"`__post_init__` should not be implemented for `Config` classes")
@@ -317,6 +317,13 @@ class Config(metaclass=ConfigMeta):
     # A registry for all the config classes.
     _registry: typing.ClassVar[Registry[str, type[typing.Self]] | None] = None
 
+    # The main dynamic type name used to refer to this class.
+    # If a class is known under multiple names,
+    #     the `type` field will be standardized to this value to prevent ambiguities.
+    # TODO: Force a unique value across all classes to prevent ambiguities when loading saved configs?
+    # Set through the `@config_class` decorator, as the first entry in `dynamic_type`. DO NOT SET EXPLICITLY.
+    dynamic_type_name: typing.ClassVar[str | None] = None
+
     def __setattr__(self, key: str, value: typing.Any) -> None:
         """
         Make the class read-only after validation.
@@ -370,16 +377,9 @@ class Config(metaclass=ConfigMeta):
         Validate a class and mark it as read-only
         This should not be overridden in derived classes.
         """
-        # Should be handled in `from_dict`, but can fail if instantiating directly.
-        try:
-            expected_class = self.get_subclass(self.type)
-        except KeyError as e:
-            # Delayed instantiation error in `from_dict`.
-            raise ValidationError(*e.args)
 
-        if expected_class is not None:
-            # Should be handled in `from_dict`, but can fail if instantiating directly.
-            Assert.is_(self.__class__, expected_class)
+        if self.type is not None:
+            Assert.eq(self.type, self.dynamic_type_name)
 
         if not self._validated:
             try:
@@ -406,6 +406,11 @@ class Config(metaclass=ConfigMeta):
             raise ValidationError(
                 f"{type(self).__name__} hasn't been validated. Make sure to use the @config_class decorator."
             )
+        if self.dynamic_type_name is not None:
+            # This also makes the type explicit.
+            # Done during validation so we don't accidentally use default subtypes as updates.
+            self.type = self.dynamic_type_name
+
         errors = []
         with self._set_implicit_default(None):
             for name, field in self.fields():
@@ -942,7 +947,11 @@ class Config(metaclass=ConfigMeta):
                     f"Parent class {get_type_name(base_class)} of config class {get_type_name(cls)} has not been validated."
                     f" Make sure to use the @config_class decorator."
                 )
+
+        # Remove class vars set in parent class.
         cls.__class_validated__ = False
+        cls.dynamic_type_name = None
+
         for name in list(cls.__dict__):
             value = getattr(cls, name)
             if isinstance(value, FieldUpdate):

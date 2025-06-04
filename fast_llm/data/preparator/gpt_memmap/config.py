@@ -25,7 +25,7 @@ MEMMAP_DTYPES_INV = {y: x for x, y in MEMMAP_DTYPES.items()}
 MEMMAP_INDEX_HEADER = b"MMIDIDX\x00\x00"
 
 
-@config_class(dynamic_type={RunnableConfig: "prepare_gpt_memmap", DatasetPreparatorConfig: "gpt_memmap"})
+@config_class()
 class GPTHuggingfaceDatasetConfig(Config):
     path: str = Field(
         default=None,
@@ -117,7 +117,7 @@ class DatasetPreparatorDistributedConfig(Config):
         Assert.in_range(self.rank, 0, self.world_size)
 
 
-@config_class()
+@config_class(dynamic_type={RunnableConfig: "prepare_gpt_memmap", DatasetPreparatorConfig: "gpt_memmap"})
 class GPTMemmapDatasetPreparatorConfig(DatasetPreparatorConfig):
     preparator_name: typing.ClassVar[str] = "gpt_memmap"
 

@@ -26,8 +26,8 @@ class RunnableConfig(Config):
         while len(args) >= 1 and "=" not in args[0] and not args[0].startswith("-"):
             # Allow chained dynamic type selection without the `type=`, ex. `train gpt`.
             cls_ = cls_.get_subclass(args[0])
-            args = args[1:]
-        parsed, unparsed = cls_._get_parser().parse_known_args([f"type={cls_.__name__}"] + args)
+            args = args[1:] + [f"type={args[0]}"]
+        parsed, unparsed = cls_._get_parser().parse_known_args(args)
         with NoAutoValidate():
             config: "RunnableConfig" = cls_._from_parsed_args(parsed, unparsed)
         try:
