@@ -20,11 +20,7 @@ from fast_llm.layers.transformer.config import (
     TransformerKwargs,
     TransformerLossNames,
 )
-from fast_llm.layers.transformer.preprocessing import (
-    BackupAttentionPreprocessor,
-    FlashAttnVarlenPreprocessor,
-    RotaryEmbeddingPreprocessor,
-)
+from fast_llm.layers.transformer.preprocessing import BackupAttentionPreprocessor, FlashAttnVarlenPreprocessor
 from fast_llm.layers.transformer.transformer import TransformerLayer
 from fast_llm.models.gpt.config import GPTBaseModelConfig, GPTBatchConfig, GPTModelConfig
 from fast_llm.models.gpt.megatron import get_init_megatron
@@ -40,11 +36,6 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
     """
 
     config_class: typing.ClassVar[type[GPTBaseModelConfig]] = GPTBaseModelConfig
-    _rotary_embedding_frequencies: torch.Tensor
-    _position_ids: torch.Tensor
-    _mask: torch.Tensor
-    _mask_value: torch.Tensor
-    _tensor_cache_max_sequence_length: int = -1
 
     def __init__(
         self,
@@ -61,10 +52,9 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
         self._preprocessors: list[Preprocessor] = []
         if self._config.use_absolute_position_embeddings:
             self._preprocessors.append(PositionEmbeddingPreprocessor(self._config, self._tensor_space))
-        if self._config.transformer.rotary.enabled:
-            self._preprocessors.append(
-                RotaryEmbeddingPreprocessor(self._config.transformer.rotary, self._tensor_space)
-            )
+        # We have multiple identical rotary modules/preprocessors, so it's simpler to make a new one here.
+        # TODO: Find a better solution.
+        self._preprocessors.append(self._config.transformer.rotary.build(self._tensor_space))
         if self._use_flash_attention:
             self._preprocessors.append(FlashAttnVarlenPreprocessor(self._config.transformer, self._tensor_space))
         else:

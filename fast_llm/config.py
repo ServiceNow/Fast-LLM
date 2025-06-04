@@ -988,7 +988,7 @@ class Config(metaclass=ConfigMeta):
     )
 
 
-class Configurable[ConfigType: Config]:
+class Configurable[ConfigType: Config](abc.ABC):
     config_class: typing.ClassVar[type[Config]] = Config
 
     def __init__(self, config: ConfigType, *args, **kwargs):
