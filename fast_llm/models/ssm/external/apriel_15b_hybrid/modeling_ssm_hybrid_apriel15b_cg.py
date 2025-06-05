@@ -448,13 +448,6 @@ class DiscreteMamba2(nn.Module):
         self.zeros_buffer = torch.zeros((self.n_v_heads, self.headdim), device=device, dtype=dtype)
         self.ones_buffer = torch.ones((self.n_v_heads, self.headdim, self.d_state), device=device, dtype=dtype)
 
-        self.use_cuda_graph = False
-        self.cuda_graph = None
-        self.graph_input = None
-        self.graph_output = None
-        self.graph_ssm_state = None
-        self.graph_conv_state = None
-
     @property
     def d_output(self):
         return self.d_model
@@ -701,93 +694,6 @@ class DiscreteMamba2(nn.Module):
             xBC = self.act(xBC).to(xBC.dtype)  # Some activations change dtype
 
         return xBC, conv_state
-
-    def enable_cuda_graph(self, batch_size=1):
-        """Capture CUDA graph for the step function"""
-        if not torch.cuda.is_available():
-            return
-
-        # Pre-allocate tensors with fixed shapes
-        device = next(self.parameters()).device
-        self.graph_input = torch.zeros(batch_size, self.d_model, device=device, dtype=torch.float16)
-        self.graph_ssm_state = torch.zeros(
-            batch_size, self.n_qk_heads, self.headdim, self.d_state, device=device, dtype=torch.float16
-        )
-        self.graph_conv_state = torch.zeros(
-            batch_size,
-            self.d_inner + 2 * self.n_qk_heads * self.d_state,
-            self.d_conv,
-            device=device,
-            dtype=torch.float16,
-        )
-        self.graph_output = torch.zeros(batch_size, self.d_model, device=device, dtype=torch.float16)
-
-        # Warmup runs
-        torch.cuda.synchronize()
-        for _ in range(3):
-            self._step_graph_impl(self.graph_input, self.graph_ssm_state, self.graph_conv_state)
-        torch.cuda.synchronize()
-
-        # Capture graph
-        self.cuda_graph = torch.cuda.CUDAGraph()
-        with torch.cuda.graph(self.cuda_graph):
-            self.graph_output = self._step_graph_impl(self.graph_input, self.graph_ssm_state, self.graph_conv_state)
-
-        self.use_cuda_graph = True
-
-    def _step_graph_impl(self, u, ssm_state, conv_state):
-        """Graph-compatible version of step function"""
-        # Same logic as step() but with pre-allocated tensors
-        xBCzA_log = self.in_proj(u)
-        xBC, z, A_log = torch.split(
-            xBCzA_log,
-            [
-                self.d_inner + 2 * self.n_qk_heads * self.d_state,
-                self.d_inner,
-                self.n_v_heads,
-            ],
-            dim=-1,
-        )
-
-        xBC, conv_state_new = self.convolutional_step(xBC, conv_state)
-        conv_state.copy_(conv_state_new)  # update state in place
-
-        x, B, C = torch.split(
-            xBC,
-            [
-                self.d_inner,
-                self.n_qk_heads * self.d_state,
-                self.n_qk_heads * self.d_state,
-            ],
-            dim=-1,
-        )
-
-        x = rearrange(x, "b (h s) -> b h s", h=self.n_v_heads)
-        B = rearrange(B, "b (h s) -> b h s", h=self.n_qk_heads)
-        C = rearrange(C, "b (h s) -> b h s", h=self.n_qk_heads)
-
-        ssm_state = ssm_state.to(x.dtype)
-        zeros = self.zeros_buffer.to(A_log.device).to(x.dtype)  # Just cast, don't allocate
-        ones = self.ones_buffer.to(A_log.device).to(x.dtype)
-        y = selective_state_update(
-            x=x / F.softplus(A_log).to(x.dtype).unsqueeze(-1),
-            dt=repeat(A_log, "b h -> b h p", p=self.headdim),
-            dt_softplus=True,
-            A=-ones,
-            B=B,
-            C=C,
-            state=ssm_state,  # will be updated in place
-            dt_bias=zeros,
-            D=zeros,
-        )
-
-        y = y + self.D[:, None] * x
-        y = rearrange(y, "b h p -> b (h p)")
-
-        # Norm and gate
-        out = self.out_proj(y * F.silu(z + self.z_bias))
-
-        return out
 
 
 class AprielSSMDecoderLayer(nn.Module):
