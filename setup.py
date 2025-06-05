@@ -1,6 +1,6 @@
 import sys
 import re
-from pathlib import Path
+import pathlib
 
 try:
     import pybind11
@@ -20,7 +20,7 @@ if setuptools.__version__ < _SETUPTOOLS_MIN_VERSION:
 
 def get_version():
     """Read version from fast_llm/__init__.py"""
-    init_file = Path(__file__).parent.joinpath("fast_llm", "__init__.py").read_text()
+    init_file = pathlib.Path(__file__).parent.joinpath("fast_llm", "__init__.py").read_text()
     version_match = re.search(r"^__version__ = ['\"]([^'\"]*)['\"]", init_file, re.M)
     if version_match:
         return version_match.group(1)
