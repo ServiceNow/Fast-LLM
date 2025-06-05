@@ -554,7 +554,7 @@ class LegacyGPTSampledIndexedDataset(SampledDataset):
     ):
         assert isinstance(sampling, GPTSamplingData)
         self._indexed_dataset = indexed_dataset
-        if not sampling.truncate_documents:
+        if not sampling.parameters.truncate_documents:
             raise NotImplementedError(
                 "Legacy sampling only supports document truncation. Please use the latest dataset format."
             )
