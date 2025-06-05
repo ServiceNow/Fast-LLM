@@ -102,9 +102,8 @@ class LanguageModelEmbedding[ConfigType: LanguageModelBaseConfig](Configurable[L
             # handle masked tokens
             if mask_inputs:
                 input_mask = input_ >= 0
-                if (~input_mask).any():
-                    masked_input = input_ * input_mask
-                    embeddings = torch.embedding(self.word_embeddings_weight, masked_input)
+                masked_input = input_ * input_mask
+                embeddings = torch.embedding(self.word_embeddings_weight, masked_input)
             else:
                 embeddings = torch.embedding(self.word_embeddings_weight, input_)
             if self._use_absolute_position_embeddings:
