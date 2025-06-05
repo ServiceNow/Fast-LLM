@@ -15,6 +15,13 @@ from fast_llm.data.dataset.config import SamplingParameters
 from fast_llm.engine.config_utils.run import Run, is_main_rank, log_main_rank, log_pipeline_parallel_main_rank
 from fast_llm.engine.distributed.config import PhaseType
 from fast_llm.engine.distributed.distributed import Distributed
+from fast_llm.engine.evaluation.evaluator import (
+    EvaluationMetrics,
+    Evaluator,
+    EvaluatorRunner,
+    EvaluatorSamplingParameters,
+    TrainingProgress,
+)
 from fast_llm.engine.multi_stage.config import StageMode
 from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
 from fast_llm.engine.optimizer.config import ParamGroup
@@ -29,13 +36,6 @@ from fast_llm.engine.training.config import (
     TrainingEvaluatorConfig,
 )
 from fast_llm.engine.training.wandb import Wandb
-from fast_llm.engine.evaluation.evaluator import (
-    Evaluator,
-    EvaluatorRunner,
-    EvaluationMetrics,
-    EvaluatorSamplingParameters,
-    TrainingProgress,
-)
 from fast_llm.logging import format_metrics, get_memory_usage_mib, log_memory_usage
 from fast_llm.utils import Assert
 
@@ -576,7 +576,8 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
             config.get_load_config(checkpoint_directory, timeout=self._config.training.timeout)
         )
         assert metadata is not None
-        self._optimizer.load(metadata["optimizer"])
+        if not self._is_evaluation_only:
+            self._optimizer.load(metadata["optimizer"])
         if "schedules" in metadata:
             # Backward compatibility.
             self._completed_steps = metadata["schedules"][PhaseType.training.value]["completed_steps"]
@@ -603,5 +604,3 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
             iteration = -1
         iteration = self._run.broadcast_int(iteration)
         return iteration if iteration >= 0 else None
-
-
