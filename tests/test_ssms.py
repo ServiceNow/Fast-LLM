@@ -16,7 +16,7 @@ from fast_llm.layers.language_model.config import LanguageModelKwargs, LanguageM
 from fast_llm.layers.transformer.config import TransformerKwargs
 from fast_llm.models.gpt.config import GPTBatchConfig, LlamaGPTHuggingfaceCheckpointFormat
 from fast_llm.models.ssm.config import LLambaHuggingfaceCheckpointFormat
-from tests.common import get_hybrid_config, materialize_meta_tensors
+from tests.utils.utils import get_hybrid_config, materialize_meta_tensors
 
 try:
     from fast_llm.layers.ssm.discrete_mamba2 import DiscreteMamba2

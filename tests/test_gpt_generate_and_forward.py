@@ -9,13 +9,7 @@ from fast_llm.engine.schedule.config import ScheduleConfig
 from fast_llm.engine.schedule.runner import ScheduleRunner
 from fast_llm.models.gpt.config import LlamaGPTHuggingfaceCheckpointFormat, PretrainedGPTModelConfig
 from fast_llm.models.gpt.huggingface import HuggingfaceGPTModelForCausalLM
-from tests.common import CONFIG_COMMON, HUGGINGFACE_CHECKPOINT_FORMAT, TEST_MODEL, TEST_RESULTS_PATH, requires_cuda
-
-
-def _prepare_checkpoint(model: str) -> str:
-    path = TEST_RESULTS_PATH.resolve() / "generate/model"
-    model_path = huggingface_hub.snapshot_download(repo_id=model, local_dir=path)
-    return model_path
+from tests.utils.utils import requires_cuda
 
 
 def _prepare_data(tokenizer, use_batch_size2: bool):
@@ -179,12 +173,11 @@ def _test_for_batches(
 
 
 @pytest.fixture(scope="module")
-def model_and_tokenizer():
-    model = "HuggingFaceTB/SmolLM2-135M-Instruct"
-    fast_llm_checkpoint_format = LlamaGPTHuggingfaceCheckpointFormat
-    model_path = _prepare_checkpoint(model)
-    tokenizer = AutoTokenizer.from_pretrained(model_path)
-    return model_path, tokenizer, fast_llm_checkpoint_format
+def model_path(result_path):
+    return huggingface_hub.snapshot_download(
+        repo_id="HuggingFaceTB/SmolLM2-135M-Instruct",
+        local_dir=result_path / "generate/model",
+    )
 
 
 def _test_generate(
@@ -224,35 +217,33 @@ def _test_generate(
     ],
 )
 def test_generate(
-    model_and_tokenizer,
+    model_path,
     use_flash_attention,
     use_bf16,
     max_new_tokens,
     min_matching_tokens_batch_size_1,
     min_matching_tokens_batch_size_2,
 ):
-    model_path, tokenizer, fast_llm_checkpoint_format = model_and_tokenizer
     _test_generate(
         model_path,
-        fast_llm_checkpoint_format,
+        LlamaGPTHuggingfaceCheckpointFormat,
         use_flash_attention,
         use_bf16,
         max_new_tokens,
         min_matching_tokens_batch_size_1,
         min_matching_tokens_batch_size_2,
-        tokenizer=tokenizer,
+        tokenizer=AutoTokenizer.from_pretrained(model_path),
     )
 
 
+@pytest.mark.slow
 @requires_cuda
-def test_export_for_generate(run_test_script):
+def test_export_for_generate(run_test_script_for_all_models, model_testing_config):
     # Not really testing, anything, but handles dependencies more easily than a fixture.
-    run_test_script(
-        f"test_{TEST_MODEL}_export_for_generate",
-        CONFIG_COMMON
-        + [
+    run_test_script_for_all_models(
+        [
             "training.train_iters=1",
-            f"training.export.format={HUGGINGFACE_CHECKPOINT_FORMAT.name}",
+            f"training.export.format={model_testing_config.checkpoint_format.name}",
             "training.export.interval=1",
         ],
     )
@@ -273,6 +264,8 @@ def test_export_for_generate(run_test_script):
     ],
 )
 def test_small_generate(
+    model_testing_config,
+    run_test_script_base_path,
     use_flash_attention,
     use_bf16,
     max_new_tokens,
@@ -280,8 +273,8 @@ def test_small_generate(
     min_matching_tokens_batch_size_2,
 ):
     _test_generate(
-        TEST_RESULTS_PATH / f"test_{TEST_MODEL}_export_for_generate/export/{HUGGINGFACE_CHECKPOINT_FORMAT.name}/1",
-        HUGGINGFACE_CHECKPOINT_FORMAT,
+        run_test_script_base_path / f"test_export_for_generate/export/{model_testing_config.checkpoint_format.name}/1",
+        model_testing_config.checkpoint_format,
         use_flash_attention,
         use_bf16,
         max_new_tokens,
@@ -312,20 +305,21 @@ def _test_generate_from_model(model_path, tokenizer, fast_llm_checkpoint_format)
 @requires_cuda
 @pytest.mark.extra_slow
 def test_generate_from_model(
-    model_and_tokenizer,
+    model_path,
 ):
-    model_path, tokenizer, fast_llm_checkpoint_format = model_and_tokenizer
-    _test_generate_from_model(model_path, tokenizer, fast_llm_checkpoint_format)
+    _test_generate_from_model(
+        model_path, AutoTokenizer.from_pretrained(model_path), LlamaGPTHuggingfaceCheckpointFormat
+    )
 
 
 @requires_cuda
 @pytest.mark.slow
 @pytest.mark.depends(on=["test_export_for_generate"])
-def test_small_generate_from_model():
+def test_small_generate_from_model(model_testing_config, run_test_script_base_path):
     _test_generate_from_model(
-        TEST_RESULTS_PATH / f"test_{TEST_MODEL}_export_for_generate/export/{HUGGINGFACE_CHECKPOINT_FORMAT.name}/1",
+        run_test_script_base_path / f"test_export_for_generate/export/{model_testing_config.checkpoint_format.name}/1",
         None,
-        HUGGINGFACE_CHECKPOINT_FORMAT,
+        model_testing_config.checkpoint_format,
     )
 
 
@@ -361,16 +355,17 @@ def _test_forward_return_hidden_states(
 
 @pytest.mark.extra_slow
 @requires_cuda
-def test_forward_return_hidden_states(model_and_tokenizer):
-    model_path, tokenizer, fast_llm_checkpoint_format = model_and_tokenizer
-    _test_forward_return_hidden_states(model_path, fast_llm_checkpoint_format, tokenizer.vocab_size)
+def test_forward_return_hidden_states(model_path):
+    _test_forward_return_hidden_states(
+        model_path, LlamaGPTHuggingfaceCheckpointFormat, AutoTokenizer.from_pretrained(model_path).vocab_size
+    )
 
 
 @pytest.mark.slow
 @requires_cuda
 @pytest.mark.depends(on=["test_export_for_generate"])
-def test_small_forward_return_hidden_states():
+def test_small_forward_return_hidden_states(model_testing_config, run_test_script_base_path):
     _test_forward_return_hidden_states(
-        TEST_RESULTS_PATH / f"test_{TEST_MODEL}_export_for_generate/export/{HUGGINGFACE_CHECKPOINT_FORMAT.name}/1",
-        HUGGINGFACE_CHECKPOINT_FORMAT,
+        run_test_script_base_path / f"test_export_for_generate/export/{model_testing_config.checkpoint_format.name}/1",
+        model_testing_config.checkpoint_format,
     )

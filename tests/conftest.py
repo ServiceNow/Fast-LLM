@@ -10,7 +10,14 @@ import torch
 from xdist.scheduler import LoadGroupScheduling
 
 # Make fixtures available globally without import
-from tests.common import run_test_script  # isort: skip
+from tests.utils.run_test_script import (  # isort: skip
+    run_test_script,
+    run_test_script_base_path,
+    run_test_script_for_all_models,
+)
+
+from tests.utils.model_configs import model_testing_config  # isort: skip
+from tests.utils.utils import result_path  # isort: skip
 
 
 def pytest_addoption(parser):
