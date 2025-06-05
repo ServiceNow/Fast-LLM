@@ -152,17 +152,12 @@ class WandbConfig(Config):
 
 
 @config_class()
-class TrainingEvaluatorConfig(EvaluatorConfigBase):
-    run_interval: IntervalConfig = Field(desc="Specifies how frequently the evaluator is executed during training")
+class TrainingEvaluatorConfig(EvaluatorConfigBase, IntervalConfig):
     evaluator: EvaluatorConfig = Field(desc="Evaluator to run")
 
     def get_run_count(self, training_iterations: int, extra_evaluations: int = 0):
         # Number of completed evaluation runs
-        return (
-            (self.run_interval.get_count(training_iterations) + extra_evaluations)
-            if self.run_interval.enabled()
-            else 0
-        )
+        return (self.get_count(training_iterations) + extra_evaluations) if self.enabled() else 0
 
     def get_evaluator(
         self,
@@ -183,8 +178,6 @@ class TrainingEvaluatorConfig(EvaluatorConfigBase):
         flat: bool = False,
     ) -> typing.Self:
         # TODO v0.x: Remove backward compatibility.
-        cls._handle_renamed_field(default, "interval", ("run_interval", "interval"))
-        cls._handle_renamed_field(default, "offset", ("run_interval", "offset"))
         cls._handle_renamed_field(default, "iterations", ("evaluator", "iterations"))
         return super()._from_dict(default, strict, flat)
 

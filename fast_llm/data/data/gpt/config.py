@@ -85,6 +85,4 @@ class GPTDataConfig(DataConfig, GPTLegacyConfig):
                     assert rename not in default["datasets"]
                     default["datasets"][rename] = default["datasets"].pop(phase.value)
 
-        # TODO: why it is here?
-        cls._handle_renamed_field(default, "validation", ("evaluators", "validation"))
         return super()._from_dict(default, strict, flat)

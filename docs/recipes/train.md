@@ -20,9 +20,7 @@ Let's start from the following training configuration:
       logs:
         interval: 10
       evaluators:
-        validation:
-          run_interval:
-            interval: 100
+          interval: 100
           evaluator:
             type: loss
             iterations: 25
@@ -74,8 +72,7 @@ Let's start from the following training configuration:
         interval: 10
       evaluators:
         validation:
-          run_interval:
-            interval: 100
+          interval: 100
           evaluator:
             type: loss
             iterations: 25

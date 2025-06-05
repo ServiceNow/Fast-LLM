@@ -96,7 +96,7 @@ class TrainingEvaluator[ConfigType: TrainingEvaluatorConfig](Evaluator[ConfigTyp
             done = training_progress.done
             completed_steps = training_progress.completed_steps
 
-        if done or self.config.run_interval.enabled(completed_steps):
+        if done or self.config.enabled(completed_steps):
             return self.evaluator.run(training_progress, run_index=self._config.get_run_count(completed_steps - 1))
         else:
             return EvaluationMetrics()
@@ -108,7 +108,7 @@ class TrainingEvaluator[ConfigType: TrainingEvaluatorConfig](Evaluator[ConfigTyp
         run_count = self._config.get_run_count(
             self._train_iters,
             # There may be an extra evaluation after the last training step.s
-            not self._config.run_interval.enabled(self._train_iters),
+            not self._config.enabled(self._train_iters),
         )
         return EvaluatorSamplingParameters(name_samples.dataset_name, name_samples.num_samples * run_count)
 
