@@ -34,6 +34,14 @@ class GPTIndexedDataset(IndexedDataset):
             else GPTSampledIndexedDataset(self, sampling)
         )
 
+    @property
+    @abc.abstractmethod
+    def has_images(self) -> bool:
+        """
+        Whether the dataset contains images.
+        This is used to determine whether to use image-related fields in the sampled data.
+        """
+
 
 class GPTDatasetSlice[IndexedDatasetType: GPTIndexedDataset](DatasetSlice[IndexedDatasetType], GPTIndexedDataset):
     """
