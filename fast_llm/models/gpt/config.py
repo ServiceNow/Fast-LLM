@@ -82,6 +82,15 @@ class GPTBatchConfig(BatchConfig):
         desc="Read loss masking spans from the dataset.",
         hint=FieldHint.feature,
     )
+    truncate_documents: bool = Field(
+        default=True,
+        desc=(
+            "If enabled, documents may be truncated while being packed to fit the sequence length."
+            "Otherwise, sequences will be padded such that every document lies entirely within a sample"
+            " (and documents exceeding the sequence length will be skipped altogether)."
+        ),
+        hint=FieldHint.feature,
+    )
 
     def _validate(self) -> None:
         if self.micro_sequence_length is None:
