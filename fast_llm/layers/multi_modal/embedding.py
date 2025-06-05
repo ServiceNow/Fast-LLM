@@ -59,8 +59,12 @@ class MultiModalEmbedding(LanguageModelEmbedding):
             token_mask = (tokens >= self._vocab_start_index) * (tokens < self._vocab_end_index)
             masked_tokens = (tokens - self._vocab_start_index) * token_mask
             embeddings = torch.embedding(self.word_embeddings_weight, masked_tokens) * token_mask.unsqueeze(2)  # noqa
+            # Cloning since we will modify the embeddings in-place
             embeddings = embeddings.clone()
             input_ = gather(input_, group, dim=0)
+            # the embeddings tensor are full-sized, but we might get a split of the patch embeddings
+            # We need to determine the offset in the embeddings tensor for each sample
+            # and also account for the special image tokens if applicable
             for sample_idx, (positions, sizes) in enumerate(zip(image_positions, image_sizes)):
                 image_embedding_offset = 0
                 for position, size in zip(positions, sizes):
@@ -86,13 +90,11 @@ class MultiModalEmbedding(LanguageModelEmbedding):
                             )
                             # row_end_src = min(row_start_src + patch_width, patch_end_offset)
                             if self._sequence_parallel:
-                                # Copy with dimensions swapped for sequence parallel case
                                 embeddings[embeddings_start_index:embeddings_end_index, sample_idx] = input_[
                                     input_start_index:input_end_index, sample_idx
                                 ]
                                 tokens[embeddings_start_index:embeddings_end_index, sample_idx] = 10
                             else:
-                                # Copy with normal dimension ordering
                                 embeddings[sample_idx, embeddings_start_index:embeddings_end_index] = input_[
                                     sample_idx, input_start_index:input_end_index
                                 ]
@@ -125,9 +127,6 @@ class MultiModalEmbedding(LanguageModelEmbedding):
                 tokens = split(tokens, group=group, dim=0)
                 if self._use_absolute_position_embeddings:
                     position_ids = split(position_ids, group=group, dim=0)
-                # TODO Soham: get image positions for current split. Maybe in preprocessing?
-                # for positions in image_positions:
-                #     if positions > self._distributed_config.tensor_rank
             # mask padded tokens
             token_mask = tokens >= 0
             masked_tokens = tokens * token_mask

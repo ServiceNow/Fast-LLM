@@ -5,7 +5,7 @@ import math
 import typing
 import warnings
 
-from fast_llm.config import Field, FieldHint, FieldUpdate, check_field, config_class, skip_valid_if_none
+from fast_llm.config import Field, FieldHint, check_field, config_class, skip_valid_if_none
 from fast_llm.engine.base_model.config import BaseModelConfig
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.engine.config_utils.tensor_space import CompositeTensorDim, TensorDim, TensorSpace
@@ -120,13 +120,7 @@ class RotaryEmbeddingType(str, enum.Enum):
     default = "default"
     llama3 = "llama3"
     yarn = "yarn"
-    # TODO Soham: generic name?
-    pixtral = "pixtral"
-
-
-class TransformerType(str, enum.Enum):
-    lm_decoder = "lm_decoder"
-    image_encoder = "image_encoder"
+    rope_2d = "rope_2d"
 
 
 @config_class(registry=True)
@@ -193,28 +187,17 @@ class RotaryConfig(BaseModelConfig):
 
     @property
     def _transformer_dim_names(self) -> TransformerDimNames:
-        return TransformerDimNames
+        if self.type == RotaryEmbeddingType.rope_2d:
+            return VisionTransformerDimNames
+        else:
+            return TransformerDimNames
 
     @property
     def _transformer_kwargs(self) -> TransformerKwargs:
-        return TransformerKwargs
-
-
-@config_class()
-class VisionRotaryConfig(RotaryConfig):
-    type: RotaryEmbeddingType = Field(
-        default=RotaryEmbeddingType.pixtral,
-        desc="The type of rotary embedding to use. Choices: none, default, llama3, yarn, pixtral.",
-        hint=FieldHint.feature,
-    )
-
-    @property
-    def _transformer_dim_names(self) -> VisionTransformerDimNames:
-        return VisionTransformerDimNames
-
-    @property
-    def _transformer_kwargs(self) -> VisionTransformerKwargs:
-        return VisionTransformerKwargs
+        if self.type == RotaryEmbeddingType.rope_2d:
+            return VisionTransformerKwargs
+        else:
+            return TransformerKwargs
 
 
 for name in RotaryEmbeddingType:
@@ -315,10 +298,15 @@ for name in PeftType:
     TransformerPeftConfig.register_subclass(name.value, TransformerPeftConfig)
 
 
-@config_class()
+class TransformerType(str, enum.Enum):
+    lm_decoder = "lm_decoder"
+    image_encoder = "image_encoder"
+
+
+@config_class(registry=True)
 class TransformerConfig(BaseModelConfig):
     _abstract = False
-    transformer_type: TransformerType = Field(
+    type: TransformerType = Field(
         default=TransformerType.lm_decoder,
         desc="Type of the transformer. Choices: lm_decoder, image_encoder.",
         hint=FieldHint.architecture,
@@ -803,39 +791,20 @@ class TransformerConfig(BaseModelConfig):
 
     @property
     def _transformer_kwargs(self) -> TransformerKwargs:
-        return TransformerKwargs
+        if self.type == TransformerType.image_encoder:
+            return VisionTransformerKwargs
+        else:
+            return TransformerKwargs
 
     @property
     def _transformer_dim_names(self) -> TransformerDimNames:
-        return TransformerDimNames
+        if self.type == TransformerType.image_encoder:
+            return VisionTransformerDimNames
+        else:
+            return TransformerDimNames
 
 
-@config_class()
-class VisionTransformerConfig(TransformerConfig):
-    """
-    Configuration for the Vision Transformer (ViT) model.
-    """
-
-    transformer_type: TransformerType = FieldUpdate(
-        default=TransformerType.image_encoder,
-        desc="Type of the transformer. Choices: lm_decoder, image_encoder.",
-        hint=FieldHint.architecture,
-    )
-    causal: bool = FieldUpdate(
-        default=False,
-        desc="Use causal attention. Turn this off only for bidirectional attention e.g., in Vision Transformer.",
-        hint=FieldHint.feature,
-    )
-    rotary: VisionRotaryConfig = FieldUpdate(
-        default_factory=VisionRotaryConfig,
-        desc="Configuration for the rotary positional embeddings.",
-        hint=FieldHint.feature,
-    )
-
-    @property
-    def _transformer_kwargs(self) -> VisionTransformerKwargs:
-        return VisionTransformerKwargs
-
-    @property
-    def _transformer_dim_names(self) -> VisionTransformerDimNames:
-        return VisionTransformerDimNames
+for name in TransformerType:
+    # We need this because we are using the reserved field name `type`.
+    # TODO: Implement proper dynamic typing.
+    TransformerConfig.register_subclass(name.value, TransformerConfig)

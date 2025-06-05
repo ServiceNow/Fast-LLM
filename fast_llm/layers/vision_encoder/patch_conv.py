@@ -44,7 +44,6 @@ class PatchConv(Layer):
         self._distributed_config = tensor_space.distributed_config
         self._sequence_parallel = self._distributed_config.sequence_tensor_parallel
         self._lr_scale = config.adapter_lr_scale
-        # TODO Soham: lr_scale
         self.weight = ParameterMeta.from_dims(
             (
                 self._tensor_space.get_tensor_dim(VisionEncoderDimNames.out_channels),

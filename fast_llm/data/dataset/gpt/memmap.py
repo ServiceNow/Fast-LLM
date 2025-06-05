@@ -114,6 +114,34 @@ class GPTMemmapDataset(GPTIndexedDataset):
                 + self._num_spans.sum() * 2 * np.dtype(np.int32).itemsize
                 + sum([x.nbytes for x in self._spans])
             )
+        # read preference spans
+        self._chosen_spans = None
+        self._rejected_spans = None
+        if self._has_preference_spans and self._version >= 3:
+            self._chosen_spans = []
+            self._rejected_spans = []
+            for idx in range(self._num_documents):
+                self._chosen_spans.append(
+                    np.frombuffer(
+                        self._index_bin_buffer,
+                        dtype=np.int32,
+                        count=2,
+                        offset=offset + idx * 2 * np.dtype(np.int32).itemsize,
+                    )
+                )
+
+            rejected_span_offset = offset + np.array(self._chosen_spans).nbytes
+            for idx in range(self._num_documents):
+                self._rejected_spans.append(
+                    np.frombuffer(
+                        self._index_bin_buffer,
+                        dtype=np.int32,
+                        count=2,
+                        offset=rejected_span_offset + idx * 2 * np.dtype(np.int32).itemsize,
+                    )
+                )
+            offset += np.array(self._chosen_spans).nbytes + np.array(self._rejected_spans).nbytes
+
         self._num_pixels = 0
         self._image_lengths = None
         self._image_positions = None
@@ -146,36 +174,6 @@ class GPTMemmapDataset(GPTIndexedDataset):
                     )
                 )
                 images_seen += n_images
-
-        # read preference spans
-        self._chosen_spans = None
-        self._rejected_spans = None
-        if self._has_preference_spans and self._version >= 3:
-            self._chosen_spans = []
-            self._rejected_spans = []
-            chosen_span_offset = offset + self._document_sizes.nbytes + self._pointers.nbytes
-            for idx in range(self._num_documents):
-                self._chosen_spans.append(
-                    np.frombuffer(
-                        self._index_bin_buffer,
-                        dtype=np.int32,
-                        count=2,
-                        offset=chosen_span_offset + idx * 2 * np.dtype(np.int32).itemsize,
-                    )
-                )
-
-            rejected_span_offset = (
-                offset + self._document_sizes.nbytes + self._pointers.nbytes + np.array(self._chosen_spans).nbytes
-            )
-            for idx in range(self._num_documents):
-                self._rejected_spans.append(
-                    np.frombuffer(
-                        self._index_bin_buffer,
-                        dtype=np.int32,
-                        count=2,
-                        offset=rejected_span_offset + idx * 2 * np.dtype(np.int32).itemsize,
-                    )
-                )
 
         self._bin_buffer_mmap = np.memmap(self._prefix.with_suffix(".bin"), mode="r", order="C")
         self._bin_buffer = memoryview(self._bin_buffer_mmap)
@@ -215,7 +213,9 @@ class GPTMemmapDataset(GPTIndexedDataset):
             offset=self._pointers[idx] + offset * np.dtype(self._dtype).itemsize,
         )
         images = None
+        image_positions = None
         if self._has_images:
+            image_positions = self._image_positions[idx]
             # Truncations with images are not yet supported, so we get all images from the document
             pixels = np.frombuffer(
                 self._bin_buffer,
@@ -275,6 +275,8 @@ class GPTMemmapDataset(GPTIndexedDataset):
 
         return GPTSample(
             token_ids=token_ids,
+            images=images,
+            image_positions=image_positions,
             loss_masking_spans=sample_spans,
             chosen_span=chosen_span,
             rejected_span=rejected_span,
@@ -384,10 +386,12 @@ class GPTMemmapDataset(GPTIndexedDataset):
 
         if total_images:
             n_images = np.array(n_images, dtype=np.int32)
+            image_lengths = np.stack(image_lengths, dtype=np.int32)
+            im_positions = np.array(im_positions, dtype=np.int32)
         else:
             n_images = np.array([])
-        image_lengths = np.stack(image_lengths, dtype=np.int32)
-        im_positions = np.array(im_positions, dtype=np.int32)
+            image_lengths = np.array([])
+            im_positions = np.array([])
 
         # Write the index file (.idx)
         with prefix.with_suffix(".idx").open("wb") as idx_stream:

@@ -241,12 +241,11 @@ class CommonHuggingfaceCheckpointHandler(WeightAndBiasConverterMixin, Huggingfac
             )
 
         # MTP-heads > 0 are thrown away
-        # TODO Soham: handle offset with MTP
         for i in range(1, prediction_heads):
             logger.warning(
                 f"The model weights for the multi-token prediction head {i} are discarded during conversion."
             )
-            mtp_transformer_layer_index = num_layers - 1 + 2 * i
+            mtp_transformer_layer_index = num_layers + offset - 1 + 2 * i
             # MTP transformer layer
             converters += self._create_transformer_layer_converters(
                 f"layers.{mtp_transformer_layer_index + 1}", "", ignore_export=True

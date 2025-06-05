@@ -48,7 +48,6 @@ class LanguageModelBaseConfig(BaseModelConfig):
         hint=FieldHint.architecture,
     )
     vision_encoder: VisionEncoderConfig = Field(
-        default_factory=VisionEncoderConfig,
         desc="Configuration for the vision encoder that transforms images into embeddings.",
         hint=FieldHint.optional,
     )

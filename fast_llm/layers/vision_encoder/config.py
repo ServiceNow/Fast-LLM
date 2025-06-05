@@ -5,7 +5,7 @@ from fast_llm.engine.base_model.config import BaseModelConfig
 from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
 from fast_llm.functional.config import ActivationType
 from fast_llm.layers.common.config import NormalizationConfig
-from fast_llm.layers.transformer.config import VisionTransformerConfig
+from fast_llm.layers.transformer.config import TransformerConfig
 from fast_llm.utils import Assert
 
 
@@ -78,10 +78,11 @@ class ImageNormalizationConfig(Config):
 
 class VisionEncoderType(str, enum.Enum):
     none = "none"
+    # TODO: better name? normalization, patch size, adapter can change based on implementation, no standard way currently.
     pixtral = "pixtral"
 
 
-@config_class()
+@config_class(registry=True)
 class VisionEncoderConfig(BaseModelConfig):
     _abstract = False
 
@@ -90,8 +91,7 @@ class VisionEncoderConfig(BaseModelConfig):
         desc="Type of the vision encoder. Choices: none, pixtral.",
         hint=FieldHint.architecture,
     )
-    transformer: VisionTransformerConfig = Field(
-        default_factory=VisionTransformerConfig,
+    transformer: TransformerConfig = Field(
         desc="Configuration for the vision transformer architecture.",
         hint=FieldHint.core,
     )
@@ -106,7 +106,6 @@ class VisionEncoderConfig(BaseModelConfig):
         hint=FieldHint.optional,
     )
     patch_norm: NormalizationConfig = Field(
-        default_factory=NormalizationConfig,
         desc="Configuration for the normalization layers applied to the image patches.",
         hint=FieldHint.optional,
     )
@@ -126,7 +125,6 @@ class VisionEncoderConfig(BaseModelConfig):
         hint=FieldHint.optional,
     )
     image_normalization: ImageNormalizationConfig = Field(
-        default_factory=ImageNormalizationConfig,
         desc="Configuration for the normalization layers applied to the image patches.",
         hint=FieldHint.optional,
     )
@@ -163,3 +161,9 @@ class VisionEncoderConfig(BaseModelConfig):
     @property
     def enabled(self) -> bool:
         return self.type != VisionEncoderType.none
+
+
+for name in VisionEncoderType:
+    # We need this because we are using the reserved field name `type`.
+    # TODO: Implement proper dynamic typing.
+    VisionEncoderConfig.register_subclass(name.value, VisionEncoderConfig)

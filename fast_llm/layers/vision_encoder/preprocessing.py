@@ -214,7 +214,6 @@ class VisionPreprocessor(Preprocessor):
                         ]
                     )
                 )
-            # TODO Soham: should this be micro_sequence_length?
             padding_size = kwargs[TransformerKwargs.sequence_length] - sample_cu_seqlen
             if padding_size > max_seqlen:
                 max_seqlen = padding_size
@@ -249,7 +248,6 @@ class VisionPreprocessor(Preprocessor):
                     ]
                 )
             )
-            # TODO Soham: remove
             assert patches[-1].size(0) == kwargs[TransformerKwargs.sequence_length]
         patches = torch.cat(patches)
         patch_position_ids = torch.cat(patch_position_ids)
@@ -262,7 +260,7 @@ class VisionPreprocessor(Preprocessor):
             patch_size,
         ).to(device=self._tensor_space.distributed.device)
         kwargs[VisionEncoderKwargs.max_image_tokens] = div(im_height * im_width, patch_size**2)
-        # TODO Soham: handle sequence data parallel
+        # sequence data parallel is not yet supported for images, so we use the same cu_seqlens for q and k
         kwargs[VisionTransformerKwargs.cu_seqlens_q] = torch.tensor(
             cu_seqlens, device=self._tensor_space.distributed.device, dtype=torch.int32
         )

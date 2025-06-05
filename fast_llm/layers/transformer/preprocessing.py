@@ -137,7 +137,6 @@ def get_2d_rotary_frequencies(
     height_positions = torch.arange(height, device=device, dtype=torch.float64)
     width_positions = torch.arange(width, device=device, dtype=torch.float64)
     frequencies = config.theta ** -torch.arange(0, 1, 2 / kv_channels, device=device, dtype=torch.float64)
-    # TODO Soham: apply scaling
     angles_h = torch.outer(height_positions, frequencies[::2])
     angles_w = torch.outer(width_positions, frequencies[1::2])
     angles = torch.cat(
@@ -182,7 +181,7 @@ class RotaryEmbeddingPreprocessor(Preprocessor):
             return
         self._tensor_cache_max_sequence_length = sequence_length
 
-        if self._config.type == RotaryEmbeddingType.pixtral:
+        if self._config.type == RotaryEmbeddingType.rope_2d:
             self._rotary_embedding_frequencies = get_2d_rotary_frequencies(
                 self._config,
                 num_patches,
@@ -199,16 +198,16 @@ class RotaryEmbeddingPreprocessor(Preprocessor):
             )
 
     def preprocess(self, batch, kwargs: dict[str, typing.Any]) -> None:
-        if self._config.type == RotaryEmbeddingType.pixtral:
+        if self._config.type == RotaryEmbeddingType.rope_2d:
             max_num_patches = kwargs[VisionEncoderKwargs.image_size] // kwargs[VisionEncoderKwargs.patch_size]
             self._create_tensors(kwargs[TransformerKwargs.sequence_length], max_num_patches)
         else:
             self._create_tensors(kwargs[TransformerKwargs.sequence_length])
         sequence_k = kwargs[TransformerKwargs.sequence_k_dim].size
         sequence_q = kwargs[TransformerKwargs.sequence_q_dim].size
-        if self._config.type == RotaryEmbeddingType.pixtral:
+        if self._config.type == RotaryEmbeddingType.rope_2d:
             position_ids = kwargs[self._transformer_kwargs.patch_position_ids]
-            # TODO Soham: use position_ids_q and position_ids_k for sequence_data_parallelism
+            # sequence data parallelism is not yet supported with images, so we can safely assume that sequence_q == sequence_k
             kwargs[self._transformer_kwargs.rotary_freq_q] = self._rotary_embedding_frequencies[:, position_ids]
             kwargs[self._transformer_kwargs.rotary_freq_k] = self._rotary_embedding_frequencies[:, position_ids]
         else:
