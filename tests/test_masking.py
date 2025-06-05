@@ -1,9 +1,9 @@
 import pytest
 import torch
 
-from fast_llm.layers.language_model.preprocessing import LLaDAMaskingPreprocessor
+from fast_llm.layers.transformer.preprocessing import LLaDAMaskingPreprocessor
 from fast_llm.layers.transformer.config import DiffusionMaskingConfig
-
+import pdb
 
 @pytest.fixture
 def masking_config():
@@ -38,7 +38,7 @@ def test_masking_basic():
     masked_indices = outputs['masked_indices']
     p_mask = outputs['p_mask']
     masked_input = outputs['input_ids']
-    
+    pdb.set_trace()
     assert masked_indices.shape == input_ids.shape
     assert p_mask.shape == input_ids.shape
     assert masked_input.shape == input_ids.shape

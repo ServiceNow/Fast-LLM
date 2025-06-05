@@ -1,0 +1,70 @@
+training:
+  train_iters: 100
+  logs:
+    interval: 10
+  # checkpoint:
+  #   interval: 20
+  #   keep: 5
+  test_iters: 0
+  export:  
+    format: llama
+    interval: 100
+  wandb:
+    entity_name: gsubbara
+    project_name: llada
+    group_name: llada-runs
+  evaluations:
+    fineweb2:
+      interval: 100
+      iterations: 10
+batch:
+  micro_batch_size: 2
+  sequence_length: 4096
+  batch_size: 3072
+data:
+  datasets:
+    training:
+      # type: blended
+      # datasets: 
+      type: file
+      path: /mnt/datasets/tokenized/Mistral-Nemo-Base-2407/FineWeb2/jpn_Jpan/fast_llm_config.yaml
+      # weights: [1.0]
+    fineweb2:
+      # type: blended
+      # datasets:
+      type: file
+      path: /mnt/datasets/tokenized/Mistral-Nemo-Base-2407/FineWeb2/jpn_Jpan/fast_llm_config.yaml
+      # weights: [1.0]
+optimizer:
+  weight_decay: 0.1
+  beta_1: 0.9
+  beta_2: 0.95
+  learning_rate:
+    base: 3.0e-04
+    minimum: 3.0e-05
+    decay_style: linear
+    decay_iterations: 100
+    warmup_iterations: 10
+pretrained:
+  format: llama
+  path: /mnt/checkpoints/downloads/Llama-3.2-3B
+  model_weights: yes
+model:
+  base_model:
+    transformer:
+      kv_channels: 128
+      use_flash_attention: yes
+      diffusion:
+        enabled: true
+        bidirectional_attention: true
+        epsilon: 0.001
+        max_mask_prob: 0.45
+        pad_prob: 0.01
+        mask_token_id: 15203
+    cross_entropy_impl: fused
+  multi_stage:
+    zero_stage: 3
+  distributed:
+    training_dtype: bf16
+    timeout: 36000
+    seed: 984060

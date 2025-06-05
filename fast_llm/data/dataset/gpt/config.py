@@ -98,15 +98,15 @@ class DiffusionMaskingConfig(Config):
     mask_token_id: int = Field(
         default=103,
         desc="Token ID to use for masking",
-        hint=FieldHint.required
+        hint=FieldHint.core
     )
 
     def _validate(self) -> None:
         super()._validate()
-        Assert.lt(self.epsilon, self.max_mask_prob, "epsilon must be less than max_mask_prob")
-        Assert.lt(self.max_mask_prob, 1.0, "max_mask_prob must be less than 1.0")
+        Assert.lt(self.epsilon, self.max_mask_prob)
+        Assert.lt(self.max_mask_prob, 1.0)
         if self.enabled:
-            Assert.is_not_none(self.mask_token_id, "mask_token_id must be set when masking is enabled")
+            Assert.not_none(self.mask_token_id)
 
 
 @dataclasses.dataclass(kw_only=True)

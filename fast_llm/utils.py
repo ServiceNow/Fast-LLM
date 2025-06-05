@@ -126,6 +126,9 @@ class Assert:
         assert x is None, f"Object of type {type(x)} is not None ({str(x)})"
 
     @staticmethod
+    def not_none(x):
+        assert x is not None, f"Object of type {type(x)} is not None ({str(x)})"
+    @staticmethod
     def empty(x):
         assert len(x) == 0, f"Not empty (len={len(x)}), {x}"
 

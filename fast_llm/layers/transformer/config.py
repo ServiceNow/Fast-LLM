@@ -470,11 +470,12 @@ class TransformerArchitectureConfig(BaseModelArchitectureConfig):
 
 
 @config_class()
-class DiffusionMaskingConfig(Config):
+class DiffusionMaskingConfig(BaseModelConfig):
     """Configuration for diffusion-based masking in the transformer model.
     This config only contains model-specific parameters. For masking parameters,
     refer to fast_llm.data.dataset.gpt.config.DiffusionMaskingConfig."""
-    
+    _abstract: typing.ClassVar[bool] = False
+
     enabled: bool = Field(
         default=False,
         desc="Whether to use diffusion-based masking during training",
@@ -484,6 +485,29 @@ class DiffusionMaskingConfig(Config):
         default=True,
         desc="Whether to use bidirectional attention for masked tokens",
         hint=FieldHint.feature
+    )
+    epsilon: float = Field(
+        default=1e-3,
+        desc="Minimum masking probability",
+        hint=FieldHint.performance,
+        valid=check_field(Assert.gt, 0)
+    )
+    max_mask_prob: float = Field(
+        default=0.45,
+        desc="Maximum masking probability",
+        hint=FieldHint.performance,
+        valid=check_field(Assert.gt, 0)
+    )
+    pad_prob: float = Field(
+        default=0.01,
+        desc="Probability of padding tokens for 1% of samples",
+        hint=FieldHint.optional,
+        valid=check_field(Assert.geq, 0)
+    )
+    mask_token_id: int = Field(
+        default=15203,
+        desc="Token ID to use for masking",
+        hint=FieldHint.core
     )
 
     def _validate(self) -> None:

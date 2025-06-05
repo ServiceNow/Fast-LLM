@@ -365,9 +365,9 @@ class LLaDAMaskingPreprocessor(Preprocessor):
         p_mask = (1 - diffusion_config.epsilon) * t + diffusion_config.epsilon
         p_mask = torch.min(p_mask, torch.tensor(diffusion_config.max_mask_prob))
         p_mask = p_mask[:, None].expand(-1, seq_len)
-        
+        # Determine breaking point within seq, idx for autoregressive tokens and after that its gonna be diffusion tokens
         masked_indices = torch.rand((batch_size, seq_len), device=device) < p_mask
-        
+        #loss would be weighted c
         if diffusion_config.pad_prob > 0:
             pad_mask = torch.rand((batch_size,), device=device) < diffusion_config.pad_prob
             if pad_mask.any():

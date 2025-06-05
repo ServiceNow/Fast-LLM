@@ -5,25 +5,36 @@ import torch.nn.functional as F
 from fast_llm.layers.language_model.head import MLMHead
 from fast_llm.layers.language_model.config import LanguageModelBaseConfig
 from fast_llm.engine.config_utils.tensor_space import TensorSpace, DefaultDimNames, TensorDim
-from fast_llm.layers.transformer.config import TransformerConfig, DiffusionMaskingConfig
+from fast_llm.layers.transformer.config import TransformerConfig, DiffusionMaskingConfig as ModelDiffusionMaskingConfig
+from fast_llm.data.dataset.gpt.config import DiffusionMaskingConfig
 from fast_llm.engine.distributed.config import DistributedConfig
+
+
+def to_model_diffusion_config(data_cfg):
+    # Only copy the fields that exist in the model config
+    return ModelDiffusionMaskingConfig(
+        enabled=data_cfg.enabled,
+        # Set bidirectional_attention to default or as needed
+        bidirectional_attention=True
+    )
 
 
 @pytest.fixture
 def mlm_config():
+    from fast_llm.data.dataset.gpt.config import DiffusionMaskingConfig
+    data_diffusion_cfg = DiffusionMaskingConfig(
+        enabled=True,
+        epsilon=0.1,
+        max_mask_prob=0.5,
+        pad_prob=0.1,
+        mask_token_id=103
+    )
     transformer_config = TransformerConfig(
         hidden_size=768,
         num_layers=12,
         num_attention_heads=12,
-        diffusion=DiffusionMaskingConfig(
-            enabled=True,
-            epsilon=0.1,
-            max_mask_prob=0.5,
-            pad_prob=0.1,
-            mask_token_id=103
-        )
+        diffusion=to_model_diffusion_config(data_diffusion_cfg)
     )
-    
     return LanguageModelBaseConfig(
         vocab_size=30522,
         transformer=transformer_config,

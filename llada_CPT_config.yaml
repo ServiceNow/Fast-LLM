@@ -1,0 +1,93 @@
+# @package _global_
+defaults:
+  - /experiment: base
+  - /job: native_multinode 
+  - /data_ids: yul_201_slam
+  # - override /job/base_image: fast_llm_custom_built 
+  - override /job/base_image/build: local 
+
+job:
+  account: snow.research.afm
+  nodes: 1
+  cpus_per_node: 128
+  memory_per_node: 1024
+  gpus_per_node: 1
+  base_image:
+    # version_tag: sha-5180937
+    build: 
+      checkout_target: 3d44671cf7e85601a9ebcadbd23ca54ca5ba3e15
+  project_name: "llada"
+  experiment_name: "llada-cptr_${fast_llm.masking.max_mask_prob}-seed_${fast_llm.model.distributed.seed}"
+  project_version: "v1_1"
+
+fast_llm:
+  training:
+    train_iters: 100
+    logs:
+      interval: 10
+    checkpoint:
+      interval: 20
+      keep: 5
+    test_iters: 0
+    export:  
+      format: llama
+      interval: 100
+    wandb:
+      entity_name: gsubbara
+      project_name: llada
+      group_name: llada-runs
+    evaluations:
+      fineweb2:
+        interval: 100
+        iterations: 10
+  batch:
+    micro_batch_size: 2
+    sequence_length: 4096
+    batch_size: 3072
+  masking:
+    enabled: true
+    epsilon: 1e-3
+    max_mask_prob: 0.45
+    pad_prob: 0.01
+    mask_token_id: 15203
+    bidirectional: true
+data:
+    datasets:
+      training:
+        type: blended
+        datasets: 
+          - type: file
+            path: /mnt/datasets/tokenized/Mistral-Nemo-Base-2407/FineWeb2/jpn_Jpan/fast_llm_config.yaml
+        weights: 1
+      fineweb2:
+        type: blended
+        datasets:
+          - type: file
+            path: /mnt/datasets/tokenized/Mistral-Nemo-Base-2407/FineWeb2/jpn_Jpan/fast_llm_config.yaml
+        weights: [1]
+  optimizer:
+    weight_decay: 0.1
+    beta_1: 0.9
+    beta_2: 0.95
+    learning_rate:
+      base: 3.0e-04
+      minimum: 3.0e-05
+      decay_style: linear
+      decay_iterations: ${fast_llm.training.train_iters}
+      warmup_iterations: 10
+  pretrained:
+    format: llama
+    path: /mnt/checkpoints/downcycled/leave_n_out/slam-5_1b-s2-sp-pr_22_24_19_27_20_5_4_9_23_7
+    model_weights: yes
+  model:
+    base_model:
+      transformer:
+        kv_channels: 128
+        use_flash_attention: yes
+      cross_entropy_impl: fused
+    multi_stage:
+      zero_stage: 3
+    distributed:
+      training_dtype: bf16
+      timeout: 36000
+      seed: 984060
