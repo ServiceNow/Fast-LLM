@@ -89,7 +89,7 @@ class GPTSampledIndexedDataset(SampledDataset):
         self._indexed_dataset = indexed_dataset
         self._config = sampling.config
         self._parameters = sampling.parameters
-        self._truncate_documents = sampling.truncate_documents
+        self._truncate_documents = sampling.parameters.truncate_documents
         self._device = torch.device("cuda" if self._config.gpu else "cpu")
 
         if sampling.cache_directory is None:

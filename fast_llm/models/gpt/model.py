@@ -179,6 +179,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             TransformerKwargs.hidden_dims: hidden_dims,
             TransformerKwargs.sequence_length: sequence_length,
             TransformerKwargs.sequence_q_dim: sequence_q_dim,
+            LanguageModelKwargs.mask_inputs: not batch_meta.truncate_documents,
         }
 
         sequence_k_pasts = range(
