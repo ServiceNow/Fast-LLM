@@ -99,7 +99,10 @@ class LanguageModelEmbedding[ConfigType: LanguageModelBaseConfig](Configurable[L
                 input_ = split(input_, group=group, dim=0)
                 if self._use_absolute_position_embeddings:
                     position_ids = split(position_ids, group=group, dim=0)
-            embeddings = torch.embedding(self.word_embeddings_weight, input_)
+            # mask padded tokens
+            input_mask = input_ >= 0
+            masked_input = input_ * input_mask
+            embeddings = torch.embedding(self.word_embeddings_weight, masked_input) * input_mask.unsqueeze(2)
             if self._use_absolute_position_embeddings:
                 embeddings = embeddings + torch.nn.functional.embedding(position_ids, self.position_embeddings_weight)
         with set_generator(

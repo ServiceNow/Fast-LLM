@@ -33,6 +33,15 @@ class GPTTrainer[ConfigType: GPTTrainerConfig](Trainer[ConfigType]):
                 "extra_tokens": self._config.model.base_model.prediction_heads,
             }
         )
+        if self._config.model.base_model.vision_encoder.enabled:
+            parameters.update(
+                {
+                    "patch_size": self._config.model.base_model.vision_encoder.patch_size,
+                    "image_size": self._config.batch.image_size,
+                    "image_break_token": self._config.model.base_model.vision_encoder.image_break_token,
+                    "image_end_token": self._config.model.base_model.vision_encoder.image_end_token,
+                }
+            )
         return parameters if _return_dict else GPTSamplingParameters(**parameters)
 
     def get_tflops(self, phase: PhaseType, elapsed_time_per_iteration) -> tuple[int, int]:

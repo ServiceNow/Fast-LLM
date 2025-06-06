@@ -106,6 +106,9 @@ class SimpleGPTIndexedDataset(GPTIndexedDataset):
     def name(self) -> str:
         return "dataset"
 
+    def has_images(self) -> bool:
+        return False
+
 
 TEST_DATASET = SimpleGPTIndexedDataset(
     [

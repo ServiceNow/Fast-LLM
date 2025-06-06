@@ -7,13 +7,8 @@ import torch
 from fast_llm.engine.base_model.config import Preprocessor
 from fast_llm.engine.config_utils.tensor_space import DefaultDimNames, TensorDim, TensorSpace
 from fast_llm.functional.rotary import convert_rotary_complex_to_real
-from fast_llm.layers.transformer.config import (
-    RotaryConfig,
-    RotaryEmbeddingType,
-    TransformerConfig,
-    TransformerDimNames,
-    TransformerKwargs,
-)
+from fast_llm.layers.transformer.config import RotaryConfig, RotaryEmbeddingType, TransformerConfig, TransformerKwargs
+from fast_llm.layers.vision_encoder.config import VisionEncoderKwargs
 from fast_llm.tensor import TensorMeta
 
 logger = logging.getLogger(__name__)
@@ -130,64 +125,115 @@ def get_rotary_frequencies(
     return frequencies
 
 
+def get_2d_rotary_frequencies(
+    config: RotaryConfig,
+    height,
+    width,
+    kv_channels,
+    *,
+    device="cuda",
+) -> torch.Tensor:
+    # Calculate complex frequencies by using alternating channels for width and height
+    height_positions = torch.arange(height, device=device, dtype=torch.float64)
+    width_positions = torch.arange(width, device=device, dtype=torch.float64)
+    frequencies = config.theta ** -torch.arange(0, 1, 2 / kv_channels, device=device, dtype=torch.float64)
+    angles_h = torch.outer(height_positions, frequencies[::2])
+    angles_w = torch.outer(width_positions, frequencies[1::2])
+    angles = torch.cat(
+        [
+            angles_h[:, None, :].repeat(1, width, 1),
+            angles_w[None, :, :].repeat(height, 1, 1),
+        ],
+        dim=-1,
+    ).reshape(-1, kv_channels // 2)
+
+    frequencies = torch.polar(torch.ones_like(angles), angles)[None, :, None, :].to(torch.complex64)
+    if not config.complex_format:
+        frequencies = convert_rotary_complex_to_real(
+            torch.view_as_real(frequencies).flatten(-2), kv_channels, 3
+        ).contiguous()
+
+    return frequencies
+
+
 class RotaryEmbeddingPreprocessor(Preprocessor):
     _scalar_dim: TensorDim
-    _kv_channels_dim: TensorDim
-    _rotary_embedding_frequencies: torch.Tensor
     _mask: torch.Tensor
     _mask_value: torch.Tensor
-    _tensor_cache_max_sequence_length: int = -1
 
     def __init__(
         self,
         config: RotaryConfig,
         tensor_space: TensorSpace,
     ):
+        self._transformer_dim_names = config._transformer_dim_names
+        self._transformer_kwargs = config._transformer_kwargs
         self._config = config
         assert self._config.enabled
         self._tensor_space = tensor_space
         self._distributed_config = self._tensor_space.distributed_config
         self._scalar_dim = self._tensor_space.get_tensor_dim(DefaultDimNames.scalar)
-        self._kv_channels_dim = self._tensor_space.get_tensor_dim(TransformerDimNames.kv_channels)
+        self._kv_channels_dim = self._tensor_space.get_tensor_dim(self._transformer_dim_names.kv_channels)
+        self._tensor_cache_max_sequence_length: int = -1
 
-    def _create_tensors(self, sequence_length: int) -> None:
+    def _create_tensors(self, sequence_length: int, num_patches: None | int = None) -> None:
         if sequence_length <= self._tensor_cache_max_sequence_length:
             return
         self._tensor_cache_max_sequence_length = sequence_length
 
-        self._rotary_embedding_frequencies = get_rotary_frequencies(
-            self._config,
-            sequence_length,
-            self._kv_channels_dim.global_size,
-            device=self._tensor_space.distributed.device,
-        )
+        if self._config.type == RotaryEmbeddingType.rope_2d:
+            self._rotary_embedding_frequencies = get_2d_rotary_frequencies(
+                self._config,
+                num_patches,
+                num_patches,
+                self._kv_channels_dim.global_size,
+                device=self._tensor_space.distributed.device,
+            )
+        else:
+            self._rotary_embedding_frequencies = get_rotary_frequencies(
+                self._config,
+                sequence_length,
+                self._kv_channels_dim.global_size,
+                device=self._tensor_space.distributed.device,
+            )
 
     def preprocess(self, batch, kwargs: dict[str, typing.Any]) -> None:
-        self._create_tensors(kwargs[TransformerKwargs.sequence_length])
+        if self._config.type == RotaryEmbeddingType.rope_2d:
+            max_num_patches = kwargs[VisionEncoderKwargs.image_size] // kwargs[VisionEncoderKwargs.patch_size]
+            self._create_tensors(kwargs[TransformerKwargs.sequence_length], max_num_patches)
+        else:
+            self._create_tensors(kwargs[TransformerKwargs.sequence_length])
         sequence_k = kwargs[TransformerKwargs.sequence_k_dim].size
-        kwargs[TransformerKwargs.rotary_freq_q] = self._rotary_embedding_frequencies[
-            :, sequence_k - kwargs[TransformerKwargs.sequence_q_dim].size : sequence_k
-        ]
-        kwargs[TransformerKwargs.rotary_freq_k] = self._rotary_embedding_frequencies[:, :sequence_k]
+        sequence_q = kwargs[TransformerKwargs.sequence_q_dim].size
+        if self._config.type == RotaryEmbeddingType.rope_2d:
+            position_ids = kwargs[self._transformer_kwargs.patch_position_ids]
+            # sequence data parallelism is not yet supported with images, so we can safely assume that sequence_q == sequence_k
+            kwargs[self._transformer_kwargs.rotary_freq_q] = self._rotary_embedding_frequencies[:, position_ids]
+            kwargs[self._transformer_kwargs.rotary_freq_k] = self._rotary_embedding_frequencies[:, position_ids]
+        else:
+            kwargs[self._transformer_kwargs.rotary_freq_q] = self._rotary_embedding_frequencies[
+                :, sequence_k - sequence_q : sequence_k
+            ]
+            kwargs[self._transformer_kwargs.rotary_freq_k] = self._rotary_embedding_frequencies[:, :sequence_k]
 
     def preprocess_meta(self, kwargs: dict[str, typing.Any]) -> None:
-        kwargs[TransformerKwargs.rotary_freq_q] = TensorMeta.from_dims(
+        kwargs[self._transformer_kwargs.rotary_freq_q] = TensorMeta.from_dims(
             (
                 self._scalar_dim,
                 kwargs[TransformerKwargs.sequence_q_dim],
                 self._scalar_dim,
                 self._kv_channels_dim,
             ),
-            tensor_name=TransformerKwargs.rotary_freq_q,
+            tensor_name=self._transformer_kwargs.rotary_freq_q,
         )
-        kwargs[TransformerKwargs.rotary_freq_k] = TensorMeta.from_dims(
+        kwargs[self._transformer_kwargs.rotary_freq_k] = TensorMeta.from_dims(
             (
                 self._scalar_dim,
                 kwargs[TransformerKwargs.sequence_q_dim],
                 self._scalar_dim,
                 self._kv_channels_dim,
             ),
-            tensor_name=TransformerKwargs.rotary_freq_k,
+            tensor_name=self._transformer_kwargs.rotary_freq_k,
         )
 
 
@@ -204,6 +250,8 @@ class BackupAttentionPreprocessor(Preprocessor):
         config: TransformerConfig,
         tensor_space: TensorSpace,
     ):
+        self._transformer_dim_names = config._transformer_dim_names
+        self._transformer_kwargs = config._transformer_kwargs
         self._config = config
         self._tensor_space = tensor_space
         self._distributed_config = self._tensor_space.distributed_config
@@ -234,10 +282,10 @@ class BackupAttentionPreprocessor(Preprocessor):
         self._create_tensors(kwargs[TransformerKwargs.sequence_length])
         sequence_k = kwargs[TransformerKwargs.sequence_k_dim].size
         sequence_q = kwargs[TransformerKwargs.sequence_q_dim].size
-        kwargs[TransformerKwargs.attention_mask] = self._mask[
+        kwargs[self._transformer_kwargs.attention_mask] = self._mask[
             None, None, sequence_k - sequence_q : sequence_k, None, :sequence_k
         ]
-        if (sequence_lengths := kwargs.get(TransformerKwargs.sequence_lengths, None)) is not None:
+        if (sequence_lengths := kwargs.get(self._transformer_kwargs.sequence_lengths, None)) is not None:
             seq_ids = torch.stack(
                 [
                     torch.cat([torch.full((x,), i) for i, x in enumerate(sample_lens)])
@@ -245,14 +293,14 @@ class BackupAttentionPreprocessor(Preprocessor):
                 ]
             )
             document_mask = (seq_ids[:, None, :] == seq_ids[:, :, None]).to(self._tensor_space.distributed.device)
-            kwargs[TransformerKwargs.attention_mask] = (
-                kwargs[TransformerKwargs.attention_mask]
+            kwargs[self._transformer_kwargs.attention_mask] = (
+                kwargs[self._transformer_kwargs.attention_mask]
                 & document_mask[:, None, sequence_k - sequence_q : sequence_k, None, :sequence_k]
             )
-        kwargs[TransformerKwargs.attention_mask_value] = self._mask_value
+        kwargs[self._transformer_kwargs.attention_mask_value] = self._mask_value
 
     def preprocess_meta(self, kwargs: dict[str, typing.Any]) -> None:
-        kwargs[TransformerKwargs.attention_mask] = TensorMeta.from_dims(
+        kwargs[self._transformer_kwargs.attention_mask] = TensorMeta.from_dims(
             (
                 self._scalar_dim,
                 self._scalar_dim,
@@ -260,12 +308,12 @@ class BackupAttentionPreprocessor(Preprocessor):
                 self._scalar_dim,
                 kwargs[TransformerKwargs.sequence_k_dim],
             ),
-            tensor_name=TransformerKwargs.attention_mask,
+            tensor_name=self._transformer_kwargs.attention_mask,
             dtype=torch.bool,
         )
-        kwargs[TransformerKwargs.attention_mask_value] = TensorMeta.from_dims(
+        kwargs[self._transformer_kwargs.attention_mask_value] = TensorMeta.from_dims(
             (self._scalar_dim,),
-            tensor_name=TransformerKwargs.attention_mask_value,
+            tensor_name=self._transformer_kwargs.attention_mask_value,
             dtype=self._tensor_space.distributed_config.training_dtype.torch,
         )
 
@@ -276,6 +324,8 @@ class FlashAttnVarlenPreprocessor(Preprocessor):
         self._tensor_space = tensor_space
         self._distributed_config = self._tensor_space.distributed_config
         assert self._config.do_use_flash_attention(self._distributed_config)
+        self._transformer_dim_names = config._transformer_dim_names
+        self._transformer_kwargs = config._transformer_kwargs
 
     def preprocess(self, batch, kwargs: dict[str, typing.Any]) -> None:
         """
@@ -326,17 +376,17 @@ class FlashAttnVarlenPreprocessor(Preprocessor):
         else:
             seqlens_q = torch.cat(sequence_lengths)
             seqlens_k = torch.cat(sequence_lengths)
-        kwargs[TransformerKwargs.cu_seqlens_q] = torch.cat(
+        kwargs[self._transformer_kwargs.cu_seqlens_q] = torch.cat(
             (
                 torch.zeros(1, dtype=torch.int32, device=self._tensor_space.distributed.device),
                 torch.cumsum(seqlens_q, dim=0, dtype=torch.int32).to(self._tensor_space.distributed.device),
             )
         )
-        kwargs[TransformerKwargs.cu_seqlens_k] = torch.cat(
+        kwargs[self._transformer_kwargs.cu_seqlens_k] = torch.cat(
             (
                 torch.zeros(1, dtype=torch.int32, device=self._tensor_space.distributed.device),
                 torch.cumsum(seqlens_k, dim=0, dtype=torch.int32).to(self._tensor_space.distributed.device),
             )
         )
-        kwargs[TransformerKwargs.max_seqlen_q] = seqlens_q.max()
-        kwargs[TransformerKwargs.max_seqlen_k] = seqlens_k.max()
+        kwargs[self._transformer_kwargs.max_seqlen_q] = seqlens_q.max()
+        kwargs[self._transformer_kwargs.max_seqlen_k] = seqlens_k.max()

@@ -65,6 +65,12 @@ class GPTHuggingfaceDatasetConfig(Config):
     rejected_text: None | str = Field(
         default=None, desc="Field containing rejected text for preference optimization", hint=FieldHint.optional
     )
+    image_positions: None | str = Field(
+        default=None, desc="Field containing image positions within a document", hint=FieldHint.optional
+    )
+    images: None | str = Field(
+        default=None, desc="Field containing images relevant to a document", hint=FieldHint.optional
+    )
     data_type: DataType | None = Field(
         default=None,
         desc="Data type of the dataset field."
@@ -160,6 +166,11 @@ class GPTMemmapDatasetPreparatorConfig(DatasetPreparatorConfig):
     tokenizer: TokenizerConfig = Field(
         desc="Configuration for the tokenizer.",
         hint=FieldHint.feature,
+    )
+    image_patch_size: int = Field(
+        default=16,
+        desc="Patch size for images. This is used solely for computing the number of tokens in an image to get an even split.",
+        hint=FieldHint.optional,
     )
     splits: dict[str, float] | None = Field(
         default=None,
