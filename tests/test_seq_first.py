@@ -4,7 +4,7 @@ import pytest
 # TODO: Compare grads with simple
 def test_model_sf(run_test_script_for_all_models):
     # Sequence-first baseline.
-    run_test_script_for_all_models("test_model_sf[{model_testing_config}]", ["model.base_model.sequence_first=True"])
+    run_test_script_for_all_models(["model.base_model.sequence_first=True"])
 
 
 @pytest.mark.slow
@@ -12,7 +12,6 @@ def test_model_sf(run_test_script_for_all_models):
 def test_model_sp2(run_test_script_for_all_models):
     # Sequence-tensor-parallel.
     run_test_script_for_all_models(
-        "test_model_sp2",
         ["model.distributed.tensor_parallel=2", "model.distributed.sequence_tensor_parallel=True"],
         num_gpus=2,
         compare="test_model_sf",
@@ -24,7 +23,6 @@ def test_model_sp2(run_test_script_for_all_models):
 def test_model_sdp2(run_test_script_for_all_models):
     # Sequence-data-parallel
     run_test_script_for_all_models(
-        "test_model_sdp2",
         ["model.distributed.sequence_data_parallel=2"],
         num_gpus=2,
         compare="test_model_sf",

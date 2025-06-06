@@ -96,10 +96,7 @@ class DependencyManager:
             for dependency in self._dependencies[nodeid]
             if not all(self._results[dependency].get(step, None) == "passed" for step in ("setup", "call", "teardown"))
         ]:
-            pytest.skip(
-                f'{item.nodeid} depends on {", ".join(failed)} ({self._dependencies[nodeid]} ;;;; {
-                [self._results[dependency] for dependency in self._dependencies[nodeid]]})'
-            )
+            pytest.skip(f'{item.nodeid} depends on failed {", ".join(failed)}')
 
     def _resolve_dependencies(self, item: pytest.Function):
         dependencies = set()

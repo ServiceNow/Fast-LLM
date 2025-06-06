@@ -6,7 +6,7 @@ from tests.utils.compare_tensor_logs import CompareConfig
 # TODO: Compare grads with simple
 def test_model_df4(run_test_script_for_all_models):
     # Depth-first gradient accumulation baseline.
-    run_test_script_for_all_models("test_model_df4", ["batch.depth_first_micro_batches=4"])
+    run_test_script_for_all_models(["batch.depth_first_micro_batches=4"])
 
 
 @pytest.mark.slow
@@ -14,7 +14,6 @@ def test_model_df4(run_test_script_for_all_models):
 def test_model_df4_z3(run_test_script_for_all_models):
     # Gradient accumulation with ZeRO-3.
     run_test_script_for_all_models(
-        "test_model_df4_z3",
         ["model.multi_stage.zero_stage=3", "batch.depth_first_micro_batches=4"],
         num_gpus=2,
         compare="test_model_df4",

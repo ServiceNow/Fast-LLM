@@ -74,7 +74,6 @@ def test_resume(run_test_script_for_all_models):
 def test_resume_frozen(run_test_script_for_all_models):
     # Resume with frozen mlp. No comparison.
     run_test_script_for_all_models(
-        "test_resume_frozen",
         [
             "training.checkpoint.interval=1",
             "training.evaluations.validation.interval=2",
@@ -456,7 +455,6 @@ def test_run_converted_model(model_testing_config, convert_paths):
 @pytest.mark.depends_on(on=["test_load_converted_distributed_checkpoint[{model_testing_config}]"])
 def test_load_pretrained_distributed_in_dp2(run_test_script_for_all_models, convert_paths):
     run_test_script_for_all_models(
-        "test_load_pretrained_distributed_in_dp2",
         [
             "training.checkpoint.interval=1",
             "training.train_iters=1",
@@ -471,7 +469,6 @@ def test_load_pretrained_distributed_in_dp2(run_test_script_for_all_models, conv
 @pytest.mark.depends_on(on=["test_load_converted_distributed_checkpoint[{model_testing_config}]"])
 def test_load_pretrained_distributed_with_config(run_test_script_for_all_models, convert_paths):
     run_test_script_for_all_models(
-        "test_load_pretrained_distributed_with_config",
         [
             "training.checkpoint.interval=1",
             "training.train_iters=1",
@@ -558,7 +555,6 @@ def test_load_distributed_checkpoint_dp2(model_testing_config, convert_paths, ru
 )
 def test_load_pretrained_fast_llm_in_dp2(run_test_script, convert_paths, run_test_script_base_path):
     run_test_script(
-        "test_load_pretrained_fast_llm_in_dp2",
         [
             "training.checkpoint.interval=1",
             "training.train_iters=1",
@@ -598,7 +594,6 @@ def test_load_pretrained_huggingface_in_dp2(
     run_test_script_for_all_models, model_testing_config, run_test_script_base_path, convert_paths
 ):
     run_test_script_for_all_models(
-        "test_load_pretrained_huggingface_in_dp2",
         [
             "training.checkpoint.interval=1",
             "training.train_iters=1",
