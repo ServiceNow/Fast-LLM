@@ -109,6 +109,7 @@ class AudioPreprocessor(Preprocessor):
                     sampling_rate=self._config.aud_sampling_rate,
                     return_tensors="pt",
                     max_length=30 * self._config.aud_sampling_rate,
+                    device=self._tensor_space.distributed.device,
                 )["input_features"]
             )
         audio_mel = torch.stack(audio_mel, dim=0).squeeze(1)
@@ -124,4 +125,11 @@ class AudioPreprocessor(Preprocessor):
         # kwargs[self._transformer_kwargs.attention_mask_value] = self._mask_value
 
         audio_mel = audio_mel.to(self._tensor_space.distributed.device)
+
+        # PAD_TO = 100
+        # padding_size = PAD_TO - audio_mel.size(0)
+        # padding = torch.zeros(padding_size, audio_mel.size(1), audio_mel.size(2), dtype=audio_mel.dtype, device=audio_mel.device)
+
+        # audio_mel = torch.cat((audio_mel, padding), dim=0)
+
         kwargs[AudioEncoderKwargs.audio_mel] = audio_mel
