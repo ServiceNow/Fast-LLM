@@ -302,62 +302,24 @@ class HybridMambaAttentionDynamicCache(DynamicCache):
         self.ssm_states[layer_idx] = new_ssm_state.to(self.ssm_states.device)
         return self.ssm_states[layer_idx]
 
+    def get_seq_length(self, layer_idx: Optional[int] = 0) -> int:
+        """Returns the sequence length of the cached states. A layer index can be optionally passed."""
+        # take any layer that contains cache and not empty tensor
+        layer_idx = self.transformer_layers[0] if layer_idx not in self.transformer_layers else layer_idx
+        if len(self.key_cache) <= layer_idx:
+            return 0
+        return self.key_cache[layer_idx].shape[-2]
+
     def reset(self):
         self.conv_states.zero_()
         self.ssm_states.zero_()
 
+    def to_legacy_cache(self) -> tuple[tuple[torch.Tensor], tuple[torch.Tensor]]:
+        raise NotImplementedError("HybridMambaAttentionDynamicCache does not have a legacy cache equivalent.")
 
-# Adapted from transformers.models.jamba.modeling_jamba.HybridMambaAttentionDynamicCache for the v2 mixer
-# class HybridMambaAttentionDynamicCache(modeling_jamba.HybridMambaAttentionDynamicCache):
-#     """
-#     A dynamic cache that can handle both the attention cache (which has a seq_len dimension) and the mamba cache
-#     (which has a constant shape regardless of seq_len).
-
-#     This cache has two sets of lists of tensors: `key_cache` and `value_cache` for attention cache and `conv_states`
-#     and `ssm_states` for mamba cache. Each of these lists has `num_layers` tensors. The expected shape for each tensor
-#     For attention layers, `key_cache` and `value_cache` have a shape of `(batch_size, num_heads, seq_len, head_dim)`,
-#     while `conv_states` and `ssm_states` have a shape of `(batch_size, 0)` (empty tensors).
-#     For mamba layers, `key_cache` and `value_cache` have a shape of `(batch_size, 0)` (empty tensors),
-#     while `conv_states` represents the convolution state and has a shape of `(batch_size, d_inner, d_conv)`,
-#     and `ssm_states` represents the ssm state and has a shape of `(batch_size, d_inner, d_state)`.
-#     """
-
-#     def __init__(self, config: AprielSSMHybridConfig, batch_size, dtype=torch.float16, device=None):
-#         config.layers_block_type = config.hybrid_block_layout
-#         super().__init__(config, batch_size, dtype, device)
-#         self.has_previous_state = False  # only used by mamba
-#         conv_kernel_size = config.ssm_cfg["d_conv"]
-#         ssm_state_size = config.ssm_cfg["d_state"]
-#         intermediate_size = config.ssm_cfg["d_inner"]
-#         self.n_qk_heads = config.ssm_cfg["n_qk_heads"]
-#         assert intermediate_size % self.n_qk_heads == 0, "d_inner must be divisible by n_qk_heads"
-#         self.head_d = intermediate_size // self.n_qk_heads
-#         self.layers_block_type = config.hybrid_block_layout
-
-#         self.conv_states = []
-#         self.ssm_states = []
-#         self.transformer_layers = []
-#         for i in range(config.num_hidden_layers):
-#             if self.layers_block_type[i] == "m2d":
-#                 self.conv_states += [
-#                     torch.zeros(
-#                         batch_size,
-#                         conv_kernel_size,
-#                         intermediate_size + 2 * self.n_qk_heads * ssm_state_size,
-#                         device=device,
-#                         dtype=dtype,
-#                     ).transpose(1, 2)
-#                 ]
-#                 self.ssm_states += [
-#                     torch.zeros(batch_size, self.n_qk_heads, self.head_d, ssm_state_size, device=device, dtype=dtype)
-#                 ]
-#             else:
-#                 self.conv_states += [torch.tensor([[]] * batch_size, device=device)]
-#                 self.ssm_states += [torch.tensor([[]] * batch_size, device=device)]
-#                 self.transformer_layers.append(i)
-
-#         self.key_cache = [torch.tensor([[]] * batch_size, device=device) for _ in range(config.num_hidden_layers)]
-#         self.value_cache = [torch.tensor([[]] * batch_size, device=device) for _ in range(config.num_hidden_layers)]
+    @classmethod
+    def from_legacy_cache(cls, past_key_values: Optional[tuple[tuple[torch.FloatTensor]]] = None) -> "DynamicCache":
+        raise NotImplementedError("HybridMambaAttentionDynamicCache does not have a legacy cache equivalent.")
 
 
 @dataclass
