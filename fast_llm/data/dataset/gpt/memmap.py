@@ -56,9 +56,6 @@ class GPTMemmapDataset(GPTIndexedDataset):
             if self._version >= 3:
                 self._has_preference_spans = struct.unpack("<B", stream.read(1))[0]
 
-            if self._version >= 3:
-                self._has_preference_spans = struct.unpack("<B", stream.read(1))[0]
-
             if self._version >= 4:
                 self._has_images = struct.unpack("<B", stream.read(1))[0]
 
