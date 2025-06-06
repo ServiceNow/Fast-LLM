@@ -26,6 +26,9 @@ from fast_llm.models.ssm.external.apriel_15b_hybrid.configuration_ssm_hybrid_apr
 logger = logging.get_logger(__name__)
 
 
+is_fast_path_available = all((selective_state_update, causal_conv1d_fn, causal_conv1d_update))
+
+
 class HybridMambaAttentionStaticCache(Cache):
     def __init__(self, config: AprielSSMHybridConfig, batch_size, max_length, dtype=torch.float16, device=None):
         super().__init__()  # config, batch_size, max_length, device, dtype)
@@ -304,6 +307,59 @@ class HybridMambaAttentionDynamicCache(DynamicCache):
         self.ssm_states.zero_()
 
 
+# Adapted from transformers.models.jamba.modeling_jamba.HybridMambaAttentionDynamicCache for the v2 mixer
+# class HybridMambaAttentionDynamicCache(modeling_jamba.HybridMambaAttentionDynamicCache):
+#     """
+#     A dynamic cache that can handle both the attention cache (which has a seq_len dimension) and the mamba cache
+#     (which has a constant shape regardless of seq_len).
+
+#     This cache has two sets of lists of tensors: `key_cache` and `value_cache` for attention cache and `conv_states`
+#     and `ssm_states` for mamba cache. Each of these lists has `num_layers` tensors. The expected shape for each tensor
+#     For attention layers, `key_cache` and `value_cache` have a shape of `(batch_size, num_heads, seq_len, head_dim)`,
+#     while `conv_states` and `ssm_states` have a shape of `(batch_size, 0)` (empty tensors).
+#     For mamba layers, `key_cache` and `value_cache` have a shape of `(batch_size, 0)` (empty tensors),
+#     while `conv_states` represents the convolution state and has a shape of `(batch_size, d_inner, d_conv)`,
+#     and `ssm_states` represents the ssm state and has a shape of `(batch_size, d_inner, d_state)`.
+#     """
+
+#     def __init__(self, config: AprielSSMHybridConfig, batch_size, dtype=torch.float16, device=None):
+#         config.layers_block_type = config.hybrid_block_layout
+#         super().__init__(config, batch_size, dtype, device)
+#         self.has_previous_state = False  # only used by mamba
+#         conv_kernel_size = config.ssm_cfg["d_conv"]
+#         ssm_state_size = config.ssm_cfg["d_state"]
+#         intermediate_size = config.ssm_cfg["d_inner"]
+#         self.n_qk_heads = config.ssm_cfg["n_qk_heads"]
+#         assert intermediate_size % self.n_qk_heads == 0, "d_inner must be divisible by n_qk_heads"
+#         self.head_d = intermediate_size // self.n_qk_heads
+#         self.layers_block_type = config.hybrid_block_layout
+
+#         self.conv_states = []
+#         self.ssm_states = []
+#         self.transformer_layers = []
+#         for i in range(config.num_hidden_layers):
+#             if self.layers_block_type[i] == "m2d":
+#                 self.conv_states += [
+#                     torch.zeros(
+#                         batch_size,
+#                         conv_kernel_size,
+#                         intermediate_size + 2 * self.n_qk_heads * ssm_state_size,
+#                         device=device,
+#                         dtype=dtype,
+#                     ).transpose(1, 2)
+#                 ]
+#                 self.ssm_states += [
+#                     torch.zeros(batch_size, self.n_qk_heads, self.head_d, ssm_state_size, device=device, dtype=dtype)
+#                 ]
+#             else:
+#                 self.conv_states += [torch.tensor([[]] * batch_size, device=device)]
+#                 self.ssm_states += [torch.tensor([[]] * batch_size, device=device)]
+#                 self.transformer_layers.append(i)
+
+#         self.key_cache = [torch.tensor([[]] * batch_size, device=device) for _ in range(config.num_hidden_layers)]
+#         self.value_cache = [torch.tensor([[]] * batch_size, device=device) for _ in range(config.num_hidden_layers)]
+
+
 @dataclass
 class AprielHybridCausalOutput(ModelOutput):
     """Custom output class for MambaLMHeadModel."""
@@ -359,6 +415,17 @@ def materialize_mixer(A_log, B, C, D):
 
     T = rearrange(T, "b h z l -> b h l z")
     return T
+
+
+def apply_mask_to_padding_states(hidden_states, attention_mask):
+    """
+    Tunes out the hidden states for padding tokens, see https://github.com/state-spaces/mamba/issues/66
+    """
+    if attention_mask is not None and attention_mask.shape[1] > 1 and attention_mask.shape[0] > 1:
+        dtype = hidden_states.dtype
+        hidden_states = (hidden_states * attention_mask[:, :, None]).to(dtype)
+
+    return hidden_states
 
 
 # This is from LLmaba/Mohawk: https://github.com/cartesia-ai/edge/blob/main/cartesia-pytorch/cartesia_pytorch/Llamba/mixers/discrete_mamba2.py
@@ -448,13 +515,6 @@ class DiscreteMamba2(nn.Module):
         self.zeros_buffer = torch.zeros((self.n_v_heads, self.headdim), device=device, dtype=dtype)
         self.ones_buffer = torch.ones((self.n_v_heads, self.headdim, self.d_state), device=device, dtype=dtype)
 
-        self.use_cuda_graph = False
-        self.cuda_graph = None
-        self.graph_input = None
-        self.graph_output = None
-        self.graph_ssm_state = None
-        self.graph_conv_state = None
-
     @property
     def d_output(self):
         return self.d_model
@@ -466,103 +526,212 @@ class DiscreteMamba2(nn.Module):
     def forward(
         self,
         u,
-        return_mixer_matrix=False,
         past_key_value: Optional[HybridMambaAttentionDynamicCache] = None,
-        inference_params=None,
+        attention_mask: Optional[torch.Tensor] = None,
+        return_mixer_matrix=False,
         **kwargs,
     ):
         """
         u: (B, L, D)
         Returns: same shape as u
+        For later refference: https://github.com/huggingface/transformers/blob/main/src/transformers/models/bamba/modeling_bamba.py
         """
-        outputs = {}
-        # assert state is None
+        assert is_fast_path_available and "cuda" in self.in_proj.weight.device.type, "Only support fast path on cuda"
+        cache_position = kwargs.get("cache_position", None)
         batch, seqlen, dim = u.shape
-
+        u = apply_mask_to_padding_states(u, attention_mask)
         ssm_state, conv_state = None, None
-        if past_key_value is not None:
+
+        use_precomputed_states = (
+            past_key_value is not None
+            and past_key_value.has_previous_state
+            and seqlen == 1
+            and past_key_value.conv_states[self.layer_idx].shape[0]
+            == past_key_value.ssm_states[self.layer_idx].shape[0]
+            == batch
+            and cache_position is not None
+            and cache_position[0] > 0
+        )
+        if use_precomputed_states:
             ssm_state, conv_state = self._get_states_from_cache(past_key_value, batch)
-            cache_position = kwargs.get("cache_position", None)
-            # if inference_params is not None and inference_params.seqlen_offset > 0:
-            if cache_position is not None and cache_position[0] > 0:
-                # States are updated inplace
-                # TODO: make sure using cache_position is correct here
-                u = u.squeeze(1) if len(u.shape) == 3 else u
-                out, _, _ = self.step(u, ssm_state, conv_state)
-                out = out.unsqueeze(1) if len(u.shape) == 2 else out
-                return {"hidden_states": out}
-
-        # Hacky way to initialize state during inference
-        chunk_size = self.chunk_size if ssm_state is None else seqlen
-
-        # Pad input to nearest multiple of chunklen
-        padded_len = (1 + (seqlen - 1) // chunk_size) * chunk_size
-        u = F.pad(u, (0, 0, 0, padded_len - seqlen))
-
-        # Project input
-        xBCzA_log = self.in_proj(u)
-        xBC, z, A_log = torch.split(
-            xBCzA_log,
-            [
-                self.d_inner + 2 * self.n_qk_heads * self.d_state,
-                self.d_inner,
-                self.n_v_heads,
-            ],
-            dim=-1,
-        )
-
-        if ssm_state is not None:
-            # If we just take xBC[:, :, -self.d_conv :], it will error if seqlen < self.d_conv
-            # Instead F.pad will pad with zeros if seqlen < self.d_conv, and truncate otherwise.
-            xBC_t = rearrange(xBC[:, :seqlen, :], "b l d -> b d l")
-            conv_state.copy_(F.pad(xBC_t, (self.d_conv - xBC_t.shape[-1], 0)))  # Update state (B D W)
-
-        # Convolutional layer
-        xBC = self.convolutional_forward(xBC, padded_len)
-
-        x, B, C = torch.split(
-            xBC,
-            [
-                self.d_inner,
-                self.n_qk_heads * self.d_state,
-                self.n_qk_heads * self.d_state,
-            ],
-            dim=-1,
-        )
-
-        x = rearrange(x, "b l (h n) -> b l h n", h=self.n_v_heads)
-        B = rearrange(B, "b l (h n) -> b l h n", h=self.n_qk_heads)
-        C = rearrange(C, "b l (h n) -> b l h n", h=self.n_qk_heads)
-
-        # SSM forward
-        result = mamba_chunk_scan_combined(
-            x=x / F.softplus(A_log).to(x.dtype).unsqueeze(-1),
-            dt=A_log,
-            dt_softplus=True,
-            A=-torch.ones(self.n_v_heads, device=A_log.device),
-            B=B,
-            C=C,
-            chunk_size=chunk_size,
-            # initial_states=(state["ssm"] if state is not None else None), # currently not supported by mamba_ssm.utils.generation
-            return_final_states=(ssm_state is not None),
-        )
-
-        if ssm_state is not None:
-            y, ssm_state_update = result
-            ssm_state.copy_(ssm_state_update)
+            u = u.squeeze(1) if len(u.shape) == 3 else u
+            out, _, _ = self.step(u, ssm_state, conv_state)
+            out = out.unsqueeze(1) if len(u.shape) == 2 else out
+            return {"hidden_states": out}
         else:
-            y = result
+            outputs = {}
+            # Hacky way to initialize state during inference
+            chunk_size = self.chunk_size if ssm_state is None else seqlen
 
-        Du = torch.einsum("h,blhp->blhp", self.D, x)
-        y = rearrange(y + Du, "b l h p -> b l (h p)")
+            # Pad input to nearest multiple of chunklen
+            padded_len = (1 + (seqlen - 1) // chunk_size) * chunk_size
+            u = F.pad(u, (0, 0, 0, padded_len - seqlen))
 
-        # Norm and gate
-        out = self.out_proj(y * F.silu(z + self.z_bias))
-        outputs["hidden_states"] = out[:, :seqlen, :]
+            # Project input
+            xBCzA_log = self.in_proj(u)
+            xBC, z, A_log = torch.split(
+                xBCzA_log,
+                [
+                    self.d_inner + 2 * self.n_qk_heads * self.d_state,
+                    self.d_inner,
+                    self.n_v_heads,
+                ],
+                dim=-1,
+            )
 
-        if return_mixer_matrix:
-            outputs["transfer_matrix"] = materialize_mixer(A_log=A_log, B=B, C=C, D=self.D)[..., :seqlen, :seqlen]
-        return outputs
+            if ssm_state is not None:
+                # If we just take xBC[:, :, -self.d_conv :], it will error if seqlen < self.d_conv
+                # Instead F.pad will pad with zeros if seqlen < self.d_conv, and truncate otherwise.
+                xBC_t = rearrange(xBC[:, :seqlen, :], "b l d -> b d l")
+                conv_state.copy_(F.pad(xBC_t, (self.d_conv - xBC_t.shape[-1], 0)))  # Update state (B D W)
+
+            # Convolutional layer
+            xBC = self.convolutional_forward(xBC, padded_len)
+
+            x, B, C = torch.split(
+                xBC,
+                [
+                    self.d_inner,
+                    self.n_qk_heads * self.d_state,
+                    self.n_qk_heads * self.d_state,
+                ],
+                dim=-1,
+            )
+
+            x = rearrange(x, "b l (h n) -> b l h n", h=self.n_v_heads)
+            B = rearrange(B, "b l (h n) -> b l h n", h=self.n_qk_heads)
+            C = rearrange(C, "b l (h n) -> b l h n", h=self.n_qk_heads)
+
+            # SSM forward
+            result = mamba_chunk_scan_combined(
+                x=x / F.softplus(A_log).to(x.dtype).unsqueeze(-1),
+                dt=A_log,
+                dt_softplus=True,
+                A=-torch.ones(self.n_v_heads, device=A_log.device),
+                B=B,
+                C=C,
+                chunk_size=chunk_size,
+                # initial_states=(state["ssm"] if state is not None else None), # currently not supported by mamba_ssm.utils.generation
+                return_final_states=(ssm_state is not None),
+            )
+
+            if ssm_state is not None:
+                y, ssm_state_update = result
+                ssm_state.copy_(ssm_state_update)
+            else:
+                y = result
+
+            Du = torch.einsum("h,blhp->blhp", self.D, x)
+            y = rearrange(y + Du, "b l h p -> b l (h p)")
+
+            # Norm and gate
+            out = self.out_proj(y * F.silu(z + self.z_bias))
+            outputs["hidden_states"] = out[:, :seqlen, :]
+
+            if return_mixer_matrix:
+                outputs["transfer_matrix"] = materialize_mixer(A_log=A_log, B=B, C=C, D=self.D)[..., :seqlen, :seqlen]
+            return outputs
+
+    # def forward_original(
+    #     self,
+    #     u,
+    #     return_mixer_matrix=False,
+    #     past_key_value: Optional[HybridMambaAttentionDynamicCache] = None,
+    #     inference_params=None,
+    #     **kwargs,
+    # ):
+    #     """
+    #     u: (B, L, D)
+    #     Returns: same shape as u
+    #     """
+    #     outputs = {}
+    #     # assert state is None
+    #     batch, seqlen, dim = u.shape
+
+    #     ssm_state, conv_state = None, None
+    #     if past_key_value is not None:
+    #         ssm_state, conv_state = self._get_states_from_cache(past_key_value, batch)
+    #         cache_position = kwargs.get("cache_position", None)
+    #         # if inference_params is not None and inference_params.seqlen_offset > 0:
+    #         if cache_position is not None and cache_position[0] > 0:
+    #             # States are updated inplace
+    #             # TODO: make sure using cache_position is correct here
+    #             u = u.squeeze(1) if len(u.shape) == 3 else u
+    #             out, _, _ = self.step(u, ssm_state, conv_state)
+    #             out = out.unsqueeze(1) if len(u.shape) == 2 else out
+    #             return {"hidden_states": out}
+
+    #     # Hacky way to initialize state during inference
+    #     chunk_size = self.chunk_size if ssm_state is None else seqlen
+
+    #     # Pad input to nearest multiple of chunklen
+    #     padded_len = (1 + (seqlen - 1) // chunk_size) * chunk_size
+    #     u = F.pad(u, (0, 0, 0, padded_len - seqlen))
+
+    #     # Project input
+    #     xBCzA_log = self.in_proj(u)
+    #     xBC, z, A_log = torch.split(
+    #         xBCzA_log,
+    #         [
+    #             self.d_inner + 2 * self.n_qk_heads * self.d_state,
+    #             self.d_inner,
+    #             self.n_v_heads,
+    #         ],
+    #         dim=-1,
+    #     )
+
+    #     if ssm_state is not None:
+    #         # If we just take xBC[:, :, -self.d_conv :], it will error if seqlen < self.d_conv
+    #         # Instead F.pad will pad with zeros if seqlen < self.d_conv, and truncate otherwise.
+    #         xBC_t = rearrange(xBC[:, :seqlen, :], "b l d -> b d l")
+    #         conv_state.copy_(F.pad(xBC_t, (self.d_conv - xBC_t.shape[-1], 0)))  # Update state (B D W)
+
+    #     # Convolutional layer
+    #     xBC = self.convolutional_forward(xBC, padded_len)
+
+    #     x, B, C = torch.split(
+    #         xBC,
+    #         [
+    #             self.d_inner,
+    #             self.n_qk_heads * self.d_state,
+    #             self.n_qk_heads * self.d_state,
+    #         ],
+    #         dim=-1,
+    #     )
+
+    #     x = rearrange(x, "b l (h n) -> b l h n", h=self.n_v_heads)
+    #     B = rearrange(B, "b l (h n) -> b l h n", h=self.n_qk_heads)
+    #     C = rearrange(C, "b l (h n) -> b l h n", h=self.n_qk_heads)
+
+    #     # SSM forward
+    #     result = mamba_chunk_scan_combined(
+    #         x=x / F.softplus(A_log).to(x.dtype).unsqueeze(-1),
+    #         dt=A_log,
+    #         dt_softplus=True,
+    #         A=-torch.ones(self.n_v_heads, device=A_log.device),
+    #         B=B,
+    #         C=C,
+    #         chunk_size=chunk_size,
+    #         # initial_states=(state["ssm"] if state is not None else None), # currently not supported by mamba_ssm.utils.generation
+    #         return_final_states=(ssm_state is not None),
+    #     )
+
+    #     if ssm_state is not None:
+    #         y, ssm_state_update = result
+    #         ssm_state.copy_(ssm_state_update)
+    #     else:
+    #         y = result
+
+    #     Du = torch.einsum("h,blhp->blhp", self.D, x)
+    #     y = rearrange(y + Du, "b l h p -> b l (h p)")
+
+    #     # Norm and gate
+    #     out = self.out_proj(y * F.silu(z + self.z_bias))
+    #     outputs["hidden_states"] = out[:, :seqlen, :]
+
+    #     if return_mixer_matrix:
+    #         outputs["transfer_matrix"] = materialize_mixer(A_log=A_log, B=B, C=C, D=self.D)[..., :seqlen, :seqlen]
+    #     return outputs
 
     def step(self, u, ssm_state, conv_state, **kwargs):
         """
@@ -584,7 +753,9 @@ class DiscreteMamba2(nn.Module):
         )
 
         xBC, conv_state_new = self.convolutional_step(xBC, conv_state)
-        conv_state.copy_(conv_state_new)  # update state in place
+        if conv_state_new is not None:
+            raise NotImplementedError("Should not end up here snce only support fast path.")
+            # conv_state.copy_(conv_state_new)  # update state in place, only for slow pass
 
         x, B, C = torch.split(
             xBC,
@@ -622,29 +793,6 @@ class DiscreteMamba2(nn.Module):
         out = self.out_proj(y * F.silu(z + self.z_bias))
 
         return out, ssm_state, conv_state
-
-    # def allocate_inference_cache(self, batch_size, max_seqlen, dtype=None, **kwargs):
-    #     device = self.in_proj.weight.device
-    #     # conv_state:
-    #     conv_dtype = self.conv1d.weight.dtype if dtype is None else dtype
-    #     conv_state = torch.zeros(
-    #         batch_size,
-    #         self.d_conv,
-    #         self.conv1d.weight.shape[0],
-    #         device=device,
-    #         dtype=conv_dtype,
-    #     ).transpose(1, 2)
-    #     # ssm_state:
-    #     ssm_dtype = self.in_proj.weight.dtype if dtype is None else dtype
-    #     ssm_state = torch.zeros(
-    #         batch_size,
-    #         self.n_v_heads,
-    #         self.headdim,
-    #         self.d_state,
-    #         device=device,
-    #         dtype=ssm_dtype,
-    #     )
-    #     return {"conv": conv_state, "ssm": ssm_state}
 
     def _get_states_from_cache(self, inference_params, batch_size, initialize_states=False):
         """
@@ -692,6 +840,7 @@ class DiscreteMamba2(nn.Module):
                 self.conv1d.bias,
                 self.activation if self.activation != "identity" else None,
             )
+            return xBC, None
         else:
             conv_state.copy_(torch.roll(conv_state, shifts=-1, dims=-1))  # Update state (B D W)
             conv_state[:, :, -1] = xBC
@@ -700,94 +849,7 @@ class DiscreteMamba2(nn.Module):
                 xBC = xBC + self.conv1d.bias
             xBC = self.act(xBC).to(xBC.dtype)  # Some activations change dtype
 
-        return xBC, conv_state
-
-    def enable_cuda_graph(self, batch_size=1):
-        """Capture CUDA graph for the step function"""
-        if not torch.cuda.is_available():
-            return
-
-        # Pre-allocate tensors with fixed shapes
-        device = next(self.parameters()).device
-        self.graph_input = torch.zeros(batch_size, self.d_model, device=device, dtype=torch.float16)
-        self.graph_ssm_state = torch.zeros(
-            batch_size, self.n_qk_heads, self.headdim, self.d_state, device=device, dtype=torch.float16
-        )
-        self.graph_conv_state = torch.zeros(
-            batch_size,
-            self.d_inner + 2 * self.n_qk_heads * self.d_state,
-            self.d_conv,
-            device=device,
-            dtype=torch.float16,
-        )
-        self.graph_output = torch.zeros(batch_size, self.d_model, device=device, dtype=torch.float16)
-
-        # Warmup runs
-        torch.cuda.synchronize()
-        for _ in range(3):
-            self._step_graph_impl(self.graph_input, self.graph_ssm_state, self.graph_conv_state)
-        torch.cuda.synchronize()
-
-        # Capture graph
-        self.cuda_graph = torch.cuda.CUDAGraph()
-        with torch.cuda.graph(self.cuda_graph):
-            self.graph_output = self._step_graph_impl(self.graph_input, self.graph_ssm_state, self.graph_conv_state)
-
-        self.use_cuda_graph = True
-
-    def _step_graph_impl(self, u, ssm_state, conv_state):
-        """Graph-compatible version of step function"""
-        # Same logic as step() but with pre-allocated tensors
-        xBCzA_log = self.in_proj(u)
-        xBC, z, A_log = torch.split(
-            xBCzA_log,
-            [
-                self.d_inner + 2 * self.n_qk_heads * self.d_state,
-                self.d_inner,
-                self.n_v_heads,
-            ],
-            dim=-1,
-        )
-
-        xBC, conv_state_new = self.convolutional_step(xBC, conv_state)
-        conv_state.copy_(conv_state_new)  # update state in place
-
-        x, B, C = torch.split(
-            xBC,
-            [
-                self.d_inner,
-                self.n_qk_heads * self.d_state,
-                self.n_qk_heads * self.d_state,
-            ],
-            dim=-1,
-        )
-
-        x = rearrange(x, "b (h s) -> b h s", h=self.n_v_heads)
-        B = rearrange(B, "b (h s) -> b h s", h=self.n_qk_heads)
-        C = rearrange(C, "b (h s) -> b h s", h=self.n_qk_heads)
-
-        ssm_state = ssm_state.to(x.dtype)
-        zeros = self.zeros_buffer.to(A_log.device).to(x.dtype)  # Just cast, don't allocate
-        ones = self.ones_buffer.to(A_log.device).to(x.dtype)
-        y = selective_state_update(
-            x=x / F.softplus(A_log).to(x.dtype).unsqueeze(-1),
-            dt=repeat(A_log, "b h -> b h p", p=self.headdim),
-            dt_softplus=True,
-            A=-ones,
-            B=B,
-            C=C,
-            state=ssm_state,  # will be updated in place
-            dt_bias=zeros,
-            D=zeros,
-        )
-
-        y = y + self.D[:, None] * x
-        y = rearrange(y, "b h p -> b (h p)")
-
-        # Norm and gate
-        out = self.out_proj(y * F.silu(z + self.z_bias))
-
-        return out
+            return xBC, conv_state
 
 
 class AprielSSMDecoderLayer(nn.Module):
@@ -879,7 +941,7 @@ class AprielSSMHybridModel(MistralModel):
         input_ids: Optional[torch.LongTensor] = None,
         attention_mask: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
-        past_key_values: Optional[Cache] = None,
+        past_key_values: Optional[HybridMambaAttentionDynamicCache] = None,
         inputs_embeds: Optional[torch.FloatTensor] = None,
         use_cache: Optional[bool] = None,
         output_attentions: Optional[bool] = None,
@@ -970,6 +1032,9 @@ class AprielSSMHybridModel(MistralModel):
         # add hidden states from the last decoder layer
         if output_hidden_states:
             all_hidden_states += (hidden_states,)
+
+        if past_key_values and not past_key_values.has_previous_state:
+            past_key_values.has_previous_state = True
 
         return BaseModelOutputWithPast(
             last_hidden_state=hidden_states,
