@@ -10,7 +10,7 @@ def test_megatron(run_test_script_for_all_models, model_testing_config):
 
 
 @pytest.mark.slow
-@pytest.mark.depends(on=["test_megatron"])
+@pytest.mark.depends_on(on=["test_megatron[{model_testing_config}]"])
 def test_match_megatron(run_test_script_for_all_models, model_testing_config):
     run_test_script_for_all_models(
         [

@@ -8,7 +8,7 @@ def test_model_ms256(run_test_script_for_all_models):
 
 
 @pytest.mark.slow
-@pytest.mark.depends(on=["test_model_ms256"])
+@pytest.mark.depends_on(on=["test_model_ms256[{model_testing_config}]"])
 def test_model_pp2s2_ms256(run_test_script_for_all_models):
     # Sequence-pipeline-parallel
     run_test_script_for_all_models(
@@ -24,7 +24,7 @@ def test_model_pp2s2_ms256(run_test_script_for_all_models):
 
 @pytest.mark.slow
 @pytest.mark.skip
-@pytest.mark.depends(on=["test_model_ms256"])
+@pytest.mark.depends_on(on=["test_model_ms256[{model_testing_config}]"])
 def test_model_dp2s2_stp2_pp2s2_ms256(run_test_script_for_all_models):
     # TODO: Handle this case.
     # Sequence-3d-parallel

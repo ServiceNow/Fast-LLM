@@ -251,7 +251,7 @@ def test_export_for_generate(run_test_script_for_all_models, model_testing_confi
 
 @pytest.mark.slow
 @requires_cuda
-@pytest.mark.depends(on=["test_export_for_generate"])
+@pytest.mark.depends_on(on=["test_export_for_generate[{model_testing_config}]"])
 @pytest.mark.parametrize(
     "use_flash_attention, use_bf16, max_new_tokens, min_matching_tokens_batch_size_1, min_matching_tokens_batch_size_2",
     [
@@ -314,7 +314,7 @@ def test_generate_from_model(
 
 @requires_cuda
 @pytest.mark.slow
-@pytest.mark.depends(on=["test_export_for_generate"])
+@pytest.mark.depends_on(on=["test_export_for_generate[{model_testing_config}]"])
 def test_small_generate_from_model(model_testing_config, run_test_script_base_path):
     _test_generate_from_model(
         run_test_script_base_path / f"test_export_for_generate/export/{model_testing_config.checkpoint_format.name}/1",
@@ -363,7 +363,7 @@ def test_forward_return_hidden_states(model_path):
 
 @pytest.mark.slow
 @requires_cuda
-@pytest.mark.depends(on=["test_export_for_generate"])
+@pytest.mark.depends_on(on=["test_export_for_generate[{model_testing_config}]"])
 def test_small_forward_return_hidden_states(model_testing_config, run_test_script_base_path):
     _test_forward_return_hidden_states(
         run_test_script_base_path / f"test_export_for_generate/export/{model_testing_config.checkpoint_format.name}/1",

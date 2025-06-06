@@ -2,12 +2,11 @@ import dataclasses
 import math
 import os
 
-import networkx
 import pytest
-import pytest_depends
-import pytest_depends.main
 import torch
 from xdist.scheduler import LoadGroupScheduling
+
+from tests.utils.depends import DependencyManager
 
 # Make fixtures available globally without import
 from tests.utils.run_test_script import (  # isort: skip
@@ -20,13 +19,23 @@ from tests.utils.model_configs import model_testing_config  # isort: skip
 from tests.utils.utils import result_path  # isort: skip
 
 
+manager: DependencyManager | None = None
+
+
 def pytest_addoption(parser):
-    parser.addoption("--skip-slow", action="store_true")
-    parser.addoption(
+    group = parser.getgroup("fast_llm")
+    group.addoption("--skip-slow", action="store_true")
+    group.addoption(
         "--run-extra-slow",
         action="store_true",
         default=False,
         help="Run tests marked as extra_slow",
+    )
+    group.addoption(
+        "--show-dependencies",
+        action="store_true",
+        default=False,
+        help="List all dependencies of all tests as a list of nodeids + the names that could not be resolved.",
     )
 
 
@@ -49,6 +58,7 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers", "extra_slow: Mark test as extra slow and skip unless --run-extra-slow is given."
     )
+    config.addinivalue_line("markers", "depends_on(name='name', on=['other_name']): marks dependencies between tests.")
     # TODO: Spawned processes (multi-gpu, Megatron) ignore resource allocation.
     is_parallel = hasattr(config, "workerinput")
     if is_parallel:
@@ -98,6 +108,8 @@ def pytest_configure(config):
 
 @pytest.hookimpl(trylast=True)
 def pytest_collection_modifyitems(config, items):
+    global manager
+
     if config.getoption("--skip-slow"):
         skip_slow = pytest.mark.skip(reason="Skipping slow tests")
         for item in items:
@@ -109,26 +121,40 @@ def pytest_collection_modifyitems(config, items):
             if "extra_slow" in item.keywords:
                 item.add_marker(skip_extra_slow)
 
-    manager: pytest_depends.DependencyManager = pytest_depends.managers[-1]
-    # Build the undirected graph as in `DependencyManager.sorted_items`.
-    dag = networkx.DiGraph()
-    for item in manager.items:
-        node_id = pytest_depends.clean_nodeid(item.nodeid)
-        dag.add_node(node_id)
-        for dependency in manager.dependencies[node_id].dependencies:
-            dag.add_edge(dependency, node_id)
-    # Mark dependency groups for xdist.
-    manager.groups = {}
-    for i, node_ids in enumerate(sorted(networkx.weakly_connected_components(dag), key=len, reverse=True)):
-        if len(node_ids) > 1:
-            for node_id in node_ids:
-                manager.nodeid_to_item[node_id]._nodeid = (
-                    f"{manager.nodeid_to_item[node_id]._nodeid}@dependency_group_{i}"
-                )
+    manager = DependencyManager(items)
 
-    old_clean_nodeid = pytest_depends.main.clean_nodeid
-    # Hack into `clean_nodeid` so pytest_depends recognizes the renamed nodes.
-    pytest_depends.main.clean_nodeid = lambda nodeid: old_clean_nodeid(nodeid.split("@dependency_group_")[0])
+    # Show the extra information if requested
+    if config.getoption("show_dependencies"):
+        manager.print_name_map(config.getoption("verbose") > 1)
+        manager.print_processed_dependencies(config.getoption("color"))
+
+    # Reorder the items so that tests run after their dependencies
+    items[:] = manager.items
+
+    # If pytest-depends is installed, it will complain about renamed nodes whether it's used or not.
+    try:
+        import pytest_depends
+    except ImportError:
+        pass
+    else:
+        old_clean_nodeid = pytest_depends.main.clean_nodeid
+        # Hack into `clean_nodeid` so pytest_depends recognizes the renamed nodes.
+        pytest_depends.main.clean_nodeid = lambda nodeid: old_clean_nodeid(nodeid.split("@dependency_group_")[0])
+
+
+@pytest.hookimpl(tryfirst=True, hookwrapper=True)
+def pytest_runtest_makereport(item: pytest.Function, call):
+    outcome = yield
+    manager.register_result(item, outcome.get_result())
+
+
+def pytest_runtest_call(item: pytest.Function):
+    manager.handle_missing(item)
+
+
+def pytest_unconfigure():
+    global manager
+    manager = None
 
 
 @pytest.fixture(scope="session")
