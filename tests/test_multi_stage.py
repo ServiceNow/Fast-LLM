@@ -4,7 +4,7 @@ from fast_llm.engine.training.trainer import Trainer
 from fast_llm.layers.transformer.transformer import TransformerLayer
 from fast_llm.tools.train import CliTrainingConfig
 from fast_llm.utils import Assert
-from tests.common import CONFIG_COMMON, requires_cuda
+from tests.utils.utils import requires_cuda
 
 
 def _get_trainer_from_args(args: list[str], model_type: str = "gpt") -> Trainer:
@@ -17,8 +17,8 @@ def _get_trainer_from_args(args: list[str], model_type: str = "gpt") -> Trainer:
 
 
 @requires_cuda
-def test_frozen_weights():
-    args = CONFIG_COMMON + ["run.tensor_logs.save=False"]
+def test_frozen_weights(model_testing_config):
+    args = model_testing_config.config_args + ["run.tensor_logs.save=False"]
     model_ref = _get_trainer_from_args(args)._multi_stage
     model_frozen = _get_trainer_from_args(args + ["model.base_model.transformer.mlp_lr_scale=[0]"])._multi_stage
 

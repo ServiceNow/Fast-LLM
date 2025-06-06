@@ -31,7 +31,7 @@ from fast_llm.functional.triton.sparse_copy import get_sparse_map
 from fast_llm.layers.transformer.config import RotaryConfig, RotaryEmbeddingType
 from fast_llm.layers.transformer.preprocessing import get_rotary_frequencies
 from fast_llm.utils import Assert, rms_diff
-from tests.common import requires_cuda
+from tests.utils.utils import requires_cuda
 
 
 @requires_cuda
