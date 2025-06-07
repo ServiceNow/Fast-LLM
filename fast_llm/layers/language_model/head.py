@@ -153,6 +153,7 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
                 ]
             )
             labels = labels.flatten()
+
         if self._sequence_parallel_logits:
             labels = split_op(labels, self._tensor_space.distributed.tensor_group, 0)
         do_grad = labels is not None and self.training
@@ -299,11 +300,62 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
         del logits
         return loss, output_parallel_linear_backward(grad, context)
 
+
 class MLMHead(LanguageModelHead):
     """
-    A masked language model head for diffusion-based training.
+    A masked language model head for diffusion-based training.`
     """
-    
+
+    def __init__(
+        self,
+        config: LanguageModelBaseConfig,
+        tensor_space: TensorSpace,
+        prediction_distance: int,
+    ):
+        super().__init__(config, tensor_space, prediction_distance)
+        self._loss_name = LanguageModelLossNames.mlm_loss
+
+    # def forward(
+    #     self, input_: torch.Tensor, kwargs: dict, losses: dict | None = None, metrics: dict | None = None
+    # ) -> torch.Tensor:
+    #     if isinstance(input_, TensorMeta):
+    #         return TensorMeta.from_tensor_space(
+    #             (DefaultDimNames.scalar,),
+    #             self._tensor_space,
+    #             tensor_name="Loss",
+    #             reductions=((DistributedDimNames.data, ReduceOp.AVG),),  # noqa
+    #         )
+
+    #     # Dropping MTP Stuff
+    #     # if not self.is_last_head:
+    #     #     # MTP: split the stacked input
+    #     #     shared_hidden, input_ = torch.unbind(input_, dim=0)
+
+    #     # TODO: Pytorch copies the grads in backward for no reason (not sure if still the case)
+    #     # TODO: Torch compile implementation sometimes break.
+    #     # TODO: Double-check correctness, optimize a bit more.
+    #     # TODO: Drop autograd entirely.
+    #     # TODO: Skip cross-entropy backward if not needed.
+
+    #     print(f"forward input_: {input_.shape} {input_}")
+
+    #     # Input needs to be the masked input with masked tokens
+    #     input_ = kwargs["noisy_batch"]
+
+    #     language_model_loss = self._forward(input_, kwargs, losses)
+    #     if language_model_loss is not None:
+    #         losses[self._loss_name].append(language_model_loss)
+    #     # TODO: Return the model output when needed.
+    #     # if self.is_last_head:
+    #     #     # Last head should return the loss for backward.
+    #     return language_model_loss
+    #     # else:
+    #     #     if self.training:
+    #     #         # Backward hook to compute the gradient of the loss
+    #     #         shared_hidden = AuxiliaryLoss.apply(shared_hidden, language_model_loss, 1.0)
+    #     #     # MTP: Return shared_hidden to be used by the next head.
+    #     #     return shared_hidden
+
     def _logits_cross_entropy_forward_backward(
         self,
         input_: torch.Tensor,
@@ -313,6 +365,16 @@ class MLMHead(LanguageModelHead):
         kwargs: dict,
         losses: dict | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
+
+        # can we just do this here?
+        # Input needs to be the masked input with masked tokens
+        # instead of forward pass
+        # this seems only a liner layer we need other layers too
+        # input_ = kwargs["noisy_batch"]
+
+        # print(f"input_: {input_.shape} {input_}")
+        # print(f"labels: {labels.shape} {labels}")
+
         logits, context = output_parallel_linear_forward(
             input_=input_,
             weight=weight,
@@ -320,6 +382,8 @@ class MLMHead(LanguageModelHead):
             group=self._tensor_space.distributed.tensor_group if self._parallel_embeddings else None,
             sequence_parallel=self._sequence_parallel and self._parallel_embeddings,
         )
+
+        # print(f"logits {logits.shape} {logits}")
 
         if self._z_loss_factor > 0.0:
             logits = z_loss(
@@ -335,24 +399,48 @@ class MLMHead(LanguageModelHead):
         if labels is None:
             return logits * self._logits_scale_factor, None
 
-        masked_indices = kwargs['masked_indices']
-        p_mask = kwargs['p_mask']
-        
-        masked_logits = logits[masked_indices]
-        masked_labels = labels[masked_indices]
-        masked_p = p_mask[masked_indices]
-        
+        masked_indices = kwargs[LanguageModelKwargs.mask_indexes]
+        p_mask = kwargs[LanguageModelKwargs.mask_probabilities]
+        # print(f"masked_indices: {masked_indices.shape} {masked_indices}")
+
+        # The labels are already left shifted x = [0, 1, 2, 3, 4, 5] -> [1, 2, 3, 4, 5?]
+        # then the mask index on the label will give the correct tokens one-hot vector?
+        # this happens in model.py part of preprocessing
+
+        # Question pier: if 2 is the masked token, settling needs to settled 3; but 3 is already seen by the model,
+        # can it just learn to copy 3? i.e copy the next token to the masked?
+
+        # TODO: update loss only on masked tokens error from earlier linear layer missing tokens becuz of masking??
+
+        masked_logits = (
+            logits  # logits[masked_indices[:, 1:]]  # Skip the first token, which is the shift/context token
+        )
+        # flatten the masked indices to match the logits
+        masked_indices_flt = masked_indices[:, 1:].flatten()
+        # print(f"masked_indices: {masked_indices_flt.shape} {masked_indices_flt}")
+        masked_labels = labels  # labels[masked_indices_flt]
+        # print(f"p_mask {p_mask.shape} {masked_indices.shape}")
+        p_mask[masked_indices]
+
         # Compute MLM loss
         loss, grad = cross_entropy_forward_backward(
             masked_logits.flatten(0, -2),
             masked_labels,
             group=self._tensor_space.distributed.tensor_group if self._parallel_embeddings else None,
-            grad_output=grad_output / masked_p,  
+            grad_output=grad_output,
             implementation=self._cross_entropy_impl,
             logits_scale_factor=self._logits_scale_factor,
         )
 
-        loss = loss / (labels.shape[0] * labels.shape[1])
-        
+        # print(f"loss: {loss.shape} {loss}")
+        # Revisit this with the formula and what happens inside the cross_entropy_forward_backward
+        # MDM https://github.com/ML-GSAI/SMDM/blob/583aa4716d17728dbb825aec6c24a121164d616a/pretrain/train_mdm.py#L274
+        # loss = loss / masked_p
+        # print(f"loss: {loss.shape} {loss}")
+
+        # revisit this with the formula and what happens inside the cross_entropy_forward_backward
+        # MDM https://github.com/ML-GSAI/SMDM/blob/583aa4716d17728dbb825aec6c24a121164d616a/pretrain/train_mdm.py#L275
+        # loss = loss.sum() / (labels.shape[0] * labels.shape[1])
+
         del logits
         return loss, output_parallel_linear_backward(grad, context)

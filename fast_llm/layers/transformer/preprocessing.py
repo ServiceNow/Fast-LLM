@@ -247,6 +247,8 @@ class BackupAttentionPreprocessor(Preprocessor):
                 kwargs[TransformerKwargs.attention_mask]
                 & document_mask[:, None, sequence_k - sequence_q : sequence_k, None, :sequence_k]
             )
+
+        # can we add a bidirectional attention here?
         kwargs[TransformerKwargs.attention_mask_value] = self._mask_value
 
     def preprocess_meta(self, kwargs: dict[str, typing.Any]) -> None:
@@ -342,71 +344,96 @@ class FlashAttnVarlenPreprocessor(Preprocessor):
 
 class LLaDAMaskingPreprocessor(Preprocessor):
     """Preprocessor for LLaDA-style masking with diffusion-based training."""
-    
+
     def __init__(self, config: TransformerConfig, tensor_space: TensorSpace):
         self._config = config
         self._tensor_space = tensor_space
         self._distributed_config = tensor_space.distributed_config
+        # print(f"tensor_space: {tensor_space._tensor_dims.keys()}")
         self._scalar_dim = tensor_space.get_tensor_dim(DefaultDimNames.scalar)
-        self._sequence_dim = tensor_space.get_tensor_dim(TransformerDimNames.sequence_q)
-        
+        # self._sequence_dim = tensor_space.get_tensor_dim(TransformerDimNames.sequence_q)
+
     def preprocess(self, batch, kwargs: dict[str, typing.Any]) -> None:
         """Apply LLaDA-style masking to the input sequence."""
         # Get diffusion config from dataset parameters
-        diffusion_config = kwargs['parameters'].diffusion
+        # print(f"kwargs: {kwargs.keys()}")
+
+        print(f"1 batch: {type(batch)} {batch.shape}")
+
+        diffusion_config = self._config.diffusion
         if not diffusion_config.enabled:
             return
-            
+
         batch_size, seq_len = batch.shape
         device = batch.device
-        
-        t = torch.rand(batch_size, device=device)
-        
-        p_mask = (1 - diffusion_config.epsilon) * t + diffusion_config.epsilon
-        p_mask = torch.min(p_mask, torch.tensor(diffusion_config.max_mask_prob))
-        p_mask = p_mask[:, None].expand(-1, seq_len)
-        
-        masked_indices = torch.rand((batch_size, seq_len), device=device) < p_mask
-        
-        if diffusion_config.pad_prob > 0:
-            pad_mask = torch.rand((batch_size,), device=device) < diffusion_config.pad_prob
-            if pad_mask.any():
-                masked_indices[pad_mask] = True
-        
-        kwargs['masked_indices'] = masked_indices
-        kwargs['p_mask'] = p_mask
-        
-        if self._config.diffusion.bidirectional_attention:
-            # Bidirectional attention - all tokens can attend to all other tokens
-            attention_mask = torch.ones((batch_size, 1, seq_len, seq_len), device=device, dtype=torch.bool)
-        else:
-            # Causal attention
-            attention_mask = torch.ones((batch_size, 1, seq_len, seq_len), device=device, dtype=torch.bool).tril_()
+        mask_token_id = diffusion_config.mask_token_id
 
-            
+        # Generate a random tensor of batch size to seed masking probabilities
+        t = torch.rand((batch_size,), device=device)
+
+        # Compute the mask probabilities for every sequence in the batch
+        p_mask = (1 - diffusion_config.epsilon) * t + diffusion_config.epsilon
+
+        # Do we need to clamp at max_mask_prob?
+        # p_mask = torch.min(p_mask, torch.tensor(diffusion_config.max_mask_prob))
+
+        # Repeat the same mask probability for each token in the sequence
+        p_mask = p_mask[:, None].repeat(1, seq_len)
+        print(f"2 p_mask: {p_mask} {p_mask.shape}")
+
+        # Generate random values for all tokens in the batch and only mask the positions\
+        # where the value is smaller than the mask probability
+        masked_indices = torch.rand((batch_size, seq_len), device=device) < p_mask
+
+        # Need further classification of this padding - 1% data to have partial sequences and padding
+        # if diffusion_config.pad_prob > 0:
+        #     pad_mask = torch.rand((batch_size,), device=device) < diffusion_config.pad_prob
+        #     if pad_mask.any():
+        #         masked_indices[pad_mask] = True
+
+        # Replace masked tokens with the mask token ID to create input for the model.
+        noisy_batch = torch.where(masked_indices, mask_token_id, batch)
+
+        kwargs["masked_indices"] = masked_indices
+        kwargs["p_mask"] = p_mask
+        kwargs["noisy_batch"] = noisy_batch
+
+        # Bidirectional attention - all tokens can attend to all other tokens
+        attention_mask = torch.ones((batch_size, 1, seq_len, seq_len), device=device, dtype=torch.bool)
+
+        # if self._config.bidirectional_attention:
+        #     # Bidirectional attention - all tokens can attend to all other tokens
+        #     attention_mask = torch.ones((batch_size, 1, seq_len, seq_len), device=device, dtype=torch.bool)
+        # else:
+        #     # Causal attention
+        #     attention_mask = torch.ones((batch_size, 1, seq_len, seq_len), device=device, dtype=torch.bool).tril_()
+
         kwargs[TransformerKwargs.attention_mask] = attention_mask
         kwargs[TransformerKwargs.attention_mask_value] = torch.tensor(-10000.0, device=device)
-        
-    def preprocess_meta(self, kwargs: dict[str, typing.Any]) -> None:
-        """Define tensor metadata for masking tensors."""
-        # Get diffusion config from dataset parameters
-        diffusion_config = kwargs['parameters'].diffusion
-        if not diffusion_config.enabled:
-            return
-            
-        kwargs['masked_indices'] = TensorMeta.from_dims(
-            (self._scalar_dim, self._sequence_dim),
-            tensor_name='masked_indices'
-        )
-        kwargs['p_mask'] = TensorMeta.from_dims(
-            (self._scalar_dim, self._sequence_dim),
-            tensor_name='p_mask'
-        )
-        kwargs[TransformerKwargs.attention_mask] = TensorMeta.from_dims(
-            (self._scalar_dim, self._scalar_dim, self._sequence_dim, self._sequence_dim),
-            tensor_name=TransformerKwargs.attention_mask
-        )
-        kwargs[TransformerKwargs.attention_mask_value] = TensorMeta.from_dims(
-            (self._scalar_dim,),
-            tensor_name=TransformerKwargs.attention_mask_value
-        )
+
+    # def preprocess_meta(self, kwargs: dict[str, typing.Any]) -> None:
+    #     """Define tensor metadata for masking tensors."""
+
+    #     print(f"kwargs: {kwargs.keys()}")
+    #     # Get diffusion config from dataset parameters
+    #     sequence_q_dim = kwargs[TransformerKwargs.sequence_q_dim].size
+    #     diffusion_config = kwargs['parameters'].diffusion
+    #     if not diffusion_config.enabled:
+    #         return
+
+    #     kwargs['masked_indices'] = TensorMeta.from_dims(
+    #         (self._scalar_dim, sequence_q_dim),
+    #         tensor_name='masked_indices'
+    #     )
+    #     kwargs['p_mask'] = TensorMeta.from_dims(
+    #         (self._scalar_dim, sequence_q_dim),
+    #         tensor_name='p_mask'
+    #     )
+    #     kwargs[TransformerKwargs.attention_mask] = TensorMeta.from_dims(
+    #         (self._scalar_dim, self._scalar_dim, sequence_q_dim, self._sequence_dim),
+    #         tensor_name=TransformerKwargs.attention_mask
+    #     )
+    #     kwargs[TransformerKwargs.attention_mask_value] = TensorMeta.from_dims(
+    #         (self._scalar_dim,),
+    #         tensor_name=TransformerKwargs.attention_mask_value
+    #     )

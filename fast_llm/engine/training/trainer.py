@@ -88,7 +88,7 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
         # Prune empty phases.
         self._samples_per_split = {k: v for k, v in self._samples_per_split.items() if len(v) > 0}
 
-        self._loss_defs = self._multi_stage.base_model.loss_defs
+        self._loss_defs = self._multi_stage.base_model.get_loss_defs()
 
         # Setup the schedules
         self._schedule = {

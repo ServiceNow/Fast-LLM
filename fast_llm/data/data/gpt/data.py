@@ -32,51 +32,68 @@ class GPTBatch:
     token_ids: torch.Tensor
     loss_masking_spans: list[torch.Tensor] | None = None
     sequence_lengths: list[torch.Tensor] | None = None
+    mask_indexes: torch.Tensor | None = None
+    mask_probabilities: torch.Tensor | None = None
 
 
 def gpt_data_collate_fn(batch: list[GPTSample], sampling_parameters: GPTSamplingParameters) -> GPTBatch:
-    """Collate function that supports LLaDA-style masking."""
+
     stacked_ids = np.stack([sample.token_ids for sample in batch])
     stacked_spans = None
     sequence_lengths = None
-    
+    mask_indexes = None
+    mask_probabilities = None
+
     token_ids = torch.from_numpy(stacked_ids)
-    
+
     if sampling_parameters.diffusion.enabled:
+
+        diffusion_config = sampling_parameters.diffusion
+
         batch_size, seq_len = token_ids.shape
-        device = token_ids.device
-        t = torch.rand(batch_size, device=device)
-        p_mask = (1 - sampling_parameters.diffusion.epsilon) * t + sampling_parameters.diffusion.epsilon
-        p_mask = torch.min(p_mask, torch.tensor(sampling_parameters.diffusion.max_mask_prob))
-        p_mask = p_mask[:, None].expand(-1, seq_len)
-        
-        masked_indices = torch.rand((batch_size, seq_len), device=device) < p_mask
-        
-        if sampling_parameters.diffusion.pad_prob > 0:
-            pad_mask = torch.rand((batch_size,), device=device) < sampling_parameters.diffusion.pad_prob
-            if pad_mask.any():
-                masked_indices[pad_mask] = True
-        
-        token_ids = torch.where(masked_indices, sampling_parameters.diffusion.mask_token_id, token_ids)
-        
-        if not stacked_spans:
-            stacked_spans = []
-        stacked_spans.extend([
-            torch.stack([masked_indices[i], p_mask[i]]) 
-            for i in range(batch_size)
-        ])
-    
+        mask_token_id = diffusion_config.mask_token_id
+
+        # Generate a random tensor of batch size to seed masking probabilities
+        t = torch.rand((batch_size,))
+
+        # Compute the mask probabilities for every sequence in the batch
+        p_mask = (1 - diffusion_config.epsilon) * t + diffusion_config.epsilon
+
+        # Do we need to clamp at max_mask_prob?
+        # p_mask = torch.min(p_mask, torch.tensor(diffusion_config.max_mask_prob))
+
+        # Repeat the same mask probability for each token in the sequence
+        mask_probabilities = p_mask[:, None].repeat(1, seq_len)
+        # Input has an additional token for shitting, is [0, 1, 2, 3, 4] -> [1, 2, 3, 4]
+        # We should not mask it
+        mask_probabilities[:, 0] = 0.0
+        # print(f"2 p_mask: {mask_probabilities} {mask_probabilities.shape}")
+
+        # Generate random values for all tokens in the batch and only mask the positions\
+        # where the value is smaller than the mask probability
+        mask_indexes = torch.rand((batch_size, seq_len)) < mask_probabilities
+
+        # Need further classification of this padding - 1% data to have partial sequences and padding
+        # if diffusion_config.pad_prob > 0:
+        #     pad_mask = torch.rand((batch_size,), device=device) < diffusion_config.pad_prob
+        #     if pad_mask.any():
+        #         mask_indexes[pad_mask] = True
+
+        # Replace masked tokens with the mask token ID to create input for the model.
+        token_ids = torch.where(mask_indexes, mask_token_id, token_ids)
+
     if sampling_parameters.use_loss_masking_spans:
-        if not stacked_spans:
-            stacked_spans = [torch.from_numpy(sample.loss_masking_spans) for sample in batch]
-            
+        stacked_spans = [torch.from_numpy(sample.loss_masking_spans) for sample in batch]
+
     if not sampling_parameters.cross_document_attention:
         sequence_lengths = [torch.tensor(sample.sequence_lengths) for sample in batch]
-        
+
     return GPTBatch(
         token_ids=token_ids,
         loss_masking_spans=stacked_spans,
-        sequence_lengths=sequence_lengths
+        sequence_lengths=sequence_lengths,
+        mask_indexes=mask_indexes,
+        mask_probabilities=mask_probabilities,
     )
 
 

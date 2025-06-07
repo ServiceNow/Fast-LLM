@@ -71,6 +71,9 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
         else:
             self._preprocessors.append(BackupAttentionPreprocessor(self._config.transformer, self._tensor_space))
 
+        # if self._config.transformer.diffusion.enabled:
+        #     self._preprocessors.append(LLaDAMaskingPreprocessor(self._config.transformer, self._tensor_space))
+
     def get_output_layers(self) -> list[Layer]:
         return [
             layer
@@ -91,7 +94,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                         self._tensor_space,
                         prediction_distance=i,
                     )
-                    if self._config.transformer.bidirectional_attention
+                    if self._config.transformer.diffusion
                     else LanguageModelHead(
                         self._config,
                         self._tensor_space,
@@ -297,7 +300,32 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                                 else:
                                     labels[i, start : end + 1] = -100
                 kwargs[LanguageModelKwargs.labels] = labels
+
+                if batch.mask_indexes is not None:
+                    # We are in masked-diffusion mode, so we need to add the mask indexes and probabilities to kwargs
+                    # print(f'in masked-diffusion mode, batch.mask_indexes: {batch.mask_indexes}')
+                    kwargs[LanguageModelKwargs.mask_indexes] = batch.mask_indexes.to(
+                        device=self._tensor_space.distributed.device
+                    )
+                    kwargs[LanguageModelKwargs.mask_probabilities] = batch.mask_probabilities.to(
+                        device=self._tensor_space.distributed.device
+                    )
+                    # Setup bidirection attention for diffusion should we set this in a preprocessor? BackupAttentionPreprocessor?
+                    batch_size, seq_len = batch.token_ids.shape
+                    attention_mask = torch.ones(
+                        (batch_size, 1, seq_len, seq_len),
+                        dtype=torch.bool,
+                        device=self._tensor_space.distributed.device,
+                    )
+                    kwargs[TransformerKwargs.attention_mask] = attention_mask
+                    kwargs[TransformerKwargs.attention_mask_value] = torch.tensor(
+                        -10000.0, device=self._tensor_space.distributed.device
+                    )
+
+            # print(f"batch.token_ids aka inputs: {batch.token_ids}")
+            # print(f"labels: {labels}")
             for preprocessor in self._preprocessors:
+                # Update this include p_maks and mask index in kwargs
                 preprocessor.preprocess(tokens, kwargs)
             preprocessed.append((tokens, kwargs))
 
@@ -338,10 +366,10 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             return {}
 
     # @property
-    def loss_defs(self) -> list[LossDef]:
+    def get_loss_defs(self) -> list[LossDef]:
         loss_defs = []
-        if self._config.transformer.bidirectional_attention:
-            # MLM loss for LLaDA-style training
+        if self._config.transformer.diffusion:
+            # Masked LM Loss for masked-diffusion training
             loss_defs.append(
                 LossDef(name=LanguageModelLossNames.mlm_loss, formatted_name="MLM Loss", count=1, dtype=torch.float32)
             )

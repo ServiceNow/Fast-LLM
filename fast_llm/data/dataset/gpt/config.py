@@ -45,31 +45,11 @@ class ShufflingType(str, enum.Enum):
 
 
 @config_class()
-class GPTSamplingConfig(SamplingConfig):
-    """
-    A dataset-dependent configuration for sampling.
-    """
-
-    gpu: bool = Field(
-        default=True,
-        desc="Enable fast sampling on GPU."
-        " Note that random sampling works differently on GPU,"
-        " so the sample won't match the CPU equivalent.",
-        hint=FieldHint.feature,
-    )
-    shuffle: ShufflingType = Field(
-        default=ShufflingType.epoch,
-        desc="Shuffling strategy.",
-        hint=FieldHint.feature,
-    )
-
-
-@config_class()
 class DiffusionMaskingConfig(Config):
     """Configuration for diffusion-based masking during data preparation."""
 
     enabled: bool = Field(
-        default=False, desc="Whether to use diffusion-based masking during training", hint=FieldHint.feature
+        default=False, desc="Whether to use masked diffusion during training", hint=FieldHint.feature
     )
 
     epsilon: float = Field(
@@ -95,9 +75,34 @@ class DiffusionMaskingConfig(Config):
         Assert.lt(
             self.max_mask_prob,
             1.0,
-        )  #  "max_mask_prob must be less than 1.0")
-        if self.enabled:
-            Assert.is_not_none(self.mask_token_id, "mask_token_id must be set when masking is enabled")
+        )  # "max_mask_prob must be less than 1.0")
+        # if self.enabled:
+        #     Assert.is_not_none(self.mask_token_id, "mask_token_id must be set when masking is enabled")
+
+
+@config_class()
+class GPTSamplingConfig(SamplingConfig):
+    """
+    A dataset-dependent configuration for sampling.
+    """
+
+    gpu: bool = Field(
+        default=True,
+        desc="Enable fast sampling on GPU."
+        " Note that random sampling works differently on GPU,"
+        " so the sample won't match the CPU equivalent.",
+        hint=FieldHint.feature,
+    )
+    shuffle: ShufflingType = Field(
+        default=ShufflingType.epoch,
+        desc="Shuffling strategy.",
+        hint=FieldHint.feature,
+    )
+    diffusion: DiffusionMaskingConfig = Field(
+        default_factory=DiffusionMaskingConfig,
+        desc="Configuration for diffusion-based masking during data preparation.",
+        hint=FieldHint.feature,
+    )
 
 
 @dataclasses.dataclass(kw_only=True)
@@ -113,9 +118,11 @@ class GPTSamplingParameters(SamplingParameters):
     # How many extra tokens to add to the sequence length.
     # This is used to provide labels even for the last tokens in the sequence.
     extra_tokens: int = 1
-
-    # Diffusion masking configuration
-    diffusion: DiffusionMaskingConfig = dataclasses.field(default_factory=DiffusionMaskingConfig)
+    diffusion: DiffusionMaskingConfig = Field(
+        default_factory=DiffusionMaskingConfig,
+        desc="Configuration for diffusion-based masking during data preparation. Will be copied from GPTSamplingConfig during ",
+        hint=FieldHint.feature,
+    )
 
 
 @dataclasses.dataclass(kw_only=True)

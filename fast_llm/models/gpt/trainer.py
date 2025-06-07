@@ -50,6 +50,7 @@ class GPTTrainer[ConfigType: GPTTrainerConfig](Trainer[ConfigType]):
                 "use_loss_masking_spans": self._config.batch.use_loss_masking_spans,
                 "cross_document_attention": self._config.batch.cross_document_attention,
                 "extra_tokens": self._config.model.base_model.prediction_heads,
+                "diffusion": self._config.data.sampling.diffusion,
             }
         )
         return parameters if _return_dict else GPTSamplingParameters(**parameters)

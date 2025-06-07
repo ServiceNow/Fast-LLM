@@ -21,6 +21,7 @@ class LanguageModelDimNames:
 class LanguageModelLossNames:
     language_model_loss = "language_model_loss"
     z_loss = "z_loss"
+    mlm_loss = "masked_language_model_loss"
 
     @staticmethod
     def multi_token_prediction_loss(index: int) -> str:
@@ -34,6 +35,8 @@ class LanguageModelKwargs:
     # TODO: These are generic
     labels = "labels"
     phase = "phase"
+    mask_indexes = "mask_indexes"
+    mask_probabilities = "mask_probabilities"
 
 
 @config_class()

@@ -93,7 +93,8 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ScheduleConfig]):
         self._stages: list[Stage] = self._multi_stage.stages
         self._tied_parameters = self._multi_stage.tied_parameters
         self._num_stages = len(self._stages)
-        self._loss_defs = {loss_def.name: loss_def for loss_def in self._multi_stage.base_model.loss_defs}
+        print(f"base_model={type(self._multi_stage.base_model)} {self._multi_stage.base_model.get_loss_defs()} ")
+        self._loss_defs = {loss_def.name: loss_def for loss_def in self._multi_stage.base_model.get_loss_defs()}
 
     def setup(self, distributed: Distributed, optimizer: Optimizer | None = None) -> None:
         assert not self._is_setup
