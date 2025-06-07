@@ -11,7 +11,7 @@ from fast_llm.layers.ssm.config import SSMConfig, SSMDimNames
 from fast_llm.tensor import ParameterMeta, init_ones_, init_uniform_, init_zeros_, kaiming_init_
 
 """
-This code is adapted fropm https://github.com/cartesia-ai/edge/blob/main/cartesia-pytorch/cartesia_pytorch/Llamba/mixers/discrete_mamba2.py
+This code is adapted from https://github.com/cartesia-ai/edge/blob/main/cartesia-pytorch/cartesia_pytorch/Llamba/mixers/discrete_mamba2.py
 """
 
 
@@ -65,7 +65,7 @@ class DiscreteMamba2(torch.nn.Module):
         self.act = config.activation_type.activation_fn
         self.activation_name = config.activation_type.name
 
-        # TODO: double check innitializations
+        # TODO: double check initializations
         # Projections
         self.in_proj = Linear(td_model, td_inner_proj, bias=bias, weight_init_method=kaiming_init_(td_model.size))
         self.z_bias = (

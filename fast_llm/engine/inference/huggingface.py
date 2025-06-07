@@ -78,7 +78,7 @@ class HuggingfacePreTrainedModel(transformers.PreTrainedModel):
             )
 
         # Create the model
-        # always set up model and crate distributed instance internally for now
+        # always set up model and create distributed instance internally for now
         fast_llm_model = cls.runner_class.model_class.from_pretrained(
             pretrained_model_name_or_path,
             *updates,

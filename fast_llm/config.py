@@ -41,7 +41,7 @@ class NoAutoValidate:
 
 
 class UpdateType(str, enum.Enum):
-    # Override entries no matter what they contais.
+    # Override entries no matter what they contain.
     override = "override"
     # Override atomic entries and lists, but update dicts recursively by setting or overriding only the specified entries.
     update = "update"
@@ -277,7 +277,6 @@ def config_class[
 
         if dynamic_type is not None:
             for cls_, name in dynamic_type.items():
-                print(cls_, name, wrapped)
                 cls_.register_subclass(name, wrapped)
 
         return wrapped

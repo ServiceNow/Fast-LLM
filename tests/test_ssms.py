@@ -139,7 +139,7 @@ def test_load_from_llamba_checkpoint(distributed_config):
     assert torch.allclose(logits, hf_logits, atol=1e-2)
 
 
-@pytest.mark.skip(reason="Too slow.")
+@pytest.mark.extra_slow
 @pytest.mark.skipif(not run_test, reason="No CUDA available or Mamba not installed")
 @pytest.mark.parametrize(
     "hybrid_block_layout,LAYER_CLS",

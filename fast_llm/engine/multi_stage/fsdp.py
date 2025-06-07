@@ -11,7 +11,7 @@ from fast_llm.engine.config_utils.tensor_space import TensorDim
 from fast_llm.engine.distributed.config import DistributedDim
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.engine.multi_stage.config import SHARD_PAD_TO_MULTIPLE, ShardName, StageMode
-from fast_llm.functional.triton.pointwise import triton_add, triton_copy
+from fast_llm.functional.triton.pointwise import triton_add, triton_copy, triton_fill
 from fast_llm.logging import log_distributed_tensor
 from fast_llm.tensor import ParameterMeta, SafeTensorSlice, TensorMeta
 from fast_llm.utils import Assert, clamp, padded_cumsum
