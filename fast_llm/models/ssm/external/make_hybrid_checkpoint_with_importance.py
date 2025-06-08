@@ -17,7 +17,12 @@ print("Transformers version:", transformers.__version__)
 @click.command()
 @click.option("--index_to_swap", type=int, required=True)
 @click.option("--checkpoint", type=str, required=True)
-def main(index_to_swap: int, checkpoint=None):
+@click.option("--output_model_path", type=str, required=True)
+def main(
+    index_to_swap: int,
+    checkpoint=None,
+    output_model_path="/mnt/checkpoints/ssm/iterative_hybrids_only_new_layer_train",
+):
     print(f"index_to_swap: {index_to_swap}, checkpoint: {checkpoint}")
 
     layer_importance = [
@@ -120,7 +125,7 @@ def main(index_to_swap: int, checkpoint=None):
 
     print(model_hybrid)
     model_hybrid.save_pretrained(
-        f"/mnt/checkpoints/ssm/iterative_hybrids_only_new_layer_train/apriel_ssm_thinker15b_hybrid_{index_to_swap+1}ssm_leastimportant_32h_init_rand"
+        f"{output_model_path}/apriel_ssm_thinker15b_hybrid_{index_to_swap+1}ssm_leastimportant_32h_init_rand"
     )
 
     # checkpoint = "ServiceNow-AI/Apriel-Nemotron-15b-Thinker"
