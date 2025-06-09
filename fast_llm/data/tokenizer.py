@@ -69,7 +69,7 @@ class Tokenizer:
                 char_pos = image_position
                 image_position = image_positions[image_idx] if image_idx < len(image_positions) else float("inf")
             if char_pos < start:
-                self._tokenize(text[char_pos:start], begin=beginning_of_text, end=False)
+                tokenized_text = self._tokenize(text[char_pos:start], begin=beginning_of_text, end=False)
                 beginning_of_text = False
                 token_ids.extend(tokenized_text)
             char_pos = start
