@@ -57,7 +57,7 @@ class GPTMemmapDataset(GPTIndexedDataset):
                 self._has_preference_spans = struct.unpack("<B", stream.read(1))[0]
             if self._version >= 4:
                 self._has_images = struct.unpack("<B", stream.read(1))[0]
-                # not sure of assignment, but has to read something here
+                # not sure of assignment, but has to read something here w.r.t preference loss masking spans
                 self._has_preference_spans = struct.unpack("<B", stream.read(1))[0]
 
             self._dtype = MEMMAP_DTYPES[struct.unpack("<B", stream.read(1))[0]].numpy            
