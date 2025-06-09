@@ -35,7 +35,7 @@ COPY --chmod=777 ./fast_llm/__init__.py fast_llm/
 COPY --chmod=777 ./fast_llm/csrc/ fast_llm/csrc/
 
 # Install dependencies within the virtual environment.
-RUN pip install --no-cache-dir --no-build-isolation -e ".[CORE,OPTIONAL,DEV]"
+RUN pip install --no-cache-dir --no-build-isolation -e ".[CORE,OPTIONAL,DEV]" --use-pep517
 
 # Copy the remaining source code with universal write permissions.
 COPY --chmod=777 ./Megatron-LM Megatron-LM
