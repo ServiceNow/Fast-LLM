@@ -549,7 +549,7 @@ class GPTSampledIndexedDataset(SampledDataset):
                     use_loss_masking_spans=self._parameters.use_loss_masking_spans,
                 )
                 start_pos = 0
-                if sample.image_positions:
+                if len(sample.image_positions) > 0:
                     for idx, im_position in enumerate(sample.image_positions):
                         # image_positions.append(im_positions + len(token_ids) + image_tokens_added)
                         # Add placeholders for image tokens

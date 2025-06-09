@@ -158,13 +158,13 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
             for item in tqdm.tqdm(shard_dataset, desc=f"Saving shard {shard_idx}", unit="docs"):
                 yield GPTSample(
                     np.array(item["input_ids"], dtype=self._data_type.numpy),
+                    item["images"] if self._config.dataset.images else None,
+                    item["image_positions"] if self._config.dataset.image_positions else None,
                     (
                         np.array(item["token_spans"], dtype=np.int32).reshape(-1, 2)
                         if self._config.dataset.loss_masking_spans
                         else None
                     ),
-                    item["images"] if self._config.dataset.images else None,
-                    item["image_positions"] if self._config.dataset.image_positions else None,
                     item.get("chosen_token_spans", None),
                     item.get("rejected_token_spans", None),
                 )
