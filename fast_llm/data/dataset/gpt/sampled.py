@@ -236,9 +236,10 @@ class GPTSampledIndexedDataset(SampledDataset):
 
         if self._yaml_path is not None and self._yaml_path.is_file():
             loaded_yaml_data = yaml.safe_load(self._yaml_path.open("r"))
+            yaml_data["unshuffled_tokens"] = loaded_yaml_data.get("unshuffled_tokens", 0)
             self._load_yaml_data(yaml_data)
-            if not self._truncate_documents and not self._parameters.use_preference_loss_spans:
-                del loaded_yaml_data["unshuffled_tokens"]
+            # if not self._truncate_documents and not self._parameters.use_preference_loss_spans:
+            #     del loaded_yaml_data["unshuffled_tokens"]
 
             if loaded_yaml_data != yaml_data:
                 raise RuntimeError(
