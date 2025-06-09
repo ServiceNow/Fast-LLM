@@ -1,6 +1,11 @@
 # syntax=docker/dockerfile:1.7-labs
 FROM nvcr.io/nvidia/pytorch:25.02-py3
 
+ENV CUDA_HOME=/usr/local/cuda
+ENV PATH=$CUDA_HOME/bin:$PATH
+ENV LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
+
+
 # Install dependencies.
 RUN apt-get update \
     && apt-get install --no-install-recommends -y acl git-lfs \
