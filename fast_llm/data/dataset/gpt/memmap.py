@@ -46,7 +46,7 @@ class GPTMemmapDataset(GPTIndexedDataset):
         self._has_spans = 0
         self._has_images = 0
         self._has_preference_spans = False
-        
+
         with self._prefix.with_suffix(".idx").open("rb") as stream:
             Assert.eq(stream.read(9), MEMMAP_INDEX_HEADER, msg=f"File: {stream.name}")
             self._version = struct.unpack("<Q", stream.read(8))[0]
@@ -55,12 +55,13 @@ class GPTMemmapDataset(GPTIndexedDataset):
                 self._has_spans = struct.unpack("<B", stream.read(1))[0]
             if self._version >= 3:
                 self._has_preference_spans = struct.unpack("<B", stream.read(1))[0]
+
             if self._version >= 4:
                 self._has_images = struct.unpack("<B", stream.read(1))[0]
-                # not sure of assignment, but has to read something here w.r.t preference loss masking spans
+                #  not sure of assignment, reading flag to indicate whether preference loss-masking spans are present
                 self._has_preference_spans = struct.unpack("<B", stream.read(1))[0]
 
-            self._dtype = MEMMAP_DTYPES[struct.unpack("<B", stream.read(1))[0]].numpy            
+            self._dtype = MEMMAP_DTYPES[struct.unpack("<B", stream.read(1))[0]].numpy
             self._num_documents = struct.unpack("<Q", stream.read(8))[0]
             _ = struct.unpack("<Q", stream.read(8))[0]
             offset = stream.tell()
@@ -110,7 +111,7 @@ class GPTMemmapDataset(GPTIndexedDataset):
             offset += (
                 self._num_spans.nbytes
                 + self._num_spans.sum() * 2 * np.dtype(np.int32).itemsize
-            )   
+            )
         # read preference spans
         self._chosen_spans = None
         self._rejected_spans = None
@@ -143,58 +144,34 @@ class GPTMemmapDataset(GPTIndexedDataset):
         self._image_lengths = None
         self._image_positions = None
         if self._has_images and self._version >= 4:
-            # Read number of images per document
             self._n_images = np.frombuffer(
                 self._index_bin_buffer, dtype=np.int32, count=self._num_documents, offset=offset
             )
-            offset += self._n_images.nbytes
-            # Read image dimensions
-            total_images = self._n_images.sum()
-            if total_images > 0:
-                image_lengths_flat = np.frombuffer(
-                    self._index_bin_buffer,
-                    dtype=np.int32,
-                    count=total_images * 2,
-                    offset=offset
-                ).reshape(-1, 2)
-                offset += image_lengths_flat.nbytes
-                
-                # Split image lengths by document
-                self._image_lengths = []
-                img_start = 0
-                for n_images in self._n_images:
-                    if n_images > 0:
-                        self._image_lengths.append(image_lengths_flat[img_start:img_start + n_images])
-                        self._num_pixels += self._image_lengths[-1].prod(axis=1, initial=3).sum()
-                        img_start += n_images
-                    else:
-                        self._image_lengths.append(np.array([], dtype=np.int32).reshape(0, 2))
-                
-                # Read padded image positions
-                max_images_per_doc = self._n_images.max() if len(self._n_images) > 0 else 0
-                if max_images_per_doc > 0:
-                    padded_positions = np.frombuffer(
+            self._image_lengths = []
+            self._image_positions = []
+            images_seen = 0
+            for n_images in self._n_images:
+                self._image_lengths.append(
+                    np.frombuffer(
                         self._index_bin_buffer,
                         dtype=np.int32,
-                        count=self._num_documents * max_images_per_doc,
-                        offset=offset,
-                    ).reshape(self._num_documents, max_images_per_doc)
-                    
-                    # Filter out padding (-1 values) to get actual positions
-                    self._image_positions = []
-                    for doc_idx, n_images in enumerate(self._n_images):
-                        if n_images > 0:
-                            actual_positions = padded_positions[doc_idx][:n_images]
-                            # Remove any -1 padding that might exist
-                            actual_positions = actual_positions[actual_positions != -1]
-                            self._image_positions.append(actual_positions)
-                        else:
-                            self._image_positions.append(np.array([], dtype=np.int32))
-                else:
-                    self._image_positions = [np.array([], dtype=np.int32) for _ in range(self._num_documents)]
-            else:
-                self._image_lengths = [np.array([], dtype=np.int32).reshape(0, 2) for _ in range(self._num_documents)]
-                self._image_positions = [np.array([], dtype=np.int32) for _ in range(self._num_documents)]
+                        count=n_images * 2,
+                        offset=offset + self._n_images.nbytes + 2 * images_seen * np.dtype(np.int32).itemsize,
+                    ).reshape(-1, 2)
+                )
+                self._num_pixels += self._image_lengths[-1].prod(axis=1, initial=3).sum()
+                self._image_positions.append(
+                    np.frombuffer(
+                        self._index_bin_buffer,
+                        dtype=np.int32,
+                        count=n_images,
+                        offset=offset
+                        + self._n_images.nbytes
+                        + 2 * self._n_images.sum() * np.dtype(np.int32).itemsize
+                        + images_seen * np.dtype(np.int32).itemsize,
+                    )
+                )
+                images_seen += n_images
 
         self._bin_buffer_mmap = np.memmap(self._prefix.with_suffix(".bin"), mode="r", order="C")
         self._bin_buffer = memoryview(self._bin_buffer_mmap)
@@ -237,30 +214,22 @@ class GPTMemmapDataset(GPTIndexedDataset):
         image_positions = None
         if self._has_images:
             image_positions = self._image_positions[idx]
+            total_pixels_needed = sum(
+                length[0] * length[1] * 3 for length in self._image_lengths[idx]
+            )
             # Truncations with images are not yet supported, so we get all images from the document
-            if len(self._image_lengths[idx]) > 0:
-                total_pixels_needed = sum(
-                    length[0] * length[1] * 3 for length in self._image_lengths[idx]
-                )
-                
-                pixels = np.frombuffer(
-                    self._bin_buffer,
-                    dtype=np.dtype(np.uint8),
-                    count=total_pixels_needed, 
-                    offset=self._pointers[idx] + self._document_sizes[idx] * np.dtype(self._dtype).itemsize,
-                )
-                
-                images = []
-                start = 0
-                for image_length in self._image_lengths[idx]:
-                    height, width = image_length[0], image_length[1]
-                    n_pixels = height * width * 3
-                    image_data = pixels[start : start + n_pixels].reshape(3, height, width)
-                    images.append(image_data)
-                    start += n_pixels
-            else:
-                images = []
-                
+            pixels = np.frombuffer(
+                self._bin_buffer,
+                dtype=np.dtype(np.uint8),
+                count=total_pixels_needed,
+                offset=self._pointers[idx] + self._document_sizes[idx] * np.dtype(self._dtype).itemsize,
+            )
+            images = []
+            start = 0
+            for image_length in self._image_lengths[idx]:
+                n_pixels = image_length[0] * image_length[1] * 3
+                images.append(pixels[start : start + n_pixels].reshape(3, image_length[0], image_length[1]))
+                start += n_pixels
         sample_spans = None
         if use_loss_masking_spans and self._spans is not None:
             sample_spans = self._spans[idx]
@@ -389,10 +358,7 @@ class GPTMemmapDataset(GPTIndexedDataset):
                         image_lengths.append(np.array(pixels.shape[1:]))
                         bin_stream.write(pixels.tobytes(order="C"))
                         total_im_size += pixels.size
-                    im_positions.append(document.image_positions)
-                else:
-                    n_images.append(0)
-                    im_positions.append([])
+                    im_positions.extend(document.image_positions)
 
                 # Update metadata
                 doc_length = len(document.token_ids)
@@ -422,14 +388,7 @@ class GPTMemmapDataset(GPTIndexedDataset):
         if total_images:
             n_images = np.array(n_images, dtype=np.int32)
             image_lengths = np.stack(image_lengths, dtype=np.int32)
-            
-            # Pad im_positions to make them equal length
-            max_images = max(len(pos_list) for pos_list in im_positions)
-            padded_im_positions = []
-            for pos_list in im_positions:
-                padded_pos = pos_list + [-1] * (max_images - len(pos_list))
-                padded_im_positions.append(padded_pos)
-            im_positions = np.array(padded_im_positions, dtype=np.int32)
+            im_positions = np.array(im_positions, dtype=np.int32)
         else:
             n_images = np.array([])
             image_lengths = np.array([])
