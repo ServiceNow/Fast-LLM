@@ -101,6 +101,10 @@ class DependencyManager:
     def _resolve_dependencies(self, item: pytest.Function):
         dependencies = set()
         unresolved = set()
+
+        if "skip" in item.keywords:
+            return dependencies, unresolved
+
         nodeid = clean_nodeid(item.nodeid)
 
         for marker in item.iter_markers():

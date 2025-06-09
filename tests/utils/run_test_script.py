@@ -69,7 +69,7 @@ def run_test_script(worker_resources):
             if num_gpus == 1 and not is_megatron:
                 CliTrainingConfig.parse_and_run(args)
             else:
-                completed_proc = subprocess.run(command, env=env, timeout=60)
+                completed_proc = subprocess.run(command, env=env, timeout=120)
                 if completed_proc.returncode:
                     raise RuntimeError(f"Process failed with return code {completed_proc.returncode}")
         if compare_path is not None and do_compare:

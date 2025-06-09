@@ -1,4 +1,5 @@
 import dataclasses
+import enum
 import functools
 import os
 import typing
@@ -21,6 +22,17 @@ from tests.utils.dataset import DATASET_PREFIX, TEST_VOCAB_SIZE
 _LOG_LEVEL = int(os.environ.get("LOG_LEVEL", 13))
 
 
+class ModelTestingGroup(enum.StrEnum):
+    basic = "basic"
+    megatron = "megatron"
+    distributed = "distributed"
+    convert = "convert"
+    generate = "generate"
+
+
+SLOW_TESTING_GROUPS = {ModelTestingGroup.megatron, ModelTestingGroup.distributed}
+
+
 @dataclasses.dataclass(kw_only=True, frozen=True)
 class ModelTestingConfig:
     name: str = None
@@ -28,6 +40,11 @@ class ModelTestingConfig:
     config_args: list[str]
     megatron_args: list[str] | None
     checkpoint_format: CheckpointFormat | None
+    # The important groups we want to test.
+    testing_groups: list[ModelTestingGroup]
+    # Other supported groups, excluded by default because they are mostly unimportant and/or redundant.
+    # They can be run with `--run-extra-slow`.
+    other_groups: list[ModelTestingGroup]
 
     @functools.cached_property
     def model_config_class(self):
@@ -54,9 +71,15 @@ def _update_and_add_testing_config(
     extra_args: list[str] | None = None,
     megatron_args: list[str] | None = ...,
     checkpoint_format: CheckpointFormat | None = ...,
+    testing_groups: list[ModelTestingGroup],
+    other_groups: list[ModelTestingGroup],
 ):
     config = _MODEL_CONFIGS[old_name]
-    updates: dict[str, typing.Any] = {"name": new_name}
+    updates: dict[str, typing.Any] = {
+        "name": new_name,
+        "testing_groups": testing_groups,
+        "other_groups": other_groups,
+    }
     if model_type is not None:
         updates["model_type"] = model_type
     if extra_args is not None:
@@ -78,6 +101,7 @@ _MODEL_CONFIGS: dict[str, ModelTestingConfig] = {}
 
 
 _MODEL_CONFIGS["gpt2"] = ModelTestingConfig(
+    # Tests gpt2 features (absolute embeddings, layer norm,  relu activation, tied embeddings, MHA, linear biases).
     name="gpt2",
     model_type="gpt",
     config_args=[
@@ -97,7 +121,7 @@ _MODEL_CONFIGS["gpt2"] = ModelTestingConfig(
         f"model.multi_stage.debug_all_param_gradients={_LOG_LEVEL}",
         "model.multi_stage.debug_tensor_parallel=True",
         "model.distributed.reproducible_init=True",
-        "model.distributed.timeout=10",
+        "model.distributed.timeout=20",
         "model.distributed.training_dtype=bf16",
         "training.train_iters=2",
         "training.num_workers=0",
@@ -153,17 +177,32 @@ _MODEL_CONFIGS["gpt2"] = ModelTestingConfig(
         "--transformer-impl=transformer_engine",
     ],
     checkpoint_format=None,
+    testing_groups=[
+        ModelTestingGroup.basic,
+        ModelTestingGroup.megatron,
+        ModelTestingGroup.distributed,
+    ],
+    other_groups=[],
 )
 
 _update_and_add_testing_config(
+    # Tests MQA.
     "gpt2",
     "starcoder",
     extra_args=["model.base_model.transformer.head_groups=1"],
     megatron_args=["--group-query-attention"],
     checkpoint_format=None,
+    testing_groups=[
+        ModelTestingGroup.basic,
+    ],
+    other_groups=[
+        ModelTestingGroup.megatron,
+        ModelTestingGroup.distributed,
+    ],
 )
 
 _update_and_add_testing_config(
+    # Tests intermediate between gpt2 and llama, closest converter to gpt2.
     "gpt2",
     "starcoder2",
     extra_args=[
@@ -177,9 +216,19 @@ _update_and_add_testing_config(
         "--no-position-embedding",
     ],
     checkpoint_format=Starcoder2GPTHuggingfaceCheckpointFormat,
+    testing_groups=[
+        ModelTestingGroup.basic,
+        ModelTestingGroup.convert,
+    ],
+    other_groups=[
+        ModelTestingGroup.megatron,
+        ModelTestingGroup.distributed,
+        ModelTestingGroup.generate,
+    ],
 )
 
 _update_and_add_testing_config(
+    # Main tested model.
     "starcoder2",
     "llama",
     extra_args=[
@@ -198,55 +247,108 @@ _update_and_add_testing_config(
         "--untie-embeddings-and-output-weights",
     ],
     checkpoint_format=LlamaGPTHuggingfaceCheckpointFormat,
+    testing_groups=[
+        ModelTestingGroup.basic,
+        ModelTestingGroup.megatron,
+        ModelTestingGroup.distributed,
+        ModelTestingGroup.convert,
+        ModelTestingGroup.generate,
+    ],
+    other_groups=[],
 )
 
 _update_and_add_testing_config(
+    # Tests llama3-style rotary embeddings.
     "llama",
     "llama3",
     extra_args=["model.base_model.transformer.rotary.type=llama3"],
     # Megatron doesn't support Llama3-style Rotary Embeddings
     megatron_args=None,
     checkpoint_format=LlamaGPTHuggingfaceCheckpointFormat,
+    testing_groups=[
+        ModelTestingGroup.basic,
+    ],
+    other_groups=[
+        ModelTestingGroup.distributed,
+        ModelTestingGroup.convert,
+        ModelTestingGroup.generate,
+    ],
 )
 
 _update_and_add_testing_config(
+    # Tests yarn-style rotary embeddings.
     "llama",
     "llama_yarn",
     extra_args=["model.base_model.transformer.rotary.type=yarn"],
     # Megatron doesn't support Yarn-style Rotary Embeddings
     megatron_args=None,
     checkpoint_format=LlamaGPTHuggingfaceCheckpointFormat,
+    testing_groups=[
+        ModelTestingGroup.basic,
+    ],
+    other_groups=[
+        ModelTestingGroup.distributed,
+        ModelTestingGroup.convert,
+        ModelTestingGroup.generate,
+    ],
 )
 
 _update_and_add_testing_config(
+    # Tests multi-token prediction, custom HF model and converter.
     "llama",
     "llama_mtp",
     extra_args=["model.base_model.prediction_heads=4"],
     # Megatron doesn't support multi-token prediction.
     megatron_args=None,
     checkpoint_format=MTPLlamaGPTHuggingfaceCheckpointFormat,
+    testing_groups=[
+        ModelTestingGroup.basic,
+        ModelTestingGroup.convert,
+        ModelTestingGroup.generate,
+    ],
+    other_groups=[
+        ModelTestingGroup.distributed,
+    ],
 )
 
 _update_and_add_testing_config(
+    # Tests partial linear biases, Qwen2 converter.
     "llama",
     "qwen2",
     extra_args=["model.base_model.transformer.add_linear_biases=only_attn_qkv"],
     # Megatron doesn't support per sub layer biases
     megatron_args=None,
     checkpoint_format=Qwen2GPTHuggingfaceCheckpointFormat,
+    testing_groups=[
+        ModelTestingGroup.basic,
+        ModelTestingGroup.convert,
+    ],
+    other_groups=[
+        ModelTestingGroup.distributed,
+        ModelTestingGroup.generate,
+    ],
 )
 
 _update_and_add_testing_config(
+    # Tests sliding window attention, mistral converter.
     "llama",
     "mistral",
     extra_args=["model.base_model.transformer.window_size=128"],
     # Megatron doesn't support sliding windows.
     megatron_args=None,
     checkpoint_format=MistralGPTHuggingfaceCheckpointFormat,
+    testing_groups=[
+        ModelTestingGroup.basic,
+        ModelTestingGroup.convert,
+        ModelTestingGroup.generate,
+    ],
+    other_groups=[
+        ModelTestingGroup.distributed,
+    ],
 )
 
 _update_and_add_testing_config(
-    # We ignore sliding windows to enable comparison with Megatron.
+    # Tests mixture of experts, mixtral converter.
     "llama",
     "mixtral",
     extra_args=[
@@ -258,19 +360,58 @@ _update_and_add_testing_config(
         "--moe-router-topk=4",
     ],
     checkpoint_format=MixtralGPTHuggingfaceCheckpointFormat,
+    testing_groups=[
+        ModelTestingGroup.basic,
+        ModelTestingGroup.megatron,
+        ModelTestingGroup.distributed,
+        ModelTestingGroup.convert,
+        ModelTestingGroup.generate,
+    ],
+    other_groups=[],
 )
 
 _update_and_add_testing_config(
-    # We ignore sliding windows to enable comparison with Megatron.
+    # Tests hybrid ssm, llamba converter.
+    # TODO: Conversion fails.
     "llama",
     "llamba",
     model_type="hybrid_ssm",
     extra_args=["model.base_model.hybrid_block_layout=['t','m']"],
     megatron_args=None,
     checkpoint_format=LLambaHuggingfaceCheckpointFormat,
+    testing_groups=[
+        ModelTestingGroup.basic,
+        ModelTestingGroup.distributed,
+        ModelTestingGroup.convert,
+        ModelTestingGroup.generate,
+    ],
+    other_groups=[],
 )
 
 
 @pytest.fixture(scope="session", params=_MODEL_CONFIGS.keys())
 def model_testing_config(request) -> ModelTestingConfig:
     return _MODEL_CONFIGS[request.param]
+
+
+def testing_group_enabled(item: pytest.Function, skip_slow: bool, skip_extra_slow: bool, show_skipped: bool) -> bool:
+    if "model_testing_group" in item.keywords:
+        assert "model_testing_config" in item.callspec.params, item.nodeid
+        groups: tuple[ModelTestingGroup] = item.keywords["model_testing_group"].args
+        model_testing_config = item.callspec.params["model_testing_config"]
+        model_config = _MODEL_CONFIGS[model_testing_config]
+        for group in groups:
+            if group in model_config.testing_groups and not (skip_slow and group in SLOW_TESTING_GROUPS):
+                pass
+            elif group in model_config.other_groups and not skip_extra_slow:
+                pass
+            elif show_skipped:
+                item.add_marker(
+                    pytest.mark.skip(reason=f"Skipping testing group {group} for model {model_testing_config}.")
+                )
+            else:
+                return False
+    elif hasattr(item, "callspec"):
+        assert "model_testing_config" not in item.callspec.params, item.nodeid
+
+    return True

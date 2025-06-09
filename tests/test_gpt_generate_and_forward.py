@@ -9,6 +9,7 @@ from fast_llm.engine.schedule.config import ScheduleConfig
 from fast_llm.engine.schedule.runner import ScheduleRunner
 from fast_llm.models.gpt.config import LlamaGPTHuggingfaceCheckpointFormat, PretrainedGPTModelConfig
 from fast_llm.models.gpt.huggingface import HuggingfaceGPTModelForCausalLM
+from tests.utils.model_configs import ModelTestingGroup
 from tests.utils.utils import requires_cuda
 
 
@@ -44,7 +45,7 @@ def _prepare_rand_data(vocab_size, use_batch_size2: bool):
 
 
 def _get_hf_model(model_path: str, use_flash_attention: bool, use_bf16: bool):
-    hf_kwargs = {}
+    hf_kwargs = {"trust_remote_code": True}
     if use_flash_attention:
         hf_kwargs["attn_implementation"] = "flash_attention_2"
         hf_kwargs["torch_dtype"] = torch.bfloat16
@@ -237,9 +238,11 @@ def test_generate(
 
 
 @pytest.mark.slow
-@requires_cuda
+@pytest.mark.model_testing_group(ModelTestingGroup.generate)
 def test_export_for_generate(run_test_script_for_all_models, model_testing_config):
     # Not really testing, anything, but handles dependencies more easily than a fixture.
+    if model_testing_config.checkpoint_format is None:
+        pytest.skip(f"Conversion not supported for {model_testing_config.name}")
     run_test_script_for_all_models(
         [
             "training.train_iters=1",
@@ -263,6 +266,7 @@ def test_export_for_generate(run_test_script_for_all_models, model_testing_confi
         (True, True, 10, 10, 10),
     ],
 )
+@pytest.mark.model_testing_group(ModelTestingGroup.generate)
 def test_small_generate(
     model_testing_config,
     run_test_script_base_path,
@@ -315,6 +319,7 @@ def test_generate_from_model(
 @requires_cuda
 @pytest.mark.slow
 @pytest.mark.depends_on(on=["test_export_for_generate[{model_testing_config}]"])
+@pytest.mark.model_testing_group(ModelTestingGroup.generate)
 def test_small_generate_from_model(model_testing_config, run_test_script_base_path):
     _test_generate_from_model(
         run_test_script_base_path / f"test_export_for_generate/export/{model_testing_config.checkpoint_format.name}/1",
@@ -363,6 +368,7 @@ def test_forward_return_hidden_states(model_path):
 
 @pytest.mark.slow
 @requires_cuda
+@pytest.mark.model_testing_group(ModelTestingGroup.generate)
 @pytest.mark.depends_on(on=["test_export_for_generate[{model_testing_config}]"])
 def test_small_forward_return_hidden_states(model_testing_config, run_test_script_base_path):
     _test_forward_return_hidden_states(

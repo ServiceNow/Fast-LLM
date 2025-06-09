@@ -1,16 +1,18 @@
 import pytest
 
 from tests.utils.compare_tensor_logs import CompareConfig
+from tests.utils.model_configs import ModelTestingGroup
 
 
 # TODO: Compare grads with simple
+@pytest.mark.model_testing_group(ModelTestingGroup.basic)
 def test_model_df4(run_test_script_for_all_models):
     # Depth-first gradient accumulation baseline.
     run_test_script_for_all_models(["batch.depth_first_micro_batches=4"])
 
 
-@pytest.mark.slow
 @pytest.mark.depends_on(on=["test_model_df4[{model_testing_config}]"])
+@pytest.mark.model_testing_group(ModelTestingGroup.distributed)
 def test_model_df4_z3(run_test_script_for_all_models):
     # Gradient accumulation with ZeRO-3.
     run_test_script_for_all_models(
@@ -22,12 +24,14 @@ def test_model_df4_z3(run_test_script_for_all_models):
 
 
 @pytest.mark.depends_on(on=["test_model_df4[{model_testing_config}]"], scope="session")
+@pytest.mark.model_testing_group(ModelTestingGroup.distributed)
 def test_model_bf4(run_test_script_for_all_models):
     # Breadth-first gradient accumulation baseline.
     run_test_script_for_all_models(["batch.breadth_first_micro_batches=4"], compare="test_model_df4")
 
 
 @pytest.mark.depends_on(on=["test_model_df4[{model_testing_config}]", "test_model_bf4[{model_testing_config}]"])
+@pytest.mark.model_testing_group(ModelTestingGroup.distributed)
 def test_model_bf2_df2(run_test_script_for_all_models):
     # Mixed gradient accumulation baseline.
     run_test_script_for_all_models(
@@ -35,8 +39,8 @@ def test_model_bf2_df2(run_test_script_for_all_models):
     )
 
 
-@pytest.mark.slow
 @pytest.mark.depends_on(on=["test_model_bf4[{model_testing_config}]"])
+@pytest.mark.model_testing_group(ModelTestingGroup.distributed)
 def test_model_pp2s2_bf4(run_test_script_for_all_models):
     # Pipeline-parallel without tied weights.
     run_test_script_for_all_models(
@@ -50,8 +54,8 @@ def test_model_pp2s2_bf4(run_test_script_for_all_models):
     )
 
 
-@pytest.mark.slow
 @pytest.mark.depends_on(on=["test_model_bf4[{model_testing_config}]"])
+@pytest.mark.model_testing_group(ModelTestingGroup.distributed)
 def test_model_pp2s1_bf4(run_test_script_for_all_models):
     # Pipeline-parallel with tied weights.
     run_test_script_for_all_models(
@@ -66,8 +70,8 @@ def test_model_pp2s1_bf4(run_test_script_for_all_models):
     )
 
 
-@pytest.mark.slow
 @pytest.mark.depends_on(on=["test_model_bf4[{model_testing_config}]"])
+@pytest.mark.model_testing_group(ModelTestingGroup.distributed)
 def test_model_dp2_tp2_pp2s2_bf4(run_test_script_for_all_models):
     # Simple 3d parallelism
     # TODO: Test fails

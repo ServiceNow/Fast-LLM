@@ -711,7 +711,4 @@ class TransformerConfig(BaseModelConfig):
             )
 
     def do_use_flash_attention(self, distributed_config: DistributedConfig) -> bool:
-        return self.use_flash_attention and distributed_config.training_dtype in (
-            DataType.float16,
-            DataType.bfloat16,
-        )
+        return self.use_flash_attention and distributed_config.training_dtype in (DataType.float16, DataType.bfloat16)

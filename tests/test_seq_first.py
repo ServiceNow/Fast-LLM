@@ -1,14 +1,17 @@
 import pytest
 
+from tests.utils.model_configs import ModelTestingGroup
+
 
 # TODO: Compare grads with simple
+@pytest.mark.model_testing_group(ModelTestingGroup.basic)
 def test_model_sf(run_test_script_for_all_models):
     # Sequence-first baseline.
     run_test_script_for_all_models(["model.base_model.sequence_first=True"])
 
 
-@pytest.mark.slow
 @pytest.mark.depends_on(on=["test_model_sf[{model_testing_config}]"])
+@pytest.mark.model_testing_group(ModelTestingGroup.distributed)
 def test_model_sp2(run_test_script_for_all_models):
     # Sequence-tensor-parallel.
     run_test_script_for_all_models(
@@ -18,8 +21,8 @@ def test_model_sp2(run_test_script_for_all_models):
     )
 
 
-@pytest.mark.slow
 @pytest.mark.depends_on(on=["test_model_sf[{model_testing_config}]"])
+@pytest.mark.model_testing_group(ModelTestingGroup.distributed)
 def test_model_sdp2(run_test_script_for_all_models):
     # Sequence-data-parallel
     run_test_script_for_all_models(
@@ -29,12 +32,11 @@ def test_model_sdp2(run_test_script_for_all_models):
     )
 
 
-@pytest.mark.slow
 @pytest.mark.depends_on(on=["test_model_sf[{model_testing_config}]"])
+@pytest.mark.model_testing_group(ModelTestingGroup.distributed)
 def test_model_sp2_ce4(run_test_script_for_all_models):
     # Sequence-tensor-parallel with cross-entropy splits.
     run_test_script_for_all_models(
-        "test_model_sp2_ce4",
         [
             "model.distributed.tensor_parallel=2",
             "model.distributed.sequence_tensor_parallel=True",

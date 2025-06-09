@@ -1,10 +1,11 @@
 import dataclasses
+import datetime
 import math
 import os
 
 import pytest
 import torch
-from xdist.scheduler import LoadGroupScheduling
+import xdist.scheduler
 
 from tests.utils.depends import DependencyManager
 
@@ -15,7 +16,7 @@ from tests.utils.run_test_script import (  # isort: skip
     run_test_script_for_all_models,
 )
 
-from tests.utils.model_configs import model_testing_config  # isort: skip
+from tests.utils.model_configs import model_testing_config, ModelTestingConfig, testing_group_enabled  # isort: skip
 from tests.utils.utils import result_path  # isort: skip
 
 
@@ -25,6 +26,8 @@ manager: DependencyManager | None = None
 def pytest_addoption(parser):
     group = parser.getgroup("fast_llm")
     group.addoption("--skip-slow", action="store_true")
+    group.addoption("--show-skipped", action="store_true")
+    group.addoption("--models", nargs="*")
     group.addoption(
         "--run-extra-slow",
         action="store_true",
@@ -59,6 +62,7 @@ def pytest_configure(config):
         "markers", "extra_slow: Mark test as extra slow and skip unless --run-extra-slow is given."
     )
     config.addinivalue_line("markers", "depends_on(name='name', on=['other_name']): marks dependencies between tests.")
+    config.addinivalue_line("markers", "model_testing_group(group='group'): marks model testing group.")
     # TODO: Spawned processes (multi-gpu, Megatron) ignore resource allocation.
     is_parallel = hasattr(config, "workerinput")
     if is_parallel:
@@ -107,8 +111,11 @@ def pytest_configure(config):
 
 
 @pytest.hookimpl(trylast=True)
-def pytest_collection_modifyitems(config, items):
+def pytest_collection_modifyitems(config, items: list[pytest.Function]):
     global manager
+    skip_slow = config.getoption("--skip-slow")
+    skip_extra_slow = not config.getoption("--run-extra-slow")
+    show_skipped = config.getoption("--show-skipped")
 
     if config.getoption("--skip-slow"):
         skip_slow = pytest.mark.skip(reason="Skipping slow tests")
@@ -121,7 +128,23 @@ def pytest_collection_modifyitems(config, items):
             if "extra_slow" in item.keywords:
                 item.add_marker(skip_extra_slow)
 
-    manager = DependencyManager(items)
+    new_items = []
+    for item in items:
+        if skip_slow and "slow" in item.keywords:
+            if show_skipped:
+                item.add_marker(pytest.mark.skip(reason="Skipping slow tests"))
+            else:
+                continue
+        elif skip_extra_slow and "extra_slow" in item.keywords:
+            if show_skipped:
+                item.add_marker(pytest.mark.skip(reason="Skipping extra-slow tests"))
+            else:
+                continue
+        elif not testing_group_enabled(item, skip_slow, skip_extra_slow, show_skipped):
+            continue
+        new_items.append(item)
+
+    manager = DependencyManager(new_items)
 
     # Show the extra information if requested
     if config.getoption("show_dependencies"):
@@ -166,4 +189,52 @@ def worker_resources(request) -> WorkerResources:
 def pytest_xdist_make_scheduler(config, log):
     # Always use grouped load balancing to handle dependencies, and make it work with `-n`.
     assert config.getvalue("dist") == "load"
-    return LoadGroupScheduling(config, log)
+    return xdist.scheduler.LoadGroupScheduling(config, log)
+
+
+def get_all_reports(terminalreporter):
+    """Reports for all stages and all outcomes"""
+    for reports in terminalreporter.stats.values():
+        for report in reports:
+            if isinstance(report, pytest.TestReport):
+                yield report
+
+
+def resource_usage_message(report):
+    """The resource usage message for a report"""
+    return ", ".join(content for (prefix, content) in report.get_sections(f"Captured resource {report.when}"))
+
+
+def format_duration(seconds):
+    """Human-readable running time message"""
+    if seconds < 60:
+        duration_string = f"{seconds:.3f} seconds"
+    else:
+        duration_string = str(datetime.timedelta(seconds=round(seconds)))
+    return f"running time: {duration_string}"
+
+
+# @pytest.hookimpl(tryfirst=True)
+# def pytest_runtest_makereport(item, call):
+#    """Report running time of a test call"""
+#    if call.when == "call":
+#        item.add_report_section(
+#            call.when, "resource", format_duration(call.duration)
+#        )
+#
+#
+# @pytest.hookimpl
+# def pytest_terminal_summary(terminalreporter):
+#    """Produce a resource usage report if any test asked for it"""
+#    resource_reports = [
+#        (report, message)
+#        for report in get_all_reports(terminalreporter)
+#        if (message := resource_usage_message(report))
+#    ]
+#    if not resource_reports:
+#        return
+#    terminalreporter.write_sep("=", "resource usage", bold=True)
+#    for report, message in resource_reports:
+#        terminalreporter.write_line(
+#            f"{report.nodeid} ({report.when}) {message}"
+#        )

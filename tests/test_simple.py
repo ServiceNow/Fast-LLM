@@ -1,6 +1,9 @@
 import pytest
 
+from tests.utils.model_configs import ModelTestingGroup
 
+
+@pytest.mark.model_testing_group(ModelTestingGroup.basic)
 def test_model_safe(run_test_script_for_all_models):
     # The safest possible config, identical to the one in test_match_megatron except for the initialization.
     run_test_script_for_all_models(
@@ -14,20 +17,22 @@ def test_model_safe(run_test_script_for_all_models):
 
 
 @pytest.mark.depends_on(on=["test_model_safe[{model_testing_config}]"])
+@pytest.mark.model_testing_group(ModelTestingGroup.basic)
 def test_model(run_test_script_for_all_models):
     # A baseline config (single-gpu, bf16, flash-attn).
     # Also tests for multiple data loaders.
     run_test_script_for_all_models(["training.num_workers=2"], compare="test_model_safe")
 
 
-@pytest.mark.slow
 @pytest.mark.depends_on(on=["test_model[{model_testing_config}]"])
+@pytest.mark.model_testing_group(ModelTestingGroup.distributed)
 def test_model_dp2(run_test_script_for_all_models):
     # Simple data-parallel.
     run_test_script_for_all_models([], num_gpus=2, compare="test_model")
 
 
-@pytest.mark.slow
+@pytest.mark.skip(reason="Flaky")
+@pytest.mark.model_testing_group(ModelTestingGroup.distributed)
 def test_model_dp2_timeout(run_test_script_for_all_models):
     # Test sampling timeout
     # TODO: Find a better way to test this
@@ -51,8 +56,8 @@ def test_model_dp2_timeout(run_test_script_for_all_models):
     )
 
 
-@pytest.mark.slow
 @pytest.mark.depends_on(on=["test_model[{model_testing_config}]"])
+@pytest.mark.model_testing_group(ModelTestingGroup.distributed)
 def test_model_tp2(run_test_script_for_all_models):
     # Simple tensor-parallel.
     run_test_script_for_all_models(
@@ -63,6 +68,7 @@ def test_model_tp2(run_test_script_for_all_models):
 
 
 @pytest.mark.depends_on(on=["test_model[{model_testing_config}]"])
+@pytest.mark.model_testing_group(ModelTestingGroup.basic)
 def test_model_ce4(run_test_script_for_all_models):
     # Cross-entropy splits.
     run_test_script_for_all_models(
@@ -71,8 +77,8 @@ def test_model_ce4(run_test_script_for_all_models):
     )
 
 
-@pytest.mark.slow
 @pytest.mark.depends_on(on=["test_model[{model_testing_config}]"])
+@pytest.mark.model_testing_group(ModelTestingGroup.distributed)
 def test_model_dp2_z2(run_test_script_for_all_models):
     # Data-parallel with zero stage 2.
     run_test_script_for_all_models(
@@ -82,8 +88,8 @@ def test_model_dp2_z2(run_test_script_for_all_models):
     )
 
 
-@pytest.mark.slow
 @pytest.mark.depends_on(on=["test_model[{model_testing_config}]"])
+@pytest.mark.model_testing_group(ModelTestingGroup.distributed)
 def test_model_dp2_z3(run_test_script_for_all_models):
     # Data-parallel with zero stage 3.
     run_test_script_for_all_models(

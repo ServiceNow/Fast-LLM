@@ -17,12 +17,12 @@ from fast_llm.engine.checkpoint.config import (
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig, ShardName, StageMode
 from fast_llm.tools.convert import ConvertConfig
 from tests.utils.compare_tensor_logs import CompareConfig, compare_logged_tensor
-from tests.utils.utils import requires_cuda
+from tests.utils.model_configs import ModelTestingGroup
 
 _WEIGHT_SHARD_SAVE_NAME = f"{ShardName.weights}_shard"
 
 
-@requires_cuda
+@pytest.mark.model_testing_group(ModelTestingGroup.basic)
 def test_checkpoint_and_eval(run_test_script_for_all_models, model_testing_config):
     # A baseline config (single-gpu, bf16, flash-attn).
     run_test_script_for_all_models(
@@ -56,6 +56,7 @@ def _compare_resume_fn(test_path: pathlib.Path, compare_path: pathlib.Path):
 
 
 @pytest.mark.depends_on(on=["test_checkpoint_and_eval[{model_testing_config}]"])
+@pytest.mark.model_testing_group(ModelTestingGroup.basic)
 def test_resume(run_test_script_for_all_models):
     # Resume from iteration=1 and compare outputs with the baseline run.
     run_test_script_for_all_models(
@@ -71,6 +72,7 @@ def test_resume(run_test_script_for_all_models):
 
 
 @pytest.mark.depends_on(on=["test_checkpoint_and_eval[{model_testing_config}]"])
+@pytest.mark.model_testing_group(ModelTestingGroup.basic)
 def test_resume_frozen(run_test_script_for_all_models):
     # Resume with frozen mlp. No comparison.
     run_test_script_for_all_models(
@@ -107,6 +109,7 @@ def convert_paths(run_test_script_base_path):
 
 
 @pytest.mark.depends_on(on=["test_checkpoint_and_eval[{model_testing_config}]"])
+@pytest.mark.model_testing_group(ModelTestingGroup.convert)
 def test_convert_distributed_to_fast_llm(model_testing_config, convert_paths):
     _run_conversion(
         ConvertConfig(
@@ -124,6 +127,7 @@ def test_convert_distributed_to_fast_llm(model_testing_config, convert_paths):
 
 
 @pytest.mark.depends_on(on=["test_convert_distributed_to_fast_llm[{model_testing_config}]"])
+@pytest.mark.model_testing_group(ModelTestingGroup.convert)
 def test_convert_fast_llm_to_huggingface(model_testing_config, convert_paths):
     if model_testing_config.checkpoint_format is None:
         pytest.skip(f"Conversion not supported for {model_testing_config.name}")
@@ -143,6 +147,7 @@ def test_convert_fast_llm_to_huggingface(model_testing_config, convert_paths):
 
 
 @pytest.mark.depends_on(on=["test_convert_fast_llm_to_huggingface[{model_testing_config}]"])
+@pytest.mark.model_testing_group(ModelTestingGroup.convert)
 def test_convert_huggingface_to_distributed(model_testing_config, convert_paths):
     _run_conversion(
         ConvertConfig(
@@ -160,6 +165,7 @@ def test_convert_huggingface_to_distributed(model_testing_config, convert_paths)
 
 
 @pytest.mark.depends_on(on=["test_checkpoint_and_eval[{model_testing_config}]"])
+@pytest.mark.model_testing_group(ModelTestingGroup.convert)
 def test_convert_distributed_to_huggingface(model_testing_config, convert_paths):
     if model_testing_config.checkpoint_format is None:
         pytest.skip(f"Conversion not supported for {model_testing_config.name}")
@@ -179,6 +185,7 @@ def test_convert_distributed_to_huggingface(model_testing_config, convert_paths)
 
 
 @pytest.mark.depends_on(on=["test_convert_distributed_to_huggingface[{model_testing_config}]"])
+@pytest.mark.model_testing_group(ModelTestingGroup.convert)
 def test_convert_huggingface_to_fast_llm(model_testing_config, convert_paths):
     _run_conversion(
         ConvertConfig(
@@ -196,6 +203,7 @@ def test_convert_huggingface_to_fast_llm(model_testing_config, convert_paths):
 
 
 @pytest.mark.depends_on(on=["test_convert_huggingface_to_fast_llm[{model_testing_config}]"])
+@pytest.mark.model_testing_group(ModelTestingGroup.convert)
 def test_convert_fast_llm_to_distributed(model_testing_config, convert_paths):
     _run_conversion(
         ConvertConfig(
@@ -218,6 +226,7 @@ def test_convert_fast_llm_to_distributed(model_testing_config, convert_paths):
         "test_convert_fast_llm_to_distributed[{model_testing_config}]",
     ]
 )
+@pytest.mark.model_testing_group(ModelTestingGroup.convert)
 def test_converted_distributed(convert_paths):
     # Compare the fast llm weights
     # TODO: Compare configs
@@ -239,6 +248,7 @@ def test_converted_distributed(convert_paths):
         "test_convert_huggingface_to_fast_llm[{model_testing_config}]",
     ]
 )
+@pytest.mark.model_testing_group(ModelTestingGroup.convert)
 def test_converted_fast_llm(convert_paths):
     s0 = safetensors.torch.load_file(convert_paths["fast_llm_0"] / "model_0.safetensors")
     s1 = safetensors.torch.load_file(convert_paths["fast_llm_1"] / "model_0.safetensors")
@@ -254,6 +264,7 @@ def test_converted_fast_llm(convert_paths):
         "test_convert_distributed_to_huggingface[{model_testing_config}]",
     ]
 )
+@pytest.mark.model_testing_group(ModelTestingGroup.convert)
 def test_converted_huggingface(convert_paths):
     h0 = safetensors.torch.load_file(convert_paths["huggingface_0"] / "model_0.safetensors")
     h1 = safetensors.torch.load_file(convert_paths["huggingface_1"] / "model_0.safetensors")
@@ -272,6 +283,7 @@ def _compare_architectures(config_ref: FastLLMModelConfig, config_test: FastLLMM
 
 
 @pytest.mark.depends_on(on=["test_converted_distributed[{model_testing_config}]"])
+@pytest.mark.model_testing_group(ModelTestingGroup.convert)
 def test_load_pretrained_distributed_checkpoint(model_testing_config, convert_paths):
     config = model_testing_config.model_config_class.from_dict(
         yaml.safe_load((convert_paths["checkpoint"] / ".." / ".." / "config.yaml").open("r"))["model"], strict=False
@@ -292,6 +304,7 @@ def test_load_pretrained_distributed_checkpoint(model_testing_config, convert_pa
 
 
 @pytest.mark.depends_on(on=["test_load_pretrained_distributed_checkpoint[{model_testing_config}]"])
+@pytest.mark.model_testing_group(ModelTestingGroup.convert)
 def test_load_converted_distributed_checkpoint(model_testing_config, convert_paths):
     config_ref = model_testing_config.model_config_class.from_pretrained(
         CheckpointLoadConfig(
@@ -329,6 +342,7 @@ def test_load_converted_distributed_checkpoint(model_testing_config, convert_pat
         "test_load_pretrained_distributed_checkpoint[{model_testing_config}]",
     ]
 )
+@pytest.mark.model_testing_group(ModelTestingGroup.convert)
 def test_load_converted_fast_llm_checkpoint(model_testing_config, convert_paths):
     config_ref = model_testing_config.model_config_class.from_pretrained(
         CheckpointLoadConfig(
@@ -365,6 +379,7 @@ def test_load_converted_fast_llm_checkpoint(model_testing_config, convert_paths)
         "test_load_pretrained_distributed_checkpoint[{model_testing_config}]",
     ]
 )
+@pytest.mark.model_testing_group(ModelTestingGroup.convert)
 def test_load_converted_huggingface_checkpoint(model_testing_config, convert_paths):
     config_ref = model_testing_config.model_config_class.from_pretrained(
         CheckpointLoadConfig(
@@ -402,6 +417,7 @@ def test_load_converted_huggingface_checkpoint(model_testing_config, convert_pat
         "test_load_converted_huggingface_checkpoint[{model_testing_config}]",
     ]
 )
+@pytest.mark.model_testing_group(ModelTestingGroup.convert)
 def test_run_converted_model(model_testing_config, convert_paths):
     model_ref = model_testing_config.huggingface_model_for_causal_lm_class.from_pretrained(
         CheckpointLoadConfig(
@@ -451,8 +467,8 @@ def test_run_converted_model(model_testing_config, convert_paths):
         raise ValueError(f"Comparison failed ({len(errors)} errors)")
 
 
-@pytest.mark.slow
 @pytest.mark.depends_on(on=["test_load_converted_distributed_checkpoint[{model_testing_config}]"])
+@pytest.mark.model_testing_group(ModelTestingGroup.convert, ModelTestingGroup.distributed)
 def test_load_pretrained_distributed_in_dp2(run_test_script_for_all_models, convert_paths):
     run_test_script_for_all_models(
         [
@@ -467,6 +483,7 @@ def test_load_pretrained_distributed_in_dp2(run_test_script_for_all_models, conv
 
 
 @pytest.mark.depends_on(on=["test_load_converted_distributed_checkpoint[{model_testing_config}]"])
+@pytest.mark.model_testing_group(ModelTestingGroup.convert)
 def test_load_pretrained_distributed_with_config(run_test_script_for_all_models, convert_paths):
     run_test_script_for_all_models(
         [
@@ -480,6 +497,7 @@ def test_load_pretrained_distributed_with_config(run_test_script_for_all_models,
 
 
 @pytest.mark.depends_on(on=["test_load_pretrained_distributed_in_dp2[{model_testing_config}]"])
+@pytest.mark.model_testing_group(ModelTestingGroup.convert, ModelTestingGroup.distributed)
 def test_load_pretrained_in_dp2_match_checkpoint(model_testing_config, convert_paths, run_test_script_base_path):
     test_ckpt_path = run_test_script_base_path / "test_load_pretrained_distributed_in_dp2" / "checkpoint" / "1"
     pretrained_config_ref = CheckpointLoadConfig(
@@ -523,8 +541,8 @@ def test_load_pretrained_in_dp2_match_checkpoint(model_testing_config, convert_p
         assert (stage_shard_test[stage_shard_ref.numel() :] == 0).all()  # noqa
 
 
-@pytest.mark.slow
 @pytest.mark.depends_on(on=["test_load_pretrained_in_dp2_match_checkpoint[{model_testing_config}]"])
+@pytest.mark.model_testing_group(ModelTestingGroup.convert, ModelTestingGroup.distributed)
 def test_load_distributed_checkpoint_dp2(model_testing_config, convert_paths, run_test_script_base_path):
     # This also tests conversion which uses `FastLLMModel.from_checkpoint`
     pretrained_config_ref = CheckpointLoadConfig(
@@ -546,15 +564,15 @@ def test_load_distributed_checkpoint_dp2(model_testing_config, convert_paths, ru
     assert (weight_shard == model.get_shard(ShardName.weights)).all()
 
 
-@pytest.mark.slow
 @pytest.mark.depends_on(
     on=[
         "test_load_converted_fast_llm_checkpoint[{model_testing_config}]",
         "test_load_pretrained_in_dp2_match_checkpoint[{model_testing_config}]",
     ]
 )
-def test_load_pretrained_fast_llm_in_dp2(run_test_script, convert_paths, run_test_script_base_path):
-    run_test_script(
+@pytest.mark.model_testing_group(ModelTestingGroup.convert, ModelTestingGroup.distributed)
+def test_load_pretrained_fast_llm_in_dp2(run_test_script_for_all_models, convert_paths, run_test_script_base_path):
+    run_test_script_for_all_models(
         [
             "training.checkpoint.interval=1",
             "training.train_iters=1",
@@ -583,13 +601,13 @@ def test_load_pretrained_fast_llm_in_dp2(run_test_script, convert_paths, run_tes
             assert (ref_shard[name] == test_shard[name]).all()
 
 
-@pytest.mark.slow
 @pytest.mark.depends_on(
     on=[
         "test_load_converted_huggingface_checkpoint[{model_testing_config}]",
         "test_load_pretrained_in_dp2_match_checkpoint[{model_testing_config}]",
     ]
 )
+@pytest.mark.model_testing_group(ModelTestingGroup.convert, ModelTestingGroup.distributed)
 def test_load_pretrained_huggingface_in_dp2(
     run_test_script_for_all_models, model_testing_config, run_test_script_base_path, convert_paths
 ):
