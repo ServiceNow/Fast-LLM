@@ -108,7 +108,7 @@ _MODEL_CONFIGS["gpt2"] = ModelTestingConfig(
         "training.logs.interval=1",
         "run.tensor_logs.save=True",
         "run.tensor_logs.show=False",
-        # "model.base_model.max_position_embeddings=512",
+        "model.base_model.max_position_embeddings=512",
         "model.base_model.transformer.num_layers=2",
         "model.base_model.transformer.hidden_size=256",
         "model.base_model.transformer.num_attention_heads=8",
@@ -208,6 +208,8 @@ _update_and_add_testing_config(
     extra_args=[
         "model.base_model.transformer.head_groups=4",
         "model.base_model.transformer.rotary.type=default",
+        # Unused, but prevents issues with conversion tests.
+        "model.base_model.max_position_embeddings=2048",
     ],
     megatron_args=[
         "--group-query-attention",

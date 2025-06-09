@@ -15,6 +15,17 @@ def test_megatron(run_test_script_for_all_models, model_testing_config):
 def test_match_megatron(run_test_script_for_all_models, model_testing_config):
     if model_testing_config.megatron_args is None:
         pytest.skip(f"Megatron does not support model {model_testing_config.name}")
+
+    ignore_tensors = [
+        ".self_attn.query_key_value.",
+        ".self_attn.query.",
+        ".self_attn.key_value.",
+        ".mlp.layer_2.weight",
+        ".mlp.experts.",
+    ]
+    if model_testing_config.name == "mixtral":
+        ignore_tensors.extend([".mlp.experts.", ".mlp.layer_1.weight"])
+
     run_test_script_for_all_models(
         [
             "model.distributed.training_dtype=fp32",
@@ -23,12 +34,5 @@ def test_match_megatron(run_test_script_for_all_models, model_testing_config):
             "model.base_model.use_megatron_initialization=True",
         ],
         compare="test_megatron",
-        config=CompareConfig(
-            ignore_tensors=[
-                ".self_attn.query_key_value.",
-                ".self_attn.query.",
-                ".self_attn.key_value.",
-                ".mlp.layer_2.weight",
-            ]
-        ),
+        config=CompareConfig(ignore_tensors=ignore_tensors),
     )
