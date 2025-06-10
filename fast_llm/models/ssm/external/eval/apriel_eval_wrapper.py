@@ -128,7 +128,7 @@ class AprielHybrid15bSSMWrapper(HFLM):
         super().__init__(
             pretrained=pretrained,
             backend=kwargs.pop("backend", "causal"),
-            tokenizer=kwargs.pop("tokenizer", "/mnt/checkpoints/upstream/Mistral-Nemo-Base-2407/"),
+            tokenizer=kwargs.pop("tokenizer", "/mnt/checkpoints/upstream/Apriel-Nemotron-15b-Thinker"),
             max_length=kwargs.pop("max_length", 4096),
             **kwargs,
         )
