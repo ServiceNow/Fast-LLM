@@ -66,7 +66,12 @@ def test_model_pp2s1_bf4(run_test_script_for_all_models):
         ],
         num_gpus=2,
         compare="test_model_df4",
-        config=CompareConfig(ignore_duplicates=["layers.0.word_embeddings_weight"]),
+        config=CompareConfig(
+            ignore_duplicates=[
+                "layers.0.word_embeddings_weight",
+                "layers.0.position_embeddings_weight",
+            ]
+        ),
     )
 
 

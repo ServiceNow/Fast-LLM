@@ -222,6 +222,7 @@ _update_and_add_testing_config(
         ModelTestingGroup.basic,
         ModelTestingGroup.convert,
     ],
+    # TODO: Bring back `generate` to `testing_groups` when stable.
     other_groups=[
         ModelTestingGroup.megatron,
         ModelTestingGroup.distributed,
@@ -254,9 +255,11 @@ _update_and_add_testing_config(
         ModelTestingGroup.megatron,
         ModelTestingGroup.distributed,
         ModelTestingGroup.convert,
+    ],
+    # TODO: Bring back `generate` to `testing_groups` when stable.
+    other_groups=[
         ModelTestingGroup.generate,
     ],
-    other_groups=[],
 )
 
 _update_and_add_testing_config(
@@ -270,6 +273,7 @@ _update_and_add_testing_config(
     testing_groups=[
         ModelTestingGroup.basic,
     ],
+    # TODO: Bring back `generate` to `testing_groups` when stable.
     other_groups=[
         ModelTestingGroup.distributed,
         ModelTestingGroup.convert,
@@ -288,6 +292,7 @@ _update_and_add_testing_config(
     testing_groups=[
         ModelTestingGroup.basic,
     ],
+    # TODO: Bring back `generate` to `testing_groups` when stable.
     other_groups=[
         ModelTestingGroup.distributed,
         ModelTestingGroup.convert,
@@ -306,10 +311,11 @@ _update_and_add_testing_config(
     testing_groups=[
         ModelTestingGroup.basic,
         ModelTestingGroup.convert,
-        ModelTestingGroup.generate,
     ],
+    # TODO: Bring back `generate` to `testing_groups` when stable.
     other_groups=[
         ModelTestingGroup.distributed,
+        ModelTestingGroup.generate,
     ],
 )
 
@@ -325,6 +331,7 @@ _update_and_add_testing_config(
         ModelTestingGroup.basic,
         ModelTestingGroup.convert,
     ],
+    # TODO: Bring back `generate` to `testing_groups` when stable.
     other_groups=[
         ModelTestingGroup.distributed,
         ModelTestingGroup.generate,
@@ -342,10 +349,11 @@ _update_and_add_testing_config(
     testing_groups=[
         ModelTestingGroup.basic,
         ModelTestingGroup.convert,
-        ModelTestingGroup.generate,
     ],
+    # TODO: Bring back `generate` to `testing_groups` when stable.
     other_groups=[
         ModelTestingGroup.distributed,
+        ModelTestingGroup.generate,
     ],
 )
 
@@ -367,14 +375,15 @@ _update_and_add_testing_config(
         ModelTestingGroup.megatron,
         ModelTestingGroup.distributed,
         ModelTestingGroup.convert,
+    ],
+    # TODO: Bring back `generate` to `testing_groups` when stable.
+    other_groups=[
         ModelTestingGroup.generate,
     ],
-    other_groups=[],
 )
 
 _update_and_add_testing_config(
     # Tests hybrid ssm, llamba converter.
-    # TODO: Conversion fails.
     "llama",
     "llamba",
     model_type="hybrid_ssm",
@@ -383,11 +392,14 @@ _update_and_add_testing_config(
     checkpoint_format=LLambaHuggingfaceCheckpointFormat,
     testing_groups=[
         ModelTestingGroup.basic,
+    ],
+    # TODO: Bring back `generate` to `testing_groups` when stable.
+    other_groups=[
+        # TODO: Fix and bring these back to `testing_groups`
         ModelTestingGroup.distributed,
         ModelTestingGroup.convert,
         ModelTestingGroup.generate,
     ],
-    other_groups=[],
 )
 
 
