@@ -1,5 +1,7 @@
 import dataclasses
-import datetime
+import gc
+import json
+import logging
 import math
 import os
 
@@ -27,6 +29,7 @@ def pytest_addoption(parser):
     group = parser.getgroup("fast_llm")
     group.addoption("--skip-slow", action="store_true")
     group.addoption("--show-skipped", action="store_true")
+    group.addoption("--show-gpu-memory", type=int, default=10)
     group.addoption("--models", nargs="*")
     group.addoption(
         "--run-extra-slow",
@@ -166,9 +169,63 @@ def pytest_collection_modifyitems(config, items: list[pytest.Function]):
 
 
 @pytest.hookimpl(tryfirst=True, hookwrapper=True)
-def pytest_runtest_makereport(item: pytest.Function, call):
+def pytest_runtest_makereport(item: pytest.Function, call: pytest.CallInfo):
     outcome = yield
-    manager.register_result(item, outcome.get_result())
+    result = outcome.get_result()
+    manager.register_result(item, result)
+
+    # Measure GPU memory usage. (TODO: This excludes child processes)
+    if call.when == "call" and torch.cuda.is_available():
+        torch._C._cuda_clearCublasWorkspaces()
+        gc.collect()
+        # This also frees memory for other processes.
+        torch.cuda.empty_cache()
+        item.add_report_section(
+            call.when,
+            "resource usage",
+            json.dumps(
+                {
+                    "duration": call.duration,
+                    "max_memory_reserved": torch.cuda.max_memory_reserved(),
+                    "max_memory_allocated": torch.cuda.max_memory_allocated(),
+                    "memory_reserved": torch.cuda.memory_reserved(),
+                    "memory_allocated": torch.cuda.memory_allocated(),
+                }
+            ),
+        )
+        torch.cuda.reset_peak_memory_stats()
+
+
+@pytest.hookimpl
+def pytest_terminal_summary(terminalreporter):
+    resource_reports = {}
+    for reports in terminalreporter.stats.values():
+        for report in reports:
+            if isinstance(report, pytest.TestReport):
+                for _, section in report.get_sections("Captured resource usage"):
+                    if report.nodeid in resource_reports:
+                        logging.error(f"Duplicate resource report for {report.nodeid}")
+                    resource_reports[report.nodeid] = json.loads(section)
+
+    if not resource_reports:
+        return
+
+    terminalreporter.write_sep("=", "Highest gpu memory usage", bold=True)
+    sorted_nodeids = sorted(
+        resource_reports.keys(),
+        key=lambda nodeid: resource_reports[nodeid]["max_memory_reserved"],
+        reverse=True,
+    )
+    logging.error(f"sorted_nodeids {sorted_nodeids}")
+    for nodeid in sorted_nodeids[: terminalreporter.config.getoption("--show-gpu-memory")]:
+        terminalreporter.write_line(
+            f"{nodeid}:\n    "
+            f"Max Reserved {resource_reports[nodeid]["max_memory_reserved"] / 1e6:.0f} MB | "
+            f"Max Allocated {resource_reports[nodeid]["max_memory_allocated"] / 1e6:.0f} MB | "
+            f"End Reserved {resource_reports[nodeid]["memory_reserved"] / 1e6:.0f} MB | "
+            f"End Allocated {resource_reports[nodeid]["memory_allocated"] / 1e6:.0f} MB | "
+            f"Duration {resource_reports[nodeid]["duration"]:.2f}"
+        )
 
 
 def pytest_runtest_call(item: pytest.Function):
@@ -190,51 +247,3 @@ def pytest_xdist_make_scheduler(config, log):
     # Always use grouped load balancing to handle dependencies, and make it work with `-n`.
     assert config.getvalue("dist") == "load"
     return xdist.scheduler.LoadGroupScheduling(config, log)
-
-
-def get_all_reports(terminalreporter):
-    """Reports for all stages and all outcomes"""
-    for reports in terminalreporter.stats.values():
-        for report in reports:
-            if isinstance(report, pytest.TestReport):
-                yield report
-
-
-def resource_usage_message(report):
-    """The resource usage message for a report"""
-    return ", ".join(content for (prefix, content) in report.get_sections(f"Captured resource {report.when}"))
-
-
-def format_duration(seconds):
-    """Human-readable running time message"""
-    if seconds < 60:
-        duration_string = f"{seconds:.3f} seconds"
-    else:
-        duration_string = str(datetime.timedelta(seconds=round(seconds)))
-    return f"running time: {duration_string}"
-
-
-# @pytest.hookimpl(tryfirst=True)
-# def pytest_runtest_makereport(item, call):
-#    """Report running time of a test call"""
-#    if call.when == "call":
-#        item.add_report_section(
-#            call.when, "resource", format_duration(call.duration)
-#        )
-#
-#
-# @pytest.hookimpl
-# def pytest_terminal_summary(terminalreporter):
-#    """Produce a resource usage report if any test asked for it"""
-#    resource_reports = [
-#        (report, message)
-#        for report in get_all_reports(terminalreporter)
-#        if (message := resource_usage_message(report))
-#    ]
-#    if not resource_reports:
-#        return
-#    terminalreporter.write_sep("=", "resource usage", bold=True)
-#    for report, message in resource_reports:
-#        terminalreporter.write_line(
-#            f"{report.nodeid} ({report.when}) {message}"
-#        )

@@ -92,11 +92,11 @@ class DependencyManager:
             pytest.fail(f'{item.nodeid} depends on {", ".join(missing)}, which was not found', False)
 
         if failed := [
-            dependency
+            f"{dependency} ({", ".join(f"{key}: {value}" for key, value in self._results[dependency].items()) if self._results[dependency] else "missing"})"
             for dependency in self._dependencies[nodeid]
             if not all(self._results[dependency].get(step, None) == "passed" for step in ("setup", "call", "teardown"))
         ]:
-            pytest.skip(f'{item.nodeid} depends on failed {", ".join(failed)}')
+            pytest.skip(f'{item.nodeid} depends on {", ".join(failed)}')
 
     def _resolve_dependencies(self, item: pytest.Function):
         dependencies = set()
