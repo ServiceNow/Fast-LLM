@@ -549,7 +549,8 @@ class GPTSampledIndexedDataset(SampledDataset):
                     use_loss_masking_spans=self._parameters.use_loss_masking_spans,
                 )
                 start_pos = 0
-                if sample.image_positions is not None:
+                has_image_positions = sample.image_positions is not None
+                if has_image_positions:
                     for idx, im_position in enumerate(sample.image_positions):
                         # image_positions.append(im_positions + len(token_ids) + image_tokens_added)
                         # Add placeholders for image tokens
@@ -593,7 +594,7 @@ class GPTSampledIndexedDataset(SampledDataset):
                         image_idx = 0
                         image_position = (
                             sample.image_positions[image_idx]
-                            if sample.image_positions is not None and image_idx < len(sample.image_positions)
+                            if has_image_positions and image_idx < len(sample.image_positions)
                             else float("inf")
                         )
                         while image_position < loss_masking_span[0]:
@@ -601,7 +602,7 @@ class GPTSampledIndexedDataset(SampledDataset):
                             image_idx += 1
                             image_position = (
                                 sample.image_positions[image_idx]
-                                if sample.image_positions is not None and image_idx < len(sample.image_positions)
+                                if has_image_positions and image_idx < len(sample.image_positions)
                                 else float("inf")
                             )
                         span_image_tokens = 0
@@ -610,7 +611,7 @@ class GPTSampledIndexedDataset(SampledDataset):
                             image_idx += 1
                             image_position = (
                                 sample.image_positions[image_idx]
-                                if sample.image_positions is not None and image_idx < len(sample.image_positions)
+                                if has_image_positions and image_idx < len(sample.image_positions)
                                 else float("inf")
                             )
                         loss_masking_span[0] += prev_image_tokens

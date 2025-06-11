@@ -214,20 +214,18 @@ class GPTMemmapDataset(GPTIndexedDataset):
         image_positions = None
         if self._has_images:
             image_positions = self._image_positions[idx]
-            total_pixels_needed = sum(
-                length[0] * length[1] * 3 for length in self._image_lengths[idx]
-            )
+        
             # Truncations with images are not yet supported, so we get all images from the document
             pixels = np.frombuffer(
                 self._bin_buffer,
                 dtype=np.dtype(np.uint8),
-                count=total_pixels_needed,
+                count=self._image_lengths[idx].prod(initial=3, axis=1).sum(),
                 offset=self._pointers[idx] + self._document_sizes[idx] * np.dtype(self._dtype).itemsize,
             )
             images = []
             start = 0
             for image_length in self._image_lengths[idx]:
-                n_pixels = image_length[0] * image_length[1] * 3
+                n_pixels = image_length.prod(initial=3)
                 images.append(pixels[start : start + n_pixels].reshape(3, image_length[0], image_length[1]))
                 start += n_pixels
         sample_spans = None
