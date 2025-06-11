@@ -21,7 +21,7 @@ from transformers.pytorch_utils import ALL_LAYERNORM_LAYERS
 from transformers.utils import LossKwargs, add_start_docstrings, add_start_docstrings_to_model_forward, logging
 from transformers.utils.generic import ModelOutput
 
-from fast_llm.models.ssm.external.apriel_hybrid.configuration_ssm_hybrid_apriel import (
+from apriel_hybrid.configuration_ssm_hybrid_apriel import (
     ROPE_INIT_FUNCTIONS,
     AprielSSMHybridConfig,
 )
