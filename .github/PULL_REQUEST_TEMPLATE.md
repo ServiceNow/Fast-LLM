@@ -31,7 +31,7 @@ Make sure the following tasks are completed before submitting the PR:
 
 ### General
 
-- [ ] 📜 I have read and followed the [contributing guidelines](https://servicenow.github.io/Fast-LLM/developers/contributing).
+- [ ] 📜 I have read and followed the [contributing guidelines](https://servicenow.github.io/Fast-LLM/contributing/contributing).
 - [ ] 🏷️ I am using a clear and descriptive PR title that summarizes the key change or feature introduced.
 - [ ] 🎉 The functionality is complete, and I have tested the changes.
 - [ ] 📝 I have updated the documentation if needed.

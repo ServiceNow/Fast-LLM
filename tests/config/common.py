@@ -13,7 +13,7 @@ class ExampleEnum(enum.StrEnum):
     c = "c"
 
 
-@config_class
+@config_class()
 class ExampleConfig(Config):
     int_field: int = Field(default=0, hint=FieldHint.optional)
     bool_field: bool = Field(default=False, hint=FieldHint.optional)
@@ -40,7 +40,7 @@ class ExampleConfig(Config):
         super()._validate()
 
 
-@config_class
+@config_class()
 class ExampleVerboseConfig(Config):
     # These fields will have non-empty default serialized values.
     list_default_field: list[int] = Field(default_factory=lambda: [0], hint=FieldHint.optional)
@@ -56,9 +56,9 @@ class ExampleVerboseConfig(Config):
         super()._validate()
 
 
-@config_class
+@config_class()
 class ExampleNestedConfig(ExampleConfig):
-    nested_field: ExampleConfig = Field(default_factory=ExampleConfig, hint=FieldHint.core)
+    nested_field: ExampleConfig = Field(hint=FieldHint.core)
 
 
 def check_config(

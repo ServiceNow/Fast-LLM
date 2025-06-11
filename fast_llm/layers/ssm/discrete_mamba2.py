@@ -21,7 +21,7 @@ except ImportError:
     causal_conv1d = None
 
 """
-This code is adapted fropm https://github.com/cartesia-ai/edge/blob/main/cartesia-pytorch/cartesia_pytorch/Llamba/mixers/discrete_mamba2.py
+This code is adapted from https://github.com/cartesia-ai/edge/blob/main/cartesia-pytorch/cartesia_pytorch/Llamba/mixers/discrete_mamba2.py
 """
 
 
@@ -78,7 +78,7 @@ class DiscreteMamba2(torch.nn.Module):
         self.act = config.activation_type.activation_fn
         self.activation_name = config.activation_type.name
 
-        # TODO: double check innitializations
+        # TODO: double check initializations
         # Projections
         self.in_proj = Linear(
             td_model,

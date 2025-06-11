@@ -38,7 +38,6 @@ class SSMConfig(LLMBlockConfig):
 
     # Normalization
     normalization: NormalizationConfig = Field(
-        default_factory=NormalizationConfig,
         desc="Configuration for the normalization layers architecture.",
         hint=FieldHint.architecture,
     )

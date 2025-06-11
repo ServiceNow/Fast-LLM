@@ -184,6 +184,7 @@ def test_load_from_hybridssm_checkpoint(distributed_config):
     assert torch.abs(torch.tensor(param_sum) - parameter_sum_hf) < 1e-1
 
 
+@pytest.mark.extra_slow
 @pytest.mark.skipif(not run_test, reason="No CUDA available or Mamba not installed")
 @pytest.mark.parametrize(
     "hybrid_block_layout,LAYER_CLS",
@@ -252,6 +253,7 @@ def test_mamba_block(distributed_config, distributed):
     assert not torch.isinf(hidden_states).any()
 
 
+@pytest.mark.slow
 @pytest.mark.skipif(not run_test, reason="No CUDA available or Mamba not installed")
 @pytest.mark.parametrize(
     ("hybrid_block_layout"),
