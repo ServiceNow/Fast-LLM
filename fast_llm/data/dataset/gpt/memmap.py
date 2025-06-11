@@ -58,6 +58,8 @@ class GPTMemmapDataset(GPTIndexedDataset):
 
             if self._version >= 4:
                 self._has_images = struct.unpack("<B", stream.read(1))[0]
+                #  not sure of assignment, reading flag to indicate whether preference loss-masking spans are present
+                self._has_preference_spans = struct.unpack("<B", stream.read(1))[0]
 
             self._dtype = MEMMAP_DTYPES[struct.unpack("<B", stream.read(1))[0]].numpy
             self._num_documents = struct.unpack("<Q", stream.read(8))[0]
@@ -109,7 +111,6 @@ class GPTMemmapDataset(GPTIndexedDataset):
             offset += (
                 self._num_spans.nbytes
                 + self._num_spans.sum() * 2 * np.dtype(np.int32).itemsize
-                + sum([x.nbytes for x in self._spans])
             )
         # read preference spans
         self._chosen_spans = None
@@ -213,11 +214,12 @@ class GPTMemmapDataset(GPTIndexedDataset):
         image_positions = None
         if self._has_images:
             image_positions = self._image_positions[idx]
+        
             # Truncations with images are not yet supported, so we get all images from the document
             pixels = np.frombuffer(
                 self._bin_buffer,
                 dtype=np.dtype(np.uint8),
-                count=self._image_lengths[idx].prod(initial=3),
+                count=self._image_lengths[idx].prod(initial=3, axis=1).sum(),
                 offset=self._pointers[idx] + self._document_sizes[idx] * np.dtype(self._dtype).itemsize,
             )
             images = []
@@ -354,7 +356,7 @@ class GPTMemmapDataset(GPTIndexedDataset):
                         image_lengths.append(np.array(pixels.shape[1:]))
                         bin_stream.write(pixels.tobytes(order="C"))
                         total_im_size += pixels.size
-                    im_positions.append(document.image_positions)
+                    im_positions.extend(document.image_positions)
 
                 # Update metadata
                 doc_length = len(document.token_ids)
