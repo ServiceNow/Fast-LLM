@@ -106,7 +106,7 @@ class MambaLayer(torch.nn.Module):
             td_x_proj,
             weight_init_method=kaiming_init_(td_inner.size),
             bias=False,
-            layer_lr_scale=mamba_layer_lr_scale,
+            lr_scale=mamba_layer_lr_scale,
             **factory_kwargs,
         )
         self.x_proj.weight.auto_grad_accumulation = True
