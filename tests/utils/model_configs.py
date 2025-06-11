@@ -403,6 +403,25 @@ _update_and_add_testing_config(
 )
 
 
+_update_and_add_testing_config(
+    # Tests hybrid ssm, llamba converter.
+    "llama",
+    "hybrid_mamba_2",
+    model_type="hybrid_ssm",
+    extra_args=["model.base_model.hybrid_block_layout=['t','m2']"],
+    megatron_args=None,
+    checkpoint_format=None,
+    testing_groups=[
+        ModelTestingGroup.basic,
+    ],
+    # TODO: Bring back `generate` to `testing_groups` when stable.
+    other_groups=[
+        # TODO: Fix and bring back to `testing_groups`
+        ModelTestingGroup.distributed,
+    ],
+)
+
+
 @pytest.fixture(scope="session", params=_MODEL_CONFIGS.keys())
 def model_testing_config(request) -> ModelTestingConfig:
     return _MODEL_CONFIGS[request.param]

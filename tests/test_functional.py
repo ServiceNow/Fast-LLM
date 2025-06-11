@@ -226,9 +226,9 @@ def test_mlp_recomputation(gated, activation_type):
 def test_dropless_mlp():
     num_experts = 4
     experts_per_token = 4
-    tokens = 1024
-    hidden_size = 2048
-    ffn_hidden_size = 4096
+    tokens = 256
+    hidden_size = 512
+    ffn_hidden_size = 1024
     std = 1 / 64
     input_ = torch.randn(tokens, hidden_size, device="cuda", requires_grad=True)
     router_weight = torch.normal(0, std, (num_experts, hidden_size), device="cuda")
