@@ -24,7 +24,7 @@ try:
     from fast_llm.layers.ssm.llamba_block import LlambaBlock
     from fast_llm.layers.ssm.mamba_layer import MambaLayer
     from fast_llm.models.ssm.model import HybridSSMBaseModel, HybridSSMModel
-except ImportError:
+except Exception:
     MambaLayer, LlambaBlock, HybridSSMBaseModel, DiscreteMamba2 = (
         None,
         None,
