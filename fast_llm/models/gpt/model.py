@@ -322,8 +322,8 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                         -10000.0, device=self._tensor_space.distributed.device
                     )
 
-            # print(f"batch.token_ids aka inputs: {batch.token_ids}")
-            # print(f"labels: {labels}")
+            # print(f"batch.token_ids aka inputs: {batch.token_ids.shape} {batch.token_ids}")
+            # print(f"labels: {labels.shape} {labels}")
             for preprocessor in self._preprocessors:
                 # Update this include p_maks and mask index in kwargs
                 preprocessor.preprocess(tokens, kwargs)

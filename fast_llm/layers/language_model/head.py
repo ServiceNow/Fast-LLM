@@ -366,15 +366,6 @@ class MLMHead(LanguageModelHead):
         losses: dict | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
 
-        # can we just do this here?
-        # Input needs to be the masked input with masked tokens
-        # instead of forward pass
-        # this seems only a liner layer we need other layers too
-        # input_ = kwargs["noisy_batch"]
-
-        # print(f"input_: {input_.shape} {input_}")
-        # print(f"labels: {labels.shape} {labels}")
-
         logits, context = output_parallel_linear_forward(
             input_=input_,
             weight=weight,
@@ -400,47 +391,65 @@ class MLMHead(LanguageModelHead):
             return logits * self._logits_scale_factor, None
 
         masked_indices = kwargs[LanguageModelKwargs.mask_indexes]
-        p_mask = kwargs[LanguageModelKwargs.mask_probabilities]
+        mask_probabilities = kwargs[LanguageModelKwargs.mask_probabilities]
+        # index   [0, 1, 2, 3, 4, 5] ->
+        # The labels are already left shifted x = [A, B, C, D, E, F] ->
+        #                                 embd =  [A, B, C, D, E]
+        #                                label =  [B, C, D, E, F]
+
+        # Question Pier: if 2 is the masked token, settling needs to settled 3; but 3 is already seen by the model,
+        # can it just learn to copy 3? i.e copy the next token to the masked?
+        # Yes. it will we need to include curruption to properly handle this. but it seems not to big looking at other CPT (diffuLlama)
+
+        # print(f"context: {context[0].shape} {context}")
+        # print(f"logits {logits.shape} {logits}")
+        # print(f"labels: {labels.shape} {labels}")
         # print(f"masked_indices: {masked_indices.shape} {masked_indices}")
 
-        # The labels are already left shifted x = [0, 1, 2, 3, 4, 5] -> [1, 2, 3, 4, 5?]
-        # then the mask index on the label will give the correct tokens one-hot vector?
-        # this happens in model.py part of preprocessing
+        # Compute CrossEntropy loss and weight each loss differently
+        # We use grad from all the input positions for backward pass.
+        # Find a way to weight the individual losses from each position seperatly, leave the grads alone.
+        # only get grads fron the masked positions ???
 
-        # Question pier: if 2 is the masked token, settling needs to settled 3; but 3 is already seen by the model,
-        # can it just learn to copy 3? i.e copy the next token to the masked?
-
-        # TODO: update loss only on masked tokens error from earlier linear layer missing tokens becuz of masking??
-
-        masked_logits = (
-            logits  # logits[masked_indices[:, 1:]]  # Skip the first token, which is the shift/context token
-        )
-        # flatten the masked indices to match the logits
-        masked_indices_flt = masked_indices[:, 1:].flatten()
-        # print(f"masked_indices: {masked_indices_flt.shape} {masked_indices_flt}")
-        masked_labels = labels  # labels[masked_indices_flt]
-        # print(f"p_mask {p_mask.shape} {masked_indices.shape}")
-        p_mask[masked_indices]
-
-        # Compute MLM loss
+        # Currently by not doing any thing we have both AR loss and Diffusion loss treated equally.
         loss, grad = cross_entropy_forward_backward(
-            masked_logits.flatten(0, -2),
-            masked_labels,
+            logits.flatten(0, -2),
+            labels,
             group=self._tensor_space.distributed.tensor_group if self._parallel_embeddings else None,
             grad_output=grad_output,
             implementation=self._cross_entropy_impl,
             logits_scale_factor=self._logits_scale_factor,
+            avg_loss=False,  # Do not average the loss, we will do it later
         )
 
+        # print(f"loss: {loss.shape} {loss}")
+        # print(f"grad: {grad.shape} {grad}")
         # print(f"loss: {loss.shape} {loss}")
         # Revisit this with the formula and what happens inside the cross_entropy_forward_backward
         # MDM https://github.com/ML-GSAI/SMDM/blob/583aa4716d17728dbb825aec6c24a121164d616a/pretrain/train_mdm.py#L274
         # loss = loss / masked_p
         # print(f"loss: {loss.shape} {loss}")
 
-        # revisit this with the formula and what happens inside the cross_entropy_forward_backward
+        # We need this when we have a way to weight the losses from each position differently.
+        # masked_logits = logits[masked_indices].unsqueeze(0)
+        # print(f"masked_logits: {masked_logits.shape} {masked_logits}")
+        # # flatten the masked indices to match the logits
+        # masked_indices_flt = masked_indices.flatten()
+        # masked_labels = labels[masked_indices_flt]
+        # print(f"masked_labels: {masked_labels.shape} {masked_labels}")
+        # p_mask[masked_indices]
+
+        # Take only the losses and grads from the masked tokens/positions
+        masked_indices_flt = masked_indices.flatten()
+        masked_loss = loss[masked_indices_flt]
+        grad[masked_indices_flt]
+        # print("f masked_probabilities: ", mask_probabilities.shape, mask_probabilities, mask_probabilities.flatten())
+        masked_loss = masked_loss / mask_probabilities.flatten()[masked_indices_flt]
+
+        # compute per token loss by all tokens in the batch (tokens we dropped thinks they have 0 loss)
         # MDM https://github.com/ML-GSAI/SMDM/blob/583aa4716d17728dbb825aec6c24a121164d616a/pretrain/train_mdm.py#L275
-        # loss = loss.sum() / (labels.shape[0] * labels.shape[1])
+        masked_loss = masked_loss.sum() / labels.shape[0]
 
         del logits
-        return loss, output_parallel_linear_backward(grad, context)
+        # masked grad or full grad?
+        return masked_loss, output_parallel_linear_backward(grad, context)
