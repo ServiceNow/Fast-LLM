@@ -315,47 +315,6 @@ class MLMHead(LanguageModelHead):
         super().__init__(config, tensor_space, prediction_distance)
         self._loss_name = LanguageModelLossNames.mlm_loss
 
-    # def forward(
-    #     self, input_: torch.Tensor, kwargs: dict, losses: dict | None = None, metrics: dict | None = None
-    # ) -> torch.Tensor:
-    #     if isinstance(input_, TensorMeta):
-    #         return TensorMeta.from_tensor_space(
-    #             (DefaultDimNames.scalar,),
-    #             self._tensor_space,
-    #             tensor_name="Loss",
-    #             reductions=((DistributedDimNames.data, ReduceOp.AVG),),  # noqa
-    #         )
-
-    #     # Dropping MTP Stuff
-    #     # if not self.is_last_head:
-    #     #     # MTP: split the stacked input
-    #     #     shared_hidden, input_ = torch.unbind(input_, dim=0)
-
-    #     # TODO: Pytorch copies the grads in backward for no reason (not sure if still the case)
-    #     # TODO: Torch compile implementation sometimes break.
-    #     # TODO: Double-check correctness, optimize a bit more.
-    #     # TODO: Drop autograd entirely.
-    #     # TODO: Skip cross-entropy backward if not needed.
-
-    #     print(f"forward input_: {input_.shape} {input_}")
-
-    #     # Input needs to be the masked input with masked tokens
-    #     input_ = kwargs["noisy_batch"]
-
-    #     language_model_loss = self._forward(input_, kwargs, losses)
-    #     if language_model_loss is not None:
-    #         losses[self._loss_name].append(language_model_loss)
-    #     # TODO: Return the model output when needed.
-    #     # if self.is_last_head:
-    #     #     # Last head should return the loss for backward.
-    #     return language_model_loss
-    #     # else:
-    #     #     if self.training:
-    #     #         # Backward hook to compute the gradient of the loss
-    #     #         shared_hidden = AuxiliaryLoss.apply(shared_hidden, language_model_loss, 1.0)
-    #     #     # MTP: Return shared_hidden to be used by the next head.
-    #     #     return shared_hidden
-
     def _logits_cross_entropy_forward_backward(
         self,
         input_: torch.Tensor,
