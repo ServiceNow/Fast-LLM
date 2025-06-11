@@ -113,13 +113,12 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
         return layers
 
     def get_vision_layers(self) -> list[Layer]:
-        patch_conv = PatchConv(self._config.vision_encoder, self._tensor_space)
         vit_layers = [
             VisionTransformerLayer(self._config.vision_encoder.transformer, self._tensor_space, layer_index=idx + 1)
             for idx in range(self._config.vision_encoder.transformer.num_layers)
         ]
         return [
-            patch_conv,
+            PatchConv(self._config.vision_encoder, self._tensor_space),
             *vit_layers,
             VisionAdapter(self._config.vision_encoder, self._tensor_space),
             MultiModalEmbedding(self._config, self._tensor_space),

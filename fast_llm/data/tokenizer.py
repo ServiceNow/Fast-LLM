@@ -60,6 +60,7 @@ class Tokenizer:
         image_position = image_positions[image_idx] if image_idx < len(image_positions) else float("inf")
 
         for start, end in char_spans:
+            # Tokenize all text before the span, with image positions in mind (i.e., break text at image positions).
             while image_position <= start:
                 tokenized_text = self._tokenize(text[char_pos:image_position], begin=beginning_of_text, end=False)
                 beginning_of_text = False
@@ -76,6 +77,7 @@ class Tokenizer:
             len(token_ids)
             span_length = 0
             token_start = len(token_ids)
+            # Tokenize all text before the end of the span
             while image_position <= end:
                 tokenized_text = self._tokenize(text[char_pos:image_position], begin=beginning_of_text, end=False)
                 beginning_of_text = False
@@ -85,21 +87,21 @@ class Tokenizer:
                 char_pos = image_position
                 image_idx += 1
                 image_position = image_positions[image_idx] if image_idx < len(image_positions) else float("inf")
-            if char_pos < end:
-                if end >= len(text) - 1:
-                    tokenized_text = self._tokenize(text[char_pos : end + 1], begin=beginning_of_text, end=True)
-                    beginning_of_text = False
-                    token_ids.extend(tokenized_text)
-                    span_length += len(tokenized_text)
-                    char_pos = end + 1
-                else:
-                    tokenized_text = self._tokenize(text[char_pos : end + 1], begin=beginning_of_text, end=False)
-                    beginning_of_text = False
-                    token_ids.extend(tokenized_text)
-                    span_length += len(tokenized_text)
-                    char_pos = end + 1
+            # Tokenize the last part of the span, since there are no more images
+            if char_pos < end + 1:
+                # end of span is end of text
+                tokenized_text = self._tokenize(
+                    text[char_pos : end + 1],
+                    begin=beginning_of_text,
+                    end=(end >= len(text) - 1),
+                )
+                beginning_of_text = False
+                token_ids.extend(tokenized_text)
+                span_length += len(tokenized_text)
+                char_pos = end + 1
             token_spans.append((token_start, token_start + span_length - 1))
 
+        # Tokenize text remaining after the last span
         while image_position <= len(text):
             image_position = image_positions[image_idx]
             tokenized_text = self._tokenize(text[char_pos:image_position], begin=beginning_of_text, end=False)

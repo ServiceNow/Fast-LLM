@@ -104,18 +104,6 @@ def create_inv_freqs(rope_theta: int, kv_channels: int, image_size: int, patch_s
     return torch.cat((inv_freq, inv_freq), dim=-1)
 
 
-def position_ids_in_meshgrid(image_sizes: list[torch.Tensor], max_size: int, patch_size: int) -> torch.Tensor:
-    positions = []
-    for h, w in image_sizes:
-        patch_height = h // patch_size
-        patch_width = w // patch_size
-        mesh = torch.meshgrid(torch.arange(patch_height), torch.arange(patch_width), indexing="ij")
-        h_grid, v_grid = torch.stack(mesh, dim=-1).reshape(-1, 2).chunk(2, -1)
-        ids = h_grid * max_size + v_grid
-        positions.append(ids[:, 0])
-    return positions
-
-
 def position_ids_in_meshgrid(height, width, max_size, patch_size) -> torch.Tensor:
     patch_height = height // patch_size
     patch_width = width // patch_size

@@ -58,8 +58,6 @@ class GPTMemmapDataset(GPTIndexedDataset):
 
             if self._version >= 4:
                 self._has_images = struct.unpack("<B", stream.read(1))[0]
-                #  not sure of assignment, reading flag to indicate whether preference loss-masking spans are present
-                self._has_preference_spans = struct.unpack("<B", stream.read(1))[0]
 
             self._dtype = MEMMAP_DTYPES[struct.unpack("<B", stream.read(1))[0]].numpy
             self._num_documents = struct.unpack("<Q", stream.read(8))[0]
@@ -108,10 +106,7 @@ class GPTMemmapDataset(GPTIndexedDataset):
                         + self._num_spans_cumsum[idx] * 2 * np.dtype(np.int32).itemsize,
                     ).reshape(-1, 2)
                 )
-            offset += (
-                self._num_spans.nbytes
-                + self._num_spans.sum() * 2 * np.dtype(np.int32).itemsize
-            )
+            offset += self._num_spans.nbytes + self._num_spans.sum() * 2 * np.dtype(np.int32).itemsize
         # read preference spans
         self._chosen_spans = None
         self._rejected_spans = None
@@ -141,17 +136,17 @@ class GPTMemmapDataset(GPTIndexedDataset):
             offset += np.array(self._chosen_spans).nbytes + np.array(self._rejected_spans).nbytes
 
         self._num_pixels = 0
-        self._image_lengths = None
+        self._image_sizes = None
         self._image_positions = None
         if self._has_images and self._version >= 4:
             self._n_images = np.frombuffer(
                 self._index_bin_buffer, dtype=np.int32, count=self._num_documents, offset=offset
             )
-            self._image_lengths = []
+            self._image_sizes = []
             self._image_positions = []
             images_seen = 0
             for n_images in self._n_images:
-                self._image_lengths.append(
+                self._image_sizes.append(
                     np.frombuffer(
                         self._index_bin_buffer,
                         dtype=np.int32,
@@ -159,7 +154,7 @@ class GPTMemmapDataset(GPTIndexedDataset):
                         offset=offset + self._n_images.nbytes + 2 * images_seen * np.dtype(np.int32).itemsize,
                     ).reshape(-1, 2)
                 )
-                self._num_pixels += self._image_lengths[-1].prod(axis=1, initial=3).sum()
+                self._num_pixels += self._image_sizes[-1].prod(axis=1, initial=3).sum()
                 self._image_positions.append(
                     np.frombuffer(
                         self._index_bin_buffer,
@@ -214,19 +209,19 @@ class GPTMemmapDataset(GPTIndexedDataset):
         image_positions = None
         if self._has_images:
             image_positions = self._image_positions[idx]
-        
+
             # Truncations with images are not yet supported, so we get all images from the document
             pixels = np.frombuffer(
                 self._bin_buffer,
                 dtype=np.dtype(np.uint8),
-                count=self._image_lengths[idx].prod(initial=3, axis=1).sum(),
+                count=self._image_sizes[idx].prod(initial=3, axis=1).sum(),
                 offset=self._pointers[idx] + self._document_sizes[idx] * np.dtype(self._dtype).itemsize,
             )
             images = []
             start = 0
-            for image_length in self._image_lengths[idx]:
-                n_pixels = image_length.prod(initial=3)
-                images.append(pixels[start : start + n_pixels].reshape(3, image_length[0], image_length[1]))
+            for image_size in self._image_sizes[idx]:
+                n_pixels = image_size.prod(initial=3)
+                images.append(pixels[start : start + n_pixels].reshape(3, image_size[0], image_size[1]))
                 start += n_pixels
         sample_spans = None
         if use_loss_masking_spans and self._spans is not None:
@@ -302,10 +297,10 @@ class GPTMemmapDataset(GPTIndexedDataset):
         The resulting array could be very large, so this method should be called cautiously,
         and derived classes should try to avoid holding the whole array im memory.
         """
-        return self._document_sizes, self._image_lengths
+        return self._document_sizes, self._image_sizes
 
     def get_document_size(self, index: int) -> int:
-        return self._document_sizes[index].item(), self._image_lengths[index] if self._has_images else []
+        return self._document_sizes[index].item(), self._image_sizes[index] if self._has_images else []
 
     @classmethod
     def write_dataset(cls, prefix: pathlib.Path | str, documents: typing.Iterable[GPTSample]):
@@ -314,7 +309,7 @@ class GPTMemmapDataset(GPTIndexedDataset):
         num_documents = 0
         doc_lengths = []
         n_images = []
-        image_lengths = []
+        image_sizes = []
         im_positions = []
         total_images = 0
         pointers = []
@@ -353,7 +348,7 @@ class GPTMemmapDataset(GPTIndexedDataset):
                                 img = img.convert("RGB")
                             pixels = np.array(img).transpose(2, 0, 1)  # HWC to CHW
                             assert pixels.dtype == np.uint8, f"Expected uint8 pixels, got {pixels.dtype}."
-                        image_lengths.append(np.array(pixels.shape[1:]))
+                        image_sizes.append(np.array(pixels.shape[1:]))
                         bin_stream.write(pixels.tobytes(order="C"))
                         total_im_size += pixels.size
                     im_positions.extend(document.image_positions)
@@ -385,11 +380,11 @@ class GPTMemmapDataset(GPTIndexedDataset):
 
         if total_images:
             n_images = np.array(n_images, dtype=np.int32)
-            image_lengths = np.stack(image_lengths, dtype=np.int32)
+            image_sizes = np.stack(image_sizes, dtype=np.int32)
             im_positions = np.array(im_positions, dtype=np.int32)
         else:
             n_images = np.array([])
-            image_lengths = np.array([])
+            image_sizes = np.array([])
             im_positions = np.array([])
 
         # Write the index file (.idx)
@@ -402,12 +397,10 @@ class GPTMemmapDataset(GPTIndexedDataset):
             idx_stream.write(struct.pack("<Q", 4))
             # Flag to indicate whether loss-masking spans are present
             idx_stream.write(struct.pack("<B", 1 if spans.size > 0 else 0))
-            # Placeholder flag for preference spans
-            idx_stream.write(struct.pack("<B", 0))
-            # Flag to indicate whether images are present
-            idx_stream.write(struct.pack("<B", 1 if total_images > 0 else 0))
             # Flag to indicate whether preference loss-masking spans are present
             idx_stream.write(struct.pack("<B", 1 if chosen_spans.size > 0 and rejected_spans.size > 0 else 0))
+            # Flag to indicate whether images are present
+            idx_stream.write(struct.pack("<B", 1 if total_images > 0 else 0))
             # Data type
             idx_stream.write(struct.pack("<B", MEMMAP_DTYPES_INV[DataType.from_numpy(dtype.type)]))
             # "Number of sequences", same as documents in our case
@@ -429,7 +422,7 @@ class GPTMemmapDataset(GPTIndexedDataset):
             # Number of images per document
             idx_stream.write(n_images.tobytes(order="C"))
             # n_pixels * 3 per image
-            idx_stream.write(image_lengths.tobytes(order="C"))
+            idx_stream.write(image_sizes.tobytes(order="C"))
             # Position of each image in the document
             idx_stream.write(im_positions.tobytes(order="C"))
             # Document indices, unused but needed for compatibility with Megatron-LM

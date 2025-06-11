@@ -149,3 +149,7 @@ class TransformerLayer(BaseBlock):
 
     def _create_mixer(self):
         self.self_attn = Attention(self._config, self._tensor_space, self._layer_index)
+
+
+class VisionTransformerLayer(TransformerLayer):
+    _name: str = "Vision transformer layer"
