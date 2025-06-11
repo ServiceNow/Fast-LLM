@@ -11,7 +11,7 @@ from fast_llm.layers.language_model.config import LanguageModelKwargs
 from fast_llm.layers.language_model.embedding import WORD_EMBEDDINGS_WEIGHT
 from fast_llm.layers.language_model.head import OUTPUT_WEIGHTS, LanguageModelHead
 from fast_llm.layers.transformer.config import TransformerKwargs
-from fast_llm.models.gpt.config import GPTModelConfig
+from fast_llm.models.gpt.config import GPTBaseModelConfig, GPTModelConfig
 from fast_llm.utils import Assert
 from tests.utils.utils import get_base_model, get_stage, requires_cuda
 
@@ -82,41 +82,46 @@ def test_lm_head(
     distributed_config_dict: dict[str, typing.Any],
     loss_masking: bool,
 ):
-    config = GPTModelConfig.from_dict(
+    config = GPTBaseModelConfig.from_dict(
         {
-            "base_model": {
-                "transformer": {
-                    "normalization": {"type": NormalizationType.rms_norm},
-                    "hidden_size": HIDDEN_SIZE,
-                    "num_layers": 0,
-                },
-                "vocab_size": VOCAB_SIZE,
-                "cross_entropy_impl": cross_entropy_impl,
+            "transformer": {
+                "normalization": {"type": NormalizationType.rms_norm},
+                "hidden_size": HIDDEN_SIZE,
+                "num_layers": 0,
             },
-            "distributed": distributed_config_dict,
+            "vocab_size": VOCAB_SIZE,
+            "cross_entropy_impl": cross_entropy_impl,
         },
         config_dict,
         update_type=UpdateType.update,
     )
-    model, distributed = get_base_model(config)
 
-    sequence_first = config.base_model.sequence_first or (
-        config.base_model.cross_entropy_splits is not None and config.base_model.cross_entropy_splits > 1
+    model, distributed = get_base_model(
+        GPTModelConfig.from_dict(
+            {
+                "base_model": config,
+                "distributed": distributed_config_dict,
+            },
+        )
+    )
+
+    sequence_first = config.sequence_first or (
+        config.cross_entropy_splits is not None and config.cross_entropy_splits > 1
     )
     input_ = torch.randn(
         (SEQUENCE_LENGTH, BATCH_SIZE, HIDDEN_SIZE) if sequence_first else (BATCH_SIZE, SEQUENCE_LENGTH, HIDDEN_SIZE),
         dtype=(
-            config.distributed.optimization_dtype.torch
-            if config.base_model.transformer.full_precision_residual
-            else config.distributed.training_dtype.torch
+            distributed.config.optimization_dtype.torch
+            if config.transformer.full_precision_residual
+            else distributed.config.training_dtype.torch
         ),
         device=distributed.device,
         requires_grad=True,
     )
     label_shape = (
-        (SEQUENCE_LENGTH + config.base_model.prediction_heads - 1, BATCH_SIZE)
+        (SEQUENCE_LENGTH + config.prediction_heads - 1, BATCH_SIZE)
         if sequence_first
-        else (BATCH_SIZE, SEQUENCE_LENGTH + config.base_model.prediction_heads - 1)
+        else (BATCH_SIZE, SEQUENCE_LENGTH + config.prediction_heads - 1)
     )
     if loss_masking:
         loss_mask = torch.randint(0, 2, label_shape, dtype=torch.bool, device=distributed.device)
@@ -126,7 +131,7 @@ def test_lm_head(
         TransformerKwargs.sequence_first: sequence_first,
         TransformerKwargs.grad_output: 1.0,
     }
-    if config.base_model.distillation_model is None:
+    if config.distillation_model is None:
         target = torch.randint(
             0,
             VOCAB_SIZE,
@@ -139,25 +144,25 @@ def test_lm_head(
 
         kwargs[LanguageModelKwargs.labels] = target
     else:
-        assert config.base_model.prediction_heads == 1
+        assert config.prediction_heads == 1
         target = torch.randn(
             input_.shape[:-1] + (VOCAB_SIZE,),
             dtype=input_.dtype,
             device=distributed.device,
         )
-        kwargs[f"{config.base_model.distillation_model}_logits"] = target
+        kwargs[f"{config.distillation_model}_logits"] = target
         if loss_mask is not None:
             kwargs[LanguageModelKwargs.loss_mask] = loss_mask
 
-    if config.base_model.tie_word_embeddings or config.base_model.prediction_heads > 1:
+    if config.tie_word_embeddings or config.prediction_heads > 1:
         logit_weight = (
             torch.empty(
-                VOCAB_SIZE, HIDDEN_SIZE, dtype=config.distributed.training_dtype.torch, device=distributed.device
+                VOCAB_SIZE, HIDDEN_SIZE, dtype=distributed.config.training_dtype.torch, device=distributed.device
             )
-            .normal_(config.base_model.transformer.init_method_std)
+            .normal_(config.transformer.init_method_std)
             .requires_grad_(True)
         )
-        kwargs[WORD_EMBEDDINGS_WEIGHT if config.base_model.tie_word_embeddings else OUTPUT_WEIGHTS] = logit_weight
+        kwargs[WORD_EMBEDDINGS_WEIGHT if config.tie_word_embeddings else OUTPUT_WEIGHTS] = logit_weight
     else:
         logit_weight = None
 
@@ -189,8 +194,8 @@ def test_lm_head(
             loss_mask,
             rms_weight=ref_rms_weight,
             logit_weight=ref_logit_weight,
-            logit_scale_factor=config.base_model.logits_scale_factor,
-            logit_z_loss=config.base_model.logit_z_loss,
+            logit_scale_factor=config.logits_scale_factor,
+            logit_z_loss=config.logit_z_loss,
         )
 
         # Prepare LM head inputs
@@ -211,10 +216,10 @@ def test_lm_head(
         output, context = stage.forward(head_input, kwargs, losses)
         stage.backward(output_grad, context)
 
-        threshold = 1e-5 if config.distributed.training_dtype == DataType.float32 else 5e-3
+        threshold = 1e-5 if distributed.config.training_dtype == DataType.float32 else 5e-3
         min_threshold = (
-            1e-5 if config.distributed.training_dtype == DataType.float32 else 1e-4
-        ) * config.base_model.logits_scale_factor
+            1e-5 if distributed.config.training_dtype == DataType.float32 else 1e-4
+        ) * config.logits_scale_factor
 
         Assert.eq(losses.keys(), loss_keys)
         Assert.eq(len(losses[loss_name]), 1)

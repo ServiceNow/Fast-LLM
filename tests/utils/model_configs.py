@@ -387,7 +387,13 @@ _update_and_add_testing_config(
     "llama",
     "llamba",
     model_type="hybrid_ssm",
-    extra_args=["model.base_model.hybrid_block_layout=['t','m']"],
+    extra_args=[
+        "model.base_model.hybrid_block_layout=['t','m']",
+        "model.base_model.ssm.state_size=8",
+        "model.base_model.ssm.chunk_size=32",
+        "model.base_model.ssm.n_qk_heads=8",
+        "model.base_model.ssm.n_v_heads=8",
+    ],
     megatron_args=None,
     checkpoint_format=LLambaHuggingfaceCheckpointFormat,
     testing_groups=[
@@ -405,10 +411,12 @@ _update_and_add_testing_config(
 
 _update_and_add_testing_config(
     # Tests hybrid ssm, llamba converter.
-    "llama",
+    "llamba",
     "hybrid_mamba_2",
     model_type="hybrid_ssm",
-    extra_args=["model.base_model.hybrid_block_layout=['t','m2']"],
+    extra_args=[
+        "model.base_model.hybrid_block_layout=['t','m2']",
+    ],
     megatron_args=None,
     checkpoint_format=None,
     testing_groups=[

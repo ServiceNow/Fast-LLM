@@ -231,7 +231,6 @@ def pytest_terminal_summary(terminalreporter):
         key=lambda nodeid: resource_reports[nodeid]["max_memory_reserved"],
         reverse=True,
     )
-    logging.error(f"sorted_nodeids {sorted_nodeids}")
     for nodeid in sorted_nodeids[: terminalreporter.config.getoption("--show-gpu-memory")]:
         terminalreporter.write_line(
             f"{nodeid}:\n    "
