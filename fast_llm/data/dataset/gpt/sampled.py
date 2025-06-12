@@ -468,15 +468,9 @@ class GPTSampledIndexedDataset(SampledDataset):
                     else:
                         # Move on to the next sample.
                         token_count += padding_size
-                elif document_size + tokens_in_sample == self._parameters.sequence_length + 1:
-                    if token_count + document_size == token_start:
-                        # Document belongs to the current sample but the condition below will include it for the next sample
-                        token_count += document_size
-                        document_sampling_index += 1
-                        continue
 
             # Determine if the document belongs to the requested sample.
-            if token_count + document_size >= token_start:
+            if token_count + document_size > token_start:
                 # Determine which part of the document belong to the sample, and add it to the list.
                 token_start_index_in_document = max(token_start - token_count, 0)
                 token_end_index_in_document = min(token_end - token_count, document_size)

@@ -1,4 +1,5 @@
 import functools
+import logging
 import typing
 
 from fast_llm.config import Field, FieldHint, FieldUpdate, check_field, config_class
@@ -15,6 +16,8 @@ if typing.TYPE_CHECKING:
     from fast_llm.models.gpt.huggingface import HuggingfaceGPTModelForCausalLM
     from fast_llm.models.gpt.model import GPTInferenceRunner, GPTModel
     from fast_llm.models.gpt.trainer import GPTTrainer
+
+logger = logging.getLogger(__name__)
 
 
 class GPTHuggingfaceCheckpointFormat(CheckpointFormat):
@@ -82,7 +85,7 @@ class GPTBatchConfig(BatchConfig):
         desc="Read loss masking spans from the dataset.",
         hint=FieldHint.feature,
     )
-    truncate_documents: bool = Field(
+    truncate_documents: bool | None = Field(
         default=True,
         desc=(
             "If enabled, documents may be truncated while being packed to fit the sequence length."
@@ -181,6 +184,12 @@ class GPTTrainerConfig(PretrainedGPTModelConfig, TrainerConfig):
             self.batch.sequence_length = self.model.base_model.max_position_embeddings
         if self.model.base_model.use_megatron_initialization:
             set_megatron_distributed_seeds(self.model.distributed)
+        if self.data.truncate_documents is not None:
+            logger.warning(
+                "Using deprecated field `data.truncate_documents`, `batch.truncate_documents` will be overridden if specified. "
+                "Use `batch.truncate_documents` instead."
+            )
+            self.batch.truncate_documents = self.data.truncate_documents
         super()._validate()
 
         if self.model.base_model.use_absolute_position_embeddings:
