@@ -23,8 +23,6 @@ from transformers.utils.generic import ModelOutput
 
 from fast_llm.models.ssm.external.apriel_15b_hybrid.configuration_ssm_hybrid_apriel15b import AprielSSMHybridConfig
 
-# from apriel_15b_hybrid.configuration_ssm_hybrid_apriel15b import AprielSSMHybridConfig
-
 logger = logging.get_logger(__name__)
 
 
