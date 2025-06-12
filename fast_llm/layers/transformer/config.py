@@ -7,12 +7,11 @@ import typing
 import warnings
 
 from fast_llm.config import Field, FieldHint, check_field, config_class, skip_valid_if_none
-from fast_llm.engine.base_model.config import BaseModelConfig
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.engine.config_utils.tensor_space import CompositeTensorDim, TensorDim, TensorSpace
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
 from fast_llm.functional.config import ActivationType, MLPRecomputeLevel, TritonConfig
-from fast_llm.layers.common.config import LoRAConfig, NoPeftConfig, NormalizationConfig, PeftConfig
+from fast_llm.layers.common.config import LLMBlockConfig, LoRAConfig, NoPeftConfig, NormalizationConfig, PeftConfig
 from fast_llm.layers.transformer.rotary.config import RotaryConfig
 from fast_llm.utils import Assert, div
 
@@ -208,7 +207,7 @@ class TransformerLoRAConfig(LoRAConfig, TransformerPeftConfig):
 
 
 @config_class()
-class TransformerConfig(BaseModelConfig):
+class TransformerConfig(LLMBlockConfig):
     _abstract = False
     normalization: NormalizationConfig = Field(
         desc="Configuration for the normalization layers architecture.",

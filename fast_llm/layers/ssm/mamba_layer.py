@@ -9,9 +9,10 @@ from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
 from fast_llm.layers.common.linear import Linear
 from fast_llm.layers.ssm.config import SSMConfig, SSMDimNames
 from fast_llm.tensor import ParameterMeta, init_ones_, kaiming_init_
+from fast_llm.utils import get_lr_scale
 
 """
-Note: this is mostly addapted from https://github.com/Zyphra/Zamba2, similar code is aslo in https://github.com/state-spaces/mamba.
+Note: this is mostly adapted from https://github.com/Zyphra/Zamba2, similar code is also in https://github.com/state-spaces/mamba.
 For now it only supports training and not inference.
 This works with triton 3.1.0
 """
@@ -20,7 +21,7 @@ This works with triton 3.1.0
 def init_A(d_state, d_inner) -> Callable[[ParameterMeta, torch.Tensor, torch.Generator], torch.Tensor]:
     def init_(meta: ParameterMeta, tensor: torch.Tensor, generator: torch.Generator):  # noqa
         # S4D real initialization
-        # TODO: adopt this innitialization to work for tensor parallel setting!
+        # TODO: adopt this initialization to work for tensor parallel setting!
         A = einops.repeat(torch.arange(1, d_state + 1, dtype=torch.float32), "n -> d n", d=d_inner).contiguous()
         A_log = torch.log(A)  # Keep A_log in fp32
         if tensor.shape != A_log.shape:
@@ -81,6 +82,8 @@ class MambaLayer(torch.nn.Module):
         self.d_state = td_state.size
         self.d_model = td_model.size
         self.dt_rank = tdt_rank.size
+        layer_lr_scale = config.per_layer_lr_scale[layer_idx] if config.per_layer_lr_scale else None
+        mamba_layer_lr_scale = get_lr_scale(self.config.mamba_lr_scale, layer_lr_scale)
 
         self.in_proj_weight = ParameterMeta.from_dims(
             (td_inner_proj, td_model),
@@ -90,6 +93,7 @@ class MambaLayer(torch.nn.Module):
         self.conv1d_weight = ParameterMeta.from_dims(
             (td_inner, TensorDim("D_inner_2", self.d_inner // self.d_inner), td_conv_kernel),
             init_method=kaiming_init_(td_inner.size),
+            lr_scale=mamba_layer_lr_scale,
         )
 
         self.conv1d_bias = None
@@ -102,14 +106,16 @@ class MambaLayer(torch.nn.Module):
             td_x_proj,
             weight_init_method=kaiming_init_(td_inner.size),
             bias=False,
+            lr_scale=mamba_layer_lr_scale,
             **factory_kwargs,
         )
         self.x_proj.weight.auto_grad_accumulation = True
 
-        # TODO: the weights are innitialized a bit differently here https://github.com/state-spaces/mamba/blob/0cce0fa645f100f00620ddf2333c2b7712abfdec/mamba_ssm/modules/mamba_simple.py#L82
+        # TODO: the weights are initialized a bit differently here https://github.com/state-spaces/mamba/blob/0cce0fa645f100f00620ddf2333c2b7712abfdec/mamba_ssm/modules/mamba_simple.py#L82
         self.dt_proj_weight = ParameterMeta.from_dims(
             (td_inner, tdt_rank),
             init_method=kaiming_init_(tdt_rank.size),
+            lr_scale=mamba_layer_lr_scale,
         )
 
         self.dt_proj_bias = ParameterMeta.from_dims(
@@ -117,12 +123,14 @@ class MambaLayer(torch.nn.Module):
             init_method=init_dtprojbias(
                 self.d_inner, self.config.dt_max, self.config.dt_min, self.config.dt_init_floor, factory_kwargs
             ),
+            lr_scale=mamba_layer_lr_scale,
         )
 
         self.A_log = ParameterMeta.from_dims(
             (td_inner, td_state),
             weight_decay=False,
             init_method=init_A(self.d_state, self.d_inner),
+            lr_scale=mamba_layer_lr_scale,
         )
 
         # D "skip" parameter
@@ -130,6 +138,7 @@ class MambaLayer(torch.nn.Module):
             (td_inner,),
             weight_decay=False,
             init_method=init_ones_,
+            lr_scale=mamba_layer_lr_scale,
         )
 
         self.out_proj = Linear(
@@ -137,6 +146,7 @@ class MambaLayer(torch.nn.Module):
             td_model,
             bias=False,  # TODO: note, if bias is used there is a problem in the MambaInnerFn.backward for the bias grads. I think this bias is not used in other mamba repos.
             weight_init_method=kaiming_init_(td_model.size),
+            lr_scale=mamba_layer_lr_scale,
             **factory_kwargs,
         )
         self.out_proj.weight.auto_grad_accumulation = True
