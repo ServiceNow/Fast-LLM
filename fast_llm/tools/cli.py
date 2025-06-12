@@ -15,7 +15,7 @@ def fast_llm(args=None):
     # (Pre-)configure logging
     configure_logging()
     parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument("subcommand", choices=["train", "convert", "prepare", "create_hybrid_checkpoint"])
+    parser.add_argument("subcommand", choices=["train", "convert", "prepare", "create_hybrid_checkpoint", "create_hybrid_checkpoint_5b"])
     parsed, unparsed = parser.parse_known_args(args)
     try:
         if parsed.subcommand == "train":
