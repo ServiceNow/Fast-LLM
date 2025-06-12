@@ -113,7 +113,9 @@ class AudioPreprocessor(Preprocessor):
             audio_mel = torch.tensor(audio_mel, dtype=torch.float32)
             curr_size = 0
 
-        max_pad = math.ceil(kwargs["sequence_length"] / (kwargs["audio_encoder_sequence_length"] // 5))
+        max_pad = math.ceil(
+            kwargs["sequence_length"] / (kwargs["audio_encoder_sequence_length"] // self._config.aud_downsampling_k)
+        )
         padding_size = max_pad - curr_size
         padding = torch.zeros(
             padding_size,
