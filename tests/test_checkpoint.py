@@ -14,9 +14,8 @@ from fast_llm.engine.checkpoint.config import (
     FastLLMCheckpointFormat,
     ModelConfigType,
 )
+from fast_llm.engine.checkpoint.convert import ConvertConfig
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig, ShardName, StageMode
-from fast_llm.models.auto import model_registry
-from fast_llm.tools.convert import ConvertConfig
 from tests.common import (
     CONFIG_COMMON,
     FORCE_REUSE_RESULTS,
@@ -29,7 +28,7 @@ from tests.common import (
 )
 from tests.compare_tensor_logs import CompareConfig, compare_logged_tensor
 
-TEST_MODEL_CONFIG_CLS = model_registry[TEST_MODEL_TYPE]
+TEST_MODEL_CONFIG_CLS = FastLLMModelConfig.get_subclass(TEST_MODEL_TYPE)
 TEST_MODEL_HF_CLS = TEST_MODEL_CONFIG_CLS.get_huggingface_model_for_causal_lm_class()
 TEST_MODEL_CLS = TEST_MODEL_CONFIG_CLS.get_model_class()
 TEST_BASE_MODEL_CONFIG_CLS = TEST_MODEL_CONFIG_CLS.get_base_model_config_class()
