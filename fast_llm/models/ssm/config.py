@@ -5,6 +5,7 @@ import typing
 from fast_llm.config import Field, FieldHint, FieldUpdate, config_class
 from fast_llm.data.data.gpt.config import GPTDataConfig
 from fast_llm.engine.checkpoint.config import CheckpointFormat, CheckpointHandler
+from fast_llm.engine.config_utils.runnable import RunnableConfig
 from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig, PretrainedFastLLMModelConfig
 from fast_llm.engine.training.config import TrainerConfig
@@ -17,7 +18,7 @@ if typing.TYPE_CHECKING:
     from fast_llm.models.gpt.model import GPTInferenceRunner
     from fast_llm.models.ssm.huggingface import HuggingfaceHybridSSMModelForCausalLM
     from fast_llm.models.ssm.model import HybridSSMModel
-    from fast_llm.models.ssm.trainer import SSMTrainer
+    from fast_llm.models.ssm.trainer import HybridSSMTrainer
 
 logger = logging.getLogger(__name__)
 
@@ -205,17 +206,17 @@ class PretrainedHybridSSMModelConfig(PretrainedFastLLMModelConfig):
     model: HybridSSMModelConfig = FieldUpdate()
 
 
-@config_class()
-class HybridTrainerConfig(PretrainedHybridSSMModelConfig, TrainerConfig):
+@config_class(dynamic_type={RunnableConfig: "train_hybrid_ssm", TrainerConfig: "hybrid_ssm"})
+class HybridSSMTrainerConfig(PretrainedHybridSSMModelConfig, TrainerConfig):
     data: GPTDataConfig = FieldUpdate()
     batch: GPTBatchConfig = FieldUpdate()
     reference_models: dict[str, PretrainedGPTModelConfig] = FieldUpdate()
 
     @classmethod
-    def get_trainer_class(cls) -> type["SSMTrainer"]:
-        from fast_llm.models.ssm.trainer import SSMTrainer
+    def get_trainer_class(cls) -> type["HybridSSMTrainer"]:
+        from fast_llm.models.ssm.trainer import HybridSSMTrainer
 
-        return SSMTrainer
+        return HybridSSMTrainer
 
     def _validate(self) -> None:
         super()._validate()

@@ -6,7 +6,6 @@ import torch
 from fast_llm.config import UpdateType
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.functional.config import CrossEntropyImpl
-from fast_llm.layers.common.config import NormalizationType
 from fast_llm.layers.language_model.config import LanguageModelKwargs
 from fast_llm.layers.language_model.embedding import WORD_EMBEDDINGS_WEIGHT
 from fast_llm.layers.language_model.head import OUTPUT_WEIGHTS, LanguageModelHead
@@ -85,7 +84,7 @@ def test_lm_head(
     config = GPTBaseModelConfig.from_dict(
         {
             "transformer": {
-                "normalization": {"type": NormalizationType.rms_norm},
+                "normalization": {"type": "rms_norm"},
                 "hidden_size": HIDDEN_SIZE,
                 "num_layers": 0,
             },
