@@ -329,6 +329,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
             if self._config.dataset.images
             else 0
         )
+        # Add the token-equivalent bytes of pixels to determine shard size
         total_tokens += total_pixels // np.dtype(self._data_type.numpy).itemsize
 
         # Split dataset into shards based on number of tokens
