@@ -187,14 +187,14 @@ class YarnRotary[ConfigType: YarnRotaryConfig](DefaultRotary[YarnRotaryConfig]):
         scales = super()._get_angle_scales(kv_channels, device)
         # TODO: max_position_embeddings or original_context_length?
         # see https://huggingface.co/deepseek-ai/DeepSeek-V3/blob/main/modeling_deepseek.py#L304
-        low = max(self._get_correction(self._config.beta_slow, kv_channels), 0)
-        high = min(self._get_correction(self._config.beta_fast, kv_channels), kv_channels - 1)
+        low = max(math.floor(self._get_correction(self._config.beta_fast, kv_channels)), 0)
+        high = min(math.ceil(self._get_correction(self._config.beta_slow, kv_channels)), kv_channels - 1)
         if low == high:
             high += 0.001  # Prevent singularity
 
         # Get n-dimensional rotational scaling corrected for extrapolation
         extrapolation_factor = torch.clamp(
-            (torch.arange(kv_channels, dtype=torch.float32, device=scales.device) - low) / (high - low), 0, 1
+            (torch.arange(kv_channels // 2, dtype=torch.float32, device=scales.device) - low) / (high - low), 0, 1
         )
         return scales / self._config.scale_factor * extrapolation_factor + scales * (1 - extrapolation_factor)
 
@@ -207,7 +207,7 @@ class YarnRotary[ConfigType: YarnRotaryConfig](DefaultRotary[YarnRotaryConfig]):
         return ramp_func
 
     def _get_correction(self, beta: float, dim: int) -> float:
-        return math.floor(
+        return (
             dim
             * math.log(self._config.original_context_length / (beta * 2 * math.pi))
             / (2 * math.log(self._config.theta))

@@ -14,23 +14,14 @@ from fast_llm.engine.schedule.runner import ScheduleRunner
 from fast_llm.engine.schedule.schedule import Schedule
 from fast_llm.layers.language_model.config import LanguageModelKwargs, LanguageModelLossNames
 from fast_llm.layers.ssm.config import SSMBlockType
+from fast_llm.layers.ssm.discrete_mamba2 import DiscreteMamba2
+from fast_llm.layers.ssm.llamba_block import LlambaBlock
+from fast_llm.layers.ssm.mamba_layer import MambaLayer
 from fast_llm.layers.transformer.config import TransformerKwargs
 from fast_llm.models.gpt.config import GPTBatchConfig, LlamaGPTHuggingfaceCheckpointFormat
 from fast_llm.models.ssm.config import AprielSSMHHybridHuggingfaceCheckpointFormat, LLambaHuggingfaceCheckpointFormat
+from fast_llm.models.ssm.model import HybridSSMBaseModel, HybridSSMModel
 from tests.common import get_hybrid_config, materialize_meta_tensors
-
-try:
-    from fast_llm.layers.ssm.discrete_mamba2 import DiscreteMamba2
-    from fast_llm.layers.ssm.llamba_block import LlambaBlock
-    from fast_llm.layers.ssm.mamba_layer import MambaLayer
-    from fast_llm.models.ssm.model import HybridSSMBaseModel, HybridSSMModel
-except Exception:
-    MambaLayer, LlambaBlock, HybridSSMBaseModel, DiscreteMamba2 = (
-        None,
-        None,
-        None,
-        None,
-    )
 
 try:
     from cartesia_pytorch.Llamba.llamba import LlambaLMHeadModel as LMHeadModel
