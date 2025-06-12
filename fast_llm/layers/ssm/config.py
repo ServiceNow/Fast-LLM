@@ -21,7 +21,7 @@ class SSMDimNames:
     v_heads = "v_heads"  # Number of V heads
 
 
-class SSMBlockType(str, enum.Enum):
+class SSMBlockType(enum.StrEnum):
     """
     An enum for the available mamba types for the MLP layer.
     """

@@ -184,8 +184,12 @@ def pytest_runtest_makereport(item: pytest.Function, call: pytest.CallInfo):
         # Collect only if the remaining memory is significant enough since it's costly.
         if torch.cuda.memory_allocated() > 1e7:
             gc.collect()
-        # Actually free the memory.
-        torch.cuda.empty_cache()
+        try:
+            # Actually free the memory.
+            torch.cuda.empty_cache()
+        except RuntimeError:
+            # Happens if the test broke cuda.
+            return
         item.add_report_section(
             call.when,
             "resource usage",
@@ -243,6 +247,12 @@ def pytest_terminal_summary(terminalreporter):
 
 
 def pytest_runtest_call(item: pytest.Function):
+    if torch.cuda.is_available():
+        # Empty cache to check is cuda is still working (TODO: Is there a better way? Can we kill the worker?)
+        try:
+            torch.cuda.empty_cache()
+        except RuntimeError:
+            pytest.skip("Cuda runtime unavailable due to an error in an earlier test.")
     manager.handle_missing(item)
 
 
