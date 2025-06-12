@@ -1,7 +1,8 @@
 import pytest
 
-from tests.common import CONFIG_COMMON, TEST_MODEL
-from tests.compare_tensor_logs import CompareConfig
+from tests.common import CONFIG_COMMON
+from tests.utils.compare_tensor_logs import CompareConfig
+from tests.utils.model_configs import TEST_MODEL
 
 CONFIG_DF = CONFIG_COMMON + ["batch.depth_first_micro_batches=4"]
 CONFIG_BF = CONFIG_COMMON + ["batch.breadth_first_micro_batches=4"]

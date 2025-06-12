@@ -1,6 +1,7 @@
 import pytest
 
-from tests.common import CONFIG_COMMON, TEST_MODEL
+from tests.common import CONFIG_COMMON
+from tests.utils.model_configs import TEST_MODEL
 
 CONFIG_SF = CONFIG_COMMON + ["model.base_model.sequence_first=True"]
 

@@ -1,6 +1,7 @@
 import pytest
 
-from tests.common import CONFIG_COMMON, TEST_MODEL
+from tests.common import CONFIG_COMMON
+from tests.utils.model_configs import TEST_MODEL
 
 CONFIG_MS = CONFIG_COMMON + ["batch.micro_sequence_length=256"]
 

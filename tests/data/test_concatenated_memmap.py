@@ -1,5 +1,4 @@
 from fast_llm.data.dataset.gpt.config import GPTConcatenatedMemmapConfig
-from tests.common import DATASET_CACHE, get_test_concatenated_memmap_dataset
 from tests.data.common import (
     compare_indexed_dataset,
     get_dataset_config,
@@ -8,6 +7,7 @@ from tests.data.common import (
     validate_indexed_dataset_sampling,
 )
 from tests.data.test_memmap import MEMMAP_DATASET_SAMPLES
+from tests.utils.dataset import DATASET_CACHE, get_test_concatenated_memmap_dataset
 
 _DATASET_PREFIX_MIX_CONCATENATED_MEMMAP = DATASET_CACHE / "concatenated_memmap"
 

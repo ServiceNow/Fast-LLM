@@ -14,7 +14,7 @@ from fast_llm.layers.transformer.config import TransformerConfig
 from fast_llm.models.auto import trainer_registry
 from fast_llm.models.gpt.config import GPTModelConfig, PretrainedGPTModelConfig
 from fast_llm.utils import Assert, check_equal_nested
-from tests.common import TEST_RESULTS_PATH
+from tests.utils.utils import TEST_RESULTS_PATH
 
 
 def run_without_import(cmd: str):

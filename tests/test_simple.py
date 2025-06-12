@@ -1,6 +1,7 @@
 import pytest
 
-from tests.common import CONFIG_COMMON, CONFIG_FAST_LLM, TEST_MODEL
+from tests.common import CONFIG_COMMON, CONFIG_FAST_LLM
+from tests.utils.model_configs import TEST_MODEL
 
 
 def test_model_safe(run_test_script):

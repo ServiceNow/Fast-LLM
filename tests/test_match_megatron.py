@@ -1,6 +1,8 @@
 import pytest
 
-from tests.common import (
+from tests.utils.compare_tensor_logs import CompareConfig
+from tests.utils.dataset import DATASET_PREFIX
+from tests.utils.model_configs import (
     CONFIG_GPT2_FAST_LLM,
     CONFIG_GPT2_MEGATRON,
     CONFIG_LLAMA_FAST_LLM,
@@ -11,9 +13,7 @@ from tests.common import (
     CONFIG_SC1_MEGATRON,
     CONFIG_SC2_FAST_LLM,
     CONFIG_SC2_MEGATRON,
-    DATASET_PREFIX,
 )
-from tests.compare_tensor_logs import CompareConfig
 
 
 @pytest.mark.slow
