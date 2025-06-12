@@ -2,7 +2,6 @@ import logging
 import math
 
 import einops
-import mamba_ssm.ops.triton.ssd_combined
 import torch
 
 from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
@@ -13,12 +12,22 @@ from fast_llm.utils import get_lr_scale
 
 logger = logging.getLogger(__name__)
 
+
 try:
-    import causal_conv1d
+    from mamba_ssm.ops.triton.ssd_combined import mamba_chunk_scan_combined as _mamba_chunk_scan_combined  # noqa
+
+    _mamba_available = True
 except ImportError:
-    # this is needed since we cannot use causal_conv1d on B200 GPUs for now
-    logger.warning("Note, causal_conv1d not found, will use torch.nn.functional.conv1d instead")
-    causal_conv1d = None
+    _mamba_available = False
+
+
+try:
+    from causal_conv1d import causal_conv1d_fn as _causal_conv1d_fn  # noqa
+
+    _causal_conv1d_available = True
+except ImportError:
+    _causal_conv1d_available = False
+
 
 """
 This code is adapted from https://github.com/cartesia-ai/edge/blob/main/cartesia-pytorch/cartesia_pytorch/Llamba/mixers/discrete_mamba2.py
@@ -148,6 +157,8 @@ class DiscreteMamba2(torch.nn.Module):
             outputs["hidden_states"]: (B, L, D).
             outputs["state"]: inference cache.
         """
+
+        assert _mamba_available
         input_ = hidden_states
         outputs = {}
         # assert state is None
@@ -201,7 +212,7 @@ class DiscreteMamba2(torch.nn.Module):
         C = einops.rearrange(C, "b l (h n) -> b l h n", h=self.n_qk_heads)
 
         # SSM forward
-        result = mamba_ssm.ops.triton.ssd_combined.mamba_chunk_scan_combined(
+        result = _mamba_chunk_scan_combined(
             x=x / torch.nn.functional.softplus(A_log).to(x.dtype).unsqueeze(-1),
             dt=A_log,
             dt_softplus=True,
@@ -234,11 +245,18 @@ class DiscreteMamba2(torch.nn.Module):
 
     def convolutional_forward(self, xBC, padded_len):
         """Convolutional layer forward pass for the full sequence."""
-        if causal_conv1d is None or self.activation_name not in [
+        if _causal_conv1d_available and self.activation_name in (
             "silu",
             "swish",
             "identity",
-        ]:
+        ):
+            xBC = _causal_conv1d_fn(
+                xBC.transpose(1, 2),
+                einops.rearrange(self.conv1d_weight, "d 1 w -> d w"),
+                self.conv1d_bias,
+                activation=None if self.activation_name == "identity" else self.activation_name,
+            ).transpose(1, 2)
+        else:
             xBC = self.act(
                 torch.nn.functional.conv1d(
                     xBC.transpose(1, 2),
@@ -248,11 +266,4 @@ class DiscreteMamba2(torch.nn.Module):
                     padding=self.conv_kernel_size - 1,
                 )[..., :padded_len].transpose(1, 2)
             )
-        else:
-            xBC = causal_conv1d.causal_conv1d_fn(
-                xBC.transpose(1, 2),
-                einops.rearrange(self.conv1d_weight, "d 1 w -> d w"),
-                self.conv1d_bias,
-                activation=None if self.activation_name == "identity" else self.activation_name,
-            ).transpose(1, 2)
         return xBC
