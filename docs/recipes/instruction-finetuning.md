@@ -114,10 +114,13 @@ training:
   train_iters: 5_000
   logs:
     interval: 1
-  evaluations:
+  evaluators:
     validation:
-      iterations: 25
-      interval: 1000
+      interval: 100
+      evaluator:
+        type: loss
+        iterations: 25
+        dataset_name: validation
   checkpoint:
     interval: 1000
     keep: 5
