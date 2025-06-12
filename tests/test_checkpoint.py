@@ -14,15 +14,14 @@ from fast_llm.engine.checkpoint.config import (
     FastLLMCheckpointFormat,
     ModelConfigType,
 )
+from fast_llm.engine.checkpoint.convert import ConvertConfig
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig, ShardName, StageMode
-from fast_llm.models.auto import model_registry
-from fast_llm.tools.convert import ConvertConfig
 from tests.utils.compare_tensor_logs import CompareConfig, compare_logged_tensor
 from tests.utils.model_configs import CONFIG_COMMON, HUGGINGFACE_CHECKPOINT_FORMAT, TEST_MODEL, TEST_MODEL_TYPE
 from tests.utils.run_test_script import FORCE_REUSE_RESULTS, REUSE_RESULTS
 from tests.utils.utils import TEST_RESULTS_PATH, requires_cuda
 
-TEST_MODEL_CONFIG_CLS = model_registry[TEST_MODEL_TYPE]
+TEST_MODEL_CONFIG_CLS = FastLLMModelConfig.get_subclass(TEST_MODEL_TYPE)
 TEST_MODEL_HF_CLS = TEST_MODEL_CONFIG_CLS.get_huggingface_model_for_causal_lm_class()
 TEST_MODEL_CLS = TEST_MODEL_CONFIG_CLS.get_model_class()
 TEST_BASE_MODEL_CONFIG_CLS = TEST_MODEL_CONFIG_CLS.get_base_model_config_class()

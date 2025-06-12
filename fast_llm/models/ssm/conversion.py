@@ -18,7 +18,7 @@ from fast_llm.engine.checkpoint.external import (
 from fast_llm.engine.checkpoint.huggingface import HuggingfaceStateDictCheckpointHandler
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig
 from fast_llm.functional.config import ActivationType
-from fast_llm.layers.common.config import NormalizationType
+from fast_llm.layers.common.config import RMSNormalizationConfig
 from fast_llm.layers.ssm.config import SSMBlockType
 from fast_llm.models.gpt.conversion import CommonLlamaHuggingfaceCheckpointHandler, MLPLayer2Converter
 from fast_llm.models.ssm.config import (
@@ -236,7 +236,8 @@ class LLambaHuggingfaceCheckpointHandler(CommonSSMHuggingfaceCheckpointHandler):
             ),
             ConstantImportParamConverter(fast_llm_names=(("transformer", "gated"),), fast_llm_value=True),
             ConstantImportParamConverter(
-                fast_llm_names=(("transformer", "normalization", "type"),), fast_llm_value=NormalizationType.rms_norm
+                fast_llm_names=(("transformer", "normalization", "type"),),
+                fast_llm_value=RMSNormalizationConfig.dynamic_type_name,
             ),
             MappedConfigParamConverter(
                 fast_llm_names=(("transformer", "activation_type"),),
@@ -452,7 +453,8 @@ class AprielSSMHuggingfaceCheckpointHandler(CommonSSMHuggingfaceCheckpointHandle
                 export_names=(("intermediate_size",),),
             ),
             ConstantImportParamConverter(
-                fast_llm_names=(("transformer", "normalization", "type"),), fast_llm_value=NormalizationType.rms_norm
+                fast_llm_names=(("transformer", "normalization", "type"),),
+                fast_llm_value=RMSNormalizationConfig.dynamic_type_name,
             ),
             RenameParamConverter(
                 fast_llm_names=(("transformer", "normalization", "epsilon"),), export_names=(("rms_norm_eps",),)

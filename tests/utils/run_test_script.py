@@ -5,7 +5,7 @@ import subprocess
 import pytest
 import torch
 
-from fast_llm.tools.train import CliTrainingConfig
+from fast_llm.engine.config_utils.runnable import RunnableConfig
 from tests.utils.compare_tensor_logs import CompareConfig, compare_tensor_logs
 from tests.utils.dataset import get_test_dataset
 from tests.utils.model_configs import TEST_MODEL_TYPE
@@ -61,7 +61,7 @@ def run_test_script(worker_resources):
         if is_megatron:
             script = [*script, f"--structured-logs-dir={path}", f"--data-cache-path={path}"]
         else:
-            script = [model_type, *script, f"run.experiment_dir={path}"]
+            script = ["train", model_type, *script, f"run.experiment_dir={path}"]
         header = ["Megatron-LM/pretrain_gpt.py"] if is_megatron else ["--no-python", "fast-llm", "train"]
         command = [
             "python",
@@ -79,7 +79,7 @@ def run_test_script(worker_resources):
         else:
             get_test_dataset()
             if num_gpus == 1 and not is_megatron:
-                CliTrainingConfig.parse_and_run(script)
+                RunnableConfig.parse_and_run(script)
             else:
                 completed_proc = subprocess.run(command, env=env, timeout=60)
                 if completed_proc.returncode:

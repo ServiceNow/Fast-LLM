@@ -6,6 +6,7 @@ from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
 from fast_llm.engine.distributed.config import DistributedDimNames
 from fast_llm.functional.config import CrossEntropyImpl
 from fast_llm.layers.transformer.config import TransformerConfig
+from fast_llm.layers.transformer.rotary.config import NoRotaryConfig
 from fast_llm.utils import Assert
 
 
@@ -179,7 +180,7 @@ class LanguageModelBaseConfig(BaseModelConfig):
         self.transformer.validate()
         with self._set_implicit_default():
             if self.use_position_embeddings is None:
-                self.use_position_embeddings = not self.transformer.rotary.enabled
+                self.use_position_embeddings = isinstance(self.transformer.rotary, NoRotaryConfig)
             if self.init_method_std_embed is None:
                 self.init_method_std_embed = self.transformer.init_method_std
             if self.init_method_max_embed is None:
