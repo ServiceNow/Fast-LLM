@@ -49,7 +49,17 @@ GOOD_OUTCOME = "passed"
 
 
 class DependencyManager:
-    """Keep track of tests, their names and their dependencies."""
+    """
+    A simplified and improved version of pytest-depends. Main differences are the following:
+    * Add compatibility with pytest-xdist: group connected components of the dependency graph together,
+        and rename them with the `@dependency_group_{i}` suffix so they are run in the same worker, assuming
+        group scheduling is used.
+    * Improved parameterized dependencies so tests can depend on other tests with matching parametrization.
+        Ex. a test `test_model` with parameter `model` can depend on `test_other[{model}]`,
+            then `test_model[llama]` will depend on `test_other[llama]`, and so on.
+    * Improved description of missing/failed dependencies.
+    * Some option hard-coded for Fast-LLM.
+    """
 
     def __init__(self, items: list[pytest.Function]):
         self._items = items

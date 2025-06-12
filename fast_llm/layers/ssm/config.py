@@ -28,7 +28,6 @@ class SSMBlockType(enum.StrEnum):
 
     mamba = "m"
     mamba2_discrete = "m2d"
-    mamba2 = "m2"
     transformer = "t"
 
 

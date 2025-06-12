@@ -415,7 +415,7 @@ _update_and_add_testing_config(
     "hybrid_mamba_2",
     model_type="hybrid_ssm",
     extra_args=[
-        "model.base_model.hybrid_block_layout=['t','m2']",
+        "model.base_model.hybrid_block_layout=['t','m2d']",
     ],
     megatron_args=None,
     checkpoint_format=None,
