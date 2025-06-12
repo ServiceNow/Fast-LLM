@@ -120,7 +120,8 @@ class DependencyManager:
         for marker in item.iter_markers():
             if marker.name == MARKER_NAME:
                 for dependency in as_list(marker.kwargs.get(MARKER_KWARG_DEPENDENCIES, [])):
-                    dependency = dependency.format(**item.callspec.params)
+                    if hasattr(item, "callspec"):
+                        dependency = dependency.format(**item.callspec.params)
 
                     # If the name is not known, try to make it absolute (ie file::[class::]method)
                     if dependency not in self._name_to_nodeids:

@@ -4,7 +4,7 @@ from fast_llm.engine.training.trainer import Trainer
 from fast_llm.layers.transformer.transformer import TransformerLayer
 from fast_llm.tools.train import CliTrainingConfig
 from fast_llm.utils import Assert
-from tests.common import CONFIG_COMMON
+from tests.utils.model_configs import CONFIG_COMMON
 from tests.utils.utils import requires_cuda
 
 

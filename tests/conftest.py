@@ -13,6 +13,8 @@ import fast_llm.logging
 from tests.utils.depends import DependencyManager
 
 # Make fixtures available globally without import
+from tests.utils.run_test_script import run_test_script  # isort: skip
+
 
 manager: DependencyManager | None = None
 
@@ -148,7 +150,7 @@ def pytest_collection_modifyitems(config, items: list[pytest.Function]):
 
     # If pytest-depends is installed, it will complain about renamed nodes whether it's used or not.
     try:
-        import pytest_depends
+        import pytest_depends.main
     except ImportError:
         pass
     else:
