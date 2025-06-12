@@ -243,7 +243,7 @@ class GPTSampledIndexedDataset(SampledDataset):
         shuffled_documents = documents_per_epoch * shuffled_epochs
         unshuffled_epochs = num_epochs - shuffled_epochs
 
-        yaml_data = {
+        yaml_data = {  # TODO Toby: add audio
             "dataset": {
                 "name": self._indexed_dataset.name,
                 "documents_per_epoch": documents_per_epoch,
@@ -504,7 +504,7 @@ class GPTSampledIndexedDataset(SampledDataset):
                 self._parameters.audio_start_token,
                 self._parameters.audio_end_token,
             )
-            audio_tokens = audio_token_size_arr.sum()
+            audio_tokens = int(audio_token_size_arr.sum())
 
             document_size = text_size + image_tokens + audio_tokens
 
@@ -705,7 +705,7 @@ class GPTSampledIndexedDataset(SampledDataset):
                         mm_tokens_before_span += mm_tokens_within_span
 
                         span = np.clip(
-                            loss_masking_span + token_count - token_start,
+                            loss_masking_span + int(token_count) - int(token_start),
                             0,
                             self._parameters.sequence_length + self._parameters.extra_tokens,
                         )
@@ -743,13 +743,15 @@ class GPTSampledIndexedDataset(SampledDataset):
         audio_positions = np.array(audio_positions) if audio_positions else None
         # Assert.eq(len(token_ids), self._parameters.sequence_length + self._parameters.extra_tokens)
 
+        # # TODO: Toby remove/comment after testing (for testing only first sample)
+        # loss_masking_spans = np.append(loss_masking_spans, [[sequence_lengths[0], sequence_lengths[:-1].sum()]], axis=0)
         return GPTSample(
             token_ids=token_ids,
             loss_masking_spans=loss_masking_spans,
             sequence_lengths=sequence_lengths,
             images=images,
             image_positions=image_positions,
-            audio=audio,
+            audio=audio if len(audio) > 0 else None,
             audio_positions=audio_positions,
         )
 

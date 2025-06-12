@@ -64,7 +64,7 @@ def gpt_data_collate_fn(batch: list[GPTSample], sampling_parameters: GPTSampling
     has_audio = False
     batch_audio = []
     for sample in batch:
-        if sample.audio is not None and len(sample.audio_positions) > 0:
+        if sample.audio is not None and sample.audio_positions is not None:
             batch_audio.append([torch.from_numpy(audio) for audio in sample.audio])
             has_audio = True
         else:

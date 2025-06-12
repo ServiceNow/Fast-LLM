@@ -484,22 +484,23 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                 )
                 kwargs[LanguageModelKwargs.tokens] = tokens
 
-            if batch.audio is not None:
-                kwargs[AudioEncoderKwargs.audio] = [
-                    [aud.to(device="cpu", dtype=torch.float32, non_blocking=True) for aud in audio]
-                    for audio in batch.audio
-                ]
-                kwargs[AudioEncoderKwargs.audio_positions] = batch.audio_positions
+            if self._config.audio_encoder.enabled:
+                if batch.audio is not None:
+                    kwargs[AudioEncoderKwargs.audio] = [
+                        [aud.to(device="cpu", dtype=torch.float32, non_blocking=True) for aud in audio]
+                        for audio in batch.audio
+                    ]
+                    kwargs[AudioEncoderKwargs.audio_positions] = batch.audio_positions
                 kwargs[LanguageModelKwargs.tokens] = tokens
 
             for preprocessor in self._preprocessors:
                 preprocessor.preprocess(tokens, kwargs)
             image_patches = kwargs.get(VisionEncoderKwargs.image_patches, None)
             audio_mel = kwargs.get(AudioEncoderKwargs.audio_mel, None)
-            if image_patches is not None:
-                preprocessed.append((image_patches, kwargs))
-            elif audio_mel is not None:
+            if audio_mel is not None:
                 preprocessed.append((audio_mel, kwargs))
+            elif image_patches is not None:
+                preprocessed.append((image_patches, kwargs))
             else:
                 preprocessed.append((tokens, kwargs))
 

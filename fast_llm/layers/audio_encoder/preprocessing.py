@@ -1,3 +1,4 @@
+import math
 import typing
 
 import numpy as np
@@ -13,7 +14,7 @@ def get_num_audio_tokens(
     sizes, aud_padding_duration, aud_sampling_rate, aud_downsampling_k, audio_start_token, audio_end_token
 ):
     if len(sizes) == 0:  # sample has no audio
-        return sizes, False
+        return np.array(sizes), False
     to_filter = False
     # account for padding
     if aud_padding_duration > 0:
@@ -88,33 +89,43 @@ class AudioPreprocessor(Preprocessor):
         pass
 
     def preprocess(self, tokens, kwargs: dict[str, typing.Any]) -> None:
-        audio_raw = kwargs[AudioEncoderKwargs.audio]
-        flattened_audio = [
-            audio_arr for sequence in audio_raw for audio_arr in sequence
-        ]  # flatten in the batch dimension
-        # flattened_audio_tensor = torch.stack(flattened_audio, dim=0)
-        # audio_inputs = self.feature_extractor(audio_raw, sampling_rate=16000, return_tensors="pt")
-        # self.mel_transform.to(self._tensor_space.distributed.device)
-
-        # audio_mel = self.mel_transform(flattened_audio_tensor)
-        # flattened_audio_tensor = np.stack(flattened_audio, axis=0)
-        # audio_inputs = self.feature_extractor(flattened_audio_tensor, sampling_rate=16000, return_tensors="pt")
-        # audio_mel = audio_inputs['input_features']
-
+        # check if audio is in batch
         audio_mel = []
-        for audio in flattened_audio:
-            audio_mel.append(
-                self.feature_extractor(
-                    audio,
-                    sampling_rate=self._config.aud_sampling_rate,
-                    return_tensors="pt",
-                    max_length=30 * self._config.aud_sampling_rate,
-                    device=self._tensor_space.distributed.device,
-                )["input_features"]
-            )
-        audio_mel = torch.stack(audio_mel, dim=0).squeeze(1)
+        if AudioEncoderKwargs.audio in kwargs:
+            audio_raw = kwargs[AudioEncoderKwargs.audio]
+            flattened_audio = [
+                audio_arr for sequence in audio_raw for audio_arr in sequence
+            ]  # flatten in the batch dimension
 
-        # audio_mel = audio_mel[:, :, :-1]  # TODO Toby: check this!
+            for audio in flattened_audio:
+                audio_mel.append(
+                    self.feature_extractor(
+                        audio,
+                        sampling_rate=self._config.aud_sampling_rate,
+                        return_tensors="pt",
+                        max_length=30 * self._config.aud_sampling_rate,
+                        device=self._tensor_space.distributed.device,
+                    )["input_features"]
+                )
+            audio_mel = torch.stack(audio_mel, dim=0).squeeze(1)
+            curr_size = audio_mel.size(0)
+        else:
+            audio_mel = torch.tensor(audio_mel, dtype=torch.float32)
+            curr_size = 0
+
+        max_pad = math.ceil(kwargs["sequence_length"] / (kwargs["audio_encoder_sequence_length"] // 5))
+        padding_size = max_pad - curr_size
+        padding = torch.zeros(
+            padding_size,
+            self.feature_extractor.feature_size,
+            self.feature_extractor.nb_max_frames,
+            dtype=audio_mel.dtype,
+            device=audio_mel.device,
+        )
+        audio_mel = torch.cat((audio_mel, padding), dim=0)
+        audio_mel = audio_mel.to(self._tensor_space.distributed.device)
+
+        kwargs[AudioEncoderKwargs.audio_mel] = audio_mel
 
         # # set attention mask # TODO Toby: fix backup attention
         # sequence_k = kwargs[self._transformer_kwargs.sequence_k_dim].size
@@ -123,13 +134,4 @@ class AudioPreprocessor(Preprocessor):
         #     None, None, sequence_k - sequence_q : sequence_k, None, :sequence_k
         # ]
         # kwargs[self._transformer_kwargs.attention_mask_value] = self._mask_value
-
-        audio_mel = audio_mel.to(self._tensor_space.distributed.device)
-
-        # PAD_TO = 100
-        # padding_size = PAD_TO - audio_mel.size(0)
-        # padding = torch.zeros(padding_size, audio_mel.size(1), audio_mel.size(2), dtype=audio_mel.dtype, device=audio_mel.device)
-
-        # audio_mel = torch.cat((audio_mel, padding), dim=0)
-
-        kwargs[AudioEncoderKwargs.audio_mel] = audio_mel
+        # audio_mel = torch.rand(len(flattened_audio), 80, 3000)
