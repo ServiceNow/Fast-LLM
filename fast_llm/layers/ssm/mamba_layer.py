@@ -2,7 +2,6 @@ import math
 from typing import Callable
 
 import einops
-import mamba_ssm.ops.selective_scan_interface
 import torch
 
 from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
@@ -10,6 +9,13 @@ from fast_llm.layers.common.linear import Linear
 from fast_llm.layers.ssm.config import SSMConfig, SSMDimNames
 from fast_llm.tensor import ParameterMeta, init_ones_, kaiming_init_
 from fast_llm.utils import get_lr_scale
+
+try:
+    from mamba_ssm.ops.selective_scan_interface import mamba_inner_fn as _mamba_inner_fn  # noqa
+
+    _mamba_available = True
+except ImportError:
+    _mamba_available = False
 
 """
 Note: this is mostly adapted from https://github.com/Zyphra/Zamba2, similar code is also in https://github.com/state-spaces/mamba.
@@ -153,6 +159,7 @@ class MambaLayer(torch.nn.Module):
         self._return_input = return_input
 
     def forward(self, hidden_states, kwargs):
+        assert _mamba_available
         batch, seqlen, dim = hidden_states.shape
 
         # We do matmul and transpose BLH -> HBL at the same time
@@ -167,7 +174,7 @@ class MambaLayer(torch.nn.Module):
         A = -torch.exp(self.A_log.float())  # (d_inner, d_state)
         # In the backward pass we write dx and dz next to each other to avoid torch.cat
         # not, if we wanbt to support inference, we would need to imp.lement slow path here, see https://github.com/Zyphra/Zamba2/blob/1b182f40f2257f822cc06dd785df53d67d691a15/mamba_layer.py#L172s
-        out = mamba_ssm.ops.selective_scan_interface.mamba_inner_fn(
+        out = _mamba_inner_fn(
             xz,
             self.conv1d_weight,
             self.conv1d_bias,
