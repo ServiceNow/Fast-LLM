@@ -171,6 +171,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
                 "num_documents": len(shard_dataset),  # Use the length of the shard dataset directly
                 "num_tokens": sum(len(doc["input_ids"]) for doc in shard_dataset),
                 "num_pixels": sum(doc["num_pixels"] for doc in shard_dataset),
+                "num_audio": sum(doc["num_audio"] for doc in shard_dataset),
             }
         )
 
