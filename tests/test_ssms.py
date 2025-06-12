@@ -13,9 +13,10 @@ from fast_llm.engine.schedule.config import ScheduleConfig
 from fast_llm.engine.schedule.runner import ScheduleRunner
 from fast_llm.engine.schedule.schedule import Schedule
 from fast_llm.layers.language_model.config import LanguageModelKwargs, LanguageModelLossNames
+from fast_llm.layers.ssm.config import SSMBlockType
 from fast_llm.layers.transformer.config import TransformerKwargs
 from fast_llm.models.gpt.config import GPTBatchConfig, LlamaGPTHuggingfaceCheckpointFormat
-from fast_llm.models.ssm.config import LLambaHuggingfaceCheckpointFormat
+from fast_llm.models.ssm.config import AprielSSMHHybridHuggingfaceCheckpointFormat, LLambaHuggingfaceCheckpointFormat
 from tests.common import get_hybrid_config, materialize_meta_tensors
 
 try:
@@ -23,14 +24,13 @@ try:
     from fast_llm.layers.ssm.llamba_block import LlambaBlock
     from fast_llm.layers.ssm.mamba_layer import MambaLayer
     from fast_llm.models.ssm.model import HybridSSMBaseModel, HybridSSMModel
-except ImportError:
+except Exception:
     MambaLayer, LlambaBlock, HybridSSMBaseModel, DiscreteMamba2 = (
         None,
         None,
         None,
         None,
     )
-    # Mamba not installed, skipping tests
 
 try:
     from cartesia_pytorch.Llamba.llamba import LlambaLMHeadModel as LMHeadModel
@@ -139,13 +139,58 @@ def test_load_from_llamba_checkpoint(distributed_config):
     assert torch.allclose(logits, hf_logits, atol=1e-2)
 
 
+def get_hf_apriel_hybrid_out(input_ids, path, format):
+    from fast_llm.models.ssm.external.apriel_hybrid.modeling_ssm_hybrid_apriel import AprielSSMHybridForCausalLM
+
+    model = AprielSSMHybridForCausalLM.from_pretrained(path, strict=True).to("cuda")
+    parameter_sum = sum(p.detach().cpu().numpy().sum() for p in model.parameters())
+    print(f"Parameter sum: {parameter_sum}")
+    output = model(input_ids)
+    del model
+    torch.cuda.empty_cache()
+    return output, parameter_sum
+
+
+@pytest.mark.slow
+@pytest.mark.skipif(
+    not run_test
+    and not pathlib.Path("/mnt/checkpoints/ssm/apriel_ssm_instruct_hybrid_ssm2nd_init_mambainlama_debug").exists(),
+    reason=f"Skipping because no CUDA available or Mamba not installed",
+)
+def test_load_from_hybridssm_checkpoint(distributed_config):
+    """
+    Test to check whether the of Fast-LLM and Huggingface checkpoint loading for Llamba-1B produce the same results.
+    """
+    vocab_size = 131072  # from https://huggingface.co/cartesia-ai/Llamba-1B/blob/main/config.json
+    batch_size = 2
+    seq_length = 32
+
+    path = pathlib.Path("/mnt/checkpoints/ssm/apriel_ssm_instruct_hybrid_ssm2nd_init_mambainlama_debug")
+    format = AprielSSMHHybridHuggingfaceCheckpointFormat
+
+    x = torch.randint(0, vocab_size, (batch_size, seq_length), device="cuda")
+    hf_logits, parameter_sum_hf = get_hf_apriel_hybrid_out(x, path, format)
+    hf_logits = hf_logits["logits"].cpu()
+
+    # Create checkpoint load config
+    checkpoint_config = CheckpointLoadConfig(path=path, format=format, model_weights=True, optimizer_state=False)
+    # Initialize model
+    model = HybridSSMModel.from_pretrained(checkpoint_config)
+    param_sum = 0
+    for stage in model.stages:
+        for fsdp in stage.fsdps:
+            if hasattr(fsdp, "_weight_shard"):
+                param_sum += torch.sum(fsdp._weight_shard).item()
+    assert torch.abs(torch.tensor(param_sum) - parameter_sum_hf) < 1e-1
+
+
 @pytest.mark.extra_slow
 @pytest.mark.skipif(not run_test, reason="No CUDA available or Mamba not installed")
 @pytest.mark.parametrize(
     "hybrid_block_layout,LAYER_CLS",
     [
-        (["m", "t"], MambaLayer),
-        (["m2", "t"], DiscreteMamba2),
+        ([SSMBlockType.mamba, SSMBlockType.transformer], MambaLayer),
+        ([SSMBlockType.mamba2_discrete, SSMBlockType.transformer], DiscreteMamba2),
     ],
     ids=["mamba", "discrete_mamba2"],
 )
@@ -214,7 +259,7 @@ def test_mamba_block(distributed_config, distributed):
     ("hybrid_block_layout"),
     [
         (["m", "t"]),
-        (["m2", "t"]),
+        (["m2d", "t"]),
     ],
     ids=["mamba", "discrete_mamba2"],
 )
@@ -301,3 +346,6 @@ def test_hybrid_model_train_with_fast_mode(distributed_config, hybrid_block_layo
 #         },
 #         losses=losses,
 #     )
+
+if __name__ == "__main__":
+    pytest.main(["-s", __file__])
