@@ -28,10 +28,11 @@ def main(
     path_instruct = "/mnt/checkpoints/upstream/Apriel-5B-Instruct-llamafied/"
     config_instruct = AutoConfig.from_pretrained(path_instruct)
     hybrid_block_layout = ["t"] * config_instruct.num_hidden_layers
-
+    
     for i in range(index_to_swap + 1):
-        print(f"Swapping layer {layer_importance[i]} to m2d")
-        hybrid_block_layout[layer_importance[i]] = "m2d"
+        layer_idx = int(layer_importance[i])
+        print(f"Swapping layer {layer_idx} to m2d")
+        hybrid_block_layout[layer_idx] = "m2d"
 
     config_hybrid = AprielSSMHybridConfig(
         hybrid_block_layout=hybrid_block_layout,
