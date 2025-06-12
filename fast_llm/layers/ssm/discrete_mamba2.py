@@ -1,6 +1,6 @@
+import logging
 import math
 
-import causal_conv1d
 import einops
 import mamba_ssm.ops.triton.ssd_combined
 import torch
@@ -9,6 +9,16 @@ from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
 from fast_llm.layers.common.linear import Linear
 from fast_llm.layers.ssm.config import SSMConfig, SSMDimNames
 from fast_llm.tensor import ParameterMeta, init_ones_, init_uniform_, init_zeros_, kaiming_init_
+from fast_llm.utils import get_lr_scale
+
+logger = logging.getLogger(__name__)
+
+try:
+    import causal_conv1d
+except ImportError:
+    # this is needed since we cannot use causal_conv1d on B200 GPUs for now
+    logger.warning("Note, causal_conv1d not found, will use torch.nn.functional.conv1d instead")
+    causal_conv1d = None
 
 """
 This code is adapted from https://github.com/cartesia-ai/edge/blob/main/cartesia-pytorch/cartesia_pytorch/Llamba/mixers/discrete_mamba2.py
@@ -44,6 +54,9 @@ class DiscreteMamba2(torch.nn.Module):
         bias = config.add_bias_linear
         self.layer_idx = layer_idx
         self._return_input = return_input
+        layer_lr_scale = config.per_layer_lr_scale[layer_idx] if config.per_layer_lr_scale else None
+        mamba_layer_lr_scale = get_lr_scale(self.config.mamba_lr_scale, layer_lr_scale)
+        logger.info(f"Setting lr_scale for layer {layer_idx} of type {type(self)}: {mamba_layer_lr_scale}")
 
         td_inner = tensor_space.get_tensor_dim(SSMDimNames.inner_dim)
         td_state = tensor_space.get_tensor_dim(SSMDimNames.state_dim)
@@ -67,31 +80,41 @@ class DiscreteMamba2(torch.nn.Module):
 
         # TODO: double check initializations
         # Projections
-        self.in_proj = Linear(td_model, td_inner_proj, bias=bias, weight_init_method=kaiming_init_(td_model.size))
+        self.in_proj = Linear(
+            td_model,
+            td_inner_proj,
+            bias=bias,
+            weight_init_method=kaiming_init_(td_model.size),
+            lr_scale=mamba_layer_lr_scale,
+        )
         self.z_bias = (
             ParameterMeta.from_dims(
                 (td_inner,),
                 weight_decay=False,
                 init_method=init_zeros_,
+                lr_scale=mamba_layer_lr_scale,
             )
             if not bias
             else 0.0
         )
 
-        # Convolutional layer
         self.conv1d_weight = ParameterMeta.from_dims(
             (td_conv, TensorDim("1", 1), td_conv_kernel),
             init_method=init_uniform_(
                 1 / math.sqrt(td_conv.size * td_conv_kernel.size), 1 / math.sqrt(td_conv.size * td_conv_kernel.size)
             ),  # see https://github.com/pytorch/pytorch/blob/1eba9b3aa3c43f86f4a2c807ac8e12c4a7767340/torch/nn/modules/conv.py#L180C53-L180C67
+            lr_scale=mamba_layer_lr_scale,
         )
-        self.conv1d_bias = ParameterMeta.from_dims((td_conv,), init_method=bias_init_method(self.conv1d_weight))
+        self.conv1d_bias = ParameterMeta.from_dims(
+            (td_conv,), init_method=bias_init_method(self.conv1d_weight), lr_scale=mamba_layer_lr_scale
+        )
 
         # D "skip" parameter
         self.D = ParameterMeta.from_dims(
             (td_n_qk_heads,),
             weight_decay=False,
             init_method=init_ones_,
+            lr_scale=mamba_layer_lr_scale,
         )
 
         # out_proj
@@ -100,6 +123,7 @@ class DiscreteMamba2(torch.nn.Module):
             td_model,
             bias=bias,
             weight_init_method=kaiming_init_(td_inner.size),
+            lr_scale=mamba_layer_lr_scale,
         )
 
     @property
@@ -210,10 +234,25 @@ class DiscreteMamba2(torch.nn.Module):
 
     def convolutional_forward(self, xBC, padded_len):
         """Convolutional layer forward pass for the full sequence."""
-        xBC = causal_conv1d.causal_conv1d_fn(
-            xBC.transpose(1, 2),
-            einops.rearrange(self.conv1d_weight, "d 1 w -> d w"),
-            self.conv1d_bias,
-            activation=None if self.activation_name == "identity" else self.activation_name,
-        ).transpose(1, 2)
+        if causal_conv1d is None or self.activation_name not in [
+            "silu",
+            "swish",
+            "identity",
+        ]:
+            xBC = self.act(
+                torch.nn.functional.conv1d(
+                    xBC.transpose(1, 2),
+                    self.conv1d_weight,
+                    bias=self.conv1d_bias,
+                    groups=self.conv1d_weight.shape[0],
+                    padding=self.conv_kernel_size - 1,
+                )[..., :padded_len].transpose(1, 2)
+            )
+        else:
+            xBC = causal_conv1d.causal_conv1d_fn(
+                xBC.transpose(1, 2),
+                einops.rearrange(self.conv1d_weight, "d 1 w -> d w"),
+                self.conv1d_bias,
+                activation=None if self.activation_name == "identity" else self.activation_name,
+            ).transpose(1, 2)
         return xBC

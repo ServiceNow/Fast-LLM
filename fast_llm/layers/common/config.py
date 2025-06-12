@@ -11,6 +11,18 @@ if typing.TYPE_CHECKING:
     from fast_llm.layers.common.normalization import LayerNorm, RMSNorm
 
 
+@config_class()
+class LLMBlockConfig(BaseModelConfig):
+    _abstract = False
+
+    per_layer_lr_scale: list[float] | None = Field(
+        default=None,
+        desc="Custom learning rate scale for each layer.",
+        doc="May be used to freeze some layers by setting their scale to zero.",
+        hint=FieldHint.feature,
+    )
+
+
 class NormalizationImplementation(str, enum.Enum):
     """
     An enum for the available implementations of layer norm.
@@ -68,7 +80,7 @@ class NormalizationConfig(BaseModelConfig):
         valid=check_field(Assert.geq, 0),
     )
 
-    def get_layer(self, hidden_dim: "TensorDim") -> "LayerNorm | RMSNorm":
+    def get_layer(self, hidden_dim: "TensorDim", lr_scale: float | None = None) -> "LayerNorm | RMSNorm":
         from fast_llm.layers.common.normalization import LayerNorm, RMSNorm
         from fast_llm.tensor import init_uniform_
 
@@ -77,6 +89,7 @@ class NormalizationConfig(BaseModelConfig):
             "eps": self.epsilon,
             "implementation": self.implementation,
             "zero_centered": self.zero_centered,
+            "lr_scale": lr_scale,
         }
         if self.initialization_range:
             mean = 0 if self.zero_centered else 1

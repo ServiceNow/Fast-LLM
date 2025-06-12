@@ -5,7 +5,9 @@ import typing
 
 from fast_llm.engine.checkpoint.config import CheckpointFormat
 from fast_llm.engine.checkpoint.external import (
+    ConstantExportParamConverter,
     ConstantImportParamConverter,
+    IgnoreImportParamConverter,
     IgnoreImportWeightConverter,
     MappedConfigParamConverter,
     ParamConverter,
@@ -17,8 +19,15 @@ from fast_llm.engine.checkpoint.huggingface import HuggingfaceStateDictCheckpoin
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig
 from fast_llm.functional.config import ActivationType
 from fast_llm.layers.common.config import NormalizationType
-from fast_llm.models.gpt.conversion import MLPLayer2Converter
-from fast_llm.models.ssm.config import HybridSSMModelConfig, LLambaHuggingfaceCheckpointFormat
+from fast_llm.layers.ssm.config import SSMBlockType
+from fast_llm.models.gpt.conversion import CommonLlamaHuggingfaceCheckpointHandler, MLPLayer2Converter
+from fast_llm.models.ssm.config import (
+    AprielSSMHHybridHuggingfaceCheckpointFormat,
+    AprielSSMHuggingfaceCheckpointFormat,
+    AprielThinkerSSMHHybridHuggingfaceCheckpointFormat,
+    HybridSSMModelConfig,
+    LLambaHuggingfaceCheckpointFormat,
+)
 from fast_llm.models.ssm.model import HybridSSMModel
 from fast_llm.utils import Assert
 
@@ -26,74 +35,46 @@ if typing.TYPE_CHECKING:
     pass
 
 
-class LLambaHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
+class HybridModelCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
+    """
+    This is a temporary solution for importing/exporting hybrid models. Since there is no standard solution for this in HF, we just use the block_pattern.
+    If block_pattern is None, it will multiply the provided default block type by the number of layers and export/import it.
+    If block_pattern is provided, it will export/import it as-is.
+    """
+
     _model: HybridSSMModel
     _model_class: typing.ClassVar[FastLLMModelConfig] = HybridSSMModelConfig
-    format: typing.ClassVar[type[CheckpointFormat]] = LLambaHuggingfaceCheckpointFormat
+    _default_block_type: str = SSMBlockType.mamba2_discrete.value
+
+    @classmethod
+    def _import_config(cls, config):
+        cls.num_layers = config["n_layer"] if "n_layer" in config else config["num_hidden_layers"]
+        cls.block_pattern = config.get("hybrid_block_layout", None)
+        return super()._import_config(config)
 
     @classmethod
     def _create_config_converters(cls) -> list[ParamConverter]:
-        """
-        Create config converters for the model, see args under https://huggingface.co/cartesia-ai/Llamba-8B/blob/main/config.json
-        """
+        if cls.block_pattern is not None:
+            block_converter = RenameParamConverter(
+                fast_llm_names=(("hybrid_block_layout",),),
+                export_names=(("hybrid_block_layout",),),
+            )
+        else:
+            block_converter = ConstantImportParamConverter(
+                fast_llm_names=(("hybrid_block_layout",),),
+                fast_llm_value=[cls._default_block_type] * cls.num_layers,
+            )
+
+        return super()._create_config_converters() + [block_converter]
+
+
+class CommonSSMHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
+    _model: HybridSSMModel
+    _model_class: typing.ClassVar[FastLLMModelConfig] = HybridSSMModelConfig
+
+    @classmethod
+    def _create_config_converters(cls) -> list[ParamConverter]:
         return super()._create_config_converters() + [
-            ConstantImportParamConverter(fast_llm_names=(("use_position_embeddings",),), fast_llm_value=False),
-            RenameParamConverter(
-                fast_llm_names=(("transformer", "num_layers"),),
-                export_names=(("n_layer",),),
-            ),
-            ConstantImportParamConverter(fast_llm_names=(("transformer", "gated"),), fast_llm_value=True),
-            # TODO: is there an equivalen of pad_vocab_size_multiple in FastLLM, does it matter?
-            RenameParamConverter(
-                fast_llm_names=(("transformer", "normalization", "epsilon"),), export_names=(("norm_epsilon",),)
-            ),
-            RenameParamConverter(
-                fast_llm_names=(("ssm", "normalization", "epsilon"),), export_names=(("norm_epsilon",),)
-            ),
-            ConstantImportParamConverter(
-                fast_llm_names=(("transformer", "normalization", "type"),), fast_llm_value=NormalizationType.rms_norm
-            ),
-            RenameParamConverter(
-                fast_llm_names=(("vocab_size",),),
-                export_names=(("vocab_size",),),
-            ),
-            RenameParamConverter(
-                fast_llm_names=(("tie_word_embeddings",),),
-                export_names=(("tie_embeddings",),),
-            ),
-            RenameParamConverter(
-                fast_llm_names=(("transformer", "hidden_size"),),
-                export_names=(("d_model",),),
-            ),
-            RenameParamConverter(
-                fast_llm_names=(("transformer", "ffn_hidden_size"),),
-                export_names=(
-                    (
-                        "mlp_cfg",
-                        "intermediate_size",
-                    ),
-                ),
-            ),
-            RenameParamConverter(
-                fast_llm_names=(("transformer", "add_linear_biases"),),
-                export_names=(
-                    (
-                        "mlp_cfg",
-                        "bias",
-                    ),
-                ),
-            ),
-            MappedConfigParamConverter(
-                fast_llm_names=(("transformer", "activation_type"),),
-                export_names=(
-                    (
-                        "mlp_cfg",
-                        "act_fn",
-                    ),
-                ),
-                fast_llm_value=ActivationType.from_hf_name,
-                export_value=lambda activation_type: activation_type.hf_name,
-            ),
             RenameParamConverter(
                 fast_llm_names=(("ssm", "state_size"),),
                 export_names=(
@@ -162,6 +143,142 @@ class LLambaHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
         ]
 
     def _create_weight_converters(self) -> list[WeightConverter]:
+        converters = super()._create_weight_converters() or []
+
+        num_layers = self._model.config.base_model.transformer.num_layers
+        ssm_bias: bool = self._model.config.base_model.ssm.add_bias_linear
+
+        for i in range(num_layers):
+            # SSM
+            converters += self._get_weight_and_bias_converters(
+                f"layers.{i+1}.mixer.in_proj", f"model.layers.{i}.mixer.in_proj", ssm_bias
+            )
+            converters += self._get_weight_and_bias_converters(
+                f"layers.{i+1}.mixer.out_proj", f"model.layers.{i}.mixer.out_proj", ssm_bias
+            )
+            converters.append(
+                WeightConverter(f"layers.{i+1}.mixer.D", f"model.layers.{i}.mixer.D", self._model.config.base_model)
+            )
+            converters.append(
+                WeightConverter(
+                    f"layers.{i+1}.mixer.z_bias", f"model.layers.{i}.mixer.z_bias", self._model.config.base_model
+                )
+            )
+            converters.append(
+                WeightConverter(
+                    f"layers.{i+1}.mixer.conv1d_weight",
+                    f"model.layers.{i}.mixer.conv1d.weight",
+                    self._model.config.base_model,
+                )
+            )
+            converters.append(
+                WeightConverter(
+                    f"layers.{i+1}.mixer.conv1d_bias",
+                    f"model.layers.{i}.mixer.conv1d.bias",
+                    self._model.config.base_model,
+                )
+            )
+
+        return converters
+
+    def _get_weight_and_bias_converters(
+        self,
+        fast_llm_prefix: str | tuple[str, ...],
+        hf_prefix: str | tuple[str, ...],
+        use_bias: bool,
+        cls=WeightConverter,
+    ) -> list[WeightConverter]:
+        if isinstance(fast_llm_prefix, str):
+            fast_llm_prefix = (fast_llm_prefix,)
+        if isinstance(hf_prefix, str):
+            hf_prefix = (hf_prefix,)
+        converters = [
+            cls(
+                tuple(f"{prefix}.weight" for prefix in fast_llm_prefix),
+                tuple(f"{prefix}.weight" for prefix in hf_prefix),
+                self._model.config.base_model,
+            )
+        ]
+        if use_bias:
+            converters.append(
+                cls(
+                    tuple(f"{prefix}.bias" for prefix in fast_llm_prefix),
+                    tuple(f"{prefix}.bias" for prefix in hf_prefix),
+                    self._model.config.base_model,
+                )
+            )
+        return converters
+
+
+class LLambaHuggingfaceCheckpointHandler(CommonSSMHuggingfaceCheckpointHandler):
+    _model: HybridSSMModel
+    _model_class: typing.ClassVar[FastLLMModelConfig] = HybridSSMModelConfig
+    format: typing.ClassVar[type[CheckpointFormat]] = LLambaHuggingfaceCheckpointFormat
+    _hf_prefix: str = "backbone"
+
+    @classmethod
+    def _create_config_converters(cls) -> list[ParamConverter]:
+        """
+        Create config converters for the model, see args under https://huggingface.co/cartesia-ai/Llamba-8B/blob/main/config.json
+        """
+        return super()._create_config_converters() + [
+            RenameParamConverter(
+                fast_llm_names=(("vocab_size",),),
+                export_names=(("vocab_size",),),
+            ),
+            RenameParamConverter(
+                fast_llm_names=(("transformer", "normalization", "epsilon"),), export_names=(("norm_epsilon",),)
+            ),
+            ConstantImportParamConverter(fast_llm_names=(("use_position_embeddings",),), fast_llm_value=False),
+            RenameParamConverter(
+                fast_llm_names=(("transformer", "num_layers"),),
+                export_names=(("n_layer",),),
+            ),
+            ConstantImportParamConverter(fast_llm_names=(("transformer", "gated"),), fast_llm_value=True),
+            ConstantImportParamConverter(
+                fast_llm_names=(("transformer", "normalization", "type"),), fast_llm_value=NormalizationType.rms_norm
+            ),
+            MappedConfigParamConverter(
+                fast_llm_names=(("transformer", "activation_type"),),
+                export_names=(
+                    (
+                        "mlp_cfg",
+                        "act_fn",
+                    ),
+                ),
+                fast_llm_value=ActivationType.from_hf_name,
+                export_value=lambda activation_type: activation_type.hf_name,
+            ),
+            RenameParamConverter(
+                fast_llm_names=(("transformer", "add_linear_biases"),),
+                export_names=(
+                    (
+                        "mlp_cfg",
+                        "bias",
+                    ),
+                ),
+            ),
+            RenameParamConverter(
+                fast_llm_names=(("transformer", "ffn_hidden_size"),),
+                export_names=(
+                    (
+                        "mlp_cfg",
+                        "intermediate_size",
+                    ),
+                ),
+            ),
+            RenameParamConverter(
+                fast_llm_names=(("transformer", "hidden_size"),),
+                export_names=(("d_model",),),
+            ),
+            RenameParamConverter(
+                fast_llm_names=(("tie_word_embeddings",),),
+                export_names=(("tie_embeddings",),),
+            ),
+        ]
+
+    def _create_weight_converters(self) -> list[WeightConverter]:
+        # not using super() because LLamba model is called backbone in the checkpoints
         converters = []
         num_layers = self._model.config.base_model.transformer.num_layers
         norm_bias: bool = False
@@ -169,58 +286,68 @@ class LLambaHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
 
         # Embedding and output
         if self._model.config.base_model.tie_word_embeddings:
-            converters.append(WeightConverter("layers.0.word_embeddings_weight", "backbone.embedding.weight"))
-            converters.append(IgnoreImportWeightConverter((), "lm_head.weight"))
+            converters.append(
+                WeightConverter("layers.0.word_embeddings_weight", f"{self._hf_prefix}.embedding.weight")
+            )
+            converters.append(IgnoreImportWeightConverter((), f"{self._hf_prefix}.lm_head.weight"))
         else:
-            converters.append(WeightConverter("layers.0.word_embeddings_weight", "backbone.embedding.weight"))
-            converters.append(WeightConverter(f"layers.{num_layers + 1}.output_weights", "lm_head.weight"))
+            converters.append(
+                WeightConverter("layers.0.word_embeddings_weight", f"{self._hf_prefix}.embedding.weight")
+            )
+            converters.append(
+                WeightConverter(f"layers.{num_layers + 1}.output_weights", f"{self._hf_prefix}.lm_head.weight")
+            )
 
         # Final norm
         converters += self._get_weight_and_bias_converters(
-            f"layers.{num_layers + 1}.final_norm", "backbone.final_layernorm", norm_bias
+            f"layers.{num_layers + 1}.final_norm", f"{self._hf_prefix}.final_layernorm", norm_bias
         )
 
         for i in range(num_layers):
             # SSM
             converters += self._get_weight_and_bias_converters(
-                f"layers.{i+1}.mixer.in_proj", f"backbone.layers.{i}.mixer.in_proj", ssm_bias
+                f"layers.{i+1}.mixer.in_proj", f"{self._hf_prefix}.layers.{i}.mixer.in_proj", ssm_bias
             )
             converters += self._get_weight_and_bias_converters(
-                f"layers.{i+1}.mixer.out_proj", f"backbone.layers.{i}.mixer.out_proj", ssm_bias
-            )
-            converters.append(
-                WeightConverter(f"layers.{i+1}.mixer.D", f"backbone.layers.{i}.mixer.D", self._model.config.base_model)
+                f"layers.{i+1}.mixer.out_proj", f"{self._hf_prefix}.layers.{i}.mixer.out_proj", ssm_bias
             )
             converters.append(
                 WeightConverter(
-                    f"layers.{i+1}.mixer.z_bias", f"backbone.layers.{i}.mixer.z_bias", self._model.config.base_model
+                    f"layers.{i+1}.mixer.D", f"{self._hf_prefix}.layers.{i}.mixer.D", self._model.config.base_model
+                )
+            )
+            converters.append(
+                WeightConverter(
+                    f"layers.{i+1}.mixer.z_bias",
+                    f"{self._hf_prefix}.layers.{i}.mixer.z_bias",
+                    self._model.config.base_model,
                 )
             )
             converters.append(
                 WeightConverter(
                     f"layers.{i+1}.mixer.conv1d_weight",
-                    f"backbone.layers.{i}.mixer.conv1d.weight",
+                    f"{self._hf_prefix}.layers.{i}.mixer.conv1d.weight",
                     self._model.config.base_model,
                 )
             )
             converters.append(
                 WeightConverter(
                     f"layers.{i+1}.mixer.conv1d_bias",
-                    f"backbone.layers.{i}.mixer.conv1d.bias",
+                    f"{self._hf_prefix}.layers.{i}.mixer.conv1d.bias",
                     self._model.config.base_model,
                 )
             )
 
             # Norm
             converters += self._get_weight_and_bias_converters(
-                f"layers.{i+1}.norm_1", f"backbone.layers.{i}.input_layernorm", norm_bias
+                f"layers.{i+1}.norm_1", f"{self._hf_prefix}.layers.{i}.input_layernorm", norm_bias
             )
             converters += self._get_weight_and_bias_converters(
-                f"layers.{i+1}.norm_2", f"backbone.layers.{i}.post_attention_layernorm", norm_bias
+                f"layers.{i+1}.norm_2", f"{self._hf_prefix}.layers.{i}.post_attention_layernorm", norm_bias
             )
 
             # MLP
-            converters += self._get_mlp_converters(f"layers.{i+1}", f"backbone.layers.{i}")
+            converters += self._get_mlp_converters(f"layers.{i+1}", f"{self._hf_prefix}.layers.{i}")
 
         return converters
 
@@ -268,6 +395,256 @@ class LLambaHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
                 )
             )
         return converters
+
+    @classmethod
+    def _load_config(cls, directory: pathlib.Path | str) -> dict:
+        if not os.path.exists(directory / "config.json"):
+            raise FileNotFoundError(f"config.json not found in {directory}")
+        with open(directory / "config.json") as f:
+            config = json.load(f)
+        Assert.eq(config["model_type"], cls.get_huggingface_model_type())
+        return config
+
+    @classmethod
+    def _save_config(cls, directory: pathlib.Path | str, config: dict[str, typing.Any]) -> None:
+        with open(directory / "config.json", "w") as f:
+            json.dump(config, f)
+
+
+class AprielSSMHuggingfaceCheckpointHandler(CommonSSMHuggingfaceCheckpointHandler):
+    """
+    Lamba-like configs, pure SSM models.
+    """
+
+    _model: HybridSSMModel
+    _model_class: typing.ClassVar[FastLLMModelConfig] = HybridSSMModelConfig
+    format: typing.ClassVar[type[CheckpointFormat]] = AprielSSMHuggingfaceCheckpointFormat
+
+    @classmethod
+    def _create_config_converters(cls) -> list[ParamConverter]:
+        return super()._create_config_converters() + [
+            RenameParamConverter(
+                fast_llm_names=(("vocab_size",),),
+                export_names=(("vocab_size",),),
+            ),
+            RenameParamConverter(
+                fast_llm_names=(("ssm", "d_inner"),),
+                export_names=(("ssm_cfg", "d_inner"),),
+            ),
+            ConstantExportParamConverter(export_names=(("mlp_bias",),), export_value=False),
+            ConstantImportParamConverter(fast_llm_names=(("use_position_embeddings",),), fast_llm_value=False),
+            MappedConfigParamConverter(
+                fast_llm_names=(("transformer", "activation_type"),),
+                export_names=(("hidden_act",),),
+                fast_llm_value=ActivationType.from_hf_name,
+                export_value=lambda activation_type: activation_type.hf_name,
+            ),
+            RenameParamConverter(
+                fast_llm_names=(("transformer", "num_layers"),),
+                export_names=(("num_hidden_layers",),),
+            ),
+            RenameParamConverter(
+                fast_llm_names=(("transformer", "hidden_size"),),
+                export_names=(("hidden_size",),),
+            ),
+            RenameParamConverter(
+                fast_llm_names=(("transformer", "ffn_hidden_size"),),
+                export_names=(("intermediate_size",),),
+            ),
+            ConstantImportParamConverter(
+                fast_llm_names=(("transformer", "normalization", "type"),), fast_llm_value=NormalizationType.rms_norm
+            ),
+            RenameParamConverter(
+                fast_llm_names=(("transformer", "normalization", "epsilon"),), export_names=(("rms_norm_eps",),)
+            ),
+            ConstantImportParamConverter(fast_llm_names=(("transformer", "gated"),), fast_llm_value=True),
+            ConstantImportParamConverter(fast_llm_names=(("transformer", "add_linear_biases"),), fast_llm_value=False),
+            RenameParamConverter(
+                fast_llm_names=(("tie_word_embeddings",),),
+                export_names=(("tie_word_embeddings",),),
+            ),
+        ]
+
+    def _create_weight_converters(self) -> list[WeightConverter]:
+        converters = super()._create_weight_converters()
+        num_layers = self._model.config.base_model.transformer.num_layers
+        norm_bias: bool = False
+
+        # Embedding and output
+        if self._model.config.base_model.tie_word_embeddings:
+            converters.append(WeightConverter("layers.0.word_embeddings_weight", "model.embed_tokens.weight"))
+            converters.append(IgnoreImportWeightConverter((), "lm_head.weight"))
+        else:
+            converters.append(WeightConverter("layers.0.word_embeddings_weight", "model.embed_tokens.weight"))
+            converters.append(WeightConverter(f"layers.{num_layers + 1}.output_weights", "lm_head.weight"))
+
+        # Final norm
+        converters += self._get_weight_and_bias_converters(
+            f"layers.{num_layers + 1}.final_norm", "model.norm", norm_bias
+        )
+
+        for i in range(num_layers):
+            # Norm
+            converters += self._get_weight_and_bias_converters(
+                f"layers.{i+1}.norm_1", f"model.layers.{i}.input_layernorm", norm_bias
+            )
+            converters += self._get_weight_and_bias_converters(
+                f"layers.{i+1}.norm_2", f"model.layers.{i}.post_attention_layernorm", norm_bias
+            )
+
+            # MLP
+            converters += self._get_mlp_converters(f"layers.{i+1}", f"model.layers.{i}")
+
+        return converters
+
+    def _get_mlp_converters(self, fast_llm_prefix: str, hf_prefix: str) -> list[WeightConverter]:
+        linear_bias: bool = self._model.config.base_model.transformer.add_linear_biases
+        return [
+            *self._get_weight_and_bias_converters(
+                f"{fast_llm_prefix}.mlp.layer_1",
+                (f"{hf_prefix}.mlp.gate_proj", f"{hf_prefix}.mlp.up_proj"),
+                linear_bias,
+                SplitWeightConverter,
+            ),
+            *self._get_weight_and_bias_converters(
+                f"{fast_llm_prefix}.mlp.layer_2",
+                f"{hf_prefix}.mlp.down_proj",
+                linear_bias,
+                MLPLayer2Converter,
+            ),
+        ]
+
+    @classmethod
+    def _load_config(cls, directory: pathlib.Path | str) -> dict:
+        if not os.path.exists(directory / "config.json"):
+            raise FileNotFoundError(f"config.json not found in {directory}")
+        with open(directory / "config.json") as f:
+            config = json.load(f)
+        Assert.eq(config["model_type"], cls.get_huggingface_model_type())
+        return config
+
+    @classmethod
+    def _save_config(cls, directory: pathlib.Path | str, config: dict[str, typing.Any]) -> None:
+        with open(directory / "config.json", "w") as f:
+            json.dump(config, f)
+
+
+class AprielSSMHHybridHuggingfaceCheckpointHandler(
+    HybridModelCheckpointHandler,  # handles the block structure parameter
+    CommonSSMHuggingfaceCheckpointHandler,  # handles the SSM layers
+    CommonLlamaHuggingfaceCheckpointHandler,  # handles the LLama layers
+):
+    """
+    Lamba-like configs, models that interleave LLama like layers with LLamba-like SSM layers.
+    """
+
+    _model: HybridSSMModel
+    _model_class: typing.ClassVar[FastLLMModelConfig] = HybridSSMModelConfig
+    format: typing.ClassVar[type[CheckpointFormat]] = AprielSSMHHybridHuggingfaceCheckpointFormat
+    _default_block_type: str = SSMBlockType.mamba2_discrete.value
+
+    @classmethod
+    def _create_config_converters(cls) -> list[ParamConverter]:
+        return super()._create_config_converters() + [
+            RenameParamConverter(
+                fast_llm_names=(("ssm", "d_inner"),),
+                export_names=(("ssm_cfg", "d_inner"),),
+            ),
+            ConstantExportParamConverter(export_names=(("attention_bias",),), export_value=False),
+            ConstantExportParamConverter(export_names=(("mlp_bias",),), export_value=False),
+        ]
+
+    def _get_mlp_converters(self, fast_llm_prefix: str, hf_prefix: str) -> list[WeightConverter]:
+        linear_bias: bool = self._model.config.base_model.transformer.add_linear_biases
+        return [
+            *self._get_weight_and_bias_converters(
+                f"{fast_llm_prefix}.mlp.layer_1",
+                (f"{hf_prefix}.mlp.gate_proj", f"{hf_prefix}.mlp.up_proj"),
+                linear_bias,
+                SplitWeightConverter,
+            ),
+            *self._get_weight_and_bias_converters(
+                f"{fast_llm_prefix}.mlp.layer_2",
+                f"{hf_prefix}.mlp.down_proj",
+                linear_bias,
+                MLPLayer2Converter,
+            ),
+        ]
+
+    @classmethod
+    def _load_config(cls, directory: pathlib.Path | str) -> dict:
+        if not os.path.exists(directory / "config.json"):
+            raise FileNotFoundError(f"config.json not found in {directory}")
+        with open(directory / "config.json") as f:
+            config = json.load(f)
+        Assert.eq(config["model_type"], cls.get_huggingface_model_type())
+        return config
+
+    @classmethod
+    def _save_config(cls, directory: pathlib.Path | str, config: dict[str, typing.Any]) -> None:
+        with open(directory / "config.json", "w") as f:
+            json.dump(config, f)
+
+
+class AprielThinkerSSMHHybridHuggingfaceCheckpointHandler(
+    HybridModelCheckpointHandler,  # handles the block structure parameter
+    CommonSSMHuggingfaceCheckpointHandler,  # handles the SSM layers
+    CommonLlamaHuggingfaceCheckpointHandler,  # handles the LLama layers
+):
+    """
+    Lamba-like configs, models that interleave LLama like layers with LLamba-like SSM layers.
+    """
+
+    _model: HybridSSMModel
+    _model_class: typing.ClassVar[FastLLMModelConfig] = HybridSSMModelConfig
+    format: typing.ClassVar[type[CheckpointFormat]] = AprielThinkerSSMHHybridHuggingfaceCheckpointFormat
+    _default_block_type: str = SSMBlockType.mamba2_discrete.value
+    _hf_prefix: str = "model"
+
+    def _create_weight_converters(self) -> list[WeightConverter]:
+        converters = super()._create_weight_converters()
+        # num_layers = self._model.config.base_model.transformer.num_layers
+        # # Embedding and output
+        # if self._model.config.base_model.tie_word_embeddings:
+        #     converters.append(
+        #         WeightConverter("layers.0.word_embeddings_weight", f"{self._hf_prefix}.embedding.weight")
+        #     )
+        #     converters.append(IgnoreImportWeightConverter((), f"{self._hf_prefix}.lm_head.weight"))
+        # else:
+        #     converters.append(
+        #         WeightConverter("layers.0.word_embeddings_weight", f"{self._hf_prefix}.embedding.weight")
+        #     )
+        #     converters.append(
+        #         WeightConverter(f"layers.{num_layers + 1}.output_weights", f"{self._hf_prefix}.lm_head.weight")
+        #     )
+        return converters
+
+    @classmethod
+    def _create_config_converters(cls) -> list[ParamConverter]:
+        return super()._create_config_converters() + [
+            RenameParamConverter(
+                fast_llm_names=(("ssm", "d_inner"),),
+                export_names=(("ssm_cfg", "d_inner"),),
+            ),
+            IgnoreImportParamConverter(export_names=(("sliding_window",),), ignore_export_value=None),
+        ]
+
+    def _get_mlp_converters(self, fast_llm_prefix: str, hf_prefix: str) -> list[WeightConverter]:
+        linear_bias: bool = self._model.config.base_model.transformer.add_linear_biases
+        return [
+            *self._get_weight_and_bias_converters(
+                f"{fast_llm_prefix}.mlp.layer_1",
+                (f"{hf_prefix}.mlp.gate_proj", f"{hf_prefix}.mlp.up_proj"),
+                linear_bias,
+                SplitWeightConverter,
+            ),
+            *self._get_weight_and_bias_converters(
+                f"{fast_llm_prefix}.mlp.layer_2",
+                f"{hf_prefix}.mlp.down_proj",
+                linear_bias,
+                MLPLayer2Converter,
+            ),
+        ]
 
     @classmethod
     def _load_config(cls, directory: pathlib.Path | str) -> dict:
