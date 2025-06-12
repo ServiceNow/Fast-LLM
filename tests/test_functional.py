@@ -218,6 +218,8 @@ def test_mlp_recomputation(gated, activation_type):
 @pytest.mark.slow
 @requires_cuda
 def test_dropless_mlp():
+    # TODO: Fix dropless MOE
+    pytest.fail("Test fails, aborting to avoid breaking cuda", False)
     num_experts = 4
     experts_per_token = 4
     tokens = 1024
