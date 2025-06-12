@@ -160,7 +160,7 @@ def pytest_collection_modifyitems(config, items: list[pytest.Function]):
 
     # If pytest-depends is installed, it will complain about renamed nodes whether it's used or not.
     try:
-        import pytest_depends
+        import pytest_depends.main
     except ImportError:
         pass
     else:
