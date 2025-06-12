@@ -194,7 +194,7 @@ class YarnRotary[ConfigType: YarnRotaryConfig](DefaultRotary[YarnRotaryConfig]):
 
         # Get n-dimensional rotational scaling corrected for extrapolation
         extrapolation_factor = torch.clamp(
-            (torch.arange(kv_channels, dtype=torch.float32, device=scales.device) - low) / (high - low), 0, 1
+            (torch.arange(kv_channels // 2, dtype=torch.float32, device=scales.device) - low) / (high - low), 0, 1
         )
         return scales / self._config.scale_factor * extrapolation_factor + scales * (1 - extrapolation_factor)
 
