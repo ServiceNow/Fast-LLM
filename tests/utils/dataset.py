@@ -15,6 +15,7 @@ DATASET_CACHE = TEST_RESULTS_PATH / "dataset"
 DATASET_PREFIX = DATASET_CACHE / "common" / "dataset"
 DATASET_SAMPLING_CACHE = TEST_RESULTS_PATH / "dataset" / "cache"
 TEST_VOCAB_SIZE = 8192
+# Random lowercase: 80.7% (3.1% each); space: 18.6%; doc end: 0.6%
 TEST_CHARACTERS = (string.ascii_lowercase) * 5 + " " * 30 + "\n"
 TEST_DATASET_TOKENS = 1000000
 
