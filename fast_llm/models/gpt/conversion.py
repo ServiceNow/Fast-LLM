@@ -28,7 +28,7 @@ from fast_llm.engine.multi_stage.config import CheckpointMetadata, FastLLMModelC
 from fast_llm.functional.config import ActivationType
 from fast_llm.functional.rotary import convert_rotary_complex_to_real, convert_rotary_real_to_complex
 from fast_llm.layers.common.config import NormalizationType
-from fast_llm.layers.transformer.config import RotaryEmbeddingType, RoutingType, TransformerConfig
+from fast_llm.layers.transformer.config import RotaryEmbeddingType, RoutingType, TransformerConfig, TransformerType
 from fast_llm.layers.vision_encoder.config import VisionEncoderType
 from fast_llm.models.gpt.config import (
     GPTBaseModelConfig,
@@ -576,6 +576,9 @@ class PixtralHuggingfaceCheckpointHandler(WeightAndBiasConverterMixin, Huggingfa
             ConstantImportParamConverter(
                 fast_llm_names=(("transformer", "normalization", "type"),), fast_llm_value=NormalizationType.rms_norm
             ),
+            ConstantImportParamConverter(
+                fast_llm_names=(("transformer", "type"),), fast_llm_value=TransformerType.image_encoder
+            ),
             ConstantExportParamConverter(export_names=(("architectures",),), export_value=["PixtralVisionModel"]),
             ConstantImportParamConverter(fast_llm_names=(("type",),), fast_llm_value=VisionEncoderType.pixtral),
             ConstantImportParamConverter(fast_llm_names=(("transformer", "causal"),), fast_llm_value=False),
@@ -638,6 +641,9 @@ class PixtralHuggingfaceCheckpointHandler(WeightAndBiasConverterMixin, Huggingfa
                     ),
                 ),
                 export_names=(("head_dim",),),
+            ),
+            ConstantImportParamConverter(
+                fast_llm_names=(("transformer", "rotary", "type"),), fast_llm_value=RotaryEmbeddingType.rope_2d
             ),
             RenameParamConverter(
                 fast_llm_names=(

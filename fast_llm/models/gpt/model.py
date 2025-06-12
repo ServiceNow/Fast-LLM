@@ -28,8 +28,7 @@ from fast_llm.layers.transformer.preprocessing import (
     FlashAttnVarlenPreprocessor,
     RotaryEmbeddingPreprocessor,
 )
-from fast_llm.layers.transformer.transformer import TransformerLayer
-from fast_llm.layers.transformer.vision_transformer import VisionTransformerLayer
+from fast_llm.layers.transformer.transformer import TransformerLayer, VisionTransformerLayer
 from fast_llm.layers.vision_encoder.adapter import VisionAdapter
 from fast_llm.layers.vision_encoder.config import VisionEncoderDimNames, VisionEncoderKwargs
 from fast_llm.layers.vision_encoder.patch_conv import PatchConv
