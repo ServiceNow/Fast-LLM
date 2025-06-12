@@ -9,11 +9,12 @@ from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig, PretrainedFastLLMModelConfig
 from fast_llm.engine.training.config import TrainerConfig
 from fast_llm.layers.language_model.config import LanguageModelBaseConfig
-from fast_llm.layers.ssm.config import SSMConfig, SSMDimNames
-from fast_llm.models.gpt.config import GPTBatchConfig
+from fast_llm.layers.ssm.config import SSMBlockType, SSMConfig, SSMDimNames
+from fast_llm.models.gpt.config import GPTBatchConfig, PretrainedGPTModelConfig
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
+    from fast_llm.models.gpt.model import GPTInferenceRunner
     from fast_llm.models.ssm.huggingface import HuggingfaceHybridSSMModelForCausalLM
     from fast_llm.models.ssm.model import HybridSSMModel
     from fast_llm.models.ssm.trainer import SSMTrainer
@@ -29,10 +30,10 @@ class HybridSSMBaseModelConfig(LanguageModelBaseConfig):
         desc="Configuration for the transformer architecture.",
         hint=FieldHint.architecture,
     )
-    hybrid_block_layout: list[str] = Field(
-        default_factory=lambda: ["m2"],
-        desc="Pattern of blocks to use in the model. 't' for Transformer, 'm' for Mamba1, 'm2' for Discrete Mamba2",
-        hint=FieldHint.architecture,
+    hybrid_block_layout: list[str] | None = Field(
+        default=None,
+        desc=f"Pattern of blocks to use in the model. Availabel types: {SSMBlockType.__members__.values()}",
+        hint=FieldHint.core,
     )
     default_mtp_type: str | None = Field(
         default=None,
@@ -49,17 +50,24 @@ class HybridSSMBaseModelConfig(LanguageModelBaseConfig):
         Some of these can be setup directly in the layer config, but keeping them here for clarity.
         """
         super().setup_tensor_space(tensor_space)
-        if not "m2" in self.hybrid_block_layout and not "m" in self.hybrid_block_layout:
-            raise ValueError(
-                "Block pattern must contain at least one 'm' or 'm2', use gpt model for transformer only architectures"
-            )
+        # if (
+        #     not SSMBlockType.mamba2_discrete.value in self.hybrid_block_layout
+        #     and not SSMBlockType.mamba.value in self.hybrid_block_layout
+        # ):
+        #     raise ValueError(
+        #         f"Block pattern must contain at least one '{SSMBlockType.mamba2_discrete.value}' or '{SSMBlockType.mamba.value}', use gpt model for transformer only architectures"
+        #     )
 
-        if self.ssm.dt_rank < 0:
+        if self.ssm.dt_rank is None:
             mamba_dt_rank = math.ceil(self.transformer.hidden_size / 16)
         else:
             mamba_dt_rank = self.ssm.dt_rank
 
-        d_inner = int(self.ssm.expansion_factor * self.transformer.hidden_size)
+        d_inner = (
+            int(self.ssm.expansion_factor * self.transformer.hidden_size)
+            if self.ssm.d_inner is None
+            else self.ssm.d_inner
+        )
         # Hidden dimension
         tensor_space.add_tensor_dim(TensorDim(SSMDimNames.model_dim, self.transformer.hidden_size))
         # Mamba-specific dimensions
@@ -70,7 +78,7 @@ class HybridSSMBaseModelConfig(LanguageModelBaseConfig):
         tensor_space.add_tensor_dim(TensorDim(SSMDimNames.conv_kernel_size, self.ssm.conv_kernel_dimension))
         tensor_space.add_tensor_dim(TensorDim(SSMDimNames.inner_proj_mamba, d_inner * 2))
 
-        if "m2" in self.hybrid_block_layout or self.default_mtp_type == "m2":
+        if SSMBlockType.mamba2_discrete.value in self.hybrid_block_layout:
             # Mamba2 specific dimensions
             # as per https://github.com/cartesia-ai/edge/blob/a0e121ebed3d2324c6d762b0e211a08d62583681/cartesia-pytorch/cartesia_pytorch/Llamba/mixers/discrete_mamba2.py#L66C3-L66C4
             headdim = d_inner // self.ssm.n_v_heads
@@ -88,26 +96,29 @@ class HybridSSMBaseModelConfig(LanguageModelBaseConfig):
             tensor_space.add_tensor_dim(TensorDim(SSMDimNames.conv_dim, conv_dim))
 
     def _validate(self):
-        len_block_layout = len(self.hybrid_block_layout)
-        if len_block_layout != self.transformer.num_layers:
-            if self.transformer.num_layers % len_block_layout != 0:
+        if self.hybrid_block_layout is None:
+            with self._set_implicit_default():
+                self.hybrid_block_layout = [SSMBlockType.mamba2_discrete.value]
+
+        if len(self.hybrid_block_layout) != self.transformer.num_layers:
+            if self.transformer.num_layers % len(self.hybrid_block_layout) != 0:
                 raise ValueError(
-                    f"hybrid_block_layout length {len_block_layout} does not match num_layers {self.transformer.num_layers}"
+                    f"hybrid_block_layout length {len(self.hybrid_block_layout)} does not match num_layers {self.transformer.num_layers}"
                 )
-            num_repeats = int(self.transformer.num_layers // len_block_layout)
+            num_repeats = int(self.transformer.num_layers // len(self.hybrid_block_layout))
             logger.warning(
-                f"hybrid_block_layout length {len_block_layout} does not match num_layers {self.transformer.num_layers}, will repeat {self.hybrid_block_layout} {num_repeats} times"
+                f"hybrid_block_layout length {len(self.hybrid_block_layout)} does not match num_layers {self.transformer.num_layers}, will repeat {self.hybrid_block_layout} {num_repeats} times"
             )
             self.hybrid_block_layout = self.hybrid_block_layout * num_repeats
 
-        Assert.eq(len_block_layout, self.transformer.num_layers)
+        Assert.eq(len(self.hybrid_block_layout), self.transformer.num_layers)
         Assert.custom(
-            lambda _: all(block_type in ["t", "m", "m2"] for block_type in self.hybrid_block_layout),
-            f"Invalid block type: {self.hybrid_block_layout}. Must be 't' or 'm' or 'm2'",
+            lambda _: all(block_type in SSMBlockType.__members__.values() for block_type in self.hybrid_block_layout),
+            f"Invalid block type: {self.hybrid_block_layout}. Must be one of {SSMBlockType.__members__.values()}",
         )
         Assert.custom(
-            lambda _: self.default_mtp_type in ["t", "m", "m2", None],
-            f"Invalid MTP type: {self.default_mtp_type}. Must be 't' or 'm' or 'm2' or None",
+            lambda _: self.default_mtp_type in SSMBlockType.__members__.values() or self.default_mtp_type is None,
+            f"Invalid MTP type: {self.default_mtp_type}. Must be one of {SSMBlockType.__members__.values()} or None",
         )
 
         super()._validate()
@@ -124,11 +135,50 @@ class LLambaHuggingfaceCheckpointFormat(CheckpointFormat):
         return LLambaHuggingfaceCheckpointHandler
 
 
+class AprielSSMHuggingfaceCheckpointFormat(CheckpointFormat):
+    support_optimizer: typing.ClassVar[bool] = False
+    name: typing.ClassVar[str] = "apriel_ssm"
+
+    @classmethod
+    def get_handler_class(cls) -> type[CheckpointHandler]:
+        from fast_llm.models.ssm.conversion import AprielSSMHuggingfaceCheckpointHandler
+
+        return AprielSSMHuggingfaceCheckpointHandler
+
+
+class AprielSSMHHybridHuggingfaceCheckpointFormat(CheckpointFormat):
+    support_optimizer: typing.ClassVar[bool] = False
+    name: typing.ClassVar[str] = "apriel_ssm_hybrid"
+
+    @classmethod
+    def get_handler_class(cls) -> type[CheckpointHandler]:
+        from fast_llm.models.ssm.conversion import AprielSSMHHybridHuggingfaceCheckpointHandler
+
+        return AprielSSMHHybridHuggingfaceCheckpointHandler
+
+
+class AprielThinkerSSMHHybridHuggingfaceCheckpointFormat(CheckpointFormat):
+    support_optimizer: typing.ClassVar[bool] = False
+    name: typing.ClassVar[str] = "apriel_ssm_thinker_hybrid"
+
+    @classmethod
+    def get_handler_class(cls) -> type[CheckpointHandler]:
+        from fast_llm.models.ssm.conversion import AprielThinkerSSMHHybridHuggingfaceCheckpointHandler
+
+        return AprielThinkerSSMHHybridHuggingfaceCheckpointHandler
+
+
 @config_class()
 class HybridSSMModelConfig(FastLLMModelConfig):
     _abstract = False
     model_name: typing.ClassVar[str] = "hybrid_ssm"
     base_model: HybridSSMBaseModelConfig = FieldUpdate()
+    checkpoint_formats = FastLLMModelConfig.checkpoint_formats + (
+        LLambaHuggingfaceCheckpointFormat,
+        AprielSSMHuggingfaceCheckpointFormat,
+        AprielSSMHHybridHuggingfaceCheckpointFormat,
+        AprielThinkerSSMHHybridHuggingfaceCheckpointFormat,
+    )
     checkpoint_formats = FastLLMModelConfig.checkpoint_formats + (LLambaHuggingfaceCheckpointFormat,)
 
     @classmethod
@@ -160,9 +210,39 @@ class PretrainedHybridSSMModelConfig(PretrainedFastLLMModelConfig):
 class HybridTrainerConfig(PretrainedHybridSSMModelConfig, TrainerConfig):
     data: GPTDataConfig = FieldUpdate()
     batch: GPTBatchConfig = FieldUpdate()
+    reference_models: dict[str, PretrainedGPTModelConfig] = FieldUpdate()
 
     @classmethod
     def get_trainer_class(cls) -> type["SSMTrainer"]:
         from fast_llm.models.ssm.trainer import SSMTrainer
 
         return SSMTrainer
+
+    def _validate(self) -> None:
+        super()._validate()
+        if (name := self.model.base_model.distillation_model) is None:
+            Assert.empty(self.reference_models)
+        else:
+            Assert.eq(self.reference_models.keys(), {name})
+        if self.model.base_model.use_absolute_position_embeddings:
+            Assert.geq(self.model.base_model.num_absolute_position_embeddings, self.batch.sequence_length)
+        # if self.model.base_model.distillation_model is not None:
+        #     # TODO: Support loss masking for distillation?
+        #     assert not self.batch.use_loss_masking_spans
+        for reference_model in self.reference_models.values():
+            Assert.none(reference_model.model.base_model.distillation_model)
+            # TODO: Support more LM head features.
+            Assert.none(reference_model.model.base_model.cross_entropy_splits)
+            Assert.eq(reference_model.model.base_model.parallel_embeddings, self.model.base_model.parallel_embeddings)
+            Assert.geq(reference_model.model.base_model.prediction_heads, self.model.base_model.prediction_heads)
+
+    @classmethod
+    def get_inference_runner_class(cls) -> type["GPTInferenceRunner"]:
+        from fast_llm.models.gpt.model import GPTInferenceRunner
+
+        # TODO: we dont have inference runner for SSM/Hybrid yet, should return None?
+        logger.warning(
+            "No inference runner for SSM/Hybrid yet, using GPTInferenceRunner for now, which does not support SSM/Hybrid"
+        )
+
+        return GPTInferenceRunner
