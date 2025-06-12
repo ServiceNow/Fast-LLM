@@ -22,7 +22,7 @@ class VisionEncoderKwargs:
     images = "images"
     image_patches = "image_patches"
     image_positions = "image_positions"
-    image_size = "image_size"
+    max_image_size = "max_image_size"
     image_sizes = "image_sizes"
     image_mean = "image_normalization_mean"
     image_std = "image_normalization_std"

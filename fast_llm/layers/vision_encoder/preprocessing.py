@@ -84,9 +84,9 @@ def pad(image: torch.Tensor, max_height, max_width) -> torch.Tensor:
     return F.pad(image, (0, 0, depth_padding, width_padding), 0)
 
 
-def create_inv_freqs(rope_theta: int, kv_channels: int, image_size: int, patch_size: int) -> torch.Tensor:
+def create_inv_freqs(rope_theta: int, kv_channels: int, max_image_size: int, patch_size: int) -> torch.Tensor:
     freqs = 1.0 / (rope_theta ** (torch.arange(0, kv_channels, 2).float() / kv_channels))
-    max_patches_per_side = image_size // patch_size
+    max_patches_per_side = max_image_size // patch_size
 
     h = torch.arange(max_patches_per_side)
     w = torch.arange(max_patches_per_side)
@@ -135,19 +135,19 @@ class VisionPreprocessor(Preprocessor):
 
     def preprocess(self, tokens, kwargs: dict[str, typing.Any]) -> None:
         images = kwargs.get(VisionEncoderKwargs.images)
-        im_height = kwargs.get(VisionEncoderKwargs.image_size)
-        im_width = kwargs.get(VisionEncoderKwargs.image_size)
+        max_image_size = kwargs.get(VisionEncoderKwargs.max_image_size)
+        im_width = kwargs.get(VisionEncoderKwargs.max_image_size)
         patch_size = kwargs[VisionEncoderKwargs.patch_size]
         image_positions = kwargs.get(VisionEncoderKwargs.image_positions)
         image_sizes = [
-            [get_resize_dims(im.size(1), im.size(2), im_height, im_width, patch_size=patch_size) for im in ims]
+            [get_resize_dims(im.size(1), im.size(2), max_image_size, im_width, patch_size=patch_size) for im in ims]
             for ims in images
         ]
         kwargs[VisionEncoderKwargs.image_sizes] = image_sizes
         images = [
             [
                 normalize(
-                    resize(image, im_height, im_width, patch_size).to(
+                    resize(image, max_image_size, im_width, patch_size).to(
                         dtype=self._tensor_space.distributed_config.training_dtype.torch
                     )
                     / kwargs[VisionEncoderKwargs.image_rescale_factor],
@@ -219,7 +219,7 @@ class VisionPreprocessor(Preprocessor):
             )
             if sizes:
                 position_ids = torch.cat(
-                    [position_ids_in_meshgrid(*size, im_height // patch_size, patch_size) for size in sizes]
+                    [position_ids_in_meshgrid(*size, max_image_size // patch_size, patch_size) for size in sizes]
                 ).to(device=self._tensor_space.distributed.device)
             else:
                 position_ids = torch.tensor(
@@ -244,10 +244,10 @@ class VisionPreprocessor(Preprocessor):
         kwargs[VisionEncoderKwargs.rotary_inv_freq] = create_inv_freqs(
             kwargs[VisionEncoderKwargs.rope_theta],
             kwargs[VisionEncoderKwargs.kv_channels],
-            im_height,
+            max_image_size,
             patch_size,
         ).to(device=self._tensor_space.distributed.device)
-        kwargs[VisionEncoderKwargs.max_image_tokens] = div(im_height * im_width, patch_size**2)
+        kwargs[VisionEncoderKwargs.max_image_tokens] = div(max_image_size * im_width, patch_size**2)
         # sequence data parallel is not yet supported for images, so we use the same cu_seqlens for q and k
         kwargs[VisionTransformerKwargs.cu_seqlens_q] = torch.tensor(
             cu_seqlens, device=self._tensor_space.distributed.device, dtype=torch.int32

@@ -50,7 +50,7 @@ class BatchConfig(Config):
         hint=FieldHint.setup,
     )
     # Image inputs
-    image_size: int | None = Field(
+    max_image_size: int | None = Field(
         default=None,
         desc="Maximum image height and width",
         hint=FieldHint.optional,

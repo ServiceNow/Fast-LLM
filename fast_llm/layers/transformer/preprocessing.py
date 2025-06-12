@@ -199,7 +199,7 @@ class RotaryEmbeddingPreprocessor(Preprocessor):
 
     def preprocess(self, batch, kwargs: dict[str, typing.Any]) -> None:
         if self._config.type == RotaryEmbeddingType.rope_2d:
-            max_num_patches = kwargs[VisionEncoderKwargs.image_size] // kwargs[VisionEncoderKwargs.patch_size]
+            max_num_patches = kwargs[VisionEncoderKwargs.max_image_size] // kwargs[VisionEncoderKwargs.patch_size]
             self._create_tensors(kwargs[TransformerKwargs.sequence_length], max_num_patches)
         else:
             self._create_tensors(kwargs[TransformerKwargs.sequence_length])

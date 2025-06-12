@@ -151,8 +151,8 @@ class GPTSampledIndexedDataset(SampledDataset):
                         get_num_image_tokens(
                             *get_resize_dims(
                                 *size,
-                                self._parameters.image_size,
-                                self._parameters.image_size,
+                                self._parameters.max_image_size,
+                                self._parameters.max_image_size,
                                 self._parameters.patch_size,
                             ),
                             self._parameters.patch_size,
@@ -496,8 +496,8 @@ class GPTSampledIndexedDataset(SampledDataset):
             resized_image_lengths = [
                 get_resize_dims(
                     *image_length,
-                    self._parameters.image_size,
-                    self._parameters.image_size,
+                    self._parameters.max_image_size,
+                    self._parameters.max_image_size,
                     self._parameters.patch_size,
                 )
                 for image_length in image_lengths

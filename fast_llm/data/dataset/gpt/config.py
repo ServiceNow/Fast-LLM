@@ -76,7 +76,7 @@ class GPTSamplingParameters(SamplingParameters):
     use_preference_loss_spans: bool = False
     cross_document_attention: bool = True
     patch_size: int | None = None
-    image_size: int | None = None
+    max_image_size: int | None = None
     image_break_token: int | None = None
     image_end_token: int | None = None
     # How many extra tokens to add to the sequence length.

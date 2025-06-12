@@ -37,7 +37,7 @@ class GPTTrainer[ConfigType: GPTTrainerConfig](Trainer[ConfigType]):
             parameters.update(
                 {
                     "patch_size": self._config.model.base_model.vision_encoder.patch_size,
-                    "image_size": self._config.batch.image_size,
+                    "max_image_size": self._config.batch.max_image_size,
                     "image_break_token": self._config.model.base_model.vision_encoder.image_break_token,
                     "image_end_token": self._config.model.base_model.vision_encoder.image_end_token,
                 }

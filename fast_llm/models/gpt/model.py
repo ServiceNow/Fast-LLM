@@ -162,7 +162,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             micro_sequence_length = sequence_length
 
         if self._config.vision_encoder.enabled:
-            image_size = batch_meta.image_size
+            max_image_size = batch_meta.max_image_size
             image_mean = [
                 self._config.vision_encoder.image_normalization.mean_r,
                 self._config.vision_encoder.image_normalization.mean_g,
@@ -176,7 +176,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             image_rescale_factor = self._config.vision_encoder.image_normalization.rescale_factor
             vision_kwargs = {
                 VisionEncoderKwargs.patch_size: self._config.vision_encoder.patch_size,
-                VisionEncoderKwargs.image_size: image_size,
+                VisionEncoderKwargs.max_image_size: max_image_size,
                 VisionEncoderKwargs.image_mean: image_mean,
                 VisionEncoderKwargs.image_std: image_std,
                 VisionEncoderKwargs.image_rescale_factor: image_rescale_factor,
