@@ -111,7 +111,7 @@ def test_pretrained_config(load_config: ModelConfigType):
                     "rotary": {"type": "default"},
                     "num_layers": 12,  # Default
                     "hidden_size": 1024,  # Default
-                    "window_size": 32,  # Non-architecture
+                    "window_size": 32,
                     "ffn_hidden_size": 4096,  # Implicit default, default value
                     "activation_type": "silu",  # Implicit default, non-default value
                     "head_groups": 4,
@@ -132,7 +132,7 @@ def test_pretrained_config(load_config: ModelConfigType):
         "transformer": {
             # rotary: Don't override nested.
             "normalization": {"implementation": "triton"},  # Update non-default nested
-            "peft": {"freeze_others": False},  # Update default nested, non-architecture
+            "peft": {"type": "lora", "freeze_others": False},  # Update default nested, change type
             "hidden_size": 512,  # Override, affects derived value (kv channels)
             "head_groups": 1,  # Override to default
         },
@@ -159,7 +159,7 @@ def test_pretrained_config(load_config: ModelConfigType):
             "transformer": {
                 "normalization": {"type": "rms_norm", "implementation": "triton"},
                 "rotary": {"type": "default"},
-                "peft": {"freeze_others": False},
+                "peft": {"type": "lora", "freeze_others": False, "layers": ["query", "value"]},
                 "num_layers": 12,
                 "hidden_size": 512,
                 "ffn_hidden_size": 4096,
@@ -171,6 +171,11 @@ def test_pretrained_config(load_config: ModelConfigType):
             "vocab_size": 1000,
         }
     else:
+        base_model_update["transformer"]["peft"] = {
+            "type": "lora",
+            "freeze_others": False,
+            "layers": ["query", "value"],
+        }
         expected_config["base_model"] = base_model_update
 
     check_equal_nested(serialized_config, expected_config)
