@@ -187,8 +187,8 @@ class YarnRotary[ConfigType: YarnRotaryConfig](DefaultRotary[YarnRotaryConfig]):
         scales = super()._get_angle_scales(kv_channels, device)
         # TODO: max_position_embeddings or original_context_length?
         # see https://huggingface.co/deepseek-ai/DeepSeek-V3/blob/main/modeling_deepseek.py#L304
-        low = max(self._get_correction(self._config.beta_slow, kv_channels), 0)
-        high = min(self._get_correction(self._config.beta_fast, kv_channels), kv_channels - 1)
+        low = max(self._get_correction(self._config.beta_fast, kv_channels), 0)
+        high = min(self._get_correction(self._config.beta_slow, kv_channels), kv_channels - 1)
         if low == high:
             high += 0.001  # Prevent singularity
 
