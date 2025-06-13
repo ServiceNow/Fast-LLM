@@ -70,8 +70,9 @@ def main(
 
     print(model_hybrid)
     model_hybrid.save_pretrained(
-        f"{output_model_path}/apriel_ssm_instruct5b_hybrid_{index_to_swap+1}ssm_leastimportant_28h_init_rand"
+        f"{output_model_path}/ihyb{index_to_swap+1}l24h/export/apriel_ssm_instruct5b_hybrid/400"
     )
+
 
 if __name__ == "__main__":
     main()
