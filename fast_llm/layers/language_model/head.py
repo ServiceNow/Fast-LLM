@@ -363,12 +363,35 @@ class MLMHead(LanguageModelHead):
         # print(f"context: {context[0].shape} {context}")
         # print(f"logits {logits.shape} {logits}")
         # print(f"labels: {labels.shape} {labels}")
-        # print(f"masked_indices: {masked_indices.shape} {masked_indices}")
+        print(f"masked_indices: {masked_indices.shape} {masked_indices}")
+        print(f"mask_probabilities: {mask_probabilities.shape} {mask_probabilities}")
 
         # Compute CrossEntropy loss and weight each loss differently
         # We use grad from all the input positions for backward pass.
         # Find a way to weight the individual losses from each position seperatly, leave the grads alone.
         # only get grads fron the masked positions ???
+
+        last_weight = 0
+        B = logits.shape[0]
+        p_mask = mask_probabilities[:, 0]  # same repeated
+        print(f"p_mask: {p_mask.shape} {p_mask} B: {B}")
+        tmp = masked_indices[:, 1:] / p_mask[:, None]
+        print(f"{tmp.shape} {tmp}")
+        print(f"{torch.ones(B).shape}")
+
+        loss_weight = torch.cat(
+            (
+                # ar_weight * in_context[:, 1:] + # not implement yet
+                masked_indices[:, 1:] / p_mask[:, None],
+                # + un_weight * ((1-epsilon) * in_shuffled[:, 1:] + epsilon * in_clean[:, 1:]) / (1 - p_mask[:, None]) # not implement yet
+                (last_weight * torch.ones(B, device=logits.device)).unsqueeze(1),
+                # This may need some weighting in terms of masking...
+                # Let's do last_weight=0 for now?
+            ),
+            dim=1,
+        ).to(logits.dtype)
+
+        print(f"loss_weight: {loss_weight.shape} {loss_weight}")
 
         # Currently by not doing any thing we have both AR loss and Diffusion loss treated equally.
         loss, grad = cross_entropy_forward_backward(
@@ -378,11 +401,11 @@ class MLMHead(LanguageModelHead):
             grad_output=grad_output,
             implementation=self._cross_entropy_impl,
             logits_scale_factor=self._logits_scale_factor,
-            avg_loss=False,  # Do not average the loss, we will do it later
+            loss_weight=loss_weight,  # Do not average the loss, we will do it later
         )
 
-        # print(f"loss: {loss.shape} {loss}")
-        # print(f"grad: {grad.shape} {grad}")
+        print(f"loss: {loss.shape} {loss}")
+        print(f"grad: {grad.shape} ")
         # print(f"loss: {loss.shape} {loss}")
         # Revisit this with the formula and what happens inside the cross_entropy_forward_backward
         # MDM https://github.com/ML-GSAI/SMDM/blob/583aa4716d17728dbb825aec6c24a121164d616a/pretrain/train_mdm.py#L274
@@ -399,16 +422,16 @@ class MLMHead(LanguageModelHead):
         # p_mask[masked_indices]
 
         # Take only the losses and grads from the masked tokens/positions
-        masked_indices_flt = masked_indices.flatten()
-        masked_loss = loss[masked_indices_flt]
-        grad[masked_indices_flt]
-        # print("f masked_probabilities: ", mask_probabilities.shape, mask_probabilities, mask_probabilities.flatten())
-        masked_loss = masked_loss / mask_probabilities.flatten()[masked_indices_flt]
+        # masked_indices_flt = masked_indices.flatten()
+        # masked_loss = loss[masked_indices_flt]
+        # grad[masked_indices_flt]
+        # # print("f masked_probabilities: ", mask_probabilities.shape, mask_probabilities, mask_probabilities.flatten())
+        # masked_loss = masked_loss / mask_probabilities.flatten()[masked_indices_flt]
 
         # compute per token loss by all tokens in the batch (tokens we dropped thinks they have 0 loss)
         # MDM https://github.com/ML-GSAI/SMDM/blob/583aa4716d17728dbb825aec6c24a121164d616a/pretrain/train_mdm.py#L275
-        masked_loss = masked_loss.sum() / labels.shape[0]
+        # masked_loss = masked_loss.sum() / labels.shape[0]
 
         del logits
         # masked grad or full grad?
-        return masked_loss, output_parallel_linear_backward(grad, context)
+        return loss, output_parallel_linear_backward(grad, context)

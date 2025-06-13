@@ -39,8 +39,8 @@ def fused_cross_entropy_forward_backward(
     logits: torch.Tensor,
     target: torch.Tensor,
     grad_output: float | None,
+    loss_weight: torch.Tensor | None,
     logits_scale_factor: float = 1.0,
-    avg_loss: bool = True,
 ) -> tuple[torch.Tensor, torch.Tensor | None]:
     """
     A fused implementation of cross-entropy with torch compile.
@@ -72,8 +72,16 @@ def fused_cross_entropy_forward_backward(
 
     per_sample_loss = sum_exp_logits.log().sub(logits_norm.gather(1, target).squeeze(1)) * loss_mask
 
-    # print(f"per_sample_loss: {per_sample_loss} {per_sample_loss.shape}")
-    return per_sample_loss.mean() if avg_loss else per_sample_loss, grad
+    print(f"per_sample_loss: {per_sample_loss} {per_sample_loss.shape} {grad.shape if grad is not None else None} ")
+    if loss_weight is None:
+        return per_sample_loss.mean(), grad
+    else:
+        per_sample_loss = per_sample_loss * loss_weight.flatten()
+        print(f"per_sample_loss: {per_sample_loss} {per_sample_loss.shape}")
+        loss_weight_expanded = loss_weight.reshape(-1, 1)
+        grad = grad * loss_weight_expanded if grad is not None else None
+        print(f"grad {grad.shape if grad is not None else None} ")
+        return per_sample_loss.mean(), grad
 
 
 @torch.compile
@@ -142,7 +150,7 @@ def cross_entropy_forward_backward(
     group: ProcessGroup | None,
     implementation: CrossEntropyImpl = CrossEntropyImpl.fused,
     logits_scale_factor: float = 1.0,
-    avg_loss: bool = True,
+    loss_weight: bool = True,
 ) -> tuple[torch.Tensor, torch.Tensor | None]:
     """
     Select the appropriate implementation of cross-entropy.
@@ -158,5 +166,5 @@ def cross_entropy_forward_backward(
         )
     else:
         return _CROSS_ENTROPY_IMPLEMENTATIONS[implementation](
-            logits, target, grad_output, logits_scale_factor=logits_scale_factor, avg_loss=avg_loss
+            logits, target, grad_output, logits_scale_factor=logits_scale_factor, loss_weight=loss_weight
         )
