@@ -844,6 +844,11 @@ class MtpAprielThinkerSSMHHybridHuggingfaceCheckpointHandler(
             # MLP
             converters += self._get_mlp_converters(f"layers.{mtp_layer_index}", f"mtp_heads.{i-1}")
 
+            # MTP norm
+            converters += self._get_weight_and_bias_converters(
+                f"layers.{mtp_layer_index+1}.final_norm", f"mtp_norms.{i-1}", norm_bias
+            )
+
         return converters
 
     @classmethod
