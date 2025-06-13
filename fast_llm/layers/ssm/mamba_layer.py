@@ -2,13 +2,20 @@ import math
 from typing import Callable
 
 import einops
-import mamba_ssm.ops.selective_scan_interface
 import torch
 
 from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
 from fast_llm.layers.common.linear import Linear
 from fast_llm.layers.ssm.config import SSMConfig, SSMDimNames
 from fast_llm.tensor import ParameterMeta, init_ones_, kaiming_init_
+from fast_llm.utils import get_lr_scale
+
+try:
+    from mamba_ssm.ops.selective_scan_interface import mamba_inner_fn as _mamba_inner_fn  # noqa
+
+    _mamba_available = True
+except ImportError:
+    _mamba_available = False
 
 """
 Note: this is mostly adapted from https://github.com/Zyphra/Zamba2, similar code is also in https://github.com/state-spaces/mamba.
@@ -81,6 +88,8 @@ class MambaLayer(torch.nn.Module):
         self.d_state = td_state.size
         self.d_model = td_model.size
         self.dt_rank = tdt_rank.size
+        layer_lr_scale = config.per_layer_lr_scale[layer_idx] if config.per_layer_lr_scale else None
+        mamba_layer_lr_scale = get_lr_scale(self.config.mamba_lr_scale, layer_lr_scale)
 
         self.in_proj_weight = ParameterMeta.from_dims(
             (td_inner_proj, td_model),
@@ -90,6 +99,7 @@ class MambaLayer(torch.nn.Module):
         self.conv1d_weight = ParameterMeta.from_dims(
             (td_inner, TensorDim("D_inner_2", self.d_inner // self.d_inner), td_conv_kernel),
             init_method=kaiming_init_(td_inner.size),
+            lr_scale=mamba_layer_lr_scale,
         )
 
         self.conv1d_bias = None
@@ -102,6 +112,7 @@ class MambaLayer(torch.nn.Module):
             td_x_proj,
             weight_init_method=kaiming_init_(td_inner.size),
             bias=False,
+            lr_scale=mamba_layer_lr_scale,
             **factory_kwargs,
         )
         self.x_proj.weight.auto_grad_accumulation = True
@@ -110,6 +121,7 @@ class MambaLayer(torch.nn.Module):
         self.dt_proj_weight = ParameterMeta.from_dims(
             (td_inner, tdt_rank),
             init_method=kaiming_init_(tdt_rank.size),
+            lr_scale=mamba_layer_lr_scale,
         )
 
         self.dt_proj_bias = ParameterMeta.from_dims(
@@ -117,12 +129,14 @@ class MambaLayer(torch.nn.Module):
             init_method=init_dtprojbias(
                 self.d_inner, self.config.dt_max, self.config.dt_min, self.config.dt_init_floor, factory_kwargs
             ),
+            lr_scale=mamba_layer_lr_scale,
         )
 
         self.A_log = ParameterMeta.from_dims(
             (td_inner, td_state),
             weight_decay=False,
             init_method=init_A(self.d_state, self.d_inner),
+            lr_scale=mamba_layer_lr_scale,
         )
 
         # D "skip" parameter
@@ -130,6 +144,7 @@ class MambaLayer(torch.nn.Module):
             (td_inner,),
             weight_decay=False,
             init_method=init_ones_,
+            lr_scale=mamba_layer_lr_scale,
         )
 
         self.out_proj = Linear(
@@ -137,12 +152,14 @@ class MambaLayer(torch.nn.Module):
             td_model,
             bias=False,  # TODO: note, if bias is used there is a problem in the MambaInnerFn.backward for the bias grads. I think this bias is not used in other mamba repos.
             weight_init_method=kaiming_init_(td_model.size),
+            lr_scale=mamba_layer_lr_scale,
             **factory_kwargs,
         )
         self.out_proj.weight.auto_grad_accumulation = True
         self._return_input = return_input
 
     def forward(self, hidden_states, kwargs):
+        assert _mamba_available
         batch, seqlen, dim = hidden_states.shape
 
         # We do matmul and transpose BLH -> HBL at the same time
@@ -157,7 +174,7 @@ class MambaLayer(torch.nn.Module):
         A = -torch.exp(self.A_log.float())  # (d_inner, d_state)
         # In the backward pass we write dx and dz next to each other to avoid torch.cat
         # not, if we wanbt to support inference, we would need to imp.lement slow path here, see https://github.com/Zyphra/Zamba2/blob/1b182f40f2257f822cc06dd785df53d67d691a15/mamba_layer.py#L172s
-        out = mamba_ssm.ops.selective_scan_interface.mamba_inner_fn(
+        out = _mamba_inner_fn(
             xz,
             self.conv1d_weight,
             self.conv1d_bias,
