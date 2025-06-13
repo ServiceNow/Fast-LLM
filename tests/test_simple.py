@@ -1,14 +1,15 @@
 import pytest
 
-from tests.utils.model_configs import CONFIG_COMMON, CONFIG_FAST_LLM, TEST_MODEL
+from tests.utils.model_configs import CONFIG_COMMON, TEST_MODEL
 
 
 def test_model_safe(run_test_script):
     # The safest possible config, identical to the one in test_match_megatron except for the initialization.
     run_test_script(
         f"test_{TEST_MODEL}_safe",
-        CONFIG_FAST_LLM
+        CONFIG_COMMON
         + [
+            "model.distributed.training_dtype=fp32",
             "run.torch_dynamo_enable=False",
             "schedule.data_overlap=False",
             "model.base_model.transformer.dropless_moe=False",
