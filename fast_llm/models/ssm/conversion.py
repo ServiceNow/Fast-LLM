@@ -27,6 +27,7 @@ from fast_llm.models.ssm.config import (
     AprielThinkerSSMHHybridHuggingfaceCheckpointFormat,
     HybridSSMModelConfig,
     LLambaHuggingfaceCheckpointFormat,
+    MtpAprielThinkerSSMHHybridHuggingfaceCheckpointFormat,
     MtpLLambaHuggingfaceCheckpointFormat,
 )
 from fast_llm.models.ssm.external.llamba.configuration_mtp_llamba import MTPLlambaConfig
@@ -723,6 +724,126 @@ class AprielThinkerSSMHHybridHuggingfaceCheckpointHandler(
         #     converters.append(
         #         WeightConverter(f"layers.{num_layers + 1}.output_weights", f"{self._hf_prefix}.lm_head.weight")
         #     )
+        return converters
+
+    @classmethod
+    def _create_config_converters(cls) -> list[ParamConverter]:
+        return super()._create_config_converters() + [
+            RenameParamConverter(
+                fast_llm_names=(("ssm", "d_inner"),),
+                export_names=(("ssm_cfg", "d_inner"),),
+            ),
+            IgnoreImportParamConverter(export_names=(("sliding_window",),), ignore_export_value=None),
+        ]
+
+    def _get_mlp_converters(self, fast_llm_prefix: str, hf_prefix: str) -> list[WeightConverter]:
+        linear_bias: bool = self._model.config.base_model.transformer.add_linear_biases
+        return [
+            *self._get_weight_and_bias_converters(
+                f"{fast_llm_prefix}.mlp.layer_1",
+                (f"{hf_prefix}.mlp.gate_proj", f"{hf_prefix}.mlp.up_proj"),
+                linear_bias,
+                SplitWeightConverter,
+            ),
+            *self._get_weight_and_bias_converters(
+                f"{fast_llm_prefix}.mlp.layer_2",
+                f"{hf_prefix}.mlp.down_proj",
+                linear_bias,
+                MLPLayer2Converter,
+            ),
+        ]
+
+    @classmethod
+    def _load_config(cls, directory: pathlib.Path | str) -> dict:
+        if not os.path.exists(directory / "config.json"):
+            raise FileNotFoundError(f"config.json not found in {directory}")
+        with open(directory / "config.json") as f:
+            config = json.load(f)
+        Assert.eq(config["model_type"], cls.get_huggingface_model_type())
+        return config
+
+    @classmethod
+    def _save_config(cls, directory: pathlib.Path | str, config: dict[str, typing.Any]) -> None:
+        with open(directory / "config.json", "w") as f:
+            json.dump(config, f)
+
+
+class MtpAprielThinkerSSMHHybridHuggingfaceCheckpointHandler(
+    HybridModelCheckpointHandler,  # handles the block structure parameter
+    CommonSSMHuggingfaceCheckpointHandler,  # handles the SSM layers
+    CommonLlamaHuggingfaceCheckpointHandler,  # handles the LLama layers
+):
+    """
+    Llamba-like configs, models that interleave LLama like layers with LLamba-like SSM layers.
+    """
+
+    _model: HybridSSMModel
+    _model_class: typing.ClassVar[FastLLMModelConfig] = HybridSSMModelConfig
+    format: typing.ClassVar[type[CheckpointFormat]] = MtpAprielThinkerSSMHHybridHuggingfaceCheckpointFormat
+    _default_block_type: str = SSMBlockType.mamba2_discrete.value
+    _hf_prefix: str = "model"
+
+    def _create_weight_converters(self) -> list[WeightConverter]:
+        converters = super()._create_weight_converters()
+        num_layers = self._model.config.base_model.transformer.num_layers
+
+        # MTP heads
+        prediction_heads = self._model.config.base_model.prediction_heads
+        for i in range(1, prediction_heads):
+            mtp_layer_index = num_layers + 2 * i
+            ssm_bias: bool = self._model.config.base_model.ssm.add_bias_linear
+            norm_bias: bool = False
+
+            converters += self._get_weight_and_bias_converters(
+                f"layers.{mtp_layer_index}.mixer.in_proj",
+                f"mtp_heads.{i-1}.mixer.in_proj",
+                ssm_bias,
+            )
+            converters += self._get_weight_and_bias_converters(
+                f"layers.{mtp_layer_index}.mixer.out_proj",
+                f"mtp_heads.{i-1}.mixer.out_proj",
+                ssm_bias,
+            )
+            converters.append(
+                WeightConverter(
+                    f"layers.{mtp_layer_index}.mixer.D",
+                    f"mtp_heads.{i-1}.mixer.D",
+                    self._model.config.base_model,
+                )
+            )
+            converters.append(
+                WeightConverter(
+                    f"layers.{mtp_layer_index}.mixer.z_bias",
+                    f"mtp_heads.{i-1}.mixer.z_bias",
+                    self._model.config.base_model,
+                )
+            )
+            converters.append(
+                WeightConverter(
+                    f"layers.{mtp_layer_index}.mixer.conv1d_weight",
+                    f"mtp_heads.{i-1}.mixer.conv1d.weight",
+                    self._model.config.base_model,
+                )
+            )
+            converters.append(
+                WeightConverter(
+                    f"layers.{mtp_layer_index}.mixer.conv1d_bias",
+                    f"mtp_heads.{i-1}.mixer.conv1d.bias",
+                    self._model.config.base_model,
+                )
+            )
+
+            # Norm
+            converters += self._get_weight_and_bias_converters(
+                f"layers.{mtp_layer_index}.norm_1", f"mtp_heads.{i-1}.input_layernorm", norm_bias
+            )
+            converters += self._get_weight_and_bias_converters(
+                f"layers.{mtp_layer_index}.norm_2", f"mtp_heads.{i-1}.post_attention_layernorm", norm_bias
+            )
+
+            # MLP
+            converters += self._get_mlp_converters(f"layers.{mtp_layer_index}", f"mtp_heads.{i-1}")
+
         return converters
 
     @classmethod

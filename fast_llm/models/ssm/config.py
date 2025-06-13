@@ -181,6 +181,18 @@ class AprielThinkerSSMHHybridHuggingfaceCheckpointFormat(CheckpointFormat):
         return AprielThinkerSSMHHybridHuggingfaceCheckpointHandler
 
 
+class MtpAprielThinkerSSMHHybridHuggingfaceCheckpointFormat(CheckpointFormat):
+    support_optimizer: typing.ClassVar[bool] = False
+    name: typing.ClassVar[str] = "mtp_apriel_ssm_thinker_hybrid"
+    trust_remote_code: typing.ClassVar[bool] = True
+
+    @classmethod
+    def get_handler_class(cls) -> type[CheckpointHandler]:
+        from fast_llm.models.ssm.conversion import MtpAprielThinkerSSMHHybridHuggingfaceCheckpointHandler
+
+        return MtpAprielThinkerSSMHHybridHuggingfaceCheckpointHandler
+
+
 @config_class()
 class HybridSSMModelConfig(FastLLMModelConfig):
     _abstract = False
@@ -192,6 +204,7 @@ class HybridSSMModelConfig(FastLLMModelConfig):
         AprielSSMHuggingfaceCheckpointFormat,
         AprielSSMHHybridHuggingfaceCheckpointFormat,
         AprielThinkerSSMHHybridHuggingfaceCheckpointFormat,
+        MtpAprielThinkerSSMHHybridHuggingfaceCheckpointFormat,
     )
 
     @classmethod

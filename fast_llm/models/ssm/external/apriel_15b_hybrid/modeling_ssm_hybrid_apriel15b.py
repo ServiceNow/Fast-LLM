@@ -926,6 +926,21 @@ class AprielSSMHybridForCausalLM(AprielHybridPreTrainedModel, GenerationMixin):
         self.vocab_size = config.vocab_size
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
 
+        mtp_heads, mtp_norms = [], []
+        if config.prediction_heads > 1:
+            # Initialize multiple prediction heads
+            for layer_idx in range(
+                len(config.hybrid_block_layout), len(config.hybrid_block_layout) + config.prediction_heads - 1
+            ):
+                mtp_heads.append(
+                    AprielSSMDecoderLayer(
+                        config, layer_idx=layer_idx, device=self.device, dtype=self.dtype
+                    )  # Use layer_idx=0 for all heads
+                )
+                mtp_norms.append(MistralRMSNorm(config.hidden_size, eps=config.rms_norm_eps))
+            self.mtp_heads = nn.ModuleList(mtp_heads)
+            self.mtp_norms = nn.ModuleList(mtp_norms)
+
         # Initialize weights and apply final processing
         self.post_init()
 
@@ -1017,6 +1032,7 @@ class AprielSSMHybridForCausalLM(AprielHybridPreTrainedModel, GenerationMixin):
         output_hidden_states: Optional[bool] = None,
         cache_position: Optional[torch.LongTensor] = None,
         logits_to_keep: Union[int, torch.Tensor] = 0,
+        return_all_prediction_heads: bool = False,
         **kwargs: Unpack[KwargsForCausalLM],
     ) -> Union[tuple, CausalLMOutputWithPast]:
         r"""
@@ -1069,10 +1085,33 @@ class AprielSSMHybridForCausalLM(AprielHybridPreTrainedModel, GenerationMixin):
             **kwargs,
         )
 
+        latents = []
         hidden_states = outputs.last_hidden_state
+        outputs.hidden_states[-2]
+        latents.append(hidden_states)
+        if return_all_prediction_heads:
+            stacked_latents = latents[0]  # TODO: REMOVE AFTER FIX!
+            # TODO: can fix after Fast-LLM training runs
+            # for head, norm in zip(self.mtp_heads, self.mtp_norms):
+            #     mtp_outputs = head(
+            #         before_last_hidden_state,
+            #         attention_mask=causal_mask,
+            #         position_ids=position_ids,
+            #         past_key_value=past_key_values,
+            #         output_attentions=output_attentions,
+            #         use_cache=use_cache,
+            #         cache_position=cache_position,
+            #         position_embeddings=position_embeddings,
+            #         **kwargs,
+            #     )
+            #     hidden_states = norm(mtp_outputs[0])
+            #     latents.append(hidden_states)
+            # stacked_latents = torch.stack(latents, dim=-2)
+        else:
+            stacked_latents = latents[0]
         # Only compute necessary logits, and do not upcast them to float if we are not computing the loss
         slice_indices = slice(-logits_to_keep, None) if isinstance(logits_to_keep, int) else logits_to_keep
-        logits = self.lm_head(hidden_states[:, slice_indices, :])
+        logits = self.lm_head(stacked_latents[:, slice_indices])
 
         loss = None
         if labels is not None:
