@@ -350,7 +350,7 @@ class MLMHead(LanguageModelHead):
             return logits * self._logits_scale_factor, None
 
         masked_indices = kwargs[LanguageModelKwargs.mask_indexes]
-        mask_probabilities = kwargs[LanguageModelKwargs.mask_probabilities]
+        p_mask = kwargs[LanguageModelKwargs.mask_probabilities]
         # index   [0, 1, 2, 3, 4, 5] ->
         # The labels are already left shifted x = [A, B, C, D, E, F] ->
         #                                 embd =  [A, B, C, D, E]
@@ -363,8 +363,8 @@ class MLMHead(LanguageModelHead):
         # print(f"context: {context[0].shape} {context}")
         # print(f"logits {logits.shape} {logits}")
         # print(f"labels: {labels.shape} {labels}")
-        print(f"masked_indices: {masked_indices.shape} {masked_indices}")
-        print(f"mask_probabilities: {mask_probabilities.shape} {mask_probabilities}")
+        # print(f"masked_indices: {masked_indices.shape} {masked_indices}")
+        # print(f"mask_probabilities: {mask_probabilities.shape} {mask_probabilities}")
 
         # Compute CrossEntropy loss and weight each loss differently
         # We use grad from all the input positions for backward pass.
@@ -373,11 +373,11 @@ class MLMHead(LanguageModelHead):
 
         last_weight = 0
         B = logits.shape[0]
-        p_mask = mask_probabilities[:, 0]  # same repeated
-        print(f"p_mask: {p_mask.shape} {p_mask} B: {B}")
-        tmp = masked_indices[:, 1:] / p_mask[:, None]
-        print(f"{tmp.shape} {tmp}")
-        print(f"{torch.ones(B).shape}")
+        # p_mask = mask_probabilities[:, 0]  # same repeated
+        # print(f"p_mask: {p_mask.shape} {p_mask} B: {B}")
+        # tmp = masked_indices[:, 1:] / p_mask[:, None]
+        # print(f"{tmp.shape} {tmp}")
+        # print(f"{torch.ones(B).shape}")
 
         loss_weight = torch.cat(
             (
@@ -391,7 +391,7 @@ class MLMHead(LanguageModelHead):
             dim=1,
         ).to(logits.dtype)
 
-        print(f"loss_weight: {loss_weight.shape} {loss_weight}")
+        # print(f"loss_weight: {loss_weight.shape} {loss_weight}")
 
         # Currently by not doing any thing we have both AR loss and Diffusion loss treated equally.
         loss, grad = cross_entropy_forward_backward(
@@ -404,8 +404,8 @@ class MLMHead(LanguageModelHead):
             loss_weight=loss_weight,  # Do not average the loss, we will do it later
         )
 
-        print(f"loss: {loss.shape} {loss}")
-        print(f"grad: {grad.shape} ")
+        # print(f"loss: {loss.shape} {loss}")
+        # print(f"grad: {grad.shape} ")
         # print(f"loss: {loss.shape} {loss}")
         # Revisit this with the formula and what happens inside the cross_entropy_forward_backward
         # MDM https://github.com/ML-GSAI/SMDM/blob/583aa4716d17728dbb825aec6c24a121164d616a/pretrain/train_mdm.py#L274

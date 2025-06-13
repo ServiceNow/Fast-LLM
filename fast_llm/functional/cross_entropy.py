@@ -72,15 +72,15 @@ def fused_cross_entropy_forward_backward(
 
     per_sample_loss = sum_exp_logits.log().sub(logits_norm.gather(1, target).squeeze(1)) * loss_mask
 
-    print(f"per_sample_loss: {per_sample_loss} {per_sample_loss.shape} {grad.shape if grad is not None else None} ")
+    # print(f"per_sample_loss: {per_sample_loss} {per_sample_loss.shape} {grad.shape if grad is not None else None} ")
     if loss_weight is None:
         return per_sample_loss.mean(), grad
     else:
         per_sample_loss = per_sample_loss * loss_weight.flatten()
-        print(f"per_sample_loss: {per_sample_loss} {per_sample_loss.shape}")
+        # print(f"per_sample_loss: {per_sample_loss} {per_sample_loss.shape}")
         loss_weight_expanded = loss_weight.reshape(-1, 1)
         grad = grad * loss_weight_expanded if grad is not None else None
-        print(f"grad {grad.shape if grad is not None else None} ")
+        # print(f"grad {grad.shape if grad is not None else None} ")
         return per_sample_loss.mean(), grad
 
 
