@@ -5,20 +5,14 @@ import torch
 
 from fast_llm.config import UpdateType
 from fast_llm.engine.config_utils.data_type import DataType
-from fast_llm.engine.config_utils.tensor_space import TensorSpace
-from fast_llm.engine.distributed.config import DistributedConfig
-from fast_llm.engine.distributed.distributed import Distributed
-from fast_llm.engine.multi_stage.config import StageConfig
-from fast_llm.engine.multi_stage.stage import Stage
 from fast_llm.functional.config import CrossEntropyImpl
 from fast_llm.layers.language_model.config import LanguageModelKwargs
 from fast_llm.layers.language_model.embedding import WORD_EMBEDDINGS_WEIGHT
 from fast_llm.layers.language_model.head import OUTPUT_WEIGHTS, LanguageModelHead
 from fast_llm.layers.transformer.config import TransformerKwargs
-from fast_llm.models.gpt.config import GPTBaseModelConfig
-from fast_llm.models.gpt.model import GPTBaseModel
+from fast_llm.models.gpt.config import GPTBaseModelConfig, GPTModelConfig
 from fast_llm.utils import Assert
-from tests.utils.utils import requires_cuda
+from tests.utils.utils import get_base_model, get_stage, requires_cuda
 
 
 def _lm_head(
@@ -100,13 +94,15 @@ def test_lm_head(
         config_dict,
         update_type=UpdateType.update,
     )
-    distributed_config = DistributedConfig.from_dict(distributed_config_dict)
-    distributed = Distributed(distributed_config)
-    tensor_space = TensorSpace(distributed_config)
-    config.setup_tensor_space(tensor_space)
-    tensor_space.setup(distributed)
-    model = GPTBaseModel(config, distributed_config)
-    model.setup(distributed)
+
+    model, distributed = get_base_model(
+        GPTModelConfig.from_dict(
+            {
+                "base_model": config,
+                "distributed": distributed_config_dict,
+            },
+        )
+    )
 
     sequence_first = config.sequence_first or (
         config.cross_entropy_splits is not None and config.cross_entropy_splits > 1
@@ -114,9 +110,9 @@ def test_lm_head(
     input_ = torch.randn(
         (SEQUENCE_LENGTH, BATCH_SIZE, HIDDEN_SIZE) if sequence_first else (BATCH_SIZE, SEQUENCE_LENGTH, HIDDEN_SIZE),
         dtype=(
-            distributed_config.optimization_dtype.torch
+            distributed.config.optimization_dtype.torch
             if config.transformer.full_precision_residual
-            else distributed_config.training_dtype.torch
+            else distributed.config.training_dtype.torch
         ),
         device=distributed.device,
         requires_grad=True,
@@ -160,7 +156,7 @@ def test_lm_head(
     if config.tie_word_embeddings or config.prediction_heads > 1:
         logit_weight = (
             torch.empty(
-                VOCAB_SIZE, HIDDEN_SIZE, dtype=distributed_config.training_dtype.torch, device=distributed.device
+                VOCAB_SIZE, HIDDEN_SIZE, dtype=distributed.config.training_dtype.torch, device=distributed.device
             )
             .normal_(config.transformer.init_method_std)
             .requires_grad_(True)
@@ -174,18 +170,7 @@ def test_lm_head(
         head: LanguageModelHead = model[layer_index]
         Assert.custom(isinstance, head, LanguageModelHead)
         Assert.eq(head._prediction_distance, prediction_distance)
-        stage = Stage(
-            config=StageConfig(),
-            base_model=[head],
-            distributed_config=distributed_config,
-            begin=0,
-            end=1,
-            index=0,
-        )
-        stage.setup(distributed=distributed)
-        stage.initialize_weights()
-        stage.restore_parameters()
-        stage.reset_gradients()
+        stage = get_stage([head], distributed)
 
         # Get reference outputs and grads
         if logit_weight is None:
@@ -230,9 +215,9 @@ def test_lm_head(
         output, context = stage.forward(head_input, kwargs, losses)
         stage.backward(output_grad, context)
 
-        threshold = 1e-5 if distributed_config.training_dtype == DataType.float32 else 5e-3
+        threshold = 1e-5 if distributed.config.training_dtype == DataType.float32 else 5e-3
         min_threshold = (
-            1e-5 if distributed_config.training_dtype == DataType.float32 else 1e-4
+            1e-5 if distributed.config.training_dtype == DataType.float32 else 1e-4
         ) * config.logits_scale_factor
 
         Assert.eq(losses.keys(), loss_keys)
