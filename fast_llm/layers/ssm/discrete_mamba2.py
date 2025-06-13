@@ -13,7 +13,7 @@ from fast_llm.utils import get_lr_scale
 
 logger = logging.getLogger(__name__)
 
-use_causal_conv1d = os.environ.get("USE_CAUSAL_CONV1D", "0") == "1"
+use_causal_conv1d = os.environ.get("USE_CAUSAL_CONV1D", "1") == "1"
 
 try:
     from mamba_ssm.ops.triton.ssd_combined import mamba_chunk_scan_combined as _mamba_chunk_scan_combined  # noqa
