@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.7-labs
-FROM nvcr.io/nvidia/pytorch:24.11-py3
+FROM nvcr.io/nvidia/pytorch:25.05-py3
 
 # Install dependencies.
 RUN apt-get update \
@@ -24,13 +24,20 @@ RUN mkdir -m 777 /app/Megatron-LM /app/examples /app/fast_llm /app/tests /app/to
       /usr/local/lib/python3.12/dist-packages \
       /usr/local/lib/python3.12/dist-packages/__pycache__
 
+# The base image enforces versions for things like pytest for no good reason.
+ENV PIP_CONSTRAINT=""
+# There is no pre-build mamba image for pytorch 2.8, we build it before the rest to avoid rebuilds.
+# We need to compile from the repo because of https://github.com/state-spaces/mamba/issues/720 (same for causal-conv1d)
+# We set the number of workers to avoid OOM when compiling on laptop. (TODO: Can we make it configurable?)
+RUN MAX_JOBS=4 pip install --no-build-isolation  "causal-conv1d@git+https://github.com/Dao-AILab/causal-conv1d.git@v1.5.0.post8"
+RUN MAX_JOBS=4 pip install --no-build-isolation "mamba_ssm[causal-conv1d]@git+https://github.com/state-spaces/mamba@v2.2.4"
 # Copy dependency files with universal write permissions for all users.
 COPY --chmod=777 setup.py setup.cfg pyproject.toml ./
 COPY --chmod=777 ./fast_llm/__init__.py fast_llm/
 COPY --chmod=777 ./fast_llm/csrc/ fast_llm/csrc/
 
 # Install dependencies within the virtual environment.
-RUN pip install --no-cache-dir --no-build-isolation -e ".[CORE,OPTIONAL,DEV]"
+RUN pip install --no-cache-dir --no-build-isolation -e ".[CORE,OPTIONAL,HUGGINGFACE,SSM,DEV]"
 
 # Copy the remaining source code with universal write permissions.
 COPY --chmod=777 ./Megatron-LM Megatron-LM

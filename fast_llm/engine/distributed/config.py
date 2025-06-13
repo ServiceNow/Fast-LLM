@@ -284,9 +284,8 @@ class DistributedConfig(Config):
         self.batch_data_rank = self.data_rank // self.sequence_data_parallel
 
         self.tensor_rank = self.rank % self.tensor_parallel
-        if self.tensor_parallel == 1:
-            with self._set_implicit_default():
-                self.sequence_tensor_parallel = False
+        if self.tensor_parallel == 1 and self.sequence_tensor_parallel:
+            self.sequence_tensor_parallel = False
 
         if self.reference_config is not None:
             self.reference_config.validate()

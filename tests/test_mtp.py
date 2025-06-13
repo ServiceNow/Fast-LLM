@@ -9,6 +9,7 @@ from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.layers.language_model.config import LanguageModelKwargs, LanguageModelLossNames
 from fast_llm.layers.language_model.embedding import WORD_EMBEDDINGS_WEIGHT
 from fast_llm.layers.language_model.head import OUTPUT_WEIGHTS, LanguageModelHead
+from fast_llm.layers.ssm.config import SSMBlockType
 from fast_llm.layers.transformer.config import TransformerKwargs
 from fast_llm.layers.transformer.transformer import TransformerLayer
 from fast_llm.models.gpt.config import GPTBaseModelConfig
@@ -20,7 +21,7 @@ try:
     from fast_llm.layers.ssm.discrete_mamba2 import DiscreteMamba2
     from fast_llm.layers.ssm.mamba_layer import MambaLayer
     from fast_llm.models.ssm.model import HybridSSMBaseModel
-except ImportError:
+except Exception:
     MambaLayer, HybridSSMBaseModel, DiscreteMamba2 = (
         None,
         None,
@@ -135,11 +136,11 @@ def test_transformer_mtp(config_dict: dict[str, typing.Any]):
 @pytest.mark.parametrize(
     ("hybrid_block_layout", "prediction_heads", "default_mtp_type"),
     [
-        (["m", "t"], 1, None),
-        (["t", "m"], 2, None),
-        (["m", "t"], 2, None),
-        (["t", "m2"], 3, None),
-        (["t", "m2"], 3, "m"),
+        ([SSMBlockType.mamba.value, SSMBlockType.transformer.value], 1, None),
+        ([SSMBlockType.transformer.value, SSMBlockType.mamba.value], 2, None),
+        ([SSMBlockType.mamba.value, SSMBlockType.transformer.value], 2, None),
+        ([SSMBlockType.transformer.value, SSMBlockType.mamba2_discrete.value], 3, None),
+        ([SSMBlockType.transformer.value, SSMBlockType.mamba2_discrete.value], 3, SSMBlockType.mamba.value),
     ],
 )
 def test_hybrid_model_mtp(distributed_config, hybrid_block_layout, prediction_heads, default_mtp_type):
@@ -154,7 +155,11 @@ def test_hybrid_model_mtp(distributed_config, hybrid_block_layout, prediction_he
     model.to("cuda")
 
     num_heads, num_mtp_blocks = 0, 0
-    str_block_mapping = {"t": TransformerLayer, "m": MambaLayer, "m2": DiscreteMamba2}
+    str_block_mapping = {
+        SSMBlockType.transformer: TransformerLayer,
+        SSMBlockType.mamba: MambaLayer,
+        SSMBlockType.mamba2_discrete: DiscreteMamba2,
+    }
     mtp_block_type = default_mtp_type or hybrid_block_layout[-1]
     for block in model.get_output_layers():
         if isinstance(block, LanguageModelHead):

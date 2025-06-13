@@ -1,17 +1,36 @@
+import logging
 import math
 
-import causal_conv1d
 import einops
-import mamba_ssm.ops.triton.ssd_combined
 import torch
 
 from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
 from fast_llm.layers.common.linear import Linear
 from fast_llm.layers.ssm.config import SSMConfig, SSMDimNames
 from fast_llm.tensor import ParameterMeta, init_ones_, init_uniform_, init_zeros_, kaiming_init_
+from fast_llm.utils import get_lr_scale
+
+logger = logging.getLogger(__name__)
+
+
+try:
+    from mamba_ssm.ops.triton.ssd_combined import mamba_chunk_scan_combined as _mamba_chunk_scan_combined  # noqa
+
+    _mamba_available = True
+except ImportError:
+    _mamba_available = False
+
+
+try:
+    from causal_conv1d import causal_conv1d_fn as _causal_conv1d_fn  # noqa
+
+    _causal_conv1d_available = True
+except ImportError:
+    _causal_conv1d_available = False
+
 
 """
-This code is adapted fropm https://github.com/cartesia-ai/edge/blob/main/cartesia-pytorch/cartesia_pytorch/Llamba/mixers/discrete_mamba2.py
+This code is adapted from https://github.com/cartesia-ai/edge/blob/main/cartesia-pytorch/cartesia_pytorch/Llamba/mixers/discrete_mamba2.py
 """
 
 
@@ -44,6 +63,9 @@ class DiscreteMamba2(torch.nn.Module):
         bias = config.add_bias_linear
         self.layer_idx = layer_idx
         self._return_input = return_input
+        layer_lr_scale = config.per_layer_lr_scale[layer_idx] if config.per_layer_lr_scale else None
+        mamba_layer_lr_scale = get_lr_scale(self.config.mamba_lr_scale, layer_lr_scale)
+        logger.info(f"Setting lr_scale for layer {layer_idx} of type {type(self)}: {mamba_layer_lr_scale}")
 
         td_inner = tensor_space.get_tensor_dim(SSMDimNames.inner_dim)
         td_state = tensor_space.get_tensor_dim(SSMDimNames.state_dim)
@@ -65,33 +87,43 @@ class DiscreteMamba2(torch.nn.Module):
         self.act = config.activation_type.activation_fn
         self.activation_name = config.activation_type.name
 
-        # TODO: double check innitializations
+        # TODO: double check initializations
         # Projections
-        self.in_proj = Linear(td_model, td_inner_proj, bias=bias, weight_init_method=kaiming_init_(td_model.size))
+        self.in_proj = Linear(
+            td_model,
+            td_inner_proj,
+            bias=bias,
+            weight_init_method=kaiming_init_(td_model.size),
+            lr_scale=mamba_layer_lr_scale,
+        )
         self.z_bias = (
             ParameterMeta.from_dims(
                 (td_inner,),
                 weight_decay=False,
                 init_method=init_zeros_,
+                lr_scale=mamba_layer_lr_scale,
             )
             if not bias
             else 0.0
         )
 
-        # Convolutional layer
         self.conv1d_weight = ParameterMeta.from_dims(
             (td_conv, TensorDim("1", 1), td_conv_kernel),
             init_method=init_uniform_(
                 1 / math.sqrt(td_conv.size * td_conv_kernel.size), 1 / math.sqrt(td_conv.size * td_conv_kernel.size)
             ),  # see https://github.com/pytorch/pytorch/blob/1eba9b3aa3c43f86f4a2c807ac8e12c4a7767340/torch/nn/modules/conv.py#L180C53-L180C67
+            lr_scale=mamba_layer_lr_scale,
         )
-        self.conv1d_bias = ParameterMeta.from_dims((td_conv,), init_method=bias_init_method(self.conv1d_weight))
+        self.conv1d_bias = ParameterMeta.from_dims(
+            (td_conv,), init_method=bias_init_method(self.conv1d_weight), lr_scale=mamba_layer_lr_scale
+        )
 
         # D "skip" parameter
         self.D = ParameterMeta.from_dims(
             (td_n_qk_heads,),
             weight_decay=False,
             init_method=init_ones_,
+            lr_scale=mamba_layer_lr_scale,
         )
 
         # out_proj
@@ -100,6 +132,7 @@ class DiscreteMamba2(torch.nn.Module):
             td_model,
             bias=bias,
             weight_init_method=kaiming_init_(td_inner.size),
+            lr_scale=mamba_layer_lr_scale,
         )
 
     @property
@@ -124,6 +157,8 @@ class DiscreteMamba2(torch.nn.Module):
             outputs["hidden_states"]: (B, L, D).
             outputs["state"]: inference cache.
         """
+
+        assert _mamba_available
         input_ = hidden_states
         outputs = {}
         # assert state is None
@@ -177,7 +212,7 @@ class DiscreteMamba2(torch.nn.Module):
         C = einops.rearrange(C, "b l (h n) -> b l h n", h=self.n_qk_heads)
 
         # SSM forward
-        result = mamba_ssm.ops.triton.ssd_combined.mamba_chunk_scan_combined(
+        result = _mamba_chunk_scan_combined(
             x=x / torch.nn.functional.softplus(A_log).to(x.dtype).unsqueeze(-1),
             dt=A_log,
             dt_softplus=True,
@@ -210,10 +245,25 @@ class DiscreteMamba2(torch.nn.Module):
 
     def convolutional_forward(self, xBC, padded_len):
         """Convolutional layer forward pass for the full sequence."""
-        xBC = causal_conv1d.causal_conv1d_fn(
-            xBC.transpose(1, 2),
-            einops.rearrange(self.conv1d_weight, "d 1 w -> d w"),
-            self.conv1d_bias,
-            activation=None if self.activation_name == "identity" else self.activation_name,
-        ).transpose(1, 2)
+        if _causal_conv1d_available and self.activation_name in (
+            "silu",
+            "swish",
+            "identity",
+        ):
+            xBC = _causal_conv1d_fn(
+                xBC.transpose(1, 2),
+                einops.rearrange(self.conv1d_weight, "d 1 w -> d w"),
+                self.conv1d_bias,
+                activation=None if self.activation_name == "identity" else self.activation_name,
+            ).transpose(1, 2)
+        else:
+            xBC = self.act(
+                torch.nn.functional.conv1d(
+                    xBC.transpose(1, 2),
+                    self.conv1d_weight,
+                    bias=self.conv1d_bias,
+                    groups=self.conv1d_weight.shape[0],
+                    padding=self.conv_kernel_size - 1,
+                )[..., :padded_len].transpose(1, 2)
+            )
         return xBC

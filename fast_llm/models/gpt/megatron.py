@@ -1,6 +1,7 @@
 import typing
 
 from fast_llm.layers.transformer.config import TransformerConfig
+from fast_llm.layers.transformer.rotary.config import DefaultRotaryConfig
 from fast_llm.utils import Assert, div
 
 if typing.TYPE_CHECKING:
@@ -92,8 +93,8 @@ def _init_attention_megatron(
         else:
             raise NotImplementedError(meta.tensor_name)
 
-    if config.rotary.enabled and config.rotary.complex_format:
-        from fast_llm.functional.rotary import convert_rotary_real_to_complex
+    if isinstance(config.rotary, DefaultRotaryConfig) and config.rotary.complex_format:
+        from fast_llm.layers.transformer.rotary.config import convert_rotary_real_to_complex
 
         # Megatron uses (2, kv_channels/2) for the complex split; we use (kv_channels/2, 2).
         # TODO: Avoid unnecessarily changing the value and dense tensors.
