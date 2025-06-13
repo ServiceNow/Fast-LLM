@@ -14,7 +14,7 @@ try:
     from mamba_ssm.ops.selective_scan_interface import mamba_inner_fn as _mamba_inner_fn  # noqa
 
     _mamba_available = True
-except ImportError:
+except (ImportError, RuntimeError):
     _mamba_available = False
 
 """
