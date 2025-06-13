@@ -696,13 +696,22 @@ class AprielThinkerSSMHHybridHuggingfaceCheckpointHandler(
     HybridModelCheckpointHandler,  # handles the block structure parameter
     CommonSSMHuggingfaceCheckpointHandler,  # handles the SSM layers
     CommonLlamaHuggingfaceCheckpointHandler,  # handles the LLama layers
+    CustomModelingExportMixin,  # handles the custom modeling export
 ):
     """
     Lamba-like configs, models that interleave LLama like layers with LLamba-like SSM layers.
     """
 
+    from fast_llm.models.ssm.external.apriel_15b_hybrid import (
+        configuration_ssm_hybrid_apriel15b,
+        modeling_ssm_hybrid_apriel15b,
+    )
+
     _model: HybridSSMModel
     _model_class: typing.ClassVar[FastLLMModelConfig] = HybridSSMModelConfig
+    modeling_file = modeling_ssm_hybrid_apriel15b.__file__
+    configuration_file = configuration_ssm_hybrid_apriel15b.__file__
+    configuration_cls: typing.ClassVar[FastLLMModelConfig] = configuration_ssm_hybrid_apriel15b.AprielSSMHybridConfig
     format: typing.ClassVar[type[CheckpointFormat]] = AprielThinkerSSMHHybridHuggingfaceCheckpointFormat
     _default_block_type: str = SSMBlockType.mamba2_discrete.value
     _hf_prefix: str = "model"
