@@ -13,7 +13,14 @@ import fast_llm.logging
 from tests.utils.depends import DependencyManager
 
 # Make fixtures available globally without import
-from tests.utils.run_test_script import run_test_script  # isort: skip
+from tests.utils.run_test_script import (  # isort: skip
+    run_test_script,
+    run_test_script_base_path,
+    run_test_script_for_all_models,
+)
+
+from tests.utils.model_configs import model_testing_config, ModelTestingConfig, testing_group_enabled  # isort: skip
+from tests.utils.utils import result_path  # isort: skip
 
 
 manager: DependencyManager | None = None
@@ -24,6 +31,7 @@ def pytest_addoption(parser):
     group.addoption("--skip-slow", action="store_true")
     group.addoption("--show-skipped", action="store_true")
     group.addoption("--show-gpu-memory", type=int, default=10)
+    group.addoption("--models", nargs="*")
     group.addoption(
         "--run-extra-slow",
         action="store_true",
@@ -136,6 +144,8 @@ def pytest_collection_modifyitems(config, items: list[pytest.Function]):
                 item.add_marker(pytest.mark.skip(reason="Skipping extra-slow tests"))
             else:
                 continue
+        elif not testing_group_enabled(item, skip_slow, skip_extra_slow, show_skipped):
+            continue
         new_items.append(item)
 
     manager = DependencyManager(new_items)
