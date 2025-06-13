@@ -13,8 +13,7 @@ def test_megatron(run_test_script_for_all_models, model_testing_config):
 @pytest.mark.depends_on(on=["test_megatron[{model_testing_config}]"])
 @pytest.mark.model_testing_group(ModelTestingGroup.megatron)
 def test_match_megatron(run_test_script_for_all_models, model_testing_config):
-    if model_testing_config.megatron_args is None:
-        pytest.skip(f"Megatron does not support model {model_testing_config.name}")
+    assert model_testing_config.megatron_args is not None
 
     ignore_tensors = [
         ".self_attn.query_key_value.",

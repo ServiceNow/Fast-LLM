@@ -43,9 +43,6 @@ class ModelTestingGroupAction(enum.StrEnum):
     not_implemented = "not_implemented"
 
 
-SLOW_TESTING_GROUPS = {ModelTestingGroup.megatron, ModelTestingGroup.distributed}
-
-
 @dataclasses.dataclass(kw_only=True, frozen=True)
 class ModelTestingConfig:
     name: str = None
