@@ -41,13 +41,5 @@ def test_match_megatron(run_test_script):
             "model.base_model.use_megatron_initialization=True",
         ],
         compare=f"test_{TEST_MODEL}_megatron",
-        config=CompareConfig(
-            ignore_tensors=[
-                ".self_attn.query_key_value.",
-                ".self_attn.query.",
-                ".self_attn.key_value.",
-                ".self_attn.dense.",
-                ".mlp.layer_2.weight",
-            ]
-        ),
+        config=CompareConfig(ignore_tensors=ignore_tensors),
     )
