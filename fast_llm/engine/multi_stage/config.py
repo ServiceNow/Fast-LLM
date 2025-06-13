@@ -215,17 +215,12 @@ class FastLLMModelConfig(Config):
         DistributedCheckpointFormat,
         FastLLMCheckpointFormat,
     )
-    model_name: typing.ClassVar[str]
     base_model: BaseModelConfig = Field(desc="Configuration for the base model.", hint=FieldHint.core)
     multi_stage: MultiStageConfig = Field(
         desc="Configuration for the stage breakdown of the model.",
         hint=FieldHint.core,
     )
     distributed: DistributedConfig = Field(desc="Distributed configuration.", hint=FieldHint.core)
-
-    @classmethod
-    def __fast_llm_serialize__(cls) -> str:
-        return cls.model_name
 
     @classmethod
     def get_checkpoint_format(cls, format: type[CheckpointFormat] | str) -> type[CheckpointFormat]:
@@ -236,7 +231,7 @@ class FastLLMModelConfig(Config):
         for format_ in cls.checkpoint_formats:
             if format_.name == format:
                 return format_
-        raise ValueError(f"Checkpoint format {format} not supported for model {cls.model_name}")
+        raise ValueError(f"Checkpoint format {format} not supported for model {cls.dynamic_type_name}")
 
     @classmethod
     def get_checkpoint_handler_class(cls, format: type[CheckpointFormat] | str) -> type[CheckpointHandler]:

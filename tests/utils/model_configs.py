@@ -7,7 +7,7 @@ import typing
 import pytest
 
 from fast_llm.engine.checkpoint.config import CheckpointFormat
-from fast_llm.models.auto import model_registry
+from fast_llm.engine.multi_stage.config import FastLLMModelConfig
 from fast_llm.models.gpt.config import (
     LlamaGPTHuggingfaceCheckpointFormat,
     MistralGPTHuggingfaceCheckpointFormat,
@@ -30,6 +30,19 @@ class ModelTestingGroup(enum.StrEnum):
     generate = "generate"
 
 
+class ModelTestingGroupAction(enum.StrEnum):
+    # Critical test, will always run.
+    main = "main"
+    # Standard test, treated as slow
+    normal = "normal"
+    # Feature is not important enough for frequent testing (ex. mostly redundant), treated as extra-slow.
+    unimportant = "unimportant"
+    # Test is known to fail, treated as extra-slow.
+    broken = "broken"
+    # Tested feature is unsupported for this model, skip unconditionally.
+    not_implemented = "not_implemented"
+
+
 SLOW_TESTING_GROUPS = {ModelTestingGroup.megatron, ModelTestingGroup.distributed}
 
 
@@ -40,15 +53,12 @@ class ModelTestingConfig:
     config_args: list[str]
     megatron_args: list[str] | None
     checkpoint_format: CheckpointFormat | None
-    # The important groups we want to test.
-    testing_groups: list[ModelTestingGroup]
-    # Other supported groups, excluded by default because they are mostly unimportant and/or redundant.
-    # They can be run with `--run-extra-slow`.
-    other_groups: list[ModelTestingGroup]
+    groups: dict[ModelTestingGroup, ModelTestingGroupAction]
 
     @functools.cached_property
     def model_config_class(self):
-        return model_registry[self.model_type]
+        # TODO: Ok to assume the model and trainer have the same name?
+        return FastLLMModelConfig.get_subclass(self.model_type)
 
     @functools.cached_property
     def huggingface_model_for_causal_lm_class(self):
@@ -71,14 +81,12 @@ def _update_and_add_testing_config(
     extra_args: list[str] | None = None,
     megatron_args: list[str] | None = ...,
     checkpoint_format: CheckpointFormat | None = ...,
-    testing_groups: list[ModelTestingGroup],
-    other_groups: list[ModelTestingGroup],
+    groups: dict[ModelTestingGroup, ModelTestingGroupAction],
 ):
     config = _MODEL_CONFIGS[old_name]
     updates: dict[str, typing.Any] = {
         "name": new_name,
-        "testing_groups": testing_groups,
-        "other_groups": other_groups,
+        "groups": groups,
     }
     if model_type is not None:
         updates["model_type"] = model_type
@@ -177,12 +185,13 @@ _MODEL_CONFIGS["gpt2"] = ModelTestingConfig(
         "--transformer-impl=transformer_engine",
     ],
     checkpoint_format=None,
-    testing_groups=[
-        ModelTestingGroup.basic,
-        ModelTestingGroup.megatron,
-        ModelTestingGroup.distributed,
-    ],
-    other_groups=[],
+    groups={
+        ModelTestingGroup.basic: ModelTestingGroupAction.main,
+        ModelTestingGroup.convert: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.generate: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.megatron: ModelTestingGroupAction.normal,
+        ModelTestingGroup.distributed: ModelTestingGroupAction.normal,
+    },
 )
 
 _update_and_add_testing_config(
@@ -192,13 +201,13 @@ _update_and_add_testing_config(
     extra_args=["model.base_model.transformer.head_groups=1"],
     megatron_args=["--group-query-attention"],
     checkpoint_format=None,
-    testing_groups=[
-        ModelTestingGroup.basic,
-    ],
-    other_groups=[
-        ModelTestingGroup.megatron,
-        ModelTestingGroup.distributed,
-    ],
+    groups={
+        ModelTestingGroup.basic: ModelTestingGroupAction.normal,
+        ModelTestingGroup.convert: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.generate: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.megatron: ModelTestingGroupAction.unimportant,
+        ModelTestingGroup.distributed: ModelTestingGroupAction.unimportant,
+    },
 )
 
 _update_and_add_testing_config(
@@ -218,16 +227,14 @@ _update_and_add_testing_config(
         "--no-position-embedding",
     ],
     checkpoint_format=Starcoder2GPTHuggingfaceCheckpointFormat,
-    testing_groups=[
-        ModelTestingGroup.basic,
-        ModelTestingGroup.convert,
-    ],
-    # TODO: Bring back `generate` to `testing_groups` when stable.
-    other_groups=[
-        ModelTestingGroup.megatron,
-        ModelTestingGroup.distributed,
-        ModelTestingGroup.generate,
-    ],
+    # TODO: Add back generate as `normal` when stable.
+    groups={
+        ModelTestingGroup.basic: ModelTestingGroupAction.normal,
+        ModelTestingGroup.convert: ModelTestingGroupAction.normal,
+        ModelTestingGroup.generate: ModelTestingGroupAction.broken,
+        ModelTestingGroup.megatron: ModelTestingGroupAction.unimportant,
+        ModelTestingGroup.distributed: ModelTestingGroupAction.unimportant,
+    },
 )
 
 _update_and_add_testing_config(
@@ -250,16 +257,14 @@ _update_and_add_testing_config(
         "--untie-embeddings-and-output-weights",
     ],
     checkpoint_format=LlamaGPTHuggingfaceCheckpointFormat,
-    testing_groups=[
-        ModelTestingGroup.basic,
-        ModelTestingGroup.megatron,
-        ModelTestingGroup.distributed,
-        ModelTestingGroup.convert,
-    ],
-    # TODO: Bring back `generate` to `testing_groups` when stable.
-    other_groups=[
-        ModelTestingGroup.generate,
-    ],
+    # TODO: Add back generate as `normal` when stable.
+    groups={
+        ModelTestingGroup.basic: ModelTestingGroupAction.main,
+        ModelTestingGroup.convert: ModelTestingGroupAction.main,
+        ModelTestingGroup.generate: ModelTestingGroupAction.broken,
+        ModelTestingGroup.megatron: ModelTestingGroupAction.normal,
+        ModelTestingGroup.distributed: ModelTestingGroupAction.normal,
+    },
 )
 
 _update_and_add_testing_config(
@@ -270,15 +275,13 @@ _update_and_add_testing_config(
     # Megatron doesn't support Llama3-style Rotary Embeddings
     megatron_args=None,
     checkpoint_format=LlamaGPTHuggingfaceCheckpointFormat,
-    testing_groups=[
-        ModelTestingGroup.basic,
-    ],
-    # TODO: Bring back `generate` to `testing_groups` when stable.
-    other_groups=[
-        ModelTestingGroup.distributed,
-        ModelTestingGroup.convert,
-        ModelTestingGroup.generate,
-    ],
+    groups={
+        ModelTestingGroup.basic: ModelTestingGroupAction.normal,
+        ModelTestingGroup.convert: ModelTestingGroupAction.unimportant,
+        ModelTestingGroup.generate: ModelTestingGroupAction.unimportant,
+        ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.distributed: ModelTestingGroupAction.unimportant,
+    },
 )
 
 _update_and_add_testing_config(
@@ -289,15 +292,13 @@ _update_and_add_testing_config(
     # Megatron doesn't support Yarn-style Rotary Embeddings
     megatron_args=None,
     checkpoint_format=LlamaGPTHuggingfaceCheckpointFormat,
-    testing_groups=[
-        ModelTestingGroup.basic,
-    ],
-    # TODO: Bring back `generate` to `testing_groups` when stable.
-    other_groups=[
-        ModelTestingGroup.distributed,
-        ModelTestingGroup.convert,
-        ModelTestingGroup.generate,
-    ],
+    groups={
+        ModelTestingGroup.basic: ModelTestingGroupAction.normal,
+        ModelTestingGroup.convert: ModelTestingGroupAction.unimportant,
+        ModelTestingGroup.generate: ModelTestingGroupAction.unimportant,
+        ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.distributed: ModelTestingGroupAction.unimportant,
+    },
 )
 
 _update_and_add_testing_config(
@@ -308,15 +309,14 @@ _update_and_add_testing_config(
     # Megatron doesn't support multi-token prediction.
     megatron_args=None,
     checkpoint_format=MTPLlamaGPTHuggingfaceCheckpointFormat,
-    testing_groups=[
-        ModelTestingGroup.basic,
-        ModelTestingGroup.convert,
-    ],
-    # TODO: Bring back `generate` to `testing_groups` when stable.
-    other_groups=[
-        ModelTestingGroup.distributed,
-        ModelTestingGroup.generate,
-    ],
+    # TODO: Add back generate as `normal` when stable.
+    groups={
+        ModelTestingGroup.basic: ModelTestingGroupAction.normal,
+        ModelTestingGroup.convert: ModelTestingGroupAction.normal,
+        ModelTestingGroup.generate: ModelTestingGroupAction.broken,
+        ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.distributed: ModelTestingGroupAction.unimportant,
+    },
 )
 
 _update_and_add_testing_config(
@@ -327,15 +327,14 @@ _update_and_add_testing_config(
     # Megatron doesn't support per sub layer biases
     megatron_args=None,
     checkpoint_format=Qwen2GPTHuggingfaceCheckpointFormat,
-    testing_groups=[
-        ModelTestingGroup.basic,
-        ModelTestingGroup.convert,
-    ],
-    # TODO: Bring back `generate` to `testing_groups` when stable.
-    other_groups=[
-        ModelTestingGroup.distributed,
-        ModelTestingGroup.generate,
-    ],
+    # TODO: Add back generate as `normal` when stable.
+    groups={
+        ModelTestingGroup.basic: ModelTestingGroupAction.normal,
+        ModelTestingGroup.convert: ModelTestingGroupAction.normal,
+        ModelTestingGroup.generate: ModelTestingGroupAction.broken,
+        ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.distributed: ModelTestingGroupAction.unimportant,
+    },
 )
 
 _update_and_add_testing_config(
@@ -346,15 +345,14 @@ _update_and_add_testing_config(
     # Megatron doesn't support sliding windows.
     megatron_args=None,
     checkpoint_format=MistralGPTHuggingfaceCheckpointFormat,
-    testing_groups=[
-        ModelTestingGroup.basic,
-        ModelTestingGroup.convert,
-    ],
-    # TODO: Bring back `generate` to `testing_groups` when stable.
-    other_groups=[
-        ModelTestingGroup.distributed,
-        ModelTestingGroup.generate,
-    ],
+    # TODO: Add back generate as `normal` when stable.
+    groups={
+        ModelTestingGroup.basic: ModelTestingGroupAction.normal,
+        ModelTestingGroup.convert: ModelTestingGroupAction.normal,
+        ModelTestingGroup.generate: ModelTestingGroupAction.broken,
+        ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.distributed: ModelTestingGroupAction.unimportant,
+    },
 )
 
 _update_and_add_testing_config(
@@ -370,16 +368,14 @@ _update_and_add_testing_config(
         "--moe-router-topk=4",
     ],
     checkpoint_format=MixtralGPTHuggingfaceCheckpointFormat,
-    testing_groups=[],
     # TODO: New base image broke mixtral
-    # TODO: Bring back `generate` to `testing_groups` when stable.
-    other_groups=[
-        ModelTestingGroup.basic,
-        ModelTestingGroup.megatron,
-        ModelTestingGroup.distributed,
-        ModelTestingGroup.convert,
-        ModelTestingGroup.generate,
-    ],
+    groups={
+        ModelTestingGroup.basic: ModelTestingGroupAction.broken,
+        ModelTestingGroup.convert: ModelTestingGroupAction.broken,
+        ModelTestingGroup.generate: ModelTestingGroupAction.broken,
+        ModelTestingGroup.megatron: ModelTestingGroupAction.broken,
+        ModelTestingGroup.distributed: ModelTestingGroupAction.broken,
+    },
 )
 
 _update_and_add_testing_config(
@@ -396,16 +392,16 @@ _update_and_add_testing_config(
     ],
     megatron_args=None,
     checkpoint_format=LLambaHuggingfaceCheckpointFormat,
-    testing_groups=[
-        ModelTestingGroup.basic,
-    ],
-    # TODO: Bring back `generate` to `testing_groups` when stable.
-    other_groups=[
-        # TODO: Fix and bring these back to `testing_groups`
-        ModelTestingGroup.distributed,
-        ModelTestingGroup.convert,
-        ModelTestingGroup.generate,
-    ],
+    # TODO: Add back generate as `normal` when stable.
+    groups={
+        ModelTestingGroup.basic: ModelTestingGroupAction.normal,
+        ModelTestingGroup.convert: ModelTestingGroupAction.broken,
+        # TODO: Fix and bring back to `testing_groups`
+        ModelTestingGroup.generate: ModelTestingGroupAction.broken,
+        ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
+        # TODO: Fix and bring back to `testing_groups`
+        ModelTestingGroup.distributed: ModelTestingGroupAction.broken,
+    },
 )
 
 
@@ -419,14 +415,13 @@ _update_and_add_testing_config(
     ],
     megatron_args=None,
     checkpoint_format=None,
-    testing_groups=[
-        ModelTestingGroup.basic,
-    ],
-    # TODO: Bring back `generate` to `testing_groups` when stable.
-    other_groups=[
-        # TODO: Fix and bring back to `testing_groups`
-        ModelTestingGroup.distributed,
-    ],
+    groups={
+        ModelTestingGroup.basic: ModelTestingGroupAction.normal,
+        ModelTestingGroup.convert: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.generate: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.distributed: ModelTestingGroupAction.unimportant,
+    },
 )
 
 
@@ -440,12 +435,17 @@ def testing_group_enabled(item: pytest.Function, skip_slow: bool, skip_extra_slo
         assert "model_testing_config" in item.callspec.params, item.nodeid
         groups: tuple[ModelTestingGroup] = item.keywords["model_testing_group"].args
         model_testing_config = item.callspec.params["model_testing_config"]
-        model_config = _MODEL_CONFIGS[model_testing_config]
+        model_config: ModelTestingConfig = _MODEL_CONFIGS[model_testing_config]
         for group in groups:
-            if group in model_config.testing_groups and not (skip_slow and group in SLOW_TESTING_GROUPS):
-                pass
-            elif group in model_config.other_groups and not skip_extra_slow:
-                pass
+            action = model_config.groups[group]
+            if action == ModelTestingGroupAction.main:
+                return True
+            elif action == ModelTestingGroupAction.normal and not skip_slow:
+                return True
+            elif (
+                action in (ModelTestingGroupAction.broken, ModelTestingGroupAction.unimportant) and not skip_extra_slow
+            ):
+                return True
             elif show_skipped:
                 item.add_marker(
                     pytest.mark.skip(reason=f"Skipping testing group {group} for model {model_testing_config}.")
