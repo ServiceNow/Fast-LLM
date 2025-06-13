@@ -1,5 +1,6 @@
 import logging
 import math
+import os
 
 import einops
 import torch
@@ -12,6 +13,7 @@ from fast_llm.utils import get_lr_scale
 
 logger = logging.getLogger(__name__)
 
+use_causal_conv1d = os.environ.get("USE_CAUSAL_CONV1D", "1") == "1"
 
 try:
     from mamba_ssm.ops.triton.ssd_combined import mamba_chunk_scan_combined as _mamba_chunk_scan_combined  # noqa
@@ -20,13 +22,15 @@ try:
 except ImportError:
     _mamba_available = False
 
-
-try:
-    from causal_conv1d import causal_conv1d_fn as _causal_conv1d_fn  # noqa
-
-    _causal_conv1d_available = True
-except ImportError:
+if not use_causal_conv1d:
     _causal_conv1d_available = False
+else:
+    try:
+        from causal_conv1d import causal_conv1d_fn as _causal_conv1d_fn  # noqa
+
+        _causal_conv1d_available = True
+    except ImportError:
+        _causal_conv1d_available = False
 
 
 """
