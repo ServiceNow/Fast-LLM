@@ -21,7 +21,7 @@ from fast_llm.layers.transformer.config import TransformerKwargs
 from fast_llm.models.gpt.config import GPTBatchConfig, LlamaGPTHuggingfaceCheckpointFormat
 from fast_llm.models.ssm.config import AprielSSMHHybridHuggingfaceCheckpointFormat, LLambaHuggingfaceCheckpointFormat
 from fast_llm.models.ssm.model import HybridSSMBaseModel, HybridSSMModel
-from tests.common import get_hybrid_config, materialize_meta_tensors
+from tests.utils.utils import get_hybrid_config, materialize_meta_tensors
 
 try:
     from cartesia_pytorch.Llamba.llamba import LlambaLMHeadModel as LMHeadModel

@@ -31,14 +31,14 @@ class HybridSSMBaseModelConfig(LanguageModelBaseConfig):
         desc="Configuration for the transformer architecture.",
         hint=FieldHint.architecture,
     )
-    hybrid_block_layout: list[str] | None = Field(
+    hybrid_block_layout: list[SSMBlockType] | None = Field(
         default=None,
-        desc=f"Pattern of blocks to use in the model. Availabel types: {SSMBlockType.__members__.values()}",
+        desc=f"Pattern of blocks to use in the model. Available types: {SSMBlockType.__members__.values()}",
         hint=FieldHint.core,
     )
-    default_mtp_type: str | None = Field(
+    default_mtp_type: SSMBlockType | None = Field(
         default=None,
-        desc="Multi-token prediction mixer to use in the model. 't' for Transformer, 'm' for Mamba1, 'm2' for discrete Mamba2. If None, will use the last block type in `hybrid_block_layout`.",
+        desc="Multi-token prediction mixer to use in the model. If None, will use the last block type in `hybrid_block_layout`.",
         hint=FieldHint.optional,
     )
     use_megatron_initialization: bool = Field(
@@ -169,7 +169,7 @@ class AprielThinkerSSMHHybridHuggingfaceCheckpointFormat(CheckpointFormat):
         return AprielThinkerSSMHHybridHuggingfaceCheckpointHandler
 
 
-@config_class()
+@config_class(dynamic_type={FastLLMModelConfig: "hybrid_ssm"})
 class HybridSSMModelConfig(FastLLMModelConfig):
     _abstract = False
     model_name: typing.ClassVar[str] = "hybrid_ssm"

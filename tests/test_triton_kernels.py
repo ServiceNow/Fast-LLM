@@ -30,7 +30,7 @@ from fast_llm.layers.transformer.rotary.rotary import (
     convert_rotary_real_to_complex,
 )
 from fast_llm.utils import Assert, rms_diff
-from tests.common import requires_cuda
+from tests.utils.utils import requires_cuda
 
 
 @requires_cuda

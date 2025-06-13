@@ -3,7 +3,8 @@ from fast_llm.engine.training.config import TrainerConfig
 from fast_llm.engine.training.trainer import Trainer
 from fast_llm.layers.transformer.transformer import TransformerLayer
 from fast_llm.utils import Assert
-from tests.common import CONFIG_COMMON, requires_cuda
+from tests.utils.model_configs import CONFIG_COMMON
+from tests.utils.utils import requires_cuda
 
 
 def _get_trainer_from_args(args: list[str], model_type: str = "gpt") -> Trainer:

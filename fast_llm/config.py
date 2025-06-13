@@ -490,7 +490,7 @@ class Config(metaclass=ConfigMeta):
             elif issubclass(origin, dict):
                 value = cls._validate_dict(value, type_, name)
             elif origin is type:
-                cls._validate_type(value, type_, name)
+                value = cls._validate_type(value, type_, name)
             else:
                 raise FieldTypeError(f"Unsupported __origin__ `{origin}`")
         elif not isinstance(type_, type):
@@ -585,10 +585,13 @@ class Config(metaclass=ConfigMeta):
         args = list(getattr(type_, "__args__", []))
         if len(args) != 1:
             raise FieldTypeError(f"Invalid type specification `{get_type_name(type_)}` for field `{name}`")
+        if issubclass(args[0], Config) and isinstance(value, str):
+            value = args[0].get_subclass(value)
         if not isinstance(value, type):
             raise ValidationError(f"Unexpected type `{get_type_name(type(value))}`")
         if not issubclass(value, args[0]):
             raise ValidationError(f"Field value `{value} is not a subclass of `{get_type_name(type_)}`")
+        return value
 
     @classmethod
     def _validate_element_type(cls, value, type_: type | tuple[type, ...], strict: bool = True):
@@ -946,6 +949,13 @@ class Config(metaclass=ConfigMeta):
         if cls_ is None:
             raise KeyError(f"Unknown type {name} for base class {cls.__name__}")
         return cls_
+
+    @classmethod
+    def __fast_llm_serialize__(cls) -> str:
+        # Used to serialize config type fields, which only makes sense for dynamic types.
+        # Deserialization implemented in _validate_type.
+        assert cls.dynamic_type_name is not None
+        return cls.dynamic_type_name
 
     def __init_subclass__(cls):
         """

@@ -323,16 +323,19 @@ def log_generator[
     return log(f"{name} {tensor.view(dtype=torch.int64)[-8:].tolist()}", log_fn=log_fn)
 
 
+_global_max_allocated = 0
 _global_max_reserved = 0
 
 
 def get_memory_usage_mib(reset_stats: bool = True, relative_to: dict[str, int] | None = None) -> dict[str, float]:
-    global _global_max_reserved
+    global _global_max_allocated, _global_max_reserved
+    max_allocated = torch.cuda.memory_allocated() / 2**20
     max_reserved = torch.cuda.max_memory_reserved() / 2**20
+    _global_max_allocated = max(max_allocated, _global_max_allocated)
     _global_max_reserved = max(max_reserved, _global_max_reserved)
     out = {
         "allocated": torch.cuda.memory_allocated() / 2**20,
-        "max_allocated": torch.cuda.max_memory_allocated() / 2**20,
+        "max_allocated": max_allocated,
         "reserved": torch.cuda.memory_reserved() / 2**20,
         "max_reserved": max_reserved,
         "global_max_reserved": _global_max_reserved,

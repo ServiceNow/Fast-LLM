@@ -17,7 +17,7 @@ try:
     from mamba_ssm.ops.triton.ssd_combined import mamba_chunk_scan_combined as _mamba_chunk_scan_combined  # noqa
 
     _mamba_available = True
-except ImportError:
+except (ImportError, RuntimeError):
     _mamba_available = False
 
 
@@ -25,7 +25,7 @@ try:
     from causal_conv1d import causal_conv1d_fn as _causal_conv1d_fn  # noqa
 
     _causal_conv1d_available = True
-except ImportError:
+except (ImportError, RuntimeError):
     _causal_conv1d_available = False
 
 

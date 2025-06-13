@@ -1,13 +1,13 @@
 from fast_llm.data.config import TokenizerConfig
 from fast_llm.data.dataset.gpt.config import GPTFimSampledDatasetConfig
 from fast_llm.data.tokenizer import Tokenizer
-from tests.common import DATASET_PREFIX, TOKENIZER_PATH, get_test_dataset
 from tests.data.common import (
     compare_sampled_dataset,
     get_dataset_config,
     get_sampling_data,
     get_test_data_and_compare_samples,
 )
+from tests.utils.dataset import DATASET_PREFIX, TOKENIZER_PATH, get_test_dataset
 
 GPT_FIM_SAMPLES = [
     [4709, 819, 79, 207, 277, 1790],

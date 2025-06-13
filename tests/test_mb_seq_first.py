@@ -1,7 +1,7 @@
 import pytest
 
-from tests.common import CONFIG_COMMON, TEST_MODEL
-from tests.compare_tensor_logs import CompareConfig
+from tests.utils.compare_tensor_logs import CompareConfig
+from tests.utils.model_configs import CONFIG_COMMON, TEST_MODEL
 
 CONFIG_DF_SF = CONFIG_COMMON + ["batch.depth_first_micro_batches=4", "model.base_model.sequence_first=True"]
 CONFIG_BF_SF = CONFIG_COMMON + ["batch.breadth_first_micro_batches=4", "model.base_model.sequence_first=True"]
@@ -19,7 +19,7 @@ def test_model_df4_sf(run_test_script):
 
 
 @pytest.mark.slow
-@pytest.mark.depends(on=["test_model_df4_sf"])
+@pytest.mark.depends_on(on=["test_model_df4_sf"])
 def test_model_dp2_sp2_df4(run_test_script):
     # Sequence-tensor-parallel with gradient accumulation.
     # TODO: Compiled cross-entropy broken for this config
@@ -38,7 +38,7 @@ def test_model_dp2_sp2_df4(run_test_script):
 
 @pytest.mark.slow
 @pytest.mark.skip(reason="Test is broken.")
-@pytest.mark.depends(on=["test_model_df4_sf"])
+@pytest.mark.depends_on(on=["test_model_df4_sf"])
 def test_model_dp2_sp2_pp2s1(run_test_script):
     # 3d-parallel with sequence-tensor-parallel.
     # TODO: Compiled cross-entropy broken for this config

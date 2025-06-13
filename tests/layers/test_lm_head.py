@@ -18,7 +18,7 @@ from fast_llm.layers.transformer.config import TransformerKwargs
 from fast_llm.models.gpt.config import GPTBaseModelConfig
 from fast_llm.models.gpt.model import GPTBaseModel
 from fast_llm.utils import Assert
-from tests.common import requires_cuda
+from tests.utils.utils import requires_cuda
 
 
 def _lm_head(

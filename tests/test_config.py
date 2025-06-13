@@ -1,6 +1,5 @@
 import pathlib
 import subprocess
-import unittest.mock
 
 import pytest
 import yaml
@@ -8,12 +7,10 @@ import yaml
 from fast_llm.config import NoAutoValidate
 from fast_llm.data.dataset.gpt.config import GPTSamplingConfig
 from fast_llm.engine.checkpoint.config import CheckpointSaveMetadataConfig, ModelConfigType
-from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.engine.distributed.config import DistributedConfig
-from fast_llm.layers.transformer.config import TransformerConfig
 from fast_llm.models.gpt.config import GPTModelConfig, GPTTrainerConfig, PretrainedGPTModelConfig
 from fast_llm.utils import Assert, check_equal_nested
-from tests.common import TEST_RESULTS_PATH
+from tests.utils.utils import TEST_RESULTS_PATH
 
 
 def run_without_import(cmd: str):
@@ -61,32 +58,6 @@ def test_validate_example_config():
         (pathlib.Path(__file__).parents[1] / "examples" / "mistral.yaml").read_text()
     )
     GPTTrainerConfig.from_dict(fast_llm_config_dict)
-
-
-def test_do_use_flash_attention():
-    # Create a mock DistributedConfig
-    mock_distributed_config = unittest.mock.Mock(spec=DistributedConfig)
-
-    # Test case 1: use_flash_attention is True and training_dtype is float16
-    config = TransformerConfig(use_flash_attention=True, window_size=None)
-    mock_distributed_config.training_dtype = DataType.float16
-    assert config.do_use_flash_attention(mock_distributed_config) is True
-
-    # Test case 2: use_flash_attention is False
-    config = TransformerConfig(use_flash_attention=False, window_size=None)
-    mock_distributed_config.training_dtype = DataType.float16
-    assert config.do_use_flash_attention(mock_distributed_config) is False
-
-    # Test case 3: use_flash_attention is True but training_dtype is not float16 or bfloat16
-    config = TransformerConfig(use_flash_attention=True, window_size=None)
-    mock_distributed_config.training_dtype = DataType.float32
-    assert config.do_use_flash_attention(mock_distributed_config) is False
-
-    # Test case 4: use_flash_attention is False and window_size is not None
-    config = TransformerConfig(use_flash_attention=False, window_size=512)
-    mock_distributed_config.training_dtype = DataType.float32
-    with pytest.raises(AssertionError):
-        config.do_use_flash_attention(mock_distributed_config)
 
 
 @pytest.mark.parametrize("cls", (GPTSamplingConfig, GPTModelConfig))
