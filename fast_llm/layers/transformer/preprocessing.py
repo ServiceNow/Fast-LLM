@@ -303,10 +303,10 @@ def _bidirectional_mask_mod(
     b: torch.Tensor, h: torch.Tensor, q_idx: torch.Tensor, kv_idx: torch.Tensor
 ) -> torch.Tensor:
     """Fully bidirectional mask (all tokens can attend to all others)."""
-    return True  # type: ignore
+    return torch.ones_like(q_idx, dtype=torch.bool, device=q_idx.device)
 
 
-def _varlen_to_abs_idx(cu_seq_lens: torch.Tensor | None, b: torch.Tensor, rel_idx: torch.Tensor):
+def _varlen_to_abs_idx(cu_seq_lens: torch.Tensor | None, b: torch.Tensor, rel_idx: torch.Tensor) -> torch.Tensor:
     """Converts relative sequence indices to absolute batch indices."""
     return rel_idx if cu_seq_lens is None else cu_seq_lens[b] + rel_idx
 
@@ -464,13 +464,15 @@ class FastAttentionPreprocessor(Preprocessor):
         block_ids_k = kwargs.get(TransformerKwargs.block_ids_k)
         window_size = (-1, -1) if self._config.window_size is None else (self._config.window_size - 1, 0)
 
+        attention_mode = kwargs.get(TransformerKwargs.attention_mode, self._config.attention_mode)
+
         mask_mod = _get_mask_mod(
             cu_seqlens_q=cu_seqlens_q,
             cu_seqlens_k=cu_seqlens_k,
             block_ids_q=block_ids_q,
             block_ids_k=block_ids_k,
             window_size=window_size,
-            attention_mode=kwargs.get(TransformerKwargs.attention_mode, AttentionMode.causal),
+            attention_mode=attention_mode,
         )
 
         if cu_seqlens_q is not None:
@@ -510,7 +512,7 @@ class FastAttentionPreprocessor(Preprocessor):
             self._config.select_attention_implementation(
                 require_variable_length=TransformerKwargs.sequence_lengths in kwargs,
                 training_dtype=self._tensor_space.distributed_config.training_dtype,
-                flash_available=self._flash_available,
+                flash_attention_available=self._flash_available,
             ),
         )
         attention_implementation_spec = ATTENTION_IMPLEMENTATION_SPECS[attention_implementation]

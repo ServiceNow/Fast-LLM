@@ -785,29 +785,36 @@ class TransformerConfig(BaseModelConfig):
                 )
             )
 
+    def _attention_implementation_eligible(
+        self,
+        spec: AttentionImplementationSpec,
+        require_variable_length: bool,
+        training_dtype: DataType,
+        flash_attention_available: bool,
+    ) -> bool:
+        if spec.fast != self.use_fast_attention:
+            return False
+        if not flash_attention_available and spec.needs_flash:
+            return False
+        if require_variable_length and not spec.variable_length:
+            return False
+        if self.attention_dropout > 0 and not spec.dropout:
+            return False
+        if self.attention_mode not in spec.modes:
+            return False
+        if training_dtype not in spec.dtypes:
+            return False
+        if self.max_window_layers is not None and not spec.variable_window:
+            return False
+        return True
+
     def select_attention_implementation(
         self,
         *,
         require_variable_length: bool,
         training_dtype: DataType,
-        flash_available: bool,
+        flash_attention_available: bool,
     ) -> AttentionImplementation:
-        def eligible(spec: AttentionImplementationSpec) -> bool:
-            if spec.fast != self.use_fast_attention:
-                return False
-            if not flash_available and spec.needs_flash:
-                return False
-            if require_variable_length and not spec.variable_length:
-                return False
-            if self.attention_dropout > 0 and not spec.dropout:
-                return False
-            if self.attention_mode not in spec.modes:
-                return False
-            if training_dtype not in spec.dtypes:
-                return False
-            if self.max_window_layers is not None and not spec.variable_window:
-                return False
-            return True
 
         preference = [
             AttentionImplementation.FLASH,
@@ -818,7 +825,12 @@ class TransformerConfig(BaseModelConfig):
         ]
 
         for impl in preference:
-            if eligible(ATTENTION_IMPLEMENTATION_SPECS[impl]):
+            if self._attention_implementation_eligible(
+                spec=ATTENTION_IMPLEMENTATION_SPECS[impl],
+                require_variable_length=require_variable_length,
+                training_dtype=training_dtype,
+                flash_attention_available=flash_attention_available,
+            ):
                 return impl
 
         raise ValueError(
@@ -826,7 +838,7 @@ class TransformerConfig(BaseModelConfig):
             f"use_fast_attention={self.use_fast_attention}, "
             f"require_variable_length={require_variable_length}, "
             f"training_dtype={training_dtype}, "
-            f"flash_available={flash_available}, "
+            f"flash_attention_available={flash_attention_available}, "
             f"attention_mode={self.attention_mode}, "
             f"attention_dropout={self.attention_dropout}, "
             f"max_window_layers={self.max_window_layers}"
