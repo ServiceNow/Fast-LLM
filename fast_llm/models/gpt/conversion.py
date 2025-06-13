@@ -319,7 +319,8 @@ class Starcoder2HuggingfaceCheckpointHandler(CommonHuggingfaceCheckpointHandler)
         return super()._create_config_converters() + [
             ConstantExportParamConverter(export_names=(("architectures",),), export_value=["Starcoder2ForCausalLM"]),
             ConstantImportParamConverter(
-                fast_llm_names=(("transformer", "rotary", "type"),), fast_llm_value=DefaultRotaryConfig
+                fast_llm_names=(("transformer", "rotary", "type"),),
+                fast_llm_value=DefaultRotaryConfig.dynamic_type_name,
             ),
             ConstantImportParamConverter(
                 fast_llm_names=(("transformer", "normalization", "type"),),

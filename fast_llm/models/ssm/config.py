@@ -169,7 +169,7 @@ class AprielThinkerSSMHHybridHuggingfaceCheckpointFormat(CheckpointFormat):
         return AprielThinkerSSMHHybridHuggingfaceCheckpointHandler
 
 
-@config_class()
+@config_class(dynamic_type={FastLLMModelConfig: "hybrid_ssm"})
 class HybridSSMModelConfig(FastLLMModelConfig):
     _abstract = False
     model_name: typing.ClassVar[str] = "hybrid_ssm"
