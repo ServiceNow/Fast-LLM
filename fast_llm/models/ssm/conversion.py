@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import pathlib
 import typing
@@ -786,6 +787,8 @@ class MtpAprielThinkerSSMHHybridHuggingfaceCheckpointHandler(
     def _create_weight_converters(self) -> list[WeightConverter]:
         converters = super()._create_weight_converters()
         num_layers = self._model.config.base_model.transformer.num_layers
+
+        logging.warning("Ignore previous warning about MTP heads, the weights have been loaded.")
 
         # MTP heads
         prediction_heads = self._model.config.base_model.prediction_heads

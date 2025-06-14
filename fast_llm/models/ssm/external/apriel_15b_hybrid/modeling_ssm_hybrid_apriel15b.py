@@ -932,10 +932,9 @@ class AprielSSMHybridForCausalLM(AprielHybridPreTrainedModel, GenerationMixin):
             for layer_idx in range(
                 len(config.hybrid_block_layout), len(config.hybrid_block_layout) + config.prediction_heads - 1
             ):
+                # Last layer is m2d for Apriel 15B hybrid, so we use AprielSSMDecoderLayer for all heads
                 mtp_heads.append(
-                    AprielSSMDecoderLayer(
-                        config, layer_idx=layer_idx, device=self.device, dtype=self.dtype
-                    )  # Use layer_idx=0 for all heads
+                    AprielSSMDecoderLayer(config, layer_idx=layer_idx, device=self.device, dtype=self.dtype)
                 )
                 mtp_norms.append(MistralRMSNorm(config.hidden_size, eps=config.rms_norm_eps))
             self.mtp_heads = nn.ModuleList(mtp_heads)
