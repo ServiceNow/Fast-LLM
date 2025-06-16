@@ -455,12 +455,6 @@ class TransformerConfig(LLMBlockConfig):
         doc="May be used to freeze some experts by setting their scale to zero.",
         hint=FieldHint.feature,
     )
-    per_layer_lr_scale: list[float] | None = Field(
-        default=None,
-        desc="Custom learning rate scale for each layer.",
-        doc="May be used to freeze some layers by setting their scale to zero.",
-        hint=FieldHint.feature,
-    )
     router_lr_scale: float | None = Field(
         default=None,
         desc="Custom learning rate for the MoE router weight.",
