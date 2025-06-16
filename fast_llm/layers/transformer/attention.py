@@ -6,8 +6,6 @@ from fast_llm.core.distributed import set_generator
 from fast_llm.core.ops import gather_op, reduce_op, reduce_scatter_op, swap_mult_dim
 from fast_llm.engine.config_utils.tensor_space import TensorSpace
 from fast_llm.functional.autograd import wrap_forward_backward
-from fast_llm.functional.rotary import apply_rotary_embeddings
-from fast_llm.functional.triton.rotary import triton_rotary_autograd_
 from fast_llm.layers.common.linear import InputParallelLinear, OutputParallelLinear
 from fast_llm.layers.transformer.config import (
     TransformerConfig,
@@ -17,7 +15,7 @@ from fast_llm.layers.transformer.config import (
 )
 from fast_llm.logging import log_distributed_grad, log_distributed_tensor
 from fast_llm.tensor import TensorMeta, init_normal_, init_zeros_
-from fast_llm.utils import Assert
+from fast_llm.utils import Assert, get_lr_scale
 
 try:
     from flash_attn.flash_attn_interface import flash_attn_func as _flash_attn_func  # noqa
@@ -84,7 +82,7 @@ class Attention(torch.nn.Module):
         super().__init__()
         self._config = config
         self._tensor_space = tensor_space
-        Assert.in_range_incl(layer_index, 1, self._config.num_layers)
+        # Assert.in_range_incl(layer_index, 1, max(self._config.num_layers, 1))
         self._layer_index = layer_index
         self._sequence_parallel = self._tensor_space.distributed_config.sequence_tensor_parallel
         self._debug_transformer = self._config.debug_transformer
@@ -110,6 +108,9 @@ class Attention(torch.nn.Module):
 
         hidden_dim = self._tensor_space.get_tensor_dim(TransformerDimNames.hidden)
 
+        layer_lr_scale = config.per_layer_lr_scale[layer_index] if config.per_layer_lr_scale else None
+        attention_lr_scale = get_lr_scale(self._config.attention_lr_scale, layer_lr_scale)
+
         # TODO: Merge the query and key-value computations? (harder with sequence parallel.)
         self.query = OutputParallelLinear(
             hidden_dim,
@@ -118,7 +119,7 @@ class Attention(torch.nn.Module):
             weight_init_method=init_method_qkv,
             bias_init_method=init_method_qkv if self._config.random_bias_init else init_zeros_,
             sequence_parallel=self._sequence_parallel,
-            lr_scale=self._config.attention_lr_scale,
+            lr_scale=attention_lr_scale,
         )
         self.key_value = OutputParallelLinear(
             hidden_dim,
@@ -127,9 +128,12 @@ class Attention(torch.nn.Module):
             weight_init_method=init_method_qkv,
             bias_init_method=init_method_qkv if self._config.random_bias_init else init_zeros_,
             sequence_parallel=self._sequence_parallel,
-            lr_scale=self._config.attention_lr_scale,
+            lr_scale=attention_lr_scale,
         )
         self._query_key_value = wrap_forward_backward(self._query_key_value_forward, self._query_key_value_backward)
+
+        # Rotary embeddings.
+        self._rotary = self._config.rotary.build()
 
         # Output.
         self.dense = InputParallelLinear(
@@ -139,7 +143,7 @@ class Attention(torch.nn.Module):
             weight_init_method=init_method_std_attn_proj,
             bias_init_method=init_method_std_attn_proj if self._config.random_bias_init else init_zeros_,
             sequence_parallel=self._sequence_parallel,
-            lr_scale=self._config.attention_lr_scale,
+            lr_scale=attention_lr_scale,
         )
 
         # PEFT.
@@ -337,18 +341,15 @@ class Attention(torch.nn.Module):
         key = key.view(*key.shape[:2], self._local_head_groups, self._kv_channels)
         value = value.view(*value.shape[:2], self._local_head_groups, self._kv_channels)
 
-        if self._config.rotary.enabled:
-            if self._debug_transformer:
-                self._debug_log(query, "query_rotary_input", self._QUERY_DIMS, kwargs)
-                self._debug_log(
-                    key,
-                    "key_rotary_input",
-                    self._KV_DIMS,
-                    kwargs,
-                )
-            rotary_fn = triton_rotary_autograd_ if self._config.rotary.triton else apply_rotary_embeddings
-            query = rotary_fn(query, kwargs[TransformerKwargs.rotary_freq_q])
-            key = rotary_fn(key, kwargs[TransformerKwargs.rotary_freq_k])
+        if self._debug_transformer:
+            self._debug_log(query, "query_rotary_input", self._QUERY_DIMS, kwargs)
+            self._debug_log(
+                key,
+                "key_rotary_input",
+                self._KV_DIMS,
+                kwargs,
+            )
+        query, key = self._rotary(query, key, kwargs)
 
         window_size = self._decide_window_size()
 

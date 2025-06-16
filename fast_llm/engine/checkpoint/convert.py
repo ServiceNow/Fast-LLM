@@ -9,7 +9,6 @@ from fast_llm.engine.checkpoint.config import CheckpointLoadConfig, CheckpointSa
 from fast_llm.engine.config_utils.runnable import RunnableConfig
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig, StageMode
 from fast_llm.functional.config import TritonConfig
-from fast_llm.models.auto import model_registry
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
@@ -18,35 +17,42 @@ if typing.TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-@config_class()
-class ConversionConfig(RunnableConfig):
-    input: CheckpointLoadConfig = Field(default_factory=CheckpointLoadConfig)
-    output: CheckpointSaveConfig = Field(default_factory=CheckpointSaveConfig)
+@config_class(dynamic_type={RunnableConfig: "convert"})
+class ConvertConfig(RunnableConfig):
+    input: CheckpointLoadConfig = Field()
+    output: CheckpointSaveConfig = Field()
     use_cpu: bool = Field(default=False)
     exist_ok: bool = Field(default=False)
     layers_per_step: int | None = Field(default=None)
-    model_config_class: type[FastLLMModelConfig] = Field(default=None)
+    model: type[FastLLMModelConfig] = Field(default=None)
 
     @classmethod
     def _get_parser(cls):
+        # TODO: Infer the model type from the loaded model instead?
         parser = super()._get_parser()
         parser.add_argument(
             "model_type",
-            choices=model_registry.keys(),
-            help="The Fast-LLM model type to use. Must be defined in the model registry in `fast_llm.models.auto`.",
+            help="The Fast-LLM model type to use.",
         )
         return parser
 
     @classmethod
     def _from_parsed_args(cls, parsed: argparse.Namespace, unparsed: list[str]):
         config = super()._from_parsed_args(parsed, unparsed)
-        config.model_config_class = model_registry[parsed.model_type]
+        config.model = parsed.model_type
         return config
 
+    @classmethod
+    def _first_arg_is_dynamic_type(cls, args: list[str]) -> bool:
+        # The first arg defines the model type, not the converter class.
+        return False
+
     def _validate(self):
-        assert self.model_config_class is not None
-        self.input.setup(self.model_config_class)
-        self.output.setup(self.model_config_class)
+        assert self.model is not None
+        if isinstance(self.model, str):
+            self.model = FastLLMModelConfig.get_subclass(self.model)
+        self.input.setup(self.model)
+        self.output.setup(self.model)
         super()._validate()
 
     def _convert_model_partial(
@@ -81,7 +87,7 @@ class ConversionConfig(RunnableConfig):
                 f"Output path {self.output.path} already exists and has been processed. Skipping model conversion..."
             )
             return
-        model_class = self.model_config_class.get_model_class()
+        model_class = self.model.get_model_class()
         if self.layers_per_step is None:
             self._convert_model_partial(model_class, self.output)
         else:
@@ -158,7 +164,3 @@ class ConversionConfig(RunnableConfig):
             # All good!
             (self.output.path / "ok").open("w")
             logger.info(f">>> All done!")
-
-
-if __name__ == "__main__":
-    ConversionConfig.parse_and_run()

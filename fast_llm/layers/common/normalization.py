@@ -3,7 +3,7 @@ import torch
 from fast_llm.engine.config_utils.run import log_main_rank
 from fast_llm.engine.config_utils.tensor_space import TensorDim
 from fast_llm.functional.config import TritonConfig
-from fast_llm.functional.triton.normalization import rms_norm, triton_normalization_autograd
+from fast_llm.functional.triton.normalization import triton_normalization_autograd
 from fast_llm.layers.common.config import NormalizationImplementation
 from fast_llm.tensor import ParameterMeta, accumulate_gradient, init_ones_, init_zeros_
 from fast_llm.utils import Assert
@@ -141,6 +141,9 @@ class FusedRMSNorm(torch.autograd.Function):
 class LayerNorm(torch.nn.Module):
     """
     A layer normalization layer, supporting multiple implementations.
+    Note: Converting input automatically to training dtype to match Apex behaviour,
+     needed for full precision residual.
+    TODO: Review this?
     """
 
     def __init__(
@@ -152,6 +155,7 @@ class LayerNorm(torch.nn.Module):
         weight_init_method=None,
         bias_init_method=init_zeros_,
         zero_centered: bool = False,
+        lr_scale: float | None = None,
     ):
         super().__init__()
         assert hidden_dim.parallel_dim is None
@@ -190,12 +194,14 @@ class LayerNorm(torch.nn.Module):
             init_method=weight_init_method,
             weight_decay=False,
             auto_grad_accumulation=implementation == NormalizationImplementation.torch,
+            lr_scale=lr_scale,
         )
         self.bias = ParameterMeta.from_dims(
             (hidden_dim,),
             init_method=bias_init_method,
             weight_decay=False,
             auto_grad_accumulation=implementation == NormalizationImplementation.torch,
+            lr_scale=lr_scale,
         )
         self.normalized_shape = self.weight.shape
 
@@ -214,12 +220,15 @@ class LayerNorm(torch.nn.Module):
         return FusedLayerNorm.apply(input_, self.normalized_shape, self.weight, self.bias, self._eps)
 
     def _forward_torch(self, input_: torch.Tensor) -> torch.Tensor:
-        return torch.nn.functional.layer_norm(input_, self.normalized_shape, self.weight, self.bias, self._eps)
+        return torch.layer_norm(input_.to(self.weight.dtype), self.normalized_shape, self.weight, self.bias, self._eps)
 
 
 class RMSNorm(torch.nn.Module):
     """
     A RMS normalization layer.
+    Note: Converting input automatically to training dtype to match Apex behaviour,
+     needed for full precision residual.
+    TODO: Review this?
     """
 
     def __init__(
@@ -230,6 +239,7 @@ class RMSNorm(torch.nn.Module):
         implementation: NormalizationImplementation = NormalizationImplementation.auto,
         weight_init_method=None,
         zero_centered: bool = False,
+        lr_scale: float | None = None,
     ):
         super().__init__()
         assert hidden_dim.parallel_dim is None
@@ -263,6 +273,7 @@ class RMSNorm(torch.nn.Module):
             init_method=weight_init_method,
             weight_decay=False,
             auto_grad_accumulation=True,
+            lr_scale=lr_scale,
         )
         self.normalized_shape = self.weight.shape
 
@@ -276,4 +287,4 @@ class RMSNorm(torch.nn.Module):
         return FusedRMSNorm.apply(input_, self.normalized_shape, self.weight, self._eps)
 
     def _forward_torch(self, input_: torch.Tensor) -> torch.Tensor:
-        return rms_norm(input_, self.weight, self._eps)
+        return torch.rms_norm(input_.to(self.weight.dtype), self.normalized_shape, self.weight, self._eps)

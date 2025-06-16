@@ -6,12 +6,15 @@ import torch
 import torch.nn
 
 from fast_llm.config import Configurable
-from fast_llm.engine.base_model.config import BaseModelArchitectureConfig, BaseModelConfig, Preprocessor
+from fast_llm.engine.base_model.config import BaseModelConfig
 from fast_llm.engine.config_utils.tensor_space import TensorSpace
 from fast_llm.engine.distributed.config import DistributedConfig, PhaseType
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.tensor import ParameterMeta, TensorMeta
 from fast_llm.utils import Assert
+
+if typing.TYPE_CHECKING:
+    from fast_llm.engine.inference.runner import InferenceRunner
 
 
 class Module(torch.nn.Module, abc.ABC):
@@ -80,13 +83,14 @@ class SequentialLayers(Sequential, abc.ABC):
 
 class BaseModel[ConfigType: BaseModelConfig](Configurable[ConfigType], SequentialLayers, abc.ABC):
     config_class: typing.ClassVar[type[BaseModelConfig]] = BaseModelConfig
+    _is_setup: bool = False
 
     def __init__(
         self,
         config: BaseModelConfig,
         distributed_config: DistributedConfig,
     ):
-        self._tensor_space = TensorSpace(distributed_config)
+        self._tensor_space: TensorSpace = TensorSpace(distributed_config)
         config.setup_tensor_space(self._tensor_space)
 
         super().__init__(config)
@@ -96,16 +100,18 @@ class BaseModel[ConfigType: BaseModelConfig](Configurable[ConfigType], Sequentia
             # Rename to the parameter full name
             value.tensor_name = key
 
-    @classmethod
-    def architecture_cls(cls) -> type[BaseModelArchitectureConfig]:
-        return cls.config_class.architecture_class
+        # Reference models
+        # TODO: Add basic handling (preprocessor) in this class.
+        self._reference_models: dict[str, "InferenceRunner"] = {}
+
+    def setup(self, distributed: Distributed) -> None:
+        assert not self._is_setup
+        distributed.check_config(self._tensor_space.distributed_config)
+        self._tensor_space.setup(distributed)
+        self._is_setup = True
 
     @abc.abstractmethod
     def get_layers(self) -> list[Layer]:
-        pass
-
-    @abc.abstractmethod
-    def setup(self, distributed: Distributed) -> None:
         pass
 
     @abc.abstractmethod
@@ -136,6 +142,7 @@ class BaseModel[ConfigType: BaseModelConfig](Configurable[ConfigType], Sequentia
     def get_loss_defs(self) -> list[LossDef]:
         pass
 
-    def add_preprocessor(self, preprocessor: Preprocessor):
-        # TODO: Generalize preprocessors.
-        raise NotImplementedError()
+    def add_reference_model(self, name: str, inference_runner: "InferenceRunner") -> None:
+        assert name not in self._reference_models
+        assert not self._is_setup
+        self._reference_models[name] = inference_runner

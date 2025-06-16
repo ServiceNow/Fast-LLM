@@ -30,10 +30,15 @@ from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
-    from fast_llm.engine.inference.model import HuggingfacePreTrainedModel
+    from fast_llm.engine.inference.huggingface import HuggingfaceBaseModelForCausalLM
     from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
 
 logger = logging.getLogger(__name__)
+
+
+class ShardName:
+    weights = "weights"
+    grads = "grads"
 
 
 class StageMode(str, enum.Enum):
@@ -203,7 +208,7 @@ class MultiStageConfig(StageConfig):
 SHARD_PAD_TO_MULTIPLE = 32
 
 
-@config_class()
+@config_class(registry=True)
 class FastLLMModelConfig(Config):
     _abstract = True
     checkpoint_formats: typing.ClassVar[tuple[type[CheckpointFormat], ...]] = (
@@ -211,17 +216,12 @@ class FastLLMModelConfig(Config):
         FastLLMCheckpointFormat,
     )
     model_name: typing.ClassVar[str]
-    base_model: BaseModelConfig = Field(
-        default_factory=BaseModelConfig, desc="Configuration for the base model.", hint=FieldHint.core
-    )
+    base_model: BaseModelConfig = Field(desc="Configuration for the base model.", hint=FieldHint.core)
     multi_stage: MultiStageConfig = Field(
-        default_factory=MultiStageConfig,
         desc="Configuration for the stage breakdown of the model.",
         hint=FieldHint.core,
     )
-    distributed: DistributedConfig = Field(
-        default_factory=DistributedConfig, desc="Distributed configuration.", hint=FieldHint.core
-    )
+    distributed: DistributedConfig = Field(desc="Distributed configuration.", hint=FieldHint.core)
 
     @classmethod
     def __fast_llm_serialize__(cls) -> str:
@@ -247,7 +247,7 @@ class FastLLMModelConfig(Config):
         raise NotImplementedError
 
     @classmethod
-    def get_huggingface_model_class(cls) -> type["HuggingfacePreTrainedModel"]:
+    def get_huggingface_model_for_causal_lm_class(cls) -> type["HuggingfaceBaseModelForCausalLM"]:
         raise NotImplementedError
 
     @classmethod
@@ -291,11 +291,8 @@ class PretrainedFastLLMModelConfig(Config):
     # TODO: Generalize data, schedule, logging, etc.
     _abstract = True
     # This configs may be overridden with the pretrained config during validation, so we should be careful about accessing them before.
-    model: FastLLMModelConfig = Field(
-        default_factory=FastLLMModelConfig, desc="Configuration for the Fast-LLM model.", hint=FieldHint.core
-    )
+    model: FastLLMModelConfig = Field(desc="Configuration for the Fast-LLM model.", hint=FieldHint.core)
     pretrained: CheckpointLoadConfig = Field(
-        default_factory=CheckpointLoadConfig,
         desc="Configuration for loading the configuration and state of a pretrained model.",
         hint=FieldHint.feature,
     )
@@ -305,7 +302,8 @@ class PretrainedFastLLMModelConfig(Config):
         self.pretrained.setup(self.model)
         self.pretrained.validate()
         if self.pretrained.path is not None:
-            self.model = self.model.from_pretrained(self.pretrained, self.model)
+            with NoAutoValidate():
+                self.model = self.model.from_pretrained(self.pretrained, self.model)
         self._setup()
         super()._validate()
 
@@ -314,7 +312,7 @@ class PretrainedFastLLMModelConfig(Config):
         pass
 
 
-@config_class
+@config_class()
 class CheckpointMetadata(Config):
     # TODO: Make entries more flexible?
     #  I.e.. model / format / usage (ex. training) - specific entries instead of a generic metadata?
@@ -335,7 +333,6 @@ class CheckpointMetadata(Config):
         hint=FieldHint.core,
     )
     config: FastLLMModelConfig = Field(
-        default_factory=FastLLMModelConfig,
         desc="The Fast-LLM model configuration for the saved model.",
         hint=FieldHint.core,
     )
@@ -380,13 +377,9 @@ class CheckpointMetadata(Config):
         if "fast_llm_version" not in default:
             default["fast_llm_version"] = "0"
 
-        # Determine the model config class.
-        from fast_llm.models.auto import model_registry
-
         model_config_class = default["model"]
         if isinstance(model_config_class, str):
-            Assert.incl(model_config_class, model_registry)
-            model_config_class = model_registry[model_config_class]
+            model_config_class = FastLLMModelConfig.get_subclass(default["model"])
             default["model"] = model_config_class
 
         # TODO v0.3: Remove backward compatibility.

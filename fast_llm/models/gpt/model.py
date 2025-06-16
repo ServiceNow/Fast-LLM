@@ -8,24 +8,19 @@ from fast_llm.engine.base_model.base_model import BaseModel, Layer, LossDef
 from fast_llm.engine.base_model.config import Preprocessor
 from fast_llm.engine.config_utils.tensor_space import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames, PhaseType
-from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.engine.inference.runner import InferenceRunner
 from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
 from fast_llm.layers.language_model.config import LanguageModelKwargs, LanguageModelLossNames
 from fast_llm.layers.language_model.embedding import WORD_EMBEDDINGS_WEIGHT, LanguageModelEmbedding
 from fast_llm.layers.language_model.head import OUTPUT_WEIGHTS, LanguageModelHead, MLMHead
-from fast_llm.layers.language_model.preprocessing import PositionEmbeddingPreprocessor
+from fast_llm.layers.language_model.preprocessing import PositionEmbeddingPreprocessor, PreferenceSpanPreprocessor
 from fast_llm.layers.transformer.config import (
     RoutingType,
     TransformerDimNames,
     TransformerKwargs,
     TransformerLossNames,
 )
-from fast_llm.layers.transformer.preprocessing import (
-    BackupAttentionPreprocessor,
-    FlashAttnVarlenPreprocessor,
-    RotaryEmbeddingPreprocessor,
-)
+from fast_llm.layers.transformer.preprocessing import BackupAttentionPreprocessor, FlashAttnVarlenPreprocessor
 from fast_llm.layers.transformer.transformer import TransformerLayer
 from fast_llm.models.gpt.config import GPTBaseModelConfig, GPTBatchConfig, GPTModelConfig
 from fast_llm.models.gpt.megatron import get_init_megatron
@@ -41,12 +36,6 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
     """
 
     config_class: typing.ClassVar[type[GPTBaseModelConfig]] = GPTBaseModelConfig
-    _is_setup: bool = False
-    _rotary_embedding_frequencies: torch.Tensor
-    _position_ids: torch.Tensor
-    _mask: torch.Tensor
-    _mask_value: torch.Tensor
-    _tensor_cache_max_sequence_length: int = -1
 
     def __init__(
         self,
@@ -59,17 +48,20 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             for param in self.parameters():
                 Assert.custom(isinstance, param, ParameterMeta)
                 param.init_parameter = get_init_megatron(param, self._config.transformer)  # Noqa
+        # `self._reference_models` is not populated at this point, so we pass a mutable dict.
         self._preprocessors: list[Preprocessor] = []
         if self._config.use_absolute_position_embeddings:
             self._preprocessors.append(PositionEmbeddingPreprocessor(self._config, self._tensor_space))
-        if self._config.transformer.rotary.enabled:
-            self._preprocessors.append(
-                RotaryEmbeddingPreprocessor(self._config.transformer.rotary, self._tensor_space)
-            )
+        # We have multiple identical rotary modules/preprocessors, so it's simpler to make a new one here.
+        # TODO: Find a better solution.
+        self._preprocessors.append(self._config.transformer.rotary.build(self._tensor_space))
         if self._use_flash_attention:
             self._preprocessors.append(FlashAttnVarlenPreprocessor(self._config.transformer, self._tensor_space))
         else:
             self._preprocessors.append(BackupAttentionPreprocessor(self._config.transformer, self._tensor_space))
+
+        if self._config.enable_dpo:  # TODO better way to pass in?
+            self._preprocessors.append(PreferenceSpanPreprocessor(self._config, self._tensor_space))
 
     def get_output_layers(self) -> list[Layer]:
         return [
@@ -102,12 +94,6 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
         ]
 
     def get_layers(self) -> list[Layer]:
-        if self._config.transformer.num_layers == 0:
-            Assert.eq(self._config.prediction_heads, 1)
-            return [
-                LanguageModelEmbedding(self._config, self._tensor_space),
-                LanguageModelHead(self._config, self._tensor_space, 0),
-            ]
         return [
             LanguageModelEmbedding(self._config, self._tensor_space),
             *[
@@ -115,17 +101,14 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                     self._config.transformer,
                     self._tensor_space,
                     layer_index=i + 1,
+                    # The last layer only returns the transformer output.
+                    # The previous layers return a stack of shared_hidden and transformer_output.
+                    return_input=self._config.prediction_heads > 1 and i == self._config.transformer.num_layers - 1,
                 )
-                for i in range(self._config.transformer.num_layers - 1)
+                for i in range(self._config.transformer.num_layers)
             ],
             *self.get_output_layers(),
         ]
-
-    def setup(self, distributed: Distributed) -> None:
-        assert not self._is_setup
-        distributed.check_config(self._tensor_space.distributed_config)
-        self._tensor_space.setup(distributed)
-        self._is_setup = True
 
     def preprocess_meta(
         self, batch_meta: GPTBatchConfig | torch.Tensor, phase: PhaseType
@@ -140,7 +123,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
         else:
             micro_batch_size, sequence_length = batch_meta.shape
             if phase != PhaseType.inference:
-                sequence_length -= 1
+                sequence_length -= self._config.prediction_heads
             micro_sequence_length = sequence_length
 
         batch_data = self._tensor_space.distributed_config.get_distributed_dim(DistributedDimNames.batch_data)
@@ -194,12 +177,20 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             TransformerKwargs.sequence_q_dim: sequence_q_dim,
         }
 
-        preprocessed_meta = []
-        for sequence_k_past in range(
+        sequence_k_pasts = range(
             sequence_q_dim.size * self._tensor_space.distributed_config.sequence_data_rank,
             sequence_length,
             micro_sequence_length,
-        ):
+        )
+        reference_preprocessed_metas = {}
+        for name, reference_model in self._reference_models.items():
+            reference_preprocessed_metas[name] = reference_model.fast_llm_model.base_model.preprocess_meta(
+                batch_meta, PhaseType.inference
+            )
+            Assert.eq(len(reference_preprocessed_metas[name]), len(sequence_k_pasts))
+
+        preprocessed_meta = []
+        for i, sequence_k_past in enumerate(sequence_k_pasts):
             sequence_k = sequence_k_past + sequence_q_dim.size
             sequence_k_dim = TensorDim(TransformerDimNames.sequence_k, sequence_k)
 
@@ -217,6 +208,19 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                 )
             for preprocessor in self._preprocessors:
                 preprocessor.preprocess_meta(kwargs)
+            reference_kwargs = {}
+            for name, reference_preprocessed_meta in reference_preprocessed_metas.items():
+                reference_tokens, reference_kwargs_ = reference_preprocessed_meta[i]
+                for key in (
+                    TransformerKwargs.sequence_first,
+                    TransformerKwargs.sequence_length,
+                    TransformerKwargs.sequence_q_dim,
+                    TransformerKwargs.sequence_k_dim,
+                ):
+                    Assert.eq(reference_kwargs_[key], kwargs[key])
+                reference_kwargs[name] = reference_kwargs_
+            kwargs["reference_models"] = reference_kwargs
+
             preprocessed_meta.append((tokens, kwargs))
 
         return preprocessed_meta
@@ -246,13 +250,30 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             dtype=torch.int64,
             non_blocking=True,
         )
+
+        reference_logits = [{} for _ in preprocessed_meta]
+        for name, reference_model in self._reference_models.items():
+            reference_preprocessed_meta = [
+                (tokens_meta, kwargs_meta["reference_models"][name]) for tokens_meta, kwargs_meta in preprocessed_meta
+            ]
+
+            reference_batch = reference_model.fast_llm_model.base_model.preprocess(
+                batch, reference_preprocessed_meta, phase=PhaseType.inference, iteration=iteration
+            )
+
+            # TODO: Do things work with >1?
+            Assert.eq(len(reference_batch), len(preprocessed_meta), 1)
+            for i, (reference_tokens, reference_kwargs) in enumerate(reference_batch):
+                reference_model.forward(reference_tokens, reference_kwargs, iteration=iteration)
+                reference_logits[i][f"{name}_logits"] = reference_kwargs["logits"]
+
         if sequence_first:
             # Move the sequence dimension first to make sequence parallel ops more efficient.
             batch.token_ids = batch.token_ids.transpose(0, 1).contiguous()
 
         preprocessed = []
         presents = None
-        for i, (tokens_meta, kwargs_meta) in enumerate(preprocessed_meta):
+        for i, (_, kwargs_meta) in enumerate(preprocessed_meta):
             sequence_k = kwargs_meta[TransformerKwargs.sequence_k_dim].size
             if sequence_first:
                 tokens = batch.token_ids[sequence_k - sequence_q : sequence_k]
@@ -261,6 +282,10 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                 tokens = batch.token_ids[:, sequence_k - sequence_q : sequence_k].contiguous()
             if batch.sequence_lengths is not None:
                 kwargs_meta[TransformerKwargs.sequence_lengths] = batch.sequence_lengths
+            if batch.chosen_spans is not None:
+                kwargs_meta[LanguageModelKwargs.chosen_spans] = batch.chosen_spans
+            if batch.rejected_spans is not None:
+                kwargs_meta[LanguageModelKwargs.rejected_spans] = batch.rejected_spans
 
             # TODO: Add pasts/presents to meta input?
             # Use lists as pointers so `past_key_values` is populated during the previous micro_sequence.
@@ -272,7 +297,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                 TransformerKwargs.presents: presents,
             }
             if phase != PhaseType.inference:
-                sequence_offset = sequence_k - sequence_q + 1
+                sequence_offset = sequence_k - sequence_q + 1  # +1 for shift in labels
                 if sequence_first:
                     labels = batch.token_ids[sequence_offset : sequence_k + prediction_heads]
                 else:
@@ -281,6 +306,8 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                     # We set label indices to -100 for masked spans, inline with ignore_index in torch.nn.CrossEntropyLoss
                     # TODO: take ignore_index from config
                 if batch.loss_masking_spans is not None:
+                    # avoid changing input tokens
+                    labels = labels.clone()
                     for i, spans in enumerate(batch.loss_masking_spans):
                         if not spans.numel():
                             continue
@@ -288,14 +315,19 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                             (spans[:, 0] <= sequence_k + prediction_heads - 1) & (spans[:, 1] >= sequence_offset)
                         ]
                         if valid_spans.numel():
+                            # if span is partially within the sequence, truncate parts of spans that are outside of the sequence
                             valid_spans[:, 0].clamp_(min=sequence_offset)
                             valid_spans[:, 1].clamp_(max=sequence_k + prediction_heads - 1)
                             valid_spans -= sequence_offset
+                            loss_mask = torch.ones_like(labels, dtype=torch.bool)
                             for start, end in valid_spans:
                                 if sequence_first:
-                                    labels[start : end + 1, i] = -100
+                                    loss_mask[start : end + 1, i] = False
                                 else:
-                                    labels[i, start : end + 1] = -100
+                                    loss_mask[i, start : end + 1] = False
+                            if self._config.distillation_model is not None:
+                                kwargs[LanguageModelKwargs.loss_mask] = loss_mask
+                            labels = torch.where(loss_mask, labels, -100)
                 kwargs[LanguageModelKwargs.labels] = labels
 
                 if batch.mask_indexes is not None:
@@ -317,6 +349,8 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                     kwargs[TransformerKwargs.attention_mask_value] = torch.tensor(
                         -10000.0, device=self._tensor_space.distributed.device
                     )
+
+            kwargs.update(reference_logits[i])
 
             for preprocessor in self._preprocessors:
                 preprocessor.preprocess(tokens, kwargs)
@@ -397,14 +431,6 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                     )
                 )
         return loss_defs
-
-    def forward(self, input_ids: torch.Tensor, kwargs: dict[str, typing.Any]) -> dict[str, torch.Tensor]:
-        outputs = super().forward(input_ids, kwargs)
-        return outputs
-
-    def add_preprocessor(self, preprocessor: Preprocessor):
-        assert not self._is_setup
-        self._preprocessors.append(preprocessor)
 
 
 class GPTModel[ConfigType: GPTModelConfig](FastLLMModel[ConfigType]):

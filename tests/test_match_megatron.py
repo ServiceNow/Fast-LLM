@@ -12,14 +12,13 @@ from tests.common import (
     CONFIG_SC2_FAST_LLM,
     CONFIG_SC2_MEGATRON,
     DATASET_PREFIX,
-    run_test_script,
 )
 from tests.compare_tensor_logs import CompareConfig
 
 
 @pytest.mark.slow
 @pytest.mark.skip(reason="Skipping mostly redundant test")
-def test_sc1_meg():
+def test_sc1_meg(run_test_script):
     # Starcoder 1 (GPT2 with MQA) with Megatron.
     run_test_script("test_sc1_meg", CONFIG_SC1_MEGATRON + ["--micro-batch-size=8"], is_megatron=True)
 
@@ -31,7 +30,7 @@ CONFIG_MATCH_MEGATRON = [
 
 
 @pytest.mark.depends(on=["test_sc1_meg"])
-def test_sc1_match_meg():
+def test_sc1_match_meg(run_test_script):
     # Starcoder 1 (GPT2 with MQA) with Fast-llm.
     # QKV tensors are in a different format.
     run_test_script(
@@ -52,13 +51,13 @@ def test_sc1_match_meg():
 @pytest.mark.slow
 @pytest.mark.skip(reason="Skipping mostly redundant test")
 @pytest.mark.depends(on=["test_sc1_match_meg"])
-def test_sc2_meg():
+def test_sc2_meg(run_test_script):
     # Starcoder 2 (GPT2 with MQA and RoPE) with Megatron.
     run_test_script("test_sc2_meg", CONFIG_SC2_MEGATRON + ["--micro-batch-size=8"], is_megatron=True)
 
 
 @pytest.mark.depends(on=["test_sc2_meg"])
-def test_sc2_match_meg():
+def test_sc2_match_meg(run_test_script):
     # Starcoder 2 (GPT2 with MQA and RoPE) with Fast-llm.
     # QKV tensors are in a different format,
     # dense not matching because of the way initialization is corrected for RoPE format.
@@ -79,13 +78,13 @@ def test_sc2_match_meg():
 
 
 @pytest.mark.slow
-def test_gpt2_meg():
+def test_gpt2_meg(run_test_script):
     # GPT2 (MHA, layer norm, absolute embeddings) with Megatron.
     run_test_script("test_gpt2_meg", CONFIG_GPT2_MEGATRON + ["--micro-batch-size=8"], is_megatron=True)
 
 
 @pytest.mark.depends(on=["test_gpt2_meg"])
-def test_gpt2_match_meg():
+def test_gpt2_match_meg(run_test_script):
     # GPT2 (MHA, layer norm, absolute embeddings) with Fast-llm.
     # QKV tensors are in a different format.
     run_test_script(
@@ -104,14 +103,14 @@ def test_gpt2_match_meg():
 
 
 @pytest.mark.slow
-def test_mistral_meg():
+def test_mistral_meg(run_test_script):
     # Mistral with Megatron.
     # No linear bias, swiglu activation, RMSNorm
     run_test_script("test_mistral_meg", CONFIG_LLAMA_MEGATRON + ["--micro-batch-size=8"], is_megatron=True)
 
 
 @pytest.mark.depends(on=["test_mistral_meg"])
-def test_mistral_match_meg():
+def test_mistral_match_meg(run_test_script):
     # Mistral with Fast-LLM.
     run_test_script(
         "test_mistral_match_meg",
@@ -130,14 +129,14 @@ def test_mistral_match_meg():
 
 
 @pytest.mark.slow
-def test_mixtral_meg():
+def test_mixtral_meg(run_test_script):
     # Mistral with Megatron.
     # No linear bias, swiglu activation, RMSNorm
     run_test_script("test_mixtral_meg", CONFIG_MIXTRAL_MEGATRON + ["--micro-batch-size=8"], is_megatron=True)
 
 
 @pytest.mark.depends(on=["test_mixtral_meg"])
-def test_mixtral_match_meg():
+def test_mixtral_match_meg(run_test_script):
     # Mistral with Fast-LLM.
     run_test_script(
         "test_mixtral_match_meg",
