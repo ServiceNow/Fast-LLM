@@ -577,8 +577,7 @@ class GPTSampledIndexedDataset(SampledDataset):
                             image_token_array = np.full((image_sizes[idx],), -100, dtype=np.int64)
                             if self._parameters.image_end_token is not None:
                                 image_token_array[-1] = self._parameters.image_end_token
-                        segment = np.concatenate([text_part, image_token_array], dtype=np.int64)
-                        sample_token_ids.append(segment)
+                        sample_token_ids.append(np.concatenate([text_part, image_token_array], dtype=np.int64))
                         text_tokens_added += len(text_part)
                         image_positions.append(text_tokens_added + image_tokens_added)
                         image_tokens_added += image_sizes[idx]
