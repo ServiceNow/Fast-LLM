@@ -1,5 +1,4 @@
 name: Manual Docker Build
-
 on:
   workflow_dispatch:
     inputs:
@@ -7,6 +6,11 @@ on:
         description: 'Branch to build from'
         required: true
         default: 'main'
+        type: string
+      commit_sha:
+        description: 'Specific commit SHA (optional - leave empty to use latest from branch)'
+        required: false
+        default: ''
         type: string
       tag_suffix:
         description: 'Tag suffix (e.g., "test", "b200")'
@@ -30,12 +34,21 @@ jobs:
           sudo rm -rf /usr/share/dotnet || true
           sudo rm -rf /opt/ghc || true
           sudo rm -rf /usr/local/.ghcup || true
-
+          
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.branch }}
-
+          ref: ${{ inputs.commit_sha != '' && inputs.commit_sha || inputs.branch }}
+          
+      - name: Get commit info
+        id: commit_info
+        run: |
+          COMMIT_SHA=$(git rev-parse HEAD)
+          COMMIT_SHORT=$(git rev-parse --short HEAD)
+          echo "full_sha=${COMMIT_SHA}" >> $GITHUB_OUTPUT
+          echo "short_sha=${COMMIT_SHORT}" >> $GITHUB_OUTPUT
+          echo "Building from commit: ${COMMIT_SHA}"
+          
       - name: Docker meta
         id: meta
         uses: docker/metadata-action@v5
@@ -44,12 +57,12 @@ jobs:
             ghcr.io/servicenow/fast-llm
           tags: |
             type=raw,value=${{ inputs.branch }}-${{ inputs.tag_suffix }}
-            type=sha,prefix=${{ inputs.branch }}-${{ inputs.tag_suffix }}-
-            type=raw,value=latest-${{ inputs.tag_suffix }},enable=${{ inputs.branch == 'main' }}
-
+            type=raw,value=${{ inputs.branch }}-${{ inputs.tag_suffix }}-${{ steps.commit_info.outputs.short_sha }}
+            type=raw,value=latest-${{ inputs.tag_suffix }},enable=${{ inputs.branch == 'main' && inputs.commit_sha == '' }}
+            
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-
+        
       - name: Login to GHCR
         if: ${{ inputs.push_image }}
         uses: docker/login-action@v3
@@ -57,7 +70,7 @@ jobs:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
+          
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
@@ -67,8 +80,13 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=registry,ref=ghcr.io/servicenow/fast-llm:cache
           cache-to: type=registry,ref=ghcr.io/servicenow/fast-llm:cache,mode=max
-
-      - name: Output image tags
+          
+      - name: Output build info
         run: |
           echo "Built Docker image with tags:"
           echo "${{ steps.meta.outputs.tags }}"
+          echo ""
+          echo "Build details:"
+          echo "Branch: ${{ inputs.branch }}"
+          echo "Commit: ${{ steps.commit_info.outputs.full_sha }}"
+          echo "Short SHA: ${{ steps.commit_info.outputs.short_sha }}"
