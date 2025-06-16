@@ -56,6 +56,14 @@ class MixtralGPTHuggingfaceCheckpointFormat(GPTHuggingfaceCheckpointFormat):
 class MTPLlamaGPTHuggingfaceCheckpointFormat(GPTHuggingfaceCheckpointFormat):
     name: typing.ClassVar[str] = "mtp_llama"
     trust_remote_code: typing.ClassVar[bool] = True
+    
+class DiffusionDreamGPTHuggingfaceCheckpointFormat(GPTHuggingfaceCheckpointFormat):
+    name: typing.ClassVar[str] = "dream"
+    trust_remote_code: typing.ClassVar[bool] = True
+    
+class DiffusionLlamaGPTHuggingfaceCheckpointFormat(GPTHuggingfaceCheckpointFormat):
+    name: typing.ClassVar[str] = "diffusion_llama"
+    trust_remote_code: typing.ClassVar[bool] = True
 
 
 @config_class()
@@ -139,6 +147,8 @@ class GPTModelConfig(FastLLMModelConfig):
         MistralGPTHuggingfaceCheckpointFormat,
         MixtralGPTHuggingfaceCheckpointFormat,
         MTPLlamaGPTHuggingfaceCheckpointFormat,
+        DiffusionDreamGPTHuggingfaceCheckpointFormat,
+        DiffusionLlamaGPTHuggingfaceCheckpointFormat,
     )
 
     @classmethod
