@@ -21,7 +21,7 @@ from fast_llm.layers.transformer.config import (
 from fast_llm.layers.transformer.mlp import MLPBase
 from fast_llm.logging import log_distributed_grad, log_distributed_tensor, log_memory_usage
 from fast_llm.tensor import TensorMeta, init_normal_
-from fast_llm.utils import Assert
+from fast_llm.utils import Assert, get_lr_scale
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +40,7 @@ class MixtureOfExpertMLP(MLPBase):
 
     _group: ProcessGroup
 
-    def __init__(self, config: TransformerConfig, tensor_space: TensorSpace, name: str = "mlp"):
+    def __init__(self, config: TransformerConfig, tensor_space: TensorSpace, name: str = "mlp", layer_index: int = 0):
         Assert.gt(config.num_experts, 1)
         # TODO: Implement?
         assert not config.add_linear_biases, "Biases not supported for MoE."
@@ -59,6 +59,9 @@ class MixtureOfExpertMLP(MLPBase):
         self._z_loss_factor = config.expert_z_loss_coefficient
         self._moe_jitter_eps = config.moe_jitter_eps
 
+        layer_lr_scale = config.per_layer_lr_scale[layer_index] if config.per_layer_lr_scale else None
+        router_lr_scale = get_lr_scale(config.router_lr_scale, layer_lr_scale)
+
         self.router = Linear(
             tensor_space.get_tensor_dim(TransformerDimNames.hidden),
             tensor_space.get_tensor_dim(TransformerDimNames.unshared_experts),
@@ -66,7 +69,7 @@ class MixtureOfExpertMLP(MLPBase):
             weight_init_method=init_normal_(
                 std=config.init_method_std, min_val=config.init_method_min, max_val=config.init_method_max
             ),
-            lr_scale=config.router_lr_scale,
+            lr_scale=router_lr_scale,
         )
         dropless_moe = config.dropless_moe
         if dropless_moe and tensor_space.distributed_config.sequence_tensor_parallel:
