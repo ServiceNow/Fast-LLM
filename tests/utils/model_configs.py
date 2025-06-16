@@ -6,6 +6,8 @@ import typing
 from fast_llm.engine.checkpoint.config import CheckpointFormat
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig
 from fast_llm.models.gpt.config import (
+    DiffusionDreamGPTHuggingfaceCheckpointFormat,
+    DiffusionLlamaGPTHuggingfaceCheckpointFormat,
     LlamaGPTHuggingfaceCheckpointFormat,
     MistralGPTHuggingfaceCheckpointFormat,
     MixtralGPTHuggingfaceCheckpointFormat,
@@ -226,6 +228,16 @@ _update_and_add_testing_config(
 )
 
 _update_and_add_testing_config(
+    # Tests yarn-style rotary embeddings.
+    "llama_yarn",
+    "diffusion_llama",
+    extra_args=[],
+    # Megatron doesn't support Yarn-style Rotary Embeddings
+    megatron_args=None,
+    checkpoint_format=DiffusionLlamaGPTHuggingfaceCheckpointFormat,
+)
+
+_update_and_add_testing_config(
     # Tests multi-token prediction, custom HF model and converter.
     "llama",
     "llama_mtp",
@@ -240,9 +252,19 @@ _update_and_add_testing_config(
     "llama",
     "qwen2",
     extra_args=["model.base_model.transformer.add_linear_biases=only_attn_qkv"],
-    # Megatron doesn't support per sub layer biases
+    # Megatron doesn't support per sub layer biases.
     megatron_args=None,
     checkpoint_format=Qwen2GPTHuggingfaceCheckpointFormat,
+)
+
+_update_and_add_testing_config(
+    # Diffusion dream converter.
+    "qwen2",
+    "dream",
+    extra_args=[],
+    # Megatron doesn't support per sub layer biases.
+    megatron_args=None,
+    checkpoint_format=DiffusionDreamGPTHuggingfaceCheckpointFormat,
 )
 
 _update_and_add_testing_config(
