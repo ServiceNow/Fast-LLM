@@ -1,4 +1,7 @@
-# coding=utf-8
+import math
+import os
+from dataclasses import dataclass
+
 # Copyright 2022 EleutherAI and the HuggingFace Inc. team. All rights reserved.
 #
 # This code is based on EleutherAI's GPT-NeoX library and the GPT-NeoX
@@ -17,43 +20,36 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-from typing import Callable, Optional, Tuple, Union
+from typing import Callable, Optional, Union
 
 import torch
 import torch.utils.checkpoint
 from torch import nn
-
+from transformers import PretrainedConfig
 from transformers.activations import ACT2FN
 from transformers.cache_utils import Cache, DynamicCache
-from transformers.generation import GenerationMixin
-from transformers.modeling_attn_mask_utils import AttentionMaskConverter
+from transformers.integrations import use_kernel_forward_from_hub
 from transformers.modeling_flash_attention_utils import FlashAttentionKwargs
-# from transformers.modeling_layers import GradientCheckpointingLayer # Update transformer
-from transformers.modeling_outputs import (
-    BaseModelOutputWithPast,
-    MaskedLMOutput,
-    CausalLMOutputWithPast,
-    QuestionAnsweringModelOutput,
-    SequenceClassifierOutputWithPast,
-    TokenClassifierOutput,
-)
-from transformers.modeling_rope_utils import dynamic_rope_update
 
-from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS, PreTrainedModel
+# from transformers.modeling_layers import GradientCheckpointingLayer # Update transformer
+from transformers.modeling_outputs import BaseModelOutputWithPast, MaskedLMOutput
+from transformers.modeling_rope_utils import dynamic_rope_update
+from transformers.modeling_utils import PreTrainedModel
 from transformers.processing_utils import Unpack
 from transformers.pytorch_utils import ALL_LAYERNORM_LAYERS
-from transformers.utils import LossKwargs, can_return_tuple, is_torch_flex_attn_available, logging # auto_docstring
-from .configuration_diffusion_llama import DiffusionLlamaConfig
-from .generation_utils import DreamGenerationMixin
-from .configuration_diffusion_llama import ROPE_INIT_FUNCTIONS
+from transformers.utils import (  # auto_docstring
+    LossKwargs,
+    ModelOutput,
+    can_return_tuple,
+    is_torch_flex_attn_available,
+    logging,
+)
 
+from .configuration_diffusion_llama import ROPE_INIT_FUNCTIONS, DiffusionLlamaConfig
+from .generation_utils import DreamGenerationConfig, DreamGenerationMixin
 
 if is_torch_flex_attn_available():
-    from torch.nn.attention.flex_attention import BlockMask
-
-    from transformers.integrations.flex_attention import make_flex_block_causal_mask
-
-from transformers.integrations import use_kernel_forward_from_hub
+    from flash_attn import flash_attn_with_kvcache
 
 
 logger = logging.get_logger(__name__)
@@ -204,6 +200,7 @@ def eager_attention_forward(
 
     return attn_output, attn_weights
 
+
 # Copied from transformers.integrations.sdpa_attention
 def sdpa_attention_forward(
     module: torch.nn.Module,
@@ -215,7 +212,7 @@ def sdpa_attention_forward(
     scaling: Optional[float] = None,
     # is_causal: Optional[bool] = None,
     **kwargs,
-) -> Tuple[torch.Tensor, None]:
+) -> tuple[torch.Tensor, None]:
     if hasattr(module, "num_key_value_groups"):
         key = repeat_kv(key, module.num_key_value_groups)
         value = repeat_kv(value, module.num_key_value_groups)
@@ -253,12 +250,196 @@ def sdpa_attention_forward(
         dropout_p=dropout,
         scale=scaling,
         # is_causal=is_causal,
-        is_causal=False
+        is_causal=False,
     )
     attn_output = attn_output.transpose(1, 2).contiguous()
 
     return attn_output, None
 
+
+def sdpa_attention_from_dream_forward(
+    self,
+    hidden_states: torch.Tensor,
+    attention_mask: Optional[torch.Tensor] = None,
+    position_ids: Optional[torch.LongTensor] = None,
+    past_key_value: Optional[Cache] = None,
+    output_attentions: bool = False,
+    use_cache: bool = False,
+    cache_position: Optional[torch.LongTensor] = None,
+    position_embeddings: Optional[tuple[torch.Tensor, torch.Tensor]] = None,  # will become mandatory in v4.46
+    is_causal: Optional[bool] = False,
+) -> tuple[torch.Tensor, Optional[torch.Tensor], Optional[tuple[torch.Tensor]]]:
+    if output_attentions:
+        # TODO: Improve this warning with e.g. `model.config.attn_implementation = "manual"` once this is implemented.
+        logger.warning_once(
+            "DreamModel is using DreamSdpaAttention, but `torch.nn.functional.scaled_dot_product_attention` does not support `output_attentions=True`. Falling back to the manual attention implementation, "
+            'but specifying the manual implementation will be required from Transformers version v5.0.0 onwards. This warning can be removed using the argument `attn_implementation="eager"` when loading the model.'
+        )
+        return super().forward(
+            hidden_states=hidden_states,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            past_key_value=past_key_value,
+            output_attentions=output_attentions,
+            use_cache=use_cache,
+        )
+
+    bsz, q_len, _ = hidden_states.size()
+
+    query_states = self.q_proj(hidden_states)
+    key_states = self.k_proj(hidden_states)
+    value_states = self.v_proj(hidden_states)
+
+    # print(f"query_states {query_states.shape} {query_states}")
+
+    query_states = query_states.view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
+    key_states = key_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
+    value_states = value_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
+
+    if position_embeddings is None:
+        logger.warning_once(
+            "The attention layers in this model are transitioning from computing the RoPE embeddings internally "
+            "through `position_ids` (2D tensor with the indexes of the tokens), to using externally computed "
+            "`position_embeddings` (Tuple of tensors, containing cos and sin). In v4.46 `position_ids` will be "
+            "removed and `position_embeddings` will be mandatory."
+        )
+        cos, sin = self.rotary_emb(value_states, position_ids)
+    else:
+        cos, sin = position_embeddings
+
+    query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
+
+    if past_key_value is not None:
+        cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}  # Specific to RoPE models
+        key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
+
+    key_states = repeat_kv(key_states, self.num_key_value_groups)
+    value_states = repeat_kv(value_states, self.num_key_value_groups)
+
+    # SDPA with memory-efficient backend is currently (torch==2.1.2) bugged with non-contiguous inputs with custom attn_mask,
+    # Reference: https://github.com/pytorch/pytorch/issues/112577.
+    if query_states.device.type == "cuda" and attention_mask is not None:
+        query_states = query_states.contiguous()
+        key_states = key_states.contiguous()
+        value_states = value_states.contiguous()
+
+    # We dispatch to SDPA's Flash Attention or Efficient kernels via this `is_causal` if statement instead of an inline conditional assignment
+    # in SDPA to support both torch.compile's dynamic shapes and full graph options. An inline conditional prevents dynamic shapes from compiling.
+    # The q_len > 1 is necessary to match with AttentionMaskConverter.to_causal_4d that does not create a causal mask in case q_len == 1.
+    # is_causal = True if causal_mask is None and q_len > 1 else False
+
+    attn_output = torch.nn.functional.scaled_dot_product_attention(
+        query_states,
+        key_states,
+        value_states,
+        attn_mask=attention_mask if isinstance(attention_mask, torch.Tensor) else None,
+        dropout_p=self.attention_dropout if self.training else 0.0,
+        is_causal=is_causal,
+    )
+
+    attn_output = attn_output.transpose(1, 2).contiguous()
+    attn_output = attn_output.view(bsz, q_len, self.hidden_size)
+
+    attn_output = self.o_proj(attn_output)
+
+    return attn_output, None, past_key_value
+
+
+def flash_attention_from_dreamforward(
+    self,
+    hidden_states: torch.Tensor,
+    attention_mask: Optional[torch.Tensor] = None,
+    position_ids: Optional[torch.LongTensor] = None,
+    past_key_value: Optional[Cache] = None,
+    output_attentions: bool = False,
+    use_cache: bool = False,
+    cache_position: Optional[torch.LongTensor] = None,
+    position_embeddings: Optional[tuple[torch.Tensor, torch.Tensor]] = None,  # will become mandatory in v4.46
+    is_causal: Optional[bool] = False,
+) -> tuple[torch.Tensor, Optional[torch.Tensor], Optional[tuple[torch.Tensor]]]:
+    if output_attentions:
+        # TODO: Improve this warning with e.g. `model.config.attn_implementation = "manual"` once this is implemented.
+        logger.warning_once(
+            "DreamModel is using DreamFlashAttention, it does not support `output_attentions=True`. Falling back to the manual attention implementation, "
+        )
+        return super().forward(
+            hidden_states=hidden_states,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            past_key_value=past_key_value,
+            output_attentions=output_attentions,
+            use_cache=use_cache,
+        )
+
+    bsz, q_len, _ = hidden_states.size()
+
+    query_states = self.q_proj(hidden_states)
+    key_states = self.k_proj(hidden_states)
+    value_states = self.v_proj(hidden_states)
+
+    query_states = query_states.view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
+    key_states = key_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
+    value_states = value_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
+
+    # print(f"hidden_states: {hidden_states.shape} query_states {query_states.shape} key_states {key_states.shape} value_states {value_states.shape}")
+    # print(f"position_ids {position_ids} {position_ids.shape}")
+
+    if position_embeddings is None:
+        logger.warning_once(
+            "The attention layers in this model are transitioning from computing the RoPE embeddings internally "
+            "through `position_ids` (2D tensor with the indexes of the tokens), to using externally computed "
+            "`position_embeddings` (Tuple of tensors, containing cos and sin). In v4.46 `position_ids` will be "
+            "removed and `position_embeddings` will be mandatory."
+        )
+        cos, sin = self.rotary_emb(value_states, position_ids)
+    else:
+        cos, sin = position_embeddings
+
+    query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
+
+    if past_key_value is not None:
+        cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}  # Specific to RoPE models
+        key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
+
+    key_states = repeat_kv(key_states, self.num_key_value_groups)
+    value_states = repeat_kv(value_states, self.num_key_value_groups)
+
+    # if query_states.device.type == "cuda" and attention_mask is not None:
+    #     query_states = query_states.contiguous()
+    #     key_states = key_states.contiguous()
+    #     value_states = value_states.contiguous()
+
+    # We dispatch to SDPA's Flash Attention or Efficient kernels via this `is_causal` if statement instead of an inline conditional assignment
+    # in SDPA to support both torch.compile's dynamic shapes and full graph options. An inline conditional prevents dynamic shapes from compiling.
+    # The q_len > 1 is necessary to match with AttentionMaskConverter.to_causal_4d that does not create a causal mask in case q_len == 1.
+    # is_causal = True if causal_mask is None and q_len > 1 else False
+
+    # attn_output_sdpa = torch.nn.functional.scaled_dot_product_attention(
+    #     query_states,
+    #     key_states,
+    #     value_states,
+    #     attn_mask=attention_mask if isinstance(attention_mask, torch.Tensor) else None,
+    #     dropout_p=self.attention_dropout if self.training else 0.0,
+    #     is_causal=False, # hard coded
+    # )
+
+    # print(f"query_states {query_states.shape} key_states {key_states.shape} value_states {value_states.shape}")
+
+    # replacing with flash attention
+    attn_output = flash_attn_with_kvcache(
+        # q dim (batch_size, seqlen, nheads, headdim)
+        q=query_states.transpose(1, 2).contiguous(),
+        k_cache=key_states.transpose(1, 2).contiguous(),
+        v_cache=value_states.transpose(1, 2).contiguous(),
+        causal=is_causal,  # hard coded
+        softmax_scale=1.0 / math.sqrt(self.head_dim),
+    )
+
+    attn_output = attn_output.view(bsz, q_len, self.hidden_size)
+
+    attn_output = self.o_proj(attn_output)
+
+    return attn_output, None, past_key_value
 
 
 class LlamaAttention(nn.Module):
@@ -290,12 +471,12 @@ class LlamaAttention(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        position_embeddings: Tuple[torch.Tensor, torch.Tensor],
+        position_embeddings: tuple[torch.Tensor, torch.Tensor],
         attention_mask: Optional[torch.Tensor],
         past_key_value: Optional[Cache] = None,
         cache_position: Optional[torch.LongTensor] = None,
         **kwargs: Unpack[FlashAttentionKwargs],
-    ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
+    ) -> tuple[torch.Tensor, Optional[torch.Tensor], Optional[tuple[torch.Tensor]]]:
         input_shape = hidden_states.shape[:-1]
         hidden_shape = (*input_shape, -1, self.head_dim)
 
@@ -320,7 +501,9 @@ class LlamaAttention(nn.Module):
                     'eager attention. This warning can be removed using the argument `attn_implementation="eager"` when loading the model.'
                 )
             elif self.config._attn_implementation == "sdpa":
-                attention_interface = sdpa_attention_forward
+                attention_interface = sdpa_attention_from_dream_forward
+            elif self.config._attn_implementation == "flash_attention":
+                attention_interface = flash_attention_from_dreamforward
             else:
                 raise ValueError(f"Unsupported attention implementation: {self.config._attn_implementation}")
                 # attention_interface = ALL_ATTENTION_FUNCTIONS[self.config._attn_implementation]
@@ -362,14 +545,14 @@ class LlamaDecoderLayer(nn.Module):
         output_attentions: Optional[bool] = False,
         use_cache: Optional[bool] = False,
         cache_position: Optional[torch.LongTensor] = None,
-        position_embeddings: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,  # necessary, but kept here for BC
+        position_embeddings: Optional[tuple[torch.Tensor, torch.Tensor]] = None,  # necessary, but kept here for BC
         **kwargs: Unpack[FlashAttentionKwargs],
-    ) -> Tuple[torch.FloatTensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]]:
+    ) -> tuple[torch.FloatTensor, Optional[tuple[torch.FloatTensor, torch.FloatTensor]]]:
         residual = hidden_states
         hidden_states = self.input_layernorm(hidden_states)
 
         # Self Attention
-        hidden_states, self_attn_weights = self.self_attn(
+        hidden_states, self_attn_weights, present_key_value = self.self_attn(
             hidden_states=hidden_states,
             attention_mask=attention_mask,
             position_ids=position_ids,
@@ -392,6 +575,14 @@ class LlamaDecoderLayer(nn.Module):
         if output_attentions:
             outputs += (self_attn_weights,)
 
+        if use_cache:
+            outputs += (present_key_value,)
+
+        # When use_cache is True, outputs will have length:
+        # - 2 if output_attentions is False (hidden_states, present_key_value)
+        # - 3 if output_attentions is True (hidden_states, self_attn_weights, present_key_value)
+        # print(f"DreamDecoderLayer: outputs {len(outputs)}")
+
         return outputs
 
 
@@ -403,7 +594,7 @@ class DiffusionLlamaPreTrainedModel(PreTrainedModel):
     _no_split_modules = ["LlamaDecoderLayer"]
     _skip_keys_device_placement = ["past_key_values"]
     _supports_flash_attn_2 = False
-    _supports_sdpa = False # TODO: Enable sdpa 
+    _supports_sdpa = False  # TODO: Enable sdpa
     _supports_flex_attn = False
     _supports_cache_class = True
     _supports_quantized_cache = False
@@ -423,59 +614,60 @@ class DiffusionLlamaPreTrainedModel(PreTrainedModel):
         elif isinstance(module, LlamaRMSNorm):
             module.weight.data.fill_(1.0)
 
-    # TODO: Copied from Dream Update 
-    # @classmethod
-    # def from_pretrained(
-    #     cls,
-    #     pretrained_model_name_or_path: Optional[Union[str, os.PathLike]],
-    #     *model_args,
-    #     config: Optional[Union[PretrainedConfig, str, os.PathLike]] = None,
-    #     cache_dir: Optional[Union[str, os.PathLike]] = None,
-    #     ignore_mismatched_sizes: bool = False,
-    #     force_download: bool = False,
-    #     local_files_only: bool = False,
-    #     token: Optional[Union[str, bool]] = None,
-    #     revision: str = "main",
-    #     use_safetensors: Optional[bool] = None,
-    #     weights_only: bool = True,
-    #     **kwargs,
-    # ):
-    #     _model = super().from_pretrained(
-    #         pretrained_model_name_or_path,
-    #         *model_args,
-    #         config=config,
-    #         cache_dir=cache_dir,
-    #         ignore_mismatched_sizes=ignore_mismatched_sizes,
-    #         force_download=force_download,
-    #         local_files_only=local_files_only,
-    #         token=token,
-    #         revision=revision,
-    #         use_safetensors=use_safetensors,
-    #         weights_only=weights_only,
-    #         **kwargs,
-    #     )
-    #     # NOTE(Lin): we need to override the generation config
-    #     # because the generation config loaded in `from_pretrained` 
-    #     # does not include all the attributes of DreamGenerationConfig
-    #     resume_download = kwargs.get("resume_download", None)
-    #     proxies = kwargs.get("proxies", None)
-    #     subfolder = kwargs.get("subfolder", "")
-    #     from_auto_class = kwargs.get("_from_auto", False)
-    #     from_pipeline = kwargs.get("_from_pipeline", None)
-    #     _model.generation_config = DreamGenerationConfig.from_pretrained(
-    #         pretrained_model_name_or_path,
-    #         cache_dir=cache_dir,
-    #         force_download=force_download,
-    #         resume_download=resume_download,
-    #         proxies=proxies,
-    #         local_files_only=local_files_only,
-    #         token=token,
-    #         revision=revision,
-    #         subfolder=subfolder,
-    #         _from_auto=from_auto_class,
-    #         _from_pipeline=from_pipeline,
-    #     )
-    #     return _model
+    # TODO: Copied from Dream Update
+    @classmethod
+    def from_pretrained(
+        cls,
+        pretrained_model_name_or_path: Optional[Union[str, os.PathLike]],
+        *model_args,
+        config: Optional[Union[PretrainedConfig, str, os.PathLike]] = None,
+        cache_dir: Optional[Union[str, os.PathLike]] = None,
+        ignore_mismatched_sizes: bool = False,
+        force_download: bool = False,
+        local_files_only: bool = False,
+        token: Optional[Union[str, bool]] = None,
+        revision: str = "main",
+        use_safetensors: Optional[bool] = None,
+        weights_only: bool = True,
+        **kwargs,
+    ):
+        _model = super().from_pretrained(
+            pretrained_model_name_or_path,
+            *model_args,
+            config=config,
+            cache_dir=cache_dir,
+            ignore_mismatched_sizes=ignore_mismatched_sizes,
+            force_download=force_download,
+            local_files_only=local_files_only,
+            token=token,
+            revision=revision,
+            use_safetensors=use_safetensors,
+            weights_only=weights_only,
+            **kwargs,
+        )
+        # NOTE(Lin): we need to override the generation config
+        # because the generation config loaded in `from_pretrained`
+        # does not include all the attributes of DreamGenerationConfig
+        resume_download = kwargs.get("resume_download", None)
+        proxies = kwargs.get("proxies", None)
+        subfolder = kwargs.get("subfolder", "")
+        from_auto_class = kwargs.get("_from_auto", False)
+        from_pipeline = kwargs.get("_from_pipeline", None)
+        _model.generation_config = DreamGenerationConfig.from_pretrained(
+            pretrained_model_name_or_path,
+            cache_dir=cache_dir,
+            force_download=force_download,
+            resume_download=resume_download,
+            proxies=proxies,
+            local_files_only=local_files_only,
+            token=token,
+            revision=revision,
+            subfolder=subfolder,
+            _from_auto=from_auto_class,
+            _from_pipeline=from_pipeline,
+        )
+        return _model
+
 
 # @auto_docstring
 class DiffusionLlamaBaseModel(DiffusionLlamaPreTrainedModel):
@@ -592,12 +784,52 @@ class DiffusionLlamaBaseModel(DiffusionLlamaPreTrainedModel):
         if output_hidden_states:
             all_hidden_states += (hidden_states,)
 
+        if use_cache:
+            # print("past_key_values", past_key_values, "use_cache", use_cache, "layer_outputs", layer_outputs)
+            past_key_values = layer_outputs[-1]
+
         return BaseModelOutputWithPast(
             last_hidden_state=hidden_states,
-            past_key_values=past_key_values if use_cache else None,
+            past_key_values=past_key_values,
             hidden_states=all_hidden_states,
             attentions=all_self_attns,
         )
+
+
+@dataclass
+class MaskedLMOutputWithPast(ModelOutput):
+    """
+    Base class for masked language models outputs with past.
+
+    Args:
+        loss (`torch.FloatTensor` of shape `(1,)`, *optional*, returned when `labels` is provided):
+            Masked language modeling (MLM) loss.
+        logits (`torch.FloatTensor` of shape `(batch_size, sequence_length, config.vocab_size)`):
+            Prediction scores of the language modeling head (scores for each vocabulary token before SoftMax).
+        hidden_states (`tuple(torch.FloatTensor)`, *optional*, returned when `output_hidden_states=True` is passed or when `config.output_hidden_states=True`):
+            Tuple of `torch.FloatTensor` (one for the output of the embeddings, if the model has an embedding layer, +
+            one for the output of each layer) of shape `(batch_size, sequence_length, hidden_size)`.
+
+            Hidden-states of the model at the output of each layer plus the optional initial embedding outputs.
+        attentions (`tuple(torch.FloatTensor)`, *optional*, returned when `output_attentions=True` is passed or when `config.output_attentions=True`):
+            Tuple of `torch.FloatTensor` (one for each layer) of shape `(batch_size, num_heads, sequence_length,
+            sequence_length)`.
+
+            Attentions weights after the attention softmax, used to compute the weighted average in the self-attention
+            heads.
+        past_key_values (`tuple(tuple(torch.FloatTensor))`, *optional*, returned when `use_cache=True` is passed or when `config.use_cache=True`):
+            Tuple of `tuple(torch.FloatTensor)` of length `config.n_layers`, with each tuple having 2 tensors of shape
+            `(batch_size, num_heads, sequence_length, embed_size_per_head)`)
+
+            Contains pre-computed hidden-states (key and values in the self-attention blocks) that can be used (see
+            `past_key_values` input) to speed up sequential decoding.
+    """
+
+    loss: Optional[torch.FloatTensor] = None
+    logits: torch.FloatTensor = None
+    hidden_states: Optional[tuple[torch.FloatTensor, ...]] = None
+    attentions: Optional[tuple[torch.FloatTensor, ...]] = None
+    past_key_values: Optional[tuple[Cache]] = None
 
     # TODO: Update for diffusion with bi-directional attention (later block casual masking)
     # def _update_causal_mask(
@@ -775,11 +1007,11 @@ class DiffusionLlamaModel(DiffusionLlamaPreTrainedModel, DreamGenerationMixin):
         output_hidden_states: Optional[bool] = None,
         cache_position: Optional[torch.LongTensor] = None,
         logits_to_keep: Union[int, torch.Tensor] = 0,
-        **kwargs, # TODO: Kwargs for Diffusion? : Unpack[KwargsForCausalLM],
+        **kwargs,  # TODO: Kwargs for Diffusion? : Unpack[KwargsForCausalLM],
     ) -> MaskedLMOutput:
         r"""
         # TODO: Update docstring for diffusion
-        
+
         labels (`torch.LongTensor` of shape `(batch_size, sequence_length)`, *optional*):
             Labels for computing the masked language modeling loss. Indices should either be in `[0, ...,
             config.vocab_size]` or -100 (see `input_ids` docstring). Tokens with indices set to `-100` are ignored
@@ -817,6 +1049,7 @@ class DiffusionLlamaModel(DiffusionLlamaPreTrainedModel, DreamGenerationMixin):
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
             cache_position=cache_position,
+            # is_casual=kwargs.get("is_casual", False),
             **kwargs,
         )
 
@@ -829,12 +1062,20 @@ class DiffusionLlamaModel(DiffusionLlamaPreTrainedModel, DreamGenerationMixin):
         if labels is not None:
             loss = self.loss_function(logits=logits, labels=labels, vocab_size=self.config.vocab_size, **kwargs)
 
-        return MaskedLMOutput(
+        # return MaskedLMOutput(
+        #     loss=loss,
+        #     logits=logits,
+        #     hidden_states=outputs.hidden_states,
+        #     attentions=outputs.attentions,
+        # )
+        return MaskedLMOutputWithPast(
             loss=loss,
             logits=logits,
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
+            past_key_values=outputs.past_key_values,
         )
+
 
 # @auto_docstring
 # class LlamaForCausalLM(LlamaPreTrainedModel, GenerationMixin):
@@ -1181,10 +1422,5 @@ class DiffusionLlamaModel(DiffusionLlamaPreTrainedModel, DreamGenerationMixin):
 
 
 __all__ = [
-    # "LlamaForCausalLM",
     "DiffusionLlamaModel",
-    # "LlamaPreTrainedModel",
-    # "LlamaForSequenceClassification",
-    # "LlamaForQuestionAnswering",
-    # "LlamaForTokenClassification",
 ]

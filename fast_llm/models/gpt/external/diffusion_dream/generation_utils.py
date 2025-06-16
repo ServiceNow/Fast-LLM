@@ -1,4 +1,3 @@
-# coding=utf-8
 # Copyright 2024 The Dream team, HKUNLP Group and the HuggingFace Inc. team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -13,26 +12,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import warnings
 import copy
+import warnings
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Tuple, Union
 from math import ceil
+from typing import Any, Optional, Union
 
 import torch
 import torch.distributions as dists
 from torch.nn import functional as F
 from transformers import __version__
-from transformers.generation.configuration_utils import (
-    GenerationConfig
-)
-from transformers.utils import (
-    ModelOutput,
-    is_torchdynamo_compiling,
-    logging,
-)
+from transformers.generation.configuration_utils import GenerationConfig
 from transformers.generation.utils import GenerationMixin
-from transformers.cache_utils import DynamicCache
+from transformers.utils import ModelOutput, is_torchdynamo_compiling, logging
 
 logger = logging.get_logger(__name__)
 
@@ -49,6 +41,7 @@ def top_p_logits(logits, top_p=None):
     mask = mask.scatter_(-1, sorted_indices, sorted_indices_to_remove)
     logits = logits.masked_fill(mask, torch.finfo(logits.dtype).min)
     return logits
+
 
 def top_k_logits(logits, top_k=None):
     top_k = min(top_k, logits.size(-1))  # Safety check
@@ -76,24 +69,27 @@ def sample_tokens(logits, temperature=0.0, top_p=None, top_k=None, margin_confid
             confidence, x0 = probs.max(dim=-1)
     else:
         confidence, x0 = probs.max(dim=-1)
-    
+
     if margin_confidence:
         sorted_probs, _ = torch.sort(probs, dim=-1, descending=True)
         # Extract top1 and top2 probabilities
-        top1_probs = sorted_probs[:, 0] 
-        top2_probs = sorted_probs[:, 1] 
+        top1_probs = sorted_probs[:, 0]
+        top2_probs = sorted_probs[:, 1]
         # Calculate confidence as top1 - top2
-        confidence = top1_probs - top2_probs 
-    
+        confidence = top1_probs - top2_probs
+
     if neg_entropy:
         epsilon = 1e-10
         log_probs = torch.log(probs + epsilon)
         confidence = torch.sum(probs * log_probs, dim=-1)
-    
+
     return confidence, x0
 
+
 # batch_sample_tokens
-def batch_sample_tokens(logits, mask_indexes, temperature=0.0, top_p=None, top_k=None, margin_confidence=False, neg_entropy=False):
+def batch_sample_tokens(
+    logits, mask_indexes, temperature=0.0, top_p=None, top_k=None, margin_confidence=False, neg_entropy=False
+):
     # print(f"batch_sample_tokens: {logits.shape} ")
     if temperature > 0:
         logits = logits / temperature
@@ -102,7 +98,7 @@ def batch_sample_tokens(logits, mask_indexes, temperature=0.0, top_p=None, top_k
         logits = torch.stack([top_p_logits(logit[mask], top_p) for logit, mask in zip(logits, mask_indexes)], dim=0)
     if top_k is not None:
         logits = torch.stack([top_k_logits(logit[mask], top_k) for logit, mask in zip(logits, mask_indexes)], dim=0)
-        
+
     # if logits are not of the same sequence so therefore we can pad them with -inf but need remove them back ...
     probs = torch.softmax(logits, dim=-1)
     # print(f"probs: {probs.shape}")
@@ -132,10 +128,11 @@ def batch_sample_tokens(logits, mask_indexes, temperature=0.0, top_p=None, top_k
 
     return confidence, x0
 
+
 @dataclass
 class DreamModelOutput(ModelOutput):
     sequences: torch.LongTensor = None
-    history: Optional[Tuple[torch.FloatTensor]] = None
+    history: Optional[tuple[torch.FloatTensor]] = None
 
 
 class DreamGenerationConfig(GenerationConfig):
@@ -148,7 +145,7 @@ class DreamGenerationConfig(GenerationConfig):
         # diffusion specific params
         self.eps: float = kwargs.pop("eps", 1e-3)
         self.steps: int = kwargs.pop("steps", 512)
-        self.alg: str = kwargs.pop("alg", 'origin')
+        self.alg: str = kwargs.pop("alg", "origin")
         self.alg_temp: Optional[float] = kwargs.pop("alg_temp", None)
 
         # Parameters that define the output variables of `generate`
@@ -188,13 +185,14 @@ class DreamGenerationConfig(GenerationConfig):
     def validate(self, is_init=False):
         pass
 
+
 class DreamGenerationMixin(GenerationMixin):
     @staticmethod
     def _expand_inputs_for_generation(
         expand_size: int = 1,
         input_ids: Optional[torch.LongTensor] = None,
-        attention_mask: Optional[torch.LongTensor] = None
-    ) -> Tuple[torch.LongTensor, Dict[str, Any]]:
+        attention_mask: Optional[torch.LongTensor] = None,
+    ) -> tuple[torch.LongTensor, dict[str, Any]]:
         """Expands tensors from [batch_size, ...] to [batch_size * expand_size, ...]"""
         # Do not call torch.repeat_interleave if expand_size is 1 because it clones
         # the input tensor and thus requires more memory although no change is applied
@@ -258,7 +256,7 @@ class DreamGenerationMixin(GenerationMixin):
         return generation_config
 
     def _prepare_generation_config(
-        self, generation_config: Optional[DreamGenerationConfig], **kwargs: Dict
+        self, generation_config: Optional[DreamGenerationConfig], **kwargs: dict
     ) -> DreamGenerationConfig:
         """
         Prepares the base generation config, then applies any generation configuration options from kwargs. This
@@ -275,7 +273,7 @@ class DreamGenerationMixin(GenerationMixin):
         # exception will be raised in `_validate_model_kwargs`
         if not is_torchdynamo_compiling():
             generation_config = copy.deepcopy(generation_config)
-            _kwargs = generation_config.update(**kwargs)
+            generation_config.update(**kwargs)
             # If `generation_config` is provided, let's fallback ALL special tokens to the default values for the model
             if not using_model_generation_config:
                 if generation_config.bos_token_id is None:
@@ -345,10 +343,12 @@ class DreamGenerationMixin(GenerationMixin):
     ) -> Union[DreamModelOutput, torch.LongTensor]:
         # fix seed for reproducability torch.random.manual_seed - lm-eval is setting it
         torch.random.manual_seed(0)
-        
+
         # 1. Handle `generation_config` and kwargs that might update it, and validate the `.generate()` call
         generation_config = self._prepare_generation_config(generation_config, **kwargs)
-        generation_tokens_hook_func = kwargs.pop("generation_tokens_hook_func", lambda step, x, logits, end_of_prompt: x)
+        generation_tokens_hook_func = kwargs.pop(
+            "generation_tokens_hook_func", lambda step, x, logits, end_of_prompt: x
+        )
         generation_logits_hook_func = kwargs.pop("generation_logits_hook_func", lambda step, x, logits: logits)
 
         # 2. Define model inputs
@@ -363,7 +363,7 @@ class DreamGenerationMixin(GenerationMixin):
         has_default_max_length = kwargs.get("max_length") is None and generation_config.max_length is not None
         generation_config = self._prepare_generated_length(
             generation_config=generation_config,
-            has_default_max_length=# The code `has_default_max_length` is not a valid Python code
+            has_default_max_length=  # The code `has_default_max_length` is not a valid Python code
             # snippet. It seems to be a placeholder or a comment in the code.
             # It does not perform any specific action or functionality in
             # Python.
@@ -372,7 +372,7 @@ class DreamGenerationMixin(GenerationMixin):
         )
 
         self._validate_generated_length(generation_config, input_ids_length, has_default_max_length)
-        
+
         # 4. Check input_ids
         if not is_torchdynamo_compiling() and self.device.type != input_ids.device.type:
             warnings.warn(
@@ -385,9 +385,9 @@ class DreamGenerationMixin(GenerationMixin):
                 UserWarning,
             )
         if (
-            hasattr(generation_config, "pad_token_id") and
-            torch.any(input_ids == generation_config.pad_token_id) and 
-            attention_mask is None
+            hasattr(generation_config, "pad_token_id")
+            and torch.any(input_ids == generation_config.pad_token_id)
+            and attention_mask is None
         ):
             warnings.warn(
                 "Padding was detected but no attention mask is passed here. For correct "
@@ -396,16 +396,13 @@ class DreamGenerationMixin(GenerationMixin):
             )
 
         input_ids, attention_mask = self._expand_inputs_for_generation(
-            expand_size=generation_config.num_return_sequences,
-            input_ids=input_ids,
-            attention_mask=attention_mask 
+            expand_size=generation_config.num_return_sequences, input_ids=input_ids, attention_mask=attention_mask
         )
 
         block_size = kwargs.pop("block_size", None)
         use_cache = kwargs.pop("use_cache", False)
         causal_cache = kwargs.pop("causal_cache", False)
-        
-        
+
         if block_size is None:
             # Default diffusion generation
             result = self._sample(
@@ -413,7 +410,7 @@ class DreamGenerationMixin(GenerationMixin):
                 attention_mask=attention_mask,
                 generation_config=generation_config,
                 generation_tokens_hook_func=generation_tokens_hook_func,
-                generation_logits_hook_func=generation_logits_hook_func
+                generation_logits_hook_func=generation_logits_hook_func,
             )
             return result
         else:
@@ -429,7 +426,7 @@ class DreamGenerationMixin(GenerationMixin):
                 )
                 return result
             else:
-                # Block generation with (diffusion) KV Caching   
+                # Block generation with (diffusion) KV Caching
                 result = self._sample_with_block(
                     input_ids,
                     attention_mask=attention_mask,
@@ -441,15 +438,14 @@ class DreamGenerationMixin(GenerationMixin):
                 )
                 return result
 
-
-# loop confidence implementation - working same results for bs 1
+    # loop confidence implementation - working same results for bs 1
     def _sample(
         self,
         input_ids: torch.LongTensor,
         attention_mask: Optional[torch.LongTensor],
         generation_config: DreamGenerationConfig,
         generation_tokens_hook_func,
-        generation_logits_hook_func
+        generation_logits_hook_func,
     ) -> Union[DreamModelOutput, torch.LongTensor]:
         # init values
         output_history = generation_config.output_history
@@ -465,7 +461,7 @@ class DreamGenerationMixin(GenerationMixin):
         top_k = generation_config.top_k
 
         histories = [] if (return_dict_in_generate and output_history) else None
-        
+
         pad_token_id = generation_config.pad_token_id
         eos_token_id = generation_config.eos_token_id
 
@@ -491,32 +487,31 @@ class DreamGenerationMixin(GenerationMixin):
 
         input_ids_length = input_ids.shape[1]
         batch_size = input_ids.shape[0]
-        
-        # this allows user-defined token control of the intermediate steps        
+
+        # this allows user-defined token control of the intermediate steps
         # x = generation_tokens_hook_func(None, x, None, input_ids_length)
-        
+
         for i in range(steps):
-            
-            
+
             logits = self(x, attention_mask, tok_idx).logits
-            logits = torch.cat([logits[:,:1], logits[:, :-1]], dim=1)
+            logits = torch.cat([logits[:, :1], logits[:, :-1]], dim=1)
 
             # this allows user-defined logits control of the intermediate steps
             logits = generation_logits_hook_func(i, x, logits)
-            
+
             t = timesteps[i]
             s = timesteps[i + 1]
 
             # loop around the batch
             for b in range(batch_size):
                 x_row = x[b, :]
-                mask_index = (x_row == mask_token_id)
+                mask_index = x_row == mask_token_id
                 # if the sequence is already completed, skip it
                 if mask_index.sum() == 0:
                     continue
                 mask_logits = logits[b, mask_index]
-        
-                if alg == 'origin':
+
+                if alg == "origin":
                     # p_transfer = 1 - s / t if i < steps - 1 else 1
                     # x0 = torch.zeros_like(x[mask_index], device=self.device, dtype=torch.long) + mask_token_id
                     # transfer_index_t_s = torch.rand(*x0.shape, device=self.device) < p_transfer
@@ -524,25 +519,29 @@ class DreamGenerationMixin(GenerationMixin):
                     # x[mask_index] = x0.clone()
                     raise RuntimeError("batch origin alg is not supported")
                 else:
-                    if alg == 'maskgit_plus':
+                    if alg == "maskgit_plus":
                         confidence, x0 = sample_tokens(mask_logits, temperature=temperature, top_p=top_p, top_k=top_k)
-                    elif alg == 'topk_margin':
-                        confidence, x0 = sample_tokens(mask_logits, temperature=temperature, top_p=top_p, top_k=top_k, margin_confidence=True)
-                    elif alg == 'entropy':
-                        confidence, x0 = sample_tokens(mask_logits, temperature, top_p=top_p, top_k=top_k, neg_entropy=True)
+                    elif alg == "topk_margin":
+                        confidence, x0 = sample_tokens(
+                            mask_logits, temperature=temperature, top_p=top_p, top_k=top_k, margin_confidence=True
+                        )
+                    elif alg == "entropy":
+                        confidence, x0 = sample_tokens(
+                            mask_logits, temperature, top_p=top_p, top_k=top_k, neg_entropy=True
+                        )
                     else:
                         raise RuntimeError(f"Unknown alg: {alg}")
                     num_mask_token = mask_index.sum()
-                    number_transfer_tokens =  ceil(num_mask_token * (1 - s / t)) if i < steps - 1 else num_mask_token
-                    
+                    number_transfer_tokens = ceil(num_mask_token * (1 - s / t)) if i < steps - 1 else num_mask_token
+
                     if number_transfer_tokens > 0:
                         if alg_temp is None or alg_temp == 0:
                             _, transfer_index = torch.topk(confidence, number_transfer_tokens)
-                            
+
                         else:
                             confidence = confidence / alg_temp
                             confidence = F.softmax(confidence, dim=-1)
-                            
+
                             transfer_index = torch.multinomial(confidence, num_samples=number_transfer_tokens)
                         x0_ = torch.zeros_like(x0, device=self.device, dtype=torch.long) + mask_token_id
                         x0_[transfer_index] = x0[transfer_index].clone()
@@ -550,16 +549,15 @@ class DreamGenerationMixin(GenerationMixin):
 
             # this allows user-defined token control of the intermediate steps
             x = generation_tokens_hook_func(i, x, logits, input_ids_length)
-            
+
             if not torch.any(x == mask_token_id):
                 break
 
-            
             # Update attention mask based on pad_token_id and eos_token_id
             attention_mask_tmp = torch.where(
                 (x == pad_token_id) | (x == eos_token_id),
                 torch.tensor(0, device=x.device, dtype=torch.bool),
-                torch.tensor(1, device=x.device, dtype=torch.bool)
+                torch.tensor(1, device=x.device, dtype=torch.bool),
             )
             attention_mask_tmp = torch.logical_and(
                 attention_mask_tmp.unsqueeze(1).unsqueeze(-2),
@@ -570,7 +568,7 @@ class DreamGenerationMixin(GenerationMixin):
 
             if histories is not None:
                 histories.append(x.clone())
-        
+
         if return_dict_in_generate:
             return DreamModelOutput(
                 sequences=x,
@@ -579,8 +577,7 @@ class DreamGenerationMixin(GenerationMixin):
         else:
             return x
 
-
-# block generation with kv cache
+    # block generation with kv cache
     def _sample_with_block(
         self,
         input_ids: torch.LongTensor,
@@ -589,7 +586,7 @@ class DreamGenerationMixin(GenerationMixin):
         block_size: int,
         use_cache: bool,
         generation_tokens_hook_func,
-        generation_logits_hook_func
+        generation_logits_hook_func,
     ) -> Union[DreamModelOutput, torch.LongTensor]:
         # init values
         output_history = generation_config.output_history
@@ -606,15 +603,14 @@ class DreamGenerationMixin(GenerationMixin):
         use_cache = use_cache
 
         histories = [] if (return_dict_in_generate and output_history) else None
-        
+
         pad_token_id = generation_config.pad_token_id
         eos_token_id = generation_config.eos_token_id
         block_size = block_size
         gen_length = generation_config.max_new_tokens
         num_of_blocks = gen_length // block_size
         steps = steps // num_of_blocks
-        
-        
+
         assert gen_length % block_size == 0, "gen_length should be divisible by block_size"
 
         # pad input_ids to max_length
@@ -628,7 +624,7 @@ class DreamGenerationMixin(GenerationMixin):
             tok_idx_base = attention_mask.long().cumsum(-1) - 1
             tok_idx_base.masked_fill_(attention_mask == 0, 1)
             # Leave padding out "<|endoftext|>1+1=2 2+2=" -> [ 1,  0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14, 15, 16, 17]
-            
+
             # attention_mask is of shape [B, N]
             # broadcast to [B, 1, N, N]
             # Set False for padding tokens and rest True
@@ -644,40 +640,42 @@ class DreamGenerationMixin(GenerationMixin):
 
         input_ids_length = input_ids.shape[1]
         batch_size = input_ids.shape[0]
-        
+
         past_key_values = None
         past_length = 0
         settled_length = input_ids_length
         x_input = x.clone()
         tok_idx = tok_idx_base.clone() if tok_idx_base is not None else None
-        
+
         for blk_indx in range(num_of_blocks):
             current_block = (num_of_blocks - (blk_indx + 1)) * block_size
-            
+
             for i in range(steps):
-                           
-                model_outputs = self(x_input, attention_mask, tok_idx, use_cache=use_cache, past_key_values=past_key_values)
-                
+
+                model_outputs = self(
+                    x_input, attention_mask, tok_idx, use_cache=use_cache, past_key_values=past_key_values
+                )
+
                 logits = model_outputs.logits
-                logits = torch.cat([logits[:,:1], logits[:, :-1]], dim=1)
-                
+                logits = torch.cat([logits[:, :1], logits[:, :-1]], dim=1)
+
                 t = timesteps[i]
                 s = timesteps[i + 1]
 
                 # loop around the batch
                 for b in range(batch_size):
                     x_row = x_input[b, :]
-                    mask_index = (x_row == mask_token_id)
-                    
+                    mask_index = x_row == mask_token_id
+
                     # if the sequence is already completed, skip it
                     if mask_index.sum() == 0:
                         continue
-                    
+
                     if current_block > 0:
                         mask_index[-current_block:] = False
                     mask_logits = logits[b, mask_index]
-            
-                    if alg == 'origin':
+
+                    if alg == "origin":
                         # p_transfer = 1 - s / t if i < steps - 1 else 1
                         # x0 = torch.zeros_like(x[mask_index], device=self.device, dtype=torch.long) + mask_token_id
                         # transfer_index_t_s = torch.rand(*x0.shape, device=self.device) < p_transfer
@@ -685,27 +683,35 @@ class DreamGenerationMixin(GenerationMixin):
                         # x[mask_index] = x0.clone()
                         raise RuntimeError("batch origin alg is not supported")
                     else:
-                        if alg == 'maskgit_plus':
-                            confidence, x0 = sample_tokens(mask_logits, temperature=temperature, top_p=top_p, top_k=top_k)
-                        elif alg == 'topk_margin':
-                            confidence, x0 = sample_tokens(mask_logits, temperature=temperature, top_p=top_p, top_k=top_k, margin_confidence=True)
-                        elif alg == 'entropy':
-                            confidence, x0 = sample_tokens(mask_logits, temperature, top_p=top_p, top_k=top_k, neg_entropy=True)
+                        if alg == "maskgit_plus":
+                            confidence, x0 = sample_tokens(
+                                mask_logits, temperature=temperature, top_p=top_p, top_k=top_k
+                            )
+                        elif alg == "topk_margin":
+                            confidence, x0 = sample_tokens(
+                                mask_logits, temperature=temperature, top_p=top_p, top_k=top_k, margin_confidence=True
+                            )
+                        elif alg == "entropy":
+                            confidence, x0 = sample_tokens(
+                                mask_logits, temperature, top_p=top_p, top_k=top_k, neg_entropy=True
+                            )
                         else:
                             raise RuntimeError(f"Unknown alg: {alg}")
                         num_mask_token = mask_index.sum()
-                        number_transfer_tokens = ceil(num_mask_token * (1 - s / t)) if i < steps - 1 else num_mask_token
-                        
+                        number_transfer_tokens = (
+                            ceil(num_mask_token * (1 - s / t)) if i < steps - 1 else num_mask_token
+                        )
+
                         # print(f"block: {blk_indx} step: {i} batch: {b} confidence: {confidence} x0: {x0}")
                         # print(f"number_transfer_tokens: {number_transfer_tokens} num_mask_token: {num_mask_token} ")
                         if number_transfer_tokens > 0:
                             if alg_temp is None or alg_temp == 0:
                                 _, transfer_index = torch.topk(confidence, number_transfer_tokens)
-                                
+
                             else:
                                 confidence = confidence / alg_temp
                                 confidence = F.softmax(confidence, dim=-1)
-                                
+
                                 transfer_index = torch.multinomial(confidence, num_samples=number_transfer_tokens)
                             x0_ = torch.zeros_like(x0, device=self.device, dtype=torch.long) + mask_token_id
                             x0_[transfer_index] = x0[transfer_index].clone()
@@ -717,50 +723,49 @@ class DreamGenerationMixin(GenerationMixin):
                 if use_cache:
                     # 1. Update settled tokens
                     x[:, past_length:] = x_input
-                    
+
                     # TODO: We can avoid these updates by setting a flag in the Attention call to not set KVs for these forward passes and only set when we reach end of the block
                     # Prepare for next forward pass
-                    # 2. Update past_key_values to include only settled tokens from previous blocks 
+                    # 2. Update past_key_values to include only settled tokens from previous blocks
                     past_key_values = model_outputs.past_key_values
                     # need to reset this since the Attention call will add new KVs
                     past_key_values.crop(settled_length)
                     # past_key_values are already set from the last forward pass
                     past_length = past_key_values.get_seq_length()
-                                       
-                     
+
                     # 3. Generic cache-dependent input and position index
                     # https://github.com/huggingface/transformers/blob/5f4ecf2d9f867a1255131d2461d75793c0cf1db2/src/transformers/generation/utils.py#L410C13-L410C53
                     x_input = x[:, past_length:].clone()
                     tok_idx = tok_idx_base[:, past_length:] if tok_idx is not None else None
-                    
+
                     # TODO: optimize this we don't need to compute this every forward pass maybe only change location where tokens are settled; adhering to early stopping
                     # 4. Set attention mask
                     # Update attention mask based from the full x to capture past eos and pad tokens masks
                     attention_mask_tmp = torch.where(
                         (x == pad_token_id) | (x == eos_token_id),
                         torch.tensor(0, device=x.device, dtype=torch.bool),
-                        torch.tensor(1, device=x.device, dtype=torch.bool)
+                        torch.tensor(1, device=x.device, dtype=torch.bool),
                     )
                     attention_mask_tmp = torch.logical_and(
                         attention_mask_tmp.unsqueeze(1).unsqueeze(-2),
                         attention_mask_tmp.unsqueeze(1).unsqueeze(-1),
                     )
-                    
+
                     # Drop values from the 3rd dimension to the size of new x_input so that it current Qs (aka inputs)
                     # [B, 1, Q_dim, K_dim]
                     attention_mask_tmp = attention_mask_tmp[:, :, past_length:, :]
                     attention_mask = attention_mask_tmp
                     # print(f"attention_mask: {attention_mask_tmp.shape}")
-                    
+
                 else:
                     x = x_input
-                    
+
                     # Set attention mask
                     # Update attention mask based on pad_token_id and eos_token_id
                     attention_mask_tmp = torch.where(
                         (x_input == pad_token_id) | (x_input == eos_token_id),
                         torch.tensor(0, device=x.device, dtype=torch.bool),
-                        torch.tensor(1, device=x.device, dtype=torch.bool)
+                        torch.tensor(1, device=x.device, dtype=torch.bool),
                     )
                     attention_mask_tmp = torch.logical_and(
                         attention_mask_tmp.unsqueeze(1).unsqueeze(-2),
@@ -771,15 +776,19 @@ class DreamGenerationMixin(GenerationMixin):
 
                 if histories is not None:
                     histories.append(x.clone())
-                
+
+                if not torch.any(x == mask_token_id):
+                    # print("unmasked all tokens in current x exiting")
+                    break
+
                 # print(f"x_input: {x_input.shape} tok_idx: {tok_idx.shape if tok_idx is not None else None} {tok_idx}")
-                
+
             # A block is completed update settled tokens length
             if not torch.any(x == mask_token_id):
                 # print("unmasked all tokens in current x exiting")
                 break
             settled_length += block_size
-                
+
         if return_dict_in_generate:
             return DreamModelOutput(
                 sequences=x,
@@ -787,8 +796,8 @@ class DreamGenerationMixin(GenerationMixin):
             )
         else:
             return x
-        
-# block generation with casual kv cache for flash attention ONLY      
+
+    # block generation with casual kv cache for flash attention ONLY
     def _sample_with_block_with_causal_kv(
         self,
         input_ids: torch.LongTensor,
@@ -796,7 +805,7 @@ class DreamGenerationMixin(GenerationMixin):
         generation_config: DreamGenerationConfig,
         block_size: int,
         generation_tokens_hook_func,
-        generation_logits_hook_func
+        generation_logits_hook_func,
     ) -> Union[DreamModelOutput, torch.LongTensor]:
         # init values
         output_history = generation_config.output_history
@@ -810,15 +819,16 @@ class DreamGenerationMixin(GenerationMixin):
         temperature = generation_config.temperature
         top_p = generation_config.top_p
         top_k = generation_config.top_k
+        generation_config.pad_token_id
+        generation_config.eos_token_id
 
         histories = [] if (return_dict_in_generate and output_history) else None
-        
+
         block_size = block_size
         gen_length = generation_config.max_new_tokens
         num_of_blocks = gen_length // block_size
         steps = steps // num_of_blocks
-        
-        
+
         assert gen_length % block_size == 0, "gen_length should be divisible by block_size"
 
         # pad input_ids to max_length
@@ -831,7 +841,7 @@ class DreamGenerationMixin(GenerationMixin):
             tok_idx_base = attention_mask.long().cumsum(-1) - 1
             tok_idx_base.masked_fill_(attention_mask == 0, 1)
             # Leave padding out "<|endoftext|>1+1=2 2+2=" -> [ 1,  0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14, 15, 16, 17]
-            
+
             # attention_mask is of shape [B, N]
             # broadcast to [B, 1, N, N]
             # Set False for padding tokens and rest True
@@ -853,10 +863,16 @@ class DreamGenerationMixin(GenerationMixin):
         tok_idx = tok_idx_base.clone() if tok_idx_base is not None else None
         x_input = x.clone()
         # initial settled length is the context/prompt length
-        settled_length = input_ids_length        
+        settled_length = input_ids_length
         # 1. Do first forward pass to get past_key_values for context in casual attention
-        # You need position_ids for the first forward pass since you want to avoid padding for following calls it can be recovered from cache length
-        model_outputs = self(x_input, attention_mask=attention_mask, position_ids=tok_idx, use_cache=True, past_key_values=past_key_values, is_causal=True)
+        model_outputs = self(
+            x_input,
+            attention_mask=attention_mask,
+            position_ids=tok_idx,
+            use_cache=True,
+            past_key_values=past_key_values,
+            is_causal=True,
+        )
         past_key_values = model_outputs.past_key_values
         # 2. Crop past_key_values to include only context tokens
         past_key_values.crop(settled_length)
@@ -864,36 +880,45 @@ class DreamGenerationMixin(GenerationMixin):
         # 3. Create new input for prediction
         x_input = x[:, past_length:].clone()
         tok_idx = tok_idx_base[:, past_length:] if tok_idx_base is not None else None
-        
+
         # print(f"settled_length: {settled_length} past_length: {past_length} x_input: {x_input.shape} past_key_values: {past_key_values.get_seq_length()}")
-        
+
         for blk_indx in range(num_of_blocks):
             current_block = (num_of_blocks - (blk_indx + 1)) * block_size
-            
+
             for i in range(steps):
-                model_outputs = self(x_input, attention_mask=None, position_ids=tok_idx, use_cache=True, past_key_values=past_key_values, is_causal=False)
-                
+                model_outputs = self(
+                    x_input,
+                    attention_mask=  # The above code is defining a variable
+                    # named `attention_mask` in Python.
+                    attention_mask,
+                    position_ids=tok_idx,
+                    use_cache=True,
+                    past_key_values=past_key_values,
+                    is_causal=False,
+                )
+
                 logits = model_outputs.logits
-                logits = torch.cat([logits[:,:1], logits[:, :-1]], dim=1)
-                
+                logits = torch.cat([logits[:, :1], logits[:, :-1]], dim=1)
+
                 t = timesteps[i]
                 s = timesteps[i + 1]
-                
+
                 # loop around the batch
                 for b in range(batch_size):
                     x_row = x_input[b, :]
-                    mask_index = (x_row == mask_token_id)
-                    
+                    mask_index = x_row == mask_token_id
+
                     # if the sequence is already completed, skip it
                     if mask_index.sum() == 0:
                         continue
-                    
+
                     if current_block > 0:
                         mask_index[-current_block:] = False
 
                     mask_logits = logits[b, mask_index]
-            
-                    if alg == 'origin':
+
+                    if alg == "origin":
                         # p_transfer = 1 - s / t if i < steps - 1 else 1
                         # x0 = torch.zeros_like(x[mask_index], device=self.device, dtype=torch.long) + mask_token_id
                         # transfer_index_t_s = torch.rand(*x0.shape, device=self.device) < p_transfer
@@ -901,27 +926,35 @@ class DreamGenerationMixin(GenerationMixin):
                         # x[mask_index] = x0.clone()
                         raise RuntimeError("batch origin alg is not supported")
                     else:
-                        if alg == 'maskgit_plus':
-                            confidence, x0 = sample_tokens(mask_logits, temperature=temperature, top_p=top_p, top_k=top_k)
-                        elif alg == 'topk_margin':
-                            confidence, x0 = sample_tokens(mask_logits, temperature=temperature, top_p=top_p, top_k=top_k, margin_confidence=True)
-                        elif alg == 'entropy':
-                            confidence, x0 = sample_tokens(mask_logits, temperature, top_p=top_p, top_k=top_k, neg_entropy=True)
+                        if alg == "maskgit_plus":
+                            confidence, x0 = sample_tokens(
+                                mask_logits, temperature=temperature, top_p=top_p, top_k=top_k
+                            )
+                        elif alg == "topk_margin":
+                            confidence, x0 = sample_tokens(
+                                mask_logits, temperature=temperature, top_p=top_p, top_k=top_k, margin_confidence=True
+                            )
+                        elif alg == "entropy":
+                            confidence, x0 = sample_tokens(
+                                mask_logits, temperature, top_p=top_p, top_k=top_k, neg_entropy=True
+                            )
                         else:
                             raise RuntimeError(f"Unknown alg: {alg}")
                         num_mask_token = mask_index.sum()
-                        number_transfer_tokens = ceil(num_mask_token * (1 - s / t)) if i < steps - 1 else num_mask_token
-                        
+                        number_transfer_tokens = (
+                            ceil(num_mask_token * (1 - s / t)) if i < steps - 1 else num_mask_token
+                        )
+
                         # print(f"block: {blk_indx} step: {i} batch: {b} confidence: {confidence} x0: {x0}")
                         # print(f"number_transfer_tokens: {number_transfer_tokens} num_mask_token: {num_mask_token}")
                         if number_transfer_tokens > 0:
                             if alg_temp is None or alg_temp == 0:
                                 _, transfer_index = torch.topk(confidence, number_transfer_tokens)
-                                
+
                             else:
                                 confidence = confidence / alg_temp
                                 confidence = F.softmax(confidence, dim=-1)
-                                
+
                                 transfer_index = torch.multinomial(confidence, num_samples=number_transfer_tokens)
                             x0_ = torch.zeros_like(x0, device=self.device, dtype=torch.long) + mask_token_id
                             x0_[transfer_index] = x0[transfer_index].clone()
@@ -929,37 +962,75 @@ class DreamGenerationMixin(GenerationMixin):
 
                 # this allows user-defined token control of the intermediate steps
                 x_input = generation_tokens_hook_func(i, x_input, logits, input_ids_length)
-                
+
                 # Update settled tokens
                 x[:, past_length:] = x_input
-                
+
                 # Prepare for next forward pass
-                
-                # 1. Update past_key_values to include only settled tokens from previous blocks 
+
+                # 1. Update past_key_values to include only settled tokens from previous blocks
                 # past_key_values = model_outputs.past_key_values
-                
+
                 # needed bcuz Attention module adds them to cache so we need to remove them for next forward pass
                 # we can stop the Attention module from adding them with a param for speedup
                 past_key_values.crop(settled_length)
                 # past_length = past_key_values.get_seq_length()
                 # print(f"past_length: {past_length} x_input: {x_input.shape} past_length: {past_length} past_key_values: {past_key_values.get_seq_length()}")
-                
+
+                # # only works for sdpa
+                # attention_mask_tmp = torch.where(
+                #     (x == pad_token_id) | (x == eos_token_id),
+                #     torch.tensor(0, device=x.device, dtype=torch.bool),
+                #     torch.tensor(1, device=x.device, dtype=torch.bool)
+                # )
+                # attention_mask_tmp = torch.logical_and(
+                #     attention_mask_tmp.unsqueeze(1).unsqueeze(-2),
+                #     attention_mask_tmp.unsqueeze(1).unsqueeze(-1),
+                # )
+
+                # # Drop values from the 3rd dimension to the size of new x_input so that it current Qs (aka inputs)
+                # # [B, 1, Q_dim, K_dim]
+                # attention_mask_tmp = attention_mask_tmp[:, :, past_length:, :]
+                # attention_mask = attention_mask_tmp
+
                 if histories is not None:
                     histories.append(x.clone())
-                
+
             # A block is completed update settled tokens length
             if not torch.any(x == mask_token_id):
                 break
             settled_length += block_size
-            model_outputs = self(x_input, attention_mask=None, position_ids=tok_idx, use_cache=True, past_key_values=past_key_values, is_causal=True)
+            model_outputs = self(
+                x_input,
+                attention_mask=attention_mask,
+                position_ids=tok_idx,
+                use_cache=True,
+                past_key_values=past_key_values,
+                is_causal=True,
+            )
             past_key_values = model_outputs.past_key_values
             past_key_values.crop(settled_length)
             past_length = past_key_values.get_seq_length()
             x_input = x[:, past_length:].clone()
             tok_idx = tok_idx_base[:, past_length:] if tok_idx is not None else None
+
+            # # Only works for sdpa
+            # attention_mask_tmp = torch.where(
+            #     (x == pad_token_id) | (x == eos_token_id),
+            #     torch.tensor(0, device=x.device, dtype=torch.bool),
+            #     torch.tensor(1, device=x.device, dtype=torch.bool)
+            # )
+            # attention_mask_tmp = torch.logical_and(
+            #     attention_mask_tmp.unsqueeze(1).unsqueeze(-2),
+            #     attention_mask_tmp.unsqueeze(1).unsqueeze(-1),
+            # )
+
+            # # Drop values from the 3rd dimension to the size of new x_input so that it current Qs (aka inputs)
+            # # [B, 1, Q_dim, K_dim]
+            # attention_mask_tmp = attention_mask_tmp[:, :, past_length:, :]
+            # attention_mask = attention_mask_tmp
             # print(f"settled_length: {settled_length} past_length: {past_length} x_input: {x_input.shape} past_key_values: {past_key_values.get_seq_length()}")
-                
-                
+
         if return_dict_in_generate:
             return DreamModelOutput(
                 sequences=x,
@@ -967,4 +1038,3 @@ class DreamGenerationMixin(GenerationMixin):
             )
         else:
             return x
-        
