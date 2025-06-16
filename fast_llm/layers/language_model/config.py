@@ -197,6 +197,12 @@ class LanguageModelBaseConfig(BaseModelConfig):
             Assert.eq(len(self.prediction_loss_coefficient), self.prediction_heads)
             for coeff in self.prediction_loss_coefficient:
                 Assert.geq(coeff, 0)
+        if self.transformer.per_layer_lr_scale is not None:
+            # -1 because the first prediction head's transformer layer is accounted for in num_layers
+            # +1 because the layer index starts at 1
+            Assert.eq(
+                len(self.transformer.per_layer_lr_scale), self.transformer.num_layers + self.prediction_heads - 1 + 1
+            )
 
     def setup_tensor_space(self, tensor_space: TensorSpace) -> None:
         self.transformer.setup_tensor_space(tensor_space)
