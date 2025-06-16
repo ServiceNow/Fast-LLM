@@ -9,7 +9,8 @@ from fast_llm.engine.schedule.config import ScheduleConfig
 from fast_llm.engine.schedule.runner import ScheduleRunner
 from fast_llm.models.gpt.config import LlamaGPTHuggingfaceCheckpointFormat, PretrainedGPTModelConfig
 from fast_llm.models.gpt.huggingface import HuggingfaceGPTModelForCausalLM
-from tests.common import CONFIG_COMMON, HUGGINGFACE_CHECKPOINT_FORMAT, TEST_MODEL, TEST_RESULTS_PATH, requires_cuda
+from tests.utils.model_configs import CONFIG_COMMON, HUGGINGFACE_CHECKPOINT_FORMAT, TEST_MODEL
+from tests.utils.utils import TEST_RESULTS_PATH, requires_cuda
 
 
 def _prepare_checkpoint(model: str) -> str:
@@ -260,7 +261,7 @@ def test_export_for_generate(run_test_script):
 
 @pytest.mark.slow
 @requires_cuda
-@pytest.mark.depends(on=["test_export_for_generate"])
+@pytest.mark.depends_on(on=["test_export_for_generate"])
 @pytest.mark.parametrize(
     "use_flash_attention, use_bf16, max_new_tokens, min_matching_tokens_batch_size_1, min_matching_tokens_batch_size_2",
     [
@@ -320,7 +321,7 @@ def test_generate_from_model(
 
 @requires_cuda
 @pytest.mark.slow
-@pytest.mark.depends(on=["test_export_for_generate"])
+@pytest.mark.depends_on(on=["test_export_for_generate"])
 def test_small_generate_from_model():
     _test_generate_from_model(
         TEST_RESULTS_PATH / f"test_{TEST_MODEL}_export_for_generate/export/{HUGGINGFACE_CHECKPOINT_FORMAT.name}/1",
@@ -368,7 +369,7 @@ def test_forward_return_hidden_states(model_and_tokenizer):
 
 @pytest.mark.slow
 @requires_cuda
-@pytest.mark.depends(on=["test_export_for_generate"])
+@pytest.mark.depends_on(on=["test_export_for_generate"])
 def test_small_forward_return_hidden_states():
     _test_forward_return_hidden_states(
         TEST_RESULTS_PATH / f"test_{TEST_MODEL}_export_for_generate/export/{HUGGINGFACE_CHECKPOINT_FORMAT.name}/1",

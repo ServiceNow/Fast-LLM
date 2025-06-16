@@ -15,7 +15,7 @@ from fast_llm.layers.transformer.transformer import TransformerLayer
 from fast_llm.models.gpt.config import GPTBaseModelConfig
 from fast_llm.models.gpt.model import GPTBaseModel
 from fast_llm.utils import Assert
-from tests.common import get_hybrid_config, materialize_meta_tensors, requires_cuda
+from tests.utils.utils import get_hybrid_config, materialize_meta_tensors, requires_cuda
 
 try:
     from fast_llm.layers.ssm.discrete_mamba2 import DiscreteMamba2

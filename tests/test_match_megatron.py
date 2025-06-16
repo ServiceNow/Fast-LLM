@@ -1,6 +1,8 @@
 import pytest
 
-from tests.common import (
+from tests.utils.compare_tensor_logs import CompareConfig
+from tests.utils.dataset import DATASET_PREFIX
+from tests.utils.model_configs import (
     CONFIG_GPT2_FAST_LLM,
     CONFIG_GPT2_MEGATRON,
     CONFIG_LLAMA_FAST_LLM,
@@ -11,9 +13,7 @@ from tests.common import (
     CONFIG_SC1_MEGATRON,
     CONFIG_SC2_FAST_LLM,
     CONFIG_SC2_MEGATRON,
-    DATASET_PREFIX,
 )
-from tests.compare_tensor_logs import CompareConfig
 
 
 @pytest.mark.slow
@@ -29,7 +29,7 @@ CONFIG_MATCH_MEGATRON = [
 ]
 
 
-@pytest.mark.depends(on=["test_sc1_meg"])
+@pytest.mark.depends_on(on=["test_sc1_meg"])
 def test_sc1_match_meg(run_test_script):
     # Starcoder 1 (GPT2 with MQA) with Fast-llm.
     # QKV tensors are in a different format.
@@ -50,13 +50,13 @@ def test_sc1_match_meg(run_test_script):
 
 @pytest.mark.slow
 @pytest.mark.skip(reason="Skipping mostly redundant test")
-@pytest.mark.depends(on=["test_sc1_match_meg"])
+@pytest.mark.depends_on(on=["test_sc1_match_meg"])
 def test_sc2_meg(run_test_script):
     # Starcoder 2 (GPT2 with MQA and RoPE) with Megatron.
     run_test_script("test_sc2_meg", CONFIG_SC2_MEGATRON + ["--micro-batch-size=8"], is_megatron=True)
 
 
-@pytest.mark.depends(on=["test_sc2_meg"])
+@pytest.mark.depends_on(on=["test_sc2_meg"])
 def test_sc2_match_meg(run_test_script):
     # Starcoder 2 (GPT2 with MQA and RoPE) with Fast-llm.
     # QKV tensors are in a different format,
@@ -83,7 +83,7 @@ def test_gpt2_meg(run_test_script):
     run_test_script("test_gpt2_meg", CONFIG_GPT2_MEGATRON + ["--micro-batch-size=8"], is_megatron=True)
 
 
-@pytest.mark.depends(on=["test_gpt2_meg"])
+@pytest.mark.depends_on(on=["test_gpt2_meg"])
 def test_gpt2_match_meg(run_test_script):
     # GPT2 (MHA, layer norm, absolute embeddings) with Fast-llm.
     # QKV tensors are in a different format.
@@ -109,7 +109,7 @@ def test_mistral_meg(run_test_script):
     run_test_script("test_mistral_meg", CONFIG_LLAMA_MEGATRON + ["--micro-batch-size=8"], is_megatron=True)
 
 
-@pytest.mark.depends(on=["test_mistral_meg"])
+@pytest.mark.depends_on(on=["test_mistral_meg"])
 def test_mistral_match_meg(run_test_script):
     # Mistral with Fast-LLM.
     run_test_script(
@@ -135,9 +135,11 @@ def test_mixtral_meg(run_test_script):
     run_test_script("test_mixtral_meg", CONFIG_MIXTRAL_MEGATRON + ["--micro-batch-size=8"], is_megatron=True)
 
 
-@pytest.mark.depends(on=["test_mixtral_meg"])
+@pytest.mark.depends_on(on=["test_mixtral_meg"])
 def test_mixtral_match_meg(run_test_script):
     # Mistral with Fast-LLM.
+    # TODO: Fix dropless MOE
+    pytest.fail("Test fails, aborting to avoid breaking cuda", False)
     run_test_script(
         "test_mixtral_match_meg",
         CONFIG_MIXTRAL_FAST_LLM + CONFIG_MATCH_MEGATRON + ["model.base_model.use_megatron_initialization=True"],

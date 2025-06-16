@@ -88,7 +88,7 @@ class HybridSSMBaseModel[ConfigType: HybridSSMBaseModelConfig](GPTBaseModel[Conf
 
         # Create blocks according to pattern
         for i, block_type in enumerate(self._config.hybrid_block_layout):
-            if block_type == SSMBlockType.transformer.value:
+            if block_type == SSMBlockType.transformer:
                 # Transformer block
                 layers.append(
                     TransformerLayer(
@@ -100,7 +100,7 @@ class HybridSSMBaseModel[ConfigType: HybridSSMBaseModelConfig](GPTBaseModel[Conf
                         ),
                     )
                 )
-            elif block_type == SSMBlockType.mamba2_discrete.value:
+            elif block_type == SSMBlockType.mamba2_discrete:
                 mamba_block = self.SSM_BLOCK_CLS(
                     config_transformer=self._config.transformer,
                     config_ssm=self._config.ssm,
@@ -113,7 +113,7 @@ class HybridSSMBaseModel[ConfigType: HybridSSMBaseModelConfig](GPTBaseModel[Conf
                 )
                 layers.append(mamba_block)
 
-            elif block_type == SSMBlockType.mamba.value:
+            elif block_type == SSMBlockType.mamba:
                 # Create Mamba block
                 mamba_block = self.SSM_BLOCK_CLS(
                     config_transformer=self._config.transformer,
