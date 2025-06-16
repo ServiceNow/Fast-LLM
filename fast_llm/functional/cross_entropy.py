@@ -12,6 +12,7 @@ def torch_cross_entropy_forward_backward(
     logits: torch.Tensor,
     target: torch.Tensor,
     grad_output: float | None,
+    loss_weight: torch.Tensor | None,
     logits_scale_factor: float = 1.0,
 ) -> tuple[torch.Tensor, torch.Tensor | None]:
     """
@@ -21,6 +22,7 @@ def torch_cross_entropy_forward_backward(
     TODO: loss masking only works for this method if the masking index is set to -100.
     """
     # Torch compile doesn't understand this.
+    assert loss_weight is None, "Loss weight not supported in torch cross-entropy implementation."
     with torch.enable_grad():
         logits_ = logits.float().detach().requires_grad_()
         if logits_scale_factor != 1.0:
@@ -90,6 +92,7 @@ def parallel_cross_entropy_forward_backward(
     target: torch.Tensor,
     grad_output: float | None,
     group: ProcessGroup,
+    loss_weight: torch.Tensor | None,
     logits_scale_factor: float = 1.0,
 ) -> tuple[torch.Tensor, torch.Tensor | None]:
     """
@@ -98,6 +101,8 @@ def parallel_cross_entropy_forward_backward(
     """
     # TODO: Compiled version incorrect for some inputs (32 bit indexing issue?).
     # TODO: Optimize, overlap/combine reductions
+    assert loss_weight is None, "Loss weight not supported in parallel cross-entropy implementation."
+
     loss_mask = target >= 0
     target = target.unsqueeze(1)
 

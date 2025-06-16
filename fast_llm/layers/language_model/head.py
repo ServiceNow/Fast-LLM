@@ -351,7 +351,7 @@ class MLMHead(LanguageModelHead):
 
         masked_indices = kwargs[LanguageModelKwargs.mask_indexes]
         p_mask = kwargs[LanguageModelKwargs.mask_probabilities]
-        # index   [0, 1, 2, 3, 4, 5] ->
+        #                                 index   [0, 1, 2, 3, 4, 5] ->
         # The labels are already left shifted x = [A, B, C, D, E, F] ->
         #                                 embd =  [A, B, C, D, E]
         #                                label =  [B, C, D, E, F]
