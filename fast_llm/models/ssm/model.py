@@ -51,7 +51,7 @@ class HybridSSMBaseModel[ConfigType: HybridSSMBaseModelConfig](GPTBaseModel[Conf
                         TransformerLayer(
                             self._config.transformer,
                             self._tensor_space,
-                            layer_index=len(self._config.hybrid_block_layout),
+                            layer_index=len(self._config.hybrid_block_layout) + i,
                             return_input=i != self._config.prediction_heads - 1,
                         )
                     )
@@ -60,7 +60,7 @@ class HybridSSMBaseModel[ConfigType: HybridSSMBaseModelConfig](GPTBaseModel[Conf
                         config_transformer=self._config.transformer,
                         config_ssm=self._config.ssm,
                         mixer_cls=DiscreteMamba2,
-                        layer_index=len(self._config.hybrid_block_layout),
+                        layer_index=len(self._config.hybrid_block_layout) + i,
                         tensor_space=self._tensor_space,
                         return_input=i != self._config.prediction_heads - 1,
                     )
@@ -70,7 +70,7 @@ class HybridSSMBaseModel[ConfigType: HybridSSMBaseModelConfig](GPTBaseModel[Conf
                         config_transformer=self._config.transformer,
                         config_ssm=self._config.ssm,
                         mixer_cls=MambaLayer,
-                        layer_index=len(self._config.hybrid_block_layout),
+                        layer_index=len(self._config.hybrid_block_layout) + i,
                         tensor_space=self._tensor_space,
                         return_input=i != self._config.prediction_heads - 1,
                     )
