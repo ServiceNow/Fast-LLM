@@ -6,6 +6,7 @@ from fast_llm.config import Config, Field, FieldHint, check_field, config_class
 from fast_llm.data.config import TokenizerConfig
 from fast_llm.data.preparator.config import DatasetPreparatorConfig
 from fast_llm.engine.config_utils.data_type import DataType
+from fast_llm.engine.config_utils.runnable import RunnableConfig
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
@@ -116,7 +117,7 @@ class DatasetPreparatorDistributedConfig(Config):
         Assert.in_range(self.rank, 0, self.world_size)
 
 
-@config_class()
+@config_class(dynamic_type={RunnableConfig: "prepare_gpt_memmap", DatasetPreparatorConfig: "gpt_memmap"})
 class GPTMemmapDatasetPreparatorConfig(DatasetPreparatorConfig):
     preparator_name: typing.ClassVar[str] = "gpt_memmap"
 

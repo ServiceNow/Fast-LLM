@@ -62,6 +62,7 @@ class LanguageModelEmbedding[ConfigType: LanguageModelBaseConfig](Configurable[L
                 min_val=config.init_method_min_embed,
                 max_val=config.init_method_max_embed,
             ),
+            lr_scale=config.embeddings_lr_scale,
         )
         if self._use_absolute_position_embeddings:
             self.position_embeddings_weight = ParameterMeta.from_dims(
@@ -72,6 +73,7 @@ class LanguageModelEmbedding[ConfigType: LanguageModelBaseConfig](Configurable[L
                     max_val=config.init_method_max_embed,
                 ),
                 allow_sequence_tensor_parallel=not config.parallel_embeddings,
+                lr_scale=config.embeddings_lr_scale,
             )
 
         # PEFT.

@@ -27,7 +27,7 @@ except ImportError as e:
     raise ImportError("Please install huggingface_hub to use this script") from e
 
 
-from fast_llm.tools.convert import ConvertConfig  # isort:skip
+from fast_llm.engine.checkpoint.convert import ConvertConfig  # isort:skip
 
 
 logger = logging.getLogger(__name__)

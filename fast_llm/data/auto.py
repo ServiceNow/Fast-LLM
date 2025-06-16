@@ -1,13 +1,5 @@
-from fast_llm.data.preparator.config import DatasetPreparatorConfig
-from fast_llm.data.preparator.gpt_memmap.config import GPTMemmapDatasetPreparatorConfig
-from fast_llm.utils import Registry
+"""
+Import these submodules to ensure classes are added to the dynamic class registry.
+"""
 
-dataset_preparator_registry = Registry[str, DatasetPreparatorConfig](
-    "DatasetPreparator",
-    {
-        dataset_preparator.preparator_name: dataset_preparator
-        for dataset_preparator in [
-            GPTMemmapDatasetPreparatorConfig,
-        ]
-    },
-)
+from fast_llm.data.preparator.gpt_memmap.config import GPTMemmapDatasetPreparatorConfig  # isort: skip
