@@ -154,8 +154,8 @@ class Attention(torch.nn.Module):
         query: torch.Tensor,
         key: torch.Tensor,
         value: torch.Tensor,
-        mask: torch.Tensor,
-        mask_value: torch.Tensor,
+        mask: torch.Tensor | None,
+        mask_value: torch.Tensor | None,
     ) -> torch.Tensor:
         # Backup attention (inefficient)
         b, sq, hidden = query.shape
@@ -185,7 +185,8 @@ class Attention(torch.nn.Module):
         ).view(b, self._local_head_groups, sq, self._local_heads_per_group, sk)
 
         attn_weights = attn_weights.to(torch.float32) * self._layer_index
-        attn_weights = torch.where(mask, attn_weights, mask_value)
+        if mask is not None and mask_value is not None:
+            attn_weights = torch.where(mask, attn_weights, mask_value)
         attn_weights = torch.nn.functional.softmax(attn_weights, dim=-1).to(query.dtype)
 
         with set_generator(self._tensor_space.distributed.tp_generator):
@@ -516,8 +517,8 @@ class Attention(torch.nn.Module):
                     query=query.flatten(-2),
                     key=key.flatten(-2),
                     value=value.flatten(-2),
-                    mask=kwargs[TransformerKwargs.attention_mask],
-                    mask_value=kwargs[TransformerKwargs.attention_mask_value],
+                    mask=kwargs.get(TransformerKwargs.attention_mask),
+                    mask_value=kwargs.get(TransformerKwargs.attention_mask_value),
                 )
             case _:
                 raise ValueError(f"Unknown attention implementation: {self._attention_implementation}")

@@ -83,14 +83,13 @@ def test_varlen_preprocessor():
 # @pytest.mark.slow
 def test_mask_mod() -> None:
     TritonConfig.TRITON_LINEAR = True  # type: ignore
-    num_layers = 2
-    num_attention_heads = 2
-    hidden_size = 16
+    num_attention_heads = 4
+    hidden_size = 8
 
     attention_dropout = 0.0
     attention_mode = AttentionMode.bidirectional
 
-    batch_size = 2
+    batch_size = 1
     sequence_length = 36
 
     distributed_config = DistributedConfig(training_dtype="bfloat16")
@@ -101,15 +100,21 @@ def test_mask_mod() -> None:
     tensor_space.setup(distributed)
     tensor_space.add_tensor_dim(TensorDim(TransformerDimNames.batch, batch_size))
 
-    with set_generator(tensor_space.distributed.tp_generator):
-        input_ = torch.randn(
-            batch_size,
-            sequence_length,
-            hidden_size,
-            dtype=dtype,
-            device=device,
-            requires_grad=True,
-        )
+    # with set_generator(tensor_space.distributed.tp_generator):
+    #     input_ = torch.randn(
+    #         batch_size,
+    #         sequence_length,
+    #         hidden_size,
+    #         dtype=dtype,
+    #         device=device,
+    #         requires_grad=True,
+    #     )
+
+    eye = torch.eye(sequence_length, dtype=dtype, device=device)  # (S, S)
+    eye = eye.unsqueeze(0).expand(batch_size, -1, -1)  # (B, S, S)
+    # project from S to hidden_size / n_heads   (pick the first d columns)
+    input_ = eye[..., :hidden_size].contiguous()  # (B, S, d)
+    input_.requires_grad_(True)
 
     kwargs = {
         TransformerKwargs.sequence_length: sequence_length,
@@ -120,9 +125,8 @@ def test_mask_mod() -> None:
 
     outputs_ = {}
 
-    for use_fast_attention in [True]:
+    for use_fast_attention in [True, False]:
         transformer_config = TransformerConfig(
-            num_layers=num_layers,
             num_attention_heads=num_attention_heads,
             hidden_size=hidden_size,
             add_linear_biases=False,
@@ -159,19 +163,21 @@ def test_mask_mod() -> None:
         print(f"Eligible attention implementations: {elegible_attention_implementations}")
 
         for impl in elegible_attention_implementations:
-            kwargs[TransformerKwargs.attention_implementation] = impl
+            _kwargs = kwargs.copy()
+            _kwargs[TransformerKwargs.attention_implementation] = impl
             spec = ATTENTION_IMPLEMENTATION_SPECS[impl]
             print(f"Testing attention implementation: {impl}")
             if spec.fast:
                 preprocessor = FastAttentionPreprocessor(config=transformer_config, tensor_space=tensor_space)
             else:
                 preprocessor = BackupAttentionPreprocessor(config=transformer_config, tensor_space=tensor_space)
-            preprocessor.preprocess(None, kwargs)
+            preprocessor.preprocess_meta(_kwargs)
+            preprocessor.preprocess(None, _kwargs)
             if spec.flex:
-                assert TransformerKwargs.block_mask in kwargs
+                assert TransformerKwargs.block_mask in _kwargs
             output_, _ = attention.forward(
                 input_=input_,
-                kwargs=kwargs,
+                kwargs=_kwargs,
             )
             outputs_[impl] = output_
             # print(f"output shape: {output_.shape}")

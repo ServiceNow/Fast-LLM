@@ -268,7 +268,7 @@ ATTENTION_IMPLEMENTATION_SPECS = {
         variable_length=True,
         dropout=True,
         dtypes={DataType.float16, DataType.bfloat16, DataType.float32},
-        modes={AttentionMode.causal},
+        modes={AttentionMode.causal, AttentionMode.bidirectional},
         variable_window=True,
     ),
 }

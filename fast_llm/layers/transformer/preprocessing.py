@@ -382,40 +382,54 @@ class BackupAttentionPreprocessor(Preprocessor):
         )
 
     def preprocess(self, batch, kwargs: dict[str, typing.Any]) -> None:
-        self._create_tensors(kwargs[TransformerKwargs.sequence_length])
-        sequence_k = kwargs[TransformerKwargs.sequence_k_dim].size
-        sequence_q = kwargs[TransformerKwargs.sequence_q_dim].size
-        kwargs[TransformerKwargs.attention_mask] = self._mask[
-            None, None, sequence_k - sequence_q : sequence_k, None, :sequence_k
-        ]
-        if (sequence_lengths := kwargs.get(TransformerKwargs.sequence_lengths, None)) is not None:
-            seq_ids = torch.stack(
-                [
-                    torch.cat([torch.full((x,), i) for i, x in enumerate(sample_lens)])
-                    for sample_lens in sequence_lengths
+        match self._config.attention_mode:
+            case AttentionMode.causal:
+                self._create_tensors(kwargs[TransformerKwargs.sequence_length])
+                sequence_k = kwargs[TransformerKwargs.sequence_k_dim].size
+                sequence_q = kwargs[TransformerKwargs.sequence_q_dim].size
+                kwargs[TransformerKwargs.attention_mask] = self._mask[
+                    None, None, sequence_k - sequence_q : sequence_k, None, :sequence_k
                 ]
-            )
-            document_mask = (seq_ids[:, None, :] == seq_ids[:, :, None]).to(self._tensor_space.distributed.device)
-            kwargs[TransformerKwargs.attention_mask] = (
-                kwargs[TransformerKwargs.attention_mask]
-                & document_mask[:, None, sequence_k - sequence_q : sequence_k, None, :sequence_k]
-            )
-        kwargs[TransformerKwargs.attention_mask_value] = self._mask_value
+                if (sequence_lengths := kwargs.get(TransformerKwargs.sequence_lengths, None)) is not None:
+                    seq_ids = torch.stack(
+                        [
+                            torch.cat([torch.full((x,), i) for i, x in enumerate(sample_lens)])
+                            for sample_lens in sequence_lengths
+                        ]
+                    )
+                    document_mask = (seq_ids[:, None, :] == seq_ids[:, :, None]).to(
+                        self._tensor_space.distributed.device
+                    )
+                    kwargs[TransformerKwargs.attention_mask] = (
+                        kwargs[TransformerKwargs.attention_mask]
+                        & document_mask[:, None, sequence_k - sequence_q : sequence_k, None, :sequence_k]
+                    )
+                kwargs[TransformerKwargs.attention_mask_value] = self._mask_value
+            case AttentionMode.bidirectional:
+                pass
+            case _:
+                raise ValueError(f"Unsupported attention mode: {self._config.attention_mode}")
 
     def preprocess_meta(self, kwargs: dict[str, typing.Any]) -> None:
-        kwargs[TransformerKwargs.attention_mask] = TensorMeta.from_dims(
-            (
-                self._scalar_dim,
-                self._scalar_dim,
-                kwargs[TransformerKwargs.sequence_q_dim],
-                self._scalar_dim,
-                kwargs[TransformerKwargs.sequence_k_dim],
-            ),
-            tensor_name=TransformerKwargs.attention_mask,
-            dtype=torch.bool,
-        )
-        kwargs[TransformerKwargs.attention_mask_value] = TensorMeta.from_dims(
-            (self._scalar_dim,),
-            tensor_name=TransformerKwargs.attention_mask_value,
-            dtype=self._tensor_space.distributed_config.training_dtype.torch,
-        )
+        match self._config.attention_mode:
+            case AttentionMode.causal:
+                kwargs[TransformerKwargs.attention_mask] = TensorMeta.from_dims(
+                    (
+                        self._scalar_dim,
+                        self._scalar_dim,
+                        kwargs[TransformerKwargs.sequence_q_dim],
+                        self._scalar_dim,
+                        kwargs[TransformerKwargs.sequence_k_dim],
+                    ),
+                    tensor_name=TransformerKwargs.attention_mask,
+                    dtype=torch.bool,
+                )
+                kwargs[TransformerKwargs.attention_mask_value] = TensorMeta.from_dims(
+                    (self._scalar_dim,),
+                    tensor_name=TransformerKwargs.attention_mask_value,
+                    dtype=self._tensor_space.distributed_config.training_dtype.torch,
+                )
+            case AttentionMode.bidirectional:
+                pass
+            case _:
+                raise ValueError(f"Unsupported attention mode: {self._config.attention_mode}")
