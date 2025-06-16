@@ -26,10 +26,11 @@ _LOG_LEVEL = int(os.environ.get("LOG_LEVEL", 13))
 
 class ModelTestingGroup(enum.StrEnum):
     basic = "basic"
-    megatron = "megatron"
-    distributed = "distributed"
+    checkpoint = "checkpoint"
     convert = "convert"
     generate = "generate"
+    megatron = "megatron"
+    distributed = "distributed"
 
 
 class ModelTestingGroupAction(enum.StrEnum):
@@ -186,6 +187,7 @@ _MODEL_CONFIGS["gpt2"] = ModelTestingConfig(
     checkpoint_format=None,
     groups={
         ModelTestingGroup.basic: ModelTestingGroupAction.main,
+        ModelTestingGroup.checkpoint: ModelTestingGroupAction.main,
         ModelTestingGroup.convert: ModelTestingGroupAction.not_implemented,
         ModelTestingGroup.generate: ModelTestingGroupAction.not_implemented,
         ModelTestingGroup.megatron: ModelTestingGroupAction.normal,
@@ -202,6 +204,7 @@ _update_and_add_testing_config(
     checkpoint_format=None,
     groups={
         ModelTestingGroup.basic: ModelTestingGroupAction.normal,
+        ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
         ModelTestingGroup.convert: ModelTestingGroupAction.not_implemented,
         ModelTestingGroup.generate: ModelTestingGroupAction.not_implemented,
         ModelTestingGroup.megatron: ModelTestingGroupAction.unimportant,
@@ -229,6 +232,7 @@ _update_and_add_testing_config(
     # TODO: Add back generate as `normal` when stable.
     groups={
         ModelTestingGroup.basic: ModelTestingGroupAction.normal,
+        ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
         ModelTestingGroup.convert: ModelTestingGroupAction.normal,
         ModelTestingGroup.generate: ModelTestingGroupAction.broken,
         ModelTestingGroup.megatron: ModelTestingGroupAction.unimportant,
@@ -259,6 +263,7 @@ _update_and_add_testing_config(
     # TODO: Add back generate as `normal` when stable.
     groups={
         ModelTestingGroup.basic: ModelTestingGroupAction.main,
+        ModelTestingGroup.checkpoint: ModelTestingGroupAction.main,
         ModelTestingGroup.convert: ModelTestingGroupAction.main,
         ModelTestingGroup.generate: ModelTestingGroupAction.broken,
         ModelTestingGroup.megatron: ModelTestingGroupAction.normal,
@@ -276,6 +281,7 @@ _update_and_add_testing_config(
     checkpoint_format=LlamaGPTHuggingfaceCheckpointFormat,
     groups={
         ModelTestingGroup.basic: ModelTestingGroupAction.normal,
+        ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
         ModelTestingGroup.convert: ModelTestingGroupAction.unimportant,
         ModelTestingGroup.generate: ModelTestingGroupAction.unimportant,
         ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
@@ -293,6 +299,7 @@ _update_and_add_testing_config(
     checkpoint_format=LlamaGPTHuggingfaceCheckpointFormat,
     groups={
         ModelTestingGroup.basic: ModelTestingGroupAction.normal,
+        ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
         ModelTestingGroup.convert: ModelTestingGroupAction.unimportant,
         ModelTestingGroup.generate: ModelTestingGroupAction.unimportant,
         ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
@@ -311,6 +318,7 @@ _update_and_add_testing_config(
     # TODO: Add back generate as `normal` when stable.
     groups={
         ModelTestingGroup.basic: ModelTestingGroupAction.unimportant,
+        ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
         ModelTestingGroup.convert: ModelTestingGroupAction.normal,
         ModelTestingGroup.generate: ModelTestingGroupAction.broken,
         ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
@@ -329,6 +337,7 @@ _update_and_add_testing_config(
     # TODO: Add back generate as `normal` when stable.
     groups={
         ModelTestingGroup.basic: ModelTestingGroupAction.normal,
+        ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
         ModelTestingGroup.convert: ModelTestingGroupAction.normal,
         ModelTestingGroup.generate: ModelTestingGroupAction.broken,
         ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
@@ -347,6 +356,7 @@ _update_and_add_testing_config(
     # TODO: Add back generate as `normal` when stable.
     groups={
         ModelTestingGroup.basic: ModelTestingGroupAction.normal,
+        ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
         ModelTestingGroup.convert: ModelTestingGroupAction.normal,
         ModelTestingGroup.generate: ModelTestingGroupAction.broken,
         ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
@@ -365,6 +375,7 @@ _update_and_add_testing_config(
     # TODO: Add back generate as `normal` when stable.
     groups={
         ModelTestingGroup.basic: ModelTestingGroupAction.unimportant,
+        ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
         ModelTestingGroup.convert: ModelTestingGroupAction.normal,
         ModelTestingGroup.generate: ModelTestingGroupAction.broken,
         ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
@@ -383,6 +394,7 @@ _update_and_add_testing_config(
     # TODO: Add back generate as `normal` when stable.
     groups={
         ModelTestingGroup.basic: ModelTestingGroupAction.normal,
+        ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
         ModelTestingGroup.convert: ModelTestingGroupAction.normal,
         ModelTestingGroup.generate: ModelTestingGroupAction.broken,
         ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
@@ -406,6 +418,7 @@ _update_and_add_testing_config(
     # TODO: New base image broke mixtral
     groups={
         ModelTestingGroup.basic: ModelTestingGroupAction.broken,
+        ModelTestingGroup.checkpoint: ModelTestingGroupAction.broken,
         ModelTestingGroup.convert: ModelTestingGroupAction.broken,
         ModelTestingGroup.generate: ModelTestingGroupAction.broken,
         ModelTestingGroup.megatron: ModelTestingGroupAction.broken,
@@ -430,6 +443,7 @@ _update_and_add_testing_config(
     # TODO: Add back generate as `normal` when stable.
     groups={
         ModelTestingGroup.basic: ModelTestingGroupAction.normal,
+        ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
         ModelTestingGroup.convert: ModelTestingGroupAction.broken,
         # TODO: Fix and bring back to `testing_groups`
         ModelTestingGroup.generate: ModelTestingGroupAction.broken,
@@ -452,6 +466,7 @@ _update_and_add_testing_config(
     checkpoint_format=None,
     groups={
         ModelTestingGroup.basic: ModelTestingGroupAction.normal,
+        ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
         ModelTestingGroup.convert: ModelTestingGroupAction.not_implemented,
         ModelTestingGroup.generate: ModelTestingGroupAction.not_implemented,
         ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,

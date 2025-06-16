@@ -22,7 +22,7 @@ from tests.utils.model_configs import ModelTestingGroup
 _WEIGHT_SHARD_SAVE_NAME = f"{ShardName.weights}_shard"
 
 
-@pytest.mark.model_testing_group(ModelTestingGroup.basic)
+@pytest.mark.model_testing_group(ModelTestingGroup.checkpoint)
 def test_checkpoint_and_eval(run_test_script_for_all_models, model_testing_config):
     # A baseline config (single-gpu, bf16, flash-attn).
     run_test_script_for_all_models(
@@ -56,7 +56,7 @@ def _compare_resume_fn(test_path: pathlib.Path, compare_path: pathlib.Path):
 
 
 @pytest.mark.depends_on(on=["test_checkpoint_and_eval[{model_testing_config}]"])
-@pytest.mark.model_testing_group(ModelTestingGroup.basic)
+@pytest.mark.model_testing_group(ModelTestingGroup.checkpoint)
 def test_resume(run_test_script_for_all_models):
     # Resume from iteration=1 and compare outputs with the baseline run.
     run_test_script_for_all_models(
@@ -72,7 +72,7 @@ def test_resume(run_test_script_for_all_models):
 
 
 @pytest.mark.depends_on(on=["test_checkpoint_and_eval[{model_testing_config}]"])
-@pytest.mark.model_testing_group(ModelTestingGroup.basic)
+@pytest.mark.model_testing_group(ModelTestingGroup.checkpoint)
 def test_resume_frozen(run_test_script_for_all_models):
     # Resume with frozen mlp. No comparison.
     run_test_script_for_all_models(
