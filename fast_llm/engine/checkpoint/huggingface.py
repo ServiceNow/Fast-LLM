@@ -133,6 +133,7 @@ class CustomModelingExportMixin:
     modeling_file: typing.ClassVar[str]
     configuration_file: typing.ClassVar[str]
     configuration_cls: typing.ClassVar[type[PretrainedConfig]]
+    generation_utils_file: str | None = None
 
     # Use custom config instead of relying on the transformers library
     @classmethod
@@ -153,3 +154,5 @@ class CustomModelingExportMixin:
         # Copy the modeling files to the output directory
         shutil.copy(self.modeling_file, config.path)
         shutil.copy(self.configuration_file, config.path)
+        if self.generation_utils_file:
+            shutil.copy(self.generation_utils_file, config.path)

@@ -17,6 +17,8 @@ from fast_llm.engine.config_utils.runnable import RunnableConfig
 from fast_llm.layers.ssm.config import SSMConfig
 from fast_llm.layers.transformer.config import TransformerConfig
 from fast_llm.models.gpt.config import (
+    DiffusionDreamGPTHuggingfaceCheckpointFormat,
+    DiffusionLlamaGPTHuggingfaceCheckpointFormat,
     LlamaGPTHuggingfaceCheckpointFormat,
     MistralGPTHuggingfaceCheckpointFormat,
     MixtralGPTHuggingfaceCheckpointFormat,
@@ -280,6 +282,20 @@ _CONFIGS = {
         CONFIG_LLAMA_MTP_MEGATRON,
         CONFIG_LLAMA_MTP_COMMON,
         MTPLlamaGPTHuggingfaceCheckpointFormat,
+    ),
+    "dream": (
+        "gpt",
+        CONFIG_QWEN2_FAST_LLM,
+        CONFIG_QWEN2_MEGATRON,
+        CONFIG_QWEN2_COMMON,
+        DiffusionDreamGPTHuggingfaceCheckpointFormat,
+    ),
+    "diffusion_llama": (
+        "gpt",
+        CONFIG_LLAMA_YARN_FAST_LLM,
+        CONFIG_LLAMA_YARN_MEGATRON,
+        CONFIG_LLAMA_YARN_COMMON,
+        DiffusionLlamaGPTHuggingfaceCheckpointFormat,
     ),
 }
 
