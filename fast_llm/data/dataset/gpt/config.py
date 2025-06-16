@@ -209,6 +209,11 @@ class GPTMemmapDatasetConfig(GPTIndexedDatasetConfig):
         desc="Expected number of pixels in the dataset.",
         hint=FieldHint.optional,
     )
+    num_audio: int | None = Field(
+        default=None,
+        desc="Expected number of audio in the dataset.",
+        hint=FieldHint.optional,
+    )
 
     def build(self) -> "GPTMemmapDataset":
         from fast_llm.data.dataset.gpt.memmap import GPTMemmapDataset
