@@ -56,9 +56,9 @@ class Tokenizer:
 
         # Collect all positions with their type
         positions = []
-        for idx, pos in enumerate(image_positions):
+        for pos in image_positions:
             positions.append((pos, "image"))
-        for idx, (start, end) in enumerate(char_spans):
+        for start, end in char_spans:
             positions.append((start, "span_start"))
             positions.append((end + 1, "span_end"))
         # Sort positions by character index. We assume that image and span positions are individually sorted and spans do not overlap
@@ -71,6 +71,7 @@ class Tokenizer:
         current_span_start = None
 
         for position in positions:
+            # We only tokenize if there is at least one character, else we might potentially add begin/end multiple times
             if char_pos < position[0]:
                 tokenized_text = self._tokenize(
                     text[char_pos : position[0]], begin=(char_pos == 0), end=position[0] > len(text) - 1
@@ -79,7 +80,11 @@ class Tokenizer:
             char_pos = position[0]
             # beginning_of_text = False
             if position[1] == "image":
-                image_token_positions.append(len(token_ids))
+                if position[0] == 0:
+                    # image should be after the bos token
+                    image_token_positions.append(1)
+                else:
+                    image_token_positions.append(len(token_ids))
             elif position[1] == "span_start":
                 assert (
                     current_span_start is None
