@@ -37,6 +37,7 @@ class LanguageModelKwargs:
     phase = "phase"
     mask_indexes = "mask_indexes"
     mask_probabilities = "mask_probabilities"
+    loss_weights = "loss_weights"
 
 
 @config_class()

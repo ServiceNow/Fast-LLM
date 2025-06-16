@@ -23,7 +23,6 @@ from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.engine.schedule.config import BatchConfig
 from fast_llm.utils import Assert
-
 logger = logging.getLogger(__name__)
 
 
@@ -34,63 +33,122 @@ class GPTBatch:
     sequence_lengths: list[torch.Tensor] | None = None
     mask_indexes: torch.Tensor | None = None
     mask_probabilities: torch.Tensor | None = None
+    loss_weights: torch.Tensor | None = None
+
+
+def get_data(batch_size, length, vocab_size):
+    # `length` here excludes the first token (which acts like a <BOS>), hence the +1
+    data_ids = torch.randint(0, vocab_size, (batch_size, length+1))
+    padded = torch.zeros(batch_size, length+1, dtype=torch.bool)
+    positions = torch.arange(length).unsqueeze(0).expand(batch_size, length)
+    return data_ids, padded, positions
+
+
+def do_mask(x, mask, mask_token_id):
+    x = x.clone()
+    x[mask] = mask_token_id
+    return x
+
+
+def do_uniform(x, is_uniform, vocab_size):
+    # WARNING! "Shuffle" was really meant to mean "uniformly sample among all non-mask tokens"
+    x = x.clone()
+    uniform = torch.randint(0, vocab_size, x.size())
+    x[is_uniform] = uniform[is_uniform]
+    return x
+
+
+def prepare_batch(
+        data_ids,
+        positions,
+        padded,
+        mask_token_id,
+        vocab_size,
+        context_length,
+        p_mask,
+        *,
+        p_uniform=0.0,
+        ar_factor=1.0,
+        un_factor=1.0,
+        last_factor=0.0,
+        # Remaining arguments are for testing/debug purpose
+        in_mask=None, 
+        in_uniform=None
+    ):
+    B, L = positions.size()
+    context_length = context_length.unsqueeze(1).expand(B, L)
+    print(f"context_length: {context_length.shape} {context_length}")
+    print(f"p_mask: {p_mask.shape} {p_mask}")
+    p_mask = p_mask.unsqueeze(1)
+
+    # Reminder: a context_length of zero still has one in_context token (à la <BOS>)
+    in_context = positions <= context_length
+    if in_mask is None:
+        in_mask = (~in_context) & ( torch.rand(B, L) < p_mask)
+    
+    if in_uniform is None:
+        in_uniform = (~in_context) & (~in_mask) & (torch.rand(B, L) < p_uniform)
+    in_clean = (~in_context) & (~in_mask) & (~in_uniform)
+
+    loss_weights = (~padded)[:, 1:] * torch.cat([
+        ar_factor * in_context[:, 1:]
+        + in_mask[:, 1:] / p_mask
+        + un_factor * (
+            (1 - p_uniform) * in_uniform[:, 1:]
+            + p_uniform * in_clean[:, 1:]
+        ) / (1 - p_mask),
+        last_factor * torch.ones(B,1)
+    ], dim=1)
+
+    input_ids = do_uniform(do_mask(data_ids[:,:-1], in_mask, mask_token_id), in_uniform, vocab_size)
+
+    return {
+        "in_context": in_context,
+        "in_mask": in_mask,
+        "in_uniform": in_uniform,
+        "in_clean": in_clean,
+        "input_ids": input_ids,
+        "target_ids": data_ids,  # Assuming that training code already drops the first entry.
+        "loss_weights": loss_weights,
+    }
 
 
 def gpt_data_collate_fn(batch: list[GPTSample], sampling_parameters: GPTSamplingParameters) -> GPTBatch:
-
+    print(f"batch: {batch}")
     stacked_ids = np.stack([sample.token_ids for sample in batch])
     stacked_spans = None
     sequence_lengths = None
     mask_indexes = None
     mask_probabilities = None
-
+    loss_weights = None
+    print(f"stacked_ids: {stacked_ids.shape} {stacked_ids}")
     token_ids = torch.from_numpy(stacked_ids)
 
     if sampling_parameters.diffusion.enabled:
-
         diffusion_config = sampling_parameters.diffusion
-
+        print(f"token_ids: {token_ids.shape} {token_ids}")
         batch_size, seq_len = token_ids.shape
-        mask_token_id = diffusion_config.mask_token_id
-
-        # Generate a random tensor of batch size to seed masking probabilities
-        t = torch.rand((batch_size,))
-
-        # Compute the mask probabilities for every sequence in the batch
-        p_mask = (1 - diffusion_config.epsilon) * t + diffusion_config.epsilon
-
-        # Do we need to clamp at max_mask_prob?
-        # p_mask = torch.min(p_mask, torch.tensor(diffusion_config.max_mask_prob))
-
-        # Repeat the same mask probability for each token in the sequence
-        mask_probabilities = p_mask[:, None].repeat(1, seq_len)
-        # Input has an additional token for shitting, is [0, 1, 2, 3, 4] -> [1, 2, 3, 4]
-
-        # index   [0, 1, 2, 3, 4, 5] ->
-        # The labels are already left shifted x = [A, B, C, D, E, F] ->
-        #                                 embd =  [A, B, C, D, E]
-        #                                label =  [B, C, D, E, F]
-        # Last input token is dropped from the processing
-
-        # We should not mask it
-        # mask_probabilities[:, 0] = 0.0
-        # print(f"2 p_mask: {mask_probabilities} {mask_probabilities.shape}")
-
-        # Generate random values for all tokens in the batch and only mask the positions\
-        # where the value is smaller than the mask probability
-        mask_indexes = torch.rand((batch_size, seq_len)) < mask_probabilities
-
-        # Need further classification of this padding - 1% data to have partial sequences and padding
-        # if diffusion_config.pad_prob > 0:
-        #     pad_mask = torch.rand((batch_size,), device=device) < diffusion_config.pad_prob
-        #     if pad_mask.any():
-        #         mask_indexes[pad_mask] = True
-
-        # Replace masked tokens with the mask token ID to create input for the model.
-        token_ids = torch.where(mask_indexes, mask_token_id, token_ids)
-
-        mask_indexes = mask_indexes[:, :-1]  # Remove the last token, which is not used for prediction.
-        mask_probabilities = mask_probabilities[:, :-1]  # Remove the last token, which is not used for prediction.
+        
+        # Get data and prepare batch using the new functions
+        data_ids, padded, positions = get_data(batch_size, seq_len, sampling_parameters.vocab_size)
+        batch_data = prepare_batch(
+            data_ids=data_ids,
+            positions=positions,
+            padded=padded,
+            mask_token_id=diffusion_config.mask_token_id,
+            vocab_size=sampling_parameters.vocab_size,
+            context_length=torch.zeros(batch_size),  # No context for diffusion
+            p_mask=torch.full((batch_size,), diffusion_config.max_mask_prob),  # Create tensor of size batch_size
+            p_uniform=0.0,  # No uniform sampling for now
+            ar_factor=1.0,
+            un_factor=1.0,
+            last_factor=0.0
+        )
+        
+        token_ids = batch_data["input_ids"]
+        mask_indexes = batch_data["in_mask"]
+        mask_probabilities = torch.full_like(mask_indexes, diffusion_config.max_mask_prob, dtype=torch.float)
+        loss_weights = batch_data["loss_weights"]
 
     if sampling_parameters.use_loss_masking_spans:
         stacked_spans = [torch.from_numpy(sample.loss_masking_spans) for sample in batch]
@@ -104,6 +162,7 @@ def gpt_data_collate_fn(batch: list[GPTSample], sampling_parameters: GPTSampling
         sequence_lengths=sequence_lengths,
         mask_indexes=mask_indexes,
         mask_probabilities=mask_probabilities,
+        loss_weights=loss_weights
     )
 
 

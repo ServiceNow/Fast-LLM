@@ -333,8 +333,6 @@ class MLMHead(LanguageModelHead):
             sequence_parallel=self._sequence_parallel and self._parallel_embeddings,
         )
 
-        # print(f"logits {logits.shape} {logits}")
-
         if self._z_loss_factor > 0.0:
             logits = z_loss(
                 logits,
@@ -351,6 +349,7 @@ class MLMHead(LanguageModelHead):
 
         masked_indices = kwargs[LanguageModelKwargs.mask_indexes]
         mask_probabilities = kwargs[LanguageModelKwargs.mask_probabilities]
+        loss_weights = kwargs[LanguageModelKwargs.loss_weights]
         # index   [0, 1, 2, 3, 4, 5] ->
         # The labels are already left shifted x = [A, B, C, D, E, F] ->
         #                                 embd =  [A, B, C, D, E]
@@ -359,11 +358,6 @@ class MLMHead(LanguageModelHead):
         # Question Pier: if 2 is the masked token, settling needs to settled 3; but 3 is already seen by the model,
         # can it just learn to copy 3? i.e copy the next token to the masked?
         # Yes. it will we need to include curruption to properly handle this. but it seems not to big looking at other CPT (diffuLlama)
-
-        # print(f"context: {context[0].shape} {context}")
-        # print(f"logits {logits.shape} {logits}")
-        # print(f"labels: {labels.shape} {labels}")
-        # print(f"masked_indices: {masked_indices.shape} {masked_indices}")
 
         # Compute CrossEntropy loss and weight each loss differently
         # We use grad from all the input positions for backward pass.
@@ -381,34 +375,26 @@ class MLMHead(LanguageModelHead):
             avg_loss=False,  # Do not average the loss, we will do it later
         )
 
-        # print(f"loss: {loss.shape} {loss}")
-        # print(f"grad: {grad.shape} {grad}")
-        # print(f"loss: {loss.shape} {loss}")
-        # Revisit this with the formula and what happens inside the cross_entropy_forward_backward
-        # MDM https://github.com/ML-GSAI/SMDM/blob/583aa4716d17728dbb825aec6c24a121164d616a/pretrain/train_mdm.py#L274
-        # loss = loss / masked_p
-        # print(f"loss: {loss.shape} {loss}")
-
-        # We need this when we have a way to weight the losses from each position differently.
-        # masked_logits = logits[masked_indices].unsqueeze(0)
-        # print(f"masked_logits: {masked_logits.shape} {masked_logits}")
-        # # flatten the masked indices to match the logits
-        # masked_indices_flt = masked_indices.flatten()
-        # masked_labels = labels[masked_indices_flt]
-        # print(f"masked_labels: {masked_labels.shape} {masked_labels}")
-        # p_mask[masked_indices]
-
         # Take only the losses and grads from the masked tokens/positions
+        print(f"loss: {loss.shape} {loss}")
+        print(f"grad: {grad.shape} {grad}")
+        print(f"masked_indices: {masked_indices.shape} {masked_indices}")
+        print(f"mask_probabilities: {mask_probabilities.shape} {mask_probabilities}")
+        print(f"loss_weights: {loss_weights.shape} {loss_weights}")
         masked_indices_flt = masked_indices.flatten()
         masked_loss = loss[masked_indices_flt]
         grad[masked_indices_flt]
-        # print("f masked_probabilities: ", mask_probabilities.shape, mask_probabilities, mask_probabilities.flatten())
         masked_loss = masked_loss / mask_probabilities.flatten()[masked_indices_flt]
+
+        # Apply loss weights to both loss and gradient
+        loss_weights_flat = loss_weights.flatten()
+        loss = loss * loss_weights_flat
+        grad = grad * loss_weights_flat.unsqueeze(-1)  # Add dimension for gradient
 
         # compute per token loss by all tokens in the batch (tokens we dropped thinks they have 0 loss)
         # MDM https://github.com/ML-GSAI/SMDM/blob/583aa4716d17728dbb825aec6c24a121164d616a/pretrain/train_mdm.py#L275
-        masked_loss = masked_loss.sum() / labels.shape[0]
+        loss = loss.sum() / labels.shape[0]
 
         del logits
         # masked grad or full grad?
-        return masked_loss, output_parallel_linear_backward(grad, context)
+        return loss, output_parallel_linear_backward(grad, context)
