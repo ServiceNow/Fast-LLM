@@ -16,6 +16,7 @@ CONFIG_MATCH_MEGATRON = [
 ]
 
 
+@pytest.mark.slow
 @pytest.mark.depends_on(on=["test_megatron"])
 def test_match_megatron(run_test_script):
     if CONFIG_MEGATRON is None:
