@@ -6,6 +6,7 @@ from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
 from fast_llm.engine.distributed.config import DistributedDimNames
 from fast_llm.functional.config import CrossEntropyImpl
 from fast_llm.layers.transformer.config import TransformerConfig
+from fast_llm.layers.transformer.rotary.config import NoRotaryConfig
 from fast_llm.utils import Assert
 
 
@@ -155,12 +156,31 @@ class LanguageModelBaseConfig(BaseModelConfig):
         hint=FieldHint.feature,
         valid=check_field(Assert.geq, 0),
     )
+    embeddings_lr_scale: float | None = Field(
+        default=None,
+        desc="Learning rate scale for the word embeddings.",
+        doc="May be used to freeze some layers by setting their scale to zero.",
+        hint=FieldHint.feature,
+        valid=skip_valid_if_none(check_field(Assert.geq, 0)),
+    )
+    output_lr_scale: float | None = Field(
+        default=None,
+        desc="Custom learning rate scale for the output weights.",
+        doc="May be used to freeze the output weights by setting their scale to zero.",
+        hint=FieldHint.feature,
+    )
+    prediction_loss_coefficient: list[float] | None = Field(
+        default=None,
+        desc="Loss coefficient for each prediction head.",
+        doc="If not provided, all heads are equally weighted.",
+        hint=FieldHint.feature,
+    )
 
     def _validate(self) -> None:
         self.transformer.validate()
         with self._set_implicit_default():
             if self.use_position_embeddings is None:
-                self.use_position_embeddings = not self.transformer.rotary.enabled
+                self.use_position_embeddings = isinstance(self.transformer.rotary, NoRotaryConfig)
             if self.init_method_std_embed is None:
                 self.init_method_std_embed = self.transformer.init_method_std
             if self.init_method_max_embed is None:
@@ -173,6 +193,10 @@ class LanguageModelBaseConfig(BaseModelConfig):
         if self.distillation_model is not None:
             if self.prediction_heads > 1:
                 raise NotImplementedError("Multi-token prediction not supported with distillation.")
+        if isinstance(self.prediction_loss_coefficient, list):
+            Assert.eq(len(self.prediction_loss_coefficient), self.prediction_heads)
+            for coeff in self.prediction_loss_coefficient:
+                Assert.geq(coeff, 0)
 
     def setup_tensor_space(self, tensor_space: TensorSpace) -> None:
         self.transformer.setup_tensor_space(tensor_space)
