@@ -551,26 +551,23 @@ class GPTSampledIndexedDataset(SampledDataset):
                 )
                 start_pos = 0
                 has_images = sample.image_positions is not None
-                if has_image_positions:
+                if has_images:
+                    sample_token_ids = []
                     for idx, im_position in enumerate(sample.image_positions):
-                        # image_positions.append(im_positions + len(token_ids) + image_tokens_added)
-                        # Add placeholders for image tokens
-                        token_ids.append(sample.token_ids[start_pos:im_position])
-                        text_tokens_added += len(token_ids[-1])
-                        image_positions.append(text_tokens_added + image_tokens_added)
+                        # add placeholder masked tokens for images
+                        # if image_break_token is set, it is appended after every row
+                        # if image_end_token is set, it is appended at the end of the image instead  of image_break_token
+                        text_part = sample.token_ids[start_pos:im_position]
                         if self._parameters.image_break_token is not None:
                             height, width = resized_image_lengths[idx]
                             num_patches_h = div(height, self._parameters.patch_size)
                             num_patches_w = div(width, self._parameters.patch_size)
-
-                            # Create image token placeholder array
                             image_token_array = np.full((image_sizes[idx],), -100, dtype=np.int64)
-
-                            # Add break tokens after each row except the last row
+                            # account for break tokens after each row
                             for row in range(num_patches_h - 1):
                                 position = (row + 1) * num_patches_w + row
                                 image_token_array[position] = self._parameters.image_break_token
-                            # add end token if specified, else break token
+                            # handle the last row separately
                             last_row_position = num_patches_h * num_patches_w + num_patches_h - 1
                             if self._parameters.image_end_token is not None:
                                 image_token_array[last_row_position] = self._parameters.image_end_token
@@ -580,11 +577,19 @@ class GPTSampledIndexedDataset(SampledDataset):
                             image_token_array = np.full((image_sizes[idx],), -100, dtype=np.int64)
                             if self._parameters.image_end_token is not None:
                                 image_token_array[-1] = self._parameters.image_end_token
-                        token_ids.append(image_token_array)
+                        segment = np.concatenate([text_part, image_token_array], dtype=np.int64)
+                        sample_token_ids.append(segment)
+                        text_tokens_added += len(text_part)
+                        image_positions.append(text_tokens_added + image_tokens_added)
                         image_tokens_added += image_sizes[idx]
                         start_pos = im_position
-                token_ids.append(sample.token_ids[start_pos:])
-                text_tokens_added += len(token_ids[-1])
+                    # Add the last text segment after the last image
+                    sample_token_ids.append(sample.token_ids[start_pos:])
+                    text_tokens_added += len(sample_token_ids[-1])
+                    token_ids.append(np.concatenate(sample_token_ids))
+                else:
+                    token_ids.append(sample.token_ids[start_pos:])
+                    text_tokens_added += len(token_ids[-1])
                 if sample.images:
                     images.append(sample.images)
                 else:

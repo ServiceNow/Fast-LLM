@@ -3,7 +3,7 @@ import typing
 import torch
 
 from fast_llm.core.distributed import set_generator
-from fast_llm.core.ops import gather, reduce_forward, split
+from fast_llm.core.ops import reduce_forward, split
 from fast_llm.engine.config_utils.tensor_space import TensorSpace
 from fast_llm.layers.language_model.config import LanguageModelBaseConfig, LanguageModelKwargs
 from fast_llm.layers.language_model.embedding import LanguageModelEmbedding
@@ -61,7 +61,6 @@ class MultiModalEmbedding(LanguageModelEmbedding):
             embeddings = torch.embedding(self.word_embeddings_weight, masked_tokens) * token_mask.unsqueeze(2)  # noqa
             # Cloning since we will modify the embeddings in-place
             embeddings = embeddings.clone()
-            input_ = gather(input_, group, dim=0)
             # the embeddings tensor are full-sized, but we might get a split of the patch embeddings
             # We need to determine the offset in the embeddings tensor for each sample
             # and also account for the special image tokens if applicable
@@ -93,12 +92,10 @@ class MultiModalEmbedding(LanguageModelEmbedding):
                                 embeddings[embeddings_start_index:embeddings_end_index, sample_idx] = input_[
                                     input_start_index:input_end_index, sample_idx
                                 ]
-                                tokens[embeddings_start_index:embeddings_end_index, sample_idx] = 10
                             else:
                                 embeddings[sample_idx, embeddings_start_index:embeddings_end_index] = input_[
                                     sample_idx, input_start_index:input_end_index
                                 ]
-                                tokens[embeddings_start_index:embeddings_end_index, sample_idx] = 10
                     else:
                         input_start_index = max(image_embedding_offset, patch_start_offset) - patch_start_offset
                         input_end_index = (
