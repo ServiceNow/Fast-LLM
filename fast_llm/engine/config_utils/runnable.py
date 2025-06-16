@@ -16,10 +16,15 @@ from fast_llm.engine.config_utils.logging import configure_logging
 logger = logging.getLogger(__name__)
 
 
-@config_class()
+@config_class(registry=True)
 class RunnableConfig(Config):
     @classmethod
-    def parse_and_run(cls, args=None) -> None:
+    def parse_and_run(cls, args: list[str] | None = None) -> None:
+        if args is None:
+            args = sys.argv[1:]
+        if cls._first_arg_is_dynamic_type(args):
+            # Allow chained dynamic type selection without the `type=`, ex. `train gpt`.
+            return cls.get_subclass(args[0]).parse_and_run(args[1:])
         parsed, unparsed = cls._get_parser().parse_known_args(args)
         with NoAutoValidate():
             config: "RunnableConfig" = cls._from_parsed_args(parsed, unparsed)
@@ -34,6 +39,10 @@ class RunnableConfig(Config):
             # We always want to show the config for debugging.
             config._show(parsed.verbose)
         runnable()
+
+    @classmethod
+    def _first_arg_is_dynamic_type(cls, args: list[str]) -> bool:
+        return len(args) >= 1 and "=" not in args[0] and not args[0].startswith("-")
 
     @classmethod
     def _get_parser(cls) -> argparse.ArgumentParser:

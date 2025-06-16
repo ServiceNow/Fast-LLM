@@ -1,6 +1,7 @@
 import itertools
 import logging
 import math
+import signal
 import typing
 from typing import Callable
 
@@ -144,7 +145,17 @@ class Assert:
     @staticmethod
     def rms_close(x, y, threshold):
         rms = rms_diff(x, y).item()
-        assert rms <= threshold, f"Rms diff too big ({rms} > {threshold}) between tensors {x} and {y}"
+        assert rms <= threshold, f"Rms diff too big ({rms:.3e} > {threshold:.3e}) between tensors {x} and {y}"
+
+    @staticmethod
+    def rms_close_relative(x, y, threshold, min_threshold=0):
+        import torch
+
+        Assert.eq(x.shape, y.shape)
+        scale = (torch.sum(x**2 + y**2) / (2 * x.numel())) ** 0.5
+        threshold = max(threshold * scale, min_threshold)
+        rms = rms_diff(x, y).item()
+        assert rms <= threshold, f"Rms diff too big ({rms:.3e} > {threshold:.3e}) between tensors {x} and {y}"
 
     @staticmethod
     def all_equal(x, y):
@@ -156,7 +167,7 @@ class Assert:
 
         neq = x != y
         if neq.any().item():  # noqa
-            index = torch.where(neq)  # noqa
+            index = None if x.numel() == 1 else torch.where(neq)  # noqa
             raise AssertionError(
                 f"Tensors have {index[0].numel()} different entries out of "
                 f"{x.numel()}: {x[index]} != {y[index]} at index {torch.stack(index, -1)}"
@@ -206,6 +217,11 @@ class Registry[KeyType, ValueType]:
         if key in self:
             raise KeyError(f"Entry {key} already in {self._name} registry")
         self._data[key] = value
+
+    def __delitem__(self, key: KeyType):
+        if key not in self:
+            raise KeyError(f"Entry {key} not found in {self._name} registry")
+        del self._data[key]
 
     def keys(self) -> list[KeyType]:
         return list(self._data)
@@ -279,7 +295,7 @@ class InvalidObject:
 
 def try_decorate(get_decorator: Callable, _return_decorator: bool = True) -> Callable:
     """
-    Try to decorate an object, but ignore the error until the object is actualy used.
+    Try to decorate an object, but ignore the error until the object is actually used.
     The wrapped decorator should always be instantiated before calling,
     i.e.. called as `@decorator()` rather than `@decorator`.
     """
@@ -344,3 +360,34 @@ def get_lr_scale(
     if isinstance(lr_scale, tuple):
         return tuple(lrs * layer_lr_scale if lrs is not None else layer_lr_scale for lrs in lr_scale)
     raise ValueError(f"Invalid lr_scale: {lr_scale} (type {type(lr_scale)})")
+
+
+class Interrupter:
+    def __init__(self, enabled: bool = True, signals: typing.Sequence[int] = (signal.SIGINT, signal.SIGTERM)):
+        self._enabled = enabled
+        self._signals = signals
+
+    def __enter__(self):
+        self._interrupted = False
+        self._old_signals = (
+            {signum: signal.signal(signum, self._handle_signal) for signum in self._signals} if self._enabled else {}
+        )
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        for signum, handler in self._old_signals.items():
+            signal.signal(signum, handler)
+
+    def _handle_signal(self, signum, frame):
+        logger.info(f"Interrupt signal {signal.Signals(signum).name} received.")
+        if self._interrupted:
+            # Raise for a repeated signal, ex. if a user really wants to ctrl-C.
+            self._old_signals[signum](signum, frame)
+        self._interrupted = True
+
+    @property
+    def enabled(self) -> bool:
+        return self._enabled
+
+    @property
+    def interrupted(self):
+        return self._interrupted

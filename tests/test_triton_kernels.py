@@ -9,11 +9,6 @@ from fast_llm.functional.config import (
     TritonConfig,
 )
 from fast_llm.functional.cross_entropy import cross_entropy_forward_backward
-from fast_llm.functional.rotary import (
-    apply_rotary_embeddings,
-    convert_rotary_complex_to_real,
-    convert_rotary_real_to_complex,
-)
 from fast_llm.functional.triton.adam import triton_adam
 from fast_llm.functional.triton.mlp import (
     torch_mlp_activation,
@@ -28,8 +23,12 @@ from fast_llm.functional.triton.normalization import (
 from fast_llm.functional.triton.pointwise import triton_add, triton_copy, triton_fill
 from fast_llm.functional.triton.rotary import triton_rotary_
 from fast_llm.functional.triton.sparse_copy import get_sparse_map
-from fast_llm.layers.transformer.config import RotaryConfig, RotaryEmbeddingType
-from fast_llm.layers.transformer.preprocessing import get_rotary_frequencies
+from fast_llm.layers.transformer.rotary.config import DefaultRotaryConfig
+from fast_llm.layers.transformer.rotary.rotary import (
+    apply_rotary_embeddings,
+    convert_rotary_complex_to_real,
+    convert_rotary_real_to_complex,
+)
 from fast_llm.utils import Assert, rms_diff
 from tests.common import requires_cuda
 
@@ -92,8 +91,9 @@ def test_triton_rotary(batch_size, sequence_length, num_heads, kv_channels):
 
     y1 = apply_rotary_embeddings(
         x,
-        get_rotary_frequencies(
-            RotaryConfig(type=RotaryEmbeddingType.default, triton=False),
+        DefaultRotaryConfig(triton=False)
+        .build()
+        ._get_frequencies(
             sequence_length,
             kv_channels,
             device="cuda",
@@ -103,12 +103,7 @@ def test_triton_rotary(batch_size, sequence_length, num_heads, kv_channels):
     y2 = convert_rotary_real_to_complex(
         triton_rotary_(
             convert_rotary_complex_to_real(x, kv_channels, 3),
-            get_rotary_frequencies(
-                RotaryConfig(type=RotaryEmbeddingType.default, triton=True),
-                sequence_length,
-                kv_channels,
-                device="cuda",
-            ),
+            DefaultRotaryConfig(triton=True).build()._get_frequencies(sequence_length, kv_channels, device="cuda"),
         ),
         kv_channels,
         3,
@@ -199,26 +194,31 @@ def test_triton_mlp_activation(gated, activation_type, recompute):
 @requires_cuda
 @pytest.mark.slow
 @pytest.mark.parametrize(
-    ("num_columns", "grad_output", "logits_scale_factor"),
+    ("num_columns", "grad_output", "logits_scale_factor", "loss_masking"),
     (
-        (8192, 1.0, 1.0),  # Simple
-        (5000, 1.0, 1.0),  # Not a power of 2
-        (5000, None, 1.0),  # No grad
-        (5000, 1.0, 4.0),  # Loss scaling
-        (5000, 4.0, 1.0),  # Grad scaling
-        (65536, 1.0, 1.0),  # Max block size
-        (65537, 1.0, 1.0),  # Above max block size
+        (8192, 1.0, 1.0, False),  # Simple
+        (5000, 1.0, 1.0, False),  # Not a power of 2
+        (5000, None, 1.0, False),  # No grad
+        (5000, 1.0, 4.0, False),  # Loss scaling
+        (5000, 4.0, 1.0, False),  # Grad scaling
+        (5000, 1.0, 1.0, True),  # Loss masking
+        (65536, 1.0, 1.0, False),  # Max block size
+        (65537, 1.0, 1.0, False),  # Above max block size
     ),
 )
 @pytest.mark.parametrize("target_format", (TargetFormat.labels, TargetFormat.logits, TargetFormat.probabilities))
-def test_cross_entropy(num_columns, grad_output, logits_scale_factor, target_format):
+def test_cross_entropy(num_columns, grad_output, logits_scale_factor, loss_masking, target_format):
     # TODO: Test tensor-parallel implementation.
     assert TritonConfig.TRITON_ENABLED
     # We want something moderately close to the target for the test to be meaningful
     logits_var = torch.randn(256, num_columns, dtype=torch.bfloat16, device="cuda") / 3
+    loss_mask = torch.randint(0, 2, (256,), dtype=torch.bool, device="cuda") if loss_masking else None
     if target_format == TargetFormat.labels:
         target = torch.randint(0, num_columns, (256,), dtype=torch.int64, device="cuda")
         logits = (torch.nn.functional.one_hot(target, num_columns) + logits_var).requires_grad_()
+        if loss_masking:
+            logits = torch.where(loss_mask.unsqueeze(-1), logits, -100)
+            loss_mask = None
     else:
         target = torch.randn(256, num_columns, dtype=torch.bfloat16, device="cuda")
         logits = (target + logits_var).requires_grad_()
@@ -228,6 +228,7 @@ def test_cross_entropy(num_columns, grad_output, logits_scale_factor, target_for
     kwargs = {
         "logits": logits,
         "target": target,
+        "loss_mask": loss_mask,
         "grad_output": grad_output,
         "logits_scale_factor": logits_scale_factor,
         "target_format": target_format,
