@@ -57,13 +57,11 @@ def gpt_data_collate_fn(batch: list[GPTSample], sampling_parameters: GPTSampling
         t = torch.rand((batch_size,))
 
         # Compute the mask probabilities for every sequence in the batch
-        p_mask = (1 - diffusion_config.epsilon) * t + diffusion_config.epsilon
+        p_mask = (1 - (2 * diffusion_config.epsilon)) * t + diffusion_config.epsilon
 
         # Do we need to clamp at max_mask_prob?
         # p_mask = torch.min(p_mask, torch.tensor(diffusion_config.max_mask_prob))
 
-        # Repeat the same mask probability for each token in the sequence
-        # mask_probabilities = p_mask[:, None].repeat(1, seq_len)
         # Input has an additional token for shitting, is [0, 1, 2, 3, 4] -> [1, 2, 3, 4]
 
         # index   [0, 1, 2, 3, 4, 5] ->
@@ -71,10 +69,6 @@ def gpt_data_collate_fn(batch: list[GPTSample], sampling_parameters: GPTSampling
         #                                 embd =  [A, B, C, D, E]
         #                                label =  [B, C, D, E, F]
         # Last input token is dropped from the processing
-
-        # We should not mask it
-        # mask_probabilities[:, 0] = 0.0
-        # print(f"2 p_mask: {mask_probabilities} {mask_probabilities.shape}")
 
         # Generate random values for all tokens in the batch and only mask the positions\
         # where the value is smaller than the mask probability
@@ -90,7 +84,6 @@ def gpt_data_collate_fn(batch: list[GPTSample], sampling_parameters: GPTSampling
         token_ids = torch.where(mask_indexes, mask_token_id, token_ids)
 
         mask_indexes = mask_indexes[:, :-1]  # Remove the last token, which is not used for prediction.
-        # mask_probabilities = mask_probabilities[:, :-1]  # Remove the last token, which is not used for prediction.
         mask_probabilities = p_mask
 
     if sampling_parameters.use_loss_masking_spans:

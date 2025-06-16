@@ -71,9 +71,6 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
         else:
             self._preprocessors.append(BackupAttentionPreprocessor(self._config.transformer, self._tensor_space))
 
-        # if self._config.transformer.diffusion.enabled:
-        #     self._preprocessors.append(LLaDAMaskingPreprocessor(self._config.transformer, self._tensor_space))
-
     def get_output_layers(self) -> list[Layer]:
         return [
             layer
@@ -303,7 +300,6 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
 
                 if batch.mask_indexes is not None:
                     # We are in masked-diffusion mode, so we need to add the mask indexes and probabilities to kwargs
-                    # print(f'in masked-diffusion mode, batch.mask_indexes: {batch.mask_indexes}')
                     kwargs[LanguageModelKwargs.mask_indexes] = batch.mask_indexes.to(
                         device=self._tensor_space.distributed.device
                     )
@@ -322,10 +318,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                         -10000.0, device=self._tensor_space.distributed.device
                     )
 
-            # print(f"batch.token_ids aka inputs: {batch.token_ids.shape} {batch.token_ids}")
-            # print(f"labels: {labels.shape} {labels}")
             for preprocessor in self._preprocessors:
-                # Update this include p_maks and mask index in kwargs
                 preprocessor.preprocess(tokens, kwargs)
             preprocessed.append((tokens, kwargs))
 
