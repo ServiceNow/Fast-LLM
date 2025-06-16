@@ -1,6 +1,8 @@
 import os
 
 from fast_llm.models.gpt.config import (
+    DiffusionDreamGPTHuggingfaceCheckpointFormat,
+    DiffusionLlamaGPTHuggingfaceCheckpointFormat,
     LlamaGPTHuggingfaceCheckpointFormat,
     MistralGPTHuggingfaceCheckpointFormat,
     MixtralGPTHuggingfaceCheckpointFormat,
@@ -186,12 +188,26 @@ _CONFIGS = {
         CONFIG_QWEN2_COMMON,
         Qwen2GPTHuggingfaceCheckpointFormat,
     ),
+    "dream": (
+        "gpt",
+        CONFIG_QWEN2_FAST_LLM,
+        CONFIG_QWEN2_MEGATRON,
+        CONFIG_QWEN2_COMMON,
+        DiffusionDreamGPTHuggingfaceCheckpointFormat,
+    ),
     "llama-yarn": (
         "gpt",
         CONFIG_LLAMA_YARN_FAST_LLM,
         CONFIG_LLAMA_YARN_MEGATRON,
         CONFIG_LLAMA_YARN_COMMON,
         LlamaGPTHuggingfaceCheckpointFormat,
+    ),
+    "diffusion_llama": (
+        "gpt",
+        CONFIG_LLAMA_YARN_FAST_LLM,
+        CONFIG_LLAMA_YARN_MEGATRON,
+        CONFIG_LLAMA_YARN_COMMON,
+        DiffusionLlamaGPTHuggingfaceCheckpointFormat,
     ),
     "mistral": (
         "gpt",
