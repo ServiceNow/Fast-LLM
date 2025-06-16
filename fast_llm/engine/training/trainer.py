@@ -284,7 +284,7 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
             self._run_training()
 
     def _run_training(self) -> None:
-        self._prepare_model_state()
+        self._prepare_training_state()
 
         log_main_rank("done with setup ...")
         log_pipeline_parallel_main_rank(lambda: log_memory_usage(f"After initial setup", str))
@@ -487,7 +487,7 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
             timeout=self._config.training.timeout,
         )
 
-    def _prepare_model_state(self) -> None:
+    def _prepare_training_state(self) -> None:
         # Setup the training state.
         if (last_iteration := self._get_last_checkpoint()) is None:
             if (path := self._config.pretrained.path) is not None and self._config.pretrained.model_weights:
