@@ -301,13 +301,21 @@ _update_and_add_testing_config(
 )
 
 _update_and_add_testing_config(
-    # Tests yarn-style rotary embeddings.
+    # Tests diffusion llama converter.
     "llama_yarn",
     "diffusion_llama",
     extra_args=[],
     # Megatron doesn't support Yarn-style Rotary Embeddings
     megatron_args=None,
     checkpoint_format=DiffusionLlamaGPTHuggingfaceCheckpointFormat,
+    # TODO: Add back generate as `normal` when stable.
+    groups={
+        ModelTestingGroup.basic: ModelTestingGroupAction.unimportant,
+        ModelTestingGroup.convert: ModelTestingGroupAction.normal,
+        ModelTestingGroup.generate: ModelTestingGroupAction.broken,
+        ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.distributed: ModelTestingGroupAction.unimportant,
+    },
 )
 
 _update_and_add_testing_config(
@@ -347,13 +355,21 @@ _update_and_add_testing_config(
 )
 
 _update_and_add_testing_config(
-    # Diffusion dream converter.
+    # Tests diffusion dream converter.
     "qwen2",
     "dream",
     extra_args=[],
     # Megatron doesn't support per sub layer biases.
     megatron_args=None,
     checkpoint_format=DiffusionDreamGPTHuggingfaceCheckpointFormat,
+    # TODO: Add back generate as `normal` when stable.
+    groups={
+        ModelTestingGroup.basic: ModelTestingGroupAction.unimportant,
+        ModelTestingGroup.convert: ModelTestingGroupAction.normal,
+        ModelTestingGroup.generate: ModelTestingGroupAction.broken,
+        ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.distributed: ModelTestingGroupAction.unimportant,
+    },
 )
 
 _update_and_add_testing_config(
