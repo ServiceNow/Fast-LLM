@@ -719,6 +719,13 @@ class DiffusionDreamHuggingfaceCheckpointHandler(CustomModelingExportMixin, Comm
                 ),
             ),
             IgnoreImportQwen2SlidingWindowParamsConverter(),
+            ConstantExportParamConverter(
+                export_names=(("auto_map",),),
+                export_value={
+                    "AutoConfig": "configuration_dream.DreamConfig",
+                    "AutoModel": "modeling_dream.DreamModel",
+                },
+            ),
         ]
 
     def _get_mlp_converters(self, fast_llm_prefix: str, hf_prefix: str) -> list[WeightConverter]:
