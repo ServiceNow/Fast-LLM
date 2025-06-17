@@ -34,3 +34,8 @@ class TokenizerConfig(Config):
         desc="Path to the tokenizer file.",
         hint=FieldHint.core,
     )
+    bos_token: str | None = Field(
+        default=None,
+        desc="BOS token to use if the tokenizer doesn't define one; must be an existing token.",
+        hint=FieldHint.core,
+    )
