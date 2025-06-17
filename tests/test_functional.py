@@ -8,7 +8,7 @@ from fast_llm.functional.dpo import _compute_dpo_loss, _compute_logprobs_for_pre
 from fast_llm.functional.triton.mlp import mlp_autograd, mlp_autograd_looped, torch_mlp_activation
 from fast_llm.functional.triton.sparse_copy import get_sparse_map
 from fast_llm.utils import Assert
-from tests.common import requires_cuda
+from tests.utils.utils import requires_cuda
 
 
 def ref_log_probs_from_logits(logits: torch.Tensor, labels: torch.Tensor, temperature: float = 1.0) -> torch.Tensor:
@@ -218,6 +218,8 @@ def test_mlp_recomputation(gated, activation_type):
 @pytest.mark.slow
 @requires_cuda
 def test_dropless_mlp():
+    # TODO: Fix dropless MOE
+    pytest.fail("Test fails, aborting to avoid breaking cuda", False)
     num_experts = 4
     experts_per_token = 4
     tokens = 1024

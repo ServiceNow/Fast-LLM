@@ -71,7 +71,7 @@ class MLPBase(Layer, ABC):
 class MLP(MLPBase):
     def __init__(self, config: TransformerConfig, tensor_space: TensorSpace, name: str = "mlp", layer_index: int = 0):
         Assert.eq(config.num_experts, 1)
-        super().__init__(config, tensor_space, name)
+        super().__init__(config, tensor_space, name, layer_index)
 
     def forward(
         self,

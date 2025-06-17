@@ -25,6 +25,23 @@ MEMMAP_DTYPES_INV = {y: x for x, y in MEMMAP_DTYPES.items()}
 MEMMAP_INDEX_HEADER = b"MMIDIDX\x00\x00"
 
 
+@config_class(registry=True)
+class SourceSchemaConfig(Config):
+    pass
+
+
+@config_class(dynamic_type={SourceSchemaConfig: "text_column"})
+class TextColumnConfig(SourceSchemaConfig):
+    input_column: str = Field(
+        default="text",
+        desc="Field of the dataset to use.",
+        hint=FieldHint.optional,
+    )
+    loss_masking_spans_column: None | str = Field(
+        default=None, desc="Field containing character spans to mask for loss computation", hint=FieldHint.optional
+    )
+
+
 @config_class()
 class GPTHuggingfaceDatasetConfig(Config):
     path: str = Field(
@@ -52,13 +69,9 @@ class GPTHuggingfaceDatasetConfig(Config):
         desc="Split of the dataset to use.",
         hint=FieldHint.optional,
     )
-    field: str = Field(
-        default="text",
-        desc="Field of the dataset to use.",
+    source_schema: SourceSchemaConfig = Field(
+        desc="Configuration for the data source.",
         hint=FieldHint.optional,
-    )
-    loss_masking_spans: None | str = Field(
-        default=None, desc="Field containing character spans to mask for loss computation", hint=FieldHint.optional
     )
     chosen_text: None | str = Field(
         default=None, desc="Field containing chosen text for preference optimization", hint=FieldHint.optional
