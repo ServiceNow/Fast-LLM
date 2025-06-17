@@ -45,7 +45,7 @@ class DreamConfig(PretrainedConfig):
         max_window_layers=28,
         attention_dropout=0.0,
         mask_token_id=151666,
-        pad_token_id=None,  # vocab_size is set to 8192 for test cases this would fail on Embedding layer check: # pad_token_id=None,
+        pad_token_id=None,  # vocab_size is set to 8192 for test cases this would fail on Embedding layer check: # pad_token_id=151643,
         **kwargs,
     ):
         self.vocab_size = vocab_size
