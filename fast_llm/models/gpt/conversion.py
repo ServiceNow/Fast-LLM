@@ -699,8 +699,10 @@ class DiffusionDreamHuggingfaceCheckpointHandler(CustomModelingExportMixin, Comm
     def _create_config_converters(cls) -> list[ParamConverter]:
         return super()._create_config_converters() + [
             # From Qwen2HuggingfaceCheckpointHandler - Change architectures to DiffusionDream
+            ConstantExportParamConverter(export_names=(("architectures",),), export_value=["DreamModel"]),
             ConstantImportParamConverter(
-                fast_llm_names=(("transformer", "normalization", "type"),), fast_llm_value=NormalizationType.rms_norm
+                fast_llm_names=(("transformer", "normalization", "type"),),
+                fast_llm_value="rms_norm",
             ),
             RenameParamConverter(
                 fast_llm_names=(("transformer", "normalization", "epsilon"),), export_names=(("rms_norm_eps",),)
@@ -709,28 +711,14 @@ class DiffusionDreamHuggingfaceCheckpointHandler(CustomModelingExportMixin, Comm
             ConstantImportParamConverter(
                 fast_llm_names=(("transformer", "add_linear_biases"),), fast_llm_value="only_attn_qkv"
             ),
-            RopeScalingParamConverter(
-                fast_llm_names=(
-                    ("transformer", "rotary", "type"),
-                    ("transformer", "rotary", "scale_factor"),
-                    ("transformer", "rotary", "low_frequency_factor"),
-                    ("transformer", "rotary", "high_frequency_factor"),
-                    ("transformer", "rotary", "original_context_length"),
-                    ("transformer", "rotary", "attention_factor"),
-                    ("transformer", "rotary", "beta_fast"),
-                    ("transformer", "rotary", "beta_slow"),
+            LLamaRotaryParamConverter(
+                fast_llm_names=(("transformer", "rotary"),),
+                export_names=(
+                    ("rope_theta",),
+                    ("rope_scaling",),
                 ),
-                export_names=(("rope_scaling",),),
             ),
             IgnoreImportQwen2SlidingWindowParamsConverter(),
-            ConstantExportParamConverter(export_names=(("architectures",),), export_value=["DreamModel"]),
-            ConstantExportParamConverter(
-                export_names=(("auto_map",),),
-                export_value={
-                    "AutoConfig": "configuration_dream.DreamConfig",
-                    "AutoModel": "modeling_dream.DreamModel",
-                },
-            ),
         ]
 
     def _get_mlp_converters(self, fast_llm_prefix: str, hf_prefix: str) -> list[WeightConverter]:
