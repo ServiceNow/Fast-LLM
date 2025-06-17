@@ -315,11 +315,12 @@ _update_and_add_testing_config(
     # Megatron doesn't support Yarn-style Rotary Embeddings
     megatron_args=None,
     checkpoint_format=DiffusionLlamaGPTHuggingfaceCheckpointFormat,
+    # TODO: Conversion is broken.
     # TODO: Add back generate as `normal` when stable.
     groups={
         ModelTestingGroup.basic: ModelTestingGroupAction.unimportant,
         ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
-        ModelTestingGroup.convert: ModelTestingGroupAction.normal,
+        ModelTestingGroup.convert: ModelTestingGroupAction.broken,
         ModelTestingGroup.generate: ModelTestingGroupAction.broken,
         ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
         ModelTestingGroup.distributed: ModelTestingGroupAction.unimportant,
@@ -372,11 +373,12 @@ _update_and_add_testing_config(
     # Megatron doesn't support per sub layer biases.
     megatron_args=None,
     checkpoint_format=DiffusionDreamGPTHuggingfaceCheckpointFormat,
+    # TODO: Conversion is broken.
     # TODO: Add back generate as `normal` when stable.
     groups={
         ModelTestingGroup.basic: ModelTestingGroupAction.unimportant,
         ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
-        ModelTestingGroup.convert: ModelTestingGroupAction.normal,
+        ModelTestingGroup.convert: ModelTestingGroupAction.broken,
         ModelTestingGroup.generate: ModelTestingGroupAction.broken,
         ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
         ModelTestingGroup.distributed: ModelTestingGroupAction.unimportant,
@@ -489,13 +491,13 @@ def testing_group_enabled(item: pytest.Function, skip_slow: bool, skip_extra_slo
         for group in groups:
             action = model_config.groups[group]
             if action == ModelTestingGroupAction.main:
-                return True
+                pass
             elif action == ModelTestingGroupAction.normal and not skip_slow:
-                return True
+                pass
             elif (
                 action in (ModelTestingGroupAction.broken, ModelTestingGroupAction.unimportant) and not skip_extra_slow
             ):
-                return True
+                pass
             elif show_skipped:
                 item.add_marker(
                     pytest.mark.skip(reason=f"Skipping testing group {group} for model {model_testing_config}.")

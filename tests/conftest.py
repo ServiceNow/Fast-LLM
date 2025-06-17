@@ -113,6 +113,9 @@ def pytest_configure(config):
         rendezvous_port=TORCHRUN_DEFAULT_PORT + 2 * worker_id + 1,
     )
 
+    # Skip slow autotune for tests. The default config has the highest block size, so this shouldn't hide any bug.
+    os.environ["FAST_LLM_SKIP_TRITON_AUTOTUNE"] = "TRUE"
+
 
 @pytest.hookimpl(trylast=True)
 def pytest_collection_modifyitems(config, items: list[pytest.Function]):
