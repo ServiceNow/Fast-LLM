@@ -6,6 +6,7 @@ from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
 from fast_llm.engine.distributed.config import DistributedDimNames
 from fast_llm.functional.config import CrossEntropyImpl
 from fast_llm.layers.transformer.config import TransformerConfig
+from fast_llm.layers.transformer.rotary.config import NoRotaryConfig
 from fast_llm.utils import Assert
 
 
@@ -180,7 +181,7 @@ class LanguageModelBaseConfig(BaseModelConfig):
         self.transformer.validate()
         with self._set_implicit_default():
             if self.use_position_embeddings is None:
-                self.use_position_embeddings = not self.transformer.rotary.enabled
+                self.use_position_embeddings = isinstance(self.transformer.rotary, NoRotaryConfig)
             if self.init_method_std_embed is None:
                 self.init_method_std_embed = self.transformer.init_method_std
             if self.init_method_max_embed is None:
@@ -197,6 +198,12 @@ class LanguageModelBaseConfig(BaseModelConfig):
             Assert.eq(len(self.prediction_loss_coefficient), self.prediction_heads)
             for coeff in self.prediction_loss_coefficient:
                 Assert.geq(coeff, 0)
+        if self.transformer.per_layer_lr_scale is not None:
+            # -1 because the first prediction head's transformer layer is accounted for in num_layers
+            # +1 because the layer index starts at 1
+            Assert.eq(
+                len(self.transformer.per_layer_lr_scale), self.transformer.num_layers + self.prediction_heads - 1 + 1
+            )
 
     def setup_tensor_space(self, tensor_space: TensorSpace) -> None:
         self.transformer.setup_tensor_space(tensor_space)

@@ -1,6 +1,6 @@
 import pytest
 
-from tests.common import CONFIG_COMMON, TEST_MODEL
+from tests.utils.model_configs import CONFIG_COMMON, TEST_MODEL
 
 CONFIG_SF = CONFIG_COMMON + ["model.base_model.sequence_first=True"]
 
@@ -12,7 +12,7 @@ def test_model_sf(run_test_script):
 
 
 @pytest.mark.slow
-@pytest.mark.depends(on=["test_model_sf"])
+@pytest.mark.depends_on(on=["test_model_sf"])
 def test_model_sp2(run_test_script):
     # Sequence-tensor-parallel.
     run_test_script(
@@ -24,7 +24,7 @@ def test_model_sp2(run_test_script):
 
 
 @pytest.mark.slow
-@pytest.mark.depends(on=["test_model_sf"])
+@pytest.mark.depends_on(on=["test_model_sf"])
 def test_model_sdp2(run_test_script):
     # Sequence-data-parallel
     run_test_script(
@@ -36,7 +36,7 @@ def test_model_sdp2(run_test_script):
 
 
 @pytest.mark.slow
-@pytest.mark.depends(on=["test_model_sf"])
+@pytest.mark.depends_on(on=["test_model_sf"])
 def test_model_sp2_ce4(run_test_script):
     # Sequence-tensor-parallel with cross-entropy splits.
     run_test_script(

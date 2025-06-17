@@ -1,5 +1,4 @@
 from fast_llm.data.dataset.gpt.config import GPTDatasetSliceConfig
-from tests.common import DATASET_PREFIX, get_test_dataset
 from tests.data.common import (
     compare_indexed_dataset,
     get_dataset_config,
@@ -8,6 +7,7 @@ from tests.data.common import (
     validate_indexed_dataset_sampling,
 )
 from tests.data.test_memmap import MEMMAP_DATASET_SAMPLES
+from tests.utils.dataset import DATASET_PREFIX, get_test_dataset
 
 GPT_SLICE_TRAINING_SAMPLES = [
     [80, 268, 79, 260, 207, 3086],

@@ -5,6 +5,7 @@ import typing
 from fast_llm.config import Field, FieldHint, FieldUpdate, check_field, config_class
 from fast_llm.data.data.gpt.config import GPTDataConfig
 from fast_llm.engine.checkpoint.config import CheckpointFormat, CheckpointHandler
+from fast_llm.engine.config_utils.runnable import RunnableConfig
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig, PretrainedFastLLMModelConfig
 from fast_llm.engine.schedule.config import BatchConfig
 from fast_llm.engine.training.config import TrainerConfig
@@ -57,6 +58,14 @@ class MixtralGPTHuggingfaceCheckpointFormat(GPTHuggingfaceCheckpointFormat):
 
 class MTPLlamaGPTHuggingfaceCheckpointFormat(GPTHuggingfaceCheckpointFormat):
     name: typing.ClassVar[str] = "mtp_llama"
+    trust_remote_code: typing.ClassVar[bool] = True
+    
+class DiffusionDreamGPTHuggingfaceCheckpointFormat(GPTHuggingfaceCheckpointFormat):
+    name: typing.ClassVar[str] = "dream"
+    trust_remote_code: typing.ClassVar[bool] = True
+    
+class DiffusionLlamaGPTHuggingfaceCheckpointFormat(GPTHuggingfaceCheckpointFormat):
+    name: typing.ClassVar[str] = "diffusion_llama"
     trust_remote_code: typing.ClassVar[bool] = True
 
 
@@ -137,7 +146,7 @@ class GPTBaseModelConfig(LanguageModelBaseConfig):
         return super()._from_dict(default, strict, flat)
 
 
-@config_class()
+@config_class(dynamic_type={FastLLMModelConfig: "gpt"})
 class GPTModelConfig(FastLLMModelConfig):
     _abstract = False
     model_name: typing.ClassVar[str] = "gpt"
@@ -150,6 +159,8 @@ class GPTModelConfig(FastLLMModelConfig):
         MistralGPTHuggingfaceCheckpointFormat,
         MixtralGPTHuggingfaceCheckpointFormat,
         MTPLlamaGPTHuggingfaceCheckpointFormat,
+        DiffusionDreamGPTHuggingfaceCheckpointFormat,
+        DiffusionLlamaGPTHuggingfaceCheckpointFormat,
     )
 
     @classmethod
@@ -171,7 +182,7 @@ class PretrainedGPTModelConfig(PretrainedFastLLMModelConfig):
     model: GPTModelConfig = FieldUpdate()
 
 
-@config_class()
+@config_class(dynamic_type={RunnableConfig: "train_gpt", TrainerConfig: "gpt"})
 class GPTTrainerConfig(PretrainedGPTModelConfig, TrainerConfig):
     data: GPTDataConfig = FieldUpdate()
     batch: GPTBatchConfig = FieldUpdate()
