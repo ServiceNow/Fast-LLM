@@ -11,7 +11,7 @@ from fast_llm.engine.config_utils.tensor_space import DefaultDimNames, TensorDim
 from fast_llm.engine.distributed.config import DistributedDimNames
 from fast_llm.functional.autograd import grad_is_context, wrap_forward_backward
 from fast_llm.functional.config import CrossEntropyImpl, TargetFormat, TritonConfig
-from fast_llm.functional.cross_entropy import cross_entropy_forward_backward
+from fast_llm.functional.cross_entropy import cross_entropy_forward_backward, reverse_kl_forward_backward
 from fast_llm.functional.dpo import compute_dpo_loss
 from fast_llm.functional.linear import output_parallel_linear_backward, output_parallel_linear_forward
 from fast_llm.layers.common.auxiliary_loss import AuxiliaryLoss, z_loss
@@ -345,16 +345,32 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
                 grad_output,
             )
         else:
-            loss, grad = cross_entropy_forward_backward(
-                logits.flatten(0, -2),
-                target,
-                loss_mask,
-                group=self._tensor_space.distributed.tensor_group if self._parallel_embeddings else None,
-                grad_output=grad_output,
-                implementation=self._cross_entropy_impl,
-                logits_scale_factor=self._logits_scale_factor,
-                target_format=TargetFormat.labels if self._config.distillation_model is None else TargetFormat.logits,
-            )
+            if self._cross_entropy_impl == CrossEntropyImpl.reverse_kl:
+                # TODO: can it stay here?
+                loss, grad = reverse_kl_forward_backward(
+                    logits.flatten(0, -2),
+                    target,
+                    loss_mask,
+                    grad_output,
+                    group=self._tensor_space.distributed.tensor_group if self._parallel_embeddings else None,
+                    logits_scale_factor=self._logits_scale_factor,
+                    target_format=(
+                        TargetFormat.labels if self._config.distillation_model is None else TargetFormat.logits
+                    ),
+                )
+            else:
+                loss, grad = cross_entropy_forward_backward(
+                    logits.flatten(0, -2),
+                    target,
+                    loss_mask,
+                    group=self._tensor_space.distributed.tensor_group if self._parallel_embeddings else None,
+                    grad_output=grad_output,
+                    implementation=self._cross_entropy_impl,
+                    logits_scale_factor=self._logits_scale_factor,
+                    target_format=(
+                        TargetFormat.labels if self._config.distillation_model is None else TargetFormat.logits
+                    ),
+                )
 
         # TODO: de-allocate earlier.
         del logits
