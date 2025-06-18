@@ -378,12 +378,16 @@ class MLMHead(LanguageModelHead):
     def _logits_cross_entropy_forward_backward(
         self,
         input_: torch.Tensor,
-        labels: torch.Tensor | None,
+        target: torch.Tensor | None,
+        loss_mask: torch.Tensor | None,
         weight: torch.Tensor,
         grad_output: float,
         kwargs: dict,
         losses: dict | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
+
+        assert target is not None, "MLM head requires target labels"
+        assert loss_mask is None, "MLM head does not support loss mask"
 
         logits, context = output_parallel_linear_forward(
             input_=input_,
@@ -392,20 +396,6 @@ class MLMHead(LanguageModelHead):
             group=self._tensor_space.distributed.tensor_group if self._parallel_embeddings else None,
             sequence_parallel=self._sequence_parallel and self._parallel_embeddings,
         )
-
-        if self._z_loss_factor > 0.0:
-            logits = z_loss(
-                logits,
-                self._z_loss_factor,
-                self.training,
-                grad_output,
-                losses,
-                LanguageModelLossNames.z_loss,
-                logits_scale_factor=self._logits_scale_factor,
-            )
-
-        if labels is None:
-            return logits * self._logits_scale_factor, None
 
         masked_indices = kwargs[LanguageModelKwargs.mask_indexes]
         p_mask = kwargs[LanguageModelKwargs.mask_probabilities]
@@ -434,13 +424,14 @@ class MLMHead(LanguageModelHead):
         ).to(logits.dtype)
 
         loss, grad = cross_entropy_forward_backward(
-            logits.flatten(0, -2),
-            labels,
-            group=self._tensor_space.distributed.tensor_group if self._parallel_embeddings else None,
+            logits=logits.flatten(0, -2),
+            target=target,
+            loss_mask=None,
             grad_output=grad_output,
+            group=self._tensor_space.distributed.tensor_group if self._parallel_embeddings else None,
             implementation=self._cross_entropy_impl,
             logits_scale_factor=self._logits_scale_factor,
-            loss_weight=loss_weight,  # Do not average the loss, we will do it later
+            loss_weight=loss_weight,
         )
 
         # This happens with the loss_weight.

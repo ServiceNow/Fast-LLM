@@ -158,6 +158,7 @@ def _fused_cross_entropy_forward_backward(
             all_reduce(loss, op=ReduceOp.MEAN, group=group)
             return loss, grad
     else:
+        # Weight every token loss by the loss weight. Before averaging.
         per_sample_loss = per_sample_loss * loss_weight.flatten()
         loss_weight_expanded = loss_weight.reshape(-1, 1)
         grad = grad * loss_weight_expanded if grad is not None else None
@@ -206,5 +207,5 @@ def cross_entropy_forward_backward(
         )
     else:
         return _CROSS_ENTROPY_IMPLEMENTATIONS[implementation](
-            logits, target, grad_output, logits_scale_factor=logits_scale_factor, loss_weight=loss_weight
+            logits, target, loss_mask, grad_output, logits_scale_factor, target_format, loss_weight=loss_weight
         )

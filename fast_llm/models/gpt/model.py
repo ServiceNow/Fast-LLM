@@ -419,6 +419,10 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
         if self._config.logit_z_loss:
             LossDef(name=LanguageModelLossNames.z_loss, formatted_name="logit z loss", count=1)
 
+        if self._config.transformer.diffusion:
+            # Masked LM Loss for masked-diffusion training
+            loss_defs.append(LossDef(name=LanguageModelLossNames.mlm_loss, formatted_name="MLM Loss", count=1))
+
         for i in range(self._config.prediction_heads):
             loss_defs.append(
                 LossDef(
