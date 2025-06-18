@@ -485,6 +485,11 @@ class TransformerConfig(LLMBlockConfig):
         " Reduces memory usage, but increases fragmentation and requires CPU synchronisation. Not recommended.",
         hint=FieldHint.expert,
     )
+    diffusion: bool = Field(
+        default=False,
+        desc="Use masked-diffusion for training.",
+        hint=FieldHint.feature,
+    )
 
     def _validate(self) -> None:
         with self._set_implicit_default():

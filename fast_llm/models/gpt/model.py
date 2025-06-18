@@ -12,7 +12,7 @@ from fast_llm.engine.inference.runner import InferenceRunner
 from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
 from fast_llm.layers.language_model.config import LanguageModelKwargs, LanguageModelLossNames
 from fast_llm.layers.language_model.embedding import WORD_EMBEDDINGS_WEIGHT, LanguageModelEmbedding
-from fast_llm.layers.language_model.head import OUTPUT_WEIGHTS, LanguageModelHead
+from fast_llm.layers.language_model.head import OUTPUT_WEIGHTS, LanguageModelHead, MLMHead
 from fast_llm.layers.language_model.preprocessing import PositionEmbeddingPreprocessor, PreferenceSpanPreprocessor
 from fast_llm.layers.transformer.config import (
     RoutingType,
@@ -78,13 +78,22 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                         return_input=i < self._config.prediction_heads - 1,
                     )
                 )
-            layers.append(
-                LanguageModelHead(
-                    self._config,
-                    self._tensor_space,
-                    prediction_distance=i,
+            if self._config.transformer.diffusion:
+                layers.append(
+                    MLMHead(
+                        self._config,
+                        self._tensor_space,
+                        prediction_distance=i,
+                    )
                 )
-            )
+            else:
+                layers.append(
+                    LanguageModelHead(
+                        self._config,
+                        self._tensor_space,
+                        prediction_distance=i,
+                    )
+                )
         return layers
 
     def get_layers(self) -> list[Layer]:
@@ -323,6 +332,27 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                                 kwargs[LanguageModelKwargs.loss_mask] = loss_mask
                             labels = torch.where(loss_mask, labels, -100)
                 kwargs[LanguageModelKwargs.labels] = labels
+
+                if batch.mask_indexes is not None:
+                    # We are in masked-diffusion mode, so we need to add the mask indexes and probabilities to kwargs
+                    kwargs[LanguageModelKwargs.mask_indexes] = batch.mask_indexes.to(
+                        device=self._tensor_space.distributed.device
+                    )
+                    kwargs[LanguageModelKwargs.mask_probabilities] = batch.mask_probabilities.to(
+                        device=self._tensor_space.distributed.device
+                    )
+                    # Setup bidirection attention for diffusion should we set this in a preprocessor? BackupAttentionPreprocessor?
+                    batch_size, seq_len = batch.token_ids.shape
+                    attention_mask = torch.ones(
+                        (batch_size, 1, seq_len, seq_len),
+                        dtype=torch.bool,
+                        device=self._tensor_space.distributed.device,
+                    )
+                    kwargs[TransformerKwargs.attention_mask] = attention_mask
+                    kwargs[TransformerKwargs.attention_mask_value] = torch.tensor(
+                        -10000.0, device=self._tensor_space.distributed.device
+                    )
+
             kwargs.update(reference_logits[i])
 
             for preprocessor in self._preprocessors:
@@ -365,8 +395,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
         else:
             return {}
 
-    @property
-    def loss_defs(self) -> list[LossDef]:
+    def get_loss_defs(self) -> list[LossDef]:
         loss_defs = []
         if (
             self._config.transformer.num_experts > 1
@@ -389,6 +418,10 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                 )
         if self._config.logit_z_loss:
             LossDef(name=LanguageModelLossNames.z_loss, formatted_name="logit z loss", count=1)
+
+        if self._config.transformer.diffusion:
+            # Masked LM Loss for masked-diffusion training
+            loss_defs.append(LossDef(name=LanguageModelLossNames.mlm_loss, formatted_name="MLM Loss", count=1))
 
         for i in range(self._config.prediction_heads):
             loss_defs.append(

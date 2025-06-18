@@ -44,6 +44,40 @@ class ShufflingType(str, enum.Enum):
     legacy = "legacy"
 
 
+@config_class(registry=True)
+class DiffusionMaskingConfig(Config):
+    """Configuration for diffusion-based masking during data preparation."""
+
+    enabled: bool = Field(
+        default=False, desc="Whether to use masked diffusion during training", hint=FieldHint.feature
+    )
+
+    epsilon: float = Field(
+        default=1e-3, desc="Minimum masking probability", hint=FieldHint.performance, valid=check_field(Assert.gt, 0)
+    )
+
+    max_mask_prob: float = Field(
+        default=0.15, desc="Maximum masking probability", hint=FieldHint.performance, valid=check_field(Assert.gt, 0)
+    )
+
+    pad_prob: float = Field(
+        default=0.01,
+        desc="Probability of padding tokens for 1% of samples",
+        hint=FieldHint.optional,
+        valid=check_field(Assert.geq, 0),
+    )
+
+    mask_token_id: int = Field(default=103, desc="Token ID to use for masking", hint=FieldHint.optional)
+
+    def _validate(self) -> None:
+        super()._validate()
+        Assert.lt(self.epsilon, self.max_mask_prob)  # , "epsilon must be less than max_mask_prob")
+        Assert.lt(
+            self.max_mask_prob,
+            1.0,
+        )
+
+
 @config_class()
 class GPTSamplingConfig(SamplingConfig):
     """
@@ -62,6 +96,10 @@ class GPTSamplingConfig(SamplingConfig):
         desc="Shuffling strategy.",
         hint=FieldHint.feature,
     )
+    diffusion: DiffusionMaskingConfig = Field(
+        desc="Configuration for diffusion-based masking during data preparation.",
+        hint=FieldHint.feature,
+    )
 
 
 @dataclasses.dataclass(kw_only=True)
@@ -78,6 +116,7 @@ class GPTSamplingParameters(SamplingParameters):
     # How many extra tokens to add to the sequence length.
     # This is used to provide labels even for the last tokens in the sequence.
     extra_tokens: int = 1
+    diffusion: DiffusionMaskingConfig
 
 
 @dataclasses.dataclass(kw_only=True)

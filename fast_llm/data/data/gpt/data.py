@@ -32,14 +32,65 @@ class GPTBatch:
     token_ids: torch.Tensor
     loss_masking_spans: list[torch.Tensor] | None = None
     sequence_lengths: list[torch.Tensor] | None = None
+    mask_indexes: torch.Tensor | None = None
+    mask_probabilities: torch.Tensor | None = None
     chosen_spans: list[torch.Tensor] | None = None
     rejected_spans: list[torch.Tensor] | None = None
 
 
 def gpt_data_collate_fn(batch: list[GPTSample], sampling_parameters: GPTSamplingParameters) -> GPTBatch:
+
     stacked_ids = np.stack([sample.token_ids for sample in batch])
     stacked_spans = None
     sequence_lengths = None
+    mask_indexes = None
+    mask_probabilities = None
+
+    token_ids = torch.from_numpy(stacked_ids)
+
+    if sampling_parameters.diffusion.enabled:
+
+        diffusion_config = sampling_parameters.diffusion
+
+        batch_size, seq_len = token_ids.shape
+        mask_token_id = diffusion_config.mask_token_id
+
+        # Generate a random tensor of batch size to seed masking probabilities
+        t = torch.rand((batch_size,))
+
+        # Compute the mask probabilities for every sequence in the batch
+        p_mask = (1 - (2 * diffusion_config.epsilon)) * t + diffusion_config.epsilon
+
+        # Do we need to clamp at max_mask_prob?
+        # p_mask = torch.min(p_mask, torch.tensor(diffusion_config.max_mask_prob))
+
+        # Input has an additional token for shitting, is [0, 1, 2, 3, 4] -> [1, 2, 3, 4]
+
+        # index   [0, 1, 2, 3, 4, 5] ->
+        # The labels are already left shifted x = [A, B, C, D, E, F] ->
+        #                                 embd =  [A, B, C, D, E]
+        #                                label =  [B, C, D, E, F]
+        # Last input token is dropped from the processing
+
+        # Generate random values for all tokens in the batch and only mask the positions\
+        # where the value is smaller than the mask probability
+        mask_indexes = torch.rand((batch_size, seq_len)) < p_mask[:, None]
+
+        # Need further classification of this padding - 1% data to have partial sequences and padding
+        # if diffusion_config.pad_prob > 0:
+        #     pad_mask = torch.rand((batch_size,), device=device) < diffusion_config.pad_prob
+        #     if pad_mask.any():
+        #         mask_indexes[pad_mask] = True
+
+        # Replace masked tokens with the mask token ID to create input for the model.
+        token_ids = torch.where(mask_indexes, mask_token_id, token_ids)
+
+        mask_indexes = mask_indexes[:, :-1]  # Remove the last token, which is not used for prediction.
+        mask_probabilities = p_mask
+
+    if sampling_parameters.use_loss_masking_spans:
+        stacked_spans = [torch.from_numpy(sample.loss_masking_spans) for sample in batch]
+
     stacked_chosen_spans = None
     stacked_rejected_spans = None
     if sampling_parameters.use_loss_masking_spans:
@@ -49,12 +100,15 @@ def gpt_data_collate_fn(batch: list[GPTSample], sampling_parameters: GPTSampling
         stacked_rejected_spans = [torch.from_numpy(sample.rejected_span) for sample in batch]
     if not sampling_parameters.cross_document_attention:
         sequence_lengths = [torch.tensor(sample.sequence_lengths) for sample in batch]
+
     return GPTBatch(
-        token_ids=torch.from_numpy(stacked_ids),
+        token_ids=token_ids,
         loss_masking_spans=stacked_spans,
         sequence_lengths=sequence_lengths,
         chosen_spans=stacked_chosen_spans,
         rejected_spans=stacked_rejected_spans,
+        mask_indexes=mask_indexes,
+        mask_probabilities=mask_probabilities,
     )
 
 

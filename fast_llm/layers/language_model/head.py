@@ -359,3 +359,87 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
         # TODO: de-allocate earlier.
         del logits
         return loss, output_parallel_linear_backward(grad, context)
+
+
+class MLMHead(LanguageModelHead):
+    """
+    A masked language model head for diffusion-based training.`
+    """
+
+    def __init__(
+        self,
+        config: LanguageModelBaseConfig,
+        tensor_space: TensorSpace,
+        prediction_distance: int,
+    ):
+        super().__init__(config, tensor_space, prediction_distance)
+        self._loss_name = LanguageModelLossNames.mlm_loss
+
+    def _logits_cross_entropy_forward_backward(
+        self,
+        input_: torch.Tensor,
+        target: torch.Tensor | None,
+        loss_mask: torch.Tensor | None,
+        weight: torch.Tensor,
+        grad_output: float,
+        kwargs: dict,
+        losses: dict | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+
+        assert target is not None, "MLM head requires target labels"
+        assert loss_mask is None, "MLM head does not support loss mask"
+
+        logits, context = output_parallel_linear_forward(
+            input_=input_,
+            weight=weight,
+            bias=None,
+            group=self._tensor_space.distributed.tensor_group if self._parallel_embeddings else None,
+            sequence_parallel=self._sequence_parallel and self._parallel_embeddings,
+        )
+
+        masked_indices = kwargs[LanguageModelKwargs.mask_indexes]
+        p_mask = kwargs[LanguageModelKwargs.mask_probabilities]
+        #                                 index   [0, 1, 2, 3, 4, 5] ->
+        # The labels are already left shifted x = [A, B, C, D, E, F] ->
+        #                                 embd =  [A, B, C, D, E]
+        #                                label =  [B, C, D, E, F]
+
+        # Question Pier: if 2 is the masked token, settling needs to settled 3; but 3 is already seen by the model,
+        # can it just learn to copy 3? i.e copy the next token to the masked?
+        # Yes. We need to drop those position from loss if the next token is not masked
+        # We can include curruption to further enhance, but it seems not to big looking at other CPT (diffuLlama)
+
+        last_weight = 0
+        B = logits.shape[0]
+
+        loss_weight = torch.cat(
+            (
+                # ar_weight * in_context[:, 1:] + # not implement yet
+                masked_indices[:, 1:] / p_mask[:, None],
+                # + un_weight * ((1-epsilon) * in_shuffled[:, 1:] + epsilon * in_clean[:, 1:]) / (1 - p_mask[:, None]) # not implement yet
+                (last_weight * torch.ones(B, device=logits.device)).unsqueeze(1),
+                # This may need some weighting in terms of masking. Let's do last_weight=0 TODO: Decide later
+            ),
+            dim=1,
+        ).to(logits.dtype)
+
+        loss, grad = cross_entropy_forward_backward(
+            logits=logits.flatten(0, -2),
+            target=target,
+            loss_mask=None,
+            grad_output=grad_output,
+            group=self._tensor_space.distributed.tensor_group if self._parallel_embeddings else None,
+            implementation=self._cross_entropy_impl,
+            logits_scale_factor=self._logits_scale_factor,
+            loss_weight=loss_weight,
+        )
+
+        # This happens with the loss_weight.
+        # MDM https://github.com/ML-GSAI/SMDM/blob/583aa4716d17728dbb825aec6c24a121164d616a/pretrain/train_mdm.py#L274
+
+        # Compute per token loss by avg across all tokens in the batch (tokens we ignore are assumed to have a 0 loss still counted towards the average)
+        # done inside the cross-entropy function
+        # MDM https://github.com/ML-GSAI/SMDM/blob/583aa4716d17728dbb825aec6c24a121164d616a/pretrain/train_mdm.py#L275
+
+        del logits
+        return loss, output_parallel_linear_backward(grad, context)
