@@ -15,8 +15,8 @@ class BackupAttentionPreprocessor(Preprocessor):
     _scalar_dim: TensorDim
     _kv_channels_dim: TensorDim
     _rotary_embedding_frequencies: torch.Tensor
-    _mask: torch.Tensor | None
-    _mask_value: torch.Tensor | None
+    _mask: torch.Tensor
+    _mask_value: torch.Tensor
     _tensor_cache_max_sequence_length: int = -1
 
     def __init__(
@@ -24,7 +24,6 @@ class BackupAttentionPreprocessor(Preprocessor):
         config: TransformerConfig,
         tensor_space: TensorSpace,
     ):
-        super().__init__()
         self._config = config
         self._tensor_space = tensor_space
         self._distributed_config = self._tensor_space.distributed_config
@@ -70,8 +69,6 @@ class BackupAttentionPreprocessor(Preprocessor):
                 kwargs[TransformerKwargs.attention_mask]
                 & document_mask[:, None, sequence_k - sequence_q : sequence_k, None, :sequence_k]
             )
-
-        # can we add a bidirectional attention here?
         kwargs[TransformerKwargs.attention_mask_value] = self._mask_value
 
     def preprocess_meta(self, kwargs: dict[str, typing.Any]) -> None:
@@ -89,7 +86,7 @@ class BackupAttentionPreprocessor(Preprocessor):
         kwargs[TransformerKwargs.attention_mask_value] = TensorMeta.from_dims(
             (self._scalar_dim,),
             tensor_name=TransformerKwargs.attention_mask_value,
-            dtype=self._distributed_config.training_dtype.torch,
+            dtype=self._tensor_space.distributed_config.training_dtype.torch,
         )
 
 
