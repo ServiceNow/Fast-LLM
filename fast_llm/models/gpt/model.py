@@ -64,34 +64,37 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             self._preprocessors.append(PreferenceSpanPreprocessor(self._config, self._tensor_space))
 
     def get_output_layers(self) -> list[Layer]:
-        return [
-            layer
-            for i in range(self._config.prediction_heads)
-            for layer in [
-                TransformerLayer(
-                    self._config.transformer,
-                    self._tensor_space,
-                    # TODO MTP: which index?
-                    layer_index=self._config.transformer.num_layers,
-                    # The last layer only returns the transformer output.
-                    # The previous layers return a stack of shared_hidden and transformer_output.
-                    return_input=i < self._config.prediction_heads - 1,
-                ),
-                (
+        layers = []
+        for i in range(self._config.prediction_heads):
+            if i > 0:
+                layers.append(
+                    TransformerLayer(
+                        self._config.transformer,
+                        self._tensor_space,
+                        # TODO MTP: which index?
+                        layer_index=max(self._config.transformer.num_layers + i, 1),
+                        # The last layer only returns the transformer output.
+                        # The previous layers return a stack of shared_hidden and transformer_output.
+                        return_input=i < self._config.prediction_heads - 1,
+                    )
+                )
+            if self._config.transformer.diffusion:
+                layers.append(
                     MLMHead(
                         self._config,
                         self._tensor_space,
                         prediction_distance=i,
                     )
-                    if self._config.transformer.diffusion
-                    else LanguageModelHead(
+                )
+            else:
+                layers.append(
+                    LanguageModelHead(
                         self._config,
                         self._tensor_space,
                         prediction_distance=i,
                     )
-                ),
-            ]
-        ]
+                )
+        return layers
 
     def get_layers(self) -> list[Layer]:
         return [
@@ -392,44 +395,38 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
         else:
             return {}
 
-    # @property
     def get_loss_defs(self) -> list[LossDef]:
         loss_defs = []
-        if self._config.transformer.diffusion:
-            # Masked LM Loss for masked-diffusion training
-            loss_defs.append(
-                LossDef(name=LanguageModelLossNames.mlm_loss, formatted_name="MLM Loss", count=1, dtype=torch.float32)
-            )
-        else:
-            # Standard language modeling loss
+        if (
+            self._config.transformer.num_experts > 1
+            and self._config.transformer.expert_routing_type == RoutingType.topk
+        ):
             loss_defs.append(
                 LossDef(
-                    name=LanguageModelLossNames.language_model_loss,
-                    formatted_name="Language Model Loss",
-                    count=1,
-                    dtype=torch.float32,
+                    name=TransformerLossNames.load_balancing_loss,
+                    formatted_name="load balancing loss",
+                    count=self._config.transformer.num_layers,
                 )
             )
-
-        if self._config.transformer.num_experts > 1:
-            if self._config.transformer.expert_routing_type == RoutingType.topk:
-                loss_defs.append(
-                    LossDef(
-                        name=TransformerLossNames.load_balancing_loss,
-                        formatted_name="Load Balancing Loss",
-                        count=1,
-                        dtype=torch.float32,
-                    )
-                )
-            if self._config.transformer.expert_z_loss_coefficient > 0:
+            if self._config.transformer.expert_z_loss_coefficient:
                 loss_defs.append(
                     LossDef(
                         name=TransformerLossNames.router_z_loss,
-                        formatted_name="Router Z Loss",
-                        count=1,
-                        dtype=torch.float32,
+                        formatted_name="router z loss",
+                        count=self._config.transformer.num_layers,
                     )
                 )
+        if self._config.logit_z_loss:
+            LossDef(name=LanguageModelLossNames.z_loss, formatted_name="logit z loss", count=1)
+
+        for i in range(self._config.prediction_heads):
+            loss_defs.append(
+                LossDef(
+                    name=LanguageModelLossNames.multi_token_prediction_loss(i),
+                    formatted_name=f"language model loss {i}",
+                    count=1,
+                )
+            )
         return loss_defs
 
 

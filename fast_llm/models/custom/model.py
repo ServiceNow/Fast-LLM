@@ -59,10 +59,9 @@ class CustomBaseModel[ConfigType: CustomBaseModelConfig](GPTBaseModel[ConfigType
         # TODO: Adjust or reimplement.
         return super().preprocess(batch, preprocessed_meta, phase=phase, iteration=iteration, metrics=metrics)
 
-    # @property
     def get_loss_defs(self) -> list[LossDef]:
         # TODO: Adjust or reimplement.
-        return super().loss_defs
+        return super().get_loss_defs()
 
 
 class CustomModel[ConfigType: CustomBaseModelConfig](GPTModel[ConfigType]):
