@@ -179,7 +179,6 @@ class HybridSSMModelConfig(FastLLMModelConfig):
         AprielSSMHHybridHuggingfaceCheckpointFormat,
         AprielThinkerSSMHHybridHuggingfaceCheckpointFormat,
     )
-    checkpoint_formats = FastLLMModelConfig.checkpoint_formats + (LLambaHuggingfaceCheckpointFormat,)
 
     @classmethod
     def get_model_class(cls) -> type["HybridSSMModel"]:
