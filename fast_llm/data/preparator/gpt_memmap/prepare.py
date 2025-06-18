@@ -154,11 +154,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
                     ),
                     item["images"] if self._config.dataset.images else None,
                     item["image_positions"] if self._config.dataset.image_positions else None,
-                    (
-                        np.array(item[self._config.dataset.audio], dtype=np.float32)
-                        if self._config.dataset.audio
-                        else None
-                    ),
+                    item[self._config.dataset.audio] if self._config.dataset.audio else None,
                     item[self._config.dataset.audio_positions] if self._config.dataset.audio_positions else None,
                 )
 
@@ -296,6 +292,8 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
         # decoding bytes to images is slow and should be done only when needed
         if self._config.dataset.images is not None:
             dataset = dataset.cast_column("images", datasets.Sequence(datasets.Image(decode=False)))
+        if self._config.dataset.audio is not None:
+            dataset = dataset.cast_column("audio", datasets.Sequence(datasets.Audio(decode=False)))
 
         # Tokenize the dataset in parallel
         tokenized_dataset = dataset.map(
@@ -303,7 +301,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
             batched=True,
             num_proc=self._config.tokenize_workers,
             desc="Tokenizing batches",
-            # load_from_cache_file=False  # TODO Toby: remove
+            load_from_cache_file=False  # TODO Toby: remove
         )
 
         # Calculate total number of tokens
@@ -320,6 +318,8 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
         )
         total_tokens += total_pixels // np.dtype(self._data_type.numpy).itemsize
         total_tokens += total_audio * np.float32().itemsize // np.dtype(self._data_type.numpy).itemsize
+
+        tokenized_dataset = tokenized_dataset.shuffle(seed=42)
 
         # Split dataset into shards based on number of tokens
         num_shards = int(np.ceil(total_tokens / self._config.tokens_per_shard))

@@ -92,10 +92,12 @@ class AudioPreprocessor(Preprocessor):
         # check if audio is in batch
         audio_mel = []
         if AudioEncoderKwargs.audio in kwargs:
+            print("Preprocessing Contains Audio")
             audio_raw = kwargs[AudioEncoderKwargs.audio]
             flattened_audio = [
                 audio_arr for sequence in audio_raw for audio_arr in sequence
             ]  # flatten in the batch dimension
+            print("Preprocessing Flattened Audio: ", flattened_audio)
 
             for audio in flattened_audio:
                 audio_mel.append(
@@ -110,23 +112,35 @@ class AudioPreprocessor(Preprocessor):
             audio_mel = torch.stack(audio_mel, dim=0).squeeze(1)
             curr_size = audio_mel.size(0)
         else:
+            print("Preprocessing No Audio")
             audio_mel = torch.tensor(audio_mel, dtype=torch.float32)
             curr_size = 0
+        
+        print("Preprocessing Audio Mel Raw: ", audio_mel)
 
+        # compute max pad
         max_pad = math.ceil(
             kwargs["sequence_length"] / (kwargs["audio_encoder_sequence_length"] // self._config.aud_downsampling_k)
         )
-        padding_size = max_pad - curr_size
-        padding = torch.zeros(
-            padding_size,
-            self.feature_extractor.feature_size,
-            self.feature_extractor.nb_max_frames,
-            dtype=audio_mel.dtype,
-            device=audio_mel.device,
-        )
-        audio_mel = torch.cat((audio_mel, padding), dim=0)
-        audio_mel = audio_mel.to(self._tensor_space.distributed.device)
+        max_pad = 1
+        max_pad = max(max_pad, curr_size)
 
+        # add padding
+        padding_size = max_pad - curr_size
+        if padding_size > 0:
+            padding = torch.zeros(
+                padding_size,
+                self.feature_extractor.feature_size,
+                self.feature_extractor.nb_max_frames,
+                dtype=audio_mel.dtype,
+                device=audio_mel.device,
+            )
+            audio_mel = torch.cat((audio_mel, padding), dim=0)
+
+        print("Preprocessing Audio Mel Final: ", audio_mel)
+
+        # move to device
+        audio_mel = audio_mel.to(self._tensor_space.distributed.device)
         kwargs[AudioEncoderKwargs.audio_mel] = audio_mel
 
         # # set attention mask # TODO Toby: fix backup attention

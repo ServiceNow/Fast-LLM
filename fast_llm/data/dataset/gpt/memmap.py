@@ -5,6 +5,8 @@ import typing
 
 import numpy as np
 import PIL.Image
+import torchaudio
+import soundfile as sf
 
 from fast_llm.data.dataset.gpt.indexed import GPTIndexedDataset
 from fast_llm.data.dataset.gpt.sampled import GPTSample
@@ -285,6 +287,10 @@ class GPTMemmapDataset(GPTIndexedDataset):
             for audio_length in self._audio_lengths[idx]:
                 audio.append(all_audio[start : start + audio_length])
                 start += audio_length
+        
+        print("Memmap audio length: ", self._audio_lengths[idx])
+        print("Memmap audio pos: ", self._audio_positions[idx])
+        print("Memmap get audio: ", audio)
 
         # TODO Soham: return loss_masking_spans
         sample_spans = None
@@ -427,13 +433,18 @@ class GPTMemmapDataset(GPTIndexedDataset):
                         total_im_size += pixels.size
                     im_positions.append(document.image_positions)
                 if document.audio is not None:
-                    n_audio.append(len(document.audio))
-                    total_audio += len(document.audio)
+                    num_audio = 0
                     for audio in document.audio:
-                        audio_lengths.append(len(audio))
-                        bin_stream.write(audio.tobytes(order="C"))
-                        total_aud_size += audio.size
-                    if len(document.audio) > 0:
+                        # audio_arr, _ = torchaudio.load(io.BytesIO(audio["bytes"]))
+                        audio_arr, _ = sf.read(io.BytesIO(audio["bytes"]))
+                        if len(audio_arr) > 0:
+                            num_audio += 1
+                            audio_lengths.append(len(audio_arr))
+                            bin_stream.write(audio_arr.tobytes(order="C"))
+                            total_aud_size += audio_arr.size
+                    n_audio.append(num_audio)
+                    total_audio += num_audio
+                    if num_audio > 0:
                         aud_positions += document.audio_positions
 
                 # Update metadata
