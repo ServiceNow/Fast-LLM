@@ -376,11 +376,11 @@ class MLMHead(LanguageModelHead):
         )
 
         # Take only the losses and grads from the masked tokens/positions
-        print(f"loss: {loss.shape} {loss}")
-        print(f"grad: {grad.shape} {grad}")
-        print(f"masked_indices: {masked_indices.shape} {masked_indices}")
-        print(f"mask_probabilities: {mask_probabilities.shape} {mask_probabilities}")
-        print(f"loss_weights: {loss_weights.shape} {loss_weights}")
+        # print(f"loss: {loss.shape} {loss}")
+        # print(f"grad: {grad.shape} {grad}")
+        # print(f"masked_indices: {masked_indices.shape} {masked_indices}")
+        # print(f"mask_probabilities: {mask_probabilities.shape} {mask_probabilities}")
+        # print(f"loss_weights: {loss_weights.shape} {loss_weights}")
         masked_indices_flt = masked_indices.flatten()
         masked_loss = loss[masked_indices_flt]
         grad[masked_indices_flt]
@@ -388,8 +388,9 @@ class MLMHead(LanguageModelHead):
 
         # Apply loss weights to both loss and gradient
         loss_weights_flat = loss_weights.flatten()
+        # print(f"DEBUG: grad.dtype={grad.dtype}, loss_weights_flat.dtype={loss_weights_flat.dtype}")
         loss = loss * loss_weights_flat
-        grad = grad * loss_weights_flat.unsqueeze(-1)  # Add dimension for gradient
+        grad = grad * loss_weights_flat.unsqueeze(-1).to(dtype=grad.dtype)  
 
         # compute per token loss by all tokens in the batch (tokens we dropped thinks they have 0 loss)
         # MDM https://github.com/ML-GSAI/SMDM/blob/583aa4716d17728dbb825aec6c24a121164d616a/pretrain/train_mdm.py#L275

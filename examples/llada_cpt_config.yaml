@@ -78,7 +78,7 @@
 run:
   experiment_dir: ./test-train-exp/diffusion_train
 training:
-  train_iters: 20
+  train_iters: 1000
   logs:
     interval: 10
   # validation:

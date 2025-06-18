@@ -304,21 +304,83 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                 if batch.mask_indexes is not None:
                     # We are in masked-diffusion mode, so we need to add the mask indexes and probabilities to kwargs
                     # print(f'in masked-diffusion mode, batch.mask_indexes: {batch.mask_indexes}')
-                    kwargs[LanguageModelKwargs.mask_indexes] = batch.mask_indexes.to(
+                    
+                    # Get the original mask_indexes shape
+                    original_mask_shape = batch.mask_indexes.shape
+                    # print(f"DEBUG: original_mask_shape={original_mask_shape}, labels.shape={labels.shape}")
+                    # print(f"DEBUG: sequence_offset={sequence_offset}, sequence_k={sequence_k}, prediction_heads={prediction_heads}")
+                    
+                    # Adjust mask_indexes to match the labels tensor dimensions
+                    # The mask_indexes from data preparation are for the shifted sequence
+                    # but labels are created from a different slice of the original sequence
+                    # We need to adjust the mask_indexes to align with the labels slice
+                    
+                    # Create adjusted mask_indexes that match the labels dimensions
+                    # labels are from sequence_offset to sequence_k + prediction_heads
+                    # We need to shift the mask_indexes by sequence_offset to align with labels
+                    adjusted_mask_indexes = torch.zeros_like(labels, dtype=torch.bool)
+                    
+                    # Calculate the offset between our mask_indexes and the labels slice
+                    mask_offset = sequence_offset - 1  # Our masks start from position 1, labels start from sequence_offset
+                    # print(f"DEBUG: mask_offset={mask_offset}")
+                    
+                    # Only apply masks if they fall within the labels range
+                    if mask_offset >= 0 and mask_offset < original_mask_shape[1]:
+                        # Extract the relevant portion of mask_indexes that corresponds to labels
+                        mask_start = max(0, mask_offset)
+                        mask_end = min(original_mask_shape[1], sequence_k + prediction_heads - 1)
+                        
+                        if mask_end > mask_start:
+                            # Map the mask_indexes to the correct positions in labels
+                            labels_start = max(0, mask_offset)
+                            labels_end = labels_start + (mask_end - mask_start)
+                            
+                            adjusted_mask_indexes[:, labels_start:labels_end] = batch.mask_indexes[:, mask_start:mask_end]
+                            # print(f"DEBUG: Applied masks from [{mask_start}:{mask_end}] to labels [{labels_start}:{labels_end}]")
+                    
+                    # print(f"DEBUG: adjusted_mask_indexes.shape={adjusted_mask_indexes.shape}")
+                    
+                    kwargs[LanguageModelKwargs.mask_indexes] = adjusted_mask_indexes.to(
                         device=self._tensor_space.distributed.device
                     )
-                    kwargs[LanguageModelKwargs.mask_probabilities] = batch.mask_probabilities.to(
+                    
+                    adjusted_mask_probabilities = torch.full_like(labels, 0.0, dtype=torch.float32)  
+                    if mask_offset >= 0 and mask_offset < original_mask_shape[1]:
+                        mask_start = max(0, mask_offset)
+                        mask_end = min(original_mask_shape[1], sequence_k + prediction_heads - 1)
+                        
+                        if mask_end > mask_start:
+                            labels_start = max(0, mask_offset)
+                            labels_end = labels_start + (mask_end - mask_start)
+                            
+                            adjusted_mask_probabilities[:, labels_start:labels_end] = batch.mask_probabilities[:, mask_start:mask_end]
+                    
+                    kwargs[LanguageModelKwargs.mask_probabilities] = adjusted_mask_probabilities.to(
                         device=self._tensor_space.distributed.device
                     )
+                    
                     if batch.loss_weights is not None:
-                        kwargs[LanguageModelKwargs.loss_weights] = batch.loss_weights.to(
+                        # Adjust loss_weights similarly
+                        adjusted_loss_weights = torch.full_like(labels, 1.0, dtype=torch.float32)  # Use float32 to match model dtype
+                        if mask_offset >= 0 and mask_offset < original_mask_shape[1]:
+                            mask_start = max(0, mask_offset)
+                            mask_end = min(original_mask_shape[1], sequence_k + prediction_heads - 1)
+                            
+                            if mask_end > mask_start:
+                                labels_start = max(0, mask_offset)
+                                labels_end = labels_start + (mask_end - mask_start)
+                                
+                                adjusted_loss_weights[:, labels_start:labels_end] = batch.loss_weights[:, mask_start:mask_end]
+                        
+                        kwargs[LanguageModelKwargs.loss_weights] = adjusted_loss_weights.to(
                             device=self._tensor_space.distributed.device
                         )
+
                     # Setup bidirection attention for diffusion should we set this in a preprocessor? BackupAttentionPreprocessor?
                     batch_size, seq_len = batch.token_ids.shape
                     
                     # Compute attention mask for diffusion
-                    C = torch.zeros(batch_size, dtype=torch.long, device=self._tensor_space.distributed.device)  # No context for diffusion
+                    C = torch.zeros(batch_size, dtype=torch.long, device=self._tensor_space.distributed.device) 
                     
                     row_idx = torch.arange(seq_len, device=self._tensor_space.distributed.device).view(1, seq_len, 1)
                     col_idx = torch.arange(seq_len, device=self._tensor_space.distributed.device).view(1, 1, seq_len)
