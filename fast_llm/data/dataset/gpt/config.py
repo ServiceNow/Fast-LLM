@@ -44,7 +44,7 @@ class ShufflingType(str, enum.Enum):
     legacy = "legacy"
 
 
-@config_class()
+@config_class(registry=True)
 class DiffusionMaskingConfig(Config):
     """Configuration for diffusion-based masking during data preparation."""
 
@@ -75,9 +75,7 @@ class DiffusionMaskingConfig(Config):
         Assert.lt(
             self.max_mask_prob,
             1.0,
-        )  # "max_mask_prob must be less than 1.0")
-        # if self.enabled:
-        #     Assert.is_not_none(self.mask_token_id, "mask_token_id must be set when masking is enabled")
+        )
 
 
 @config_class()
@@ -99,7 +97,6 @@ class GPTSamplingConfig(SamplingConfig):
         hint=FieldHint.feature,
     )
     diffusion: DiffusionMaskingConfig = Field(
-        default_factory=DiffusionMaskingConfig,
         desc="Configuration for diffusion-based masking during data preparation.",
         hint=FieldHint.feature,
     )
@@ -119,11 +116,7 @@ class GPTSamplingParameters(SamplingParameters):
     # How many extra tokens to add to the sequence length.
     # This is used to provide labels even for the last tokens in the sequence.
     extra_tokens: int = 1
-    diffusion: DiffusionMaskingConfig = Field(
-        default_factory=DiffusionMaskingConfig,
-        desc="Configuration for diffusion-based masking during data preparation. Will be copied from GPTSamplingConfig during ",
-        hint=FieldHint.feature,
-    )
+    diffusion: DiffusionMaskingConfig
 
 
 @dataclasses.dataclass(kw_only=True)
