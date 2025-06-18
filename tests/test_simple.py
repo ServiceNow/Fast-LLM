@@ -1,14 +1,15 @@
 import pytest
 
-from tests.common import CONFIG_COMMON, CONFIG_FAST_LLM, TEST_MODEL
+from tests.utils.model_configs import CONFIG_COMMON, TEST_MODEL
 
 
 def test_model_safe(run_test_script):
     # The safest possible config, identical to the one in test_match_megatron except for the initialization.
     run_test_script(
         f"test_{TEST_MODEL}_safe",
-        CONFIG_FAST_LLM
+        CONFIG_COMMON
         + [
+            "model.distributed.training_dtype=fp32",
             "run.torch_dynamo_enable=False",
             "schedule.data_overlap=False",
             "model.base_model.transformer.dropless_moe=False",
@@ -16,7 +17,7 @@ def test_model_safe(run_test_script):
     )
 
 
-@pytest.mark.depends(on=["test_model_safe"])
+@pytest.mark.depends_on(on=["test_model_safe"])
 def test_model(run_test_script):
     # A baseline config (single-gpu, bf16, flash-attn).
     # Also tests for multiple data loaders.
@@ -26,7 +27,7 @@ def test_model(run_test_script):
 
 
 @pytest.mark.slow
-@pytest.mark.depends(on=["test_model"])
+@pytest.mark.depends_on(on=["test_model"])
 def test_model_dp2(run_test_script):
     # Simple data-parallel.
     run_test_script(f"test_{TEST_MODEL}_dp2", CONFIG_COMMON, num_gpus=2, compare=f"test_{TEST_MODEL}")
@@ -59,7 +60,7 @@ def test_model_dp2_timeout(run_test_script):
 
 
 @pytest.mark.slow
-@pytest.mark.depends(on=["test_model"])
+@pytest.mark.depends_on(on=["test_model"])
 def test_model_tp2(run_test_script):
     # Simple tensor-parallel.
     run_test_script(
@@ -70,7 +71,7 @@ def test_model_tp2(run_test_script):
     )
 
 
-@pytest.mark.depends(on=["test_model"])
+@pytest.mark.depends_on(on=["test_model"])
 def test_model_ce4(run_test_script):
     # Cross-entropy splits.
     run_test_script(
@@ -81,7 +82,7 @@ def test_model_ce4(run_test_script):
 
 
 @pytest.mark.slow
-@pytest.mark.depends(on=["test_model"])
+@pytest.mark.depends_on(on=["test_model"])
 def test_model_dp2_z2(run_test_script):
     # Data-parallel with zero stage 2.
     run_test_script(
@@ -93,7 +94,7 @@ def test_model_dp2_z2(run_test_script):
 
 
 @pytest.mark.slow
-@pytest.mark.depends(on=["test_model"])
+@pytest.mark.depends_on(on=["test_model"])
 def test_model_dp2_z3(run_test_script):
     # Data-parallel with zero stage 3.
     run_test_script(

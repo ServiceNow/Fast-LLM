@@ -29,6 +29,8 @@ from fast_llm.layers.transformer.config import RoutingType, TransformerConfig
 from fast_llm.layers.transformer.rotary.config import DefaultRotaryConfig, Llama3RotaryConfig, YarnRotaryConfig
 from fast_llm.layers.transformer.rotary.rotary import convert_rotary_complex_to_real, convert_rotary_real_to_complex
 from fast_llm.models.gpt.config import (
+    DiffusionDreamGPTHuggingfaceCheckpointFormat,
+    DiffusionLlamaGPTHuggingfaceCheckpointFormat,
     GPTBaseModelConfig,
     GPTModelConfig,
     LlamaGPTHuggingfaceCheckpointFormat,
@@ -37,12 +39,10 @@ from fast_llm.models.gpt.config import (
     MTPLlamaGPTHuggingfaceCheckpointFormat,
     Qwen2GPTHuggingfaceCheckpointFormat,
     Starcoder2GPTHuggingfaceCheckpointFormat,
-    DiffusionDreamGPTHuggingfaceCheckpointFormat,
-    DiffusionLlamaGPTHuggingfaceCheckpointFormat,
 )
-from fast_llm.models.gpt.external.mtp_llama.configuration_mtp_llama import MTPLlamaConfig
 from fast_llm.models.gpt.external.diffusion_dream.configuration_dream import DreamConfig
 from fast_llm.models.gpt.external.diffusion_llama.configuration_diffusion_llama import DiffusionLlamaConfig
+from fast_llm.models.gpt.external.mtp_llama.configuration_mtp_llama import MTPLlamaConfig
 from fast_llm.models.gpt.model import GPTModel
 from fast_llm.tensor import SafeTensorSlice
 from fast_llm.utils import Assert
@@ -323,7 +323,8 @@ class Starcoder2HuggingfaceCheckpointHandler(CommonHuggingfaceCheckpointHandler)
         return super()._create_config_converters() + [
             ConstantExportParamConverter(export_names=(("architectures",),), export_value=["Starcoder2ForCausalLM"]),
             ConstantImportParamConverter(
-                fast_llm_names=(("transformer", "rotary", "type"),), fast_llm_value=DefaultRotaryConfig
+                fast_llm_names=(("transformer", "rotary", "type"),),
+                fast_llm_value=DefaultRotaryConfig.dynamic_type_name,
             ),
             ConstantImportParamConverter(
                 fast_llm_names=(("transformer", "normalization", "type"),),
@@ -683,10 +684,11 @@ class MTPLlamaHuggingfaceCheckpointHandler(CustomModelingExportMixin, CommonLlam
 
         return converters
 
+
 class DiffusionDreamHuggingfaceCheckpointHandler(CustomModelingExportMixin, CommonHuggingfaceCheckpointHandler):
-    
-    from fast_llm.models.gpt.external.diffusion_dream import configuration_dream, modeling_dream, generation_utils
-    
+
+    from fast_llm.models.gpt.external.diffusion_dream import configuration_dream, generation_utils, modeling_dream
+
     format: typing.ClassVar[type[CheckpointFormat]] = DiffusionDreamGPTHuggingfaceCheckpointFormat
     modeling_file = modeling_dream.__file__
     configuration_file = configuration_dream.__file__
@@ -696,7 +698,7 @@ class DiffusionDreamHuggingfaceCheckpointHandler(CustomModelingExportMixin, Comm
     @classmethod
     def _create_config_converters(cls) -> list[ParamConverter]:
         return super()._create_config_converters() + [
-            # From Qwen2HuggingfaceCheckpointHandler - Change architectures to DiffusionDream 
+            # From Qwen2HuggingfaceCheckpointHandler - Change architectures to DiffusionDream
             ConstantImportParamConverter(
                 fast_llm_names=(("transformer", "normalization", "type"),), fast_llm_value=NormalizationType.rms_norm
             ),
@@ -730,7 +732,6 @@ class DiffusionDreamHuggingfaceCheckpointHandler(CustomModelingExportMixin, Comm
                 },
             ),
         ]
-            
 
     def _get_mlp_converters(self, fast_llm_prefix: str, hf_prefix: str) -> list[WeightConverter]:
         # From Qwen2HuggingfaceCheckpointHandler
@@ -749,11 +750,16 @@ class DiffusionDreamHuggingfaceCheckpointHandler(CustomModelingExportMixin, Comm
                 MLPLayer2Converter,
             ),
         ]
-    
+
+
 class DiffusionLlamaHuggingfaceCheckpointHandler(CustomModelingExportMixin, CommonLlamaHuggingfaceCheckpointHandler):
-    
-    from fast_llm.models.gpt.external.diffusion_llama import configuration_diffusion_llama, modeling_diffusion_llama, generation_utils
-    
+
+    from fast_llm.models.gpt.external.diffusion_llama import (
+        configuration_diffusion_llama,
+        generation_utils,
+        modeling_diffusion_llama,
+    )
+
     format: typing.ClassVar[type[CheckpointFormat]] = DiffusionLlamaGPTHuggingfaceCheckpointFormat
     modeling_file = modeling_diffusion_llama.__file__
     configuration_file = configuration_diffusion_llama.__file__
@@ -773,7 +779,8 @@ class DiffusionLlamaHuggingfaceCheckpointHandler(CustomModelingExportMixin, Comm
                 export_value={
                     "AutoConfig": "configuration_diffusion_llama.DiffusionLlamaConfig",
                     "AutoModel": "modeling_diffusion_llama.DiffusionLlamaModel",
-                },),
+                },
+            ),
             # TODO: include when the mask diffusion training is implemented;
             # since the imported model (llama) for CPT doesn't have it but the exported model (diffusion llama) does need to have this token.
             # RenameParamConverter(
@@ -781,7 +788,6 @@ class DiffusionLlamaHuggingfaceCheckpointHandler(CustomModelingExportMixin, Comm
             #     export_names=(("mask_token_id",),),
             # ),
         ]
-            
 
     def _get_mlp_converters(self, fast_llm_prefix: str, hf_prefix: str) -> list[WeightConverter]:
         # From LlamaHuggingfaceCheckpointHandler
@@ -799,7 +805,7 @@ class DiffusionLlamaHuggingfaceCheckpointHandler(CustomModelingExportMixin, Comm
                 transformer_config.add_mlp_bias,
                 MLPLayer2Converter,
             ),
-        ] 
+        ]
 
 
 class AutoGPTHuggingfaceCheckpointHandler(

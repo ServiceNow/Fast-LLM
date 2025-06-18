@@ -1,6 +1,6 @@
 import pytest
 
-from tests.common import CONFIG_COMMON, TEST_MODEL
+from tests.utils.model_configs import CONFIG_COMMON, TEST_MODEL
 
 CONFIG_MS = CONFIG_COMMON + ["batch.micro_sequence_length=256"]
 
@@ -12,7 +12,7 @@ def test_model_ms256(run_test_script):
 
 
 @pytest.mark.slow
-@pytest.mark.depends(on=["test_model_ms256"])
+@pytest.mark.depends_on(on=["test_model_ms256"])
 def test_model_pp2s2_ms256(run_test_script):
     # Sequence-pipeline-parallel
     run_test_script(
@@ -25,7 +25,7 @@ def test_model_pp2s2_ms256(run_test_script):
 
 @pytest.mark.slow
 @pytest.mark.skip
-@pytest.mark.depends(on=["test_model_ms256"])
+@pytest.mark.depends_on(on=["test_model_ms256"])
 def test_model_dp2s2_stp2_pp2s2_ms256(run_test_script):
     # TODO: Handle this case.
     # Sequence-3d-parallel
