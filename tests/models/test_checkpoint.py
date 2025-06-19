@@ -29,8 +29,8 @@ def test_checkpoint_and_eval(run_test_script_for_all_models, model_testing_confi
         model_testing_config.config_args
         + [
             "training.checkpoint.interval=1",
-            "training.evaluations.validation.interval=2",
-            "training.evaluations.validation.iterations=1",
+            "training.evaluators.validation.interval=2",
+            "training.evaluators.validation.evaluators.iterations=1",
         ],
     )
 
@@ -62,8 +62,8 @@ def test_resume(run_test_script_for_all_models):
     run_test_script_for_all_models(
         [
             "training.checkpoint.interval=1",
-            "training.evaluations.validation.interval=2",
-            "training.evaluations.validation.iterations=1",
+            "training.evaluators.validation.interval=2",
+            "training.evaluators.validation.evaluators.iterations=1",
         ],
         compare=f"test_checkpoint_and_eval",
         prepare_fn=_prepare_resume_fn,
@@ -78,8 +78,8 @@ def test_resume_frozen(run_test_script_for_all_models):
     run_test_script_for_all_models(
         [
             "training.checkpoint.interval=1",
-            "training.evaluations.validation.interval=2",
-            "training.evaluations.validation.iterations=1",
+            "training.evaluators.validation.interval=2",
+            "training.evaluators.validation.evaluators.iterations=1",
             "model.base_model.transformer.mlp_lr_scale=0.",
         ],
         compare="test_checkpoint_and_eval",

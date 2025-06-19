@@ -1,3 +1,4 @@
+import abc
 import dataclasses
 import logging
 import typing
@@ -12,7 +13,7 @@ from fast_llm.engine.base_model.base_model import BaseModel
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.engine.config_utils.run import log_main_rank, log_model_parallel_main_rank
 from fast_llm.engine.config_utils.tensor_space import TensorDim
-from fast_llm.engine.distributed.config import DistributedDim, DistributedDimNames
+from fast_llm.engine.distributed.config import DistributedDim, DistributedDimNames, PhaseType
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig, ShardName, StageMode
 from fast_llm.engine.multi_stage.fsdp import FSDP
@@ -251,6 +252,11 @@ class MultiStageModel[ConfigType: FastLLMModelConfig](Configurable[ConfigType]):
         self._setup_stages()
 
         self.train(self._mode.support_backward)
+
+    @abc.abstractmethod
+    def get_tflops(self, phase: PhaseType, elapsed_time_per_iteration, batch_size, sequence_length) -> tuple[int, int]:
+        # TODO: Do in model, automate/generalize, get other stats
+        pass
 
     def _allocate_buffers(
         self, buffer_meta: TensorMeta, sizes: list[int], name: str
