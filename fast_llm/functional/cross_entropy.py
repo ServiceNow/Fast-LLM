@@ -164,7 +164,7 @@ def _fused_reverse_kl_forward_backward(
     group: ProcessGroup | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor | None]:
     """
-    TODO: check this!
+    TODO: implement this!
     A reverse KL divergence implementation where we compute KL(q||p) instead of KL(p||q).
     In reverse KL, the predicted distribution q(x) acts as the "source" and target p(x) as the "reference".
     This is useful for mode-seeking behavior where we want the model to focus on the modes of the target.
@@ -230,22 +230,17 @@ def _torch_reverse_kl_forward_backward(
     grad_output: float | None,
     logits_scale_factor: float,
     target_format: TargetFormat,
+    group: ProcessGroup | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor | None]:
     """
     Reverse KL using PyTorch's native kl_div function.
     Much simpler and more reliable than custom implementation!
     """
-    # Scale logits if needed
-    if logits_scale_factor != 1.0:
-        logits = logits * logits_scale_factor
-        target = target * logits_scale_factor
-
     Assert.eq(target_format, TargetFormat.logits, msg="Reverse KL only supports logits format")
 
-    # Compute log probabilities
-    # student_log_probs = torch.log_softmax(logits, dim=-1)  # log(q)
-    teacher_log_probs = torch.log_softmax(target, dim=-1)  # log(p)
-    # student_probs = torch.softmax(logits, dim=-1)           # q
+    # Compute log probabilities - let _fused_softmax handle scaling internally
+    teacher_probs = _fused_softmax(target, logits_scale_factor, group)
+    teacher_log_probs = torch.log(teacher_probs + 1e-8)  # log(p)
 
     # For reverse KL: KL(q||p) = Σ q * log(q/p) = Σ q * (log(q) - log(p))
     # Use kl_div with: input=log(p), target=q, log_target=False
@@ -253,22 +248,25 @@ def _torch_reverse_kl_forward_backward(
 
     with torch.enable_grad():
         logits_ = logits.detach().requires_grad_(grad_output is not None)
-        student_probs_ = torch.softmax(logits_, dim=-1)
+        student_probs_ = _fused_softmax(logits_, logits_scale_factor, group)
 
         # Reverse KL: input=teacher_log_probs, target=student_probs
-        loss = torch.nn.functional.kl_div(
-            teacher_log_probs,  # input = log(p)
-            student_probs_,  # target = q
-            reduction="batchmean",  # Use 'batchmean' for proper KL math
-            log_target=False,
-        )
-
-        if loss_mask is not None:
+        if loss_mask is None:
+            loss = torch.nn.functional.kl_div(
+                teacher_log_probs,  # input = log(p)
+                student_probs_,  # target = q
+                reduction="batchmean",
+                log_target=False,
+            )
+        else:
             # Apply loss mask - this requires some reshaping
             loss_per_sample = torch.nn.functional.kl_div(
                 teacher_log_probs, student_probs_, reduction="none", log_target=False
             ).sum(dim=-1)
             loss = (loss_per_sample * loss_mask).mean()
+
+        if group is not None and target_format != TargetFormat.labels:
+            all_reduce(loss, op=ReduceOp.MEAN, group=group)
 
         if grad_output is not None:
             loss.backward(torch.tensor(grad_output, device=loss.device))
@@ -374,5 +372,5 @@ def reverse_kl_forward_backward(
             Assert.eq(loss_mask.shape, logits.shape[:-1])
     # TODO: implement fused?
     return _torch_reverse_kl_forward_backward(
-        logits, target, loss_mask, grad_output, logits_scale_factor, target_format
+        logits, target, loss_mask, grad_output, logits_scale_factor, target_format, group
     )
