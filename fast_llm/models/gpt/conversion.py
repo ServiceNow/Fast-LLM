@@ -545,7 +545,7 @@ class MistralHuggingfaceCheckpointHandler(CommonLlamaHuggingfaceCheckpointHandle
     @classmethod
     def _create_config_converters(cls) -> list[ParamConverter]:
         return super()._create_config_converters() + [
-            ConstantExportParamConverter(export_names=(("architectures",),), export_value=["MistralForCausalLM"]),
+            # ConstantExportParamConverter(export_names=(("architectures",),), export_value=["MistralForCausalLM"]),
             IgnoreImportParamConverter(export_names=(("sliding_window",),), ignore_export_value=None),
         ]
 
