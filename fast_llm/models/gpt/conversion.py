@@ -685,7 +685,12 @@ class MTPLlamaHuggingfaceCheckpointHandler(CustomModelingExportMixin, CommonLlam
         return converters
 
 
-class DiffusionDreamHuggingfaceCheckpointHandler(CustomModelingExportMixin, CommonHuggingfaceCheckpointHandler):
+class DiffusionDreamHuggingfaceCheckpointHandler(CustomModelingExportMixin, Qwen2HuggingfaceCheckpointHandler):
+    """
+    Handler for DiffusionDream Huggingface checkpoints.
+    Inherits from Qwen2HuggingfaceCheckpointHandler (and CustomModelingExportMixin),
+    but overrides _create_config_converters to update architectures and auto_map.
+    """
 
     from fast_llm.models.gpt.external.diffusion_dream import configuration_dream, generation_utils, modeling_dream
 
@@ -697,28 +702,23 @@ class DiffusionDreamHuggingfaceCheckpointHandler(CustomModelingExportMixin, Comm
 
     @classmethod
     def _create_config_converters(cls) -> list[ParamConverter]:
-        return super()._create_config_converters() + [
-            # From Qwen2HuggingfaceCheckpointHandler - Change architectures to DiffusionDream
+        # Reuse Qwen2 converters but replace architectures and auto_map
+        converters = super()._create_config_converters()
+        # Remove any previous architectures/auto_map ConstantExportParamConverter
+        print(converters)
+        converters = [
+            c
+            for c in converters
+            if not (
+                isinstance(c, ConstantExportParamConverter)
+                and (
+                    ("architectures",) in getattr(c, "export_names", [])
+                    or ("auto_map",) in getattr(c, "export_names", [])
+                )
+            )
+        ]
+        converters += [
             ConstantExportParamConverter(export_names=(("architectures",),), export_value=["DreamModel"]),
-            ConstantImportParamConverter(
-                fast_llm_names=(("transformer", "normalization", "type"),),
-                fast_llm_value="rms_norm",
-            ),
-            RenameParamConverter(
-                fast_llm_names=(("transformer", "normalization", "epsilon"),), export_names=(("rms_norm_eps",),)
-            ),
-            ConstantImportParamConverter(fast_llm_names=(("transformer", "gated"),), fast_llm_value=True),
-            ConstantImportParamConverter(
-                fast_llm_names=(("transformer", "add_linear_biases"),), fast_llm_value="only_attn_qkv"
-            ),
-            LLamaRotaryParamConverter(
-                fast_llm_names=(("transformer", "rotary"),),
-                export_names=(
-                    ("rope_theta",),
-                    ("rope_scaling",),
-                ),
-            ),
-            IgnoreImportQwen2SlidingWindowParamsConverter(),
             ConstantExportParamConverter(
                 export_names=(("auto_map",),),
                 export_value={
@@ -727,24 +727,7 @@ class DiffusionDreamHuggingfaceCheckpointHandler(CustomModelingExportMixin, Comm
                 },
             ),
         ]
-
-    def _get_mlp_converters(self, fast_llm_prefix: str, hf_prefix: str) -> list[WeightConverter]:
-        # From Qwen2HuggingfaceCheckpointHandler
-        transformer_config: TransformerConfig = self._model.config.base_model.transformer
-        return [
-            *self._get_weight_and_bias_converters(
-                f"{fast_llm_prefix}.mlp.layer_1",
-                (f"{hf_prefix}.mlp.gate_proj", f"{hf_prefix}.mlp.up_proj"),
-                transformer_config.add_mlp_bias,
-                SplitWeightConverter,
-            ),
-            *self._get_weight_and_bias_converters(
-                f"{fast_llm_prefix}.mlp.layer_2",
-                f"{hf_prefix}.mlp.down_proj",
-                transformer_config.add_mlp_bias,
-                MLPLayer2Converter,
-            ),
-        ]
+        return converters
 
 
 class DiffusionLlamaHuggingfaceCheckpointHandler(CustomModelingExportMixin, CommonLlamaHuggingfaceCheckpointHandler):
