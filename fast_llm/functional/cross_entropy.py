@@ -143,7 +143,11 @@ def _fused_cross_entropy_forward_backward(
     else:
         predicted_logits = (target * logits_norm).sum(dim=-1, keepdim=True)
 
+    print(
+        f"predicted_logits: {predicted_logits.shape}, {predicted_logits}, sum_exp_logits: {sum_exp_logits.shape} {sum_exp_logits}"
+    )
     per_sample_loss = sum_exp_logits.log() - predicted_logits
+    print(f"per_sample_loss: {per_sample_loss.shape}, {per_sample_loss}")
     if loss_mask is not None:
         per_sample_loss = per_sample_loss * loss_mask
 
