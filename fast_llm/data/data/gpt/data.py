@@ -117,8 +117,10 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
         self._datasets = {}
         for dataset_name, sampling_parameters in self._sampling_parameters.items():
             if self._tokenizer is not None:
-                # TODO: Too constraining?
-                Assert.eq(self._tokenizer.vocab_size, sampling_parameters.vocab_size)
+                # NOTE: Some models like Qwen2-1.5B-Instruct
+                # have vocab_size bigger in model config than in tokenizer
+                # TODO: Still, is it too constraining?
+                Assert.geq(sampling_parameters.vocab_size, self._tokenizer.vocab_size)
             if sampling_parameters.num_samples > 0:
                 sampling = GPTSamplingData(
                     config=self._config.sampling,

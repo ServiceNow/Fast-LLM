@@ -31,7 +31,7 @@ class HybridSSMBaseModelConfig(LanguageModelBaseConfig):
         desc="Configuration for the transformer architecture.",
         hint=FieldHint.architecture,
     )
-    hybrid_block_layout: list[SSMBlockType] | None = Field(
+    hybrid_block_layout: list[str] | None = Field(
         default=None,
         desc=f"Pattern of blocks to use in the model. Available types: {SSMBlockType.__members__.values()}",
         hint=FieldHint.core,

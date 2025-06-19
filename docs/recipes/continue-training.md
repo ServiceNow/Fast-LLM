@@ -5,11 +5,13 @@ title: Continual Pretraining of Llama 3.1 8B or Qwen 2.5 7B
 
 In this guide, we provide step-by-step instructions to do continued pretraining on The Stack with Llama 3.1 8B  or Qwen 2.5 7B models.
 
-# Preliminary steps
+## Preliminary steps
+
 - [Quick Start](../quick-start.md)
 - [Data preparation](data-preparation.md)
 
-# Download the Pretrained Model
+## Download the Pretrained Model
+
 Let's download the model first:
 === "Llama 3.1 8B"
     ```bash
@@ -22,21 +24,27 @@ Let's download the model first:
     git clone https://huggingface.co/Qwen/Qwen2.5-7B ./fast-llm-tutorial/pretrained-model
     ```
 
-# Training
+## Training
+
 This is not much different from a pretraining config. We will:
+
 - specify the the model checkpoint to load and its format. Fast-LLM will automatically infer the corresponding model architecture.
 - adapt some of the training parameters for our needs.
 - and that's it!
 === "Llama 3.1 8B"
+
     ```yaml
     training:
       train_iters: 100_000
       logs:
         interval: 10
-      evaluations:
+      evaluators:
         validation:
-          iterations: 25
-          interval: 1000
+          interval: 100
+          evaluator:
+            type: loss
+            iterations: 25
+            dataset_name: validation
       checkpoint:
         interval: 1000
         keep: 5
@@ -55,8 +63,8 @@ This is not much different from a pretraining config. We will:
           path: fast-llm-tutorial/dataset/fast_llm_config_training.yaml  # (2)!
         validation:
           type: file
-          path: fast-llm-tutorial/dataset/fast_llm_config_validation.yaml  # (2)!  
-    optimizer:  
+          path: fast-llm-tutorial/dataset/fast_llm_config_validation.yaml  # (2)!
+    optimizer:
       weight_decay: 0.1
       beta_1: 0.9
       beta_2: 0.95
@@ -78,20 +86,24 @@ This is not much different from a pretraining config. We will:
       multi_stage:
         zero_stage: 2
       distributed:
-        training_dtype: bf16  
+        training_dtype: bf16
     run:
       experiment_dir: fast-llm-tutorial/Llama-3.1-8B-cpt
     ```
+
 === "Qwen 2.5 7B"
     ```yaml
     training:
       train_iters: 100_000
       logs:
         interval: 10
-      validation:
-        Validation:
-          iterations: 25
-          interval: 1000
+      evaluators:
+        validation:
+          interval: 100
+          evaluator:
+            type: loss
+            iterations: 25
+            dataset_name: validation
       checkpoint:
         interval: 1000
         keep: 5
@@ -110,8 +122,8 @@ This is not much different from a pretraining config. We will:
           path: fast-llm-tutorial/dataset/fast_llm_config_training.yaml  # (6)!
         validation:
           type: file
-          path: fast-llm-tutorial/dataset/fast_llm_config_validation.yaml  # (6)! 
-    optimizer:  
+          path: fast-llm-tutorial/dataset/fast_llm_config_validation.yaml  # (6)!
+    optimizer:
       weight_decay: 0.1
       beta_1: 0.9
       beta_2: 0.95
@@ -133,7 +145,7 @@ This is not much different from a pretraining config. We will:
       multi_stage:
         zero_stage: 2
       distributed:
-        training_dtype: bf16  
+        training_dtype: bf16
     run:
       experiment_dir: fast-llm-tutorial/qwen-2.5-7B-cpt
     ```
@@ -144,7 +156,8 @@ This is not much different from a pretraining config. We will:
 4.  Config of the pretrained model. We load the model downloaded from the repository earlier.
 5.  This tells Fast-LLM to load the weights of the pretrained model. If we wanted to use the model's configuration, but train from scratch, we could use the same config but set this to `no`.
 
-# Checkpoint usage
+## Checkpoint usage
+
 Checkpoints will be saved regularly, and every 20k steps a checkpoint will be exported in the HF format.
 You can use it in `transformers` as you would use the pretrained  model, except this one should be stronger on programming languages!
 === "Llama 3.1 8B"

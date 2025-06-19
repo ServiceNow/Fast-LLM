@@ -492,10 +492,13 @@ Save the following as `fast-llm-tutorial/train-config.yaml`:
       train_iters: 100  # (1)!
       logs:
         interval: 10
-      evaluations:
+      evaluators:
         validation:
-          iterations: 25
           interval: 100
+          evaluator:
+            type: loss
+            iterations: 25
+            dataset_name: validation
       export:  # (2)!
         format: llama
         interval: 100
@@ -550,10 +553,13 @@ Save the following as `fast-llm-tutorial/train-config.yaml`:
       train_iters: 100_000  # (1)!
       logs:
         interval: 10
-      evaluations:
+      evaluators:
         validation:
-          iterations: 25
-          interval: 1000
+          interval: 100
+          evaluator:
+            type: loss
+            iterations: 25
+            dataset_name: validation
       checkpoint:
         interval: 1000
         keep: 5
