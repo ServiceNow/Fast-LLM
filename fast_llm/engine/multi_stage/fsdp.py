@@ -1,3 +1,4 @@
+import math
 import typing
 
 import torch
@@ -75,8 +76,8 @@ class FSDP:
         )
 
         # TODO: Use parallel_dim property instead?
-        weight_shard_dim = TensorDim("weight_shard", (self._parameter_count + self._global_pad) // self._fsdp_dim.size)
-        grad_shard_dim = TensorDim("grad_shard", weight_shard_dim.size if self._requires_grad else 0)
+        weight_shard_dim = TensorDim("weight_shard", self._shard_size)
+        grad_shard_dim = TensorDim("grad_shard", self._shard_size if self._requires_grad else 0)
 
         self._weight_shard_meta = TensorMeta.from_dims(
             (weight_shard_dim,),
@@ -431,34 +432,90 @@ class FSDP:
 
     def copy_shard_overlaps(
         self,
-        loaded_fsdp: "FSDP",
-        shards: dict[str, torch.Tensor],
-        loaded_shards: dict[str, torch.Tensor],
-        counter: torch.Tensor,
+        loaded_fsdp: typing.Self,
+        shards: dict[str, torch.Tensor] | None,
+        loaded_shards: dict[str, torch.Tensor] | None,
+        # counter: torch.Tensor,
         device: torch.device,
-    ) -> None:
+    ) -> dict[tuple[str, str], int]:
         """
         See MultiStage._load_partial.
-        TODO: Not intended to work with frozen weights, need to enforce.
         """
-        Assert.eq(set(shards), set(loaded_shards))
+        if shards is not None:
+            Assert.eq(set(shards), set(loaded_shards))
         index_overlap = [name for name in loaded_fsdp._parameter_metas if name in self._parameter_metas]
-        for name in index_overlap:
-            overlap_index_map = self.parameter_global_to_shard(
-                loaded_fsdp._get_parameter_shard_indices_in_full_weight(name, device), name
-            )
-            overlap_mask = overlap_index_map >= 0
-            overlap_index_map_masked = overlap_index_map[overlap_mask]
-            overlap_count = overlap_mask.sum()
-            begin, end = self._parameter_range_in_shard(name)
+        counter = {}
+        for parameter_name in index_overlap:
+            self_meta = self._parameter_metas[parameter_name]
+            loaded_meta = loaded_fsdp._parameter_metas[parameter_name]
 
-            for shard_name, shard in shards.items():
-                # Shards can be empty (frozen weights)
-                if shard.numel() == 0:
+            if self_meta.is_tensor_parallel:
+                self_tp = self_meta.tensor_parallel_dim.size
+                loaded_tp = loaded_meta.tensor_parallel_dim.size
+                self_rank = self_meta.tensor_parallel_dim.rank
+                loaded_rank = loaded_meta.tensor_parallel_dim.rank
+                # The shared tensor-parallel part (usually the smallest of the two) can be safely ignored.
+                shared_tp = math.gcd(self_tp, loaded_tp)
+
+                self_tp //= shared_tp
+                loaded_tp //= shared_tp
+
+                if self_rank // self_tp != loaded_rank // loaded_tp:
+                    # Disjoint shared rank, no possible overlap.
                     continue
-                if loaded_shards[shard_name].numel() == 0:
-                    shard[begin:end][overlap_mask] = 0
-                    counter += overlap_count
+                self_rank %= self_tp
+                loaded_rank %= loaded_tp
+            else:
+                self_tp, loaded_tp, self_rank, loaded_rank = 1, 1, 0, 0
+
+            if self_tp == loaded_tp == 1:
+                self_shard_begin_in_buffer = self._fsdp_dim.rank * self._shard_size
+                self_shard_end_in_buffer = (self._fsdp_dim.rank + 1) * self._shard_size
+                self_shard_begin_in_param = self._index_buffer_to_param(self_shard_begin_in_buffer, parameter_name)
+                self_shard_end_in_param = self._index_buffer_to_param(self_shard_end_in_buffer, parameter_name)
+                self_param_begin_in_shard, _ = self._parameter_range_in_shard(parameter_name)
+
+                loaded_shard_begin_in_buffer = loaded_fsdp._fsdp_dim.rank * loaded_fsdp._shard_size
+                loaded_shard_end_in_buffer = (loaded_fsdp._fsdp_dim.rank + 1) * loaded_fsdp._shard_size
+                loaded_shard_begin_in_param = loaded_fsdp._index_buffer_to_param(
+                    loaded_shard_begin_in_buffer, parameter_name
+                )
+                loaded_shard_end_in_param = loaded_fsdp._index_buffer_to_param(
+                    loaded_shard_end_in_buffer, parameter_name
+                )
+                loaded_param_begin_in_shard, _ = loaded_fsdp._parameter_range_in_shard(parameter_name)
+
+                overlap_begin_in_param = max(self_shard_begin_in_param, loaded_shard_begin_in_param)
+                overlap_end_in_param = min(self_shard_end_in_param, loaded_shard_end_in_param)
+
+                if (overlap_size := overlap_end_in_param - overlap_begin_in_param) <= 0:
                     continue
-                shard[begin:end][overlap_mask] = loaded_shards[shard_name][overlap_index_map_masked]
-                counter += overlap_count
+
+                overlap_begin_in_self_shard = self_param_begin_in_shard + overlap_begin_in_param
+
+                overlap_begin_in_loaded_shard = loaded_param_begin_in_shard + overlap_begin_in_param
+
+                if shards is None:
+                    # Dry run, we only want the counter.
+                    Assert.not_incl((parameter_name, ""), counter)
+                    counter[(parameter_name, "")] = overlap_size
+                    continue
+
+                for shard_name, shard in shards.items():
+                    # Shards can be empty (frozen weights)
+                    if shard.numel() == 0:
+                        continue
+                    Assert.not_incl((parameter_name, shard_name), counter)
+                    counter[(parameter_name, shard_name)] = overlap_size
+                    shard[overlap_begin_in_self_shard : overlap_begin_in_self_shard + overlap_size] = (
+                        loaded_shards[shard_name][
+                            overlap_begin_in_loaded_shard : overlap_begin_in_loaded_shard + overlap_size
+                        ]
+                        if loaded_shards[shard_name].numel() > 0
+                        else 0
+                    )
+
+            else:
+                raise NotImplementedError()
+
+        return counter

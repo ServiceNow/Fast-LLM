@@ -7,7 +7,6 @@ from torch.distributed import all_reduce
 from fast_llm.core.distributed import add_ephemeral_timeout
 from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
 from fast_llm.functional.triton.pointwise import triton_fill
-from fast_llm.utils import Assert
 
 logger = logging.getLogger(__name__)
 
@@ -48,14 +47,17 @@ class SafeLoad:
         if not exc_type:
             self._validate()
 
-    def mark_as_loaded(self, count: int, parameter: tuple[str, str] | None = None) -> None:
+    def mark_as_loaded(self, count: int, parameter: tuple[str, str] | None = None, partial: bool = False) -> None:
         self._loaded += count
         if parameter is not None:
             parameter_name, shard_name = parameter
             if shard_name not in self._loaded_parameters:
                 self._loaded_parameters[shard_name] = {}
-            Assert.not_incl(parameter_name, self._loaded_parameters[shard_name])
-            self._loaded_parameters[shard_name][parameter_name] = count
+            if not partial and parameter_name in self._loaded_parameters[shard_name]:
+                raise ValueError(f"Duplicate loaded parameter ({parameter_name}, {shard_name})")
+            self._loaded_parameters[shard_name][parameter_name] = (
+                self._loaded_parameters[shard_name].get(parameter_name, 0) + count
+            )
 
     def _validate(self) -> None:
         errors = []
@@ -105,7 +107,7 @@ class SafeLoad:
                                 f"{missing_for_param:,} values missing out of {parameter.numel():,} for parameter {parameter_name} in stage {stage.index}, shard {shard_name}"
                                 f" (locally {local_missing_for_param:,} out of {local_values.numel():,})"
                             )
-                    missing_for_pad = buffer[-fsdp._global_pad :].isnan().sum().item()
+                    missing_for_pad = buffer[-fsdp._global_pad :].isnan().sum().item() if fsdp._global_pad > 0 else 0
                     if missing_for_pad > 0:
                         global_total += missing_for_pad
                         local_missing_for_pad = (
