@@ -70,7 +70,7 @@ def main(
 
     print(model_hybrid)
     model_hybrid.save_pretrained(
-        f"{output_model_path}/ihyb{index_to_swap+1}l24h/export/apriel_ssm_hybrid/400"
+        f"{output_model_path}"
     )
 
 
