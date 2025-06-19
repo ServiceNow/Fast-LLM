@@ -1,4 +1,3 @@
-import os
 import pathlib
 
 import pytest
@@ -10,8 +9,12 @@ from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig, StageConfig
 from fast_llm.engine.multi_stage.stage import Stage
 
-TEST_RESULTS_PATH = pathlib.Path(os.environ.get("TEST_RESULTS_PATH", "/tmp/fast_llm_tests")).resolve()
 requires_cuda = pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is not available")
+
+
+@pytest.fixture(scope="session")
+def result_path():
+    return pathlib.Path("/tmp/fast_llm_tests")
 
 
 def get_base_model(config: FastLLMModelConfig):

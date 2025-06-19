@@ -1,9 +1,12 @@
+import pytest
+
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.engine.training.config import TrainerConfig
 from fast_llm.engine.training.trainer import Trainer
+from fast_llm.layers.ssm.llamba_block import LlambaBlock
 from fast_llm.layers.transformer.transformer import TransformerLayer
 from fast_llm.utils import Assert
-from tests.utils.model_configs import CONFIG_COMMON
+from tests.utils.model_configs import ModelTestingGroup
 from tests.utils.utils import requires_cuda
 
 
@@ -18,33 +21,42 @@ def _get_trainer_from_args(args: list[str], model_type: str = "gpt") -> Trainer:
 
 
 @requires_cuda
-def test_frozen_weights():
-    args = CONFIG_COMMON + ["run.tensor_logs.save=False"]
-    model_ref = _get_trainer_from_args(args)._multi_stage
-    model_frozen = _get_trainer_from_args(args + ["model.base_model.transformer.mlp_lr_scale=[0]"])._multi_stage
+@pytest.mark.model_testing_group(ModelTestingGroup.basic)
+def test_frozen_weights(model_testing_config):
+    args = model_testing_config.config_args + ["run.tensor_logs.save=False"]
+    model_ref = _get_trainer_from_args(args, model_testing_config.model_type)._multi_stage
+    model_frozen = _get_trainer_from_args(
+        args
+        + [
+            f"model.base_model.transformer.mlp_lr_scale={[0]*model_ref.config.base_model.transformer.num_experts}",
+            f"model.base_model.transformer.router_lr_scale=0",
+        ],
+        model_testing_config.model_type,
+    )._multi_stage
 
     Assert.eq(
         model_ref._num_stages,
         model_frozen._num_stages,
     )
-    diff_by_layer = [
-        sum(p.numel() for p in layer.mlp.parameters()) if isinstance(layer, TransformerLayer) else 0
+    frozen_parameter_counts = [
+        sum(p.numel() for p in layer.mlp.parameters()) if isinstance(layer, (TransformerLayer, LlambaBlock)) else 0
         for layer in model_ref.base_model.layers
     ]
-    assert all((diff_by_layer[i] == 0) == (i in (0, len(diff_by_layer) - 1)) for i in range(len(diff_by_layer)))
-    total_diff = sum(diff_by_layer)
-
     for weight_buffer_ref, weight_buffer_frozen in zip(
         model_ref._weight_buffers, model_frozen._weight_buffers, strict=True
     ):
-        assert weight_buffer_ref.numel() == weight_buffer_frozen.numel()
+        Assert.eq(weight_buffer_ref.numel() == weight_buffer_frozen.numel())
 
-    for grad_buffer_ref, grad_buffer_frozen, diff in zip(
-        model_ref._grad_buffers, model_frozen._grad_buffers, diff_by_layer, strict=True
+    for grad_buffer_ref, grad_buffer_frozen, frozen_parameter_count in zip(
+        model_ref._grad_buffers, model_frozen._grad_buffers, frozen_parameter_counts, strict=True
     ):
-        Assert.eq(grad_buffer_ref.numel() - grad_buffer_frozen.numel() == diff)
+        Assert.eq(grad_buffer_ref.numel() - grad_buffer_frozen.numel() == frozen_parameter_count)
 
-    for shard_name, shard_diff in zip(
-        model_ref._shard_names, [0] + [total_diff] * (len(model_ref._all_shard_names) - 1), strict=True
+    for shard_name, shard_frozen_count in zip(
+        model_ref._shard_names,
+        [0] + [sum(frozen_parameter_counts)] * (len(model_ref._all_shard_names) - 1),
+        strict=True,
     ):
-        Assert.eq(model_ref.get_shard(shard_name).numel() - model_frozen.get_shard(shard_name).numel(), shard_diff)
+        Assert.eq(
+            model_ref.get_shard(shard_name).numel() - model_frozen.get_shard(shard_name).numel(), shard_frozen_count
+        )
