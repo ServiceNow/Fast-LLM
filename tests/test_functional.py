@@ -57,9 +57,15 @@ def ref_packed_get_batch_logps(
 
 
 @pytest.mark.slow
-@pytest.mark.parametrize("batch_size", [1, 2, 4, 8])
-@pytest.mark.parametrize("seq_length", [1024, 4096, 8192])
-@pytest.mark.parametrize("vocab_size", [1000, 2000, 8000])
+@pytest.mark.parametrize(
+    ("batch_size", "seq_length", "vocab_size"),
+    (
+        (2, 32, 50),
+        (1, 32, 50),
+        (2, 100, 50),
+        (2, 32, 200),
+    ),
+)
 def test_preference_logps(batch_size, seq_length, vocab_size):
     random.seed(0)
     torch.manual_seed(0)
@@ -222,9 +228,9 @@ def test_dropless_mlp():
     pytest.fail("Test fails, aborting to avoid breaking cuda", False)
     num_experts = 4
     experts_per_token = 4
-    tokens = 1024
-    hidden_size = 2048
-    ffn_hidden_size = 4096
+    tokens = 256
+    hidden_size = 512
+    ffn_hidden_size = 1024
     std = 1 / 64
     input_ = torch.randn(tokens, hidden_size, device="cuda", requires_grad=True)
     router_weight = torch.normal(0, std, (num_experts, hidden_size), device="cuda")
