@@ -399,9 +399,14 @@ def test_run_converted_model():
     )
     errors = []
     compare = CompareConfig()
-    model_as_hf = transformers.AutoModel.from_pretrained(
-        CONVERT_PATH / "huggingface_0", trust_remote_code=HUGGINGFACE_CHECKPOINT_FORMAT.trust_remote_code
-    ).cuda()
+    if TEST_MODEL in ["diffusion_llama", "dream"]:
+        model_as_hf = transformers.AutoModel.from_pretrained(
+            CONVERT_PATH / "huggingface_0", trust_remote_code=HUGGINGFACE_CHECKPOINT_FORMAT.trust_remote_code
+        ).cuda()
+    else:
+        model_as_hf = transformers.AutoModelForCausalLM.from_pretrained(
+            CONVERT_PATH / "huggingface_0", trust_remote_code=HUGGINGFACE_CHECKPOINT_FORMAT.trust_remote_code
+        ).cuda()
     for name, model in zip(
         ("From state dict", "From Huggingface", "Native Huggingface"),
         (model_from_fast_llm, model_from_hf, model_as_hf),
