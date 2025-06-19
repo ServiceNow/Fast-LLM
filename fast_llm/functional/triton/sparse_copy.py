@@ -11,10 +11,15 @@ from fast_llm.functional.triton import tl, tl_constexpr, triton, triton_jit
 @dataclasses.dataclass()
 class SparseMap:
     sparse_rows: torch.Tensor
+    # The end row for each expert, including padding. `expert_ends[i] = expert_begins[i] + padded_tokens_per_expert[i]`
     expert_ends: torch.Tensor
+    # The end row for each expert, excluding padding. `expert_pad_begins[i] = expert_begins[i] + unpadded_tokens_per_expert[i]`
     expert_pad_begins: torch.Tensor
+    # The number of rows un the dense tensor, i.e., the number of tokens.
     num_rows_dense: int
+    # The number of sparse rows, including padding. `num_rows = expert_ends[-1]`
     num_rows: int
+    # The number of sparse rows, excluding padding. `num_rows_unpadded = num_rows_dense * num_experts_per_token`
     num_rows_unpadded: int
     num_experts: int
     num_experts_per_token: int

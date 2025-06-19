@@ -30,7 +30,7 @@ def test_checkpoint_and_eval(run_test_script_for_all_models, model_testing_confi
         + [
             "training.checkpoint.interval=1",
             "training.evaluators.validation.interval=2",
-            "training.evaluators.validation.evaluators.iterations=1",
+            "training.evaluators.validation.evaluator.iterations=1",
         ],
     )
 
@@ -63,7 +63,7 @@ def test_resume(run_test_script_for_all_models):
         [
             "training.checkpoint.interval=1",
             "training.evaluators.validation.interval=2",
-            "training.evaluators.validation.evaluators.iterations=1",
+            "training.evaluators.validation.evaluator.iterations=1",
         ],
         compare=f"test_checkpoint_and_eval",
         prepare_fn=_prepare_resume_fn,
@@ -79,7 +79,7 @@ def test_resume_frozen(run_test_script_for_all_models):
         [
             "training.checkpoint.interval=1",
             "training.evaluators.validation.interval=2",
-            "training.evaluators.validation.evaluators.iterations=1",
+            "training.evaluators.validation.evaluator.iterations=1",
             "model.base_model.transformer.mlp_lr_scale=0.",
         ],
         compare="test_checkpoint_and_eval",
@@ -442,7 +442,12 @@ def test_run_converted_model(model_testing_config, convert_paths):
     )
     errors = []
     compare = CompareConfig()
-    model_as_hf = transformers.AutoModel.from_pretrained(
+    auto_model = (
+        transformers.AutoModel
+        if model_testing_config.name in ("diffusion_llama", "dream")
+        else transformers.AutoModelForCausalLM
+    )
+    model_as_hf = auto_model.from_pretrained(
         convert_paths["huggingface_0"], trust_remote_code=model_testing_config.checkpoint_format.trust_remote_code
     ).cuda()
     for name, model in zip(
