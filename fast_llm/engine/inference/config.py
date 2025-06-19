@@ -108,7 +108,8 @@ class HuggingfaceModelConfig(transformers.PretrainedConfig):
 
     def to_dict(self) -> dict[str, typing.Any]:
         out = super().to_dict()
-        out["fast_llm_config"] = self.fast_llm_config.to_dict(verbose=FieldVerboseLevel.everything)
+        if self.fast_llm_config is not None:
+            out["fast_llm_config"] = self.fast_llm_config.to_dict(verbose=FieldVerboseLevel.everything)
         return out
 
     def to_diff_dict(self) -> dict[str, typing.Any]:
