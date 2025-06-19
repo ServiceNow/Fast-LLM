@@ -3,9 +3,11 @@ training:
   num_workers: 8
   logs:
     interval: 10
-  evaluations:
+  evaluators:
     validation:
-      iterations: null
+      evaluator:
+        type: loss
+        iterations: null
   test_iters: 0
 batch:
   sequence_length: 4096

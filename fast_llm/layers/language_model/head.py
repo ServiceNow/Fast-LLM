@@ -246,12 +246,15 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
             split_size = div(target.size(0), self._cross_entropy_splits)
             grad_output /= self._cross_entropy_splits
             logit_input = input_.flatten(0, -2)
-            logit_input_grad = torch.empty_like(logit_input)
+            if self.training:
+                logit_input_grad = torch.empty_like(logit_input)
+            else:
+                logit_input_grad = None
             for logit_input_, target_, loss_mask_, logit_input_grad_ in zip(
                 logit_input.split(split_size),
                 target.split(split_size),
                 [None] * self._cross_entropy_splits if loss_mask is None else loss_mask.split(split_size),
-                logit_input_grad.split(split_size),
+                logit_input_grad.split(split_size) if self.training else [None] * split_size,
                 strict=True,
             ):
                 loss_, grad_ = self._logits_cross_entropy_forward_backward(
@@ -263,7 +266,8 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
                     kwargs,
                 )
                 # TODO: Avoid copy with explicit out argument.
-                logit_input_grad_.copy_(grad_)
+                if self.training:
+                    logit_input_grad_.copy_(grad_)
                 loss = loss_ if loss is None else loss + loss_
                 del grad_, loss_
         loss_count = (self._cross_entropy_splits or 1) * (self._group_size if self._sequence_parallel_logits else 1)
@@ -272,7 +276,7 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
         if self._sequence_parallel_logits:
             # TODO: Async
             all_reduce(loss, group=self._tensor_space.distributed.tensor_group)
-        return loss, logit_input_grad.view_as(input_)
+        return loss, logit_input_grad.view_as(input_) if logit_input_grad is not None else None
 
     def _logits_cross_entropy_forward_backward(
         self,
@@ -358,4 +362,4 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
 
         # TODO: de-allocate earlier.
         del logits
-        return loss, output_parallel_linear_backward(grad, context)
+        return loss, output_parallel_linear_backward(grad, context) if self.training else None
