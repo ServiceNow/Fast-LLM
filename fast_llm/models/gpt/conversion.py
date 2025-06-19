@@ -545,7 +545,7 @@ class MistralHuggingfaceCheckpointHandler(CommonLlamaHuggingfaceCheckpointHandle
     @classmethod
     def _create_config_converters(cls) -> list[ParamConverter]:
         return super()._create_config_converters() + [
-            # ConstantExportParamConverter(export_names=(("architectures",),), export_value=["MistralForCausalLM"]),
+            ConstantExportParamConverter(export_names=(("architectures",),), export_value=["MistralForCausalLM"]),
             IgnoreImportParamConverter(export_names=(("sliding_window",),), ignore_export_value=None),
         ]
 
@@ -561,6 +561,21 @@ class MistralHuggingfaceCheckpointHandler(CommonLlamaHuggingfaceCheckpointHandle
                 self._model.config.base_model,
             ),
         ]
+
+
+class PixtralNumHeadsConverter(ParamConverter):
+    def __post_init__(self):
+        Assert.eq(len(self.fast_llm_names), 2)
+        Assert.eq(len(self.export_names), 1)
+
+    def export_params(self, fast_llm_values: tuple[typing.Any, ...]) -> tuple[typing.Any, ...]:
+        (num_heads, head_groups) = fast_llm_values
+        assert head_groups == num_heads, "Pixtral encoder expects num_heads == head_groups (MHA)"
+        return (num_heads,)
+
+    def import_params(self, export_values: tuple[typing.Any, ...]) -> tuple[typing.Any, ...]:
+        (num_heads,) = export_values
+        return (num_heads, num_heads)
 
 
 class PixtralHuggingfaceCheckpointHandler(WeightAndBiasConverterMixin, HuggingfaceStateDictCheckpointHandler):
@@ -600,24 +615,37 @@ class PixtralHuggingfaceCheckpointHandler(WeightAndBiasConverterMixin, Huggingfa
                 ),
                 export_names=(("hidden_size",),),
             ),
-            RenameParamConverter(
+            PixtralNumHeadsConverter(
                 fast_llm_names=(
                     (
                         "transformer",
                         "num_attention_heads",
                     ),
-                ),
-                export_names=(("num_attention_heads",),),
-            ),
-            RenameParamConverter(
-                fast_llm_names=(
                     (
                         "transformer",
                         "head_groups",
                     ),
                 ),
-                export_names=(("num_key_value_heads",),),
+                export_names=(("num_attention_heads",),),
             ),
+            # RenameParamConverter(
+            #     fast_llm_names=(
+            #         (
+            #             "transformer",
+            #             "num_attention_heads",
+            #         ),
+            #     ),
+            #     export_names=(("num_attention_heads",),),
+            # ),
+            # RenameParamConverter(
+            #     fast_llm_names=(
+            #         (
+            #             "transformer",
+            #             "head_groups",
+            #         ),
+            #     ),
+            #     export_names=(("num_key_value_heads",),),
+            # ),
             RenameParamConverter(
                 fast_llm_names=(
                     (
