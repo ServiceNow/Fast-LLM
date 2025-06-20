@@ -1,10 +1,12 @@
+import os
+
 import torch
 
 from fast_llm.functional.triton import TritonConfig, tl, tl_constexpr, triton, triton_autotune, triton_jit
 from fast_llm.functional.triton.sparse_copy import SparseMap
 from fast_llm.utils import Assert, div
 
-autotune_configs = [
+autotune_configs = (
     TritonConfig(
         {"block_size_row": 128, "block_size_col": 256, "block_size_inner": 64, "group_size_row": 8},
         num_stages=3,
@@ -45,7 +47,10 @@ autotune_configs = [
         num_stages=5,
         num_warps=2,
     ),
-]
+)
+
+if os.environ.get("FAST_LLM_SKIP_TRITON_AUTOTUNE"):
+    autotune_configs = (autotune_configs[2],)
 
 
 @triton_autotune(
@@ -255,13 +260,13 @@ def output_sparse_matmul_kernel(
 def output_sparse_matmul(
     lhs: torch.Tensor,
     rhs: torch.Tensor,
-    sparse_map: SparseMap | None,
+    sparse_map: SparseMap | None = None,
     out: torch.Tensor | None = None,
     accumulate: bool = False,
 ) -> torch.Tensor:
     """
-    Output-sparse matrix multiplication with a sparse column dimension,
-    i.e., with a mapping row_index -> sparse_index (obtained from expert_ends).
+    Output-sparse matrix multiplication with a sparse column dimension
+    and a mapping row_index -> sparse_index (obtained from expert_ends).
     Ex.: MLP layer 1 forward (Y = X x W1^T), MLP layer 2 input grad (gY = gZ x W2).
     Formula: out[i, js] = sum_k(lhs[i, k] * rhs[k, jd]), where jd = js + col_sparse_dim * sparse_index[i]
       sparse_index[i] = sum(expert_ends <= i)
@@ -381,13 +386,13 @@ def input_inner_sparse_matmul_kernel(
 def input_inner_sparse_matmul(
     lhs: torch.Tensor,
     rhs: torch.Tensor,
-    sparse_map: SparseMap | None,
+    sparse_map: SparseMap | None = None,
     out: torch.Tensor | None = None,
     accumulate: bool = False,
 ) -> torch.Tensor:
     """
-    Left-input-sparse matrix multiplication with a sparse inner dimension,
-    i.e., with a mapping row_index -> sparse_index (obtained from expert_ends).
+    Left-input-sparse matrix multiplication with a sparse inner dimension
+    and a mapping row_index -> sparse_index (obtained from expert_ends).
     Ex.: MLP layer 2 forward (Z = Y x W2^T), MLP layer 1 input grad (gX = gY x W1).
     Formula: out[i, j] = sum_ks(lhs[i, ks] * rhs[kd, j]), where kd = ks + inner_sparse_dim * sparse_index[i]
       sparse_index[i] = sum(expert_ends <= i)
@@ -511,13 +516,13 @@ def input_row_sparse_matmul_kernel(
 def input_row_sparse_matmul(
     lhs: torch.Tensor,
     rhs: torch.Tensor,
-    sparse_map: SparseMap | None,
+    sparse_map: SparseMap | None = None,
     out: torch.Tensor | None = None,
     accumulate: bool = False,
 ) -> torch.Tensor:
     """
-    Left-input-sparse matrix multiplication with a sparse row dimension,
-    i.e., with a mapping inner_index -> sparse_index.
+    Left-input-sparse matrix multiplication with a sparse row dimension
+    and a mapping inner_index -> sparse_index.
     Ex.: MLP layer 1 weight grad (gW1 = gY^T x X), MLP layer 2 weight grad (gW2^T = Y^T x gZ).
     Formula: out[id, j] = sum_ks(lhs[is, ks] * rhs[ks, j]), where
       sparse_begin[sparse_index[id]] <= ks < sparse_end[sparse_index[id]],

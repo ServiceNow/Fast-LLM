@@ -7,8 +7,9 @@ import yaml
 
 from fast_llm.data.dataset.gpt.memmap import GPTMemmapDataset
 from fast_llm.data.dataset.gpt.sampled import GPTSample
-from tests.utils.utils import TEST_RESULTS_PATH
 
+# TODO: Fixture
+TEST_RESULTS_PATH = pathlib.Path("/tmp/fast_llm_tests")
 TOKENIZER_PATH = TEST_RESULTS_PATH / "tokenizer" / "common"
 TOKENIZER_FILE = TOKENIZER_PATH / "tokenizer.json"
 DATASET_CACHE = TEST_RESULTS_PATH / "dataset"
