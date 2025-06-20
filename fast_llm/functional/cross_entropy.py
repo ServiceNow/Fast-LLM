@@ -92,6 +92,14 @@ def _fused_cross_entropy_forward_backward(
     # Do the forward and backward passes all at once, and fused with dtype conversion.
     # Way faster and more memory-efficient than the pytorch version.
 
+    print("logits:", logits.shape, logits.dtype)
+    print("target:", target.shape, target.dtype)
+    print("loss_mask:", None if loss_mask is None else (loss_mask.shape, loss_mask.dtype))
+    print("grad_output:", grad_output)
+    print("logits_scale_factor:", logits_scale_factor)
+    print("target_format:", target_format)
+    print("group:", group)
+
     logits_norm, exp_logits, sum_exp_logits = _fused_softmax_base(logits, logits_scale_factor, group)
 
     if target_format == TargetFormat.logits:
@@ -145,9 +153,9 @@ def _fused_cross_entropy_forward_backward(
         predicted_logits = (target * logits_norm).sum(dim=-1, keepdim=True)
 
     per_sample_loss = sum_exp_logits.log() - predicted_logits
-    print(f"per_sample_loss: {per_sample_loss.shape}, {per_sample_loss}")
-    print(f"sum_exp_logits: {sum_exp_logits.shape}, {sum_exp_logits}")
-    print(f"predicted_logits: {predicted_logits.shape}, {predicted_logits}")
+    print(f"per_sample_loss: {per_sample_loss.shape}, {per_sample_loss.max()}, {per_sample_loss.min()}")
+    print(f"sum_exp_logits: {sum_exp_logits.shape}, {sum_exp_logits.max()}, {sum_exp_logits.min()}")
+    print(f"predicted_logits: {predicted_logits.shape}, {predicted_logits.max()}, {predicted_logits.min()}")
 
     if loss_mask is not None:
         per_sample_loss = per_sample_loss * loss_mask
