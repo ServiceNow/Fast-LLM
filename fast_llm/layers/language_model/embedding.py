@@ -125,4 +125,5 @@ class LanguageModelEmbedding[ConfigType: LanguageModelBaseConfig](Configurable[L
                 tensor_name="Embedding output",
                 dtype=self._residual_dtype,
             )
+        print(f"LanguageModelEmbedding with input shape: {input_.shape} {input_.min()} {input_.max()}")
         return self._forward(input_, kwargs.get(LanguageModelKwargs.position_ids))

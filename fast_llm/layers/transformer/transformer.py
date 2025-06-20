@@ -104,6 +104,10 @@ class BaseBlock(Layer, abc.ABC):
     ) -> torch.Tensor:
         if isinstance(input_, TensorMeta):
             return self._get_meta(input_, "output", kwargs)
+        print(f"{self.name} with input: {input_.shape}, {input_.dtype} {input_.min()} {input_.max()}")
+        if torch.isnan(input_).any():
+            print(f"NaN found in input tensor {input_}")
+            raise ValueError(f"Input tensor {input_} contains NaN values.")
         generator = (
             self._tensor_space.distributed.tp_generator
             if self._tensor_space.distributed_config.sequence_tensor_parallel
@@ -113,16 +117,21 @@ class BaseBlock(Layer, abc.ABC):
             self._debug_log(None, "Begin", kwargs)
         fw_input = input_
         hidden_states = self.norm_1(input_)
+        print(f"{self.name} after norm_1 : {hidden_states.min()} {hidden_states.max()}")
         if self._debug_mode:
             self._debug_log(hidden_states, "Norm 1", kwargs)
         hidden_states, bias = getattr(self, self._mixer_module_name)(hidden_states, kwargs)
         if self._debug_mode:
             self._debug_log(hidden_states, f"{self._mixer_module_name} output", kwargs, bias=bias)
+        print(f"{self.name} before _bias_dropout_add : {hidden_states.min()} {hidden_states.max()}")
         with set_generator(generator):
             input_ = self._bias_dropout_add(hidden_states, bias, input_)
+        print(f"{self.name} after _bias_dropout_add : {hidden_states.min()} {hidden_states.max()}")
         if self._debug_mode:
             self._debug_log(input_, f"{self._mixer_module_name} residual", kwargs)
+        print(f"{self.name} before norm_2 : {input_.min()} {input_.max()}")
         hidden_states = self.norm_2(input_)
+        print(f"{self.name} before norm_2 : {input_.min()} {input_.max()}")
         if self._debug_mode:
             self._debug_log(hidden_states, "Norm 2", kwargs)
         hidden_states, bias = self.mlp(hidden_states, kwargs, losses, metrics)

@@ -80,6 +80,7 @@ class MLP(MLPBase):
         losses: dict[str, typing.Any] | None = None,
         metrics: dict[str, typing.Any] | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
+        print(f"{self._name} {self._layer_index} with input: {input_.shape}, {input_.dtype} {input_.min()} {input_.max()}")
         parallel_group = self._intermediate_dim.parallel_group
         return (
             mlp_autograd(
