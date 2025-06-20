@@ -293,7 +293,8 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
         )
 
         print(
-            f"CR head: input: {input_.shape} {input_.max()} {input_.min()} target {target.shape} {target.min()} {target.max()} \
+            f"CR head: input: {input_.shape} {input_.max()} {input_.min()} \
+                target {target.shape if target is not None else target} {target.min() if target is not None else target} {target.max() if target is not None else target} \
                 logits: {logits.shape}, {logits.max()} {logits.min()} "
         )
 
