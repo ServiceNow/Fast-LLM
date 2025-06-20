@@ -4,8 +4,6 @@ import logging
 import time
 import typing
 
-from lm_eval.evaluator import simple_evaluate as lm_eval_simple_evaluate
-
 from fast_llm.config import Configurable
 from fast_llm.core.distributed import safe_barrier
 from fast_llm.data.data.abstract import Data
@@ -18,8 +16,6 @@ from fast_llm.engine.evaluation.config import (
     EvaluatorLmEvalConfig,
     EvaluatorLossConfig,
 )
-from fast_llm.engine.evaluation.lm_eval.fast_llm_wrapper import FastLLMLmEvalWrapper
-from fast_llm.engine.evaluation.lm_eval.utils import prepare_lm_eval_simple_eval_params, process_lm_eval_results
 from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
 from fast_llm.engine.schedule.config import BatchConfig
 from fast_llm.engine.schedule.runner import ScheduleRunner
@@ -262,6 +258,8 @@ class EvaluatorLmEval[ConfigType: EvaluatorLmEvalConfig](Evaluator[ConfigType]):
         data: Data,
         phase: PhaseType,
     ) -> None:
+        from fast_llm.engine.evaluation.lm_eval.fast_llm_wrapper import FastLLMLmEvalWrapper
+
         super().setup(distributed, run, multi_stage, runner, data, phase)
 
         self._hf_model = self._multi_stage.config_class.get_huggingface_model_for_causal_lm_class()(
@@ -287,6 +285,13 @@ class EvaluatorLmEval[ConfigType: EvaluatorLmEvalConfig](Evaluator[ConfigType]):
         training_progress: TrainingProgress | None = None,
         run_index: int | None = None,
     ) -> EvaluationMetrics:
+        from lm_eval.evaluator import simple_evaluate as lm_eval_simple_evaluate
+
+        from fast_llm.engine.evaluation.lm_eval.utils import (
+            prepare_lm_eval_simple_eval_params,
+            process_lm_eval_results,
+        )
+
         assert self._is_setup
 
         # TODO: use run_index instead?
