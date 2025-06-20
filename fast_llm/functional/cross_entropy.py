@@ -92,8 +92,8 @@ def _fused_cross_entropy_forward_backward(
     # Do the forward and backward passes all at once, and fused with dtype conversion.
     # Way faster and more memory-efficient than the pytorch version.
 
-    print("logits:", logits.shape, logits.dtype)
-    print("target:", target.shape, target.dtype)
+    print("logits:", logits.shape, logits.dtype logits.max(), logits.min())
+    print("target:", target.shape, target.dtype, target.max(), target.min())
     print("loss_mask:", None if loss_mask is None else (loss_mask.shape, loss_mask.dtype))
     print("grad_output:", grad_output)
     print("logits_scale_factor:", logits_scale_factor)
