@@ -12,7 +12,7 @@ from fast_llm.engine.schedule.runner import ScheduleRunner
 from fast_llm.engine.schedule.schedule import Schedule
 from fast_llm.layers.language_model.config import LanguageModelKwargs
 from fast_llm.models.gpt.config import GPTBatchConfig, LlamaGPTHuggingfaceCheckpointFormat, PretrainedGPTModelConfig
-from tests.test_gpt_generate_and_forward import model_and_tokenizer  # noqa: F401
+from tests.models.test_generate import model_path  # noqa: F401
 from tests.utils.utils import requires_cuda
 
 
@@ -109,12 +109,10 @@ def _test_for_phase(model_path, fast_llm_checkpoint_format, phase):
 
 # @pytest.mark.extra_slow
 @requires_cuda
-def test_loss_validation_vs_inference(model_and_tokenizer):
-    model_path, _, fast_llm_checkpoint_format = model_and_tokenizer
+def test_loss_validation_vs_inference(model_path):
+    iter_losses_validation = _test_for_phase(model_path, LlamaGPTHuggingfaceCheckpointFormat, PhaseType.validation)
 
-    iter_losses_validation = _test_for_phase(model_path, fast_llm_checkpoint_format, PhaseType.validation)
-
-    iter_losses_inference = _test_for_phase(model_path, fast_llm_checkpoint_format, PhaseType.inference)
+    iter_losses_inference = _test_for_phase(model_path, LlamaGPTHuggingfaceCheckpointFormat, PhaseType.inference)
 
     assert len(iter_losses_validation) == len(iter_losses_inference)
     for key in iter_losses_validation.keys():
