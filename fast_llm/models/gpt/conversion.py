@@ -633,24 +633,6 @@ class PixtralHuggingfaceCheckpointHandler(WeightAndBiasConverterMixin, Huggingfa
                 ),
                 export_names=(("num_attention_heads",),),
             ),
-            # RenameParamConverter(
-            #     fast_llm_names=(
-            #         (
-            #             "transformer",
-            #             "num_attention_heads",
-            #         ),
-            #     ),
-            #     export_names=(("num_attention_heads",),),
-            # ),
-            # RenameParamConverter(
-            #     fast_llm_names=(
-            #         (
-            #             "transformer",
-            #             "head_groups",
-            #         ),
-            #     ),
-            #     export_names=(("num_key_value_heads",),),
-            # ),
             RenameParamConverter(
                 fast_llm_names=(
                     (
