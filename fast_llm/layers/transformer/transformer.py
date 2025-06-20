@@ -118,6 +118,7 @@ class BaseBlock(Layer, abc.ABC):
         fw_input = input_
         hidden_states = self.norm_1(input_)
         print(f"{self.name} after norm_1 : {hidden_states.min()} {hidden_states.max()}")
+        print(f"{self.name} norm : {type(self.norm_1)} {self.norm_1.weight.shape} {self.norm_1.weight.min()} {self.norm_1.weight.max()}")
         if self._debug_mode:
             self._debug_log(hidden_states, "Norm 1", kwargs)
         hidden_states, bias = getattr(self, self._mixer_module_name)(hidden_states, kwargs)
