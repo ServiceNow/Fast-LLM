@@ -564,6 +564,11 @@ class MistralHuggingfaceCheckpointHandler(CommonLlamaHuggingfaceCheckpointHandle
 
 
 class PixtralNumHeadsConverter(ParamConverter):
+    """
+    Pixtral encoder uses Multi-Head Attention.
+    Map `num_attention_heads` and `head_groups` to a single `num_heads` parameter.
+    """
+
     def __post_init__(self):
         Assert.eq(len(self.fast_llm_names), 2)
         Assert.eq(len(self.export_names), 1)
