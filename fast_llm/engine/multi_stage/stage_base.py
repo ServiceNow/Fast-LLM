@@ -291,7 +291,7 @@ class StageBase(Configurable[StageConfig]):
             )
             grads_norm_slices = []
             for name in grad_norm_names:
-                begin, end = fsdp._parameter_range_in_shard(name)
+                begin, end = fsdp._get_parameter_range_in_shard(name)
                 if len(grads_norm_slices) < 0 and begin == grads_norm_slices[-1].stop:
                     grads_norm_slices[-1] = slice(grads_norm_slices[-1].start, end)
                 else:

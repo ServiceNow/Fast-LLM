@@ -303,7 +303,7 @@ class FSDP:
         """
         Assert.eq(shard.shape, (self._shard_size,))
         tensor_shard = self.parameter_global_to_shard(tensor, parameter_name)
-        begin, end = self._parameter_range_in_shard(parameter_name)
+        begin, end = self._get_parameter_range_in_shard(parameter_name)
         Assert.eq(tensor_shard.numel(), end - begin)
         shard[begin:end].copy_(tensor_shard)
         return end - begin
@@ -386,10 +386,16 @@ class FSDP:
         else:
             triton_copy(self._grad_buffer_local_shard, self._grad_shard)
 
-    def _parameter_range_in_shard(self, parameter_name: str) -> tuple[int, int]:
+    def _get_parameter_range_in_shard(self, parameter_name: str) -> tuple[int, int]:
         begin = self.index_buffer_to_shard(self.get_parameter_begin_in_buffer(parameter_name))
         end = self.index_buffer_to_shard(self.get_parameter_end_in_buffer(parameter_name))
         return begin, end
+
+    def get_parameter_size_in_shard(self, parameter_name: str, shard_name: str = ShardName.weights) -> int:
+        if not self._requires_grad and shard_name != ShardName.weights:
+            return 0
+        begin, end = self._get_parameter_range_in_shard(parameter_name)
+        return end - begin
 
     def invalidate_buffer(self) -> None:
         # Buffer is no longer valid (Updated weights or overwritten by other stage)
@@ -424,7 +430,7 @@ class FSDP:
             device=device,
         )
         # Set the shard slice of the global parameter to corresponding indices of the parameter slice of the shard
-        begin, end = self._parameter_range_in_shard(parameter_name)
+        begin, end = self._get_parameter_range_in_shard(parameter_name)
         self.parameter_global_to_shard(index, parameter_name).copy_(
             torch.arange(begin, end, dtype=torch.int64, device=device)
         )
@@ -473,7 +479,6 @@ class FSDP:
                 self_shard_end_in_buffer = (self._fsdp_dim.rank + 1) * self._shard_size
                 self_shard_begin_in_param = self._index_buffer_to_param(self_shard_begin_in_buffer, parameter_name)
                 self_shard_end_in_param = self._index_buffer_to_param(self_shard_end_in_buffer, parameter_name)
-                self_param_begin_in_shard, _ = self._parameter_range_in_shard(parameter_name)
 
                 loaded_shard_begin_in_buffer = loaded_fsdp._fsdp_dim.rank * loaded_fsdp._shard_size
                 loaded_shard_end_in_buffer = (loaded_fsdp._fsdp_dim.rank + 1) * loaded_fsdp._shard_size
@@ -483,7 +488,6 @@ class FSDP:
                 loaded_shard_end_in_param = loaded_fsdp._index_buffer_to_param(
                     loaded_shard_end_in_buffer, parameter_name
                 )
-                loaded_param_begin_in_shard, _ = loaded_fsdp._parameter_range_in_shard(parameter_name)
 
                 overlap_begin_in_param = max(self_shard_begin_in_param, loaded_shard_begin_in_param)
                 overlap_end_in_param = min(self_shard_end_in_param, loaded_shard_end_in_param)
@@ -491,9 +495,16 @@ class FSDP:
                 if (overlap_size := overlap_end_in_param - overlap_begin_in_param) <= 0:
                     continue
 
-                overlap_begin_in_self_shard = self_param_begin_in_shard + overlap_begin_in_param
-
-                overlap_begin_in_loaded_shard = loaded_param_begin_in_shard + overlap_begin_in_param
+                overlap_begin_in_self_shard = (
+                    self._parameter_begins_in_buffer[parameter_name]
+                    + overlap_begin_in_param
+                    - self_shard_begin_in_buffer
+                )
+                overlap_begin_in_loaded_shard = (
+                    loaded_fsdp._parameter_begins_in_buffer[parameter_name]
+                    + overlap_begin_in_param
+                    - loaded_shard_begin_in_buffer
+                )
 
                 if shards is None:
                     # Dry run, we only want the counter.

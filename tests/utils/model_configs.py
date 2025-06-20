@@ -479,6 +479,9 @@ _update_and_add_testing_config(
 
 @pytest.fixture(scope="session", params=_MODEL_CONFIGS.keys())
 def model_testing_config(request) -> ModelTestingConfig:
+    models = request.config.getoption("--models")
+    if models and request.param not in models:
+        pytest.skip(f"Skipping model {request.param}")
     return _MODEL_CONFIGS[request.param]
 
 
