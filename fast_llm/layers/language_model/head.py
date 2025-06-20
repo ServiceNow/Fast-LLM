@@ -292,6 +292,10 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
             sequence_parallel=self._sequence_parallel and self._parallel_embeddings,
         )
 
+        print(
+            f"logits: {logits.shape}, {logits.max()} {logits.min()} input: {input_.shape} {input_.max()} {input_.min()}"
+        )
+
         if self._z_loss_factor > 0.0:
             logits = z_loss(
                 logits,
