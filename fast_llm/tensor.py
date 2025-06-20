@@ -1,3 +1,4 @@
+import functools
 import math
 import typing
 
@@ -86,12 +87,25 @@ class TensorMeta(torch.Tensor):
             data,
         )
 
-    @property
+    @functools.cached_property
     def is_tensor_parallel(self) -> bool:
         # TODO: Avoid hard-coded assumptions on tensor parallel.
         return any(
             dim.parallel_dim is not None and dim.parallel_dim.name == DistributedDimNames.tensor for dim in self.dims
         )
+
+    @functools.cached_property
+    def tensor_parallel_dim(self) -> DistributedDim | None:
+        # TODO: Avoid hard-coded assumptions on tensor parallel.
+        if not self.is_tensor_parallel:
+            return None
+        dims = [
+            dim
+            for dim in self.dims
+            if dim.parallel_dim is not None and dim.parallel_dim.name == DistributedDimNames.tensor
+        ]
+        assert len(dims) == 1, dims
+        return dims[0].parallel_dim
 
     def __repr__(self, *, tensor_contents=()):
         return super().__repr__(
