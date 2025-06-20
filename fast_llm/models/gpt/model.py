@@ -169,6 +169,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             TransformerKwargs.hidden_dims: hidden_dims,
             TransformerKwargs.sequence_length: sequence_length,
             TransformerKwargs.sequence_q_dim: sequence_q_dim,
+            LanguageModelKwargs.mask_inputs: not batch_meta.truncate_documents,
         }
 
         sequence_k_pasts = range(
@@ -302,7 +303,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                 if batch.loss_masking_spans is not None:
                     # avoid changing input tokens
                     labels = labels.clone()
-                    for i, spans in enumerate(batch.loss_masking_spans):
+                    for idx, spans in enumerate(batch.loss_masking_spans):
                         if not spans.numel():
                             continue
                         valid_spans = spans[
@@ -316,9 +317,9 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                             loss_mask = torch.ones_like(labels, dtype=torch.bool)
                             for start, end in valid_spans:
                                 if sequence_first:
-                                    loss_mask[start : end + 1, i] = False
+                                    loss_mask[start : end + 1, idx] = False
                                 else:
-                                    loss_mask[i, start : end + 1] = False
+                                    loss_mask[idx, start : end + 1] = False
                             if self._config.distillation_model is not None:
                                 kwargs[LanguageModelKwargs.loss_mask] = loss_mask
                             labels = torch.where(loss_mask, labels, -100)

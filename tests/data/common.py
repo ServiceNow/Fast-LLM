@@ -51,12 +51,12 @@ def get_sampling_data(
             num_samples=num_samples,
             sequence_length=sequence_length,
             vocab_size=vocab_size,
+            truncate_documents=truncate_documents,
         ),
         cache_directory=cache_directory,
         distributed=distributed,
         dataset_name=phase.value,
         tokenizer=tokenizer,
-        truncate_documents=truncate_documents,
     )
 
 
