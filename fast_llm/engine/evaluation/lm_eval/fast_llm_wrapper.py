@@ -92,7 +92,7 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
 
         self.batch_schedule = 1
         self.batch_sizes = {}
-        self.batch_size_per_gpu = 16  # model._inference_runner._batch_config.micro_batch_size
+        self.batch_size_per_gpu = model._inference_runner._batch_config.micro_batch_size
         self.batch_size = self.batch_size_per_gpu * dist_config.batch_data_parallel
         self.max_batch_size = self.batch_size
 
