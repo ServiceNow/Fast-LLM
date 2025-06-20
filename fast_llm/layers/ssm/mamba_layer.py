@@ -159,6 +159,7 @@ class MambaLayer(torch.nn.Module):
         self._return_input = return_input
 
     def forward(self, hidden_states, kwargs):
+        print(f"MambaLayer {self.layer_idx} with input shape: {hidden_states.shape} {hidden_states.min()} {hidden_states.max()}")
         assert _mamba_available
         batch, seqlen, dim = hidden_states.shape
 
@@ -191,4 +192,5 @@ class MambaLayer(torch.nn.Module):
         )
         if self._return_input:
             out = torch.stack((hidden_states, out), dim=0)
+        print(f"MambaLayer {self.layer_idx} output shape: {out.shape} {out.min()} {out.max()}")
         return out, None

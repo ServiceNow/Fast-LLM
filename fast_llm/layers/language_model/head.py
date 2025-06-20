@@ -293,7 +293,8 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
         )
 
         print(
-            f"logits: {logits.shape}, {logits.max()} {logits.min()} input: {input_.shape} {input_.max()} {input_.min()}"
+            f"CR head: input: {input_.shape} {input_.max()} {input_.min()} target {target.shape} {target.min()} {target.max()} \
+                logits: {logits.shape}, {logits.max()} {logits.min()} "
         )
 
         if self._z_loss_factor > 0.0:

@@ -157,7 +157,7 @@ class DiscreteMamba2(torch.nn.Module):
             outputs["hidden_states"]: (B, L, D).
             outputs["state"]: inference cache.
         """
-
+        print(f"DiscreteMamba2 {self.layer_idx} with input shape: {hidden_states.shape} {hidden_states.min()} {hidden_states.max()}")
         assert _mamba_available
         input_ = hidden_states
         outputs = {}
@@ -241,6 +241,7 @@ class DiscreteMamba2(torch.nn.Module):
             return torch.stack([input_, outputs["hidden_states"]], dim=0)
 
         # TODO: since we do not support inference for now, we only return the hidden states for now.
+        print(f"DiscreteMamba2 {self.layer_idx} output shape: {outputs["hidden_states"].shape} {outputs["hidden_states"].min()} {outputs["hidden_states"].max()}")
         return outputs["hidden_states"], None
 
     def convolutional_forward(self, xBC, padded_len):
