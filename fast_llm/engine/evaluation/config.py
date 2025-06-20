@@ -6,7 +6,7 @@ from fast_llm.engine.schedule.config import BatchConfig
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
-    from fast_llm.engine.evaluation.evaluator import Evaluator, EvaluatorLoss
+    from fast_llm.engine.evaluation.evaluator import Evaluator, EvaluatorLmEval, EvaluatorLoss
 
 
 @config_class()
@@ -64,10 +64,9 @@ class EvaluatorLossConfig(EvaluatorConfig):
         return EvaluatorLoss(name, self, batch_config, data_load_num_proc, train_iters)
 
 
-@config_class()
+@config_class(dynamic_type={EvaluatorConfig: "lm_eval"})
 class EvaluatorLmEvalConfig(EvaluatorConfig):
     _abstract: typing.ClassVar[bool] = False
-    type_: typing.ClassVar[str | None] = "lm_eval"
 
     cli_args: list[str] = Field(
         default_factory=lambda: [],

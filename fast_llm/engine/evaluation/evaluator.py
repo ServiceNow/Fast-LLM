@@ -264,10 +264,8 @@ class EvaluatorLmEval[ConfigType: EvaluatorLmEvalConfig](Evaluator[ConfigType]):
     ) -> None:
         super().setup(distributed, run, multi_stage, runner, data, phase)
 
-        # TODO: pass mini and batch size of the same length for lm_eval not to crash during training
-        #       or implement min batch sequential awareness in fas_llm_wrapper for lm_eval
-        self._hf_model = self._multi_stage.config_class.get_huggingface_model_for_causal_lm_class().from_model(
-            self._multi_stage, self._batch_config.micro_batch_size, self._runner
+        self._hf_model = self._multi_stage.config_class.get_huggingface_model_for_causal_lm_class()(
+            self._multi_stage, runner=self._runner
         )
 
         # For reporting purposes, just to indicate it is from Fast-LLM
