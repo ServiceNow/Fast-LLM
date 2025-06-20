@@ -62,3 +62,49 @@ class EvaluatorLossConfig(EvaluatorConfig):
         from fast_llm.engine.evaluation.evaluator import EvaluatorLoss
 
         return EvaluatorLoss(name, self, batch_config, data_load_num_proc, train_iters)
+
+
+@config_class()
+class EvaluatorLmEvalConfig(EvaluatorConfig):
+    _abstract: typing.ClassVar[bool] = False
+    type_: typing.ClassVar[str | None] = "lm_eval"
+
+    cli_args: list[str] = Field(
+        default_factory=lambda: [],
+        desc="lm_eval CLI arguments, excluding those related to model, wandb, batch sizes, and device.",
+    )
+
+    truncation: bool = Field(
+        default=False,
+        desc="Whether to use truncation during tokenization (useful when inputs exceed model's max length);"
+        " passed to the Fast-LLM lm_eval model wrapper.",
+    )
+
+    logits_cache: bool = Field(
+        default=True,
+        desc="Whether to enable logits caching for speedup and avoiding recomputation during repeated evaluations;"
+        " passed to the Fast-LLM lm_eval model wrapper.",
+    )
+
+    add_bos_token: bool = Field(
+        default=False,
+        desc="Whether to prepend a beginning-of-sequence (BOS) token, required for some models like LLaMA;"
+        " passed to the Fast-LLM lm_eval model wrapper.",
+    )
+
+    prefix_token_id: int | None = Field(
+        default=None,
+        desc="Token ID to use as a prefix to the input (e.g., for control codes or prompts);"
+        " passed to the Fast-LLM lm_eval model wrapper.",
+    )
+
+    def get_evaluator(
+        self,
+        name: str,
+        batch_config: BatchConfig,
+        data_load_num_proc: int,
+        train_iters: int | None = None,
+    ) -> "EvaluatorLmEval":
+        from fast_llm.engine.evaluation.evaluator import EvaluatorLmEval
+
+        return EvaluatorLmEval(name, self, batch_config, data_load_num_proc, train_iters)
