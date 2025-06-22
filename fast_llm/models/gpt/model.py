@@ -318,8 +318,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                     batch_size, seq_len = batch.token_ids.shape
                     
                     # Compute attention mask for diffusion
-                    C = torch.tensor([0, 3], dtype=torch.long, device=self._tensor_space.distributed.device)
-                    
+                    C = batch.in_context_length.to(device=self._tensor_space.distributed.device)
                     row_idx = torch.arange(seq_len, device=self._tensor_space.distributed.device).view(1, seq_len, 1)
                     col_idx = torch.arange(seq_len, device=self._tensor_space.distributed.device).view(1, 1, seq_len)
                     C_exp = C.view(batch_size, 1, 1)

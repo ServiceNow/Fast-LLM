@@ -34,14 +34,7 @@ class GPTBatch:
     mask_indexes: torch.Tensor | None = None
     mask_probabilities: torch.Tensor | None = None
     loss_weights: torch.Tensor | None = None
-
-
-def get_data(batch_size, length, vocab_size):
-    # `length` here excludes the first token (which acts like a <BOS>), hence the +1
-    data_ids = torch.randint(0, vocab_size, (batch_size, length+1))
-    padded = torch.zeros(batch_size, length+1, dtype=torch.bool)
-    positions = torch.arange(length+1).unsqueeze(0).expand(batch_size, length+1)
-    return data_ids, padded, positions
+    in_context_length: torch.Tensor | None = None
 
 
 def do_mask(x, mask, mask_token_id):
@@ -75,7 +68,7 @@ def prepare_batch(
         in_uniform=None
     ):
     B, L = positions.size()
-
+    in_context_length = context_length
     context_length = context_length.unsqueeze(1).expand(B, L)
     p_mask = p_mask.unsqueeze(1)
 
@@ -111,6 +104,7 @@ def prepare_batch(
         "input_ids": input_ids,
         "target_ids": data_ids,
         "loss_weights": loss_weights[:, 1:],
+        "in_context_length": in_context_length,
     }
 
 
@@ -129,7 +123,7 @@ def gpt_data_collate_fn(batch: list[GPTSample], sampling_parameters: GPTSampling
         data_ids = token_ids
         padded = torch.zeros_like(data_ids, dtype=torch.bool)
         positions = torch.arange(seq_len).unsqueeze(0).expand(batch_size, seq_len)
-        C = torch.IntTensor([0, 3])
+        C = torch.randint(0, seq_len, (batch_size,), dtype=torch.long)
 
         batch_data = prepare_batch(
             data_ids=data_ids,
@@ -149,7 +143,7 @@ def gpt_data_collate_fn(batch: list[GPTSample], sampling_parameters: GPTSampling
         mask_indexes = batch_data["in_mask"]
         mask_probabilities = torch.full_like(mask_indexes, diffusion_config.max_mask_prob, dtype=torch.float32)  # Use float32 to match model dtype
         loss_weights = batch_data["loss_weights"]
-        
+        in_context_length = batch_data["in_context_length"]
 
     if sampling_parameters.use_loss_masking_spans:
         stacked_spans = [torch.from_numpy(sample.loss_masking_spans) for sample in batch]
@@ -163,7 +157,8 @@ def gpt_data_collate_fn(batch: list[GPTSample], sampling_parameters: GPTSampling
         sequence_lengths=sequence_lengths,
         mask_indexes=mask_indexes,
         mask_probabilities=mask_probabilities,
-        loss_weights=loss_weights
+        loss_weights=loss_weights,
+        in_context_length=in_context_length
     )
 
 
