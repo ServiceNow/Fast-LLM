@@ -143,6 +143,7 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
         labels = kwargs[LanguageModelKwargs.labels] if LanguageModelKwargs.labels in kwargs else None
         # MTP: Shift the labels
+
         if labels is not None:
             labels = (
                 labels[self._prediction_distance : self._prediction_distance + input_.size(0),]
@@ -347,8 +348,6 @@ class MLMHead(LanguageModelHead):
         if labels is None:
             return logits * self._logits_scale_factor, None
 
-        masked_indices = kwargs[LanguageModelKwargs.mask_indexes]
-        mask_probabilities = kwargs[LanguageModelKwargs.mask_probabilities]
         loss_weights = kwargs[LanguageModelKwargs.loss_weights]
         # index   [0, 1, 2, 3, 4, 5] ->
         # The labels are already left shifted x = [A, B, C, D, E, F] ->
@@ -372,30 +371,8 @@ class MLMHead(LanguageModelHead):
             grad_output=grad_output,
             implementation=self._cross_entropy_impl,
             logits_scale_factor=self._logits_scale_factor,
-            avg_loss=False,  # Do not average the loss, we will do it later
+            loss_weight=loss_weights,
         )
 
-        # Take only the losses and grads from the masked tokens/positions
-        # print(f"loss: {loss.shape} {loss}")
-        # print(f"grad: {grad.shape} {grad}")
-        # print(f"masked_indices: {masked_indices.shape} {masked_indices}")
-        # print(f"mask_probabilities: {mask_probabilities.shape} {mask_probabilities}")
-        # print(f"loss_weights: {loss_weights.shape} {loss_weights}")
-        masked_indices_flt = masked_indices.flatten()
-        masked_loss = loss[masked_indices_flt]
-        grad[masked_indices_flt]
-        masked_loss = masked_loss / mask_probabilities.flatten()[masked_indices_flt]
-
-        # Apply loss weights to both loss and gradient
-        loss_weights_flat = loss_weights.flatten()
-        # print(f"DEBUG: grad.dtype={grad.dtype}, loss_weights_flat.dtype={loss_weights_flat.dtype}")
-        loss = loss * loss_weights_flat
-        grad = grad * loss_weights_flat.unsqueeze(-1).to(dtype=grad.dtype)  
-
-        # compute per token loss by all tokens in the batch (tokens we dropped thinks they have 0 loss)
-        # MDM https://github.com/ML-GSAI/SMDM/blob/583aa4716d17728dbb825aec6c24a121164d616a/pretrain/train_mdm.py#L275
-        loss = loss.sum() / labels.shape[0]
-
         del logits
-        # masked grad or full grad?
         return loss, output_parallel_linear_backward(grad, context)

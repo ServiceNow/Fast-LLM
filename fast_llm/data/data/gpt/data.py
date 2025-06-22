@@ -71,88 +71,73 @@ def prepare_batch(
         ar_factor=1.0,
         un_factor=1.0,
         last_factor=0.0,
-        # Remaining arguments are for testing/debug purpose
         in_mask=None, 
         in_uniform=None
     ):
     B, L = positions.size()
-    # print(f"DEBUG: B={B}, L={L}, data_ids.shape={data_ids.shape}, padded.shape={padded.shape}")
-    
+
     context_length = context_length.unsqueeze(1).expand(B, L)
-    # print(f"context_length: {context_length.shape} {context_length}")
-    # print(f"p_mask: {p_mask.shape} {p_mask.dtype} {p_mask}")
     p_mask = p_mask.unsqueeze(1)
 
-    # Reminder: a context_length of zero still has one in_context token (à la <BOS>)
     in_context = positions <= context_length
+
     if in_mask is None:
-        in_mask = (~in_context) & ( torch.rand(B, L) < p_mask)
-    
+        in_mask = (~in_context) & (torch.rand(B, L) < p_mask)
+
     if in_uniform is None:
         in_uniform = (~in_context) & (~in_mask) & (torch.rand(B, L) < p_uniform)
     in_clean = (~in_context) & (~in_mask) & (~in_uniform)
 
-
-    shifted_length = L
-
-    loss_weights = (~padded)[:, 1:].float() * (
-        ar_factor * in_context[:, 1:].float()
-        + in_mask[:, 1:].float() / p_mask
+    loss_weights = (~padded) * (
+        ar_factor * in_context.float()
+        + in_mask.float() / p_mask
         + un_factor * (
-            (1 - p_uniform) * in_uniform[:, 1:].float()
-            + p_uniform * in_clean[:, 1:].float()
+            (1 - p_uniform) * in_uniform.float()
+            + p_uniform * in_clean.float()
         ) / (1 - p_mask)
     )
-    
-    # print(f"DEBUG: loss_weights.shape={loss_weights.shape}")
-    
-    if last_factor > 0.0:
-        last_weights = last_factor * torch.ones(B, 1, device=loss_weights.device)
-        loss_weights = torch.cat([loss_weights, last_weights], dim=1)
 
-    input_ids_full = do_uniform(do_mask(data_ids, in_mask, mask_token_id), in_uniform, vocab_size)
-    input_ids = input_ids_full[:, :-1] 
-    
-    # print(f"DEBUG: input_ids_full.shape={input_ids_full.shape}, input_ids.shape={input_ids.shape}, target_ids.shape={data_ids[:, 1:].shape}")
-    # print(f"DEBUG: in_mask.shape={in_mask[:, 1:].shape}")
+    if last_factor >= 0.0:
+        last_weights = last_factor * torch.ones(B, 1, device=loss_weights.device)
+        loss_weights[:, -1] = last_weights.squeeze(1)
+
+    input_ids = do_uniform(do_mask(data_ids, in_mask, mask_token_id), in_uniform, vocab_size)
 
     return {
-        "in_context": in_context[:, 1:],  
-        "in_mask": in_mask[:, 1:],        
-        "in_uniform": in_uniform[:, 1:],  
-        "in_clean": in_clean[:, 1:],      
+        "in_context": in_context[:, 1:],  # Only for tokens to be predicted
+        "in_mask": in_mask[:, 1:],
+        "in_uniform": in_uniform[:, 1:],
+        "in_clean": in_clean[:, 1:],
         "input_ids": input_ids,
-        "target_ids": data_ids[:, 1:],    
-        "loss_weights": loss_weights,
+        "target_ids": data_ids,
+        "loss_weights": loss_weights[:, 1:],
     }
 
 
 def gpt_data_collate_fn(batch: list[GPTSample], sampling_parameters: GPTSamplingParameters) -> GPTBatch:
-    # print(f"batch: {batch}")
     stacked_ids = np.stack([sample.token_ids for sample in batch])
     stacked_spans = None
     sequence_lengths = None
     mask_indexes = None
     mask_probabilities = None
     loss_weights = None
-    # print(f"stacked_ids: {stacked_ids.shape} {stacked_ids}")
     token_ids = torch.from_numpy(stacked_ids)
 
     if sampling_parameters.diffusion.enabled:
         diffusion_config = sampling_parameters.diffusion
-        # print(f"token_ids: {token_ids.shape} {token_ids}")
-        batch_size, seq_len = token_ids.shape
-        
-        data_ids, padded, positions = get_data(batch_size, seq_len, sampling_parameters.vocab_size)
-        # print(f"DEBUG: get_data returned - data_ids.shape={data_ids.shape}, padded.shape={padded.shape}, positions.shape={positions.shape}")
-        
+        batch_size, seq_len = token_ids.shape[0], token_ids.shape[1]
+        data_ids = token_ids
+        padded = torch.zeros_like(data_ids, dtype=torch.bool)
+        positions = torch.arange(seq_len).unsqueeze(0).expand(batch_size, seq_len)
+        C = torch.IntTensor([0, 3])
+
         batch_data = prepare_batch(
             data_ids=data_ids,
             positions=positions,
             padded=padded,
             mask_token_id=diffusion_config.mask_token_id,
             vocab_size=sampling_parameters.vocab_size,
-            context_length=torch.zeros(batch_size),  
+            context_length=C,  
             p_mask=torch.full((batch_size,), diffusion_config.max_mask_prob),  
             p_uniform=0.0, 
             ar_factor=1.0,
@@ -165,7 +150,6 @@ def gpt_data_collate_fn(batch: list[GPTSample], sampling_parameters: GPTSampling
         mask_probabilities = torch.full_like(mask_indexes, diffusion_config.max_mask_prob, dtype=torch.float32)  # Use float32 to match model dtype
         loss_weights = batch_data["loss_weights"]
         
-        # print(f"DEBUG: Final shapes - token_ids.shape={token_ids.shape}, mask_indexes.shape={mask_indexes.shape}, loss_weights.shape={loss_weights.shape}")
 
     if sampling_parameters.use_loss_masking_spans:
         stacked_spans = [torch.from_numpy(sample.loss_masking_spans) for sample in batch]

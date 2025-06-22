@@ -1,84 +1,7 @@
-# run:
-#   experiment_dir: ./test-train-exp/diffusion_train
-# training:
-#   train_iters: 10
-#   logs:
-#     interval: 10
-#   # validation:
-#   #   iterations: 25
-#   #   interval: 10 # 100
-#   checkpoint:
-#     interval: 50 # 100
-#     keep: 1
-#   test_iters: 0
-#   export:  
-#     format: llama
-#     interval: 50
-#   # wandb:
-#   #   entity_name: akshaykalkunte
-#   #   project_name: slam
-#   #   group_name: downcycle-runs
-# batch:
-#   micro_batch_size: 1
-#   sequence_length: 4
-#   batch_size: 64 # 2880
-#   # micro_batch_size: 1
-#   # sequence_length: 16384
-#   # batch_size: 768
-#   # diffusion:
-#   #   enabled: true
-#   #   epsilon: 0.001
-#   #   max_mask_prob: 0.45
-#   #   pad_prob: 0.01
-#   #   mask_token_id: 15203
- 
- 
-# data:
-#   sampling:
-#     diffusion:
-#       enabled: true
-#       epsilon: 0.001
-#       max_mask_prob: 0.45
-#       pad_prob: 0.01
-#       mask_token_id: 15203
- 
-#   datasets:
-#     training:
-#       type: file
-#       path: /mnt/checkpoints/diffusion_models/SmolLM2_dataset/cpt_test_gsm8k_old
- 
-# optimizer:
-#   weight_decay: 0.1
-#   beta_1: 0.9
-#   beta_2: 0.95
-#   learning_rate:
-#     base: 3.0e-04
-#     minimum: 3.0e-05
-#     decay_style: linear
-#     decay_iterations: 10
-#     warmup_iterations: 2
-# pretrained:
-#   format: llama
-#   path: /mnt/checkpoints/diffusion_models/SmolLM2-135M
-#   model_weights: yes
-# model:
-#   base_model:
-#     transformer:
-#       use_flash_attention: yes
-#       diffusion: true
-#       #   enabled: true
-#       # bidirectional_attention: true
-#     cross_entropy_impl: auto
-#   distributed:
-#     training_dtype: bf16
-#     timeout: 36000
-#     seed: 984060
-
-
 run:
-  experiment_dir: ./test-train-exp/diffusion_train
+  experiment_dir: ./test-train-exp/diffusion_train_3
 training:
-  train_iters: 1000
+  train_iters: 170
   logs:
     interval: 10
   # validation:
@@ -99,15 +22,6 @@ batch:
   micro_batch_size: 2
   sequence_length: 8
   batch_size: 64 # 2880
-  # micro_batch_size: 1
-  # sequence_length: 16384
-  # batch_size: 768
-  # diffusion:
-  #   enabled: true
-  #   epsilon: 0.001
-  #   max_mask_prob: 0.45
-  #   pad_prob: 0.01
-  #   mask_token_id: 15203
  
  
 data:
@@ -143,8 +57,6 @@ model:
     transformer:
       use_flash_attention: yes
       diffusion: true
-      #   enabled: true
-      # bidirectional_attention: true
     cross_entropy_impl: fused
   distributed:
     training_dtype: bf16
