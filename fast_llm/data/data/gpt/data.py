@@ -32,10 +32,11 @@ class GPTBatch:
     token_ids: torch.Tensor
     loss_masking_spans: list[torch.Tensor] | None = None
     sequence_lengths: list[torch.Tensor] | None = None
-    mask_indexes: torch.Tensor | None = None
-    mask_probabilities: torch.Tensor | None = None
     chosen_spans: list[torch.Tensor] | None = None
     rejected_spans: list[torch.Tensor] | None = None
+    mask_indexes: torch.Tensor | None = None
+    mask_probabilities: torch.Tensor | None = None
+    masked_token_ids: torch.Tensor | None = None
 
 
 def gpt_data_collate_fn(batch: list[GPTSample], sampling_parameters: GPTSamplingParameters) -> GPTBatch:
@@ -83,7 +84,7 @@ def gpt_data_collate_fn(batch: list[GPTSample], sampling_parameters: GPTSampling
         #         mask_indexes[pad_mask] = True
 
         # Replace masked tokens with the mask token ID to create input for the model.
-        token_ids = torch.where(mask_indexes, mask_token_id, token_ids)
+        masked_token_ids = torch.where(mask_indexes, mask_token_id, token_ids)
 
         mask_indexes = mask_indexes[:, :-1]  # Remove the last token, which is not used for prediction.
         mask_probabilities = p_mask
@@ -109,6 +110,7 @@ def gpt_data_collate_fn(batch: list[GPTSample], sampling_parameters: GPTSampling
         rejected_spans=stacked_rejected_spans,
         mask_indexes=mask_indexes,
         mask_probabilities=mask_probabilities,
+        masked_token_ids=masked_token_ids,
     )
 
 

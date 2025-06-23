@@ -353,6 +353,9 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                         -10000.0, device=self._tensor_space.distributed.device
                     )
 
+                    # set token ids to masked tokens
+                    batch.token_ids = batch.masked_token_ids
+
             kwargs.update(reference_logits[i])
 
             for preprocessor in self._preprocessors:
