@@ -172,7 +172,10 @@ class HybridMambaAttentionStaticCache(Cache):
         # limit the check to the first batch member and head dimension.
         # TODO: deprecate this function in favor of `cache_position`
         if layer_idx is None:
-            layer_idx = self.transformer_layers[0]
+            if len(self.transformer_layers) > 0:
+                layer_idx = self.transformer_layers[0]
+            else:
+                return 0
         return (self.key_cache[layer_idx][0, 0].any(dim=-1)).sum()
 
     def get_max_cache_shape(self) -> Optional[int]:
@@ -391,6 +394,8 @@ def apply_mask_to_padding_states(hidden_states, attention_mask):
 
 
 # This is from LLmaba/Mohawk: https://github.com/cartesia-ai/edge/blob/main/cartesia-pytorch/cartesia_pytorch/Llamba/mixers/discrete_mamba2.py
+
+
 class DiscreteMamba2(nn.Module):
     def __init__(
         self,
@@ -474,8 +479,8 @@ class DiscreteMamba2(nn.Module):
         # out_proj
         self.out_proj = nn.Linear(self.d_inner, self.d_model, bias=bias, **factory_kwargs)
         # In __init__, pre-allocate these tensors
-        self.zeros_buffer = torch.zeros((self.n_v_heads, self.headdim), device=device, dtype=dtype)
-        self.ones_buffer = torch.ones((self.n_v_heads, self.headdim, self.d_state), device=device, dtype=dtype)
+        # self.zeros_buffer = torch.zeros((self.n_v_heads, self.headdim), device=device, dtype=dtype)
+        # self.ones_buffer = torch.ones((self.n_v_heads, self.headdim, self.d_state), device=device, dtype=dtype)
 
     @property
     def d_output(self):
@@ -501,19 +506,28 @@ class DiscreteMamba2(nn.Module):
         assert is_fast_path_available and "cuda" in self.in_proj.weight.device.type, "Only support fast path on cuda"
         cache_position = kwargs.get("cache_position", None)
         batch, seqlen, dim = u.shape
-        u = apply_mask_to_padding_states(u, attention_mask)
+        # u = apply_mask_to_padding_states(u, attention_mask)
         ssm_state, conv_state = None, None
-
-        use_precomputed_states = (
-            past_key_value is not None
-            and past_key_value.has_previous_state
-            and seqlen == 1
-            and past_key_value.conv_states[self.layer_idx].shape[0]
-            == past_key_value.ssm_states[self.layer_idx].shape[0]
-            == batch
-            and cache_position is not None
-            and cache_position[0] > 0
-        )
+        use_precomputed_states = False
+        #########################################################
+        # Quick and dirty to work with CG
+        if "inference_params" in kwargs:
+            seqlen_offset = kwargs["inference_params"].seqlen_offset
+            if seqlen_offset > 0:
+                use_precomputed_states = True
+        else:
+            seqlen_offset = kwargs.get("seqlen_offset", cache_position[0]) if cache_position is not None else 0
+            use_precomputed_states = (
+                past_key_value is not None
+                and past_key_value.has_previous_state
+                and seqlen == 1
+                and past_key_value.conv_states[self.layer_idx].shape[0]
+                == past_key_value.ssm_states[self.layer_idx].shape[0]
+                == batch
+                and cache_position is not None
+                and seqlen_offset > 0
+            )
+        #########################################################
         if use_precomputed_states:
             ssm_state, conv_state = self._get_states_from_cache(past_key_value, batch)
             u = u.squeeze(1) if len(u.shape) == 3 else u
@@ -594,107 +608,6 @@ class DiscreteMamba2(nn.Module):
                 outputs["transfer_matrix"] = materialize_mixer(A_log=A_log, B=B, C=C, D=self.D)[..., :seqlen, :seqlen]
             return outputs
 
-    # def forward_original(
-    #     self,
-    #     u,
-    #     return_mixer_matrix=False,
-    #     past_key_value: Optional[HybridMambaAttentionDynamicCache] = None,
-    #     inference_params=None,
-    #     **kwargs,
-    # ):
-    #     """
-    #     u: (B, L, D)
-    #     Returns: same shape as u
-    #     """
-    #     outputs = {}
-    #     # assert state is None
-    #     batch, seqlen, dim = u.shape
-
-    #     ssm_state, conv_state = None, None
-    #     if past_key_value is not None:
-    #         ssm_state, conv_state = self._get_states_from_cache(past_key_value, batch)
-    #         cache_position = kwargs.get("cache_position", None)
-    #         # if inference_params is not None and inference_params.seqlen_offset > 0:
-    #         if cache_position is not None and cache_position[0] > 0:
-    #             # States are updated inplace
-    #             # TODO: make sure using cache_position is correct here
-    #             u = u.squeeze(1) if len(u.shape) == 3 else u
-    #             out, _, _ = self.step(u, ssm_state, conv_state)
-    #             out = out.unsqueeze(1) if len(u.shape) == 2 else out
-    #             return {"hidden_states": out}
-
-    #     # Hacky way to initialize state during inference
-    #     chunk_size = self.chunk_size if ssm_state is None else seqlen
-
-    #     # Pad input to nearest multiple of chunklen
-    #     padded_len = (1 + (seqlen - 1) // chunk_size) * chunk_size
-    #     u = F.pad(u, (0, 0, 0, padded_len - seqlen))
-
-    #     # Project input
-    #     xBCzA_log = self.in_proj(u)
-    #     xBC, z, A_log = torch.split(
-    #         xBCzA_log,
-    #         [
-    #             self.d_inner + 2 * self.n_qk_heads * self.d_state,
-    #             self.d_inner,
-    #             self.n_v_heads,
-    #         ],
-    #         dim=-1,
-    #     )
-
-    #     if ssm_state is not None:
-    #         # If we just take xBC[:, :, -self.d_conv :], it will error if seqlen < self.d_conv
-    #         # Instead F.pad will pad with zeros if seqlen < self.d_conv, and truncate otherwise.
-    #         xBC_t = rearrange(xBC[:, :seqlen, :], "b l d -> b d l")
-    #         conv_state.copy_(F.pad(xBC_t, (self.d_conv - xBC_t.shape[-1], 0)))  # Update state (B D W)
-
-    #     # Convolutional layer
-    #     xBC = self.convolutional_forward(xBC, padded_len)
-
-    #     x, B, C = torch.split(
-    #         xBC,
-    #         [
-    #             self.d_inner,
-    #             self.n_qk_heads * self.d_state,
-    #             self.n_qk_heads * self.d_state,
-    #         ],
-    #         dim=-1,
-    #     )
-
-    #     x = rearrange(x, "b l (h n) -> b l h n", h=self.n_v_heads)
-    #     B = rearrange(B, "b l (h n) -> b l h n", h=self.n_qk_heads)
-    #     C = rearrange(C, "b l (h n) -> b l h n", h=self.n_qk_heads)
-
-    #     # SSM forward
-    #     result = mamba_chunk_scan_combined(
-    #         x=x / F.softplus(A_log).to(x.dtype).unsqueeze(-1),
-    #         dt=A_log,
-    #         dt_softplus=True,
-    #         A=-torch.ones(self.n_v_heads, device=A_log.device),
-    #         B=B,
-    #         C=C,
-    #         chunk_size=chunk_size,
-    #         # initial_states=(state["ssm"] if state is not None else None), # currently not supported by mamba_ssm.utils.generation
-    #         return_final_states=(ssm_state is not None),
-    #     )
-
-    #     if ssm_state is not None:
-    #         y, ssm_state_update = result
-    #         ssm_state.copy_(ssm_state_update)
-    #     else:
-    #         y = result
-
-    #     Du = torch.einsum("h,blhp->blhp", self.D, x)
-    #     y = rearrange(y + Du, "b l h p -> b l (h p)")
-
-    #     # Norm and gate
-    #     out = self.out_proj(y * F.silu(z + self.z_bias))
-    #     outputs["hidden_states"] = out[:, :seqlen, :]
-
-    #     if return_mixer_matrix:
-    #         outputs["transfer_matrix"] = materialize_mixer(A_log=A_log, B=B, C=C, D=self.D)[..., :seqlen, :seqlen]
-    #     return outputs
-
     def step(self, u, ssm_state, conv_state, **kwargs):
         """
         u: (B D)
@@ -734,8 +647,11 @@ class DiscreteMamba2(nn.Module):
         C = rearrange(C, "b (h s) -> b h s", h=self.n_qk_heads)
 
         ssm_state = ssm_state.to(x.dtype)
-        zeros = self.zeros_buffer.to(A_log.device).to(x.dtype)  # Just cast, don't allocate
-        ones = self.ones_buffer.to(A_log.device).to(x.dtype)
+        # does nto work with CG, probably becuase zeros and ones are on CPU
+        # zeros = self.zeros_buffer.to(A_log.device).to(x.dtype)  # Just cast, don't allocate
+        # ones = self.ones_buffer.to(A_log.device).to(x.dtype)
+        zeros = torch.zeros((self.n_v_heads, self.headdim), device=A_log.device).to(dtype=x.dtype)
+        ones = torch.ones((self.n_v_heads, self.headdim, self.d_state), device=A_log.device).to(dtype=x.dtype)
         y = selective_state_update(
             x=x / F.softplus(A_log).to(x.dtype).unsqueeze(-1),
             dt=repeat(A_log, "b h -> b h p", p=self.headdim),
