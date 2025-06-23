@@ -751,7 +751,7 @@ class GPTSampledIndexedDataset(SampledDataset):
             sequence_lengths=sequence_lengths,
             images=images,
             image_positions=image_positions,
-            audio=audio if len(audio) > 0 else None,
+            audio=audio if audio is not None and len(audio) > 0 else None,
             audio_positions=audio_positions,
         )
 
