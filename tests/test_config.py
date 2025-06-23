@@ -10,7 +10,6 @@ from fast_llm.engine.checkpoint.config import CheckpointSaveMetadataConfig, Mode
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.models.gpt.config import GPTModelConfig, GPTTrainerConfig, PretrainedGPTModelConfig
 from fast_llm.utils import Assert, check_equal_nested
-from tests.utils.utils import TEST_RESULTS_PATH
 
 
 def run_without_import(cmd: str):
@@ -69,8 +68,8 @@ def test_serialize_default_config_updates(cls):
 
 
 @pytest.mark.parametrize("load_config", tuple(ModelConfigType))
-def test_pretrained_config(load_config: ModelConfigType):
-    config_path = TEST_RESULTS_PATH / "pretrained_config"
+def test_pretrained_config(load_config: ModelConfigType, result_path):
+    config_path = result_path / "pretrained_config"
     pretrained_model_config = GPTModelConfig.from_dict(
         {
             "base_model": {
