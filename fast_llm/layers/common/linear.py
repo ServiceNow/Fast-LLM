@@ -24,10 +24,10 @@ class LinearLike(torch.nn.Module):
         super().__init__()
         self._forward = wrap_forward_backward(self.forward_only, self.backward)
 
-    def forward(self, input_: torch.Tensor) -> torch.Tensor:
-        return self._forward(input_)
+    def forward(self, input_: torch.Tensor, weight=None) -> torch.Tensor:
+        return self._forward(input_, weight)
 
-    def forward_only(self, input_: torch.Tensor):
+    def forward_only(self, input_: torch.Tensor, weight = None):
         raise NotImplementedError()
 
     def backward(self, grad_output: torch.Tensor, context: typing.Any) -> torch.Tensor:
@@ -107,9 +107,10 @@ class Linear(LinearBase):
         )
 
     def forward_only(
-        self, input_: torch.Tensor
+        self, input_: torch.Tensor,
+        weight: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor, torch.Tensor, bool]]:
-        return linear_forward(input_, weight=self.weight, bias=self.bias, transposed_weight=self._transposed_weight)
+        return linear_forward(input_, weight=self.weight if weight is None else weight, bias=self.bias, transposed_weight=self._transposed_weight)
 
     def backward(self, grad_output: torch.Tensor, context) -> torch.Tensor:  # noqa
         return linear_backward(grad_output, context)

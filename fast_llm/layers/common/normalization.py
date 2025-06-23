@@ -278,6 +278,7 @@ class RMSNorm(torch.nn.Module):
         self.normalized_shape = self.weight.shape
 
     def forward(self, input_: torch.Tensor) -> torch.Tensor:
+        # print(f"RMSNorm with input: {input_.shape}, {input_.dtype} {input_.min()} {input_.max()}")
         return self._forward(input_.view(-1, *self.normalized_shape)).view_as(input_)
 
     def _forward_triton(self, input_: torch.Tensor) -> torch.Tensor:
@@ -287,4 +288,18 @@ class RMSNorm(torch.nn.Module):
         return FusedRMSNorm.apply(input_, self.normalized_shape, self.weight, self._eps)
 
     def _forward_torch(self, input_: torch.Tensor) -> torch.Tensor:
-        return torch.rms_norm(input_.to(self.weight.dtype), self.normalized_shape, self.weight, self._eps)
+        out = torch.rms_norm(input_.to(torch.float32), self.normalized_shape, self.weight.float(), self._eps)
+        print("weight stats:", self.weight.min(), torch.isnan(self.weight).any())
+        if torch.isnan(out).any():            
+            print("Weight NaNs:", self.weight.dtype, torch.isnan(self.weight).any(), "Infs:", torch.isinf(self.weight).any())
+            print("Input NaNs:", torch.isnan(input_).any(), "Infs:", torch.isinf(input_).any())
+            
+            print("input_.dtype:", input_.dtype)
+            print("converted dtype:", input_.to(self.weight.dtype).dtype)
+            # print("max abs input_:", input_.abs().max())
+            print("weight stats:", self.weight.min())
+            print("eps:", self._eps)
+            print("normalized_shape:", self.normalized_shape, "expected tail shape:", input_.shape[-len(self.normalized_shape):])
+
+
+        return out.to(input_.dtype)

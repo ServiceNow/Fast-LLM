@@ -292,11 +292,11 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
             sequence_parallel=self._sequence_parallel and self._parallel_embeddings,
         )
 
-        print(
-            f"CR head: input: {input_.shape} {input_.max()} {input_.min()} \
-                target {target.shape if target is not None else target} {target.min() if target is not None else target} {target.max() if target is not None else target} \
-                logits: {logits.shape}, {logits.max()} {logits.min()} "
-        )
+        # print(
+        #     f"CR head: input: {input_.shape} {input_.max()} {input_.min()} \
+        #         target {target.shape if target is not None else target} {target.min() if target is not None else target} {target.max() if target is not None else target} \
+        #         logits: {logits.shape}, {logits.max()} {logits.min()} "
+        # )
 
         if self._z_loss_factor > 0.0:
             logits = z_loss(

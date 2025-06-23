@@ -3,6 +3,7 @@ import logging
 import typing
 
 import torch
+import torch.distributed as dist
 
 from fast_llm.core.distributed import set_generator
 from fast_llm.engine.base_model.base_model import Layer
@@ -16,6 +17,10 @@ from fast_llm.logging import log_distributed_grad, log_distributed_tensor, log_m
 from fast_llm.tensor import TensorMeta
 
 logger = logging.getLogger(__name__)
+
+
+if not dist.is_initialized():
+    dist.init_process_group(backend="nccl")
 
 
 class BaseBlock(Layer, abc.ABC):
@@ -40,8 +45,8 @@ class BaseBlock(Layer, abc.ABC):
         hidden_dim = self._tensor_space.get_tensor_dim(TransformerDimNames.hidden)
         # Note, layer_lr_scale does not impact the norms
         # TODO: add a seperate norm_lr_scale
-        self.norm_1 = self._config.normalization.get_layer(hidden_dim)
-        self.norm_2 = self._config.normalization.get_layer(hidden_dim)
+        self.norm_1 = self._config.normalization.get_layer(hidden_dim, lr_scale=0.0)
+        self.norm_2 = self._config.normalization.get_layer(hidden_dim, lr_scale=0.0)
 
         self._create_mixer()
 
@@ -116,9 +121,17 @@ class BaseBlock(Layer, abc.ABC):
         if self._debug_mode:
             self._debug_log(None, "Begin", kwargs)
         fw_input = input_
+        if torch.isnan(fw_input).any():
+            print(f"NaN found in input tensor {fw_input}")
         hidden_states = self.norm_1(input_)
+        if torch.isnan(hidden_states).any():
+            print(f"NaN found in hidden_states tensor {hidden_states}")
         print(f"{self.name} after norm_1 : {hidden_states.min()} {hidden_states.max()}")
         print(f"{self.name} norm : {type(self.norm_1)} {self.norm_1.weight.shape} {self.norm_1.weight.min()} {self.norm_1.weight.max()}")
+        if torch.isnan(hidden_states).any():
+            print(f"implementation {self.norm_1._forward} eps: {self.norm_1._eps}")
+            print(f"NaN found in input tensor {hidden_states}")
+            raise ValueError(f"hidden_states tensor contains NaN values.")
         if self._debug_mode:
             self._debug_log(hidden_states, "Norm 1", kwargs)
         hidden_states, bias = getattr(self, self._mixer_module_name)(hidden_states, kwargs)

@@ -96,6 +96,8 @@ class DiscreteMamba2(torch.nn.Module):
             weight_init_method=kaiming_init_(td_model.size),
             lr_scale=mamba_layer_lr_scale,
         )
+        self.in_proj.weight = self.in_proj.weight.to(torch.float32)
+        
         self.z_bias = (
             ParameterMeta.from_dims(
                 (td_inner,),
@@ -174,7 +176,16 @@ class DiscreteMamba2(torch.nn.Module):
         u = torch.nn.functional.pad(input_, (0, 0, 0, padded_len - seqlen))
 
         # Project input
-        xBCzA_log = self.in_proj(u)
+        if dist.get_rank() == 0:
+            print(f"DiscreteMamba2 {self.layer_idx} before in_proj : {u.shape} {u.min()} {u.max()}")
+            print(f"self.in_proj.weight {self.in_proj.weight.shape} {self.in_proj.weight.min()} {self.in_proj.weight.max()} {torch.isnan(self.in_proj.weight).any()}")
+            print(f"self.in_proj.bias {self.in_proj.bias.shape} {self.in_proj.bias.min()} {self.in_proj.bias.max()} {torch.isnan(self.in_proj.bias).any()}")
+            
+        xBCzA_log = self.in_proj(u.float(), self.in_proj.weight.to(torch.float32))
+        if dist.get_rank() == 0:
+            print(f"DiscreteMamba2 {self.layer_idx} after in_proj: {xBCzA_log.shape} {xBCzA_log.min()} {xBCzA_log.max()}")
+            if torch.isnan(xBCzA_log).any():
+                print(f"self.in_proj.weight {self.in_proj.weight.shape} {self.in_proj.weight.min()} {self.in_proj.weight.max()}")
 
         xBC, z, A_log = torch.split(
             xBCzA_log,
@@ -196,7 +207,9 @@ class DiscreteMamba2(torch.nn.Module):
 
         # Convolutional layer
         xBC = self.convolutional_forward(xBC, padded_len)
-
+        if dist.get_rank() == 0:
+            print(f"DiscreteMamba2 {self.layer_idx} after convolutional_forward: {xBC.shape} {xBC.min()} {xBC.max()}")
+        
         x, B, C = torch.split(
             xBC,
             [
