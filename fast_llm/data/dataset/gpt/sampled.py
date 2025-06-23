@@ -347,7 +347,7 @@ class GPTSampledIndexedDataset(SampledDataset):
             unshuffled_tokens = 0
 
         if not self._truncate_documents:
-            yaml_data["unshuffled_tokens"] = unshuffled_tokens.item() * unshuffled_epochs
+            yaml_data["unshuffled_tokens"] = unshuffled_tokens * unshuffled_epochs
         self._load_yaml_data(yaml_data)
         if self._yaml_path is not None:
             self._yaml_path.parent.mkdir(parents=True, exist_ok=True)

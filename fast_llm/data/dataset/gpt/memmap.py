@@ -287,10 +287,6 @@ class GPTMemmapDataset(GPTIndexedDataset):
             for audio_length in self._audio_lengths[idx]:
                 audio.append(all_audio[start : start + audio_length])
                 start += audio_length
-        
-        print("Memmap audio length: ", self._audio_lengths[idx])
-        print("Memmap audio pos: ", self._audio_positions[idx])
-        print("Memmap get audio: ", audio)
 
         # TODO Soham: return loss_masking_spans
         sample_spans = None
@@ -437,6 +433,7 @@ class GPTMemmapDataset(GPTIndexedDataset):
                     for audio in document.audio:
                         # audio_arr, _ = torchaudio.load(io.BytesIO(audio["bytes"]))
                         audio_arr, _ = sf.read(io.BytesIO(audio["bytes"]))
+                        audio_arr = audio_arr.astype(np.float32)
                         if len(audio_arr) > 0:
                             num_audio += 1
                             audio_lengths.append(len(audio_arr))
