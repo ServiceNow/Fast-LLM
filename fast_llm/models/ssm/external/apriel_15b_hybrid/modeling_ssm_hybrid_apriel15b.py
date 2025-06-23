@@ -1086,26 +1086,35 @@ class AprielSSMHybridForCausalLM(AprielHybridPreTrainedModel, GenerationMixin):
 
         latents = []
         hidden_states = outputs.last_hidden_state
-        outputs.hidden_states[-2]
         latents.append(hidden_states)
+
         if return_all_prediction_heads:
-            stacked_latents = latents[0]  # TODO: REMOVE AFTER FIX!
-            # TODO: can fix after Fast-LLM training runs
-            # for head, norm in zip(self.mtp_heads, self.mtp_norms):
-            #     mtp_outputs = head(
-            #         before_last_hidden_state,
-            #         attention_mask=causal_mask,
-            #         position_ids=position_ids,
-            #         past_key_value=past_key_values,
-            #         output_attentions=output_attentions,
-            #         use_cache=use_cache,
-            #         cache_position=cache_position,
-            #         position_embeddings=position_embeddings,
-            #         **kwargs,
-            #     )
-            #     hidden_states = norm(mtp_outputs[0])
-            #     latents.append(hidden_states)
-            # stacked_latents = torch.stack(latents, dim=-2)
+            before_last_hidden_state = outputs.hidden_states[-2]
+            causal_mask = self.model._update_causal_mask(
+                attention_mask,
+                self.model.embed_tokens(input_ids),
+                cache_position,
+                past_key_values,
+                output_attentions,
+            )
+            position_embeddings = self.model.rotary_emb(inputs_embeds, position_ids)
+
+            for head, norm in zip(self.mtp_heads, self.mtp_norms):
+                mtp_outputs = head(
+                    before_last_hidden_state,
+                    attention_mask=causal_mask,
+                    position_ids=position_ids,
+                    past_key_value=past_key_values,
+                    output_attentions=output_attentions,
+                    use_cache=use_cache,
+                    cache_position=cache_position,
+                    position_embeddings=position_embeddings,
+                    **kwargs,
+                )
+                hidden_states = norm(mtp_outputs[0])
+                latents.append(hidden_states)
+
+            stacked_latents = torch.stack(latents, dim=-2)
         else:
             stacked_latents = latents[0]
         # Only compute necessary logits, and do not upcast them to float if we are not computing the loss
