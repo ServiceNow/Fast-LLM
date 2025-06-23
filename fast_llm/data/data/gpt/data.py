@@ -29,6 +29,7 @@ logger = logging.getLogger(__name__)
 @dataclasses.dataclass
 class GPTBatch:
     token_ids: torch.Tensor
+    masked_token_ids: torch.Tensor | None = None
     loss_masking_spans: list[torch.Tensor] | None = None
     sequence_lengths: list[torch.Tensor] | None = None
     mask_indexes: torch.Tensor | None = None
@@ -105,6 +106,7 @@ def prepare_batch(
         "target_ids": data_ids,
         "loss_weights": loss_weights[:, 1:],
         "in_context_length": in_context_length,
+        
     }
 
 
@@ -139,7 +141,9 @@ def gpt_data_collate_fn(batch: list[GPTSample], sampling_parameters: GPTSampling
             last_factor=0.0
         )
         
-        token_ids = batch_data["input_ids"]
+        # token_ids = batch_data["input_ids"]
+        masked_token_ids = batch_data["input_ids"]
+
         mask_indexes = batch_data["in_mask"]
         mask_probabilities = torch.full_like(mask_indexes, diffusion_config.max_mask_prob, dtype=torch.float32)  # Use float32 to match model dtype
         loss_weights = batch_data["loss_weights"]
@@ -153,6 +157,7 @@ def gpt_data_collate_fn(batch: list[GPTSample], sampling_parameters: GPTSampling
 
     return GPTBatch(
         token_ids=token_ids,
+        masked_token_ids=masked_token_ids,
         loss_masking_spans=stacked_spans,
         sequence_lengths=sequence_lengths,
         mask_indexes=mask_indexes,

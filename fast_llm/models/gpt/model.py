@@ -356,7 +356,11 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                     kwargs[TransformerKwargs.attention_mask_value] = torch.tensor(
                         -10000.0, device=self._tensor_space.distributed.device
                     )
-
+                    batch.token_ids = batch.masked_token_ids
+                    # print("batch.token_ids", batch.token_ids)
+                    # print("batch.masked_token_ids", batch.masked_token_ids)
+                    # print("batch.labels", labels)
+                    # print("batch.loss_weights", batch.loss_weights)
             for preprocessor in self._preprocessors:
                 # Update this include p_maks and mask index in kwargs
                 preprocessor.preprocess(tokens, kwargs)
