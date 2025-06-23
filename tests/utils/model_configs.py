@@ -231,7 +231,7 @@ _update_and_add_testing_config(
     # Tests yarn-style rotary embeddings.
     "llama_yarn",
     "diffusion_llama",
-    extra_args=["model.base_model.transformer.rotary.type=yarn"],
+    extra_args=[],
     # Megatron doesn't support Yarn-style Rotary Embeddings
     megatron_args=None,
     checkpoint_format=DiffusionLlamaGPTHuggingfaceCheckpointFormat,
