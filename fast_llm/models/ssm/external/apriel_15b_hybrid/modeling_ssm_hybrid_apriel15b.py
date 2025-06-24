@@ -1090,6 +1090,7 @@ class AprielSSMHybridForCausalLM(AprielHybridPreTrainedModel, GenerationMixin):
 
         if return_all_prediction_heads:
             before_last_hidden_state = outputs.hidden_states[-2]
+            inputs_embeds = self.model.embed_tokens(input_ids)
             causal_mask = self.model._update_causal_mask(
                 attention_mask,
                 self.model.embed_tokens(input_ids),
