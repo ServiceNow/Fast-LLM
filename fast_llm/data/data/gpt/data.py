@@ -46,6 +46,7 @@ def gpt_data_collate_fn(batch: list[GPTSample], sampling_parameters: GPTSampling
     sequence_lengths = None
     mask_indexes = None
     mask_probabilities = None
+    masked_token_ids = None
 
     token_ids = torch.from_numpy(stacked_ids)
 
