@@ -83,7 +83,7 @@ def _update_and_add_testing_config(
     checkpoint_format: CheckpointFormat | None = ...,
     groups: dict[ModelTestingGroup, ModelTestingGroupAction],
 ):
-    config = _MODEL_CONFIGS[old_name]
+    config = MODEL_CONFIGS[old_name]
     updates: dict[str, typing.Any] = {
         "name": new_name,
         "groups": groups,
@@ -102,13 +102,13 @@ def _update_and_add_testing_config(
     if checkpoint_format is not ...:
         updates["checkpoint_format"] = checkpoint_format
 
-    _MODEL_CONFIGS[new_name] = dataclasses.replace(config, **updates)
+    MODEL_CONFIGS[new_name] = dataclasses.replace(config, **updates)
 
 
-_MODEL_CONFIGS: dict[str, ModelTestingConfig] = {}
+MODEL_CONFIGS: dict[str, ModelTestingConfig] = {}
 
 
-_MODEL_CONFIGS["gpt2"] = ModelTestingConfig(
+MODEL_CONFIGS["gpt2"] = ModelTestingConfig(
     # Tests gpt2 features (absolute embeddings, layer norm,  relu activation, tied embeddings, MHA, linear biases).
     name="gpt2",
     model_type="gpt",
@@ -477,12 +477,12 @@ _update_and_add_testing_config(
 )
 
 
-@pytest.fixture(scope="session", params=_MODEL_CONFIGS.keys())
+@pytest.fixture(scope="session", params=MODEL_CONFIGS.keys())
 def model_testing_config(request) -> ModelTestingConfig:
     models = request.config.getoption("--models")
     if models and request.param not in models:
         pytest.skip(f"Skipping model {request.param}")
-    return _MODEL_CONFIGS[request.param]
+    return MODEL_CONFIGS[request.param]
 
 
 def testing_group_enabled(item: pytest.Function, skip_slow: bool, skip_extra_slow: bool, show_skipped: bool) -> bool:
@@ -490,7 +490,7 @@ def testing_group_enabled(item: pytest.Function, skip_slow: bool, skip_extra_slo
         assert "model_testing_config" in item.callspec.params, item.nodeid
         groups: tuple[ModelTestingGroup] = item.keywords["model_testing_group"].args
         model_testing_config = item.callspec.params["model_testing_config"]
-        model_config: ModelTestingConfig = _MODEL_CONFIGS[model_testing_config]
+        model_config: ModelTestingConfig = MODEL_CONFIGS[model_testing_config]
         for group in groups:
             action = model_config.groups[group]
             if action == ModelTestingGroupAction.main:

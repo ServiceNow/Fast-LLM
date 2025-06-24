@@ -457,22 +457,26 @@ class FSDP:
 
             if self_meta.is_tensor_parallel:
                 self_tp = self_meta.tensor_parallel_dim.size
-                loaded_tp = loaded_meta.tensor_parallel_dim.size
                 self_rank = self_meta.tensor_parallel_dim.rank
-                loaded_rank = loaded_meta.tensor_parallel_dim.rank
-                # The shared tensor-parallel part (usually the smallest of the two) can be safely ignored.
-                shared_tp = math.gcd(self_tp, loaded_tp)
-
-                self_tp //= shared_tp
-                loaded_tp //= shared_tp
-
-                if self_rank // self_tp != loaded_rank // loaded_tp:
-                    # Disjoint shared rank, no possible overlap.
-                    continue
-                self_rank %= self_tp
-                loaded_rank %= loaded_tp
             else:
-                self_tp, loaded_tp, self_rank, loaded_rank = 1, 1, 0, 0
+                self_tp, self_rank = 1, 0
+            if loaded_meta.is_tensor_parallel:
+                loaded_tp = loaded_meta.tensor_parallel_dim.size
+                loaded_rank = loaded_meta.tensor_parallel_dim.rank
+            else:
+                loaded_tp, loaded_rank = 1, 0
+
+            # The shared tensor-parallel part (usually the smallest of the two) can be safely ignored.
+            shared_tp = math.gcd(self_tp, loaded_tp)
+
+            self_tp //= shared_tp
+            loaded_tp //= shared_tp
+
+            if self_rank // self_tp != loaded_rank // loaded_tp:
+                # Disjoint shared rank, no possible overlap.
+                continue
+            self_rank %= self_tp
+            loaded_rank %= loaded_tp
 
             if self_tp == loaded_tp == 1:
                 self_shard_begin_in_buffer = self._fsdp_dim.rank * self._shard_size
