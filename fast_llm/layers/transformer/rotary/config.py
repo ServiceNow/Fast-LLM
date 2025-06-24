@@ -3,7 +3,7 @@ import math
 import typing
 import warnings
 
-from fast_llm.config import Field, FieldHint, config_class
+from fast_llm.config import DEFAULT, Field, FieldHint, config_class
 from fast_llm.engine.base_model.config import BaseModelConfig
 from fast_llm.engine.config_utils.tensor_space import TensorSpace
 from fast_llm.functional.config import TritonConfig
@@ -112,8 +112,8 @@ class YarnRotaryConfig(DefaultRotaryConfig):
 
     # TODO: Add descriptions.
     scale_factor: float = Field(default=8.0, hint=FieldHint.feature)
-    attention_factor: None | float = Field(
-        default=None,
+    attention_factor: float | None = Field(
+        default=DEFAULT,
         hint=FieldHint.feature,
     )
     beta_fast: float = Field(
@@ -128,8 +128,8 @@ class YarnRotaryConfig(DefaultRotaryConfig):
 
     def _validate(self) -> None:
         if self.attention_factor is None:
-            with self._set_implicit_default():
-                self.attention_factor = 0.1 * math.log(self.scale_factor) + 1.0
+            # with self._set_implicit_default():
+            self.attention_factor = 0.1 * math.log(self.scale_factor) + 1.0
         super()._validate()
 
     def _get_configurable_class(self) -> "type[YarnRotary]":
