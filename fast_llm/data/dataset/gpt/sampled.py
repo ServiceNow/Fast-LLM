@@ -179,6 +179,10 @@ class GPTSampledIndexedDataset(SampledDataset):
             long_audio_filter[i] = to_filter
 
         documents_per_epoch = document_sizes.numel()
+        log_main_rank(
+            f" > Total documents per epoch: {documents_per_epoch}.",
+            log_fn=logger.warning,
+        )
         tokens_per_epoch = (
             document_sizes.sum().item() + image_token_sizes.sum().item() + audio_token_sizes.sum().item()
         )
