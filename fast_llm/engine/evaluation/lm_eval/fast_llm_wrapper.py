@@ -64,11 +64,6 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
         self._device = self._model.device
         self._config = self._model.config
 
-        # access self._model through self.model property outside this method
-        if isinstance(self.model, torch.nn.Module):
-            self.model.eval()
-            self.model.tie_weights()
-
         self.truncation = truncation
         self.logits_cache = logits_cache
         self.vocab_size = self.tokenizer.vocab_size
