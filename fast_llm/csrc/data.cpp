@@ -141,11 +141,13 @@ py::array build_padded_token_cumsum(const py::array_t<int32_t>& sizes_,
   int32_t seq_size = 0;
   int64_t sizes_idx = 0;
   int32_t samples = 0;
+  int32_t num_seq_samples = 0;
   auto sizes = sizes_.unchecked<1>();
   std::vector<int64_t> token_cumsum;
 
   int64_t cumsum = offset;
   std::vector<float> padding_efficiency;
+  std::vector<int> packing_sample_rate;
 
   while (sizes_idx < sizes.size()) {
     int32_t size = sizes[sizes_idx];
@@ -159,11 +161,14 @@ py::array build_padded_token_cumsum(const py::array_t<int32_t>& sizes_,
       cumsum += seq_length - seq_size;
       // float padding_efficiency = (float)(seq_length - seq_size) / (float)seq_length;
       padding_efficiency.push_back((float)(seq_length - seq_size) / (float)seq_length);
+      packing_sample_rate.push_back(num_seq_samples);
       seq_size = 0;
+      num_seq_samples = 0;
     } else {
       // Increment here to account for padding. This ensures that the stored values match the beginning of the next document.
       if (samples % token_cumsum_rate==0) token_cumsum.push_back(cumsum);
       seq_size += size;
+      num_seq_samples += 1;
       cumsum += size;
       sizes_idx += 1;
       samples += 1;
@@ -173,8 +178,10 @@ py::array build_padded_token_cumsum(const py::array_t<int32_t>& sizes_,
   // Add a final (padded) entry so we know how many tokens there are in total.
   cumsum += seq_length - seq_size;
   padding_efficiency.push_back((float)(seq_length - seq_size) / (float)seq_length);
+  packing_sample_rate.push_back(num_seq_samples);
   token_cumsum.push_back(cumsum);
 
+  // average padding efficiency
   float average_padding_efficiency = 0.0f;
   for (const auto& eff : padding_efficiency) {
     average_padding_efficiency += eff;
@@ -182,6 +189,20 @@ py::array build_padded_token_cumsum(const py::array_t<int32_t>& sizes_,
   average_padding_efficiency /= padding_efficiency.size();
   // print average padding efficiency
   std::cout << "Average padding efficiency: " << average_padding_efficiency << std::endl;
+  // py::print("Average padding efficiency: ");
+  // py::print(average_padding_efficiency);
+
+
+  // packing sample rate
+  float average_packing_sample_rate = 0.0f;
+  for (const auto& num_samples : packing_sample_rate) {
+    average_packing_sample_rate += num_samples;
+  }
+  average_packing_sample_rate /= packing_sample_rate.size();
+  // print average padding efficiency
+  std::cout << "Average packing size: " << average_packing_sample_rate << std::endl;
+  // py::print("Average padding efficiency: ");
+  // py::print(average_padding_efficiency);
 
   int64_t* token_cumsum_result = new int64_t[token_cumsum.size()];
   memcpy(token_cumsum_result, token_cumsum.data(), token_cumsum.size() * sizeof(int64_t));
