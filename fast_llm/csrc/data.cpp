@@ -145,6 +145,7 @@ py::array build_padded_token_cumsum(const py::array_t<int32_t>& sizes_,
   std::vector<int64_t> token_cumsum;
 
   int64_t cumsum = offset;
+  std::vector<float> padding_efficiency;
 
   while (sizes_idx < sizes.size()) {
     int32_t size = sizes[sizes_idx];
@@ -156,6 +157,8 @@ py::array build_padded_token_cumsum(const py::array_t<int32_t>& sizes_,
     } else if (seq_size + size > seq_length) {
       // add padded tokens if a document does not fit in current sequence and start a new sequence
       cumsum += seq_length - seq_size;
+      // float padding_efficiency = (float)(seq_length - seq_size) / (float)seq_length;
+      padding_efficiency.push_back((float)(seq_length - seq_size) / (float)seq_length);
       seq_size = 0;
     } else {
       // Increment here to account for padding. This ensures that the stored values match the beginning of the next document.
@@ -169,8 +172,16 @@ py::array build_padded_token_cumsum(const py::array_t<int32_t>& sizes_,
 
   // Add a final (padded) entry so we know how many tokens there are in total.
   cumsum += seq_length - seq_size;
+  padding_efficiency.push_back((float)(seq_length - seq_size) / (float)seq_length);
   token_cumsum.push_back(cumsum);
 
+  float average_padding_efficiency = 0.0f;
+  for (const auto& eff : padding_efficiency) {
+    average_padding_efficiency += eff;
+  }
+  average_padding_efficiency /= padding_efficiency.size();
+  // print average padding efficiency
+  std::cout << "Average padding efficiency: " << average_padding_efficiency << std::endl;
 
   int64_t* token_cumsum_result = new int64_t[token_cumsum.size()];
   memcpy(token_cumsum_result, token_cumsum.data(), token_cumsum.size() * sizeof(int64_t));
