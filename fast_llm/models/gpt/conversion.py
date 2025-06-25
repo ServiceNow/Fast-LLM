@@ -118,7 +118,7 @@ class MLPLayer2Converter(WeightConverter):
 class CommonHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
     _model: GPTModel
     _model_class: typing.ClassVar[FastLLMModelConfig] = GPTModelConfig
-    architecture: typing.ClassVar[list[str]]
+    architecture: typing.ClassVar[str]
     """
     Common converter for llama-based huggingface models (llama, starcoder2, mistral, mixtral)
     """
@@ -126,7 +126,7 @@ class CommonHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
     @classmethod
     def _create_config_converters(cls) -> list[ParamConverter]:
         return super()._create_config_converters() + [
-            ConstantExportParamConverter(export_names=(("architectures",),), export_value=cls.architecture),
+            ConstantExportParamConverter(export_names=(("architectures",),), export_value=[cls.architecture]),
             ConstantImportParamConverter(fast_llm_names=(("use_position_embeddings",),), fast_llm_value=False),
             RenameParamConverter(
                 fast_llm_names=(("transformer", "rotary", "theta"),), export_names=(("rope_theta",),)
@@ -322,7 +322,7 @@ class Starcoder2HuggingfaceCheckpointHandler(CommonHuggingfaceCheckpointHandler)
 
     @classmethod
     def _create_config_converters(cls) -> list[ParamConverter]:
-        cls.architecture = ["Starcoder2ForCausalLM"]
+        cls.architecture = "Starcoder2ForCausalLM"
         return super()._create_config_converters() + [
             ConstantImportParamConverter(
                 fast_llm_names=(("transformer", "rotary", "type"),),
@@ -449,7 +449,7 @@ class LlamaHuggingfaceCheckpointHandler(CommonLlamaHuggingfaceCheckpointHandler)
 
     @classmethod
     def _create_config_converters(cls) -> list[ParamConverter]:
-        cls.architecture = ["LlamaForCausalLM"]
+        cls.architecture = "LlamaForCausalLM"
         return super()._create_config_converters() + [
             # TODO: Llama supports biases
             ConstantExportParamConverter(export_names=(("attention_bias",),), export_value=False),
@@ -501,7 +501,7 @@ class Qwen2HuggingfaceCheckpointHandler(CommonHuggingfaceCheckpointHandler):
 
     @classmethod
     def _create_config_converters(cls) -> list[ParamConverter]:
-        cls.architecture = ["Qwen2ForCausalLM"]
+        cls.architecture = "Qwen2ForCausalLM"
         return super()._create_config_converters() + [
             ConstantImportParamConverter(
                 fast_llm_names=(("transformer", "normalization", "type"),),
@@ -547,7 +547,7 @@ class MistralHuggingfaceCheckpointHandler(CommonLlamaHuggingfaceCheckpointHandle
 
     @classmethod
     def _create_config_converters(cls) -> list[ParamConverter]:
-        cls.architecture = ["MistralForCausalLM"]
+        cls.architecture = "MistralForCausalLM"
         return super()._create_config_converters() + [
             IgnoreImportParamConverter(export_names=(("sliding_window",),), ignore_export_value=None),
         ]
@@ -571,7 +571,7 @@ class MixtralHuggingfaceCheckpointHandler(CommonLlamaHuggingfaceCheckpointHandle
 
     @classmethod
     def _create_config_converters(cls) -> list[ParamConverter]:
-        cls.architecture = ["MixtralForCausalLM"]
+        cls.architecture = "MixtralForCausalLM"
         return super()._create_config_converters() + [
             ConstantImportParamConverter(
                 fast_llm_names=(("transformer", "expert_routing_type"),), fast_llm_value=RoutingType.topk
@@ -615,7 +615,7 @@ class MTPLlamaHuggingfaceCheckpointHandler(CustomModelingExportMixin, CommonLlam
 
     @classmethod
     def _create_config_converters(cls) -> list[ParamConverter]:
-        cls.architecture = ["MTPLlamaForCausalLM"]
+        cls.architecture = "MTPLlamaForCausalLM"
         return super()._create_config_converters() + [
             ConstantExportParamConverter(
                 export_names=(("auto_map",),),
@@ -704,7 +704,7 @@ class DiffusionDreamHuggingfaceCheckpointHandler(CustomModelingExportMixin, Qwen
 
     @classmethod
     def _create_config_converters(cls) -> list[ParamConverter]:
-        cls.architecture = ["DreamModel"]
+        cls.architecture = "DreamModel"
         return super()._create_config_converters() + [
             ConstantExportParamConverter(
                 export_names=(("auto_map",),),
@@ -732,7 +732,7 @@ class DiffusionLlamaHuggingfaceCheckpointHandler(CustomModelingExportMixin, Llam
 
     @classmethod
     def _create_config_converters(cls) -> list[ParamConverter]:
-        cls.architecture = ["DiffusionLlamaModel"]
+        cls.architecture = "DiffusionLlamaModel"
         return super()._create_config_converters() + [
             ConstantExportParamConverter(
                 export_names=(("auto_map",),),
