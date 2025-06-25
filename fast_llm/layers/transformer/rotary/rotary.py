@@ -181,7 +181,10 @@ class YarnRotary[ConfigType: YarnRotaryConfig](DefaultRotary[YarnRotaryConfig]):
     """
 
     def _get_frequencies(self, sequence_length: int, kv_channels: int, device="cuda") -> torch.Tensor:
-        return super()._get_frequencies(sequence_length, kv_channels, device) * self._config.attention_factor
+        attention_factor = self._config.attention_factor
+        if attention_factor is None:
+            attention_factor = 0.1 * math.log(self._config.scale_factor) + 1.0
+        return super()._get_frequencies(sequence_length, kv_channels, device) * attention_factor
 
     def _get_angle_scales(self, kv_channels: int, device="cuda") -> torch.Tensor:
         scales = super()._get_angle_scales(kv_channels, device)
