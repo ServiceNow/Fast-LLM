@@ -92,12 +92,12 @@ class AudioPreprocessor(Preprocessor):
         # check if audio is in batch
         audio_mel = []
         if AudioEncoderKwargs.audio in kwargs:
-            print("Preprocessing Contains Audio")
+            # print("Preprocessing Contains Audio")
             audio_raw = kwargs[AudioEncoderKwargs.audio]
             flattened_audio = [
                 audio_arr for sequence in audio_raw for audio_arr in sequence
             ]  # flatten in the batch dimension
-            print("Preprocessing Flattened Audio: ", flattened_audio)
+            # print("Preprocessing Flattened Audio: ", flattened_audio)
 
             for audio in flattened_audio:
                 audio_mel.append(
@@ -112,11 +112,11 @@ class AudioPreprocessor(Preprocessor):
             audio_mel = torch.stack(audio_mel, dim=0).squeeze(1)
             curr_size = audio_mel.size(0)
         else:
-            print("Preprocessing No Audio")
+            # print("Preprocessing No Audio")
             audio_mel = torch.tensor(audio_mel, dtype=torch.float32)
             curr_size = 0
         
-        print("Preprocessing Audio Mel Raw: ", audio_mel)
+        # print("Preprocessing Audio Mel Raw: ", audio_mel)
 
         # compute max pad
         max_pad = math.ceil(
@@ -137,7 +137,7 @@ class AudioPreprocessor(Preprocessor):
             )
             audio_mel = torch.cat((audio_mel, padding), dim=0)
 
-        print("Preprocessing Audio Mel Final: ", audio_mel)
+        # print("Preprocessing Audio Mel Final: ", audio_mel)
 
         # move to device
         audio_mel = audio_mel.to(self._tensor_space.distributed.device)

@@ -134,6 +134,8 @@ class MultiModalEmbedding(LanguageModelEmbedding):
             # mask padded tokens
             token_mask = tokens >= 0
             masked_tokens = tokens * token_mask
+            # print(self.word_embeddings_weight.shape)
+            # print(masked_tokens)
             embeddings = torch.embedding(self.word_embeddings_weight, masked_tokens) * token_mask.unsqueeze(2)
             embeddings = embeddings.clone()
             for sample_idx, (positions, sizes) in enumerate(zip(image_positions, image_sizes)):

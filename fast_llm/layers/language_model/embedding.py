@@ -105,6 +105,7 @@ class LanguageModelEmbedding[ConfigType: LanguageModelBaseConfig](Configurable[L
             embeddings = torch.embedding(self.word_embeddings_weight, masked_input) * input_mask.unsqueeze(2)
             if self._use_absolute_position_embeddings:
                 embeddings = embeddings + torch.nn.functional.embedding(position_ids, self.position_embeddings_weight)
+            embeddings = embeddings * input_mask.unsqueeze(2)
         with set_generator(
             self._tensor_space.distributed.tp_generator
             if self._sequence_parallel

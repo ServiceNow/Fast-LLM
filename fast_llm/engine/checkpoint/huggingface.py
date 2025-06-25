@@ -72,7 +72,16 @@ class HuggingfaceStateDictCheckpointHandler(ExternalStateDictCheckpointHandler, 
     def _load_config(cls, directory: pathlib.Path | str) -> dict:
         import transformers
 
-        config = transformers.AutoConfig.from_pretrained(directory).to_dict()
+        print("Model config directory: ", directory)
+        import sys
+        if directory not in sys.path:
+            sys.path.insert(0, directory)
+
+        # import transformers_modules
+        # print(transformers_modules.__file__)
+        # print(dir(transformers_modules.model_name.model_config))
+        config = transformers.AutoConfig.from_pretrained(directory, trust_remote_code=True).to_dict()
+        # config = transformers.AutoConfig.from_pretrained(directory).to_dict()
         Assert.eq(config["model_type"], cls.get_huggingface_model_type())
         return config
 
@@ -80,7 +89,8 @@ class HuggingfaceStateDictCheckpointHandler(ExternalStateDictCheckpointHandler, 
     def _save_config(cls, directory: pathlib.Path | str, config: dict[str, typing.Any]) -> None:
         import transformers
 
-        transformers.CONFIG_MAPPING[config["model_type"]].from_dict(config).save_pretrained(directory)
+        if config["model_type"] in transformers.CONFIG_MAPPING:
+            transformers.CONFIG_MAPPING[config["model_type"]].from_dict(config).save_pretrained(directory)
 
     def _load_weights(
         self, config: CheckpointLoadConfig, device
