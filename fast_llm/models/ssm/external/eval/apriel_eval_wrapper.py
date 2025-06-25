@@ -18,7 +18,6 @@ class AprielSSMWrapper(HFLM):
             pretrained=pretrained,
             backend=kwargs.pop("backend", "causal"),
             tokenizer=kwargs.pop("tokenizer", "/mnt/checkpoints/upstream/Apriel-5B-Instruct/"),
-            max_length=kwargs.pop("max_length", 4096),
             **kwargs,
         )
 
@@ -70,7 +69,6 @@ class AprielHybridSSMWrapper(HFLM):
             pretrained=pretrained,
             backend=kwargs.pop("backend", "causal"),
             tokenizer=kwargs.pop("tokenizer", "/mnt/checkpoints/upstream/Apriel-5B-Instruct/"),
-            max_length=kwargs.pop("max_length", 4096),
             **kwargs,
         )
 
@@ -129,7 +127,6 @@ class AprielHybrid15bSSMWrapper(HFLM):
             pretrained=pretrained,
             backend=kwargs.pop("backend", "causal"),
             tokenizer=kwargs.pop("tokenizer", "/mnt/checkpoints/upstream/Apriel-Nemotron-15b-Thinker"),
-            max_length=kwargs.pop("max_length", 4096),
             **kwargs,
         )
 
