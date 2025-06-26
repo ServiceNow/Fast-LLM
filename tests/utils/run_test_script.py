@@ -31,6 +31,7 @@ def do_run_distributed_script(
     torchrun_port: int,
     num_gpus: int,
     timeout: float = 120,
+    env: dict[str, str | None] = None,
 ):
     command = [
         "python",
@@ -42,7 +43,7 @@ def do_run_distributed_script(
         *args,
     ]
     print(" ".join(command))
-    completed_proc = subprocess.run(command, timeout=timeout)
+    completed_proc = subprocess.run(command, timeout=timeout, env=env)
     if completed_proc.returncode:
         raise RuntimeError(f"Process failed with return code {completed_proc.returncode}")
 
@@ -75,6 +76,8 @@ def do_run_test_script(
         # Prevent Megatron from complaining.
         env["CUDA_DEVICE_MAX_CONNECTIONS"] = "1"
         env["NVTE_FLASH_ATTN"] = "0"
+    else:
+        env = None
     if local_rank == 0 and prepare_fn is not None:
         prepare_fn(path, None if compare_path is None else compare_path)
     if is_megatron:
@@ -86,7 +89,9 @@ def do_run_test_script(
         print(" ".join(args[1:]))
         RunnableConfig.parse_and_run(args[2:])
     else:
-        do_run_distributed_script(args, rendezvous_port, torchrun_port, num_gpus)
+        do_run_distributed_script(
+            args, rendezvous_port=rendezvous_port, torchrun_port=torchrun_port, num_gpus=num_gpus, env=env
+        )
     if local_rank == 0 and compare_path is not None and do_compare:
         if compare_fn is not None:
             compare_fn(path, compare_path)
