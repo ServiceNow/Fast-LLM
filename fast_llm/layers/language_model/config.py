@@ -155,6 +155,13 @@ class LanguageModelBaseConfig(BaseModelConfig):
         hint=FieldHint.feature,
         valid=check_field(Assert.geq, 0),
     )
+    teacher_softmax_temp: float = Field(
+        default=1.0,
+        desc="Multiplies target logits by 1/temperature inc ase of distillation.",
+        doc="This is used to scale the target logits to match the teacher's logits.",
+        hint=FieldHint.feature,
+        valid=check_field(Assert.geq, 0),
+    )
     embeddings_lr_scale: float | None = Field(
         default=None,
         desc="Learning rate scale for the word embeddings.",

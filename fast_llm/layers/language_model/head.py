@@ -354,6 +354,7 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
                     grad_output,
                     group=self._tensor_space.distributed.tensor_group if self._parallel_embeddings else None,
                     logits_scale_factor=self._logits_scale_factor,
+                    teacher_softmax_temp=self._config.teacher_softmax_temp,
                     target_format=(
                         TargetFormat.labels if self._config.distillation_model is None else TargetFormat.logits
                     ),
@@ -367,6 +368,7 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
                     grad_output=grad_output,
                     implementation=self._cross_entropy_impl,
                     logits_scale_factor=self._logits_scale_factor,
+                    teacher_softmax_temp=self._config.teacher_softmax_temp,
                     target_format=(
                         TargetFormat.labels if self._config.distillation_model is None else TargetFormat.logits
                     ),

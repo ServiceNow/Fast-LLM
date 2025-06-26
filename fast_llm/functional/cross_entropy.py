@@ -14,6 +14,7 @@ def _torch_cross_entropy_forward_backward(
     loss_mask: torch.Tensor | None,
     grad_output: float | None,
     logits_scale_factor: float,
+    teacher_softmax_temp: float,
     target_format: TargetFormat,
 ) -> tuple[torch.Tensor, torch.Tensor | None]:
     """
@@ -28,6 +29,8 @@ def _torch_cross_entropy_forward_backward(
         if target_format == TargetFormat.logits:
             if logits_scale_factor != 1.0:
                 target = target * logits_scale_factor
+            if teacher_softmax_temp != 1.0:
+                target = target * (1 / teacher_softmax_temp)
             target = torch.softmax(target, dim=-1)
         if loss_mask is None:
             loss = torch.nn.functional.cross_entropy(
@@ -81,6 +84,7 @@ def _fused_cross_entropy_forward_backward(
     loss_mask: torch.Tensor | None,
     grad_output: float | None,
     logits_scale_factor: float,
+    teacher_softmax_temp: float,
     target_format: TargetFormat,
     group: ProcessGroup | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor | None]:
@@ -95,7 +99,7 @@ def _fused_cross_entropy_forward_backward(
     logits_norm, exp_logits, sum_exp_logits = _fused_softmax_base(logits, logits_scale_factor, group)
 
     if target_format == TargetFormat.logits:
-        target = _fused_softmax(target, logits_scale_factor, group)
+        target = _fused_softmax(target, logits_scale_factor * (1 / teacher_softmax_temp), group)
 
     if target_format == TargetFormat.labels:
         target = target.unsqueeze(-1)
@@ -154,73 +158,73 @@ def _fused_cross_entropy_forward_backward(
     return loss, grad
 
 
-def _fused_reverse_kl_forward_backward(
-    logits: torch.Tensor,
-    target: torch.Tensor,
-    loss_mask: torch.Tensor | None,
-    grad_output: float | None,
-    logits_scale_factor: float,
-    target_format: TargetFormat,
-    group: ProcessGroup | None = None,
-) -> tuple[torch.Tensor, torch.Tensor | None]:
-    """
-    TODO: implement this!
-    A reverse KL divergence implementation where we compute KL(q||p) instead of KL(p||q).
-    In reverse KL, the predicted distribution q(x) acts as the "source" and target p(x) as the "reference".
-    This is useful for mode-seeking behavior where we want the model to focus on the modes of the target.
+# def _fused_reverse_kl_forward_backward(
+#     logits: torch.Tensor,
+#     target: torch.Tensor,
+#     loss_mask: torch.Tensor | None,
+#     grad_output: float | None,
+#     logits_scale_factor: float,
+#     target_format: TargetFormat,
+#     group: ProcessGroup | None = None,
+# ) -> tuple[torch.Tensor, torch.Tensor | None]:
+#     """
+#     TODO: implement this!
+#     A reverse KL divergence implementation where we compute KL(q||p) instead of KL(p||q).
+#     In reverse KL, the predicted distribution q(x) acts as the "source" and target p(x) as the "reference".
+#     This is useful for mode-seeking behavior where we want the model to focus on the modes of the target.
 
-    Forward KL: -Σ p(x) log(p(x) / q(x)) = -Σ p(x) * [log(p(x)) - log(q(x))]
-    Reverse KL: Σ q(x) log(q(x) / p(x)) = Σ q(x) * [log(q(x)) - log(p(x))]
+#     Forward KL: -Σ p(x) log(p(x) / q(x)) = -Σ p(x) * [log(p(x)) - log(q(x))]
+#     Reverse KL: Σ q(x) log(q(x) / p(x)) = Σ q(x) * [log(q(x)) - log(p(x))]
 
-    logits -- student logits, i.e. q
-    target -- teacher logits, i.e. p
-    """
+#     logits -- student logits, i.e. q
+#     target -- teacher logits, i.e. p
+#     """
 
-    # Compute softmax for predicted distribution (q)
-    logits_norm, exp_logits, sum_exp_logits = _fused_softmax_base(logits, logits_scale_factor, group)
-    predicted_probs = exp_logits / sum_exp_logits  # q(x) = softmax(logits)
-    log_predicted_probs = logits_norm - torch.log(sum_exp_logits)  # log(q(x)), same as torch.log(predicted_probs)
+#     # Compute softmax for predicted distribution (q)
+#     logits_norm, exp_logits, sum_exp_logits = _fused_softmax_base(logits, logits_scale_factor, group)
+#     predicted_probs = exp_logits / sum_exp_logits  # q(x) = softmax(logits)
+#     log_predicted_probs = logits_norm - torch.log(sum_exp_logits)  # log(q(x)), same as torch.log(predicted_probs)
 
-    Assert.eq(target_format, TargetFormat.logits, msg="Reverse KL only supports logits format")
-    # Convert target logits to probabilities
-    target_probs = _fused_softmax(target, logits_scale_factor, group)  # p(x) = softmax(target_logits)
-    target_log_probs = torch.log(target_probs + 1e-8)  # Add small epsilon for numerical stability
+#     Assert.eq(target_format, TargetFormat.logits, msg="Reverse KL only supports logits format")
+#     # Convert target logits to probabilities
+#     target_probs = _fused_softmax(target, logits_scale_factor, group)  # p(x) = softmax(target_logits)
+#     target_log_probs = torch.log(target_probs + 1e-8)  # Add small epsilon for numerical stability
 
-    # Reverse KL: Σ q(x) * [log(q(x)) - log(p(x))]
-    per_token_kl = predicted_probs * (log_predicted_probs - target_log_probs)
-    per_sample_loss = per_token_kl.sum(dim=-1, keepdim=True)
+#     # Reverse KL: Σ q(x) * [log(q(x)) - log(p(x))]
+#     per_token_kl = predicted_probs * (log_predicted_probs - target_log_probs)
+#     per_sample_loss = per_token_kl.sum(dim=-1, keepdim=True)
 
-    if loss_mask is not None:
-        if target_format != TargetFormat.labels:
-            loss_mask = loss_mask.unsqueeze(-1)
-        per_sample_loss = per_sample_loss * loss_mask
+#     if loss_mask is not None:
+#         if target_format != TargetFormat.labels:
+#             loss_mask = loss_mask.unsqueeze(-1)
+#         per_sample_loss = per_sample_loss * loss_mask
 
-    loss = per_sample_loss.mean()
+#     loss = per_sample_loss.mean()
 
-    if group is not None and target_format != TargetFormat.labels:
-        all_reduce(loss, op=ReduceOp.MEAN, group=group)
+#     if group is not None and target_format != TargetFormat.labels:
+#         all_reduce(loss, op=ReduceOp.MEAN, group=group)
 
-    # Gradient computation for reverse KL
-    if grad_output is None:
-        grad = None
-    else:
-        # For distribution targets: d/d_logits Σ q(x) * [log(q(x)) - log(p(x))]
-        # = Σ [d_q/d_logits * (log(q) - log(p)) + q * d_log_q/d_logits]
-        # = Σ q * (1 - q) * (log(q) - log(p)) / q + q * (1 - q) / q  [using softmax gradient]
-        # = Σ (1 - q) * (log(q) - log(p) + 1)
+#     # Gradient computation for reverse KL
+#     if grad_output is None:
+#         grad = None
+#     else:
+#         # For distribution targets: d/d_logits Σ q(x) * [log(q(x)) - log(p(x))]
+#         # = Σ [d_q/d_logits * (log(q) - log(p)) + q * d_log_q/d_logits]
+#         # = Σ q * (1 - q) * (log(q) - log(p)) / q + q * (1 - q) / q  [using softmax gradient]
+#         # = Σ (1 - q) * (log(q) - log(p) + 1)
 
-        grad_factor = log_predicted_probs - target_log_probs + 1.0
-        grad_base = predicted_probs * (1.0 - predicted_probs) * grad_factor
+#         grad_factor = log_predicted_probs - target_log_probs + 1.0
+#         grad_base = predicted_probs * (1.0 - predicted_probs) * grad_factor
 
-        grad = grad_base * (grad_output / logits.size(0))
+#         grad = grad_base * (grad_output / logits.size(0))
 
-        if logits_scale_factor != 1.0:
-            grad *= logits_scale_factor
-        if loss_mask is not None:
-            grad *= loss_mask
-        grad = grad.to(logits.dtype)
+#         if logits_scale_factor != 1.0:
+#             grad *= logits_scale_factor
+#         if loss_mask is not None:
+#             grad *= loss_mask
+#         grad = grad.to(logits.dtype)
 
-    return loss, grad
+#     return loss, grad
 
 
 def _torch_reverse_kl_forward_backward(
@@ -229,6 +233,7 @@ def _torch_reverse_kl_forward_backward(
     loss_mask: torch.Tensor | None,
     grad_output: float | None,
     logits_scale_factor: float,
+    teacher_softmax_temp: float,
     target_format: TargetFormat,
     group: ProcessGroup | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor | None]:
@@ -239,7 +244,7 @@ def _torch_reverse_kl_forward_backward(
     Assert.eq(target_format, TargetFormat.logits, msg="Reverse KL only supports logits format")
 
     # Compute log probabilities - let _fused_softmax handle scaling internally
-    teacher_probs = _fused_softmax(target, logits_scale_factor, group)
+    teacher_probs = _fused_softmax(target, logits_scale_factor * (1 / teacher_softmax_temp), group)
     teacher_log_probs = torch.log(teacher_probs + 1e-8)  # log(p)
 
     # For reverse KL: KL(q||p) = Σ q * log(q/p) = Σ q * (log(q) - log(p))
@@ -292,6 +297,7 @@ def cross_entropy_forward_backward(
     group: ProcessGroup | None = None,
     implementation: CrossEntropyImpl = CrossEntropyImpl.fused,
     logits_scale_factor: float = 1.0,
+    teacher_softmax_temp: float = 1.0,
     target_format: TargetFormat = TargetFormat.labels,
 ) -> tuple[torch.Tensor, torch.Tensor | None]:
     """
@@ -312,11 +318,11 @@ def cross_entropy_forward_backward(
     if group:
         Assert.eq(implementation, CrossEntropyImpl.fused)
         return _fused_cross_entropy_forward_backward(
-            logits, target, loss_mask, grad_output, logits_scale_factor, target_format, group
+            logits, target, loss_mask, grad_output, logits_scale_factor, teacher_softmax_temp, target_format, group
         )
     else:
         return _CROSS_ENTROPY_IMPLEMENTATIONS[implementation](
-            logits, target, loss_mask, grad_output, logits_scale_factor, target_format
+            logits, target, loss_mask, grad_output, logits_scale_factor, teacher_softmax_temp, target_format
         )
 
 
@@ -327,6 +333,7 @@ def reverse_kl_forward_backward(
     grad_output: float | None,
     group: ProcessGroup | None = None,
     logits_scale_factor: float = 1.0,
+    teacher_softmax_temp: float = 1.0,
     target_format: TargetFormat = TargetFormat.labels,
 ) -> tuple[torch.Tensor, torch.Tensor | None]:
     """
@@ -372,5 +379,5 @@ def reverse_kl_forward_backward(
             Assert.eq(loss_mask.shape, logits.shape[:-1])
     # TODO: implement fused?
     return _torch_reverse_kl_forward_backward(
-        logits, target, loss_mask, grad_output, logits_scale_factor, target_format, group
+        logits, target, loss_mask, grad_output, logits_scale_factor, teacher_softmax_temp, target_format, group
     )
