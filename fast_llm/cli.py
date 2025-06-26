@@ -1,3 +1,4 @@
+import contextlib
 import logging
 import sys
 import traceback
@@ -15,12 +16,12 @@ import fast_llm.models.auto  # isort: skip
 logger = logging.getLogger(__name__)
 
 
-def fast_llm_main(args: list[str] | None = None):
-    # TODO: Add hook to register model classes? (environment variable?)
+@contextlib.contextmanager
+def fast_llm_main_wrapper():
     # (Pre-)configure logging
     configure_logging()
     try:
-        RunnableConfig.parse_and_run(args)
+        yield
     except Exception as e:
         if sys.gettrace():
             raise
@@ -29,6 +30,12 @@ def fast_llm_main(args: list[str] | None = None):
         else:
             logger.critical(traceback.format_exc())
         sys.exit(1)
+
+
+def fast_llm_main(args: list[str] | None = None):
+    # TODO: Add hook to register model classes? (environment variable?)
+    with fast_llm_main_wrapper():
+        RunnableConfig.parse_and_run(args)
 
 
 if __name__ == "__main__":
