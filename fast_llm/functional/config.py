@@ -15,7 +15,7 @@ class TritonConfig:
     MAX_BLOCK_SIZE_BYTES = 65536
 
 
-class MLPRecomputeLevel(str, enum.Enum):
+class MLPRecomputeLevel(enum.StrEnum):
     none = "none"
     activation = "activation"
     activation_and_input = "activation_and_input"

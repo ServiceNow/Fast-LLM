@@ -3,8 +3,8 @@ import pathlib
 import pytest
 
 from fast_llm.data.dataset.gpt.config import GPTMemmapDatasetConfig
-from tests.common import DATASET_CACHE, DATASET_PREFIX, DATASET_SAMPLING_CACHE, get_test_dataset
 from tests.data.common import compare_indexed_dataset, get_dataset_config
+from tests.utils.dataset import DATASET_CACHE, DATASET_PREFIX, DATASET_SAMPLING_CACHE, get_test_dataset
 
 MEMMAP_DATASET_LENGTH = 6153
 MEMMAP_DATASET_TOKENS = 508327
