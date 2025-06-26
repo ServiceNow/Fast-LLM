@@ -410,6 +410,12 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                             if self._config.distillation_model is not None:
                                 kwargs[LanguageModelKwargs.loss_mask] = loss_mask
                             labels = torch.where(loss_mask, labels, -100)
+                if self._config.vision_encoder.enabled:
+                    labels = labels.clone()
+                    if self._config.vision_encoder.image_break_token is not None:
+                        labels = torch.where(labels == self._config.vision_encoder.image_break_token, -100, labels)
+                    if self._config.vision_encoder.image_end_token is not None:
+                        labels = torch.where(labels == self._config.vision_encoder.image_end_token, -100, labels)
                 kwargs[LanguageModelKwargs.labels] = labels
             kwargs.update(reference_logits[i])
 
