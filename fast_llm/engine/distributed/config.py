@@ -247,6 +247,8 @@ class DistributedConfig(Config):
         Assert.multiple(self.local_world_size, self.tensor_parallel)
 
         if self.pipeline_first:
+            # Case is useless and would cause too many complications.
+            Assert.eq(self.sequence_data_parallel, 1)
             # Smaller models can be more demanding on pipeline parallel.
             self.data_rank = (self.rank // self.tensor_parallel) // self.pipeline_parallel
             self.pipeline_rank = (self.rank // self.tensor_parallel) % self.pipeline_parallel
@@ -271,8 +273,10 @@ class DistributedConfig(Config):
         else:
             self.distributed_dims = {}
 
-            data_stride = self.tensor_parallel * (1 if self.pipeline_first else self.pipeline_parallel)
-            pipeline_stride = self.tensor_parallel * (self.data_parallel if self.pipeline_first else 1)
+            data_stride = self.tensor_parallel * (self.pipeline_parallel if self.pipeline_first else 1)
+            pipeline_stride = self.tensor_parallel * (1 if self.pipeline_first else self.data_parallel)
+            print("data_stride", data_stride)
+            print("pipeline_stride", pipeline_stride)
 
             self._add_distributed_dim(
                 DistributedDim(
@@ -345,7 +349,7 @@ class DistributedConfig(Config):
         return range(start, start + size * stride, stride)
 
     def _add_distributed_dim(self, distributed_dim: DistributedDim) -> None:
-        Assert.eq(distributed_dim.global_ranks[distributed_dim.rank], self.rank)
+        Assert.eq(distributed_dim.global_ranks[distributed_dim.rank], self.rank, msg=distributed_dim)
         if distributed_dim.name in self.distributed_dims:
             Assert.eq(distributed_dim, self.distributed_dims[distributed_dim.name])
         else:
