@@ -274,7 +274,7 @@ def _torch_reverse_kl_forward_backward(
         else:
             grad = None
 
-    return loss, grad
+    return loss.detach_(), grad
 
 
 _CROSS_ENTROPY_IMPLEMENTATIONS = {
