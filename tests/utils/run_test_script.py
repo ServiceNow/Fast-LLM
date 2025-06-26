@@ -2,7 +2,6 @@ import argparse
 import functools
 import os
 import pathlib
-import shutil
 import subprocess
 import sys
 import typing
@@ -76,26 +75,18 @@ def do_run_test_script(
         # Prevent Megatron from complaining.
         env["CUDA_DEVICE_MAX_CONNECTIONS"] = "1"
         env["NVTE_FLASH_ATTN"] = "0"
-    skip = False
-    if local_rank == 0 and path.exists():
-        assert path.is_dir()
-        # TODO: Better way to check if the previous attempt succeeded.
-        shutil.rmtree(path)
     if local_rank == 0 and prepare_fn is not None:
-        skip = prepare_fn(path, None if compare_path is None else compare_path, skip)
+        prepare_fn(path, None if compare_path is None else compare_path)
     if is_megatron:
         args = ["Megatron-LM/pretrain_gpt.py", *args, f"--structured-logs-dir={path}", f"--data-cache-path={path}"]
     else:
         args = ["--no-python", "fast-llm", "train", model_type, *args, f"run.experiment_dir={path}"]
-    if skip:
-        print("Reusing existing run.")
+    get_test_dataset()
+    if (num_gpus == 1 or is_parallel) and not is_megatron:
+        print(" ".join(args[1:]))
+        RunnableConfig.parse_and_run(args[2:])
     else:
-        get_test_dataset()
-        if (num_gpus == 1 or is_parallel) and not is_megatron:
-            print(" ".join(args[1:]))
-            RunnableConfig.parse_and_run(args[2:])
-        else:
-            do_run_distributed_script(args, rendezvous_port, torchrun_port, num_gpus)
+        do_run_distributed_script(args, rendezvous_port, torchrun_port, num_gpus)
     if local_rank == 0 and compare_path is not None and do_compare:
         if compare_fn is not None:
             compare_fn(path, compare_path)
@@ -171,12 +162,10 @@ def run_test_script_for_all_models(
 
 def parse_run_distributed_script(args: list[str] | None = None):
     parser = argparse.ArgumentParser()
-    parser.add_argument("rendezvous_port", type=int)
-    parser.add_argument("torchrun_port", type=int)
     parser.add_argument("base_path", type=pathlib.Path)
     parser.add_argument("model_testing_config", type=str)
     parsed = parser.parse_args(args)
-    return parsed.rendezvous_port, parsed.torchrun_port, parsed.base_path, MODEL_CONFIGS[parsed.model_testing_config]
+    return parsed.base_path, MODEL_CONFIGS[parsed.model_testing_config]
 
 
 @pytest.fixture(scope="session")
@@ -186,13 +175,11 @@ def run_distributed_script_for_all_models(
     model_testing_config: ModelTestingConfig,
     request: pytest.FixtureRequest,
 ):
-    def do_run_distributed_script_for_all_models(args: list[str], num_gpus=2):
+    def do_run_distributed_script_for_all_models(args: list[str], num_gpus=2, base_path: pathlib.Path | None = None):
         do_run_distributed_script(
             args
             + [
-                str(worker_resources.rendezvous_port),
-                str(worker_resources.torchrun_port),
-                str(run_test_script_base_path),
+                str(run_test_script_base_path if base_path is None else base_path),
                 model_testing_config.name,
             ],
             worker_resources.rendezvous_port,

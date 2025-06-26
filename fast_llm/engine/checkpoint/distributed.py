@@ -30,8 +30,8 @@ class DistributedCheckpointHandler(CheckpointHandler):
 
     @classmethod
     def save_metadata(cls, config: CheckpointSaveMetadataConfig, metadata: CheckpointMetadata):
-        config.path.mkdir(parents=True, exist_ok=True)
         serialized_metadata = metadata.to_dict()
+        config.path.mkdir(parents=True, exist_ok=True)
         yaml.safe_dump(serialized_metadata, (config.path / "metadata.yaml").open("w"))
 
     @classmethod
@@ -40,6 +40,7 @@ class DistributedCheckpointHandler(CheckpointHandler):
 
     def save(self, config: CheckpointSaveConfig, metadata: CheckpointMetadata) -> None:
         serialized_metadata = metadata.to_dict()
+        config.path.mkdir(parents=True, exist_ok=True)
         if self._model.config.distributed.rank == 0:
             yaml.safe_dump(serialized_metadata, (config.path / "metadata.yaml").open("w"))
         safetensors.torch.save_file(

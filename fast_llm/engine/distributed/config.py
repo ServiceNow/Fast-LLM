@@ -65,7 +65,6 @@ class DistributedDim:
 
     def __post_init__(self):
         self._is_setup = False
-        logger.info(str(self))
 
     @property
     def group(self) -> "ProcessGroup|None":

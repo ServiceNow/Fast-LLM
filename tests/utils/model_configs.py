@@ -8,6 +8,7 @@ import pytest
 
 from fast_llm.engine.checkpoint.config import CheckpointFormat
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig
+from fast_llm.engine.training.config import TrainerConfig
 from fast_llm.models.gpt.config import (
     DiffusionDreamGPTHuggingfaceCheckpointFormat,
     DiffusionLlamaGPTHuggingfaceCheckpointFormat,
@@ -52,13 +53,26 @@ class ModelTestingConfig:
     model_type: str
     config_args: list[str]
     megatron_args: list[str] | None
-    checkpoint_format: CheckpointFormat | None
+    checkpoint_format: type[CheckpointFormat] | None
     groups: dict[ModelTestingGroup, ModelTestingGroupAction]
 
     @functools.cached_property
-    def model_config_class(self):
+    def trainer_config_class(self) -> type[TrainerConfig]:
+        return TrainerConfig.get_subclass(self.model_type)
+
+    @functools.cached_property
+    def trainer_config(self) -> TrainerConfig:
+        # See `RunnableConfig._from_parsed_args`
+        return self.trainer_config_class.from_dict(self.trainer_config_class._parse_updates(self.config_args))
+
+    @functools.cached_property
+    def model_config_class(self) -> type[FastLLMModelConfig]:
         # TODO: Ok to assume the model and trainer have the same name?
         return FastLLMModelConfig.get_subclass(self.model_type)
+
+    @functools.cached_property
+    def model_config(self) -> FastLLMModelConfig:
+        return self.trainer_config.model
 
     @functools.cached_property
     def huggingface_model_for_causal_lm_class(self):
@@ -487,7 +501,7 @@ def model_testing_config(request) -> ModelTestingConfig:
 
 def testing_group_enabled(item: pytest.Function, skip_slow: bool, skip_extra_slow: bool, show_skipped: bool) -> bool:
     if "model_testing_group" in item.keywords:
-        assert "model_testing_config" in item.callspec.params, item.nodeid
+        assert hasattr(item, "callspec") and "model_testing_config" in item.callspec.params, item.nodeid
         groups: tuple[ModelTestingGroup] = item.keywords["model_testing_group"].args
         model_testing_config = item.callspec.params["model_testing_config"]
         model_config: ModelTestingConfig = MODEL_CONFIGS[model_testing_config]

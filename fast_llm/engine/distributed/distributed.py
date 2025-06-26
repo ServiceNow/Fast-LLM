@@ -54,7 +54,6 @@ class ProcessGroupPool:
         Get the requested process group from the pool, or create it if it doesn't exist.
         """
         group_size = len(global_ranks)
-        logger.info(f"WIOUGHNIOUW {global_ranks}, {group_size}, {self._rank}")
         Assert.eq(global_ranks[rank], self._rank)
         if group_size == 1:
             return None
@@ -192,7 +191,6 @@ class Distributed[ConfigType: DistributedConfig](Configurable[ConfigType]):
         Add a process group from its definition.
         """
         self._config.log_first_rank(f"Initializing group {distributed_dim.name}, size={distributed_dim.size}...")
-        logger.info(f"INIT {distributed_dim}")
         group = self._pool.get_process_group(distributed_dim.global_ranks, distributed_dim.rank)
         distributed_dim.setup(group)
         return group
