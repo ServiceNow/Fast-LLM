@@ -49,12 +49,12 @@ class ProcessGroupPool:
     def world_size(self):
         return self._world_size
 
-    def get_process_group(self, global_ranks: range | tuple, rank: int) -> ProcessGroup | None:
+    def get_process_group(self, global_ranks: range | tuple, group_rank: int) -> ProcessGroup | None:
         """
         Get the requested process group from the pool, or create it if it doesn't exist.
         """
         group_size = len(global_ranks)
-        Assert.eq(global_ranks[rank], self._rank)
+        Assert.eq(global_ranks[group_rank], self._rank)
         if group_size == 1:
             return None
 
@@ -74,7 +74,7 @@ class ProcessGroupPool:
 
         group = torch.distributed.ProcessGroupNCCL(
             torch.distributed.PrefixStore(prefix + "/", self.store),
-            global_ranks.index(rank),
+            group_rank,
             group_size,
             datetime.timedelta(seconds=self._timeout),
         )
