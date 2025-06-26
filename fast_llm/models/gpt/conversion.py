@@ -563,6 +563,26 @@ class MistralHuggingfaceCheckpointHandler(CommonLlamaHuggingfaceCheckpointHandle
         ]
 
 
+class PixtralNumHeadsConverter(ParamConverter):
+    """
+    Pixtral encoder uses Multi-Head Attention.
+    Map `num_attention_heads` and `head_groups` to a single `num_heads` parameter.
+    """
+
+    def __post_init__(self):
+        Assert.eq(len(self.fast_llm_names), 2)
+        Assert.eq(len(self.export_names), 1)
+
+    def export_params(self, fast_llm_values: tuple[typing.Any, ...]) -> tuple[typing.Any, ...]:
+        (num_heads, head_groups) = fast_llm_values
+        assert head_groups == num_heads, "Pixtral encoder expects num_heads == head_groups (MHA)"
+        return (num_heads,)
+
+    def import_params(self, export_values: tuple[typing.Any, ...]) -> tuple[typing.Any, ...]:
+        (num_heads,) = export_values
+        return (num_heads, num_heads)
+
+
 class PixtralHuggingfaceCheckpointHandler(WeightAndBiasConverterMixin, HuggingfaceStateDictCheckpointHandler):
     format: typing.ClassVar[type[CheckpointFormat]] = PixtralGPTHuggingfaceCheckpointFormat
     _model_class: typing.ClassVar[FastLLMModelConfig] = GPTModelConfig
@@ -600,23 +620,18 @@ class PixtralHuggingfaceCheckpointHandler(WeightAndBiasConverterMixin, Huggingfa
                 ),
                 export_names=(("hidden_size",),),
             ),
-            RenameParamConverter(
+            PixtralNumHeadsConverter(
                 fast_llm_names=(
                     (
                         "transformer",
                         "num_attention_heads",
                     ),
-                ),
-                export_names=(("num_attention_heads",),),
-            ),
-            RenameParamConverter(
-                fast_llm_names=(
                     (
                         "transformer",
                         "head_groups",
                     ),
                 ),
-                export_names=(("num_key_value_heads",),),
+                export_names=(("num_attention_heads",),),
             ),
             RenameParamConverter(
                 fast_llm_names=(

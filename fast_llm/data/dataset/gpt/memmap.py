@@ -145,6 +145,7 @@ class GPTMemmapDataset(GPTIndexedDataset):
             self._image_sizes = []
             self._image_positions = []
             images_seen = 0
+            num_total_images = self._n_images.sum()
             for n_images in self._n_images:
                 self._image_sizes.append(
                     np.frombuffer(
@@ -162,8 +163,8 @@ class GPTMemmapDataset(GPTIndexedDataset):
                         count=n_images,
                         offset=offset
                         + self._n_images.nbytes
-                        + 2 * self._n_images.sum() * np.dtype(np.int32).itemsize
-                        + images_seen * np.dtype(np.int32).itemsize,
+                        + 2 * num_total_images * np.dtype(np.int32).itemsize
+                        + +images_seen * np.dtype(np.int32).itemsize,
                     )
                 )
                 images_seen += n_images
@@ -352,6 +353,8 @@ class GPTMemmapDataset(GPTIndexedDataset):
                         bin_stream.write(pixels.tobytes(order="C"))
                         total_im_size += pixels.size
                     im_positions.extend(document.image_positions)
+                else:
+                    n_images.append(0)
 
                 # Update metadata
                 doc_length = len(document.token_ids)
