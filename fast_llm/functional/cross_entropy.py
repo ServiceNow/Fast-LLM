@@ -269,7 +269,7 @@ def _torch_reverse_kl_forward_backward(
             all_reduce(loss, op=ReduceOp.MEAN, group=group)
 
         if grad_output is not None:
-            loss.backward(torch.tensor(grad_output, device=loss.device))
+            loss.backward(torch.full_like(loss, grad_output))
             grad = logits_.grad.to(logits.dtype)
         else:
             grad = None
