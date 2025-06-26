@@ -118,6 +118,7 @@ class MLPLayer2Converter(WeightConverter):
 class CommonHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
     _model: GPTModel
     _model_class: typing.ClassVar[FastLLMModelConfig] = GPTModelConfig
+    architecture: typing.ClassVar[str]
     """
     Common converter for llama-based huggingface models (llama, starcoder2, mistral, mixtral)
     """
@@ -125,6 +126,7 @@ class CommonHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
     @classmethod
     def _create_config_converters(cls) -> list[ParamConverter]:
         return super()._create_config_converters() + [
+            ConstantExportParamConverter(export_names=(("architectures",),), export_value=[cls.architecture]),
             ConstantImportParamConverter(fast_llm_names=(("use_position_embeddings",),), fast_llm_value=False),
             RenameParamConverter(
                 fast_llm_names=(("transformer", "rotary", "theta"),), export_names=(("rope_theta",),)
@@ -320,8 +322,8 @@ class Starcoder2HuggingfaceCheckpointHandler(CommonHuggingfaceCheckpointHandler)
 
     @classmethod
     def _create_config_converters(cls) -> list[ParamConverter]:
+        cls.architecture = "Starcoder2ForCausalLM"
         return super()._create_config_converters() + [
-            ConstantExportParamConverter(export_names=(("architectures",),), export_value=["Starcoder2ForCausalLM"]),
             ConstantImportParamConverter(
                 fast_llm_names=(("transformer", "rotary", "type"),),
                 fast_llm_value=DefaultRotaryConfig.dynamic_type_name,
@@ -447,8 +449,8 @@ class LlamaHuggingfaceCheckpointHandler(CommonLlamaHuggingfaceCheckpointHandler)
 
     @classmethod
     def _create_config_converters(cls) -> list[ParamConverter]:
+        cls.architecture = "LlamaForCausalLM"
         return super()._create_config_converters() + [
-            ConstantExportParamConverter(export_names=(("architectures",),), export_value=["LlamaForCausalLM"]),
             # TODO: Llama supports biases
             ConstantExportParamConverter(export_names=(("attention_bias",),), export_value=False),
             ConstantExportParamConverter(export_names=(("mlp_bias",),), export_value=False),
@@ -499,8 +501,8 @@ class Qwen2HuggingfaceCheckpointHandler(CommonHuggingfaceCheckpointHandler):
 
     @classmethod
     def _create_config_converters(cls) -> list[ParamConverter]:
+        cls.architecture = "Qwen2ForCausalLM"
         return super()._create_config_converters() + [
-            ConstantExportParamConverter(export_names=(("architectures",),), export_value=["Qwen2ForCausalLM"]),
             ConstantImportParamConverter(
                 fast_llm_names=(("transformer", "normalization", "type"),),
                 fast_llm_value="rms_norm",
@@ -545,8 +547,8 @@ class MistralHuggingfaceCheckpointHandler(CommonLlamaHuggingfaceCheckpointHandle
 
     @classmethod
     def _create_config_converters(cls) -> list[ParamConverter]:
+        cls.architecture = "MistralForCausalLM"
         return super()._create_config_converters() + [
-            ConstantExportParamConverter(export_names=(("architectures",),), export_value=["MistralForCausalLM"]),
             IgnoreImportParamConverter(export_names=(("sliding_window",),), ignore_export_value=None),
         ]
 
@@ -569,8 +571,8 @@ class MixtralHuggingfaceCheckpointHandler(CommonLlamaHuggingfaceCheckpointHandle
 
     @classmethod
     def _create_config_converters(cls) -> list[ParamConverter]:
+        cls.architecture = "MixtralForCausalLM"
         return super()._create_config_converters() + [
-            ConstantExportParamConverter(export_names=(("architectures",),), export_value=["MixtralForCausalLM"]),
             ConstantImportParamConverter(
                 fast_llm_names=(("transformer", "expert_routing_type"),), fast_llm_value=RoutingType.topk
             ),
@@ -613,8 +615,8 @@ class MTPLlamaHuggingfaceCheckpointHandler(CustomModelingExportMixin, CommonLlam
 
     @classmethod
     def _create_config_converters(cls) -> list[ParamConverter]:
+        cls.architecture = "MTPLlamaForCausalLM"
         return super()._create_config_converters() + [
-            ConstantExportParamConverter(export_names=(("architectures",),), export_value=["MTPLlamaForCausalLM"]),
             ConstantExportParamConverter(
                 export_names=(("auto_map",),),
                 export_value={
@@ -685,7 +687,12 @@ class MTPLlamaHuggingfaceCheckpointHandler(CustomModelingExportMixin, CommonLlam
         return converters
 
 
-class DiffusionDreamHuggingfaceCheckpointHandler(CustomModelingExportMixin, CommonHuggingfaceCheckpointHandler):
+class DiffusionDreamHuggingfaceCheckpointHandler(CustomModelingExportMixin, Qwen2HuggingfaceCheckpointHandler):
+    """
+    Handler for DiffusionDream Huggingface checkpoints.
+    Inherits from Qwen2HuggingfaceCheckpointHandler (and CustomModelingExportMixin),
+    but overrides _create_config_converters to update architectures and auto_map.
+    """
 
     from fast_llm.models.gpt.external.diffusion_dream import configuration_dream, generation_utils, modeling_dream
 
@@ -697,33 +704,8 @@ class DiffusionDreamHuggingfaceCheckpointHandler(CustomModelingExportMixin, Comm
 
     @classmethod
     def _create_config_converters(cls) -> list[ParamConverter]:
+        cls.architecture = "DreamModel"
         return super()._create_config_converters() + [
-            # From Qwen2HuggingfaceCheckpointHandler - Change architectures to DiffusionDream
-            ConstantImportParamConverter(
-                fast_llm_names=(("transformer", "normalization", "type"),), fast_llm_value=NormalizationType.rms_norm
-            ),
-            RenameParamConverter(
-                fast_llm_names=(("transformer", "normalization", "epsilon"),), export_names=(("rms_norm_eps",),)
-            ),
-            ConstantImportParamConverter(fast_llm_names=(("transformer", "gated"),), fast_llm_value=True),
-            ConstantImportParamConverter(
-                fast_llm_names=(("transformer", "add_linear_biases"),), fast_llm_value="only_attn_qkv"
-            ),
-            RopeScalingParamConverter(
-                fast_llm_names=(
-                    ("transformer", "rotary", "type"),
-                    ("transformer", "rotary", "scale_factor"),
-                    ("transformer", "rotary", "low_frequency_factor"),
-                    ("transformer", "rotary", "high_frequency_factor"),
-                    ("transformer", "rotary", "original_context_length"),
-                    ("transformer", "rotary", "attention_factor"),
-                    ("transformer", "rotary", "beta_fast"),
-                    ("transformer", "rotary", "beta_slow"),
-                ),
-                export_names=(("rope_scaling",),),
-            ),
-            IgnoreImportQwen2SlidingWindowParamsConverter(),
-            ConstantExportParamConverter(export_names=(("architectures",),), export_value=["DreamModel"]),
             ConstantExportParamConverter(
                 export_names=(("auto_map",),),
                 export_value={
@@ -733,26 +715,8 @@ class DiffusionDreamHuggingfaceCheckpointHandler(CustomModelingExportMixin, Comm
             ),
         ]
 
-    def _get_mlp_converters(self, fast_llm_prefix: str, hf_prefix: str) -> list[WeightConverter]:
-        # From Qwen2HuggingfaceCheckpointHandler
-        transformer_config: TransformerConfig = self._model.config.base_model.transformer
-        return [
-            *self._get_weight_and_bias_converters(
-                f"{fast_llm_prefix}.mlp.layer_1",
-                (f"{hf_prefix}.mlp.gate_proj", f"{hf_prefix}.mlp.up_proj"),
-                transformer_config.add_mlp_bias,
-                SplitWeightConverter,
-            ),
-            *self._get_weight_and_bias_converters(
-                f"{fast_llm_prefix}.mlp.layer_2",
-                f"{hf_prefix}.mlp.down_proj",
-                transformer_config.add_mlp_bias,
-                MLPLayer2Converter,
-            ),
-        ]
 
-
-class DiffusionLlamaHuggingfaceCheckpointHandler(CustomModelingExportMixin, CommonLlamaHuggingfaceCheckpointHandler):
+class DiffusionLlamaHuggingfaceCheckpointHandler(CustomModelingExportMixin, LlamaHuggingfaceCheckpointHandler):
 
     from fast_llm.models.gpt.external.diffusion_llama import (
         configuration_diffusion_llama,
@@ -768,12 +732,8 @@ class DiffusionLlamaHuggingfaceCheckpointHandler(CustomModelingExportMixin, Comm
 
     @classmethod
     def _create_config_converters(cls) -> list[ParamConverter]:
+        cls.architecture = "DiffusionLlamaModel"
         return super()._create_config_converters() + [
-            # From LlamaHuggingfaceCheckpointHandler - Update architectures to DiffusionLlama
-            # TODO: Llama supports biases
-            ConstantExportParamConverter(export_names=(("attention_bias",),), export_value=False),
-            ConstantExportParamConverter(export_names=(("mlp_bias",),), export_value=False),
-            ConstantExportParamConverter(export_names=(("architectures",),), export_value=["DiffusionLlamaModel"]),
             ConstantExportParamConverter(
                 export_names=(("auto_map",),),
                 export_value={
@@ -787,24 +747,6 @@ class DiffusionLlamaHuggingfaceCheckpointHandler(CustomModelingExportMixin, Comm
             #     fast_llm_names=(("mask_token_id",),),
             #     export_names=(("mask_token_id",),),
             # ),
-        ]
-
-    def _get_mlp_converters(self, fast_llm_prefix: str, hf_prefix: str) -> list[WeightConverter]:
-        # From LlamaHuggingfaceCheckpointHandler
-        transformer_config: TransformerConfig = self._model.config.base_model.transformer
-        return [
-            *self._get_weight_and_bias_converters(
-                f"{fast_llm_prefix}.mlp.layer_1",
-                (f"{hf_prefix}.mlp.gate_proj", f"{hf_prefix}.mlp.up_proj"),
-                transformer_config.add_mlp_bias,
-                SplitWeightConverter,
-            ),
-            *self._get_weight_and_bias_converters(
-                f"{fast_llm_prefix}.mlp.layer_2",
-                f"{hf_prefix}.mlp.down_proj",
-                transformer_config.add_mlp_bias,
-                MLPLayer2Converter,
-            ),
         ]
 
 

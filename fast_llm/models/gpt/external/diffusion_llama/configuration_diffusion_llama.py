@@ -1,4 +1,3 @@
-# coding=utf-8
 # Copyright 2022 EleutherAI and the HuggingFace Inc. team. All rights reserved.
 #
 # This code is based on EleutherAI's GPT-NeoX library and the GPT-NeoX
@@ -20,7 +19,7 @@
 """LLaMA model configuration"""
 
 import math
-from typing import Optional, Tuple
+from typing import Optional
 
 from transformers.configuration_utils import PretrainedConfig
 from transformers.utils import is_torch_available, logging
@@ -30,13 +29,14 @@ logger = logging.get_logger(__name__)
 if is_torch_available():
     import torch
 
+
 # Update yarn implementation for RoPE (Taken from Llama but updated to use original_max_position_embeddings)
 def _compute_default_rope_parameters(
     config: Optional[PretrainedConfig] = None,
     device: Optional["torch.device"] = None,
     seq_len: Optional[int] = None,
     **rope_kwargs,
-) -> Tuple["torch.Tensor", float]:
+) -> tuple["torch.Tensor", float]:
     """
     Computes the inverse frequencies according to the original RoPE implementation
     Args:
@@ -72,9 +72,10 @@ def _compute_default_rope_parameters(
     inv_freq = 1.0 / (base ** (torch.arange(0, dim, 2, dtype=torch.int64).float().to(device) / dim))
     return inv_freq, attention_factor
 
+
 def _compute_yarn_parameters(
     config: PretrainedConfig, device: "torch.device", seq_len: Optional[int] = None, **rope_kwargs
-) -> Tuple["torch.Tensor", float]:
+) -> tuple["torch.Tensor", float]:
     """
     Computes the inverse frequencies with NTK scaling. Please refer to the
     [original paper](https://arxiv.org/abs/2309.00071)
@@ -101,7 +102,7 @@ def _compute_yarn_parameters(
     partial_rotary_factor = config.partial_rotary_factor if hasattr(config, "partial_rotary_factor") else 1.0
     head_dim = getattr(config, "head_dim", config.hidden_size // config.num_attention_heads)
     dim = int(head_dim * partial_rotary_factor)
-        
+
     # Apriel: Use original max_position_embeddings instead of max_position_embeddings
     max_position_embeddings = config.rope_scaling.get("original_max_position_embeddings")
     factor = config.rope_scaling["factor"]
@@ -152,6 +153,7 @@ def _compute_yarn_parameters(
 
     return inv_freq, attention_factor
 
+
 def _check_received_keys(
     rope_type: str,
     received_keys: set,
@@ -159,7 +161,6 @@ def _check_received_keys(
     optional_keys: Optional[set] = None,
     ignore_keys: Optional[set] = None,
 ):
-    
     """Compare the received keys in `config.rope_scaling` against the expected and optional keys"""
     # BC: "rope_type" was originally "type" -- let's check for "rope_type" when "type" is present
     if "type" in received_keys:
@@ -188,6 +189,7 @@ def _validate_default_rope_parameters(config: PretrainedConfig, ignore_keys: Opt
     required_keys = {"rope_type"}
     received_keys = set(rope_scaling.keys())
     _check_received_keys(rope_type, received_keys, required_keys, ignore_keys=ignore_keys)
+
 
 def _validate_yarn_parameters(config: PretrainedConfig, ignore_keys: Optional[set] = None):
     rope_scaling = config.rope_scaling
@@ -218,6 +220,8 @@ def _validate_yarn_parameters(config: PretrainedConfig, ignore_keys: Optional[se
             f"`rope_scaling`'s beta_fast field must be greater than beta_slow, got beta_fast={beta_fast} "
             f"(defaults to 32 if None) and beta_slow={beta_slow} (defaults to 1 if None)"
         )
+
+
 # This maps the "rope_type" string field in rope config to the corresponding function to compute the RoPE parameters
 # from the model config. You can append new {'rope_type': callable} pairs to this dictionary to enable custom RoPE
 # parameterizations, as long as the callable has the same signature.
@@ -231,6 +235,7 @@ ROPE_VALIDATION_FUNCTIONS = {
     "default": _validate_default_rope_parameters,
     "yarn": _validate_yarn_parameters,
 }
+
 
 def rope_config_validation(config: PretrainedConfig, ignore_keys: Optional[set] = None):
     """
@@ -249,6 +254,7 @@ def rope_config_validation(config: PretrainedConfig, ignore_keys: Optional[set] 
         logger.warning(
             f"Missing validation function mapping in `ROPE_VALIDATION_FUNCTIONS` for 'rope_type'='{rope_type}'"
         )
+
 
 class DiffusionLlamaConfig(PretrainedConfig):
     r"""
@@ -397,7 +403,7 @@ class DiffusionLlamaConfig(PretrainedConfig):
         max_position_embeddings=2048,
         initializer_range=0.02,
         rms_norm_eps=1e-6,
-        use_cache=False, # cache not implemented in diffusion
+        use_cache=False,  # cache not implemented in diffusion
         pad_token_id=None,
         bos_token_id=1,
         eos_token_id=2,
@@ -409,7 +415,7 @@ class DiffusionLlamaConfig(PretrainedConfig):
         attention_dropout=0.0,
         mlp_bias=False,
         head_dim=None,
-        # mask_token_id= TODO: add the mask_token_id we will be using,
+        mask_token_id=131072,  # TODO: add the mask_token_id we will be using,
         **kwargs,
     ):
         self.vocab_size = vocab_size
@@ -435,6 +441,8 @@ class DiffusionLlamaConfig(PretrainedConfig):
         self.attention_dropout = attention_dropout
         self.mlp_bias = mlp_bias
         self.head_dim = head_dim if head_dim is not None else self.hidden_size // self.num_attention_heads
+        self.mask_token_id = mask_token_id
+        self.pad_token_id = pad_token_id
         # Validate the correctness of rotary position embeddings parameters
         # BC: if there is a 'type' field, copy it it to 'rope_type'.
         if self.rope_scaling is not None and "type" in self.rope_scaling:
@@ -450,4 +458,5 @@ class DiffusionLlamaConfig(PretrainedConfig):
         )
         # TODO: self.mask_token_id = mask_token_id
 
-__all__ = ["LlamaConfig"]
+
+__all__ = ["DiffusionLlamaConfig"]
