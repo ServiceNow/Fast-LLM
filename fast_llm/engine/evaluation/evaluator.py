@@ -1,6 +1,8 @@
 import abc
 import dataclasses
 import logging
+import os
+import pathlib
 import time
 import typing
 
@@ -258,6 +260,8 @@ class EvaluatorLmEval[ConfigType: EvaluatorLmEvalConfig](Evaluator[ConfigType]):
         data: Data,
         phase: PhaseType,
     ) -> None:
+        os.environ["HF_TOKEN"] = pathlib.Path(os.environ["HUGGINGFACE_API_KEY_PATH"]).open("r").read().strip()
+
         from fast_llm.engine.evaluation.lm_eval.fast_llm_wrapper import FastLLMLmEvalWrapper
 
         super().setup(distributed, run, multi_stage, runner, data, phase)
