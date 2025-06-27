@@ -386,7 +386,6 @@ class Attention(torch.nn.Module):
             input_ = input_.flatten(-2)
         else:
             # TODO: Avoid the flattens.
-            print("using fused attention")
             input_ = self._attn_fused(
                 query.flatten(-2),
                 key.flatten(-2),
