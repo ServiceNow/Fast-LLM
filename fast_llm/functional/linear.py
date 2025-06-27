@@ -38,7 +38,7 @@ def update_linear_gradients(
       Which one is best? (and can we fuse everything?)
     """
 
-    grad_output = grad_output.flatten(0, -2)
+    grad_output = grad_output(0, -2)
     input_ = input_.flatten(0, -2)
     lhs, rhs = (input_.t(), grad_output) if transposed_weight else (grad_output.t(), input_)
 

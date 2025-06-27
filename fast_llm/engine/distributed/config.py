@@ -61,7 +61,7 @@ class DistributedDim:
     name: str
     size: int
     rank: int
-    global_ranks: range | tuple[int, ...] = None
+    global_ranks: range | tuple[int, ...]
 
     def __post_init__(self):
         self._is_setup = False

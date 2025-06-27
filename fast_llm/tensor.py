@@ -10,7 +10,7 @@ from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
 from fast_llm.engine.distributed.config import DistributedDim, DistributedDimNames
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.functional.triton.pointwise import triton_add, triton_copy
-from fast_llm.utils import Assert
+from fast_llm.utils import Assert, flatten_without_copy
 
 
 class _SafeTensorSliceMeta(type):
@@ -88,24 +88,27 @@ class TensorMeta(torch.Tensor):
         )
 
     @functools.cached_property
-    def is_tensor_parallel(self) -> bool:
+    def tensor_parallel_dim_index(self) -> int | None:
         # TODO: Avoid hard-coded assumptions on tensor parallel.
-        return any(
-            dim.parallel_dim is not None and dim.parallel_dim.name == DistributedDimNames.tensor for dim in self.dims
-        )
-
-    @functools.cached_property
-    def tensor_parallel_dim(self) -> DistributedDim | None:
-        # TODO: Avoid hard-coded assumptions on tensor parallel.
-        if not self.is_tensor_parallel:
-            return None
-        dims = [
-            dim
-            for dim in self.dims
+        indexes = [
+            i
+            for i, dim in enumerate(self.dims)
             if dim.parallel_dim is not None and dim.parallel_dim.name == DistributedDimNames.tensor
         ]
-        assert len(dims) == 1, dims
-        return dims[0].parallel_dim
+        assert len(indexes) == 1, indexes
+        return indexes[0]
+
+    @functools.cached_property
+    def is_tensor_parallel(self) -> bool:
+        return self.tensor_parallel_dim_index is not None
+
+    @functools.cached_property
+    def tensor_parallel_size(self) -> int:
+        return self.dims[self.tensor_parallel_dim_index].parallel_dim.size if self.is_tensor_parallel else 1
+
+    @functools.cached_property
+    def tensor_parallel_rank(self) -> int:
+        return self.dims[self.tensor_parallel_dim_index].parallel_dim.rank if self.is_tensor_parallel else 0
 
     def __repr__(self, *, tensor_contents=()):
         return super().__repr__(
@@ -194,10 +197,12 @@ class TensorMeta(torch.Tensor):
 
         for i, dim in enumerate(self.dims):
             if dim.parallel_dim is not None and dim.parallel_dim.size > 1:
-                tensor_ = (
-                    tensor_.unflatten(i, dim.global_expanded_shape)
-                    .chunk(dim.parallel_dim.size, i + dim.parallel_dim_index)[dim.parallel_dim.rank]
-                    .flatten(i, i + len(dim.expanded_shape) - 1)
+                tensor_ = flatten_without_copy(
+                    tensor_.unflatten(i, dim.global_expanded_shape).chunk(
+                        dim.parallel_dim.size, i + dim.parallel_dim_index
+                    )[dim.parallel_dim.rank],
+                    i,
+                    i + len(dim.expanded_shape) - 1,
                 )
 
         return tensor_.view(self.shape)
