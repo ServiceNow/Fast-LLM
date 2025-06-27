@@ -46,6 +46,8 @@ data:
 
 ## Evaluation Harness (`lm_eval`) Evaluator
 
+**Note:** Only data parallelism is currently supported for the `lm_eval` evaluator.
+
 To run `lm_eval` evaluations, version `0.4.9` of `lm_eval` must be installed along with all dependencies required for your evaluation tasks.
 
 The following environment variables may need to be set:
