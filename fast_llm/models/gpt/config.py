@@ -237,13 +237,15 @@ class GPTTrainerConfig(PretrainedGPTModelConfig, TrainerConfig):
         cls._handle_renamed_field(
             default, ("data", "sampling", "use_loss_masking_spans"), ("batch", "use_loss_masking_spans")
         )
-        if "truncate_documents" in default["data"]:
+        if "truncate_documents" in default.get("data", {}):
             # Backward compatibility for the legacy truncate_documents field.
             # TODO v0.x: Remove backward compatibility.
             logger.warning(
                 "`data.truncate_documents` field is deprecated. " "Please use `batch.truncate_documents` instead."
             )
-            assert "truncate_documents" not in default["batch"]
+            assert "truncate_documents" not in default.get("batch", {})
+            if "batch" not in default:
+                default["batch"] = {}
             default["batch"]["truncate_documents"] = default["data"].pop("truncate_documents")
         return super()._from_dict(default, strict, flat)
 
