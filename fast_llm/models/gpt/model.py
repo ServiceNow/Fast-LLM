@@ -66,7 +66,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             self._preprocessors.append(
                 RotaryEmbeddingPreprocessor(self._config.transformer.rotary, self._tensor_space)
             )
-        if not self._config.transformer.diffusion.enabled:
+        if not self._config.transformer.diffusion:
             if self._use_flash_attention:
                 self._preprocessors.append(FlashAttnVarlenPreprocessor(self._config.transformer, self._tensor_space))
             else:
