@@ -82,6 +82,7 @@ class TransformerKwargs:
     sequence_length = "sequence_length"
     # TODO: Move
     grad_output = "grad_output"
+    causal = "causal"
 
 
 class TransformerLossNames:

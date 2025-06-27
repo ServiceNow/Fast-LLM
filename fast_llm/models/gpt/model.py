@@ -55,13 +55,15 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
         # We have multiple identical rotary modules/preprocessors, so it's simpler to make a new one here.
         # TODO: Find a better solution.
         self._preprocessors.append(self._config.transformer.rotary.build(self._tensor_space))
-        if self._use_flash_attention:
-            self._preprocessors.append(FlashAttnVarlenPreprocessor(self._config.transformer, self._tensor_space))
-        else:
-            self._preprocessors.append(BackupAttentionPreprocessor(self._config.transformer, self._tensor_space))
 
-        if self._config.enable_dpo:  # TODO better way to pass in?
-            self._preprocessors.append(PreferenceSpanPreprocessor(self._config, self._tensor_space))
+        if not self._config.transformer.diffusion:
+            if self._use_flash_attention:
+                self._preprocessors.append(FlashAttnVarlenPreprocessor(self._config.transformer, self._tensor_space))
+            else:
+                self._preprocessors.append(BackupAttentionPreprocessor(self._config.transformer, self._tensor_space))
+
+            if self._config.enable_dpo:  # TODO better way to pass in?
+                self._preprocessors.append(PreferenceSpanPreprocessor(self._config, self._tensor_space))
 
     def get_output_layers(self) -> list[Layer]:
         layers = []
@@ -341,17 +343,9 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                     kwargs[LanguageModelKwargs.mask_probabilities] = batch.mask_probabilities.to(
                         device=self._tensor_space.distributed.device
                     )
-                    # Setup bidirection attention for diffusion should we set this in a preprocessor? BackupAttentionPreprocessor?
-                    batch_size, seq_len = batch.token_ids.shape
-                    attention_mask = torch.ones(
-                        (batch_size, 1, seq_len, seq_len),
-                        dtype=torch.bool,
-                        device=self._tensor_space.distributed.device,
-                    )
-                    kwargs[TransformerKwargs.attention_mask] = attention_mask
-                    kwargs[TransformerKwargs.attention_mask_value] = torch.tensor(
-                        -10000.0, device=self._tensor_space.distributed.device
-                    )
+                    # Setup bidirection attention for masked diffusion
+                    # It uses _flash_attn_func so no need to set attention_mask and attention_mask_value.
+                    kwargs[TransformerKwargs.causal] = False
 
                     # set token ids to masked tokens
                     batch.token_ids = batch.masked_token_ids

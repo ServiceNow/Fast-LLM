@@ -371,7 +371,7 @@ class Attention(torch.nn.Module):
                         max_seqlen_k=kwargs.get(TransformerKwargs.max_seqlen_k),
                         dropout_p=self._config.attention_dropout if self.training else 0.0,
                         window_size=(-1, -1) if window_size is None else (window_size - 1, 0),
-                        causal=True,
+                        causal=kwargs.get(TransformerKwargs.causal, True),
                         softmax_scale=self._softmax_scale,
                     ).view(*out_dims)
                 else:
@@ -381,7 +381,7 @@ class Attention(torch.nn.Module):
                         value,
                         window_size=(-1, -1) if window_size is None else (window_size - 1, 0),
                         dropout_p=self._config.attention_dropout if self.training else 0.0,
-                        causal=True,
+                        causal=kwargs.get(TransformerKwargs.causal, True),
                         softmax_scale=self._softmax_scale,
                     )
             input_ = input_.flatten(-2)
