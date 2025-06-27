@@ -5,9 +5,9 @@ import torch
 from torch.distributed import all_reduce
 
 from fast_llm.core.distributed import add_ephemeral_timeout
+from fast_llm.engine.multi_stage.config import ShardName
 from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
 from fast_llm.functional.triton.pointwise import triton_fill
-from fast_llm.utils import Assert
 
 logger = logging.getLogger(__name__)
 
@@ -48,14 +48,17 @@ class SafeLoad:
         if not exc_type:
             self._validate()
 
-    def mark_as_loaded(self, count: int, parameter: tuple[str, str] | None = None) -> None:
+    def mark_as_loaded(self, count: int, parameter: tuple[str, str] | None = None, partial: bool = False) -> None:
         self._loaded += count
         if parameter is not None:
             parameter_name, shard_name = parameter
             if shard_name not in self._loaded_parameters:
                 self._loaded_parameters[shard_name] = {}
-            Assert.not_incl(parameter_name, self._loaded_parameters[shard_name])
-            self._loaded_parameters[shard_name][parameter_name] = count
+            if not partial and parameter_name in self._loaded_parameters[shard_name]:
+                raise ValueError(f"Duplicate loaded parameter ({parameter_name}, {shard_name})")
+            self._loaded_parameters[shard_name][parameter_name] = (
+                self._loaded_parameters[shard_name].get(parameter_name, 0) + count
+            )
 
     def _validate(self) -> None:
         errors = []
@@ -105,7 +108,7 @@ class SafeLoad:
                                 f"{missing_for_param:,} values missing out of {parameter.numel():,} for parameter {parameter_name} in stage {stage.index}, shard {shard_name}"
                                 f" (locally {local_missing_for_param:,} out of {local_values.numel():,})"
                             )
-                    missing_for_pad = buffer[-fsdp._global_pad :].isnan().sum().item()
+                    missing_for_pad = buffer[-fsdp._global_pad :].isnan().sum().item() if fsdp._global_pad > 0 else 0
                     if missing_for_pad > 0:
                         global_total += missing_for_pad
                         local_missing_for_pad = (
@@ -127,52 +130,63 @@ class SafeLoad:
                 )
 
     def _check_parameters(self, errors: list[str]) -> None:
-        loaded_shard_names = set(self._loaded_parameters)
-        shard_names = set(self._self_shards)
-        if loaded_shard_names != shard_names:
-            errors.append(f"Incorrect loaded shards: {loaded_shard_names}!={shard_names}")
-        for shard_name in shard_names & loaded_shard_names:
-            counter_per_parameter = {
-                parameter_name: self._loaded_parameters[shard_name].pop(parameter_name, None)
-                for parameter_name in self._model.parameter_names
-            }
-            for parameter_name, count in self._loaded_parameters[shard_name].items():
-                errors.append(f'Loaded unknown parameter "{parameter_name}" for shard "{shard_name}" (count={count})')
-            for parameter_name, counter in counter_per_parameter.items():
-                if self._model.is_parameter_on_device(parameter_name):
-                    if counter is None:
-                        errors.append(f'Missing parameter "{parameter_name}" for shard "{shard_name}"')
-                elif counter is not None and counter > 0:
-                    errors.append(f'Loaded off-device parameter : "{parameter_name}" for shard "{shard_name}"')
-            if self._distributed.world_group is not None:
-                counter_list = []
-                for parameter_name, counter in counter_per_parameter.items():
-                    parameter_stage = self._model.get_parameter_stage(parameter_name)
-                    parameter_meta = parameter_stage.get_parameter_meta(parameter_name)
-                    if (
-                        counter is None
-                        or (not parameter_meta.is_tensor_parallel and self._distributed.config.tensor_rank != 0)
-                        or parameter_stage.is_tied_weight_copy
-                    ):
-                        # Ignore the counter from missing or duplicate tensors.
-                        counter = 0
-                    counter_list.append(counter)
+        if set(self._loaded_parameters) != set(self._self_shards):
+            errors.append(f"Incorrect loaded shards: {tuple(self._loaded_parameters)}!={tuple(self._self_shards)}")
 
-                counter_tensor = torch.tensor(counter_list, dtype=torch.int64).to(self._distributed.device)
-
-                add_ephemeral_timeout(self._distributed.world_group, self._timeout)
-                all_reduce(counter_tensor, group=self._distributed.world_group)
-                counter_per_parameter = {
-                    parameter_name: counter
-                    for parameter_name, counter in zip(counter_per_parameter, counter_tensor.tolist())
-                }
-            for parameter_name, counter in counter_per_parameter.items():
-                parameter_size = (
-                    self._model.get_parameter_stage(parameter_name)
-                    .get_parameter_meta(parameter_name)
-                    .global_shape.numel()
+        counters = []
+        # Compare local counts against expected values.
+        for stage, fsdp, parameter_name, parameter_meta in self._model.stages_fsdp_parameters:
+            for shard_name in self._self_shards if fsdp.requires_grad else [ShardName.weights]:
+                counter = self._loaded_parameters[shard_name].pop(parameter_meta.tensor_name, 0)
+                local_size = (
+                    fsdp.get_parameter_size_in_shard(parameter_name, shard_name)
+                    if self._model.is_parameter_on_device(parameter_name)
+                    else 0
                 )
+                if counter != local_size:
+                    errors.append(
+                        f'Local counter mismatch for parameter "{parameter_name}"'
+                        f' and shard "{shard_name}": loaded {counter}, expected {local_size}'
+                    )
+
+                counter_ = counter
+                # Accumulate in a list for global counter check.
+                if (
+                    not parameter_meta.is_tensor_parallel and self._distributed.config.tensor_rank != 0
+                ) or stage.is_tied_weight_copy:
+                    # Ignore the counter from duplicate tensors.
+                    counter = 0
+                if parameter_name == "layers.1.norm_1.weight":
+                    logger.info(
+                        f"Parameter {parameter_name} local {counter_} keep {counter} (size {parameter_meta.numel()} / {parameter_meta.global_shape.numel()})"
+                    )
+                counters.append(counter)
+
+        # Check for unexpected parameters.
+        for shard_name, loaded in self._loaded_parameters.items():
+            for parameter_name, count in loaded.items():
+                errors.append(f'Loaded unknown parameter "{parameter_name}" for shard "{shard_name}" (count={count})')
+
+        # All-reduce to get global counts.
+        if self._distributed.world_group is not None:
+            counter_tensor = torch.tensor(counters, dtype=torch.int64).to(self._distributed.device)
+            # This may be the first distributed barrier after loading, so we need to wait for everyone to finish.
+            add_ephemeral_timeout(self._distributed.world_group, self._timeout)
+            all_reduce(counter_tensor, group=self._distributed.world_group)
+            counters = counter_tensor.tolist()
+
+        # Compare global counts against expected values.
+        for stage, fsdp, parameter_name, parameter_meta in self._model.stages_fsdp_parameters:
+            for shard_name in self._self_shards if fsdp.requires_grad else [ShardName.weights]:
+                counter = counters.pop(0)
+                if parameter_name == "layers.1.norm_1.weight":
+                    logger.info(
+                        f"Parameter {parameter_name} global {counter} (size {parameter_meta.numel()} / {parameter_meta.global_shape.numel()})"
+                    )
+                parameter_size = parameter_meta.global_shape.numel()
                 if counter != parameter_size:
                     errors.append(
-                        f'Global counter mismatch for parameter "{parameter_name}" and shard "{shard_name}": {counter} != {parameter_size}'
+                        f'Global counter mismatch for parameter "{parameter_name}"'
+                        f' and shard "{shard_name}": loaded {counter}, expected {parameter_size}'
                     )
+        assert not counters

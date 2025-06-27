@@ -66,6 +66,10 @@ class TensorDim:
     def parallel_group(self) -> "ProcessGroup|None":
         return None if self._parallel_dim is None else self._parallel_dim.group
 
+    def replace_parallel_dim(self, distributed_dim: DistributedDim) -> typing.Self:
+        assert self.parallel_dim is not None
+        return TensorDim(self.name, self.size * distributed_dim.size, distributed_dim)
+
 
 class CompositeTensorDim(TensorDim):
     def __init__(self, name: str, dims: tuple[TensorDim, ...]):
@@ -105,6 +109,12 @@ class CompositeTensorDim(TensorDim):
     @property
     def parallel_dim_index(self) -> int | None:
         return self._parallel_dim_index
+
+    def replace_parallel_dim(self, distributed_dim: DistributedDim) -> typing.Self:
+        assert self.parallel_dim_index is not None
+        dims = list(self.dims)
+        dims[self.parallel_dim_index] = dims[self.parallel_dim_index].replace_parallel_dim(distributed_dim)
+        return CompositeTensorDim(self.name, tuple(dims))
 
 
 class DefaultDimNames:

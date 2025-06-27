@@ -8,7 +8,7 @@ from fast_llm.config import Configurable
 from fast_llm.core.distributed import check_parallel_match
 from fast_llm.engine.base_model.base_model import BaseModel, Layer
 from fast_llm.engine.config_utils.data_type import DataType
-from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
+from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.engine.multi_stage.config import ShardName, StageConfig, StageMode
 from fast_llm.engine.multi_stage.fsdp import FSDP
@@ -51,20 +51,13 @@ class StageBase(Configurable[StageConfig]):
         parameter_metas, frozen_metas = self._get_parameter_metas()
         self._parameter_metas = parameter_metas + frozen_metas
         self._fsdps = []
-        gradient_buffer_dtype = (
-            self._distributed_config.optimization_dtype
-            if self._config.full_precision_gradients
-            else self._distributed_config.training_dtype
-        )
         if parameter_metas:
             self._fsdps.append(
                 FSDP(
                     f"stage_{self._index}",
                     parameter_metas,
-                    self._distributed_config.get_distributed_dim(DistributedDimNames.data),
-                    training_dtype=self._distributed_config.training_dtype,
-                    gradient_buffer_dtype=gradient_buffer_dtype,
-                    optimization_dtype=self._distributed_config.optimization_dtype,
+                    self._distributed_config,
+                    full_precision_gradient_buffer=self._config.full_precision_gradients,
                 )
             )
         if frozen_metas:
@@ -72,14 +65,9 @@ class StageBase(Configurable[StageConfig]):
                 FSDP(
                     f"stage_{self._index}_frozen",
                     frozen_metas,
-                    self._distributed_config.get_distributed_dim(DistributedDimNames.data),
-                    training_dtype=self._distributed_config.training_dtype,
-                    gradient_buffer_dtype=gradient_buffer_dtype,
-                    optimization_dtype=(
-                        self._distributed_config.optimization_dtype
-                        if self._config.store_frozen_weights_in_optimization_precision
-                        else self._distributed_config.training_dtype.torch
-                    ),
+                    self._distributed_config,
+                    full_precision_gradient_buffer=self._config.full_precision_gradients,
+                    full_precision_shards=self._config.store_frozen_weights_in_optimization_precision,
                 )
             )
         # TODO: Separate fsdp for tied weights?
@@ -291,7 +279,7 @@ class StageBase(Configurable[StageConfig]):
             )
             grads_norm_slices = []
             for name in grad_norm_names:
-                begin, end = fsdp._parameter_range_in_shard(name)
+                begin, end = fsdp._get_parameter_range_in_shard(name)
                 if len(grads_norm_slices) < 0 and begin == grads_norm_slices[-1].stop:
                     grads_norm_slices[-1] = slice(grads_norm_slices[-1].start, end)
                 else:

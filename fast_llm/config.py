@@ -379,6 +379,8 @@ class Config(metaclass=ConfigMeta):
         Validate a class and mark it as read-only
         This should not be overridden in derived classes.
         """
+        if self._validated:
+            return self
         try:
             expected_class = self.get_subclass(self.type)
         except KeyError as e:
@@ -392,15 +394,14 @@ class Config(metaclass=ConfigMeta):
             # Done during validation so we don't accidentally use default subtypes as updates.
             self.type = self.dynamic_type_name
 
-        if not self._validated:
-            try:
-                self._validate()
-            except (ValidationError, FieldTypeError) as e:
-                if _is_validating:
-                    raise
-                else:
-                    raise type(e)("\n".join(e.args)) from None
-            self._validated = True
+        try:
+            self._validate()
+        except (ValidationError, FieldTypeError) as e:
+            if _is_validating:
+                raise
+            else:
+                raise type(e)("\n".join(e.args)) from None
+        self._validated = True
         return self
 
     def _validate(self) -> None:
