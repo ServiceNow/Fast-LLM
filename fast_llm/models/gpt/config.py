@@ -59,11 +59,13 @@ class MixtralGPTHuggingfaceCheckpointFormat(GPTHuggingfaceCheckpointFormat):
 class MTPLlamaGPTHuggingfaceCheckpointFormat(GPTHuggingfaceCheckpointFormat):
     name: typing.ClassVar[str] = "mtp_llama"
     trust_remote_code: typing.ClassVar[bool] = True
-    
+
+
 class DiffusionDreamGPTHuggingfaceCheckpointFormat(GPTHuggingfaceCheckpointFormat):
     name: typing.ClassVar[str] = "dream"
     trust_remote_code: typing.ClassVar[bool] = True
-    
+
+
 class DiffusionLlamaGPTHuggingfaceCheckpointFormat(GPTHuggingfaceCheckpointFormat):
     name: typing.ClassVar[str] = "diffusion_llama"
     trust_remote_code: typing.ClassVar[bool] = True
@@ -195,12 +197,6 @@ class GPTTrainerConfig(PretrainedGPTModelConfig, TrainerConfig):
             self.batch.sequence_length = self.model.base_model.max_position_embeddings
         if self.model.base_model.use_megatron_initialization:
             set_megatron_distributed_seeds(self.model.distributed)
-        if self.data.truncate_documents is not None:
-            logger.warning(
-                "Using deprecated field `data.truncate_documents`, `batch.truncate_documents` will be overridden if specified. "
-                "Use `batch.truncate_documents` instead."
-            )
-            self.batch.truncate_documents = self.data.truncate_documents
         super()._validate()
 
         if self.model.base_model.use_absolute_position_embeddings:
@@ -241,6 +237,14 @@ class GPTTrainerConfig(PretrainedGPTModelConfig, TrainerConfig):
         cls._handle_renamed_field(
             default, ("data", "sampling", "use_loss_masking_spans"), ("batch", "use_loss_masking_spans")
         )
+        if "truncate_documents" in default["data"]:
+            # Backward compatibility for the legacy truncate_documents field.
+            # TODO v0.x: Remove backward compatibility.
+            logger.warning(
+                "`data.truncate_documents` field is deprecated. " "Please use `batch.truncate_documents` instead."
+            )
+            assert "truncate_documents" not in default["batch"]
+            default["batch"]["truncate_documents"] = default["data"].pop("truncate_documents")
         return super()._from_dict(default, strict, flat)
 
     @classmethod
