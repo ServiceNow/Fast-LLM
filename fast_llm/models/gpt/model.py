@@ -66,13 +66,11 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             self._preprocessors.append(
                 RotaryEmbeddingPreprocessor(self._config.transformer.rotary, self._tensor_space)
             )
-        if self._use_flash_attention:
-            self._preprocessors.append(FlashAttnVarlenPreprocessor(self._config.transformer, self._tensor_space))
-        else:
-            self._preprocessors.append(BackupAttentionPreprocessor(self._config.transformer, self._tensor_space))
-
-        # if self._config.transformer.diffusion.enabled:
-        #     self._preprocessors.append(LLaDAMaskingPreprocessor(self._config.transformer, self._tensor_space))
+        if not self._config.transformer.diffusion.enabled:
+            if self._use_flash_attention:
+                self._preprocessors.append(FlashAttnVarlenPreprocessor(self._config.transformer, self._tensor_space))
+            else:
+                self._preprocessors.append(BackupAttentionPreprocessor(self._config.transformer, self._tensor_space))
 
     def get_output_layers(self) -> list[Layer]:
         return [
@@ -316,45 +314,52 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
 
                     # Setup bidirection attention for diffusion should we set this in a preprocessor? BackupAttentionPreprocessor?
                     batch_size, seq_len = batch.token_ids.shape
-                    
+
                     # Compute attention mask for diffusion
                     C = batch.in_context_length.to(device=self._tensor_space.distributed.device)
                     row_idx = torch.arange(seq_len, device=self._tensor_space.distributed.device).view(1, seq_len, 1)
                     col_idx = torch.arange(seq_len, device=self._tensor_space.distributed.device).view(1, 1, seq_len)
                     C_exp = C.view(batch_size, 1, 1)
-                    
+
                     causal_mask = col_idx <= row_idx
-                    context_mask_query = row_idx < C_exp
-                    context_mask_key = col_idx < C_exp
-                    
-                    attn_mask = torch.zeros(batch_size, seq_len, seq_len, dtype=torch.bool, device=self._tensor_space.distributed.device)
-                    
+                    row_idx < C_exp
+                    col_idx < C_exp
+
+                    attn_mask = torch.zeros(
+                        batch_size, seq_len, seq_len, dtype=torch.bool, device=self._tensor_space.distributed.device
+                    )
+
                     for b in range(batch_size):
                         C_val = C[b].item()
-                        
+
                         if C_val > 0:
                             context_causal = causal_mask[0, :C_val, :C_val]
                             attn_mask[b, :C_val, :C_val] = context_causal
-                            
+
                         if C_val > 0 and C_val < seq_len:
                             attn_mask[b, C_val:, :C_val] = True
-                            
+
                         if C_val < seq_len:
                             attn_mask[b, C_val:, C_val:] = True
-                    
+
                     # Handle padding if needed
                     if batch.sequence_lengths is not None:
-                        padded = torch.zeros(batch_size, seq_len, dtype=torch.bool, device=self._tensor_space.distributed.device)
+                        padded = torch.zeros(
+                            batch_size, seq_len, dtype=torch.bool, device=self._tensor_space.distributed.device
+                        )
                         for b in range(batch_size):
-                            padded[b, batch.sequence_lengths[b]:] = True
+                            padded[b, batch.sequence_lengths[b] :] = True
                         not_padded = ~padded[:, 1:]
                         attn_mask = attn_mask & not_padded.unsqueeze(1) & not_padded.unsqueeze(2)
-                    
+
                     # Reshape to match expected attention mask format
                     attention_mask = attn_mask.unsqueeze(1)  # Add head dimension
                     kwargs[TransformerKwargs.attention_mask] = attention_mask
-                    kwargs[TransformerKwargs.attention_mask_value] = torch.tensor(
-                        -10000.0, device=self._tensor_space.distributed.device
+                    kwargs[TransformerKwargs.attention_mask_value] = torch.full(
+                        [],
+                        torch.finfo(self._tensor_space.distributed_config.training_dtype.torch).min,
+                        dtype=self._tensor_space.distributed_config.training_dtype.torch,
+                        device=self._tensor_space.distributed.device,
                     )
                     batch.token_ids = batch.masked_token_ids
                     # print("batch.token_ids", batch.token_ids)
