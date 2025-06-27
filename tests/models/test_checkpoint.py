@@ -373,10 +373,8 @@ def parallel_checkpoint_names(model_testing_config):
         [
             "load_pretrained_dp2_in_stp2",
             "load_pretrained_stp2_in_dp2",
-            "load_pretrained_tp2_in_stp2",
+            "load_pretrained_tp2_in_pp2",
             "load_pretrained_pp2_in_tp2",
-            "load_pretrained_dp2_in_stp2",
-            "load_pretrained_dp2_in_stp2",
         ]
     )
     return names
@@ -426,10 +424,12 @@ def test_multi_gpu_fast_llm_checkpoint(
     model_testing_config, load_and_save_parallel_base_path, get_convert_path, parallel_checkpoint_names
 ):
     # Fast-LLM checkpoints are independent of the distributed configuration that saved it.
+    # TODO: Check pipeline-parallel checkpoints (two files).
     _compare_safetensor_files(
         get_convert_path(FastLLMCheckpointFormat, DistributedCheckpointFormat) / f"model_0.safetensors",
         *[
             load_and_save_parallel_base_path / name / FastLLMCheckpointFormat.name / f"model_0.safetensors"
             for name in parallel_checkpoint_names
+            if "in_pp2" not in name
         ],
     )

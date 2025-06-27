@@ -119,7 +119,7 @@ def main(args: list[str] | None = None) -> None:
             pretrained_path=base_path / f"load_pretrained_{dist}_in_tp2" / dist,
             pretrained_format=DistributedCheckpointFormat,
             distributed_config={"tensor_parallel": 2, "sequence_tensor_parallel": True},
-            save_path=base_path / "load_pretrained_tp2_in_stp2",
+            save_path=base_path / "load_pretrained_tp2_in_pp2",
         )
         _test_load_and_save_parallel(
             model_testing_config=model_testing_config,
