@@ -180,6 +180,8 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
             group_dst=0,
             group=self.group,
         )
+        # Clean gather list from empty shards
+        gather_list = [el for el in gather_list if len(el) > 0]
 
         # If it was model generate tensors could be of different length
         # so we aggregate results to list instead of a tensor
@@ -188,8 +190,6 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
         else:
             # Tensors gathered via gather_object will remain on their original GPUs,
             # even if they came from another node. Move them to the current GPU.
-            if orig_size < self.batch_size:
-                print("gather_list", gather_list)
             gather_list = [el.to(self.device) for el in gather_list]
             res = torch.cat(gather_list, dim=0)
 
