@@ -135,7 +135,7 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
         # TODO: Skip cross-entropy backward if not needed.
         language_model_loss = self._forward(input_, kwargs, losses)
         if losses is not None and language_model_loss is not None:
-            losses[self._loss_name].append(language_model_loss)
+            losses[self._loss_name].append(language_model_loss.detach())
         # TODO: Return the model output when needed.
         if self._is_last_head:
             # Last head should return the loss for backward.

@@ -201,14 +201,14 @@ def pytest_runtest_makereport(item: pytest.Function, call: pytest.CallInfo):
                     "duration": call.duration,
                     # Relevant value for OOM risk. Also look at global max since fast-llm resets stats.
                     "max_memory_reserved": max(
-                        torch.cuda.max_memory_reserved(), fast_llm.logging._global_max_reserved
+                        torch.cuda.max_memory_reserved() / 2**20, fast_llm.logging._global_max_reserved
                     ),
                     # Actual memory usage from the test.
                     "max_memory_allocated": max(
-                        torch.cuda.max_memory_allocated(), fast_llm.logging._global_max_allocated
+                        torch.cuda.max_memory_allocated() / 2**20, fast_llm.logging._global_max_allocated
                     ),
-                    "memory_reserved": torch.cuda.memory_reserved(),
-                    "memory_allocated": torch.cuda.memory_allocated(),
+                    "memory_reserved": torch.cuda.memory_reserved() / 2**20,
+                    "memory_allocated": torch.cuda.memory_allocated() / 2**20,
                 }
             ),
         )
@@ -241,10 +241,10 @@ def pytest_terminal_summary(terminalreporter):
     for nodeid in sorted_nodeids[: terminalreporter.config.getoption("--show-gpu-memory")]:
         terminalreporter.write_line(
             f"{nodeid}:\n    "
-            f"Max Reserved {resource_reports[nodeid]["max_memory_reserved"] / 1e6:.0f} MB | "
-            f"Max Allocated {resource_reports[nodeid]["max_memory_allocated"] / 1e6:.0f} MB | "
-            f"End Reserved {resource_reports[nodeid]["memory_reserved"] / 1e6:.0f} MB | "
-            f"End Allocated {resource_reports[nodeid]["memory_allocated"] / 1e6:.0f} MB | "
+            f"Max Reserved {resource_reports[nodeid]["max_memory_reserved"]:.0f} MiB | "
+            f"Max Allocated {resource_reports[nodeid]["max_memory_allocated"]:.0f} MiB | "
+            f"End Reserved {resource_reports[nodeid]["memory_reserved"]:.0f} MiB | "
+            f"End Allocated {resource_reports[nodeid]["memory_allocated"]:.0f} MiB | "
             f"Duration {resource_reports[nodeid]["duration"]:.2f}"
         )
 

@@ -84,7 +84,7 @@ class LanguageModelEmbedding[ConfigType: LanguageModelBaseConfig](Configurable[L
             )
 
     @torch.compile
-    def _forward(self, input_: torch.Tensor, position_ids: torch.Tensor | None) -> torch.Tensor:
+    def _forward(self, input_: torch.Tensor, position_ids: torch.Tensor | None, mask_inputs: bool) -> torch.Tensor:
         Assert.eq(position_ids is not None, self._use_absolute_position_embeddings)
         group = self._tensor_space.distributed.tensor_group
         if self._parallel_embeddings:
@@ -101,9 +101,17 @@ class LanguageModelEmbedding[ConfigType: LanguageModelBaseConfig](Configurable[L
                 input_ = split(input_, group=group, dim=0)
                 if self._use_absolute_position_embeddings:
                     position_ids = split(position_ids, group=group, dim=0)
-            embeddings = torch.embedding(self.word_embeddings_weight, input_)
+            # handle masked tokens
+            if mask_inputs:
+                input_mask = input_ >= 0
+                masked_input = input_ * input_mask
+                embeddings = torch.embedding(self.word_embeddings_weight, masked_input)
+            else:
+                embeddings = torch.embedding(self.word_embeddings_weight, input_)
             if self._use_absolute_position_embeddings:
                 embeddings = embeddings + torch.nn.functional.embedding(position_ids, self.position_embeddings_weight)
+            if mask_inputs:
+                embeddings = embeddings * input_mask.unsqueeze(2)
         with set_generator(
             self._tensor_space.distributed.tp_generator
             if self._sequence_parallel
@@ -125,4 +133,6 @@ class LanguageModelEmbedding[ConfigType: LanguageModelBaseConfig](Configurable[L
                 tensor_name="Embedding output",
                 dtype=self._residual_dtype,
             )
-        return self._forward(input_, kwargs.get(LanguageModelKwargs.position_ids))
+        return self._forward(
+            input_, kwargs.get(LanguageModelKwargs.position_ids), kwargs.get(LanguageModelKwargs.mask_inputs)
+        )

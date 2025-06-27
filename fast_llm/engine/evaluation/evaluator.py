@@ -124,9 +124,13 @@ class EvaluatorLoss[ConfigType: EvaluatorLossConfig](Evaluator[ConfigType]):
         self._is_setup = True
 
     def get_sampling_parameters(self) -> EvaluatorSamplingParameters | None:
-        return EvaluatorSamplingParameters(
-            (self._name if self._config.dataset_name is None else self._config.dataset_name),
-            self._config.iterations * self._batch_config.batch_size,
+        return (
+            None
+            if self._config.iterations is None
+            else EvaluatorSamplingParameters(
+                (self._name if self._config.dataset_name is None else self._config.dataset_name),
+                self._config.iterations * self._batch_config.batch_size,
+            )
         )
 
     def run(
@@ -139,7 +143,6 @@ class EvaluatorLoss[ConfigType: EvaluatorLossConfig](Evaluator[ConfigType]):
             run_index = 0
 
         metrics = {}
-        formatted_metrics = None
 
         if self._evaluation_iterator is None:
             self._evaluation_iterator = self._get_data_iterator(self._get_completed_evaluation_steps(run_index))

@@ -156,3 +156,6 @@ class CustomModelingExportMixin:
         shutil.copy(self.configuration_file, config.path)
         if self.generation_utils_file:
             shutil.copy(self.generation_utils_file, config.path)
+            gen_config = pathlib.Path(self.generation_utils_file).parent / "generation_config.json"
+            if gen_config.exists():
+                shutil.copy(gen_config, config.path)
