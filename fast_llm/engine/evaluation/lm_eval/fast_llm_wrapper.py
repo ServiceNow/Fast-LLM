@@ -122,9 +122,13 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
                 assert max_length is not None and stop is not None
 
             # always divide by batch_size, if not full batch, some ranks will get less work or not at all
+            assert self.batch_size % world_size == 0
             step = self.batch_size // world_size
+            orig_size = input_ids.shape[0]
 
             input_ids = [input_ids[i * step : (i + 1) * step] for i in range(world_size)]
+            if orig_size < self.batch_size:
+                print("input_ids", input_ids)
             attention_mask = [
                 attention_mask[i * step : (i + 1) * step] if attention_mask is not None else None
                 for i in range(world_size)
@@ -184,6 +188,8 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
         else:
             # Tensors gathered via gather_object will remain on their original GPUs,
             # even if they came from another node. Move them to the current GPU.
+            if orig_size < self.batch_size:
+                print("gather_list", gather_list)
             gather_list = [el.to(self.device) for el in gather_list]
             res = torch.cat(gather_list, dim=0)
 
