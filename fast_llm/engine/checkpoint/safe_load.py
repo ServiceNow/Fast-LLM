@@ -148,12 +148,18 @@ class SafeLoad:
                         f'Local counter mismatch for parameter "{parameter_name}"'
                         f' and shard "{shard_name}": loaded {counter}, expected {local_size}'
                     )
+
+                counter_ = counter
                 # Accumulate in a list for global counter check.
                 if (
                     not parameter_meta.is_tensor_parallel and self._distributed.config.tensor_rank != 0
                 ) or stage.is_tied_weight_copy:
                     # Ignore the counter from duplicate tensors.
                     counter = 0
+                if parameter_name == "layers.1.norm_1.weight":
+                    logger.info(
+                        f"Parameter {parameter_name} local {counter_} keep {counter} (size {parameter_meta.numel()} / {parameter_meta.global_shape.numel()})"
+                    )
                 counters.append(counter)
 
         # Check for unexpected parameters.
@@ -173,6 +179,10 @@ class SafeLoad:
         for stage, fsdp, parameter_name, parameter_meta in self._model.stages_fsdp_parameters:
             for shard_name in self._self_shards if fsdp.requires_grad else [ShardName.weights]:
                 counter = counters.pop(0)
+                if parameter_name == "layers.1.norm_1.weight":
+                    logger.info(
+                        f"Parameter {parameter_name} global {counter} (size {parameter_meta.numel()} / {parameter_meta.global_shape.numel()})"
+                    )
                 parameter_size = parameter_meta.global_shape.numel()
                 if counter != parameter_size:
                     errors.append(

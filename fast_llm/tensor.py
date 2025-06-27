@@ -10,7 +10,7 @@ from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
 from fast_llm.engine.distributed.config import DistributedDim, DistributedDimNames
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.functional.triton.pointwise import triton_add, triton_copy
-from fast_llm.utils import Assert, flatten_without_copy
+from fast_llm.utils import Assert
 
 
 class _SafeTensorSliceMeta(type):
@@ -187,6 +187,8 @@ class TensorMeta(torch.Tensor):
     def global_to_local(
         self,
         tensor: torch.Tensor | SafeTensorSlice,
+        # Return an expanded tensor, avoiding `flatten` which copies the data.
+        expand: bool = False,
     ) -> torch.Tensor:
         """
         Recover the tensor-parallel slice of a tensor. Support lazy-loaded safetensor slices.
@@ -195,17 +197,13 @@ class TensorMeta(torch.Tensor):
         tensor_ = tensor[:]
         assert not self._reductions
 
-        for i, dim in enumerate(self.dims):
+        for i, dim in reversed(list(enumerate(self.dims))):
             if dim.parallel_dim is not None and dim.parallel_dim.size > 1:
-                tensor_ = flatten_without_copy(
-                    tensor_.unflatten(i, dim.global_expanded_shape).chunk(
-                        dim.parallel_dim.size, i + dim.parallel_dim_index
-                    )[dim.parallel_dim.rank],
-                    i,
-                    i + len(dim.expanded_shape) - 1,
-                )
+                tensor_ = tensor_.unflatten(i, dim.global_expanded_shape).chunk(
+                    dim.parallel_dim.size, i + dim.parallel_dim_index
+                )[dim.parallel_dim.rank]
 
-        return tensor_.view(self.shape)
+        return tensor_ if expand else tensor_.reshape(self.shape)
 
     @classmethod
     def __torch_function__(cls, func, types, args=(), kwargs=None):
@@ -219,6 +217,17 @@ class TensorMeta(torch.Tensor):
 
     def validate(self, tensor: torch.Tensor, device: torch.device | None = None) -> torch.Tensor:
         return validate_tensor(tensor, self, device)
+
+    def replace_tensor_parallel_dim(self, distributed_dim: DistributedDim) -> "TensorMeta":
+        # Replace the tensor-parallel `DistributedDim` in `meta`.
+        # Note: This will turn `ParameterMeta` into `TensorMeta`
+        if not self.is_tensor_parallel:
+            return self
+        dims = list(self.dims)
+        dims[self.tensor_parallel_dim_index] = dims[self.tensor_parallel_dim_index].replace_parallel_dim(
+            distributed_dim
+        )
+        return TensorMeta(self, tensor_name=self.tensor_name, dims=tuple(dims), reductions=self._reductions)
 
 
 class ParameterMeta(TensorMeta):

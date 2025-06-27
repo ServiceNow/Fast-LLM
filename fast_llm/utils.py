@@ -71,13 +71,6 @@ def rms_diff(x: "torch.Tensor", y: "torch.Tensor") -> "torch.Tensor":
     return torch.norm(x - y, 2, dtype=torch.float32) / x.numel() ** 0.5  # noqa
 
 
-def flatten_without_copy(x: "torch.Tensor", start_dim: int = 0, end_dim: int = -1) -> "torch.Tensor":
-    # Similar to torch.flatten, but never returns a copy.
-    return x.view(
-        *x.shape[:start_dim], x.shape[start_dim:end_dim].numel(), *([] if end_dim == -1 else x.shape[end_dim + 1 :])
-    )
-
-
 class Tag:
     __slots__ = ("value",)
 
