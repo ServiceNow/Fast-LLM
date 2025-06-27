@@ -95,8 +95,8 @@ class TensorMeta(torch.Tensor):
             for i, dim in enumerate(self.dims)
             if dim.parallel_dim is not None and dim.parallel_dim.name == DistributedDimNames.tensor
         ]
-        assert len(indexes) == 1, indexes
-        return indexes[0]
+        assert len(indexes) <= 1, indexes
+        return indexes[0] if indexes else None
 
     @functools.cached_property
     def is_tensor_parallel(self) -> bool:

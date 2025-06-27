@@ -129,7 +129,6 @@ class DistributedCheckpointHandler(CheckpointHandler):
                     loaded_fsdp,
                     None,
                     None,
-                    self._model.distributed.device,
                 )
                 if counter:
                     return True
@@ -147,7 +146,6 @@ class DistributedCheckpointHandler(CheckpointHandler):
                     loaded_fsdp,
                     self_fsdp_shards,
                     loaded_fsdp_shards,
-                    self._model.distributed.device,
                 )
                 for parameter, count in counter.items():
                     context.mark_as_loaded(count, parameter, True)
