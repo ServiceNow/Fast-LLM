@@ -4,6 +4,7 @@ import json
 import logging
 import math
 import os
+import shutil
 
 import pytest
 import torch
@@ -14,13 +15,14 @@ from tests.utils.depends import DependencyManager
 
 # Make fixtures available globally without import
 from tests.utils.run_test_script import (  # isort: skip
+    run_distributed_script_for_all_models,
     run_test_script,
     run_test_script_base_path,
     run_test_script_for_all_models,
 )
 
 from tests.utils.model_configs import model_testing_config, ModelTestingConfig, testing_group_enabled  # isort: skip
-from tests.utils.utils import result_path  # isort: skip
+from tests.utils.utils import result_path, TEST_RESULTS_PATH  # isort: skip
 
 
 manager: DependencyManager | None = None
@@ -75,6 +77,11 @@ def pytest_configure(config):
         worker_id = int(worker_name[2:])
     else:
         worker_id = 0
+
+    # TODO: Remove the whole `TEST_RESULTS_PATH` once `get_test_dataset` is parallel-safe.
+    model_result_path = TEST_RESULTS_PATH / "models"
+    if model_result_path.exists():
+        shutil.rmtree(model_result_path)
 
     num_gpus = torch.cuda.device_count()
     if num_gpus > 0 and is_parallel:

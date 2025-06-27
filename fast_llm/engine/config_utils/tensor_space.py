@@ -147,7 +147,10 @@ class TensorSpace:
         else:
             if dim.parallel_dim is not None:
                 assert dim.parallel_dim.name in self._distributed_config.distributed_dims, dim.parallel_dim.name
-                Assert.eq(dim.parallel_dim, self._distributed_config.distributed_dims[dim.parallel_dim.name])
+                Assert.eq(
+                    dim.parallel_dim.__dict__,
+                    self._distributed_config.distributed_dims[dim.parallel_dim.name].__dict__,
+                )
             self._tensor_dims[dim.name] = dim
 
     def get_tensor_dim(self, name: str) -> TensorDim:

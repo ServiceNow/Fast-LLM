@@ -5,6 +5,7 @@ import pathlib
 import typing
 
 from fast_llm.config import Config, Field, FieldHint, check_field, config_class, skip_valid_if_none
+from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.utils import Assert
 
 logger = logging.getLogger(__name__)
@@ -14,8 +15,8 @@ def configure_logging(
     *,
     log_timestamps: bool = True,
     enable_all_loggers: bool = False,
-    rank: int = 0,
-    world_size: int = 1,
+    rank: int = DistributedConfig.default_rank,
+    world_size: int = DistributedConfig.default_world_size,
     directory: pathlib.Path | str | None = None,
 ) -> None:
     rank_str = str(rank).zfill(math.ceil(math.log10(world_size)))

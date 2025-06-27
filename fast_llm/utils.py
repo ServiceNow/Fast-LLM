@@ -165,6 +165,7 @@ class Assert:
         x = torch.as_tensor(x)
         y = torch.as_tensor(y)
 
+        Assert.eq(x.shape, y.shape)
         neq = x != y
         if neq.any().item():  # noqa
             index = None if x.numel() == 1 else torch.where(neq)  # noqa

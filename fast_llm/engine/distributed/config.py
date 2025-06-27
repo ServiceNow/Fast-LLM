@@ -1,3 +1,4 @@
+import dataclasses
 import enum
 import logging
 import os
@@ -50,58 +51,32 @@ class PhaseType(str, enum.Enum):
         return self == PhaseType.training
 
 
+@dataclasses.dataclass
 class DistributedDim:
     """
     A dataclass to hold all relevant information on a process group without actually creating it.
     """
 
-    _is_setup: bool = False
-    _group: "ProcessGroup|None"
+    _group: "ProcessGroup|None" = dataclasses.field(init=False, repr=False)
+    name: str
+    size: int
+    rank: int
+    global_ranks: range | tuple[int, ...] = None
 
-    def __init__(self, name: str, size: int = 1, rank: int = 0, id_: str | None = None, parent: str | None = None):
-        self._name = name
-        self._size = size
-        self._rank = rank
-        self._id = id_
-        self._parent = parent
-
-    @property
-    def name(self) -> str:
-        return self._name
-
-    @property
-    def size(self) -> int:
-        return self._size
-
-    @property
-    def rank(self) -> int:
-        return self._rank
-
-    @property
-    def id(self) -> str | None:
-        return self._id
-
-    @property
-    def parent(self) -> str | None:
-        return self._parent
+    def __post_init__(self):
+        self._is_setup = False
 
     @property
     def group(self) -> "ProcessGroup|None":
-        assert self._is_setup
+        assert hasattr(self, "_group")
         return self._group
 
-    def __repr__(self) -> str:
-        return (
-            f"DistributedDim(name={self.name}, size={self.size}, rank={self.rank}, id={self.id}, parent={self.parent})"
-        )
-
     def setup(self, group: "ProcessGroup|None"):
-        assert not self._is_setup
-        self._is_setup = True
+        assert not hasattr(self, "_group")
         Assert.eq(group is None, self.size == 1)
         if group is not None:
-            Assert.eq(group.size(), self._size)
-            Assert.eq(group.rank(), self._rank)
+            Assert.eq(group.size(), self.size)
+            Assert.eq(group.rank(), self.rank)
         self._group = group
 
 
@@ -272,6 +247,8 @@ class DistributedConfig(Config):
         Assert.multiple(self.local_world_size, self.tensor_parallel)
 
         if self.pipeline_first:
+            # Case is useless and would cause too many complications.
+            Assert.eq(self.sequence_data_parallel, 1)
             # Smaller models can be more demanding on pipeline parallel.
             self.data_rank = (self.rank // self.tensor_parallel) // self.pipeline_parallel
             self.pipeline_rank = (self.rank // self.tensor_parallel) % self.pipeline_parallel
@@ -296,9 +273,17 @@ class DistributedConfig(Config):
         else:
             self.distributed_dims = {}
 
+            data_stride = self.tensor_parallel * (self.pipeline_parallel if self.pipeline_first else 1)
+            pipeline_stride = self.tensor_parallel * (1 if self.pipeline_first else self.data_parallel)
+            print("data_stride", data_stride)
+            print("pipeline_stride", pipeline_stride)
+
             self._add_distributed_dim(
                 DistributedDim(
-                    name=DistributedDimNames.world, size=self.world_size, rank=self.rank, id_=None, parent=None
+                    name=DistributedDimNames.world,
+                    size=self.world_size,
+                    rank=self.rank,
+                    global_ranks=range(self.world_size),
                 )
             )
             self._add_distributed_dim(
@@ -306,8 +291,7 @@ class DistributedConfig(Config):
                     name=DistributedDimNames.data,
                     size=self.data_parallel,
                     rank=self.data_rank,
-                    id_=f"x_{self.pipeline_rank}_{self.tensor_rank}",
-                    parent=DistributedDimNames.world,
+                    global_ranks=self._get_global_ranks(self.data_parallel, data_stride),
                 )
             )
             self._add_distributed_dim(
@@ -315,8 +299,7 @@ class DistributedConfig(Config):
                     name=DistributedDimNames.pipeline,
                     size=self.pipeline_parallel,
                     rank=self.pipeline_rank,
-                    id_=f"x_{self.data_rank}_{self.tensor_rank}",
-                    parent=DistributedDimNames.world,
+                    global_ranks=self._get_global_ranks(self.pipeline_parallel, pipeline_stride),
                 )
             )
             self._add_distributed_dim(
@@ -324,8 +307,7 @@ class DistributedConfig(Config):
                     name=DistributedDimNames.tensor,
                     size=self.tensor_parallel,
                     rank=self.tensor_rank,
-                    id_=f"x_{self.data_rank}_{self.pipeline_rank}",
-                    parent=DistributedDimNames.world,
+                    global_ranks=self._get_global_ranks(self.tensor_parallel, 1),
                 )
             )
             self._add_distributed_dim(
@@ -333,8 +315,7 @@ class DistributedConfig(Config):
                     name=DistributedDimNames.sequence_data,
                     size=self.sequence_data_parallel,
                     rank=self.sequence_data_rank,
-                    id_=f"{self.batch_data_rank}_{self.pipeline_rank}_{self.tensor_rank}",
-                    parent=DistributedDimNames.data,
+                    global_ranks=self._get_global_ranks(self.sequence_data_parallel, data_stride),
                 )
             )
             self._add_distributed_dim(
@@ -342,8 +323,9 @@ class DistributedConfig(Config):
                     name=DistributedDimNames.batch_data,
                     size=self.batch_data_parallel,
                     rank=self.batch_data_rank,
-                    id_=f"{self.sequence_data_rank}_{self.pipeline_rank}_{self.tensor_rank}",
-                    parent=DistributedDimNames.data,
+                    global_ranks=self._get_global_ranks(
+                        self.batch_data_parallel, data_stride * self.sequence_data_parallel
+                    ),
                 )
             )
             self._add_distributed_dim(
@@ -351,16 +333,7 @@ class DistributedConfig(Config):
                     name=DistributedDimNames.tensor_and_sequence_data,
                     size=self.sequence_data_parallel * self.tensor_parallel,
                     rank=self.tensor_rank + self.sequence_data_rank * self.tensor_parallel,
-                    id_=f"{self.batch_data_rank}_{self.pipeline_rank}",
-                    parent=(
-                        DistributedDimNames.tensor
-                        if self.sequence_data_parallel == 1
-                        else (
-                            DistributedDimNames.sequence_data
-                            if self.tensor_parallel == 1
-                            else DistributedDimNames.world
-                        )
-                    ),
+                    global_ranks=self._get_global_ranks(self.sequence_data_parallel * self.tensor_parallel, 1),
                 )
             )
 
@@ -371,12 +344,15 @@ class DistributedConfig(Config):
         Assert.in_range(self.rank, 0, self.world_size)
         Assert.in_range(self.local_rank, 0, self.local_world_size)
 
+    def _get_global_ranks(self, size: int, stride: int) -> range:
+        start = self.rank // (size * stride) * size * stride + self.rank % stride
+        return range(start, start + size * stride, stride)
+
     def _add_distributed_dim(self, distributed_dim: DistributedDim) -> None:
+        Assert.eq(distributed_dim.global_ranks[distributed_dim.rank], self.rank, msg=distributed_dim)
         if distributed_dim.name in self.distributed_dims:
             Assert.eq(distributed_dim, self.distributed_dims[distributed_dim.name])
         else:
-            if distributed_dim.parent is not None:
-                assert distributed_dim.parent in self.distributed_dims
             self.distributed_dims[distributed_dim.name] = distributed_dim
 
     def get_distributed_dim(self, name: str) -> DistributedDim:
