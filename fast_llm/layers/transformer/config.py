@@ -82,6 +82,7 @@ class TransformerKwargs:
     sequence_length = "sequence_length"
     # TODO: Move
     grad_output = "grad_output"
+    causal = "causal"
 
 
 class TransformerLossNames:
@@ -484,6 +485,11 @@ class TransformerConfig(LLMBlockConfig):
         desc="Use a dynamic shape for dropless MLP instead of the worst-case value."
         " Reduces memory usage, but increases fragmentation and requires CPU synchronisation. Not recommended.",
         hint=FieldHint.expert,
+    )
+    diffusion: bool = Field(
+        default=False,
+        desc="Use masked-diffusion for training.",
+        hint=FieldHint.feature,
     )
 
     def _validate(self) -> None:

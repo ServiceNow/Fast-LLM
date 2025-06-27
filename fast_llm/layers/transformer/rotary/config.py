@@ -112,7 +112,7 @@ class YarnRotaryConfig(DefaultRotaryConfig):
 
     # TODO: Add descriptions.
     scale_factor: float = Field(default=8.0, hint=FieldHint.feature)
-    attention_factor: None | float = Field(
+    attention_factor: float | None = Field(
         default=None,
         hint=FieldHint.feature,
     )
@@ -127,9 +127,9 @@ class YarnRotaryConfig(DefaultRotaryConfig):
     original_context_length: int = Field(default=8192, hint=FieldHint.feature)
 
     def _validate(self) -> None:
-        if self.attention_factor is None:
-            with self._set_implicit_default():
-                self.attention_factor = 0.1 * math.log(self.scale_factor) + 1.0
+        # if self.attention_factor is None:
+        #     # with self._set_implicit_default():
+        #     self.attention_factor = 0.1 * math.log(self.scale_factor) + 1.0
         super()._validate()
 
     def _get_configurable_class(self) -> "type[YarnRotary]":

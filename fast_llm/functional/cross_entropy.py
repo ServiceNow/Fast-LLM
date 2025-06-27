@@ -15,6 +15,7 @@ def _torch_cross_entropy_forward_backward(
     grad_output: float | None,
     logits_scale_factor: float,
     target_format: TargetFormat,
+    loss_weight: torch.Tensor | None,
 ) -> tuple[torch.Tensor, torch.Tensor | None]:
     """
     A wrapper for the pytorch implementation of cross-entropy.
@@ -22,6 +23,8 @@ def _torch_cross_entropy_forward_backward(
     and separate forward and backward kernels lead to poor performance.
     TODO: loss masking only works for with labels format and if the masking index is set to -100.
     """
+    assert loss_weight is None, "Loss weight not supported in torch cross-entropy implementation."
+
     # Torch compile doesn't understand this.
     with torch.set_grad_enabled(grad_output is not None):
         logits_ = logits.float().detach().requires_grad_(grad_output is not None)
@@ -82,6 +85,7 @@ def _fused_cross_entropy_forward_backward(
     grad_output: float | None,
     logits_scale_factor: float,
     target_format: TargetFormat,
+    loss_weight: torch.Tensor | None,
     group: ProcessGroup | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor | None]:
     """
@@ -143,15 +147,23 @@ def _fused_cross_entropy_forward_backward(
     else:
         predicted_logits = (target * logits_norm).sum(dim=-1, keepdim=True)
 
-    per_sample_loss = sum_exp_logits.log() - predicted_logits
-    if loss_mask is not None:
-        per_sample_loss = per_sample_loss * loss_mask
+    per_sample_loss = sum_exp_logits.log().sub(logits_norm.gather(1, target).squeeze(1)) * loss_mask
 
-    loss = per_sample_loss.mean()
-    if target_format != TargetFormat.labels and group is not None:
-        all_reduce(loss, op=ReduceOp.MEAN, group=group)
+    if loss_weight is None:
+        if loss_mask is not None:
+            per_sample_loss = per_sample_loss * loss_mask
 
-    return loss, grad
+        loss = per_sample_loss.mean()
+        if target_format != TargetFormat.labels and group is not None:
+            all_reduce(loss, op=ReduceOp.MEAN, group=group)
+            return loss, grad
+    else:
+        # Weight every token loss by the loss weight. Before averaging.
+        per_sample_loss = per_sample_loss * loss_weight.flatten()
+        loss_weight_expanded = loss_weight.reshape(-1, 1)
+        grad = grad * loss_weight_expanded if grad is not None else None
+        # Avg across all the tokens.
+        return per_sample_loss.mean(), grad
 
 
 _CROSS_ENTROPY_IMPLEMENTATIONS = {
@@ -170,6 +182,7 @@ def cross_entropy_forward_backward(
     implementation: CrossEntropyImpl = CrossEntropyImpl.fused,
     logits_scale_factor: float = 1.0,
     target_format: TargetFormat = TargetFormat.labels,
+    loss_weight: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor | None]:
     """
     Select the appropriate implementation of cross-entropy.
@@ -177,6 +190,7 @@ def cross_entropy_forward_backward(
     It doesn't have a tensor-parallel implementation, but can be computed in a sequence-tensor-parallel way,
     which is faster and has a relatively small memory overhead.
     """
+
     if target_format == TargetFormat.labels:
         Assert.eq(target.shape, logits.shape[:-1])
         Assert.eq(target.dtype, torch.int64)
@@ -193,5 +207,5 @@ def cross_entropy_forward_backward(
         )
     else:
         return _CROSS_ENTROPY_IMPLEMENTATIONS[implementation](
-            logits, target, loss_mask, grad_output, logits_scale_factor, target_format
+            logits, target, loss_mask, grad_output, logits_scale_factor, target_format, loss_weight=loss_weight
         )

@@ -12,7 +12,7 @@ from fast_llm.engine.inference.runner import InferenceRunner
 from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
 from fast_llm.layers.language_model.config import LanguageModelKwargs, LanguageModelLossNames
 from fast_llm.layers.language_model.embedding import WORD_EMBEDDINGS_WEIGHT, LanguageModelEmbedding
-from fast_llm.layers.language_model.head import OUTPUT_WEIGHTS, LanguageModelHead
+from fast_llm.layers.language_model.head import OUTPUT_WEIGHTS, LanguageModelHead, MLMHead
 from fast_llm.layers.language_model.preprocessing import PositionEmbeddingPreprocessor, PreferenceSpanPreprocessor
 from fast_llm.layers.transformer.config import (
     RoutingType,
@@ -55,13 +55,15 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
         # We have multiple identical rotary modules/preprocessors, so it's simpler to make a new one here.
         # TODO: Find a better solution.
         self._preprocessors.append(self._config.transformer.rotary.build(self._tensor_space))
-        if self._use_flash_attention:
-            self._preprocessors.append(FlashAttnVarlenPreprocessor(self._config.transformer, self._tensor_space))
-        else:
-            self._preprocessors.append(BackupAttentionPreprocessor(self._config.transformer, self._tensor_space))
 
-        if self._config.enable_dpo:  # TODO better way to pass in?
-            self._preprocessors.append(PreferenceSpanPreprocessor(self._config, self._tensor_space))
+        if not self._config.transformer.diffusion:
+            if self._use_flash_attention:
+                self._preprocessors.append(FlashAttnVarlenPreprocessor(self._config.transformer, self._tensor_space))
+            else:
+                self._preprocessors.append(BackupAttentionPreprocessor(self._config.transformer, self._tensor_space))
+
+            if self._config.enable_dpo:  # TODO better way to pass in?
+                self._preprocessors.append(PreferenceSpanPreprocessor(self._config, self._tensor_space))
 
     def get_output_layers(self) -> list[Layer]:
         layers = []
@@ -78,13 +80,22 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                         return_input=i < self._config.prediction_heads - 1,
                     )
                 )
-            layers.append(
-                LanguageModelHead(
-                    self._config,
-                    self._tensor_space,
-                    prediction_distance=i,
+            if self._config.transformer.diffusion:
+                layers.append(
+                    MLMHead(
+                        self._config,
+                        self._tensor_space,
+                        prediction_distance=i,
+                    )
                 )
-            )
+            else:
+                layers.append(
+                    LanguageModelHead(
+                        self._config,
+                        self._tensor_space,
+                        prediction_distance=i,
+                    )
+                )
         return layers
 
     def get_layers(self) -> list[Layer]:
@@ -323,6 +334,22 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                                 kwargs[LanguageModelKwargs.loss_mask] = loss_mask
                             labels = torch.where(loss_mask, labels, -100)
                 kwargs[LanguageModelKwargs.labels] = labels
+
+                if batch.mask_indexes is not None:
+                    # We are in masked-diffusion mode, so we need to add the mask indexes and probabilities to kwargs
+                    kwargs[LanguageModelKwargs.mask_indexes] = batch.mask_indexes.to(
+                        device=self._tensor_space.distributed.device
+                    )
+                    kwargs[LanguageModelKwargs.mask_probabilities] = batch.mask_probabilities.to(
+                        device=self._tensor_space.distributed.device
+                    )
+                    # Setup bidirection attention for masked diffusion
+                    # It uses _flash_attn_func so no need to set attention_mask and attention_mask_value.
+                    kwargs[TransformerKwargs.causal] = False
+
+                    # set token ids to masked tokens
+                    batch.token_ids = batch.masked_token_ids
+
             kwargs.update(reference_logits[i])
 
             for preprocessor in self._preprocessors:
@@ -365,8 +392,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
         else:
             return {}
 
-    @property
-    def loss_defs(self) -> list[LossDef]:
+    def get_loss_defs(self) -> list[LossDef]:
         loss_defs = []
         if (
             self._config.transformer.num_experts > 1
@@ -389,6 +415,10 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                 )
         if self._config.logit_z_loss:
             LossDef(name=LanguageModelLossNames.z_loss, formatted_name="logit z loss", count=1)
+
+        if self._config.transformer.diffusion:
+            # Masked LM Loss for masked-diffusion training
+            loss_defs.append(LossDef(name=LanguageModelLossNames.mlm_loss, formatted_name="MLM Loss", count=1))
 
         for i in range(self._config.prediction_heads):
             loss_defs.append(
