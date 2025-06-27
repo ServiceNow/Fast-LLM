@@ -387,9 +387,11 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                     labels = batch.token_ids[:, sequence_offset : sequence_k + prediction_heads].contiguous()
                     # We set label indices to -100 for masked spans, inline with ignore_index in torch.nn.CrossEntropyLoss
                     # TODO: take ignore_index from config
+                labels_cloned = False
                 if batch.loss_masking_spans is not None:
                     # avoid changing input tokens
                     labels = labels.clone()
+                    labels_cloned = True
                     for i, spans in enumerate(batch.loss_masking_spans):
                         if not spans.numel():
                             continue
@@ -411,10 +413,15 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                                 kwargs[LanguageModelKwargs.loss_mask] = loss_mask
                             labels = torch.where(loss_mask, labels, -100)
                 if self._config.vision_encoder.enabled:
-                    labels = labels.clone()
                     if self._config.vision_encoder.image_break_token is not None:
+                        if not labels_cloned:
+                            labels = labels.clone()
+                            labels_cloned = True
                         labels = torch.where(labels == self._config.vision_encoder.image_break_token, -100, labels)
                     if self._config.vision_encoder.image_end_token is not None:
+                        if not labels_cloned:
+                            labels = labels.clone()
+                            labels_cloned = True
                         labels = torch.where(labels == self._config.vision_encoder.image_end_token, -100, labels)
                 kwargs[LanguageModelKwargs.labels] = labels
             kwargs.update(reference_logits[i])
