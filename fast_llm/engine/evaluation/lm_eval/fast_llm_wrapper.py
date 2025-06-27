@@ -182,6 +182,9 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
         if generate:
             res = sum((el.tolist() for el in gather_list), [])
         else:
+            # Tensors gathered via gather_object will remain on their original GPUs,
+            # even if they came from another node. Move them to the current GPU.
+            gather_list = [el.to(self.device) for el in gather_list]
             res = torch.cat(gather_list, dim=0)
 
         return res
