@@ -23,6 +23,7 @@ from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.engine.schedule.config import BatchConfig
 from fast_llm.utils import Assert
+
 logger = logging.getLogger(__name__)
 
 
@@ -53,28 +54,28 @@ def do_uniform(x, is_uniform, vocab_size):
 
 
 def prepare_batch(
-        data_ids,
-        positions,
-        padded,
-        mask_token_id,
-        vocab_size,
-        context_length,
-        p_mask,
-        *,
-        p_uniform=0.0,
-        ar_factor=1.0,
-        un_factor=1.0,
-        last_factor=0.0,
-        in_mask=None, 
-        in_uniform=None
-    ):
+    data_ids,
+    positions,
+    padded,
+    mask_token_id,
+    vocab_size,
+    context_length,
+    p_mask,
+    *,
+    p_uniform=0.0,
+    ar_factor=1.0,
+    un_factor=1.0,
+    last_factor=0.0,
+    in_mask=None,
+    in_uniform=None,
+):
+
     B, L = positions.size()
-    in_context_length = context_length
     context_length = context_length.unsqueeze(1).expand(B, L)
     p_mask = p_mask.unsqueeze(1)
 
+    # Reminder: a context_length of zero still has one in_context token (à la <BOS>)
     in_context = positions <= context_length
-
     if in_mask is None:
         in_mask = (~in_context) & (torch.rand(B, L) < p_mask)
 
@@ -82,31 +83,39 @@ def prepare_batch(
         in_uniform = (~in_context) & (~in_mask) & (torch.rand(B, L) < p_uniform)
     in_clean = (~in_context) & (~in_mask) & (~in_uniform)
 
-    loss_weights = (~padded) * (
-        ar_factor * in_context.float()
-        + in_mask.float() / p_mask
-        + un_factor * (
-            (1 - p_uniform) * in_uniform.float()
-            + p_uniform * in_clean.float()
-        ) / (1 - p_mask)
+    loss_weights = (~padded)[:, 1:] * torch.cat(
+        [
+            ar_factor * in_context[:, 1:]
+            + in_mask[:, 1:] / p_mask
+            + un_factor * ((1 - p_uniform) * in_uniform[:, 1:] + p_uniform * in_clean[:, 1:]) / (1 - p_mask),
+            last_factor * torch.ones(B, 1),
+        ],
+        dim=1,
     )
 
-    if last_factor >= 0.0:
-        last_weights = last_factor * torch.ones(B, 1, device=loss_weights.device)
-        loss_weights[:, -1] = last_weights.squeeze(1)
+    input_ids = do_uniform(do_mask(data_ids[:, :-1], in_mask, mask_token_id), in_uniform, vocab_size)
 
-    input_ids = do_uniform(do_mask(data_ids, in_mask, mask_token_id), in_uniform, vocab_size)
+    # print(
+    #     f"{'Name':<20} {'Shape/Value':<30}\n"
+    #     f"{'-'*50}\n"
+    #     f"{'input_ids':<20} {str(input_ids.shape):<30}\n"
+    #     f"{'in_context':<20} {str(in_context.shape):<30}\n"
+    #     f"{'in_mask':<20} {str(in_mask.shape):<30}\n"
+    #     f"{'in_uniform':<20} {str(in_uniform.shape):<30}\n"
+    #     f"{'in_clean':<20} {str(in_clean.shape):<30}\n"
+    #     f"{'loss_weights':<20} {str(loss_weights.shape):<30}\n"
+    #     f"{'in_context_length':<20} {str(context_length):<30}\n"
+    # )
 
     return {
-        "in_context": in_context[:, 1:],  # Only for tokens to be predicted
-        "in_mask": in_mask[:, 1:],
-        "in_uniform": in_uniform[:, 1:],
-        "in_clean": in_clean[:, 1:],
+        "in_context": in_context,  # Only for tokens to be predicted
+        "in_mask": in_mask,
+        "in_uniform": in_uniform,
+        "in_clean": in_clean,
         "input_ids": input_ids,
-        "target_ids": data_ids,
-        "loss_weights": loss_weights[:, 1:],
-        "in_context_length": in_context_length,
-        
+        # "target_ids": data_ids,
+        "loss_weights": loss_weights,
+        # "in_context_length": context_length,
     }
 
 
@@ -117,15 +126,21 @@ def gpt_data_collate_fn(batch: list[GPTSample], sampling_parameters: GPTSampling
     mask_indexes = None
     mask_probabilities = None
     loss_weights = None
+    in_context_length = None
     token_ids = torch.from_numpy(stacked_ids)
 
     if sampling_parameters.diffusion.enabled:
         diffusion_config = sampling_parameters.diffusion
-        batch_size, seq_len = token_ids.shape[0], token_ids.shape[1]
+        batch_size, seq_len = token_ids.shape
         data_ids = token_ids
         padded = torch.zeros_like(data_ids, dtype=torch.bool)
-        positions = torch.arange(seq_len).unsqueeze(0).expand(batch_size, seq_len)
-        C = torch.randint(0, seq_len, (batch_size,), dtype=torch.long)
+        positions = torch.arange(seq_len - 1).unsqueeze(0).expand(batch_size, seq_len - 1)
+        C = torch.randint(0, (seq_len - 2), (batch_size,), dtype=torch.long)
+
+        # Generate a random tensor of batch size to seed masking probabilities
+        t = torch.rand((batch_size,))
+        # Compute the mask probabilities for every sequence in the batch leaving extrams 0 & 1
+        p_mask = (1 - (2 * diffusion_config.epsilon)) * t + diffusion_config.epsilon
 
         batch_data = prepare_batch(
             data_ids=data_ids,
@@ -133,21 +148,21 @@ def gpt_data_collate_fn(batch: list[GPTSample], sampling_parameters: GPTSampling
             padded=padded,
             mask_token_id=diffusion_config.mask_token_id,
             vocab_size=sampling_parameters.vocab_size,
-            context_length=C,  
-            p_mask=torch.full((batch_size,), diffusion_config.max_mask_prob),  
-            p_uniform=0.0, 
+            context_length=C,
+            p_mask=p_mask,
+            p_uniform=0.0,  # no uniform shuffling of tokens
             ar_factor=1.0,
             un_factor=1.0,
-            last_factor=0.0
+            last_factor=0.0,
         )
-        
+
         # token_ids = batch_data["input_ids"]
         masked_token_ids = batch_data["input_ids"]
 
         mask_indexes = batch_data["in_mask"]
-        mask_probabilities = torch.full_like(mask_indexes, diffusion_config.max_mask_prob, dtype=torch.float32)  # Use float32 to match model dtype
+        # mask_probabilities = torch.full_like(mask_indexes, diffusion_config.max_mask_prob, dtype=token_ids.dtype)
         loss_weights = batch_data["loss_weights"]
-        in_context_length = batch_data["in_context_length"]
+        in_context_length = C
 
     if sampling_parameters.use_loss_masking_spans:
         stacked_spans = [torch.from_numpy(sample.loss_masking_spans) for sample in batch]
@@ -163,7 +178,7 @@ def gpt_data_collate_fn(batch: list[GPTSample], sampling_parameters: GPTSampling
         mask_indexes=mask_indexes,
         mask_probabilities=mask_probabilities,
         loss_weights=loss_weights,
-        in_context_length=in_context_length
+        in_context_length=in_context_length,
     )
 
 

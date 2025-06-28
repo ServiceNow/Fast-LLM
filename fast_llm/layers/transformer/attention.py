@@ -169,6 +169,8 @@ class Attention(torch.nn.Module):
         attn_weights = torch.empty(
             (b * self._local_head_groups, sq * self._local_heads_per_group, sk), device=query.device, dtype=query.dtype
         )
+        # print(f"Query shape: {query.shape}, Key shape: {key.shape}, Value shape: {value.shape}")
+        # print(f"attn_weights {attn_weights.shape}, b: {b}, sq: {sq}")
         attn_weights = torch.baddbmm(
             attn_weights,
             query,
@@ -177,8 +179,15 @@ class Attention(torch.nn.Module):
             alpha=self._softmax_scale / self._layer_index,
         ).view(b, self._local_head_groups, sq, self._local_heads_per_group, sk)
 
+        # attn_weights ? [batch_size, num_heads_q, seq_q, num_heads_k, seq_k]
+        # [batch_size, head_groups, query_len, heads_per_group, key_len]
         attn_weights = attn_weights.to(torch.float32) * self._layer_index
+        # print(f"1 Attention weights shape: {attn_weights.shape}, mask: {mask.shape}")
+        attn_weights = attn_weights.transpose(2, 3)
+        # print(f"2: Attention weights shape: {attn_weights.shape}, mask: {mask.shape}")
         attn_weights = torch.where(mask, attn_weights, mask_value)
+        attn_weights = attn_weights.transpose(2, 3)
+        # print(f"3: Attention weights shape: {attn_weights.shape}, mask: {mask.shape}")
         attn_weights = torch.nn.functional.softmax(attn_weights, dim=-1).to(query.dtype)
 
         with set_generator(self._tensor_space.distributed.tp_generator):

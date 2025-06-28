@@ -304,17 +304,17 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                     kwargs[LanguageModelKwargs.mask_indexes] = batch.mask_indexes.to(
                         device=self._tensor_space.distributed.device
                     )
-                    kwargs[LanguageModelKwargs.mask_probabilities] = batch.mask_probabilities.to(
+                    # kwargs[LanguageModelKwargs.mask_probabilities] = batch.mask_probabilities.to(
+                    #     device=self._tensor_space.distributed.device
+                    # )
+
+                    kwargs[LanguageModelKwargs.loss_weights] = batch.loss_weights.to(
                         device=self._tensor_space.distributed.device
                     )
-                    if batch.loss_weights is not None:
-                        kwargs[LanguageModelKwargs.loss_weights] = batch.loss_weights.to(
-                            device=self._tensor_space.distributed.device
-                        )
 
                     # Setup bidirection attention for diffusion should we set this in a preprocessor? BackupAttentionPreprocessor?
                     batch_size, seq_len = batch.token_ids.shape
-
+                    seq_len -= 1  # last token is drop from the input
                     # Compute attention mask for diffusion
                     C = batch.in_context_length.to(device=self._tensor_space.distributed.device)
                     row_idx = torch.arange(seq_len, device=self._tensor_space.distributed.device).view(1, seq_len, 1)
@@ -352,8 +352,15 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                         not_padded = ~padded[:, 1:]
                         attn_mask = attn_mask & not_padded.unsqueeze(1) & not_padded.unsqueeze(2)
 
+                    # print(f"C: {C}")
+                    # print(f"mask indexes: {batch.mask_indexes}")
+                    # print(f"masked_token_ids: {batch.masked_token_ids}")
+                    # print(f"token_ids: {batch.token_ids}")
+                    # print(f"labels: {labels}")
+                    # print(f"loss_weights: {batch.loss_weights}")
                     # Reshape to match expected attention mask format
-                    attention_mask = attn_mask.unsqueeze(1)  # Add head dimension
+                    attention_mask = attn_mask.unsqueeze(1).unsqueeze(1)  # Add additional dimension
+                    # print(f"attention_mask shape: {attention_mask.shape}\n{attention_mask}")
                     kwargs[TransformerKwargs.attention_mask] = attention_mask
                     kwargs[TransformerKwargs.attention_mask_value] = torch.full(
                         [],
