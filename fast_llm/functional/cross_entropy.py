@@ -41,7 +41,6 @@ def fused_cross_entropy_forward_backward(
     grad_output: float | None,
     logits_scale_factor: float = 1.0,
     loss_weight: torch.Tensor | None = None,
-
 ) -> tuple[torch.Tensor, torch.Tensor | None]:
     """
     A fused implementation of cross-entropy with torch compile.
@@ -79,8 +78,10 @@ def fused_cross_entropy_forward_backward(
         per_sample_loss = per_sample_loss * loss_weight.flatten()
         loss_weight_expanded = loss_weight.reshape(-1, 1)
         grad = grad * loss_weight_expanded.to(dtype=grad.dtype) if grad is not None else None
-        # Avg across all the tokens.
-        return per_sample_loss.mean(), grad
+        # Avg across on loss contributing tokens vs all the tokens.
+        denom = torch.clamp((loss_weight != 0).sum(), min=1)
+        # print(f"{per_sample_loss.sum()} {(loss_weight != 0).sum()} {per_sample_loss.sum() / denom}")
+        return per_sample_loss.sum() / denom, grad
 
 
 @torch.compile
