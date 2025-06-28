@@ -334,19 +334,19 @@ class MLMHead(LanguageModelHead):
             sequence_parallel=self._sequence_parallel and self._parallel_embeddings,
         )
 
-        if self._z_loss_factor > 0.0:
-            logits = z_loss(
-                logits,
-                self._z_loss_factor,
-                self.training,
-                grad_output,
-                losses,
-                LanguageModelLossNames.z_loss,
-                logits_scale_factor=self._logits_scale_factor,
-            )
+        # if self._z_loss_factor > 0.0:
+        #     logits = z_loss(
+        #         logits,
+        #         self._z_loss_factor,
+        #         self.training,
+        #         grad_output,
+        #         losses,
+        #         LanguageModelLossNames.z_loss,
+        #         logits_scale_factor=self._logits_scale_factor,
+        #     )
 
-        if labels is None:
-            return logits * self._logits_scale_factor, None
+        # if labels is None:
+        #     return logits * self._logits_scale_factor, None
 
         loss_weights = kwargs[LanguageModelKwargs.loss_weights]
         # index   [0, 1, 2, 3, 4, 5] ->
