@@ -106,6 +106,9 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
         continue_generate: bool,
         **generation_kwargs,
     ):
+        # TODO: Consider passing true messages and payloads around instead of combining all data into a large tuple.
+        # Messages could include types like logits, generate, finished.
+
         if self.group is None or (world_size := self.group.size()) == 1:
             # Must not be called with continue_generate false on one process
             assert continue_generate
@@ -185,9 +188,7 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
         if generate:
             res = sum((el.tolist() for el in gather_list), [])
         else:
-            # Tensors gathered via gather_object will remain on their original GPUs,
-            # even if they came from another node. Move them to the current GPU.
-            gather_list = [el.to(self.device) for el in gather_list]
+            assert all(el.device.type == "cpu" for el in gather_list)
             res = torch.cat(gather_list, dim=0)
 
         return res
@@ -282,8 +283,17 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
             A torch tensor of shape [batch, sequence, vocab] with the
         logits returned from the model's decoder
         """
-        # TODO: do we need no_grad for our model?
+        # TODO: do we need no_grad for fast_llm model?
         with torch.no_grad():
+            # We move logits to the CPU because they will be copied across processes and nodes
+            # in a multi-GPU, multi-node setup and eventually collected on the main rank.
+            # We cannot afford to accumulate them on rank 0 GPU, as GPU memory may already be tight.
+            # CPU tensors are slower, but we typically have much more CPU RAM available.
+
+            # TODO: Check if it's possible to move some of the _loglikelihood_tokens work here
+            # and pass only the results around instead of the full logits.
+            # Computing errors here is also preferable, as copying logits across nodes and GPUs
+            # is inefficient and can involve gigabytes of data.
             if attention_mask is not None or labels is not None:
                 assert attention_mask is not None and labels is not None
                 return self.model(
@@ -297,7 +307,7 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
                     output_attentions=False,
                     output_hidden_states=False,
                     return_dict=True,
-                ).logits
+                ).logits.cpu()
             else:
                 return self.model(
                     input_ids=input_ids,
@@ -310,7 +320,7 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
                     output_attentions=False,
                     output_hidden_states=False,
                     return_dict=True,
-                ).logits
+                ).logits.cpu()
 
     def _model_generate_inner(self, input_ids, attention_mask, max_length, stop, **generation_kwargs):
         # temperature = 0.0 if not set
