@@ -1,4 +1,5 @@
 import logging
+import os
 import sys
 import traceback
 
@@ -6,6 +7,16 @@ from fast_llm.config import ValidationError
 from fast_llm.engine.config_utils.logging import configure_logging
 from fast_llm.engine.config_utils.run import log_main_rank
 from fast_llm.engine.config_utils.runnable import RunnableConfig
+
+# This must be set before importing numexpr,
+# because by default, the maximum number of threads is 64.
+# On systems with more cores, numexpr logs an error and
+# ignores the thread setting if it exceeds the limit.
+if "NUMEXPR_MAX_THREADS" not in os.environ:
+    import multiprocessing as mp
+
+    os.environ["NUMEXPR_MAX_THREADS"] = str(mp.cpu_count())
+
 
 # Import these submodules to ensure classes are added to the dynamic class registry.
 import fast_llm.data.auto  # isort: skip
