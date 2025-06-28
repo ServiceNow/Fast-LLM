@@ -427,6 +427,8 @@ class MLMHead(LanguageModelHead):
             dim=1,
         ).to(logits.dtype)
 
+        print(f"Loss weight: {loss_weight}")
+
         loss, grad = cross_entropy_forward_backward(
             logits=logits.flatten(0, -2),
             target=target,
