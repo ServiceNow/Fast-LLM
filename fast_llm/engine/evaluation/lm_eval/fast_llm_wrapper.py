@@ -124,11 +124,8 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
             # always divide by batch_size, if not full batch, some ranks will get less work or not at all
             assert self.batch_size % world_size == 0
             step = self.batch_size // world_size
-            orig_size = input_ids.shape[0]
 
             input_ids = [input_ids[i * step : (i + 1) * step] for i in range(world_size)]
-            if orig_size < self.batch_size:
-                print("input_ids", input_ids)
             attention_mask = [
                 attention_mask[i * step : (i + 1) * step] if attention_mask is not None else None
                 for i in range(world_size)
