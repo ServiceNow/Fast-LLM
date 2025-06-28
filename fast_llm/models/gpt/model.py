@@ -346,8 +346,8 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                     # Setup bidirection attention for masked diffusion
                     # It uses _flash_attn_func so no need to set attention_mask and attention_mask_value.
                     kwargs[TransformerKwargs.causal] = False
-                    
-                    print(f"labels shape: {labels}, tokens: {batch.token_ids}, mask indexes shape: {batch.mask_indexes}")
+
+                    # print(f"labels shape: {labels}, tokens: {batch.token_ids}, mask indexes shape: {batch.mask_indexes}")
 
                     # set token ids to masked tokens
                     batch.token_ids = batch.masked_token_ids
