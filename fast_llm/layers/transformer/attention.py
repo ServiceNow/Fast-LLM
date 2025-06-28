@@ -181,7 +181,7 @@ class Attention(torch.nn.Module):
 
         # attn_weights ? [batch_size, num_heads_q, seq_q, num_heads_k, seq_k]
         # [batch_size, head_groups, query_len, heads_per_group, key_len]
-        attn_weights = attn_weights.to(torch.float32) * self._layer_index
+        attn_weights = attn_weights * self._layer_index # attn_weights.to(torch.float32) * self._layer_index
         # print(f"1 Attention weights shape: {attn_weights.shape}, mask: {mask.shape}")
         attn_weights = attn_weights.transpose(2, 3)
         # print(f"2: Attention weights shape: {attn_weights.shape}, mask: {mask.shape}")
