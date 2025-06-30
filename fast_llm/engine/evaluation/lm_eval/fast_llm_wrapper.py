@@ -745,6 +745,8 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
                 self._model_call(batched_inps, **call_kwargs), dim=-1
             )  # [batch, padding_length (inp or cont), vocab]
 
+            # TODO: Consider moving this part to per-shard execution in a multi-GPU and multi-node setup
+            # to avoid copying logits between GPUs and nodes, and to enable performing logits computations on the GPU.
             for (request_str, ctx_tokens, _), logits, inplen, cont_toks in zip(
                 chunk, multi_logits, inplens, cont_toks_list
             ):
@@ -772,7 +774,9 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
                     cont_toks=cont_toks,
                     logits=logits,
                 ):
-                    cont_toks = torch.tensor(cont_toks, dtype=torch.long, device=self.device).unsqueeze(0)  # [1, seq]
+                    # NOTE: Currently, computations are performed on the CPU due to limited GPU memory.
+                    cont_toks = torch.tensor(cont_toks, dtype=torch.long, device="cpu").unsqueeze(0)  # [1, seq]
+
                     max_equal = (greedy_tokens == cont_toks).all()
 
                     # Obtain log-probs at the corresponding continuation token indices
