@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 class BaseBlock(Layer, abc.ABC):
     """
-    A transformer-like decoder base block block with abstract mixer.
+    A transformer-like decoder base block with abstract mixer.
     """
 
     _mixer_module_name = "self_attn"

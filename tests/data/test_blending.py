@@ -5,13 +5,13 @@ import pytest
 
 from fast_llm.data.dataset.gpt.config import GPTBlendedDatasetConfig
 from fast_llm.utils import Assert, normalize_probabilities
-from tests.common import DATASET_CACHE, DATASET_PREFIX, get_test_dataset
 from tests.data.common import (
     compare_sampled_dataset,
     get_dataset_config,
     get_sampling_data,
     get_test_data_and_compare_samples,
 )
+from tests.utils.dataset import DATASET_CACHE, DATASET_PREFIX, get_test_dataset
 
 _DATASET_PREFIX_MIX_1 = DATASET_CACHE / "blended_mix_1" / "dataset"
 

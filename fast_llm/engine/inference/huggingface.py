@@ -38,7 +38,13 @@ class HuggingfacePreTrainedModel(transformers.PreTrainedModel):
         assert config.fast_llm_config is fast_llm_model.config
         assert isinstance(config, self.config_class)
 
+        # The HF constructor performs a deep copy of the config,
+        # but config.fast_llm_config may contain non-picklable items like process groups.
+        # Temporarily remove it before the call and restore it afterward.
+        fast_llm_config = config.fast_llm_config
+        config.fast_llm_config = None
         super().__init__(config, **kwargs)
+        config.fast_llm_config = fast_llm_config
 
         self._inference_runner = self.runner_class(fast_llm_model, runner)
 

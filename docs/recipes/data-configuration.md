@@ -25,13 +25,13 @@ We already saw an example dataset configuration in the [quick-start guide](../qu
 
 In this section we are interested in generalizing step 3. For more details on steps 1 and 2, please refer to the quick-start guide or [this example](data-configuration.md).
 
-The section `data.datasets` holds descriptions of datasets used in training, validation, and testing.  
+The section `data.datasets` holds descriptions of datasets used in training, validation, and testing.
 
-The Training and Testing phases must have predetermined dataset names: `training` and `testing`, respectively. Each of these phases can have only one dataset.  
+The Training and Testing phases must have predetermined dataset names: `training` and `testing`, respectively. Each of these phases can have only one dataset.
 
-For validation datasets, the rules are different. There can be as many validation datasets as needed, and their names are arbitrary. In the example above, the dataset name `validation` is chosen for simplicity. The datasets names used for validation and their application details are specified in the training config `evaluations` sections.  
+For datasets used for loss evaluator during a validation phase, the rules are different. There can be as many such datasets as needed, and their names are arbitrary. In the example above, the dataset name `validation` is chosen for simplicity. The datasets names used for validation and their application details are specified in the training config `evaluators` sections.
 
-Adding multiple validation datasets increases flexibility in tracking the accuracy of your trained model. One possible scenario is using a separate validation dataset for each blended training dataset, allowing you to track training progress on each subset separately and observe how the model performs in real time on different subsets of your training data.  
+Adding multiple datasets for loss evaluators in validation phase increases flexibility in tracking the accuracy of your trained model. One possible scenario is using a separate validation dataset for each blended training dataset, allowing you to track training progress on each subset separately and observe how the model performs in real time on different subsets of your training data.
 
 Below are examples of how to configure various aspects of training and validation datasets.
 
@@ -128,22 +128,27 @@ data:
 !!! note "Default seed"
     In the absence of explicit seed, Fast-LLM uses a default seed (`data.sampling`'s default) instead, and uses seed shifts to ensure different seeds for each phase and for the various blended datasets.
 
+## Example 5: Specifying Multiple Dataset for Loss Evaluators During Validation phase
 
-## Example 5: Specifying Multiple Validation Datasets  
+In this example, we show how to specify multiple  datasets for loss evaluators and configure how often they are applied, along with their usage attributes in the `training.evaluators` section.
 
-In this example, we show how to specify multiple validation datasets and configure how often they are applied, along with their usage attributes in the `training.evaluations` section.  
-
-Please note that the same dataset names must be used in the `training.evaluations` section. If a validation dataset is specified in the `datasets` section but not in `training.evaluations`, it will not be used for validation.  
+Please note that the same dataset names must be used in the `training.evaluators` section. If a dataset is specified in the `datasets` section but not in `training.evaluators`, it will not be used for loss evaluation.
 
 ```yaml
 training:
-  evaluations:
+  evaluators:
     the_stack:
-      iterations: 25
       interval: 50
+      evaluator:
+        type: loss
+        iterations: 25
+        dataset_name: the_stack
     fineweb:
-      iterations: 25
       interval: 100
+      evaluator:
+        type: loss
+        iterations: 15
+        dataset_name: fineweb
 data:
   datasets:
     the_stack:
@@ -152,7 +157,7 @@ data:
     fineweb:
       type: file
       path: path/to/validation_fineweb_dataset.yaml
-      
+
 ```
 
 ## Example 6: Advanced scenario
@@ -207,7 +212,7 @@ data:
 
 !!! note "Configure from file"
     If a dataset configuration is especially complex and makes the dataset configuration excessively big, or is reused across many experiments, you may want to save it to a yaml file and refer to it un the config using a `file` dataset. This can be used to reduce the present example to
-    
+
     ```yaml
     data:
       datasets:

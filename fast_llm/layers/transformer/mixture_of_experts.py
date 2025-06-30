@@ -44,7 +44,7 @@ class MixtureOfExpertMLP(MLPBase):
         Assert.gt(config.num_experts, 1)
         # TODO: Implement?
         assert not config.add_linear_biases, "Biases not supported for MoE."
-        super().__init__(config, tensor_space, name)
+        super().__init__(config, tensor_space, name, layer_index)
         self._config = config
         self._tensor_space = tensor_space
         self._debug_mode = self._config.debug_transformer or self._config.debug_transformer_memory

@@ -34,6 +34,8 @@ repos:
     rev: 5.13.2
     hooks:
     -   id: isort
+        args: ["--profile", "black"]
+    -   id: isort
         name: isort (python)
     -   id: isort
         name: isort (cython)
