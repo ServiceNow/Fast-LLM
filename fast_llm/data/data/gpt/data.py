@@ -129,7 +129,6 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
                     distributed=distributed,
                     dataset_name=dataset_name,
                     tokenizer=self._tokenizer,
-                    truncate_documents=self._config.truncate_documents,
                 )
                 dataset = self._config.datasets[dataset_name].build_and_sample(sampling)
                 self._datasets[dataset_name] = DatasetMonitor(dataset, self._config.data_sample_warn_time_ms)
