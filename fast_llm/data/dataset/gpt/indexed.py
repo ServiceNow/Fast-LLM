@@ -34,6 +34,14 @@ class GPTIndexedDataset(IndexedDataset):
             else GPTSampledIndexedDataset(self, sampling)
         )
 
+    @property
+    @abc.abstractmethod
+    def has_images(self) -> bool:
+        """
+        Whether the dataset contains images.
+        This is used to determine whether to use image-related fields in the sampled data.
+        """
+
 
 class GPTDatasetSlice[IndexedDatasetType: GPTIndexedDataset](DatasetSlice[IndexedDatasetType], GPTIndexedDataset):
     """
@@ -44,10 +52,15 @@ class GPTDatasetSlice[IndexedDatasetType: GPTIndexedDataset](DatasetSlice[Indexe
 
     def get_document_sizes(self) -> np.ndarray:
         # TODO: This can be really big.
-        return self._dataset.get_document_sizes()[self._begin : self._end]
+        doc_sizes, im_sizes = self._dataset.get_document_sizes()
+        return doc_sizes[self._begin : self._end], im_sizes[self._begin : self._end] if im_sizes else []
 
     def get_document_size(self, index: int) -> int:
         return self._dataset.get_document_size(self._begin + index)
+
+    @property
+    def has_images(self) -> bool:
+        return self._dataset.has_images
 
 
 class GPTConcatenatedDataset[IndexedDatasetType: GPTIndexedDataset](
