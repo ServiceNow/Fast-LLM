@@ -433,12 +433,12 @@ _update_and_add_testing_config(
     checkpoint_format=MixtralGPTHuggingfaceCheckpointFormat,
     # TODO: New base image broke mixtral
     groups={
-        ModelTestingGroup.basic: ModelTestingGroupAction.broken,
-        ModelTestingGroup.checkpoint: ModelTestingGroupAction.broken,
-        ModelTestingGroup.convert: ModelTestingGroupAction.broken,
+        ModelTestingGroup.basic: ModelTestingGroupAction.normal,
+        ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
+        ModelTestingGroup.convert: ModelTestingGroupAction.normal,
         ModelTestingGroup.generate: ModelTestingGroupAction.broken,
-        ModelTestingGroup.megatron: ModelTestingGroupAction.broken,
-        ModelTestingGroup.distributed: ModelTestingGroupAction.broken,
+        ModelTestingGroup.megatron: ModelTestingGroupAction.normal,
+        ModelTestingGroup.distributed: ModelTestingGroupAction.normal,
     },
 )
 

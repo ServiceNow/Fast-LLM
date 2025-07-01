@@ -453,6 +453,13 @@ class MultiStageModel[ConfigType: FastLLMModelConfig](Configurable[ConfigType]):
         assert self._is_setup
         return self._distributed
 
+    @property
+    def stages_fsdp_parameters(self) -> typing.Generator[tuple[Stage, FSDP, str, ParameterMeta], None, None]:
+        for stage in self._stages:
+            for fsdp in stage.fsdps:
+                for parameter_name in fsdp.parameter_names:
+                    yield stage, fsdp, parameter_name, stage.get_parameter_meta(parameter_name)
+
     def invalidate_buffers(self) -> None:
         for stage in self._stages_on_device.values():
             stage.invalidate_buffer()

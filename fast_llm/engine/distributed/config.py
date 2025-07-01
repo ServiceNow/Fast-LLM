@@ -61,7 +61,7 @@ class DistributedDim:
     name: str
     size: int
     rank: int
-    global_ranks: range | tuple[int, ...] = None
+    global_ranks: range | tuple[int, ...]
 
     def __post_init__(self):
         self._is_setup = False
@@ -275,8 +275,6 @@ class DistributedConfig(Config):
 
             data_stride = self.tensor_parallel * (self.pipeline_parallel if self.pipeline_first else 1)
             pipeline_stride = self.tensor_parallel * (1 if self.pipeline_first else self.data_parallel)
-            print("data_stride", data_stride)
-            print("pipeline_stride", pipeline_stride)
 
             self._add_distributed_dim(
                 DistributedDim(

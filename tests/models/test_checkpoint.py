@@ -356,54 +356,80 @@ def test_save_and_load_in_parallel(run_distributed_script_for_all_models, load_a
     )
 
 
-@pytest.mark.depends_on(on=["test_save_and_load_in_parallel[{model_testing_config}]"])
-@pytest.mark.model_testing_group(ModelTestingGroup.convert, ModelTestingGroup.distributed)
-def test_parallel_checkpoint(model_testing_config, load_and_save_parallel_base_path, get_convert_path):
-    # Check the consistency of the checkpoints saved in `test_save_and_load_in_parallel`
-    checkpoint_formats = (DistributedCheckpointFormat, FastLLMCheckpointFormat, model_testing_config.checkpoint_format)
-    # Compare Distributed checkpoints
-    for rank in range(2):
-        _compare_safetensor_files(
-            *[
-                load_and_save_parallel_base_path
-                / f"load_pretrained_{format_.name}_in_dp2"
-                / DistributedCheckpointFormat.name
-                / f"rank_{rank}.safetensors"
-                for format_ in checkpoint_formats
+@pytest.fixture(scope="module")
+def parallel_checkpoint_names(model_testing_config):
+    names = []
+    for format_ in (DistributedCheckpointFormat, FastLLMCheckpointFormat, model_testing_config.checkpoint_format):
+        names.extend(
+            [
+                f"load_pretrained_{format_.name}_in_dp2",
+                f"load_pretrained_{format_.name}_in_tp2",
+                f"load_pretrained_{format_.name}_in_stp2",
+                f"load_pretrained_{format_.name}_in_pp2",
             ]
         )
 
-    # Compare Fast-LLM checkpoints
-    _compare_safetensor_files(
-        # Fast-LLM checkpoints are independent of the distributed configuration that saved it.
-        get_convert_path(FastLLMCheckpointFormat, DistributedCheckpointFormat) / f"model_0.safetensors",
-        *[
-            load_and_save_parallel_base_path
-            / f"load_pretrained_{format_.name}_in_dp2"
-            / FastLLMCheckpointFormat.name
-            / f"model_0.safetensors"
-            for format_ in checkpoint_formats
-        ],
+    names.extend(
+        [
+            "load_pretrained_dp2_in_stp2",
+            "load_pretrained_stp2_in_dp2",
+            "load_pretrained_tp2_in_pp2",
+            "load_pretrained_pp2_in_tp2",
+        ]
     )
+    return names
 
 
 @pytest.mark.depends_on(on=["test_save_and_load_in_parallel[{model_testing_config}]"])
 @pytest.mark.model_testing_group(ModelTestingGroup.convert, ModelTestingGroup.distributed)
-def test_load_parallel_checkpoint(
-    model_testing_config, load_and_save_parallel_base_path, get_convert_path, load_and_compare_checkpoints
+def test_load_parallel_checkpoint_in_single_gpu(
+    load_and_save_parallel_base_path, get_convert_path, load_and_compare_checkpoints, parallel_checkpoint_names
 ):
     # Test single-gpu loading of multi-gpu distributed checkpoints.
-    checkpoint_formats = (DistributedCheckpointFormat, FastLLMCheckpointFormat, model_testing_config.checkpoint_format)
     reference_shard = safetensors.torch.load_file(get_convert_path() / "rank_0.safetensors", device="cuda")[
         _WEIGHT_SHARD_SAVE_NAME
     ]
 
-    for format_ in checkpoint_formats:
+    for name in parallel_checkpoint_names:
         load_and_compare_checkpoints(
             DistributedCheckpointFormat,
-            load_and_save_parallel_base_path
-            / f"load_pretrained_{format_.name}_in_dp2"
-            / DistributedCheckpointFormat.name,
+            load_and_save_parallel_base_path / name / DistributedCheckpointFormat.name,
             None,
             reference_shard,
         )
+
+
+@pytest.mark.depends_on(on=["test_save_and_load_in_parallel[{model_testing_config}]"])
+@pytest.mark.model_testing_group(ModelTestingGroup.convert, ModelTestingGroup.distributed)
+def test_parallel_checkpoint_consistency(model_testing_config, load_and_save_parallel_base_path, get_convert_path):
+    # Check the consistency of the checkpoints saved in `test_save_and_load_in_parallel`
+    checkpoint_formats = (DistributedCheckpointFormat, FastLLMCheckpointFormat, model_testing_config.checkpoint_format)
+    # Compare Distributed checkpoints
+    for config in ("dp2", "tp2", "stp2", "pp2"):
+        for rank in range(2):
+            _compare_safetensor_files(
+                *[
+                    load_and_save_parallel_base_path
+                    / f"load_pretrained_{format_.name}_in_{config}"
+                    / DistributedCheckpointFormat.name
+                    / f"rank_{rank}.safetensors"
+                    for format_ in checkpoint_formats
+                ]
+            )
+
+
+@pytest.mark.depends_on(on=["test_save_and_load_in_parallel[{model_testing_config}]"])
+@pytest.mark.model_testing_group(ModelTestingGroup.convert, ModelTestingGroup.distributed)
+def test_multi_gpu_fast_llm_checkpoint(
+    model_testing_config, load_and_save_parallel_base_path, get_convert_path, parallel_checkpoint_names
+):
+    # Fast-LLM checkpoints are independent of the distributed configuration that saved it.
+    # TODO: Check pipeline-parallel checkpoints (two files).
+    _compare_safetensor_files(
+        get_convert_path(FastLLMCheckpointFormat, DistributedCheckpointFormat) / f"model_0.safetensors",
+        *[
+            load_and_save_parallel_base_path / name / FastLLMCheckpointFormat.name / f"model_0.safetensors"
+            for name in parallel_checkpoint_names
+            if "in_pp2" not in name
+        ],
+    )

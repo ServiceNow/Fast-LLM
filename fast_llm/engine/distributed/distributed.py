@@ -90,13 +90,16 @@ class ProcessGroupPool:
         global _default_pool
         assert _default_pool is self
         _default_pool = None
+        self.shutdown()
 
-    def __del__(self):
+    def shutdown(self):
         # Shutdown the process group backend explicitly to prevent a nccl warning.
         # We can't call `destroy_process_group` directly because pytorch doesn't know about it.
         for group in self._process_groups.values():
-            if group is not None and hasattr(group, "_shutdown"):
-                group._shutdown()  # noqa
+            group.shutdown()
+
+    def __del__(self):
+        self.shutdown()
 
 
 _default_pool: ProcessGroupPool | None = None
@@ -114,7 +117,7 @@ class Distributed[ConfigType: DistributedConfig](Configurable[ConfigType]):
 
     config_class: typing.ClassVar[type[DistributedConfig]] = DistributedConfig
 
-    def __init__(self, config: DistributedConfig, use_cpu: bool = False, pool: ProcessGroupPool | None = None):
+    def __init__(self, config: DistributedConfig, use_cpu: bool = False):
         super().__init__(config)
         assert self._config.reference_config is None
         self._use_cpu = use_cpu
@@ -128,14 +131,13 @@ class Distributed[ConfigType: DistributedConfig](Configurable[ConfigType]):
             self.device = torch.device(self._config.local_rank)
             torch.cuda.set_device(self.device)
 
-        if pool is None and _default_pool is None:
+        self._local_pool = _default_pool is None
+        if self._local_pool:
             self._pool = ProcessGroupPool(self._config.rank, self._config.world_size, self._config.timeout)
         else:
-            if pool is None:
-                pool = _default_pool
-            Assert.eq(pool._world_size, self._config.world_size)
-            Assert.eq(pool._rank, self._config.rank)
-            self._pool = pool
+            self._pool = _default_pool
+            Assert.eq(self._pool._world_size, self._config.world_size)
+            Assert.eq(self._pool._rank, self._config.rank)
 
         self.world_group = self.add_group(self._config.distributed_dims[DistributedDimNames.world])
         self.data_group = self.add_group(self._config.distributed_dims[DistributedDimNames.data])
@@ -210,3 +212,7 @@ class Distributed[ConfigType: DistributedConfig](Configurable[ConfigType]):
         seed_shift = step * self._config.sample_seed_shift + self._phase_seeds_shifts[phase]
         self.pp_generator.manual_seed((self._pp_seed + seed_shift) % MAX_SEED)
         self.tp_generator.manual_seed((self._tp_seed + seed_shift) % MAX_SEED)
+
+    def __del__(self):
+        if self._local_pool:
+            self._pool.shutdown()
