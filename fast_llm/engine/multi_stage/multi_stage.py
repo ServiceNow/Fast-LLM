@@ -576,13 +576,13 @@ class TiedParameter:
         # Setup the tied parameter process groups
         if len(self.all_ranks) > 1 and self.on_device:
             # TODO: Create a group def first?
+            pipeline_ranks = distributed.config.get_distributed_dim(DistributedDimNames.pipeline).global_ranks
             self.group = distributed.add_group(
                 DistributedDim(
                     name=self.name + "_tied_weight",
                     size=len(self.all_ranks),
                     rank=sorted(self.all_ranks).index(distributed.config.pipeline_rank),
-                    id_=f"{distributed.config.data_rank}_x_{distributed.config.tensor_rank}",
-                    parent=DistributedDimNames.pipeline,
+                    global_ranks=tuple(pipeline_ranks[rank] for rank in self.all_ranks),
                 )
             )
         else:

@@ -8,6 +8,7 @@ import pytest
 
 from fast_llm.engine.checkpoint.config import CheckpointFormat
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig
+from fast_llm.engine.training.config import TrainerConfig
 from fast_llm.models.gpt.config import (
     DiffusionDreamGPTHuggingfaceCheckpointFormat,
     DiffusionLlamaGPTHuggingfaceCheckpointFormat,
@@ -52,13 +53,26 @@ class ModelTestingConfig:
     model_type: str
     config_args: list[str]
     megatron_args: list[str] | None
-    checkpoint_format: CheckpointFormat | None
+    checkpoint_format: type[CheckpointFormat] | None
     groups: dict[ModelTestingGroup, ModelTestingGroupAction]
 
     @functools.cached_property
-    def model_config_class(self):
+    def trainer_config_class(self) -> type[TrainerConfig]:
+        return TrainerConfig.get_subclass(self.model_type)
+
+    @functools.cached_property
+    def trainer_config(self) -> TrainerConfig:
+        # See `RunnableConfig._from_parsed_args`
+        return self.trainer_config_class.from_dict(self.trainer_config_class._parse_updates(self.config_args))
+
+    @functools.cached_property
+    def model_config_class(self) -> type[FastLLMModelConfig]:
         # TODO: Ok to assume the model and trainer have the same name?
         return FastLLMModelConfig.get_subclass(self.model_type)
+
+    @functools.cached_property
+    def model_config(self) -> FastLLMModelConfig:
+        return self.trainer_config.model
 
     @functools.cached_property
     def huggingface_model_for_causal_lm_class(self):
@@ -83,7 +97,7 @@ def _update_and_add_testing_config(
     checkpoint_format: CheckpointFormat | None = ...,
     groups: dict[ModelTestingGroup, ModelTestingGroupAction],
 ):
-    config = _MODEL_CONFIGS[old_name]
+    config = MODEL_CONFIGS[old_name]
     updates: dict[str, typing.Any] = {
         "name": new_name,
         "groups": groups,
@@ -102,13 +116,13 @@ def _update_and_add_testing_config(
     if checkpoint_format is not ...:
         updates["checkpoint_format"] = checkpoint_format
 
-    _MODEL_CONFIGS[new_name] = dataclasses.replace(config, **updates)
+    MODEL_CONFIGS[new_name] = dataclasses.replace(config, **updates)
 
 
-_MODEL_CONFIGS: dict[str, ModelTestingConfig] = {}
+MODEL_CONFIGS: dict[str, ModelTestingConfig] = {}
 
 
-_MODEL_CONFIGS["gpt2"] = ModelTestingConfig(
+MODEL_CONFIGS["gpt2"] = ModelTestingConfig(
     # Tests gpt2 features (absolute embeddings, layer norm,  relu activation, tied embeddings, MHA, linear biases).
     name="gpt2",
     model_type="gpt",
@@ -477,17 +491,20 @@ _update_and_add_testing_config(
 )
 
 
-@pytest.fixture(scope="session", params=_MODEL_CONFIGS.keys())
+@pytest.fixture(scope="session", params=MODEL_CONFIGS.keys())
 def model_testing_config(request) -> ModelTestingConfig:
-    return _MODEL_CONFIGS[request.param]
+    models = request.config.getoption("--models")
+    if models and request.param not in models:
+        pytest.skip(f"Skipping model {request.param}")
+    return MODEL_CONFIGS[request.param]
 
 
 def testing_group_enabled(item: pytest.Function, skip_slow: bool, skip_extra_slow: bool, show_skipped: bool) -> bool:
     if "model_testing_group" in item.keywords:
-        assert "model_testing_config" in item.callspec.params, item.nodeid
+        assert hasattr(item, "callspec") and "model_testing_config" in item.callspec.params, item.nodeid
         groups: tuple[ModelTestingGroup] = item.keywords["model_testing_group"].args
         model_testing_config = item.callspec.params["model_testing_config"]
-        model_config: ModelTestingConfig = _MODEL_CONFIGS[model_testing_config]
+        model_config: ModelTestingConfig = MODEL_CONFIGS[model_testing_config]
         for group in groups:
             action = model_config.groups[group]
             if action == ModelTestingGroupAction.main:
