@@ -145,9 +145,9 @@ def _fused_cross_entropy_forward_backward(
 
     per_sample_loss = sum_exp_logits.log() - predicted_logits
     if loss_mask is not None:
-        per_sample_loss = per_sample_loss * loss_mask
-
-    loss = per_sample_loss.mean()
+        loss = (per_sample_loss * loss_mask).sum() / torch.maximum(loss_mask.sum(), 1)
+    else:
+        loss = per_sample_loss.mean()
     if target_format != TargetFormat.labels and group is not None:
         all_reduce(loss, op=ReduceOp.MEAN, group=group)
 
