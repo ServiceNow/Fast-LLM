@@ -1,3 +1,5 @@
+import dataclasses
+import math
 import typing
 
 import torch
@@ -8,7 +10,7 @@ from fast_llm.core.distributed import ProcessGroup
 from fast_llm.core.ops import gather_op
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.engine.config_utils.tensor_space import TensorDim
-from fast_llm.engine.distributed.config import DistributedDim
+from fast_llm.engine.distributed.config import DistributedConfig, DistributedDim, DistributedDimNames
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.engine.multi_stage.config import SHARD_PAD_TO_MULTIPLE, ShardName, StageMode
 from fast_llm.functional.triton.pointwise import triton_add, triton_copy, triton_fill
@@ -35,18 +37,16 @@ class FSDP:
         self,
         name: str,
         parameter_metas: list[ParameterMeta],
-        fsdp_dim: DistributedDim,
-        training_dtype: DataType,
-        gradient_buffer_dtype: DataType,
-        optimization_dtype: DataType,
+        distributed_config: DistributedConfig,
+        full_precision_gradient_buffer: bool = False,
+        full_precision_shards: bool = True,
+        is_tied_weight_copy: bool = False,
     ):
         self._name = name
         self._parameter_metas = {parameter_meta.tensor_name: parameter_meta for parameter_meta in parameter_metas}
-        self._fsdp_dim = fsdp_dim
-        self._training_dtype = training_dtype
-        self._gradient_buffer_dtype = gradient_buffer_dtype
-        self._optimization_dtype = optimization_dtype
-
+        self._distributed_config = distributed_config
+        self._fsdp_dim = self._distributed_config.get_distributed_dim(DistributedDimNames.data)
+        self._is_tied_weight_copy = is_tied_weight_copy
         self._requires_grad = any(parameter_meta.requires_grad for parameter_meta in self._parameter_metas.values())
 
         parameter_sizes = [meta.numel() for meta in self._parameter_metas.values()]
@@ -75,29 +75,41 @@ class FSDP:
         )
 
         # TODO: Use parallel_dim property instead?
-        weight_shard_dim = TensorDim("weight_shard", (self._parameter_count + self._global_pad) // self._fsdp_dim.size)
-        grad_shard_dim = TensorDim("grad_shard", weight_shard_dim.size if self._requires_grad else 0)
+        weight_shard_dim = TensorDim("weight_shard", self._shard_size)
+        grad_shard_dim = TensorDim("grad_shard", self._shard_size if self._requires_grad else 0)
 
         self._weight_shard_meta = TensorMeta.from_dims(
             (weight_shard_dim,),
             tensor_name=f"{self._name}_weight_shard",
-            dtype=self._optimization_dtype.torch,
+            dtype=(
+                self._distributed_config.optimization_dtype
+                if full_precision_shards
+                else self._distributed_config.training_dtype
+            ).torch,
         )
         # TODO: Distinguish grad and optimizer shard?
         self._grad_shard_meta = TensorMeta.from_dims(
             (grad_shard_dim,),
             tensor_name=f"{self._name}_grad_shard",
-            dtype=self._optimization_dtype.torch,
+            dtype=(
+                self._distributed_config.optimization_dtype
+                if full_precision_shards
+                else self._distributed_config.training_dtype
+            ).torch,
         )
         self._weight_buffer_meta = TensorMeta.from_dims(
             (TensorDim("weight_buffer", weight_shard_dim.size * self._fsdp_dim.size),),
             tensor_name=f"{self._name}_weight_buffer",
-            dtype=self._training_dtype.torch,
+            dtype=self._distributed_config.training_dtype.torch,
         )
         self._grad_buffer_meta = TensorMeta.from_dims(
             (TensorDim("grad_buffer", weight_shard_dim.size * self._fsdp_dim.size if self._requires_grad else 0),),
             tensor_name=f"{self._name}_grad_buffer",
-            dtype=self._gradient_buffer_dtype.torch,
+            dtype=(
+                self._distributed_config.optimization_dtype
+                if full_precision_gradient_buffer
+                else self._distributed_config.training_dtype
+            ).torch,
         )
 
     @property
@@ -302,7 +314,7 @@ class FSDP:
         """
         Assert.eq(shard.shape, (self._shard_size,))
         tensor_shard = self.parameter_global_to_shard(tensor, parameter_name)
-        begin, end = self._parameter_range_in_shard(parameter_name)
+        begin, end = self._get_parameter_range_in_shard(parameter_name)
         Assert.eq(tensor_shard.numel(), end - begin)
         shard[begin:end].copy_(tensor_shard)
         return end - begin
@@ -385,10 +397,16 @@ class FSDP:
         else:
             triton_copy(self._grad_buffer_local_shard, self._grad_shard)
 
-    def _parameter_range_in_shard(self, parameter_name: str) -> tuple[int, int]:
+    def _get_parameter_range_in_shard(self, parameter_name: str) -> tuple[int, int]:
         begin = self.index_buffer_to_shard(self.get_parameter_begin_in_buffer(parameter_name))
         end = self.index_buffer_to_shard(self.get_parameter_end_in_buffer(parameter_name))
         return begin, end
+
+    def get_parameter_size_in_shard(self, parameter_name: str, shard_name: str = ShardName.weights) -> int:
+        if not self._requires_grad and shard_name != ShardName.weights:
+            return 0
+        begin, end = self._get_parameter_range_in_shard(parameter_name)
+        return end - begin
 
     def invalidate_buffer(self) -> None:
         # Buffer is no longer valid (Updated weights or overwritten by other stage)
@@ -396,9 +414,17 @@ class FSDP:
         self._is_restored = False
 
     def parameter_global_to_shard(
-        self, global_param: torch.Tensor | SafeTensorSlice, parameter_name: str
+        self,
+        global_param: torch.Tensor | SafeTensorSlice,
+        parameter_name: str,
+        *,
+        _parameter_meta: TensorMeta | None = None,
     ) -> torch.Tensor:
-        shard_param = self.get_parameter_meta(parameter_name).global_to_local(global_param).flatten()
+        if _parameter_meta is None:
+            # Used with reduced tensor-parallel in `copy_shard_overlaps`
+            _parameter_meta = self._parameter_metas[parameter_name]
+        # This may copy the data.
+        shard_param = _parameter_meta.global_to_local(global_param).flatten()
         if self._fsdp_dim.size > 1:
             shard_param = shard_param[
                 self._index_buffer_to_param(
@@ -407,13 +433,14 @@ class FSDP:
             ]
         return shard_param
 
-    def _get_parameter_shard_indices_in_full_weight(self, parameter_name: str, device: torch.device) -> torch.Tensor:
+    def _get_parameter_shard_indices_in_full_weight(
+        self, parameter_name: str, device: torch.device, parameter_meta: TensorMeta
+    ) -> torch.Tensor:
         """
         Create an index array for the global parameter, where each entry corresponds to the index
         where it is located in the shard if it exists, or -1 if it's not in the shard.
         Used to determine the location of each entry in a different distributed configuration.
         """
-        parameter_meta = self.get_parameter_meta(parameter_name)
 
         # Create an empty index for the global parameter.
         index = torch.full(
@@ -423,42 +450,194 @@ class FSDP:
             device=device,
         )
         # Set the shard slice of the global parameter to corresponding indices of the parameter slice of the shard
-        begin, end = self._parameter_range_in_shard(parameter_name)
-        self.parameter_global_to_shard(index, parameter_name).copy_(
-            torch.arange(begin, end, dtype=torch.int64, device=device)
-        )
+        begin, end = self._get_parameter_range_in_shard(parameter_name)
+
+        buffer_index = parameter_meta.global_to_local(index, expand=True)
+        # Copying directly into `buffer_index` requires a view of the tensor, which may not be feasible.
+        # In that case, we work with a separate tensor to be copied back into `buffer_index`.
+        try:
+            buffer_index_flat = buffer_index.view(-1)
+            is_view = True
+        except RuntimeError:
+            buffer_index_flat = buffer_index.new_full((buffer_index.numel(),), -1)
+            is_view = False
+
+        # Copy the shard indices at their respective positions in the flat buffer index.
+        buffer_index_flat[
+            self._index_buffer_to_param(
+                self._fsdp_dim.rank * self._shard_size, parameter_name
+            ) : self._index_buffer_to_param((self._fsdp_dim.rank + 1) * self._shard_size, parameter_name)
+        ].copy_(torch.arange(begin, end, dtype=torch.int64, device=device))
+
+        # If needed, copy the flat buffer index back into the index.
+        if not is_view:
+            buffer_index.copy_(buffer_index_flat.view_as(buffer_index))
+
         return index
 
     def copy_shard_overlaps(
         self,
-        loaded_fsdp: "FSDP",
-        shards: dict[str, torch.Tensor],
-        loaded_shards: dict[str, torch.Tensor],
-        counter: torch.Tensor,
-        device: torch.device,
-    ) -> None:
+        loaded_fsdp: typing.Self,
+        shards: dict[str, torch.Tensor] | None,
+        loaded_shards: dict[str, torch.Tensor] | None,
+    ) -> dict[tuple[str, str], int]:
         """
         See MultiStage._load_partial.
-        TODO: Not intended to work with frozen weights, need to enforce.
         """
-        Assert.eq(set(shards), set(loaded_shards))
+        if shards is not None:
+            Assert.eq(set(shards), set(loaded_shards))
         index_overlap = [name for name in loaded_fsdp._parameter_metas if name in self._parameter_metas]
-        for name in index_overlap:
-            overlap_index_map = self.parameter_global_to_shard(
-                loaded_fsdp._get_parameter_shard_indices_in_full_weight(name, device), name
-            )
-            overlap_mask = overlap_index_map >= 0
-            overlap_index_map_masked = overlap_index_map[overlap_mask]
-            overlap_count = overlap_mask.sum()
-            begin, end = self._parameter_range_in_shard(name)
+        counter = {}
 
-            for shard_name, shard in shards.items():
-                # Shards can be empty (frozen weights)
-                if shard.numel() == 0:
-                    continue
-                if loaded_shards[shard_name].numel() == 0:
-                    shard[begin:end][overlap_mask] = 0
-                    counter += overlap_count
-                    continue
-                shard[begin:end][overlap_mask] = loaded_shards[shard_name][overlap_index_map_masked]
-                counter += overlap_count
+        self_tensor_dim = self._distributed_config.get_distributed_dim(DistributedDimNames.tensor)
+        loaded_tensor_dim = loaded_fsdp._distributed_config.get_distributed_dim(DistributedDimNames.tensor)
+
+        # The shared tensor-parallel part (usually the smallest of the two) can be safely ignored.
+        if (shared_tp := math.gcd(self_tensor_dim.size, loaded_tensor_dim.size)) > 1:
+            self_tensor_dim, self_new_size, self_shared_rank = _reduce_tensor_parallel_size(self_tensor_dim, shared_tp)
+            loaded_tensor_dim, loaded_new_size, loaded_shared_rank = _reduce_tensor_parallel_size(
+                loaded_tensor_dim, shared_tp
+            )
+
+            if self_shared_rank != loaded_shared_rank:
+                # Disjoint tensor-parallel slices, no possible overlap.
+                #   (Duplicated parameters will be loaded from the new rank 0 which prevents unnecessary file loading).
+                return counter
+
+        for parameter_name in index_overlap:
+            self_meta = self._parameter_metas[parameter_name]
+            loaded_meta = loaded_fsdp._parameter_metas[parameter_name]
+
+            if shared_tp > 1:
+                self_meta = self_meta.replace_tensor_parallel_dim(self_tensor_dim)
+                loaded_meta = loaded_meta.replace_tensor_parallel_dim(loaded_tensor_dim)
+
+            if not loaded_meta.is_tensor_parallel and loaded_tensor_dim.rank != 0:
+                # Loaded parameter is tensor-parallel duplicate, ignore.
+                continue
+
+            if self_meta.tensor_parallel_size == loaded_meta.tensor_parallel_size == 1:
+                self._copy_shard_overlaps(loaded_fsdp, shards, loaded_shards, parameter_name, counter)
+            else:
+                self._copy_tensor_parallel_shard_overlaps(
+                    loaded_fsdp, shards, loaded_shards, parameter_name, counter, self_meta, loaded_meta
+                )
+
+        return counter
+
+    def _copy_shard_overlaps(
+        self,
+        loaded_fsdp: typing.Self,
+        shards: dict[str, torch.Tensor] | None,
+        loaded_shards: dict[str, torch.Tensor] | None,
+        parameter_name: str,
+        counter: dict[tuple[str, str], int],
+    ):
+        # Common case: the overlap is a contiguous slice of the shards.
+
+        # Find the slice of the parameter contained in each shard.
+        self_shard_begin_in_buffer = self._fsdp_dim.rank * self._shard_size
+        self_shard_end_in_buffer = (self._fsdp_dim.rank + 1) * self._shard_size
+        self_shard_begin_in_param = self._index_buffer_to_param(self_shard_begin_in_buffer, parameter_name)
+        self_shard_end_in_param = self._index_buffer_to_param(self_shard_end_in_buffer, parameter_name)
+        loaded_shard_begin_in_buffer = loaded_fsdp._fsdp_dim.rank * loaded_fsdp._shard_size
+        loaded_shard_end_in_buffer = (loaded_fsdp._fsdp_dim.rank + 1) * loaded_fsdp._shard_size
+        loaded_shard_begin_in_param = loaded_fsdp._index_buffer_to_param(loaded_shard_begin_in_buffer, parameter_name)
+        loaded_shard_end_in_param = loaded_fsdp._index_buffer_to_param(loaded_shard_end_in_buffer, parameter_name)
+
+        # Calculate the overap.
+        overlap_begin_in_param = max(self_shard_begin_in_param, loaded_shard_begin_in_param)
+        overlap_end_in_param = min(self_shard_end_in_param, loaded_shard_end_in_param)
+
+        if (overlap_size := overlap_end_in_param - overlap_begin_in_param) <= 0:
+            return
+
+        # Map the overlap back to the shards.
+        overlap_begin_in_self_shard = (
+            self._parameter_begins_in_buffer[parameter_name] + overlap_begin_in_param - self_shard_begin_in_buffer
+        )
+        overlap_begin_in_loaded_shard = (
+            loaded_fsdp._parameter_begins_in_buffer[parameter_name]
+            + overlap_begin_in_param
+            - loaded_shard_begin_in_buffer
+        )
+
+        if shards is None:
+            # Dry run.
+            counter[(parameter_name, "")] = overlap_size
+            return
+
+        for shard_name, shard in shards.items():
+            # Shards can be empty (frozen weights)
+            if shard.numel() == 0:
+                continue
+            counter[(parameter_name, shard_name)] = overlap_size
+
+            # Copy the overlap.
+            shard[overlap_begin_in_self_shard : overlap_begin_in_self_shard + overlap_size] = (
+                loaded_shards[shard_name][overlap_begin_in_loaded_shard : overlap_begin_in_loaded_shard + overlap_size]
+                if loaded_shards[shard_name].numel() > 0
+                else 0
+            )
+
+    def _copy_tensor_parallel_shard_overlaps(
+        self,
+        loaded_fsdp: typing.Self,
+        shards: dict[str, torch.Tensor] | None,
+        loaded_shards: dict[str, torch.Tensor] | None,
+        parameter_name: str,
+        counter: dict[tuple[str, str], int],
+        self_meta: TensorMeta,
+        loaded_meta: TensorMeta,
+    ):
+
+        self_begin, self_end = self._get_parameter_range_in_shard(parameter_name)
+        loaded_begin, loaded_end = loaded_fsdp._get_parameter_range_in_shard(parameter_name)
+        if self_begin >= self_end or loaded_begin >= loaded_end:
+            # Parameter is not present in both shards, no overlap.
+            return
+
+        # Tensor-parallel case: the overlap cannot be represented as a slice.
+        if shards is None:
+            # Dry run. Since we only need to know if there can be overlap,
+            #   we skip the slow computation and return a dummy value.
+            counter[(parameter_name, "")] = 1
+            return
+
+        device = next(iter(shards.values())).device
+        # Create an array that associates each entry in the `parameter_name` slice of `shard`
+        #   to the index of the same parameter entry in `loaded_shard`, or -1 if not present.
+        overlap_index_map = self.parameter_global_to_shard(
+            loaded_fsdp._get_parameter_shard_indices_in_full_weight(parameter_name, device, loaded_meta),
+            parameter_name,
+            _parameter_meta=self_meta,
+        )
+        # Create a mask to exclude the missing entries.
+        overlap_mask = overlap_index_map >= 0
+        overlap_index_map_masked = overlap_index_map[overlap_mask]
+        overlap_size = overlap_mask.sum().item()
+        if overlap_size == 0:
+            return
+        begin, end = self._get_parameter_range_in_shard(parameter_name)
+
+        for shard_name, shard in shards.items():
+            # Shards can be empty (frozen weights)
+            if shard.numel() == 0:
+                continue
+            counter[(parameter_name, shard_name)] = overlap_size
+            # Masked copy of the overlap index map.
+            shard[begin:end][overlap_mask] = (
+                loaded_shards[shard_name][overlap_index_map_masked] if loaded_shards[shard_name].numel() > 0 else 0
+            )
+
+
+def _reduce_tensor_parallel_size(distributed_dim: DistributedDim, shared_size: int):
+    new_size = distributed_dim.size // shared_size
+    shared_rank = distributed_dim.rank // new_size
+    new_dim = dataclasses.replace(
+        distributed_dim,
+        size=new_size,
+        rank=distributed_dim.rank % new_size,
+        global_ranks=distributed_dim.global_ranks[shared_size * shared_rank : shared_size * (shared_rank + 1)],
+    )
+    return new_dim, new_size, shared_rank

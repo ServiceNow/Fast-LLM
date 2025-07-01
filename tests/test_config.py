@@ -1,6 +1,6 @@
+import collections
 import pathlib
 import subprocess
-import unittest.mock
 
 import pytest
 import yaml
@@ -8,13 +8,9 @@ import yaml
 from fast_llm.config import NoAutoValidate
 from fast_llm.data.dataset.gpt.config import GPTSamplingConfig
 from fast_llm.engine.checkpoint.config import CheckpointSaveMetadataConfig, ModelConfigType
-from fast_llm.engine.config_utils.data_type import DataType
-from fast_llm.engine.distributed.config import DistributedConfig
-from fast_llm.layers.transformer.config import TransformerConfig
-from fast_llm.models.auto import trainer_registry
-from fast_llm.models.gpt.config import GPTModelConfig, PretrainedGPTModelConfig
+from fast_llm.engine.distributed.config import DistributedConfig, DistributedDim, DistributedDimNames
+from fast_llm.models.gpt.config import GPTModelConfig, GPTTrainerConfig, PretrainedGPTModelConfig
 from fast_llm.utils import Assert, check_equal_nested
-from tests.common import TEST_RESULTS_PATH
 
 
 def run_without_import(cmd: str):
@@ -32,7 +28,7 @@ def run_without_import(cmd: str):
                 "sys.path=[p for p in sys.path if not any(x in p for x in ('site-packages', 'dist-packages', '.egg'))]",
                 # We still want to enable imports from within Fast-llm
                 f"sys.path.append('{repo_path}')",
-                "from fast_llm.tools.cli import fast_llm as main",
+                "from fast_llm.cli import fast_llm_main as main",
                 cmd,
             ]
         ),
@@ -61,48 +57,20 @@ def test_validate_example_config():
     fast_llm_config_dict = yaml.safe_load(
         (pathlib.Path(__file__).parents[1] / "examples" / "mistral.yaml").read_text()
     )
-    trainer_registry["gpt"].from_dict(fast_llm_config_dict)
+    GPTTrainerConfig.from_dict(fast_llm_config_dict)
 
 
-def test_do_use_flash_attention():
-    # Create a mock DistributedConfig
-    mock_distributed_config = unittest.mock.Mock(spec=DistributedConfig)
-
-    # Test case 1: use_flash_attention is True and training_dtype is float16
-    config = TransformerConfig(use_flash_attention=True, window_size=None)
-    mock_distributed_config.training_dtype = DataType.float16
-    assert config.do_use_flash_attention(mock_distributed_config) is True
-
-    # Test case 2: use_flash_attention is False
-    config = TransformerConfig(use_flash_attention=False, window_size=None)
-    mock_distributed_config.training_dtype = DataType.float16
-    assert config.do_use_flash_attention(mock_distributed_config) is False
-
-    # Test case 3: use_flash_attention is True but training_dtype is not float16 or bfloat16
-    config = TransformerConfig(use_flash_attention=True, window_size=None)
-    mock_distributed_config.training_dtype = DataType.float32
-    assert config.do_use_flash_attention(mock_distributed_config) is False
-
-    # Test case 4: use_flash_attention is False and window_size is not None
-    config = TransformerConfig(use_flash_attention=False, window_size=512)
-    mock_distributed_config.training_dtype = DataType.float32
-    with pytest.raises(AssertionError):
-        config.do_use_flash_attention(mock_distributed_config)
-
-
-@pytest.mark.parametrize(
-    ("cls", "default"),
-    ((GPTSamplingConfig, {}), (GPTModelConfig, {"distributed": {"world_size": 1, "rank": 0, "local_world_size": 1}})),
-)
-def test_serialize_default_config_updates(cls, default):
+@pytest.mark.parametrize("cls", (GPTSamplingConfig, GPTModelConfig))
+def test_serialize_default_config_updates(cls):
     # Config classes used as config updates should have a default that serializes to an empty dict
     #   so no value is incorrectly overridden.
-    check_equal_nested(cls.from_dict({}).to_dict(), default)
+    with NoAutoValidate():
+        check_equal_nested(cls.from_dict({}).to_dict(), {})
 
 
 @pytest.mark.parametrize("load_config", tuple(ModelConfigType))
-def test_pretrained_config(load_config: ModelConfigType):
-    config_path = TEST_RESULTS_PATH / "pretrained_config"
+def test_pretrained_config(load_config: ModelConfigType, result_path):
+    config_path = result_path / "pretrained_config"
     pretrained_model_config = GPTModelConfig.from_dict(
         {
             "base_model": {
@@ -111,7 +79,7 @@ def test_pretrained_config(load_config: ModelConfigType):
                     "rotary": {"type": "default"},
                     "num_layers": 12,  # Default
                     "hidden_size": 1024,  # Default
-                    "window_size": 32,  # Non-architecture
+                    "window_size": 32,
                     "ffn_hidden_size": 4096,  # Implicit default, default value
                     "activation_type": "silu",  # Implicit default, non-default value
                     "head_groups": 4,
@@ -132,7 +100,7 @@ def test_pretrained_config(load_config: ModelConfigType):
         "transformer": {
             # rotary: Don't override nested.
             "normalization": {"implementation": "triton"},  # Update non-default nested
-            "peft": {"freeze_others": False},  # Update default nested, non-architecture
+            "peft": {"type": "lora", "freeze_others": False},  # Update default nested, change type
             "hidden_size": 512,  # Override, affects derived value (kv channels)
             "head_groups": 1,  # Override to default
         },
@@ -149,7 +117,7 @@ def test_pretrained_config(load_config: ModelConfigType):
     )
     Assert.eq(pretrained_config.model.base_model.transformer.kv_channels, 64)
     serialized_config = pretrained_config.model.to_dict()
-    expected_config = {"distributed": DistributedConfig().to_dict()}
+    expected_config = {"type": "gpt", "distributed": DistributedConfig().to_dict()}
 
     if load_config == ModelConfigType.fast_llm:
         expected_config["multi_stage"] = {"zero_stage": 3}
@@ -159,7 +127,7 @@ def test_pretrained_config(load_config: ModelConfigType):
             "transformer": {
                 "normalization": {"type": "rms_norm", "implementation": "triton"},
                 "rotary": {"type": "default"},
-                "peft": {"freeze_others": False},
+                "peft": {"type": "lora", "freeze_others": False, "layers": ["query", "value"]},
                 "num_layers": 12,
                 "hidden_size": 512,
                 "ffn_hidden_size": 4096,
@@ -171,6 +139,132 @@ def test_pretrained_config(load_config: ModelConfigType):
             "vocab_size": 1000,
         }
     else:
+        base_model_update["transformer"]["peft"] = {
+            "type": "lora",
+            "freeze_others": False,
+            "layers": ["query", "value"],
+        }
+        base_model_update["transformer"]["normalization"]["type"] = "layer_norm"
+        base_model_update["transformer"]["rotary"] = {"type": "none"}
         expected_config["base_model"] = base_model_update
 
     check_equal_nested(serialized_config, expected_config)
+
+
+def _check_dim(dim: DistributedDim, name: str, rank: int, size: int, global_rank: int):
+    Assert.eq(dim.name, name)
+    Assert.eq(dim.size, size)
+    Assert.eq(dim.rank, rank)
+    # Already checked in distributed config, we repeat for extra safety.
+    Assert.eq(dim.global_ranks[rank], global_rank)
+    Assert.eq(len(dim.global_ranks), size)
+
+
+@pytest.mark.parametrize(
+    ("bdp", "sdp", "tp", "pp", "pipeline_first"),
+    (
+        (1, 1, 1, 1, False),
+        (4, 1, 1, 1, False),
+        (1, 4, 1, 1, False),
+        (1, 1, 4, 1, False),
+        (1, 1, 1, 4, False),
+        (1, 4, 1, 3, False),
+        (1, 1, 3, 2, False),
+        (1, 1, 3, 2, True),
+        (3, 1, 1, 2, False),
+        (3, 1, 1, 2, True),
+        (2, 2, 2, 3, False),
+    ),
+)
+def test_distributed_global_ranks(bdp: int, sdp: int, tp: int, pp: int, pipeline_first: bool):
+    world_size = bdp * sdp * tp * pp
+    dp = sdp * bdp
+    config_dict = {
+        "sequence_data_parallel": sdp,
+        "tensor_parallel": tp,
+        "pipeline_parallel": pp,
+        "pipeline_first": pipeline_first,
+        "world_size": world_size,
+        "local_world_size": world_size,
+    }
+
+    all_global_ranks = collections.defaultdict(set)
+    rank_breakdowns = set()
+    for rank in range(world_size):
+        # Independent computation of the group ranks.
+        tp_rank = rank % tp
+        rank_ = rank // tp
+        if pipeline_first:
+            pp_rank = rank_ % pp
+            dp_rank = rank_ // pp
+        else:
+            dp_rank = rank_ % dp
+            pp_rank = rank_ // dp
+
+        config = DistributedConfig.from_dict(config_dict, {"rank": rank})
+        # Check that each group has the right size and rank.
+        _check_dim(
+            world_dim := config.get_distributed_dim(DistributedDimNames.world),
+            DistributedDimNames.world,
+            rank,
+            world_size,
+            rank,
+        )
+        _check_dim(
+            tp_dim := config.get_distributed_dim(DistributedDimNames.tensor),
+            DistributedDimNames.tensor,
+            tp_rank,
+            tp,
+            rank,
+        )
+        _check_dim(
+            tp_sdp_dim := config.get_distributed_dim(DistributedDimNames.tensor_and_sequence_data),
+            DistributedDimNames.tensor_and_sequence_data,
+            dp_rank % sdp * tp + tp_rank,
+            tp * sdp,
+            rank,
+        )
+        _check_dim(
+            sdp_dim := config.get_distributed_dim(DistributedDimNames.sequence_data),
+            DistributedDimNames.sequence_data,
+            dp_rank % sdp,
+            sdp,
+            rank,
+        )
+        _check_dim(
+            bdp_dim := config.get_distributed_dim(DistributedDimNames.batch_data),
+            DistributedDimNames.batch_data,
+            dp_rank // sdp,
+            bdp,
+            rank,
+        )
+        _check_dim(
+            dp_dim := config.get_distributed_dim(DistributedDimNames.data),
+            DistributedDimNames.data,
+            dp_rank,
+            bdp * sdp,
+            rank,
+        )
+        _check_dim(
+            pp_dim := config.get_distributed_dim(DistributedDimNames.pipeline),
+            DistributedDimNames.pipeline,
+            pp_rank,
+            pp,
+            rank,
+        )
+        all_global_ranks["world"].add(tuple(world_dim.global_ranks))
+        all_global_ranks["tp"].add(tuple(tp_dim.global_ranks))
+        all_global_ranks["tp_sdp"].add(tuple(tp_sdp_dim.global_ranks))
+        all_global_ranks["sdp"].add(tuple(sdp_dim.global_ranks))
+        all_global_ranks["bdp"].add(tuple(bdp_dim.global_ranks))
+        all_global_ranks["dp"].add(tuple(dp_dim.global_ranks))
+        all_global_ranks["pp"].add(tuple(pp_dim.global_ranks))
+        rank_breakdowns.add((tp_rank, dp_rank // sdp, dp_rank % sdp, pp_rank))
+
+    for name, global_ranks_set in all_global_ranks.items():
+        # Check that the global ranks are partitioned into disjoint groups for each distributed dimension,
+        # and indirectly that `DistributedDim.global_ranks` is consistent between ranks.
+        Assert.eq(sum(len(global_ranks) for global_ranks in global_ranks_set), world_size)
+        Assert.eq(len({global_rank for global_ranks in global_ranks_set for global_rank in global_ranks}))
+
+    Assert.eq(len(rank_breakdowns), world_size)

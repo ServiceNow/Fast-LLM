@@ -1,5 +1,4 @@
 from fast_llm.data.dataset.gpt.config import GPTConcatenatedDatasetConfig
-from tests.common import DATASET_PREFIX, get_test_dataset
 from tests.data.common import (
     compare_indexed_dataset,
     compare_sampled_dataset,
@@ -8,6 +7,7 @@ from tests.data.common import (
     get_test_data_and_compare_samples,
 )
 from tests.data.test_memmap import MEMMAP_DATASET_LENGTH, MEMMAP_DATASET_SAMPLES, MEMMAP_DATASET_TOKENS
+from tests.utils.dataset import DATASET_PREFIX, get_test_dataset
 
 GPT_CONCATENATED_SAMPLES = [
     [4709, 819, 79, 207, 277, 1790],

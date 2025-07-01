@@ -165,6 +165,7 @@ class Assert:
         x = torch.as_tensor(x)
         y = torch.as_tensor(y)
 
+        Assert.eq(x.shape, y.shape)
         neq = x != y
         if neq.any().item():  # noqa
             index = None if x.numel() == 1 else torch.where(neq)  # noqa
@@ -217,6 +218,11 @@ class Registry[KeyType, ValueType]:
         if key in self:
             raise KeyError(f"Entry {key} already in {self._name} registry")
         self._data[key] = value
+
+    def __delitem__(self, key: KeyType):
+        if key not in self:
+            raise KeyError(f"Entry {key} not found in {self._name} registry")
+        del self._data[key]
 
     def keys(self) -> list[KeyType]:
         return list(self._data)

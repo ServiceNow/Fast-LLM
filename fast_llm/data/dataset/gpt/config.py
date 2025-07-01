@@ -75,6 +75,7 @@ class GPTSamplingParameters(SamplingParameters):
     use_loss_masking_spans: bool = False
     use_preference_loss_spans: bool = False
     cross_document_attention: bool = True
+    truncate_documents: bool = True
     patch_size: int | None = None
     max_image_size: int | None = None
     image_break_token: int | None = None
@@ -94,7 +95,6 @@ class GPTSamplingData(SamplingData):
     config: GPTSamplingConfig
     parameters: GPTSamplingParameters
     tokenizer: "Tokenizer"
-    truncate_documents: bool = True
 
 
 @config_class(registry=True)

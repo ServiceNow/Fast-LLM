@@ -1,6 +1,6 @@
 import numpy as np
 import torch
-from transformers import PreTrainedTokenizerFast
+from transformers import AutoTokenizer
 
 from fast_llm.data.config import TokenizerConfig
 from fast_llm.engine.config_utils.run import log_main_rank
@@ -13,9 +13,15 @@ class Tokenizer:
 
     def __init__(self, config: TokenizerConfig):
         log_main_rank(f"> loading tokenizer from {config.path} ...")
-        self.tokenizer: PreTrainedTokenizerFast = PreTrainedTokenizerFast.from_pretrained(
-            pretrained_model_name_or_path=config.path, errors="replace", max_len=None
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            pretrained_model_name_or_path=config.path,
+            errors="replace",
+            max_len=None,
+            trust_remote_code=True,
+            use_fast=True,
         )
+        if config.bos_token is not None:
+            self.tokenizer.bos_token = config.bos_token
         if self.tokenizer.eos_token_id is None:
             raise ValueError("Tokenizer does not have an EOS token.")
         if self.tokenizer.bos_token_id is None:
@@ -58,6 +64,7 @@ class Tokenizer:
         positions = []
         for pos in image_positions:
             positions.append((pos, "image"))
+
         for start, end in char_spans:
             positions.append((start, "span_start"))
             positions.append((end + 1, "span_end"))

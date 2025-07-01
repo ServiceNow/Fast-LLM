@@ -4,13 +4,13 @@ title: Training Llama 3.1 8B
 
 Follow this guide to train a Llama-3.1 or Qwen 2.5 7B like model from scratch!
 
+## Preliminary steps
 
-# Preliminary steps
 - [Quick Start](../quick-start.md)
 - [Data preparation](data-preparation.md)
 
+## Training configuration
 
-# Training configuration
 In this guide, we show you how to configure a model architecture and train a model from scratch.
 Let's start from the following training configuration:
 === "Llama 3.1 8B"
@@ -19,10 +19,12 @@ Let's start from the following training configuration:
       train_iters: 100_000
       logs:
         interval: 10
-      evaluations:
-        validation:
-          iterations: 25
-          interval: 1000
+      evaluators:
+          interval: 100
+          evaluator:
+            type: loss
+            iterations: 25
+            dataset_name: validation
       checkpoint:
         interval: 1000
         keep: 5
@@ -68,10 +70,13 @@ Let's start from the following training configuration:
       train_iters: 100_000
       logs:
         interval: 10
-      evaluations:
+      evaluators:
         validation:
-          iterations: 25
-          interval: 1000
+          interval: 100
+          evaluator:
+            type: loss
+            iterations: 25
+            dataset_name: validation
       checkpoint:
         interval: 1000
         keep: 5
@@ -133,16 +138,16 @@ By specifying a pretrained model from the HuggingFace hub, Fast-LLM automaticall
 === "Llama 3.1 8B"
     ```yaml
     pretrained:
-      format: llama  
+      format: llama
       path: fast-llm-tutorial/pretrained_model
-      model_weights: no 
+      model_weights: no
     ```
 === "Qwen 2.5 7B"
     ```yaml
     pretrained:
-      format: qwen2  
+      format: qwen2
       path: fast-llm-tutorial/pretrained_model
-      model_weights: no 
+      model_weights: no
     ```
 
 Alternatively, we define the model architecture ourselves as follows:
@@ -196,4 +201,3 @@ Alternatively, we define the model architecture ourselves as follows:
 1.  Hidden-size/num-layers will be used to provide good defaults for weight initialization std.
 
 Configuring the model this way is a bit more verbose than using the pretrained configuration, but gives an idea of how to configure a the model with Fast-LLM.
-

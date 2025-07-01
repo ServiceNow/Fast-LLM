@@ -92,7 +92,7 @@ class GPTSampledIndexedDataset(SampledDataset):
         self._indexed_dataset = indexed_dataset
         self._config = sampling.config
         self._parameters = sampling.parameters
-        self._truncate_documents = sampling.truncate_documents
+        self._truncate_documents = sampling.parameters.truncate_documents
         self._device = torch.device("cuda" if self._config.gpu else "cpu")
 
         if self._indexed_dataset.has_images and self._truncate_documents:
@@ -176,7 +176,7 @@ class GPTSampledIndexedDataset(SampledDataset):
                 " Please make sure Fast-LLM is installed correctly."
             )
             long_docs_filter = document_sizes + image_token_sizes > self._parameters.sequence_length + 1
-            ignored_documents = long_docs_filter.sum()
+            ignored_documents = long_docs_filter.sum().item()
             if ignored_documents:
                 log_main_rank(
                     f" > {ignored_documents}/{documents_per_epoch} documents are longer than {self._parameters.sequence_length+1} tokens and will be ignored.",
@@ -236,10 +236,10 @@ class GPTSampledIndexedDataset(SampledDataset):
 
         if self._yaml_path is not None and self._yaml_path.is_file():
             loaded_yaml_data = yaml.safe_load(self._yaml_path.open("r"))
-            yaml_data["unshuffled_tokens"] = loaded_yaml_data.get("unshuffled_tokens", 0)
+            # Hack to make sure unshuffled tokens are loaded
+            if not self._truncate_documents:
+                yaml_data["unshuffled_tokens"] = loaded_yaml_data["unshuffled_tokens"]
             self._load_yaml_data(yaml_data)
-            # if not self._truncate_documents and not self._parameters.use_preference_loss_spans:
-            #     del loaded_yaml_data["unshuffled_tokens"]
 
             if loaded_yaml_data != yaml_data:
                 raise RuntimeError(
@@ -539,7 +539,7 @@ class GPTSampledIndexedDataset(SampledDataset):
                         continue
 
             # Determine if the document belongs to the requested sample.
-            if token_count + document_size >= token_start:
+            if token_count + document_size > token_start:
                 # Determine which part of the document belong to the sample, and add it to the list.
                 token_start_index_in_document = max(token_start - token_count, 0)
                 token_end_index_in_document = min(token_end - token_count, text_size)
@@ -695,7 +695,7 @@ class LegacyGPTSampledIndexedDataset(SampledDataset):
     ):
         assert isinstance(sampling, GPTSamplingData)
         self._indexed_dataset = indexed_dataset
-        if not sampling.truncate_documents:
+        if not sampling.parameters.truncate_documents:
             raise NotImplementedError(
                 "Legacy sampling only supports document truncation. Please use the latest dataset format."
             )

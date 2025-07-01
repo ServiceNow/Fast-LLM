@@ -48,15 +48,6 @@ class GPTDataConfig(DataConfig, GPTLegacyConfig):
         desc="Multiprocessing context. Do not touch.",
         hint=FieldHint.expert,
     )
-    truncate_documents: bool = Field(
-        default=True,
-        desc=(
-            "If enabled, documents may be truncated while being packed to fit the sequence length."
-            "Otherwise, sequences will be padded such that every document lies entirely within a sample"
-            " (and documents exceeding the sequence length will be skipped altogether)."
-        ),
-        hint=FieldHint.feature,
-    )
 
     def _validate(self) -> None:
         if not self.datasets:
@@ -85,5 +76,4 @@ class GPTDataConfig(DataConfig, GPTLegacyConfig):
                     assert rename not in default["datasets"]
                     default["datasets"][rename] = default["datasets"].pop(phase.value)
 
-        cls._handle_renamed_field(default, "validation", ("evaluations", "validation"))
         return super()._from_dict(default, strict, flat)

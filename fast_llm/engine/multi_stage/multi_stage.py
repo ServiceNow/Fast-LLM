@@ -1,3 +1,4 @@
+import abc
 import dataclasses
 import logging
 import typing
@@ -12,7 +13,7 @@ from fast_llm.engine.base_model.base_model import BaseModel
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.engine.config_utils.run import log_main_rank, log_model_parallel_main_rank
 from fast_llm.engine.config_utils.tensor_space import TensorDim
-from fast_llm.engine.distributed.config import DistributedDim, DistributedDimNames
+from fast_llm.engine.distributed.config import DistributedDim, DistributedDimNames, PhaseType
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig, ShardName, StageMode
 from fast_llm.engine.multi_stage.fsdp import FSDP
@@ -252,6 +253,11 @@ class MultiStageModel[ConfigType: FastLLMModelConfig](Configurable[ConfigType]):
 
         self.train(self._mode.support_backward)
 
+    @abc.abstractmethod
+    def get_tflops(self, phase: PhaseType, elapsed_time_per_iteration, batch_size, sequence_length) -> tuple[int, int]:
+        # TODO: Do in model, automate/generalize, get other stats
+        pass
+
     def _allocate_buffers(
         self, buffer_meta: TensorMeta, sizes: list[int], name: str
     ) -> tuple[tuple[torch.Tensor, ...], int]:
@@ -447,6 +453,13 @@ class MultiStageModel[ConfigType: FastLLMModelConfig](Configurable[ConfigType]):
         assert self._is_setup
         return self._distributed
 
+    @property
+    def stages_fsdp_parameters(self) -> typing.Generator[tuple[Stage, FSDP, str, ParameterMeta], None, None]:
+        for stage in self._stages:
+            for fsdp in stage.fsdps:
+                for parameter_name in fsdp.parameter_names:
+                    yield stage, fsdp, parameter_name, stage.get_parameter_meta(parameter_name)
+
     def invalidate_buffers(self) -> None:
         for stage in self._stages_on_device.values():
             stage.invalidate_buffer()
@@ -570,13 +583,13 @@ class TiedParameter:
         # Setup the tied parameter process groups
         if len(self.all_ranks) > 1 and self.on_device:
             # TODO: Create a group def first?
+            pipeline_ranks = distributed.config.get_distributed_dim(DistributedDimNames.pipeline).global_ranks
             self.group = distributed.add_group(
                 DistributedDim(
                     name=self.name + "_tied_weight",
                     size=len(self.all_ranks),
                     rank=sorted(self.all_ranks).index(distributed.config.pipeline_rank),
-                    id_=f"{distributed.config.data_rank}_x_{distributed.config.tensor_rank}",
-                    parent=DistributedDimNames.pipeline,
+                    global_ranks=tuple(pipeline_ranks[rank] for rank in self.all_ranks),
                 )
             )
         else:

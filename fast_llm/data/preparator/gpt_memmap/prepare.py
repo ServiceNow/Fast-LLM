@@ -27,7 +27,7 @@ from fast_llm.data.dataset.gpt.config import (
 from fast_llm.data.dataset.gpt.memmap import GPTMemmapDataset
 from fast_llm.data.dataset.gpt.sampled import GPTSample
 from fast_llm.data.preparator.config import DatasetPreparator
-from fast_llm.data.preparator.gpt_memmap.config import GPTMemmapDatasetPreparatorConfig
+from fast_llm.data.preparator.gpt_memmap.config import GPTMemmapDatasetPreparatorConfig, TextColumnConfig
 from fast_llm.data.tokenizer import Tokenizer
 from fast_llm.engine.config_utils.data_type import DataType, get_unsigned_integer_type
 from fast_llm.utils import Assert, normalize_probabilities, padded_cumsum
@@ -40,9 +40,8 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
 
     _tokenizer: Tokenizer
     _data_type: DataType
-
-    def _process_batch(self, batch: dict[str, list[typing.Any]]) -> dict[str, list[typing.Any]]:
-        pass
+    _text_column: str
+    _loss_masking_spans_column: str | None
 
     def _tokenize_batch(self, batch: dict[str, list[typing.Any]]) -> dict[str, list[typing.Any]]:
         input_ids, token_spans, image_token_positions = map(
@@ -155,6 +154,9 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
         shard_output_path = self._config.output_path / prefix
 
         def _document_generator():
+            has_preference_spans = (
+                self._config.dataset.chosen_text is not None and self._config.dataset.rejected_text is not None
+            )
             for item in tqdm.tqdm(shard_dataset, desc=f"Saving shard {shard_idx}", unit="docs"):
                 yield GPTSample(
                     np.array(item["input_ids"], dtype=self._data_type.numpy),
@@ -162,11 +164,11 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
                     item["image_positions"] if self._config.dataset.image_positions else None,
                     (
                         np.array(item["token_spans"], dtype=np.int32).reshape(-1, 2)
-                        if self._config.dataset.loss_masking_spans
+                        if self._loss_masking_spans_column
                         else None
                     ),
-                    item.get("chosen_token_spans", None),
-                    item.get("rejected_token_spans", None),
+                    item["chosen_token_spans"] if has_preference_spans else None,
+                    item["rejected_token_spans"] if has_preference_spans else None,
                 )
 
         GPTMemmapDataset.write_dataset(prefix=shard_output_path, documents=_document_generator())
@@ -292,20 +294,36 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
             num_shards=self._config.distributed.world_size,
             index=self._config.distributed.rank,
         )
-        if self._config.dataset.field not in dataset.column_names:
-            raise ValueError(f"Dataset does not have field '{self._config.dataset.field}'.")
-        # decoding bytes to images is slow and should be done only when needed
-        if self._config.dataset.images is not None:
-            dataset = dataset.cast_column("images", datasets.Sequence(datasets.Image(decode=False)))
-        if self._config.dataset.loss_masking_spans is not None and (
+
+        # Set data column and loss masking spans column based on source schema
+        if isinstance(self._config.dataset.source_schema, TextColumnConfig):
+            self._text_column = self._config.dataset.source_schema.input_column
+            self._loss_masking_spans_column = self._config.dataset.source_schema.loss_masking_spans_column
+            if isinstance(self._config.dataset.source_schema, TextImageColumnConfig):
+                self._images_column = self._config.dataset.source_schema.images_column
+                self._image_positions_column = self._config.dataset.source_schema.image_positions_column
+                # decoding bytes to images is slow and should be done only when needed
+                dataset = dataset.cast_column("images", datasets.Sequence(datasets.Image(decode=False)))
+        else:
+            raise ValueError(
+                f"Dataset source_schema set incorrectly. source_schema: '{self._config.dataset.source_schema}'."
+            )
+
+        if self._text_column not in dataset.column_names:
+            raise ValueError(f"Dataset does not have field '{self._text_column}'.")
+
+        if self._loss_masking_spans_column is not None and (
             self._config.dataset.chosen_text is not None or self._config.dataset.rejected_text is not None
         ):
-            raise ValueError(f"Can not enable both loss masking spans and chosen/rejected loss masking spans.")
+            if self._config.dataset.chosen_text is not None and self._config.dataset.rejected_text is not None:
+                raise ValueError(f"Can not enable both loss masking spans and chosen/rejected loss masking spans.")
+            if self._loss_masking_spans_column not in dataset.column_names:
+                raise ValueError(f"Dataset does not have spans field '{self._loss_masking_spans_column}'.")
         if (self._config.dataset.chosen_text is None) != (self._config.dataset.rejected_text is None):
             raise ValueError(f"Both chosen and rejected loss masking spans must be specified if one is specified.")
 
         # route tokenize function
-        if self._config.dataset.chosen_text is not None and self._config.dataset.rejected_text is not None:
+        elif self._config.dataset.chosen_text is not None and self._config.dataset.rejected_text is not None:
             if self._config.dataset.chosen_text not in dataset.column_names:
                 raise ValueError(f"Dataset does not have chosen spans field '{self._config.dataset.chosen_text}'.")
             if self._config.dataset.rejected_text not in dataset.column_names:

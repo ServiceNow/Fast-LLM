@@ -23,11 +23,7 @@ from fast_llm.layers.transformer.config import (
     VisionTransformerDimNames,
     VisionTransformerKwargs,
 )
-from fast_llm.layers.transformer.preprocessing import (
-    BackupAttentionPreprocessor,
-    FlashAttnVarlenPreprocessor,
-    RotaryEmbeddingPreprocessor,
-)
+from fast_llm.layers.transformer.preprocessing import BackupAttentionPreprocessor, FlashAttnVarlenPreprocessor
 from fast_llm.layers.transformer.transformer import TransformerLayer, VisionTransformerLayer
 from fast_llm.layers.vision_encoder.adapter import VisionAdapter
 from fast_llm.layers.vision_encoder.config import VisionEncoderDimNames, VisionEncoderKwargs
@@ -47,11 +43,6 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
     """
 
     config_class: typing.ClassVar[type[GPTBaseModelConfig]] = GPTBaseModelConfig
-    _rotary_embedding_frequencies: torch.Tensor
-    _position_ids: torch.Tensor
-    _mask: torch.Tensor
-    _mask_value: torch.Tensor
-    _tensor_cache_max_sequence_length: int = -1
 
     def __init__(
         self,
@@ -68,10 +59,9 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
         self._preprocessors: list[Preprocessor] = []
         if self._config.use_absolute_position_embeddings:
             self._preprocessors.append(PositionEmbeddingPreprocessor(self._config, self._tensor_space))
-        if self._config.transformer.rotary.enabled:
-            self._preprocessors.append(
-                RotaryEmbeddingPreprocessor(self._config.transformer.rotary, self._tensor_space)
-            )
+        # We have multiple identical rotary modules/preprocessors, so it's simpler to make a new one here.
+        # TODO: Find a better solution.
+        self._preprocessors.append(self._config.transformer.rotary.build(self._tensor_space))
         if self._use_flash_attention:
             self._preprocessors.append(FlashAttnVarlenPreprocessor(self._config.transformer, self._tensor_space))
         else:
@@ -96,7 +86,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                         self._config.transformer,
                         self._tensor_space,
                         # TODO MTP: which index?
-                        layer_index=max(self._config.transformer.num_layers, 1),
+                        layer_index=max(self._config.transformer.num_layers + i, 1),
                         # The last layer only returns the transformer output.
                         # The previous layers return a stack of shared_hidden and transformer_output.
                         return_input=i < self._config.prediction_heads - 1,
@@ -534,6 +524,64 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
 class GPTModel[ConfigType: GPTModelConfig](FastLLMModel[ConfigType]):
     config_class: typing.ClassVar[type[GPTModelConfig]] = GPTModelConfig
     base_model_class: typing.ClassVar[type[GPTBaseModel]] = GPTBaseModel
+
+    def get_tflops(self, phase: PhaseType, elapsed_time_per_iteration, batch_size, sequence_length) -> tuple[int, int]:
+        # TODO: Do in model, automate/generalize, get other stats
+        """Get tflop/s/GPU from global-batch-size and elapsed-time"""
+        checkpoint_activations_factor = 3 if phase == PhaseType.training else 1
+        transformer_config = self._config.base_model.transformer
+
+        consumed_tokens_per_iteration = sequence_length * batch_size
+
+        num_transformer_layers = transformer_config.num_layers + self._config.base_model.prediction_heads - 1
+        transformer_flops_base = (
+            2 * checkpoint_activations_factor * consumed_tokens_per_iteration * num_transformer_layers
+        )
+        dense_flops_base = transformer_flops_base * transformer_config.hidden_size
+        # Query, key, value, dense.
+        flops_per_iteration = (
+            2
+            * (transformer_config.num_attention_heads + transformer_config.head_groups)
+            * transformer_config.kv_channels
+            * dense_flops_base
+        )
+        # MLP
+        flops_per_iteration += (
+            (2 + transformer_config.gated)
+            * transformer_config.ffn_hidden_size
+            * dense_flops_base
+            * transformer_config.num_experts_per_token
+        )
+
+        # LM-head
+        flops_per_iteration += (
+            6
+            * consumed_tokens_per_iteration
+            * transformer_config.hidden_size
+            * self._config.base_model.vocab_size
+            * self._config.base_model.prediction_heads
+        )
+
+        # Attention-matrix computation
+        attn_flops_base = transformer_flops_base * transformer_config.projection_size
+        if transformer_config.window_size is None:
+            # Ignore masked values (s**2/2)
+            attn_flops = attn_flops_base * sequence_length
+            model_tflops = flops_per_iteration + attn_flops
+        else:
+            # s*w - w**2/2
+            attn_flops = (
+                2
+                * attn_flops_base
+                * transformer_config.window_size
+                * (1 - transformer_config.window_size / 2 / sequence_length)
+            )
+            model_tflops = flops_per_iteration + attn_flops
+
+        # Partial recomputation (normal is 2 ops * ckpt_factor = 6, adding 1 for recomputing Q x K)
+        hardware_flops = flops_per_iteration + 7 / 6 * attn_flops
+        ratio = elapsed_time_per_iteration * self._config.distributed.world_size * 1e12
+        return model_tflops / ratio, hardware_flops / ratio
 
 
 class GPTInferenceRunner(InferenceRunner):

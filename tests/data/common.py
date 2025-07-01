@@ -23,7 +23,7 @@ from fast_llm.engine.distributed.config import DistributedConfig, PhaseType
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.models.gpt.config import GPTBatchConfig
 from fast_llm.utils import Assert, div
-from tests.common import TEST_VOCAB_SIZE
+from tests.utils.dataset import TEST_VOCAB_SIZE
 
 
 def get_sampling_data(
@@ -51,12 +51,12 @@ def get_sampling_data(
             num_samples=num_samples,
             sequence_length=sequence_length,
             vocab_size=vocab_size,
+            truncate_documents=truncate_documents,
         ),
         cache_directory=cache_directory,
         distributed=distributed,
         dataset_name=phase.value,
         tokenizer=tokenizer,
-        truncate_documents=truncate_documents,
     )
 
 
