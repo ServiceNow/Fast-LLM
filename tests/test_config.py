@@ -1,3 +1,4 @@
+import collections
 import pathlib
 import subprocess
 
@@ -7,7 +8,7 @@ import yaml
 from fast_llm.config import NoAutoValidate
 from fast_llm.data.dataset.gpt.config import GPTSamplingConfig
 from fast_llm.engine.checkpoint.config import CheckpointSaveMetadataConfig, ModelConfigType
-from fast_llm.engine.distributed.config import DistributedConfig
+from fast_llm.engine.distributed.config import DistributedConfig, DistributedDim, DistributedDimNames
 from fast_llm.models.gpt.config import GPTModelConfig, GPTTrainerConfig, PretrainedGPTModelConfig
 from fast_llm.utils import Assert, check_equal_nested
 
@@ -148,3 +149,122 @@ def test_pretrained_config(load_config: ModelConfigType, result_path):
         expected_config["base_model"] = base_model_update
 
     check_equal_nested(serialized_config, expected_config)
+
+
+def _check_dim(dim: DistributedDim, name: str, rank: int, size: int, global_rank: int):
+    Assert.eq(dim.name, name)
+    Assert.eq(dim.size, size)
+    Assert.eq(dim.rank, rank)
+    # Already checked in distributed config, we repeat for extra safety.
+    Assert.eq(dim.global_ranks[rank], global_rank)
+    Assert.eq(len(dim.global_ranks), size)
+
+
+@pytest.mark.parametrize(
+    ("bdp", "sdp", "tp", "pp", "pipeline_first"),
+    (
+        (1, 1, 1, 1, False),
+        (4, 1, 1, 1, False),
+        (1, 4, 1, 1, False),
+        (1, 1, 4, 1, False),
+        (1, 1, 1, 4, False),
+        (1, 4, 1, 3, False),
+        (1, 1, 3, 2, False),
+        (1, 1, 3, 2, True),
+        (3, 1, 1, 2, False),
+        (3, 1, 1, 2, True),
+        (2, 2, 2, 3, False),
+    ),
+)
+def test_distributed_global_ranks(bdp: int, sdp: int, tp: int, pp: int, pipeline_first: bool):
+    world_size = bdp * sdp * tp * pp
+    dp = sdp * bdp
+    config_dict = {
+        "sequence_data_parallel": sdp,
+        "tensor_parallel": tp,
+        "pipeline_parallel": pp,
+        "pipeline_first": pipeline_first,
+        "world_size": world_size,
+        "local_world_size": world_size,
+    }
+
+    all_global_ranks = collections.defaultdict(set)
+    rank_breakdowns = set()
+    for rank in range(world_size):
+        # Independent computation of the group ranks.
+        tp_rank = rank % tp
+        rank_ = rank // tp
+        if pipeline_first:
+            pp_rank = rank_ % pp
+            dp_rank = rank_ // pp
+        else:
+            dp_rank = rank_ % dp
+            pp_rank = rank_ // dp
+
+        config = DistributedConfig.from_dict(config_dict, {"rank": rank})
+        # Check that each group has the right size and rank.
+        _check_dim(
+            world_dim := config.get_distributed_dim(DistributedDimNames.world),
+            DistributedDimNames.world,
+            rank,
+            world_size,
+            rank,
+        )
+        _check_dim(
+            tp_dim := config.get_distributed_dim(DistributedDimNames.tensor),
+            DistributedDimNames.tensor,
+            tp_rank,
+            tp,
+            rank,
+        )
+        _check_dim(
+            tp_sdp_dim := config.get_distributed_dim(DistributedDimNames.tensor_and_sequence_data),
+            DistributedDimNames.tensor_and_sequence_data,
+            dp_rank % sdp * tp + tp_rank,
+            tp * sdp,
+            rank,
+        )
+        _check_dim(
+            sdp_dim := config.get_distributed_dim(DistributedDimNames.sequence_data),
+            DistributedDimNames.sequence_data,
+            dp_rank % sdp,
+            sdp,
+            rank,
+        )
+        _check_dim(
+            bdp_dim := config.get_distributed_dim(DistributedDimNames.batch_data),
+            DistributedDimNames.batch_data,
+            dp_rank // sdp,
+            bdp,
+            rank,
+        )
+        _check_dim(
+            dp_dim := config.get_distributed_dim(DistributedDimNames.data),
+            DistributedDimNames.data,
+            dp_rank,
+            bdp * sdp,
+            rank,
+        )
+        _check_dim(
+            pp_dim := config.get_distributed_dim(DistributedDimNames.pipeline),
+            DistributedDimNames.pipeline,
+            pp_rank,
+            pp,
+            rank,
+        )
+        all_global_ranks["world"].add(tuple(world_dim.global_ranks))
+        all_global_ranks["tp"].add(tuple(tp_dim.global_ranks))
+        all_global_ranks["tp_sdp"].add(tuple(tp_sdp_dim.global_ranks))
+        all_global_ranks["sdp"].add(tuple(sdp_dim.global_ranks))
+        all_global_ranks["bdp"].add(tuple(bdp_dim.global_ranks))
+        all_global_ranks["dp"].add(tuple(dp_dim.global_ranks))
+        all_global_ranks["pp"].add(tuple(pp_dim.global_ranks))
+        rank_breakdowns.add((tp_rank, dp_rank // sdp, dp_rank % sdp, pp_rank))
+
+    for name, global_ranks_set in all_global_ranks.items():
+        # Check that the global ranks are partitioned into disjoint groups for each distributed dimension,
+        # and indirectly that `DistributedDim.global_ranks` is consistent between ranks.
+        Assert.eq(sum(len(global_ranks) for global_ranks in global_ranks_set), world_size)
+        Assert.eq(len({global_rank for global_ranks in global_ranks_set for global_rank in global_ranks}))
+
+    Assert.eq(len(rank_breakdowns), world_size)

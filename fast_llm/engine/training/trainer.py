@@ -96,7 +96,7 @@ class TrainingEvaluator[ConfigType: TrainingEvaluatorConfig](Evaluator[ConfigTyp
             done = training_progress.done
             completed_steps = training_progress.completed_steps
 
-        if done or self.config.enabled(completed_steps):
+        if (done and self.config.enabled()) or self.config.enabled(completed_steps):
             return self.evaluator.run(training_progress, run_index=self._config.get_run_count(completed_steps - 1))
         else:
             return EvaluationMetrics()

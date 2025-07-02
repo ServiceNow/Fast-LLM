@@ -54,7 +54,7 @@ class DistributedCheckpointHandler(CheckpointHandler):
         loaded_metadata = self._model.config.load_metadata(config.to_copy({"load_config": ModelConfigType.fast_llm}))
         shard_names = self.get_shard_names(config)
         # Make sure all shards to load are in the checkpoint.
-        Assert.leq(set(self.get_shard_names(config)), set(loaded_metadata.shards))
+        Assert.leq(set(shard_names), set(loaded_metadata.shards))
         Assert.eq(loaded_metadata.shards[: len(shard_names)], list(shard_names))
 
         # Using `log_fn=bool` sets the output to true if the error list is non-empty.
@@ -96,7 +96,13 @@ class DistributedCheckpointHandler(CheckpointHandler):
                     )
                     path = config.path / f"rank_{rank}.safetensors"
                     log_main_rank(f"Loading from {path}", log_fn=logger.info)
-                    # TODO: skip shards without overlap.
+
+                    # First do a dry run to check if there is any overlap.
+                    if not self._has_shard_overlaps(loaded_model):
+                        # No overlap found, skip this file.
+                        continue
+
+                    # TODO: Lazy loading?
                     with safetensors.safe_open(path, framework="pt", device=str(self._model.distributed.device)) as f:
                         # TODO: Use self_shard
                         if "state_shard" in f.keys():
@@ -112,22 +118,34 @@ class DistributedCheckpointHandler(CheckpointHandler):
                                 shard_name: f.get_tensor(f"{shard_name}_shard") for shard_name in shard_names
                             }
 
-                        for shard_name, loaded_shard in loaded_shards.items():
-                            loaded_model.get_shard_meta(shard_name).validate(loaded_shard)
-
-                        self_shards = {shard_name: self._model.get_shard(shard_name) for shard_name in shard_names}
-
-                        counter = torch.zeros(1, dtype=torch.int64, device=self._model.distributed.device)
-                        for _, loaded_fsdp, loaded_fsdp_shards in loaded_model.split_shards_by_fsdp(loaded_shards):
-                            for _, self_fsdp, self_fsdp_shards in self._model.split_shards_by_fsdp(self_shards):
-                                self_fsdp.copy_shard_overlaps(
-                                    loaded_fsdp,
-                                    self_fsdp_shards,
-                                    loaded_fsdp_shards,
-                                    counter,
-                                    self._model.distributed.device,
-                                )
-
-                        context.mark_as_loaded(counter.item())
+                    self._copy_shard_overlaps(loaded_model, loaded_shards, context)
 
         return loaded_metadata.metadata
+
+    def _has_shard_overlaps(self, loaded_model) -> bool:
+        for _, loaded_fsdp, _ in loaded_model.split_shards_by_fsdp({}):
+            for _, self_fsdp, _ in self._model.split_shards_by_fsdp({}):
+                counter = self_fsdp.copy_shard_overlaps(
+                    loaded_fsdp,
+                    None,
+                    None,
+                )
+                if counter:
+                    return True
+        return False
+
+    def _copy_shard_overlaps(self, loaded_model, loaded_shards, context):
+        for shard_name, loaded_shard in loaded_shards.items():
+            loaded_model.get_shard_meta(shard_name).validate(loaded_shard)
+
+        self_shards = {shard_name: self._model.get_shard(shard_name) for shard_name in loaded_shards}
+
+        for _, loaded_fsdp, loaded_fsdp_shards in loaded_model.split_shards_by_fsdp(loaded_shards):
+            for _, self_fsdp, self_fsdp_shards in self._model.split_shards_by_fsdp(self_shards):
+                counter = self_fsdp.copy_shard_overlaps(
+                    loaded_fsdp,
+                    self_fsdp_shards,
+                    loaded_fsdp_shards,
+                )
+                for parameter, count in counter.items():
+                    context.mark_as_loaded(count, parameter, True)

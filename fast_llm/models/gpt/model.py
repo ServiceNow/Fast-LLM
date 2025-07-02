@@ -114,17 +114,16 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             micro_batch_size = batch_meta.micro_batch_size
             sequence_length = batch_meta.sequence_length
             micro_sequence_length = batch_meta.micro_sequence_length
+            truncate_documents = batch_meta.truncate_documents
         else:
             micro_batch_size, sequence_length = batch_meta.shape
             if phase != PhaseType.inference:
                 sequence_length -= self._config.prediction_heads
             micro_sequence_length = sequence_length
+            truncate_documents = True
 
         batch_data = self._tensor_space.distributed_config.get_distributed_dim(DistributedDimNames.batch_data)
         batch_dim = TensorDim(TransformerDimNames.batch, micro_batch_size * batch_data.size, batch_data)
-
-        if isinstance(batch_meta, GPTBatchConfig):
-            micro_sequence_length = batch_meta.micro_sequence_length
 
         if micro_sequence_length is None:
             micro_sequence_length = sequence_length
@@ -169,7 +168,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             TransformerKwargs.hidden_dims: hidden_dims,
             TransformerKwargs.sequence_length: sequence_length,
             TransformerKwargs.sequence_q_dim: sequence_q_dim,
-            LanguageModelKwargs.mask_inputs: not batch_meta.truncate_documents,
+            LanguageModelKwargs.mask_inputs: not truncate_documents,
         }
 
         sequence_k_pasts = range(
