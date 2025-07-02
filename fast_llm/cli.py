@@ -14,9 +14,9 @@ from fast_llm.engine.config_utils.runnable import RunnableConfig
 # On systems with more cores, numexpr logs an error and
 # ignores the thread setting if it exceeds the limit.
 if "NUMEXPR_MAX_THREADS" not in os.environ:
-    import multiprocessing as mp
+    import multiprocessing
 
-    os.environ["NUMEXPR_MAX_THREADS"] = str(mp.cpu_count())
+    os.environ["NUMEXPR_MAX_THREADS"] = str(multiprocessing.cpu_count())
 
 
 # Import these submodules to ensure classes are added to the dynamic class registry.
