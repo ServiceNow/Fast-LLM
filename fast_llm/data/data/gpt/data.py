@@ -37,6 +37,7 @@ class GPTBatch:
     mask_probabilities: torch.Tensor | None = None
     loss_weights: torch.Tensor | None = None
     in_context_length: torch.Tensor | None = None
+    in_context: torch.Tensor | None = None
 
 
 def do_mask(x, mask, mask_token_id):
@@ -127,6 +128,8 @@ def gpt_data_collate_fn(batch: list[GPTSample], sampling_parameters: GPTSampling
     mask_probabilities = None
     loss_weights = None
     in_context_length = None
+    in_context = None
+
     token_ids = torch.from_numpy(stacked_ids)
 
     if sampling_parameters.diffusion.enabled:
@@ -135,7 +138,16 @@ def gpt_data_collate_fn(batch: list[GPTSample], sampling_parameters: GPTSampling
         data_ids = token_ids
         padded = torch.zeros_like(data_ids, dtype=torch.bool)
         positions = torch.arange(seq_len - 1).unsqueeze(0).expand(batch_size, seq_len - 1)
-        C = torch.randint(0, (seq_len - 2), (batch_size,), dtype=torch.long)
+
+        # TODO:
+        # 90% of the batch: C = random [0, seq_len // 4], 10%: C = random in [0, seq_len-2)
+        prob = torch.rand(1)
+        C = torch.where(
+            prob > diffusion_config.context_sampler,
+            torch.randint(0, seq_len // 4, (batch_size,), dtype=torch.long),
+            torch.randint(0, seq_len - 2, (batch_size,), dtype=torch.long),
+        )
+        # C = torch.randint(0, (seq_len - 2), (batch_size,), dtype=torch.long)
 
         # Generate a random tensor of batch size to seed masking probabilities
         t = torch.rand((batch_size,))
@@ -151,7 +163,7 @@ def gpt_data_collate_fn(batch: list[GPTSample], sampling_parameters: GPTSampling
             context_length=C,
             p_mask=p_mask,
             p_uniform=0.0,  # no uniform shuffling of tokens
-            ar_factor=1.0,
+            ar_factor=diffusion_config.ar_factor,
             un_factor=1.0,
             last_factor=0.0,
         )
@@ -163,6 +175,7 @@ def gpt_data_collate_fn(batch: list[GPTSample], sampling_parameters: GPTSampling
         # mask_probabilities = torch.full_like(mask_indexes, diffusion_config.max_mask_prob, dtype=token_ids.dtype)
         loss_weights = batch_data["loss_weights"]
         in_context_length = C
+        in_context = batch_data["in_context"]
 
     if sampling_parameters.use_loss_masking_spans:
         stacked_spans = [torch.from_numpy(sample.loss_masking_spans) for sample in batch]
@@ -179,6 +192,7 @@ def gpt_data_collate_fn(batch: list[GPTSample], sampling_parameters: GPTSampling
         mask_probabilities=mask_probabilities,
         loss_weights=loss_weights,
         in_context_length=in_context_length,
+        in_context=in_context,
     )
 
 

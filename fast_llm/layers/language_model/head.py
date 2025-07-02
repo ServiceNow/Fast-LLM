@@ -349,6 +349,13 @@ class MLMHead(LanguageModelHead):
         #     return logits * self._logits_scale_factor, None
 
         loss_weights = kwargs[LanguageModelKwargs.loss_weights]
+        context_index = kwargs[LanguageModelKwargs.in_context]
+        masked_index = kwargs[LanguageModelKwargs.mask_indexes]
+        B = loss_weights.shape[0]
+        masked_index = torch.cat([masked_index[:, 1:], torch.zeros(B, 1, device=loss_weights.device)], dim=1)
+        context_index = torch.cat([context_index[:, 1:], torch.zeros(B, 1, device=loss_weights.device)], dim=1)
+        # print(f"shifted masked_index: {masked_index}")
+        # print(f"shifted context_index: {context_index}")
         # index   [0, 1, 2, 3, 4, 5] ->
         # The labels are already left shifted x = [A, B, C, D, E, F] ->
         #                                 embd =  [A, B, C, D, E]
@@ -364,7 +371,7 @@ class MLMHead(LanguageModelHead):
         # only get grads fron the masked positions ???
 
         # Currently by not doing any thing we have both AR loss and Diffusion loss treated equally.
-        loss, grad = cross_entropy_forward_backward(
+        loss, grad, per_token_loss_b4_weight = cross_entropy_forward_backward(
             logits.flatten(0, -2),
             labels,
             group=self._tensor_space.distributed.tensor_group if self._parallel_embeddings else None,
@@ -373,6 +380,15 @@ class MLMHead(LanguageModelHead):
             logits_scale_factor=self._logits_scale_factor,
             loss_weight=loss_weights,
         )
+
+        # adding the two unweighted losses to the losses dict
+        # print(f"losses: {losses}")
+
+        losses["loss_mask_tokens"].append((per_token_loss_b4_weight * masked_index).mean())
+        losses["loss_in_context_tokens"].append((per_token_loss_b4_weight * context_index).mean())
+        # print(
+        #     f"losses: {losses}"
+        # )
 
         del logits
         return loss, output_parallel_linear_backward(grad, context)

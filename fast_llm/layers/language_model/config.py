@@ -38,6 +38,7 @@ class LanguageModelKwargs:
     mask_indexes = "mask_indexes"
     mask_probabilities = "mask_probabilities"
     loss_weights = "loss_weights"
+    in_context = "in_context"
 
 
 @config_class()

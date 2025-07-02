@@ -75,13 +75,14 @@ def fused_cross_entropy_forward_backward(
     if loss_weight is None:
         return per_sample_loss.mean(), grad
     else:
+        per_token_loss_b4_weight = per_sample_loss.clone()
         per_sample_loss = per_sample_loss * loss_weight.flatten()
         loss_weight_expanded = loss_weight.reshape(-1, 1)
         grad = grad * loss_weight_expanded.to(dtype=grad.dtype) if grad is not None else None
         # Avg across on loss contributing tokens vs all the tokens.
-        denom = torch.clamp((loss_weight != 0).sum(), min=1)
+        # denom = torch.clamp((loss_weight != 0).sum(), min=1)
         # print(f"{per_sample_loss.sum()} {(loss_weight != 0).sum()} {per_sample_loss.sum() / denom}")
-        return per_sample_loss.sum() / denom, grad
+        return per_sample_loss.mean(), grad, per_token_loss_b4_weight
 
 
 @torch.compile

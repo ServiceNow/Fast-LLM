@@ -68,16 +68,14 @@ class DiffusionMaskingConfig(Config):
     )
 
     mask_token_id: int = Field(default=103, desc="Token ID to use for masking", hint=FieldHint.optional)
-
-    def _validate(self) -> None:
-        super()._validate()
-        Assert.lt(self.epsilon, self.max_mask_prob)  # , "epsilon must be less than max_mask_prob")
-        Assert.lt(
-            self.max_mask_prob,
-            1.0,
-        )  # "max_mask_prob must be less than 1.0")
-        # if self.enabled:
-        #     Assert.is_not_none(self.mask_token_id, "mask_token_id must be set when masking is enabled")
+    ar_factor: float = Field(
+        default=1.0,
+        desc="Factor for the AR weigting on overal loss.",
+        hint=FieldHint.optional,
+    )
+    context_sampler: float = Field(
+        default=1.0, desc="Context lenght C sampled in under 25% sequence length vs all", hint=FieldHint.optional
+    )
 
 
 @config_class()
