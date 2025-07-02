@@ -62,14 +62,6 @@ def prepare_lm_eval_simple_eval_params(
     assert args.batch_size == 1  # default value of 1
     assert args.max_batch_size is None
     assert args.device is None
-    # if args.wandb_args:
-    #     wandb_args_dict = simple_parse_args_string(args.wandb_args)
-    #     wandb_config_args_dict = simple_parse_args_string(args.wandb_config_args)
-    #     wandb_logger = WandbLogger(wandb_args_dict, wandb_config_args_dict)
-
-    # TODO: change logging levels from fast_llm to lm_eval and then back?
-    # utils.setup_logging(args.verbosity)
-    # eval_logger = logging.getLogger(__name__)
 
     # update the evaluation tracker args with the output path and the HF token
     evaluation_tracker_args = ""
