@@ -104,6 +104,6 @@ class EvaluatorLmEvalConfig(EvaluatorConfig):
         data_load_num_proc: int,
         train_iters: int | None = None,
     ) -> "EvaluatorLmEval":
-        from fast_llm.engine.evaluation.evaluator import EvaluatorLmEval
+        from fast_llm.engine.evaluation.lm_eval.evaluator import EvaluatorLmEval
 
         return EvaluatorLmEval(name, self, batch_config, data_load_num_proc, train_iters)

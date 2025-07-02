@@ -1,8 +1,6 @@
 import abc
 import dataclasses
 import logging
-import os
-import pathlib
 import time
 import typing
 
@@ -12,12 +10,7 @@ from fast_llm.data.data.abstract import Data
 from fast_llm.engine.config_utils.run import Run, log_main_rank
 from fast_llm.engine.distributed.config import PhaseType
 from fast_llm.engine.distributed.distributed import Distributed
-from fast_llm.engine.evaluation.config import (
-    EvaluatorConfig,
-    EvaluatorConfigBase,
-    EvaluatorLmEvalConfig,
-    EvaluatorLossConfig,
-)
+from fast_llm.engine.evaluation.config import EvaluatorConfig, EvaluatorConfigBase, EvaluatorLossConfig
 from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
 from fast_llm.engine.schedule.config import BatchConfig
 from fast_llm.engine.schedule.runner import ScheduleRunner
@@ -249,104 +242,6 @@ class EvaluatorLoss[ConfigType: EvaluatorLossConfig](Evaluator[ConfigType]):
             num_workers=self._data_load_num_proc,
             prefetch_factor=prefetch_factor,
         )
-
-
-class EvaluatorLmEval[ConfigType: EvaluatorLmEvalConfig](Evaluator[ConfigType]):
-    config_class: typing.ClassVar[type[EvaluatorLmEvalConfig]] = EvaluatorLmEvalConfig
-
-    def setup(
-        self,
-        distributed: Distributed,
-        run: Run,
-        multi_stage: FastLLMModel,
-        runner: ScheduleRunner,
-        data: Data,
-        phase: PhaseType,
-    ) -> None:
-        os.environ["HF_TOKEN"] = pathlib.Path(os.environ["HUGGINGFACE_API_KEY_PATH"]).open("r").read().strip()
-
-        from fast_llm.engine.evaluation.lm_eval.fast_llm_wrapper import FastLLMLmEvalWrapper
-
-        super().setup(distributed, run, multi_stage, runner, data, phase)
-
-        self._hf_model = self._multi_stage.config_class.get_huggingface_model_for_causal_lm_class()(
-            self._multi_stage, runner=self._runner
-        )
-
-        # For reporting purposes, just to indicate it is from Fast-LLM
-        # as lm_eval.simple_evaluate will take it for results['config']['model']
-        self._hf_model.config.name_or_path = type(self._hf_model).__name__
-
-        self._flm_wrapper = FastLLMLmEvalWrapper(
-            model=self._hf_model,
-            tokenizer=self._data.tokenizer.tokenizer,
-            truncation=self._config.truncation,
-            logits_cache=self._config.logits_cache,
-            add_bos_token=self._config.add_bos_token,
-            prefix_token_id=self._config.prefix_token_id,
-        )
-        self._is_setup = True
-
-    def run(
-        self,
-        training_progress: TrainingProgress | None = None,
-        run_index: int | None = None,
-    ) -> EvaluationMetrics:
-        from lm_eval.evaluator import simple_evaluate as lm_eval_simple_evaluate
-
-        from fast_llm.engine.evaluation.lm_eval.utils import (
-            prepare_lm_eval_simple_eval_params,
-            process_lm_eval_results,
-        )
-
-        assert self._is_setup
-
-        # TODO: use run_index instead?
-        # completed_steps is added to output_path like output_path/runs/run_index/completed_steps/
-        completed_steps = 0 if training_progress is None else training_progress.completed_steps
-
-        if self._run.is_main_rank:
-            args, simple_eval_kwargs = prepare_lm_eval_simple_eval_params(
-                self._config.cli_args, completed_steps, self._run.index
-            )
-            simple_eval_kwargs["model"] = self._flm_wrapper
-
-            # Needed for reporting as batch_size is set from args not lm for reporting in evaluate
-            simple_eval_kwargs["batch_size"] = self._flm_wrapper.batch_size
-            simple_eval_kwargs["max_batch_size"] = self._flm_wrapper.max_batch_size
-
-            # As of lm_eval commit 758c5ed891b1ca48acd8d3a0d309a827215796b7
-            # Expected to be a string even if empty and not None in simple_evaluate
-            simple_eval_kwargs["model_args"] = ""
-
-            results = lm_eval_simple_evaluate(**simple_eval_kwargs)
-            self._flm_wrapper.stop_workers()
-
-            # Evaluation_tracker save expects model to be either string, but if model is passed
-            # LM wrapper needs to be deep copyable and json serializable
-            simple_eval_kwargs["evaluation_tracker"].general_config_tracker.model_source = (
-                self._hf_model.config.name_or_path
-            )
-
-            if results is not None:
-                process_lm_eval_results(
-                    args,
-                    results,
-                    simple_eval_kwargs["evaluation_tracker"],
-                    completed_steps,
-                )
-        else:
-            self._flm_wrapper.worker_model_invoke()
-
-        # TODO: do we need it here as self._flm_wrapper.stop_workers() and self._flm_wrapper.worker_model_invoke()
-        #       already have barrier
-        safe_barrier(self._distributed.world_group, f"Evaluation Harness Run end")
-
-        # lm_eval logs to disc, wandb and prints to screen itself
-        return EvaluationMetrics()
-
-    def get_sampling_parameters(self) -> EvaluatorSamplingParameters | None:
-        return None
 
 
 # NOTE: This is not a standalone runnable; it's a submodule of Trainer used for code encapsulation.

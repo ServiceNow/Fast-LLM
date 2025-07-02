@@ -4,6 +4,7 @@ import logging
 import jinja2
 import lm_eval.api.instance
 import lm_eval.api.model
+import lm_eval.evaluator
 import lm_eval.models.utils
 import lm_eval.utils
 import torch
@@ -12,8 +13,8 @@ import tqdm.auto
 import transformers
 
 from fast_llm.core.distributed import gather_object, safe_barrier, scatter_object_list
-from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.engine.distributed.distributed import Distributed
+from fast_llm.engine.evaluation.lm_eval.utils import prepare_lm_eval_simple_eval_params, process_lm_eval_results
 from fast_llm.engine.inference.huggingface import HuggingfaceBaseModelForCausalLM
 
 eval_logger = logging.getLogger(__name__)
@@ -37,9 +38,12 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
         self._world_size = 1
 
         self._distributed: Distributed = model._inference_runner._fast_llm_model.distributed
-        dist_config: DistributedConfig = self._distributed.config
         # get batch_data_parallel group leaders
-        if dist_config.sequence_data_rank == 0 and dist_config.pipeline_rank == 0 and dist_config.tensor_rank == 0:
+        if (
+            self._distributed.config.sequence_data_rank == 0
+            and self._distributed.config.pipeline_rank == 0
+            and self._distributed.config.tensor_rank == 0
+        ):
             self.group = self._distributed.batch_data_group
         else:
             self.group = torch.distributed.GroupMember.NON_GROUP_MEMBER
@@ -71,13 +75,6 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
         self.tokenizer = lm_eval.models.utils.configure_pad_token(self.tokenizer, model_config=self.config)
 
         self.add_bos_token = add_bos_token
-        # TODO: do we support gemma models?
-        if "gemma" in getattr(self.config, "model_type", ""):
-            self.add_bos_token = True
-            eval_logger.info(
-                f"Model type is '{self.config.model_type}', part of the Gemma family--a BOS"
-                " token will be used as Gemma underperforms without it."
-            )
 
         self._max_length = model._inference_runner._batch_config.sequence_length
         self.pretrained = model
@@ -88,12 +85,48 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
         self.batch_schedule = 1
         self.batch_sizes = {}
         self.batch_size_per_gpu = model._inference_runner._batch_config.micro_batch_size
-        self.batch_size = self.batch_size_per_gpu * dist_config.batch_data_parallel
+        self.batch_size = self.batch_size_per_gpu * self._distributed.config.batch_data_parallel
         self.max_batch_size = self.batch_size
 
         self.custom_prefix_token_id = prefix_token_id
         if prefix_token_id is not None:
             eval_logger.info(f"Loglikelihood prefix token id used in evaluation: {self.prefix_token_id}")
+
+    def run(self, cli_args: list[str], completed_steps: int, run_index: int):
+        if self._distributed.config.rank == 0:
+            args, simple_eval_kwargs = prepare_lm_eval_simple_eval_params(cli_args, completed_steps, run_index)
+            simple_eval_kwargs["model"] = self
+
+            # Needed for reporting as batch_size is set from args not lm for reporting in evaluate
+            simple_eval_kwargs["batch_size"] = self.batch_size
+            simple_eval_kwargs["max_batch_size"] = self.max_batch_size
+
+            # As of lm_eval commit 758c5ed891b1ca48acd8d3a0d309a827215796b7
+            # Expected to be a string even if empty and not None in simple_evaluate
+            simple_eval_kwargs["model_args"] = ""
+
+            results = lm_eval.evaluator.simple_evaluate(**simple_eval_kwargs)
+            self.stop_workers()
+
+            # Evaluation_tracker save expects model to be either string, but if model is passed
+            # LM wrapper needs to be deep copyable and json serializable
+            simple_eval_kwargs["evaluation_tracker"].general_config_tracker.model_source = (
+                self._model.config.name_or_path
+            )
+
+            if results is not None:
+                process_lm_eval_results(
+                    args,
+                    results,
+                    simple_eval_kwargs["evaluation_tracker"],
+                    completed_steps,
+                )
+        else:
+            self.worker_model_invoke()
+
+        # TODO: do we need it here as self.stop_workers() and self.worker_model_invoke()
+        #       already have barrier
+        safe_barrier(self._distributed.world_group, f"lm_eval Run end")
 
     def _model_invoke(
         self,
@@ -109,15 +142,17 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
         # TODO: Consider passing true messages and payloads around instead of combining all data into a large tuple.
         # Messages could include types like logits, generate, finished.
 
-        if self.group is None or (world_size := self.group.size()) == 1:
+        # Groups is always None if world size is 1
+        if self.group is None:
             # Must not be called with continue_generate false on one process
             assert continue_generate
             return self._model_invoke_inner(
                 input_ids, attention_mask, labels, max_length, stop, generate, **generation_kwargs
             )
 
-        rank = self.group.rank()
-        assert rank == 0
+        world_size = self.group.size()
+
+        assert self.group.rank() == 0
 
         if continue_generate:
             assert input_ids is not None
@@ -197,7 +232,8 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
         assert self.group is not None
         # if isinstance(self.group, dist.ProcessGroup):
         if not isinstance(self.group, int):
-            assert self.group.size() > 1 and self.group.rank() != 0
+            # groups is None for world_size 1
+            assert self.group.rank() != 0
             # on worker ranks the function need to wait to be called multiple times
             while True:
                 scatter_list = None
