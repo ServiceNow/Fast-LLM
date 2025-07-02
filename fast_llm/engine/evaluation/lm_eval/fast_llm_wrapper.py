@@ -8,8 +8,8 @@ import lm_eval.models.utils
 import lm_eval.utils
 import torch
 import torch.nn.functional as F
+import tqdm.auto
 import transformers
-from tqdm.auto import tqdm
 
 from fast_llm.core.distributed import gather_object, safe_barrier, scatter_object_list
 from fast_llm.engine.distributed.config import DistributedConfig
@@ -213,7 +213,7 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
                     tuple(obj_list[0])
                 )
 
-                if continue_generate == False:
+                if not continue_generate:
                     break
 
                 # if some data was received, work, otherwise return empty tensor
@@ -283,6 +283,9 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
             A torch tensor of shape [batch, sequence, vocab] with the
         logits returned from the model's decoder
         """
+        if attention_mask is not None or labels is not None:
+            assert attention_mask is not None and labels is not None
+
         # TODO: do we need no_grad for fast_llm model?
         with torch.no_grad():
             # We move logits to the CPU because they will be copied across processes and nodes
@@ -294,33 +297,18 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
             # and pass only the results around instead of the full logits.
             # Computing errors here is also preferable, as copying logits across nodes and GPUs
             # is inefficient and can involve gigabytes of data.
-            if attention_mask is not None or labels is not None:
-                assert attention_mask is not None and labels is not None
-                return self.model(
-                    input_ids=input_ids,
-                    attention_mask=attention_mask,
-                    labels=labels,
-                    position_ids=None,
-                    past_key_values=None,
-                    inputs_embeds=None,
-                    use_cache=False,
-                    output_attentions=False,
-                    output_hidden_states=False,
-                    return_dict=True,
-                ).logits.cpu()
-            else:
-                return self.model(
-                    input_ids=input_ids,
-                    attention_mask=None,
-                    position_ids=None,
-                    past_key_values=None,
-                    inputs_embeds=None,
-                    labels=None,
-                    use_cache=False,
-                    output_attentions=False,
-                    output_hidden_states=False,
-                    return_dict=True,
-                ).logits.cpu()
+            return self.model(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                labels=labels,
+                position_ids=None,
+                past_key_values=None,
+                inputs_embeds=None,
+                use_cache=False,
+                output_attentions=False,
+                output_hidden_states=False,
+                return_dict=True,
+            ).logits.cpu()
 
     def _model_generate_inner(self, input_ids, attention_mask, max_length, stop, **generation_kwargs):
         # temperature = 0.0 if not set
@@ -340,25 +328,19 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
         stopping_criteria = lm_eval.models.utils.stop_sequences_criteria(
             self.tokenizer, stop, input_ids.shape[1], input_ids.shape[0]
         )
-        if attention_mask is None:
-            return self.model.generate(
-                input_ids=input_ids,
-                max_length=max_length,
-                stopping_criteria=stopping_criteria,
-                pad_token_id=self.tokenizer.pad_token_id,
-                use_cache=False,
-                **generation_kwargs,
-            )
-        else:
-            return self.model.generate(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                max_length=max_length,
-                stopping_criteria=stopping_criteria,
-                pad_token_id=self.tokenizer.pad_token_id,
-                use_cache=False,
-                **generation_kwargs,
-            )
+
+        kwargs = {
+            "input_ids": input_ids,
+            "max_length": max_length,
+            "stopping_criteria": stopping_criteria,
+            "pad_token_id": self.tokenizer.pad_token_id,
+            "use_cache": False,
+            **generation_kwargs,
+        }
+        if attention_mask is not None:
+            kwargs["attention_mask"] = attention_mask
+
+        return self.model.generate(**kwargs)
 
     @property
     def config(self):
@@ -367,11 +349,7 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
 
     @property
     def model(self):
-        # returns the model, unwrapping it if using Accelerate
-        if hasattr(self, "accelerator"):
-            return self.accelerator.unwrap_model(self._model)
-        else:
-            return self._model
+        return self._model
 
     @property
     def eot_token_id(self):
@@ -516,7 +494,7 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
         request_window_counts = []  # Track number of windows per request
 
         for req_idx, (string,) in enumerate(
-            tqdm(
+            tqdm.auto.tqdm(
                 [req.args for req in requests],
                 disable=(disable_tqdm or (self.rank != 0)),
             )
@@ -618,19 +596,16 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
             toks = req[1] + req[2]
             return -len(toks), tuple(toks)
 
-        def _lookup_one_token_cont(req: tuple[tuple[str, str], list[int], list[int]]):
-            """Defines the key to group and lookup one-token continuations"""
-            # Use with group_by="contexts" (optional)"
-            # allows for the creation of a lookup, so we can reuse logits in case of one-token continuations.
-            # speeds up some multiple-choice tasks proportionally to the number of choices.
-            # groups requests by context+continuation[:-1] and infer on one request/group.
-            return req[-2] + req[-1][:-1]
-
+        # NOTE:  the group_fn  Defines the key to group and lookup one-token continuations
+        # Use with group_by="contexts" (optional)"
+        # allows for the creation of a lookup, so we can reuse logits in case of one-token continuations.
+        # speeds up some multiple-choice tasks proportionally to the number of choices.
+        # groups requests by context+continuation[:-1] and infer on one request/group.
         re_ord = lm_eval.models.utils.Collator(
             requests,
             sort_fn=_collate,
             group_by="contexts" if self.backend == "causal" and self.logits_cache else None,
-            group_fn=_lookup_one_token_cont,
+            group_fn=lambda req: req[-2] + req[-1][:-1],
         )
 
         # automatic (variable) batch size detection for vectorization
@@ -644,7 +619,7 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
         )
 
         chunks = re_ord.get_batched(n=batch_size, batch_fn=batch_fn)
-        pbar = tqdm(
+        pbar = tqdm.auto.tqdm(
             total=len(requests),
             disable=(disable_tqdm or (self.rank != 0)),
             desc="Running loglikelihood requests",
@@ -802,18 +777,7 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
     def generate_until(self, requests: list[lm_eval.api.instance.Instance], disable_tqdm: bool = False) -> list[str]:
         res = []
 
-        def _collate(req: tuple[str, dict]):
-            """Defines the key for the sorted method"""
-            # the negative sign on len(toks) sorts descending - this has a few advantages:
-            # - time estimates will always be over not underestimates, which is more useful for planning
-            # - to know the size of a batch when going through the list, you know the first one is always the batch
-            #   padded context length. this is useful to simplify the batching logic and more importantly to make
-            #   automatic adaptive batches much much easier to implement
-            # - any OOMs will happen right away rather than near the end
-            toks = self.tok_encode(req[0])
-            return -len(toks), req[0]
-
-        pbar = tqdm(
+        pbar = tqdm.auto.tqdm(
             total=len(requests),
             disable=(disable_tqdm or (self.rank != 0)),
             desc="Running generate_until requests",
@@ -837,9 +801,15 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
         # so that we don't try to execute e.g. greedy sampling and temp=0.8 sampling
         # in the same batch.
         # group_fn=lambda x: x[1] -> x=(context, gen_kwargs)
+        # NOTE: for sort_fn, the negative sign on len(toks) sorts descending - this has a few advantages:
+        # - time estimates will always be over not underestimates, which is more useful for planning
+        # - to know the size of a batch when going through the list, you know the first one is always the batch
+        #   padded context length. this is useful to simplify the batching logic and more importantly to make
+        #   automatic adaptive batches much much easier to implement
+        # - any OOMs will happen right away rather than near the end
         re_ords = lm_eval.models.utils.Collator(
             [reg.args for reg in requests],
-            sort_fn=_collate,
+            sort_fn=lambda req: (-len(self.tok_encode(req[0])), req[0]),
             group_by="gen_kwargs",
             group_fn=lambda x: x[1],
         )
