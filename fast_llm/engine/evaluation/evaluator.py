@@ -19,8 +19,6 @@ from fast_llm.engine.training.config import WandbConfig
 from fast_llm.engine.training.wandb import Wandb
 from fast_llm.logging import format_metrics, get_memory_usage_mib
 
-# from fast_llm.engine.training.lm_eval.evaluator import simple_evaluate as lm_eval_simple_evaluate
-
 logger = logging.getLogger(__name__)
 
 
