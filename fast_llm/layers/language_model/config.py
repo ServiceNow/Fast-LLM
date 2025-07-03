@@ -112,6 +112,11 @@ class LanguageModelBaseConfig(BaseModelConfig):
         desc="Implementation for the cross-entropy computation.",
         hint=FieldHint.performance,
     )
+    distil_cross_entropy_impl: CrossEntropyImpl = Field(
+        default=CrossEntropyImpl.auto,
+        desc="Implementation for the distillation cross-entropy computation.",
+        hint=FieldHint.performance,
+    )
     cross_entropy_splits: int | None = Field(
         default=None,
         desc="Split the logit and cross-entropy computation into this many fragment, to reduce memory usage.",
