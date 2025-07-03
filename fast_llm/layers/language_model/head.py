@@ -5,7 +5,6 @@ from torch._C._distributed_c10d import ReduceOp  # noqa
 from torch.distributed import all_reduce
 
 from fast_llm.config import Configurable
-from fast_llm.core.ops import split_op
 from fast_llm.engine.base_model.base_model import Layer
 from fast_llm.engine.config_utils.tensor_space import DefaultDimNames, TensorDim, TensorSpace
 from fast_llm.engine.distributed.config import DistributedDimNames
@@ -150,7 +149,45 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
     def _forward_backward(
         self, input_: torch.Tensor, kwargs: dict, losses: dict | None = None
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
+        targets = self._get_targets(kwargs)
+        input_ = input_.detach().requires_grad_(do_grad := targets is not None and self.training)
+        with torch.enable_grad():
+            ln_output = self.final_norm(input_)
 
+            if "output_hidden_states" in kwargs and kwargs["output_hidden_states"]:
+                # The last hidden layer output is returned normalized in the HF Transformers-style output, at least for LLama style models.
+                # So, if needed, we gather the data after normalization and set it as the output of the previous layer.
+                dims = list(kwargs[TransformerKwargs.hidden_dims])
+                sequence_index = 1 - int(kwargs[TransformerKwargs.sequence_first])
+                dims[sequence_index] = (
+                    TensorDim(
+                        TransformerDimNames.sequence_q_tp, dims[sequence_index].global_size, DistributedDimNames.tensor
+                    )
+                    if self._sequence_parallel_logits
+                    else TensorDim(TransformerDimNames.sequence_q, dims[sequence_index].global_size)
+                )
+                meta = TensorMeta.from_dims(tuple(dims), tensor_name="transformer hidden_state", dtype=ln_output.dtype)
+                hidden_state, _ = meta.local_to_global(ln_output.detach(), distributed=self._tensor_space.distributed)
+                kwargs["hidden_states"][len(kwargs["hidden_states"]) - 1]["tensor"] = hidden_state
+
+        grad_output = kwargs[TransformerKwargs.grad_output] / (
+            self._group_size if self._sequence_parallel_logits else 1
+        )
+
+        output_weights = self._get_output_weights(kwargs)
+        loss, ln_output_grad = self._logits_cross_entropy_forward_backward_split(
+            ln_output.detach(), targets, output_weights, grad_output, kwargs, losses
+        )
+
+        if do_grad:
+            ln_output.backward(ln_output_grad)
+            return loss, input_.grad
+        else:
+            return loss, None
+
+    def _get_targets(
+        self, kwargs: dict
+    ) -> tuple[torch.Tensor | None, torch.Tensor | None, torch.Tensor | None, torch.Tensor | None] | None:
         # Loss mask for distillation. (Labels are already masked.)
         if self._use_dpo_loss:
             dpo_target = kwargs.get(LanguageModelKwargs.labels)
@@ -191,52 +228,10 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
                 lm_target = None
 
         targets = (dpo_target, lm_target, distillation_target, loss_mask)
-        if self._sequence_parallel_logits:
-            targets = tuple(
-                None if target is None else split_op(target, self._tensor_space.distributed.tensor_group, 0)
-                for target in targets
-            )
-
         if not any(target is not None for target in targets):
-            # Simplify so we don't have to do the check again.
+            # Simplify so we don't have to check every time.
             targets = None
-
-        do_grad = targets is not None and self.training
-
-        input_ = input_.detach().requires_grad_(do_grad)
-        with torch.enable_grad():
-            ln_output = self.final_norm(input_)
-
-            if "output_hidden_states" in kwargs and kwargs["output_hidden_states"]:
-                # The last hidden layer output is returned normalized in the HF Transformers-style output, at least for LLama style models.
-                # So, if needed, we gather the data after normalization and set it as the output of the previous layer.
-                dims = list(kwargs[TransformerKwargs.hidden_dims])
-                sequence_index = 1 - int(kwargs[TransformerKwargs.sequence_first])
-                dims[sequence_index] = (
-                    TensorDim(
-                        TransformerDimNames.sequence_q_tp, dims[sequence_index].global_size, DistributedDimNames.tensor
-                    )
-                    if self._sequence_parallel_logits
-                    else TensorDim(TransformerDimNames.sequence_q, dims[sequence_index].global_size)
-                )
-                meta = TensorMeta.from_dims(tuple(dims), tensor_name="transformer hidden_state", dtype=ln_output.dtype)
-                hidden_state, _ = meta.local_to_global(ln_output.detach(), distributed=self._tensor_space.distributed)
-                kwargs["hidden_states"][len(kwargs["hidden_states"]) - 1]["tensor"] = hidden_state
-
-        grad_output = kwargs[TransformerKwargs.grad_output] / (
-            self._group_size if self._sequence_parallel_logits else 1
-        )
-
-        output_weights = self._get_output_weights(kwargs)
-        loss, ln_output_grad = self._logits_cross_entropy_forward_backward_split(
-            ln_output.detach(), targets, output_weights, grad_output, kwargs, losses
-        )
-
-        if do_grad:
-            ln_output.backward(ln_output_grad)
-            return loss, input_.grad
-        else:
-            return loss, None
+        return targets
 
     def _get_output_weights(self, kwargs: dict) -> torch.Tensor:
         if self._tie_word_embeddings:
