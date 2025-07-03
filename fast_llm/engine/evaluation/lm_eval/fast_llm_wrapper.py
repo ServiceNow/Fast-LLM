@@ -48,14 +48,8 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
         else:
             self.group = torch.distributed.GroupMember.NON_GROUP_MEMBER
 
-        # TODO: clean code which does not used parts from HFLM
-        backend = "causal"
-        revision = "main"
-        delta = None
-        peft = None
-
         # set some inputs which are expected in HFLM but are set by our model config
-        self.backend = backend
+        self.backend = "causal"
 
         # set tokenizer object
         assert isinstance(tokenizer, transformers.PreTrainedTokenizer) or isinstance(
@@ -78,9 +72,6 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
 
         self._max_length = model._inference_runner._batch_config.sequence_length
         self.pretrained = model
-        self.delta = delta
-        self.peft = peft
-        self.revision = revision
 
         self.batch_schedule = 1
         self.batch_sizes = {}
@@ -365,18 +356,15 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
             self.tokenizer, stop, input_ids.shape[1], input_ids.shape[0]
         )
 
-        kwargs = {
-            "input_ids": input_ids,
-            "max_length": max_length,
-            "stopping_criteria": stopping_criteria,
-            "pad_token_id": self.tokenizer.pad_token_id,
-            "use_cache": False,
+        return self.model.generate(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            max_length=max_length,
+            stopping_criteria=stopping_criteria,
+            pad_token_id=self.tokenizer.pad_token_id,
+            use_cache=False,
             **generation_kwargs,
-        }
-        if attention_mask is not None:
-            kwargs["attention_mask"] = attention_mask
-
-        return self.model.generate(**kwargs)
+        )
 
     @property
     def config(self):
