@@ -79,6 +79,7 @@ class AprielHybridSSMWrapper(HFLM):
         from fast_llm.models.ssm.external.apriel_hybrid.configuration_ssm_hybrid_apriel import AprielSSMHybridConfig
 
         self._config = AprielSSMHybridConfig.from_pretrained(pretrained, trust_remote_code=True)
+        # This config is used to initialize the model and tokenizer.
 
     def _create_model(self, pretrained: str, dtype: Optional[Union[str, torch.dtype]] = "float16", **kwargs) -> None:
         """Create the model."""
