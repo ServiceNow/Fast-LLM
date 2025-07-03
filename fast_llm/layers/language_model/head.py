@@ -25,7 +25,7 @@ from fast_llm.layers.language_model.embedding import WORD_EMBEDDINGS_WEIGHT
 from fast_llm.layers.transformer.config import TransformerDimNames, TransformerKwargs
 from fast_llm.logging import log_distributed_tensor
 from fast_llm.tensor import ParameterMeta, TensorMeta, init_normal_
-from fast_llm.utils import Assert, get_unique
+from fast_llm.utils import Assert, div, get_unique
 
 OUTPUT_WEIGHTS = "output_weights"
 
@@ -271,10 +271,11 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
                 logit_input_grad = torch.empty_like(logit_input)
             else:
                 logit_input_grad = None
-
-            split_size = get_unique(target.size(0) for target in targets)
+            split_size = div(
+                get_unique(target.size(0) for target in targets if target is not None), self._cross_entropy_splits
+            )
             tensors_split = [
-                [None] * split_size if tensor is None else tensor.split(split_size)
+                [None] * self._cross_entropy_splits if tensor is None else tensor.split(split_size)
                 for tensor in [logit_input, *targets, logit_input_grad]
             ]
             for logit_input_, *targets_, logit_input_grad_ in zip(*tensors_split, strict=True):
