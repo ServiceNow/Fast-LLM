@@ -97,6 +97,12 @@ class EvaluatorLmEvalConfig(EvaluatorConfig):
         " passed to the Fast-LLM lm_eval model wrapper.",
     )
 
+    max_length: int | None = Field(
+        default=None,
+        desc="Maximum sequence length including both prompt and newly generated tokens."
+        " If not set, it is inferred from the Fast-LLM model config or tokenizer.",
+    )
+
     def get_evaluator(
         self,
         name: str,

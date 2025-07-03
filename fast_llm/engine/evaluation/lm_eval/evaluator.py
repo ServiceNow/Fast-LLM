@@ -67,6 +67,7 @@ class EvaluatorLmEval[ConfigType: EvaluatorLmEvalConfig](Evaluator[ConfigType]):
             logits_cache=self._config.logits_cache,
             add_bos_token=self._config.add_bos_token,
             prefix_token_id=self._config.prefix_token_id,
+            max_length=self._config.max_length,
         )
         self._is_setup = True
 

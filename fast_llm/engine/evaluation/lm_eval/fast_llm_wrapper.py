@@ -16,12 +16,14 @@ from fast_llm.core.distributed import gather_object, safe_barrier, scatter_objec
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.engine.evaluation.lm_eval.utils import prepare_lm_eval_simple_eval_params, process_lm_eval_results
 from fast_llm.engine.inference.huggingface import HuggingfaceBaseModelForCausalLM
+from fast_llm.layers.transformer.rotary.config import NoRotaryConfig
 
 eval_logger = logging.getLogger(__name__)
 
 
 class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
     _DEFAULT_MAX_LENGTH = 2048
+    _DEFAULT_MAX_GEN_TOKENS = 256
 
     def __init__(
         self,
@@ -31,57 +33,113 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
         logits_cache: bool = True,
         add_bos_token: bool | None = False,
         prefix_token_id: int | None = None,
+        max_length: int | None = None,
     ):
         super().__init__()
-        # This is for lm_eval sake, we always run lm_eval on one main rank
-        self._rank = 0
-        self._world_size = 1
 
+        # === Distributed setup ===
+        self._rank = 0  # For lm_eval: always run on main rank
+        self._world_size = 1
         self._distributed: Distributed = model._inference_runner._fast_llm_model.distributed
-        # get batch_data_parallel group leaders
+
         if (
             self._distributed.config.sequence_data_rank == 0
             and self._distributed.config.pipeline_rank == 0
             and self._distributed.config.tensor_rank == 0
         ):
-            self.group = self._distributed.batch_data_group
+            self._group = self._distributed.batch_data_group
         else:
-            self.group = torch.distributed.GroupMember.NON_GROUP_MEMBER
+            self._group = torch.distributed.GroupMember.NON_GROUP_MEMBER
 
-        # set some inputs which are expected in HFLM but are set by our model config
-        self.backend = "causal"
-
-        # set tokenizer object
-        assert isinstance(tokenizer, transformers.PreTrainedTokenizer) or isinstance(
-            tokenizer, transformers.PreTrainedTokenizerFast
-        )
-        self.tokenizer = tokenizer
-
-        # initialize model fields
+        # === Model & tokenizer setup ===
         self._model = model
-        self._device = self._model.device
-        self._config = self._model.config
+        self._device = model.device
+        self._config = model.config
 
-        self.truncation = truncation
-        self.logits_cache = logits_cache
-        self.vocab_size = self.tokenizer.vocab_size
-        # select (or create) a pad token to use
-        self.tokenizer = lm_eval.models.utils.configure_pad_token(self.tokenizer, model_config=self.config)
+        assert isinstance(tokenizer, (transformers.PreTrainedTokenizer, transformers.PreTrainedTokenizerFast))
+        self._tokenizer = tokenizer
+        self._tokenizer = lm_eval.models.utils.configure_pad_token(self._tokenizer, model_config=self._config)
 
-        self.add_bos_token = add_bos_token
-
-        self._max_length = model._inference_runner._batch_config.sequence_length
-        self.pretrained = model
-
-        self.batch_schedule = 1
-        self.batch_sizes = {}
-        self.batch_size_per_gpu = model._inference_runner._batch_config.micro_batch_size
-        self.batch_size = self.batch_size_per_gpu * self._distributed.config.batch_data_parallel
-        self.max_batch_size = self.batch_size
-
-        self.custom_prefix_token_id = prefix_token_id
+        # === Generation/configuration parameters ===
+        self._truncation = truncation
+        self._logits_cache = logits_cache
+        self._add_bos_token = add_bos_token
+        self._max_length = max_length
+        self._custom_prefix_token_id = prefix_token_id
         if prefix_token_id is not None:
             eval_logger.info(f"Loglikelihood prefix token id used in evaluation: {self.prefix_token_id}")
+
+        # === Internal constants ===
+        self._backend = "causal"
+        self._vocab_size = self._tokenizer.vocab_size
+
+        # === Batch configuration ===
+        self._batch_schedule = 1
+        self._batch_sizes = {}  # Not used dynamically by lm_eval
+        self._batch_size_per_gpu = model._inference_runner._batch_config.micro_batch_size
+        self._batch_size = self._batch_size_per_gpu * self._distributed.config.batch_data_parallel
+        self._max_batch_size = self._batch_size
+
+    @property
+    def eot_token_id(self):
+        # we use EOT because end of *text* is more accurate for what we're doing than end of *sentence*
+        return self._tokenizer.eos_token_id
+
+    # overrides from TemplateLM, but not used externally
+    @property
+    def prefix_token_id(self):
+        # it is used as prefix for loglikelihood
+        if self._custom_prefix_token_id is not None:
+            return self._custom_prefix_token_id
+        if self._tokenizer.bos_token_id is not None:
+            return self._tokenizer.bos_token_id
+        return self._tokenizer.eos_token_id
+
+    @property
+    def max_length(self):
+        # if max length manually set, return it
+        if self._max_length:
+            return self._max_length
+
+        # check if it is absolute positional encoding and return max_position_embeddings
+        if hasattr(self._config.fast_llm_config.base_model, "transformer"):
+            # NOTE: will need to extend if more relative encoding types will be added
+            if isinstance(self._config.fast_llm_config.base_model.transformer.rotary, NoRotaryConfig):
+                return self._config.fast_llm_config.base_model.max_position_embeddings
+
+        # check if tokenizer holds model sequence leigh info
+        if hasattr(self._tokenizer, "model_max_length"):
+            if self._tokenizer.model_max_length == 1000000000000000019884624838656:
+                return self._DEFAULT_MAX_LENGTH
+            return self._tokenizer.model_max_length
+
+        # finally try to get sequence length from batch config
+        if hasattr(self._model._inference_runner._batch_config, "sequence_length"):
+            return self._model._inference_runner._batch_config.sequence_length
+
+        return self._DEFAULT_MAX_LENGTH
+
+    # @property
+    # def device(self):
+    #     # only used for world_size when lm_eval world size > 1 and
+    #     # should not be called with current lm_eval support implementation
+    #     return self._device
+
+    @property
+    def rank(self):
+        return self._rank
+
+    @property
+    def world_size(self):
+        return self._world_size
+
+    @property
+    def tokenizer(self):
+        return self._tokenizer
+
+    @property
+    def tokenizer_name(self) -> str:
+        return self._tokenizer.name_or_path.replace("/", "__")
 
     def run(self, cli_args: list[str], completed_steps: int, run_index: int):
         if self._distributed.config.rank == 0:
@@ -89,8 +147,8 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
             simple_eval_kwargs["model"] = self
 
             # Needed for reporting as batch_size is set from args not lm for reporting in evaluate
-            simple_eval_kwargs["batch_size"] = self.batch_size
-            simple_eval_kwargs["max_batch_size"] = self.max_batch_size
+            simple_eval_kwargs["batch_size"] = self._batch_size
+            simple_eval_kwargs["max_batch_size"] = self._max_batch_size
 
             # As of lm_eval commit 758c5ed891b1ca48acd8d3a0d309a827215796b7
             # Expected to be a string even if empty and not None in simple_evaluate
@@ -134,16 +192,16 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
         # Messages could include types like logits, generate, finished.
 
         # Groups is always None if world size is 1
-        if self.group is None:
+        if self._group is None:
             # Must not be called with continue_generate false on one process
             assert continue_generate
             return self._model_invoke_inner(
                 input_ids, attention_mask, labels, max_length, stop, generate, **generation_kwargs
             )
 
-        world_size = self.group.size()
+        world_size = self._group.size()
 
-        assert self.group.rank() == 0
+        assert self._group.rank() == 0
 
         if continue_generate:
             assert input_ids is not None
@@ -151,8 +209,8 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
                 assert max_length is not None and stop is not None
 
             # always divide by batch_size, if not full batch, some ranks will get less work or not at all
-            assert self.batch_size % world_size == 0
-            step = self.batch_size // world_size
+            assert self._batch_size % world_size == 0
+            step = self._batch_size // world_size
 
             input_ids = [input_ids[i * step : (i + 1) * step] for i in range(world_size)]
             attention_mask = [
@@ -183,7 +241,7 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
             obj_list,
             scatter_list,
             group_src=0,
-            group=self.group,
+            group=self._group,
         )
         input_ids, attention_mask, labels, max_length, stop, generate, continue_generate, generation_kwargs = tuple(
             obj_list[0]
@@ -204,7 +262,7 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
             res,
             gather_list,
             group_dst=0,
-            group=self.group,
+            group=self._group,
         )
         # Clean gather list from empty shards
         gather_list = [el for el in gather_list if len(el) > 0]
@@ -220,11 +278,11 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
         return res
 
     def worker_model_invoke(self):
-        assert self.group is not None
+        assert self._group is not None
         # if isinstance(self.group, dist.ProcessGroup):
-        if not isinstance(self.group, int):
+        if not isinstance(self._group, int):
             # groups is None for world_size 1
-            assert self.group.rank() != 0
+            assert self._group.rank() != 0
             # on worker ranks the function need to wait to be called multiple times
             while True:
                 scatter_list = None
@@ -234,7 +292,7 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
                     obj_list,
                     scatter_list,
                     group_src=0,
-                    group=self.group,
+                    group=self._group,
                 )
                 input_ids, attention_mask, labels, max_length, stop, generate, continue_generate, generation_kwargs = (
                     tuple(obj_list[0])
@@ -257,15 +315,15 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
                     res,
                     gather_list,
                     group_dst=0,
-                    group=self.group,
+                    group=self._group,
                 )
         else:
             # TODO: implement distributed model support
-            assert self.group == torch.distributed.GroupMember.NON_GROUP_MEMBER
+            assert self._group == torch.distributed.GroupMember.NON_GROUP_MEMBER
         safe_barrier(self._distributed.world_group, "lm_eval_end")
 
     def stop_workers(self):
-        if self.group is None or (world_size := self.group.size()) == 1:
+        if self._group is None or (world_size := self._group.size()) == 1:
             return
         self._model_invoke(None, None, None, None, None, None, continue_generate=False)
         safe_barrier(self._distributed.world_group, "lm_eval_end")
@@ -324,7 +382,7 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
             # and pass only the results around instead of the full logits.
             # Computing errors here is also preferable, as copying logits across nodes and GPUs
             # is inefficient and can involve gigabytes of data.
-            return self.model(
+            return self._model(
                 input_ids=input_ids,
                 attention_mask=attention_mask,
                 labels=labels,
@@ -353,80 +411,18 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
             generation_kwargs.pop("temperature")
         # build stopping criteria
         stopping_criteria = lm_eval.models.utils.stop_sequences_criteria(
-            self.tokenizer, stop, input_ids.shape[1], input_ids.shape[0]
+            self._tokenizer, stop, input_ids.shape[1], input_ids.shape[0]
         )
 
-        return self.model.generate(
+        return self._model.generate(
             input_ids=input_ids,
             attention_mask=attention_mask,
             max_length=max_length,
             stopping_criteria=stopping_criteria,
-            pad_token_id=self.tokenizer.pad_token_id,
+            pad_token_id=self._tokenizer.pad_token_id,
             use_cache=False,
             **generation_kwargs,
         )
-
-    @property
-    def config(self):
-        # return the associated transformers.AutoConfig for the given pretrained model.
-        return self._config
-
-    @property
-    def model(self):
-        return self._model
-
-    @property
-    def eot_token_id(self):
-        # we use EOT because end of *text* is more accurate for what we're doing than end of *sentence*
-        return self.tokenizer.eos_token_id
-
-    @property
-    def prefix_token_id(self):
-        # it is used as prefix for loglikelihood
-        if self.custom_prefix_token_id is not None:
-            return self.custom_prefix_token_id
-        if self.tokenizer.bos_token_id is not None:
-            return self.tokenizer.bos_token_id
-        return self.tokenizer.eos_token_id
-
-    @property
-    def max_length(self):
-        if self._max_length:  # if max length manually set, return it
-            return self._max_length
-        seqlen_config_attrs = ("n_positions", "max_position_embeddings", "n_ctx")
-        for attr in seqlen_config_attrs:
-            if hasattr(self.model.config, attr):
-                return getattr(self.model.config, attr)
-        if hasattr(self.tokenizer, "model_max_length"):
-            if self.tokenizer.model_max_length == 1000000000000000019884624838656:
-                return self._DEFAULT_MAX_LENGTH
-            return self.tokenizer.model_max_length
-        return self._DEFAULT_MAX_LENGTH
-
-    @property
-    def max_gen_toks(self) -> int:
-        return 256
-
-    # TODO: check removing this does not affect lm_eval
-    # @property
-    # def batch_size(self):
-    #     return self.batch_size_per_gpu
-
-    @property
-    def device(self):
-        return self._device
-
-    @property
-    def rank(self):
-        return self._rank
-
-    @property
-    def world_size(self):
-        return self._world_size
-
-    @property
-    def tokenizer_name(self) -> str:
-        return self.tokenizer.name_or_path.replace("/", "__")
 
     def tok_encode(self, string: str, left_truncate_len=None, add_special_tokens=None) -> list[int]:
         """ """
@@ -436,13 +432,13 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
 
         # by default for CausalLM - false or self.add_bos_token is set
         if add_special_tokens is None:
-            if self.backend == "causal":
-                special_tokens_kwargs = {"add_special_tokens": False or self.add_bos_token}
+            if self._backend == "causal":
+                special_tokens_kwargs = {"add_special_tokens": False or self._add_bos_token}
         # otherwise the method explicitly defines the value
         else:
             special_tokens_kwargs = {"add_special_tokens": add_special_tokens}
 
-        encoding = self.tokenizer.encode(string, **special_tokens_kwargs)
+        encoding = self._tokenizer.encode(string, **special_tokens_kwargs)
 
         # left-truncate the encoded context to be at most `left_truncate_len` tokens long
         if left_truncate_len:
@@ -458,14 +454,14 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
         truncation: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         # encode a batch of strings. converts to tensors and pads automatically, unlike tok_encode.
-        old_padding_side = self.tokenizer.padding_side
-        self.tokenizer.padding_side = padding_side
+        old_padding_side = self._tokenizer.padding_side
+        self._tokenizer.padding_side = padding_side
 
         add_special_tokens = {}
-        if self.backend == "causal":
-            add_special_tokens = {"add_special_tokens": False or self.add_bos_token}
+        if self._backend == "causal":
+            add_special_tokens = {"add_special_tokens": False or self._add_bos_token}
 
-        encoding = self.tokenizer(
+        encoding = self._tokenizer(
             strings,
             truncation=truncation,
             padding="longest",
@@ -481,20 +477,20 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
                 )
             encoding["input_ids"] = encoding["input_ids"][:, -left_truncate_len:]
             encoding["attention_mask"] = encoding["attention_mask"][:, -left_truncate_len:]
-        self.tokenizer.padding_side = old_padding_side
+        self._tokenizer.padding_side = old_padding_side
 
         return encoding["input_ids"], encoding["attention_mask"]
 
     def tok_decode(self, tokens, skip_special_tokens=True):
-        return self.tokenizer.decode(tokens, skip_special_tokens=skip_special_tokens)
+        return self._tokenizer.decode(tokens, skip_special_tokens=skip_special_tokens)
 
     def _select_cont_toks(self, logits: torch.Tensor, contlen: int = None, inplen: int = None) -> torch.Tensor:
-        if self.backend == "causal":
+        if self._backend == "causal":
             assert contlen and inplen, "Must pass input len and cont. len to select scored logits for causal LM"
             # discard right-padding.
             # also discard the input/context tokens. we'll only score continuations.
             logits = logits[inplen - contlen : inplen]
-        elif self.backend == "seq2seq":
+        elif self._backend == "seq2seq":
             assert contlen and not inplen, "Selecting scored logits for Seq2SeqLM requires only cont. len"
             # only discard right-padding.
             # the logits input to this fn only contain decoder-side tokens.
@@ -506,7 +502,7 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
         self, requests: list[lm_eval.api.instance.Instance], disable_tqdm: bool = False
     ) -> list[float]:
         adaptive_batch_size = None
-        if self.batch_size == "auto":
+        if self._batch_size == "auto":
             # using rolling window with maximum context
             print("Passed argument batch_size = auto. Detecting largest batch size")
             batch_size = self._detect_batch_size()
@@ -523,6 +519,8 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
                 disable=(disable_tqdm or (self.rank != 0)),
             )
         ):
+            # The tokenizer may raise: "Token indices sequence length is longer than the specified maximum sequence length for this model"
+            # This is expected and fine, as the sequence will be split into chunks of max_length later.
             rolling_token_windows: list[tuple[list[int], list[int]]] = list(
                 map(
                     lm_eval.utils.make_disjoint_window,
@@ -545,14 +543,14 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
         # Handle distributed case padding
         pad_amnt = 0
         if self.world_size > 1:
-            mytensor = torch.tensor(len(all_windows), device=self.device)
+            mytensor = torch.tensor(len(all_windows), device=self._device)
             gathered = self.accelerator.gather(mytensor).cpu().detach().numpy().tolist()
             pad_amnt = max(gathered) - gathered[self.rank]
             if pad_amnt > 0:
                 all_windows += pad_amnt * [all_windows[0]]
 
         all_nlls = []
-        batch_size = adaptive_batch_size or self.batch_size
+        batch_size = adaptive_batch_size or self._batch_size
         for i in range(0, len(all_windows), batch_size):
             batch = all_windows[i : i + batch_size]
             # Extract just the windows for processing, keeping track of request indices
@@ -587,17 +585,17 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
         return loglikelihoods
 
     def _batch_scheduler(self, pos, n_reordered_requests):
-        sched = pos // int(len(n_reordered_requests) / self.batch_schedule)
-        if sched in self.batch_sizes:
-            return self.batch_sizes[sched]
-        if (len(self.batch_sizes) > 1) and (self.batch_sizes[sched - 1] == self.max_batch_size):
+        sched = pos // int(len(n_reordered_requests) / self._batch_schedule)
+        if sched in self._batch_sizes:
+            return self._batch_sizes[sched]
+        if (len(self._batch_sizes) > 1) and (self._batch_sizes[sched - 1] == self._max_batch_size):
             # if previous batch size is already maximal, skip recomputation
-            self.batch_sizes[sched] = self.max_batch_size
-            return self.batch_sizes[sched]
-        print(f"Passed argument batch_size = auto:{self.batch_schedule}. Detecting largest batch size")
-        self.batch_sizes[sched] = self._detect_batch_size(n_reordered_requests, pos)
-        print(f"Determined largest batch size: {self.batch_sizes[sched]}")
-        return self.batch_sizes[sched]
+            self._batch_sizes[sched] = self._max_batch_size
+            return self._batch_sizes[sched]
+        print(f"Passed argument batch_size = auto:{self._batch_schedule}. Detecting largest batch size")
+        self._batch_sizes[sched] = self._detect_batch_size(n_reordered_requests, pos)
+        print(f"Determined largest batch size: {self._batch_sizes[sched]}")
+        return self._batch_sizes[sched]
 
     def _loglikelihood_tokens(
         self,
@@ -628,17 +626,17 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
         re_ord = lm_eval.models.utils.Collator(
             requests,
             sort_fn=_collate,
-            group_by="contexts" if self.backend == "causal" and self.logits_cache else None,
+            group_by="contexts" if self._backend == "causal" and self._logits_cache else None,
             group_fn=lambda req: req[-2] + req[-1][:-1],
         )
 
         # automatic (variable) batch size detection for vectorization
         # pull longest context sample from request
         n_reordered_requests = len(re_ord)
-        batch_size = self.batch_size if self.batch_size != "auto" else override_bs if override_bs is not None else 0
+        batch_size = self._batch_size if self._batch_size != "auto" else override_bs if override_bs is not None else 0
         batch_fn = (
             self._batch_scheduler
-            if self.batch_size == "auto" and n_reordered_requests > 0 and not override_bs
+            if self._batch_size == "auto" and n_reordered_requests > 0 and not override_bs
             else None
         )
 
@@ -676,10 +674,10 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
                 # cont_toks      4 5 6 7 8 9      [:, -len(continuation_enc):, :self.vocab_size] slice
 
                 # when too long to fit in context, truncate from the left
-                if self.backend == "causal":
+                if self._backend == "causal":
                     total_length = len(context_enc) + len(continuation_enc)
                     if total_length > self.max_length + 1:
-                        eval_logger.warn(
+                        eval_logger.warning(
                             f"Combined length of context ({len(context_enc)}) and continuation ({len(continuation_enc)}) "
                             f"exceeds model's maximum length ({self.max_length}). "
                             f"Truncating {total_length - self.max_length + 1} tokens from the left."
@@ -687,14 +685,14 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
                     inp = torch.tensor(
                         (context_enc + continuation_enc)[-(self.max_length + 1) :][:-1],
                         dtype=torch.long,
-                        device=self.device,
+                        device=self._device,
                     )
                     (inplen,) = inp.shape
-                elif self.backend == "seq2seq":
+                elif self._backend == "seq2seq":
                     inp = torch.tensor(
                         (context_enc)[-self.max_length :],
                         dtype=torch.long,
-                        device=self.device,
+                        device=self._device,
                     )
                     (inplen,) = inp.shape
 
@@ -706,7 +704,7 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
                         # TODO: left-shift these?
                         # TODO: our code assumes we never end up truncating conts for either model type
                         dtype=torch.long,
-                        device=self.device,
+                        device=self._device,
                     )
                     (contlen,) = cont.shape
 
@@ -722,11 +720,11 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
 
             # create encoder attn mask and batched conts, if seq2seq
             call_kwargs = {}
-            if self.backend == "causal":
+            if self._backend == "causal":
                 batched_inps = lm_eval.models.utils.pad_and_concat(
                     padding_len_inp, inps, padding_side="right"
                 )  # [batch, padding_len_inp]
-            elif self.backend == "seq2seq":
+            elif self._backend == "seq2seq":
                 # TODO: left-pad encoder inps and mask?
                 batched_inps = lm_eval.models.utils.pad_and_concat(padding_len_inp, inps)  # [batch, padding_len_inp]
                 batched_conts = lm_eval.models.utils.pad_and_concat(
@@ -755,7 +753,7 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
                 # (discard context toks if decoder-only ; discard right-padding)
                 # also discards + checks for "virtual tokens" in the causal LM's input window
                 # from prompt/prefix tuning tokens, if applicable
-                ctx_len = inplen + (logits.shape[0] - padding_len_inp) if self.backend == "causal" else None
+                ctx_len = inplen + (logits.shape[0] - padding_len_inp) if self._backend == "causal" else None
                 logits = self._select_cont_toks(logits, contlen=contlen, inplen=ctx_len)
                 logits = logits.unsqueeze(0)  # [1, seq, vocab]
 
@@ -807,7 +805,7 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
             desc="Running generate_until requests",
         )
         adaptive_batch_size = None
-        if self.batch_size == "auto":
+        if self._batch_size == "auto":
             # using rolling window with maximum context
             print("Passed argument batch_size = auto. Detecting largest batch size")
             batch_size = self._detect_batch_size()
@@ -815,11 +813,11 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
             adaptive_batch_size = batch_size
         # for each different set of kwargs, we execute all requests, by batch.
         batch_size = (
-            self.batch_size
-            if self.batch_size != "auto"
+            self._batch_size
+            if self._batch_size != "auto"
             else adaptive_batch_size if adaptive_batch_size is not None else 0
         )
-        batch_fn = self._batch_scheduler if self.batch_size == "auto" and not adaptive_batch_size else None
+        batch_fn = self._batch_scheduler if self._batch_size == "auto" and not adaptive_batch_size else None
 
         # we group requests by their generation_kwargs,
         # so that we don't try to execute e.g. greedy sampling and temp=0.8 sampling
@@ -855,16 +853,16 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
             if "max_gen_toks" in kwargs.keys():
                 max_gen_toks = kwargs.pop("max_gen_toks")
             else:
-                max_gen_toks = self.max_gen_toks
+                max_gen_toks = self._DEFAULT_MAX_GEN_TOKENS
 
             # set the max length in tokens of inputs ("context_enc")
-            if self.backend == "causal":
+            if self._backend == "causal":
                 # max len for inputs = max length, minus room to generate the max new tokens
                 max_ctx_len = self.max_length - max_gen_toks
                 assert (
                     max_ctx_len > 0
                 ), f"Invalid configuration: requested max tokens to generate ({max_gen_toks}) must be less than model's maximum sequence length ({self.max_length})."
-            elif self.backend == "seq2seq":
+            elif self._backend == "seq2seq":
                 # max len for inputs = encoder's whole max_length
                 max_ctx_len = self.max_length
 
@@ -872,10 +870,10 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
             input_ids, attention_mask = self.tok_batch_encode(
                 contexts,
                 left_truncate_len=max_ctx_len,
-                truncation=self.truncation,
+                truncation=self._truncation,
             )
-            input_ids = input_ids.to(self.device)
-            attention_mask = attention_mask.to(self.device)
+            input_ids = input_ids.to(self._device)
+            attention_mask = attention_mask.to(self._device)
 
             if "max_length" not in kwargs:
                 kwargs["max_length"] = input_ids.shape[1] + max_gen_toks
@@ -893,7 +891,7 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
 
             for cont_toks, context in zip(cont_toks_list, contexts):
                 # discard context + left-padding toks if using causal decoder-only LM
-                if self.backend == "causal":
+                if self._backend == "causal":
                     cont_toks = cont_toks[input_ids.shape[1] :]
 
                 s = self.tok_decode(cont_toks)
@@ -921,7 +919,7 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
         Method to apply a chat template to a list of chat history between user and model.
         """
         try:
-            chat_templated = self.tokenizer.apply_chat_template(
+            chat_templated = self._tokenizer.apply_chat_template(
                 chat_history,
                 tokenize=False,
                 add_generation_prompt=add_generation_prompt,
@@ -930,7 +928,7 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
         except jinja2.exceptions.TemplateError:
             eval_logger.warning("Failed to apply chat template. removing the system role in chat history.")
             chat_history = [msg for msg in chat_history if msg["role"] != "system"]
-            chat_templated = self.tokenizer.apply_chat_template(
+            chat_templated = self._tokenizer.apply_chat_template(
                 chat_history,
                 tokenize=False,
                 add_generation_prompt=add_generation_prompt,
