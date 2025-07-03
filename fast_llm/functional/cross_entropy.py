@@ -244,8 +244,11 @@ def _torch_reverse_kl_forward_backward(
     Assert.eq(target_format, TargetFormat.logits, msg="Reverse KL only supports logits format")
 
     # Compute log probabilities - let _fused_softmax handle scaling internally
-    teacher_probs = _fused_softmax(target, logits_scale_factor * (1 / teacher_softmax_temp), group)
-    teacher_log_probs = torch.log(teacher_probs + 1e-8)  # log(p)
+    # teacher_probs = _fused_softmax(target, logits_scale_factor * (1 / teacher_softmax_temp), group)
+    # # teacher_log_probs = torch.log(teacher_probs + 1e-8)  # log(p)
+    # teacher_probs = torch.clamp(teacher_probs, min=1e-7)  # or even 1e-6
+    # teacher_log_probs = torch.log(teacher_probs)
+    teacher_log_probs = torch.log_softmax(target * logits_scale_factor * (1 / teacher_softmax_temp), dim=-1)
 
     # For reverse KL: KL(q||p) = Σ q * log(q/p) = Σ q * (log(q) - log(p))
     # Use kl_div with: input=log(p), target=q, log_target=False
