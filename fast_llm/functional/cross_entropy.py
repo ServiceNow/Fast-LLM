@@ -269,20 +269,20 @@ def _torch_reverse_kl_forward_backward(
         student_log_probs = torch.log_softmax(scaled_logits, dim=-1)
 
         # Convert to probabilities for kl_div
-        student_probs_ = torch.exp(student_log_probs)
+        # student_probs_ = torch.exp(student_log_probs)
 
         # Reverse KL: input=teacher_log_probs, target=student_probs
         if loss_mask is None:
             loss = torch.nn.functional.kl_div(
                 teacher_log_probs,  # input = log(p)
-                student_probs_,  # target = q
+                student_log_probs,  # target = log(q)
                 reduction="batchmean",
-                log_target=False,
+                log_target=True,
             )
         else:
             # Apply loss mask - this requires some reshaping
             loss_per_sample = torch.nn.functional.kl_div(
-                teacher_log_probs, student_probs_, reduction="none", log_target=False
+                teacher_log_probs, student_log_probs, reduction="none", log_target=True
             ).sum(dim=-1)
             loss = (loss_per_sample * loss_mask).mean()
 
