@@ -15,8 +15,8 @@ from tests.utils.depends import DependencyManager
 
 # Make fixtures available globally without import
 from tests.utils.run_test_script import (  # isort: skip
-    run_distributed_script_for_all_models,
-    run_test_script,
+    compare_results_for_all_models,
+    run_distributed_script,
     run_test_script_base_path,
     run_test_script_for_all_models,
 )
