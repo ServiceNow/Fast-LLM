@@ -22,6 +22,9 @@ class LanguageModelDimNames:
 class LanguageModelLossNames:
     language_model_loss = "language_model_loss"
     z_loss = "z_loss"
+    dpo_loss = "dpo_loss"
+    distil_lm_loss = "distil_lm_loss"
+    distillation_loss = "distillation_loss"
 
     @staticmethod
     def multi_token_prediction_loss(index: int) -> str:
