@@ -1,4 +1,6 @@
+import json
 import logging
+import math
 import pathlib
 import sys
 import time
@@ -110,7 +112,7 @@ class DistributedSubtestContext:
             report = get_and_reset_memory_usage_mib(clear_cache=True, global_stats=True, reset_global_stats=True)
             report["duration"] = time.perf_counter() - self._start
 
-            self._path.joinpath(f"pytest_report_{self._rank}").write_text(traceback.format_exc())
+            json.dump(report, self._path.joinpath(f"pytest_report_{self._rank}").open("w"))
 
         logger.warning(f"{self._name} {"PASSED" if self.success else "FAILED"})")
         if self._rank == 0:
@@ -135,8 +137,22 @@ def check_subtest_success(path: pathlib, fail: bool = True) -> bool:
         return False
 
 
-@pytest.fixture(scope="session")
-def report_subtest(request):
+def format_resource_report(title: str, report: dict[str, float]) -> str:
+    return "".join(
+        [
+            f"{title}:\n    ",
+            f"Max Reserved: {report.get("max_reserved", math.nan):.0f} MiB",
+            f"| Max Allocated: {report.get("max_allocated", math.nan):.0f} MiB".ljust(26),
+            f"| End Reserved: {report.get("reserved", math.nan):.0f} MiB".ljust(25),
+            f"| End Allocated: {report.get("allocated", math.nan):.0f} MiB".ljust(26),
+            f"| Duration: {report.get("duration", math.nan):.2f}".ljust(18),
+            f"| GPUs: {report["gpus"]:.0f}" if "gpus" in report else "",
+        ]
+    )
+
+
+@pytest.fixture(scope="function")
+def report_subtest(request: pytest.FixtureRequest):
     verbose = request.config.getoption("verbose")
     do_capture = request.config.getoption("distributed_capture")
 
@@ -155,6 +171,23 @@ def report_subtest(request):
                         print(f"<<< not found {file_path}>>>", file=file_)
         else:
             print("Set verbose > 1 to show run output.")
+
+        reports = {}
+        for rank in range(world_size):
+            try:
+                reports[f"rank_{rank}"] = json.load(path.joinpath(f"pytest_report_{rank}").open("r"))
+            except OSError:
+                reports[rank] = {}
+        keys = {key for report in reports.values() for key in report}
+        report = {key: max(report[key] for report in reports.values() if key in report) for key in keys}
+        report["gpus"] = world_size
+        reports["global"] = report
+
+        print(header(f"Resource usage", 80), file=sys.stderr)
+        for name, report in reports.items():
+            print(format_resource_report(name, report), file=sys.stderr)
+        setattr(request.node, "fast_llm_resource_report", report)
+
         if not success:
             raise RuntimeError(f"test {path.name} failed")
 

@@ -425,19 +425,15 @@ def get_and_reset_memory_usage_mib(
             # Happens if cuda is broken.
             return {}
     report = {
-        # Relevant value for OOM risk. Also look at global max since fast-llm resets stats.
-        "max_memory_reserved": max(torch.cuda.max_memory_reserved() / 2**20, _global_max_reserved),
-        # Actual memory usage from the test.
-        "max_memory_allocated": max(torch.cuda.max_memory_allocated() / 2**20, _global_max_allocated),
-        "memory_reserved": torch.cuda.memory_reserved() / 2**20,
-        "memory_allocated": torch.cuda.memory_allocated() / 2**20,
+        "reserved": torch.cuda.memory_reserved() / 2**20,
+        "allocated": torch.cuda.memory_allocated() / 2**20,
     }
     max_allocated = torch.cuda.max_memory_allocated() / 2**20
     max_reserved = torch.cuda.max_memory_reserved() / 2**20
     if global_stats:
         report |= {
-            "max_memory_reserved": max(max_reserved, _global_max_reserved),
-            "max_memory_allocated": max(max_allocated, _global_max_allocated),
+            "max_reserved": max(max_reserved, _global_max_reserved),
+            "max_allocated": max(max_allocated, _global_max_allocated),
         }
     else:
         report |= {

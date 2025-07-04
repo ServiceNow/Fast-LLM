@@ -9,7 +9,6 @@ import pytest
 import torch
 import xdist.scheduler
 
-import fast_llm.logging
 from fast_llm.utils import get_and_reset_memory_usage_mib
 from tests.utils.depends import DependencyManager
 
@@ -22,7 +21,7 @@ from tests.utils.run_test_script import (  # isort: skip
 )
 
 from tests.utils.model_configs import model_testing_config, ModelTestingConfig, testing_group_enabled  # isort: skip
-from tests.utils.utils import result_path, TEST_RESULTS_PATH  # isort: skip
+from tests.utils.utils import result_path, TEST_RESULTS_PATH, format_resource_report, report_subtest  # isort: skip
 
 
 manager: DependencyManager | None = None
@@ -190,15 +189,18 @@ def pytest_runtest_makereport(item: pytest.Function, call: pytest.CallInfo):
     if call.when == "call" and torch.cuda.is_available():
         report = get_and_reset_memory_usage_mib(clear_cache=True, global_stats=True, reset_global_stats=True)
         report["duration"] = call.duration
+        if hasattr(item, "fast_llm_resource_report"):
+            report_ = getattr(item, "fast_llm_resource_report")
+            report = {
+                key: max(report[key] for report in (report, report_) if key in report)
+                for key in set(report_) | set(report)
+            }
+
         item.add_report_section(
             call.when,
             "resource usage",
             json.dumps(report),
         )
-        torch.cuda.reset_peak_memory_stats()
-        # Reset global stats for next test.
-        fast_llm.logging._global_max_reserved = 0
-        fast_llm.logging._global_max_allocated = 0
 
 
 @pytest.hookimpl
@@ -218,18 +220,11 @@ def pytest_terminal_summary(terminalreporter):
     terminalreporter.write_sep("=", "Highest gpu memory usage", bold=True)
     sorted_nodeids = sorted(
         resource_reports.keys(),
-        key=lambda nodeid: resource_reports[nodeid]["max_memory_reserved"],
+        key=lambda nodeid: resource_reports[nodeid]["max_reserved"],
         reverse=True,
     )
     for nodeid in sorted_nodeids[: terminalreporter.config.getoption("--show-gpu-memory")]:
-        terminalreporter.write_line(
-            f"{nodeid}:\n    "
-            f"Max Reserved {resource_reports[nodeid]["max_memory_reserved"]:.0f} MiB | "
-            f"Max Allocated {resource_reports[nodeid]["max_memory_allocated"]:.0f} MiB | "
-            f"End Reserved {resource_reports[nodeid]["memory_reserved"]:.0f} MiB | "
-            f"End Allocated {resource_reports[nodeid]["memory_allocated"]:.0f} MiB | "
-            f"Duration {resource_reports[nodeid]["duration"]:.2f}"
-        )
+        terminalreporter.write_line(format_resource_report(nodeid, resource_reports[nodeid]))
 
 
 def pytest_runtest_call(item: pytest.Function):

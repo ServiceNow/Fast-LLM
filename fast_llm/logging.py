@@ -339,7 +339,7 @@ def log_memory_usage[
     relative_to: dict[str, int] | None = None,
 ) -> T:
     if report is None:
-        get_and_reset_memory_usage_mib(relative_to=relative_to, reset_stats=reset_stats)
+        report = get_and_reset_memory_usage_mib(relative_to=relative_to, reset_stats=reset_stats)
     formatted = _MEMORY_METRIC_FORMAT.format(**report)
     if header is not None:
         formatted = f"{header}: {formatted}"
