@@ -1,6 +1,4 @@
 import torch
-import torch._dynamo  # noqa
-import torch.autograd
 
 from fast_llm.core.distributed import ProcessGroup, ReduceOp, all_reduce
 from fast_llm.functional.config import CrossEntropyImpl, TargetFormat
@@ -14,6 +12,7 @@ def _torch_cross_entropy_forward_backward(
     loss_mask: torch.Tensor | None,
     grad_output: float | None,
     logits_scale_factor: float,
+    teacher_softmax_temp: float,
     target_format: TargetFormat,
 ) -> tuple[torch.Tensor, torch.Tensor | None]:
     """
@@ -28,6 +27,8 @@ def _torch_cross_entropy_forward_backward(
         if target_format == TargetFormat.logits:
             if logits_scale_factor != 1.0:
                 target = target * logits_scale_factor
+            if teacher_softmax_temp != 1.0:
+                target = target * (1 / teacher_softmax_temp)
             target = torch.softmax(target, dim=-1)
         if loss_mask is None:
             loss = torch.nn.functional.cross_entropy(
@@ -81,6 +82,7 @@ def _fused_cross_entropy_forward_backward(
     loss_mask: torch.Tensor | None,
     grad_output: float | None,
     logits_scale_factor: float,
+    teacher_softmax_temp: float,
     target_format: TargetFormat,
     group: ProcessGroup | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor | None]:
@@ -95,7 +97,7 @@ def _fused_cross_entropy_forward_backward(
     logits_norm, exp_logits, sum_exp_logits = _fused_softmax_base(logits, logits_scale_factor, group)
 
     if target_format == TargetFormat.logits:
-        target = _fused_softmax(target, logits_scale_factor, group)
+        target = _fused_softmax(target, logits_scale_factor * (1 / teacher_softmax_temp), group)
 
     if target_format == TargetFormat.labels:
         target = target.unsqueeze(-1)
@@ -169,6 +171,7 @@ def cross_entropy_forward_backward(
     group: ProcessGroup | None = None,
     implementation: CrossEntropyImpl = CrossEntropyImpl.fused,
     logits_scale_factor: float = 1.0,
+    teacher_softmax_temp: float = 1.0,
     target_format: TargetFormat = TargetFormat.labels,
 ) -> tuple[torch.Tensor, torch.Tensor | None]:
     """
@@ -189,11 +192,11 @@ def cross_entropy_forward_backward(
     if group:
         Assert.eq(implementation, CrossEntropyImpl.fused)
         return _fused_cross_entropy_forward_backward(
-            logits, target, loss_mask, grad_output, logits_scale_factor, target_format, group
+            logits, target, loss_mask, grad_output, logits_scale_factor, teacher_softmax_temp, target_format, group
         )
     else:
         return _CROSS_ENTROPY_IMPLEMENTATIONS[implementation](
-            logits, target, loss_mask, grad_output, logits_scale_factor, target_format
+            logits, target, loss_mask, grad_output, logits_scale_factor, teacher_softmax_temp, target_format
         )
 
 

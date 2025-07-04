@@ -86,7 +86,7 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
             self.dpo_beta = config.dpo_beta
         else:
             self._cross_entropy_impl = config.cross_entropy_impl
-            self._distil_cross_entropy_impl = config.distil_cross_entropy_impl
+            self._distil_loss_impl = config.distil_loss_impl
             if self._cross_entropy_impl == CrossEntropyImpl.auto:
                 if self._parallel_embeddings:
                     self._cross_entropy_impl = CrossEntropyImpl.fused
@@ -397,7 +397,7 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
             lm_loss, lm_grad = None, None
 
         if distillation_target is not None and self._distil_loss_factor > 0.0:
-            if self._distil_cross_entropy_impl == CrossEntropyImpl.reverse_kl:
+            if self._distil_loss_impl == CrossEntropyImpl.reverse_kl:
                 distillation_loss, distillation_grad = reverse_kl_forward_backward(
                     logits.flatten(0, -2),
                     distillation_target,
