@@ -18,7 +18,7 @@ from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutpu
 from transformers.modeling_utils import PreTrainedModel
 from transformers.models.mistral.modeling_mistral import MistralDecoderLayer, MistralMLP, MistralModel, MistralRMSNorm
 from transformers.processing_utils import Unpack
-from transformers.utils import LossKwargs, auto_docstring, can_return_tuple, logging
+from transformers.utils import LossKwargs, can_return_tuple, logging
 from transformers.utils.generic import ModelOutput
 
 from fast_llm.models.ssm.external.apriel_15b_hybrid.configuration_ssm_hybrid_apriel15b import AprielSSMHybridConfig
@@ -813,7 +813,6 @@ class AprielSSMHybridModel(MistralModel):
         self.post_init()
 
     @can_return_tuple
-    @auto_docstring
     def forward(
         self,
         input_ids: Optional[torch.LongTensor] = None,
