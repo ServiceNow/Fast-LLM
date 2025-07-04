@@ -1,5 +1,4 @@
 import dataclasses
-import gc
 import json
 import logging
 import math
@@ -11,6 +10,7 @@ import torch
 import xdist.scheduler
 
 import fast_llm.logging
+from fast_llm.utils import get_and_reset_memory_usage_mib
 from tests.utils.depends import DependencyManager
 
 # Make fixtures available globally without import
@@ -33,6 +33,7 @@ def pytest_addoption(parser):
     group.addoption("--skip-slow", action="store_true")
     group.addoption("--show-skipped", action="store_true")
     group.addoption("--show-gpu-memory", type=int, default=10)
+    group.addoption("--no-distributed-capture", dest="distributed_capture", action="store_false")
     group.addoption("--models", nargs="*")
     group.addoption(
         "--run-extra-slow",
@@ -187,37 +188,12 @@ def pytest_runtest_makereport(item: pytest.Function, call: pytest.CallInfo):
 
     # Measure GPU memory usage. (TODO: This excludes child processes)
     if call.when == "call" and torch.cuda.is_available():
-        # Free memory for more accurate reporting, and to reduce OOM risk with lots of workers.
-        # Cublas workspace can unnecessarily keep 100s of MBs of reserved memory.
-        torch._C._cuda_clearCublasWorkspaces()
-        # Lots of tensors tend to stay allocated until the next garbage collection.
-        # Collect only if the remaining memory is significant enough since it's costly.
-        if torch.cuda.memory_allocated() > 1e7:
-            gc.collect()
-        try:
-            # Actually free the memory.
-            torch.cuda.empty_cache()
-        except RuntimeError:
-            # Happens if the test broke cuda.
-            return
+        report = get_and_reset_memory_usage_mib(clear_cache=True, global_stats=True, reset_global_stats=True)
+        report["duration"] = call.duration
         item.add_report_section(
             call.when,
             "resource usage",
-            json.dumps(
-                {
-                    "duration": call.duration,
-                    # Relevant value for OOM risk. Also look at global max since fast-llm resets stats.
-                    "max_memory_reserved": max(
-                        torch.cuda.max_memory_reserved() / 2**20, fast_llm.logging._global_max_reserved
-                    ),
-                    # Actual memory usage from the test.
-                    "max_memory_allocated": max(
-                        torch.cuda.max_memory_allocated() / 2**20, fast_llm.logging._global_max_allocated
-                    ),
-                    "memory_reserved": torch.cuda.memory_reserved() / 2**20,
-                    "memory_allocated": torch.cuda.memory_allocated() / 2**20,
-                }
-            ),
+            json.dumps(report),
         )
         torch.cuda.reset_peak_memory_stats()
         # Reset global stats for next test.

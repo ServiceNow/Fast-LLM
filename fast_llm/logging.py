@@ -10,7 +10,7 @@ from fast_llm.engine.base_model.base_model import LossDef
 from fast_llm.engine.config_utils.logging import TensorLogs
 from fast_llm.engine.distributed.config import PhaseType
 from fast_llm.tensor import TensorMeta
-from fast_llm.utils import format_number, log
+from fast_llm.utils import format_number, get_and_reset_memory_usage_mib, log
 
 if typing.TYPE_CHECKING:
     from fast_llm.core.distributed import ProcessGroup
@@ -329,7 +329,7 @@ _global_max_allocated = 0
 _global_max_reserved = 0
 
 
-def get_memory_usage_mib(reset_stats: bool = True, relative_to: dict[str, int] | None = None) -> dict[str, float]:
+def get_memory_usage_mib(reset_stats: bool = True, relative_to: dict[str, float] | None = None) -> dict[str, float]:
     global _global_max_allocated, _global_max_reserved
     max_allocated = torch.cuda.max_memory_allocated() / 2**20
     max_reserved = torch.cuda.max_memory_reserved() / 2**20
@@ -355,12 +355,13 @@ def log_memory_usage[
     header: str | None = None,
     log_fn: type[BaseException] | typing.Callable[[str], T] = logger.info,
     reset_stats: bool = True,
-    stats: dict[str, int] | None = None,
+    report: dict[str, float] | None = None,
     relative_to: dict[str, int] | None = None,
 ) -> T:
-    if stats is None:
-        stats = get_memory_usage_mib(reset_stats, relative_to)
-    formatted = _MEMORY_METRIC_FORMAT.format(**stats)
+    if report is None:
+        get_and_reset_memory_usage_mib(relative_to=relative_to, reset_stats=reset_stats)
+        report = get_memory_usage_mib(reset_stats, relative_to)
+    formatted = _MEMORY_METRIC_FORMAT.format(**report)
     if header is not None:
         formatted = f"{header}: {formatted}"
     return log(formatted, log_fn=log_fn)

@@ -387,10 +387,5 @@ class DistributedConfig(Config):
         strict: bool = True,
         flat: bool = False,
     ) -> typing.Self:
-        # TODO v0.3: Remove backward compatibility fix
-        if "sequence_first" in default and strict:
-            del default["sequence_first"]
-        if "separate_init_generators" in default and strict:
-            del default["separate_init_generators"]
         cls._handle_renamed_field(default, "distributed_timeout", "timeout")
         return super()._from_dict(default, strict, flat)

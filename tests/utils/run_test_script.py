@@ -102,8 +102,10 @@ def parse_run_distributed_script(args: list[str] | None = None):
     parser = argparse.ArgumentParser()
     parser.add_argument("base_path", type=pathlib.Path)
     parser.add_argument("model_testing_config", type=str)
+    parser.add_argument("--no-distributed-capture", dest="distributed_capture", action="store_false")
+
     parsed = parser.parse_args(args)
-    return parsed.base_path, MODEL_CONFIGS[parsed.model_testing_config]
+    return parsed.base_path, MODEL_CONFIGS[parsed.model_testing_config], parsed.distributed_capture
 
 
 @pytest.fixture(scope="session")
@@ -111,12 +113,16 @@ def compare_results_for_all_models(
     worker_resources: "WorkerResources",
     run_test_script_base_path: pathlib.Path,
 ):
-    def do_compare_results_for_all_models(distributed_testing_config: DistributedTestingConfig):
-        assert distributed_testing_config.compare is not None
+    def do_compare_results_for_all_models(config: DistributedTestingConfig, artifacts: typing.Iterable[str]):
+        assert config.compare is not None
+        compare_path = run_test_script_base_path / config.compare / ARTIFACT_PATH
+        for artifact in artifacts:
+            if not (artifact_path := compare_path / "0" / f"tensor_logs_{artifact}.pt").is_file():
+                pytest.fail(f"Missing artifact {artifact_path} from {config.compare}.", pytrace=False)
         compare_tensor_logs(
-            run_test_script_base_path / distributed_testing_config.compare / ARTIFACT_PATH,
-            run_test_script_base_path / distributed_testing_config.name / ARTIFACT_PATH,
-            distributed_testing_config.compare_config,
+            compare_path,
+            run_test_script_base_path / config.name / ARTIFACT_PATH,
+            config.compare_config,
         )
 
     return do_compare_results_for_all_models

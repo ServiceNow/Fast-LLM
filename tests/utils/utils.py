@@ -1,20 +1,21 @@
 import logging
 import pathlib
 import sys
+import time
 import traceback
 import typing
 
-import _pytest.capture
 import pytest
 import torch
 
+from fast_llm.core.distributed import ProcessGroup, allreduce_scalar, safe_barrier
 from fast_llm.engine.base_model.base_model import BaseModel, Layer
 from fast_llm.engine.config_utils.logging import configure_logging
 from fast_llm.engine.config_utils.tensor_space import TensorSpace
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig, StageConfig
 from fast_llm.engine.multi_stage.stage import Stage
-from fast_llm.utils import header
+from fast_llm.utils import get_and_reset_memory_usage_mib, header
 
 logger = logging.getLogger(__name__)
 
@@ -59,47 +60,102 @@ def get_stage(base_model: BaseModel | list[Layer], distributed: Distributed):
 
 
 class DistributedSubtestContext:
-    def __init__(self, path: pathlib.Path, rank: int) -> None:
-        self._path = path
-        self._rank = rank
-        self._capture_manager = _pytest.capture.CaptureManager("fd")
+    def __init__(
+        self, base_path: pathlib.Path, name: str, group: ProcessGroup | None, num_gpus: int, enabled: bool = True
+    ) -> None:
+        self._path = base_path / name
+        self._name = name
+        self._group = group
+        self._rank = 0 if group is None else group.rank()
+        self._rank_enabled = self._rank < num_gpus
+        self._enabled = enabled and self._rank_enabled
         self.success = False
 
     def __enter__(self) -> typing.Self:
-        self._capture_manager.start_global_capturing()
-        # Logging is set to log to the old stdout, so we need to reconfigure.
-        configure_logging()
+        if self._enabled:
+            self._sys_stdout = sys.stdout
+            self._sys_stderr = sys.stderr
+            self._path.mkdir(parents=True, exist_ok=True)
+            sys.stdout = self._path.joinpath(f"pytest_stdout_{self._rank}").open("w")
+            sys.stderr = self._path.joinpath(f"pytest_stderr_{self._rank}").open("w")
+            # Logging is set to log to the old stdout, so we need to reconfigure.
+            configure_logging()
+        self._start = time.perf_counter()
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        try:
-            self._capture_manager.suspend_global_capture()
-            out, err = self._capture_manager.read_global_capture()
-            self._path.mkdir(parents=True, exist_ok=True)
-            self._path.joinpath(f"pytest_stdout_{self._rank}").write_text(out)
-            self._path.joinpath(f"pytest_stderr_{self._rank}").write_text(err)
-            if exc_type is None:
-                self.success = True
-            else:
-                self._path.joinpath(f"pytest_traceback_{self._rank}").write_text(traceback.format_exc())
-            return True
-        finally:
-            self._capture_manager.stop_global_capturing()
-            configure_logging()
+        if self._enabled:
+            try:
+                stdout_handle = sys.stdout
+                stderr_handle = sys.stderr
+                sys.stdout = self._sys_stdout
+                sys.stderr = self._sys_stderr
+                stdout_handle.close()
+                stderr_handle.close()
+            finally:
+                configure_logging()
+
+        if exc_type is None:
+            self.success = True
+        else:
+            self._path.joinpath(f"pytest_traceback_{self._rank}").write_text(traceback.format_exc())
+
+        if self._group is not None:
+            # Barrier so `allreduce_scalar` doesn't go crazy in case of desync.
+            safe_barrier(self._group, self._name)
+            self.success = allreduce_scalar(self.success, dtype=torch.int64, group=self._group) == self._group.size()
+
+        if self._rank_enabled:
+            # Free resources to limit memory usage.
+            report = get_and_reset_memory_usage_mib(clear_cache=True, global_stats=True, reset_global_stats=True)
+            report["duration"] = time.perf_counter() - self._start
+
+            self._path.joinpath(f"pytest_report_{self._rank}").write_text(traceback.format_exc())
+
+        logger.warning(f"{self._name} {"PASSED" if self.success else "FAILED"})")
+        if self._rank == 0:
+            set_subtest_success(self._path, self.success)
+
+        return True
 
 
-def report_subtest(path: pathlib.Path, world_size: int):
+def set_subtest_success(path: pathlib.Path, success: bool = True):
+    path.joinpath("pytest_success").write_text(str(int(success)))
+
+
+def check_subtest_success(path: pathlib, fail: bool = True) -> bool:
+    if not path.is_dir():
+        if fail:
+            pytest.fail(f"Test {path.name} did not run", pytrace=False)
+        else:
+            return False
     try:
-        success = bool(int(path.joinpath("pytest_success").read_text()))
+        return bool(int(path.joinpath("pytest_success").read_text()))
     except OSError:
-        success = False
-    if not success:
-        for rank in range(world_size):
-            for fd, file_ in (("stdout", sys.stdout), ("stderr", sys.stdout), ("traceback", sys.stderr)):
-                print(header(f"{fd} rank {rank}", 80), file=file_)
-                file_path = path / f"pytest_{fd}_{rank}"
-                try:
-                    print(file_path.read_text(), file=file_)
-                except OSError:
-                    print(f"<<< not found {file_path}>>>", file=file_)
-        raise RuntimeError(f"test {path.name} failed")
+        return False
+
+
+@pytest.fixture(scope="session")
+def report_subtest(request):
+    verbose = request.config.getoption("verbose")
+    do_capture = request.config.getoption("distributed_capture")
+
+    def do_report_subtest(path: pathlib.Path, world_size: int) -> None:
+        success = check_subtest_success(path)
+        if not do_capture:
+            logger.warning("Distributed capture is disabled. See distributed test for run output.")
+        elif verbose > 1 or not success:
+            for rank in range(world_size):
+                for fd, file_ in (("stdout", sys.stdout), ("stderr", sys.stdout), ("traceback", sys.stderr)):
+                    print(header(f"{fd} rank {rank}", 80), file=file_)
+                    file_path = path / f"pytest_{fd}_{rank}"
+                    try:
+                        print(file_path.read_text(), file=file_)
+                    except OSError:
+                        print(f"<<< not found {file_path}>>>", file=file_)
+        else:
+            print("Set verbose > 1 to show run output.")
+        if not success:
+            raise RuntimeError(f"test {path.name} failed")
+
+    return do_report_subtest
