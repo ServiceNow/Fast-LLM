@@ -39,6 +39,7 @@ class AprielSSMWrapper(HFLM):
         )
 
     def _model_generate(self, context, max_length, stop, **generation_kwargs):
+        context = context.to(self._device)
         """Generate text from the model."""
         for key in ("do_sample", "attention_mask"):
             if key in generation_kwargs:
@@ -90,6 +91,7 @@ class AprielHybridSSMWrapper(HFLM):
         )
 
     def _model_generate(self, context, max_length, stop, **generation_kwargs):
+        context = context.to(self._device)
 
         stopping_criteria = lm_eval.models.utils.stop_sequences_criteria(
             self.tokenizer,
@@ -152,7 +154,7 @@ class AprielHybrid15bSSMWrapper(HFLM):
         )
 
     def _model_generate(self, context, max_length, stop, **generation_kwargs):
-
+        context = context.to(self._device)
         stopping_criteria = lm_eval.models.utils.stop_sequences_criteria(
             self.tokenizer,
             stop,
