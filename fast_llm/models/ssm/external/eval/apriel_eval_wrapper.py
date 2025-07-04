@@ -223,6 +223,7 @@ class AprielHybrid15bSSMWrapper(HFLM):
 
         # Ensure context is on the same device as the model
         context = context.to(device)
+        self.model.to(device)
 
         # Move any tensors in generation_kwargs to the correct device
         generation_kwargs = _move_tensors_to_device(generation_kwargs, device)
