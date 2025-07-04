@@ -392,7 +392,7 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
                 logits_scale_factor=self._logits_scale_factor,
                 target_format=TargetFormat.labels,
             )
-            lm_loss = lm_loss * self._distil_ntp_loss_factor
+            lm_loss = lm_loss * distil_ntp_loss_factor
         else:
             lm_loss, lm_grad = None, None
 
