@@ -345,24 +345,25 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                     )
                     # Setup bidirection attention for masked diffusion
                     # It uses _flash_attn_func so no need to set attention_mask and attention_mask_value.
-                    kwargs[TransformerKwargs.causal] = False
-                    # batch_size, seq_len = batch.token_ids.shape
-                    # attention_mask = torch.ones(
-                    #     (batch_size, 1, seq_len, seq_len),
-                    #     dtype=torch.bool,
-                    #     device=self._tensor_space.distributed.device,
-                    # )
-                    # kwargs[TransformerKwargs.attention_mask] = attention_mask
+                    # kwargs[TransformerKwargs.causal] = False
+                    batch_size, seq_len = batch.token_ids.shape
+                    seq_len -= 1  # last token is dropped inputs
+                    attention_mask = torch.ones(
+                        (batch_size, 1, seq_len, seq_len),
+                        dtype=torch.bool,
+                        device=self._tensor_space.distributed.device,
+                    )
+                    kwargs[TransformerKwargs.attention_mask] = attention_mask.unsqueeze(1).unsqueeze(1)
                     # # kwargs[TransformerKwargs.attention_mask_value] = torch.tensor(
                     # #     -10000.0, device=self._tensor_space.distributed.device
                     # # )
-                    # kwargs[TransformerKwargs.attention_mask_value] = torch.full(
-                    #     [],
-                    #     torch.finfo(self._tensor_space.distributed_config.training_dtype.torch).min,
-                    #     dtype=self._tensor_space.distributed_config.training_dtype.torch,
-                    #     device=self._tensor_space.distributed.device,
-                    # )
-
+                    kwargs[TransformerKwargs.attention_mask_value] = torch.full(
+                        [],
+                        torch.finfo(self._tensor_space.distributed_config.training_dtype.torch).min,
+                        dtype=self._tensor_space.distributed_config.training_dtype.torch,
+                        device=self._tensor_space.distributed.device,
+                    )
+                    # print(f"attention_mask : {attention_mask}")
                     # print(f"labels shape: {labels}, tokens: {batch.token_ids}, mask indexes shape: {batch.mask_indexes}")
 
                     # set token ids to masked tokens

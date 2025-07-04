@@ -182,7 +182,11 @@ class Attention(torch.nn.Module):
         ).view(b, self._local_head_groups, sq, self._local_heads_per_group, sk)
 
         attn_weights = attn_weights.to(torch.float32) * self._layer_index
+
+        attn_weights = attn_weights.transpose(2, 3)
         attn_weights = torch.where(mask, attn_weights, mask_value)
+        attn_weights = attn_weights.transpose(2, 3)
+
         attn_weights = torch.nn.functional.softmax(attn_weights, dim=-1).to(query.dtype)
 
         with set_generator(self._tensor_space.distributed.tp_generator):
