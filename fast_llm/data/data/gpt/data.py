@@ -142,13 +142,13 @@ def gpt_data_collate_fn(batch: list[GPTSample], sampling_parameters: GPTSampling
         # TODO:
         # 90% of the batch: C = random [0, seq_len // 4], 10%: C = random in [0, seq_len-2)
         prob = torch.rand(1)
-        C = torch.where(
-            prob > diffusion_config.context_sampler,
-            torch.randint(0, seq_len // 4, (batch_size,), dtype=torch.long),
-            torch.randint(0, seq_len - 2, (batch_size,), dtype=torch.long),
-        )
+        # C = torch.where(
+        #     prob > diffusion_config.context_sampler,
+        #     torch.randint(0, seq_len // 4, (batch_size,), dtype=torch.long),
+        #     torch.randint(0, seq_len - 2, (batch_size,), dtype=torch.long),
+        # )
         # C = torch.randint(0, (seq_len - 2), (batch_size,), dtype=torch.long)
-
+        C = -torch.ones(batch_size, dtype=torch.int)
         # Generate a random tensor of batch size to seed masking probabilities
         t = torch.rand((batch_size,))
         # Compute the mask probabilities for every sequence in the batch leaving extrams 0 & 1
