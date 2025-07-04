@@ -1,6 +1,5 @@
 import datetime
 import logging
-import time
 import typing
 
 import torch
@@ -102,8 +101,6 @@ class ProcessGroupPool:
             if isinstance(global_ranks, range)
             else f"ranks_{"_".join(str(rank) for rank in global_ranks)}"
         )
-        logger.info(f"Creating process group {prefix} (rank = {group_rank}, size = {group_size})")
-        time.sleep(0.1)
 
         group = torch.distributed.ProcessGroupNCCL(
             torch.distributed.PrefixStore(prefix + "/", self.store),
@@ -111,8 +108,6 @@ class ProcessGroupPool:
             group_size,
             datetime.timedelta(seconds=self._timeout),
         )
-        logger.info(f"Barrier process group {prefix} (rank = {group_rank}, size = {group_size})")
-        logger.info(f"Done process group {prefix} (rank = {group_rank}, size = {group_size})")
         self._process_groups[global_ranks] = group
         return group
 
@@ -230,7 +225,7 @@ class Distributed[ConfigType: DistributedConfig](Configurable[ConfigType]):
         """
         Add a process group from its definition.
         """
-        # self._config.log_first_rank(f"Initializing group {distributed_dim.name}, size={distributed_dim.size}...")
+        self._config.log_first_rank(f"Initializing group {distributed_dim.name}, size={distributed_dim.size}...")
         distributed_dim.check_ranks_in_range(0, self._config.world_size)
         group = self._pool.get_process_group(distributed_dim.global_ranks, distributed_dim.rank)
         distributed_dim.setup(group)

@@ -329,26 +329,6 @@ _global_max_allocated = 0
 _global_max_reserved = 0
 
 
-def get_memory_usage_mib(reset_stats: bool = True, relative_to: dict[str, float] | None = None) -> dict[str, float]:
-    global _global_max_allocated, _global_max_reserved
-    max_allocated = torch.cuda.max_memory_allocated() / 2**20
-    max_reserved = torch.cuda.max_memory_reserved() / 2**20
-    _global_max_allocated = max(max_allocated, _global_max_allocated)
-    _global_max_reserved = max(max_reserved, _global_max_reserved)
-    out = {
-        "allocated": torch.cuda.memory_allocated() / 2**20,
-        "max_allocated": max_allocated,
-        "reserved": torch.cuda.memory_reserved() / 2**20,
-        "max_reserved": max_reserved,
-        "global_max_reserved": _global_max_reserved,
-    }
-    if relative_to:
-        out = {key: value - relative_to.get(key, 0) for key, value in out.items()}
-    if reset_stats:
-        torch.cuda.reset_peak_memory_stats()
-    return out
-
-
 def log_memory_usage[
     T
 ](
@@ -360,7 +340,6 @@ def log_memory_usage[
 ) -> T:
     if report is None:
         get_and_reset_memory_usage_mib(relative_to=relative_to, reset_stats=reset_stats)
-        report = get_memory_usage_mib(reset_stats, relative_to)
     formatted = _MEMORY_METRIC_FORMAT.format(**report)
     if header is not None:
         formatted = f"{header}: {formatted}"
