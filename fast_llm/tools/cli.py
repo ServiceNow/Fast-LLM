@@ -30,6 +30,9 @@ def fast_llm(args=None):
         elif parsed.subcommand == "create_hybrid_checkpoint_5b":
             from fast_llm.models.ssm.external.make_hybrid_checkpoint_with_importance_5b import main
             main(args=unparsed)
+        elif parsed.subcommand == "create_hybrid_checkpoint_15b":
+            from fast_llm.models.ssm.external.make_hybrid_checkpoint_with_importance_15b import main
+            main(args=unparsed)
         else:
             raise RuntimeError("Unknown subcommand")
         Runnable.parse_and_run(unparsed)
