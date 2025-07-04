@@ -149,6 +149,16 @@ class LanguageModelBaseConfig(BaseModelConfig):
         hint=FieldHint.feature,
         valid=check_field(Assert.geq, 0),
     )
+    distil_ntp_loss_factor: float = Field(
+        default=0.0,
+        desc="Factor to scale the distillation loss by.",
+        hint=FieldHint.feature,
+    )
+    distil_loss_factor: float = Field(
+        default=1.0,
+        desc="Factor to scale the distillation loss by.",
+        hint=FieldHint.feature,
+    )
     logits_scale_factor: float = Field(
         default=1.0,
         desc="Multiply output logits by scale factor.",

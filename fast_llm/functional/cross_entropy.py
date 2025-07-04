@@ -195,3 +195,131 @@ def cross_entropy_forward_backward(
         return _CROSS_ENTROPY_IMPLEMENTATIONS[implementation](
             logits, target, loss_mask, grad_output, logits_scale_factor, target_format
         )
+
+
+def _torch_reverse_kl_forward_backward(
+    logits: torch.Tensor,
+    target: torch.Tensor,
+    loss_mask: torch.Tensor | None,
+    grad_output: float | None,
+    logits_scale_factor: float,
+    teacher_softmax_temp: float,
+    target_format: TargetFormat,
+    group: ProcessGroup | None = None,
+) -> tuple[torch.Tensor, torch.Tensor | None]:
+    """
+    Reverse KL using PyTorch's native kl_div function.
+    Much simpler and more reliable than custom implementation!
+    """
+    Assert.eq(target_format, TargetFormat.logits, msg="Reverse KL only supports logits format")
+
+    # Compute log probabilities - let _fused_softmax handle scaling internally
+    # teacher_probs = _fused_softmax(target, logits_scale_factor * (1 / teacher_softmax_temp), group)
+    # # teacher_log_probs = torch.log(teacher_probs + 1e-8)  # log(p)
+    # teacher_probs = torch.clamp(teacher_probs, min=1e-7)  # or even 1e-6
+    # teacher_log_probs = torch.log(teacher_probs)
+
+    # Scale target logits more carefully
+    scaled_target = target * (logits_scale_factor / teacher_softmax_temp)
+
+    # Clamp to prevent extreme values before log_softmax
+    scaled_target = torch.clamp(scaled_target, min=-50, max=50)
+    teacher_log_probs = torch.log_softmax(scaled_target, dim=-1)
+
+    # For reverse KL: KL(q||p) = Σ q * log(q/p) = Σ q * (log(q) - log(p))
+    # Use kl_div with: input=log(p), target=q, log_target=False
+    # This gives: Σ q * (log(q) - log(p)) = exactly what we want!
+
+    with torch.enable_grad():
+        logits_ = logits.detach().requires_grad_(grad_output is not None)
+
+        # Use log_softmax for consistency instead of _fused_softmax
+        scaled_logits = logits_ * logits_scale_factor
+        scaled_logits = torch.clamp(scaled_logits, min=-50, max=50)
+        student_log_probs = torch.log_softmax(scaled_logits, dim=-1)
+
+        # Convert to probabilities for kl_div
+        # student_probs_ = torch.exp(student_log_probs)
+
+        # Reverse KL: input=teacher_log_probs, target=student_probs
+        if loss_mask is None:
+            loss = torch.nn.functional.kl_div(
+                teacher_log_probs,  # input = log(p)
+                student_log_probs,  # target = log(q)
+                reduction="batchmean",
+                log_target=True,
+            )
+        else:
+            # Apply loss mask - this requires some reshaping
+            loss_per_sample = torch.nn.functional.kl_div(
+                teacher_log_probs, student_log_probs, reduction="none", log_target=True
+            ).sum(dim=-1)
+            loss = (loss_per_sample * loss_mask).mean()
+
+        if group is not None and target_format != TargetFormat.labels:
+            all_reduce(loss, op=ReduceOp.MEAN, group=group)
+
+        if grad_output is not None:
+            loss.backward(torch.full_like(loss, grad_output))
+            grad = logits_.grad.to(logits.dtype)
+        else:
+            grad = None
+
+    return loss.detach_(), grad
+
+
+def reverse_kl_forward_backward(
+    logits: torch.Tensor,
+    target: torch.Tensor,
+    loss_mask: torch.Tensor | None,
+    grad_output: float | None,
+    group: ProcessGroup | None = None,
+    logits_scale_factor: float = 1.0,
+    teacher_softmax_temp: float = 1.0,
+    target_format: TargetFormat = TargetFormat.labels,
+) -> tuple[torch.Tensor, torch.Tensor | None]:
+    """
+    Compute reverse KL divergence: KL(q||p) where q is the predicted distribution (student) and p is the target (teacher).
+    This is mode-seeking (vs. mode-covering for forward KL) and useful for:
+    - Encouraging the model to focus on the modes of the target distribution
+    - Avoiding probability mass on low-probability regions of the target
+    - Distillation scenarios where you want sharp, focused predictions
+
+    Key differences from standard cross-entropy:
+    - Standard CE: KL(p||q) = mode-covering (spreads mass broadly)
+    - Reverse KL: KL(q||p) = mode-seeking (focuses on target modes)
+
+    Args:
+        logits: Model predictions [batch_size, ..., vocab_size]
+        target: Target distribution or labels
+        loss_mask: Optional mask for loss computation
+        grad_output: Gradient output scale factor
+        group: Process group for tensor parallelism
+        logits_scale_factor: Temperature scaling factor (1/T)
+        target_format: Format of target (labels or logits)
+
+    Returns:
+        loss: Reverse KL divergence loss
+        grad: Gradients w.r.t. logits
+
+    Example usage:
+        # Replace standard cross-entropy with reverse KL
+        # loss, grad = cross_entropy_forward_backward(logits, target, ...)
+        loss, grad = reverse_kl_forward_backward(logits, target,
+                                               loss_mask=None,
+                                               grad_output=1.0,
+                                               logits_scale_factor=1.0,
+                                               target_format=TargetFormat.labels)
+    """
+    if target_format == TargetFormat.labels:
+        Assert.eq(target.shape, logits.shape[:-1])
+        Assert.eq(target.dtype, torch.int64)
+    else:
+        Assert.eq(target.shape, logits.shape)
+        assert target.dtype.is_floating_point, target.dtype
+        if loss_mask is not None:
+            Assert.eq(loss_mask.shape, logits.shape[:-1])
+    # TODO: implement fused?
+    return _torch_reverse_kl_forward_backward(
+        logits, target, loss_mask, grad_output, logits_scale_factor, teacher_softmax_temp, target_format, group
+    )
