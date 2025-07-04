@@ -47,7 +47,7 @@ def _test_load_and_save_parallel(
 
 
 def main(args: list[str] | None = None) -> None:
-    base_path, model_testing_config = parse_run_distributed_script(args)
+    base_path, model_testing_config, _ = parse_run_distributed_script(args)
 
     with ProcessGroupPool(timeout=20):
         for pretrained_format, pretrained_path in (

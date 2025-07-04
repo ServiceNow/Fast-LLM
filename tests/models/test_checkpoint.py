@@ -20,7 +20,9 @@ from fast_llm.engine.checkpoint.convert import ConvertConfig
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig, ShardName
 from fast_llm.utils import Assert
 from tests.utils.compare_tensor_logs import CompareConfig, compare_logged_tensor
+from tests.utils.distributed_configs import DistributedTestingConfig
 from tests.utils.model_configs import ModelTestingConfig, ModelTestingGroup
+from tests.utils.run_test_script import ARTIFACT_PATH
 
 _WEIGHT_SHARD_SAVE_NAME = f"{ShardName.weights}_shard"
 
@@ -34,46 +36,53 @@ _CHECKPOINT_AND_EVAL_ARGS = [
 @pytest.mark.model_testing_group(ModelTestingGroup.checkpoint)
 def test_checkpoint_and_eval(run_test_script_for_all_models, model_testing_config):
     # A baseline config (single-gpu, bf16, flash-attn).
-    run_test_script_for_all_models(_CHECKPOINT_AND_EVAL_ARGS)
+    run_test_script_for_all_models(
+        distributed_testing_config=DistributedTestingConfig(
+            name="checkpoint_and_eval", config_args=_CHECKPOINT_AND_EVAL_ARGS
+        ),
+    )
 
 
-def _prepare_resume_fn(test_path: pathlib.Path, compare_path: pathlib.Path):
-    shutil.copytree(compare_path, test_path)
-    shutil.rmtree(test_path / "checkpoint" / "2")
-    assert (test_path / "checkpoint" / "1" / "ok").is_file()
-    # TODO: Eval
-    shutil.rmtree(test_path / "runs")
+@pytest.fixture(scope="module")
+def prepare_resume(run_test_script_base_path: pathlib.Path):
+    def do_prepare_resume(distributed_testing_config: DistributedTestingConfig):
+        resume_from_path = run_test_script_base_path / distributed_testing_config.compare
+        self_path = run_test_script_base_path / distributed_testing_config.name
+        shutil.copytree(resume_from_path, self_path)
+        shutil.rmtree(self_path / "checkpoint" / "2")
+        assert (self_path / "checkpoint" / "1" / "ok").is_file()
+        # TODO: Eval
+        shutil.rmtree(self_path / "runs")
+        for artifact in ["init", "train_1"]:
+            path = f"{ARTIFACT_PATH}/0/tensor_logs_{artifact}.pt"
+            shutil.copy(resume_from_path / path, self_path / path)
 
-
-def _compare_resume_fn(test_path: pathlib.Path, compare_path: pathlib.Path):
-    for artifact in ["init", "train_1"]:
-        path = f"runs/0/artifacts/0/tensor_logs_{artifact}.pt"
-        if not (test_path / path).is_file():
-            shutil.copy(compare_path / path, test_path / path)
+    return do_prepare_resume
 
 
 @pytest.mark.depends_on(on=["test_checkpoint_and_eval[{model_testing_config}]"])
 @pytest.mark.model_testing_group(ModelTestingGroup.checkpoint)
-def test_resume(run_test_script_for_all_models):
+def test_resume(run_test_script_for_all_models, compare_results_for_all_models, prepare_resume):
+    distributed_testing_config = DistributedTestingConfig(
+        name="resume", compare="test_checkpoint_and_eval", config_args=_CHECKPOINT_AND_EVAL_ARGS
+    )
+
+    prepare_resume(distributed_testing_config)
+
     # Resume from iteration=1 and compare outputs with the baseline run.
-    run_test_script_for_all_models(
-        _CHECKPOINT_AND_EVAL_ARGS,
-        compare=f"test_checkpoint_and_eval",
-        prepare_fn=_prepare_resume_fn,
-        compare_fn=_compare_resume_fn,
-    )
+    run_test_script_for_all_models(distributed_testing_config)
+    compare_results_for_all_models("distributed_testing_config")
 
 
 @pytest.mark.depends_on(on=["test_checkpoint_and_eval[{model_testing_config}]"])
 @pytest.mark.model_testing_group(ModelTestingGroup.checkpoint)
-def test_resume_frozen(run_test_script_for_all_models):
-    # Resume with frozen mlp. No comparison.
-    run_test_script_for_all_models(
-        _CHECKPOINT_AND_EVAL_ARGS + ["model.base_model.transformer.mlp_lr_scale=0."],
-        compare="test_checkpoint_and_eval",
-        prepare_fn=_prepare_resume_fn,
-        do_compare=False,
+def test_resume_frozen(run_test_script_for_all_models, prepare_resume):
+    distributed_testing_config = DistributedTestingConfig(
+        name="resume_frozen", compare="test_checkpoint_and_eval", config_args=_CHECKPOINT_AND_EVAL_ARGS
     )
+    prepare_resume(distributed_testing_config)
+    # Resume with frozen mlp. No comparison.
+    run_test_script_for_all_models(distributed_testing_config)
 
 
 def do_get_convert_path(
@@ -343,15 +352,18 @@ def load_and_save_parallel_base_path(run_test_script_base_path):
     ]
 )
 @pytest.mark.model_testing_group(ModelTestingGroup.convert, ModelTestingGroup.distributed)
-def test_save_and_load_in_parallel(run_distributed_script_for_all_models, load_and_save_parallel_base_path):
+def test_save_and_load_in_parallel(run_distributed_script, load_and_save_parallel_base_path, model_testing_config):
     # Save and load checkpoints to and from various distributed configurations.
     # Combined in a single test to mitigate process creation overhead.
     # TODO: Test beyond 2 gpu configs?
     import tests.models.distributed_test_checkpoint
 
-    run_distributed_script_for_all_models(
-        [tests.models.distributed_test_checkpoint.__file__],
-        base_path=load_and_save_parallel_base_path,
+    run_distributed_script(
+        [
+            tests.models.distributed_test_checkpoint.__file__,
+            str(load_and_save_parallel_base_path),
+            model_testing_config.name,
+        ],
         num_gpus=2,
     )
 

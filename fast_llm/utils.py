@@ -1,3 +1,4 @@
+import gc
 import itertools
 import logging
 import math
@@ -392,3 +393,64 @@ class Interrupter:
     @property
     def interrupted(self):
         return self._interrupted
+
+
+_global_max_allocated = 0
+_global_max_reserved = 0
+
+
+def get_and_reset_memory_usage_mib(
+    *,
+    relative_to: dict[str, int] | None = None,
+    clear_cache: bool = False,
+    global_stats: bool = False,
+    reset_stats: bool = True,
+    reset_global_stats: bool = False,
+) -> dict[str, float]:
+    global _global_max_allocated, _global_max_reserved
+    import torch
+
+    if clear_cache:
+        # Free memory for more accurate reporting, and to reduce OOM risk with lots of workers.
+        # Cublas workspace can unnecessarily keep 100s of MBs of reserved memory.
+        torch._C._cuda_clearCublasWorkspaces()
+        # Lots of tensors tend to stay allocated until the next garbage collection.
+        # Collect only if the remaining memory is significant enough since it's costly.
+        if torch.cuda.memory_allocated() > 1e7:
+            gc.collect()
+        try:
+            # Actually free the memory.
+            torch.cuda.empty_cache()
+        except RuntimeError:
+            # Happens if cuda is broken.
+            return {}
+    report = {
+        "reserved": torch.cuda.memory_reserved() / 2**20,
+        "allocated": torch.cuda.memory_allocated() / 2**20,
+    }
+    max_allocated = torch.cuda.max_memory_allocated() / 2**20
+    max_reserved = torch.cuda.max_memory_reserved() / 2**20
+    if global_stats:
+        report |= {
+            "max_reserved": max(max_reserved, _global_max_reserved),
+            "max_allocated": max(max_allocated, _global_max_allocated),
+        }
+    else:
+        report |= {
+            "max_allocated": max_allocated,
+            "max_reserved": max_reserved,
+            "global_max_reserved": _global_max_reserved,
+        }
+
+    if relative_to:
+        report = {key: value - relative_to.get(key, 0) for key, value in report.items()}
+    if reset_global_stats:
+        torch.cuda.reset_peak_memory_stats()
+        _global_max_reserved = 0
+        _global_max_allocated = 0
+    elif reset_stats:
+        torch.cuda.reset_peak_memory_stats()
+        _global_max_allocated = max(max_allocated, _global_max_allocated)
+        _global_max_reserved = max(max_reserved, _global_max_reserved)
+
+    return report

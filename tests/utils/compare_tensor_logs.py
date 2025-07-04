@@ -59,7 +59,7 @@ def compare_logged_tensor(tensor_ref, tensor_test, errors, step, name, config: C
     if tensor_ref["shape"] != tensor_test["shape"]:
         errors.append(
             "\n".join(
-                [f">>>> [{step}] Incompatible shape for tensor {name}: {tensor_ref['shape']}!={tensor_test['shape']}"]
+                [f">>>> [{step}] Incompatible shape for tensor {name}: {tensor_test['shape']}!={tensor_ref['shape']}"]
             )
         )
         return
@@ -67,7 +67,7 @@ def compare_logged_tensor(tensor_ref, tensor_test, errors, step, name, config: C
         errors.append(
             "\n".join(
                 [
-                    f">>>> [{step}] Incompatible sampling rate for tensor {name}: {tensor_ref['step']}!={tensor_test['step']}"
+                    f">>>> [{step}] Incompatible sampling rate for tensor {name}: {tensor_test['step']}!={tensor_ref['step']}"
                 ]
             )
         )
@@ -101,8 +101,8 @@ def compare_logged_tensor(tensor_ref, tensor_test, errors, step, name, config: C
     if tensor_errors:
         tensor_errors.extend(
             [
-                f"  Ref samples:  " + "".join(f"{x:12.4e}" for x in samples_ref[: config.show_samples].tolist()),
                 f"  Test samples: " + "".join(f"{x:12.4e}" for x in samples_test[: config.show_samples].tolist()),
+                f"  Ref samples:  " + "".join(f"{x:12.4e}" for x in samples_ref[: config.show_samples].tolist()),
             ]
         )
         errors.append("\n".join([f">>>> [{step}] Excessive diff for tensor {name}:"] + tensor_errors))
