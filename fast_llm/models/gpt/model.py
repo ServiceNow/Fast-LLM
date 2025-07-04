@@ -315,11 +315,21 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                     kwargs[LanguageModelKwargs.in_context] = batch.in_context.to(
                         device=self._tensor_space.distributed.device
                     )
+                    
+                    batch_size, seq_len = batch.token_ids.shape
+                    seq_len -= 1  # last token is dropped from the input
+                    attn_mask = torch.ones(
+                        (batch_size, 1, seq_len, seq_len),
+                        dtype=torch.bool,
+                        device=self._tensor_space.distributed.device,
+                    )
+                    
+                    
                     # Setup bidirection attention for diffusion should we set this in a preprocessor? BackupAttentionPreprocessor?
                     # batch_size, seq_len = batch.token_ids.shape
                     # seq_len -= 1  # last token is drop from the input
                     # # Compute attention mask for diffusion
-                    # C = batch.in_context_length.to(device=self._tensor_space.distributed.device)
+                    C = batch.in_context_length.to(device=self._tensor_space.distributed.device)
                     # row_idx = torch.arange(seq_len, device=self._tensor_space.distributed.device).view(1, seq_len, 1)
                     # col_idx = torch.arange(seq_len, device=self._tensor_space.distributed.device).view(1, 1, seq_len)
                     # C_exp = C.view(batch_size, 1, 1)
@@ -355,13 +365,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                     #     not_padded = ~padded[:, 1:]
                     #     attn_mask = attn_mask & not_padded.unsqueeze(1) & not_padded.unsqueeze(2)
 
-                    print(f"C: {C}")
-                    print(f"masked_token_ids: {batch.masked_token_ids}")
-                    print(f"token_ids: {batch.token_ids}")
-                    print(f"labels: {labels}")
-                    print(f"loss_weights: {batch.loss_weights}")
-                    print(f"mask indexes: {batch.mask_indexes}")
-                    print(f"in_context: {batch.in_context}")
+
                     # Reshape to match expected attention mask format
                     attention_mask = attn_mask.unsqueeze(1).unsqueeze(1)  # Add additional dimension
                     # print(f"attention_mask shape: {attention_mask.shape}\n{attention_mask}")
@@ -373,7 +377,14 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                         device=self._tensor_space.distributed.device,
                     )
                     batch.token_ids = batch.masked_token_ids
-                    print(f"attention_mask: {attention_mask}")
+                    # print(f"C: {C}")
+                    # print(f"masked_token_ids: {batch.masked_token_ids}")
+                    # print(f"token_ids: {batch.token_ids}")
+                    # print(f"labels: {labels}")
+                    # print(f"loss_weights: {batch.loss_weights}")
+                    # print(f"mask indexes: {batch.mask_indexes}")
+                    # print(f"in_context: {batch.in_context}")
+                    # print(f"attention_mask: {attention_mask}")
 
             for preprocessor in self._preprocessors:
                 # Update this include p_maks and mask index in kwargs
