@@ -162,8 +162,6 @@ def _fused_cross_entropy_forward_backward(
         per_sample_loss = per_sample_loss * loss_weight.flatten()
         loss_weight_expanded = loss_weight.reshape(-1, 1)
         grad = grad * loss_weight_expanded if grad is not None else None
-        # Avg across all the tokens.
-        # denom = torch.clamp((loss_weight != 0).sum(), min=1)
         return per_sample_loss.mean(), grad
 
 
