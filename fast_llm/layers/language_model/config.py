@@ -22,6 +22,9 @@ class LanguageModelDimNames:
 class LanguageModelLossNames:
     language_model_loss = "language_model_loss"
     z_loss = "z_loss"
+    dpo_loss = "dpo_loss"
+    distil_lm_loss = "distil_lm_loss"
+    distillation_loss = "distillation_loss"
 
     @staticmethod
     def multi_token_prediction_loss(index: int) -> str:
@@ -111,6 +114,11 @@ class LanguageModelBaseConfig(BaseModelConfig):
         desc="Implementation for the cross-entropy computation.",
         hint=FieldHint.performance,
     )
+    distil_loss_impl: CrossEntropyImpl = Field(
+        default=CrossEntropyImpl.auto,
+        desc="Implementation for the distillation cross-entropy computation.",
+        hint=FieldHint.performance,
+    )
     cross_entropy_splits: int | None = Field(
         default=None,
         desc="Split the logit and cross-entropy computation into this many fragment, to reduce memory usage.",
@@ -149,11 +157,28 @@ class LanguageModelBaseConfig(BaseModelConfig):
         hint=FieldHint.feature,
         valid=check_field(Assert.geq, 0),
     )
+    distil_ntp_loss_factor: float = Field(
+        default=0.0,
+        desc="Factor to scale the distillation loss by.",
+        hint=FieldHint.feature,
+    )
+    distil_loss_factor: float = Field(
+        default=1.0,
+        desc="Factor to scale the distillation loss by.",
+        hint=FieldHint.feature,
+    )
     logits_scale_factor: float = Field(
         default=1.0,
         desc="Multiply output logits by scale factor.",
         doc="Useful in muP setting, since we need to adjust the output logits by the width factor."
         " Since we are mupltiplying the output logits, under muP the scale factor should be < 1.0.",
+        hint=FieldHint.feature,
+        valid=check_field(Assert.geq, 0),
+    )
+    teacher_softmax_temp: float = Field(
+        default=1.0,
+        desc="Multiplies target logits by 1/temperature inc ase of distillation.",
+        doc="This is used to scale the target logits to match the teacher's logits.",
         hint=FieldHint.feature,
         valid=check_field(Assert.geq, 0),
     )
