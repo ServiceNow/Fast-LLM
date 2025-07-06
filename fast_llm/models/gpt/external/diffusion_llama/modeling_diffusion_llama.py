@@ -2,7 +2,7 @@ import math
 import os
 from dataclasses import dataclass
 
-# Copyright 2022 EleutherAI and the HuggingFace Inc. team. All rights reserved.
+# Copyright 2022 ServiceNow. All rights reserved.
 #
 # This code is based on EleutherAI's GPT-NeoX library and the GPT-NeoX
 # and OPT implementations in this library. It has been modified from its
@@ -46,7 +46,7 @@ from transformers.utils import (  # auto_docstring
 )
 
 from .configuration_diffusion_llama import ROPE_INIT_FUNCTIONS, DiffusionLlamaConfig
-from .generation_utils import DreamGenerationConfig, DreamGenerationMixin
+from .generation_utils import SLAMGenerationConfig, SLAMGenerationMixin
 
 if is_torch_flex_attn_available():
     from flash_attn import flash_attn_with_kvcache
@@ -210,236 +210,59 @@ def sdpa_attention_forward(
     attention_mask: Optional[torch.Tensor],
     dropout: float = 0.0,
     scaling: Optional[float] = None,
-    # is_causal: Optional[bool] = None,
+    is_causal: Optional[bool] = None,
     **kwargs,
 ) -> tuple[torch.Tensor, None]:
     if hasattr(module, "num_key_value_groups"):
         key = repeat_kv(key, module.num_key_value_groups)
         value = repeat_kv(value, module.num_key_value_groups)
 
-    # Note: Updates from Dream
-    # causal_mask = attention_mask
-    # if attention_mask is not None:
-    #     causal_mask = causal_mask[:, :, :, : key.shape[-2]]
-
     # SDPA with memory-efficient backend is bugged with non-contiguous inputs and custom attn_mask for some torch versions
     # Reference: https://github.com/pytorch/pytorch/issues/112577.
+    print("is_causal", is_causal)
     query = query.contiguous()
     key = key.contiguous()
     value = value.contiguous()
-
-    # We dispatch to SDPA's Flash Attention or Efficient kernels via this `is_causal` if statement instead of an inline conditional assignment
-    # in SDPA to support both torch.compile's dynamic shapes and full graph options. An inline conditional prevents dynamic shapes from compiling.
-    # Note: Updates from Dream
-    # if is_causal is None:
-    #     is_causal = causal_mask is None and query.shape[2] > 1
-
-    # Shapes (e.g. query.shape[2]) are tensors during jit tracing, resulting in `is_causal` being a tensor.
-    # We convert it to a bool for the SDPA kernel that only accepts bools.
-    # note: Updates from Dream
-    # if torch.jit.is_tracing() and isinstance(is_causal, torch.Tensor):
-    #     is_causal = is_causal.item()
 
     attn_output = torch.nn.functional.scaled_dot_product_attention(
         query,
         key,
         value,
-        # Note: Updates from Dream
-        # attn_mask=causal_mask,
         attn_mask=attention_mask if isinstance(attention_mask, torch.Tensor) else None,
         dropout_p=dropout,
         scale=scaling,
-        # is_causal=is_causal,
-        is_causal=False,
+        is_causal=is_causal,
     )
     attn_output = attn_output.transpose(1, 2).contiguous()
 
     return attn_output, None
 
 
-def sdpa_attention_from_dream_forward(
-    self,
-    hidden_states: torch.Tensor,
-    attention_mask: Optional[torch.Tensor] = None,
-    position_ids: Optional[torch.LongTensor] = None,
-    past_key_value: Optional[Cache] = None,
-    output_attentions: bool = False,
-    use_cache: bool = False,
-    cache_position: Optional[torch.LongTensor] = None,
-    position_embeddings: Optional[tuple[torch.Tensor, torch.Tensor]] = None,  # will become mandatory in v4.46
+def flash_attention_forward(
+    module: nn.Module,
+    query: torch.Tensor,
+    key: torch.Tensor,
+    value: torch.Tensor,
+    attention_mask: Optional[torch.Tensor],
+    scaling: float,
+    dropout: float = 0.0,
     is_causal: Optional[bool] = False,
+    **kwargs,
 ) -> tuple[torch.Tensor, Optional[torch.Tensor], Optional[tuple[torch.Tensor]]]:
-    if output_attentions:
-        # TODO: Improve this warning with e.g. `model.config.attn_implementation = "manual"` once this is implemented.
-        logger.warning_once(
-            "DreamModel is using DreamSdpaAttention, but `torch.nn.functional.scaled_dot_product_attention` does not support `output_attentions=True`. Falling back to the manual attention implementation, "
-            'but specifying the manual implementation will be required from Transformers version v5.0.0 onwards. This warning can be removed using the argument `attn_implementation="eager"` when loading the model.'
-        )
-        return super().forward(
-            hidden_states=hidden_states,
-            attention_mask=attention_mask,
-            position_ids=position_ids,
-            past_key_value=past_key_value,
-            output_attentions=output_attentions,
-            use_cache=use_cache,
-        )
 
-    bsz, q_len, _ = hidden_states.size()
+    key_states = repeat_kv(key, module.num_key_value_groups)
+    value_states = repeat_kv(value, module.num_key_value_groups)
 
-    query_states = self.q_proj(hidden_states)
-    key_states = self.k_proj(hidden_states)
-    value_states = self.v_proj(hidden_states)
-
-    # print(f"query_states {query_states.shape} {query_states}")
-
-    query_states = query_states.view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
-    key_states = key_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
-    value_states = value_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
-
-    if position_embeddings is None:
-        logger.warning_once(
-            "The attention layers in this model are transitioning from computing the RoPE embeddings internally "
-            "through `position_ids` (2D tensor with the indexes of the tokens), to using externally computed "
-            "`position_embeddings` (Tuple of tensors, containing cos and sin). In v4.46 `position_ids` will be "
-            "removed and `position_embeddings` will be mandatory."
-        )
-        cos, sin = self.rotary_emb(value_states, position_ids)
-    else:
-        cos, sin = position_embeddings
-
-    query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
-
-    if past_key_value is not None:
-        cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}  # Specific to RoPE models
-        key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
-
-    key_states = repeat_kv(key_states, self.num_key_value_groups)
-    value_states = repeat_kv(value_states, self.num_key_value_groups)
-
-    # SDPA with memory-efficient backend is currently (torch==2.1.2) bugged with non-contiguous inputs with custom attn_mask,
-    # Reference: https://github.com/pytorch/pytorch/issues/112577.
-    if query_states.device.type == "cuda" and attention_mask is not None:
-        query_states = query_states.contiguous()
-        key_states = key_states.contiguous()
-        value_states = value_states.contiguous()
-
-    # We dispatch to SDPA's Flash Attention or Efficient kernels via this `is_causal` if statement instead of an inline conditional assignment
-    # in SDPA to support both torch.compile's dynamic shapes and full graph options. An inline conditional prevents dynamic shapes from compiling.
-    # The q_len > 1 is necessary to match with AttentionMaskConverter.to_causal_4d that does not create a causal mask in case q_len == 1.
-    # is_causal = True if causal_mask is None and q_len > 1 else False
-
-    attn_output = torch.nn.functional.scaled_dot_product_attention(
-        query_states,
-        key_states,
-        value_states,
-        attn_mask=attention_mask if isinstance(attention_mask, torch.Tensor) else None,
-        dropout_p=self.attention_dropout if self.training else 0.0,
-        is_causal=is_causal,
-    )
-
-    attn_output = attn_output.transpose(1, 2).contiguous()
-    attn_output = attn_output.view(bsz, q_len, self.hidden_size)
-
-    attn_output = self.o_proj(attn_output)
-
-    return attn_output, None, past_key_value
-
-
-def flash_attention_from_dreamforward(
-    self,
-    hidden_states: torch.Tensor,
-    attention_mask: Optional[torch.Tensor] = None,
-    position_ids: Optional[torch.LongTensor] = None,
-    past_key_value: Optional[Cache] = None,
-    output_attentions: bool = False,
-    use_cache: bool = False,
-    cache_position: Optional[torch.LongTensor] = None,
-    position_embeddings: Optional[tuple[torch.Tensor, torch.Tensor]] = None,  # will become mandatory in v4.46
-    is_causal: Optional[bool] = False,
-) -> tuple[torch.Tensor, Optional[torch.Tensor], Optional[tuple[torch.Tensor]]]:
-    if output_attentions:
-        # TODO: Improve this warning with e.g. `model.config.attn_implementation = "manual"` once this is implemented.
-        logger.warning_once(
-            "DreamModel is using DreamFlashAttention, it does not support `output_attentions=True`. Falling back to the manual attention implementation, "
-        )
-        return super().forward(
-            hidden_states=hidden_states,
-            attention_mask=attention_mask,
-            position_ids=position_ids,
-            past_key_value=past_key_value,
-            output_attentions=output_attentions,
-            use_cache=use_cache,
-        )
-
-    bsz, q_len, _ = hidden_states.size()
-
-    query_states = self.q_proj(hidden_states)
-    key_states = self.k_proj(hidden_states)
-    value_states = self.v_proj(hidden_states)
-
-    query_states = query_states.view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
-    key_states = key_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
-    value_states = value_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
-
-    # print(f"hidden_states: {hidden_states.shape} query_states {query_states.shape} key_states {key_states.shape} value_states {value_states.shape}")
-    # print(f"position_ids {position_ids} {position_ids.shape}")
-
-    if position_embeddings is None:
-        logger.warning_once(
-            "The attention layers in this model are transitioning from computing the RoPE embeddings internally "
-            "through `position_ids` (2D tensor with the indexes of the tokens), to using externally computed "
-            "`position_embeddings` (Tuple of tensors, containing cos and sin). In v4.46 `position_ids` will be "
-            "removed and `position_embeddings` will be mandatory."
-        )
-        cos, sin = self.rotary_emb(value_states, position_ids)
-    else:
-        cos, sin = position_embeddings
-
-    query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
-
-    if past_key_value is not None:
-        cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}  # Specific to RoPE models
-        key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
-
-    key_states = repeat_kv(key_states, self.num_key_value_groups)
-    value_states = repeat_kv(value_states, self.num_key_value_groups)
-
-    # if query_states.device.type == "cuda" and attention_mask is not None:
-    #     query_states = query_states.contiguous()
-    #     key_states = key_states.contiguous()
-    #     value_states = value_states.contiguous()
-
-    # We dispatch to SDPA's Flash Attention or Efficient kernels via this `is_causal` if statement instead of an inline conditional assignment
-    # in SDPA to support both torch.compile's dynamic shapes and full graph options. An inline conditional prevents dynamic shapes from compiling.
-    # The q_len > 1 is necessary to match with AttentionMaskConverter.to_causal_4d that does not create a causal mask in case q_len == 1.
-    # is_causal = True if causal_mask is None and q_len > 1 else False
-
-    # attn_output_sdpa = torch.nn.functional.scaled_dot_product_attention(
-    #     query_states,
-    #     key_states,
-    #     value_states,
-    #     attn_mask=attention_mask if isinstance(attention_mask, torch.Tensor) else None,
-    #     dropout_p=self.attention_dropout if self.training else 0.0,
-    #     is_causal=False, # hard coded
-    # )
-
-    # print(f"query_states {query_states.shape} key_states {key_states.shape} value_states {value_states.shape}")
-
-    # replacing with flash attention
     attn_output = flash_attn_with_kvcache(
         # q dim (batch_size, seqlen, nheads, headdim)
-        q=query_states.transpose(1, 2).contiguous(),
+        q=query.transpose(1, 2).contiguous(),
         k_cache=key_states.transpose(1, 2).contiguous(),
         v_cache=value_states.transpose(1, 2).contiguous(),
-        causal=is_causal,  # hard coded
-        softmax_scale=1.0 / math.sqrt(self.head_dim),
+        causal=is_causal,
+        softmax_scale=1.0 / math.sqrt(module.head_dim),
     )
 
-    attn_output = attn_output.view(bsz, q_len, self.hidden_size)
-
-    attn_output = self.o_proj(attn_output)
-
-    return attn_output, None, past_key_value
+    return attn_output, None
 
 
 class LlamaAttention(nn.Module):
@@ -453,7 +276,7 @@ class LlamaAttention(nn.Module):
         self.num_key_value_groups = config.num_attention_heads // config.num_key_value_heads
         self.scaling = self.head_dim**-0.5
         self.attention_dropout = config.attention_dropout
-        self.is_causal = True
+        # self.is_causal = True
 
         self.q_proj = nn.Linear(
             config.hidden_size, config.num_attention_heads * self.head_dim, bias=config.attention_bias
@@ -475,6 +298,7 @@ class LlamaAttention(nn.Module):
         attention_mask: Optional[torch.Tensor],
         past_key_value: Optional[Cache] = None,
         cache_position: Optional[torch.LongTensor] = None,
+        is_causal: Optional[bool] = False,
         **kwargs: Unpack[FlashAttentionKwargs],
     ) -> tuple[torch.Tensor, Optional[torch.Tensor], Optional[tuple[torch.Tensor]]]:
         input_shape = hidden_states.shape[:-1]
@@ -483,6 +307,10 @@ class LlamaAttention(nn.Module):
         query_states = self.q_proj(hidden_states).view(hidden_shape).transpose(1, 2)
         key_states = self.k_proj(hidden_states).view(hidden_shape).transpose(1, 2)
         value_states = self.v_proj(hidden_states).view(hidden_shape).transpose(1, 2)
+
+        # print(f"hidden_states: {hidden_states.shape} query_states {query_states.shape} key_states {key_states.shape} value_states {value_states.shape}")
+        # print(f"position_ids {position_ids} {position_ids.shape}")
+        # print(f"past_key_value {past_key_value.get_seq_length() if past_key_value is not None else None}")
 
         cos, sin = position_embeddings
         query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
@@ -494,6 +322,7 @@ class LlamaAttention(nn.Module):
 
         attention_interface: Callable = eager_attention_forward
 
+        # print(f"self.config._attn_implementation {self.config._attn_implementation}")
         if self.config._attn_implementation != "eager":
             if self.config._attn_implementation == "sdpa" and kwargs.get("output_attentions", False):
                 logger.warning_once(
@@ -501,9 +330,9 @@ class LlamaAttention(nn.Module):
                     'eager attention. This warning can be removed using the argument `attn_implementation="eager"` when loading the model.'
                 )
             elif self.config._attn_implementation == "sdpa":
-                attention_interface = sdpa_attention_from_dream_forward
-            elif self.config._attn_implementation == "flash_attention":
-                attention_interface = flash_attention_from_dreamforward
+                attention_interface = sdpa_attention_forward
+            elif self.config._attn_implementation == "flash_attention_2":
+                attention_interface = flash_attention_forward
             else:
                 raise ValueError(f"Unsupported attention implementation: {self.config._attn_implementation}")
                 # attention_interface = ALL_ATTENTION_FUNCTIONS[self.config._attn_implementation]
@@ -516,12 +345,14 @@ class LlamaAttention(nn.Module):
             attention_mask,
             dropout=0.0 if not self.training else self.attention_dropout,
             scaling=self.scaling,
+            is_causal=is_causal,
             **kwargs,
         )
-
+        # print(f"attn_output {attn_output.shape}")
         attn_output = attn_output.reshape(*input_shape, -1).contiguous()
+        # print(f"attn_output {attn_output.shape}")
         attn_output = self.o_proj(attn_output)
-        return attn_output, attn_weights
+        return attn_output, attn_weights, past_key_value
 
 
 # TODO: Update after transformer update: class LlamaDecoderLayer(GradientCheckpointingLayer):
@@ -546,6 +377,7 @@ class LlamaDecoderLayer(nn.Module):
         use_cache: Optional[bool] = False,
         cache_position: Optional[torch.LongTensor] = None,
         position_embeddings: Optional[tuple[torch.Tensor, torch.Tensor]] = None,  # necessary, but kept here for BC
+        is_causal: Optional[bool] = False,
         **kwargs: Unpack[FlashAttentionKwargs],
     ) -> tuple[torch.FloatTensor, Optional[tuple[torch.FloatTensor, torch.FloatTensor]]]:
         residual = hidden_states
@@ -561,6 +393,7 @@ class LlamaDecoderLayer(nn.Module):
             use_cache=use_cache,
             cache_position=cache_position,
             position_embeddings=position_embeddings,
+            is_causal=is_causal,
             **kwargs,
         )
         hidden_states = residual + hidden_states
@@ -581,7 +414,6 @@ class LlamaDecoderLayer(nn.Module):
         # When use_cache is True, outputs will have length:
         # - 2 if output_attentions is False (hidden_states, present_key_value)
         # - 3 if output_attentions is True (hidden_states, self_attn_weights, present_key_value)
-        # print(f"DreamDecoderLayer: outputs {len(outputs)}")
 
         return outputs
 
@@ -593,8 +425,8 @@ class DiffusionLlamaPreTrainedModel(PreTrainedModel):
     supports_gradient_checkpointing = True
     _no_split_modules = ["LlamaDecoderLayer"]
     _skip_keys_device_placement = ["past_key_values"]
-    _supports_flash_attn_2 = False
-    _supports_sdpa = False  # TODO: Enable sdpa
+    _supports_flash_attn_2 = True
+    _supports_sdpa = True  # TODO: Enable sdpa
     _supports_flex_attn = False
     _supports_cache_class = True
     _supports_quantized_cache = False
@@ -647,13 +479,13 @@ class DiffusionLlamaPreTrainedModel(PreTrainedModel):
         )
         # NOTE(Lin): we need to override the generation config
         # because the generation config loaded in `from_pretrained`
-        # does not include all the attributes of DreamGenerationConfig
+        # does not include all the attributes of SLAMGenerationConfig
         resume_download = kwargs.get("resume_download", None)
         proxies = kwargs.get("proxies", None)
         subfolder = kwargs.get("subfolder", "")
         from_auto_class = kwargs.get("_from_auto", False)
         from_pipeline = kwargs.get("_from_pipeline", None)
-        _model.generation_config = DreamGenerationConfig.from_pretrained(
+        _model.generation_config = SLAMGenerationConfig.from_pretrained(
             pretrained_model_name_or_path,
             cache_dir=cache_dir,
             force_download=force_download,
@@ -706,6 +538,7 @@ class DiffusionLlamaBaseModel(DiffusionLlamaPreTrainedModel):
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         cache_position: Optional[torch.LongTensor] = None,
+        is_causal: Optional[bool] = False,
         **flash_attn_kwargs: Unpack[FlashAttentionKwargs],
     ) -> BaseModelOutputWithPast:
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
@@ -770,6 +603,7 @@ class DiffusionLlamaBaseModel(DiffusionLlamaPreTrainedModel):
                 use_cache=use_cache,
                 cache_position=cache_position,
                 position_embeddings=position_embeddings,
+                is_causal=is_causal,
                 **flash_attn_kwargs,
             )
 
@@ -831,136 +665,9 @@ class MaskedLMOutputWithPast(ModelOutput):
     attentions: Optional[tuple[torch.FloatTensor, ...]] = None
     past_key_values: Optional[tuple[Cache]] = None
 
-    # TODO: Update for diffusion with bi-directional attention (later block casual masking)
-    # def _update_causal_mask(
-    #     self,
-    #     attention_mask: Union[torch.Tensor, "BlockMask"],
-    #     input_tensor: torch.Tensor,
-    #     cache_position: torch.Tensor,
-    #     past_key_values: Cache,
-    #     output_attentions: bool = False,
-    # ):
-    #     if self.config._attn_implementation == "flash_attention_2":
-    #         if attention_mask is not None and (attention_mask == 0.0).any():
-    #             return attention_mask
-    #         return None
-    #     if self.config._attn_implementation == "flex_attention":
-    #         if isinstance(attention_mask, torch.Tensor):
-    #             attention_mask = make_flex_block_causal_mask(attention_mask)
-    #         return attention_mask
-
-    #     # For SDPA, when possible, we will rely on its `is_causal` argument instead of its `attn_mask` argument, in
-    #     # order to dispatch on Flash Attention 2. This feature is not compatible with static cache, as SDPA will fail
-    #     # to infer the attention mask.
-    #     past_seen_tokens = past_key_values.get_seq_length() if past_key_values is not None else 0
-    #     using_compilable_cache = past_key_values.is_compileable if past_key_values is not None else False
-
-    #     # When output attentions is True, sdpa implementation's forward method calls the eager implementation's forward
-    #     if self.config._attn_implementation == "sdpa" and not using_compilable_cache and not output_attentions:
-    #         if AttentionMaskConverter._ignore_causal_mask_sdpa(
-    #             attention_mask,
-    #             inputs_embeds=input_tensor,
-    #             past_key_values_length=past_seen_tokens,
-    #             is_training=self.training,
-    #         ):
-    #             return None
-
-    #     dtype = input_tensor.dtype
-    #     sequence_length = input_tensor.shape[1]
-    #     if using_compilable_cache:
-    #         target_length = past_key_values.get_max_cache_shape()
-    #     else:
-    #         target_length = (
-    #             attention_mask.shape[-1]
-    #             if isinstance(attention_mask, torch.Tensor)
-    #             else past_seen_tokens + sequence_length + 1
-    #         )
-
-    #     # In case the provided `attention` mask is 2D, we generate a causal mask here (4D).
-    #     causal_mask = self._prepare_4d_causal_attention_mask_with_cache_position(
-    #         attention_mask,
-    #         sequence_length=sequence_length,
-    #         target_length=target_length,
-    #         dtype=dtype,
-    #         cache_position=cache_position,
-    #         batch_size=input_tensor.shape[0],
-    #     )
-
-    #     if (
-    #         self.config._attn_implementation == "sdpa"
-    #         and attention_mask is not None
-    #         and attention_mask.device.type in ["cuda", "xpu", "npu"]
-    #         and not output_attentions
-    #     ):
-    #         # Attend to all tokens in fully masked rows in the causal_mask, for example the relevant first rows when
-    #         # using left padding. This is required by F.scaled_dot_product_attention memory-efficient attention path.
-    #         # Details: https://github.com/pytorch/pytorch/issues/110213
-    #         min_dtype = torch.finfo(dtype).min
-    #         causal_mask = AttentionMaskConverter._unmask_unattended(causal_mask, min_dtype)
-
-    #     return causal_mask
-
-    # @staticmethod
-    # def _prepare_4d_causal_attention_mask_with_cache_position(
-    #     attention_mask: torch.Tensor,
-    #     sequence_length: int,
-    #     target_length: int,
-    #     dtype: torch.dtype,
-    #     cache_position: torch.Tensor,
-    #     batch_size: int,
-    #     **kwargs,
-    # ):
-    #     """
-    #     Creates a causal 4D mask of shape `(batch_size, 1, query_length, key_value_length)` from a 2D mask of shape
-    #     `(batch_size, key_value_length)`, or if the input `attention_mask` is already 4D, do nothing.
-
-    #     Args:
-    #         attention_mask (`torch.Tensor`):
-    #             A 2D attention mask of shape `(batch_size, key_value_length)` or a 4D attention mask of shape
-    #             `(batch_size, 1, query_length, key_value_length)`.
-    #         sequence_length (`int`):
-    #             The sequence length being processed.
-    #         target_length (`int`):
-    #             The target length: when generating with static cache, the mask should be as long as the static cache,
-    #             to account for the 0 padding, the part of the cache that is not filled yet.
-    #         dtype (`torch.dtype`):
-    #             The dtype to use for the 4D attention mask.
-    #         cache_position (`torch.Tensor`):
-    #             Indices depicting the position of the input sequence tokens in the sequence.
-    #         batch_size (`torch.Tensor`):
-    #             Batch size.
-    #     """
-    #     if attention_mask is not None and attention_mask.dim() == 4:
-    #         # In this case we assume that the mask comes already in inverted form and requires no inversion or slicing.
-    #         causal_mask = attention_mask
-    #     else:
-    #         min_dtype = torch.finfo(dtype).min
-    #         causal_mask = torch.full(
-    #             (sequence_length, target_length), fill_value=min_dtype, dtype=dtype, device=cache_position.device
-    #         )
-    #         if sequence_length != 1:
-    #             causal_mask = torch.triu(causal_mask, diagonal=1)
-    #         causal_mask *= torch.arange(target_length, device=cache_position.device) > cache_position.reshape(-1, 1)
-    #         causal_mask = causal_mask[None, None, :, :].expand(batch_size, 1, -1, -1)
-    #         if attention_mask is not None:
-    #             causal_mask = causal_mask.clone()  # copy to contiguous memory for in-place edit
-    #             mask_length = attention_mask.shape[-1]
-    #             padding_mask = causal_mask[:, :, :, :mask_length] + attention_mask[:, None, None, :].to(
-    #                 causal_mask.device
-    #             )
-    #             padding_mask = padding_mask == 0
-    #             causal_mask[:, :, :, :mask_length] = causal_mask[:, :, :, :mask_length].masked_fill(
-    #                 padding_mask, min_dtype
-    #             )
-
-    #     return causal_mask
-
-
-# class KwargsForCausalLM(FlashAttentionKwargs, LossKwargs): ...
-
 
 # @auto_docstring
-class DiffusionLlamaModel(DiffusionLlamaPreTrainedModel, DreamGenerationMixin):
+class DiffusionLlamaModel(DiffusionLlamaPreTrainedModel, SLAMGenerationMixin):
     _tied_weights_keys = ["lm_head.weight"]
     _tp_plan = {"lm_head": "colwise_rep"}
     _pp_plan = {"lm_head": (["hidden_states"], ["logits"])}
@@ -1049,7 +756,7 @@ class DiffusionLlamaModel(DiffusionLlamaPreTrainedModel, DreamGenerationMixin):
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
             cache_position=cache_position,
-            # is_casual=kwargs.get("is_casual", False),
+            is_casual=kwargs.get("is_casual", False),
             **kwargs,
         )
 
@@ -1075,350 +782,6 @@ class DiffusionLlamaModel(DiffusionLlamaPreTrainedModel, DreamGenerationMixin):
             attentions=outputs.attentions,
             past_key_values=outputs.past_key_values,
         )
-
-
-# @auto_docstring
-# class LlamaForCausalLM(LlamaPreTrainedModel, GenerationMixin):
-#     _tied_weights_keys = ["lm_head.weight"]
-#     _tp_plan = {"lm_head": "colwise_rep"}
-#     _pp_plan = {"lm_head": (["hidden_states"], ["logits"])}
-
-#     def __init__(self, config):
-#         super().__init__(config)
-#         self.model = LlamaModel(config)
-#         self.vocab_size = config.vocab_size
-#         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
-
-#         # Initialize weights and apply final processing
-#         self.post_init()
-
-#     def get_input_embeddings(self):
-#         return self.model.embed_tokens
-
-#     def set_input_embeddings(self, value):
-#         self.model.embed_tokens = value
-
-#     def get_output_embeddings(self):
-#         return self.lm_head
-
-#     def set_output_embeddings(self, new_embeddings):
-#         self.lm_head = new_embeddings
-
-#     def set_decoder(self, decoder):
-#         self.model = decoder
-
-#     def get_decoder(self):
-#         return self.model
-
-#     @can_return_tuple
-#     @auto_docstring
-#     def forward(
-#         self,
-#         input_ids: Optional[torch.LongTensor] = None,
-#         attention_mask: Optional[torch.Tensor] = None,
-#         position_ids: Optional[torch.LongTensor] = None,
-#         past_key_values: Optional[Cache] = None,
-#         inputs_embeds: Optional[torch.FloatTensor] = None,
-#         labels: Optional[torch.LongTensor] = None,
-#         use_cache: Optional[bool] = None,
-#         output_attentions: Optional[bool] = None,
-#         output_hidden_states: Optional[bool] = None,
-#         cache_position: Optional[torch.LongTensor] = None,
-#         logits_to_keep: Union[int, torch.Tensor] = 0,
-#         **kwargs: Unpack[KwargsForCausalLM],
-#     ) -> CausalLMOutputWithPast:
-#         r"""
-#         labels (`torch.LongTensor` of shape `(batch_size, sequence_length)`, *optional*):
-#             Labels for computing the masked language modeling loss. Indices should either be in `[0, ...,
-#             config.vocab_size]` or -100 (see `input_ids` docstring). Tokens with indices set to `-100` are ignored
-#             (masked), the loss is only computed for the tokens with labels in `[0, ..., config.vocab_size]`.
-
-#         Example:
-
-#         ```python
-#         >>> from transformers import AutoTokenizer, LlamaForCausalLM
-
-#         >>> model = LlamaForCausalLM.from_pretrained("meta-llama/Llama-2-7b-hf")
-#         >>> tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-2-7b-hf")
-
-#         >>> prompt = "Hey, are you conscious? Can you talk to me?"
-#         >>> inputs = tokenizer(prompt, return_tensors="pt")
-
-#         >>> # Generate
-#         >>> generate_ids = model.generate(inputs.input_ids, max_length=30)
-#         >>> tokenizer.batch_decode(generate_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False)[0]
-#         "Hey, are you conscious? Can you talk to me?\nI'm not conscious, but I can talk to you."
-#         ```"""
-#         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
-#         output_hidden_states = (
-#             output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
-#         )
-
-#         # decoder outputs consists of (dec_features, layer_state, dec_hidden, dec_attn)
-#         outputs: BaseModelOutputWithPast = self.model(
-#             input_ids=input_ids,
-#             attention_mask=attention_mask,
-#             position_ids=position_ids,
-#             past_key_values=past_key_values,
-#             inputs_embeds=inputs_embeds,
-#             use_cache=use_cache,
-#             output_attentions=output_attentions,
-#             output_hidden_states=output_hidden_states,
-#             cache_position=cache_position,
-#             **kwargs,
-#         )
-
-#         hidden_states = outputs.last_hidden_state
-#         # Only compute necessary logits, and do not upcast them to float if we are not computing the loss
-#         slice_indices = slice(-logits_to_keep, None) if isinstance(logits_to_keep, int) else logits_to_keep
-#         logits = self.lm_head(hidden_states[:, slice_indices, :])
-
-#         loss = None
-#         if labels is not None:
-#             loss = self.loss_function(logits=logits, labels=labels, vocab_size=self.config.vocab_size, **kwargs)
-
-#         return CausalLMOutputWithPast(
-#             loss=loss,
-#             logits=logits,
-#             past_key_values=outputs.past_key_values,
-#             hidden_states=outputs.hidden_states,
-#             attentions=outputs.attentions,
-#         )
-
-
-# @auto_docstring(
-#     custom_intro="""
-#     The LLaMa Model transformer with a sequence classification head on top (linear layer).
-
-#     [`LlamaForSequenceClassification`] uses the last token in order to do the classification, as other causal models
-#     (e.g. GPT-2) do.
-
-#     Since it does classification on the last token, it requires to know the position of the last token. If a
-#     `pad_token_id` is defined in the configuration, it finds the last token that is not a padding token in each row. If
-#     no `pad_token_id` is defined, it simply takes the last value in each row of the batch. Since it cannot guess the
-#     padding tokens when `inputs_embeds` are passed instead of `input_ids`, it does the same (take the last value in
-#     each row of the batch).
-#     """
-# )
-# class LlamaForSequenceClassification(LlamaPreTrainedModel):
-#     def __init__(self, config):
-#         super().__init__(config)
-#         self.num_labels = config.num_labels
-#         self.model = LlamaModel(config)
-#         self.score = nn.Linear(config.hidden_size, self.num_labels, bias=False)
-
-#         # Initialize weights and apply final processing
-#         self.post_init()
-
-#     def get_input_embeddings(self):
-#         return self.model.embed_tokens
-
-#     def set_input_embeddings(self, value):
-#         self.model.embed_tokens = value
-
-#     @can_return_tuple
-#     @auto_docstring
-#     def forward(
-#         self,
-#         input_ids: Optional[torch.LongTensor] = None,
-#         attention_mask: Optional[torch.Tensor] = None,
-#         position_ids: Optional[torch.LongTensor] = None,
-#         past_key_values: Optional[Cache] = None,
-#         inputs_embeds: Optional[torch.FloatTensor] = None,
-#         labels: Optional[torch.LongTensor] = None,
-#         use_cache: Optional[bool] = None,
-#         output_attentions: Optional[bool] = None,
-#         output_hidden_states: Optional[bool] = None,
-#     ) -> SequenceClassifierOutputWithPast:
-#         r"""
-#         labels (`torch.LongTensor` of shape `(batch_size,)`, *optional*):
-#             Labels for computing the sequence classification/regression loss. Indices should be in `[0, ...,
-#             config.num_labels - 1]`. If `config.num_labels == 1` a regression loss is computed (Mean-Square loss), If
-#             `config.num_labels > 1` a classification loss is computed (Cross-Entropy).
-#         """
-
-#         transformer_outputs: BaseModelOutputWithPast = self.model(
-#             input_ids,
-#             attention_mask=attention_mask,
-#             position_ids=position_ids,
-#             past_key_values=past_key_values,
-#             inputs_embeds=inputs_embeds,
-#             use_cache=use_cache,
-#             output_attentions=output_attentions,
-#             output_hidden_states=output_hidden_states,
-#         )
-#         hidden_states = transformer_outputs.last_hidden_state
-#         logits = self.score(hidden_states)
-
-#         if input_ids is not None:
-#             batch_size = input_ids.shape[0]
-#         else:
-#             batch_size = inputs_embeds.shape[0]
-
-#         if self.config.pad_token_id is None and batch_size != 1:
-#             raise ValueError("Cannot handle batch sizes > 1 if no padding token is defined.")
-#         if self.config.pad_token_id is None:
-#             last_non_pad_token = -1
-#         elif input_ids is not None:
-#             # To handle both left- and right- padding, we take the rightmost token that is not equal to pad_token_id
-#             non_pad_mask = (input_ids != self.config.pad_token_id).to(logits.device, torch.int32)
-#             token_indices = torch.arange(input_ids.shape[-1], device=logits.device, dtype=torch.int32)
-#             last_non_pad_token = (token_indices * non_pad_mask).argmax(-1)
-#         else:
-#             last_non_pad_token = -1
-#             logger.warning_once(
-#                 f"{self.__class__.__name__} will not detect padding tokens in `inputs_embeds`. Results may be "
-#                 "unexpected if using padding tokens in conjunction with `inputs_embeds.`"
-#             )
-
-#         pooled_logits = logits[torch.arange(batch_size, device=logits.device), last_non_pad_token]
-
-#         loss = None
-#         if labels is not None:
-#             loss = self.loss_function(logits=logits, labels=labels, pooled_logits=pooled_logits, config=self.config)
-
-#         return SequenceClassifierOutputWithPast(
-#             loss=loss,
-#             logits=pooled_logits,
-#             past_key_values=transformer_outputs.past_key_values,
-#             hidden_states=transformer_outputs.hidden_states,
-#             attentions=transformer_outputs.attentions,
-#         )
-
-
-# @auto_docstring
-# class LlamaForQuestionAnswering(LlamaPreTrainedModel):
-#     base_model_prefix = "transformer"
-
-#     # Copied from transformers.models.bloom.modeling_bloom.BloomForQuestionAnswering.__init__ with Bloom->Llama
-#     def __init__(self, config):
-#         super().__init__(config)
-#         self.transformer = LlamaModel(config)
-#         self.qa_outputs = nn.Linear(config.hidden_size, 2)
-
-#         # Initialize weights and apply final processing
-#         self.post_init()
-
-#     def get_input_embeddings(self):
-#         return self.transformer.embed_tokens
-
-#     def set_input_embeddings(self, value):
-#         self.transformer.embed_tokens = value
-
-#     @can_return_tuple
-#     @auto_docstring
-#     def forward(
-#         self,
-#         input_ids: Optional[torch.LongTensor] = None,
-#         attention_mask: Optional[torch.Tensor] = None,
-#         position_ids: Optional[torch.LongTensor] = None,
-#         past_key_values: Optional[Cache] = None,
-#         inputs_embeds: Optional[torch.FloatTensor] = None,
-#         start_positions: Optional[torch.LongTensor] = None,
-#         end_positions: Optional[torch.LongTensor] = None,
-#         output_attentions: Optional[bool] = None,
-#         output_hidden_states: Optional[bool] = None,
-#         **kwargs,
-#     ) -> QuestionAnsweringModelOutput:
-#         outputs: BaseModelOutputWithPast = self.transformer(
-#             input_ids,
-#             attention_mask=attention_mask,
-#             position_ids=position_ids,
-#             past_key_values=past_key_values,
-#             inputs_embeds=inputs_embeds,
-#             output_attentions=output_attentions,
-#             output_hidden_states=output_hidden_states,
-#         )
-
-#         sequence_output = outputs.last_hidden_state
-
-#         logits = self.qa_outputs(sequence_output)
-#         start_logits, end_logits = logits.split(1, dim=-1)
-#         start_logits = start_logits.squeeze(-1).contiguous()
-#         end_logits = end_logits.squeeze(-1).contiguous()
-
-#         loss = None
-#         if start_positions is not None and end_positions is not None:
-#             loss = self.loss_function(start_logits, end_logits, start_positions, end_positions, **kwargs)
-
-#         return QuestionAnsweringModelOutput(
-#             loss=loss,
-#             start_logits=start_logits,
-#             end_logits=end_logits,
-#             hidden_states=outputs.hidden_states,
-#             attentions=outputs.attentions,
-#         )
-
-
-# @auto_docstring
-# class LlamaForTokenClassification(LlamaPreTrainedModel):
-#     def __init__(self, config):
-#         super().__init__(config)
-#         self.num_labels = config.num_labels
-#         self.model = LlamaModel(config)
-#         if getattr(config, "classifier_dropout", None) is not None:
-#             classifier_dropout = config.classifier_dropout
-#         elif getattr(config, "hidden_dropout", None) is not None:
-#             classifier_dropout = config.hidden_dropout
-#         else:
-#             classifier_dropout = 0.1
-#         self.dropout = nn.Dropout(classifier_dropout)
-#         self.score = nn.Linear(config.hidden_size, config.num_labels)
-
-#         # Initialize weights and apply final processing
-#         self.post_init()
-
-#     def get_input_embeddings(self):
-#         return self.model.embed_tokens
-
-#     def set_input_embeddings(self, value):
-#         self.model.embed_tokens = value
-
-#     @can_return_tuple
-#     @auto_docstring
-#     def forward(
-#         self,
-#         input_ids: Optional[torch.LongTensor] = None,
-#         attention_mask: Optional[torch.Tensor] = None,
-#         position_ids: Optional[torch.LongTensor] = None,
-#         past_key_values: Optional[Cache] = None,
-#         inputs_embeds: Optional[torch.FloatTensor] = None,
-#         labels: Optional[torch.LongTensor] = None,
-#         use_cache: Optional[bool] = None,
-#         output_attentions: Optional[bool] = None,
-#         output_hidden_states: Optional[bool] = None,
-#     ) -> TokenClassifierOutput:
-#         r"""
-#         labels (`torch.LongTensor` of shape `(batch_size,)`, *optional*):
-#             Labels for computing the sequence classification/regression loss. Indices should be in `[0, ...,
-#             config.num_labels - 1]`. If `config.num_labels == 1` a regression loss is computed (Mean-Square loss), If
-#             `config.num_labels > 1` a classification loss is computed (Cross-Entropy).
-#         """
-
-#         outputs: BaseModelOutputWithPast = self.model(
-#             input_ids,
-#             attention_mask=attention_mask,
-#             position_ids=position_ids,
-#             past_key_values=past_key_values,
-#             inputs_embeds=inputs_embeds,
-#             use_cache=use_cache,
-#             output_attentions=output_attentions,
-#             output_hidden_states=output_hidden_states,
-#         )
-#         sequence_output = outputs.last_hidden_state
-#         sequence_output = self.dropout(sequence_output)
-#         logits = self.score(sequence_output)
-
-#         loss = None
-#         if labels is not None:
-#             loss = self.loss_function(logits, labels, self.config)
-
-#         return TokenClassifierOutput(
-#             loss=loss,
-#             logits=logits,
-#             hidden_states=outputs.hidden_states,
-#             attentions=outputs.attentions,
-#         )
 
 
 __all__ = [

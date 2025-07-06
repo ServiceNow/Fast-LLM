@@ -126,17 +126,16 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             micro_batch_size = batch_meta.micro_batch_size
             sequence_length = batch_meta.sequence_length
             micro_sequence_length = batch_meta.micro_sequence_length
+            truncate_documents = batch_meta.truncate_documents
         else:
             micro_batch_size, sequence_length = batch_meta.shape
             if phase != PhaseType.inference:
                 sequence_length -= self._config.prediction_heads
             micro_sequence_length = sequence_length
+            truncate_documents = True
 
         batch_data = self._tensor_space.distributed_config.get_distributed_dim(DistributedDimNames.batch_data)
         batch_dim = TensorDim(TransformerDimNames.batch, micro_batch_size * batch_data.size, batch_data)
-
-        if isinstance(batch_meta, GPTBatchConfig):
-            micro_sequence_length = batch_meta.micro_sequence_length
 
         if micro_sequence_length is None:
             micro_sequence_length = sequence_length
@@ -181,6 +180,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             TransformerKwargs.hidden_dims: hidden_dims,
             TransformerKwargs.sequence_length: sequence_length,
             TransformerKwargs.sequence_q_dim: sequence_q_dim,
+            LanguageModelKwargs.mask_inputs: not truncate_documents,
         }
 
         sequence_k_pasts = range(
@@ -314,7 +314,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                 if batch.loss_masking_spans is not None:
                     # avoid changing input tokens
                     labels = labels.clone()
-                    for i, spans in enumerate(batch.loss_masking_spans):
+                    for idx, spans in enumerate(batch.loss_masking_spans):
                         if not spans.numel():
                             continue
                         valid_spans = spans[
@@ -328,9 +328,9 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                             loss_mask = torch.ones_like(labels, dtype=torch.bool)
                             for start, end in valid_spans:
                                 if sequence_first:
-                                    loss_mask[start : end + 1, i] = False
+                                    loss_mask[start : end + 1, idx] = False
                                 else:
-                                    loss_mask[i, start : end + 1] = False
+                                    loss_mask[idx, start : end + 1] = False
                             if self._config.distillation_model is not None:
                                 kwargs[LanguageModelKwargs.loss_mask] = loss_mask
                             labels = torch.where(loss_mask, labels, -100)

@@ -216,6 +216,7 @@ class StateDictSaver:
         file_name = f"{self.base_file_name}_{self._file_count}.safetensors"
         if self._do_save:
             logger.info(f"Saving tensors to {self._config.path / file_name}")
+            self._config.path.mkdir(parents=True, exist_ok=True)
             safetensors.torch.save_file(
                 tensors=self._tensors,
                 filename=self._config.path / file_name,

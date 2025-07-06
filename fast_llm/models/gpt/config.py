@@ -1,4 +1,5 @@
 import functools
+import logging
 import typing
 
 from fast_llm.config import Field, FieldHint, FieldUpdate, check_field, config_class
@@ -16,6 +17,8 @@ if typing.TYPE_CHECKING:
     from fast_llm.models.gpt.huggingface import HuggingfaceGPTModelForCausalLM
     from fast_llm.models.gpt.model import GPTInferenceRunner, GPTModel
     from fast_llm.models.gpt.trainer import GPTTrainer
+
+logger = logging.getLogger(__name__)
 
 
 class GPTHuggingfaceCheckpointFormat(CheckpointFormat):
@@ -56,11 +59,13 @@ class MixtralGPTHuggingfaceCheckpointFormat(GPTHuggingfaceCheckpointFormat):
 class MTPLlamaGPTHuggingfaceCheckpointFormat(GPTHuggingfaceCheckpointFormat):
     name: typing.ClassVar[str] = "mtp_llama"
     trust_remote_code: typing.ClassVar[bool] = True
-    
+
+
 class DiffusionDreamGPTHuggingfaceCheckpointFormat(GPTHuggingfaceCheckpointFormat):
     name: typing.ClassVar[str] = "dream"
     trust_remote_code: typing.ClassVar[bool] = True
-    
+
+
 class DiffusionLlamaGPTHuggingfaceCheckpointFormat(GPTHuggingfaceCheckpointFormat):
     name: typing.ClassVar[str] = "diffusion_llama"
     trust_remote_code: typing.ClassVar[bool] = True
@@ -89,6 +94,15 @@ class GPTBatchConfig(BatchConfig):
     use_loss_masking_spans: bool = Field(
         default=False,
         desc="Read loss masking spans from the dataset.",
+        hint=FieldHint.feature,
+    )
+    truncate_documents: bool | None = Field(
+        default=True,
+        desc=(
+            "If enabled, documents may be truncated while being packed to fit the sequence length."
+            "Otherwise, sequences will be padded such that every document lies entirely within a sample"
+            " (and documents exceeding the sequence length will be skipped altogether)."
+        ),
         hint=FieldHint.feature,
     )
 
@@ -223,6 +237,16 @@ class GPTTrainerConfig(PretrainedGPTModelConfig, TrainerConfig):
         cls._handle_renamed_field(
             default, ("data", "sampling", "use_loss_masking_spans"), ("batch", "use_loss_masking_spans")
         )
+        if "truncate_documents" in default.get("data", {}):
+            # Backward compatibility for the legacy truncate_documents field.
+            # TODO v0.x: Remove backward compatibility.
+            logger.warning(
+                "`data.truncate_documents` field is deprecated. " "Please use `batch.truncate_documents` instead."
+            )
+            assert "truncate_documents" not in default.get("batch", {})
+            if "batch" not in default:
+                default["batch"] = {}
+            default["batch"]["truncate_documents"] = default["data"].pop("truncate_documents")
         return super()._from_dict(default, strict, flat)
 
     @classmethod
