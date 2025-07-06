@@ -147,7 +147,7 @@ def _fused_cross_entropy_forward_backward(
     else:
         predicted_logits = (target * logits_norm).sum(dim=-1, keepdim=True)
 
-    per_sample_loss = sum_exp_logits.log().sub(logits_norm.gather(1, target).squeeze(1)) * loss_mask
+    per_sample_loss = sum_exp_logits.log() - predicted_logits
 
     if loss_weight is None:
         if loss_mask is not None:
