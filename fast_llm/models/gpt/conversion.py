@@ -404,6 +404,7 @@ class LLamaRotaryParamConverter(ParamConverter):
         elif type(rotary_config) is YarnRotaryConfig:
             rotary_scaling = {
                 "rope_type": "yarn",
+                "factor": rotary_config.scale_factor,
                 "attention_factor": rotary_config.attention_factor,
                 "beta_fast": rotary_config.beta_fast,
                 "beta_slow": rotary_config.beta_slow,
@@ -435,6 +436,7 @@ class LLamaRotaryParamConverter(ParamConverter):
         elif rotary_type == "yarn":
             rotary_config.update(
                 {
+                    "scale_factor": rope_scaling.get("factor", DEFAULT),
                     "attention_factor": rope_scaling.get("attention_factor", DEFAULT),
                     "beta_fast": rope_scaling.get("beta_fast", DEFAULT),
                     "beta_slow": rope_scaling.get("beta_slow", DEFAULT),
