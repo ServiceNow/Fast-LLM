@@ -4,7 +4,7 @@ import torch
 from torch._C._distributed_c10d import ReduceOp  # noqa
 from torch.distributed import all_reduce
 
-from fast_llm.config import Configurable
+from fast_llm.config import Configurable, DiffusionStyle
 from fast_llm.core.ops import split_op
 from fast_llm.engine.base_model.base_model import Layer
 from fast_llm.engine.config_utils.tensor_space import DefaultDimNames, TensorDim, TensorSpace
@@ -377,7 +377,8 @@ class MLMHead(LanguageModelHead):
         prediction_distance: int,
     ):
         super().__init__(config, tensor_space, prediction_distance)
-        self._loss_name = LanguageModelLossNames.mlm_loss
+        if config.transformer.diffusion is not None and config.transformer.diffusion == DiffusionStyle.masked:
+            self._loss_name = LanguageModelLossNames.mlm_loss
 
     def _logits_cross_entropy_forward_backward(
         self,

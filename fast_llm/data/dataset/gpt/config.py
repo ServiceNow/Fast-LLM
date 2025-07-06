@@ -8,7 +8,16 @@ import warnings
 
 import yaml
 
-from fast_llm.config import Config, Field, FieldHint, FieldUpdate, check_field, config_class, skip_valid_if_none
+from fast_llm.config import (
+    Config,
+    DiffusionStyle,
+    Field,
+    FieldHint,
+    FieldUpdate,
+    check_field,
+    config_class,
+    skip_valid_if_none,
+)
 from fast_llm.data.dataset.abstract import SamplableDataset, SampledDataset
 from fast_llm.data.dataset.config import (
     BlendedDatasetConfig,
@@ -48,8 +57,8 @@ class ShufflingType(str, enum.Enum):
 class DiffusionMaskingConfig(Config):
     """Configuration for diffusion-based masking during data preparation."""
 
-    enabled: bool = Field(
-        default=False, desc="Whether to use masked diffusion during training", hint=FieldHint.feature
+    style: DiffusionStyle = Field(
+        default=DiffusionStyle.none, desc="Whether to use masked diffusion during training", hint=FieldHint.feature
     )
 
     epsilon: float = Field(
@@ -68,14 +77,17 @@ class DiffusionMaskingConfig(Config):
     )
 
     mask_token_id: int = Field(default=103, desc="Token ID to use for masking", hint=FieldHint.optional)
+    ar_factor: float = Field(
+        default=1.0,
+        desc="Factor for the AR weigting on overal loss.",
+        hint=FieldHint.optional,
+    )
+    context_sampler: float = Field(
+        default=1.0, desc="Context lenght C sampled in under 25% sequence length vs all", hint=FieldHint.optional
+    )
 
     def _validate(self) -> None:
         super()._validate()
-        Assert.lt(self.epsilon, self.max_mask_prob)  # , "epsilon must be less than max_mask_prob")
-        Assert.lt(
-            self.max_mask_prob,
-            1.0,
-        )
 
 
 @config_class()

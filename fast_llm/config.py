@@ -1098,3 +1098,13 @@ def pop_nested_dict_value[
         return d.pop(keys[-1])
     else:
         return d.pop(keys)
+
+
+class DiffusionStyle(str, enum.Enum):
+    """
+    Type of diffusion masking to use.
+    """
+
+    masked = "masked"
+    ar_masked = "autoregressive_masked"
+    none = None

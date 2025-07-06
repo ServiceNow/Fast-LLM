@@ -6,7 +6,7 @@ import math
 import typing
 import warnings
 
-from fast_llm.config import Field, FieldHint, check_field, config_class, skip_valid_if_none
+from fast_llm.config import DiffusionStyle, Field, FieldHint, check_field, config_class, skip_valid_if_none
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.engine.config_utils.tensor_space import CompositeTensorDim, TensorDim, TensorSpace
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
@@ -486,8 +486,8 @@ class TransformerConfig(LLMBlockConfig):
         " Reduces memory usage, but increases fragmentation and requires CPU synchronisation. Not recommended.",
         hint=FieldHint.expert,
     )
-    diffusion: bool = Field(
-        default=False,
+    diffusion: DiffusionStyle = Field(
+        default=DiffusionStyle.none,
         desc="Use masked-diffusion for training.",
         hint=FieldHint.feature,
     )
