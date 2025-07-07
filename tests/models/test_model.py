@@ -49,11 +49,12 @@ def test_run_model_distributed(run_distributed_script, model_testing_config, run
     import tests.models.distributed_test_model
 
     script = [tests.models.distributed_test_model.__file__, str(run_test_script_base_path), model_testing_config.name]
-    if not request.config.getoption("distributed_capture"):
+    if request.config.getoption("distributed_capture"):
         logger.warning(
             "Capturing output and forwarding to associated tests. Run with `--no-distributed-capture` to disable."
         )
-        script.append("--no-capture")
+    else:
+        script.append("--no-distributed-capture")
     run_distributed_script(script, num_gpus=torch.cuda.device_count())
 
 

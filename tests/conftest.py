@@ -12,6 +12,12 @@ import xdist.scheduler
 from fast_llm.utils import get_and_reset_memory_usage_mib
 from tests.utils.depends import DependencyManager
 
+from tests.utils.save_load_configs import (  # isort: skip
+    distributed_save_load_config,
+    distributed_save_load_config_non_pp,
+    get_convert_path,
+)
+
 # Make fixtures available globally without import
 from tests.utils.run_test_script import (  # isort: skip
     compare_results_for_all_models,

@@ -42,6 +42,8 @@ def main(args: list[str] | None = None) -> None:
         # These should already be reported above, we repeat for convenience.
         if failures:
             raise RuntimeError(f"The following subtests failed: {", ".join(failures)}")
+        else:
+            logger.warning("All tests passed")
 
 
 if __name__ == "__main__":

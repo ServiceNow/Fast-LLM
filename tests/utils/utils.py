@@ -100,6 +100,7 @@ class DistributedSubtestContext:
         if exc_type is None:
             self.success = True
         else:
+            self._path.mkdir(parents=True, exist_ok=True)
             self._path.joinpath(f"pytest_traceback_{self._rank}").write_text(traceback.format_exc())
 
         if self._group is not None:

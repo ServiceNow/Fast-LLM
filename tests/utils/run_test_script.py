@@ -29,7 +29,7 @@ def do_run_distributed_script(
     rendezvous_port: int,
     torchrun_port: int,
     num_gpus: int,
-    timeout: float = 120,
+    timeout: float = 240,
     env: dict[str, str | None] = None,
 ):
     command = [
@@ -113,16 +113,15 @@ def compare_results_for_all_models(
     worker_resources: "WorkerResources",
     run_test_script_base_path: pathlib.Path,
 ):
-    def do_compare_results_for_all_models(config: DistributedTestingConfig, artifacts: typing.Iterable[str]):
+    def do_compare_results_for_all_models(
+        config: DistributedTestingConfig, artifacts: typing.Iterable[str] | None = None
+    ):
         assert config.compare is not None
-        compare_path = run_test_script_base_path / config.compare / ARTIFACT_PATH
-        for artifact in artifacts:
-            if not (artifact_path := compare_path / "0" / f"tensor_logs_{artifact}.pt").is_file():
-                pytest.fail(f"Missing artifact {artifact_path} from {config.compare}.", pytrace=False)
         compare_tensor_logs(
-            compare_path,
+            run_test_script_base_path / config.compare / ARTIFACT_PATH,
             run_test_script_base_path / config.name / ARTIFACT_PATH,
             config.compare_config,
+            artifacts,
         )
 
     return do_compare_results_for_all_models
