@@ -12,7 +12,7 @@ import torch.nn.functional as F
 import tqdm.auto
 import transformers
 
-from fast_llm.core.distributed import gather_object, safe_barrier, scatter_object_list
+from fast_llm.core.distributed import gather_object, safe_barrier, scatter_object
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.engine.evaluation.lm_eval.utils import prepare_lm_eval_simple_eval_params, process_lm_eval_results
 from fast_llm.engine.inference.huggingface import HuggingfaceBaseModelForCausalLM
@@ -235,16 +235,11 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
         else:
             scatter_list = [[None, None, None, None, None, None, False, None] for _ in range(world_size)]
 
-        obj_list = [None]
-        scatter_object_list(
-            self._distributed.device,
-            obj_list,
-            scatter_list,
-            group_src=0,
-            group=self._group,
-        )
-        input_ids, attention_mask, labels, max_length, stop, generate, continue_generate, generation_kwargs = tuple(
-            obj_list[0]
+        input_ids, attention_mask, labels, max_length, stop, generate, continue_generate, generation_kwargs = (
+            scatter_object(
+                scatter_list,
+                group=self._group,
+            )
         )
 
         if continue_generate == False:
@@ -252,30 +247,23 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
 
         assert len(input_ids) > 0
 
-        res = self._model_invoke_inner(
+        result = self._model_invoke_inner(
             input_ids, attention_mask, labels, max_length, stop, generate, **generation_kwargs
         )
 
-        gather_list = [None] * world_size
-        gather_object(
-            self._distributed.device,
-            res,
-            gather_list,
-            group_dst=0,
-            group=self._group,
-        )
+        gather_list = gather_object(result, group=self._group)
         # Clean gather list from empty shards
         gather_list = [el for el in gather_list if len(el) > 0]
 
         # If it was model generate tensors could be of different length
         # so we aggregate results to list instead of a tensor
         if generate:
-            res = sum((el.tolist() for el in gather_list), [])
+            result = sum((el.tolist() for el in gather_list), [])
         else:
             assert all(el.device.type == "cpu" for el in gather_list)
-            res = torch.cat(gather_list, dim=0)
+            result = torch.cat(gather_list, dim=0)
 
-        return res
+        return result
 
     def worker_model_invoke(self):
         assert self._group is not None
@@ -285,17 +273,11 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
             assert self._group.rank() != 0
             # on worker ranks the function need to wait to be called multiple times
             while True:
-                scatter_list = None
-                obj_list = [None]
-                scatter_object_list(
-                    self._distributed.device,
-                    obj_list,
-                    scatter_list,
-                    group_src=0,
-                    group=self._group,
-                )
                 input_ids, attention_mask, labels, max_length, stop, generate, continue_generate, generation_kwargs = (
-                    tuple(obj_list[0])
+                    scatter_object(
+                        None,
+                        group=self._group,
+                    )
                 )
 
                 if not continue_generate:
@@ -303,20 +285,13 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
 
                 # if some data was received, work, otherwise return empty tensor
                 if len(input_ids) > 0:
-                    res = self._model_invoke_inner(
+                    result = self._model_invoke_inner(
                         input_ids, attention_mask, labels, max_length, stop, generate, **generation_kwargs
                     )
                 else:
-                    res = input_ids
+                    result = input_ids
 
-                gather_list = None
-                gather_object(
-                    self._distributed.device,
-                    res,
-                    gather_list,
-                    group_dst=0,
-                    group=self._group,
-                )
+                gather_object(result, group=self._group)
         else:
             # TODO: implement distributed model support
             assert self._group == torch.distributed.GroupMember.NON_GROUP_MEMBER
