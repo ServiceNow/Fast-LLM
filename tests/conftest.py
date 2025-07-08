@@ -6,11 +6,24 @@ import os
 import shutil
 
 import pytest
-import torch
 import xdist.scheduler
 
 from fast_llm.utils import get_and_reset_memory_usage_mib
 from tests.utils.depends import DependencyManager
+
+if worker_name := os.environ.get("PYTEST_XDIST_WORKER"):
+    if gpus := os.environ.get("CUDA_VISIBLE_DEVICES"):
+        # We set the device through "CUDA_VISIBLE_DEVICES", and this needs to happen before importing torch.
+        assert worker_name.startswith("gw")
+        worker_id = int(worker_name[2:])
+        gpus = [int(i) for i in gpus.split(",")]
+        num_gpus = len(gpus)
+        gpus = [gpus[(i + worker_id) % num_gpus] for i in range(num_gpus)]
+        os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(str(i) for i in gpus)
+
+
+import torch  # isort: skip
+
 
 from tests.utils.save_load_configs import (  # isort: skip
     distributed_save_load_config,
@@ -29,6 +42,7 @@ from tests.utils.run_test_script import (  # isort: skip
 from tests.utils.model_configs import model_testing_config, ModelTestingConfig, testing_group_enabled  # isort: skip
 from tests.utils.utils import result_path, TEST_RESULTS_PATH, format_resource_report, report_subtest  # isort: skip
 
+logger = logging.getLogger(__name__)
 
 manager: DependencyManager | None = None
 
@@ -56,9 +70,6 @@ def pytest_addoption(parser):
 
 @dataclasses.dataclass
 class WorkerResources:
-    worker_id: int
-    gpu_id: int | None
-    num_gpus: int
     torchrun_port: int
     rendezvous_port: int
 
@@ -92,17 +103,10 @@ def pytest_configure(config):
     num_gpus = torch.cuda.device_count()
     if num_gpus > 0 and is_parallel:
         # We spread workers across GPUs.
-        gpu_id = worker_id % num_gpus
-        # We set the device through "CUDA_VISIBLE_DEVICES", and this needs to happen before cuda initialization.
-        # The `device_count` call above doesn't initialize, but `mem_get_info` below does.
-        assert not torch.cuda.is_initialized()
-        # TODO: Support this?
-        assert "CUDA_VISIBLE_DEVICES" not in os.environ
-        os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(str((gpu_id + i) % num_gpus) for i in range(num_gpus))
+        logger.warning(f"[Worker {worker_id}] Using GPUs {os.environ["CUDA_VISIBLE_DEVICES"]}")
     elif num_gpus > 0:
-        gpu_id = 0
-    else:
-        gpu_id = None
+        if "CUDA_VISIBLE_DEVICES" not in os.environ:
+            os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(str(i) for i in range(num_gpus))
 
     gpu_memory = torch.cuda.mem_get_info(0)[1] if num_gpus > 0 else 0
     if num_gpus > 0:
@@ -118,9 +122,6 @@ def pytest_configure(config):
             )
 
     config.worker_resources = WorkerResources(
-        worker_id=worker_id,
-        gpu_id=gpu_id,
-        num_gpus=num_gpus,
         # Each worker needs its own set of ports for safe distributed run. Hopefully these are free.
         torchrun_port=TORCHRUN_DEFAULT_PORT + 2 * worker_id,
         rendezvous_port=TORCHRUN_DEFAULT_PORT + 2 * worker_id + 1,
