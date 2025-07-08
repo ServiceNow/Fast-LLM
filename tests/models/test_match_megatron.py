@@ -6,8 +6,10 @@ from tests.utils.compare_tensor_logs import CompareConfig
 from tests.utils.dataset import DATASET_PREFIX, get_test_dataset
 from tests.utils.distributed_configs import DistributedTestingConfig
 from tests.utils.model_configs import ModelTestingGroup
+from tests.utils.utils import requires_cuda
 
 
+@requires_cuda
 @pytest.mark.model_testing_group(ModelTestingGroup.megatron)
 def test_megatron(run_distributed_script, model_testing_config, run_test_script_base_path):
     path = run_test_script_base_path / "megatron"
@@ -28,6 +30,7 @@ def test_megatron(run_distributed_script, model_testing_config, run_test_script_
     )
 
 
+@requires_cuda
 @pytest.mark.depends_on(on=["test_megatron[{model_testing_config}]"])
 @pytest.mark.model_testing_group(ModelTestingGroup.megatron)
 def test_match_megatron(run_test_script_for_all_models, model_testing_config, compare_results_for_all_models):

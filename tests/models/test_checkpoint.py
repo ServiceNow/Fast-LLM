@@ -36,6 +36,7 @@ _CHECKPOINT_AND_EVAL_ARGS = [
 ]
 
 
+@requires_cuda
 @pytest.mark.model_testing_group(ModelTestingGroup.checkpoint)
 def test_checkpoint_and_eval(run_test_script_for_all_models, model_testing_config):
     # A baseline config (single-gpu, bf16, flash-attn).
