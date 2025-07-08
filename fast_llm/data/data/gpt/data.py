@@ -139,7 +139,6 @@ def gpt_data_collate_fn(batch: list[GPTSample], sampling_parameters: GPTSampling
     token_ids = torch.from_numpy(stacked_ids)
 
     if sampling_parameters.diffusion.style == DiffusionStyle.masked:
-
         diffusion_config = sampling_parameters.diffusion
 
         batch_size, seq_len = token_ids.shape

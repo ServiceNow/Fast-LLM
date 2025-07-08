@@ -389,8 +389,10 @@ class Attention(torch.nn.Module):
                         softmax_scale=self._softmax_scale,
                     )
             input_ = input_.flatten(-2)
+
         else:
             # TODO: Avoid the flattens.
+
             input_ = self._attn_fused(
                 query.flatten(-2),
                 key.flatten(-2),
@@ -398,6 +400,30 @@ class Attention(torch.nn.Module):
                 kwargs[TransformerKwargs.attention_mask],
                 kwargs[TransformerKwargs.attention_mask_value],
             )
+            # print(f"Fused: Attention: {input_.shape} {input_} ")
+
+            flash_input_ = _flash_attn_func(
+                query,
+                key,
+                value,
+                window_size=(-1, -1) if window_size is None else (window_size - 1, 0),
+                dropout_p=self._config.attention_dropout if self.training else 0.0,
+                causal=False,
+                softmax_scale=self._softmax_scale,
+            )
+            # print(f"1: Flash : Attention: {flash_input_.shape} {flash_input_} ")
+            flash_input_ = flash_input_.flatten(-2)
+            # print(f"2: Flash: Attention: {flash_input_.shape} {flash_input_} ")
+            diff = input_ - flash_input_
+            # print(f"Element-wise difference: {diff.shape} {diff}")
+            max_diff = diff.abs().max()
+            min_diff = diff.abs().min()
+            print(f"Min element-wise difference: {min_diff.item()}")
+            print(f"Max element-wise difference: {max_diff.item()}")
+            # if max_diff > 1e-3:
+            #     print("Warning: Max difference exceeds 1e-3")
+            #     import sys
+            #     sys.exit(1)
 
         if self._debug_transformer:
             self._debug_log(query, "query", self._QUERY_DIMS, kwargs)
