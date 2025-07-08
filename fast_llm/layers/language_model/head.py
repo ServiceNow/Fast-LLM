@@ -402,67 +402,68 @@ class MLMHead(LanguageModelHead):
             sequence_parallel=self._sequence_parallel and self._parallel_embeddings,
         )
 
-        if self.config.transformer.diffusion == DiffusionStyle.masked:
-            masked_indices = kwargs[LanguageModelKwargs.mask_indexes]
-            p_mask = kwargs[LanguageModelKwargs.mask_probabilities]
-            #                                 index   [0, 1, 2, 3, 4, 5] ->
-            # The labels are already left shifted x = [A, B, C, D, E, F] ->
-            #                                 embd =  [A, B, C, D, E]
-            #                                label =  [B, C, D, E, F]
+        if self.config.transformer.diffusion is not None:
+            if self.config.transformer.diffusion == DiffusionStyle.masked:
+                masked_indices = kwargs[LanguageModelKwargs.mask_indexes]
+                p_mask = kwargs[LanguageModelKwargs.mask_probabilities]
+                #                                 index   [0, 1, 2, 3, 4, 5] ->
+                # The labels are already left shifted x = [A, B, C, D, E, F] ->
+                #                                 embd =  [A, B, C, D, E]
+                #                                label =  [B, C, D, E, F]
 
-            # Question Pier: if 2 is the masked token, settling needs to settled 3; but 3 is already seen by the model,
-            # can it just learn to copy 3? i.e copy the next token to the masked?
-            # Yes. We need to drop those position from loss if the next token is not masked
-            # We can include curruption to further enhance, but it seems not to big looking at other CPT (diffuLlama)
+                # Question Pier: if 2 is the masked token, settling needs to settled 3; but 3 is already seen by the model,
+                # can it just learn to copy 3? i.e copy the next token to the masked?
+                # Yes. We need to drop those position from loss if the next token is not masked
+                # We can include curruption to further enhance, but it seems not to big looking at other CPT (diffuLlama)
 
-            last_weight = 0
-            B = logits.shape[0]
+                last_weight = 0
+                B = logits.shape[0]
 
-            loss_weight = torch.cat(
-                (
-                    # ar_weight * in_context[:, 1:] + # not implement yet
-                    masked_indices[:, 1:] / p_mask[:, None],
-                    # + un_weight * ((1-epsilon) * in_shuffled[:, 1:] + epsilon * in_clean[:, 1:]) / (1 - p_mask[:, None]) # not implement yet
-                    (last_weight * torch.ones(B, device=logits.device)).unsqueeze(1),
-                    # This may need some weighting in terms of masking. Let's do last_weight=0 TODO: Decide later
-                ),
-                dim=1,
-            ).to(logits.dtype)
+                loss_weight = torch.cat(
+                    (
+                        # ar_weight * in_context[:, 1:] + # not implement yet
+                        masked_indices[:, 1:] / p_mask[:, None],
+                        # + un_weight * ((1-epsilon) * in_shuffled[:, 1:] + epsilon * in_clean[:, 1:]) / (1 - p_mask[:, None]) # not implement yet
+                        (last_weight * torch.ones(B, device=logits.device)).unsqueeze(1),
+                        # This may need some weighting in terms of masking. Let's do last_weight=0 TODO: Decide later
+                    ),
+                    dim=1,
+                ).to(logits.dtype)
 
-            # print(f"Loss weight: {loss_weight}")
+                # print(f"Loss weight: {loss_weight}")
 
-            loss, grad = cross_entropy_forward_backward(
-                logits=logits.flatten(0, -2),
-                target=target,
-                loss_mask=None,
-                grad_output=grad_output,
-                group=self._tensor_space.distributed.tensor_group if self._parallel_embeddings else None,
-                implementation=self._cross_entropy_impl,
-                logits_scale_factor=self._logits_scale_factor,
-                loss_weight=loss_weight,
-            )
+                loss, grad = cross_entropy_forward_backward(
+                    logits=logits.flatten(0, -2),
+                    target=target,
+                    loss_mask=None,
+                    grad_output=grad_output,
+                    group=self._tensor_space.distributed.tensor_group if self._parallel_embeddings else None,
+                    implementation=self._cross_entropy_impl,
+                    logits_scale_factor=self._logits_scale_factor,
+                    loss_weight=loss_weight,
+                )
 
-        elif self.confing.transformer.diffusion == DiffusionStyle.ar_masked:
+            elif self.confing.transformer.diffusion == DiffusionStyle.ar_masked:
 
-            loss_weights = kwargs[LanguageModelKwargs.loss_weights]
-            context_index = kwargs[LanguageModelKwargs.in_context]
-            masked_index = kwargs[LanguageModelKwargs.mask_indexes]
-            B = loss_weights.shape[0]
-            masked_index = torch.cat([masked_index[:, 1:], torch.zeros(B, 1, device=loss_weights.device)], dim=1)
-            context_index = torch.cat([context_index[:, 1:], torch.zeros(B, 1, device=loss_weights.device)], dim=1)
+                loss_weights = kwargs[LanguageModelKwargs.loss_weights]
+                context_index = kwargs[LanguageModelKwargs.in_context]
+                masked_index = kwargs[LanguageModelKwargs.mask_indexes]
+                B = loss_weights.shape[0]
+                masked_index = torch.cat([masked_index[:, 1:], torch.zeros(B, 1, device=loss_weights.device)], dim=1)
+                context_index = torch.cat([context_index[:, 1:], torch.zeros(B, 1, device=loss_weights.device)], dim=1)
 
-            loss, grad, per_token_loss_b4_weight = cross_entropy_forward_backward(
-                logits.flatten(0, -2),
-                target=target,
-                group=self._tensor_space.distributed.tensor_group if self._parallel_embeddings else None,
-                grad_output=grad_output,
-                implementation=self._cross_entropy_impl,
-                logits_scale_factor=self._logits_scale_factor,
-                loss_weight=loss_weights,
-            )
-
-            losses["loss_mask_tokens"].append((per_token_loss_b4_weight * masked_index).mean())
-            losses["loss_in_context_tokens"].append((per_token_loss_b4_weight * context_index).mean())
+                loss, grad, per_token_loss_b4_weight = cross_entropy_forward_backward(
+                    logits.flatten(0, -2),
+                    target=target,
+                    group=self._tensor_space.distributed.tensor_group if self._parallel_embeddings else None,
+                    grad_output=grad_output,
+                    implementation=self._cross_entropy_impl,
+                    logits_scale_factor=self._logits_scale_factor,
+                    loss_weight=loss_weights,
+                )
+                # Add these before weighting to display them separately
+                losses["loss_mask_tokens"].append((per_token_loss_b4_weight * masked_index).mean())
+                losses["loss_in_context_tokens"].append((per_token_loss_b4_weight * context_index).mean())
 
         # This happens with the loss_weight.
         # MDM https://github.com/ML-GSAI/SMDM/blob/583aa4716d17728dbb825aec6c24a121164d616a/pretrain/train_mdm.py#L274
