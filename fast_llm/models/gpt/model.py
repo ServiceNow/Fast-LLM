@@ -57,7 +57,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
         # TODO: Find a better solution.
         self._preprocessors.append(self._config.transformer.rotary.build(self._tensor_space))
 
-        if not self._config.transformer.diffusion:
+        if self._config.transformer.diffusion is None:
             if self._use_flash_attention:
                 self._preprocessors.append(FlashAttnVarlenPreprocessor(self._config.transformer, self._tensor_space))
             else:
@@ -355,12 +355,21 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
 
                         batch_size, seq_len = batch.token_ids.shape
                         seq_len -= 1  # last token is dropped inputs
+                        # attention_mask = torch.ones(
+                        #     (batch_size, 1, seq_len, seq_len),
+                        #     dtype=torch.bool,
+                        #     device=self._tensor_space.distributed.device,
+                        # )
+                        # kwargs[TransformerKwargs.attention_mask] = attention_mask.unsqueeze(1).unsqueeze(1)
                         attention_mask = torch.ones(
-                            (batch_size, 1, seq_len, seq_len),
+                            (seq_len, seq_len),
                             dtype=torch.bool,
                             device=self._tensor_space.distributed.device,
                         )
-                        kwargs[TransformerKwargs.attention_mask] = attention_mask.unsqueeze(1).unsqueeze(1)
+                        kwargs[TransformerKwargs.attention_mask] = attention_mask[
+                            None, None, 0:seq_len, None, :seq_len
+                        ]
+                        print(f"attention_mask: {kwargs[TransformerKwargs.attention_mask]}")
                         # # kwargs[TransformerKwargs.attention_mask_value] = torch.tensor(
                         # #     -10000.0, device=self._tensor_space.distributed.device
                         # # )

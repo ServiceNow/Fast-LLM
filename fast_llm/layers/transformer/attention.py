@@ -182,11 +182,7 @@ class Attention(torch.nn.Module):
         ).view(b, self._local_head_groups, sq, self._local_heads_per_group, sk)
 
         attn_weights = attn_weights.to(torch.float32) * self._layer_index
-
-        attn_weights = attn_weights.transpose(2, 3)
         attn_weights = torch.where(mask, attn_weights, mask_value)
-        attn_weights = attn_weights.transpose(2, 3)
-
         attn_weights = torch.nn.functional.softmax(attn_weights, dim=-1).to(query.dtype)
 
         with set_generator(self._tensor_space.distributed.tp_generator):
@@ -417,13 +413,10 @@ class Attention(torch.nn.Module):
             diff = input_ - flash_input_
             # print(f"Element-wise difference: {diff.shape} {diff}")
             max_diff = diff.abs().max()
-            min_diff = diff.abs().min()
-            print(f"Min element-wise difference: {min_diff.item()}")
-            print(f"Max element-wise difference: {max_diff.item()}")
-            # if max_diff > 1e-3:
-            #     print("Warning: Max difference exceeds 1e-3")
-            #     import sys
-            #     sys.exit(1)
+
+            if max_diff > 1e-3:
+                print("Warning: Max difference exceeds 1e-3")
+                print(f"Max element-wise difference: {max_diff.item()}")
 
         if self._debug_transformer:
             self._debug_log(query, "query", self._QUERY_DIMS, kwargs)
