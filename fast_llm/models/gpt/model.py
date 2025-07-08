@@ -66,6 +66,8 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             if self._config.enable_dpo:  # TODO better way to pass in?
                 self._preprocessors.append(PreferenceSpanPreprocessor(self._config, self._tensor_space))
 
+        self._preprocessors.append(BackupAttentionPreprocessor(self._config.transformer, self._tensor_space))
+
     def get_output_layers(self) -> list[Layer]:
         layers = []
         for i in range(self._config.prediction_heads):
@@ -355,6 +357,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
 
                         batch_size, seq_len = batch.token_ids.shape
                         seq_len -= 1  # last token is dropped inputs
+                        # seq_len = kwargs[TransformerKwargs.sequence_length] # alrenatively we can use this
                         # attention_mask = torch.ones(
                         #     (batch_size, 1, seq_len, seq_len),
                         #     dtype=torch.bool,
@@ -369,6 +372,12 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                         kwargs[TransformerKwargs.attention_mask] = attention_mask[
                             None, None, 0:seq_len, None, :seq_len
                         ]
+                        # alternatively we can use this
+                        # sequence_k = kwargs[TransformerKwargs.sequence_k_dim].size
+                        # sequence_q = kwargs[TransformerKwargs.sequence_q_dim].size
+                        # kwargs[TransformerKwargs.attention_mask] = self._mask[
+                        #     None, None, sequence_k - sequence_q : sequence_k, None, :sequence_k
+                        # ]
                         print(f"attention_mask: {kwargs[TransformerKwargs.attention_mask]}")
                         # # kwargs[TransformerKwargs.attention_mask_value] = torch.tensor(
                         # #     -10000.0, device=self._tensor_space.distributed.device
