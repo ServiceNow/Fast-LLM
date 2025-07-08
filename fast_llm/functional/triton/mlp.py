@@ -47,7 +47,7 @@ def triton_mlp_activation_forward_kernel(
 
     input_ = tl.load(input_ptr, mask=mask).to(tl.float32)
 
-    if activation_type in ["gelu_pytorch_tanh", "gelu"]:
+    if activation_type == "gelu" or activation_type == "gelu_pytorch_tanh":
         tanh_input = 0.79788456 * input_ * (1 + 0.044715 * input_ * input_)
         tanh = 1 - 2 / (1 + tl.exp(2 * tanh_input))
         out = input_ * 0.5 * (1.0 + tanh)
@@ -97,7 +97,7 @@ def triton_mlp_activation_backward_kernel(
     input_ = tl.load(input_ptr, mask=mask).to(tl.float32)
     output_grad = tl.load(grad_output_ptr + output_offsets, mask=mask).to(tl.float32)
 
-    if activation_type in ["gelu_pytorch_tanh", "gelu"]:
+    if activation_type == "gelu" or activation_type == "gelu_pytorch_tanh":
         tanh_input = 0.79788456 * input_ * (1 + 0.044715 * input_ * input_)
         tanh = 1 - 2 / (1 + tl.exp(2 * tanh_input))
         grad = 0.5 * input_ * ((1 - tanh * tanh) * (0.79788456 + 0.1070322243 * input_ * input_)) + 0.5 * (1 + tanh)

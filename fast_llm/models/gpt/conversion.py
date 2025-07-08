@@ -26,11 +26,15 @@ from fast_llm.engine.checkpoint.external import (
 from fast_llm.engine.checkpoint.huggingface import CustomModelingExportMixin, HuggingfaceStateDictCheckpointHandler
 from fast_llm.engine.multi_stage.config import CheckpointMetadata, FastLLMModelConfig
 from fast_llm.functional.config import ActivationType
-from fast_llm.layers.common.config import LayerNormalizationConfig, NormalizationType
-from fast_llm.layers.transformer.config import RotaryEmbeddingType, RoutingType, TransformerConfig, TransformerType
-from fast_llm.layers.transformer.rotary.config import DefaultRotaryConfig, Llama3RotaryConfig, YarnRotaryConfig
+from fast_llm.layers.common.config import LayerNormalizationConfig
+from fast_llm.layers.transformer.config import RoutingType, TransformerConfig
+from fast_llm.layers.transformer.rotary.config import (
+    DefaultRotaryConfig,
+    Llama3RotaryConfig,
+    Rotary2DConfig,
+    YarnRotaryConfig,
+)
 from fast_llm.layers.transformer.rotary.rotary import convert_rotary_complex_to_real, convert_rotary_real_to_complex
-from fast_llm.layers.vision_encoder.config import VisionEncoderType
 from fast_llm.models.gpt.config import (
     DiffusionDreamGPTHuggingfaceCheckpointFormat,
     DiffusionLlamaGPTHuggingfaceCheckpointFormat,
@@ -161,6 +165,7 @@ class CommonHuggingfaceCheckpointHandler(WeightAndBiasConverterMixin, Huggingfac
     @classmethod
     def _create_config_converters(cls) -> list[ParamConverter]:
         return super()._create_config_converters() + [
+            ConstantImportParamConverter(fast_llm_names=(("transformer", "type"),), fast_llm_value="lm_decoder"),
             ConstantExportParamConverter(export_names=(("architectures",),), export_value=[cls.architecture]),
             ConstantImportParamConverter(fast_llm_names=(("use_position_embeddings",),), fast_llm_value=False),
             RenameParamConverter(
@@ -224,42 +229,6 @@ class CommonHuggingfaceCheckpointHandler(WeightAndBiasConverterMixin, Huggingfac
         for i in range(num_layers):
             converters += self._create_transformer_layer_converters(
                 f"layers.{i+offset+1}", f"{hf_base_prefix}model.layers.{i}"
-            )
-
-        return converters
-
-    def _create_lm_head_converters(self, hf_base_prefix: str = "", offset: int = 0) -> list[WeightConverter]:
-        num_layers = self._model.config.base_model.transformer.num_layers
-        prediction_heads = self._model.config.base_model.prediction_heads
-        norm_bias: bool = self._model.config.base_model.transformer.normalization.type == NormalizationType.layer_norm
-        converters = []
-
-        # Next-token prediction head
-        # Final norm
-        converters += self._get_weight_and_bias_converters(
-            f"layers.{num_layers + offset + 1}.final_norm", f"{hf_base_prefix}model.norm", norm_bias
-        )
-        # Output weights
-        if self._model.config.base_model.tie_word_embeddings:
-            converters.append(IgnoreImportWeightConverter((), f"{hf_base_prefix}lm_head.weight"))
-        else:
-            converters.append(
-                WeightConverter(f"layers.{num_layers + offset + 1}.output_weights", f"{hf_base_prefix}lm_head.weight")
-            )
-
-        # MTP-heads > 0 are thrown away
-        for i in range(1, prediction_heads):
-            logger.warning(
-                f"The model weights for the multi-token prediction head {i} are discarded during conversion."
-            )
-            mtp_transformer_layer_index = num_layers + offset - 1 + 2 * i
-            # MTP transformer layer
-            converters += self._create_transformer_layer_converters(
-                f"layers.{mtp_transformer_layer_index + 1}", "", ignore_export=True
-            )
-            # MTP output norm
-            converters += self._get_weight_and_bias_converters(
-                f"layers.{mtp_transformer_layer_index + 2}.final_norm", (), norm_bias, IgnoreExportWeightConverter
             )
 
         return converters
@@ -331,7 +300,7 @@ class CommonHuggingfaceCheckpointHandler(WeightAndBiasConverterMixin, Huggingfac
             converters += self._get_mlp_converters(f"{fast_llm_layer_name}", f"{hf_layer_name}")
         return converters
 
-    def _create_lm_head_converters(self) -> list[WeightConverter]:
+    def _create_lm_head_converters(self, hf_base_prefix: str = "", offset: int = 0) -> list[WeightConverter]:
         num_layers = self._model.config.base_model.transformer.num_layers
         prediction_heads = self._model.config.base_model.prediction_heads
         norm_bias: bool = isinstance(self._model.config.base_model.transformer.normalization, LayerNormalizationConfig)
@@ -340,20 +309,22 @@ class CommonHuggingfaceCheckpointHandler(WeightAndBiasConverterMixin, Huggingfac
         # Next-token prediction head
         # Final norm
         converters += self._get_weight_and_bias_converters(
-            f"layers.{num_layers + 1}.final_norm", "model.norm", norm_bias
+            f"layers.{num_layers + offset + 1}.final_norm", f"{hf_base_prefix}model.norm", norm_bias
         )
         # Output weights
         if self._model.config.base_model.tie_word_embeddings:
-            converters.append(IgnoreImportWeightConverter((), "lm_head.weight"))
+            converters.append(IgnoreImportWeightConverter((), f"{hf_base_prefix}lm_head.weight"))
         else:
-            converters.append(WeightConverter(f"layers.{num_layers + 1}.output_weights", "lm_head.weight"))
+            converters.append(
+                WeightConverter(f"layers.{num_layers + offset + 1}.output_weights", f"{hf_base_prefix}lm_head.weight")
+            )
 
         # MTP-heads > 0 are thrown away
         for i in range(1, prediction_heads):
             logger.warning(
                 f"The model weights for the multi-token prediction head {i} are discarded during conversion."
             )
-            mtp_transformer_layer_index = num_layers - 1 + 2 * i
+            mtp_transformer_layer_index = num_layers + offset - 1 + 2 * i
             # MTP transformer layer
             converters += self._create_transformer_layer_converters(
                 f"layers.{mtp_transformer_layer_index + 1}", "", ignore_export=True
@@ -466,7 +437,7 @@ class LLamaRotaryParamConverter(ParamConverter):
 
     def export_params(self, fast_llm_values: tuple[typing.Any, ...]) -> tuple[typing.Any, ...]:
         (rotary_config,) = fast_llm_values
-        if type(rotary_config) is DefaultRotaryConfig:
+        if type(rotary_config) is DefaultRotaryConfig or rotary_config is Rotary2DConfig:
             rotary_scaling = {
                 "rope_type": "default",
             }
@@ -663,6 +634,34 @@ class PixtralNumHeadsConverter(ParamConverter):
         return (num_heads, num_heads)
 
 
+class PixtralRotaryParamConverter(ParamConverter):
+    """
+    Pixtral encoder uses 2D Rotary Embeddings.
+    Map `rope_theta` to a single `rotary` parameter. `rotary_scaling` is not needed.
+    """
+
+    def __init__(self, fast_llm_names, export_names):
+        Assert.eq(len(fast_llm_names), 1)
+        Assert.eq(len(export_names), 1)
+        self.fast_llm_names = fast_llm_names
+        self.export_names = export_names
+
+    def export_params(self, fast_llm_values: tuple[typing.Any, ...]) -> tuple[typing.Any, ...]:
+        (rotary_config,) = fast_llm_values
+        if type(rotary_config) is Rotary2DConfig:
+            return (rotary_config.theta,)
+        else:
+            raise ValueError(f"Unsupported rotary type: {type(rotary_config).__name__}")
+
+    def import_params(self, export_values: tuple[typing.Any, ...]) -> tuple[typing.Any, ...]:
+        (rotary_theta,) = export_values
+        rotary_config = {
+            "type": "rope_2d",
+            "theta": rotary_theta,
+        }
+        return (rotary_config,)
+
+
 class PixtralHuggingfaceCheckpointHandler(WeightAndBiasConverterMixin, HuggingfaceStateDictCheckpointHandler):
     format: typing.ClassVar[type[CheckpointFormat]] = PixtralGPTHuggingfaceCheckpointFormat
     _model_class: typing.ClassVar[FastLLMModelConfig] = GPTModelConfig
@@ -670,17 +669,13 @@ class PixtralHuggingfaceCheckpointHandler(WeightAndBiasConverterMixin, Huggingfa
     @classmethod
     def _create_config_converters(cls) -> list[ParamConverter]:
         return super()._create_config_converters() + [
+            ConstantImportParamConverter(fast_llm_names=(("type",),), fast_llm_value="pixtral"),
+            ConstantImportParamConverter(fast_llm_names=(("patch_norm", "type"),), fast_llm_value="rms_norm"),
             ConstantImportParamConverter(
-                fast_llm_names=(("patch_norm", "type"),), fast_llm_value=NormalizationType.rms_norm
+                fast_llm_names=(("transformer", "normalization", "type"),), fast_llm_value="rms_norm"
             ),
-            ConstantImportParamConverter(
-                fast_llm_names=(("transformer", "normalization", "type"),), fast_llm_value=NormalizationType.rms_norm
-            ),
-            ConstantImportParamConverter(
-                fast_llm_names=(("transformer", "type"),), fast_llm_value=TransformerType.image_encoder
-            ),
+            ConstantImportParamConverter(fast_llm_names=(("transformer", "type"),), fast_llm_value="image_encoder"),
             ConstantExportParamConverter(export_names=(("architectures",),), export_value=["PixtralVisionModel"]),
-            ConstantImportParamConverter(fast_llm_names=(("type",),), fast_llm_value=VisionEncoderType.pixtral),
             ConstantImportParamConverter(fast_llm_names=(("transformer", "causal"),), fast_llm_value=False),
             RenameParamConverter(
                 fast_llm_names=(
@@ -737,17 +732,21 @@ class PixtralHuggingfaceCheckpointHandler(WeightAndBiasConverterMixin, Huggingfa
                 ),
                 export_names=(("head_dim",),),
             ),
-            ConstantImportParamConverter(
-                fast_llm_names=(("transformer", "rotary", "type"),), fast_llm_value=RotaryEmbeddingType.rope_2d
-            ),
-            RenameParamConverter(
-                fast_llm_names=(
-                    (
-                        "transformer",
-                        "rotary",
-                        "theta",
-                    ),
-                ),
+            # ConstantImportParamConverter(
+            #     fast_llm_names=(("transformer", "rotary", "type"),), fast_llm_value=RotaryEmbeddingType.rope_2d
+            # ),
+            # RenameParamConverter(
+            #     fast_llm_names=(
+            #         (
+            #             "transformer",
+            #             "rotary",
+            #             "theta",
+            #         ),
+            #     ),
+            #     export_names=(("rope_theta",),),
+            # ),
+            PixtralRotaryParamConverter(
+                fast_llm_names=(("transformer", "rotary"),),
                 export_names=(("rope_theta",),),
             ),
             RenameParamConverter(fast_llm_names=(("patch_size",),), export_names=(("patch_size",),)),
@@ -773,7 +772,7 @@ class PixtralHuggingfaceCheckpointHandler(WeightAndBiasConverterMixin, Huggingfa
     ) -> list[WeightConverter]:
         # Vision transformer layer
         transformer_config = self._model.config.base_model.vision_encoder.transformer
-        norm_bias: bool = transformer_config.normalization.type == NormalizationType.layer_norm
+        norm_bias: bool = isinstance(self._model.config.base_model.transformer.normalization, LayerNormalizationConfig)
         name_bias_cls = [
             # Self-attn
             (
@@ -828,11 +827,12 @@ class PixtralHuggingfaceCheckpointHandler(WeightAndBiasConverterMixin, Huggingfa
 
     def _create_weight_converters(self, offset: int = 0, hf_base_prefix: str = "") -> list[WeightConverter]:
         converters = []
+        norm_bias = isinstance(self._model.config.base_model.vision_encoder.patch_norm, LayerNormalizationConfig)
         converters.append(WeightConverter(f"layers.{offset}.weight", f"{hf_base_prefix}patch_conv.weight"))
         if self._model.config.base_model.vision_encoder.conv_bias:
             converters.append(WeightConverter(f"layers.{offset}.bias", f"{hf_base_prefix}patch_conv.bias"))
         converters.append(WeightConverter(f"layers.{offset}.norm.weight", f"{hf_base_prefix}ln_pre.weight"))
-        if self._model.config.base_model.vision_encoder.patch_norm.type == NormalizationType.layer_norm:
+        if norm_bias:
             converters.append(WeightConverter(f"layers.{offset}.norm.bias", f"{hf_base_prefix}ln_pre.bias"))
 
         num_layers = self._model.config.base_model.vision_encoder.transformer.num_layers

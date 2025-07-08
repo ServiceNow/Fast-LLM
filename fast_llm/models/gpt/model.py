@@ -72,10 +72,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
 
         if self._config.vision_encoder.enabled:
             self._preprocessors.append(VisionPreprocessor(self._config.vision_encoder, self._tensor_space))
-            if self._config.vision_encoder.transformer.rotary.enabled:
-                self._preprocessors.append(
-                    RotaryEmbeddingPreprocessor(self._config.vision_encoder.transformer.rotary, self._tensor_space)
-                )
+            self._preprocessors.append(self._config.vision_encoder.transformer.rotary.build(self._tensor_space))
 
     def get_output_layers(self) -> list[Layer]:
         layers = []
