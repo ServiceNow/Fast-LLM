@@ -2,7 +2,7 @@ import math
 import typing
 
 import torch
-import torchvision.transforms.v2.functional as F
+import torchvision
 
 from fast_llm.engine.base_model.config import Preprocessor
 from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
@@ -62,17 +62,21 @@ def resize(image: torch.Tensor, max_height: int, max_width: int, patch_size: int
         height, width = get_resize_dims(
             height, width, intermediate_max_height, intermediate_max_width, patch_size=patch_size
         )
-        image = F.resize(image, size=(height, width), interpolation=F.InterpolationMode.BICUBIC)
+        image = torchvision.transforms.v2.functional.resize(
+            image, size=(height, width), interpolation=torchvision.transforms.InterpolationMode.BICUBIC
+        )
 
     # TODO: options for interpolation mode?
-    return F.resize(image, size=(target_height, target_width), interpolation=F.InterpolationMode.BICUBIC)
+    return torchvision.transforms.v2.functional.resize(
+        image, size=(target_height, target_width), interpolation=torchvision.transforms.InterpolationMode.BICUBIC
+    )
 
 
 def normalize(image: torch.Tensor, mean: list[float], std: list[float]) -> torch.Tensor:
     """
     Normalize the image using the specified mean and standard deviation.
     """
-    return F.normalize(image, mean=mean, std=std)
+    return torchvision.transforms.v2.functional.normalize(image, mean=mean, std=std)
 
 
 def pad(image: torch.Tensor, max_height, max_width) -> torch.Tensor:
@@ -81,7 +85,7 @@ def pad(image: torch.Tensor, max_height, max_width) -> torch.Tensor:
     """
     width_padding = max(0, max_height - image.size(1))
     depth_padding = max(0, max_width - image.size(2))
-    return F.pad(image, (0, 0, depth_padding, width_padding), 0)
+    return torchvision.transforms.v2.functional.pad(image, (0, 0, depth_padding, width_padding), 0)
 
 
 def create_inv_freqs(rope_theta: int, kv_channels: int, max_image_size: int, patch_size: int) -> torch.Tensor:
