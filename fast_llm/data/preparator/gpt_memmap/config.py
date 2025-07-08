@@ -42,6 +42,18 @@ class TextColumnConfig(SourceSchemaConfig):
     )
 
 
+@config_class(dynamic_type={SourceSchemaConfig: "text_image_column"})
+class TextImageColumnConfig(TextColumnConfig):
+    images_column: str = Field(
+        default="images",
+        desc="Field containing images relevant to a document.",
+    )
+    image_positions_column: None | str = Field(
+        default="image_positions",
+        desc="Field containing image positions within a document.",
+    )
+
+
 @config_class()
 class GPTHuggingfaceDatasetConfig(Config):
     path: str = Field(
@@ -78,12 +90,6 @@ class GPTHuggingfaceDatasetConfig(Config):
     )
     rejected_text: None | str = Field(
         default=None, desc="Field containing rejected text for preference optimization", hint=FieldHint.optional
-    )
-    image_positions: None | str = Field(
-        default=None, desc="Field containing image positions within a document", hint=FieldHint.optional
-    )
-    images: None | str = Field(
-        default=None, desc="Field containing images relevant to a document", hint=FieldHint.optional
     )
     data_type: DataType | None = Field(
         default=None,

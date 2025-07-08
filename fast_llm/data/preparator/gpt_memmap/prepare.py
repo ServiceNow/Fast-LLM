@@ -27,7 +27,11 @@ from fast_llm.data.dataset.gpt.config import (
 from fast_llm.data.dataset.gpt.memmap import GPTMemmapDataset
 from fast_llm.data.dataset.gpt.sampled import GPTSample
 from fast_llm.data.preparator.config import DatasetPreparator
-from fast_llm.data.preparator.gpt_memmap.config import GPTMemmapDatasetPreparatorConfig, TextColumnConfig
+from fast_llm.data.preparator.gpt_memmap.config import (
+    GPTMemmapDatasetPreparatorConfig,
+    TextColumnConfig,
+    TextImageColumnConfig,
+)
 from fast_llm.data.tokenizer import Tokenizer
 from fast_llm.engine.config_utils.data_type import DataType, get_unsigned_integer_type
 from fast_llm.utils import Assert, normalize_probabilities, padded_cumsum
@@ -60,9 +64,9 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
                             im_char_positions,
                         )
                         for text, loss_mask_spans, im_char_positions in zip(
-                            batch[self._config.dataset.field],
-                            batch.get(self._config.dataset.loss_masking_spans, itertools.repeat(None)),
-                            batch.get(self._config.dataset.image_positions, itertools.repeat(None)),
+                            batch[self._text_column],
+                            batch.get(self._loss_masking_spans_column, itertools.repeat(None)),
+                            batch.get(self._image_positions_column, itertools.repeat(None)),
                         )
                     ]
                 ]
@@ -160,8 +164,8 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
             for item in tqdm.tqdm(shard_dataset, desc=f"Saving shard {shard_idx}", unit="docs"):
                 yield GPTSample(
                     np.array(item["input_ids"], dtype=self._data_type.numpy),
-                    item["images"] if self._config.dataset.images else None,
-                    item["image_positions"] if self._config.dataset.image_positions else None,
+                    item["images"] if self._images_column else None,
+                    item["image_positions"] if self._image_positions_column else None,
                     (
                         np.array(item["token_spans"], dtype=np.int32).reshape(-1, 2)
                         if self._loss_masking_spans_column
@@ -344,7 +348,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
         total_tokens = sum(tqdm.tqdm(tokenized_dataset["num_tokens"], desc="Counting tokens", unit="tokens"))
         total_pixels = (
             sum(tqdm.tqdm(tokenized_dataset["num_pixels"], desc="Counting pixels", unit="pixels"))
-            if self._config.dataset.images
+            if self._images_column
             else 0
         )
         # Add the token-equivalent bytes of pixels to determine shard size
