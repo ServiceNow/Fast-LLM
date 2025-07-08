@@ -37,6 +37,7 @@ class ProcessGroupPool:
         )
         self._timeout = timeout
         self._use_cpu = use_cpu
+        self._process_groups = {}
 
         if self._use_cpu:
             Assert.eq(self._world_size, 1)
@@ -60,7 +61,6 @@ class ProcessGroupPool:
                     timeout=datetime.timedelta(seconds=timeout),
                 )
             )
-        self._process_groups = {}
 
     @property
     def rank(self):

@@ -33,7 +33,7 @@ jobs:
           MAMBA_FORCE_BUILD=TRUE CAUSAL_CONV1D_FORCE_BUILD=TRUE CAUSAL_CONV1D_SKIP_CUDA_BUILD=TRUE \
           pip install --no-build-isolation -e ".[CORE,OPTIONAL,HUGGINGFACE,SSM,DEV,DOCS]"
       - name: Run tests
-        run: pytest .
+        run: pytest -v -ra .
 
   docker:
     name: Docker

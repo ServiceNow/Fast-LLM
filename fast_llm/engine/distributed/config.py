@@ -357,7 +357,6 @@ class DistributedConfig(Config):
     def _add_distributed_dim(self, distributed_dim: DistributedDim) -> None:
         Assert.eq(distributed_dim.global_ranks[distributed_dim.rank], self.rank, msg=distributed_dim)
 
-        logger.info(f"Initializing group {distributed_dim}")
         try:
             distributed_dim.check_ranks_in_range(0, self.world_size)
         except:
