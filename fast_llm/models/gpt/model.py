@@ -378,7 +378,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                         # kwargs[TransformerKwargs.attention_mask] = self._mask[
                         #     None, None, sequence_k - sequence_q : sequence_k, None, :sequence_k
                         # ]
-                        print(f"attention_mask: {kwargs[TransformerKwargs.attention_mask]}")
+                        # print(f"attention_mask: {kwargs[TransformerKwargs.attention_mask]}")
                         # # kwargs[TransformerKwargs.attention_mask_value] = torch.tensor(
                         # #     -10000.0, device=self._tensor_space.distributed.device
                         # # )
@@ -388,7 +388,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                             dtype=self._tensor_space.distributed_config.training_dtype.torch,
                             device=self._tensor_space.distributed.device,
                         )
-                        # print(f"attention_mask : {attention_mask}")
+                        print(f"attention_mask : {attention_mask}")
                         # print(f"labels shape: {labels}, tokens: {batch.token_ids}, mask indexes shape: {batch.mask_indexes}")
 
                         # set token ids to masked tokens
