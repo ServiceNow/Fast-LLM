@@ -425,7 +425,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
         dataset_configs: list[GPTMemmapDatasetConfig],
         splits: dict[str, int | float],
         output_path: pathlib.Path,
-        image_patch_size: int,
+        image_patch_size: None | int = None,
     ) -> dict[str, GPTSampledDatasetConfig]:
         split_cumsum = padded_cumsum(normalize_probabilities(list(splits.values()), return_array=True)).tolist()
         dataset_sizes = [dataset_config.num_tokens for dataset_config in dataset_configs]

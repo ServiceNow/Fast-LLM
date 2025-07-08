@@ -127,10 +127,10 @@ def compare_indexed_dataset(
     loss_masking_spans: dict[int, list[int]] | None = None,
 ) -> None:
     Assert.eq(len(dataset), length)
-    sizes = dataset.get_document_sizes()
+    text_sizes, image_sizes = dataset.get_document_sizes()
     # Assert.eq(sizes.sum(), num_tokens)
     Assert.all_equal(
-        [len(dataset.get(i).token_ids) for i in range(min(len(dataset), 100))], sizes[: min(len(dataset), 100)]
+        [len(dataset.get(i).token_ids) for i in range(min(len(dataset), 100))], text_sizes[: min(len(dataset), 100)]
     )
     for i, expected_sample in expected_samples.items():
         Assert.all_equal(dataset.get(i).token_ids, np.array(expected_sample, dtype=np.uint16))

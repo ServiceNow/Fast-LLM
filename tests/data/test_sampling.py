@@ -106,6 +106,7 @@ class SimpleGPTIndexedDataset(GPTIndexedDataset):
     def name(self) -> str:
         return "dataset"
 
+    @property
     def has_images(self) -> bool:
         return False
 
