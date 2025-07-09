@@ -94,6 +94,9 @@ class CrossEntropyImpl(str, enum.Enum):
     torch = "torch"
     fused = "fused"
     triton = "triton"
+
+
+class DistillationLossImpl(str, enum.Enum):
     reverse_kl = "reverse_kl"
 
 

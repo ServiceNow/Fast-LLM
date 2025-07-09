@@ -10,7 +10,7 @@ from fast_llm.engine.base_model.base_model import Layer
 from fast_llm.engine.config_utils.tensor_space import DefaultDimNames, TensorDim, TensorSpace
 from fast_llm.engine.distributed.config import DistributedDimNames
 from fast_llm.functional.autograd import grad_is_context, wrap_forward_backward
-from fast_llm.functional.config import CrossEntropyImpl, TargetFormat, TritonConfig
+from fast_llm.functional.config import CrossEntropyImpl, DistillationLossImpl, TargetFormat, TritonConfig
 from fast_llm.functional.cross_entropy import cross_entropy_forward_backward, reverse_kl_forward_backward
 from fast_llm.functional.dpo import compute_dpo_loss
 from fast_llm.functional.linear import output_parallel_linear_backward, output_parallel_linear_forward
@@ -68,8 +68,8 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
         self._loss_name = LanguageModelLossNames.multi_token_prediction_loss(prediction_distance)
         self.final_norm = config.transformer.normalization.get_layer(hidden_dim)
         self._logits_scale_factor = config.logits_scale_factor
-        self._distil_ntp_loss_factor = config.distil_ntp_loss_factor
-        self._distil_loss_factor = config.distil_loss_factor
+        self._language_model_loss_factor = config.language_model_loss_factor
+        self._distilation_loss_factor = config.distilation_loss_factor
         self._z_loss_factor = config.logit_z_loss
 
         # Distance of the target token prediction
@@ -86,7 +86,7 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
             self.dpo_beta = config.dpo_beta
         else:
             self._cross_entropy_impl = config.cross_entropy_impl
-            self._distil_loss_impl = config.distil_loss_impl
+            self._distillation_loss_implementation = config.distillation_loss_implementation
             if self._cross_entropy_impl == CrossEntropyImpl.auto:
                 if self._parallel_embeddings:
                     self._cross_entropy_impl = CrossEntropyImpl.fused
@@ -211,9 +211,7 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
                 if loss_mask is not None:
                     loss_mask = loss_mask.flatten()
 
-            if self._config.distillation_model is None or (
-                self._config.distillation_model is not None and self._distil_ntp_loss_factor > 0.0
-            ):
+            if self._config.distillation_model is None or self._language_model_loss_factor > 0.0:
                 lm_target = kwargs.get(LanguageModelKwargs.labels)
                 if lm_target is not None:
                     # MTP: Shift the labels
@@ -377,35 +375,30 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
             dpo_loss, dpo_grad = None, None
 
         if lm_target is not None:
-            distil_ntp_loss_factor = 1.0
-            if self._config.distillation_model is not None:
-                # doing distillation
-                distil_ntp_loss_factor = self._distil_ntp_loss_factor
-
             lm_loss, lm_grad = cross_entropy_forward_backward(
                 logits.flatten(0, -2),
                 lm_target,
                 None,
                 group=self._tensor_space.distributed.tensor_group if self._parallel_embeddings else None,
-                grad_output=grad_output * self._loss_coefficient * distil_ntp_loss_factor,
+                grad_output=grad_output * self._loss_coefficient * self._language_model_loss_factor,
                 implementation=self._cross_entropy_impl,
                 logits_scale_factor=self._logits_scale_factor,
                 target_format=TargetFormat.labels,
             )
-            lm_loss = lm_loss * distil_ntp_loss_factor
+            lm_loss = lm_loss * self._language_model_loss_factor
         else:
             lm_loss, lm_grad = None, None
 
-        if distillation_target is not None and self._distil_loss_factor > 0.0:
-            if self._distil_loss_impl == CrossEntropyImpl.reverse_kl:
+        if distillation_target is not None and self._distilation_loss_factor > 0.0:
+            if self._distillation_loss_implementation == DistillationLossImpl.reverse_kl:
                 distillation_loss, distillation_grad = reverse_kl_forward_backward(
                     logits.flatten(0, -2),
                     distillation_target,
                     loss_mask,
-                    grad_output=grad_output * self._loss_coefficient * self._distil_loss_factor,
+                    grad_output=grad_output * self._loss_coefficient * self._distilation_loss_factor,
                     group=self._tensor_space.distributed.tensor_group if self._parallel_embeddings else None,
                     logits_scale_factor=self._logits_scale_factor,
-                    teacher_softmax_temp=self._config.teacher_softmax_temp,
+                    teacher_softmax_temperature=self._config.teacher_softmax_temperature,
                     target_format=(
                         TargetFormat.labels if self._config.distillation_model is None else TargetFormat.logits
                     ),
@@ -416,12 +409,13 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
                     distillation_target,
                     loss_mask,
                     group=self._tensor_space.distributed.tensor_group if self._parallel_embeddings else None,
-                    grad_output=grad_output * self._loss_coefficient * self._distil_loss_factor,
+                    grad_output=grad_output * self._loss_coefficient * self._distilation_loss_factor,
                     implementation=self._cross_entropy_impl,
                     logits_scale_factor=self._logits_scale_factor,
                     target_format=TargetFormat.logits,
                 )
-            distillation_loss = distillation_loss * self._distil_loss_factor
+
+            distillation_loss = distillation_loss * self._distilation_loss_factor
         else:
             distillation_loss, distillation_grad = None, None
 
@@ -436,10 +430,10 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
         if self.training and losses is not None:
             if dpo_loss is not None:
                 losses[LanguageModelLossNames.dpo_loss].append(dpo_loss.detach())
-            if lm_loss is not None:
-                losses[LanguageModelLossNames.distil_lm_loss].append(lm_loss.detach())
             if distillation_loss is not None:
                 losses[LanguageModelLossNames.distillation_loss].append(distillation_loss.detach())
+            if self._config.distillation_model is not None and lm_loss is not None:
+                losses[LanguageModelLossNames.distil_lm_loss].append(lm_loss.detach())
 
         return loss, output_parallel_linear_backward(grad, context) if self.training else None
 

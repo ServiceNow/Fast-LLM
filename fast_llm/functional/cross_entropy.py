@@ -12,8 +12,8 @@ def _torch_cross_entropy_forward_backward(
     loss_mask: torch.Tensor | None,
     grad_output: float | None,
     logits_scale_factor: float,
-    teacher_softmax_temp: float,
     target_format: TargetFormat,
+    teacher_softmax_temperature: float = 1.0,
 ) -> tuple[torch.Tensor, torch.Tensor | None]:
     """
     A wrapper for the pytorch implementation of cross-entropy.
@@ -27,8 +27,8 @@ def _torch_cross_entropy_forward_backward(
         if target_format == TargetFormat.logits:
             if logits_scale_factor != 1.0:
                 target = target * logits_scale_factor
-            if teacher_softmax_temp != 1.0:
-                target = target * (1 / teacher_softmax_temp)
+            if teacher_softmax_temperature != 1.0:
+                target = target / teacher_softmax_temperature
             target = torch.softmax(target, dim=-1)
         if loss_mask is None:
             loss = torch.nn.functional.cross_entropy(
@@ -82,9 +82,9 @@ def _fused_cross_entropy_forward_backward(
     loss_mask: torch.Tensor | None,
     grad_output: float | None,
     logits_scale_factor: float,
-    teacher_softmax_temp: float,
     target_format: TargetFormat,
     group: ProcessGroup | None = None,
+    teacher_softmax_temperature: float = 1.0,
 ) -> tuple[torch.Tensor, torch.Tensor | None]:
     """
     A fused implementation of cross-entropy with torch compile.
@@ -97,7 +97,7 @@ def _fused_cross_entropy_forward_backward(
     logits_norm, exp_logits, sum_exp_logits = _fused_softmax_base(logits, logits_scale_factor, group)
 
     if target_format == TargetFormat.logits:
-        target = _fused_softmax(target, logits_scale_factor * (1 / teacher_softmax_temp), group)
+        target = _fused_softmax(target, logits_scale_factor / teacher_softmax_temperature, group)
 
     if target_format == TargetFormat.labels:
         target = target.unsqueeze(-1)
@@ -171,7 +171,7 @@ def cross_entropy_forward_backward(
     group: ProcessGroup | None = None,
     implementation: CrossEntropyImpl = CrossEntropyImpl.fused,
     logits_scale_factor: float = 1.0,
-    teacher_softmax_temp: float = 1.0,
+    teacher_softmax_temperature: float = 1.0,
     target_format: TargetFormat = TargetFormat.labels,
 ) -> tuple[torch.Tensor, torch.Tensor | None]:
     """
@@ -192,11 +192,18 @@ def cross_entropy_forward_backward(
     if group:
         Assert.eq(implementation, CrossEntropyImpl.fused)
         return _fused_cross_entropy_forward_backward(
-            logits, target, loss_mask, grad_output, logits_scale_factor, teacher_softmax_temp, target_format, group
+            logits,
+            target,
+            loss_mask,
+            grad_output,
+            logits_scale_factor,
+            target_format,
+            group,
+            teacher_softmax_temperature,
         )
     else:
         return _CROSS_ENTROPY_IMPLEMENTATIONS[implementation](
-            logits, target, loss_mask, grad_output, logits_scale_factor, teacher_softmax_temp, target_format
+            logits, target, loss_mask, grad_output, logits_scale_factor, target_format, teacher_softmax_temperature
         )
 
 
@@ -206,9 +213,9 @@ def _torch_reverse_kl_forward_backward(
     loss_mask: torch.Tensor | None,
     grad_output: float | None,
     logits_scale_factor: float,
-    teacher_softmax_temp: float,
     target_format: TargetFormat,
     group: ProcessGroup | None = None,
+    teacher_softmax_temperature: float = 1.0,
 ) -> tuple[torch.Tensor, torch.Tensor | None]:
     """
     Reverse KL using PyTorch's native kl_div function.
@@ -217,13 +224,13 @@ def _torch_reverse_kl_forward_backward(
     Assert.eq(target_format, TargetFormat.logits, msg="Reverse KL only supports logits format")
 
     # Compute log probabilities - let _fused_softmax handle scaling internally
-    # teacher_probs = _fused_softmax(target, logits_scale_factor * (1 / teacher_softmax_temp), group)
+    # teacher_probs = _fused_softmax(target, logits_scale_factor * (1 / teacher_softmax_temperature), group)
     # # teacher_log_probs = torch.log(teacher_probs + 1e-8)  # log(p)
     # teacher_probs = torch.clamp(teacher_probs, min=1e-7)  # or even 1e-6
     # teacher_log_probs = torch.log(teacher_probs)
 
     # Scale target logits more carefully
-    scaled_target = target * (logits_scale_factor / teacher_softmax_temp)
+    scaled_target = target * (logits_scale_factor / teacher_softmax_temperature)
 
     # Clamp to prevent extreme values before log_softmax
     scaled_target = torch.clamp(scaled_target, min=-50, max=50)
@@ -278,7 +285,7 @@ def reverse_kl_forward_backward(
     grad_output: float | None,
     group: ProcessGroup | None = None,
     logits_scale_factor: float = 1.0,
-    teacher_softmax_temp: float = 1.0,
+    teacher_softmax_temperature: float = 1.0,
     target_format: TargetFormat = TargetFormat.labels,
 ) -> tuple[torch.Tensor, torch.Tensor | None]:
     """
@@ -324,5 +331,5 @@ def reverse_kl_forward_backward(
             Assert.eq(loss_mask.shape, logits.shape[:-1])
     # TODO: implement fused?
     return _torch_reverse_kl_forward_backward(
-        logits, target, loss_mask, grad_output, logits_scale_factor, teacher_softmax_temp, target_format, group
+        logits, target, loss_mask, grad_output, logits_scale_factor, target_format, group, teacher_softmax_temperature
     )

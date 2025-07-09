@@ -397,7 +397,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             loss_defs.append(
                 LossDef(name=LanguageModelLossNames.distillation_loss, formatted_name="distillation loss", count=1)
             )
-            if self._config.distil_ntp_loss_factor > 0.0:
+            if self._config.language_model_loss_factor > 0.0:
                 loss_defs.append(
                     LossDef(name=LanguageModelLossNames.distil_lm_loss, formatted_name="distillation lm loss", count=1)
                 )

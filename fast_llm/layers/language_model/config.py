@@ -23,7 +23,7 @@ class LanguageModelLossNames:
     language_model_loss = "language_model_loss"
     z_loss = "z_loss"
     dpo_loss = "dpo_loss"
-    distil_lm_loss = "distil_lm_loss"
+    distil_lm_loss = "distillation_language_model_loss"  # the next token perdiciton of combined distillation loss
     distillation_loss = "distillation_loss"
 
     @staticmethod
@@ -114,7 +114,7 @@ class LanguageModelBaseConfig(BaseModelConfig):
         desc="Implementation for the cross-entropy computation.",
         hint=FieldHint.performance,
     )
-    distil_loss_impl: CrossEntropyImpl = Field(
+    distillation_loss_implementation: CrossEntropyImpl = Field(
         default=CrossEntropyImpl.auto,
         desc="Implementation for the distillation cross-entropy computation.",
         hint=FieldHint.performance,
@@ -157,14 +157,14 @@ class LanguageModelBaseConfig(BaseModelConfig):
         hint=FieldHint.feature,
         valid=check_field(Assert.geq, 0),
     )
-    distil_ntp_loss_factor: float = Field(
-        default=0.0,
-        desc="Factor to scale the distillation loss by.",
+    language_model_loss_factor: float = Field(
+        default=None,
+        desc="Factor to scale the language modeling loss by when using distillation.",
         hint=FieldHint.feature,
     )
-    distil_loss_factor: float = Field(
+    distilation_loss_factor: float = Field(
         default=1.0,
-        desc="Factor to scale the distillation loss by.",
+        desc="Factor to scale the distillation loss by when using distillation.",
         hint=FieldHint.feature,
     )
     logits_scale_factor: float = Field(
@@ -175,10 +175,10 @@ class LanguageModelBaseConfig(BaseModelConfig):
         hint=FieldHint.feature,
         valid=check_field(Assert.geq, 0),
     )
-    teacher_softmax_temp: float = Field(
+    teacher_softmax_temperature: float = Field(
         default=1.0,
-        desc="Multiplies target logits by 1/temperature inc ase of distillation.",
-        doc="This is used to scale the target logits to match the teacher's logits.",
+        desc="Divides distillation target logits by this factor.",
+        doc="Divides distillation target logits by this factor.",
         hint=FieldHint.feature,
         valid=check_field(Assert.geq, 0),
     )
@@ -205,6 +205,11 @@ class LanguageModelBaseConfig(BaseModelConfig):
     def _validate(self) -> None:
         self.transformer.validate()
         with self._set_implicit_default():
+            if self.language_model_loss_factor is None:
+                if self.distillation_model is None:
+                    self.language_model_loss_factor = 1.0
+                else:
+                    self.language_model_loss_factor = 0.0
             if self.use_position_embeddings is None:
                 self.use_position_embeddings = isinstance(self.transformer.rotary, NoRotaryConfig)
             if self.init_method_std_embed is None:
