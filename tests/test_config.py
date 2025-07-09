@@ -137,6 +137,14 @@ def test_pretrained_config(load_config: ModelConfigType, result_path):
             },
             "tie_word_embeddings": False,
             "vocab_size": 1000,
+            "vision_encoder": {
+                "transformer": {
+                    "normalization": {"type": "layer_norm"},
+                    "rotary": {"type": "none"},
+                    "peft": {"type": "none"},
+                },
+                "patch_norm": {"type": "layer_norm"},
+            },
         }
     else:
         base_model_update["transformer"]["peft"] = {
@@ -146,6 +154,14 @@ def test_pretrained_config(load_config: ModelConfigType, result_path):
         }
         base_model_update["transformer"]["normalization"]["type"] = "layer_norm"
         base_model_update["transformer"]["rotary"] = {"type": "none"}
+        base_model_update["vision_encoder"] = {
+            "transformer": {
+                "normalization": {"type": "layer_norm"},
+                "rotary": {"type": "none"},
+                "peft": {"type": "none"},
+            },
+            "patch_norm": {"type": "layer_norm"},
+        }
         expected_config["base_model"] = base_model_update
 
     check_equal_nested(serialized_config, expected_config)

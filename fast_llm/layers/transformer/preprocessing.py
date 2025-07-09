@@ -24,6 +24,8 @@ class BackupAttentionPreprocessor(Preprocessor):
         config: TransformerConfig,
         tensor_space: TensorSpace,
     ):
+        self._transformer_dim_names = config._transformer_dim_names
+        self._transformer_kwargs = config._transformer_kwargs
         self._config = config
         self._tensor_space = tensor_space
         self._distributed_config = self._tensor_space.distributed_config
@@ -54,10 +56,10 @@ class BackupAttentionPreprocessor(Preprocessor):
         self._create_tensors(kwargs[TransformerKwargs.sequence_length])
         sequence_k = kwargs[TransformerKwargs.sequence_k_dim].size
         sequence_q = kwargs[TransformerKwargs.sequence_q_dim].size
-        kwargs[TransformerKwargs.attention_mask] = self._mask[
+        kwargs[self._transformer_kwargs.attention_mask] = self._mask[
             None, None, sequence_k - sequence_q : sequence_k, None, :sequence_k
         ]
-        if (sequence_lengths := kwargs.get(TransformerKwargs.sequence_lengths, None)) is not None:
+        if (sequence_lengths := kwargs.get(self._transformer_kwargs.sequence_lengths, None)) is not None:
             seq_ids = torch.stack(
                 [
                     torch.cat([torch.full((x,), i) for i, x in enumerate(sample_lens)])
@@ -65,14 +67,14 @@ class BackupAttentionPreprocessor(Preprocessor):
                 ]
             )
             document_mask = (seq_ids[:, None, :] == seq_ids[:, :, None]).to(self._tensor_space.distributed.device)
-            kwargs[TransformerKwargs.attention_mask] = (
-                kwargs[TransformerKwargs.attention_mask]
+            kwargs[self._transformer_kwargs.attention_mask] = (
+                kwargs[self._transformer_kwargs.attention_mask]
                 & document_mask[:, None, sequence_k - sequence_q : sequence_k, None, :sequence_k]
             )
-        kwargs[TransformerKwargs.attention_mask_value] = self._mask_value
+        kwargs[self._transformer_kwargs.attention_mask_value] = self._mask_value
 
     def preprocess_meta(self, kwargs: dict[str, typing.Any]) -> None:
-        kwargs[TransformerKwargs.attention_mask] = TensorMeta.from_dims(
+        kwargs[self._transformer_kwargs.attention_mask] = TensorMeta.from_dims(
             (
                 self._scalar_dim,
                 self._scalar_dim,
@@ -80,12 +82,12 @@ class BackupAttentionPreprocessor(Preprocessor):
                 self._scalar_dim,
                 kwargs[TransformerKwargs.sequence_k_dim],
             ),
-            tensor_name=TransformerKwargs.attention_mask,
+            tensor_name=self._transformer_kwargs.attention_mask,
             dtype=torch.bool,
         )
-        kwargs[TransformerKwargs.attention_mask_value] = TensorMeta.from_dims(
+        kwargs[self._transformer_kwargs.attention_mask_value] = TensorMeta.from_dims(
             (self._scalar_dim,),
-            tensor_name=TransformerKwargs.attention_mask_value,
+            tensor_name=self._transformer_kwargs.attention_mask_value,
             dtype=self._tensor_space.distributed_config.training_dtype.torch,
         )
 
@@ -96,6 +98,8 @@ class FlashAttnVarlenPreprocessor(Preprocessor):
         self._tensor_space = tensor_space
         self._distributed_config = self._tensor_space.distributed_config
         assert self._config.do_use_flash_attention(self._distributed_config)
+        self._transformer_dim_names = config._transformer_dim_names
+        self._transformer_kwargs = config._transformer_kwargs
 
     def preprocess(self, batch, kwargs: dict[str, typing.Any]) -> None:
         """
@@ -146,17 +150,17 @@ class FlashAttnVarlenPreprocessor(Preprocessor):
         else:
             seqlens_q = torch.cat(sequence_lengths)
             seqlens_k = torch.cat(sequence_lengths)
-        kwargs[TransformerKwargs.cu_seqlens_q] = torch.cat(
+        kwargs[self._transformer_kwargs.cu_seqlens_q] = torch.cat(
             (
                 torch.zeros(1, dtype=torch.int32, device=self._tensor_space.distributed.device),
                 torch.cumsum(seqlens_q, dim=0, dtype=torch.int32).to(self._tensor_space.distributed.device),
             )
         )
-        kwargs[TransformerKwargs.cu_seqlens_k] = torch.cat(
+        kwargs[self._transformer_kwargs.cu_seqlens_k] = torch.cat(
             (
                 torch.zeros(1, dtype=torch.int32, device=self._tensor_space.distributed.device),
                 torch.cumsum(seqlens_k, dim=0, dtype=torch.int32).to(self._tensor_space.distributed.device),
             )
         )
-        kwargs[TransformerKwargs.max_seqlen_q] = seqlens_q.max()
-        kwargs[TransformerKwargs.max_seqlen_k] = seqlens_k.max()
+        kwargs[self._transformer_kwargs.max_seqlen_q] = seqlens_q.max()
+        kwargs[self._transformer_kwargs.max_seqlen_k] = seqlens_k.max()
