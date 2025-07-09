@@ -191,7 +191,7 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
         # TODO: Consider passing true messages and payloads around instead of combining all data into a large tuple.
         # Messages could include types like logits, generate, finished.
 
-        # Groups is always None if world size is 1
+        # Group is always None if world size is 1
         if self._group is None:
             # Must not be called with continue_generate false on one process
             assert continue_generate
@@ -208,7 +208,7 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
             if generate:
                 assert max_length is not None and stop is not None
 
-            # always divide by batch_size, if not full batch, some ranks will get less work or not at all
+            # always divide by world_size, if not full batch, some ranks will get less work or not at all
             assert self._batch_size % world_size == 0
             step = self._batch_size // world_size
 
@@ -242,7 +242,7 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
             )
         )
 
-        if continue_generate == False:
+        if not continue_generate:
             return
 
         assert len(input_ids) > 0
@@ -280,6 +280,7 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
                     )
                 )
 
+                # Stop signal was send, end waiting/porcessing loop
                 if not continue_generate:
                     break
 
@@ -298,7 +299,8 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
         safe_barrier(self._distributed.world_group, "lm_eval_end")
 
     def stop_workers(self):
-        if self._group is None or (world_size := self._group.size()) == 1:
+        # Group is always None if world size is 1
+        if self._group is None:
             return
         self._model_invoke(None, None, None, None, None, None, continue_generate=False)
         safe_barrier(self._distributed.world_group, "lm_eval_end")
