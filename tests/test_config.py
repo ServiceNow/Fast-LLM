@@ -88,14 +88,6 @@ def test_pretrained_config(load_config: ModelConfigType, result_path):
             },
             "multi_stage": {"zero_stage": 3},
             "distributed": {"training_dtype": "bfloat16"},
-            # "vision_encoder": {
-            #     "type": "none",
-            #     "transformer": {
-            #         "normalization": {
-            #             "type": "rms_norm",
-            #         }
-            #     }
-            # }
         }
     )
     with NoAutoValidate():
