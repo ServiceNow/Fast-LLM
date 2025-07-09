@@ -458,7 +458,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
                     text_sizes, image_sizes = dataset.get_document_sizes()
                     tokens_cumsum = text_sizes.cumsum()
                     Assert.eq(tokens_cumsum[-1], dataset_config.num_tokens)
-                    if image_sizes:
+                    if image_sizes.any():
                         num_pixels_cumsum = np.cumsum([x.prod(axis=1).sum() for x in image_sizes])
                         # We use the patch sizes only for the purposes of even splitting and blending weights.
                         # We can always use a different patch size for training without any significant impact
@@ -466,7 +466,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
                         image_tokens_cumsum = num_pixels_cumsum // (image_patch_size**2)
                         tokens_cumsum += image_tokens_cumsum
                         num_pixels_cumsum = num_pixels_cumsum * 3
-                    Assert.eq(num_pixels_cumsum[-1], dataset_config.num_pixels)
+                        Assert.eq(num_pixels_cumsum[-1], dataset_config.num_pixels)
                     begin_index = _get_nearest_split(tokens_cumsum, split_begin_in_dataset * tokens_cumsum[-1])
                     end_index = _get_nearest_split(tokens_cumsum, split_end_in_dataset * tokens_cumsum[-1])
                     if end_index > begin_index:
