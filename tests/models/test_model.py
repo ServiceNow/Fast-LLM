@@ -40,7 +40,7 @@ def test_and_compare_model(
     set_subtest_success(run_test_script_base_path / config.name)
 
     if config.compare is not None:
-        compare_results_for_all_models(config, ("init", "train_1", "train_2"))
+        compare_results_for_all_models(config)
 
 
 @requires_cuda
@@ -81,4 +81,4 @@ def test_model_distributed(
     if config.compare is not None:
         if not check_subtest_success(run_test_script_base_path / config.compare):
             pytest.fail(f"Test {config.compare} failed", pytrace=False)
-        compare_results_for_all_models(config, ("init", "train_1", "train_2"))
+        compare_results_for_all_models(config)

@@ -15,6 +15,43 @@ class DistributedTestingConfig:
     compare_config: CompareConfig | None = None
 
 
+# TODO: Ajust
+_default_compare = CompareConfig(
+    rms_eps=1e-4,
+    rms_rel_tolerance=3e-3,
+    rms_abs_tolerance=5e-4,
+    max_rel_tolerance=1.5e-2,
+    max_abs_tolerance=5e-3,
+)
+_pp_tied_weight_compare = dataclasses.replace(
+    _default_compare,
+    sub_configs={
+        (None, ("layers.0.word_embeddings_weight", "layers.0.position_embeddings_weight")): CompareConfig(
+            ignore_duplicates=True
+        )
+    },
+)
+
+_z3_accumulation_compare = dataclasses.replace(
+    _default_compare, sub_configs={(None, "Global gradient"): CompareConfig(ignore_duplicates=True)}
+)
+_bf16_compare = dataclasses.replace(
+    _default_compare,
+    rms_eps=1e-3,
+    rms_rel_tolerance=3e-2,
+    rms_abs_tolerance=5e-3,
+    max_rel_tolerance=1.5e-1,
+    max_abs_tolerance=5e-2,
+)
+_fp16_compare = dataclasses.replace(
+    _default_compare,
+    rms_eps=1e-3,
+    rms_rel_tolerance=3e-2,
+    rms_abs_tolerance=5e-3,
+    max_rel_tolerance=1.5e-1,
+    max_abs_tolerance=5e-2,
+)
+
 # Baseline (also tests data-parallel workers)
 SIMPLE_TESTING_CONFIG = DistributedTestingConfig(
     name="simple",
@@ -24,12 +61,27 @@ SIMPLE_TESTING_CONFIG = DistributedTestingConfig(
 )
 
 _SINGLE_GPU_TESTING_CONFIGS = [
+    DistributedTestingConfig(
+        name="bf16",
+        compare="simple",
+        config_args=["model.distributed.training_dtype=bf16"],
+        num_gpus=1,
+        compare_config=_bf16_compare,
+    ),
+    DistributedTestingConfig(
+        name="fp16",
+        compare="simple",
+        config_args=["model.distributed.training_dtype=bf16"],
+        num_gpus=1,
+        compare_config=_fp16_compare,
+    ),
     # Sequence-first baseline
     DistributedTestingConfig(
         name="sf",
         compare=None,
         config_args=["model.base_model.sequence_first=True"],
         num_gpus=1,
+        compare_config=_default_compare,
     ),
     # Cross-entropy splits.
     DistributedTestingConfig(
@@ -58,6 +110,7 @@ _SINGLE_GPU_TESTING_CONFIGS = [
         compare="df4",
         config_args=["batch.breadth_first_micro_batches=4"],
         num_gpus=1,
+        compare_config=_default_compare,
     ),
     # Mixed gradient accumulation.
     DistributedTestingConfig(
@@ -65,6 +118,7 @@ _SINGLE_GPU_TESTING_CONFIGS = [
         compare="df4",
         config_args=["batch.depth_first_micro_batches=2", "batch.breadth_first_micro_batches=2"],
         num_gpus=1,
+        compare_config=_default_compare,
     ),
     # Sequence-first gradient accumulation baseline.
     DistributedTestingConfig(
@@ -86,6 +140,7 @@ _DISTRIBUTED_TESTING_CONFIGS = [
         compare="simple",
         config_args=[],
         num_gpus=2,
+        compare_config=_default_compare,
     ),
     # Zero stage 2
     DistributedTestingConfig(
@@ -93,6 +148,7 @@ _DISTRIBUTED_TESTING_CONFIGS = [
         compare="simple",
         config_args=["model.multi_stage.zero_stage=2"],
         num_gpus=2,
+        compare_config=_default_compare,
     ),
     # Zero stage 3
     DistributedTestingConfig(
@@ -100,6 +156,7 @@ _DISTRIBUTED_TESTING_CONFIGS = [
         compare="simple",
         config_args=["model.multi_stage.zero_stage=3"],
         num_gpus=2,
+        compare_config=_default_compare,
     ),
     # Depth-first micro-batches
     DistributedTestingConfig(
@@ -107,11 +164,7 @@ _DISTRIBUTED_TESTING_CONFIGS = [
         compare="df4",
         config_args=["model.multi_stage.zero_stage=3", "batch.depth_first_micro_batches=4"],
         num_gpus=2,
-        compare_config=CompareConfig(
-            ignore_duplicates=[
-                "Global gradient",
-            ]
-        ),
+        compare_config=_z3_accumulation_compare,
     ),
     # Sequence-data-parallel
     DistributedTestingConfig(
@@ -119,6 +172,7 @@ _DISTRIBUTED_TESTING_CONFIGS = [
         compare="sf",
         config_args=["model.distributed.sequence_data_parallel=2"],
         num_gpus=2,
+        compare_config=_default_compare,
     ),
     # ===== Tensor-parallel configs
     # Simple tensor-parallel
@@ -127,6 +181,7 @@ _DISTRIBUTED_TESTING_CONFIGS = [
         compare="simple",
         config_args=["model.distributed.tensor_parallel=2"],
         num_gpus=2,
+        compare_config=_default_compare,
     ),
     # Simple sequence-tensor-parallel
     DistributedTestingConfig(
@@ -134,6 +189,7 @@ _DISTRIBUTED_TESTING_CONFIGS = [
         compare="sf",
         config_args=["model.distributed.tensor_parallel=2", "model.distributed.sequence_tensor_parallel=True"],
         num_gpus=2,
+        compare_config=_default_compare,
     ),
     # Cross-entropy splits
     DistributedTestingConfig(
@@ -146,6 +202,7 @@ _DISTRIBUTED_TESTING_CONFIGS = [
             "model.base_model.cross_entropy_splits=4",
         ],
         num_gpus=2,
+        compare_config=_default_compare,
     ),
     # ===== 2d configs (Data + Tensor)
     # Simple
@@ -157,6 +214,7 @@ _DISTRIBUTED_TESTING_CONFIGS = [
             "model.distributed.sequence_tensor_parallel=True",
         ],
         num_gpus=4,
+        compare_config=_default_compare,
     ),
     # Depth-first micro-batches, tensor-parallel
     DistributedTestingConfig(
@@ -167,6 +225,7 @@ _DISTRIBUTED_TESTING_CONFIGS = [
             "batch.depth_first_micro_batches=4",
         ],
         num_gpus=4,
+        compare_config=_default_compare,
     ),
     # Breadth-first micro-batches
     DistributedTestingConfig(
@@ -179,6 +238,7 @@ _DISTRIBUTED_TESTING_CONFIGS = [
             "batch.breadth_first_micro_batches=4",
         ],
         num_gpus=4,
+        compare_config=_default_compare,
     ),
     # Sequence-data-parallel
     DistributedTestingConfig(
@@ -190,6 +250,7 @@ _DISTRIBUTED_TESTING_CONFIGS = [
             "model.distributed.sequence_tensor_parallel=True",
         ],
         num_gpus=4,
+        compare_config=_default_compare,
     ),
     # ===== Pipeline-parallel configs
     # Simple [mb]
@@ -202,6 +263,7 @@ _DISTRIBUTED_TESTING_CONFIGS = [
             "batch.breadth_first_micro_batches=4",
         ],
         num_gpus=2,
+        compare_config=_default_compare,
     ),
     # Tied weights on different ranks
     DistributedTestingConfig(
@@ -213,12 +275,7 @@ _DISTRIBUTED_TESTING_CONFIGS = [
             "batch.breadth_first_micro_batches=4",
         ],
         num_gpus=2,
-        compare_config=CompareConfig(
-            ignore_duplicates=[
-                "layers.0.word_embeddings_weight",
-                "layers.0.position_embeddings_weight",
-            ]
-        ),
+        compare_config=_pp_tied_weight_compare,
     ),
     # Micro-sequence [ms]
     DistributedTestingConfig(
@@ -230,6 +287,7 @@ _DISTRIBUTED_TESTING_CONFIGS = [
             "batch.micro_sequence_length=256",
         ],
         num_gpus=2,
+        compare_config=_default_compare,
     ),
     # ===== 2d configs (Data + Pipeline)
     # Simple
@@ -242,6 +300,7 @@ _DISTRIBUTED_TESTING_CONFIGS = [
             "batch.breadth_first_micro_batches=4",
         ],
         num_gpus=4,
+        compare_config=_default_compare,
     ),
     # ===== 2d configs (Tensor + Pipeline)
     # Simple [sf, mb]
@@ -256,12 +315,7 @@ _DISTRIBUTED_TESTING_CONFIGS = [
             "batch.breadth_first_micro_batches=4",
         ],
         num_gpus=4,
-        compare_config=CompareConfig(
-            ignore_duplicates=[
-                "layers.0.word_embeddings_weight",
-                "layers.0.position_embeddings_weight",
-            ]
-        ),
+        compare_config=_pp_tied_weight_compare,
     ),
     # ===== Data + Tensor + Pipeline
     # Simple
@@ -275,6 +329,7 @@ _DISTRIBUTED_TESTING_CONFIGS = [
             "batch.breadth_first_micro_batches=4",
         ],
         num_gpus=8,
+        compare_config=_default_compare,
     ),
     # Tied weights on different ranks
     DistributedTestingConfig(
@@ -288,12 +343,7 @@ _DISTRIBUTED_TESTING_CONFIGS = [
             "batch.breadth_first_micro_batches=4",
         ],
         num_gpus=8,
-        compare_config=CompareConfig(
-            ignore_duplicates=[
-                "layers.0.word_embeddings_weight",
-                "layers.0.position_embeddings_weight",
-            ]
-        ),
+        compare_config=_pp_tied_weight_compare,
     ),
     # Micro-sequence
     DistributedTestingConfig(
@@ -308,6 +358,7 @@ _DISTRIBUTED_TESTING_CONFIGS = [
             "batch.micro_sequence_length=256",
         ],
         num_gpus=8,
+        compare_config=_default_compare,
     ),
 ]
 

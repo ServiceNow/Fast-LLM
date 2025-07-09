@@ -144,7 +144,6 @@ MODEL_CONFIGS["gpt2"] = ModelTestingConfig(
         "model.multi_stage.debug_tensor_parallel=True",
         "model.distributed.reproducible_init=True",
         "model.distributed.timeout=20",
-        "model.distributed.training_dtype=bf16",
         "training.train_iters=2",
         "training.num_workers=0",
         "training.timeout=30",

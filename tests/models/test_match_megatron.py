@@ -56,7 +56,7 @@ def test_match_megatron(run_test_script_for_all_models, model_testing_config, co
             "model.base_model.use_megatron_initialization=True",
         ],
         num_gpus=1,
-        compare_config=CompareConfig(ignore_tensors=ignore_tensors),
+        compare_config=CompareConfig(sub_configs={(None, ignore_tensors): CompareConfig(ignore_tensors=True)}),
     )
 
     run_test_script_for_all_models(distributed_testing_config)

@@ -65,12 +65,15 @@ def prepare_resume(run_test_script_base_path: pathlib.Path):
 @pytest.mark.model_testing_group(ModelTestingGroup.checkpoint)
 def test_resume(run_test_script_for_all_models, compare_results_for_all_models, prepare_resume):
     distributed_testing_config = DistributedTestingConfig(
-        name="resume", compare="checkpoint_and_eval", config_args=_CHECKPOINT_AND_EVAL_ARGS
+        name="resume",
+        compare="checkpoint_and_eval",
+        config_args=_CHECKPOINT_AND_EVAL_ARGS,
+        compare_config=CompareConfig(sub_configs={(("init", "train_1"), None): CompareConfig(ignore_tensors=True)}),
     )
     prepare_resume(distributed_testing_config)
     # Resume from iteration=1 and compare outputs with the baseline run.
     run_test_script_for_all_models(distributed_testing_config)
-    compare_results_for_all_models(distributed_testing_config, ("train_2",))
+    compare_results_for_all_models(distributed_testing_config)
 
 
 @requires_cuda

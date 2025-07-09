@@ -10,7 +10,6 @@ import pytest
 
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.utils import Assert
-from tests.utils.compare_tensor_logs import compare_tensor_logs
 from tests.utils.dataset import get_test_dataset
 from tests.utils.distributed_configs import DistributedTestingConfig
 from tests.utils.model_configs import MODEL_CONFIGS, ModelTestingConfig
@@ -117,10 +116,9 @@ def compare_results_for_all_models(
         config: DistributedTestingConfig, artifacts: typing.Iterable[str] | None = None
     ):
         assert config.compare is not None
-        compare_tensor_logs(
+        config.compare_config.compare_tensor_logs(
             run_test_script_base_path / config.compare / ARTIFACT_PATH,
             run_test_script_base_path / config.name / ARTIFACT_PATH,
-            config.compare_config,
             artifacts,
         )
 
