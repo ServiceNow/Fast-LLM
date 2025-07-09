@@ -101,6 +101,15 @@ class ExperimentConfig(RunnableConfig):
         return run
 
     def _set_external_variables(self) -> None:
+        # This must be set before importing numexpr,
+        # because by default, the maximum number of threads is 64.
+        # On systems with more cores, numexpr logs an error and
+        # ignores the thread setting if it exceeds the limit.
+        if "NUMEXPR_MAX_THREADS" not in os.environ:
+            import multiprocessing
+
+            os.environ["NUMEXPR_MAX_THREADS"] = str(multiprocessing.cpu_count())
+
         import torch._dynamo
 
         # TODO: Find an alternative to get reliable tensor-parallel overlap.
