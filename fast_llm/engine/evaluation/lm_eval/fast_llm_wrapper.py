@@ -280,7 +280,7 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
                     )
                 )
 
-                # Stop signal was send, end waiting/porcessing loop
+                # Stop signal was send, end waiting/processing loop
                 if not continue_generate:
                     break
 
