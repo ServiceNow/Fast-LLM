@@ -216,6 +216,7 @@ class LLambaHuggingfaceCheckpointHandler(CommonSSMHuggingfaceCheckpointHandler):
     _model_class: typing.ClassVar[FastLLMModelConfig] = HybridSSMModelConfig
     format: typing.ClassVar[type[CheckpointFormat]] = LLambaHuggingfaceCheckpointFormat
     _hf_prefix: str = "backbone"
+    architecture: typing.ClassVar[str] = "LlambaForCausalLM"
 
     @classmethod
     def _create_config_converters(cls) -> list[ParamConverter]:
@@ -421,6 +422,7 @@ class AprielSSMHuggingfaceCheckpointHandler(CommonSSMHuggingfaceCheckpointHandle
     _model: HybridSSMModel
     _model_class: typing.ClassVar[FastLLMModelConfig] = HybridSSMModelConfig
     format: typing.ClassVar[type[CheckpointFormat]] = AprielSSMHuggingfaceCheckpointFormat
+    architecture: typing.ClassVar[str] = "AprielSSMForCausalLM"
 
     @classmethod
     def _create_config_converters(cls) -> list[ParamConverter]:
@@ -545,6 +547,7 @@ class AprielSSMHHybridHuggingfaceCheckpointHandler(
     _model_class: typing.ClassVar[FastLLMModelConfig] = HybridSSMModelConfig
     format: typing.ClassVar[type[CheckpointFormat]] = AprielSSMHHybridHuggingfaceCheckpointFormat
     _default_block_type: str = SSMBlockType.mamba2_discrete.value
+    architecture: typing.ClassVar[str] = "AprielSSMHybridForCausalLM"
 
     @classmethod
     def _create_config_converters(cls) -> list[ParamConverter]:
@@ -603,6 +606,7 @@ class AprielThinkerSSMHHybridHuggingfaceCheckpointHandler(
     format: typing.ClassVar[type[CheckpointFormat]] = AprielThinkerSSMHHybridHuggingfaceCheckpointFormat
     _default_block_type: str = SSMBlockType.mamba2_discrete.value
     _hf_prefix: str = "model"
+    architecture: typing.ClassVar[str] = "AprielThinkerSSMHybridForCausalLM"
 
     def _create_weight_converters(self) -> list[WeightConverter]:
         converters = super()._create_weight_converters()
