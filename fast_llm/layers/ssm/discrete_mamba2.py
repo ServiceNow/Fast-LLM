@@ -41,9 +41,6 @@ class DiscreteMamba2(torch.nn.Module):
     ):
         """
         See the class .kernel.SSKernel for the kernel constructor which accepts kernel_args.
-        TODO: check what this comment means
-        Relevant options that are worth considering and tuning include "mode" + "measure", "dt_min", "dt_max", "lr".
-
         Other options are all experimental and should not need to be configured.
         """
         # factory_kwargs = {"device": "meta"}  # , "dtype": torch.bfloat16}

@@ -141,6 +141,61 @@ class CommonSSMHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandle
                 fast_llm_value=ActivationType.from_hf_name,
                 export_value=lambda activation_type: activation_type.hf_name,
             ),
+            # Mamba2 specific parameters
+            RenameParamConverter(
+                fast_llm_names=(("ssm", "dt_rank"),),
+                export_names=(
+                    (
+                        "ssm_cfg",
+                        "dt_rank",
+                    ),
+                ),
+            ),
+            RenameParamConverter(
+                fast_llm_names=(("ssm", "dt_min"),),
+                export_names=(
+                    (
+                        "ssm_cfg",
+                        "dt_min",
+                    ),
+                ),
+            ),
+            RenameParamConverter(
+                fast_llm_names=(("ssm", "dt_max"),),
+                export_names=(
+                    (
+                        "ssm_cfg",
+                        "dt_max",
+                    ),
+                ),
+            ),
+            RenameParamConverter(
+                fast_llm_names=(("ssm", "dt_init_floor"),),
+                export_names=(
+                    (
+                        "ssm_cfg",
+                        "dt_init_floor",
+                    ),
+                ),
+            ),
+            RenameParamConverter(
+                fast_llm_names=(("ssm", "dt_init_ceil"),),
+                export_names=(
+                    (
+                        "ssm_cfg",
+                        "dt_init_ceil",
+                    ),
+                ),
+            ),
+            RenameParamConverter(
+                fast_llm_names=(("ssm", "dt_scale"),),
+                export_names=(
+                    (
+                        "ssm_cfg",
+                        "dt_scale",
+                    ),
+                ),
+            ),
         ]
 
     def _create_weight_converters(self) -> list[WeightConverter]:

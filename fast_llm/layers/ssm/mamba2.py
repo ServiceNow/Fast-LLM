@@ -102,7 +102,7 @@ class Mamba2(torch.nn.Module):
         )
 
         # Initialize special dt projection to preserve variance at initialization
-        dt_scale = 1.0
+        dt_scale = config.dt_scale  # 1.0
         dt_init_std = self.dt_rank**-0.5 * dt_scale
         if config.dt_init == "constant":
             dt_init = init_fill_(dt_init_std)
@@ -112,9 +112,9 @@ class Mamba2(torch.nn.Module):
             raise NotImplementedError
 
         # Initialize dt bias so that F.softplus(dt_bias) is between dt_min and dt_max
-        dt_max = 0.1
-        dt_min = 0.001
-        dt_init_floor = 1e-4
+        dt_max = config.dt_max  # or 0.1
+        dt_min = config.dt_min  # or 0.001
+        dt_init_floor = config.dt_init_floor  # or 1e-4
         dt = torch.exp(torch.rand(self.d_inner) * (math.log(dt_max) - math.log(dt_min)) + math.log(dt_min)).clamp(
             min=dt_init_floor
         )

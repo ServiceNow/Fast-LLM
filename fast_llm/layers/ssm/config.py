@@ -106,12 +106,6 @@ class SSMConfig(LLMBlockConfig):
         hint=FieldHint.core,
         valid=check_field(Assert.gt, 0),
     )
-    dt_max: float = Field(
-        default=0.1,
-        desc="Maximum step size for discretization",
-        hint=FieldHint.core,
-        valid=check_field(Assert.gt, 0),
-    )
     dt_init_floor: float = Field(
         default=1e-4,
         desc="Minimum value for initializing dt",
@@ -138,7 +132,7 @@ class SSMConfig(LLMBlockConfig):
         hint=FieldHint.architecture,
     )
     d_xb: int = Field(
-        default=1024,
+        default=None,
         desc="Dimension of the xB in Mamba2 blocks.",
         hint=FieldHint.architecture,
     )
@@ -146,6 +140,30 @@ class SSMConfig(LLMBlockConfig):
         default="random",
         desc="Initialization method for dt",
         hint=FieldHint.core,
+    )
+    dt_max: float = Field(
+        default=0.1,
+        desc="Maximum step size for discretization",
+        hint=FieldHint.core,
+        valid=check_field(Assert.gt, 0),
+    )
+    dt_min: float = Field(
+        default=0.001,
+        desc="Minimum step size for discretization",
+        hint=FieldHint.core,
+        valid=check_field(Assert.gt, 0),
+    )
+    dt_init_floor: float = Field(
+        default=1e-4,
+        desc="Minimum value for initializing dt",
+        hint=FieldHint.core,
+        valid=check_field(Assert.gt, 0),
+    )
+    dt_scale: float = Field(
+        default=1.0,
+        desc="Scale for dt",
+        hint=FieldHint.core,
+        valid=check_field(Assert.gt, 0),
     )
 
     def _validate(self) -> None:
