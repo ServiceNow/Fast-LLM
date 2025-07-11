@@ -37,7 +37,6 @@ class Mamba2(torch.nn.Module):
         tensor_space: TensorSpace,
         return_input: bool = False,
     ):
-        # factory_kwargs = {"device": device, "dtype": dtype}
         super().__init__()
         self.config: SSMConfig = config
         bias: bool = config.add_bias_linear
