@@ -15,13 +15,14 @@ ssm_config_default = {
     "d_conv": 4,
     "d_inner": 32 * 128,
     # mamba2
-    "d_xb": None,
+    "d_xb": None,  # willb e set to model dim
     "dt_rank": "auto",
     "dt_min": 0.001,
     "dt_max": 0.1,
     "dt_init": "random",
     "dt_scale": 1.0,
     "dt_init_floor": 1e-4,
+    "conv_bias": True,
 }
 
 

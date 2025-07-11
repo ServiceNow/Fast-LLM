@@ -764,9 +764,8 @@ class Mamba2(nn.Module):
         dt_init_floor=1e-4,
         repeat_kv_before_conv=True,
         conv_bias=True,
-        proj_x_bias=False,
-        proj_z_bias=False,
-        out_proj_bias=False,
+        bias=False,
+        dt_proj_bias=True,
         use_fast_path=True,  # Fused kernel options
         layer_idx=None,
         device=None,
@@ -814,17 +813,10 @@ class Mamba2(nn.Module):
         self.num_C_head = self.d_inner // self.d_state
         self.repeat_group = self.num_C_head // self.num_xb_head
 
-        # fuse those layers
-        # self.in_proj_z = nn.Linear(self.d_model, self.d_inner, bias=proj_z_bias, **factory_kwargs)
-        # self.in_proj_x = nn.Linear(self.d_model, self.d_xb, bias=proj_x_bias, **factory_kwargs)
-        # self.B_proj = nn.Linear(self.d_model, self.d_xb, bias=False, **factory_kwargs)
-        # self.C_proj = nn.Linear(self.d_model, self.d_inner, bias=False, **factory_kwargs)
-        # self.dt_proj_down = nn.Linear(self.d_model, self.dt_rank, bias=False, **factory_kwargs)
-
         self.in_proj = nn.Linear(
-            self.d_model, 2 * self.d_xb + 2 * self.d_inner + self.dt_rank, bias=False, **factory_kwargs
+            self.d_model, 2 * self.d_xb + 2 * self.d_inner + self.dt_rank, bias=bias, **factory_kwargs
         )
-        self.dt_proj = nn.Linear(self.dt_rank, self.d_inner, bias=True, **factory_kwargs)
+        self.dt_proj = nn.Linear(self.dt_rank, self.d_inner, bias=dt_proj_bias, **factory_kwargs)
 
         # Initialize special dt projection to preserve variance at initialization
         dt_init_std = self.dt_rank**-0.5 * dt_scale
@@ -860,7 +852,7 @@ class Mamba2(nn.Module):
         self.D = nn.Parameter(torch.ones(self.d_inner, device=device))  # Keep in fp32
         self.D._no_weight_decay = True
 
-        self.out_proj = nn.Linear(self.d_inner, self.d_model, bias=out_proj_bias, **factory_kwargs)
+        self.out_proj = nn.Linear(self.d_inner, self.d_model, bias=bias, **factory_kwargs)
 
     def forward(self, hidden_states, position_ids=None, cu_seqlens=None, seq_idx=None, inference_params=None):
         """
