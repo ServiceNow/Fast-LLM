@@ -37,6 +37,7 @@ if typing.TYPE_CHECKING:
 
 class HybridModelCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
     """
+    IF we use Hybrid model and block pattern is not provided, we will use the default block type for all layers.
     This is a temporary solution for importing/exporting hybrid models. Since there is no standard solution for this in HF, we just use the block_pattern.
     If block_pattern is None, it will multiply the provided default block type by the number of layers and export/import it.
     If block_pattern is provided, it will export/import it as-is.
@@ -54,16 +55,16 @@ class HybridModelCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
 
     @classmethod
     def _create_config_converters(cls) -> list[ParamConverter]:
-        if cls.block_pattern is not None:
-            block_converter = RenameParamConverter(
-                fast_llm_names=(("hybrid_block_layout",),),
-                export_names=(("hybrid_block_layout",),),
-            )
-        else:
-            block_converter = ConstantImportParamConverter(
-                fast_llm_names=(("hybrid_block_layout",),),
-                fast_llm_value=[cls._default_block_type] * cls.num_layers,
-            )
+        block_converter = RenameParamConverter(
+            fast_llm_names=(("hybrid_block_layout",),),
+            export_names=(("hybrid_block_layout",),),
+        )
+        # if hasattr(cls, "block_pattern") and cls.block_pattern is None:
+        #     # block
+        #     block_converter = ConstantImportParamConverter(
+        #         fast_llm_names=(("hybrid_block_layout",),),
+        #         fast_llm_value=[cls._default_block_type] * cls.num_layers,
+        #     )
 
         return super()._create_config_converters() + [block_converter]
 

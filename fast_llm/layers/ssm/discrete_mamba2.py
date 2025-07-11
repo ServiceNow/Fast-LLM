@@ -74,7 +74,7 @@ class DiscreteMamba2(torch.nn.Module):
         td_n_qk_heads = tensor_space.get_tensor_dim(SSMDimNames.qk_heads)
         td_n_v_heads = tensor_space.get_tensor_dim(SSMDimNames.v_heads)
         td_conv_kernel = tensor_space.get_tensor_dim(SSMDimNames.conv_kernel_size)
-        td_inner_proj = tensor_space.get_tensor_dim(SSMDimNames.inner_proj_mamba2)
+        td_inner_proj = tensor_space.get_tensor_dim(SSMDimNames.inner_proj_discrete_mamba2)
 
         self.d_model = td_model.size
         self.d_inner = td_inner.size

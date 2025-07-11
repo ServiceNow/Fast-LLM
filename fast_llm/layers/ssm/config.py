@@ -13,12 +13,16 @@ class SSMDimNames:
     inner_dim = "inner_dim"  # Inner dimension after expansion
     dt_rank = "dt_rank"  # Rank of Δ
     inner_proj_mamba = "inner_proj_mamba"  # Inner projection dimension for mamba
+    inner_proj_discrete_mamba2 = "inner_proj_discrete_mamba2"  # Inner projection dimension for discrete mamba2
     inner_proj_mamba2 = "inner_proj_mamba2"  # Inner projection dimension for mamba2
     x_proj_dim = "x_proj_dim"  # X projection dimension
     head_dim = "head_dim"  # Dimension of the mamba2 head (P)
     conv_kernel_size = "conv_kernel_size"  # Kernel size of the conv1d in mamba layers
     qk_heads = "qk_heads"  # Number of QK heads
     v_heads = "v_heads"  # Number of V heads
+
+    # Mamba 2
+    d_xb = "d_xb"  # Dimension of the xB
 
 
 class SSMBlockType(enum.StrEnum):
@@ -28,6 +32,7 @@ class SSMBlockType(enum.StrEnum):
 
     mamba = "m"
     mamba2_discrete = "m2d"
+    mamba2 = "m2"
     transformer = "t"
 
 
@@ -124,6 +129,23 @@ class SSMConfig(LLMBlockConfig):
         desc="Learning rate scale for Mamba blocks.",
         hint=FieldHint.feature,
         valid=skip_valid_if_none(check_field(Assert.geq, 0)),
+    )
+
+    # Mamba 2
+    repeat_kv_before_conv: bool = Field(
+        default=True,
+        desc="Whether to repeat the KV before the conv1d in Mamba2 blocks.",
+        hint=FieldHint.architecture,
+    )
+    d_xb: int = Field(
+        default=1024,
+        desc="Dimension of the xB in Mamba2 blocks.",
+        hint=FieldHint.architecture,
+    )
+    dt_init: str = Field(
+        default="random",
+        desc="Initialization method for dt",
+        hint=FieldHint.core,
     )
 
     def _validate(self) -> None:

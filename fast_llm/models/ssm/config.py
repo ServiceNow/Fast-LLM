@@ -64,7 +64,7 @@ class HybridSSMBaseModelConfig(LanguageModelBaseConfig):
         else:
             mamba_dt_rank = self.ssm.dt_rank
 
-        d_inner = (
+        d_inner: int = (
             int(self.ssm.expansion_factor * self.transformer.hidden_size)
             if self.ssm.d_inner is None
             else self.ssm.d_inner
@@ -93,8 +93,12 @@ class HybridSSMBaseModelConfig(LanguageModelBaseConfig):
             tensor_space.add_tensor_dim(TensorDim(SSMDimNames.head_dim, headdim))
             tensor_space.add_tensor_dim(TensorDim(SSMDimNames.qk_heads, self.ssm.n_qk_heads))
             tensor_space.add_tensor_dim(TensorDim(SSMDimNames.v_heads, self.ssm.n_v_heads))
-            tensor_space.add_tensor_dim(TensorDim(SSMDimNames.inner_proj_mamba2, inner_proj_dim))
+            tensor_space.add_tensor_dim(TensorDim(SSMDimNames.inner_proj_discrete_mamba2, inner_proj_dim))
             tensor_space.add_tensor_dim(TensorDim(SSMDimNames.conv_dim, conv_dim))
+        elif SSMBlockType.mamba2.value in self.hybrid_block_layout:
+            inner_proj_dim: int = 2 * self.ssm.d_xb + 2 * d_inner + mamba_dt_rank
+            tensor_space.add_tensor_dim(TensorDim(SSMDimNames.inner_proj_mamba2, inner_proj_dim))
+            tensor_space.add_tensor_dim(TensorDim(SSMDimNames.d_xb, self.ssm.d_xb))
 
     def _validate(self):
         if self.hybrid_block_layout is None:

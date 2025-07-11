@@ -7,6 +7,7 @@ from fast_llm.layers.language_model.embedding import LanguageModelEmbedding
 from fast_llm.layers.language_model.head import LanguageModelHead
 from fast_llm.layers.ssm.discrete_mamba2 import DiscreteMamba2
 from fast_llm.layers.ssm.llamba_block import LlambaBlock
+from fast_llm.layers.ssm.mamba2 import Mamba2
 from fast_llm.layers.ssm.mamba_layer import MambaLayer
 from fast_llm.layers.transformer.transformer import TransformerLayer
 from fast_llm.models.gpt.model import GPTBaseModel, GPTModel
@@ -72,6 +73,16 @@ class HybridSSMBaseModel[ConfigType: HybridSSMBaseModelConfig](GPTBaseModel[Conf
                         return_input=i != self._config.prediction_heads - 1,
                     )
                     layers.append(mamba_block)
+                elif block_type == SSMBlockType.mamba2.value:
+                    mamba_block = self.SSM_BLOCK_CLS(
+                        config_transformer=self._config.transformer,
+                        config_ssm=self._config.ssm,
+                        mixer_cls=Mamba2,
+                        layer_index=len(self._config.hybrid_block_layout),
+                        tensor_space=self._tensor_space,
+                        return_input=i != self._config.prediction_heads - 1,
+                    )
+                    layers.append(mamba_block)
                 else:
                     raise ValueError(f"Invalid block type: {block_type}. Must be {SSMBlockType.__members__}")
                 layers.append(LanguageModelHead(self._config, self._tensor_space, prediction_distance=i))
@@ -118,6 +129,18 @@ class HybridSSMBaseModel[ConfigType: HybridSSMBaseModelConfig](GPTBaseModel[Conf
                     config_transformer=self._config.transformer,
                     config_ssm=self._config.ssm,
                     mixer_cls=MambaLayer,
+                    layer_index=i + 1,
+                    tensor_space=self._tensor_space,
+                    return_input=(
+                        i == len(self._config.hybrid_block_layout) - 1 and self._config.prediction_heads > 1
+                    ),
+                )
+                layers.append(mamba_block)
+            elif block_type == SSMBlockType.mamba2:
+                mamba_block = self.SSM_BLOCK_CLS(
+                    config_transformer=self._config.transformer,
+                    config_ssm=self._config.ssm,
+                    mixer_cls=Mamba2,
                     layer_index=i + 1,
                     tensor_space=self._tensor_space,
                     return_input=(
