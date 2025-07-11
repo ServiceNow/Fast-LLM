@@ -583,26 +583,20 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
         # TODO: implement some kind of efficient-request-middleware that lumps together requests with the same context
         res = []
 
-        def _collate(req: tuple[tuple[str, str], list[int], list[int]]):
-            """Defines the key for the sorted method"""
-            # the negative sign on len(toks) sorts descending - this has a few advantages:
-            # - time estimates will always be over not underestimates, which is more useful for planning
-            # - to know the size of a batch when going through the list, you know the first one is always the batch
-            #   padded context length. this is useful to simplify the batching logic and more importantly to make
-            #   automatic adaptive batches much much easier to implement
-            # - any OOMs will happen right away rather than near the end
-
-            toks = req[1] + req[2]
-            return -len(toks), tuple(toks)
-
-        # NOTE:  the group_fn  Defines the key to group and lookup one-token continuations
+        # NOTE: for the sort_fn, the negative sign on len(toks) sorts descending - this has a few advantages:
+        # - time estimates will always be over not underestimates, which is more useful for planning
+        # - to know the size of a batch when going through the list, you know the first one is always the batch
+        #   padded context length. this is useful to simplify the batching logic and more importantly to make
+        #   automatic adaptive batches much much easier to implement
+        # - any OOMs will happen right away rather than near the end
+        # NOTE: the group_fn  Defines the key to group and lookup one-token continuations
         # Use with group_by="contexts" (optional)"
         # allows for the creation of a lookup, so we can reuse logits in case of one-token continuations.
         # speeds up some multiple-choice tasks proportionally to the number of choices.
         # groups requests by context+continuation[:-1] and infer on one request/group.
         re_ord = lm_eval.models.utils.Collator(
             requests,
-            sort_fn=_collate,
+            sort_fn=lambda req: (-(len(req[1]) + len(req[2])), tuple(req[1] + req[2])),
             group_by="contexts" if self._backend == "causal" and self._logits_cache else None,
             group_fn=lambda req: req[-2] + req[-1][:-1],
         )
