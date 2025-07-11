@@ -1,5 +1,4 @@
 import dataclasses
-import gc
 import json
 import logging
 import math
@@ -7,23 +6,43 @@ import os
 import shutil
 
 import pytest
-import torch
 import xdist.scheduler
 
-import fast_llm.logging
+from fast_llm.utils import get_and_reset_memory_usage_mib
 from tests.utils.depends import DependencyManager
+
+if worker_name := os.environ.get("PYTEST_XDIST_WORKER"):
+    if gpus := os.environ.get("CUDA_VISIBLE_DEVICES"):
+        # We set the device through "CUDA_VISIBLE_DEVICES", and this needs to happen before importing torch.
+        assert worker_name.startswith("gw")
+        worker_id = int(worker_name[2:])
+        gpus = [int(i) for i in gpus.split(",")]
+        num_gpus = len(gpus)
+        gpus = [gpus[(i + worker_id) % num_gpus] for i in range(num_gpus)]
+        os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(str(i) for i in gpus)
+
+
+import torch  # isort: skip
+
+
+from tests.utils.save_load_configs import (  # isort: skip
+    distributed_save_load_config,
+    distributed_save_load_config_non_pp,
+    get_convert_path,
+)
 
 # Make fixtures available globally without import
 from tests.utils.run_test_script import (  # isort: skip
-    run_distributed_script_for_all_models,
-    run_test_script,
+    compare_results_for_all_models,
+    run_distributed_script,
     run_test_script_base_path,
     run_test_script_for_all_models,
 )
 
 from tests.utils.model_configs import model_testing_config, ModelTestingConfig, testing_group_enabled  # isort: skip
-from tests.utils.utils import result_path, TEST_RESULTS_PATH  # isort: skip
+from tests.utils.utils import result_path, TEST_RESULTS_PATH, format_resource_report, report_subtest  # isort: skip
 
+logger = logging.getLogger(__name__)
 
 manager: DependencyManager | None = None
 
@@ -33,6 +52,7 @@ def pytest_addoption(parser):
     group.addoption("--skip-slow", action="store_true")
     group.addoption("--show-skipped", action="store_true")
     group.addoption("--show-gpu-memory", type=int, default=10)
+    group.addoption("--no-distributed-capture", dest="distributed_capture", action="store_false")
     group.addoption("--models", nargs="*")
     group.addoption(
         "--run-extra-slow",
@@ -50,9 +70,6 @@ def pytest_addoption(parser):
 
 @dataclasses.dataclass
 class WorkerResources:
-    worker_id: int
-    gpu_id: int | None
-    num_gpus: int
     torchrun_port: int
     rendezvous_port: int
 
@@ -86,17 +103,10 @@ def pytest_configure(config):
     num_gpus = torch.cuda.device_count()
     if num_gpus > 0 and is_parallel:
         # We spread workers across GPUs.
-        gpu_id = worker_id % num_gpus
-        # We set the device through "CUDA_VISIBLE_DEVICES", and this needs to happen before cuda initialization.
-        # The `device_count` call above doesn't initialize, but `mem_get_info` below does.
-        assert not torch.cuda.is_initialized()
-        # TODO: Support this?
-        assert "CUDA_VISIBLE_DEVICES" not in os.environ
-        os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(str((gpu_id + i) % num_gpus) for i in range(num_gpus))
+        logger.warning(f"[Worker {worker_id}] Using GPUs {os.environ["CUDA_VISIBLE_DEVICES"]}")
     elif num_gpus > 0:
-        gpu_id = 0
-    else:
-        gpu_id = None
+        if "CUDA_VISIBLE_DEVICES" not in os.environ:
+            os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(str(i) for i in range(num_gpus))
 
     gpu_memory = torch.cuda.mem_get_info(0)[1] if num_gpus > 0 else 0
     if num_gpus > 0:
@@ -112,9 +122,6 @@ def pytest_configure(config):
             )
 
     config.worker_resources = WorkerResources(
-        worker_id=worker_id,
-        gpu_id=gpu_id,
-        num_gpus=num_gpus,
         # Each worker needs its own set of ports for safe distributed run. Hopefully these are free.
         torchrun_port=TORCHRUN_DEFAULT_PORT + 2 * worker_id,
         rendezvous_port=TORCHRUN_DEFAULT_PORT + 2 * worker_id + 1,
@@ -187,42 +194,20 @@ def pytest_runtest_makereport(item: pytest.Function, call: pytest.CallInfo):
 
     # Measure GPU memory usage. (TODO: This excludes child processes)
     if call.when == "call" and torch.cuda.is_available():
-        # Free memory for more accurate reporting, and to reduce OOM risk with lots of workers.
-        # Cublas workspace can unnecessarily keep 100s of MBs of reserved memory.
-        torch._C._cuda_clearCublasWorkspaces()
-        # Lots of tensors tend to stay allocated until the next garbage collection.
-        # Collect only if the remaining memory is significant enough since it's costly.
-        if torch.cuda.memory_allocated() > 1e7:
-            gc.collect()
-        try:
-            # Actually free the memory.
-            torch.cuda.empty_cache()
-        except RuntimeError:
-            # Happens if the test broke cuda.
-            return
+        report = get_and_reset_memory_usage_mib(clear_cache=True, global_stats=True, reset_global_stats=True)
+        report["duration"] = call.duration
+        if hasattr(item, "fast_llm_resource_report"):
+            report_ = getattr(item, "fast_llm_resource_report")
+            report = {
+                key: max(report[key] for report in (report, report_) if key in report)
+                for key in set(report_) | set(report)
+            }
+
         item.add_report_section(
             call.when,
             "resource usage",
-            json.dumps(
-                {
-                    "duration": call.duration,
-                    # Relevant value for OOM risk. Also look at global max since fast-llm resets stats.
-                    "max_memory_reserved": max(
-                        torch.cuda.max_memory_reserved() / 2**20, fast_llm.logging._global_max_reserved
-                    ),
-                    # Actual memory usage from the test.
-                    "max_memory_allocated": max(
-                        torch.cuda.max_memory_allocated() / 2**20, fast_llm.logging._global_max_allocated
-                    ),
-                    "memory_reserved": torch.cuda.memory_reserved() / 2**20,
-                    "memory_allocated": torch.cuda.memory_allocated() / 2**20,
-                }
-            ),
+            json.dumps(report),
         )
-        torch.cuda.reset_peak_memory_stats()
-        # Reset global stats for next test.
-        fast_llm.logging._global_max_reserved = 0
-        fast_llm.logging._global_max_allocated = 0
 
 
 @pytest.hookimpl
@@ -242,18 +227,11 @@ def pytest_terminal_summary(terminalreporter):
     terminalreporter.write_sep("=", "Highest gpu memory usage", bold=True)
     sorted_nodeids = sorted(
         resource_reports.keys(),
-        key=lambda nodeid: resource_reports[nodeid]["max_memory_reserved"],
+        key=lambda nodeid: resource_reports[nodeid]["max_reserved"],
         reverse=True,
     )
     for nodeid in sorted_nodeids[: terminalreporter.config.getoption("--show-gpu-memory")]:
-        terminalreporter.write_line(
-            f"{nodeid}:\n    "
-            f"Max Reserved {resource_reports[nodeid]["max_memory_reserved"]:.0f} MiB | "
-            f"Max Allocated {resource_reports[nodeid]["max_memory_allocated"]:.0f} MiB | "
-            f"End Reserved {resource_reports[nodeid]["memory_reserved"]:.0f} MiB | "
-            f"End Allocated {resource_reports[nodeid]["memory_allocated"]:.0f} MiB | "
-            f"Duration {resource_reports[nodeid]["duration"]:.2f}"
-        )
+        terminalreporter.write_line(format_resource_report(nodeid, resource_reports[nodeid]))
 
 
 def pytest_runtest_call(item: pytest.Function):

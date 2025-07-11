@@ -1,6 +1,7 @@
 import argparse
 import dataclasses
 import pathlib
+import typing
 import warnings
 
 import torch
@@ -20,13 +21,17 @@ class CompareConfig:
     ignore_duplicates: list[str] = dataclasses.field(default_factory=list)
 
 
-def extract_tensor_logs(artifact_path: pathlib.Path, errors, config: CompareConfig):
+def extract_tensor_logs(
+    artifact_path: pathlib.Path, errors, config: CompareConfig, artifacts: typing.Sequence[str] | None = None
+):
     tensor_logs = {}
     ignore_keys = set()
     for rank_path in sorted(artifact_path.iterdir()):
         for p in rank_path.iterdir():
             if p.name.startswith(_TENSOR_LOG_PREFIX) and p.suffix == ".pt":
                 step_name = p.stem[len(_TENSOR_LOG_PREFIX) :]
+                if artifacts is not None and step_name not in artifacts:
+                    continue
                 step_logs = torch.load(p)
                 if step_name not in tensor_logs:
                     tensor_logs[step_name] = {}
@@ -59,7 +64,7 @@ def compare_logged_tensor(tensor_ref, tensor_test, errors, step, name, config: C
     if tensor_ref["shape"] != tensor_test["shape"]:
         errors.append(
             "\n".join(
-                [f">>>> [{step}] Incompatible shape for tensor {name}: {tensor_ref['shape']}!={tensor_test['shape']}"]
+                [f">>>> [{step}] Incompatible shape for tensor {name}: {tensor_test['shape']}!={tensor_ref['shape']}"]
             )
         )
         return
@@ -67,7 +72,7 @@ def compare_logged_tensor(tensor_ref, tensor_test, errors, step, name, config: C
         errors.append(
             "\n".join(
                 [
-                    f">>>> [{step}] Incompatible sampling rate for tensor {name}: {tensor_ref['step']}!={tensor_test['step']}"
+                    f">>>> [{step}] Incompatible sampling rate for tensor {name}: {tensor_test['step']}!={tensor_ref['step']}"
                 ]
             )
         )
@@ -101,8 +106,8 @@ def compare_logged_tensor(tensor_ref, tensor_test, errors, step, name, config: C
     if tensor_errors:
         tensor_errors.extend(
             [
-                f"  Ref samples:  " + "".join(f"{x:12.4e}" for x in samples_ref[: config.show_samples].tolist()),
                 f"  Test samples: " + "".join(f"{x:12.4e}" for x in samples_test[: config.show_samples].tolist()),
+                f"  Ref samples:  " + "".join(f"{x:12.4e}" for x in samples_ref[: config.show_samples].tolist()),
             ]
         )
         errors.append("\n".join([f">>>> [{step}] Excessive diff for tensor {name}:"] + tensor_errors))
@@ -112,14 +117,15 @@ def compare_tensor_logs_base(
     artifact_path_ref: pathlib.Path,
     artifact_path_test: pathlib.Path,
     config: CompareConfig | None = None,
+    artifacts: typing.Sequence[str] | None = None,
 ):
     errors = []
 
     if config is None:
         config = CompareConfig()
 
-    logs_ref = extract_tensor_logs(artifact_path_ref, errors, config=config)
-    logs_test = extract_tensor_logs(artifact_path_test, errors, config=config)
+    logs_ref = extract_tensor_logs(artifact_path_ref, errors, config=config, artifacts=artifacts)
+    logs_test = extract_tensor_logs(artifact_path_test, errors, config=config, artifacts=artifacts)
 
     for step_key in sorted(compare_dict_keys(logs_ref, logs_test, errors, "Logged steps")):
         step_logs_ref = logs_ref[step_key]
@@ -144,9 +150,10 @@ def compare_tensor_logs(
     artifact_path_ref: pathlib.Path,
     artifact_path_test: pathlib.Path,
     config: CompareConfig | None = None,
+    artifacts: typing.Sequence[str] | None = None,
 ):
     print(f'Comparing tensor logs in "{artifact_path_test}" with reference logs "{artifact_path_ref}"')
-    errors = compare_tensor_logs_base(artifact_path_ref, artifact_path_test, config)
+    errors = compare_tensor_logs_base(artifact_path_ref, artifact_path_test, config, artifacts)
     if errors:
         for error in errors:
             print(error)

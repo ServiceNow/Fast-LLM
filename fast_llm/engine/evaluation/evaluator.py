@@ -17,7 +17,8 @@ from fast_llm.engine.schedule.runner import ScheduleRunner
 from fast_llm.engine.schedule.schedule import Schedule
 from fast_llm.engine.training.config import WandbConfig
 from fast_llm.engine.training.wandb import Wandb
-from fast_llm.logging import format_metrics, get_memory_usage_mib
+from fast_llm.logging import format_metrics
+from fast_llm.utils import get_and_reset_memory_usage_mib
 
 # from fast_llm.engine.training.lm_eval.evaluator import simple_evaluate as lm_eval_simple_evaluate
 
@@ -226,7 +227,7 @@ class EvaluatorLoss[ConfigType: EvaluatorLossConfig](Evaluator[ConfigType]):
                 / self._schedule._distributed.world_size
                 / time_per_iteration
             ),
-            **get_memory_usage_mib(),
+            **get_and_reset_memory_usage_mib(),
         }
         return metrics
 

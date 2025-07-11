@@ -79,6 +79,14 @@ class DistributedDim:
             Assert.eq(group.rank(), self.rank)
         self._group = group
 
+    def check_ranks_in_range(self, start, stop):
+        check_ranks_in_range(self.global_ranks, start, stop)
+
+
+def check_ranks_in_range(global_ranks, start, stop):
+    Assert.geq(min(global_ranks), start)
+    Assert.lt(max(global_ranks), stop)
+
 
 class DistributedDimNames:
     # A set of common distributed dim names packed into a singleton.
@@ -348,6 +356,12 @@ class DistributedConfig(Config):
 
     def _add_distributed_dim(self, distributed_dim: DistributedDim) -> None:
         Assert.eq(distributed_dim.global_ranks[distributed_dim.rank], self.rank, msg=distributed_dim)
+
+        try:
+            distributed_dim.check_ranks_in_range(0, self.world_size)
+        except:
+            logger.info(str(self))
+            raise
         if distributed_dim.name in self.distributed_dims:
             Assert.eq(distributed_dim, self.distributed_dims[distributed_dim.name])
         else:
@@ -372,10 +386,5 @@ class DistributedConfig(Config):
         strict: bool = True,
         flat: bool = False,
     ) -> typing.Self:
-        # TODO v0.3: Remove backward compatibility fix
-        if "sequence_first" in default and strict:
-            del default["sequence_first"]
-        if "separate_init_generators" in default and strict:
-            del default["separate_init_generators"]
         cls._handle_renamed_field(default, "distributed_timeout", "timeout")
         return super()._from_dict(default, strict, flat)
