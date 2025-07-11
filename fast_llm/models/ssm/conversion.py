@@ -12,6 +12,7 @@ from fast_llm.engine.checkpoint.external import (
     MappedConfigParamConverter,
     ParamConverter,
     RenameParamConverter,
+    RenameParamConverterIfExists,
     SplitWeightConverter,
     WeightConverter,
 )
@@ -141,52 +142,58 @@ class CommonSSMHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandle
                 fast_llm_value=ActivationType.from_hf_name,
                 export_value=lambda activation_type: activation_type.hf_name,
             ),
-            # Mamba2 specific parameters
-            #     RenameParamConverter(
-            #         fast_llm_names=(("ssm", "dt_rank"),),
-            #         export_names=(
-            #             (
-            #                 "ssm_cfg",
-            #                 "dt_rank",
-            #             ),
-            #         ),
-            #     ),
-            #     RenameParamConverter(
-            #         fast_llm_names=(("ssm", "dt_min"),),
-            #         export_names=(
-            #             (
-            #                 "ssm_cfg",
-            #                 "dt_min",
-            #             ),
-            #         ),
-            #     ),
-            #     RenameParamConverter(
-            #         fast_llm_names=(("ssm", "dt_max"),),
-            #         export_names=(
-            #             (
-            #                 "ssm_cfg",
-            #                 "dt_max",
-            #             ),
-            #         ),
-            #     ),
-            #     RenameParamConverter(
-            #         fast_llm_names=(("ssm", "dt_init_floor"),),
-            #         export_names=(
-            #             (
-            #                 "ssm_cfg",
-            #                 "dt_init_floor",
-            #             ),
-            #         ),
-            #     ),
-            #     RenameParamConverter(
-            #         fast_llm_names=(("ssm", "dt_scale"),),
-            #         export_names=(
-            #             (
-            #                 "ssm_cfg",
-            #                 "dt_scale",
-            #             ),
-            #         ),
-            #     ),
+            # ================================================
+            # Mamba2 specific parameters: they dont exist in old checkpoints exported for discrete Mamba2, hence need backward compatibility
+            RenameParamConverterIfExists(
+                fast_llm_names=(("ssm", "dt_rank"),),
+                export_names=(
+                    (
+                        "ssm_cfg",
+                        "dt_rank",
+                    ),
+                ),
+                default_value=None,
+            ),
+            RenameParamConverterIfExists(
+                fast_llm_names=(("ssm", "dt_min"),),
+                export_names=(
+                    (
+                        "ssm_cfg",
+                        "dt_min",
+                    ),
+                ),
+                default_value=0.001,
+            ),
+            RenameParamConverterIfExists(
+                fast_llm_names=(("ssm", "dt_max"),),
+                export_names=(
+                    (
+                        "ssm_cfg",
+                        "dt_max",
+                    ),
+                ),
+                default_value=0.1,
+            ),
+            RenameParamConverterIfExists(
+                fast_llm_names=(("ssm", "dt_init_floor"),),
+                export_names=(
+                    (
+                        "ssm_cfg",
+                        "dt_init_floor",
+                    ),
+                ),
+                default_value=1e-4,
+            ),
+            RenameParamConverterIfExists(
+                fast_llm_names=(("ssm", "dt_scale"),),
+                export_names=(
+                    (
+                        "ssm_cfg",
+                        "dt_scale",
+                    ),
+                ),
+                default_value=1.0,
+            ),
         ]
 
     def _create_weight_converters(self) -> list[WeightConverter]:
@@ -216,6 +223,20 @@ class CommonSSMHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandle
                     f"layers.{i+1}.mixer.z_bias", f"model.layers.{i}.mixer.z_bias", self._model.config.base_model
                 )
             )
+            converters.append(
+                WeightConverter(
+                    f"layers.{i+1}.mixer.conv1d_weight",
+                    f"model.layers.{i}.mixer.conv1d.weight",
+                    self._model.config.base_model,
+                )
+            )
+            converters.append(
+                WeightConverter(
+                    f"layers.{i+1}.mixer.conv1d_bias",
+                    f"model.layers.{i}.mixer.conv1d.bias",
+                    self._model.config.base_model,
+                )
+            )
             # ================================================
             # Mamba2 specific parameters
             converters += self._get_weight_and_bias_converters(
@@ -233,13 +254,6 @@ class CommonSSMHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandle
             converters.append(
                 WeightConverter(
                     f"layers.{i+1}.mixer.A_log", f"model.layers.{i}.mixer.A_log", self._model.config.base_model
-                )
-            )
-            converters.append(
-                WeightConverter(
-                    f"layers.{i+1}.mixer.conv1d_bias",
-                    f"model.layers.{i}.mixer.conv1d.bias",
-                    self._model.config.base_model,
                 )
             )
 

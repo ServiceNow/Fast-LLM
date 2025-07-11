@@ -103,6 +103,27 @@ class IgnoreImportParamConverter(ParamConverter):
         return ()
 
 
+class RenameParamConverterIfExists(RenameParamConverter):
+    """
+    This converter is used to rename a parameter if it exists in the checkpoint.
+    If the parameter is not present in the checkpoint, it will be set to the default value.
+    """
+
+    ignore_export_value: typing.Any = MISSING
+
+    def __init__(self, default_value: typing.Any = None, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.default_value = default_value
+
+    def import_params(self, export_values):
+        if export_values[0] in (self.ignore_export_value, MISSING):
+            logger.warning(
+                f"The configuration parameter `{self.export_names[0]}={export_values[0]}` is ignored during conversion as it is not present in the checkpoint."
+            )
+            return (self.default_value,)
+        return export_values
+
+
 @dataclasses.dataclass(kw_only=True)
 class MappedConfigParamConverter(ParamConverter):
     fast_llm_value: typing.Callable[[typing.Any], typing.Any] = lambda x: x
