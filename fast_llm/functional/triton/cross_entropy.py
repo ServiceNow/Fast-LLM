@@ -125,6 +125,7 @@ def triton_cross_entropy_forward_backward(
     grad_output: float | None,
     logits_scale_factor: float,
     target_format: TargetFormat,
+    loss_weight: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """
     A fast triton implementation of cross-entropy, which combines the casting and forward and backward passes,
@@ -133,6 +134,8 @@ def triton_cross_entropy_forward_backward(
     TODO: Better handling of `grad_output = None`
     """
     assert TritonConfig.TRITON_ENABLED
+    assert loss_weight is None, "Loss weight not supported in triton cross-entropy implementation."
+
     # TODO: Improve assumptions.
     assert logits.is_contiguous()
     assert target.is_contiguous()

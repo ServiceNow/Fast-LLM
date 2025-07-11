@@ -137,9 +137,8 @@ class BaseModel[ConfigType: BaseModelConfig](Configurable[ConfigType], Sequentia
         # The name (dict key) is used to insert the weight in the kwargs of the forward pass.
         return {}
 
-    @property
     @abc.abstractmethod
-    def loss_defs(self) -> list[LossDef]:
+    def get_loss_defs(self) -> list[LossDef]:
         pass
 
     def add_reference_model(self, name: str, inference_runner: "InferenceRunner") -> None:

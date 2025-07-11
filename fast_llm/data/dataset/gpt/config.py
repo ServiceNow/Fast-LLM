@@ -8,7 +8,16 @@ import warnings
 
 import yaml
 
-from fast_llm.config import Config, Field, FieldHint, FieldUpdate, check_field, config_class, skip_valid_if_none
+from fast_llm.config import (
+    Config,
+    DiffusionStyle,
+    Field,
+    FieldHint,
+    FieldUpdate,
+    check_field,
+    config_class,
+    skip_valid_if_none,
+)
 from fast_llm.data.dataset.abstract import SamplableDataset, SampledDataset
 from fast_llm.data.dataset.config import (
     BlendedDatasetConfig,
@@ -44,6 +53,43 @@ class ShufflingType(str, enum.Enum):
     legacy = "legacy"
 
 
+@config_class(registry=True)
+class DiffusionMaskingConfig(Config):
+    """Configuration for diffusion-based masking during data preparation."""
+
+    style: DiffusionStyle = Field(
+        default=DiffusionStyle.none, desc="Whether to use masked diffusion during training", hint=FieldHint.feature
+    )
+
+    epsilon: float = Field(
+        default=1e-3, desc="Minimum masking probability", hint=FieldHint.performance, valid=check_field(Assert.gt, 0)
+    )
+
+    max_mask_prob: float = Field(
+        default=0.15, desc="Maximum masking probability", hint=FieldHint.performance, valid=check_field(Assert.gt, 0)
+    )
+
+    pad_prob: float = Field(
+        default=0.01,
+        desc="Probability of padding tokens for 1% of samples",
+        hint=FieldHint.optional,
+        valid=check_field(Assert.geq, 0),
+    )
+
+    mask_token_id: int = Field(default=103, desc="Token ID to use for masking", hint=FieldHint.optional)
+    ar_factor: float = Field(
+        default=1.0,
+        desc="Factor for the AR weigting on overal loss.",
+        hint=FieldHint.optional,
+    )
+    context_sampler: float = Field(
+        default=1.0, desc="Context lenght C sampled in under 25% sequence length vs all", hint=FieldHint.optional
+    )
+
+    def _validate(self) -> None:
+        super()._validate()
+
+
 @config_class()
 class GPTSamplingConfig(SamplingConfig):
     """
@@ -60,6 +106,10 @@ class GPTSamplingConfig(SamplingConfig):
     shuffle: ShufflingType = Field(
         default=ShufflingType.epoch,
         desc="Shuffling strategy.",
+        hint=FieldHint.feature,
+    )
+    diffusion: DiffusionMaskingConfig = Field(
+        desc="Configuration for diffusion-based masking during data preparation.",
         hint=FieldHint.feature,
     )
 
@@ -79,6 +129,7 @@ class GPTSamplingParameters(SamplingParameters):
     # How many extra tokens to add to the sequence length.
     # This is used to provide labels even for the last tokens in the sequence.
     extra_tokens: int = 1
+    diffusion: DiffusionMaskingConfig
 
 
 @dataclasses.dataclass(kw_only=True)

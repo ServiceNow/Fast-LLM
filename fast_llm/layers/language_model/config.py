@@ -22,6 +22,7 @@ class LanguageModelDimNames:
 class LanguageModelLossNames:
     language_model_loss = "language_model_loss"
     z_loss = "z_loss"
+    mlm_loss = "masked_language_model_loss"
 
     @staticmethod
     def multi_token_prediction_loss(index: int) -> str:
@@ -38,7 +39,11 @@ class LanguageModelKwargs:
     chosen_spans = "chosen_spans"
     rejected_spans = "rejected_spans"
     loss_mask = "loss_mask"
+    mask_indexes = "mask_indexes"
+    mask_probabilities = "mask_probabilities"
     mask_inputs = "mask_inputs"
+    loss_weights = "loss_weights"
+    in_context = "in_context"
 
 
 @config_class()

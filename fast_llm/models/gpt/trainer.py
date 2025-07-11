@@ -31,6 +31,7 @@ class GPTTrainer[ConfigType: GPTTrainerConfig](Trainer[ConfigType]):
                 "cross_document_attention": self._config.batch.cross_document_attention,
                 "truncate_documents": self._config.batch.truncate_documents,
                 "extra_tokens": self._config.model.base_model.prediction_heads,
+                "diffusion": self._config.data.sampling.diffusion,
             }
         )
         return parameters if _return_dict else GPTSamplingParameters(**parameters)
