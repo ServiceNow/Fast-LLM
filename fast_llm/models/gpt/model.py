@@ -390,6 +390,18 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
         if self._config.logit_z_loss:
             LossDef(name=LanguageModelLossNames.z_loss, formatted_name="logit z loss", count=1)
 
+        if self._config.enable_dpo:
+            loss_defs.append(LossDef(name=LanguageModelLossNames.dpo_loss, formatted_name="dpo loss", count=1))
+
+        if self._config.distillation_model is not None:
+            loss_defs.append(
+                LossDef(name=LanguageModelLossNames.distillation_loss, formatted_name="distillation loss", count=1)
+            )
+            if self._config.language_model_loss_factor > 0.0:
+                loss_defs.append(
+                    LossDef(name=LanguageModelLossNames.distil_lm_loss, formatted_name="distillation lm loss", count=1)
+                )
+
         for i in range(self._config.prediction_heads):
             loss_defs.append(
                 LossDef(

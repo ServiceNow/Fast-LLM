@@ -128,6 +128,10 @@ class YarnRotaryConfig(DefaultRotaryConfig):
 
     def _validate(self) -> None:
         if self.attention_factor is None:
+            if "attention_factor" in self._explicit_fields:
+                # TODO: hack to be able to load models with attention_factor set to None/null in the config (e.g. https://huggingface.co/ServiceNow-AI/Apriel-5B-Instruct/blob/main/config.json)
+                self._explicit_fields.remove("attention_factor")
+                delattr(self, "attention_factor")
             with self._set_implicit_default():
                 self.attention_factor = 0.1 * math.log(self.scale_factor) + 1.0
         super()._validate()
