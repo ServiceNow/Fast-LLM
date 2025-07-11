@@ -1151,7 +1151,7 @@ class AprielThinkerSSMHybridModel(MistralModel):
         for layer_idx, type in enumerate(config.hybrid_block_layout):
             if type == "m2d":
                 blocks.append(AprielSSMDecoderLayer(config, layer_idx))
-            if type == "m2":
+            elif type == "m2":
                 blocks.append(AprielSSMM2DecoderLayer(config, layer_idx))
             elif type == "t":
                 blocks.append(MistralDecoderLayer(config, layer_idx))
