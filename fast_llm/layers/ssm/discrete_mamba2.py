@@ -29,13 +29,8 @@ except (ImportError, RuntimeError):
     _causal_conv1d_available = False
 
 
-"""
-This code is adapted from https://github.com/cartesia-ai/edge/blob/main/cartesia-pytorch/cartesia_pytorch/Llamba/mixers/discrete_mamba2.py
-"""
-
-
 class DiscreteMamba2(torch.nn.Module):
-    """DiscreteMamba2 (taken github.com/goombalab/phi-mamba.git)."""
+    """DiscreteMamba2 (This code is adapted from https://github.com/cartesia-ai/edge/blob/main/cartesia-pytorch/cartesia_pytorch/Llamba/mixers/discrete_mamba2.py)."""
 
     def __init__(
         self,
