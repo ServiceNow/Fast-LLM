@@ -170,6 +170,5 @@ class SSMConfig(LLMBlockConfig):
         with self._set_implicit_default():
             if self.activation_type is None:
                 self.activation_type = ActivationType.silu
-
         super()._validate()
         Assert.geq(self.dt_max, self.dt_min)
