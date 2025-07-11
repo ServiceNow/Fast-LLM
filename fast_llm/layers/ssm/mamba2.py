@@ -1,7 +1,3 @@
-"""
-This code is adapted from https://github.com/jxiw/MambaInLlama/blob/main/mamba2/hybrid_mamba_layer.py
-"""
-
 import math
 import typing
 
@@ -13,7 +9,7 @@ from mamba_ssm.ops.selective_scan_interface import selective_scan_fn
 from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
 from fast_llm.layers.common.linear import Linear
 from fast_llm.layers.ssm.config import SSMConfig, SSMDimNames
-from fast_llm.tensor import ParameterMeta, init_fill_, init_ones_, init_uniform_, kaiming_init_
+from fast_llm.tensor import ParameterMeta, bias_init_method, init_fill_, init_ones_, init_uniform_, kaiming_init_
 from fast_llm.utils import get_lr_scale
 
 
@@ -29,13 +25,11 @@ def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
     return hidden_states.reshape(batch, num_key_value_heads * n_rep, slen, head_dim)
 
 
-def bias_init_method(conv_weight):
-    fan_in, _ = torch.nn.init._calculate_fan_in_and_fan_out(conv_weight)
-    bound = 1 / math.sqrt(fan_in) if fan_in > 0 else 0
-    return init_uniform_(-bound, bound)
-
-
 class Mamba2(torch.nn.Module):
+    """
+    This code is adapted from https://github.com/jxiw/M1/blob/537a1ca5407a786a99dc6c721873493cf8750d5e/mamba/hybrid_mamba_layer.py
+    """
+
     def __init__(
         self,
         config: SSMConfig,
@@ -58,50 +52,17 @@ class Mamba2(torch.nn.Module):
         td_state: TensorDim = tensor_space.get_tensor_dim(name=SSMDimNames.state_dim)
         td_model: TensorDim = tensor_space.get_tensor_dim(name=SSMDimNames.model_dim)
         tdt_rank: TensorDim = tensor_space.get_tensor_dim(name=SSMDimNames.dt_rank)
-        # tensor_space.get_tensor_dim(SSMDimNames.conv_dim)
-        # tensor_space.get_tensor_dim(SSMDimNames.qk_heads)
-        # tensor_space.get_tensor_dim(SSMDimNames.v_heads)
         td_xb: TensorDim = tensor_space.get_tensor_dim(name=SSMDimNames.d_xb)
         td_inner_proj: TensorDim = tensor_space.get_tensor_dim(name=SSMDimNames.inner_proj_mamba2)
         td_conv_kernel: TensorDim = tensor_space.get_tensor_dim(name=SSMDimNames.conv_kernel_size)
 
         self.repeat_kv_before_conv = config.repeat_kv_before_conv
 
-        # self.d_model = d_model
-        # self.d_state = d_state
-        # self.d_conv = d_conv
-        # self.conv_init = conv_init
-        # self.expand = expand
-        # self.process_group = process_group
-        # self.sequence_parallel = sequence_parallel
-        # self.world_size = 1 if process_group is None else process_group.size()
-        # self.local_rank = 0 if process_group is None else process_group.rank()
-        # self.d_inner = d_inner if d_inner is not None else (self.expand * self.d_model) // self.world_size
-        # # assert self.d_inner * self.world_size == self.expand * self.d_model
-        # self.headdim = headdim
-        # self.d_ssm = self.d_inner if d_ssm is None else d_ssm // self.world_size
-        # assert ngroups % self.world_size == 0
-        # self.ngroups = ngroups // self.world_size
-        # assert self.d_ssm % self.headdim == 0
-        # self.nheads = self.d_ssm // self.headdim
-        # self.D_has_hdim = D_has_hdim
-        # self.rmsnorm = rmsnorm
-        # self.norm_before_gate = norm_before_gate
-        # self.dt_limit = dt_limit
-        # self.activation = "silu"
-        # self.chunk_size = chunk_size
-        # self.use_mem_eff_path = use_mem_eff_path
-        # self.layer_idx = layer_idx
-        # self.d_xb = d_xb
-        # self.repeat_group = self.d_inner // self.d_xb
-        # self.repeat_kv_before_conv = repeat_kv_before_conv
-
         self.d_state = td_state.size
         self.d_model = td_model.size
         self.d_xb = td_xb.size
         self.d_inner = td_inner.size
         self.dt_rank = tdt_rank.size
-        # conv_dim = self.d_ssm + 2 * self.ngroups * self.d_state
 
         if self.repeat_kv_before_conv:
             self.conv1d_weight = ParameterMeta.from_dims(
@@ -115,14 +76,6 @@ class Mamba2(torch.nn.Module):
             self.conv1d_bias = ParameterMeta.from_dims(
                 (td_inner,), init_method=bias_init_method(self.conv1d_weight), lr_scale=mamba_layer_lr_scale
             )
-            # self.conv1d = nn.Conv1d(
-            #     in_channels=td_inner.size,
-            #     out_channels=td_inner.size,
-            #     bias=True,
-            #     kernel_size=td_conv_kernel.size,
-            #     groups=td_inner.size,
-            #     padding=td_conv_kernel.size - 1,
-            # )
         else:
             self.conv1d_weight = ParameterMeta.from_dims(
                 (td_xb, TensorDim("1", 1), td_conv_kernel),
@@ -134,17 +87,8 @@ class Mamba2(torch.nn.Module):
             self.conv1d_bias = ParameterMeta.from_dims(
                 (td_xb,), init_method=bias_init_method(self.conv1d_weight), lr_scale=mamba_layer_lr_scale
             )
-            # self.conv1d = nn.Conv1d(
-            #     in_channels=td_xb.size,
-            #     out_channels=td_xb.size,
-            #     bias=True,
-            #     kernel_size=td_conv_kernel.size,
-            #     groups=td_xb.size,
-            #     padding=td_conv_kernel.size - 1,
-            # )
 
         self.activation = "silu"
-        # self.act = nn.SiLU() # not used
 
         self.num_xb_head = td_xb.size // td_state.size
         self.num_C_head = td_inner.size // td_state.size
@@ -163,10 +107,8 @@ class Mamba2(torch.nn.Module):
         dt_init_std = self.dt_rank**-0.5 * dt_scale
         if config.dt_init == "constant":
             dt_init = init_fill_(dt_init_std)
-            # nn.init.constant_(self.dt_proj.weight, dt_init_std)
         elif config.dt_init == "random":
             dt_init = init_uniform_(-dt_init_std, dt_init_std)
-            # nn.init.uniform_(self.dt_proj.weight, -dt_init_std, dt_init_std)
         else:
             raise NotImplementedError
 
@@ -193,7 +135,6 @@ class Mamba2(torch.nn.Module):
             td_inner,
             bias=False,
             weight_init_method=dt_init,
-            # bias_init_method=init_ones_,  # init_from_tensor_(inv_dt),
             lr_scale=mamba_layer_lr_scale,
         )
         # define bias outside the linear layer since its also used in the selective_scan_fn
@@ -259,13 +200,6 @@ class Mamba2(torch.nn.Module):
             x = einops.rearrange(x, "b (n_group dstate) l -> b n_group l dstate", dstate=self.d_state)
             x = repeat_kv(x, self.repeat_group)
             x = einops.rearrange(x, "b n_group l dstate -> b (n_group dstate) l")
-
-        # Compute short convolution
-        # if conv_state is not None:
-        #     # If we just take x[:, :, -self.d_conv :], it will error if seqlen < self.d_conv
-        #     # Instead F.pad will pad with zeros if seqlen < self.d_conv, and truncate otherwise.
-        #     # Update state (B D W)
-        #     conv_state.copy_(torch.nn.functional.pad(x, (self.d_conv - x.shape[-1], 0)))
 
         assert self.activation in ["silu", "swish"]
         x = _causal_conv1d_fn(

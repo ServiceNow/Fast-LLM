@@ -7,7 +7,7 @@ import torch
 from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
 from fast_llm.layers.common.linear import Linear
 from fast_llm.layers.ssm.config import SSMConfig, SSMDimNames
-from fast_llm.tensor import ParameterMeta, init_ones_, init_uniform_, init_zeros_, kaiming_init_
+from fast_llm.tensor import ParameterMeta, bias_init_method, init_ones_, init_uniform_, init_zeros_, kaiming_init_
 from fast_llm.utils import get_lr_scale
 
 logger = logging.getLogger(__name__)
@@ -32,12 +32,6 @@ except (ImportError, RuntimeError):
 """
 This code is adapted from https://github.com/cartesia-ai/edge/blob/main/cartesia-pytorch/cartesia_pytorch/Llamba/mixers/discrete_mamba2.py
 """
-
-
-def bias_init_method(conv_weight):
-    fan_in, _ = torch.nn.init._calculate_fan_in_and_fan_out(conv_weight)
-    bound = 1 / math.sqrt(fan_in) if fan_in > 0 else 0
-    return init_uniform_(-bound, bound)
 
 
 class DiscreteMamba2(torch.nn.Module):
