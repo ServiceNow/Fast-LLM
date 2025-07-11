@@ -596,7 +596,7 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
         # groups requests by context+continuation[:-1] and infer on one request/group.
         re_ord = lm_eval.models.utils.Collator(
             requests,
-            sort_fn=lambda req: (-(len(req[1]) + len(req[2])), tuple(req[1] + req[2])),
+            sort_fn=lambda req: (-(len(req[1]) + len(req[2])), tuple(req[1]) + tuple(req[2])),
             group_by="contexts" if self._backend == "causal" and self._logits_cache else None,
             group_fn=lambda req: req[-2] + req[-1][:-1],
         )
