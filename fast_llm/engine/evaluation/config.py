@@ -6,7 +6,7 @@ from fast_llm.engine.schedule.config import BatchConfig
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
-    from fast_llm.engine.evaluation.evaluator import Evaluator, EvaluatorLmEval, EvaluatorLoss
+    from fast_llm.engine.evaluation.evaluator import Evaluator, EvaluatorLmEval, LossEvaluator
 
 
 @config_class()
@@ -40,7 +40,7 @@ class EvaluatorConfig(EvaluatorConfigBase):
 
 
 @config_class(dynamic_type={EvaluatorConfig: "loss"})
-class EvaluatorLossConfig(EvaluatorConfig):
+class LossEvaluatorConfig(EvaluatorConfig):
     _abstract: typing.ClassVar[bool] = False
 
     iterations: int | None = Field(
@@ -58,14 +58,14 @@ class EvaluatorLossConfig(EvaluatorConfig):
         batch_config: BatchConfig,
         data_load_num_proc: int,
         train_iters: int | None = None,
-    ) -> "EvaluatorLoss":
-        from fast_llm.engine.evaluation.evaluator import EvaluatorLoss
+    ) -> "LossEvaluator":
+        from fast_llm.engine.evaluation.evaluator import LossEvaluator
 
-        return EvaluatorLoss(name, self, batch_config, data_load_num_proc, train_iters)
+        return LossEvaluator(name, self, batch_config, data_load_num_proc, train_iters)
 
 
 @config_class(dynamic_type={EvaluatorConfig: "lm_eval"})
-class EvaluatorLmEvalConfig(EvaluatorConfig):
+class LmEvalEvaluatorConfig(EvaluatorConfig):
     _abstract: typing.ClassVar[bool] = False
 
     cli_args: list[str] = Field(
@@ -110,6 +110,6 @@ class EvaluatorLmEvalConfig(EvaluatorConfig):
         data_load_num_proc: int,
         train_iters: int | None = None,
     ) -> "EvaluatorLmEval":
-        from fast_llm.engine.evaluation.lm_eval.evaluator import EvaluatorLmEval
+        from fast_llm.engine.evaluation.lm_eval.evaluator import LmEvalEvaluator
 
-        return EvaluatorLmEval(name, self, batch_config, data_load_num_proc, train_iters)
+        return LmEvalEvaluator(name, self, batch_config, data_load_num_proc, train_iters)

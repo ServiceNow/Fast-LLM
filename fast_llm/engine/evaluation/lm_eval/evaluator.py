@@ -7,7 +7,7 @@ from fast_llm.data.data.abstract import Data
 from fast_llm.engine.config_utils.run import Run
 from fast_llm.engine.distributed.config import PhaseType
 from fast_llm.engine.distributed.distributed import Distributed
-from fast_llm.engine.evaluation.config import EvaluatorLmEvalConfig
+from fast_llm.engine.evaluation.config import LmEvalEvaluatorConfig
 from fast_llm.engine.evaluation.evaluator import (
     EvaluationMetrics,
     Evaluator,
@@ -24,8 +24,8 @@ if typing.TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class EvaluatorLmEval[ConfigType: EvaluatorLmEvalConfig](Evaluator[ConfigType]):
-    config_class: typing.ClassVar[type[EvaluatorLmEvalConfig]] = EvaluatorLmEvalConfig
+class LmEvalEvaluator[ConfigType: LmEvalEvaluatorConfig](Evaluator[ConfigType]):
+    config_class: typing.ClassVar[type[LmEvalEvaluatorConfig]] = LmEvalEvaluatorConfig
 
     _hf_model: "HuggingfaceBaseModelForCausalLM" = None
     _flm_wrapper: "FastLLMLmEvalWrapper" = None
