@@ -242,7 +242,7 @@ class CommonSSMHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandle
             converters += self._get_weight_and_bias_converters(
                 f"layers.{i+1}.mixer.dt_proj", f"model.layers.{i}.mixer.dt_proj", False
             )
-            # bias is treated separately in Mamba2
+            # bias is treated separately in Mamba2 and must always exist (https://github.com/jxiw/M1/blob/537a1ca5407a786a99dc6c721873493cf8750d5e/mamba/hybrid_mamba_layer.py)
             converters.append(
                 WeightConverter(
                     f"layers.{i+1}.mixer.dt_proj_bias",
