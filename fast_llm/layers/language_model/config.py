@@ -38,6 +38,7 @@ class LanguageModelKwargs:
     chosen_spans = "chosen_spans"
     rejected_spans = "rejected_spans"
     loss_mask = "loss_mask"
+    mask_inputs = "mask_inputs"
 
 
 @config_class()
