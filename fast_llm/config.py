@@ -735,7 +735,7 @@ class Config(metaclass=ConfigMeta):
     @classmethod
     def from_dict(
         cls,
-        default: "Config| dict[str, typing.Any]]",
+        default: "Config| dict[str, typing.Any]",
         *updates: "Config| dict[str | tuple[str, ...], typing.Any]",
         strict: bool = True,
         update_type: UpdateType = UpdateType.override,

@@ -7,6 +7,9 @@ import typing
 import pytest
 
 from fast_llm.engine.checkpoint.config import CheckpointFormat
+from fast_llm.engine.evaluation.evaluators import (  # noqa: F401  # needed for dynamic type registration
+    EvaluatorsConfig,
+)
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig
 from fast_llm.engine.training.config import TrainerConfig
 from fast_llm.models.gpt.config import (

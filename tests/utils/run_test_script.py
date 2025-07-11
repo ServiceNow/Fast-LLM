@@ -62,6 +62,7 @@ def do_run_test_script(
     do_compare: bool = True,
     rendezvous_port: int,
     torchrun_port: int,
+    task: str = "train",
 ):
     is_parallel = DistributedConfig.default_world_size > 1
     if is_parallel:
@@ -83,7 +84,7 @@ def do_run_test_script(
     if is_megatron:
         args = ["Megatron-LM/pretrain_gpt.py", *args, f"--structured-logs-dir={path}", f"--data-cache-path={path}"]
     else:
-        args = ["--no-python", "fast-llm", "train", model_type, *args, f"run.experiment_dir={path}"]
+        args = ["--no-python", "fast-llm", task, model_type, *args, f"run.experiment_dir={path}"]
     get_test_dataset()
     if (num_gpus == 1 or is_parallel) and not is_megatron:
         print(" ".join(args[1:]))
@@ -117,6 +118,7 @@ def do_run_test_script_for_all_models(
     test_name: str,
     base_path: pathlib.Path,
     model_testing_config: ModelTestingConfig,
+    task: str = "train",
 ):
     do_run_test_script(
         base_path / test_name,
@@ -131,6 +133,7 @@ def do_run_test_script_for_all_models(
         do_compare=do_compare,
         rendezvous_port=rendezvous_port,
         torchrun_port=torchrun_port,
+        task=task,
     )
 
 
