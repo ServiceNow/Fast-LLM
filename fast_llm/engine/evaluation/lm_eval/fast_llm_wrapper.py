@@ -243,7 +243,7 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
         )
 
         if not continue_generate:
-            return
+            return None
 
         assert len(input_ids) > 0
 
