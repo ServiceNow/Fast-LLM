@@ -1142,7 +1142,7 @@ class AprielHybridIdentity(nn.Module):
         return (hidden_states,)
 
 
-class AprielSSMHybridModel(MistralModel):
+class AprielThinkerSSMHybridModel(MistralModel):
     """
     Transformer decoder consisting of *config.num_hidden_layers* layers. Each layer is a [`AprielDecoderLayer`, `AprielSSMDecoderLayer`]
     Args:
@@ -1285,7 +1285,7 @@ class AprielSSMHybridModel(MistralModel):
 class KwargsForCausalLM(FlashAttentionKwargs, LossKwargs): ...
 
 
-class AprielHybridPreTrainedModel(PreTrainedModel):
+class AprielThinkerSSMHybridPreTrainedModel(PreTrainedModel):
     config_class = AprielSSMHybridConfig
     base_model_prefix = "model"
     _no_split_modules = ["MistralDecoderLayer", "AprielSSMDecoderLayer"]
@@ -1312,13 +1312,13 @@ class AprielHybridPreTrainedModel(PreTrainedModel):
             module.weight.data.fill_(1.0)
 
 
-class AprielSSMHybridForCausalLM(AprielHybridPreTrainedModel, GenerationMixin):
+class AprielThinkerSSMHybridForCausalLM(AprielThinkerSSMHybridPreTrainedModel, GenerationMixin):
     _tied_weights_keys = ["lm_head.weight"]
     _tp_plan = {"lm_head": "colwise_rep"}
 
     def __init__(self, config: AprielSSMHybridConfig, **kwargs):
         super().__init__(config, **kwargs)
-        self.model = AprielSSMHybridModel(config)
+        self.model = AprielThinkerSSMHybridModel(config)
         self.vocab_size = config.vocab_size
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
 
@@ -1483,7 +1483,7 @@ class AprielSSMHybridForCausalLM(AprielHybridPreTrainedModel, GenerationMixin):
 
 
 __all__ = [
-    "AprielSSMHybridForCausalLM",
-    "AprielSSMHybridModel",
-    "AprielSSMPreTrainedModel",
+    "AprielThinkerSSMHybridForCausalLM",
+    "AprielThinkerSSMHybridModel",
+    "AprielThinkerSSMHybridPreTrainedModel",
 ]
