@@ -184,7 +184,7 @@ class Attention(torch.nn.Module):
         attn_weights = attn_weights.to(torch.float32) * self._layer_index
         attn_weights = torch.where(mask, attn_weights, mask_value)
         attn_weights = torch.nn.functional.softmax(attn_weights, dim=-1).to(query.dtype)
-        
+
         with set_generator(self._tensor_space.distributed.tp_generator):
             attn_weights = torch.dropout(attn_weights, self._config.attention_dropout, self.training)
         attn_output = torch.bmm(
@@ -388,10 +388,6 @@ class Attention(torch.nn.Module):
 
         else:
             # TODO: Avoid the flattens.
-            query_clone = query.clone()
-            key_clone = key.clone()
-            value_clone = value.clone()
-            
             input_ = self._attn_fused(
                 query.flatten(-2),
                 key.flatten(-2),
@@ -399,27 +395,6 @@ class Attention(torch.nn.Module):
                 kwargs[TransformerKwargs.attention_mask],
                 kwargs[TransformerKwargs.attention_mask_value],
             )
-            # print(f"Fused: Attention: {input_.shape} {input_} ")
-
-            flash_input_, softmax_lse, S_dmask, = _flash_attn_func(
-                query_clone,
-                key_clone,
-                value_clone,
-                window_size=(-1, -1) if window_size is None else (window_size - 1, 0),
-                dropout_p=self._config.attention_dropout if self.training else 0.0,
-                causal=False,
-                softmax_scale=self._softmax_scale,
-                return_attn_probs=True,
-            )
-            
-            flash_input_ = flash_input_.flatten(-2)
-            diff = torch.abs(flash_input_ - input_)
-            # print(f"Element-wise difference: {diff.shape} {diff}")
-            max_diff = diff.abs().max()
-
-            if max_diff > 1e-3:
-                # print("Warning: Max difference exceeds 1e-3")
-                print(f"Max element-wise difference: {max_diff.item()}")
 
         if self._debug_transformer:
             self._debug_log(query, "query", self._QUERY_DIMS, kwargs)

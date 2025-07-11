@@ -148,6 +148,7 @@ def _fused_cross_entropy_forward_backward(
         predicted_logits = (target * logits_norm).sum(dim=-1, keepdim=True)
 
     per_sample_loss = sum_exp_logits.log() - predicted_logits
+    # print(f"Per sample loss {per_sample_loss} {per_sample_loss.shape}")
 
     if loss_weight is None:
         if loss_mask is not None:
@@ -159,10 +160,13 @@ def _fused_cross_entropy_forward_backward(
             return loss, grad
     else:
         # Weight every token loss by the loss weight. Before averaging.
-        per_sample_loss = per_sample_loss * loss_weight.flatten()
+        per_sample_loss = per_sample_loss * loss_weight.view(-1, 1)
         loss_weight_expanded = loss_weight.reshape(-1, 1)
         grad = grad * loss_weight_expanded if grad is not None else None
-        return per_sample_loss.mean(), grad
+        # print(f"Loss {per_sample_loss} {per_sample_loss.shape}")
+        denom = torch.clamp((loss_weight != 0).sum(), min=1)
+        # print(f"avg all: {per_sample_loss.mean()}")
+        return per_sample_loss.sum() / denom, grad
 
 
 _CROSS_ENTROPY_IMPLEMENTATIONS = {

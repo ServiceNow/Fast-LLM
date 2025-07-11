@@ -66,8 +66,6 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             if self._config.enable_dpo:  # TODO better way to pass in?
                 self._preprocessors.append(PreferenceSpanPreprocessor(self._config, self._tensor_space))
 
-        self._preprocessors.append(BackupAttentionPreprocessor(self._config.transformer, self._tensor_space))
-
     def get_output_layers(self) -> list[Layer]:
         layers = []
         for i in range(self._config.prediction_heads):
@@ -340,20 +338,24 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
 
                 if self._config.transformer.diffusion is not None:
                     # if batch.mask_indexes is not None:
+                    assert batch.loss_weights is not None, "masked-diffusion mode needs to set loss_weights"
                     if self._config.transformer.diffusion == DiffusionStyle.masked:
-                        assert batch.mask_indexes is not None, "masked-diffusion mode needs to set mask indexes"
-                        assert batch.mask_probabilities is not None, "masked-diffusion mode needs to set mask"
+                        # assert batch.loss_weights is not None, "masked-diffusion mode needs to set loss_weights"
 
                         # We are in masked-diffusion mode, so we need to add the mask indexes and probabilities to kwargs
-                        kwargs[LanguageModelKwargs.mask_indexes] = batch.mask_indexes.to(
-                            device=self._tensor_space.distributed.device
-                        )
-                        kwargs[LanguageModelKwargs.mask_probabilities] = batch.mask_probabilities.to(
-                            device=self._tensor_space.distributed.device
-                        )
+                        # kwargs[LanguageModelKwargs.mask_indexes] = batch.mask_indexes.to(
+                        #     device=self._tensor_space.distributed.device
+                        # )
+                        # kwargs[LanguageModelKwargs.mask_probabilities] = batch.mask_probabilities.to(
+                        #     device=self._tensor_space.distributed.device
+                        # )
                         # Setup bidirection attention for masked diffusion
                         # It uses _flash_attn_func so no need to set attention_mask and attention_mask_value.
                         kwargs[TransformerKwargs.causal] = False
+                        kwargs[LanguageModelKwargs.loss_weights] = batch.loss_weights.to(
+                            device=self._tensor_space.distributed.device,
+                            dtype=self._tensor_space.distributed_config.training_dtype.torch,
+                        )
 
                         batch_size, seq_len = batch.token_ids.shape
                         seq_len -= 1  # last token is dropped inputs
@@ -388,11 +390,16 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                             dtype=self._tensor_space.distributed_config.training_dtype.torch,
                             device=self._tensor_space.distributed.device,
                         )
-                        print(f"attention_mask : {attention_mask}")
-                        # print(f"labels shape: {labels}, tokens: {batch.token_ids}, mask indexes shape: {batch.mask_indexes}")
+                        # print(f"attention_mask : {attention_mask}")
+                        # print(f"labels shape: {labels}\ntokens: {batch.token_ids}\nmask indexes shape: {batch.mask_indexes}\nmask input: {batch.masked_token_ids}")
 
                         # set token ids to masked tokens
-                        batch.token_ids = batch.masked_token_ids
+                        batch.token_ids = batch.masked_token_ids.to(
+                            device=self._tensor_space.distributed.device,
+                            dtype=torch.int64,
+                            non_blocking=True,
+                        )
+                        tokens = batch.token_ids
 
                     elif self._config.transformer.diffusion == DiffusionStyle.ar_masked:
 

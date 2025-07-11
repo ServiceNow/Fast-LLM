@@ -142,7 +142,9 @@ def gpt_data_collate_fn(batch: list[GPTSample], sampling_parameters: GPTSampling
         diffusion_config = sampling_parameters.diffusion
 
         batch_size, seq_len = token_ids.shape
-        mask_token_id = diffusion_config.mask_token_id
+        diffusion_config.mask_token_id
+        positions = torch.arange(seq_len - 1).unsqueeze(0).expand(batch_size, seq_len - 1)
+        padded = torch.zeros_like(token_ids, dtype=torch.bool)
 
         # Generate a random tensor of batch size to seed masking probabilities
         t = torch.rand((batch_size,))
@@ -163,7 +165,7 @@ def gpt_data_collate_fn(batch: list[GPTSample], sampling_parameters: GPTSampling
 
         # Generate random values for all tokens in the batch and only mask the positions\
         # where the value is smaller than the mask probability
-        mask_indexes = torch.rand((batch_size, seq_len)) < p_mask[:, None]
+        # mask_indexes = torch.rand((batch_size, seq_len)) < p_mask[:, None]
 
         # Need further classification of this padding - 1% data to have partial sequences and padding
         # if diffusion_config.pad_prob > 0:
@@ -172,10 +174,34 @@ def gpt_data_collate_fn(batch: list[GPTSample], sampling_parameters: GPTSampling
         #         mask_indexes[pad_mask] = True
 
         # Replace masked tokens with the mask token ID to create input for the model.
-        masked_token_ids = torch.where(mask_indexes, mask_token_id, token_ids)
+        # masked_token_ids = torch.where(mask_indexes, mask_token_id, token_ids)
+        # masked_token_ids = masked_token_ids[:, :-1]  # Remove the last token, which is not used for prediction.
 
-        mask_indexes = mask_indexes[:, :-1]  # Remove the last token, which is not used for prediction.
-        mask_probabilities = p_mask
+        # mask_indexes = mask_indexes[:, 1:]  # Shift left so previous token to mask is the index for loss.
+        # mask_probabilities = p_mask
+
+        batch_data = prepare_batch(
+            data_ids=token_ids,
+            positions=positions,
+            padded=padded,
+            mask_token_id=diffusion_config.mask_token_id,
+            vocab_size=sampling_parameters.vocab_size,
+            context_length=-torch.ones(batch_size, dtype=torch.int),  # No context length for masked diffusion
+            p_mask=p_mask,
+            p_uniform=0.0,  # no uniform shuffling of tokens
+            ar_factor=0.0,
+            un_factor=0.0,
+            last_factor=0.0,
+        )
+
+        # token_ids = batch_data["input_ids"]
+        masked_token_ids = batch_data["input_ids"]
+
+        mask_indexes = batch_data["in_mask"]
+        # mask_probabilities = torch.full_like(mask_indexes, diffusion_config.max_mask_prob, dtype=token_ids.dtype)
+        loss_weights = batch_data["loss_weights"]
+        # in_context_length = C
+        in_context = batch_data["in_context"]
 
     elif sampling_parameters.diffusion.style == DiffusionStyle.ar_masked:
         diffusion_config = sampling_parameters.diffusion

@@ -404,33 +404,34 @@ class MLMHead(LanguageModelHead):
 
         if self.config.transformer.diffusion is not None:
             if self.config.transformer.diffusion == DiffusionStyle.masked:
-                masked_indices = kwargs[LanguageModelKwargs.mask_indexes]
-                p_mask = kwargs[LanguageModelKwargs.mask_probabilities]
-                #                                 index   [0, 1, 2, 3, 4, 5] ->
-                # The labels are already left shifted x = [A, B, C, D, E, F] ->
-                #                                 embd =  [A, B, C, D, E]
-                #                                label =  [B, C, D, E, F]
+                # masked_indices = kwargs[LanguageModelKwargs.mask_indexes]
+                # p_mask = kwargs[LanguageModelKwargs.mask_probabilities]
+                # #                                 index   [0, 1, 2, 3, 4, 5] ->
+                # # The labels are already left shifted x = [A, B, C, D, E, F] ->
+                # #                                 embd =  [A, B, C, D, E]
+                # #                                label =  [B, C, D, E, F]
 
-                # Question Pier: if 2 is the masked token, settling needs to settled 3; but 3 is already seen by the model,
-                # can it just learn to copy 3? i.e copy the next token to the masked?
-                # Yes. We need to drop those position from loss if the next token is not masked
-                # We can include curruption to further enhance, but it seems not to big looking at other CPT (diffuLlama)
+                # # Question Pier: if 2 is the masked token, settling needs to settled 3; but 3 is already seen by the model,
+                # # can it just learn to copy 3? i.e copy the next token to the masked?
+                # # Yes. We need to drop those position from loss if the next token is not masked
+                # # We can include curruption to further enhance, but it seems not to big looking at other CPT (diffuLlama)
 
-                last_weight = 0
-                B = logits.shape[0]
+                # last_weight = 0
+                # B = logits.shape[0]
 
-                loss_weight = torch.cat(
-                    (
-                        # ar_weight * in_context[:, 1:] + # not implement yet
-                        masked_indices[:, 1:] / p_mask[:, None],
-                        # + un_weight * ((1-epsilon) * in_shuffled[:, 1:] + epsilon * in_clean[:, 1:]) / (1 - p_mask[:, None]) # not implement yet
-                        (last_weight * torch.ones(B, device=logits.device)).unsqueeze(1),
-                        # This may need some weighting in terms of masking. Let's do last_weight=0 TODO: Decide later
-                    ),
-                    dim=1,
-                ).to(logits.dtype)
+                # loss_weight = torch.cat(
+                #     (
+                #         # ar_weight * in_context[:, 1:] + # not implement yet
+                #         masked_indices[:, :-1] / p_mask[:, None],
+                #         # + un_weight * ((1-epsilon) * in_shuffled[:, 1:] + epsilon * in_clean[:, 1:]) / (1 - p_mask[:, None]) # not implement yet
+                #         (last_weight * torch.ones(B, device=logits.device)).unsqueeze(1),
+                #         # This may need some weighting in terms of masking. Let's do last_weight=0 TODO: Decide later
+                #     ),
+                #     dim=1,
+                # ).to(logits.dtype)
 
-                # print(f"Loss weight: {loss_weight}")
+                loss_weights = kwargs[LanguageModelKwargs.loss_weights]
+                # print(f"Loss weight: {loss_weights} {loss_weights.shape} ")
 
                 loss, grad = cross_entropy_forward_backward(
                     logits=logits.flatten(0, -2),
@@ -440,7 +441,7 @@ class MLMHead(LanguageModelHead):
                     group=self._tensor_space.distributed.tensor_group if self._parallel_embeddings else None,
                     implementation=self._cross_entropy_impl,
                     logits_scale_factor=self._logits_scale_factor,
-                    loss_weight=loss_weight,
+                    loss_weight=loss_weights,
                 )
 
             elif self.confing.transformer.diffusion == DiffusionStyle.ar_masked:
