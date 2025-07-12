@@ -194,6 +194,36 @@ class CommonSSMHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandle
                 ),
                 default_value=1.0,
             ),
+            RenameParamConverterIfExists(
+                fast_llm_names=(("ssm", "d_xb"),),
+                export_names=(
+                    (
+                        "ssm_cfg",
+                        "d_xb",
+                    ),
+                ),
+                default_value=None,
+            ),
+            RenameParamConverterIfExists(
+                fast_llm_names=(("ssm", "conv_kernel_dimension"),),
+                export_names=(
+                    (
+                        "ssm_cfg",
+                        "d_conv",
+                    ),
+                ),
+                default_value=140,
+            ),
+            RenameParamConverterIfExists(
+                fast_llm_names=(("ssm", "dt_init"),),
+                export_names=(
+                    (
+                        "ssm_cfg",
+                        "dt_init",
+                    ),
+                ),
+                default_value="random",
+            ),
         ]
 
     def _create_weight_converters(self) -> list[WeightConverter]:
