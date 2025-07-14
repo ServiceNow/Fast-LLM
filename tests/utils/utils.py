@@ -11,15 +11,6 @@ from fast_llm.engine.multi_stage.stage import Stage
 
 requires_cuda = pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is not available")
 
-try:
-    import lm_eval  # noqa: F401
-
-    _lm_eval_installed = True
-except ImportError:
-    _lm_eval_installed = False
-
-requires_lm_eval = pytest.mark.skipif(not _lm_eval_installed, reason="lm_eval is not installed")
-
 
 TEST_RESULTS_PATH = pathlib.Path("/tmp/fast_llm_tests")
 
