@@ -173,7 +173,7 @@ def scatter(
     opts.asyncOp = async_op
     work = group.scatter(
         [tensor if not tensor.is_complex() else torch.view_as_real(tensor)],
-        [t if not t.is_complex() else torch.view_as_real(t) for t in scatter_list] if src == group.rank() else [],
+        [[t if not t.is_complex() else torch.view_as_real(t) for t in scatter_list]] if src == group.rank() else [],
         opts,
     )
     if async_op:
