@@ -90,3 +90,45 @@ data:
   tokenizer:
     path: path/to/the/tokenizer
 ```
+
+It is also possible to run different tasks with different intervals and offsets—for example, to run slower or more comprehensive tasks less frequently.:
+
+```yaml
+training:
+  evaluations:
+    gsm8k:
+      interval: 20
+      evaluator:
+        type: lm_eval
+        cli_args:
+          - --tasks
+          - gsm8k
+          - --output_path
+          - /path/to/lm_eval/output
+          - --limit
+          - "64"
+    ifeval:
+      offset: 10
+      interval: 40
+      evaluator:
+        type: lm_eval
+        cli_args:
+          - --tasks
+          - ifeval
+          - --output_path
+          - /path/to/lm_eval/output
+          - --limit
+          - "32"
+    faster_tasks:
+      interval: 10
+      evaluator:
+        type: lm_eval
+        cli_args:
+          - --tasks
+          - xnli_en,wikitext
+          - --output_path
+          - /path/to/lm_eval/output
+data:
+  tokenizer:
+    path: path/to/the/tokenizer
+```
