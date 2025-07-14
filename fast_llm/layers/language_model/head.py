@@ -10,7 +10,7 @@ from fast_llm.engine.base_model.base_model import Layer
 from fast_llm.engine.config_utils.tensor_space import DefaultDimNames, TensorDim, TensorSpace
 from fast_llm.engine.distributed.config import DistributedDimNames
 from fast_llm.functional.autograd import grad_is_context, wrap_forward_backward
-from fast_llm.functional.config import LMLossImpl, TargetFormat, TritonConfig
+from fast_llm.functional.config import CrossEntropyImpl, DistillationLossImpl, TargetFormat, TritonConfig
 from fast_llm.functional.cross_entropy import cross_entropy_forward_backward, reverse_kl_forward_backward
 from fast_llm.functional.dpo import compute_dpo_loss
 from fast_llm.functional.linear import output_parallel_linear_backward, output_parallel_linear_forward
@@ -87,13 +87,13 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
         else:
             self._cross_entropy_impl = config.cross_entropy_impl
             self._distillation_loss_implementation = config.distillation_loss_implementation
-            if self._cross_entropy_impl == LMLossImpl.auto:
+            if self._cross_entropy_impl == CrossEntropyImpl.auto:
                 if self._parallel_embeddings:
-                    self._cross_entropy_impl = LMLossImpl.ce_fused
+                    self._cross_entropy_impl = CrossEntropyImpl.fused
                 elif TritonConfig.TRITON_ENABLED:
-                    self._cross_entropy_impl = LMLossImpl.ce_triton
+                    self._cross_entropy_impl = CrossEntropyImpl.triton
                 else:
-                    self._cross_entropy_impl = LMLossImpl.ce_fused
+                    self._cross_entropy_impl = CrossEntropyImpl.fused
 
         self._forward = wrap_forward_backward(self._forward_backward, grad_is_context)
 
@@ -390,7 +390,7 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
             lm_loss, lm_grad = None, None
 
         if distillation_target is not None and self._distillation_loss_factor > 0.0:
-            if self._distillation_loss_implementation == LMLossImpl.reverse_kl:
+            if self._distillation_loss_implementation == DistillationLossImpl.reverse_kl:
                 distillation_loss, distillation_grad = reverse_kl_forward_backward(
                     logits.flatten(0, -2),
                     distillation_target,
@@ -403,7 +403,7 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
                         TargetFormat.labels if self._config.distillation_model is None else TargetFormat.logits
                     ),
                 )
-            else:
+            elif self._distillation_loss_implementation == DistillationLossImpl.cross_entropy:
                 distillation_loss, distillation_grad = cross_entropy_forward_backward(
                     logits.flatten(0, -2),
                     distillation_target,
@@ -414,7 +414,8 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
                     logits_scale_factor=self._logits_scale_factor,
                     target_format=TargetFormat.logits,
                 )
-
+            else:
+                raise ValueError(f"Invalid distillation loss implementation: {self._distillation_loss_implementation}")
             distillation_loss = distillation_loss * self._distillation_loss_factor
         else:
             distillation_loss, distillation_grad = None, None
@@ -430,7 +431,7 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
         if self.training and losses is not None:
             if dpo_loss is not None:
                 losses[LanguageModelLossNames.dpo_loss].append(dpo_loss.detach())
-            if distillation_loss is not None:
+            if self._config.distillation_model is not None and distillation_loss is not None:
                 losses[LanguageModelLossNames.distillation_loss].append(distillation_loss.detach())
             if self._config.distillation_model is not None and lm_loss is not None:
                 losses[LanguageModelLossNames.distil_lm_loss].append(lm_loss.detach())

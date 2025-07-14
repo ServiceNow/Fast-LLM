@@ -89,12 +89,16 @@ _ACTIVATION_HF_NAMES_INV = {value: key for key, value in _ACTIVATION_HF_NAMES.it
 MAX_DROPLESS_BLOCK_SIZE_ROW = 128
 
 
-class LMLossImpl(str, enum.Enum):
+class CrossEntropyImpl(str, enum.Enum):
     auto = "auto"
-    ce_torch = "ce_torch"
-    ce_fused = "ce_fused"
-    ce_triton = "ce_triton"
+    torch = "torch"
+    fused = "fused"
+    triton = "triton"
+
+
+class DistillationLossImpl(str, enum.Enum):
     reverse_kl = "reverse_kl"
+    cross_entropy = "cross_entropy"
 
 
 class TargetFormat(enum.StrEnum):

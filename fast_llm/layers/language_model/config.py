@@ -4,7 +4,7 @@ from fast_llm.config import Field, FieldHint, check_field, config_class, skip_va
 from fast_llm.engine.base_model.config import BaseModelConfig
 from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
 from fast_llm.engine.distributed.config import DistributedDimNames
-from fast_llm.functional.config import LMLossImpl
+from fast_llm.functional.config import CrossEntropyImpl, DistillationLossImpl
 from fast_llm.layers.transformer.config import TransformerConfig
 from fast_llm.layers.transformer.rotary.config import NoRotaryConfig
 from fast_llm.utils import Assert
@@ -109,13 +109,13 @@ class LanguageModelBaseConfig(BaseModelConfig):
         desc="Name of the reference model to use for dpo.",
         hint=FieldHint.feature,
     )
-    cross_entropy_impl: LMLossImpl = Field(
-        default=LMLossImpl.auto,
+    cross_entropy_impl: CrossEntropyImpl = Field(
+        default=CrossEntropyImpl.auto,
         desc="Implementation for the cross-entropy computation.",
         hint=FieldHint.performance,
     )
-    distillation_loss_implementation: LMLossImpl = Field(
-        default=LMLossImpl.auto,
+    distillation_loss_implementation: DistillationLossImpl = Field(
+        default=DistillationLossImpl.cross_entropy,
         desc="Implementation for the distillation cross-entropy computation.",
         hint=FieldHint.performance,
     )

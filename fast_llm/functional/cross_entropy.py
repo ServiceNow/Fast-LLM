@@ -1,7 +1,7 @@
 import torch
 
 from fast_llm.core.distributed import ProcessGroup, ReduceOp, all_reduce
-from fast_llm.functional.config import LMLossImpl, TargetFormat
+from fast_llm.functional.config import CrossEntropyImpl, TargetFormat
 from fast_llm.functional.triton.cross_entropy import triton_cross_entropy_forward_backward
 from fast_llm.utils import Assert
 
@@ -157,9 +157,9 @@ def _fused_cross_entropy_forward_backward(
 
 
 _CROSS_ENTROPY_IMPLEMENTATIONS = {
-    LMLossImpl.ce_torch: _torch_cross_entropy_forward_backward,
-    LMLossImpl.ce_fused: _fused_cross_entropy_forward_backward,
-    LMLossImpl.ce_triton: triton_cross_entropy_forward_backward,
+    CrossEntropyImpl.torch: _torch_cross_entropy_forward_backward,
+    CrossEntropyImpl.fused: _fused_cross_entropy_forward_backward,
+    CrossEntropyImpl.triton: triton_cross_entropy_forward_backward,
 }
 
 
@@ -169,7 +169,7 @@ def cross_entropy_forward_backward(
     loss_mask: torch.Tensor | None,
     grad_output: float | None,
     group: ProcessGroup | None = None,
-    implementation: LMLossImpl = LMLossImpl.ce_fused,
+    implementation: CrossEntropyImpl = CrossEntropyImpl.fused,
     logits_scale_factor: float = 1.0,
     teacher_softmax_temperature: float = 1.0,
     target_format: TargetFormat = TargetFormat.labels,
@@ -190,7 +190,7 @@ def cross_entropy_forward_backward(
         if loss_mask is not None:
             Assert.eq(loss_mask.shape, logits.shape[:-1])
     if group:
-        Assert.eq(implementation, LMLossImpl.ce_fused)
+        Assert.eq(implementation, CrossEntropyImpl.fused)
         return _fused_cross_entropy_forward_backward(
             logits,
             target,
