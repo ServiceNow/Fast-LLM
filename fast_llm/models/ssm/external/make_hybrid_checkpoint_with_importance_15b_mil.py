@@ -64,12 +64,12 @@ def convert_layers(transformer, mamba_config, hybrid_block_layout, init_with_kqv
             raise ValueError(f"Invalid layer type: {type}")
 
 
-# @click.command()
-# @click.option("--index_to_swap", type=int, required=True)
-# @click.option("--checkpoint", type=str, required=True)
-# @click.option("--output_model_path", type=str, required=True)
-# @click.option("--layer_type", type=str, default="m2")
-# @click.option("--mil_init", type=bool, default=True)
+@click.command()
+@click.option("--index_to_swap", type=int, required=True)
+@click.option("--checkpoint", type=str, required=True)
+@click.option("--output_model_path", type=str, required=True)
+@click.option("--layer_type", type=str, default="m2")
+@click.option("--mil_init", type=bool, default=True)
 def main(
     index_to_swap: int,
     checkpoint=None,
@@ -163,9 +163,9 @@ def main(
 
 
 if __name__ == "__main__":
-    # main()
-    main(
-        index_to_swap=1,
-        checkpoint="/mnt/checkpoints/fast_llm_exp/slam_ssm_distill/15b-ihyb1lrklm216mil-bs768-lr0.0003-lrs0-0-0-0-sl4096_ti1000_lm2/export/apriel_ssm_thinker_hybrid/1000",
-        layer_type="m2",
-    )
+    main()
+    # main(
+    #     index_to_swap=1,
+    #     checkpoint="/mnt/checkpoints/fast_llm_exp/slam_ssm_distill/15b-ihyb1lrklm216mil-bs768-lr0.0003-lrs0-0-0-0-sl4096_ti1000_lm2/export/apriel_ssm_thinker_hybrid/1000",
+    #     layer_type="m2",
+    # )
