@@ -10,7 +10,7 @@ from fast_llm.engine.base_model.base_model import Layer
 from fast_llm.engine.config_utils.tensor_space import DefaultDimNames, TensorDim, TensorSpace
 from fast_llm.engine.distributed.config import DistributedDimNames
 from fast_llm.functional.autograd import grad_is_context, wrap_forward_backward
-from fast_llm.functional.config import CrossEntropyImpl, DistillationLossImpl, TargetFormat, TritonConfig
+from fast_llm.functional.config import LMLossImpl, TargetFormat, TritonConfig
 from fast_llm.functional.cross_entropy import cross_entropy_forward_backward, reverse_kl_forward_backward
 from fast_llm.functional.dpo import compute_dpo_loss
 from fast_llm.functional.linear import output_parallel_linear_backward, output_parallel_linear_forward
@@ -69,7 +69,7 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
         self.final_norm = config.transformer.normalization.get_layer(hidden_dim)
         self._logits_scale_factor = config.logits_scale_factor
         self._language_model_loss_factor = config.language_model_loss_factor
-        self._distilation_loss_factor = config.distilation_loss_factor
+        self._distillation_loss_factor = config.distillation_loss_factor
         self._z_loss_factor = config.logit_z_loss
 
         # Distance of the target token prediction
@@ -87,13 +87,13 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
         else:
             self._cross_entropy_impl = config.cross_entropy_impl
             self._distillation_loss_implementation = config.distillation_loss_implementation
-            if self._cross_entropy_impl == CrossEntropyImpl.auto:
+            if self._cross_entropy_impl == LMLossImpl.auto:
                 if self._parallel_embeddings:
-                    self._cross_entropy_impl = CrossEntropyImpl.fused
+                    self._cross_entropy_impl = LMLossImpl.ce_fused
                 elif TritonConfig.TRITON_ENABLED:
-                    self._cross_entropy_impl = CrossEntropyImpl.triton
+                    self._cross_entropy_impl = LMLossImpl.ce_triton
                 else:
-                    self._cross_entropy_impl = CrossEntropyImpl.fused
+                    self._cross_entropy_impl = LMLossImpl.ce_fused
 
         self._forward = wrap_forward_backward(self._forward_backward, grad_is_context)
 
@@ -389,13 +389,13 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
         else:
             lm_loss, lm_grad = None, None
 
-        if distillation_target is not None and self._distilation_loss_factor > 0.0:
-            if self._distillation_loss_implementation == DistillationLossImpl.reverse_kl:
+        if distillation_target is not None and self._distillation_loss_factor > 0.0:
+            if self._distillation_loss_implementation == LMLossImpl.reverse_kl:
                 distillation_loss, distillation_grad = reverse_kl_forward_backward(
                     logits.flatten(0, -2),
                     distillation_target,
                     loss_mask,
-                    grad_output=grad_output * self._loss_coefficient * self._distilation_loss_factor,
+                    grad_output=grad_output * self._loss_coefficient * self._distillation_loss_factor,
                     group=self._tensor_space.distributed.tensor_group if self._parallel_embeddings else None,
                     logits_scale_factor=self._logits_scale_factor,
                     teacher_softmax_temperature=self._config.teacher_softmax_temperature,
@@ -409,13 +409,13 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
                     distillation_target,
                     loss_mask,
                     group=self._tensor_space.distributed.tensor_group if self._parallel_embeddings else None,
-                    grad_output=grad_output * self._loss_coefficient * self._distilation_loss_factor,
+                    grad_output=grad_output * self._loss_coefficient * self._distillation_loss_factor,
                     implementation=self._cross_entropy_impl,
                     logits_scale_factor=self._logits_scale_factor,
                     target_format=TargetFormat.logits,
                 )
 
-            distillation_loss = distillation_loss * self._distilation_loss_factor
+            distillation_loss = distillation_loss * self._distillation_loss_factor
         else:
             distillation_loss, distillation_grad = None, None
 

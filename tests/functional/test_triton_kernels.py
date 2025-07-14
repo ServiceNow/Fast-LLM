@@ -4,7 +4,7 @@ import torch
 from fast_llm.functional.config import (
     MAX_DROPLESS_BLOCK_SIZE_ROW,
     ActivationType,
-    CrossEntropyImpl,
+    LMLossImpl,
     TargetFormat,
     TritonConfig,
 )
@@ -234,9 +234,9 @@ def test_cross_entropy(num_columns, grad_output, logits_scale_factor, loss_maski
         "target_format": target_format,
     }
     # Torch serves as the reference implementation.
-    out_torch, grad_torch = cross_entropy_forward_backward(**kwargs, implementation=CrossEntropyImpl.torch)
+    out_torch, grad_torch = cross_entropy_forward_backward(**kwargs, implementation=LMLossImpl.ce_torch)
 
-    out_fused, grad_fused = cross_entropy_forward_backward(**kwargs, implementation=CrossEntropyImpl.fused)
+    out_fused, grad_fused = cross_entropy_forward_backward(**kwargs, implementation=LMLossImpl.ce_fused)
     Assert.rms_close(out_fused, out_torch, 5e-3)
     if grad_output is None:
         assert grad_torch is None
@@ -246,9 +246,9 @@ def test_cross_entropy(num_columns, grad_output, logits_scale_factor, loss_maski
 
     if num_columns > 65536:
         with pytest.raises(AssertionError):
-            cross_entropy_forward_backward(**kwargs, implementation=CrossEntropyImpl.triton)
+            cross_entropy_forward_backward(**kwargs, implementation=LMLossImpl.ce_triton)
     else:
-        out_triton, grad_triton = cross_entropy_forward_backward(**kwargs, implementation=CrossEntropyImpl.triton)
+        out_triton, grad_triton = cross_entropy_forward_backward(**kwargs, implementation=LMLossImpl.ce_triton)
         if grad_output is None:
             assert grad_triton is None
         else:

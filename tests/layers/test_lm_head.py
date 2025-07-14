@@ -5,7 +5,7 @@ import torch
 
 from fast_llm.config import UpdateType
 from fast_llm.engine.config_utils.data_type import DataType
-from fast_llm.functional.config import CrossEntropyImpl
+from fast_llm.functional.config import LMLossImpl
 from fast_llm.layers.language_model.config import LanguageModelKwargs
 from fast_llm.layers.language_model.embedding import WORD_EMBEDDINGS_WEIGHT
 from fast_llm.layers.language_model.head import OUTPUT_WEIGHTS, LanguageModelHead
@@ -58,7 +58,7 @@ VOCAB_SIZE = 500
 
 @requires_cuda
 @pytest.mark.slow
-@pytest.mark.parametrize("cross_entropy_impl", tuple(CrossEntropyImpl))
+@pytest.mark.parametrize("cross_entropy_impl", tuple(LMLossImpl))
 @pytest.mark.parametrize(
     ("config_dict", "distributed_config_dict", "loss_masking"),
     (
@@ -76,7 +76,7 @@ VOCAB_SIZE = 500
     ),
 )
 def test_lm_head(
-    cross_entropy_impl: CrossEntropyImpl,
+    cross_entropy_impl: LMLossImpl,
     config_dict: dict[str, typing.Any],
     distributed_config_dict: dict[str, typing.Any],
     loss_masking: bool,
