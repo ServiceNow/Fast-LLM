@@ -4,7 +4,7 @@ from fast_llm.config import Field, FieldHint, check_field, config_class, skip_va
 from fast_llm.engine.base_model.config import BaseModelConfig
 from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
 from fast_llm.engine.distributed.config import DistributedDimNames
-from fast_llm.functional.config import CrossEntropyImpl
+from fast_llm.functional.config import CrossEntropyImpl, DistillationLossImpl
 from fast_llm.layers.transformer.config import TransformerConfig
 from fast_llm.layers.transformer.rotary.config import NoRotaryConfig
 from fast_llm.utils import Assert
@@ -114,8 +114,8 @@ class LanguageModelBaseConfig(BaseModelConfig):
         desc="Implementation for the cross-entropy computation.",
         hint=FieldHint.performance,
     )
-    distillation_loss_implementation: CrossEntropyImpl = Field(
-        default=CrossEntropyImpl.auto,
+    distillation_loss_implementation: DistillationLossImpl = Field(
+        default=DistillationLossImpl.cross_entropy,
         desc="Implementation for the distillation cross-entropy computation.",
         hint=FieldHint.performance,
     )
@@ -162,7 +162,7 @@ class LanguageModelBaseConfig(BaseModelConfig):
         desc="Factor to scale the language modeling loss by when using distillation.",
         hint=FieldHint.feature,
     )
-    distilation_loss_factor: float = Field(
+    distillation_loss_factor: float = Field(
         default=1.0,
         desc="Factor to scale the distillation loss by when using distillation.",
         hint=FieldHint.feature,

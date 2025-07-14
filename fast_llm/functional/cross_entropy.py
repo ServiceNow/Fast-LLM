@@ -228,6 +228,10 @@ def _torch_reverse_kl_forward_backward(
     Much simpler and more reliable than custom implementation!
     """
     Assert.eq(target_format, TargetFormat.logits, msg="Reverse KL only supports logits format")
+    Assert.eq(target.shape, logits.shape)
+    assert target.dtype.is_floating_point, target.dtype
+    if loss_mask is not None:
+        Assert.eq(loss_mask.shape, logits.shape[:-1])
 
     # Compute log probabilities - let _fused_softmax handle scaling internally
     # teacher_probs = _fused_softmax(target, logits_scale_factor * (1 / teacher_softmax_temperature), group)

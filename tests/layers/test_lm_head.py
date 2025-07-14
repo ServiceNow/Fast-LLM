@@ -5,7 +5,7 @@ import torch
 
 from fast_llm.config import UpdateType
 from fast_llm.engine.config_utils.data_type import DataType
-from fast_llm.functional.config import CrossEntropyImpl
+from fast_llm.functional.config import CrossEntropyImpl, DistillationLossImpl
 from fast_llm.layers.language_model.config import LanguageModelKwargs
 from fast_llm.layers.language_model.embedding import WORD_EMBEDDINGS_WEIGHT
 from fast_llm.layers.language_model.head import OUTPUT_WEIGHTS, LanguageModelHead
@@ -13,6 +13,37 @@ from fast_llm.layers.transformer.config import TransformerKwargs
 from fast_llm.models.gpt.config import GPTBaseModelConfig, GPTModelConfig
 from fast_llm.utils import Assert
 from tests.utils.utils import get_base_model, get_stage, requires_cuda
+
+
+def _reverse_kl_loss(
+    logits: torch.Tensor,
+    target: torch.Tensor,
+    loss_mask: torch.Tensor | None,
+    teacher_softmax_temperature: float = 1.0,
+):
+    scaled_target = target / teacher_softmax_temperature
+
+    scaled_target = torch.clamp(target, min=-50, max=50)
+    teacher_log_probs = torch.log_softmax(scaled_target, dim=-1)
+
+    with torch.enable_grad():
+        # Use log_softmax for consistency instead of _fused_softmax
+        logits = torch.clamp(logits, min=-50, max=50)
+        student_log_probs = torch.log_softmax(logits, dim=-1)
+        if loss_mask is None:
+            loss = torch.nn.functional.kl_div(
+                teacher_log_probs,  # input = log(p)
+                student_log_probs,  # target = log(q)
+                reduction="batchmean",
+                log_target=True,
+            )
+        else:
+            # Apply loss mask - this requires some reshaping
+            loss_per_sample = torch.nn.functional.kl_div(
+                teacher_log_probs, student_log_probs, reduction="none", log_target=True
+            ).sum(dim=-1)
+            loss = (loss_per_sample * loss_mask.flatten()).mean()
+    return loss
 
 
 def _lm_head(
@@ -26,6 +57,7 @@ def _lm_head(
     grad_output: float = 1.0,
     logit_scale_factor: float = 1.0,
     logit_z_loss=0.0,
+    distillation_loss_implementation: DistillationLossImpl = DistillationLossImpl.cross_entropy,
 ):
     hidden = torch.rms_norm(
         input_.to(rms_weight.dtype),
@@ -34,6 +66,15 @@ def _lm_head(
         1e-5,
     )
     logits = torch.nn.functional.linear(hidden, logit_weight).float()
+
+    if distillation_loss_implementation == DistillationLossImpl.reverse_kl:
+        Assert.eq(logits.shape, target.shape)
+        loss = _reverse_kl_loss(
+            (logits * logit_scale_factor).flatten(0, -2), (target * logit_scale_factor).flatten(0, -2), loss_mask
+        )
+        loss.backward(torch.full_like(loss, grad_output))
+        return loss, None
+
     if logit_scale_factor != 1.0:
         logits *= logit_scale_factor
     z_loss = torch.mean(torch.logsumexp(logits, dim=-1) ** 2) if logit_z_loss > 0 else None
@@ -71,8 +112,38 @@ VOCAB_SIZE = 500
         ({"tie_word_embeddings": False}, {}, False),
         ({"prediction_heads": 2}, {}, False),
         ({}, {}, True),
-        ({"distillation_model": "distillation"}, {}, False),
-        ({"distillation_model": "distillation"}, {}, True),
+        (
+            {
+                "distillation_model": "distillation",
+                "distillation_loss_implementation": DistillationLossImpl.cross_entropy,
+            },
+            {},
+            False,
+        ),
+        (
+            {
+                "distillation_model": "distillation",
+                "distillation_loss_implementation": DistillationLossImpl.reverse_kl,
+            },
+            {},
+            False,
+        ),
+        (
+            {
+                "distillation_model": "distillation",
+                "distillation_loss_implementation": DistillationLossImpl.cross_entropy,
+            },
+            {},
+            True,
+        ),
+        (
+            {
+                "distillation_model": "distillation",
+                "distillation_loss_implementation": DistillationLossImpl.reverse_kl,
+            },
+            {},
+            True,
+        ),
     ),
 )
 def test_lm_head(
@@ -195,6 +266,7 @@ def test_lm_head(
             logit_weight=ref_logit_weight,
             logit_scale_factor=config.logits_scale_factor,
             logit_z_loss=config.logit_z_loss,
+            distillation_loss_implementation=config.distillation_loss_implementation,
         )
 
         # Prepare LM head inputs
@@ -211,6 +283,9 @@ def test_lm_head(
         loss_keys = {loss_name}
         if ref_z_loss is not None:
             loss_keys.add("z_loss")
+        if config.distillation_model is not None:
+            loss_keys.add("distillation_loss")
+            loss_keys.add("distil_lm_loss")
         losses = {key: [] for key in loss_keys}
         output, context = stage.forward(head_input, kwargs, losses)
         stage.backward(output_grad, context)
@@ -239,3 +314,7 @@ def test_lm_head(
         Assert.rms_close_relative(input_grad, ref_input.grad, threshold, min_threshold)
         Assert.rms_close_relative(head.final_norm.weight.grad_buffer, ref_rms_weight.grad, threshold, min_threshold)
         Assert.rms_close_relative(logit_weight.grad_buffer, ref_logit_weight.grad, threshold, min_threshold)
+
+
+if __name__ == "__main__":
+    pytest.main([__file__])

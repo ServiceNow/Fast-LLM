@@ -95,6 +95,7 @@ class CrossEntropyImpl(str, enum.Enum):
     fused = "fused"
     triton = "triton"
     reverse_kl = "reverse_kl"
+    cross_entropy = "cross_entropy"
 
 
 class TargetFormat(enum.StrEnum):
