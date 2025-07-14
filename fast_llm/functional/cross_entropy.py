@@ -165,8 +165,8 @@ def _fused_cross_entropy_forward_backward(
         # print(f"grad: {grad.shape}")
         grad = grad * loss_weight.view(-1, 1) if grad is not None else None
         # print(f"Loss {per_sample_loss} {per_sample_loss.shape}")
-        # denom = torch.clamp((loss_weight != 0).sum(), min=1)
-        # per_sample_loss.sum() / denom
+        denom = torch.clamp((loss_weight != 0).sum(), min=1)
+        per_sample_loss.sum() / denom
         # print(f"avg all: {per_sample_loss.mean()}")
         return per_sample_loss.mean(), grad
 
