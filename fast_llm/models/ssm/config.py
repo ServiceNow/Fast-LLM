@@ -79,7 +79,10 @@ class HybridSSMBaseModelConfig(LanguageModelBaseConfig):
             tensor_space.add_tensor_dim(TensorDim(SSMDimNames.v_heads, self.ssm.n_v_heads))
             tensor_space.add_tensor_dim(TensorDim(SSMDimNames.inner_proj_discrete_mamba2, inner_proj_dim))
             tensor_space.add_tensor_dim(TensorDim(SSMDimNames.conv_dim, conv_dim))
-        elif SSMBlockType.mamba2.value in self.hybrid_block_layout:
+        elif (
+            SSMBlockType.mamba2.value in self.hybrid_block_layout
+            or SSMBlockType.mamba2_discrete_test.value in self.hybrid_block_layout
+        ):
             inner_proj_dim: int = 2 * self.ssm.d_xb + 2 * d_inner + self.ssm.dt_rank
             tensor_space.add_tensor_dim(TensorDim(SSMDimNames.inner_proj_mamba2, inner_proj_dim))
             tensor_space.add_tensor_dim(TensorDim(SSMDimNames.d_xb, self.ssm.d_xb))

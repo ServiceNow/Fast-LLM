@@ -34,6 +34,7 @@ class SSMBlockType(enum.StrEnum):
     mamba2_discrete = "m2d"
     mamba2 = "m2"
     transformer = "t"
+    mamba2_discrete_test = "m2d_test"
 
 
 @config_class()

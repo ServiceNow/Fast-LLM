@@ -162,7 +162,10 @@ class DiscreteMamba2(torch.nn.Module):
         # Project input
         xBCzA_log = self.in_proj(u)
 
-        xBC, z, A_log = torch.split(
+        (
+            xBC,
+            z,
+        ) = torch.split(
             xBCzA_log,
             [
                 self.d_inner + 2 * self.n_qk_heads * self.d_state,
