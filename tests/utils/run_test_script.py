@@ -2,6 +2,7 @@ import argparse
 import functools
 import os
 import pathlib
+import pprint
 import subprocess
 import sys
 import typing
@@ -111,15 +112,15 @@ def parse_run_distributed_script(args: list[str] | None = None):
 def compare_results_for_all_models(
     worker_resources: "WorkerResources",
     run_test_script_base_path: pathlib.Path,
+    model_testing_config: ModelTestingConfig,
 ):
-    def do_compare_results_for_all_models(
-        config: DistributedTestingConfig, artifacts: typing.Iterable[str] | None = None
-    ):
+    def do_compare_results_for_all_models(config: DistributedTestingConfig):
         assert config.compare is not None
-        config.compare_config.compare_tensor_logs(
+        compare_config = config.compare_config.rescale(config.compare_factor)
+        pprint.pprint(compare_config)
+        compare_config.compare_tensor_logs(
             run_test_script_base_path / config.compare / ARTIFACT_PATH,
             run_test_script_base_path / config.name / ARTIFACT_PATH,
-            artifacts,
         )
 
     return do_compare_results_for_all_models

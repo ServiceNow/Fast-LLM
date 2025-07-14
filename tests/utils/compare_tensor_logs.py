@@ -25,6 +25,8 @@ class CompareConfig:
     rms_abs_tolerance: float = 5e-4
     max_rel_tolerance: float = 1.5e-2
     max_abs_tolerance: float = 5e-3
+    # Test tensors are scaled by this amount (ex. gradient scaling). Unscale (divide) them before comparison.
+    scale: float = 1.0
     show_samples: int = 10
     ignore_tensors: bool = False
     ignore_duplicates: bool = False
@@ -32,6 +34,20 @@ class CompareConfig:
     sub_configs: dict[tuple[typing.Iterable[str] | str | None, typing.Iterable[str] | str | None], "CompareConfig"] = (
         dataclasses.field(default_factory=dict)
     )
+
+    def rescale(self, factor: float) -> typing.Self:
+        # Scale all tolerances by this factor.
+        if factor == 1.0:
+            return self
+        return dataclasses.replace(
+            self,
+            rms_eps=self.rms_eps * factor,
+            rms_rel_tolerance=self.rms_rel_tolerance * factor,
+            rms_abs_tolerance=self.rms_abs_tolerance * factor,
+            max_rel_tolerance=self.max_rel_tolerance * factor,
+            max_abs_tolerance=self.max_abs_tolerance * factor,
+            sub_configs={key: sub_config.rescale(factor) for key, sub_config in self.sub_configs.items()},
+        )
 
     def _get_sub_config(self, step_name: str, tensor_name: str) -> typing.Self:
         for (step_key, name_key), sub_config in self.sub_configs.items():
@@ -56,7 +72,7 @@ class CompareConfig:
                                 tensor_logs[step_name] = {}
                             if (
                                 tensor_name in (tensor_step_logs := tensor_logs[step_name])
-                                and not self.ignore_duplicates
+                                and not sub_config.ignore_duplicates
                             ):
                                 errors.append(f"Duplicate tensor log in step {step_name}: {tensor_name}")
                             tensor_step_logs[tensor_name] = step_log
@@ -98,6 +114,8 @@ class CompareConfig:
 
         samples_ref = tensor_ref["samples"].flatten().float()
         samples_test = tensor_test["samples"].flatten().float()
+        if sub_config.scale != 1.0:
+            samples_test = samples_test / sub_config.scale
         scale_unreg = (samples_ref**2).mean() ** 0.5
         rms_scale = (scale_unreg**2 + sub_config.rms_eps**2) ** 0.5
         rms = ((samples_ref - samples_test) ** 2).mean() ** 0.5
@@ -170,14 +188,6 @@ class CompareConfig:
             raise ValueError(f"Comparison failed ({len(errors)} errors)")
         else:
             print("Comparison succeeded!")
-
-
-def compare_tensor_logs(
-    self,
-    artifact_path_ref: pathlib.Path,
-    artifact_path_test: pathlib.Path,
-):
-    pass
 
 
 if __name__ == "__main__":
