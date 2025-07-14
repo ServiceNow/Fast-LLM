@@ -42,7 +42,7 @@ def get_lm_eval_config(base_path, santacoder_tokenizer_path):
 @pytest.mark.extra_slow
 @requires_lm_eval
 @requires_cuda
-@pytest.mark.model_testing_group(ModelTestingGroup.basic)
+@pytest.mark.model_testing_group(ModelTestingGroup.generate)
 def test_lm_eval_in_training(run_test_script_for_all_models, run_test_script_base_path, santacoder_tokenizer_path):
     run_test_script_for_all_models(
         get_lm_eval_config(run_test_script_base_path / "test_lm_eval_in_training", santacoder_tokenizer_path)
@@ -54,7 +54,7 @@ def test_lm_eval_in_training(run_test_script_for_all_models, run_test_script_bas
 @requires_lm_eval
 @requires_cuda
 @pytest.mark.depends_on(on=["test_lm_eval_in_training[{model_testing_config}]"])
-@pytest.mark.model_testing_group(ModelTestingGroup.basic)
+@pytest.mark.model_testing_group(ModelTestingGroup.generate)
 def test_lm_eval_evaluation(run_test_script_for_all_models, run_test_script_base_path, santacoder_tokenizer_path):
     run_test_script_for_all_models(
         get_lm_eval_config(run_test_script_base_path / "test_lm_eval_evaluation", santacoder_tokenizer_path),
