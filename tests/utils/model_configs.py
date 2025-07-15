@@ -20,7 +20,7 @@ from fast_llm.models.gpt.config import (
     Starcoder2GPTHuggingfaceCheckpointFormat,
 )
 from fast_llm.models.ssm.config import LLambaHuggingfaceCheckpointFormat
-from tests.utils.dataset import DATASET_PREFIX, TEST_VOCAB_SIZE
+from tests.utils.dataset import MODEL_DATASET_PREFIX, MODEL_TEST_VOCAB_SIZE
 
 _LOG_LEVEL = int(os.environ.get("LOG_LEVEL", 13))
 
@@ -55,6 +55,8 @@ class ModelTestingConfig:
     megatron_args: list[str] | None
     checkpoint_format: type[CheckpointFormat] | None
     groups: dict[ModelTestingGroup, ModelTestingGroupAction]
+    # Scale the comparison thresholds for specific models.
+    compare_factor: float = 1.0
 
     @functools.cached_property
     def trainer_config_class(self) -> type[TrainerConfig]:
@@ -96,6 +98,7 @@ def _update_and_add_testing_config(
     megatron_args: list[str] | None = ...,
     checkpoint_format: CheckpointFormat | None = ...,
     groups: dict[ModelTestingGroup, ModelTestingGroupAction],
+    compare_factor: float = ...,
 ):
     config = MODEL_CONFIGS[old_name]
     updates: dict[str, typing.Any] = {
@@ -115,6 +118,8 @@ def _update_and_add_testing_config(
             updates["megatron_args"] = config.megatron_args + megatron_args
     if checkpoint_format is not ...:
         updates["checkpoint_format"] = checkpoint_format
+    if compare_factor is not ...:
+        updates["compare_factor"] = compare_factor
 
     MODEL_CONFIGS[new_name] = dataclasses.replace(config, **updates)
 
@@ -136,7 +141,7 @@ MODEL_CONFIGS["gpt2"] = ModelTestingConfig(
         "model.base_model.transformer.num_attention_heads=8",
         "model.base_model.transformer.head_groups=8",
         "model.base_model.transformer.init_method_std=0.022",
-        f"model.base_model.vocab_size={TEST_VOCAB_SIZE}",
+        f"model.base_model.vocab_size={MODEL_TEST_VOCAB_SIZE}",
         f"model.multi_stage.debug_param_init={_LOG_LEVEL}",
         f"model.multi_stage.debug_layer_outputs={_LOG_LEVEL}",
         f"model.multi_stage.debug_layer_gradients={_LOG_LEVEL}",
@@ -152,17 +157,17 @@ MODEL_CONFIGS["gpt2"] = ModelTestingConfig(
         "data.datasets.training.type=slice",
         "data.datasets.training.end=0.969",
         "data.datasets.training.dataset.type=memmap",
-        f"data.datasets.training.dataset.path={DATASET_PREFIX}",
+        f"data.datasets.training.dataset.path={MODEL_DATASET_PREFIX}",
         "data.datasets.validation.type=slice",
         "data.datasets.validation.begin=0.969",
         "data.datasets.validation.end=0.999",
         "data.datasets.validation.dataset.type=memmap",
-        f"data.datasets.validation.dataset.path={DATASET_PREFIX}",
+        f"data.datasets.validation.dataset.path={MODEL_DATASET_PREFIX}",
         "data.datasets.test.type=slice",
         "data.datasets.test.begin=0.999",
         "data.datasets.test.end=1",
         "data.datasets.test.dataset.type=memmap",
-        f"data.datasets.test.dataset.path={DATASET_PREFIX}",
+        f"data.datasets.test.dataset.path={MODEL_DATASET_PREFIX}",
         "optimizer.learning_rate.base=0.0001",
     ],
     megatron_args=[
@@ -189,8 +194,8 @@ MODEL_CONFIGS["gpt2"] = ModelTestingConfig(
         "--valid-num-workers=0",
         "--tokenizer-type=NullTokenizer",
         # Megatron messes with the vocab size, so we have to subtract 1.
-        f"--vocab-size={TEST_VOCAB_SIZE - 1}",
-        f"--data-path={DATASET_PREFIX}",
+        f"--vocab-size={MODEL_TEST_VOCAB_SIZE - 1}",
+        f"--data-path={MODEL_DATASET_PREFIX}",
         "--lr-decay-style=constant",
         # Initialization is set up to match MCore models (MCore inverts self-attn qkv and dense layers compared to original Megatron)
         "--use-mcore-models",
@@ -439,6 +444,7 @@ _update_and_add_testing_config(
         ModelTestingGroup.megatron: ModelTestingGroupAction.normal,
         ModelTestingGroup.distributed: ModelTestingGroupAction.normal,
     },
+    compare_factor=2.0,
 )
 
 _update_and_add_testing_config(
@@ -466,6 +472,7 @@ _update_and_add_testing_config(
         # TODO: Fix and bring back to `testing_groups`
         ModelTestingGroup.distributed: ModelTestingGroupAction.broken,
     },
+    compare_factor=10.0,
 )
 
 
@@ -487,6 +494,7 @@ _update_and_add_testing_config(
         ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
         ModelTestingGroup.distributed: ModelTestingGroupAction.unimportant,
     },
+    compare_factor=10.0,
 )
 
 

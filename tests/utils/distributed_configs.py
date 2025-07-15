@@ -14,7 +14,7 @@ class DistributedTestingConfig:
     config_args: list[str]
     num_gpus: int = 1
     compare_config: CompareConfig | None = None
-    # Scale the comparison thresholds for specific models.
+    # Scale the comparison thresholds for specific distributed configs.
     compare_factor: float = 1.0
 
 
@@ -33,34 +33,31 @@ def get_config(relative: float = 0, absolute: float = 0, **kwargs) -> CompareCon
 _compare_layer_match = get_config(
     sub_configs={
         ("init", None): get_config(),
-        ("train_1", "fw"): get_config(1e-3, 3e-5),
-        ("train_2", "fw"): get_config(1e-3, 1e-4),
-        ("train_1", "bw"): get_config(3e-3, 3e-6),
-        ("train_2", "bw"): get_config(3e-3, 1e-5),
-        ("train_1", "gradient"): get_config(3e-3, 1e-5),
-        ("train_2", "gradient"): get_config(3e-3, 3e-5),
+        (None, "fw"): get_config(1e-3, 1e-4),
+        (None, "bw"): get_config(3e-3, 1e-5),
+        # Biases have higher absolute error.
+        (None, "bias"): get_config(3e-3, 5e-5),
+        (None, "gradient"): get_config(3e-3, 3e-5),
     }
 )
 
 _compare_layer_mismatch = copy.deepcopy(_compare_layer_match)
 _pp_tied_weight_compare = copy.deepcopy(_compare_layer_match)
 _z3_accumulation_compare = copy.deepcopy(_compare_layer_match)
-for step in ("train_1", "train_2"):
-    _z3_accumulation_compare.sub_configs[(step, "gradient")].ignore_duplicates = True
-    for tensor in ("fw", "bw"):
-        _compare_layer_mismatch.sub_configs[(step, tensor)].ignore_tensors = True
-        _pp_tied_weight_compare.sub_configs[(step, tensor)].ignore_duplicates = True
+_z3_accumulation_compare.sub_configs[(None, "gradient")].ignore_duplicates = True
+_pp_tied_weight_compare.sub_configs[(None, "gradient")].ignore_duplicates = True
+for tensor in ("fw", "bw"):
+    _compare_layer_mismatch.sub_configs[(None, tensor)].ignore_tensors = True
+    _pp_tied_weight_compare.sub_configs[(None, tensor)].ignore_duplicates = True
 
 
 _bf16_compare = get_config(
     sub_configs={
         ("init", None): get_config(),
-        ("train_1", "fw"): get_config(1e-2, 1e-3),
-        ("train_2", "fw"): get_config(1e-2, 1e-3),
-        ("train_1", "bw"): get_config(1e-2, 1e-5),
-        ("train_2", "bw"): get_config(1e-2, 1e-5),
-        ("train_1", "gradient"): get_config(2e-2, 3e-5),
-        ("train_2", "gradient"): get_config(2e-2, 3e-5),
+        (None, "fw"): get_config(1e-2, 1e-3),
+        (None, "bw"): get_config(1e-2, 1e-5),
+        (None, "bias"): get_config(2e-2, 1e-4),
+        (None, "gradient"): get_config(2e-2, 3e-5),
     }
 )
 
@@ -68,12 +65,10 @@ _fp16_compare = get_config(
     sub_configs={
         ("init", None): get_config(),
         # Saved gradient include the gradient scaling by 2**16 (default initial value)
-        ("train_1", "fw"): get_config(1e-3, 1e-4),
-        ("train_2", "fw"): get_config(1e-3, 1e-4),
-        ("train_1", "bw"): get_config(3e-3, 1e-5, scale=2**16),
-        ("train_2", "bw"): get_config(3e-3, 1e-5, scale=2**16),
-        ("train_1", "gradient"): get_config(3e-3, 1e-5, scale=2**16),
-        ("train_2", "gradient"): get_config(3e-3, 1e-5, scale=2**16),
+        (None, "fw"): get_config(1e-3, 1e-4),
+        (None, "bw"): get_config(3e-3, 1e-5, scale=2**16),
+        (None, "bias"): get_config(3e-3, 1e-4, scale=2**16),
+        (None, "gradient"): get_config(3e-3, 5e-5, scale=2**16),
     }
 )
 

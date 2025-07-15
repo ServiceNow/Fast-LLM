@@ -15,10 +15,13 @@ TOKENIZER_FILE = TOKENIZER_PATH / "tokenizer.json"
 DATASET_CACHE = TEST_RESULTS_PATH / "dataset"
 DATASET_PREFIX = DATASET_CACHE / "common" / "dataset"
 DATASET_SAMPLING_CACHE = TEST_RESULTS_PATH / "dataset" / "cache"
-TEST_VOCAB_SIZE = 384
+TEST_VOCAB_SIZE = 8192
 # Random lowercase: 80.7% (3.1% each); space: 18.6%; doc end: 0.6%
 TEST_CHARACTERS = (string.ascii_lowercase) * 5 + " " * 30 + "\n"
 TEST_DATASET_TOKENS = 1000000
+
+MODEL_DATASET_PREFIX = DATASET_CACHE / "common" / "model_dataset"
+MODEL_TEST_VOCAB_SIZE = 384
 
 
 def get_test_dataset(
@@ -58,6 +61,13 @@ def get_test_dataset(
         yaml.safe_dump(
             {"type": "memmap", "path": prefix.name}, prefix.parent.joinpath("fast_llm_config.yaml").open("w")
         )
+
+
+def get_model_test_dataset(
+    prefix: pathlib.Path = MODEL_DATASET_PREFIX,
+    vocab_size: int = MODEL_TEST_VOCAB_SIZE,
+):
+    return get_test_dataset(prefix=prefix, vocab_size=vocab_size)
 
 
 def get_test_concatenated_memmap_dataset(

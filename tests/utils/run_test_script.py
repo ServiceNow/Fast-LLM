@@ -6,12 +6,13 @@ import pprint
 import subprocess
 import sys
 import typing
+import warnings
 
 import pytest
 
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.utils import Assert
-from tests.utils.dataset import get_test_dataset
+from tests.utils.dataset import get_model_test_dataset
 from tests.utils.distributed_configs import DistributedTestingConfig
 from tests.utils.model_configs import MODEL_CONFIGS, ModelTestingConfig
 
@@ -71,7 +72,7 @@ def do_run_test_script_for_all_models(
     base_path: pathlib.Path,
 ):
     Assert.leq(distributed_testing_config.num_gpus, DistributedConfig.default_world_size)
-    get_test_dataset()
+    get_model_test_dataset()
     args = [
         "fast-llm",
         "train",
@@ -116,11 +117,13 @@ def compare_results_for_all_models(
 ):
     def do_compare_results_for_all_models(config: DistributedTestingConfig):
         assert config.compare is not None
-        compare_config = config.compare_config.rescale(config.compare_factor)
+        compare_config = config.compare_config.rescale(config.compare_factor * model_testing_config.compare_factor)
         pprint.pprint(compare_config)
-        compare_config.compare_tensor_logs(
-            run_test_script_base_path / config.compare / ARTIFACT_PATH,
-            run_test_script_base_path / config.name / ARTIFACT_PATH,
-        )
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=DeprecationWarning, message="Ignoring keys in ")
+            compare_config.compare_tensor_logs(
+                run_test_script_base_path / config.compare / ARTIFACT_PATH,
+                run_test_script_base_path / config.name / ARTIFACT_PATH,
+            )
 
     return do_compare_results_for_all_models

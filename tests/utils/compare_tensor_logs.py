@@ -91,7 +91,7 @@ class CompareConfig:
         # Avoid set to preserve ordering.
         return [key for key in dict_test if key in dict_ref]
 
-    def _compare_tensors(self, tensor_ref, tensor_test, errors, step_name, tensor_name):
+    def compare_tensors(self, tensor_ref, tensor_test, errors, step_name, tensor_name):
         sub_config = self._get_sub_config(step_name, tensor_name)
         if tensor_ref["shape"] != tensor_test["shape"]:
             errors.append(
@@ -165,7 +165,7 @@ class CompareConfig:
             for tensor_key in self._compare_dict_keys(
                 step_logs_ref, step_logs_test, errors=errors, name=f"[{step_key}] Tensor keys"
             ):
-                self._compare_tensors(
+                self.compare_tensors(
                     step_logs_ref[tensor_key],
                     step_logs_test[tensor_key],
                     errors,

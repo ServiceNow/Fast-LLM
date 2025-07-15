@@ -3,7 +3,7 @@ import os
 import pytest
 
 from tests.utils.compare_tensor_logs import CompareConfig
-from tests.utils.dataset import DATASET_PREFIX, get_test_dataset
+from tests.utils.dataset import MODEL_DATASET_PREFIX, get_model_test_dataset
 from tests.utils.distributed_configs import DistributedTestingConfig
 from tests.utils.model_configs import ModelTestingGroup
 from tests.utils.utils import requires_cuda
@@ -17,7 +17,7 @@ def test_megatron(run_distributed_script, model_testing_config, run_test_script_
     # Prevent Megatron from complaining.
     env["CUDA_DEVICE_MAX_CONNECTIONS"] = "1"
     env["NVTE_FLASH_ATTN"] = "0"
-    get_test_dataset()
+    get_model_test_dataset()
     run_distributed_script(
         [
             "Megatron-LM/pretrain_gpt.py",
@@ -52,7 +52,7 @@ def test_match_megatron(run_test_script_for_all_models, model_testing_config, co
         config_args=[
             "model.distributed.training_dtype=fp32",
             "data.datasets={}",
-            f"data.path={DATASET_PREFIX}",
+            f"data.path={MODEL_DATASET_PREFIX}",
             "model.base_model.use_megatron_initialization=True",
         ],
         num_gpus=1,
