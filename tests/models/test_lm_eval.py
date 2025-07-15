@@ -1,8 +1,8 @@
 import pathlib
+import shutil
 
 import pytest
 
-from tests.models.test_checkpoint import _prepare_resume_fn
 from tests.utils.dataset import TOKENIZER_PATH, download_santacoder_tokenizer
 from tests.utils.model_configs import ModelTestingGroup
 from tests.utils.utils import requires_cuda
@@ -61,6 +61,10 @@ def test_lm_eval_in_training(run_test_script_for_all_models, run_test_script_bas
     )
 
 
+def _copy_training_output(test_path: pathlib.Path, compare_path: pathlib.Path):
+    shutil.copytree(compare_path, test_path)
+
+
 @requires_cuda
 @pytest.mark.depends_on(on=["test_lm_eval_in_training[{model_testing_config}]"])
 @pytest.mark.model_testing_group(ModelTestingGroup.generate)
@@ -68,7 +72,7 @@ def test_lm_eval_evaluation(run_test_script_for_all_models, run_test_script_base
     run_test_script_for_all_models(
         get_lm_eval_config(run_test_script_base_path / "test_lm_eval_in_training"),
         compare="test_lm_eval_in_training",
-        prepare_fn=_prepare_resume_fn,
+        prepare_fn=_copy_training_output,
         do_compare=False,
         runnable_type="evaluate",
     )
