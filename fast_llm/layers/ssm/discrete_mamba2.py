@@ -165,6 +165,7 @@ class DiscreteMamba2(torch.nn.Module):
         (
             xBC,
             z,
+            A_log,
         ) = torch.split(
             xBCzA_log,
             [
