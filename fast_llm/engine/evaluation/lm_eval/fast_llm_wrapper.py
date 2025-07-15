@@ -18,7 +18,7 @@ from fast_llm.engine.evaluation.lm_eval.utils import prepare_lm_eval_simple_eval
 from fast_llm.engine.inference.huggingface import HuggingfaceBaseModelForCausalLM
 from fast_llm.layers.transformer.rotary.config import NoRotaryConfig
 
-eval_logger = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 
 class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
@@ -67,7 +67,7 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
         self._max_length = max_length
         self._custom_prefix_token_id = prefix_token_id
         if prefix_token_id is not None:
-            eval_logger.info(f"Loglikelihood prefix token id used in evaluation: {self.prefix_token_id}")
+            logger.info(f"Loglikelihood prefix token id used in evaluation: {self.prefix_token_id}")
 
         # === Internal constants ===
         self._backend = "causal"
@@ -448,7 +448,7 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
         if left_truncate_len:
             original_lengths = encoding["input_ids"].size(1)
             if original_lengths > left_truncate_len:
-                eval_logger.warn(
+                logger.warn(
                     f"Left truncation applied. Original sequence length was {original_lengths}, "
                     f"truncating to last {left_truncate_len} tokens. Some content will be lost.",
                 )
@@ -648,7 +648,7 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
                 if self._backend == "causal":
                     total_length = len(context_enc) + len(continuation_enc)
                     if total_length > self.max_length + 1:
-                        eval_logger.warning(
+                        logger.warning(
                             f"Combined length of context ({len(context_enc)}) and continuation ({len(continuation_enc)}) "
                             f"exceeds model's maximum length ({self.max_length}). "
                             f"Truncating {total_length - self.max_length + 1} tokens from the left."
@@ -897,7 +897,7 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
                 continue_final_message=not add_generation_prompt,
             )
         except jinja2.exceptions.TemplateError:
-            eval_logger.warning("Failed to apply chat template. removing the system role in chat history.")
+            logger.warning("Failed to apply chat template. removing the system role in chat history.")
             chat_history = [msg for msg in chat_history if msg["role"] != "system"]
             chat_templated = self._tokenizer.apply_chat_template(
                 chat_history,

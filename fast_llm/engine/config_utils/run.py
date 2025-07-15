@@ -2,7 +2,6 @@ import logging
 import os
 import pathlib
 import typing
-import warnings
 
 import yaml
 
@@ -10,7 +9,7 @@ from fast_llm.config import Config, Field, FieldHint, FieldVerboseLevel, config_
 from fast_llm.engine.config_utils.logging import TensorLogs, TensorLogsConfig, configure_logging
 from fast_llm.engine.config_utils.runnable import RunnableConfig
 from fast_llm.engine.distributed.config import DistributedConfig
-from fast_llm.utils import Assert, log
+from fast_llm.utils import Assert, log, set_global_variables
 
 if typing.TYPE_CHECKING:
     from fast_llm.engine.distributed.distributed import Distributed
@@ -97,28 +96,8 @@ class ExperimentConfig(RunnableConfig):
         TritonConfig.TRITON_ENABLED = self.run.enable_triton_kernels
         TritonConfig.TRITON_LINEAR = self.run.triton_linear_kernels
         run = Run(config=self, distributed=distributed)
-        self._set_external_variables()
+        set_global_variables(not self.run.torch_dynamo_enable)
         return run
-
-    def _set_external_variables(self) -> None:
-        # This must be set before importing numexpr,
-        # because by default, the maximum number of threads is 64.
-        # On systems with more cores, numexpr logs an error and
-        # ignores the thread setting if it exceeds the limit.
-        if "NUMEXPR_MAX_THREADS" not in os.environ:
-            import multiprocessing
-
-            os.environ["NUMEXPR_MAX_THREADS"] = str(multiprocessing.cpu_count())
-
-        import torch._dynamo
-
-        # TODO: Find an alternative to get reliable tensor-parallel overlap.
-        if os.environ.get("CUDA_DEVICE_MAX_CONNECTIONS", ""):
-            warnings.warn("Setting CUDA_DEVICE_MAX_CONNECTIONS breaks things.")
-        if "PYTHONHASHSEED" not in os.environ:
-            warnings.warn("PYTHONHASHSEED should be set and to the same value for all workers.")
-
-        torch._dynamo.config.disable = not self.run.torch_dynamo_enable  # noqa
 
 
 _MAIN_RANK = 0

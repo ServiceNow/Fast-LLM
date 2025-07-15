@@ -33,12 +33,6 @@ def do_run_distributed_script(
     timeout: float = 120,
     env: dict[str, str | None] = None,
 ):
-    if env is None:
-        env = os.environ.copy()
-    else:
-        env = env.copy()
-    env["PYTHONHASHSEED"] = "0"
-
     command = [
         "python",
         "-m",

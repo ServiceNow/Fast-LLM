@@ -12,7 +12,9 @@ import lm_eval.loggers
 import lm_eval.tasks
 import lm_eval.utils
 
-eval_logger = logging.getLogger(__name__)
+from fast_llm.utils import Assert
+
+logger = logging.getLogger(__name__)
 
 
 def parse_eval_args(parser: argparse.ArgumentParser, args: list[str]) -> argparse.Namespace:
@@ -52,16 +54,20 @@ def prepare_lm_eval_simple_eval_params(
         SystemExit: If special task listing flags are used.
     """
     parser = lm_eval.__main__.setup_parser()
+    parser.add_argument(
+        "--no_defaults",
+        action="store_true",
+    )
     args = parse_eval_args(parser, cli_args)
 
     # NOTE: all this args are set by fast_llm on the model directly or not used here
-    assert not args.wandb_args  # default empty string
-    assert not args.wandb_config_args  # default empty string
-    assert args.model == "hf"  # default value of 'hf'
-    assert not args.model_args  # default empty string
-    assert args.batch_size == 1  # default value of 1
-    assert args.max_batch_size is None
-    assert args.device is None
+    Assert.eq(args.wandb_args, "")
+    Assert.eq(args.wandb_config_args, "")
+    Assert.eq(args.model, "hf")
+    Assert.eq(args.model_args, "")
+    Assert.eq(int(args.batch_size), 1)
+    Assert.none(args.max_batch_size)
+    Assert.none(args.device)
 
     # update the evaluation tracker args with the output path and the HF token
     evaluation_tracker_args = ""
@@ -83,19 +89,23 @@ def prepare_lm_eval_simple_eval_params(
         )
 
     if args.include_path is not None:
-        eval_logger.info(f"Including path: {args.include_path}")
+        args.include_path = args.include_path.split(",")
+        logger.info(f"Including paths: {args.include_path}")
     metadata = (
         lm_eval.utils.simple_parse_args_string(args.model_args)
         if isinstance(args.model_args, str)
         else args.model_args if isinstance(args.model_args, dict) else {}
     ) | (args.metadata if isinstance(args.metadata, dict) else lm_eval.utils.simple_parse_args_string(args.metadata))
 
-    task_manager = lm_eval.tasks.TaskManager(include_path=args.include_path, metadata=metadata)
+    task_manager = lm_eval.tasks.TaskManager(
+        verbosity=args.verbosity,
+        include_path=args.include_path,
+        include_defaults=not args.no_defaults,
+        metadata=metadata,
+    )
 
     if args.limit:
-        eval_logger.warning(
-            " --limit SHOULD ONLY BE USED FOR TESTING." "REAL METRICS SHOULD NOT BE COMPUTED USING LIMIT."
-        )
+        logger.warning(" --limit SHOULD ONLY BE USED FOR TESTING." "REAL METRICS SHOULD NOT BE COMPUTED USING LIMIT.")
     if args.samples:
         assert args.limit is None, "If --samples is not None, then --limit must be None."
         if (samples := Path(args.samples)).is_file():
@@ -104,7 +114,7 @@ def prepare_lm_eval_simple_eval_params(
             args.samples = json.loads(args.samples)
 
     if args.tasks is None:
-        eval_logger.error("Need to specify task to evaluate.")
+        logger.error("Need to specify task to evaluate.")
         sys.exit()
     elif args.tasks == "list":
         print(task_manager.list_all_tasks())
@@ -140,7 +150,7 @@ def prepare_lm_eval_simple_eval_params(
 
             if task_missing:
                 missing = ", ".join(task_missing)
-                eval_logger.error(
+                logger.error(
                     f"Tasks were not found: {missing}\n"
                     f"{lm_eval.utils.SPACING}Try `lm-eval --tasks list` for list of available tasks",
                 )
@@ -150,11 +160,7 @@ def prepare_lm_eval_simple_eval_params(
                     " to troubleshoot task registration issues."
                 )
 
-    (
-        eval_logger.info(f"Selected Tasks: {task_names}")
-        if eval_logger.getEffectiveLevel() >= logging.INFO
-        else print(f"Selected Tasks: {task_names}")
-    )
+    logger.info(f"Selected Tasks: {task_names}")
 
     request_caching_args = lm_eval.evaluator.request_caching_arg_to_dict(cache_requests=args.cache_requests)
 
@@ -217,7 +223,7 @@ def process_lm_eval_results(
                 if args.log_samples:
                     wandb_logger.log_eval_samples(samples)
             except Exception as e:
-                eval_logger.info(f"Logging to Weights and Biases failed due to {e}")
+                logger.info(f"Logging to Weights and Biases failed due to {e}")
 
         evaluation_tracker.save_results_aggregated(results=results, samples=samples if args.log_samples else None)
 

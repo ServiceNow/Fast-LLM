@@ -1,5 +1,6 @@
 import pathlib
 
+import cartesia_pytorch.Llamba.llamba
 import pytest
 import torch
 
@@ -14,17 +15,8 @@ from fast_llm.models.gpt.config import GPTBatchConfig
 from fast_llm.models.ssm.config import LLambaHuggingfaceCheckpointFormat
 from fast_llm.models.ssm.model import HybridSSMModel
 
-try:
-    from cartesia_pytorch.Llamba.llamba import LlambaLMHeadModel as LMHeadModel
-except ImportError:
-    LMHeadModel = None
-
 
 @pytest.mark.slow
-@pytest.mark.skipif(
-    LMHeadModel is None,
-    reason=f"cartesia_pytorch.Llamba not installed",
-)
 def test_load_from_llamba_checkpoint():
     """
     Test to check whether the of Fast-LLM and Huggingface checkpoint loading for Llamba-1B produce the same results.
@@ -38,7 +30,7 @@ def test_load_from_llamba_checkpoint():
 
     x = torch.randint(0, vocab_size, (batch_size, seq_length), device="cuda")
 
-    hf_model = LMHeadModel.from_pretrained(path, strict=True).to("cuda")
+    hf_model = cartesia_pytorch.Llamba.llamba.LMHeadModel.from_pretrained(path, strict=True).to("cuda")
     parameter_sum_hf = sum(p.detach().sum().cpu().item() for p in hf_model.parameters())
     hf_logits = hf_model(x)["logits"].cpu()
     del hf_model
