@@ -203,14 +203,14 @@ class AprielHybrid15bSSMWrapper(HFLM):
     def _create_model(self, pretrained: str, dtype: Optional[Union[str, torch.dtype]] = "float16", **kwargs) -> None:
         """Create the model."""
         from fast_llm.models.ssm.external.apriel_15b_hybrid.modeling_ssm_hybrid_apriel15b import (
-            AprielSSMHybridForCausalLM,
+            AprielThinkerSSMHybridForCausalLM,
         )
 
         # Ensure we're using the correct device
         device = _get_device()
         self._device = device
 
-        self._model = AprielSSMHybridForCausalLM.from_pretrained(
+        self._model = AprielThinkerSSMHybridForCausalLM.from_pretrained(
             pretrained,
             device=device,
             torch_dtype=torch.bfloat16 if dtype == "auto" else lm_eval.models.utils.get_dtype(dtype),
