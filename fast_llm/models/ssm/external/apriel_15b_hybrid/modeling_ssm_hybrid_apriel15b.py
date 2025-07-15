@@ -1,7 +1,6 @@
 import copy
 import math
 from dataclasses import dataclass
-from functools import partial
 from typing import Any, Optional, Union
 
 import torch
@@ -19,7 +18,7 @@ from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutpu
 from transformers.modeling_utils import PreTrainedModel
 from transformers.models.mistral.modeling_mistral import MistralDecoderLayer, MistralMLP, MistralModel, MistralRMSNorm
 from transformers.processing_utils import Unpack
-from transformers.utils import LossKwargs, auto_docstring, can_return_tuple, logging
+from transformers.utils import LossKwargs, logging
 from transformers.utils.generic import ModelOutput
 
 from fast_llm.models.ssm.external.apriel_15b_hybrid.configuration_ssm_hybrid_apriel15b import AprielSSMHybridConfig
@@ -585,7 +584,7 @@ class DiscreteMamba2(nn.Module):
         else:
             outputs = {}
             # Hacky way to initialize state during inference
-            chunk_size = self.chunk_size if ssm_state is None else seqlen
+            chunk_size = self.chunk_size  # if ssm_state is None else seqlen
 
             # Pad input to nearest multiple of chunklen
             padded_len = (1 + (seqlen - 1) // chunk_size) * chunk_size
@@ -1210,114 +1209,114 @@ class AprielThinkerSSMHybridModel(MistralModel):
         # Initialize weights and apply final processing
         self.post_init()
 
-    @can_return_tuple
-    @auto_docstring
-    def forward(
-        self,
-        input_ids: Optional[torch.LongTensor] = None,
-        attention_mask: Optional[torch.Tensor] = None,
-        position_ids: Optional[torch.LongTensor] = None,
-        past_key_values: Optional[HybridMambaAttentionDynamicCache] = None,
-        inputs_embeds: Optional[torch.FloatTensor] = None,
-        use_cache: Optional[bool] = None,
-        output_attentions: Optional[bool] = None,
-        output_hidden_states: Optional[bool] = None,
-        cache_position: Optional[torch.LongTensor] = None,
-        **flash_attn_kwargs: Unpack[FlashAttentionKwargs],
-    ) -> BaseModelOutputWithPast:
-        output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
-        output_hidden_states = (
-            output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
-        )
-        use_cache = use_cache if use_cache is not None else self.config.use_cache
+    # @can_return_tuple
+    # @auto_docstring
+    # def forward(
+    #     self,
+    #     input_ids: Optional[torch.LongTensor] = None,
+    #     attention_mask: Optional[torch.Tensor] = None,
+    #     position_ids: Optional[torch.LongTensor] = None,
+    #     past_key_values: Optional[HybridMambaAttentionDynamicCache] = None,
+    #     inputs_embeds: Optional[torch.FloatTensor] = None,
+    #     use_cache: Optional[bool] = None,
+    #     output_attentions: Optional[bool] = None,
+    #     output_hidden_states: Optional[bool] = None,
+    #     cache_position: Optional[torch.LongTensor] = None,
+    #     **flash_attn_kwargs: Unpack[FlashAttentionKwargs],
+    # ) -> BaseModelOutputWithPast:
+    #     output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
+    #     output_hidden_states = (
+    #         output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
+    #     )
+    #     use_cache = use_cache if use_cache is not None else self.config.use_cache
 
-        if (input_ids is None) ^ (inputs_embeds is not None):
-            raise ValueError("You must specify exactly one of input_ids or inputs_embeds")
+    #     if (input_ids is None) ^ (inputs_embeds is not None):
+    #         raise ValueError("You must specify exactly one of input_ids or inputs_embeds")
 
-        if self.gradient_checkpointing and self.training and use_cache:
-            logger.warning_once(
-                "`use_cache=True` is incompatible with gradient checkpointing. Setting `use_cache=False`."
-            )
-            use_cache = False
+    #     if self.gradient_checkpointing and self.training and use_cache:
+    #         logger.warning_once(
+    #             "`use_cache=True` is incompatible with gradient checkpointing. Setting `use_cache=False`."
+    #         )
+    #         use_cache = False
 
-        if inputs_embeds is None:
-            inputs_embeds = self.embed_tokens(input_ids)
+    #     if inputs_embeds is None:
+    #         inputs_embeds = self.embed_tokens(input_ids)
 
-        # OO: Cache is initialized in the `prepare_inputs_for_generation` method, so this can be removed
-        # if use_cache and past_key_values is None:
-        #     past_key_values = DynamicCache()
+    #     # OO: Cache is initialized in the `prepare_inputs_for_generation` method, so this can be removed
+    #     # if use_cache and past_key_values is None:
+    #     #     past_key_values = DynamicCache()
 
-        if cache_position is None:
-            past_seen_tokens = past_key_values.get_seq_length() if past_key_values is not None else 0
-            cache_position = torch.arange(
-                past_seen_tokens, past_seen_tokens + inputs_embeds.shape[1], device=inputs_embeds.device
-            )
+    #     if cache_position is None:
+    #         past_seen_tokens = past_key_values.get_seq_length() if past_key_values is not None else 0
+    #         cache_position = torch.arange(
+    #             past_seen_tokens, past_seen_tokens + inputs_embeds.shape[1], device=inputs_embeds.device
+    #         )
 
-        if position_ids is None:
-            position_ids = cache_position.unsqueeze(0)
+    #     if position_ids is None:
+    #         position_ids = cache_position.unsqueeze(0)
 
-        causal_mask = self._update_causal_mask(
-            attention_mask, inputs_embeds, cache_position, past_key_values, output_attentions
-        )
+    #     causal_mask = self._update_causal_mask(
+    #         attention_mask, inputs_embeds, cache_position, past_key_values, output_attentions
+    #     )
 
-        hidden_states = inputs_embeds
+    #     hidden_states = inputs_embeds
 
-        # create position embeddings to be shared across the decoder layers
-        position_embeddings = self.rotary_emb(hidden_states, position_ids)
+    #     # create position embeddings to be shared across the decoder layers
+    #     position_embeddings = self.rotary_emb(hidden_states, position_ids)
 
-        # decoder layers
-        all_hidden_states = () if output_hidden_states else None
-        all_self_attns = () if output_attentions else None
+    #     # decoder layers
+    #     all_hidden_states = () if output_hidden_states else None
+    #     all_self_attns = () if output_attentions else None
 
-        for decoder_layer in self.layers[: self.config.num_hidden_layers]:
-            if output_hidden_states:
-                all_hidden_states += (hidden_states,)
+    #     for decoder_layer in self.layers[: self.config.num_hidden_layers]:
+    #         if output_hidden_states:
+    #             all_hidden_states += (hidden_states,)
 
-            if self.gradient_checkpointing and self.training:
-                layer_outputs = self._gradient_checkpointing_func(
-                    partial(decoder_layer.__call__, **flash_attn_kwargs),
-                    hidden_states,
-                    causal_mask,
-                    position_ids,
-                    past_key_values,
-                    output_attentions,
-                    use_cache,
-                    cache_position,
-                    position_embeddings,
-                )
-            else:
-                layer_outputs = decoder_layer(
-                    hidden_states,
-                    attention_mask=causal_mask,
-                    position_ids=position_ids,
-                    past_key_value=past_key_values,
-                    output_attentions=output_attentions,
-                    use_cache=use_cache,
-                    cache_position=cache_position,
-                    position_embeddings=position_embeddings,
-                    **flash_attn_kwargs,
-                )
+    #         if self.gradient_checkpointing and self.training:
+    #             layer_outputs = self._gradient_checkpointing_func(
+    #                 partial(decoder_layer.__call__, **flash_attn_kwargs),
+    #                 hidden_states,
+    #                 causal_mask,
+    #                 position_ids,
+    #                 past_key_values,
+    #                 output_attentions,
+    #                 use_cache,
+    #                 cache_position,
+    #                 position_embeddings,
+    #             )
+    #         else:
+    #             layer_outputs = decoder_layer(
+    #                 hidden_states,
+    #                 attention_mask=causal_mask,
+    #                 position_ids=position_ids,
+    #                 past_key_value=past_key_values,
+    #                 output_attentions=output_attentions,
+    #                 use_cache=use_cache,
+    #                 cache_position=cache_position,
+    #                 position_embeddings=position_embeddings,
+    #                 **flash_attn_kwargs,
+    #             )
 
-            hidden_states = layer_outputs[0]
+    #         hidden_states = layer_outputs[0]
 
-            if output_attentions:
-                all_self_attns += (layer_outputs[1],)
+    #         if output_attentions:
+    #             all_self_attns += (layer_outputs[1],)
 
-        hidden_states = self.norm(hidden_states)
+    #     hidden_states = self.norm(hidden_states)
 
-        # add hidden states from the last decoder layer
-        if output_hidden_states:
-            all_hidden_states += (hidden_states,)
+    #     # add hidden states from the last decoder layer
+    #     if output_hidden_states:
+    #         all_hidden_states += (hidden_states,)
 
-        if past_key_values and not past_key_values.has_previous_state:
-            past_key_values.has_previous_state = True
+    #     if past_key_values and not past_key_values.has_previous_state:
+    #         past_key_values.has_previous_state = True
 
-        return BaseModelOutputWithPast(
-            last_hidden_state=hidden_states,
-            past_key_values=past_key_values if use_cache else None,
-            hidden_states=all_hidden_states,
-            attentions=all_self_attns,
-        )
+    #     return BaseModelOutputWithPast(
+    #         last_hidden_state=hidden_states,
+    #         past_key_values=past_key_values if use_cache else None,
+    #         hidden_states=all_hidden_states,
+    #         attentions=all_self_attns,
+    #     )
 
 
 class KwargsForCausalLM(FlashAttentionKwargs, LossKwargs): ...
@@ -1326,7 +1325,7 @@ class KwargsForCausalLM(FlashAttentionKwargs, LossKwargs): ...
 class AprielThinkerSSMHybridPreTrainedModel(PreTrainedModel):
     config_class = AprielSSMHybridConfig
     base_model_prefix = "model"
-    _no_split_modules = ["MistralDecoderLayer", "AprielSSMDecoderLayer"]
+    _no_split_modules = ["MistralDecoderLayer", "AprielSSMDecoderLayer", "AprielSSMM2DecoderLayer"]
     _skip_keys_device_placement = ["past_key_values"]
     _supports_flash_attn_2 = True
     _supports_sdpa = True
