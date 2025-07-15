@@ -4,7 +4,7 @@ from fast_llm.config import Field, FieldHint, check_field, config_class, skip_va
 from fast_llm.engine.base_model.config import BaseModelConfig
 from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
 from fast_llm.engine.distributed.config import DistributedDimNames
-from fast_llm.functional.config import CrossEntropyImpl
+from fast_llm.functional.config import CrossEntropyImpl, DistillationLossImpl
 from fast_llm.layers.transformer.config import TransformerConfig
 from fast_llm.layers.transformer.rotary.config import NoRotaryConfig
 from fast_llm.utils import Assert
@@ -22,6 +22,9 @@ class LanguageModelDimNames:
 class LanguageModelLossNames:
     language_model_loss = "language_model_loss"
     z_loss = "z_loss"
+    dpo_loss = "dpo_loss"
+    distil_lm_loss = "distillation_language_model_loss"  # the next token perdiciton of combined distillation loss
+    distillation_loss = "distillation_loss"
 
     @staticmethod
     def multi_token_prediction_loss(index: int) -> str:
@@ -111,6 +114,11 @@ class LanguageModelBaseConfig(BaseModelConfig):
         desc="Implementation for the cross-entropy computation.",
         hint=FieldHint.performance,
     )
+    distillation_loss_implementation: DistillationLossImpl = Field(
+        default=DistillationLossImpl.cross_entropy,
+        desc="Implementation for the distillation cross-entropy computation.",
+        hint=FieldHint.performance,
+    )
     cross_entropy_splits: int | None = Field(
         default=None,
         desc="Split the logit and cross-entropy computation into this many fragment, to reduce memory usage.",
@@ -149,11 +157,28 @@ class LanguageModelBaseConfig(BaseModelConfig):
         hint=FieldHint.feature,
         valid=check_field(Assert.geq, 0),
     )
+    language_model_loss_factor: float = Field(
+        default=None,
+        desc="Factor to scale the language modeling loss by when using distillation.",
+        hint=FieldHint.feature,
+    )
+    distillation_loss_factor: float = Field(
+        default=1.0,
+        desc="Factor to scale the distillation loss by when using distillation.",
+        hint=FieldHint.feature,
+    )
     logits_scale_factor: float = Field(
         default=1.0,
         desc="Multiply output logits by scale factor.",
         doc="Useful in muP setting, since we need to adjust the output logits by the width factor."
         " Since we are mupltiplying the output logits, under muP the scale factor should be < 1.0.",
+        hint=FieldHint.feature,
+        valid=check_field(Assert.geq, 0),
+    )
+    teacher_softmax_temperature: float = Field(
+        default=1.0,
+        desc="Divides distillation target logits by this factor.",
+        doc="Divides distillation target logits by this factor.",
         hint=FieldHint.feature,
         valid=check_field(Assert.geq, 0),
     )
@@ -180,6 +205,11 @@ class LanguageModelBaseConfig(BaseModelConfig):
     def _validate(self) -> None:
         self.transformer.validate()
         with self._set_implicit_default():
+            if self.language_model_loss_factor is None:
+                if self.distillation_model is None:
+                    self.language_model_loss_factor = 1.0
+                else:
+                    self.language_model_loss_factor = 0.0
             if self.use_position_embeddings is None:
                 self.use_position_embeddings = isinstance(self.transformer.rotary, NoRotaryConfig)
             if self.init_method_std_embed is None:

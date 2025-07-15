@@ -300,7 +300,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
         if self._text_column not in dataset.column_names:
             raise ValueError(f"Dataset does not have field '{self._text_column}'.")
 
-        if self._config.dataset.loss_masking_spans is not None and (
+        if self._config.dataset.source_schema.loss_masking_spans_column is not None and (
             self._config.dataset.chosen_text is not None or self._config.dataset.rejected_text is not None
         ):
             raise ValueError(f"Can not enable both loss masking spans and chosen/rejected loss masking spans.")
