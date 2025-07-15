@@ -237,10 +237,15 @@ class HybridMambaAttentionDynamicCache(DynamicCache):
         self.dtype = dtype
         self.hybrid_override_pattern = config.hybrid_block_layout
         self.has_previous_state = False  # only used by mamba
-        intermediate_size = config.ssm_cfg["d_inner"]
+        intermediate_size = (
+            config.ssm_cfg["d_inner"]
+            if config.ssm_cfg["d_inner"] is not None
+            else config.ssm_cfg["expand"] * config.hidden_size
+        )
         ssm_state_size = config.ssm_cfg["d_state"]
         conv_kernel_size = config.ssm_cfg["d_conv"]
         self.n_qk_heads = config.ssm_cfg["n_qk_heads"]
+        self.num_C_head = intermediate_size // ssm_state_size  # mamba2
         assert intermediate_size % self.n_qk_heads == 0, "d_inner must be divisible by n_qk_heads"
         self.head_d = intermediate_size // self.n_qk_heads
         self.conv_states = []
@@ -260,6 +265,31 @@ class HybridMambaAttentionDynamicCache(DynamicCache):
                 ]
                 self.ssm_states += [
                     torch.zeros(batch_size, self.n_qk_heads, self.head_d, ssm_state_size, device=device, dtype=dtype)
+                ]
+            elif self.hybrid_override_pattern[i] == "m2":
+                if "repeat_kv_before_conv" in config.ssm_cfg:
+                    assert (
+                        config.ssm_cfg["repeat_kv_before_conv"] == True
+                    ), "Only support repeat_kv_before_conv=True for m2 for now"
+
+                self.conv_states += [
+                    torch.zeros(
+                        batch_size,
+                        intermediate_size,
+                        conv_kernel_size,
+                        device=device,
+                        dtype=dtype,
+                    )
+                ]
+                self.ssm_states += [
+                    torch.zeros(
+                        batch_size,
+                        self.num_C_head,
+                        intermediate_size // self.num_C_head,
+                        ssm_state_size,
+                        device=device,
+                        dtype=dtype,
+                    )
                 ]
             else:
                 # Attention or MLP layer
@@ -545,8 +575,9 @@ class DiscreteMamba2(nn.Module):
                 and seqlen_offset > 0
             )
         #########################################################
+        ssm_state, conv_state = self._get_states_from_cache(past_key_value, batch)
         if use_precomputed_states:
-            ssm_state, conv_state = self._get_states_from_cache(past_key_value, batch)
+            # ssm_state, conv_state = self._get_states_from_cache(past_key_value, batch)
             u = u.squeeze(1) if len(u.shape) == 3 else u
             out, _, _ = self.step(u, ssm_state, conv_state)
             out = out.unsqueeze(1) if len(u.shape) == 2 else out
@@ -572,7 +603,7 @@ class DiscreteMamba2(nn.Module):
                 dim=-1,
             )
 
-            if ssm_state is not None:
+            if conv_state is not None:
                 # If we just take xBC[:, :, -self.d_conv :], it will error if seqlen < self.d_conv
                 # Instead F.pad will pad with zeros if seqlen < self.d_conv, and truncate otherwise.
                 xBC_t = rearrange(xBC[:, :seqlen, :], "b l d -> b d l")
@@ -854,22 +885,53 @@ class Mamba2(nn.Module):
 
         self.out_proj = nn.Linear(self.d_inner, self.d_model, bias=bias, **factory_kwargs)
 
-    def forward(self, hidden_states, position_ids=None, cu_seqlens=None, seq_idx=None, inference_params=None):
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        past_key_value: Optional[HybridMambaAttentionDynamicCache] = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        return_mixer_matrix=False,
+        **kwargs,
+    ):
         """
         hidden_states: (B, L, D)
         Returns: same shape as hidden_states
         """
+        cu_seqlens = None
+        assert is_fast_path_available and "cuda" in self.in_proj.weight.device.type, "Only support fast path on cuda"
+        cache_position = kwargs.get("cache_position", None)
         batch, seqlen, dim = hidden_states.shape
 
-        conv_state, ssm_state = None, None
-        if inference_params is not None:
-            batch = cu_seqlens.shape[0] - 1 if cu_seqlens is not None else batch
-            conv_state, ssm_state = self._get_states_from_cache(inference_params, batch)
-            if inference_params.seqlen_offset > 0:
-                # The states are updated inplace
-                out, _, _ = self.step(hidden_states, conv_state, ssm_state)
-                return out
+        ssm_state, conv_state = None, None
+        use_precomputed_states = False
 
+        #########################################################
+        # Quick and dirty to work with CG
+        if "inference_params" in kwargs:
+            seqlen_offset = kwargs["inference_params"].seqlen_offset
+            if seqlen_offset > 0:
+                use_precomputed_states = True
+        else:
+            seqlen_offset = kwargs.get("seqlen_offset", cache_position[0]) if cache_position is not None else 0
+            use_precomputed_states = (
+                past_key_value is not None
+                and past_key_value.has_previous_state
+                and seqlen == 1
+                and past_key_value.conv_states[self.layer_idx].shape[0]
+                == past_key_value.ssm_states[self.layer_idx].shape[0]
+                == batch
+                and cache_position is not None
+                and seqlen_offset > 0
+            )
+        #########################################################
+
+        ssm_state, conv_state = self._get_states_from_cache(past_key_value, batch)
+        if use_precomputed_states:
+            # ssm_state, conv_state = self._get_states_from_cache(past_key_value, batch)
+            out, _, _ = self.step(hidden_states, conv_state, ssm_state)
+            return {"hidden_states": out}
+
+        outputs = {}
         A = -torch.exp(self.A_log.float())  # (d_inner, d_state)
 
         zxbcdt = self.in_proj(hidden_states)
@@ -952,7 +1014,7 @@ class Mamba2(nn.Module):
                 z=z,
                 delta_bias=self.dt_proj.bias.float(),
                 delta_softplus=True,
-                return_last_state=True,
+                return_last_state=(ssm_state is not None),
             )
 
             if ssm_state is not None:
@@ -961,7 +1023,9 @@ class Mamba2(nn.Module):
 
         y = rearrange(y, "b d l -> b l d")
         out = self.out_proj(y)
-        return out
+
+        outputs["hidden_states"] = out[:, :seqlen, :]
+        return outputs
 
     def step(self, hidden_states, conv_state, ssm_state):
         dtype = hidden_states.dtype
@@ -1037,41 +1101,23 @@ class Mamba2(nn.Module):
         return conv_state, ssm_state
 
     def _get_states_from_cache(self, inference_params, batch_size, initialize_states=False):
+        """
+        conv_state: (batch, d_conv, conv1d.weight.shape[0])
+        ssm_state: (batch, n_qk_heads, headdim, d_state)
+        """
         assert self.layer_idx is not None
-        if self.layer_idx not in inference_params.key_value_memory_dict:
-            (batch_size,)
-            if self.repeat_kv_before_conv:
-                conv_state = torch.zeros(
-                    batch_size,
-                    self.d_inner,
-                    self.d_conv,
-                    device=self.conv1d.weight.device,
-                    dtype=self.conv1d.weight.dtype,
-                )
-            else:
-                conv_state = torch.zeros(
-                    batch_size,
-                    self.d_xb,
-                    self.d_conv,
-                    device=self.conv1d.weight.device,
-                    dtype=self.conv1d.weight.dtype,
-                )
-            ssm_state = torch.zeros(
-                batch_size,
-                self.num_C_head,
-                self.d_inner // self.num_C_head,
-                self.d_state,
-                device=self.dt_proj.weight.device,
-                dtype=self.dt_proj.weight.dtype,
-            )
-            inference_params.key_value_memory_dict[self.layer_idx] = (conv_state, ssm_state)
-        else:
-            conv_state, ssm_state = inference_params.key_value_memory_dict[self.layer_idx]
-            # TODO: What if batch size changes between generation, and we reuse the same states?
-            if initialize_states:
-                conv_state.zero_()
-                ssm_state.zero_()
-        return conv_state, ssm_state
+        # Allocate memory if not exists
+        # if self.layer_idx not in inference_params.ssm_states:
+        #     inference_params.key_value_memory_dict[self.layer_idx] = self.allocate_inference_cache(
+        #         batch_size, inference_params.max_seqlen, dtype=torch.float32
+        #     )
+        # Get states
+        ssm_states = inference_params.ssm_states[self.layer_idx]
+        conv_states = inference_params.conv_states[self.layer_idx]
+        if initialize_states:
+            ssm_states.zero_()
+            conv_states.zero_()
+        return ssm_states, conv_states
 
 
 class AprielSSMDecoderLayer(nn.Module):
