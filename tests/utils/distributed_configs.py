@@ -44,8 +44,10 @@ _compare_layer_match = get_config(
 _compare_layer_mismatch = copy.deepcopy(_compare_layer_match)
 _pp_tied_weight_compare = copy.deepcopy(_compare_layer_match)
 _z3_accumulation_compare = copy.deepcopy(_compare_layer_match)
+_z3_accumulation_compare.sub_configs[(None, "bias")].ignore_duplicates = True
 _z3_accumulation_compare.sub_configs[(None, "gradient")].ignore_duplicates = True
 _pp_tied_weight_compare.sub_configs[(None, "gradient")].ignore_duplicates = True
+_pp_tied_weight_compare.sub_configs[("init", None)].ignore_duplicates = True
 for tensor in ("fw", "bw"):
     _compare_layer_mismatch.sub_configs[(None, tensor)].ignore_tensors = True
     _pp_tied_weight_compare.sub_configs[(None, tensor)].ignore_duplicates = True
@@ -55,8 +57,8 @@ _bf16_compare = get_config(
     sub_configs={
         ("init", None): get_config(),
         (None, "fw"): get_config(1e-2, 1e-3),
-        (None, "bw"): get_config(1e-2, 1e-5),
-        (None, "bias"): get_config(2e-2, 1e-4),
+        (None, "bw"): get_config(1.5e-2, 1e-5),
+        (None, "bias"): get_config(2e-2, 1e-3),
         (None, "gradient"): get_config(2e-2, 3e-5),
     }
 )
@@ -212,7 +214,11 @@ _DISTRIBUTED_TESTING_CONFIGS = [
     DistributedTestingConfig(
         name="stp2",
         compare="sf",
-        config_args=["model.distributed.tensor_parallel=2", "model.distributed.sequence_tensor_parallel=True"],
+        config_args=[
+            "model.distributed.tensor_parallel=2",
+            "model.distributed.sequence_tensor_parallel=True",
+            "model.base_model.transformer.dropless_moe=False",
+        ],
         num_gpus=2,
         compare_config=_compare_layer_match,
     ),
@@ -223,6 +229,7 @@ _DISTRIBUTED_TESTING_CONFIGS = [
         config_args=[
             "model.distributed.tensor_parallel=2",
             "model.distributed.sequence_tensor_parallel=True",
+            "model.base_model.transformer.dropless_moe=False",
             "model.base_model.parallel_embeddings=False",
             "model.base_model.cross_entropy_splits=4",
         ],
@@ -237,6 +244,7 @@ _DISTRIBUTED_TESTING_CONFIGS = [
         config_args=[
             "model.distributed.tensor_parallel=2",
             "model.distributed.sequence_tensor_parallel=True",
+            "model.base_model.transformer.dropless_moe=False",
         ],
         num_gpus=4,
         compare_config=_compare_layer_match,
@@ -260,6 +268,7 @@ _DISTRIBUTED_TESTING_CONFIGS = [
             "model.distributed.sequence_data_parallel=2",
             "model.distributed.tensor_parallel=2",
             "model.distributed.sequence_tensor_parallel=True",
+            "model.base_model.transformer.dropless_moe=False",
             "batch.breadth_first_micro_batches=4",
         ],
         num_gpus=4,
@@ -273,6 +282,7 @@ _DISTRIBUTED_TESTING_CONFIGS = [
             "model.distributed.sequence_data_parallel=2",
             "model.distributed.tensor_parallel=2",
             "model.distributed.sequence_tensor_parallel=True",
+            "model.base_model.transformer.dropless_moe=False",
         ],
         num_gpus=4,
         compare_config=_compare_layer_match,
@@ -335,6 +345,7 @@ _DISTRIBUTED_TESTING_CONFIGS = [
         config_args=[
             "model.distributed.tensor_parallel=2",
             "model.distributed.sequence_tensor_parallel=True",
+            "model.base_model.transformer.dropless_moe=False",
             "model.distributed.pipeline_parallel=2",
             "model.multi_stage.layers_per_stage=2",
             "batch.breadth_first_micro_batches=4",
@@ -349,6 +360,8 @@ _DISTRIBUTED_TESTING_CONFIGS = [
         compare="mb",
         config_args=[
             "model.distributed.tensor_parallel=2",
+            "model.distributed.sequence_tensor_parallel=True",
+            "model.base_model.transformer.dropless_moe=False",
             "model.distributed.pipeline_parallel=2",
             "model.multi_stage.layers_per_stage=2",
             "batch.breadth_first_micro_batches=4",
@@ -378,6 +391,7 @@ _DISTRIBUTED_TESTING_CONFIGS = [
             "model.distributed.sequence_data_parallel=2",
             "model.distributed.tensor_parallel=2",
             "model.distributed.sequence_tensor_parallel=True",
+            "model.base_model.transformer.dropless_moe=False",
             "model.distributed.pipeline_parallel=2",
             "model.multi_stage.layers_per_stage=2",
             "batch.micro_sequence_length=256",

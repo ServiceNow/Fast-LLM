@@ -6,6 +6,7 @@ from torch._C._distributed_c10d import ReduceOp  # noqa
 from torch.distributed import all_reduce
 
 from fast_llm.config import Configurable
+from fast_llm.core.ops import split_op
 from fast_llm.engine.base_model.base_model import Layer
 from fast_llm.engine.config_utils.tensor_space import DefaultDimNames, TensorDim, TensorSpace
 from fast_llm.engine.distributed.config import DistributedDimNames
@@ -234,6 +235,11 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
                 lm_target = None
 
         targets = (dpo_target, lm_target, distillation_target, loss_mask)
+        if self._sequence_parallel_logits:
+            targets = [
+                None if target is None else split_op(target, self._tensor_space.distributed.tensor_group, 0)
+                for target in targets
+            ]
         if not any(target is not None for target in targets):
             # Simplify so we don't have to check every time.
             targets = None

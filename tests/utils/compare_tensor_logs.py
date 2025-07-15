@@ -2,7 +2,6 @@ import argparse
 import dataclasses
 import pathlib
 import typing
-import warnings
 
 import torch
 
@@ -57,7 +56,6 @@ class CompareConfig:
 
     def _extract_tensor_logs(self, artifact_path: pathlib.Path, errors):
         tensor_logs = {}
-        ignore_keys = set()
         for rank_path in sorted(artifact_path.iterdir()):
             for p in rank_path.iterdir():
                 if p.name.startswith(_TENSOR_LOG_PREFIX) and p.suffix == ".pt":
@@ -65,9 +63,7 @@ class CompareConfig:
                     for step_log in torch.load(p):
                         tensor_name = step_log["name"]
                         sub_config = self._get_sub_config(step_name, tensor_name)
-                        if sub_config.ignore_tensors:
-                            ignore_keys.add(f"{step_name}/{tensor_name}")
-                        else:
+                        if not sub_config.ignore_tensors:
                             if step_name not in tensor_logs:
                                 tensor_logs[step_name] = {}
                             if (
@@ -76,8 +72,6 @@ class CompareConfig:
                             ):
                                 errors.append(f"Duplicate tensor log in step {step_name}: {tensor_name}")
                             tensor_step_logs[tensor_name] = step_log
-        if ignore_keys:
-            warnings.warn(f"Ignoring keys in {artifact_path}: {ignore_keys}")
         return tensor_logs
 
     def _compare_dict_keys(self, dict_ref, dict_test, errors, name):
