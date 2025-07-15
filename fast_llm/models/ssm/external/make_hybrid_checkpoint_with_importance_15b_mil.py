@@ -147,7 +147,6 @@ def main(
     config_hybrid = AprielSSMHybridConfig(**model_hybrid_prev.config.to_dict())
     config_hybrid.hybrid_block_layout = hybrid_block_layout
     convert_layers(transformer, config_hybrid, hybrid_block_layout, mil_init, torch.bfloat16)
-    model_hybrid = transformer
 
     missing, unexpected = transformer.load_state_dict(
         model_hybrid_prev.state_dict(), strict=False
@@ -156,11 +155,16 @@ def main(
         print("Missing keys:", missing)
     if unexpected:
         print("Unexpected keys:", unexpected)
-    model_hybrid.to(torch.bfloat16)
+    transformer.to(torch.bfloat16)
     model_hybrid_prev = None
-    print(model_hybrid)
+    print(transformer)
+    model_hybrid = AprielThinkerSSMHybridForCausalLM(config_hybrid)
+    missing, unexpected = model_hybrid.load_state_dict(transformer.state_dict())
+    assert len(missing) == 0, "Missing keys: " + str(missing)
+    assert len(unexpected) == 0, "Unexpected keys: " + str(unexpected)
+
     model_hybrid.save_pretrained(f"{output_model_path}")
-    config_hybrid.save_pretrained(f"{output_model_path}")
+    # config_hybrid.save_pretrained(f"{output_model_path}")
 
 
 if __name__ == "__main__":
