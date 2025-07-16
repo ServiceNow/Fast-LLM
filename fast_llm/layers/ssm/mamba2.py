@@ -3,14 +3,26 @@ import typing
 
 import einops
 import torch
-from causal_conv1d import causal_conv1d_fn as _causal_conv1d_fn
-from mamba_ssm.ops.selective_scan_interface import selective_scan_fn
 
 from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
 from fast_llm.layers.common.linear import Linear
 from fast_llm.layers.ssm.config import SSMConfig, SSMDimNames
 from fast_llm.tensor import ParameterMeta, bias_init_method, init_fill_, init_ones_, init_uniform_, kaiming_init_
 from fast_llm.utils import get_lr_scale
+
+try:
+    from mamba_ssm.ops.selective_scan_interface import selective_scan_fn  # noqa
+
+    _mamba_available = True
+except (ImportError, RuntimeError):
+    _mamba_available = False
+
+try:
+    from causal_conv1d import causal_conv1d_fn as _causal_conv1d_fn  # noqa
+
+    _causal_conv1d_available = True
+except (ImportError, RuntimeError):
+    _causal_conv1d_available = False
 
 
 def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
@@ -173,6 +185,7 @@ class Mamba2(torch.nn.Module):
         hidden_states: (B, L, D)
         Returns: same shape as hidden_states
         """
+        assert _mamba_available
         batch, seqlen, dim = hidden_states.shape
         outputs = {}
 
@@ -201,12 +214,15 @@ class Mamba2(torch.nn.Module):
             x = einops.rearrange(x, "b n_group l dstate -> b (n_group dstate) l")
 
         assert self.activation in ["silu", "swish"]
-        x = _causal_conv1d_fn(
-            x=x,
-            weight=einops.rearrange(self.conv1d_weight, "d 1 w -> d w"),
-            bias=self.conv1d_bias,
-            activation=self.activation,
-        )  # B, L, D
+        if _causal_conv1d_available:
+            x = _causal_conv1d_fn(
+                x=x,
+                weight=einops.rearrange(self.conv1d_weight, "d 1 w -> d w"),
+                bias=self.conv1d_bias,
+                activation=self.activation,
+            )  # B, L, D
+        else:
+            raise RuntimeError("Causal conv1d is not available. Please install causal_conv1d.")
 
         if not self.repeat_kv_before_conv:
             x = einops.rearrange(x, "b (n_group dstate) l -> b n_group l dstate", dstate=self.d_state)
