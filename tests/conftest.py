@@ -11,7 +11,12 @@ import torch
 import xdist.scheduler
 
 import fast_llm.logging
+from fast_llm.utils import set_global_variables
 from tests.utils.depends import DependencyManager
+
+# TODO: Is this early enough?
+set_global_variables()  # isort: skip
+
 
 # Make fixtures available globally without import
 from tests.utils.run_test_script import (  # isort: skip

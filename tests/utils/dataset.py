@@ -21,6 +21,13 @@ TEST_CHARACTERS = (string.ascii_lowercase) * 5 + " " * 30 + "\n"
 TEST_DATASET_TOKENS = 1000000
 
 
+def download_santacoder_tokenizer():
+    if not TOKENIZER_FILE.is_file():
+        import transformers
+
+        transformers.AutoTokenizer.from_pretrained("bigcode/santacoder").save_pretrained(TOKENIZER_PATH)
+
+
 def get_test_dataset(
     prefix: pathlib.Path = DATASET_PREFIX,
     seed: int = 1234,
@@ -29,10 +36,7 @@ def get_test_dataset(
     vocab_size: int = TEST_VOCAB_SIZE,
     max_spans: int = 0,
 ):
-    if not TOKENIZER_FILE.is_file():
-        import transformers
-
-        transformers.AutoTokenizer.from_pretrained("bigcode/santacoder").save_pretrained(TOKENIZER_PATH)
+    download_santacoder_tokenizer()
 
     if not (
         prefix.with_suffix(".idx").is_file()

@@ -22,6 +22,10 @@ from fast_llm.models.gpt.config import (
 from fast_llm.models.ssm.config import LLambaHuggingfaceCheckpointFormat
 from tests.utils.dataset import DATASET_PREFIX, TEST_VOCAB_SIZE
 
+from fast_llm.engine.evaluation.evaluators import (  # isort:skip  # needed for dynamic type registration
+    EvaluatorsConfig,
+)
+
 _LOG_LEVEL = int(os.environ.get("LOG_LEVEL", 13))
 
 

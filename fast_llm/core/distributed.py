@@ -8,10 +8,13 @@ Todo: Move all core methods elsewhere (functional?).
 
 import contextlib
 import datetime
+import io
 import logging
+import pickle
 import typing
 
 import torch
+import torch.monitor
 from torch._C._distributed_c10d import Work
 from torch.distributed import (  # noqa
     ProcessGroup,
@@ -46,6 +49,7 @@ def broadcast(
         return work
     else:
         work.wait()
+        return None
 
 
 def check_parallel_match(tensor: torch.Tensor, group: ProcessGroup | None, name: str) -> None:
@@ -110,6 +114,7 @@ def send(tensor: torch.Tensor, dst: int, group: ProcessGroup, async_op=False, ta
         return work
     else:
         work.wait()
+        return None
 
 
 def recv(tensor: torch.Tensor, src: int, group: ProcessGroup, async_op=False, tag: int = 0) -> Work | None:
@@ -119,6 +124,7 @@ def recv(tensor: torch.Tensor, src: int, group: ProcessGroup, async_op=False, ta
         return work
     else:
         work.wait()
+        return None
 
 
 @contextlib.contextmanager
@@ -133,3 +139,118 @@ def set_generator(generator: torch.Generator) -> typing.Generator[None, None, No
     finally:
         generator.set_state(default_generator.get_state())
         default_generator.set_state(old_state)
+
+
+def gather(
+    tensor: torch.Tensor,
+    gather_list: list[torch.Tensor] | None = None,
+    group: ProcessGroup | None = None,
+    async_op: bool = False,
+    dst: int = 0,
+):
+    assert group is not None
+    opts = torch.distributed.GatherOptions()
+    opts.rootRank = dst
+    work = group.gather([gather_list] if dst == group.rank() else [], [tensor], opts)
+
+    if async_op:
+        return work
+    elif work is not None:
+        work.wait()
+        return None
+
+
+def scatter(
+    tensor: torch.Tensor,
+    scatter_list: list[torch.Tensor] | None = None,
+    group: ProcessGroup | None = None,
+    async_op: bool = False,
+    src: int = 0,
+):
+    assert group is not None
+    opts = torch.distributed.ScatterOptions()
+    opts.rootRank = src
+    opts.asyncOp = async_op
+    work = group.scatter(
+        [tensor if not tensor.is_complex() else torch.view_as_real(tensor)],
+        [[t if not t.is_complex() else torch.view_as_real(t) for t in scatter_list]] if src == group.rank() else [],
+        opts,
+    )
+    if async_op:
+        return work
+    elif work is not None:
+        work.wait()
+        return None
+
+
+def _object_to_tensor(obj: typing.Any) -> torch.Tensor:
+    f = io.BytesIO()
+    pickle.Pickler(f).dump(obj)
+    return torch.tensor(torch.UntypedStorage.from_buffer(f.getvalue(), dtype=torch.uint8), dtype=torch.uint8)
+
+
+def _tensor_to_object(tensor: torch.Tensor) -> typing.Any:
+    return pickle.Unpickler(io.BytesIO(tensor.numpy(force=True).tobytes())).load()
+
+
+def gather_object(
+    obj: typing.Any,
+    group: ProcessGroup | None = None,
+    dst: int = 0,
+) -> list[typing.Any] | None:
+    assert group is not None
+    group_rank = group.rank()
+    group_size = group.size()
+    device = torch.cuda.current_device()
+
+    obj_tensor = _object_to_tensor(None if group_rank == dst else obj)
+    sizes = torch.full([group.size()], len(obj_tensor), dtype=torch.int64, device=device)
+    all_gather_into_tensor(sizes, sizes[group.rank()], group=group)
+    sizes = sizes.tolist()
+    max_size = max(sizes)
+
+    input_tensor = torch.empty(max_size, dtype=torch.uint8, device=device)
+
+    if group_rank == dst:
+        output_tensors = list(torch.empty(max_size * group_size, dtype=torch.uint8, device=device).chunk(group_size))
+        gather(input_tensor, output_tensors, dst=dst, group=group)
+        return [
+            obj if rank_ == dst else _tensor_to_object(tensor[:size])
+            for rank_, (tensor, size) in enumerate(zip(output_tensors, sizes, strict=True))
+        ]
+    else:
+        input_tensor[: obj_tensor.numel()].copy_(obj_tensor)
+        gather(input_tensor, None, dst=dst, group=group)
+        return None
+
+
+def scatter_object(
+    scatter_object_input_list: typing.Optional[list[typing.Any]] = None,
+    group: ProcessGroup | None = None,
+    src: int = 0,
+) -> typing.Any:
+    assert group is not None
+    group_rank = group.rank()
+    group_size = group.size()
+    device = torch.cuda.current_device()
+
+    if group_rank == src:
+        tensor_list = [
+            _object_to_tensor(None if rank_ == src else obj) for rank_, obj in enumerate(scatter_object_input_list)
+        ]
+        sizes = [tensor.numel() for tensor in tensor_list]
+        max_size = max(sizes)
+        size_tensor = torch.tensor([[size, max_size] for size in sizes], dtype=torch.int64, device=device)
+        scatter(size_tensor[group_rank], list(size_tensor.unbind()), src=src, group=group)
+        scatter_list = list(torch.empty(max_size * group_size, dtype=torch.uint8, device=device).chunk(group_size))
+        for scatter_tensor, tensor, size in zip(scatter_list, tensor_list, sizes, strict=True):
+            scatter_tensor[:size].copy_(tensor)
+        scatter(scatter_list[src], scatter_list, src=src, group=group)
+        return scatter_object_input_list[src]
+    else:
+        size_tensor = torch.empty(2, dtype=torch.int64, device=device)
+        scatter(size_tensor, None, src=src, group=group)
+        size, max_size = size_tensor.tolist()
+        output_tensor = torch.empty(max_size, dtype=torch.uint8, device=device)
+        scatter(output_tensor, None, src=src, group=group)
+        return _tensor_to_object(output_tensor[:size])
