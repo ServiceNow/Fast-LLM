@@ -45,7 +45,7 @@ Here are some tips to ensure your pull request gets reviewed and merged promptly
 -   **Run benchmarks and performance tests**: Make sure your changes don't slow things down. If there's any impact on performance, provide benchmark results to back it up.
 -   **Avoid introducing new issues**: Check that there are no new runtime warnings, type checker errors, linting problems, or unhandled edge cases.
 -   **Comment non-trivial code**: Make your code easy to understand for others.
--   **Keep sensitive data out**: Make sure your code or commit messages don't expose pr
+-   **Keep sensitive data out**: Make sure your code or commit messages don't expose private or proprietary information.
 -   **Use a clear and descriptive title**: The PR title should summarize the key change or feature introduced. Avoid vague titles like "Fix bug" or "Update code." Start with a keyword like `[feat]`, `[fix]`, `[docs]`, etc. to categorize the change. Reference the issue number if applicable (e.g., `[fix] resolve #123 memory leak in training loop`). This title will become the commit message for the squashed merge.
 -   **Use the [PR template](https://github.com/ServiceNow/Fast-LLM/blob/main/.github/PULL_REQUEST_TEMPLATE.md)**: Complete the checklist to make sure everything is in order before hitting submit.ivate or proprietary information.
 -   **Make sure all tests pass before merging**: Run the tests with `pytest tests/ -v -ra -n 10`, and fix any failure before merging. If possible, please run the test in an environment with at least 4 GPUs.
