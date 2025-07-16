@@ -22,7 +22,7 @@ class SSMDimNames:
     v_heads = "v_heads"  # Number of V heads
 
     # Mamba 2
-    d_xb = "d_xb"  # Dimension of the xB
+    x_proj_dim_2 = "x_proj_dim"  # d_xb
 
 
 class SSMBlockType(enum.StrEnum):

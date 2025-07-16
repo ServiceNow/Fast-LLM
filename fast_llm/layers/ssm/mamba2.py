@@ -69,7 +69,7 @@ class Mamba2(torch.nn.Module):
         td_state: TensorDim = tensor_space.get_tensor_dim(name=SSMDimNames.state_dim)
         td_model: TensorDim = tensor_space.get_tensor_dim(name=SSMDimNames.model_dim)
         tdt_rank: TensorDim = tensor_space.get_tensor_dim(name=SSMDimNames.dt_rank)
-        td_xb: TensorDim = tensor_space.get_tensor_dim(name=SSMDimNames.d_xb)
+        td_xb: TensorDim = tensor_space.get_tensor_dim(name=SSMDimNames.x_proj_dim_2)
         td_inner_proj: TensorDim = tensor_space.get_tensor_dim(name=SSMDimNames.inner_proj_mamba2)
         td_conv_kernel: TensorDim = tensor_space.get_tensor_dim(name=SSMDimNames.conv_kernel_size)
 

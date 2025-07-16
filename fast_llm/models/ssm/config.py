@@ -82,7 +82,7 @@ class HybridSSMBaseModelConfig(LanguageModelBaseConfig):
         elif SSMBlockType.mamba2.value in self.hybrid_block_layout:
             inner_proj_dim: int = 2 * self.ssm.d_xb + 2 * d_inner + self.ssm.dt_rank
             tensor_space.add_tensor_dim(TensorDim(SSMDimNames.inner_proj_mamba2, inner_proj_dim))
-            tensor_space.add_tensor_dim(TensorDim(SSMDimNames.d_xb, self.ssm.d_xb))
+            tensor_space.add_tensor_dim(TensorDim(SSMDimNames.x_proj_dim_2, self.ssm.d_xb))
 
     def _validate(self):
         with self._set_implicit_default(None):
