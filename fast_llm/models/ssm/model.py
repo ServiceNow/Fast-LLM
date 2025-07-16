@@ -44,7 +44,7 @@ class HybridSSMBaseModel[ConfigType: HybridSSMBaseModelConfig](GPTBaseModel[Conf
         if self._config.prediction_heads > 1:
             block_type = self._config.default_mtp_type or self._config.hybrid_block_layout[-1]
             for i in range(1, self._config.prediction_heads):
-                if block_type == SSMBlockType.transformer.value:
+                if block_type == SSMBlockType.transformer:
                     layers.append(
                         TransformerLayer(
                             self._config.transformer,
@@ -53,7 +53,7 @@ class HybridSSMBaseModel[ConfigType: HybridSSMBaseModelConfig](GPTBaseModel[Conf
                             return_input=i != self._config.prediction_heads - 1,
                         )
                     )
-                elif block_type == SSMBlockType.mamba2_discrete.value:
+                elif block_type == SSMBlockType.mamba2_discrete:
                     mamba_block = self.SSM_BLOCK_CLS(
                         config_transformer=self._config.transformer,
                         config_ssm=self._config.ssm,
@@ -63,7 +63,7 @@ class HybridSSMBaseModel[ConfigType: HybridSSMBaseModelConfig](GPTBaseModel[Conf
                         return_input=i != self._config.prediction_heads - 1,
                     )
                     layers.append(mamba_block)
-                elif block_type == SSMBlockType.mamba.value:
+                elif block_type == SSMBlockType.mamba:
                     mamba_block = self.SSM_BLOCK_CLS(
                         config_transformer=self._config.transformer,
                         config_ssm=self._config.ssm,
@@ -73,7 +73,7 @@ class HybridSSMBaseModel[ConfigType: HybridSSMBaseModelConfig](GPTBaseModel[Conf
                         return_input=i != self._config.prediction_heads - 1,
                     )
                     layers.append(mamba_block)
-                elif block_type == SSMBlockType.mamba2.value:
+                elif block_type == SSMBlockType.mamba2:
                     mamba_block = self.SSM_BLOCK_CLS(
                         config_transformer=self._config.transformer,
                         config_ssm=self._config.ssm,
