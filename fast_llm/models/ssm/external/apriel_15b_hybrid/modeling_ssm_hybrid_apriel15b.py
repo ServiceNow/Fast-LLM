@@ -1209,6 +1209,13 @@ class AprielThinkerSSMHybridModel(MistralModel):
         # Initialize weights and apply final processing
         self.post_init()
 
+    def forward(self, input_ids, **kwargs):
+        output: BaseModelOutputWithPast = super().forward(input_ids, **kwargs)
+        past_key_values: HybridMambaAttentionDynamicCache = output.past_key_values
+        if past_key_values and not past_key_values.has_previous_state:
+            past_key_values.has_previous_state = True
+        return output
+
 
 class KwargsForCausalLM(FlashAttentionKwargs, LossKwargs): ...
 
