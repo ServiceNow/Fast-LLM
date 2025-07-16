@@ -314,7 +314,3 @@ def test_lm_head(
         Assert.rms_close_relative(input_grad, ref_input.grad, threshold, min_threshold)
         Assert.rms_close_relative(head.final_norm.weight.grad_buffer, ref_rms_weight.grad, threshold, min_threshold)
         Assert.rms_close_relative(logit_weight.grad_buffer, ref_logit_weight.grad, threshold, min_threshold)
-
-
-if __name__ == "__main__":
-    pytest.main([__file__])
