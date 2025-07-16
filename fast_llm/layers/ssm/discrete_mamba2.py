@@ -98,11 +98,6 @@ class DiscreteMamba2(torch.nn.Module):
             if not bias
             else 0.0
         )
-        #########################################################
-        # replicate torch bias init method
-        fan_in, _ = torch.nn.init._calculate_fan_in_and_fan_out(self.conv1d_weight)
-        1 / math.sqrt(fan_in) if fan_in > 0 else 0
-        #########################################################
 
         self.conv1d_weight = ParameterMeta.from_dims(
             (td_conv, TensorDim("1", 1), td_conv_kernel),
