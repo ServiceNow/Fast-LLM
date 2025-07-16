@@ -37,36 +37,17 @@ if typing.TYPE_CHECKING:
 
 
 class HybridModelCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
-    """
-    IF we use Hybrid model and the block pattern is not provided, we will use the default block type for all layers (mamba2_discrete).
-    This is a temporary solution for importing/exporting hybrid models. Since there is no standard solution for this in HF, we just use the block_pattern.
-    If block_pattern is None, it will multiply the provided default block type by the number of layers and export/import it.
-    If block_pattern is provided, it will export/import it as-is.
-    """
-
     _model: HybridSSMModel
     _model_class: typing.ClassVar[FastLLMModelConfig] = HybridSSMModelConfig
     _default_block_type: str = SSMBlockType.mamba2_discrete.value
 
     @classmethod
-    def _import_config(cls, config):
-        cls.num_layers = config["n_layer"] if "n_layer" in config else config["num_hidden_layers"]
-        cls.block_pattern = config.get("hybrid_block_layout", None)
-        return super()._import_config(config)
-
-    @classmethod
     def _create_config_converters(cls) -> list[ParamConverter]:
-        block_converter = RenameParamConverter(
+        block_converter = RenameParamConverterIfExists(
             fast_llm_names=(("hybrid_block_layout",),),
             export_names=(("hybrid_block_layout",),),
+            default_value=[cls._default_block_type],
         )
-        # if hasattr(cls, "block_pattern") and cls.block_pattern is None:
-        #     # block
-        #     block_converter = ConstantImportParamConverter(
-        #         fast_llm_names=(("hybrid_block_layout",),),
-        #         fast_llm_value=[cls._default_block_type] * cls.num_layers,
-        #     )
-
         return super()._create_config_converters() + [block_converter]
 
 
@@ -212,7 +193,7 @@ class CommonSSMHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandle
                         "d_conv",
                     ),
                 ),
-                default_value=140,
+                default_value=4,
             ),
             RenameParamConverterIfExists(
                 fast_llm_names=(("ssm", "dt_init"),),
