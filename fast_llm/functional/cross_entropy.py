@@ -6,7 +6,7 @@ from fast_llm.core.distributed import ProcessGroup, ReduceOp, all_reduce
 from fast_llm.functional.config import CrossEntropyImpl, TargetFormat
 from fast_llm.functional.triton.cross_entropy import triton_cross_entropy_forward_backward
 from fast_llm.utils import Assert
-
+from flash_attn.losses.cross_entropy import CrossEntropyLoss
 
 def _torch_cross_entropy_forward_backward(
     logits: torch.Tensor,
@@ -160,15 +160,23 @@ def _fused_cross_entropy_forward_backward(
             return loss, grad
     else:
         # Weight every token loss by the loss weight. Before averaging.
+        # loss_func = CrossEntropyLoss(inplace_backward=True,reduction='none')
+        # diffu_loss = loss_func(
+        #     logits,
+        #     target.reshape(-1)
+        # )
+        # print(f"diffu_loss {diffu_loss} {diffu_loss.shape}")
+        # print(f"Loss {per_sample_loss} {per_sample_loss.shape}")
         per_sample_loss = per_sample_loss * loss_weight.view(-1, 1)
         # loss_weight_expanded = loss_weight.reshape(-1, 1)
         # print(f"grad: {grad.shape}")
         grad = grad * loss_weight.view(-1, 1) if grad is not None else None
-        # print(f"Loss {per_sample_loss} {per_sample_loss.shape}")
+        
         denom = torch.clamp((loss_weight != 0).sum(), min=1)
-        per_sample_loss.sum() / denom
+        
+        # print(f"masked tokens avg: {per_sample_loss.sum() / denom}")
         # print(f"avg all: {per_sample_loss.mean()}")
-        return per_sample_loss.mean(), grad
+        return (per_sample_loss.sum() / denom), grad
 
 
 _CROSS_ENTROPY_IMPLEMENTATIONS = {

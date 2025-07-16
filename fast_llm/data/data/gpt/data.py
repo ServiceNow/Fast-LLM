@@ -77,6 +77,7 @@ def prepare_batch(
     B, L = positions.size()
     context_length = context_length.unsqueeze(1).expand(B, L)
     p_mask = p_mask.unsqueeze(1)
+    # print(f"p_mask: {p_mask} {p_mask.shape}")
 
     # Reminder: a context_length of zero still has one in_context token (à la <BOS>)
     in_context = positions <= context_length
