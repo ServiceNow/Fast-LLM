@@ -127,16 +127,6 @@ class DiscreteMamba2(torch.nn.Module):
             lr_scale=mamba_layer_lr_scale,
         )
 
-    @property
-    def d_output(self):
-        """Returns the output dimension of the model."""
-        return self.d_model
-
-    @property
-    def state_to_tensor(self):
-        """Returns the state of the model as a tensor."""
-        return self.layer.state_to_tensor
-
     def forward(self, hidden_states, kwargs):
         """
         ON variable names and pep8: keeping some variable names as in the original code for clarity.
