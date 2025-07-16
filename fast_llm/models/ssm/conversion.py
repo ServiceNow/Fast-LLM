@@ -38,7 +38,7 @@ if typing.TYPE_CHECKING:
 
 class HybridModelCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
     """
-    IF we use Hybrid model and block pattern is not provided, we will use the default block type for all layers.
+    IF we use Hybrid model and the block pattern is not provided, we will use the default block type for all layers (mamba2_discrete).
     This is a temporary solution for importing/exporting hybrid models. Since there is no standard solution for this in HF, we just use the block_pattern.
     If block_pattern is None, it will multiply the provided default block type by the number of layers and export/import it.
     If block_pattern is provided, it will export/import it as-is.
