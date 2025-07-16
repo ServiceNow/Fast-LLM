@@ -85,14 +85,10 @@ class HybridSSMBaseModelConfig(LanguageModelBaseConfig):
             tensor_space.add_tensor_dim(TensorDim(SSMDimNames.d_xb, self.ssm.d_xb))
 
     def _validate(self):
-        with self._set_implicit_default():
-            # address case where dt_rank is "auto", which is same as None
-            if self.ssm.dt_rank == "auto":
-                if "dt_rank" in self.ssm._explicit_fields:
-                    self.ssm._explicit_fields.remove("dt_rank")
-                    self.ssm.dt_rank = None  # will be set in HybridSSMBaseModelConfig.validate()
-            if self.ssm.dt_rank is None:
+        with self._set_implicit_default(None):
+            if self.ssm.dt_rank == "auto" or self.ssm.dt_rank is None:
                 self.ssm.dt_rank = math.ceil(self.transformer.hidden_size / 16)
+        with self._set_implicit_default():
             if self.ssm.d_xb is None:
                 self.ssm.d_xb = self.transformer.hidden_size
             if self.ssm.d_inner is None:
