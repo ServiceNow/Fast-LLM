@@ -12,7 +12,6 @@ from fast_llm.engine.checkpoint.external import (
     MappedConfigParamConverter,
     ParamConverter,
     RenameParamConverter,
-    RenameParamConverterIfExists,
     SplitWeightConverter,
     WeightConverter,
 )
@@ -43,9 +42,10 @@ class HybridModelCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
 
     @classmethod
     def _create_config_converters(cls) -> list[ParamConverter]:
-        block_converter = RenameParamConverterIfExists(
+        block_converter = RenameParamConverter(
             fast_llm_names=(("hybrid_block_layout",),),
             export_names=(("hybrid_block_layout",),),
+            ignore=True,
             default_value=[cls._default_block_type],
         )
         return super()._create_config_converters() + [block_converter]
@@ -125,7 +125,7 @@ class CommonSSMHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandle
             ),
             # ================================================
             # Mamba2 specific parameters: they dont exist in old checkpoints exported for discrete Mamba2, hence need backward compatibility
-            RenameParamConverterIfExists(
+            RenameParamConverter(
                 fast_llm_names=(("ssm", "dt_rank"),),
                 export_names=(
                     (
@@ -133,9 +133,10 @@ class CommonSSMHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandle
                         "dt_rank",
                     ),
                 ),
+                ignore=True,
                 default_value=None,
             ),
-            RenameParamConverterIfExists(
+            RenameParamConverter(
                 fast_llm_names=(("ssm", "dt_min"),),
                 export_names=(
                     (
@@ -143,9 +144,10 @@ class CommonSSMHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandle
                         "dt_min",
                     ),
                 ),
+                ignore=True,
                 default_value=0.001,
             ),
-            RenameParamConverterIfExists(
+            RenameParamConverter(
                 fast_llm_names=(("ssm", "dt_max"),),
                 export_names=(
                     (
@@ -153,9 +155,10 @@ class CommonSSMHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandle
                         "dt_max",
                     ),
                 ),
+                ignore=True,
                 default_value=0.1,
             ),
-            RenameParamConverterIfExists(
+            RenameParamConverter(
                 fast_llm_names=(("ssm", "dt_init_floor"),),
                 export_names=(
                     (
@@ -163,9 +166,10 @@ class CommonSSMHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandle
                         "dt_init_floor",
                     ),
                 ),
+                ignore=True,
                 default_value=1e-4,
             ),
-            RenameParamConverterIfExists(
+            RenameParamConverter(
                 fast_llm_names=(("ssm", "dt_scale"),),
                 export_names=(
                     (
@@ -173,9 +177,10 @@ class CommonSSMHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandle
                         "dt_scale",
                     ),
                 ),
+                ignore=True,
                 default_value=1.0,
             ),
-            RenameParamConverterIfExists(
+            RenameParamConverter(
                 fast_llm_names=(("ssm", "d_xb"),),
                 export_names=(
                     (
@@ -183,9 +188,10 @@ class CommonSSMHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandle
                         "d_xb",
                     ),
                 ),
+                ignore=True,
                 default_value=None,
             ),
-            RenameParamConverterIfExists(
+            RenameParamConverter(
                 fast_llm_names=(("ssm", "conv_kernel_dimension"),),
                 export_names=(
                     (
@@ -193,9 +199,10 @@ class CommonSSMHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandle
                         "d_conv",
                     ),
                 ),
+                ignore=True,
                 default_value=4,
             ),
-            RenameParamConverterIfExists(
+            RenameParamConverter(
                 fast_llm_names=(("ssm", "dt_init"),),
                 export_names=(
                     (
@@ -203,6 +210,7 @@ class CommonSSMHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandle
                         "dt_init",
                     ),
                 ),
+                ignore=True,
                 default_value="random",
             ),
         ]
