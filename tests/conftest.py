@@ -95,10 +95,8 @@ def pytest_configure(config):
     else:
         worker_id = 0
 
-    # TODO: Remove the whole `TEST_RESULTS_PATH` once `get_test_dataset` is parallel-safe.
-    model_result_path = TEST_RESULTS_PATH / "models"
-    if model_result_path.exists():
-        shutil.rmtree(model_result_path)
+    if TEST_RESULTS_PATH.exists():
+        shutil.rmtree(TEST_RESULTS_PATH)
 
     num_gpus = torch.cuda.device_count()
     if num_gpus > 0 and is_parallel:
