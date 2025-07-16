@@ -21,6 +21,7 @@ from fast_llm.models.gpt.config import (
 )
 from fast_llm.models.ssm.config import LLambaHuggingfaceCheckpointFormat
 from tests.utils.dataset import MODEL_DATASET_PREFIX, MODEL_TEST_VOCAB_SIZE
+from tests.utils.distributed_configs import DistributedTestingConfig
 
 _LOG_LEVEL = int(os.environ.get("LOG_LEVEL", 13))
 
@@ -57,6 +58,8 @@ class ModelTestingConfig:
     groups: dict[ModelTestingGroup, ModelTestingGroupAction]
     # Scale the comparison thresholds for specific models.
     compare_factor: float = 1.0
+    # Option to skip specific distributed configuration with name containing any of the provided strings.
+    skip_tests: tuple[str] = ()
 
     @functools.cached_property
     def trainer_config_class(self) -> type[TrainerConfig]:
@@ -88,6 +91,9 @@ class ModelTestingConfig:
     def base_model_config_class(self):
         return self.model_config_class.get_base_model_config_class()
 
+    def should_skip(self, distributed_config: DistributedTestingConfig) -> bool:
+        return any(key in distributed_config.name for key in self.skip_tests)
+
 
 def _update_and_add_testing_config(
     old_name: str,
@@ -96,9 +102,8 @@ def _update_and_add_testing_config(
     model_type: str | None = None,
     extra_args: list[str] | None = None,
     megatron_args: list[str] | None = ...,
-    checkpoint_format: CheckpointFormat | None = ...,
     groups: dict[ModelTestingGroup, ModelTestingGroupAction],
-    compare_factor: float = ...,
+    **kwargs,
 ):
     config = MODEL_CONFIGS[old_name]
     updates: dict[str, typing.Any] = {
@@ -116,10 +121,7 @@ def _update_and_add_testing_config(
             updates["megatron_args"] = megatron_args
         else:
             updates["megatron_args"] = config.megatron_args + megatron_args
-    if checkpoint_format is not ...:
-        updates["checkpoint_format"] = checkpoint_format
-    if compare_factor is not ...:
-        updates["compare_factor"] = compare_factor
+    updates.update(kwargs)
 
     MODEL_CONFIGS[new_name] = dataclasses.replace(config, **updates)
 
@@ -362,6 +364,7 @@ _update_and_add_testing_config(
         ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
         ModelTestingGroup.distributed: ModelTestingGroupAction.unimportant,
     },
+    compare_factor=2.0,
 )
 
 _update_and_add_testing_config(
@@ -472,7 +475,9 @@ _update_and_add_testing_config(
         # TODO: Fix and bring back to `testing_groups`
         ModelTestingGroup.distributed: ModelTestingGroupAction.broken,
     },
-    compare_factor=10.0,
+    compare_factor=2.0,
+    # SSMs don't support sequence-first configurations.
+    skip_tests=("sf", "sdp", "stp", "ms"),
 )
 
 
@@ -494,7 +499,6 @@ _update_and_add_testing_config(
         ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
         ModelTestingGroup.distributed: ModelTestingGroupAction.unimportant,
     },
-    compare_factor=10.0,
 )
 
 

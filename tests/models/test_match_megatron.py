@@ -44,7 +44,7 @@ def test_match_megatron(run_test_script_for_all_models, model_testing_config, co
         ".mlp.experts.",
     )
     if model_testing_config.name == "mixtral":
-        ignore_tensors.extend([".mlp.experts.", ".mlp.layer_1.weight"])
+        ignore_tensors += (".mlp.experts.", ".mlp.layer_1.weight")
 
     distributed_testing_config = DistributedTestingConfig(
         name="match_megatron",

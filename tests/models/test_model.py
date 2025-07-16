@@ -28,10 +28,16 @@ def test_model_simple(run_test_script_for_all_models, run_test_script_base_path)
 # Parametrize with config name so it shows in test name.
 @pytest.mark.parametrize("config_name", SINGLE_GPU_TESTING_CONFIGS)
 def test_and_compare_model(
-    run_test_script_for_all_models, compare_results_for_all_models, config_name, run_test_script_base_path
+    run_test_script_for_all_models,
+    compare_results_for_all_models,
+    config_name,
+    run_test_script_base_path,
+    model_testing_config,
 ):
     # We can expect tests to respect the ordering of `SINGLE_GPU_TESTING_CONFIGS`, so compare should have run already.
     config = SINGLE_GPU_TESTING_CONFIGS[config_name]
+    if model_testing_config.should_skip(config):
+        pytest.skip(f"Configuration not supported.")
     if config.compare is not None:
         check_subtest_success(run_test_script_base_path / config.compare)
     # A baseline config (single-gpu, bf16, flash-attn).
@@ -73,8 +79,11 @@ def test_model_distributed(
     config_name,
     run_test_script_base_path,
     report_subtest,
+    model_testing_config,
 ):
     config = DISTRIBUTED_TESTING_CONFIGS[config_name]
+    if model_testing_config.should_skip(config):
+        pytest.skip(f"Configuration not supported.")
     if torch.cuda.device_count() < config.num_gpus:
         pytest.skip(f"Not enough GPUs: {torch.cuda.device_count()} < {config.num_gpus}")
     report_subtest(run_test_script_base_path / config.name, config.num_gpus)
