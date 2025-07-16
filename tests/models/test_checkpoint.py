@@ -1,4 +1,4 @@
-import functools
+import logging
 import pathlib
 import shutil
 
@@ -20,7 +20,12 @@ from fast_llm.engine.checkpoint.convert import ConvertConfig
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig, ShardName
 from fast_llm.utils import Assert
 from tests.utils.compare_tensor_logs import CompareConfig, compare_logged_tensor
+from tests.utils.distributed_configs import DistributedTestingConfig
 from tests.utils.model_configs import ModelTestingConfig, ModelTestingGroup
+from tests.utils.save_load_configs import DISTRIBUTED_SAVE_LOAD_CONFIGS, DistributedSaveLoadConfig
+from tests.utils.utils import requires_cuda
+
+logger = logging.getLogger(__name__)
 
 _WEIGHT_SHARD_SAVE_NAME = f"{ShardName.weights}_shard"
 
@@ -31,62 +36,53 @@ _CHECKPOINT_AND_EVAL_ARGS = [
 ]
 
 
+@requires_cuda
 @pytest.mark.model_testing_group(ModelTestingGroup.checkpoint)
 def test_checkpoint_and_eval(run_test_script_for_all_models, model_testing_config):
     # A baseline config (single-gpu, bf16, flash-attn).
-    run_test_script_for_all_models(_CHECKPOINT_AND_EVAL_ARGS)
-
-
-def _prepare_resume_fn(test_path: pathlib.Path, compare_path: pathlib.Path):
-    shutil.copytree(compare_path, test_path)
-    shutil.rmtree(test_path / "checkpoint" / "2")
-    assert (test_path / "checkpoint" / "1" / "ok").is_file()
-    # TODO: Eval
-    shutil.rmtree(test_path / "runs")
-
-
-def _compare_resume_fn(test_path: pathlib.Path, compare_path: pathlib.Path):
-    for artifact in ["init", "train_1"]:
-        path = f"runs/0/artifacts/0/tensor_logs_{artifact}.pt"
-        if not (test_path / path).is_file():
-            shutil.copy(compare_path / path, test_path / path)
-
-
-@pytest.mark.depends_on(on=["test_checkpoint_and_eval[{model_testing_config}]"])
-@pytest.mark.model_testing_group(ModelTestingGroup.checkpoint)
-def test_resume(run_test_script_for_all_models):
-    # Resume from iteration=1 and compare outputs with the baseline run.
     run_test_script_for_all_models(
-        _CHECKPOINT_AND_EVAL_ARGS,
-        compare=f"test_checkpoint_and_eval",
-        prepare_fn=_prepare_resume_fn,
-        compare_fn=_compare_resume_fn,
+        distributed_testing_config=DistributedTestingConfig(
+            name="checkpoint_and_eval", config_args=_CHECKPOINT_AND_EVAL_ARGS
+        ),
     )
-
-
-@pytest.mark.depends_on(on=["test_checkpoint_and_eval[{model_testing_config}]"])
-@pytest.mark.model_testing_group(ModelTestingGroup.checkpoint)
-def test_resume_frozen(run_test_script_for_all_models):
-    # Resume with frozen mlp. No comparison.
-    run_test_script_for_all_models(
-        _CHECKPOINT_AND_EVAL_ARGS + ["model.base_model.transformer.mlp_lr_scale=0."],
-        compare="test_checkpoint_and_eval",
-        prepare_fn=_prepare_resume_fn,
-        do_compare=False,
-    )
-
-
-def do_get_convert_path(
-    to: type[CheckpointFormat] | None = None, from_: type[CheckpointFormat] | None = None, *, base_path: pathlib.Path
-) -> pathlib.Path:
-    if to is None or from_ is None:
-        return base_path / "test_checkpoint_and_eval" / "checkpoint" / "2"
-    return base_path / "test_convert_model" / f"{to.name}_from_{from_.name}"
 
 
 @pytest.fixture(scope="module")
-def get_convert_path(run_test_script_base_path):
-    return functools.partial(do_get_convert_path, base_path=run_test_script_base_path)
+def prepare_resume(run_test_script_base_path: pathlib.Path):
+    def do_prepare_resume(distributed_testing_config: DistributedTestingConfig):
+        self_path = run_test_script_base_path / distributed_testing_config.name
+        shutil.copytree(run_test_script_base_path / distributed_testing_config.compare, self_path)
+        shutil.rmtree(self_path / "checkpoint" / "2")
+        assert (self_path / "checkpoint" / "1" / "ok").is_file()
+        # TODO: Eval
+        shutil.rmtree(self_path / "runs")
+
+    return do_prepare_resume
+
+
+@requires_cuda
+@pytest.mark.depends_on(on=["test_checkpoint_and_eval[{model_testing_config}]"])
+@pytest.mark.model_testing_group(ModelTestingGroup.checkpoint)
+def test_resume(run_test_script_for_all_models, compare_results_for_all_models, prepare_resume):
+    distributed_testing_config = DistributedTestingConfig(
+        name="resume", compare="checkpoint_and_eval", config_args=_CHECKPOINT_AND_EVAL_ARGS
+    )
+    prepare_resume(distributed_testing_config)
+    # Resume from iteration=1 and compare outputs with the baseline run.
+    run_test_script_for_all_models(distributed_testing_config)
+    compare_results_for_all_models(distributed_testing_config, ("train_2",))
+
+
+@requires_cuda
+@pytest.mark.depends_on(on=["test_checkpoint_and_eval[{model_testing_config}]"])
+@pytest.mark.model_testing_group(ModelTestingGroup.checkpoint)
+def test_resume_frozen(run_test_script_for_all_models, prepare_resume):
+    distributed_testing_config = DistributedTestingConfig(
+        name="resume_frozen", compare="checkpoint_and_eval", config_args=_CHECKPOINT_AND_EVAL_ARGS
+    )
+    prepare_resume(distributed_testing_config)
+    # Resume with frozen mlp. No comparison.
+    run_test_script_for_all_models(distributed_testing_config)
 
 
 @pytest.fixture(scope="module")
@@ -109,6 +105,7 @@ def run_conversion(model_testing_config: ModelTestingConfig, get_convert_path):
     return do_run_conversion
 
 
+@requires_cuda
 @pytest.mark.depends_on(on=["test_checkpoint_and_eval[{model_testing_config}]"])
 @pytest.mark.model_testing_group(ModelTestingGroup.convert)
 def test_conversion(model_testing_config, run_conversion, get_convert_path):
@@ -146,9 +143,12 @@ def test_conversion(model_testing_config, run_conversion, get_convert_path):
 
 
 def _compare_safetensor_files(
-    reference_path: pathlib.Path, *other_paths: pathlib.Path, expected_keys: set[str] | None = None
+    reference: pathlib.Path | dict[str, torch.Tensor],
+    *other_paths: pathlib.Path,
+    expected_keys: set[str] | None = None,
 ):
-    reference = safetensors.torch.load_file(reference_path)
+    if isinstance(reference, pathlib.Path):
+        reference = safetensors.torch.load_file(reference)
     if expected_keys is None:
         expected_keys = set(reference.keys())
     else:
@@ -161,6 +161,7 @@ def _compare_safetensor_files(
             Assert.all_equal(reference[key], other[key])
 
 
+@requires_cuda
 @pytest.mark.depends_on(on=["test_conversion[{model_testing_config}]"])
 @pytest.mark.model_testing_group(ModelTestingGroup.convert)
 def test_converted_round_trip(model_testing_config, get_convert_path):
@@ -208,6 +209,7 @@ def load_and_compare_checkpoints(model_testing_config):
     return do_load_and_compare_checkpoints
 
 
+@requires_cuda
 @pytest.mark.depends_on(on=["test_conversion[{model_testing_config}]"])
 @pytest.mark.model_testing_group(ModelTestingGroup.convert)
 def test_load_pretrained(
@@ -274,6 +276,7 @@ def test_load_pretrained(
     )
 
 
+@requires_cuda
 @pytest.mark.depends_on(on=["test_load_pretrained[{model_testing_config}]"])
 @pytest.mark.model_testing_group(ModelTestingGroup.convert)
 def test_huggingface_model(model_testing_config, get_convert_path):
@@ -332,104 +335,114 @@ def test_huggingface_model(model_testing_config, get_convert_path):
         raise ValueError(f"Comparison failed ({len(errors)} errors)")
 
 
-@pytest.fixture(scope="module")
-def load_and_save_parallel_base_path(run_test_script_base_path):
-    return run_test_script_base_path / "test_load_and_save_parallel"
-
-
-@pytest.mark.depends_on(
-    on=[
-        "test_load_pretrained[{model_testing_config}]",
-    ]
-)
+@requires_cuda
+@pytest.mark.depends_on(on=["test_load_pretrained[{model_testing_config}]"])
 @pytest.mark.model_testing_group(ModelTestingGroup.convert, ModelTestingGroup.distributed)
-def test_save_and_load_in_parallel(run_distributed_script_for_all_models, load_and_save_parallel_base_path):
+def test_save_and_load_in_parallel(run_distributed_script, run_test_script_base_path, model_testing_config, request):
     # Save and load checkpoints to and from various distributed configurations.
     # Combined in a single test to mitigate process creation overhead.
     # TODO: Test beyond 2 gpu configs?
     import tests.models.distributed_test_checkpoint
 
-    run_distributed_script_for_all_models(
-        [tests.models.distributed_test_checkpoint.__file__],
-        base_path=load_and_save_parallel_base_path,
-        num_gpus=2,
-    )
+    script = [
+        tests.models.distributed_test_checkpoint.__file__,
+        str(run_test_script_base_path),
+        model_testing_config.name,
+    ]
+    if request.config.getoption("distributed_capture"):
+        logger.warning(
+            "Capturing output and forwarding to associated tests. Run with `--no-distributed-capture` to disable."
+        )
+    else:
+        script.append("--no-distributed-capture")
+    run_distributed_script(script, num_gpus=2)
 
 
 @pytest.fixture(scope="module")
-def parallel_checkpoint_names(model_testing_config):
-    names = []
-    for format_ in (DistributedCheckpointFormat, FastLLMCheckpointFormat, model_testing_config.checkpoint_format):
-        names.extend(
-            [
-                f"load_pretrained_{format_.name}_in_dp2",
-                f"load_pretrained_{format_.name}_in_tp2",
-                f"load_pretrained_{format_.name}_in_stp2",
-                f"load_pretrained_{format_.name}_in_pp2",
-            ]
-        )
-
-    names.extend(
-        [
-            "load_pretrained_dp2_in_stp2",
-            "load_pretrained_stp2_in_dp2",
-            "load_pretrained_tp2_in_pp2",
-            "load_pretrained_pp2_in_tp2",
-        ]
-    )
-    return names
+def reference_distributed_shard(get_convert_path) -> torch.Tensor | None:
+    # Load the file in a fixture (on cpu) so it's not loaded from disk each time.
+    try:
+        return safetensors.torch.load_file(get_convert_path() / "rank_0.safetensors")[_WEIGHT_SHARD_SAVE_NAME]
+    except OSError:
+        # The fixture may be evaluated even if the tests are to be skipped.
+        return None
 
 
-@pytest.mark.depends_on(on=["test_save_and_load_in_parallel[{model_testing_config}]"])
+@requires_cuda
+@pytest.mark.depends_on(on=["test_load_pretrained[{model_testing_config}]"])
 @pytest.mark.model_testing_group(ModelTestingGroup.convert, ModelTestingGroup.distributed)
 def test_load_parallel_checkpoint_in_single_gpu(
-    load_and_save_parallel_base_path, get_convert_path, load_and_compare_checkpoints, parallel_checkpoint_names
+    distributed_save_load_config: DistributedSaveLoadConfig,
+    run_test_script_base_path,
+    model_testing_config,
+    load_and_compare_checkpoints,
+    reference_distributed_shard,
+    report_subtest,
 ):
-    # Test single-gpu loading of multi-gpu distributed checkpoints.
-    reference_shard = safetensors.torch.load_file(get_convert_path() / "rank_0.safetensors", device="cuda")[
-        _WEIGHT_SHARD_SAVE_NAME
-    ]
+    # This should only happen when test is skipped (failed dependency).
+    assert reference_distributed_shard is not None
+    distributed_save_load_config = distributed_save_load_config.resolve(
+        base_path=run_test_script_base_path, model_testing_config=model_testing_config
+    )
+    report_subtest(distributed_save_load_config.save_path, distributed_save_load_config.num_gpus)
+    load_and_compare_checkpoints(
+        DistributedCheckpointFormat,
+        distributed_save_load_config.save_path / DistributedCheckpointFormat.name,
+        None,
+        reference_distributed_shard.to(device="cuda"),
+    )
 
-    for name in parallel_checkpoint_names:
-        load_and_compare_checkpoints(
-            DistributedCheckpointFormat,
-            load_and_save_parallel_base_path / name / DistributedCheckpointFormat.name,
-            None,
-            reference_shard,
-        )
 
-
+@requires_cuda
 @pytest.mark.depends_on(on=["test_save_and_load_in_parallel[{model_testing_config}]"])
 @pytest.mark.model_testing_group(ModelTestingGroup.convert, ModelTestingGroup.distributed)
-def test_parallel_checkpoint_consistency(model_testing_config, load_and_save_parallel_base_path, get_convert_path):
+def test_parallel_checkpoint_consistency(model_testing_config, run_test_script_base_path):
     # Check the consistency of the checkpoints saved in `test_save_and_load_in_parallel`
-    checkpoint_formats = (DistributedCheckpointFormat, FastLLMCheckpointFormat, model_testing_config.checkpoint_format)
     # Compare Distributed checkpoints
     for config in ("dp2", "tp2", "stp2", "pp2"):
         for rank in range(2):
             _compare_safetensor_files(
                 *[
-                    load_and_save_parallel_base_path
-                    / f"load_pretrained_{format_.name}_in_{config}"
-                    / DistributedCheckpointFormat.name
-                    / f"rank_{rank}.safetensors"
-                    for format_ in checkpoint_formats
+                    DISTRIBUTED_SAVE_LOAD_CONFIGS[f"load_{format_}_in_{config}"]
+                    .resolve(base_path=run_test_script_base_path, model_testing_config=model_testing_config)
+                    .save_path
+                    / f"{DistributedCheckpointFormat.name}/rank_{rank}.safetensors"
+                    for format_ in (
+                        DistributedCheckpointFormat.name,
+                        FastLLMCheckpointFormat.name,
+                        "{checkpoint_format}",
+                    )
                 ]
             )
 
 
+@pytest.fixture(scope="module")
+def reference_fast_llm_shard(get_convert_path) -> dict[str, torch.Tensor] | None:
+    # Load the file in a fixture (on cpu) so it's not loaded from disk each time.
+    try:
+        return safetensors.torch.load_file(
+            get_convert_path(FastLLMCheckpointFormat, DistributedCheckpointFormat) / f"model_0.safetensors"
+        )
+    except OSError:
+        # The fixture may be evaluated even if the tests are to be skipped.
+        return None
+
+
+@requires_cuda
 @pytest.mark.depends_on(on=["test_save_and_load_in_parallel[{model_testing_config}]"])
 @pytest.mark.model_testing_group(ModelTestingGroup.convert, ModelTestingGroup.distributed)
 def test_multi_gpu_fast_llm_checkpoint(
-    model_testing_config, load_and_save_parallel_base_path, get_convert_path, parallel_checkpoint_names
+    model_testing_config, distributed_save_load_config_non_pp, run_test_script_base_path, reference_fast_llm_shard
 ):
+    # This should only happen when test is skipped (failed dependency).
+    assert reference_fast_llm_shard is not None
     # Fast-LLM checkpoints are independent of the distributed configuration that saved it.
     # TODO: Check pipeline-parallel checkpoints (two files).
+    distributed_save_load_config_non_pp = distributed_save_load_config_non_pp.resolve(
+        base_path=run_test_script_base_path, model_testing_config=model_testing_config
+    )
+
     _compare_safetensor_files(
-        get_convert_path(FastLLMCheckpointFormat, DistributedCheckpointFormat) / f"model_0.safetensors",
-        *[
-            load_and_save_parallel_base_path / name / FastLLMCheckpointFormat.name / f"model_0.safetensors"
-            for name in parallel_checkpoint_names
-            if "in_pp2" not in name
-        ],
+        reference_fast_llm_shard,
+        distributed_save_load_config_non_pp.save_path / f"{FastLLMCheckpointFormat.name}/model_0.safetensors",
     )
