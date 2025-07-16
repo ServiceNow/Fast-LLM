@@ -1,6 +1,5 @@
 import pathlib
 
-import cartesia_pytorch.Llamba.llamba
 import pytest
 import torch
 
@@ -16,11 +15,14 @@ from fast_llm.models.ssm.config import LLambaHuggingfaceCheckpointFormat
 from fast_llm.models.ssm.model import HybridSSMModel
 
 
+@pytest.mark.skip("Disabled due to cartesia_pytorch installation issue")
 @pytest.mark.slow
 def test_load_from_llamba_checkpoint():
     """
     Test to check whether the of Fast-LLM and Huggingface checkpoint loading for Llamba-1B produce the same results.
     """
+    import cartesia_pytorch.Llamba.llamba
+
     vocab_size = 128256  # from https://huggingface.co/cartesia-ai/Llamba-1B/blob/main/config.json
     batch_size = 2
     seq_length = 32
