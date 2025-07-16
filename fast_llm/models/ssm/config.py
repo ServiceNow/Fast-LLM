@@ -197,6 +197,12 @@ class HybridSSMModelConfig(FastLLMModelConfig):
         logger.warning(
             "HybridSSMModelConfig is being instantiated. This model is experimental and may not work as expected."
         )
+        if (
+            self.base_model.sequence_first
+            or self.distributed.sequence_data_parallel > 1
+            or self.distributed.sequence_tensor_parallel
+        ):
+            raise NotImplementedError(f"Sequence-first not supported for SSMs.")
         super()._validate()
 
 

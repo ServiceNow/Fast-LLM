@@ -7,6 +7,7 @@ import torch
 from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
 from fast_llm.layers.common.linear import Linear
 from fast_llm.layers.ssm.config import SSMConfig, SSMDimNames
+from fast_llm.layers.transformer.config import TransformerKwargs
 from fast_llm.tensor import ParameterMeta, init_ones_, init_uniform_, init_zeros_, kaiming_init_
 from fast_llm.utils import get_lr_scale
 
@@ -157,6 +158,8 @@ class DiscreteMamba2(torch.nn.Module):
             outputs["hidden_states"]: (B, L, D).
             outputs["state"]: inference cache.
         """
+        if kwargs[TransformerKwargs.sequence_first]:
+            raise NotImplementedError(f"Sequence-first not supported for SSMs.")
 
         assert _mamba_available
         input_ = hidden_states

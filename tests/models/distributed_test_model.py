@@ -27,6 +27,8 @@ def main(args: list[str] | None = None) -> None:
         group = pool.get_process_group(range(world_size), rank)
 
         for name, config in DISTRIBUTED_TESTING_CONFIGS.items():
+            if model_testing_config.should_skip(config):
+                continue
             if world_size < config.num_gpus:
                 logger.warning(f"{name} {f"SKIPPED (not enough GPUs: {world_size} < {config.num_gpus})"})")
                 continue

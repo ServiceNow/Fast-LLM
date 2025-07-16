@@ -19,7 +19,7 @@ from fast_llm.engine.checkpoint.config import (
 from fast_llm.engine.checkpoint.convert import ConvertConfig
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig, ShardName
 from fast_llm.utils import Assert
-from tests.utils.compare_tensor_logs import CompareConfig, compare_logged_tensor
+from tests.utils.compare_tensor_logs import CompareConfig
 from tests.utils.distributed_configs import DistributedTestingConfig
 from tests.utils.model_configs import ModelTestingConfig, ModelTestingGroup
 from tests.utils.save_load_configs import DISTRIBUTED_SAVE_LOAD_CONFIGS, DistributedSaveLoadConfig
@@ -65,12 +65,15 @@ def prepare_resume(run_test_script_base_path: pathlib.Path):
 @pytest.mark.model_testing_group(ModelTestingGroup.checkpoint)
 def test_resume(run_test_script_for_all_models, compare_results_for_all_models, prepare_resume):
     distributed_testing_config = DistributedTestingConfig(
-        name="resume", compare="checkpoint_and_eval", config_args=_CHECKPOINT_AND_EVAL_ARGS
+        name="resume",
+        compare="checkpoint_and_eval",
+        config_args=_CHECKPOINT_AND_EVAL_ARGS,
+        compare_config=CompareConfig(sub_configs={(("init", "train_1"), None): CompareConfig(ignore_tensors=True)}),
     )
     prepare_resume(distributed_testing_config)
     # Resume from iteration=1 and compare outputs with the baseline run.
     run_test_script_for_all_models(distributed_testing_config)
-    compare_results_for_all_models(distributed_testing_config, ("train_2",))
+    compare_results_for_all_models(distributed_testing_config)
 
 
 @requires_cuda
@@ -304,7 +307,6 @@ def test_huggingface_model(model_testing_config, get_convert_path):
         )
     )
     errors = []
-    compare = CompareConfig()
     auto_model = (
         transformers.AutoModel
         if model_testing_config.name in ("diffusion_llama", "dream")
@@ -320,13 +322,12 @@ def test_huggingface_model(model_testing_config, get_convert_path):
         print(name)
         output = model(test_input)
         # TODO: Make a generic comparison util.
-        compare_logged_tensor(
+        CompareConfig().compare_tensors(
             {"samples": output_ref.logits, "shape": output_ref.logits.shape, "step": 0},
             {"samples": output.logits, "shape": output.logits.shape, "step": 0},
             errors,
             name,
             "logits",
-            compare,
         )
 
     if errors:
