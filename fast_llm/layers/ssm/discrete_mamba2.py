@@ -7,7 +7,7 @@ import torch
 from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
 from fast_llm.layers.common.linear import Linear
 from fast_llm.layers.ssm.config import SSMConfig, SSMDimNames
-from fast_llm.tensor import ParameterMeta, bias_init_method, init_ones_, init_uniform_, init_zeros_, kaiming_init_
+from fast_llm.tensor import ParameterMeta, init_ones_, init_uniform_, init_zeros_, kaiming_init_
 from fast_llm.utils import get_lr_scale
 
 logger = logging.getLogger(__name__)
@@ -16,17 +16,23 @@ logger = logging.getLogger(__name__)
 try:
     from mamba_ssm.ops.triton.ssd_combined import mamba_chunk_scan_combined as _mamba_chunk_scan_combined  # noqa
 
-    _mamba_available = True
+    _MAMBA_AVAILABLE = True
 except (ImportError, RuntimeError):
-    _mamba_available = False
+    _MAMBA_AVAILABLE = False
 
 
 try:
     from causal_conv1d import causal_conv1d_fn as _causal_conv1d_fn  # noqa
 
-    _causal_conv1d_available = True
+    _CAUSAL_CONV1D_AVAILABLE = True
 except (ImportError, RuntimeError):
-    _causal_conv1d_available = False
+    _CAUSAL_CONV1D_AVAILABLE = False
+
+
+def bias_init_method(conv_weight):
+    fan_in, _ = torch.nn.init._calculate_fan_in_and_fan_out(conv_weight)
+    bound = 1 / math.sqrt(fan_in) if fan_in > 0 else 0
+    return init_uniform_(-bound, bound)
 
 
 class DiscreteMamba2(torch.nn.Module):
@@ -92,6 +98,11 @@ class DiscreteMamba2(torch.nn.Module):
             if not bias
             else 0.0
         )
+        #########################################################
+        # replicate torch bias init method
+        fan_in, _ = torch.nn.init._calculate_fan_in_and_fan_out(self.conv1d_weight)
+        1 / math.sqrt(fan_in) if fan_in > 0 else 0
+        #########################################################
 
         self.conv1d_weight = ParameterMeta.from_dims(
             (td_conv, TensorDim("1", 1), td_conv_kernel),
@@ -144,7 +155,7 @@ class DiscreteMamba2(torch.nn.Module):
             outputs["state"]: inference cache.
         """
 
-        assert _mamba_available
+        assert _MAMBA_AVAILABLE
         input_ = hidden_states
         outputs = {}
         # assert state is None
@@ -235,7 +246,7 @@ class DiscreteMamba2(torch.nn.Module):
 
     def convolutional_forward(self, xBC, padded_len):
         """Convolutional layer forward pass for the full sequence."""
-        if _causal_conv1d_available and self.activation_name in (
+        if _CAUSAL_CONV1D_AVAILABLE and self.activation_name in (
             "silu",
             "swish",
             "identity",

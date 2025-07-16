@@ -7,22 +7,22 @@ import torch
 from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
 from fast_llm.layers.common.linear import Linear
 from fast_llm.layers.ssm.config import SSMConfig, SSMDimNames
-from fast_llm.tensor import ParameterMeta, bias_init_method, init_fill_, init_ones_, init_uniform_, kaiming_init_
+from fast_llm.tensor import ParameterMeta, init_fill_, init_ones_, init_uniform_, kaiming_init_
 from fast_llm.utils import get_lr_scale
 
 try:
     from mamba_ssm.ops.selective_scan_interface import selective_scan_fn  # noqa
 
-    _mamba_available = True
+    _MAMBA_AVAILABLE = True
 except (ImportError, RuntimeError):
-    _mamba_available = False
+    _MAMBA_AVAILABLE = False
 
 try:
     from causal_conv1d import causal_conv1d_fn as _causal_conv1d_fn  # noqa
 
-    _causal_conv1d_available = True
+    _CAUSAL_CONV1D_AVAILABLE = True
 except (ImportError, RuntimeError):
-    _causal_conv1d_available = False
+    _CAUSAL_CONV1D_AVAILABLE = False
 
 
 def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
@@ -35,6 +35,12 @@ def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
         return hidden_states
     hidden_states = hidden_states[:, :, None, :, :].expand(batch, num_key_value_heads, n_rep, slen, head_dim)
     return hidden_states.reshape(batch, num_key_value_heads * n_rep, slen, head_dim)
+
+
+def bias_init_method(conv_weight):
+    fan_in, _ = torch.nn.init._calculate_fan_in_and_fan_out(conv_weight)
+    bound = 1 / math.sqrt(fan_in) if fan_in > 0 else 0
+    return init_uniform_(-bound, bound)
 
 
 class Mamba2(torch.nn.Module):
@@ -84,6 +90,7 @@ class Mamba2(torch.nn.Module):
                 ),  # see https://github.com/pytorch/pytorch/blob/1eba9b3aa3c43f86f4a2c807ac8e12c4a7767340/torch/nn/modules/conv.py#L180C53-L180C67
                 lr_scale=mamba_layer_lr_scale,
             )
+
             self.conv1d_bias = ParameterMeta.from_dims(
                 (td_inner,), init_method=bias_init_method(self.conv1d_weight), lr_scale=mamba_layer_lr_scale
             )
@@ -185,7 +192,7 @@ class Mamba2(torch.nn.Module):
         hidden_states: (B, L, D)
         Returns: same shape as hidden_states
         """
-        assert _mamba_available
+        assert _MAMBA_AVAILABLE
         batch, seqlen, dim = hidden_states.shape
         outputs = {}
 
@@ -214,7 +221,7 @@ class Mamba2(torch.nn.Module):
             x = einops.rearrange(x, "b n_group l dstate -> b (n_group dstate) l")
 
         assert self.activation in ["silu", "swish"]
-        if _causal_conv1d_available:
+        if _CAUSAL_CONV1D_AVAILABLE:
             x = _causal_conv1d_fn(
                 x=x,
                 weight=einops.rearrange(self.conv1d_weight, "d 1 w -> d w"),

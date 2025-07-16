@@ -369,9 +369,3 @@ def init_uniform_(
             return tensor
 
     return init_
-
-
-def bias_init_method(conv_weight):
-    fan_in, _ = torch.nn.init._calculate_fan_in_and_fan_out(conv_weight)
-    bound = 1 / math.sqrt(fan_in) if fan_in > 0 else 0
-    return init_uniform_(-bound, bound)

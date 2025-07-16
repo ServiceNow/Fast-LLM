@@ -13,9 +13,9 @@ from fast_llm.utils import get_lr_scale
 try:
     from mamba_ssm.ops.selective_scan_interface import mamba_inner_fn as _mamba_inner_fn  # noqa
 
-    _mamba_available = True
+    _MAMBA_AVAILABLE = True
 except (ImportError, RuntimeError):
-    _mamba_available = False
+    _MAMBA_AVAILABLE = False
 
 """
 Note: this is mostly adapted from https://github.com/Zyphra/Zamba2, similar code is also in https://github.com/state-spaces/mamba.
@@ -159,7 +159,7 @@ class MambaLayer(torch.nn.Module):
         self._return_input = return_input
 
     def forward(self, hidden_states, kwargs):
-        assert _mamba_available
+        assert _MAMBA_AVAILABLE
         batch, seqlen, dim = hidden_states.shape
 
         # We do matmul and transpose BLH -> HBL at the same time
