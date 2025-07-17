@@ -337,60 +337,39 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                 kwargs[LanguageModelKwargs.labels] = labels
 
                 if self._config.transformer.diffusion is not None:
-                    # if batch.mask_indexes is not None:
+
                     assert batch.loss_weights is not None, "masked-diffusion mode needs to set loss_weights"
                     if self._config.transformer.diffusion == DiffusionStyle.masked:
-                        # assert batch.loss_weights is not None, "masked-diffusion mode needs to set loss_weights"
 
-                        # We are in masked-diffusion mode, so we need to add the mask indexes and probabilities to kwargs
-                        # kwargs[LanguageModelKwargs.mask_indexes] = batch.mask_indexes.to(
-                        #     device=self._tensor_space.distributed.device
-                        # )
-                        # kwargs[LanguageModelKwargs.mask_probabilities] = batch.mask_probabilities.to(
-                        #     device=self._tensor_space.distributed.device
-                        # )
-                        # Setup bidirection attention for masked diffusion
-                        # It uses _flash_attn_func so no need to set attention_mask and attention_mask_value.
+                        # Setup bidirection attention for masked diffusion, If uses _flash_attn_func attention_mask and attention_mask_value won't be used.
+                        # Set causal to False, for flash attention function
                         kwargs[TransformerKwargs.causal] = False
                         kwargs[LanguageModelKwargs.loss_weights] = batch.loss_weights.to(
                             device=self._tensor_space.distributed.device,
                             dtype=self._tensor_space.distributed_config.training_dtype.torch,
                         )
 
-                        batch_size, seq_len = batch.token_ids.shape
-                        seq_len -= 1  # last token is dropped inputs
-                        # seq_len = kwargs[TransformerKwargs.sequence_length] # alrenatively we can use this
-                        # attention_mask = torch.ones(
-                        #     (batch_size, 1, seq_len, seq_len),
-                        #     dtype=torch.bool,
-                        #     device=self._tensor_space.distributed.device,
-                        # )
-                        # kwargs[TransformerKwargs.attention_mask] = attention_mask.unsqueeze(1).unsqueeze(1)
+                        sequence_length = kwargs[TransformerKwargs.sequence_length]
                         attention_mask = torch.ones(
-                            (seq_len, seq_len),
+                            (sequence_length, sequence_length),
                             dtype=torch.bool,
                             device=self._tensor_space.distributed.device,
                         )
+                        # Following BackupAttentionPreprocessor
+                        # k and q are same so can use sequence_length
+                        sequence_k = kwargs[TransformerKwargs.sequence_k_dim].size
+                        sequence_q = kwargs[TransformerKwargs.sequence_q_dim].size
                         kwargs[TransformerKwargs.attention_mask] = attention_mask[
-                            None, None, 0:seq_len, None, :seq_len
+                            None, None, sequence_k - sequence_q : sequence_k, None, :sequence_k
                         ]
-                        # alternatively we can use this
-                        # sequence_k = kwargs[TransformerKwargs.sequence_k_dim].size
-                        # sequence_q = kwargs[TransformerKwargs.sequence_q_dim].size
-                        # kwargs[TransformerKwargs.attention_mask] = self._mask[
-                        #     None, None, sequence_k - sequence_q : sequence_k, None, :sequence_k
-                        # ]
-                        # print(f"attention_mask: {kwargs[TransformerKwargs.attention_mask]}")
-                        # # kwargs[TransformerKwargs.attention_mask_value] = torch.tensor(
-                        # #     -10000.0, device=self._tensor_space.distributed.device
-                        # # )
+
                         kwargs[TransformerKwargs.attention_mask_value] = torch.full(
                             [],
                             torch.finfo(self._tensor_space.distributed_config.training_dtype.torch).min,
                             dtype=self._tensor_space.distributed_config.training_dtype.torch,
                             device=self._tensor_space.distributed.device,
                         )
-                        # print(f"attention_mask : {attention_mask}")
+
                         # print(f"labels shape: {labels}\ntokens: {batch.token_ids}\nmask indexes shape: {batch.mask_indexes}\nmask input: {batch.masked_token_ids}")
 
                         # set token ids to masked tokens
