@@ -1,3 +1,5 @@
+import pytest
+
 from fast_llm.data.dataset.gpt.config import GPTConcatenatedMemmapConfig
 from tests.data.common import (
     compare_indexed_dataset,
@@ -42,10 +44,11 @@ def test_gpt_concatenated_memmap():
     # Make sure dataset splitting works and check for unintended changes in behavior.
     _get_test_dataset_concatenated_memmap()
     # samples[9:18]
-    dataset = get_dataset_config(
-        {"type": "concatenated_memmap", "path": _DATASET_PREFIX_MIX_CONCATENATED_MEMMAP},
-        GPTConcatenatedMemmapConfig,
-    ).build()
+    with pytest.warns(DeprecationWarning):
+        dataset = get_dataset_config(
+            {"type": "concatenated_memmap", "path": _DATASET_PREFIX_MIX_CONCATENATED_MEMMAP},
+            GPTConcatenatedMemmapConfig,
+        ).build()
     compare_indexed_dataset(
         dataset,
         CONCATENATED_MEMMAP_DATASET_LENGTH,
@@ -58,16 +61,17 @@ def test_gpt_concatenated_memmap():
 
 def test_gpt_concatenated_memmap_data():
     _get_test_dataset_concatenated_memmap()
-    get_test_data_and_compare_samples(
-        {
-            "datasets": {
-                "Training": {
-                    "type": "concatenated_memmap",
-                    "path": _DATASET_PREFIX_MIX_CONCATENATED_MEMMAP,
+    with pytest.warns(DeprecationWarning):
+        get_test_data_and_compare_samples(
+            {
+                "datasets": {
+                    "Training": {
+                        "type": "concatenated_memmap",
+                        "path": _DATASET_PREFIX_MIX_CONCATENATED_MEMMAP,
+                    }
                 }
-            }
-        },
-        8,
-        sequence_length=5,
-        expected_samples=CONCATENATED_MEMMAP_SAMPLES,
-    )
+            },
+            8,
+            sequence_length=5,
+            expected_samples=CONCATENATED_MEMMAP_SAMPLES,
+        )

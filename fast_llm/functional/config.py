@@ -100,6 +100,11 @@ class CrossEntropyImpl(str, enum.Enum):
     triton = "triton"
 
 
+class DistillationLossImpl(str, enum.Enum):
+    reverse_kl = "reverse_kl"
+    cross_entropy = "cross_entropy"
+
+
 class TargetFormat(enum.StrEnum):
     labels = "labels"
     logits = "logits"

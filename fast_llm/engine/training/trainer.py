@@ -36,8 +36,8 @@ from fast_llm.engine.training.config import (
     TrainingEvaluatorConfig,
 )
 from fast_llm.engine.training.wandb import Wandb
-from fast_llm.logging import format_metrics, get_memory_usage_mib, log_memory_usage
-from fast_llm.utils import Assert, Interrupter
+from fast_llm.logging import format_metrics, log_memory_usage
+from fast_llm.utils import Assert, Interrupter, get_and_reset_memory_usage_mib
 
 logger = logging.getLogger(__name__)
 
@@ -422,7 +422,7 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
                             ),
                             "run": self._run.index,
                             **train_metrics,
-                            **get_memory_usage_mib(),
+                            **get_and_reset_memory_usage_mib(),
                         }
 
                         formatted_metrics = format_metrics(metrics[metrics_key], self._loss_defs, PhaseType.training)

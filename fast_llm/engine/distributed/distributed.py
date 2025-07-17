@@ -13,6 +13,7 @@ from fast_llm.engine.distributed.config import (
     DistributedDim,
     DistributedDimNames,
     PhaseType,
+    check_ranks_in_range,
 )
 from fast_llm.utils import Assert
 
@@ -20,14 +21,35 @@ logger = logging.getLogger(__name__)
 
 
 class ProcessGroupPool:
-    def __init__(self, rank: int | None = None, world_size: int | None = None, timeout: float = 60):
+    def __init__(
+        self,
+        rank: int | None = None,
+        world_size: int | None = None,
+        local_world_size: int | None = None,
+        timeout: float = 60,
+        use_cpu: bool = False,
+    ):
 
         self._rank = DistributedConfig.default_rank if rank is None else rank
         self._world_size = DistributedConfig.default_world_size if world_size is None else world_size
+        self._local_world_size = (
+            DistributedConfig.default_local_world_size if local_world_size is None else local_world_size
+        )
         self._timeout = timeout
+        self._use_cpu = use_cpu
+        self._process_groups = {}
+
+        if self._use_cpu:
+            Assert.eq(self._world_size, 1)
+            self._device = torch.device("cpu")
+        else:
+            Assert.in_range_incl(self._local_world_size, 1, torch.cuda.device_count())
+            torch.cuda.init()
+            self._device = torch.device(self._rank)
+            torch.cuda.set_device(self._device)
 
         if self._world_size > 1:
-            if rank == 0:
+            if self._rank == 0:
                 logger.info("Initializing TCP store.")
             # We bypass `torch.distributed.init_process_group` which makes things way more complicated for no reason.
             # TODO: Allow other init methods?
@@ -39,7 +61,6 @@ class ProcessGroupPool:
                     timeout=datetime.timedelta(seconds=timeout),
                 )
             )
-        self._process_groups = {}
 
     @property
     def rank(self):
@@ -49,12 +70,21 @@ class ProcessGroupPool:
     def world_size(self):
         return self._world_size
 
+    @property
+    def local_world_size(self):
+        return self._local_world_size
+
+    @property
+    def device(self):
+        return self._device
+
     def get_process_group(self, global_ranks: range | tuple, group_rank: int) -> ProcessGroup | None:
         """
         Get the requested process group from the pool, or create it if it doesn't exist.
         """
         group_size = len(global_ranks)
         Assert.eq(global_ranks[group_rank], self._rank)
+        check_ranks_in_range(global_ranks, 0, self._world_size)
         if group_size == 1:
             return None
 
@@ -67,7 +97,7 @@ class ProcessGroupPool:
                 return group
 
         prefix = (
-            f"range_{global_ranks.start}_{global_ranks.start}_{global_ranks.step}"
+            f"range_{global_ranks.start}_{global_ranks.stop}_{global_ranks.step}"
             if isinstance(global_ranks, range)
             else f"ranks_{"_".join(str(rank) for rank in global_ranks)}"
         )
@@ -85,6 +115,7 @@ class ProcessGroupPool:
         global _default_pool
         assert _default_pool is None
         _default_pool = self
+        return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         global _default_pool
@@ -120,24 +151,22 @@ class Distributed[ConfigType: DistributedConfig](Configurable[ConfigType]):
     def __init__(self, config: DistributedConfig, use_cpu: bool = False):
         super().__init__(config)
         assert self._config.reference_config is None
-        self._use_cpu = use_cpu
-
-        if self._use_cpu:
-            Assert.eq(self._config.world_size, 1)
-            self.device = torch.device("cpu")
-        else:
-            Assert.in_range_incl(self._config.local_world_size, 1, torch.cuda.device_count())
-            torch.cuda.init()
-            self.device = torch.device(self._config.local_rank)
-            torch.cuda.set_device(self.device)
 
         self._local_pool = _default_pool is None
         if self._local_pool:
-            self._pool = ProcessGroupPool(self._config.rank, self._config.world_size, self._config.timeout)
+            self._pool = ProcessGroupPool(
+                self._config.rank,
+                self._config.world_size,
+                self._config.local_world_size,
+                self._config.timeout,
+                use_cpu,
+            )
         else:
             self._pool = _default_pool
-            Assert.eq(self._pool._world_size, self._config.world_size)
-            Assert.eq(self._pool._rank, self._config.rank)
+            Assert.geq(self._pool.world_size, self._config.world_size)
+            Assert.eq(self._pool.rank, self._config.rank)
+            Assert.geq(self._pool.local_world_size, self._config.local_world_size)
+            Assert.eq(self._pool.device.type, "cpu" if use_cpu else "cuda")
 
         self.world_group = self.add_group(self._config.distributed_dims[DistributedDimNames.world])
         self.data_group = self.add_group(self._config.distributed_dims[DistributedDimNames.data])
@@ -188,11 +217,16 @@ class Distributed[ConfigType: DistributedConfig](Configurable[ConfigType]):
 
         self.set_step(0, PhaseType.training)
 
+    @property
+    def device(self):
+        return self._pool.device
+
     def add_group(self, distributed_dim: DistributedDim) -> ProcessGroup | None:
         """
         Add a process group from its definition.
         """
         self._config.log_first_rank(f"Initializing group {distributed_dim.name}, size={distributed_dim.size}...")
+        distributed_dim.check_ranks_in_range(0, self._config.world_size)
         group = self._pool.get_process_group(distributed_dim.global_ranks, distributed_dim.rank)
         distributed_dim.setup(group)
         return group
