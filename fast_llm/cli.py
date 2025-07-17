@@ -39,10 +39,9 @@ def fast_llm_main(args: list[str] | None = None):
     if args is None:
         args = sys.argv[1:]
     if args and args[0] == "create-dataset":
-        # Call the custom dataset creation script
+        # Call the custom dataset creation script from the installed package
         import runpy
-
-        runpy.run_path("diffuLlama/create_dataset.py", run_name="__main__")
+        runpy.run_module("fast_llm.diffullama.create_dataset", run_name="__main__")
         return
     with fast_llm_main_wrapper():
         RunnableConfig.parse_and_run(args)
