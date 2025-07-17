@@ -84,7 +84,7 @@ class PackedDatasetBuilder:
         self._version = 1
         self._filenames = []
 
-        self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
+        self._executor = concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) if parallel_write else None
         self._futures = []
         self._parallel_write = parallel_write
 
