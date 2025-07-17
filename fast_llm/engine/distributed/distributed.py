@@ -45,7 +45,7 @@ class ProcessGroupPool:
         else:
             Assert.in_range_incl(self._local_world_size, 1, torch.cuda.device_count())
             torch.cuda.init()
-            self._device = torch.device(self._rank)
+            self._device = torch.device(self._rank % self._local_world_size)
             logger.info(f"Using device {self._device} for rank {self._rank}.")
             logger.info(f"Number of local devices: {torch.cuda.device_count()}.")
             torch.cuda.set_device(self._device)
