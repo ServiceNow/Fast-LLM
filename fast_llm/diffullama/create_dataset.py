@@ -9,8 +9,8 @@ from fast_llm.diffullama.packed_dataset import PackedDatasetBuilder  # Update im
 
 # === Config ===
 tokenizer_name = "/mnt/checkpoints/diffusion_models/SmolLM2-135M-MASK_TOKEN"
-chunk_size = 2**30  # 1GB
-output_dir = "/mnt/datasets/tokenized/SmolLM2-135M/packed_fineweb_sample_350B_largefiles_job"
+chunk_size = 2**28  # 512MB
+output_dir = "/mnt/datasets/tokenized/SmolLM2-135M/packed_fineweb_sample_350B_largefiles_job_512"
 prefix = "fineweb_sample"
 dataset_name = "HuggingFaceFW/fineweb"
 dataset_config = "sample-350BT"
@@ -50,15 +50,29 @@ dataset = load_dataset(
 
 print(f"Dataset loaded: {len(dataset)} samples")
 
-total_tokens = 0
-for ex in tqdm(dataset, desc="Packing dataset"):
-    text = ex[input_col]
+
+def tokenize_and_pack(example):
+    text = example[input_col]
     if not text.strip():
-        continue
+        return {"ids": []}
     ids = tokenizer(text, add_special_tokens=False).input_ids
-    ids.append(sep_token)  # always separate sequences
-    builder.add_array(np.array(ids, dtype=builder.dtype))
-    total_tokens += len(ids)
+    ids.append(sep_token)
+    return {"ids": ids}
+
+
+print("Tokenizing and packing dataset with multiprocessing...")
+tokenized_dataset = dataset.map(
+    tokenize_and_pack,
+    num_proc=128,
+    desc="Tokenizing",
+)
+
+total_tokens = 0
+for ex in tqdm(tokenized_dataset, desc="Packing dataset"):
+    if not ex["ids"]:
+        continue
+    builder.add_array(np.array(ex["ids"], dtype=builder.dtype))
+    total_tokens += len(ex["ids"])
 
 builder.write_reminder()
 print(f"Total tokens packed: {total_tokens}")
