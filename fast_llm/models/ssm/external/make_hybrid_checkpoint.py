@@ -11,10 +11,10 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 
 
 @click.command()
+@click.option("--checkpoint", type=str, required=False, default="ServiceNow-AI/Apriel-Nemotron-15b-Thinker")
 @click.option("--identity_index", type=int, required=True)
 @click.option("--save_dir", type=str, required=True)
-def main(identity_index: int, save_dir: str):
-    checkpoint = "ServiceNow-AI/Apriel-Nemotron-15b-Thinker"
+def main(checkpoint: str, identity_index: int, save_dir: str):
     config = AutoConfig.from_pretrained(checkpoint, trust_remote_code=True)
 
     hybrid_block_layout = ["t"] * config.num_hidden_layers
