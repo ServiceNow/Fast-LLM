@@ -34,6 +34,16 @@ def fast_llm_main_wrapper():
 
 def fast_llm_main(args: list[str] | None = None):
     # TODO: Add hook to register model classes? (environment variable?)
+    import sys
+
+    if args is None:
+        args = sys.argv[1:]
+    if args and args[0] == "create-dataset":
+        # Call the custom dataset creation script
+        import runpy
+
+        runpy.run_path("diffuLlama/create_dataset.py", run_name="__main__")
+        return
     with fast_llm_main_wrapper():
         RunnableConfig.parse_and_run(args)
 
