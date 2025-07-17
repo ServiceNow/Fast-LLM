@@ -144,6 +144,10 @@ class GPTSampledIndexedDataset(SampledDataset):
         document_sizes, image_sizes = self._indexed_dataset.get_document_sizes()
         document_sizes = torch.from_numpy(document_sizes).to(self._device)
         if image_sizes.any():
+            assert self._parameters.max_image_size is not None, (
+                f"Dataset {self._indexed_dataset.name} contains images, but no max_image_size is set."
+                f"image_sizes: {image_sizes}, max_image_size: {self._parameters.max_image_size}"
+            )
             image_token_sizes = []
             for i, sizes in enumerate(image_sizes):
                 image_token_sizes.append(
