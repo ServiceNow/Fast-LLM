@@ -43,8 +43,8 @@ dataset = load_dataset(
     dataset_config,
     split=split,
     trust_remote_code=True,
-    num_proc=8,
-    cache_dir="/mnt/transformers_cache/",  # "/mnt/hf_home",
+    num_proc=128,
+    cache_dir="/mnt/hf_home",
 )
 
 
@@ -60,7 +60,7 @@ def tokenize_and_pack(example):
 print("Tokenizing and packing dataset with multiprocessing...")
 tokenized_dataset = dataset.map(
     tokenize_and_pack,
-    num_proc=8,
+    num_proc=128,
     desc="Tokenizing",
 )
 
