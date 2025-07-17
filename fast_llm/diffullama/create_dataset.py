@@ -1,8 +1,10 @@
 import os
+
 import numpy as np
 from datasets import load_dataset
 from tqdm import tqdm
 from transformers import AutoTokenizer
+
 from fast_llm.diffullama.packed_dataset import PackedDatasetBuilder  # Update import if needed
 
 # === Config ===
