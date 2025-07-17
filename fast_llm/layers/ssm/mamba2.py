@@ -13,16 +13,16 @@ from fast_llm.utils import get_lr_scale
 try:
     from mamba_ssm.ops.selective_scan_interface import selective_scan_fn  # noqa
 
-    _MAMBA_AVAILABLE = True
+    _mamba_available = True
 except (ImportError, RuntimeError):
-    _MAMBA_AVAILABLE = False
+    _mamba_available = False
 
 try:
     from causal_conv1d import causal_conv1d_fn as _causal_conv1d_fn  # noqa
 
-    _CAUSAL_CONV1D_AVAILABLE = True
+    _causal_conv1d_available = True
 except (ImportError, RuntimeError):
-    _CAUSAL_CONV1D_AVAILABLE = False
+    _causal_conv1d_available = False
 
 
 def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
@@ -192,7 +192,7 @@ class Mamba2(torch.nn.Module):
         hidden_states: (B, L, D)
         Returns: same shape as hidden_states
         """
-        assert _MAMBA_AVAILABLE
+        assert _mamba_available
         batch, seqlen, dim = hidden_states.shape
         outputs = {}
 
@@ -221,7 +221,7 @@ class Mamba2(torch.nn.Module):
             x = einops.rearrange(x, "b n_group l dstate -> b (n_group dstate) l")
 
         assert self.activation in ["silu", "swish"]
-        if _CAUSAL_CONV1D_AVAILABLE:
+        if _causal_conv1d_available:
             x = _causal_conv1d_fn(
                 x=x,
                 weight=einops.rearrange(self.conv1d_weight, "d 1 w -> d w"),

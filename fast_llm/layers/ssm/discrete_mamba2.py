@@ -16,17 +16,17 @@ logger = logging.getLogger(__name__)
 try:
     from mamba_ssm.ops.triton.ssd_combined import mamba_chunk_scan_combined as _mamba_chunk_scan_combined  # noqa
 
-    _MAMBA_AVAILABLE = True
+    _mamba_available = True
 except (ImportError, RuntimeError):
-    _MAMBA_AVAILABLE = False
+    _mamba_available = False
 
 
 try:
     from causal_conv1d import causal_conv1d_fn as _causal_conv1d_fn  # noqa
 
-    _CAUSAL_CONV1D_AVAILABLE = True
+    _causal_conv1d_available = True
 except (ImportError, RuntimeError):
-    _CAUSAL_CONV1D_AVAILABLE = False
+    _causal_conv1d_available = False
 
 
 def bias_init_method(conv_weight):
@@ -140,7 +140,7 @@ class DiscreteMamba2(torch.nn.Module):
             outputs["state"]: inference cache.
         """
 
-        assert _MAMBA_AVAILABLE
+        assert _mamba_available
         input_ = hidden_states
         outputs = {}
         # assert state is None
@@ -231,7 +231,7 @@ class DiscreteMamba2(torch.nn.Module):
 
     def convolutional_forward(self, xBC, padded_len):
         """Convolutional layer forward pass for the full sequence."""
-        if _CAUSAL_CONV1D_AVAILABLE and self.activation_name in (
+        if _causal_conv1d_available and self.activation_name in (
             "silu",
             "swish",
             "identity",

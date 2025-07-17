@@ -45,7 +45,7 @@ class HybridModelCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
         block_converter = RenameParamConverter(
             fast_llm_names=(("hybrid_block_layout",),),
             export_names=(("hybrid_block_layout",),),
-            ignore=True,
+            ignore_missing=True,
             default_value=[cls._default_block_type],
         )
         return super()._create_config_converters() + [block_converter]
@@ -133,7 +133,7 @@ class CommonSSMHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandle
                         "dt_rank",
                     ),
                 ),
-                ignore=True,
+                ignore_missing=True,
                 default_value=None,
             ),
             RenameParamConverter(
@@ -144,7 +144,7 @@ class CommonSSMHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandle
                         "dt_min",
                     ),
                 ),
-                ignore=True,
+                ignore_missing=True,
                 default_value=0.001,
             ),
             RenameParamConverter(
@@ -155,7 +155,7 @@ class CommonSSMHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandle
                         "dt_max",
                     ),
                 ),
-                ignore=True,
+                ignore_missing=True,
                 default_value=0.1,
             ),
             RenameParamConverter(
@@ -166,7 +166,7 @@ class CommonSSMHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandle
                         "dt_init_floor",
                     ),
                 ),
-                ignore=True,
+                ignore_missing=True,
                 default_value=1e-4,
             ),
             RenameParamConverter(
@@ -177,7 +177,7 @@ class CommonSSMHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandle
                         "dt_scale",
                     ),
                 ),
-                ignore=True,
+                ignore_missing=True,
                 default_value=1.0,
             ),
             RenameParamConverter(
@@ -188,7 +188,7 @@ class CommonSSMHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandle
                         "d_xb",
                     ),
                 ),
-                ignore=True,
+                ignore_missing=True,
                 default_value=None,
             ),
             RenameParamConverter(
@@ -199,7 +199,7 @@ class CommonSSMHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandle
                         "d_conv",
                     ),
                 ),
-                ignore=True,
+                ignore_missing=True,
                 default_value=4,
             ),
             RenameParamConverter(
@@ -210,7 +210,7 @@ class CommonSSMHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandle
                         "dt_init",
                     ),
                 ),
-                ignore=True,
+                ignore_missing=True,
                 default_value="random",
             ),
         ]
