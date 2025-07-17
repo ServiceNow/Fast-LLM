@@ -9,8 +9,8 @@ from fast_llm.diffullama.packed_dataset import PackedDatasetBuilder  # Update im
 
 # === Config ===
 tokenizer_name = "/mnt/checkpoints/diffusion_models/SmolLM2-135M-MASK_TOKEN"
-chunk_size = 2**28  # 512MB
-output_dir = "/mnt/datasets/tokenized/SmolLM2-135M/packed_fineweb_sample_350B_largefiles_job_512"
+chunk_size = 2**29  # 512MB
+output_dir = "/mnt/datasets/tokenized/SmolLM2-135M/packed_fineweb_350B_largefiles"
 prefix = "fineweb_sample"
 dataset_name = "HuggingFaceFW/fineweb"
 dataset_config = "sample-350BT"
@@ -33,8 +33,7 @@ builder = PackedDatasetBuilder(
     sep_token=sep_token,
     vocab_size=vocab_size,
     dtype="auto",
-    parallel_write=True,
-    max_workers=128,
+    parallel_write=False,
 )
 
 print(f"sep_token: {sep_token}, vocab_size: {vocab_size}")
@@ -44,11 +43,9 @@ dataset = load_dataset(
     dataset_config,
     split=split,
     trust_remote_code=True,
-    num_proc=128,
-    cache_dir="/mnt/hf_home",
+    num_proc=8,
+    cache_dir="/mnt/transformers_cache/",  # "/mnt/hf_home",
 )
-
-print(f"Dataset loaded: {len(dataset)} samples")
 
 
 def tokenize_and_pack(example):
@@ -63,7 +60,7 @@ def tokenize_and_pack(example):
 print("Tokenizing and packing dataset with multiprocessing...")
 tokenized_dataset = dataset.map(
     tokenize_and_pack,
-    num_proc=128,
+    num_proc=8,
     desc="Tokenizing",
 )
 
