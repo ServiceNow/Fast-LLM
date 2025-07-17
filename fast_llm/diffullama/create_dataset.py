@@ -32,7 +32,7 @@ builder = PackedDatasetBuilder(
     vocab_size=vocab_size,
     dtype="auto",
     parallel_write=True,
-    max_workers=64,
+    max_workers=128,
 )
 
 print(f"sep_token: {sep_token}, vocab_size: {vocab_size}")
@@ -42,8 +42,8 @@ dataset = load_dataset(
     dataset_config,
     split=split,
     trust_remote_code=True,
-    num_proc=8,
-    cache_dir="/mnt/transformers_cache/datasets",
+    num_proc=128,
+    cache_dir="/mnt/hf_home",
 )
 
 print(f"Dataset loaded: {len(dataset)} samples")
