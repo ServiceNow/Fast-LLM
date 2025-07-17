@@ -51,31 +51,15 @@ class HybridSSMBaseModelConfig(LanguageModelBaseConfig):
         Some of these can be setup directly in the layer config, but keeping them here for clarity.
         """
         super().setup_tensor_space(tensor_space)
-        # if (
-        #     not SSMBlockType.mamba2_discrete.value in self.hybrid_block_layout
-        #     and not SSMBlockType.mamba.value in self.hybrid_block_layout
-        # ):
-        #     raise ValueError(
-        #         f"Block pattern must contain at least one '{SSMBlockType.mamba2_discrete.value}' or '{SSMBlockType.mamba.value}', use gpt model for transformer only architectures"
-        #     )
+        d_inner: int = self.ssm.d_inner
 
-        if self.ssm.dt_rank is None:
-            mamba_dt_rank = math.ceil(self.transformer.hidden_size / 16)
-        else:
-            mamba_dt_rank = self.ssm.dt_rank
-
-        d_inner = (
-            int(self.ssm.expansion_factor * self.transformer.hidden_size)
-            if self.ssm.d_inner is None
-            else self.ssm.d_inner
-        )
         # Hidden dimension
         tensor_space.add_tensor_dim(TensorDim(SSMDimNames.model_dim, self.transformer.hidden_size))
         # Mamba-specific dimensions
         tensor_space.add_tensor_dim(TensorDim(SSMDimNames.inner_dim, d_inner))
         tensor_space.add_tensor_dim(TensorDim(SSMDimNames.state_dim, self.ssm.state_size))
-        tensor_space.add_tensor_dim(TensorDim(SSMDimNames.dt_rank, mamba_dt_rank))
-        tensor_space.add_tensor_dim(TensorDim(SSMDimNames.x_proj_dim, mamba_dt_rank + self.ssm.state_size * 2))
+        tensor_space.add_tensor_dim(TensorDim(SSMDimNames.dt_rank, self.ssm.dt_rank))
+        tensor_space.add_tensor_dim(TensorDim(SSMDimNames.x_proj_dim, self.ssm.dt_rank + self.ssm.state_size * 2))
         tensor_space.add_tensor_dim(TensorDim(SSMDimNames.conv_kernel_size, self.ssm.conv_kernel_dimension))
         tensor_space.add_tensor_dim(TensorDim(SSMDimNames.inner_proj_mamba, d_inner * 2))
 
@@ -93,10 +77,23 @@ class HybridSSMBaseModelConfig(LanguageModelBaseConfig):
             tensor_space.add_tensor_dim(TensorDim(SSMDimNames.head_dim, headdim))
             tensor_space.add_tensor_dim(TensorDim(SSMDimNames.qk_heads, self.ssm.n_qk_heads))
             tensor_space.add_tensor_dim(TensorDim(SSMDimNames.v_heads, self.ssm.n_v_heads))
-            tensor_space.add_tensor_dim(TensorDim(SSMDimNames.inner_proj_mamba2, inner_proj_dim))
+            tensor_space.add_tensor_dim(TensorDim(SSMDimNames.inner_proj_discrete_mamba2, inner_proj_dim))
             tensor_space.add_tensor_dim(TensorDim(SSMDimNames.conv_dim, conv_dim))
+        elif SSMBlockType.mamba2.value in self.hybrid_block_layout:
+            inner_proj_dim: int = 2 * self.ssm.d_xb + 2 * d_inner + self.ssm.dt_rank
+            tensor_space.add_tensor_dim(TensorDim(SSMDimNames.inner_proj_mamba2, inner_proj_dim))
+            tensor_space.add_tensor_dim(TensorDim(SSMDimNames.x_proj_dim_2, self.ssm.d_xb))
 
     def _validate(self):
+        with self._set_implicit_default(None):
+            if self.ssm.dt_rank == "auto" or self.ssm.dt_rank is None:
+                self.ssm.dt_rank = math.ceil(self.transformer.hidden_size / 16)
+        with self._set_implicit_default():
+            if self.ssm.d_xb is None:
+                self.ssm.d_xb = self.transformer.hidden_size
+            if self.ssm.d_inner is None:
+                self.ssm.d_inner = int(self.ssm.expansion_factor * self.transformer.hidden_size)
+
         if self.hybrid_block_layout is None:
             with self._set_implicit_default():
                 self.hybrid_block_layout = [SSMBlockType.mamba2_discrete.value]

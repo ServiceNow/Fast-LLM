@@ -484,10 +484,30 @@ _update_and_add_testing_config(
 _update_and_add_testing_config(
     # Tests hybrid ssm, llamba converter.
     "llamba",
-    "hybrid_mamba_2",
+    "hybrid_discrete_mamba2",
     model_type="hybrid_ssm",
     extra_args=[
         "model.base_model.hybrid_block_layout=['t','m2d']",
+    ],
+    megatron_args=None,
+    checkpoint_format=None,
+    groups={
+        ModelTestingGroup.basic: ModelTestingGroupAction.normal,
+        ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
+        ModelTestingGroup.convert: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.generate: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.distributed: ModelTestingGroupAction.unimportant,
+    },
+)
+
+_update_and_add_testing_config(
+    # Tests hybrid ssm, llamba converter.
+    "llamba",
+    "hybrid_mamba2",
+    model_type="hybrid_ssm",
+    extra_args=[
+        "model.base_model.hybrid_block_layout=['t','m2']",
     ],
     megatron_args=None,
     checkpoint_format=None,

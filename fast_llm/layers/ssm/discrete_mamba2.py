@@ -30,11 +30,6 @@ except (ImportError, RuntimeError):
     _causal_conv1d_available = False
 
 
-"""
-This code is adapted from https://github.com/cartesia-ai/edge/blob/main/cartesia-pytorch/cartesia_pytorch/Llamba/mixers/discrete_mamba2.py
-"""
-
-
 def bias_init_method(conv_weight):
     fan_in, _ = torch.nn.init._calculate_fan_in_and_fan_out(conv_weight)
     bound = 1 / math.sqrt(fan_in) if fan_in > 0 else 0
@@ -42,7 +37,7 @@ def bias_init_method(conv_weight):
 
 
 class DiscreteMamba2(torch.nn.Module):
-    """DiscreteMamba2 (taken github.com/goombalab/phi-mamba.git)."""
+    """DiscreteMamba2 (This code is adapted from https://github.com/cartesia-ai/edge/blob/main/cartesia-pytorch/cartesia_pytorch/Llamba/mixers/discrete_mamba2.py)."""
 
     def __init__(
         self,
@@ -53,9 +48,6 @@ class DiscreteMamba2(torch.nn.Module):
     ):
         """
         See the class .kernel.SSKernel for the kernel constructor which accepts kernel_args.
-        TODO: check what this comment means
-        Relevant options that are worth considering and tuning include "mode" + "measure", "dt_min", "dt_max", "lr".
-
         Other options are all experimental and should not need to be configured.
         """
         # factory_kwargs = {"device": "meta"}  # , "dtype": torch.bfloat16}
@@ -75,7 +67,7 @@ class DiscreteMamba2(torch.nn.Module):
         td_n_qk_heads = tensor_space.get_tensor_dim(SSMDimNames.qk_heads)
         td_n_v_heads = tensor_space.get_tensor_dim(SSMDimNames.v_heads)
         td_conv_kernel = tensor_space.get_tensor_dim(SSMDimNames.conv_kernel_size)
-        td_inner_proj = tensor_space.get_tensor_dim(SSMDimNames.inner_proj_mamba2)
+        td_inner_proj = tensor_space.get_tensor_dim(SSMDimNames.inner_proj_discrete_mamba2)
 
         self.d_model = td_model.size
         self.d_inner = td_inner.size
@@ -136,16 +128,6 @@ class DiscreteMamba2(torch.nn.Module):
             lr_scale=mamba_layer_lr_scale,
         )
 
-    @property
-    def d_output(self):
-        """Returns the output dimension of the model."""
-        return self.d_model
-
-    @property
-    def state_to_tensor(self):
-        """Returns the state of the model as a tensor."""
-        return self.layer.state_to_tensor
-
     def forward(self, hidden_states, kwargs):
         """
         ON variable names and pep8: keeping some variable names as in the original code for clarity.
@@ -179,7 +161,11 @@ class DiscreteMamba2(torch.nn.Module):
         # Project input
         xBCzA_log = self.in_proj(u)
 
-        xBC, z, A_log = torch.split(
+        (
+            xBC,
+            z,
+            A_log,
+        ) = torch.split(
             xBCzA_log,
             [
                 self.d_inner + 2 * self.n_qk_heads * self.d_state,
