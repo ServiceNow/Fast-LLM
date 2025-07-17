@@ -28,6 +28,19 @@ from fast_llm.models.ssm.external.apriel_hybrid.configuration_ssm_hybrid_apriel 
 
 logger = logging.get_logger(__name__)
 
+is_fast_path_available = all((selective_state_update, causal_conv1d_fn, causal_conv1d_update))
+
+
+def apply_mask_to_padding_states(hidden_states, attention_mask):
+    """
+    Tunes out the hidden states for padding tokens, see https://github.com/state-spaces/mamba/issues/66
+    """
+    if attention_mask is not None and attention_mask.shape[1] > 1 and attention_mask.shape[0] > 1:
+        dtype = hidden_states.dtype
+        hidden_states = (hidden_states * attention_mask[:, :, None]).to(dtype)
+
+    return hidden_states
+
 
 class HybridMambaAttentionStaticCache(Cache):
     def __init__(self, config: AprielSSMHybridConfig, batch_size, max_length, dtype=torch.float16, device=None):
@@ -172,7 +185,10 @@ class HybridMambaAttentionStaticCache(Cache):
         # limit the check to the first batch member and head dimension.
         # TODO: deprecate this function in favor of `cache_position`
         if layer_idx is None:
-            layer_idx = self.transformer_layers[0]
+            if len(self.transformer_layers) > 0:
+                layer_idx = self.transformer_layers[0]
+            else:
+                return 0
         return (self.key_cache[layer_idx][0, 0].any(dim=-1)).sum()
 
     def get_max_cache_shape(self) -> Optional[int]:
@@ -613,7 +629,6 @@ def materialize_mixer(A_log, B, C, D):
     return T
 
 
-# This is from LLmaba/Mohawk: https://github.com/cartesia-ai/edge/blob/main/cartesia-pytorch/cartesia_pytorch/Llamba/mixers/discrete_mamba2.py
 class DiscreteMamba2(nn.Module):
     def __init__(
         self,
@@ -696,6 +711,9 @@ class DiscreteMamba2(nn.Module):
 
         # out_proj
         self.out_proj = nn.Linear(self.d_inner, self.d_model, bias=bias, **factory_kwargs)
+        # In __init__, pre-allocate these tensors
+        self.zeros_buffer = torch.zeros((self.n_v_heads, self.headdim), device=device, dtype=dtype)
+        self.ones_buffer = torch.ones((self.n_v_heads, self.headdim, self.d_state), device=device, dtype=dtype)
 
     @property
     def d_output(self):
@@ -708,30 +726,40 @@ class DiscreteMamba2(nn.Module):
     def forward(
         self,
         u,
-        return_mixer_matrix=False,
         past_key_value: Optional[HybridMambaAttentionDynamicCache] = None,
-        inference_params=None,
+        attention_mask: Optional[torch.Tensor] = None,
+        return_mixer_matrix=False,
         **kwargs,
     ):
         """
         u: (B, L, D)
         Returns: same shape as u
+        For later refference: https://github.com/huggingface/transformers/blob/main/src/transformers/models/bamba/modeling_bamba.py
         """
-        outputs = {}
-        # assert state is None
+        assert is_fast_path_available and "cuda" in self.in_proj.weight.device.type, "Only support fast path on cuda"
+        cache_position = kwargs.get("cache_position", None)
         batch, seqlen, dim = u.shape
-
+        u = apply_mask_to_padding_states(u, attention_mask)
         ssm_state, conv_state = None, None
-        if past_key_value is not None:
-            ssm_state, conv_state = self._get_states_from_cache(past_key_value, batch)
-            if inference_params is not None and inference_params.seqlen_offset > 0:
-                # States are updated inplace
-                # TODO: make sure inference_params with seqlen_offset are properly initialized
-                u = u.squeeze(1) if len(u.shape) == 3 else u
-                out, _, _ = self.step(u, ssm_state, conv_state)
-                out = out.unsqueeze(1) if len(u.shape) == 2 else out
-                return {"hidden_states": out}
 
+        use_precomputed_states = (
+            past_key_value is not None
+            and past_key_value.has_previous_state
+            and seqlen == 1
+            and past_key_value.conv_states[self.layer_idx].shape[0]
+            == past_key_value.ssm_states[self.layer_idx].shape[0]
+            == batch
+            and cache_position is not None
+            and cache_position[0] > 0
+        )
+        ssm_state, conv_state = self._get_states_from_cache(past_key_value, batch)
+        if use_precomputed_states:
+            u = u.squeeze(1) if len(u.shape) == 3 else u
+            out, _, _ = self.step(u, ssm_state, conv_state)
+            out = out.unsqueeze(1) if len(u.shape) == 2 else out
+            return {"hidden_states": out}
+
+        outputs = {}
         # Hacky way to initialize state during inference
         chunk_size = self.chunk_size if ssm_state is None else seqlen
 
@@ -824,7 +852,9 @@ class DiscreteMamba2(nn.Module):
         )
 
         xBC, conv_state_new = self.convolutional_step(xBC, conv_state)
-        conv_state.copy_(conv_state_new)  # update state in place
+        if conv_state_new is not None:
+            raise NotImplementedError("Should not end up here snce only support fast path.")
+            # conv_state.copy_(conv_state_new)  # update state in place, only for slow pass
 
         x, B, C = torch.split(
             xBC,
@@ -841,8 +871,8 @@ class DiscreteMamba2(nn.Module):
         C = rearrange(C, "b (h s) -> b h s", h=self.n_qk_heads)
 
         ssm_state = ssm_state.to(x.dtype)
-        zeros = torch.zeros((self.n_v_heads, self.headdim), device=A_log.device).to(dtype=x.dtype)
-        ones = torch.ones((self.n_v_heads, self.headdim, self.d_state), device=A_log.device).to(dtype=x.dtype)
+        zeros = self.zeros_buffer.to(A_log.device).to(x.dtype)  # Just cast, don't allocate
+        ones = self.ones_buffer.to(A_log.device).to(x.dtype)
         y = selective_state_update(
             x=x / F.softplus(A_log).to(x.dtype).unsqueeze(-1),
             dt=repeat(A_log, "b h -> b h p", p=self.headdim),
@@ -862,29 +892,6 @@ class DiscreteMamba2(nn.Module):
         out = self.out_proj(y * F.silu(z + self.z_bias))
 
         return out, ssm_state, conv_state
-
-    # def allocate_inference_cache(self, batch_size, max_seqlen, dtype=None, **kwargs):
-    #     device = self.in_proj.weight.device
-    #     # conv_state:
-    #     conv_dtype = self.conv1d.weight.dtype if dtype is None else dtype
-    #     conv_state = torch.zeros(
-    #         batch_size,
-    #         self.d_conv,
-    #         self.conv1d.weight.shape[0],
-    #         device=device,
-    #         dtype=conv_dtype,
-    #     ).transpose(1, 2)
-    #     # ssm_state:
-    #     ssm_dtype = self.in_proj.weight.dtype if dtype is None else dtype
-    #     ssm_state = torch.zeros(
-    #         batch_size,
-    #         self.n_v_heads,
-    #         self.headdim,
-    #         self.d_state,
-    #         device=device,
-    #         dtype=ssm_dtype,
-    #     )
-    #     return {"conv": conv_state, "ssm": ssm_state}
 
     def _get_states_from_cache(self, inference_params, batch_size, initialize_states=False):
         """
@@ -932,6 +939,7 @@ class DiscreteMamba2(nn.Module):
                 self.conv1d.bias,
                 self.activation if self.activation != "identity" else None,
             )
+            return xBC, None
         else:
             conv_state.copy_(torch.roll(conv_state, shifts=-1, dims=-1))  # Update state (B D W)
             conv_state[:, :, -1] = xBC
@@ -940,7 +948,7 @@ class DiscreteMamba2(nn.Module):
                 xBC = xBC + self.conv1d.bias
             xBC = self.act(xBC).to(xBC.dtype)  # Some activations change dtype
 
-        return xBC, conv_state
+            return xBC, conv_state
 
 
 class AprielDecoderLayer(nn.Module):
