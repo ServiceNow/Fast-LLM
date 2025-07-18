@@ -664,7 +664,7 @@ class PixtralRotaryParamConverter(ParamConverter):
 
 class PixtralHuggingfaceCheckpointHandler(WeightAndBiasConverterMixin, HuggingfaceStateDictCheckpointHandler):
     format: typing.ClassVar[type[CheckpointFormat]] = PixtralGPTHuggingfaceCheckpointFormat
-    _model_class: typing.ClassVar[FastLLMModelConfig] = GPTModelConfig
+    _model_class: typing.ClassVar[FastLLMModelConfig] = FastLLMModelConfig
 
     @classmethod
     def _create_config_converters(cls) -> list[ParamConverter]:
