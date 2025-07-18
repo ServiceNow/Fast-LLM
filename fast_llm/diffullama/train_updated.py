@@ -147,7 +147,11 @@ def main(args):
     
 
     wandb_config = vars(args)
-    accelerator.init_trackers(project_name=args.wandb, config=wandb_config, init_kwargs={"wandb":{"name":args.output_dir.split("/")[-1]}})
+    accelerator.init_trackers(
+        project_name=args.wandb,
+        config=wandb_config,
+        init_kwargs={"wandb": {"name": args.output_dir.split("/")[-1], "entity": args.wandb_entity}}
+    )
     accelerator.print(f"Total GPUS: {accelerator.num_processes}")
  
     if accelerator.state.deepspeed_plugin is not None:
@@ -338,6 +342,7 @@ if __name__ == "__main__":
     args.add_argument("--gradient-accumulate-every", type=int, default=8)
     args.add_argument("--output-dir", type=str, required=True)
     args.add_argument("--wandb", type=str)
+    args.add_argument("--wandb-entity", type=str, default="akshaykalkunte")
     args.add_argument("--seed", type=int, default=42)
     args.add_argument("--max-train-steps", type=int, default=400)
     args.add_argument("--learning-rate", type=float, default=2e-5)

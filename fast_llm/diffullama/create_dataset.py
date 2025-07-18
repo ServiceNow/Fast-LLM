@@ -46,6 +46,7 @@ dataset = load_dataset(
     num_proc=128,
     cache_dir="/mnt/hf_home", # "/mnt/transformers_cache/"
 )
+print(f"Dataset loaded with {len(dataset)} examples.")
 
 # multi process tokenization function 
 def tokenize_and_pack(example):
@@ -69,6 +70,7 @@ tokenized_dataset = dataset.map(
     load_from_cache_file=True,
 )
 
+print("Tokenization complete. Packing dataset...")
 
 # builder created after multi process ends so build can use threads to save files.
 builder = PackedDatasetBuilder(
