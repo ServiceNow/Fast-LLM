@@ -62,7 +62,7 @@ def create_dataloader(
 
         dataset = PackedDataset(
             filenames,
-            # n_chunks control the buffer size. 
+            # n_chunks control the buffer size.
             # Note that the buffer size also impacts the random shuffle
             # (PackedDataset is an IterableDataset. So the shuffle is done by prefetch a buffer and shuffle the buffer)
             n_chunks=8,
@@ -95,7 +95,7 @@ def create_dataloaders(
     train_data_dir: Path = Path("data/redpajama_sample"),
     val_data_dir: Optional[Path] = None,
     seed: int = 12345,
-) -> Tuple[DataLoader, DataLoader]:
+) -> tuple[DataLoader, DataLoader]:
     # Increase by one because we need the next word as well
     effective_block_size = block_size + 1
     train_dataloader = create_dataloader(
@@ -124,16 +124,16 @@ def create_dataloaders(
 
 
 def main(args):
-    
+
     if args.output_dir:
         os.makedirs(args.output_dir, exist_ok=True)
-        
+
     if args.wandb:
         import wandb
         wandb.login()
-        
+
     set_seed(args.seed)
-    
+
 
     timeout = InitProcessGroupKwargs(timeout=timedelta(seconds=1_000_000))
 
@@ -144,7 +144,7 @@ def main(args):
         kwargs_handlers=[timeout],
         # fsdp_plugin=fsdp_plugin,
     )
-    
+
 
     wandb_config = vars(args)
     accelerator.init_trackers(
@@ -153,14 +153,14 @@ def main(args):
         init_kwargs={"wandb": {"name": args.output_dir.split("/")[-1], "entity": args.wandb_entity}}
     )
     accelerator.print(f"Total GPUS: {accelerator.num_processes}")
- 
+
     if accelerator.state.deepspeed_plugin is not None:
         ds_config = accelerator.state.deepspeed_plugin.deepspeed_config
         if args.wandb:
             wandb_config["deepspeed_config"] = ds_config
             accelerator.log({"deepspeed_config": ds_config}, step=0)
-            
-    
+
+
 
     train_loader, val_dataloader = create_dataloaders(
         batch_size=args.batch_size,
@@ -170,20 +170,20 @@ def main(args):
         val_data_dir=None,
         seed=3407,
     )
-    
+
     model = LlamaForCausalLM.from_pretrained(
         args.model,
         # device_map=accelerator.device,
         torch_dtype=torch.bfloat16,
         _attn_implementation="flash_attention_2",
     )
-    
+
 
     model_type = (
         "llama" if isinstance(model, transformers.LlamaForCausalLM) else "mistral"
     )
     apply_seq_parallel_monkey_patch(args.parallel_mode, model_type)
-    
+
 
     if args.learning_rate != 2e-5:
         accelerator.print(f"Warning: You also need to modify accelerate_configs/zero3_offload.json to change the learning rate")
@@ -193,11 +193,11 @@ def main(args):
         num_training_steps=args.max_train_steps,
         total_num_steps=args.max_train_steps,
     )
-    
+
     model, optim, scheduler = accelerator.prepare(model, optim, scheduler)
     train_loader = prepare_dataloader(args.parallel_mode, train_loader, accelerator)
     model.gradient_checkpointing_enable()
-    
+
 
     accelerator.register_for_checkpointing(scheduler)
 
@@ -209,11 +209,11 @@ def main(args):
 
     model.train()
     loss_func = CrossEntropyLoss(inplace_backward=True,reduction='none')
-    
-    sampling_eps = 1e-3
-    mask_token_id = args.mask_token #mask token id. can be a new token or an existing token. 
 
-    
+    sampling_eps = 1e-3
+    mask_token_id = args.mask_token #mask token id. can be a new token or an existing token.
+
+
     for step, batch in enumerate(train_loader):
 
         input_ids = batch[..., : args.seq_length + 1]
@@ -237,12 +237,12 @@ def main(args):
         local_position_ids = prepared["local_position_ids"]
         local_target_ids = prepared["local_target_ids"]
         src_mask = torch.zeros_like(local_input_ids, dtype=torch.bool, device=local_input_ids.device)
-        
+
         # change range to [sampling_eps, 1 - sampling_eps]
         t = (1 - (2 * sampling_eps)) * torch.rand(local_input_ids.shape[0], device=local_input_ids.device) + sampling_eps
         sigma = t
         dsigma = torch.reciprocal(t)  # dsigma = 1 / t
-        
+
         local_input_ids = transition(local_input_ids,sigma[:, None], maskable_mask=~src_mask, mask_token_id=mask_token_id)
         loss_log = None
         loss_mask = local_input_ids == mask_token_id
@@ -289,13 +289,13 @@ def main(args):
             if loss_log is not None:
                 progress_bar.set_postfix(loss_log)
             completed_steps += 1
-            
+
             if (completed_steps % args.checkpoint_interval) == 0:
                 accelerator.print(f"[Saving checkpoint at step {completed_steps}", flush=True)
                 accelerator.wait_for_everyone()
                 # All processes need to do this to ensure the model is saved correctly
-                state_dict = accelerator.get_state_dict(model)                
-                
+                state_dict = accelerator.get_state_dict(model)
+
                 try:
                     # Only main process saves the model
                     accelerator.unwrap_model(model).save_pretrained(
@@ -310,7 +310,7 @@ def main(args):
 
                 # Wait for the main to finish to sync all processes
                 accelerator.wait_for_everyone()
-                 
+
 
         if completed_steps >= args.max_train_steps:
             break
@@ -332,7 +332,7 @@ def main(args):
         )
 
         accelerator.print(f"Saving Finished")
-    
+
     accelerator.end_training()
 
 
@@ -351,7 +351,7 @@ if __name__ == "__main__":
         "--dataset",
         type=str,
         default="/work/nvme/bbzy/shivama2/TinyLlama/data/slim_star_combined/",
-    ) #Path to processed dataset from TinyLlama pre-processing. 
+    ) #Path to processed dataset from TinyLlama pre-processing.
     args.add_argument("--seq-length", type=int, default=16384)
     args.add_argument("--mask_token", type=int, default=811)
     args.add_argument(

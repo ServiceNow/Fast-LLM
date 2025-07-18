@@ -48,7 +48,7 @@ dataset = load_dataset(
 )
 print(f"Dataset loaded with {len(dataset)} examples.")
 
-# multi process tokenization function 
+# multi process tokenization function
 def tokenize_and_pack(example):
     # Re-initialize tokenizer inside the function for multiprocessing safety
     tokenizer_local = AutoTokenizer.from_pretrained(tokenizer_name, use_fast=True)
