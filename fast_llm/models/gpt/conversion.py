@@ -14,6 +14,7 @@ from fast_llm.engine.checkpoint.external import (
     AutoStateDictCheckpointHandler,
     ConstantExportParamConverter,
     ConstantImportParamConverter,
+    ExternalStateDictCheckpointHandler,
     IgnoreExportWeightConverter,
     IgnoreImportParamConverter,
     IgnoreImportWeightConverter,
@@ -874,6 +875,14 @@ class LlavaHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
     _model_class: typing.ClassVar[FastLLMModelConfig] = GPTModelConfig
 
     @classmethod
+    def get_vision_handler_class(cls) -> type[ExternalStateDictCheckpointHandler]:
+        return AutoGPTHuggingfaceCheckpointHandler.get_handler_class(cls.format.vision_name)
+
+    @classmethod
+    def get_text_handler_class(cls) -> type[ExternalStateDictCheckpointHandler]:
+        return AutoGPTHuggingfaceCheckpointHandler.get_handler_class(cls.format.text_name)
+
+    @classmethod
     def _load_metadata(cls, config: CheckpointLoadMetadataConfig) -> CheckpointMetadata:
         cfg_dict = cls._load_config(config.path)
         kwargs = {}
@@ -944,8 +953,8 @@ class LlavaHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
     @classmethod
     def _export_config(cls, config: BaseModelConfig) -> dict[str, typing.Any]:
         exported_config = {}
-        vision_handler_cls = AutoGPTHuggingfaceCheckpointHandler.get_handler_class(cls.format.vision_name)
-        text_handler_cls = AutoGPTHuggingfaceCheckpointHandler.get_handler_class(cls.format.text_name)
+        vision_handler_cls = cls.get_vision_handler_class()
+        text_handler_cls = cls.get_text_handler_class()
         for converter in vision_handler_cls._create_config_converters():
             try:
                 values = converter.export_params(
@@ -991,10 +1000,10 @@ class LlavaHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
         return exported_config
 
     def _create_weight_converters(self):
-        vision_handler_cls = AutoGPTHuggingfaceCheckpointHandler.get_handler_class(self.format.vision_name)
+        vision_handler_cls = self.get_vision_handler_class()
         vision_handler = vision_handler_cls(self._model)
         converters = vision_handler._create_weight_converters(hf_base_prefix="vision_tower.", offset=0)
-        text_handler_cls = AutoGPTHuggingfaceCheckpointHandler.get_handler_class(self.format.text_name)
+        text_handler_cls = self.get_text_handler_class()
         text_handler = text_handler_cls(self._model)
         converters.extend(
             text_handler._create_weight_converters(hf_base_prefix="language_model.", offset=vision_handler.num_layers)

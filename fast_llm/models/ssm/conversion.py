@@ -7,6 +7,7 @@ from fast_llm.engine.checkpoint.config import CheckpointFormat
 from fast_llm.engine.checkpoint.external import (
     ConstantExportParamConverter,
     ConstantImportParamConverter,
+    ExternalStateDictCheckpointHandler,
     IgnoreImportParamConverter,
     IgnoreImportWeightConverter,
     MappedConfigParamConverter,
@@ -772,3 +773,9 @@ class AprielThinkerSSMHHybridHuggingfaceCheckpointHandler(
 class LlavaHybridHuggingfaceCheckpointHandler(LlavaHuggingfaceCheckpointHandler):
     format: typing.ClassVar[type[CheckpointFormat]] = LlavaHybridHuggingfaceCheckpointFormat
     _model_class: typing.ClassVar[FastLLMModelConfig] = HybridSSMModelConfig
+
+    @classmethod
+    def get_text_handler_class(cls) -> type[ExternalStateDictCheckpointHandler]:
+        from fast_llm.models.ssm.conversion import AprielThinkerSSMHHybridHuggingfaceCheckpointHandler
+
+        return AprielThinkerSSMHHybridHuggingfaceCheckpointHandler
