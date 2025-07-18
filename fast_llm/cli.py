@@ -43,6 +43,24 @@ def fast_llm_main(args: list[str] | None = None):
         import runpy
         runpy.run_module("fast_llm.diffullama.create_dataset", run_name="__main__")
         return
+    if args and args[0] == "train-diffullama":
+        # Launch train_updated.py using accelerate with recommended arguments
+        import subprocess, os
+        # Remove the first argument ("train-update") and pass the rest to train_updated.py
+        train_args = args[1:]
+        # You can customize config path, master addr/port, etc. here or via environment variables
+        accelerate_cmd = [
+            "accelerate", "launch",
+            "--config_file", "fast_llm/diffullama/accelerate_configs/single_node.yaml",
+            "--main_process_ip", os.environ.get("MASTER_ADDR", "localhost"),
+            "--main_process_port", os.environ.get("MASTER_PORT", "20000"),
+            "--machine_rank", os.environ.get("NODEID", "0"),
+            "--num_processes", os.environ.get("WORLD_SIZE", "2"),
+            "--num_machines", os.environ.get("NNODES", "1"),
+            "fast_llm/diffullama/train_updated.py"
+        ] + train_args
+        subprocess.run(accelerate_cmd, check=True)
+        return
     with fast_llm_main_wrapper():
         RunnableConfig.parse_and_run(args)
 

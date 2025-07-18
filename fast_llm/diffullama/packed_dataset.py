@@ -2,7 +2,6 @@
 # https://github.com/NVIDIA/Megatron-LM/blob/main/megatron/data/indexed_dataset.py
 
 
-import concurrent.futures
 import os
 import random
 import struct
@@ -10,6 +9,7 @@ import struct
 import numpy as np
 import torch
 from torch.utils.data import IterableDataset, get_worker_info
+import concurrent.futures
 
 dtypes = {1: np.uint8, 2: np.int8, 3: np.int16, 4: np.int32, 5: np.int64, 6: np.float32, 7: np.float64, 8: np.uint16}
 
@@ -47,8 +47,7 @@ class PackedDataset(IterableDataset):
 
         max_num_files = len(self._filenames) // num_shards * num_shards
         filenames = self._filenames[shard_id:max_num_files:num_shards]
-
-        print(f"[RANK {self._process_rank}] entering PackedDataset iterator", flush=True)
+        
         return PackedDatasetIterator(
             filenames=filenames,
             n_chunks=self._n_chunks,
@@ -60,10 +59,8 @@ class PackedDataset(IterableDataset):
         )
 
 
-class PackedDatasetBuilder:
-    def __init__(
-        self, outdir, prefix, chunk_size, sep_token, dtype="auto", vocab_size=None, max_workers=4, parallel_write=False
-    ):
+class PackedDatasetBuilder(object):
+    def __init__(self, outdir, prefix, chunk_size, sep_token, dtype="auto", vocab_size=None, max_workers=4, parallel_write=False):
         if dtype == "auto":
             if vocab_size is None:
                 raise ValueError("vocab_size cannot be None when dtype='auto'")
@@ -83,7 +80,7 @@ class PackedDatasetBuilder:
         self._idx = 0
         self._version = 1
         self._filenames = []
-
+        
         self._executor = concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) if parallel_write else None
         self._futures = []
         self._parallel_write = parallel_write
@@ -106,32 +103,34 @@ class PackedDatasetBuilder:
             self._arr.fill(self._sep_token)
             self._idx = 0
 
-    def _write_chunk_parallel(self):
-        # Parallelized version using ThreadPoolExecutor
-        filename = f"{self._prefix}_{self._counter:010d}.bin"
-        filename = os.path.join(self._outdir, filename)
-        arr_copy = self._arr.copy()
-        version = self._version
-        dtype = self._dtype
-        chunk_size = self._chunk_size
-
-        # sep_token = self._sep_token
-        def write_task():
+    @staticmethod
+    def _write_task_static(filename, arr_copy, version, dtype, chunk_size):
+        try:
             with open(filename, "wb") as f:
                 f.write(HDR_MAGIC)
                 f.write(struct.pack("<Q", version))
                 f.write(struct.pack("<B", code(dtype)))
                 f.write(struct.pack("<Q", chunk_size))
                 f.write(arr_copy.tobytes(order="C"))
+            print(f"[PackedDatasetBuilder] Wrote chunk: {filename}")
             return filename
+        except Exception as e:
+            print(f"[PackedDatasetBuilder] ERROR writing {filename}: {e}")
+            return None
 
-        future = self._executor.submit(write_task)
+    def _write_chunk_parallel(self):
+        filename = f"{self._prefix}_{self._counter:010d}.bin"
+        filename = os.path.join(self._outdir, filename)
+        arr_copy = self._arr.copy()
+        version = self._version
+        dtype = self._dtype
+        chunk_size = self._chunk_size
+        future = self._executor.submit(PackedDatasetBuilder._write_task_static, filename, arr_copy, version, dtype, chunk_size)
         self._futures.append(future)
         self._filenames.append(filename)
         self._counter += 1
         self._arr.fill(self._sep_token)
         self._idx = 0
-
     def close(self):
         # Wait for all futures to finish
         for future in self._futures:
@@ -193,7 +192,7 @@ class PackedDatasetIterator:
 
         self._block_idxs = []
         self._curr_idx = 0
-
+        
         self._process_rank = process_rank
 
         self._load_n_chunks()
@@ -217,15 +216,12 @@ class PackedDatasetIterator:
         self._close_mmaps()
         self._mmaps = []
         self._buffers = []
-        print(
-            f"[RANK] {self._process_rank} file_idx: {self._file_idx}, files: {len(self._filenames)},\
-            n_chunks: {self._n_chunks} {self._n_chunks > len(self._filenames[self._file_idx :])}"
-        )
 
         if self._n_chunks > len(self._filenames[self._file_idx :]):
-            # if not self._wrap:
-            raise StopIteration
-            # self._file_idx = 0
+            if not self._wrap:
+                raise StopIteration
+            self._file_idx = 0
+        
 
         for i in range(self._n_chunks):
             filename = self._filenames[self._file_idx + i]
