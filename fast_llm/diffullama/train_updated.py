@@ -1,35 +1,30 @@
 import argparse
-import torch
+import glob
 import os
+import random
 from datetime import timedelta
-from torch.utils.data import DataLoader
+from pathlib import Path
+from typing import Optional
+
+import torch
+import transformers
 from accelerate import Accelerator
-from accelerate.utils import InitProcessGroupKwargs, set_seed
-from tqdm import tqdm
-from transformers import set_seed
+from accelerate.utils import DummyOptim, DummyScheduler, InitProcessGroupKwargs, set_seed
+from easy_context import (
+    apply_seq_parallel_monkey_patch,
+    apply_unsloth_offloaded_gradient_checkpoint_monkey_patch,
+    prepare_dataloader,
+    prepare_seq_parallel_inputs,
+)
+from flash_attn.losses.cross_entropy import CrossEntropyLoss
+
 # from transformers import AutoModelForCausalLM
 from model_llama import LlamaForCausalLM
-import transformers
-from flash_attn.losses.cross_entropy import CrossEntropyLoss
-import math
-from accelerate.utils import (
-    InitProcessGroupKwargs,
-    set_seed,
-    DummyOptim,
-    DummyScheduler,
-)
-from pathlib import Path
-from typing import Optional, Tuple
-import glob
-import random
+from packed_dataset import PackedDataset
+from torch.utils.data import DataLoader
+from tqdm import tqdm
+from transformers import set_seed
 
-from packed_dataset import CombinedDataset, PackedDataset
-from easy_context import (
-    prepare_seq_parallel_inputs,
-    apply_seq_parallel_monkey_patch,
-    prepare_dataloader,
-    apply_unsloth_offloaded_gradient_checkpoint_monkey_patch
-)
 apply_unsloth_offloaded_gradient_checkpoint_monkey_patch()
 
 # train_data_config = [
@@ -38,9 +33,11 @@ apply_unsloth_offloaded_gradient_checkpoint_monkey_patch()
 # ]
 train_data_config = [
     # ("zyda_2_sample", 1.0),
-    ("gsm8k_sample", 1.0),
+    # ("gsm8k_sample", 1.0),
+    ("fineweb_sample", 1.0),
 ]
 val_data_config = None
+
 
 def transition(x_0, sigma, maskable_mask, mask_token_id):
     # move_chance = 1 - (-sigma).exp()
@@ -49,8 +46,15 @@ def transition(x_0, sigma, maskable_mask, mask_token_id):
     x_t = torch.where(move_indices, mask_token_id, x_0)
     return x_t
 
+
 def create_dataloader(
-    batch_size: int, block_size: int, data_dir: Path, accelerator, shuffle: bool = True, seed: int = 4756, split="train"
+    batch_size: int,
+    block_size: int,
+    data_dir: Path,
+    accelerator,
+    shuffle: bool = True,
+    seed: int = 4756,
+    split="train",
 ) -> DataLoader:
     datasets = []
     data_config = train_data_config if split == "train" else val_data_config
@@ -68,7 +72,7 @@ def create_dataloader(
             n_chunks=8,
             block_size=block_size,
             shuffle=shuffle,
-            seed=seed+accelerator.process_index,
+            seed=seed + accelerator.process_index,
             num_processes=accelerator.num_processes,
             process_rank=accelerator.process_index,
         )
@@ -83,7 +87,7 @@ def create_dataloader(
     # sum_weights = sum(weights)
     # weights = [el / sum_weights for el in weights]
 
-    combined_dataset = datasets[0] # CombinedDataset(datasets=datasets, seed=seed, weights=weights)
+    combined_dataset = datasets[0]  # CombinedDataset(datasets=datasets, seed=seed, weights=weights)
 
     return DataLoader(combined_dataset, batch_size=batch_size, shuffle=False, pin_memory=True)
 
@@ -105,7 +109,7 @@ def create_dataloaders(
         data_dir=train_data_dir,
         shuffle=True,
         seed=seed,
-        split="train"
+        split="train",
     )
     val_dataloader = (
         create_dataloader(
@@ -115,7 +119,7 @@ def create_dataloaders(
             data_dir=val_data_dir,
             shuffle=False,
             seed=seed,
-            split="validation"
+            split="validation",
         )
         if val_data_dir
         else None
@@ -130,10 +134,10 @@ def main(args):
 
     if args.wandb:
         import wandb
+
         wandb.login()
 
     set_seed(args.seed)
-
 
     timeout = InitProcessGroupKwargs(timeout=timedelta(seconds=1_000_000))
 
@@ -145,12 +149,13 @@ def main(args):
         # fsdp_plugin=fsdp_plugin,
     )
 
-
     wandb_config = vars(args)
     accelerator.init_trackers(
         project_name=args.wandb,
         config=wandb_config,
-        init_kwargs={"wandb": {"name": args.output_dir.split("/")[-1], "entity": args.wandb_entity, "group": "slam_diffusion"}}
+        init_kwargs={
+            "wandb": {"name": args.output_dir.split("/")[-1], "entity": args.wandb_entity, "group": "slam_diffusion"}
+        },
     )
     accelerator.print(f"Total GPUS: {accelerator.num_processes}")
 
@@ -159,8 +164,6 @@ def main(args):
         if args.wandb:
             wandb_config["deepspeed_config"] = ds_config
             accelerator.log({"deepspeed_config": ds_config}, step=0)
-
-
 
     train_loader, val_dataloader = create_dataloaders(
         batch_size=args.batch_size,
@@ -178,15 +181,13 @@ def main(args):
         _attn_implementation="flash_attention_2",
     )
 
-
-    model_type = (
-        "llama" if isinstance(model, transformers.LlamaForCausalLM) else "mistral"
-    )
+    model_type = "llama" if isinstance(model, transformers.LlamaForCausalLM) else "mistral"
     apply_seq_parallel_monkey_patch(args.parallel_mode, model_type)
 
-
     if args.learning_rate != 2e-5:
-        accelerator.print(f"Warning: You also need to modify accelerate_configs/zero3_offload.json to change the learning rate")
+        accelerator.print(
+            f"Warning: You also need to modify accelerate_configs/zero3_offload.json to change the learning rate"
+        )
     optim = DummyOptim(model.parameters(), lr=args.learning_rate)
     scheduler = DummyScheduler(
         optim,
@@ -198,30 +199,24 @@ def main(args):
     train_loader = prepare_dataloader(args.parallel_mode, train_loader, accelerator)
     model.gradient_checkpointing_enable()
 
-
     accelerator.register_for_checkpointing(scheduler)
 
     accelerator.print(f"Max train steps: {args.max_train_steps}")
-    progress_bar = tqdm(
-        range(args.max_train_steps), disable=not accelerator.is_local_main_process
-    )
+    progress_bar = tqdm(range(args.max_train_steps), disable=not accelerator.is_local_main_process)
     completed_steps = 0
 
     model.train()
-    loss_func = CrossEntropyLoss(inplace_backward=True,reduction='none')
+    loss_func = CrossEntropyLoss(inplace_backward=True, reduction="none")
 
     sampling_eps = 1e-3
-    mask_token_id = args.mask_token #mask token id. can be a new token or an existing token.
-
+    mask_token_id = args.mask_token  # mask token id. can be a new token or an existing token.
 
     for step, batch in enumerate(train_loader):
 
         input_ids = batch[..., : args.seq_length + 1]
         # print(input_ids.shape)
         target_ids = batch[..., : args.seq_length + 1]
-        position_ids = (
-            torch.arange(args.seq_length+1).unsqueeze(0).expand(input_ids.shape[0], -1)
-        )
+        position_ids = torch.arange(args.seq_length + 1).unsqueeze(0).expand(input_ids.shape[0], -1)
         # shard the input_ids according to the world size and rank according to zig zag attention
 
         prepared = prepare_seq_parallel_inputs(
@@ -239,28 +234,34 @@ def main(args):
         src_mask = torch.zeros_like(local_input_ids, dtype=torch.bool, device=local_input_ids.device)
 
         # change range to [sampling_eps, 1 - sampling_eps]
-        t = (1 - (2 * sampling_eps)) * torch.rand(local_input_ids.shape[0], device=local_input_ids.device) + sampling_eps
+        t = (1 - (2 * sampling_eps)) * torch.rand(
+            local_input_ids.shape[0], device=local_input_ids.device
+        ) + sampling_eps
         sigma = t
         dsigma = torch.reciprocal(t)  # dsigma = 1 / t
 
-        local_input_ids = transition(local_input_ids,sigma[:, None], maskable_mask=~src_mask, mask_token_id=mask_token_id)
+        local_input_ids = transition(
+            local_input_ids, sigma[:, None], maskable_mask=~src_mask, mask_token_id=mask_token_id
+        )
         loss_log = None
         loss_mask = local_input_ids == mask_token_id
         with accelerator.accumulate(model):
             logits = model(
                 # Drop the last token from forward pass
-                local_input_ids[:,:-1],
-                position_ids=local_position_ids[:,:-1],
+                local_input_ids[:, :-1],
+                position_ids=local_position_ids[:, :-1],
             ).logits
 
             # logits = logits[:,:-1] # do not drop the last token here since already dropped in the forward pass
-            loss_mask = loss_mask[:,1:]
-            local_target_ids = local_target_ids[:,1:]
-            loss = loss_func(
-                logits.reshape(-1, logits.shape[-1]), local_target_ids.reshape(-1)
-            ).reshape(local_target_ids.shape[0],-1)
+            loss_mask = loss_mask[:, 1:]
+            local_target_ids = local_target_ids[:, 1:]
+            loss = loss_func(logits.reshape(-1, logits.shape[-1]), local_target_ids.reshape(-1)).reshape(
+                local_target_ids.shape[0], -1
+            )
             loss = loss.masked_fill(~loss_mask, 0)
-            loss = (dsigma[:, None] * loss).sum() / torch.clamp(loss_mask.sum(), min=1)   # avg token loss if 0 set it to 1 to avoid NaN
+            loss = (dsigma[:, None] * loss).sum() / torch.clamp(
+                loss_mask.sum(), min=1
+            )  # avg token loss if 0 set it to 1 to avoid NaN
             accelerator.backward(loss)
 
             if accelerator.sync_gradients:
@@ -311,7 +312,6 @@ def main(args):
                 # Wait for the main to finish to sync all processes
                 accelerator.wait_for_everyone()
 
-
         if completed_steps >= args.max_train_steps:
             break
 
@@ -351,7 +351,7 @@ if __name__ == "__main__":
         "--dataset",
         type=str,
         default="/work/nvme/bbzy/shivama2/TinyLlama/data/slim_star_combined/",
-    ) #Path to processed dataset from TinyLlama pre-processing.
+    )  # Path to processed dataset from TinyLlama pre-processing.
     args.add_argument("--seq-length", type=int, default=16384)
     args.add_argument("--mask_token", type=int, default=811)
     args.add_argument(
@@ -359,10 +359,5 @@ if __name__ == "__main__":
         type=str,
         choices=["dist_flash_attn", "ulysses_attn", "data_parallel"],
     )
-    args.add_argument(
-        "--checkpoint-interval",
-        type=int,
-        default=500,
-        help="Number of steps between checkpoints"
-    )
+    args.add_argument("--checkpoint-interval", type=int, default=500, help="Number of steps between checkpoints")
     main(args.parse_args())
