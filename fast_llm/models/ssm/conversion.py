@@ -771,3 +771,4 @@ class AprielThinkerSSMHHybridHuggingfaceCheckpointHandler(
 
 class LlavaHybridHuggingfaceCheckpointHandler(LlavaHuggingfaceCheckpointHandler):
     format: typing.ClassVar[type[CheckpointFormat]] = LlavaHybridHuggingfaceCheckpointFormat
+    _model_class: typing.ClassVar[FastLLMModelConfig] = HybridSSMModelConfig
