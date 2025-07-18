@@ -135,7 +135,13 @@ def main(args):
     if args.wandb:
         import wandb
 
-        wandb.login()
+        wandb_api_key_path = os.environ.get("WANDB_API_KEY_PATH")
+        if wandb_api_key_path and os.path.exists(wandb_api_key_path):
+            with open(wandb_api_key_path, "r") as f:
+            wandb_api_key = f.read().strip()
+            wandb.login(key=wandb_api_key)
+        else:
+            wandb.login()
 
     set_seed(args.seed)
 
