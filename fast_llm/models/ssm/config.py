@@ -196,6 +196,7 @@ class HybridSSMModelConfig(FastLLMModelConfig):
         AprielSSMHuggingfaceCheckpointFormat,
         AprielSSMHHybridHuggingfaceCheckpointFormat,
         AprielThinkerSSMHHybridHuggingfaceCheckpointFormat,
+        LlavaHybridHuggingfaceCheckpointFormat,
     )
 
     @classmethod
