@@ -280,12 +280,18 @@ def main(args):
                 # we now try gathered loss to verify if ring attention and dist flash attention produce the same loss
                 # this may slow down the training
                 gathered_loss = accelerator.reduce(loss.clone().detach(), "mean")
+
+                elapsed_time = progress_bar.format_dict["elapsed"] + 1e-8
+                elapsed_time_per_iteration = elapsed_time / (step + 1)
+                tokens_per_sec_per_gpu = (args.seq_length * args.batch_size) / accelerator.num_processes / elapsed_time_per_iteration
+
                 loss_log = {
                     "loss": gathered_loss.item(),
                     # "ppl": math.exp(gathered_loss.item()), # same as loss
                     "learning_rate": scheduler.get_last_lr()[0],
+                    "t/g/s": tokens_per_sec_per_gpu,
                 }
-                # log the loss every 10 steps
+
                 if completed_steps % 10 == 0:
                     accelerator.log(loss_log, step=completed_steps)
 
