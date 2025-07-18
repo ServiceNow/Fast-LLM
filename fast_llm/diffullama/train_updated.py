@@ -137,7 +137,7 @@ def main(args):
 
         wandb_api_key_path = os.environ.get("WANDB_API_KEY_PATH")
         if wandb_api_key_path and os.path.exists(wandb_api_key_path):
-            with open(wandb_api_key_path, "r") as f:
+            with open(wandb_api_key_path) as f:
                 wandb_api_key = f.read().strip()
             wandb.login(key=wandb_api_key)
         else:
@@ -285,7 +285,9 @@ def main(args):
                     # "ppl": math.exp(gathered_loss.item()), # same as loss
                     "learning_rate": scheduler.get_last_lr()[0],
                 }
-                accelerator.log(loss_log, step=completed_steps)
+                # log the loss every 10 steps
+                if completed_steps % 10 == 0:
+                    accelerator.log(loss_log, step=completed_steps)
 
             optim.step()
             scheduler.step()
