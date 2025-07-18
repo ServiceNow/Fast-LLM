@@ -1,3 +1,4 @@
+import logging
 import math
 import typing
 
@@ -9,6 +10,8 @@ from fast_llm.layers.common.linear import Linear
 from fast_llm.layers.ssm.config import SSMConfig, SSMDimNames
 from fast_llm.tensor import ParameterMeta, init_fill_, init_ones_, init_uniform_, kaiming_init_
 from fast_llm.utils import get_lr_scale
+
+logger = logging.getLogger(__name__)
 
 try:
     from mamba_ssm.ops.selective_scan_interface import selective_scan_fn  # noqa
@@ -144,6 +147,9 @@ class Mamba2(torch.nn.Module):
             value: torch.Tensor,
         ) -> typing.Callable[[ParameterMeta, torch.Tensor, torch.Generator], torch.Tensor]:
             def init_(meta: ParameterMeta, tensor: torch.Tensor, generator: torch.Generator):  # noqa
+                logger.info(
+                    f"Initializing {meta.tensor_name} with shape {meta.shape} from tensor with shape {value.shape}"
+                )
                 return tensor.copy_(value)
 
             return init_
@@ -156,6 +162,7 @@ class Mamba2(torch.nn.Module):
             lr_scale=mamba_layer_lr_scale,
         )
         # define bias outside the linear layer since its also used in the selective_scan_fn
+        logger.info(f"td_inner: {td_inner}, inv_dt: {inv_dt.shape}")
         self.dt_proj_bias = ParameterMeta.from_dims(
             (td_inner,), init_method=init_from_tensor_(inv_dt), lr_scale=mamba_layer_lr_scale
         )
@@ -166,6 +173,7 @@ class Mamba2(torch.nn.Module):
             d=self.d_inner,
         ).contiguous()
         A_log = torch.log(A).flatten()  # Keep A_log in fp32
+        logger.info(f"A_log: {A_log.shape}, td_inner: {td_inner}, td_state: {td_state}")
         self.A_log = ParameterMeta.from_dims(
             (td_inner, td_state),
             init_method=init_from_tensor_(A_log),
