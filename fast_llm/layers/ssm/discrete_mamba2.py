@@ -102,7 +102,7 @@ class DiscreteMamba2(torch.nn.Module):
         self.conv1d_weight = ParameterMeta.from_dims(
             (td_conv, TensorDim("1", 1), td_conv_kernel),
             init_method=init_uniform_(
-                1 / math.sqrt(td_conv.size * td_conv_kernel.size), 1 / math.sqrt(td_conv.size * td_conv_kernel.size)
+                -1 / math.sqrt(td_conv.size * td_conv_kernel.size), 1 / math.sqrt(td_conv.size * td_conv_kernel.size)
             ),  # see https://github.com/pytorch/pytorch/blob/1eba9b3aa3c43f86f4a2c807ac8e12c4a7767340/torch/nn/modules/conv.py#L180C53-L180C67
             lr_scale=mamba_layer_lr_scale,
         )
