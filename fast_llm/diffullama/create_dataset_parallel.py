@@ -1,33 +1,34 @@
+import multiprocessing
 import os
+
 import numpy as np
 from datasets import load_dataset
-from tqdm import tqdm
 from transformers import AutoTokenizer
+
 from fast_llm.diffullama.packing_utils import pack_worker
-import multiprocessing
 
 # === Config ===
-num_proc = 128
+num_proc = 8
 chunk_size = 2**29
 tokenizer_name = "/mnt/checkpoints/diffusion_models/SmolLM2-135M-MASK_TOKEN"
 
-# output_dir = "/mnt/datasets/tokenized/SmolLM2-135M/packed_wikitext_largefiles_test_divded"
-# prefix = "wikitext_sample"
-# dataset_name = "Salesforce/wikitext"
-# dataset_config = "wikitext-2-v1"
-# split = "train"
-# input_col = "text"
-
-output_dir = "/mnt/datasets/tokenized/SmolLM2-135M/packed_fineweb_350B_largefiles_parellel_blocks"
-prefix = "fineweb_sample"
-dataset_name = "HuggingFaceFW/fineweb"
-dataset_config = "sample-350BT"
+output_dir = "/mnt/datasets/tokenized/SmolLM2-135M/packed_wikitext_largefiles_test_divded"
+prefix = "wikitext_sample"
+dataset_name = "Salesforce/wikitext"
+dataset_config = "wikitext-2-v1"
 split = "train"
 input_col = "text"
 
+# output_dir = "/mnt/datasets/tokenized/SmolLM2-135M/packed_fineweb_350B_largefiles_parellel_blocks"
+# prefix = "fineweb_sample"
+# dataset_name = "HuggingFaceFW/fineweb"
+# dataset_config = "sample-350BT"
+# split = "train"
+# input_col = "text"
 
 
-    # ...existing code...
+# ...existing code...
+
 
 def main():
     os.makedirs(output_dir, exist_ok=True)
@@ -64,6 +65,7 @@ def main():
         num_proc=num_proc,
         desc="Tokenizing",
         load_from_cache_file=True,
+        cache_dir="/mnt/hf_home",
     )
 
     # Split tokenized_dataset into num_proc blocks
@@ -85,10 +87,7 @@ def main():
     start_counters = [i * 100000 for i in range(num_proc)]  # Each worker starts at a different 5-digit offset
 
     with multiprocessing.Pool(num_proc) as pool:
-        results = pool.starmap(
-            pack_worker,
-            [(blk, builder_args, start_counters[i]) for i, blk in enumerate(blocks)]
-        )
+        results = pool.starmap(pack_worker, [(blk, builder_args, start_counters[i]) for i, blk in enumerate(blocks)])
 
     # Merge filenames and token counts
     all_filenames = []
@@ -101,6 +100,7 @@ def main():
     print("Done writing packed dataset.")
 
     print(f"Chunks written: {len(all_filenames)}")
+
 
 if __name__ == "__main__":
     main()

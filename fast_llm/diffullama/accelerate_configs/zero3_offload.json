@@ -8,8 +8,8 @@
   "scheduler": {
     "type": "WarmupCosineLR",
     "params": {
-      "total_num_steps": 10,
-      "warmup_num_steps": 5,
+      "total_num_steps": 1000000,
+      "warmup_num_steps": 2000,
       "warmup_min_ratio": 0.0,
       "cos_min_ratio": 0.0,
       "warmup_type": "linear"
@@ -48,6 +48,6 @@
   "gradient_clipping": "auto",
   "steps_per_print": 2000,
   "train_batch_size": "auto",
-  "train_micro_batch_size_per_gpu": 64,
+  "train_micro_batch_size_per_gpu": 32,
   "wall_clock_breakdown": false
 }
