@@ -65,7 +65,6 @@ def main():
         num_proc=num_proc,
         desc="Tokenizing",
         load_from_cache_file=True,
-        cache_dir="/mnt/hf_home",
     )
 
     # Split tokenized_dataset into num_proc blocks
