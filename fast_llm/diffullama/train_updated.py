@@ -150,7 +150,7 @@ def main(args):
     accelerator.init_trackers(
         project_name=args.wandb,
         config=wandb_config,
-        init_kwargs={"wandb": {"name": args.output_dir.split("/")[-1], "entity": args.wandb_entity}}
+        init_kwargs={"wandb": {"name": args.output_dir.split("/")[-1], "entity": args.wandb_entity, "group": "slam_diffusion"}}
     )
     accelerator.print(f"Total GPUS: {accelerator.num_processes}")
 

@@ -19,6 +19,13 @@ dataset_config = "sample-350BT"
 split = "train"
 input_col = "text"
 
+# output_dir = "/mnt/datasets/tokenized/SmolLM2-135M/packed_wikitext_largefiles_test"
+# prefix = "wikitext_sample"
+# dataset_name = "Salesforce/wikitext"
+# dataset_config = "wikitext-2-v1"
+# split = "train"
+# input_col = "text"
+
 os.makedirs(output_dir, exist_ok=True)
 tokenizer = AutoTokenizer.from_pretrained(tokenizer_name, use_fast=True)
 if tokenizer.pad_token is None:
@@ -35,18 +42,18 @@ dataset = load_dataset(
     split=split,
     trust_remote_code=True,
     num_proc=num_proc,
-    cache_dir="/mnt/hf_home",
+    # cache_dir="/mnt/hf_home",
 )
 print(f"Dataset loaded with {len(dataset)} examples.")
 
 def tokenize_and_pack(example):
-    tokenizer_local = AutoTokenizer.from_pretrained(tokenizer_name, use_fast=True)
-    if tokenizer_local.pad_token is None:
-        tokenizer_local.pad_token = tokenizer_local.eos_token
+    # tokenizer_local = AutoTokenizer.from_pretrained(tokenizer_name, use_fast=True)
+    # if tokenizer_local.pad_token is None:
+    #     tokenizer_local.pad_token = tokenizer_local.eos_token
     text = example[input_col]
     if not text.strip():
         return {"ids": []}
-    ids = tokenizer_local(text, add_special_tokens=False).input_ids
+    ids = tokenizer(text, add_special_tokens=False).input_ids
     ids.append(sep_token)
     return {"ids": ids}
 
