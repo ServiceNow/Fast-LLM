@@ -110,13 +110,15 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             MultiModalEmbedding(self._config, self._tensor_space),
         ]
 
+    def get_embedding_layers(self) -> list[Layer]:
+        if self._config.vision_encoder.enabled:
+            return self.get_vision_layers()
+        else:
+            return [LanguageModelEmbedding(self._config, self._tensor_space)]
+
     def get_layers(self) -> list[Layer]:
         return [
-            *(
-                [LanguageModelEmbedding(self._config, self._tensor_space)]
-                if not self._config.vision_encoder.enabled
-                else self.get_vision_layers()
-            ),
+            *(self.get_embedding_layers()),
             *[
                 TransformerLayer(
                     self._config.transformer,

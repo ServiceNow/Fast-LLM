@@ -3,7 +3,6 @@ import typing
 
 from fast_llm.engine.base_model.base_model import Layer
 from fast_llm.engine.distributed.config import DistributedConfig
-from fast_llm.layers.language_model.embedding import LanguageModelEmbedding
 from fast_llm.layers.language_model.head import LanguageModelHead
 from fast_llm.layers.ssm.discrete_mamba2 import DiscreteMamba2
 from fast_llm.layers.ssm.llamba_block import LlambaBlock
@@ -94,7 +93,7 @@ class HybridSSMBaseModel[ConfigType: HybridSSMBaseModelConfig](GPTBaseModel[Conf
         Create a list of layers for the model, interleaving Transformer and Mamba blocks
         according to the block pattern.
         """
-        layers = [LanguageModelEmbedding(self._config, self._tensor_space)]
+        layers = self.get_embedding_layers()
 
         # Create blocks according to pattern
         for i, block_type in enumerate(self._config.hybrid_block_layout):
