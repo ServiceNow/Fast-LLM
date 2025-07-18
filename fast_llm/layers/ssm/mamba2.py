@@ -148,9 +148,14 @@ class Mamba2(torch.nn.Module):
         ) -> typing.Callable[[ParameterMeta, torch.Tensor, torch.Generator], torch.Tensor]:
             def init_(meta: ParameterMeta, tensor: torch.Tensor, generator: torch.Generator):  # noqa
                 logger.info(
-                    f"Initializing {meta.tensor_name} with shape {meta.shape} from tensor with shape {value.shape}"
+                    f"Initializing {meta.tensor_name} with shape {meta.shape}, tensor shape {tensor.shape} from value shape {value.shape}"
                 )
-                return tensor.copy_(value)
+                # TODO: fix and remove try-except
+                try:
+                    return tensor.copy_(value)
+                except RuntimeError as e:
+                    logger.error(f"Failed to copy value to tensor: {e}")
+                    return tensor.fill_(0.0)
 
             return init_
 
