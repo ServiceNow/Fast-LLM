@@ -1,6 +1,5 @@
 import enum
 import functools
-import warnings
 
 from fast_llm.config import Config, Field, FieldHint, check_field, config_class, test_field
 from fast_llm.engine.distributed.config import DistributedConfig
@@ -105,11 +104,6 @@ class BatchConfig(Config):
 
         if self._distributed.pipeline_parallel > 1 and self.depth_first_micro_batches > 1:
             raise NotImplementedError("Depth-first pipeline parallelism not yet implemented")
-        if self.depth_first_micro_batches > 1 and self.breadth_first_micro_batches > 1:
-            warnings.warn(
-                "Mixing of breadth-first and depth-first gradient accumulation is not thoroughly tested."
-                " Use at your own risk."
-            )
         super()._validate()
 
 

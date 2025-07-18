@@ -145,7 +145,7 @@ class Assert:
 
     @staticmethod
     def rms_close(x, y, threshold):
-        rms = rms_diff(x, y).item()
+        rms = rms_diff(x, y).detach().item()
         assert rms <= threshold, f"Rms diff too big ({rms:.3e} > {threshold:.3e}) between tensors {x} and {y}"
 
     @staticmethod
