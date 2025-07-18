@@ -81,7 +81,7 @@ class PackedDatasetBuilder(object):
         self._version = 1
         self._filenames = []
         
-        self._executor = concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) if parallel_write else None
+        self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) if parallel_write else None
         self._futures = []
         self._parallel_write = parallel_write
 
@@ -112,10 +112,10 @@ class PackedDatasetBuilder(object):
                 f.write(struct.pack("<B", code(dtype)))
                 f.write(struct.pack("<Q", chunk_size))
                 f.write(arr_copy.tobytes(order="C"))
-            print(f"[PackedDatasetBuilder] Wrote chunk: {filename}")
+            print(f"[PackedDatasetBuilder] Wrote chunk: {filename} (pid={os.getpid()})")
             return filename
         except Exception as e:
-            print(f"[PackedDatasetBuilder] ERROR writing {filename}: {e}")
+            print(f"[PackedDatasetBuilder] ERROR writing {filename}: {e} (pid={os.getpid()})")
             return None
 
     def _write_chunk_parallel(self):

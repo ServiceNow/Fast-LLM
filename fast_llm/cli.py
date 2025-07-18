@@ -41,7 +41,7 @@ def fast_llm_main(args: list[str] | None = None):
     if args and args[0] == "create-dataset":
         # Call the custom dataset creation script from the installed package
         import runpy
-        runpy.run_module("fast_llm.diffullama.create_dataset", run_name="__main__")
+        runpy.run_module("fast_llm.diffullama.create_dataset_parallel", run_name="__main__")
         return
     if args and args[0] == "train-diffullama":
         # Launch train_updated.py using accelerate with recommended arguments
