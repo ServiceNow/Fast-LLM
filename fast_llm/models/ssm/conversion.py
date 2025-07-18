@@ -20,13 +20,18 @@ from fast_llm.engine.multi_stage.config import FastLLMModelConfig
 from fast_llm.functional.config import ActivationType
 from fast_llm.layers.common.config import RMSNormalizationConfig
 from fast_llm.layers.ssm.config import SSMBlockType
-from fast_llm.models.gpt.conversion import CommonLlamaHuggingfaceCheckpointHandler, MLPLayer2Converter
+from fast_llm.models.gpt.conversion import (
+    CommonLlamaHuggingfaceCheckpointHandler,
+    LlavaHuggingfaceCheckpointHandler,
+    MLPLayer2Converter,
+)
 from fast_llm.models.ssm.config import (
     AprielSSMHHybridHuggingfaceCheckpointFormat,
     AprielSSMHuggingfaceCheckpointFormat,
     AprielThinkerSSMHHybridHuggingfaceCheckpointFormat,
     HybridSSMModelConfig,
     LLambaHuggingfaceCheckpointFormat,
+    LlavaHybridHuggingfaceCheckpointFormat,
 )
 from fast_llm.models.ssm.model import HybridSSMModel
 from fast_llm.utils import Assert
@@ -762,3 +767,7 @@ class AprielThinkerSSMHHybridHuggingfaceCheckpointHandler(
     def _save_config(cls, directory: pathlib.Path | str, config: dict[str, typing.Any]) -> None:
         with open(directory / "config.json", "w") as f:
             json.dump(config, f)
+
+
+class LlavaHybridHuggingfaceCheckpointHandler(LlavaHuggingfaceCheckpointHandler):
+    format: typing.ClassVar[type[CheckpointFormat]] = LlavaHybridHuggingfaceCheckpointFormat
