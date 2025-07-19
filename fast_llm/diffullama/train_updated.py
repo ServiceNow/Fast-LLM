@@ -24,6 +24,7 @@ from packed_dataset import PackedDataset
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 from transformers import set_seed
+import time
 
 apply_unsloth_offloaded_gradient_checkpoint_monkey_patch()
 
@@ -63,13 +64,13 @@ def create_dataloader(
         random.seed(seed)
         random.shuffle(filenames)
         print(f"[RANK {accelerator.process_index}] found {len(filenames)} files", flush=True)
-        filenames = filenames[0: 256]
+        # filenames = filenames[0: 256]
         dataset = PackedDataset(
             filenames,
             # n_chunks control the buffer size.
             # Note that the buffer size also impacts the random shuffle
             # (PackedDataset is an IterableDataset. So the shuffle is done by prefetch a buffer and shuffle the buffer)
-            n_chunks=2,
+            n_chunks=4,
             block_size=block_size,
             shuffle=shuffle,
             seed=seed + accelerator.process_index,
@@ -89,7 +90,9 @@ def create_dataloader(
 
     combined_dataset = datasets[0]  # CombinedDataset(datasets=datasets, seed=seed, weights=weights)
 
-    return DataLoader(combined_dataset, batch_size=batch_size, shuffle=False, pin_memory=True, num_workers=1)
+    return DataLoader(combined_dataset, batch_size=batch_size, shuffle=False, \
+        pin_memory=True, num_workers=2 * accelerator.num_processes,\
+            prefetch_factor=2, persistent_workers=True)
 
 
 def create_dataloaders(
@@ -167,10 +170,19 @@ def main(args):
 
     if accelerator.state.deepspeed_plugin is not None:
         ds_config = accelerator.state.deepspeed_plugin.deepspeed_config
+
+        # # Add flops_profiler config
+        # ds_config["flops_profiler"] = {
+        #     "enabled": True,
+        #     "profile_step": 10,
+        #     "module_depth": -1,
+        #     "top_modules": 1,
+        #     "detailed": True
+        # }
         if args.wandb:
             wandb_config["deepspeed_config"] = ds_config
-            accelerator.log({"deepspeed_config": ds_config}, step=0)
-
+            accelerator.log({"deepspeed_config": ds_config}, step=0)  
+    
     train_loader, val_dataloader = create_dataloaders(
         batch_size=args.batch_size,
         block_size=args.seq_length,
@@ -217,6 +229,7 @@ def main(args):
     sampling_eps = 1e-3
     mask_token_id = args.mask_token  # mask token id. can be a new token or an existing token.
 
+    step_start_time = time.time()
     for step, batch in enumerate(train_loader):
 
         input_ids = batch[..., : args.seq_length + 1]
@@ -281,19 +294,25 @@ def main(args):
                 # this may slow down the training
                 gathered_loss = accelerator.reduce(loss.clone().detach(), "mean")
 
-                elapsed_time = progress_bar.format_dict["elapsed"] + 1e-8
-                elapsed_time_per_iteration = elapsed_time / (step + 1)
-                tokens_per_sec_per_gpu = (args.seq_length * args.batch_size) / accelerator.num_processes / elapsed_time_per_iteration
+                elapsed_time_time = time.time() - step_start_time
+                # elapsed_time = progress_bar.format_dict["elapsed"] + 1e-8
+                # elapsed_time_per_iteration = elapsed_time / (step + 1)
+                # tokens_per_sec_per_gpu = (args.seq_length * args.batch_size) \
+                #     / accelerator.num_processes / elapsed_time_per_iteration
+                tokens_per_sec_per_gpu_time = (args.seq_length * args.batch_size * args.gradient_accumulate_every) \
+                    / accelerator.num_processes / elapsed_time_time
 
                 loss_log = {
                     "loss": gathered_loss.item(),
                     # "ppl": math.exp(gathered_loss.item()), # same as loss
                     "learning_rate": scheduler.get_last_lr()[0],
-                    "t/g/s": tokens_per_sec_per_gpu,
+                    # "tokens/g/s": tokens_per_sec_per_gpu,
+                    "tokens/g/s time": tokens_per_sec_per_gpu_time,
                 }
 
                 if completed_steps % 10 == 0:
                     accelerator.log(loss_log, step=completed_steps)
+                step_start_time = time.time()
 
             optim.step()
             scheduler.step()

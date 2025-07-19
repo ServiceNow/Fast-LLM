@@ -52,6 +52,9 @@ def fast_llm_main(args: list[str] | None = None):
         # Remove the first argument ("train-update") and pass the rest to train_updated.py
         train_args = args[1:]
         # You can customize config path, master addr/port, etc. here or via environment variables
+        # Set NCCL and Torch distributed debug environment variables
+        # os.environ["NCCL_DEBUG"] = "INFO"
+        # os.environ["TORCH_DISTRIBUTED_DEBUG"] = "DETAIL"
         accelerate_cmd = [
             "accelerate",
             "launch",
