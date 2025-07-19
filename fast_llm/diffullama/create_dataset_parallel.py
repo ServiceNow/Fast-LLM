@@ -8,23 +8,23 @@ from transformers import AutoTokenizer
 from fast_llm.diffullama.packing_utils import pack_worker
 
 # === Config ===
-num_proc = 8
-chunk_size = 2**29
+num_proc = 128
+chunk_size = 2**28
 tokenizer_name = "/mnt/checkpoints/diffusion_models/SmolLM2-135M-MASK_TOKEN"
 
-output_dir = "/mnt/datasets/tokenized/SmolLM2-135M/packed_wikitext_largefiles_test_divded"
-prefix = "wikitext_sample"
-dataset_name = "Salesforce/wikitext"
-dataset_config = "wikitext-2-v1"
-split = "train"
-input_col = "text"
-
-# output_dir = "/mnt/datasets/tokenized/SmolLM2-135M/packed_fineweb_350B_largefiles_parellel_blocks"
-# prefix = "fineweb_sample"
-# dataset_name = "HuggingFaceFW/fineweb"
-# dataset_config = "sample-350BT"
+# output_dir = "/mnt/datasets/tokenized/SmolLM2-135M/packed_wikitext_largefiles_test_divded"
+# prefix = "wikitext_sample"
+# dataset_name = "Salesforce/wikitext"
+# dataset_config = "wikitext-2-v1"
 # split = "train"
 # input_col = "text"
+
+output_dir = "/mnt/datasets/tokenized/SmolLM2-135M/packed_fineweb_350B_smallfiles_parellel_blocks"
+prefix = "fineweb_sample"
+dataset_name = "HuggingFaceFW/fineweb"
+dataset_config = "sample-350BT"
+split = "train"
+input_col = "text"
 
 
 # ...existing code...
@@ -68,7 +68,7 @@ def main():
     )
 
     # Split tokenized_dataset into num_proc blocks
-    blocks = np.array_split(tokenized_dataset, num_proc)
+    blocks = np.array_split(tokenized_dataset, 64)
     print(f"Total blocks created: {len(blocks)}")
     builder_args = {
         "outdir": output_dir,

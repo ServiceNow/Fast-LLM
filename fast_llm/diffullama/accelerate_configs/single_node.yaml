@@ -1,14 +1,14 @@
 compute_environment: LOCAL_MACHINE
 debug: false
 deepspeed_config:
-  deepspeed_config_file:  /app/fast_llm/diffullama/accelerate_configs/zero3_offload.json
+  deepspeed_config_file:  fast_llm/diffullama/accelerate_configs/zero3_offload.json
   zero3_init_flag: false
 distributed_type: DEEPSPEED
 downcast_bf16: 'no'
 machine_rank: 0
 main_training_function: main
 num_machines: 1
-num_processes: 8
+num_processes: 1
 rdzv_backend: static
 same_network: true
 tpu_env: []

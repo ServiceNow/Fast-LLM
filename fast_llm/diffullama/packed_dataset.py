@@ -44,8 +44,8 @@ class PackedDataset(IterableDataset):
         worker_id = worker_info.id if worker_info is not None else 0
         num_shards = num_workers * self._num_processes
         shard_id = self._process_rank * num_workers + worker_id
-
         max_num_files = len(self._filenames) // num_shards * num_shards
+        print(f"[PackedDataset] files: {len(self._filenames)} max files: {max_num_files } Shard {shard_id} of {num_shards} (process rank={self._process_rank}, worker id={worker_id})")
         filenames = self._filenames[shard_id:max_num_files:num_shards]
         
         return PackedDatasetIterator(
@@ -218,8 +218,8 @@ class PackedDatasetIterator:
         self._buffers = []
 
         if self._n_chunks > len(self._filenames[self._file_idx :]):
-            if not self._wrap:
-                raise StopIteration
+            # if not self._wrap:
+            #     raise StopIteration
             self._file_idx = 0
         
 

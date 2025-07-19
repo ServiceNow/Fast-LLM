@@ -9,24 +9,24 @@ import argparse
 
 # def main(num_proc=256):
 # === Config ===
-num_proc=8
+num_proc=128
 tokenizer_name = "/mnt/checkpoints/diffusion_models/SmolLM2-135M-MASK_TOKEN"
-chunk_size = 2**24 # 2**29  # 512MB
+chunk_size = 2**28 # 2**29  # 512MB
 
 
-# output_dir = "/mnt/datasets/tokenized/SmolLM2-135M/packed_fineweb_350B_largefiles_parellel"
-# prefix = "fineweb_sample"
-# dataset_name = "HuggingFaceFW/fineweb"
-# dataset_config = "sample-350BT"
-# split = "train"
-# input_col = "text"
-
-output_dir = "/mnt/datasets/tokenized/SmolLM2-135M/packed_wikitext_largefiles_test"
-prefix = "wikitext_sample"
-dataset_name = "Salesforce/wikitext"
-dataset_config = "wikitext-2-v1"
+output_dir = "/mnt/datasets/tokenized/SmolLM2-135M/packed_fineweb_350B_smallfiles_parellel"
+prefix = "fineweb_sample"
+dataset_name = "HuggingFaceFW/fineweb"
+dataset_config = "sample-350BT"
 split = "train"
 input_col = "text"
+
+# output_dir = "/mnt/datasets/tokenized/SmolLM2-135M/packed_wikitext_largefiles_test"
+# prefix = "wikitext_sample"
+# dataset_name = "Salesforce/wikitext"
+# dataset_config = "wikitext-2-v1"
+# split = "train"
+# input_col = "text"
 
 os.makedirs(output_dir, exist_ok=True)
 tokenizer = AutoTokenizer.from_pretrained(tokenizer_name, use_fast=True)
@@ -44,7 +44,7 @@ dataset = load_dataset(
     split=split,
     trust_remote_code=True,
     num_proc=num_proc,
-    # cache_dir="/mnt/hf_home",
+    cache_dir="/mnt/hf_home",
 )
 print(f"Dataset loaded with {len(dataset)} examples.")
 

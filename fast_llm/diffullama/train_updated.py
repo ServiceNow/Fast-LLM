@@ -63,13 +63,13 @@ def create_dataloader(
         random.seed(seed)
         random.shuffle(filenames)
         print(f"[RANK {accelerator.process_index}] found {len(filenames)} files", flush=True)
-
+        filenames = filenames[0: 256]
         dataset = PackedDataset(
             filenames,
             # n_chunks control the buffer size.
             # Note that the buffer size also impacts the random shuffle
             # (PackedDataset is an IterableDataset. So the shuffle is done by prefetch a buffer and shuffle the buffer)
-            n_chunks=8,
+            n_chunks=2,
             block_size=block_size,
             shuffle=shuffle,
             seed=seed + accelerator.process_index,
@@ -89,7 +89,7 @@ def create_dataloader(
 
     combined_dataset = datasets[0]  # CombinedDataset(datasets=datasets, seed=seed, weights=weights)
 
-    return DataLoader(combined_dataset, batch_size=batch_size, shuffle=False, pin_memory=True)
+    return DataLoader(combined_dataset, batch_size=batch_size, shuffle=False, pin_memory=True, num_workers=1)
 
 
 def create_dataloaders(
@@ -177,7 +177,7 @@ def main(args):
         accelerator=accelerator,
         train_data_dir=Path(args.dataset),
         val_data_dir=None,
-        seed=3407,
+        seed=180725,
     )
 
     model = LlamaForCausalLM.from_pretrained(

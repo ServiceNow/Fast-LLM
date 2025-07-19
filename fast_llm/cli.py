@@ -42,7 +42,7 @@ def fast_llm_main(args: list[str] | None = None):
         # Call the custom dataset creation script from the installed package
         import runpy
 
-        runpy.run_module("fast_llm.diffullama.create_dataset_parallel", run_name="__main__")
+        runpy.run_module("fast_llm.diffullama.create_dataset", run_name="__main__")
         return
     if args and args[0] == "train-diffullama":
         # Launch train_updated.py using accelerate with recommended arguments
@@ -56,8 +56,8 @@ def fast_llm_main(args: list[str] | None = None):
             "accelerate",
             "launch",
             "--config_file",
-            "/app/fast_llm/diffullama/accelerate_configs/single_node.yaml",
-            # "fast_llm/diffullama/accelerate_configs/single_node.yaml",
+            # "/app/fast_llm/diffullama/accelerate_configs/single_node.yaml",
+            "fast_llm/diffullama/accelerate_configs/single_node.yaml",
             "--main_process_ip",
             os.environ.get("MASTER_ADDR", "localhost"),
             "--main_process_port",
@@ -65,11 +65,11 @@ def fast_llm_main(args: list[str] | None = None):
             "--machine_rank",
             os.environ.get("NODEID", "0"),
             "--num_processes",
-            os.environ.get("WORLD_SIZE", "8"),
+            os.environ.get("WORLD_SIZE", "1"),
             "--num_machines",
             os.environ.get("NNODES", "1"),
-            # "fast_llm/diffullama/train_updated.py",
-            "/app/fast_llm/diffullama/train_updated.py",
+            "fast_llm/diffullama/train_updated.py",
+            # "/app/fast_llm/diffullama/train_updated.py",
         ] + train_args
         subprocess.run(accelerate_cmd, check=True)
         return
