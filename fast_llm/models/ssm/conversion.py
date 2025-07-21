@@ -221,7 +221,11 @@ class CommonSSMHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandle
             ),
         ]
 
-    def _create_weight_converters(self) -> list[WeightConverter]:
+    def _create_weight_converters(
+        self,
+        hf_base_prefix: str = "",
+        offset: int = 0,
+    ) -> list[WeightConverter]:
         converters = super()._create_weight_converters() or []
 
         num_layers = self._model.config.base_model.transformer.num_layers
@@ -230,55 +234,65 @@ class CommonSSMHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandle
         for i in range(num_layers):
             # SSM
             converters += self._get_weight_and_bias_converters(
-                f"layers.{i+1}.mixer.in_proj", f"model.layers.{i}.mixer.in_proj", ssm_bias
+                f"layers.{offset+i+1}.mixer.in_proj", f"{hf_base_prefix}model.layers.{i}.mixer.in_proj", ssm_bias
             )
             converters += self._get_weight_and_bias_converters(
-                f"layers.{i+1}.mixer.out_proj", f"model.layers.{i}.mixer.out_proj", ssm_bias
-            )
-            converters.append(
-                WeightConverter(f"layers.{i+1}.mixer.D", f"model.layers.{i}.mixer.D", self._model.config.base_model)
+                f"layers.{offset+i+1}.mixer.out_proj", f"{hf_base_prefix}model.layers.{i}.mixer.out_proj", ssm_bias
             )
             converters.append(
                 WeightConverter(
-                    f"layers.{i+1}.mixer.z_bias", f"model.layers.{i}.mixer.z_bias", self._model.config.base_model
-                )
-            )
-            converters.append(
-                WeightConverter(
-                    f"layers.{i+1}.mixer.z_bias", f"model.layers.{i}.mixer.z_bias", self._model.config.base_model
-                )
-            )
-            converters.append(
-                WeightConverter(
-                    f"layers.{i+1}.mixer.conv1d_weight",
-                    f"model.layers.{i}.mixer.conv1d.weight",
+                    f"layers.{offset+i+1}.mixer.D",
+                    f"{hf_base_prefix}model.layers.{i}.mixer.D",
                     self._model.config.base_model,
                 )
             )
             converters.append(
                 WeightConverter(
-                    f"layers.{i+1}.mixer.conv1d_bias",
-                    f"model.layers.{i}.mixer.conv1d.bias",
+                    f"layers.{offset+i+1}.mixer.z_bias",
+                    f"{hf_base_prefix}model.layers.{i}.mixer.z_bias",
+                    self._model.config.base_model,
+                )
+            )
+            converters.append(
+                WeightConverter(
+                    f"layers.{offset+i+1}.mixer.z_bias",
+                    f"{hf_base_prefix}model.layers.{i}.mixer.z_bias",
+                    self._model.config.base_model,
+                )
+            )
+            converters.append(
+                WeightConverter(
+                    f"layers.{offset+i+1}.mixer.conv1d_weight",
+                    f"{hf_base_prefix}model.layers.{i}.mixer.conv1d.weight",
+                    self._model.config.base_model,
+                )
+            )
+            converters.append(
+                WeightConverter(
+                    f"layers.{offset+i+1}.mixer.conv1d_bias",
+                    f"{hf_base_prefix}model.layers.{i}.mixer.conv1d.bias",
                     self._model.config.base_model,
                 )
             )
             # ================================================
             # Mamba2 specific parameters
             converters += self._get_weight_and_bias_converters(
-                f"layers.{i+1}.mixer.dt_proj", f"model.layers.{i}.mixer.dt_proj", False
+                f"layers.{offset+i+1}.mixer.dt_proj", f"{hf_base_prefix}model.layers.{i}.mixer.dt_proj", False
             )
             # bias is treated separately in Mamba2 and must always exist (https://github.com/jxiw/M1/blob/537a1ca5407a786a99dc6c721873493cf8750d5e/mamba/hybrid_mamba_layer.py)
             converters.append(
                 WeightConverter(
-                    f"layers.{i+1}.mixer.dt_proj_bias",
-                    f"model.layers.{i}.mixer.dt_proj.bias",
+                    f"layers.{offset+i+1}.mixer.dt_proj_bias",
+                    f"{hf_base_prefix}model.layers.{i}.mixer.dt_proj.bias",
                     self._model.config.base_model,
                 )
             )
 
             converters.append(
                 WeightConverter(
-                    f"layers.{i+1}.mixer.A_log", f"model.layers.{i}.mixer.A_log", self._model.config.base_model
+                    f"layers.{offset+i+1}.mixer.A_log",
+                    f"{hf_base_prefix}model.layers.{i}.mixer.A_log",
+                    self._model.config.base_model,
                 )
             )
 
@@ -572,11 +586,16 @@ class AprielSSMHuggingfaceCheckpointHandler(CommonSSMHuggingfaceCheckpointHandle
             ),
         ]
 
-    def _create_weight_converters(self) -> list[WeightConverter]:
-        converters = super()._create_weight_converters()
+    def _create_weight_converters(
+        self,
+        hf_base_prefix: str = "",
+        offset: int = 0,
+    ) -> list[WeightConverter]:
+        converters = super()._create_weight_converters(hf_base_prefix, offset)
         num_layers = self._model.config.base_model.transformer.num_layers
         norm_bias: bool = False
 
+        # TODO: use hf_base_prefix and offset
         # Embedding and output
         if self._model.config.base_model.tie_word_embeddings:
             converters.append(WeightConverter("layers.0.word_embeddings_weight", "model.embed_tokens.weight"))
@@ -710,8 +729,12 @@ class AprielThinkerSSMHHybridHuggingfaceCheckpointHandler(
     _hf_prefix: str = "model"
     architecture: typing.ClassVar[str] = "AprielThinkerSSMHybridForCausalLM"
 
-    def _create_weight_converters(self) -> list[WeightConverter]:
-        converters = super()._create_weight_converters()
+    def _create_weight_converters(
+        self,
+        hf_base_prefix: str = "",
+        offset: int = 0,
+    ) -> list[WeightConverter]:
+        converters = super()._create_weight_converters(hf_base_prefix, offset)
         # num_layers = self._model.config.base_model.transformer.num_layers
         # # Embedding and output
         # if self._model.config.base_model.tie_word_embeddings:
