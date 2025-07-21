@@ -21,7 +21,7 @@ from fast_llm.layers.transformer.config import (
     TransformerLossNames,
 )
 from fast_llm.layers.transformer.preprocessing import BackupAttentionPreprocessor, FlashAttnVarlenPreprocessor
-from fast_llm.layers.transformer.transformer import TransformerLayer
+from fast_llm.layers.transformer.transformer import TransformerBlock
 from fast_llm.models.gpt.config import GPTBaseModelConfig, GPTBatchConfig, GPTModelConfig
 from fast_llm.models.gpt.megatron import get_init_megatron
 from fast_llm.tensor import ParameterMeta, TensorMeta
@@ -68,7 +68,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
         for i in range(self._config.prediction_heads):
             if i > 0:
                 layers.append(
-                    TransformerLayer(
+                    TransformerBlock(
                         self._config.transformer,
                         self._tensor_space,
                         # TODO MTP: which index?
@@ -91,7 +91,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
         return [
             LanguageModelEmbedding(self._config, self._tensor_space),
             *[
-                TransformerLayer(
+                TransformerBlock(
                     self._config.transformer,
                     self._tensor_space,
                     layer_index=i + 1,
@@ -336,7 +336,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
         return self.layers[0]
 
     @property
-    def transformer_layers(self) -> list[TransformerLayer]:
+    def transformer_layers(self) -> list[TransformerBlock]:
         return self.layers[1:-1]
 
     @property

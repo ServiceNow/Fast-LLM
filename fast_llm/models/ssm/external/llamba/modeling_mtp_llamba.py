@@ -322,19 +322,21 @@ class Block(nn.Module):
 
         # Mixer
         self.mixer = DiscreteMamba2(
-            d_model=self.config.d_model,
+            d_model=self.config._hidden_size,
             layer_idx=layer_idx,
             **config.ssm_cfg,
             **factory_kwargs,
         )
 
         # Other components
-        self.input_layernorm = LlamaRMSNorm(hidden_size=self.config.d_model, eps=1e-5, factory_kwargs=factory_kwargs)
+        self.input_layernorm = LlamaRMSNorm(
+            hidden_size=self.config._hidden_size, eps=1e-5, factory_kwargs=factory_kwargs
+        )
         self.post_attention_layernorm = LlamaRMSNorm(
-            hidden_size=self.config.d_model, eps=1e-5, factory_kwargs=factory_kwargs
+            hidden_size=self.config._hidden_size, eps=1e-5, factory_kwargs=factory_kwargs
         )
         self.mlp = LlamaMLP(
-            hidden_size=self.config.d_model,
+            hidden_size=self.config._hidden_size,
             **config.mlp_cfg,
             factory_kwargs=factory_kwargs,
         )

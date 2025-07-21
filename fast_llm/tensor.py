@@ -354,7 +354,7 @@ def init_normal_(
     return init_
 
 
-def kaiming_init_(d_in):
+def init_kaiming_(d_in):
     return init_normal_(0.0, math.sqrt(2.0 / d_in))
 
 
@@ -369,3 +369,9 @@ def init_uniform_(
             return tensor
 
     return init_
+
+
+def init_uniform_centered_(
+    high, max_val=None, mean=0.0
+) -> typing.Callable[[ParameterMeta, torch.Tensor, torch.Generator], torch.Tensor]:
+    return init_uniform_(mean - high, mean + high, min_val=mean - max_val, max_val=mean + max_val)

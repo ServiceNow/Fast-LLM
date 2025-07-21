@@ -4,7 +4,7 @@ from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.engine.training.config import TrainerConfig
 from fast_llm.engine.training.trainer import Trainer
 from fast_llm.layers.ssm.llamba_block import LlambaBlock
-from fast_llm.layers.transformer.transformer import TransformerLayer
+from fast_llm.layers.transformer.transformer import TransformerBlock
 from fast_llm.utils import Assert
 from tests.utils.model_configs import ModelTestingGroup
 from tests.utils.utils import requires_cuda
@@ -39,7 +39,7 @@ def test_frozen_weights(model_testing_config):
         model_frozen._num_stages,
     )
     frozen_parameter_counts = [
-        sum(p.numel() for p in layer.mlp.parameters()) if isinstance(layer, (TransformerLayer, LlambaBlock)) else 0
+        sum(p.numel() for p in layer.mlp.parameters()) if isinstance(layer, (TransformerBlock, LlambaBlock)) else 0
         for layer in model_ref.base_model.layers
     ]
     for weight_buffer_ref, weight_buffer_frozen in zip(

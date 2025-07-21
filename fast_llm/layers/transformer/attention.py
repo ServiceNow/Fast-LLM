@@ -13,6 +13,7 @@ from fast_llm.layers.transformer.config import (
     TransformerKwargs,
     TransformerSubLayerName,
 )
+from fast_llm.layers.transformer.transformer import Mixer
 from fast_llm.logging import log_distributed_grad, log_distributed_tensor
 from fast_llm.tensor import TensorMeta, init_normal_, init_zeros_
 from fast_llm.utils import Assert, get_lr_scale
@@ -50,7 +51,7 @@ class AttachGrad(torch.autograd.Function):
         return grad, None
 
 
-class Attention(torch.nn.Module):
+class Attention(Mixer):
     """
     A self-attention layer.
     """

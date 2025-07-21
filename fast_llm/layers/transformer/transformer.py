@@ -18,12 +18,23 @@ from fast_llm.tensor import TensorMeta
 logger = logging.getLogger(__name__)
 
 
+class Mixer(torch.nn.Module, abc.ABC):
+    """
+    Base class for mixer modules.
+    """
+
+    @abc.abstractmethod
+    def forward(self, input_: torch.Tensor, kwargs: dict[str, typing.Any]) -> tuple[torch.Tensor, torch.Tensor | None]:
+        """
+        Mixer module forward. Returns the output hidden states and an optional bias,
+         in case its addition can be made more efficient in `_bias_dropout_add`.
+        """
+
+
 class BaseBlock(Layer, abc.ABC):
     """
     A transformer-like decoder base block with abstract mixer.
     """
-
-    _mixer_module_name = "self_attn"
 
     def __init__(
         self, config: TransformerConfig, tensor_space: TensorSpace, layer_index: int, return_input: bool = False
@@ -54,7 +65,7 @@ class BaseBlock(Layer, abc.ABC):
         self.norm_2 = self._config.peft.apply_other(self.norm_2)
 
     @abc.abstractmethod
-    def _create_mixer(self):
+    def get_mixer(self) -> Mixer:
         pass
 
     @torch.compile
@@ -115,7 +126,7 @@ class BaseBlock(Layer, abc.ABC):
         hidden_states = self.norm_1(input_)
         if self._debug_mode:
             self._debug_log(hidden_states, "Norm 1", kwargs)
-        hidden_states, bias = getattr(self, self._mixer_module_name)(hidden_states, kwargs)
+        hidden_states, bias = self.get_mixer()(hidden_states, kwargs)
         if self._debug_mode:
             self._debug_log(hidden_states, f"{self._mixer_module_name} output", kwargs, bias=bias)
         with set_generator(generator):
@@ -137,14 +148,14 @@ class BaseBlock(Layer, abc.ABC):
         return hidden_states
 
 
-class TransformerLayer(BaseBlock):
+class TransformerBlock(BaseBlock):
     _name = "Transformer layer"
-    _mixer_module_name = "self_attn"
 
     def __init__(
         self, config: TransformerConfig, tensor_space: TensorSpace, layer_index: int, return_input: bool = False
     ):
         super().__init__(config, tensor_space, layer_index, return_input)
-
-    def _create_mixer(self):
         self.self_attn = Attention(self._config, self._tensor_space, self._layer_index)
+
+    def get_mixer(self) -> Mixer:
+        return self.self_attn

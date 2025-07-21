@@ -1,5 +1,6 @@
 import logging
 import math
+import typing
 
 import einops
 import torch
@@ -7,8 +8,8 @@ import torch
 from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
 from fast_llm.layers.common.linear import Linear
 from fast_llm.layers.ssm.config import SSMConfig, SSMDimNames
-from fast_llm.layers.transformer.config import TransformerKwargs
-from fast_llm.tensor import ParameterMeta, init_ones_, init_uniform_, init_zeros_, kaiming_init_
+from fast_llm.layers.transformer.config import TransformerDimNames, TransformerKwargs
+from fast_llm.tensor import ParameterMeta, init_kaiming_, init_ones_, init_uniform_centered_, init_zeros_
 from fast_llm.utils import get_lr_scale
 
 logger = logging.getLogger(__name__)
@@ -33,7 +34,7 @@ except (ImportError, RuntimeError):
 def bias_init_method(conv_weight):
     fan_in, _ = torch.nn.init._calculate_fan_in_and_fan_out(conv_weight)
     bound = 1 / math.sqrt(fan_in) if fan_in > 0 else 0
-    return init_uniform_(-bound, bound)
+    return init_uniform_centered_(bound)
 
 
 class DiscreteMamba2(torch.nn.Module):
@@ -53,21 +54,20 @@ class DiscreteMamba2(torch.nn.Module):
         # factory_kwargs = {"device": "meta"}  # , "dtype": torch.bfloat16}
         super().__init__()
         self.config: SSMConfig = config
-        bias = config.add_bias_linear
         self.layer_idx = layer_idx
         self._return_input = return_input
         layer_lr_scale = config.per_layer_lr_scale[layer_idx] if config.per_layer_lr_scale else None
         mamba_layer_lr_scale = get_lr_scale(self.config.mamba_lr_scale, layer_lr_scale)
         logger.info(f"Setting lr_scale for layer {layer_idx} of type {type(self)}: {mamba_layer_lr_scale}")
 
-        td_inner = tensor_space.get_tensor_dim(SSMDimNames.inner_dim)
-        td_state = tensor_space.get_tensor_dim(SSMDimNames.state_dim)
-        td_model = tensor_space.get_tensor_dim(SSMDimNames.model_dim)
+        td_inner = tensor_space.get_tensor_dim(SSMDimNames.composite_heads_and_state)
+        td_state = tensor_space.get_tensor_dim(SSMDimNames.state)
+        td_model = tensor_space.get_tensor_dim(TransformerDimNames.hidden)
         td_conv = tensor_space.get_tensor_dim(SSMDimNames.conv_dim)
-        td_n_qk_heads = tensor_space.get_tensor_dim(SSMDimNames.qk_heads)
-        td_n_v_heads = tensor_space.get_tensor_dim(SSMDimNames.v_heads)
-        td_conv_kernel = tensor_space.get_tensor_dim(SSMDimNames.conv_kernel_size)
-        td_inner_proj = tensor_space.get_tensor_dim(SSMDimNames.inner_proj_discrete_mamba2)
+        td_n_qk_heads = tensor_space.get_tensor_dim(SSMDimNames.head_groups)
+        td_n_v_heads = tensor_space.get_tensor_dim(SSMDimNames.composite_heads)
+        td_conv_kernel = tensor_space.get_tensor_dim(SSMDimNames.conv_kernel)
+        td_inner_proj = tensor_space.get_tensor_dim(SSMDimNames.composite_inner_projection)
 
         self.d_model = td_model.size
         self.d_inner = td_inner.size
@@ -85,8 +85,8 @@ class DiscreteMamba2(torch.nn.Module):
         self.in_proj = Linear(
             td_model,
             td_inner_proj,
-            bias=bias,
-            weight_init_method=kaiming_init_(td_model.size),
+            bias=config.add_bias_linear,
+            weight_init_method=init_kaiming_(td_model.size),
             lr_scale=mamba_layer_lr_scale,
         )
         self.z_bias = (
@@ -96,15 +96,13 @@ class DiscreteMamba2(torch.nn.Module):
                 init_method=init_zeros_,
                 lr_scale=mamba_layer_lr_scale,
             )
-            if not bias
+            if not config.add_bias_linear
             else 0.0
         )
 
         self.conv1d_weight = ParameterMeta.from_dims(
             (td_conv, TensorDim("1", 1), td_conv_kernel),
-            init_method=init_uniform_(
-                1 / math.sqrt(td_conv.size * td_conv_kernel.size), 1 / math.sqrt(td_conv.size * td_conv_kernel.size)
-            ),  # see https://github.com/pytorch/pytorch/blob/1eba9b3aa3c43f86f4a2c807ac8e12c4a7767340/torch/nn/modules/conv.py#L180C53-L180C67
+            init_method=init_uniform_centered_((td_conv.size * td_conv_kernel.size) ** -0.5),
             lr_scale=mamba_layer_lr_scale,
         )
         self.conv1d_bias = ParameterMeta.from_dims(
@@ -123,12 +121,12 @@ class DiscreteMamba2(torch.nn.Module):
         self.out_proj = Linear(
             td_inner,
             td_model,
-            bias=bias,
-            weight_init_method=kaiming_init_(td_inner.size),
+            bias=config.add_bias_linear,
+            weight_init_method=init_kaiming_(td_inner.size),
             lr_scale=mamba_layer_lr_scale,
         )
 
-    def forward(self, hidden_states, kwargs):
+    def forward(self, input_: torch.Tensor, kwargs: dict[str, typing.Any]) -> tuple[torch.Tensor, torch.Tensor | None]:
         """
         ON variable names and pep8: keeping some variable names as in the original code for clarity.
 
@@ -144,7 +142,6 @@ class DiscreteMamba2(torch.nn.Module):
             raise NotImplementedError(f"Sequence-first not supported for SSMs.")
 
         assert _mamba_available
-        input_ = hidden_states
         outputs = {}
         # assert state is None
         batch, seqlen, dim = input_.shape

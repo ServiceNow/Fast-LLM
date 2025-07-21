@@ -1,6 +1,6 @@
 import typing
 
-from fast_llm.layers.transformer.transformer import BaseBlock
+from fast_llm.layers.transformer.transformer import BaseBlock, Mixer
 
 if typing.TYPE_CHECKING:
     from fast_llm.engine.config_utils.tensor_space import TensorSpace
@@ -14,21 +14,19 @@ class LlambaBlock(BaseBlock):
     """
 
     _name = "Llamba block"
-    _mixer_module_name = "mixer"
 
     def __init__(
         self,
-        config_transformer: "TransformerConfig",
-        config_ssm: "SSMConfig",
+        transformer_config: "TransformerConfig",
+        ssm_config: "SSMConfig",
         tensor_space: "TensorSpace",
-        mixer_cls,
+        mixer_cls: type[Mixer],
         layer_index: int,
         return_input: bool = False,
     ):
-        self.mixer_cls = mixer_cls
-        self._config_ssm = config_ssm
         self._debug_mode = self._config_ssm.debug_ssm
-        super().__init__(config_transformer, tensor_space, layer_index, return_input)
+        super().__init__(transformer_config, tensor_space, layer_index, return_input)
+        self.mixer = mixer_cls(ssm_config, layer_idx=self._layer_index, tensor_space=self._tensor_space)
 
-    def _create_mixer(self):
-        self.mixer = self.mixer_cls(self._config_ssm, layer_idx=self._layer_index, tensor_space=self._tensor_space)
+    def get_mixer(self) -> Mixer:
+        return self.mixer
