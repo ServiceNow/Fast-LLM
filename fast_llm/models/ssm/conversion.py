@@ -3,6 +3,8 @@ import os
 import pathlib
 import typing
 
+from transformers.configuration_utils import PretrainedConfig
+
 from fast_llm.engine.checkpoint.config import CheckpointFormat
 from fast_llm.engine.checkpoint.external import (
     ConstantExportParamConverter,
@@ -16,7 +18,7 @@ from fast_llm.engine.checkpoint.external import (
     SplitWeightConverter,
     WeightConverter,
 )
-from fast_llm.engine.checkpoint.huggingface import HuggingfaceStateDictCheckpointHandler
+from fast_llm.engine.checkpoint.huggingface import CustomModelingExportMixin, HuggingfaceStateDictCheckpointHandler
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig
 from fast_llm.functional.config import ActivationType
 from fast_llm.layers.common.config import RMSNormalizationConfig
@@ -34,6 +36,11 @@ from fast_llm.models.ssm.config import (
     LLambaHuggingfaceCheckpointFormat,
     LlavaHybridHuggingfaceCheckpointFormat,
 )
+from fast_llm.models.ssm.external.apriel_15b_hybrid import (
+    configuration_ssm_hybrid_apriel15b,
+    modeling_ssm_hybrid_apriel15b,
+)
+from fast_llm.models.ssm.external.llava_hybrid import configuration_llava_hybrid, modeling_llava_hybrid
 from fast_llm.models.ssm.model import HybridSSMModel
 from fast_llm.utils import Assert
 
@@ -793,9 +800,16 @@ class AprielThinkerSSMHHybridHuggingfaceCheckpointHandler(
             json.dump(config, f)
 
 
-class LlavaHybridHuggingfaceCheckpointHandler(LlavaHuggingfaceCheckpointHandler):
+class LlavaHybridHuggingfaceCheckpointHandler(CustomModelingExportMixin, LlavaHuggingfaceCheckpointHandler):
     format: typing.ClassVar[type[CheckpointFormat]] = LlavaHybridHuggingfaceCheckpointFormat
+    modeling_file = modeling_llava_hybrid.__file__
+    configuration_file = configuration_llava_hybrid.__file__
+    configuration_cls: typing.ClassVar[type[PretrainedConfig]] = configuration_llava_hybrid.LlavaHybridConfig
     _model_class: typing.ClassVar[FastLLMModelConfig] = HybridSSMModelConfig
+    additional_files = [
+        modeling_ssm_hybrid_apriel15b.__file__,
+        configuration_ssm_hybrid_apriel15b.__file__,
+    ]
 
     @classmethod
     def get_text_handler_class(cls) -> type[ExternalStateDictCheckpointHandler]:
