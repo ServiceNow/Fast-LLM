@@ -4,7 +4,6 @@ from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
 from fast_llm.functional.config import ActivationType
 from fast_llm.layers.common.linear import InputParallelLinear, Linear, OutputParallelLinear
 from fast_llm.layers.ssm.config import SSMConfig, SSMDimNames
-from fast_llm.layers.ssm.discrete_mamba2 import bias_init_method
 from fast_llm.layers.ssm.mamba_layer import init_A, init_dtprojbias
 from fast_llm.layers.transformer.config import TransformerDimNames, TransformerKwargs
 from fast_llm.layers.transformer.transformer import Mixer
@@ -62,7 +61,9 @@ class Mamba2(Mixer):
             lr_scale=lr_scale,
         )
         self.conv1d_bias = ParameterMeta.from_dims(
-            (conv1d_dim,), init_method=bias_init_method(self._config.conv_kernel_dimension**-0.5), lr_scale=lr_scale
+            (conv1d_dim,),
+            init_method=init_uniform_centered_(self._config.conv_kernel_dimension**-0.5),
+            lr_scale=lr_scale,
         )
         self.in_proj = OutputParallelLinear(
             hidden_dim,
@@ -124,7 +125,7 @@ class Mamba2(Mixer):
         if kwargs[TransformerKwargs.sequence_first]:
             inner_projection = inner_projection.transpose(0, 1)
             dt = dt.transpose(0, 1)
-        sequence_length = hidden_states.size(1)
+        sequence_length = inner_projection.size(1)
 
         z, x, b, c = torch.split(
             inner_projection,
@@ -177,9 +178,11 @@ class Mamba2(Mixer):
             delta_softplus=True,
         )
 
-        # y: (batch, heads * state, sequence) -> out: (batch, sequence, hidden)
-        out = self.out_proj(y.transpose(1, 2))[:, :sequence_length]
+        # y: (batch, heads * state, sequence) -> (batch, sequence, heads * state)
+        y = y.transpose(1, 2)[:, :sequence_length]
         if kwargs[TransformerKwargs.sequence_first]:
-            out = out.transpose(0, 1)
-        # TODO: Is contiguous needed?
-        return out.contiguous(), None
+            # TODO: Is contiguous needed?
+            y = y.transpose(0, 1).contiguous()
+        a, b = self.out_proj(y)
+        Assert.eq(a.shape, hidden_states.shape)
+        return a, b

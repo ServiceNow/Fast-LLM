@@ -21,7 +21,7 @@ class TensorDim:
 
     def __repr__(self) -> str:
         return (
-            f"TensorDim("
+            f"{type(self).__name__}("
             f"name={self._name},"
             f" size={self._size},"
             f" global_size={self._global_size},"
@@ -134,6 +134,8 @@ class ConcatenatedTensorDim(TensorDim):
         raise NotImplementedError()
 
     def local_to_global(self, tensor: "torch.Tensor", dim: int = 0) -> "torch.Tensor":
+        import torch
+
         return (
             torch.concatenate(
                 [
@@ -153,6 +155,8 @@ class ConcatenatedTensorDim(TensorDim):
     def global_to_local(self, tensor: "torch.Tensor", dim: int = 0, expand: bool = False) -> "torch.Tensor":
         if self.is_parallel and expand:
             raise NotImplementedError()
+        import torch
+
         return (
             torch.concatenate(
                 [

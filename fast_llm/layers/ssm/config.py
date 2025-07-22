@@ -219,8 +219,6 @@ class SSMConfig(LLMBlockConfig):
             num_head_groups = div(self.d_xb, self.state_size)
         elif block_type == SSMBlockType.mamba2_discrete:
             Assert.eq(num_heads, self.n_v_heads)
-            # TODO: Fix (Du einsum crashes)
-            Assert.eq(self.n_qk_heads, self.n_v_heads)
             num_head_groups = self.n_qk_heads
         else:
             raise NotImplementedError(block_type)

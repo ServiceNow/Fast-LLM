@@ -35,7 +35,10 @@ def init_A(d_state, d_inner) -> typing.Callable[[ParameterMeta, torch.Tensor, to
         if tensor.numel() != d_state * d_inner:
             raise ValueError(f"_init_A requires not supported for tensor slices.")
         return torch.log(
-            torch.arange(1, d_state + 1, dtype=torch.float32, device=tensor.device).repeat(d_inner), out=tensor
+            torch.arange(1, d_state + 1, dtype=torch.float32, device=tensor.device)
+            .unsqueeze(0)
+            .expand(d_inner, d_state),
+            out=tensor,
         )
 
     return init_

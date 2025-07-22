@@ -111,7 +111,7 @@ class DiscreteMamba2(torch.nn.Module):
 
         # D "skip" parameter
         self.D = ParameterMeta.from_dims(
-            (td_n_qk_heads,),
+            (td_n_v_heads,),
             weight_decay=False,
             init_method=init_ones_,
             lr_scale=mamba_layer_lr_scale,
@@ -216,8 +216,6 @@ class DiscreteMamba2(torch.nn.Module):
         else:
             y = result
 
-        print("AHNFIUWEGIUWEI", self.D.shape, x.shape)
-        # TODO: h different for D and x (qk_heads, v_heads)
         Du = torch.einsum("h,blhp->blhp", self.D, x)
         y = einops.rearrange(y + Du, "b l h p -> b l (h p)")
 

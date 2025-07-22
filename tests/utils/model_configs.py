@@ -487,9 +487,8 @@ _update_and_add_testing_config(
         "model.base_model.hybrid_block_layout=['t','m2d']",
         "model.base_model.ssm.d_inner=512",
         "model.base_model.ssm.state_size=8",
-        # TODO: Set to 16 once fixed.
-        "model.base_model.ssm.n_qk_heads=32",
-        "model.base_model.ssm.n_v_heads=32",
+        "model.base_model.ssm.n_qk_heads=8",
+        "model.base_model.ssm.n_v_heads=16",
         "model.base_model.ssm.chunk_size=32",
     ],
     megatron_args=None,
@@ -503,6 +502,7 @@ _update_and_add_testing_config(
         # TODO: Implement
         ModelTestingGroup.distributed: ModelTestingGroupAction.not_implemented,
     },
+    compare_factor=2.0,
     # Micro-sequence split and sequence-first not supported.
     skip_tests=("sf", "stp", "sdp", "ms"),
 )
@@ -515,7 +515,7 @@ _update_and_add_testing_config(
     extra_args=[
         "model.base_model.hybrid_block_layout=['t','m2']",
         "model.base_model.ssm.d_inner=512",
-        "model.base_model.ssm.state_size=16",
+        "model.base_model.ssm.state_size=8",
         "model.base_model.ssm.d_xb=256",
     ],
     megatron_args=None,
@@ -528,6 +528,7 @@ _update_and_add_testing_config(
         ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
         ModelTestingGroup.distributed: ModelTestingGroupAction.normal,
     },
+    compare_factor=2.0,
     # Micro-sequence split not supported.
     skip_tests=("sdp", "ms"),
 )

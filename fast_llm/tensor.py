@@ -164,6 +164,9 @@ class TensorMeta(torch.Tensor):
         *,
         distributed: Distributed,
     ) -> tuple[torch.Tensor, ...]:
+        if tensor.ndim == 0:
+            tensor = tensor[None]
+        Assert.eq(tensor.shape, self.shape)
         # Tensors are always either split or duplicated in the tensor-parallel direction.
         # TODO: Avoid hard-coded assumptions on duplication
         is_first_rank, modified = distributed.config.tensor_rank == 0, False
@@ -195,6 +198,9 @@ class TensorMeta(torch.Tensor):
         # Take a trivial slice to convert safetensor slices.
         tensor = tensor[:]
         assert not self._reductions
+        if tensor.ndim == 0:
+            tensor = tensor[None]
+        Assert.eq(tensor.shape, self.global_shape)
 
         for dim, tensor_dim in reversed(list(enumerate(self.dims))):
             tensor = tensor_dim.global_to_local(tensor, dim, expand)
