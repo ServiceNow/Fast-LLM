@@ -1,7 +1,7 @@
 import enum
 
 from fast_llm.config import Field, FieldHint, check_field, config_class, skip_valid_if_none
-from fast_llm.engine.config_utils.tensor_space import CompositeTensorDim, TensorDim, TensorSpace
+from fast_llm.engine.config_utils.tensor_space import CompositeTensorDim, ConcatenatedTensorDim, TensorDim, TensorSpace
 from fast_llm.engine.distributed.config import DistributedDimNames
 from fast_llm.functional.config import ActivationType
 from fast_llm.layers.common.config import LLMBlockConfig, NormalizationConfig
@@ -20,8 +20,7 @@ class SSMDimNames:
     composite_head_groups_and_state = "ssm_composite_head_groups_and_state"
 
     # Inner projection total dimension.
-    inner_projection = "ssm_inner_projection"
-    composite_inner_projection = "ssm_composite_inner_projection"
+    concatenated_inner_projection = "ssm_concatenated_inner_projection"
 
     # Convolution shape in discrete mamba 2. TODO: Remove (dim too complex)
     conv_dim = "ssm_conv_dim"
@@ -210,7 +209,7 @@ class SSMConfig(LLMBlockConfig):
             Assert.eq(num_heads, self.n_v_heads)
             num_head_groups = self.n_qk_heads
             # (head_groups, (2 * group_heads + 2) * state_dim + group_heads)
-            inner_projection_size = 2 * self.d_inner + 2 * num_head_groups * self.state_size + num_heads
+            2 * self.d_inner + 2 * num_head_groups * self.state_size + num_heads
         else:
             raise NotImplementedError(block_type)
 
@@ -219,12 +218,18 @@ class SSMConfig(LLMBlockConfig):
         tensor_space.add_tensor_dim(
             group_heads := TensorDim(SSMDimNames.group_heads, num_group_heads := div(num_heads, num_head_groups))
         )
-        tensor_space.add_tensor_dim(CompositeTensorDim(SSMDimNames.composite_heads, (head_groups, group_heads)))
         tensor_space.add_tensor_dim(
-            CompositeTensorDim(SSMDimNames.composite_heads_and_state, (head_groups, group_heads, state_dim))
+            heads := CompositeTensorDim(SSMDimNames.composite_heads, (head_groups, group_heads))
         )
         tensor_space.add_tensor_dim(
-            CompositeTensorDim(SSMDimNames.composite_head_groups_and_state, (head_groups, state_dim))
+            heads_and_state := CompositeTensorDim(
+                SSMDimNames.composite_heads_and_state, (head_groups, group_heads, state_dim)
+            )
+        )
+        tensor_space.add_tensor_dim(
+            head_groups_and_state := CompositeTensorDim(
+                SSMDimNames.composite_head_groups_and_state, (head_groups, state_dim)
+            )
         )
         tensor_space.add_tensor_dim(TensorDim(SSMDimNames.conv_kernel, self.conv_kernel_dimension))
 
@@ -234,17 +239,27 @@ class SSMConfig(LLMBlockConfig):
 
         if block_type == SSMBlockType.mamba:
             tensor_space.add_tensor_dim(TensorDim(SSMDimNames.x_proj_dim, self.dt_rank + self.state_size * 2))
-            inner_projection_size = 2 * num_group_heads * self.state_size
+            # TODO: Use composition instead
+            tensor_space.add_tensor_dim(
+                ConcatenatedTensorDim(SSMDimNames.concatenated_inner_projection, (heads_and_state, heads_and_state))
+            )
         elif block_type == SSMBlockType.mamba2:
-            inner_projection_size = 2 * (num_group_heads + 1) * self.state_size
+            # TODO: Factor out state?
+            tensor_space.add_tensor_dim(
+                ConcatenatedTensorDim(
+                    SSMDimNames.concatenated_inner_projection,
+                    (heads_and_state, head_groups_and_state, head_groups_and_state, heads_and_state),
+                )
+            )
         elif block_type == SSMBlockType.mamba2_discrete:
-            inner_projection_size = 2 * (num_group_heads + 1) * self.state_size + num_group_heads
+            # TODO: Factor as (head_groups, (group_heads + 2) * state_size + group_heads)?
+            tensor_space.add_tensor_dim(
+                ConcatenatedTensorDim(
+                    SSMDimNames.concatenated_inner_projection,
+                    (heads_and_state, head_groups_and_state, head_groups_and_state, heads_and_state, heads),
+                )
+            )
             # TODO: (head_groups, group_heads + 2, state_size)
             tensor_space.add_tensor_dim(
                 TensorDim(SSMDimNames.conv_dim, self.d_inner + 2 * self.n_qk_heads * self.state_size)
             )
-
-        tensor_space.add_tensor_dim(inner_projection := TensorDim(SSMDimNames.inner_projection, inner_projection_size))
-        tensor_space.add_tensor_dim(
-            CompositeTensorDim(SSMDimNames.composite_inner_projection, (head_groups, inner_projection))
-        )

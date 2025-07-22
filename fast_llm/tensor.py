@@ -5,7 +5,7 @@ import typing
 import torch
 
 from fast_llm.core.distributed import ReduceOp
-from fast_llm.core.ops import gather_op, reduce_op
+from fast_llm.core.ops import reduce_op
 from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
 from fast_llm.engine.distributed.config import DistributedDim, DistributedDimNames
 from fast_llm.engine.distributed.distributed import Distributed
@@ -166,14 +166,13 @@ class TensorMeta(torch.Tensor):
     ) -> tuple[torch.Tensor, ...]:
         # Tensors are always either split or duplicated in the tensor-parallel direction.
         # TODO: Avoid hard-coded assumptions on duplication
-        is_first_rank = distributed.config.tensor_rank == 0
-        modified = False
-        for i, dim in enumerate(self.dims):
-            if dim.parallel_group is not None:
-                tensor = gather_op(
-                    tensor.unflatten(i, dim.expanded_shape), dim.parallel_group, i + dim.parallel_dim_index
-                ).flatten(i, i + len(dim.expanded_shape) - 1)
-                is_first_rank, modified = is_first_rank and dim.parallel_group.rank() == 0, True
+        is_first_rank, modified = distributed.config.tensor_rank == 0, False
+
+        for dim, tensor_dim in enumerate(self.dims):
+            if tensor_dim.is_parallel:
+                tensor = tensor_dim.local_to_global(tensor, dim)
+                is_first_rank &= tensor_dim.parallel_dim.rank == 0
+                modified = True
 
         for distributed_dim, op in self._reductions:
             if distributed_dim.group is not None:
@@ -187,23 +186,19 @@ class TensorMeta(torch.Tensor):
     def global_to_local(
         self,
         tensor: torch.Tensor | SafeTensorSlice,
-        # Return an expanded tensor, avoiding `flatten` which copies the data.
+        # Return an expanded tensor, avoiding `flatten` which copies the data. TODO: Rework.
         expand: bool = False,
     ) -> torch.Tensor:
         """
         Recover the tensor-parallel slice of a tensor. Support lazy-loaded safetensor slices.
         """
         # Take a trivial slice to convert safetensor slices.
-        tensor_ = tensor[:]
+        tensor = tensor[:]
         assert not self._reductions
 
-        for i, dim in reversed(list(enumerate(self.dims))):
-            if dim.parallel_dim is not None and dim.parallel_dim.size > 1:
-                tensor_ = tensor_.unflatten(i, dim.global_expanded_shape).chunk(
-                    dim.parallel_dim.size, i + dim.parallel_dim_index
-                )[dim.parallel_dim.rank]
-
-        return tensor_ if expand else tensor_.reshape(self.shape)
+        for dim, tensor_dim in reversed(list(enumerate(self.dims))):
+            tensor = tensor_dim.global_to_local(tensor, dim, expand)
+        return tensor
 
     @classmethod
     def __torch_function__(cls, func, types, args=(), kwargs=None):

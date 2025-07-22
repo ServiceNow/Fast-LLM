@@ -74,7 +74,7 @@ class MambaLayer(Mixer):
         # TODO: lr_scale?
         self.in_proj = Linear(
             hidden_dim,
-            tensor_space.get_tensor_dim(SSMDimNames.composite_inner_projection),
+            tensor_space.get_tensor_dim(SSMDimNames.concatenated_inner_projection),
             bias=False,
             weight_init_method=init_kaiming_(hidden_dim.size),
         )

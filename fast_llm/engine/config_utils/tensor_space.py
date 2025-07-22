@@ -5,6 +5,8 @@ from fast_llm.engine.distributed.config import DistributedConfig, DistributedDim
 from fast_llm.utils import Assert, div
 
 if typing.TYPE_CHECKING:
+    import torch
+
     from fast_llm.core.distributed import ProcessGroup
     from fast_llm.engine.distributed.distributed import Distributed
 
@@ -23,7 +25,7 @@ class TensorDim:
             f"name={self._name},"
             f" size={self._size},"
             f" global_size={self._global_size},"
-            f" parallel_dim={None if self.parallel_dim is None else self._parallel_dim}"
+            f" parallel_dim={self._parallel_dim}"
             f")"
         )
 
@@ -39,82 +41,133 @@ class TensorDim:
         return self._size
 
     @property
-    def expanded_shape(self) -> tuple[int, ...]:
-        return (self._size,)
-
-    @property
-    def ndim(self) -> int:
-        return 1
-
-    @property
     def global_size(self) -> int:
         return self._global_size
 
     @property
-    def global_expanded_shape(self) -> tuple[int, ...]:
-        return (self._size if self._parallel_dim is None else self._size * self._parallel_dim.size,)
+    def is_parallel(self) -> bool:
+        return self._parallel_dim is not None and self._parallel_dim.size > 1
 
     @property
     def parallel_dim(self) -> DistributedDim | None:
+        # TODO: Make more flexible for derived classes?
         return self._parallel_dim
 
     @property
-    def parallel_dim_index(self) -> int | None:
-        return None if self._parallel_dim is None else 0
-
-    @property
     def parallel_group(self) -> "ProcessGroup|None":
+        # TODO: Make more flexible for derived classes?
         return None if self._parallel_dim is None else self._parallel_dim.group
 
     def replace_parallel_dim(self, distributed_dim: DistributedDim) -> typing.Self:
-        assert self.parallel_dim is not None
+        assert self.is_parallel
         return TensorDim(self.name, self.size * distributed_dim.size, distributed_dim)
+
+    def local_to_global(self, tensor: "torch.Tensor", dim: int = 0) -> "torch.Tensor":
+        if self.parallel_group is not None:
+            from fast_llm.core.ops import gather_op
+
+            return gather_op(tensor, self.parallel_group, dim)
+        else:
+            return tensor
+
+    def global_to_local(self, tensor: "torch.Tensor", dim: int = 0, expand: bool = False) -> torch.Tensor:
+        return (
+            tensor.chunk(self.parallel_dim.size, dim)[self.parallel_dim.rank]
+            if self.parallel_dim is not None and self.parallel_dim.size > 1
+            else tensor
+        )
 
 
 class CompositeTensorDim(TensorDim):
-    def __init__(self, name: str, dims: tuple[TensorDim, ...]):
-        # TODO: Recursive composition??
-        parallel_dims = [(i, dim.parallel_dim) for i, dim in enumerate(dims) if dim.parallel_dim]
-        Assert.leq(len(parallel_dims), 1)
+    def __init__(self, name: str, tensor_dims: tuple[TensorDim, ...]):
+        parallel_dim = None
+        for dim, tensor_dim in enumerate(tensor_dims):
+            if tensor_dim.is_parallel:
+                # TODO: Allow more than one parallel subdim?
+                assert parallel_dim is None
+                parallel_dim = tensor_dim.parallel_dim
+                self._parallel_dim_index = dim
 
         super().__init__(
             name=name,
-            global_size=math.prod(dim.global_size for dim in dims),
-            parallel_dim=parallel_dims[0][1] if parallel_dims else None,
+            global_size=math.prod(dim.global_size for dim in tensor_dims),
+            parallel_dim=parallel_dim,
         )
-        self._dims = dims
-        self._parallel_dim_index = (
-            sum(dim.ndim for dim in self._dims[: parallel_dims[0][0]])
-            + self._dims[parallel_dims[0][0]].parallel_dim_index
-            if parallel_dims
-            else None
-        )
-
-    @property
-    def dims(self) -> tuple[TensorDim, ...]:
-        return self._dims
-
-    @property
-    def ndim(self) -> int:
-        return sum(dim.ndim for dim in self._dims)
-
-    @property
-    def expanded_shape(self) -> tuple[int, ...]:
-        return sum((dim.expanded_shape for dim in self._dims), ())
-
-    @property
-    def global_expanded_shape(self) -> tuple[int, ...]:
-        return sum((dim.global_expanded_shape for dim in self._dims), ())
-
-    @property
-    def parallel_dim_index(self) -> int | None:
-        return self._parallel_dim_index
+        self._tensor_dims = tensor_dims
 
     def replace_parallel_dim(self, distributed_dim: DistributedDim) -> typing.Self:
-        assert self.parallel_dim_index is not None
-        dims = list(self.dims)
-        dims[self.parallel_dim_index] = dims[self.parallel_dim_index].replace_parallel_dim(distributed_dim)
+        assert self._parallel_dim_index is not None
+        dims = list(self._tensor_dims)
+        dims[self._parallel_dim_index] = dims[self._parallel_dim_index].replace_parallel_dim(distributed_dim)
         return CompositeTensorDim(self.name, tuple(dims))
+
+    def local_to_global(self, tensor: "torch.Tensor", dim: int = 0) -> "torch.Tensor":
+        tensor = tensor.unflatten(dim, [tensor_dim.size for tensor_dim in self._tensor_dims])
+        for i, tensor_dim in enumerate(self._tensor_dims):
+            tensor = tensor_dim.local_to_global(tensor, dim + i)
+
+        return tensor.flatten(dim, dim + len(self._tensor_dims) - 1)
+
+    def global_to_local(self, tensor: "torch.Tensor", dim: int = 0, expand: bool = False) -> torch.Tensor:
+        tensor = tensor.unflatten(dim, [tensor_dim.global_size for tensor_dim in self._tensor_dims])
+        for i, tensor_dim in reversed(list(enumerate(self._tensor_dims))):
+            tensor = tensor_dim.global_to_local(tensor, dim + i)
+        return tensor if expand else tensor.flatten(dim, dim + len(self._tensor_dims) - 1)
+
+
+class ConcatenatedTensorDim(TensorDim):
+    def __init__(self, name: str, tensor_dims: tuple[TensorDim, ...]):
+        parallel_dim = tensor_dims[0].parallel_dim
+        for dim, tensor_dim in enumerate(tensor_dims[1:]):
+            # TODO: Allow more flexibility?
+            Assert.is_(tensor_dim.parallel_dim, parallel_dim)
+
+        super().__init__(
+            name=name,
+            global_size=sum(dim.global_size for dim in tensor_dims),
+            parallel_dim=parallel_dim,
+        )
+        self._tensor_dims = tensor_dims
+
+    def replace_parallel_dim(self, distributed_dim: DistributedDim) -> typing.Self:
+        # TODO: Implement
+        raise NotImplementedError()
+
+    def local_to_global(self, tensor: "torch.Tensor", dim: int = 0) -> "torch.Tensor":
+        return (
+            torch.concatenate(
+                [
+                    tensor_dim.local_to_global(tensor_, dim)[0]
+                    for tensor_, tensor_dim in zip(
+                        tensor.split([tensor_dim.size for tensor_dim in self._tensor_dims], dim),
+                        self._tensor_dims,
+                        strict=True,
+                    )
+                ],
+                dim,
+            )
+            if self.is_parallel
+            else tensor
+        )
+
+    def global_to_local(self, tensor: "torch.Tensor", dim: int = 0, expand: bool = False) -> torch.Tensor:
+        if self.is_parallel and expand:
+            raise NotImplementedError()
+        return (
+            torch.concatenate(
+                [
+                    tensor_dim.global_to_local(tensor_, dim)
+                    for tensor_, tensor_dim in zip(
+                        tensor.split([tensor_dim.global_size for tensor_dim in self._tensor_dims], dim),
+                        self._tensor_dims,
+                        strict=True,
+                    )
+                ],
+                dim,
+            )
+            if self.is_parallel
+            else tensor
+        )
 
 
 class DefaultDimNames:
@@ -147,21 +200,22 @@ class TensorSpace:
         assert self._is_setup
         return self._distributed
 
-    def add_tensor_dim(self, dim: TensorDim) -> None:
-        if isinstance(dim, CompositeTensorDim):
-            for dim_ in dim.dims:
-                Assert.incl(dim_.name, self._tensor_dims)
-                Assert.eq(dim_, self._tensor_dims[dim_.name])
-        if dim.name in self._tensor_dims:
-            Assert.eq(dim, self._tensor_dims[dim.name])
+    def add_tensor_dim(self, tensor_dim: TensorDim) -> None:
+        if tensor_dim.name in self._tensor_dims:
+            Assert.eq(tensor_dim, self._tensor_dims[tensor_dim.name])
         else:
-            if dim.parallel_dim is not None:
-                assert dim.parallel_dim.name in self._distributed_config.distributed_dims, dim.parallel_dim.name
+            if tensor_dim.parallel_dim is not None:
+                assert (
+                    tensor_dim.parallel_dim.name in self._distributed_config.distributed_dims
+                ), tensor_dim.parallel_dim.name
                 Assert.eq(
-                    dim.parallel_dim.__dict__,
-                    self._distributed_config.distributed_dims[dim.parallel_dim.name].__dict__,
+                    tensor_dim.parallel_dim.__dict__,
+                    self._distributed_config.distributed_dims[tensor_dim.parallel_dim.name].__dict__,
                 )
-            self._tensor_dims[dim.name] = dim
+            self._tensor_dims[tensor_dim.name] = tensor_dim
 
     def get_tensor_dim(self, name: str) -> TensorDim:
         return self._tensor_dims[name]
+
+    # TODO: Replace uses
+    __getitem__ = get_tensor_dim

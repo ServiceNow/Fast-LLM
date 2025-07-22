@@ -45,6 +45,7 @@ class Mamba2(Mixer):
 
         inner_dim: TensorDim = tensor_space.get_tensor_dim(name=SSMDimNames.composite_heads_and_state)
         hidden_dim: TensorDim = tensor_space.get_tensor_dim(name=TransformerDimNames.hidden)
+        dt_rank_dim = tensor_space.get_tensor_dim(name=SSMDimNames.dt_rank)
 
         self._head_groups = div(self._config.d_xb, self._config.state_size)
         self._heads = div(self._config.d_inner, self._config.state_size)
@@ -65,13 +66,21 @@ class Mamba2(Mixer):
         )
         self.in_proj = OutputParallelLinear(
             hidden_dim,
-            tensor_space.get_tensor_dim(name=SSMDimNames.composite_inner_projection),
+            tensor_space.get_tensor_dim(name=SSMDimNames.concatenated_inner_projection),
             bias=config.add_bias_linear,
             weight_init_method=init_kaiming_(hidden_dim.size),
             lr_scale=lr_scale,
         )
-        self.dt_proj = Linear(
-            tensor_space.get_tensor_dim(name=SSMDimNames.dt_rank),
+
+        self.dt_in_proj = Linear(
+            hidden_dim,
+            dt_rank_dim,
+            bias=config.add_bias_linear,
+            weight_init_method=init_kaiming_(hidden_dim.size),
+            lr_scale=lr_scale,
+        )
+        self.dt_proj = OutputParallelLinear(
+            dt_rank_dim,
             inner_dim,
             bias=False,
             # Initialize special dt projection to preserve variance at initialization
@@ -110,16 +119,19 @@ class Mamba2(Mixer):
         assert _causal_conv1d_available
 
         inner_projection = self.in_proj(hidden_states)
+        dt = self.dt_in_proj(hidden_states)
         # Standardize to (batch, sequence, inner_projection)
         if kwargs[TransformerKwargs.sequence_first]:
             inner_projection = inner_projection.transpose(0, 1)
+            dt = dt.transpose(0, 1)
         sequence_length = hidden_states.size(1)
 
-        z, x, b, c, dt = torch.split(
+        z, x, b, c = torch.split(
             inner_projection,
-            [self._config.d_inner, self._config.d_xb, self._config.d_xb, self._config.d_inner, self._config.dt_rank],
+            [self._config.d_inner, self._config.d_xb, self._config.d_xb, self._config.d_inner],
             dim=2,
         )
+
         # z: (batch, sequence, heads * state) -> (batch, heads * state, sequence)
         z = z.transpose(1, 2)
 
