@@ -369,4 +369,9 @@ def init_uniform_(
 def init_uniform_centered_(
     high, max_val=None, mean=0.0
 ) -> typing.Callable[[ParameterMeta, torch.Tensor, torch.Generator], torch.Tensor]:
-    return init_uniform_(mean - high, mean + high, min_val=mean - max_val, max_val=mean + max_val)
+    return init_uniform_(
+        mean - high,
+        mean + high,
+        min_val=None if max_val is None else mean - max_val,
+        max_val=None if max_val is None else mean + max_val,
+    )

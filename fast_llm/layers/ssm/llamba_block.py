@@ -8,7 +8,7 @@ if typing.TYPE_CHECKING:
     from fast_llm.layers.transformer.config import TransformerConfig
 
 
-class LlambaBlock(BaseBlock):
+class SSMBlock(BaseBlock):
     """
     A transformer-like decoder block with a SSM mixer, see https://arxiv.org/abs/2502.14458
     """
@@ -24,9 +24,9 @@ class LlambaBlock(BaseBlock):
         layer_index: int,
         return_input: bool = False,
     ):
-        self._debug_mode = self._config_ssm.debug_ssm
+        self._ssm_config = ssm_config
+        self._mixer_cls = mixer_cls
         super().__init__(transformer_config, tensor_space, layer_index, return_input)
-        self.mixer = mixer_cls(ssm_config, layer_idx=self._layer_index, tensor_space=self._tensor_space)
 
-    def get_mixer(self) -> Mixer:
-        return self.mixer
+    def _create_mixer(self) -> Mixer:
+        return self._mixer_cls(self._ssm_config, layer_idx=self._layer_index, tensor_space=self._tensor_space)

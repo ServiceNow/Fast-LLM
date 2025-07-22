@@ -30,7 +30,7 @@ class HybridSSMBaseModelConfig(GPTBaseModelConfig):
         desc="Configuration for the transformer architecture.",
         hint=FieldHint.architecture,
     )
-    hybrid_block_layout: list[str] | None = Field(
+    hybrid_block_layout: list[SSMBlockType] | None = Field(
         default=None,
         desc=f"Pattern of blocks to use in the model. Available types: {SSMBlockType.__members__.values()}",
         hint=FieldHint.core,
@@ -43,14 +43,16 @@ class HybridSSMBaseModelConfig(GPTBaseModelConfig):
     use_megatron_initialization: bool = Field(
         default=False, desc="Exactly match the initialization of a Megatron model.", hint=FieldHint.testing
     )  # TODO: is this needed?
+    # TODO: Support combination of different SSM block types.
+    ssm_block_type: SSMBlockType | None = Field(init=False)
 
     def setup_tensor_space(self, tensor_space: TensorSpace) -> None:
         """
         Setup the tensor space for the model.
-        Some of these can be setup directly in the layer config, but keeping them here for clarity.
         """
         super().setup_tensor_space(tensor_space)
-        self.ssm.setup_tensor_space(tensor_space)
+        if self.ssm_block_type is not None:
+            self.ssm.setup_tensor_space(tensor_space, self.ssm_block_type)
 
     def _validate(self):
         with self._set_implicit_default(None):
@@ -64,30 +66,21 @@ class HybridSSMBaseModelConfig(GPTBaseModelConfig):
 
         if self.hybrid_block_layout is None:
             with self._set_implicit_default():
-                self.hybrid_block_layout = [SSMBlockType.mamba2_discrete.value]
+                self.hybrid_block_layout = [SSMBlockType.mamba2_discrete] * self.transformer.num_layers
 
         if len(self.hybrid_block_layout) != self.transformer.num_layers:
+            message = f"hybrid_block_layout length {len(self.hybrid_block_layout)} does not match num_layers {self.transformer.num_layers}"
             if self.transformer.num_layers % len(self.hybrid_block_layout) != 0:
-                raise ValueError(
-                    f"hybrid_block_layout length {len(self.hybrid_block_layout)} does not match num_layers {self.transformer.num_layers}"
-                )
-            num_repeats = int(self.transformer.num_layers // len(self.hybrid_block_layout))
-            logger.warning(
-                f"hybrid_block_layout length {len(self.hybrid_block_layout)} does not match num_layers {self.transformer.num_layers}, will repeat {self.hybrid_block_layout} {num_repeats} times"
-            )
+                raise ValueError(message)
+            num_repeats = self.transformer.num_layers // len(self.hybrid_block_layout)
+            logger.warning(f"{message}, will repeat {self.hybrid_block_layout} {num_repeats} times.")
             self.hybrid_block_layout = self.hybrid_block_layout * num_repeats
 
-        Assert.eq(len(self.hybrid_block_layout), self.transformer.num_layers)
-        Assert.custom(
-            lambda _: all(block_type in SSMBlockType.__members__.values() for block_type in self.hybrid_block_layout),
-            f"Invalid block type: {self.hybrid_block_layout}. Must be one of {SSMBlockType.__members__.values()}",
-        )
-        Assert.custom(
-            lambda _: self.default_mtp_type in SSMBlockType.__members__.values() or self.default_mtp_type is None,
-            f"Invalid MTP type: {self.default_mtp_type}. Must be one of {SSMBlockType.__members__.values()} or None",
-        )
-
         super()._validate()
+        ssm_block_types = set(self.hybrid_block_layout) - {SSMBlockType.transformer}
+        # TODO: Support combination of different SSM block types.
+        Assert.leq(len(ssm_block_types), 1)
+        self.ssm_block_type = ssm_block_types.pop() if ssm_block_types else None
 
 
 class LLambaHuggingfaceCheckpointFormat(CheckpointFormat):
@@ -162,12 +155,6 @@ class HybridSSMModelConfig(FastLLMModelConfig):
         logger.warning(
             "HybridSSMModelConfig is being instantiated. This model is experimental and may not work as expected."
         )
-        if (
-            self.base_model.sequence_first
-            or self.distributed.sequence_data_parallel > 1
-            or self.distributed.sequence_tensor_parallel
-        ):
-            raise NotImplementedError(f"Sequence-first not supported for SSMs.")
         super()._validate()
 
 

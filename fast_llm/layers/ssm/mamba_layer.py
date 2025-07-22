@@ -1,7 +1,6 @@
 import logging
 import math
 import typing
-from typing import Callable
 
 import torch
 
@@ -30,21 +29,25 @@ This works with triton 3.1.0
 """
 
 
-def init_A(d_state, d_inner) -> Callable[[ParameterMeta, torch.Tensor, torch.Generator], torch.Tensor]:
+def init_A(d_state, d_inner) -> typing.Callable[[ParameterMeta, torch.Tensor, torch.Generator], torch.Tensor]:
     def init_(meta: ParameterMeta, tensor: torch.Tensor, generator: torch.Generator):  # noqa
         # TODO: adopt this initialization to work for tensor parallel setting!
         if tensor.numel() != d_state * d_inner:
             raise ValueError(f"_init_A requires not supported for tensor slices.")
-        return torch.log(torch.arange(1, d_state + 1, dtype=torch.float32).repeat(d_inner), out=tensor)
+        return torch.log(
+            torch.arange(1, d_state + 1, dtype=torch.float32, device=tensor.device).repeat(d_inner), out=tensor
+        )
 
     return init_
 
 
 def init_dtprojbias(
     dt_max: float, dt_min: float, dt_init_floor: float
-) -> Callable[[ParameterMeta, torch.Tensor, torch.Generator], torch.Tensor]:
+) -> typing.Callable[[ParameterMeta, torch.Tensor, torch.Generator], torch.Tensor]:
     def init_(meta: ParameterMeta, tensor: torch.Tensor, generator: torch.Generator):  # noqa
-        tensor = tensor.uniform_(math.log(dt_min), math.log(dt_max)).exp_().clamp_min(dt_init_floor)
+        tensor = (
+            tensor.uniform_(math.log(dt_min), math.log(dt_max), generator=generator).exp_().clamp_min(dt_init_floor)
+        )
         # Inverse of softplus: https://github.com/pytorch/pytorch/issues/72759
         return tensor.add_(torch.log(-torch.expm1(-tensor)))
 

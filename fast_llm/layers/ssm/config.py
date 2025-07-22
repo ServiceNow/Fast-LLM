@@ -41,6 +41,22 @@ class SSMBlockType(enum.StrEnum):
     mamba2 = "m2"
     transformer = "t"
 
+    def get_mixer_class(self):
+        if self == SSMBlockType.mamba:
+            from fast_llm.layers.ssm.mamba_layer import MambaLayer
+
+            return MambaLayer
+        elif self == SSMBlockType.mamba2:
+            from fast_llm.layers.ssm.mamba2 import Mamba2
+
+            return Mamba2
+        elif self == SSMBlockType.mamba2_discrete:
+            from fast_llm.layers.ssm.discrete_mamba2 import DiscreteMamba2
+
+            return DiscreteMamba2
+        else:
+            raise NotImplementedError(self)
+
 
 class DTInitType(enum.StrEnum):
     constant = "constant"
@@ -199,17 +215,13 @@ class SSMConfig(LLMBlockConfig):
         # Head groups are configured differently depending on the block type.
         if block_type == SSMBlockType.mamba:
             num_head_groups = num_heads
-            # (head_groups, 2 * group_heads * state_dim)
-            inner_projection_size = self.d_inner * 2
         elif block_type == SSMBlockType.mamba2:
             num_head_groups = div(self.d_xb, self.state_size)
-            # (head_groups, 2 * group_heads + 2, state_dim) + (dt,)
-            inner_projection_size: int = 2 * self.d_inner + 2 * num_head_groups * self.state_size + self.dt_rank
         elif block_type == SSMBlockType.mamba2_discrete:
             Assert.eq(num_heads, self.n_v_heads)
+            # TODO: Fix (Du einsum crashes)
+            Assert.eq(self.n_qk_heads, self.n_v_heads)
             num_head_groups = self.n_qk_heads
-            # (head_groups, (2 * group_heads + 2) * state_dim + group_heads)
-            2 * self.d_inner + 2 * num_head_groups * self.state_size + num_heads
         else:
             raise NotImplementedError(block_type)
 

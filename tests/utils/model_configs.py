@@ -451,16 +451,14 @@ _update_and_add_testing_config(
 )
 
 _update_and_add_testing_config(
-    # Tests hybrid ssm, llamba converter.
+    # Tests hybrid Mamba, llamba converter.
     "llama",
     "llamba",
     model_type="hybrid_ssm",
     extra_args=[
         "model.base_model.hybrid_block_layout=['t','m']",
-        "model.base_model.ssm.state_size=8",
-        "model.base_model.ssm.chunk_size=32",
-        "model.base_model.ssm.n_qk_heads=8",
-        "model.base_model.ssm.n_v_heads=8",
+        "model.base_model.ssm.d_inner=512",
+        "model.base_model.ssm.state_size=16",
     ],
     megatron_args=None,
     checkpoint_format=LLambaHuggingfaceCheckpointFormat,
@@ -468,26 +466,31 @@ _update_and_add_testing_config(
     groups={
         ModelTestingGroup.basic: ModelTestingGroupAction.normal,
         ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
-        ModelTestingGroup.convert: ModelTestingGroupAction.broken,
         # TODO: Fix and bring back to `testing_groups`
+        ModelTestingGroup.convert: ModelTestingGroupAction.broken,
         ModelTestingGroup.generate: ModelTestingGroupAction.broken,
         ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
-        # TODO: Fix and bring back to `testing_groups`
-        ModelTestingGroup.distributed: ModelTestingGroupAction.broken,
+        ModelTestingGroup.distributed: ModelTestingGroupAction.not_implemented,
     },
     compare_factor=2.0,
-    # SSMs don't support sequence-first configurations.
-    skip_tests=("sf", "sdp", "stp", "ms"),
+    # Micro-sequence split not supported.
+    skip_tests=("sdp", "ms"),
 )
 
 
 _update_and_add_testing_config(
-    # Tests hybrid ssm, llamba converter.
-    "llamba",
+    # Tests hybrid discrete Mamba 2.
+    "llama",
     "hybrid_discrete_mamba2",
     model_type="hybrid_ssm",
     extra_args=[
         "model.base_model.hybrid_block_layout=['t','m2d']",
+        "model.base_model.ssm.d_inner=512",
+        "model.base_model.ssm.state_size=8",
+        # TODO: Set to 16 once fixed.
+        "model.base_model.ssm.n_qk_heads=32",
+        "model.base_model.ssm.n_v_heads=32",
+        "model.base_model.ssm.chunk_size=32",
     ],
     megatron_args=None,
     checkpoint_format=None,
@@ -497,17 +500,23 @@ _update_and_add_testing_config(
         ModelTestingGroup.convert: ModelTestingGroupAction.not_implemented,
         ModelTestingGroup.generate: ModelTestingGroupAction.not_implemented,
         ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
-        ModelTestingGroup.distributed: ModelTestingGroupAction.unimportant,
+        # TODO: Implement
+        ModelTestingGroup.distributed: ModelTestingGroupAction.not_implemented,
     },
+    # Micro-sequence split and sequence-first not supported.
+    skip_tests=("sf", "stp", "sdp", "ms"),
 )
 
 _update_and_add_testing_config(
-    # Tests hybrid ssm, llamba converter.
-    "llamba",
+    # Tests hybrid Mamba 2.
+    "llama",
     "hybrid_mamba2",
     model_type="hybrid_ssm",
     extra_args=[
         "model.base_model.hybrid_block_layout=['t','m2']",
+        "model.base_model.ssm.d_inner=512",
+        "model.base_model.ssm.state_size=16",
+        "model.base_model.ssm.d_xb=256",
     ],
     megatron_args=None,
     checkpoint_format=None,
@@ -517,8 +526,10 @@ _update_and_add_testing_config(
         ModelTestingGroup.convert: ModelTestingGroupAction.not_implemented,
         ModelTestingGroup.generate: ModelTestingGroupAction.not_implemented,
         ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
-        ModelTestingGroup.distributed: ModelTestingGroupAction.unimportant,
+        ModelTestingGroup.distributed: ModelTestingGroupAction.normal,
     },
+    # Micro-sequence split not supported.
+    skip_tests=("sdp", "ms"),
 )
 
 

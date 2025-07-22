@@ -8,7 +8,6 @@ from fast_llm.core.distributed import set_generator
 from fast_llm.engine.base_model.base_model import Layer
 from fast_llm.engine.config_utils.run import log_pipeline_parallel_main_rank
 from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
-from fast_llm.layers.transformer.attention import Attention
 from fast_llm.layers.transformer.config import TransformerConfig, TransformerDimNames, TransformerKwargs
 from fast_llm.layers.transformer.mixture_of_experts import MixtureOfExpertMLP
 from fast_llm.layers.transformer.mlp import MLP
@@ -36,6 +35,9 @@ class BaseBlock(Layer, abc.ABC):
     A transformer-like decoder base block with abstract mixer.
     """
 
+    # TODO: Standardize to `mixer`
+    _mixer_module_name: typing.ClassVar[str] = "mixer"
+
     def __init__(
         self, config: TransformerConfig, tensor_space: TensorSpace, layer_index: int, return_input: bool = False
     ):
@@ -54,7 +56,8 @@ class BaseBlock(Layer, abc.ABC):
         self.norm_1 = self._config.normalization.get_layer(hidden_dim)
         self.norm_2 = self._config.normalization.get_layer(hidden_dim)
 
-        self._create_mixer()
+        # The mixer needs to be created here for backward-compatible weight ordering.
+        setattr(self, self._mixer_module_name, self._create_mixer())
 
         self.mlp = (MixtureOfExpertMLP if self._config.num_experts > 1 else MLP)(
             self._config, self._tensor_space, f"{self.name} mlp", layer_index=layer_index
@@ -65,7 +68,7 @@ class BaseBlock(Layer, abc.ABC):
         self.norm_2 = self._config.peft.apply_other(self.norm_2)
 
     @abc.abstractmethod
-    def get_mixer(self) -> Mixer:
+    def _create_mixer(self) -> Mixer:
         pass
 
     @torch.compile
@@ -126,7 +129,7 @@ class BaseBlock(Layer, abc.ABC):
         hidden_states = self.norm_1(input_)
         if self._debug_mode:
             self._debug_log(hidden_states, "Norm 1", kwargs)
-        hidden_states, bias = self.get_mixer()(hidden_states, kwargs)
+        hidden_states, bias = getattr(self, self._mixer_module_name)(hidden_states, kwargs)
         if self._debug_mode:
             self._debug_log(hidden_states, f"{self._mixer_module_name} output", kwargs, bias=bias)
         with set_generator(generator):
@@ -150,12 +153,15 @@ class BaseBlock(Layer, abc.ABC):
 
 class TransformerBlock(BaseBlock):
     _name = "Transformer layer"
+    # TODO: Standardize to `mixer`
+    _mixer_module_name: typing.ClassVar[str] = "self_attn"
 
     def __init__(
         self, config: TransformerConfig, tensor_space: TensorSpace, layer_index: int, return_input: bool = False
     ):
         super().__init__(config, tensor_space, layer_index, return_input)
-        self.self_attn = Attention(self._config, self._tensor_space, self._layer_index)
 
-    def get_mixer(self) -> Mixer:
-        return self.self_attn
+    def _create_mixer(self) -> Mixer:
+        from fast_llm.layers.transformer.attention import Attention
+
+        return Attention(self._config, self._tensor_space, self._layer_index)

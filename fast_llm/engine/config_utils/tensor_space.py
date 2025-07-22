@@ -70,7 +70,7 @@ class TensorDim:
         else:
             return tensor
 
-    def global_to_local(self, tensor: "torch.Tensor", dim: int = 0, expand: bool = False) -> torch.Tensor:
+    def global_to_local(self, tensor: "torch.Tensor", dim: int = 0, expand: bool = False) -> "torch.Tensor":
         return (
             tensor.chunk(self.parallel_dim.size, dim)[self.parallel_dim.rank]
             if self.parallel_dim is not None and self.parallel_dim.size > 1
@@ -108,7 +108,7 @@ class CompositeTensorDim(TensorDim):
 
         return tensor.flatten(dim, dim + len(self._tensor_dims) - 1)
 
-    def global_to_local(self, tensor: "torch.Tensor", dim: int = 0, expand: bool = False) -> torch.Tensor:
+    def global_to_local(self, tensor: "torch.Tensor", dim: int = 0, expand: bool = False) -> "torch.Tensor":
         tensor = tensor.unflatten(dim, [tensor_dim.global_size for tensor_dim in self._tensor_dims])
         for i, tensor_dim in reversed(list(enumerate(self._tensor_dims))):
             tensor = tensor_dim.global_to_local(tensor, dim + i)
@@ -150,7 +150,7 @@ class ConcatenatedTensorDim(TensorDim):
             else tensor
         )
 
-    def global_to_local(self, tensor: "torch.Tensor", dim: int = 0, expand: bool = False) -> torch.Tensor:
+    def global_to_local(self, tensor: "torch.Tensor", dim: int = 0, expand: bool = False) -> "torch.Tensor":
         if self.is_parallel and expand:
             raise NotImplementedError()
         return (
