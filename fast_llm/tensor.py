@@ -184,6 +184,7 @@ class TensorMeta(torch.Tensor):
                     tensor = tensor.clone()
                 tensor = reduce_op(tensor, distributed_dim.group, op=op)
                 is_first_rank, modified = is_first_rank and distributed_dim.group.rank() == 0, True
+        Assert.eq(tensor.shape, self.global_shape)
         return tensor, is_first_rank
 
     def global_to_local(
@@ -204,6 +205,7 @@ class TensorMeta(torch.Tensor):
 
         for dim, tensor_dim in reversed(list(enumerate(self.dims))):
             tensor = tensor_dim.global_to_local(tensor, dim, expand)
+        Assert.eq(tensor.shape, self.shape)
         return tensor
 
     @classmethod

@@ -1,3 +1,5 @@
+import logging
+
 import torch
 
 from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
@@ -24,6 +26,8 @@ try:
 except (ImportError, RuntimeError):
     _causal_conv1d_available = False
 
+logger = logging.getLogger(__name__)
+
 
 class Mamba2(Mixer):
     """
@@ -43,21 +47,20 @@ class Mamba2(Mixer):
         lr_scale: float | tuple[float | None, ...] | None = get_lr_scale(self._config.mamba_lr_scale, layer_lr_scale)
 
         inner_dim: TensorDim = tensor_space.get_tensor_dim(name=SSMDimNames.composite_heads_and_state)
+        xb_dim = tensor_space.get_tensor_dim(name=SSMDimNames.composite_head_groups_and_state)
         hidden_dim: TensorDim = tensor_space.get_tensor_dim(name=TransformerDimNames.hidden)
         dt_rank_dim = tensor_space.get_tensor_dim(name=SSMDimNames.dt_rank)
 
-        self._head_groups = div(self._config.d_xb, self._config.state_size)
-        self._heads = div(self._config.d_inner, self._config.state_size)
-        self._group_heads = div(self._heads, self._head_groups)
+        self._local_heads = tensor_space.get_tensor_dim(name=SSMDimNames.composite_heads).size
+        self._local_head_groups = tensor_space.get_tensor_dim(name=SSMDimNames.head_groups).size
+        self._group_heads = div(self._local_heads, self._local_head_groups)
+        self._local_inner_size = inner_dim.size
+        self._local_xb_size = xb_dim.size
 
-        conv1d_dim = (
-            inner_dim
-            if self._config.repeat_kv_before_conv
-            else tensor_space.get_tensor_dim(name=SSMDimNames.composite_head_groups_and_state)
-        )
+        conv1d_dim = inner_dim if self._config.repeat_kv_before_conv else xb_dim
         self.conv1d_weight = ParameterMeta.from_dims(
             (conv1d_dim, tensor_space.get_tensor_dim(name=SSMDimNames.conv_kernel)),
-            init_method=init_uniform_centered_((conv1d_dim.size * self._config.conv_kernel_dimension) ** -0.5),
+            init_method=init_uniform_centered_((conv1d_dim.global_size * self._config.conv_kernel_dimension) ** -0.5),
             lr_scale=lr_scale,
         )
         self.conv1d_bias = ParameterMeta.from_dims(
@@ -69,7 +72,7 @@ class Mamba2(Mixer):
             hidden_dim,
             tensor_space.get_tensor_dim(name=SSMDimNames.concatenated_inner_projection),
             bias=config.add_bias_linear,
-            weight_init_method=init_kaiming_(hidden_dim.size),
+            weight_init_method=init_kaiming_(hidden_dim.global_size),
             lr_scale=lr_scale,
         )
 
@@ -77,7 +80,7 @@ class Mamba2(Mixer):
             hidden_dim,
             dt_rank_dim,
             bias=config.add_bias_linear,
-            weight_init_method=init_kaiming_(hidden_dim.size),
+            weight_init_method=init_kaiming_(hidden_dim.global_size),
             lr_scale=lr_scale,
         )
         self.dt_proj = OutputParallelLinear(
@@ -129,7 +132,7 @@ class Mamba2(Mixer):
 
         z, x, b, c = torch.split(
             inner_projection,
-            [self._config.d_inner, self._config.d_xb, self._config.d_xb, self._config.d_inner],
+            [self._local_inner_size, self._local_xb_size, self._local_xb_size, self._local_inner_size],
             dim=2,
         )
 
@@ -140,28 +143,28 @@ class Mamba2(Mixer):
         x = x.transpose(1, 2)
         if self._config.repeat_kv_before_conv:
             x = (
-                x.unflatten(1, (self._head_groups, self._config.state_size))
-                .repeat_interleave(self._group_heads, 1, output_size=self._heads)
+                x.unflatten(1, (self._local_head_groups, self._config.state_size))
+                .repeat_interleave(self._group_heads, 1, output_size=self._local_heads)
                 .flatten(1, 2)
             )
             x = _causal_conv1d_fn(x=x, weight=self.conv1d_weight, bias=self.conv1d_bias, activation="silu")
         else:
             x = _causal_conv1d_fn(x=x, weight=self.conv1d_weight, bias=self.conv1d_bias, activation="silu")
             x = (
-                x.unflatten(1, (self._head_groups, self._config.state_size))
-                .repeat_interleave(self._group_heads, 1, output_size=self._heads)
+                x.unflatten(1, (self._local_head_groups, self._config.state_size))
+                .repeat_interleave(self._group_heads, 1, output_size=self._local_heads)
                 .flatten(1, 2)
             )
 
         # b: (batch, sequence, head_groups * state) -> (batch, heads, state, sequence)
         b = (
             b.transpose(1, 2)
-            .unflatten(1, (self._head_groups, self._config.state_size))
-            .repeat_interleave(self._group_heads, 1, output_size=self._heads)
+            .unflatten(1, (self._local_head_groups, self._config.state_size))
+            .repeat_interleave(self._group_heads, 1, output_size=self._local_heads)
         )
 
         # c: (batch, sequence, heads * state) -> (batch, heads, state, sequence)
-        c = c.transpose(1, 2).unflatten(1, (self._heads, self._config.state_size))
+        c = c.transpose(1, 2).unflatten(1, (self._local_heads, self._config.state_size))
 
         # dt: (batch, sequence, dt_rank) -> (batch, heads * state, sequence)
         dt = (self.dt_proj(dt) + self.dt_proj_bias).transpose(1, 2)

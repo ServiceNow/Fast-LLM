@@ -1,3 +1,4 @@
+import logging
 import math
 import typing
 
@@ -9,6 +10,8 @@ if typing.TYPE_CHECKING:
 
     from fast_llm.core.distributed import ProcessGroup
     from fast_llm.engine.distributed.distributed import Distributed
+
+logger = logging.getLogger(__name__)
 
 
 class TensorDim:
@@ -130,8 +133,10 @@ class ConcatenatedTensorDim(TensorDim):
         self._tensor_dims = tensor_dims
 
     def replace_parallel_dim(self, distributed_dim: DistributedDim) -> typing.Self:
-        # TODO: Implement
-        raise NotImplementedError()
+        assert self.is_parallel
+        return ConcatenatedTensorDim(
+            self.name, tuple(tensor_dim.replace_parallel_dim(distributed_dim) for tensor_dim in self._tensor_dims)
+        )
 
     def local_to_global(self, tensor: "torch.Tensor", dim: int = 0) -> "torch.Tensor":
         import torch
@@ -139,7 +144,7 @@ class ConcatenatedTensorDim(TensorDim):
         return (
             torch.concatenate(
                 [
-                    tensor_dim.local_to_global(tensor_, dim)[0]
+                    tensor_dim.local_to_global(tensor_, dim)
                     for tensor_, tensor_dim in zip(
                         tensor.split([tensor_dim.size for tensor_dim in self._tensor_dims], dim),
                         self._tensor_dims,
