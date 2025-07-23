@@ -168,7 +168,7 @@ class SSMConfig(LLMBlockConfig):
     # Initialization
     # dt_weight_initialization_method [Mamba2]
     dt_init: DTInitType = Field(
-        default="random",
+        default=DTInitType.random,
         desc="Initialization method for dt",
         hint=FieldHint.core,
     )
