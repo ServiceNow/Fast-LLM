@@ -75,6 +75,17 @@ class ModelTestingConfig:
         return self.trainer_config_class.from_dict(self.trainer_config_class._parse_updates(self.config_args))
 
     @functools.cached_property
+    def evaluators_config_class(self) -> type[EvaluatorsConfig]:
+        # EvaluatorsConfig is a base class that, during parse_and_run, replaces itself with the appropriate TrainingConfig subclass.
+        # Therefore, the arguments passed to EvaluatorsConfig.parse_and_run must include the model type as the first element.
+        return EvaluatorsConfig
+
+    @functools.cached_property
+    def evaluators_config(self) -> EvaluatorsConfig:
+        # See `RunnableConfig._from_parsed_args`
+        return self.evaluators_config_class.from_dict(self.evaluators_config_class._parse_updates(self.config_args))
+
+    @functools.cached_property
     def model_config_class(self) -> type[FastLLMModelConfig]:
         # TODO: Ok to assume the model and trainer have the same name?
         return FastLLMModelConfig.get_subclass(self.model_type)

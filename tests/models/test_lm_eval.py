@@ -4,6 +4,7 @@ import shutil
 import pytest
 
 from tests.utils.dataset import TOKENIZER_PATH, download_santacoder_tokenizer
+from tests.utils.distributed_configs import DistributedTestingConfig
 from tests.utils.model_configs import ModelTestingGroup
 from tests.utils.utils import requires_cuda
 
@@ -57,33 +58,48 @@ def get_lm_eval_config(tokenizer_path, monkeypatch):
 @pytest.mark.model_testing_group(ModelTestingGroup.generate)
 def test_lm_eval_in_training(run_test_script_for_all_models, run_test_script_base_path, get_lm_eval_config):
     run_test_script_for_all_models(
-        get_lm_eval_config(run_test_script_base_path / "test_lm_eval_in_training") + ["training.checkpoint.interval=2"]
+        distributed_testing_config=DistributedTestingConfig(
+            name="lm_eval_in_training",
+            config_args=get_lm_eval_config(run_test_script_base_path / "lm_eval_in_training")
+            + ["training.checkpoint.interval=2"],
+        )
     )
 
 
-def _copy_training_output(test_path: pathlib.Path, compare_path: pathlib.Path):
-    shutil.copytree(compare_path, test_path)
+@pytest.fixture(scope="module")
+def copy_training_output(run_test_script_base_path: pathlib.Path):
+    def do_copy_training_output(distributed_testing_config: DistributedTestingConfig):
+        self_path = run_test_script_base_path / distributed_testing_config.name
+        shutil.copytree(run_test_script_base_path / distributed_testing_config.compare, self_path)
+
+    return do_copy_training_output
 
 
 @requires_cuda
 @pytest.mark.depends_on(on=["test_lm_eval_in_training[{model_testing_config}]"])
 @pytest.mark.model_testing_group(ModelTestingGroup.generate)
-def test_lm_eval_evaluation(run_test_script_for_all_models, run_test_script_base_path, get_lm_eval_config):
-    run_test_script_for_all_models(
-        get_lm_eval_config(run_test_script_base_path / "test_lm_eval_in_training"),
-        compare="test_lm_eval_in_training",
-        prepare_fn=_copy_training_output,
-        do_compare=False,
-        runnable_type="evaluate",
+def test_lm_eval_evaluation_last_checkpoint(
+    run_test_script_for_all_models, run_test_script_base_path, get_lm_eval_config, copy_training_output
+):
+    distributed_testing_config = DistributedTestingConfig(
+        name="lm_eval_evaluation_last_checkpoint",
+        config_args=get_lm_eval_config(run_test_script_base_path / "lm_eval_evaluation_last_checkpoint"),
+        compare="lm_eval_in_training",
     )
+    copy_training_output(distributed_testing_config)
+    run_test_script_for_all_models(distributed_testing_config=distributed_testing_config, runnable_type="evaluate")
 
 
-@requires_cuda
-@pytest.mark.depends_on(on=["test_lm_eval_in_training[{model_testing_config}]"])
-@pytest.mark.model_testing_group(ModelTestingGroup.generate, ModelTestingGroup.distributed)
-def test_lm_eval_in_training_dp2(run_test_script_for_all_models, run_test_script_base_path, get_lm_eval_config):
-    run_test_script_for_all_models(
-        get_lm_eval_config(run_test_script_base_path / "test_lm_eval_in_training_dp2")
-        + ["training.checkpoint.interval=1"],
-        num_gpus=2,
-    )
+# TODO: rewrite for a new distributed test function
+# @requires_cuda
+# @pytest.mark.depends_on(on=["test_lm_eval_in_training[{model_testing_config}]"])
+# @pytest.mark.model_testing_group(ModelTestingGroup.generate, ModelTestingGroup.distributed)
+# def test_lm_eval_in_training_dp2(run_test_script_for_all_models, run_test_script_base_path, get_lm_eval_config):
+#     run_test_script_for_all_models(
+#         distributed_testing_config=DistributedTestingConfig(
+#             name="lm_eval_in_training_dp2",
+#             config_args=get_lm_eval_config(run_test_script_base_path / "lm_eval_in_training_dp2")
+#             + ["training.checkpoint.interval=1"],
+#             num_gpus=2,
+#         )
+#     )
