@@ -467,7 +467,7 @@ _update_and_add_testing_config(
         ModelTestingGroup.basic: ModelTestingGroupAction.normal,
         ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
         # TODO: Fix and bring back to `testing_groups`
-        ModelTestingGroup.convert: ModelTestingGroupAction.broken,
+        ModelTestingGroup.convert: ModelTestingGroupAction.normal,
         ModelTestingGroup.generate: ModelTestingGroupAction.broken,
         ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
         ModelTestingGroup.distributed: ModelTestingGroupAction.not_implemented,

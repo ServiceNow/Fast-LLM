@@ -205,7 +205,8 @@ class TensorMeta(torch.Tensor):
 
         for dim, tensor_dim in reversed(list(enumerate(self.dims))):
             tensor = tensor_dim.global_to_local(tensor, dim, expand)
-        Assert.eq(tensor.shape, self.shape)
+        if not expand:
+            Assert.eq(tensor.shape, self.shape)
         return tensor
 
     @classmethod
