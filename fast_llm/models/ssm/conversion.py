@@ -36,35 +36,18 @@ if typing.TYPE_CHECKING:
 
 
 class HybridModelCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
-    """
-    This is a temporary solution for importing/exporting hybrid models. Since there is no standard solution for this in HF, we just use the block_pattern.
-    If block_pattern is None, it will multiply the provided default block type by the number of layers and export/import it.
-    If block_pattern is provided, it will export/import it as-is.
-    """
-
     _model: HybridSSMModel
     _model_class: typing.ClassVar[FastLLMModelConfig] = HybridSSMModelConfig
     _default_block_type: str = SSMBlockType.mamba2_discrete.value
 
     @classmethod
-    def _import_config(cls, config):
-        cls.num_layers = config["n_layer"] if "n_layer" in config else config["num_hidden_layers"]
-        cls.block_pattern = config.get("hybrid_block_layout", None)
-        return super()._import_config(config)
-
-    @classmethod
     def _create_config_converters(cls) -> list[ParamConverter]:
-        if cls.block_pattern is not None:
-            block_converter = RenameParamConverter(
-                fast_llm_names=(("hybrid_block_layout",),),
-                export_names=(("hybrid_block_layout",),),
-            )
-        else:
-            block_converter = ConstantImportParamConverter(
-                fast_llm_names=(("hybrid_block_layout",),),
-                fast_llm_value=[cls._default_block_type] * cls.num_layers,
-            )
-
+        block_converter = RenameParamConverter(
+            fast_llm_names=(("hybrid_block_layout",),),
+            export_names=(("hybrid_block_layout",),),
+            ignore_missing=True,
+            default_value=[cls._default_block_type],
+        )
         return super()._create_config_converters() + [block_converter]
 
 
@@ -140,6 +123,96 @@ class CommonSSMHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandle
                 fast_llm_value=ActivationType.from_hf_name,
                 export_value=lambda activation_type: activation_type.hf_name,
             ),
+            # ================================================
+            # Mamba2 specific parameters: they dont exist in old checkpoints exported for discrete Mamba2, hence need backward compatibility
+            RenameParamConverter(
+                fast_llm_names=(("ssm", "dt_rank"),),
+                export_names=(
+                    (
+                        "ssm_cfg",
+                        "dt_rank",
+                    ),
+                ),
+                ignore_missing=True,
+                default_value=None,
+            ),
+            RenameParamConverter(
+                fast_llm_names=(("ssm", "dt_min"),),
+                export_names=(
+                    (
+                        "ssm_cfg",
+                        "dt_min",
+                    ),
+                ),
+                ignore_missing=True,
+                default_value=0.001,
+            ),
+            RenameParamConverter(
+                fast_llm_names=(("ssm", "dt_max"),),
+                export_names=(
+                    (
+                        "ssm_cfg",
+                        "dt_max",
+                    ),
+                ),
+                ignore_missing=True,
+                default_value=0.1,
+            ),
+            RenameParamConverter(
+                fast_llm_names=(("ssm", "dt_init_floor"),),
+                export_names=(
+                    (
+                        "ssm_cfg",
+                        "dt_init_floor",
+                    ),
+                ),
+                ignore_missing=True,
+                default_value=1e-4,
+            ),
+            RenameParamConverter(
+                fast_llm_names=(("ssm", "dt_scale"),),
+                export_names=(
+                    (
+                        "ssm_cfg",
+                        "dt_scale",
+                    ),
+                ),
+                ignore_missing=True,
+                default_value=1.0,
+            ),
+            RenameParamConverter(
+                fast_llm_names=(("ssm", "d_xb"),),
+                export_names=(
+                    (
+                        "ssm_cfg",
+                        "d_xb",
+                    ),
+                ),
+                ignore_missing=True,
+                default_value=None,
+            ),
+            RenameParamConverter(
+                fast_llm_names=(("ssm", "conv_kernel_dimension"),),
+                export_names=(
+                    (
+                        "ssm_cfg",
+                        "d_conv",
+                    ),
+                ),
+                ignore_missing=True,
+                default_value=4,
+            ),
+            RenameParamConverter(
+                fast_llm_names=(("ssm", "dt_init"),),
+                export_names=(
+                    (
+                        "ssm_cfg",
+                        "dt_init",
+                    ),
+                ),
+                ignore_missing=True,
+                default_value="random",
+            ),
         ]
 
     def _create_weight_converters(self) -> list[WeightConverter]:
@@ -166,6 +239,11 @@ class CommonSSMHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandle
             )
             converters.append(
                 WeightConverter(
+                    f"layers.{i+1}.mixer.z_bias", f"model.layers.{i}.mixer.z_bias", self._model.config.base_model
+                )
+            )
+            converters.append(
+                WeightConverter(
                     f"layers.{i+1}.mixer.conv1d_weight",
                     f"model.layers.{i}.mixer.conv1d.weight",
                     self._model.config.base_model,
@@ -176,6 +254,25 @@ class CommonSSMHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandle
                     f"layers.{i+1}.mixer.conv1d_bias",
                     f"model.layers.{i}.mixer.conv1d.bias",
                     self._model.config.base_model,
+                )
+            )
+            # ================================================
+            # Mamba2 specific parameters
+            converters += self._get_weight_and_bias_converters(
+                f"layers.{i+1}.mixer.dt_proj", f"model.layers.{i}.mixer.dt_proj", False
+            )
+            # bias is treated separately in Mamba2 and must always exist (https://github.com/jxiw/M1/blob/537a1ca5407a786a99dc6c721873493cf8750d5e/mamba/hybrid_mamba_layer.py)
+            converters.append(
+                WeightConverter(
+                    f"layers.{i+1}.mixer.dt_proj_bias",
+                    f"model.layers.{i}.mixer.dt_proj.bias",
+                    self._model.config.base_model,
+                )
+            )
+
+            converters.append(
+                WeightConverter(
+                    f"layers.{i+1}.mixer.A_log", f"model.layers.{i}.mixer.A_log", self._model.config.base_model
                 )
             )
 

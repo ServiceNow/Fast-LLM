@@ -6,6 +6,34 @@ from lm_eval.api.registry import register_model
 from lm_eval.models.huggingface import HFLM
 
 
+def _get_device():
+    """Get the correct device for distributed training."""
+    # Check if we're in a distributed setting with accelerate
+    if hasattr(torch.distributed, "is_initialized") and torch.distributed.is_initialized():
+        # Use the local rank as device
+        local_rank = torch.distributed.get_rank() % torch.cuda.device_count()
+        device = torch.device(f"cuda:{local_rank}")
+    elif torch.cuda.is_available():
+        # Use current device
+        device = torch.device(f"cuda:{torch.cuda.current_device()}")
+    else:
+        device = torch.device("cpu")
+
+    return device
+
+
+def _move_tensors_to_device(obj, device):
+    """Recursively move tensors in nested structures to device."""
+    if isinstance(obj, torch.Tensor):
+        return obj.to(device)
+    elif isinstance(obj, dict):
+        return {k: _move_tensors_to_device(v, device) for k, v in obj.items()}
+    elif isinstance(obj, (list, tuple)):
+        return type(obj)(_move_tensors_to_device(item, device) for item in obj)
+    else:
+        return obj
+
+
 @register_model("apriel_ssm")
 class AprielSSMWrapper(HFLM):
     """Wrapper for AprielSSM model for compatibility with lm-evaluation-harness."""
@@ -17,10 +45,12 @@ class AprielSSMWrapper(HFLM):
         super().__init__(
             pretrained=pretrained,
             backend=kwargs.pop("backend", "causal"),
-            tokenizer=kwargs.pop("tokenizer", "/mnt/checkpoints/upstream/Mistral-Nemo-Base-2407/"),
-            max_length=kwargs.pop("max_length", 4096),
+            tokenizer=kwargs.pop("tokenizer", "/mnt/checkpoints/upstream/Apriel-5B-Instruct/"),
             **kwargs,
         )
+
+        # Override device detection for distributed settings
+        self._device = _get_device()
 
     def _get_config(self, pretrained: str, **kwargs) -> None:
         """Get the model configuration."""
@@ -32,15 +62,28 @@ class AprielSSMWrapper(HFLM):
         """Create the model."""
         from fast_llm.models.ssm.external.apriel_ssm.modeling_ssm_apriel import AprielSSMForCausalLM
 
+        # Ensure we're using the correct device
+        device = _get_device()
+        self._device = device
+
         self._model = AprielSSMForCausalLM.from_pretrained(
             pretrained,
-            device=self._device,
+            device=device,
             dtype=torch.bfloat16 if dtype == "auto" else lm_eval.models.utils.get_dtype(dtype),
             trust_remote_code=True,
         )
 
     def _model_generate(self, context, max_length, stop, **generation_kwargs):
         """Generate text from the model."""
+        # Ensure we're using the correct device
+        device = _get_device()
+
+        # Ensure context is on the same device as the model
+        context = context.to(device)
+
+        # Move any tensors in generation_kwargs to the correct device
+        generation_kwargs = _move_tensors_to_device(generation_kwargs, device)
+
         for key in ("do_sample", "attention_mask"):
             if key in generation_kwargs:
                 generation_kwargs.pop(key)
@@ -69,10 +112,12 @@ class AprielHybridSSMWrapper(HFLM):
         super().__init__(
             pretrained=pretrained,
             backend=kwargs.pop("backend", "causal"),
-            tokenizer=kwargs.pop("tokenizer", "/mnt/checkpoints/upstream/Mistral-Nemo-Base-2407/"),
-            max_length=kwargs.pop("max_length", 4096),
+            tokenizer=kwargs.pop("tokenizer", "/mnt/checkpoints/upstream/Apriel-5B-Instruct/"),
             **kwargs,
         )
+
+        # Override device detection for distributed settings
+        self._device = _get_device()
 
     def _get_config(self, pretrained: str, **kwargs) -> None:
         """Get the model configuration."""
@@ -84,14 +129,26 @@ class AprielHybridSSMWrapper(HFLM):
         """Create the model."""
         from fast_llm.models.ssm.external.apriel_hybrid.modeling_ssm_hybrid_apriel import AprielSSMHybridForCausalLM
 
+        # Ensure we're using the correct device
+        device = _get_device()
+        self._device = device
+
         self._model = AprielSSMHybridForCausalLM.from_pretrained(
             pretrained,
-            device=self._device,
+            device=device,
             torch_dtype=torch.bfloat16 if dtype == "auto" else lm_eval.models.utils.get_dtype(dtype),
             **kwargs,
         )
 
     def _model_generate(self, context, max_length, stop, **generation_kwargs):
+        # Ensure we're using the correct device
+        device = _get_device()
+
+        # Ensure context is on the same device as the model
+        context = context.to(device)
+
+        # Move any tensors in generation_kwargs to the correct device
+        generation_kwargs = _move_tensors_to_device(generation_kwargs, device)
 
         stopping_criteria = lm_eval.models.utils.stop_sequences_criteria(
             self.tokenizer,
@@ -129,9 +186,11 @@ class AprielHybrid15bSSMWrapper(HFLM):
             pretrained=pretrained,
             backend=kwargs.pop("backend", "causal"),
             tokenizer=kwargs.pop("tokenizer", "/mnt/checkpoints/upstream/Apriel-Nemotron-15b-Thinker"),
-            max_length=kwargs.pop("max_length", 4096),
             **kwargs,
         )
+
+        # Override device detection for distributed settings
+        self._device = _get_device()
 
     def _get_config(self, pretrained: str, **kwargs) -> None:
         """Get the model configuration."""
@@ -144,17 +203,30 @@ class AprielHybrid15bSSMWrapper(HFLM):
     def _create_model(self, pretrained: str, dtype: Optional[Union[str, torch.dtype]] = "float16", **kwargs) -> None:
         """Create the model."""
         from fast_llm.models.ssm.external.apriel_15b_hybrid.modeling_ssm_hybrid_apriel15b import (
-            AprielSSMHybridForCausalLM,
+            AprielThinkerSSMHybridForCausalLM,
         )
 
-        self._model = AprielSSMHybridForCausalLM.from_pretrained(
+        # Ensure we're using the correct device
+        device = _get_device()
+        self._device = device
+
+        self._model = AprielThinkerSSMHybridForCausalLM.from_pretrained(
             pretrained,
-            device=self._device,
+            device=device,
             torch_dtype=torch.bfloat16 if dtype == "auto" else lm_eval.models.utils.get_dtype(dtype),
             **kwargs,
         )
 
     def _model_generate(self, context, max_length, stop, **generation_kwargs):
+        # Ensure we're using the correct device
+        device = _get_device()
+
+        # Ensure context is on the same device as the model
+        context = context.to(device)
+        self.model.to(device)
+
+        # Move any tensors in generation_kwargs to the correct device
+        generation_kwargs = _move_tensors_to_device(generation_kwargs, device)
 
         stopping_criteria = lm_eval.models.utils.stop_sequences_criteria(
             self.tokenizer,
