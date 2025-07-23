@@ -229,7 +229,9 @@ def pytest_terminal_summary(terminalreporter):
     terminalreporter.write_sep("=", "Highest gpu memory usage", bold=True)
     sorted_nodeids = sorted(
         resource_reports.keys(),
-        key=lambda nodeid: resource_reports[nodeid]["max_reserved"],
+        key=lambda nodeid: (
+            resource_reports[nodeid]["max_reserved"] if "max_reserved" in resource_reports[nodeid] else 0
+        ),
         reverse=True,
     )
     for nodeid in sorted_nodeids[: terminalreporter.config.getoption("--show-gpu-memory")]:
