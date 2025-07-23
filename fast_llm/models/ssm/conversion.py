@@ -233,7 +233,13 @@ class CommonSSMHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandle
         hf_base_prefix: str = "",
         offset: int = 0,
     ) -> list[WeightConverter]:
-        converters = super()._create_weight_converters() or []
+        converters = (
+            super()._create_weight_converters(
+                hf_base_prefix=hf_base_prefix,
+                offset=offset,
+            )
+            or []
+        )
 
         num_layers = self._model.config.base_model.transformer.num_layers
         ssm_bias: bool = self._model.config.base_model.ssm.add_bias_linear

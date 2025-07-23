@@ -24,15 +24,15 @@ class VisionAdapter(Layer):
             input_dim,
             tensor_space.get_tensor_dim(VisionEncoderDimNames.adapter_size),
             bias=True,
-            weight_init_method=init_normal_(),
-            bias_init_method=init_normal_(),
+            weight_init_method=init_normal_(std=config.adapter_init_method_std),
+            bias_init_method=init_normal_(std=config.adapter_init_method_std),
         )
         self.layer_2 = Linear(
             tensor_space.get_tensor_dim(VisionEncoderDimNames.adapter_size),
             tensor_space.get_tensor_dim(TransformerDimNames.hidden),
             bias=True,
-            weight_init_method=init_normal_(),
-            bias_init_method=init_normal_(),
+            weight_init_method=init_normal_(std=config.adapter_init_method_std),
+            bias_init_method=init_normal_(std=config.adapter_init_method_std),
         )
 
     def forward(

@@ -19,7 +19,7 @@ from fast_llm.models.gpt.config import (
     Qwen2GPTHuggingfaceCheckpointFormat,
     Starcoder2GPTHuggingfaceCheckpointFormat,
 )
-from fast_llm.models.ssm.config import LLambaHuggingfaceCheckpointFormat
+from fast_llm.models.ssm.config import LLambaHuggingfaceCheckpointFormat, LlavaHybridHuggingfaceCheckpointFormat
 from tests.utils.dataset import MODEL_DATASET_PREFIX, MODEL_TEST_VOCAB_SIZE
 from tests.utils.distributed_configs import DistributedTestingConfig
 
@@ -519,6 +519,38 @@ _update_and_add_testing_config(
         ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
         ModelTestingGroup.distributed: ModelTestingGroupAction.unimportant,
     },
+)
+
+_update_and_add_testing_config(
+    # Tests hybrid ssm, llamba converter.
+    "hybrid_mamba2",
+    "vision_hybrid_mamba2",
+    model_type="hybrid_ssm",
+    extra_args=[
+        "batch.max_image_size=128",
+        "model.base_model.vision_encoder.type=pixtral",
+        "model.base_model.vision_encoder.transformer.type=image_encoder",
+        "model.base_model.vision_encoder.transformer.gated=True",
+        "model.base_model.vision_encoder.transformer.num_layers=2",
+        "model.base_model.vision_encoder.transformer.hidden_size=256",
+        "model.base_model.vision_encoder.transformer.num_attention_heads=8",
+        "model.base_model.vision_encoder.transformer.head_groups=4",
+        "model.base_model.vision_encoder.transformer.init_method_std=0.022",
+        "model.base_model.vision_encoder.transformer.rotary.type=rope_2d",
+        "model.base_model.vision_encoder.adapter_size=512",
+        "model.distributed.training_dtype=torch.bfloat16",
+    ],
+    megatron_args=None,
+    checkpoint_format=LlavaHybridHuggingfaceCheckpointFormat,
+    groups={
+        ModelTestingGroup.basic: ModelTestingGroupAction.normal,
+        ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
+        ModelTestingGroup.convert: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.generate: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.distributed: ModelTestingGroupAction.unimportant,
+    },
+    compare_factor=16.0,
 )
 
 

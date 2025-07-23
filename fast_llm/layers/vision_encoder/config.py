@@ -150,6 +150,18 @@ class VisionEncoderConfig(BaseModelConfig):
         hint=FieldHint.feature,
         valid=skip_valid_if_none(check_field(Assert.geq, 0)),
     )
+    adapter_init_method_std: float = Field(
+        default=None,
+        desc="Standard deviation for the normal initialization of the adapter weights. Default: adapter_size ** -0.5.",
+        hint=FieldHint.optional,
+        valid=check_field(Assert.geq, 0),
+    )
+
+    def _validate(self) -> None:
+        with self._set_implicit_default():
+            if self.adapter_init_method_std is None:
+                self.adapter_init_method_std = self.adapter_size**-0.5
+        super()._validate()
 
     def setup_tensor_space(self, tensor_space: TensorSpace):
         tensor_space.add_tensor_dim(TensorDim(VisionEncoderDimNames.out_channels, self.transformer.hidden_size))
