@@ -178,6 +178,7 @@ class LlavaHybridHuggingfaceCheckpointFormat(CheckpointFormat):
     name: typing.ClassVar[str] = "llava_hybrid"
     vision_name: typing.ClassVar[str] = "pixtral"
     text_name: typing.ClassVar[str] = "apriel_ssm_thinker_hybrid"
+    trust_remote_code: typing.ClassVar[bool] = True
 
     @classmethod
     def get_handler_class(cls) -> type[CheckpointHandler]:
@@ -206,7 +207,7 @@ class HybridSSMModelConfig(FastLLMModelConfig):
         return HybridSSMModel
 
     @classmethod
-    def get_huggingface_model_class(cls) -> type["HuggingfaceHybridSSMModelForCausalLM"]:
+    def get_huggingface_model_for_causal_lm_class(cls) -> type["HuggingfaceHybridSSMModelForCausalLM"]:
         from fast_llm.models.ssm.huggingface import HuggingfaceHybridSSMModelForCausalLM
 
         return HuggingfaceHybridSSMModelForCausalLM

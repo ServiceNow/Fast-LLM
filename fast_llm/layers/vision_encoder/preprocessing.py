@@ -163,11 +163,12 @@ class VisionPreprocessor(Preprocessor):
             for imgs in images
         ]
 
-        labels = kwargs[LanguageModelKwargs.labels]
-        if (self._config.image_break_token is not None) or (self._config.image_end_token is not None):
-            # If image break or end token is present, we need to replace image token ids to -100 in labels
-            # TODO: avoid double cloning labels in case of loss masking spans?
-            labels = labels.clone()
+        if LanguageModelKwargs.labels in kwargs:
+            labels = kwargs[LanguageModelKwargs.labels]
+            if (self._config.image_break_token is not None) or (self._config.image_end_token is not None):
+                # If image break or end token is present, we need to replace image token ids to -100 in labels
+                # TODO: avoid double cloning labels in case of loss masking spans?
+                labels = labels.clone()
 
         patches = []
         patch_position_ids = []
@@ -191,8 +192,9 @@ class VisionPreprocessor(Preprocessor):
                     image_break=self._config.image_break_token is not None,
                     image_end=self._config.image_end_token is not None,
                 )
-                # set labels for image patches to -100
-                labels[idx, max(position - 1, 0) : position + num_tokens - 1] = -100
+                if LanguageModelKwargs.labels in kwargs:
+                    # set labels for image patches to -100
+                    labels[idx, max(position - 1, 0) : position + num_tokens - 1] = -100
                 if seqlen > max_seqlen:
                     max_seqlen = seqlen
                 cu_seqlens.append(cu_seqlens[-1] + seqlen)
@@ -261,4 +263,19 @@ class VisionPreprocessor(Preprocessor):
         )
         kwargs[VisionTransformerKwargs.max_seqlen_q] = max_seqlen
         kwargs[VisionTransformerKwargs.max_seqlen_k] = max_seqlen
-        kwargs[LanguageModelKwargs.labels] = labels
+        if LanguageModelKwargs.labels in kwargs:
+            kwargs[LanguageModelKwargs.labels] = labels
+
+        # TODO: add proper preprocessing for attention-mask when not using flash attention
+        # Following is just a dummy code to run the tests.
+        kwargs[self._config.transformer._transformer_kwargs.attention_mask] = torch.ones(
+            (1, 1, kwargs[TransformerKwargs.sequence_length], 1, kwargs[TransformerKwargs.sequence_length]),
+            dtype=torch.bool,
+            device=self._tensor_space.distributed.device,
+        )
+        kwargs[self._config.transformer._transformer_kwargs.attention_mask_value] = torch.full(
+            [],
+            torch.finfo(self._distributed_config.training_dtype.torch).min,
+            dtype=self._distributed_config.training_dtype.torch,
+            device=self._tensor_space.distributed.device,
+        )

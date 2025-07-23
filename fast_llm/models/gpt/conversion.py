@@ -884,13 +884,15 @@ class LlavaHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
 
     @classmethod
     def _load_metadata(cls, config: CheckpointLoadMetadataConfig) -> CheckpointMetadata:
+        vision_handler_cls = cls.get_vision_handler_class()
+        text_handler_cls = cls.get_text_handler_class()
         cfg_dict = cls._load_config(config.path)
         kwargs = {}
         if "text_config" in cfg_dict:
-            text_kwargs = cls._import_config(cfg_dict["text_config"])
+            text_kwargs = text_handler_cls._import_config_dict(cfg_dict["text_config"])
             kwargs.update(text_kwargs)
         if "vision_config" in cfg_dict:
-            vision_kwargs = cls._import_config(cfg_dict["vision_config"])
+            vision_kwargs = vision_handler_cls._import_config_dict(cfg_dict["vision_config"])
             vision_kwargs = {tuple(["vision_encoder"] + list(key)): value for key, value in vision_kwargs.items()}
             kwargs.update(vision_kwargs)
         kwargs.update(
@@ -927,9 +929,9 @@ class LlavaHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
 
     @classmethod
     def _import_config(cls, config: dict[str, typing.Any]) -> GPTBaseModelConfig:
-        handler_cls = AutoGPTHuggingfaceCheckpointHandler.get_handler_class(config["model_type"])
+        # handler_cls = AutoGPTHuggingfaceCheckpointHandler.get_handler_class(config["model_type"])
         kwargs = {}
-        for converter in handler_cls._create_config_converters():
+        for converter in cls._create_config_converters():
             try:
                 values = ()
                 for export_name in converter.export_names:

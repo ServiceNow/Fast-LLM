@@ -822,3 +822,17 @@ class LlavaHybridHuggingfaceCheckpointHandler(CustomModelingExportMixin, LlavaHu
         from fast_llm.models.ssm.conversion import AprielThinkerSSMHHybridHuggingfaceCheckpointHandler
 
         return AprielThinkerSSMHHybridHuggingfaceCheckpointHandler
+
+    @classmethod
+    def _create_config_converters(cls) -> list[ParamConverter]:
+        cls.architecture = "LlavaHybridForConditionalGeneration"
+        return super()._create_config_converters() + [
+            ConstantExportParamConverter(
+                export_names=(("auto_map",),),
+                export_value={
+                    "AutoConfig": "configuration_llava_hybrid.LlavaHybridConfig",
+                    "AutoModel": "modeling_llava_hybrid.LlavaHybridModel",
+                    "AutoModelForConditionalGeneration": "modeling_llava_hybrid.LlavaHybridForConditionalGeneration",
+                },
+            ),
+        ]

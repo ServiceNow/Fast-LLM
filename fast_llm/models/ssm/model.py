@@ -3,12 +3,14 @@ import typing
 
 from fast_llm.engine.base_model.base_model import Layer
 from fast_llm.engine.distributed.config import DistributedConfig
+from fast_llm.engine.inference.runner import InferenceRunner
 from fast_llm.layers.language_model.head import LanguageModelHead
 from fast_llm.layers.ssm.discrete_mamba2 import DiscreteMamba2
 from fast_llm.layers.ssm.llamba_block import LlambaBlock
 from fast_llm.layers.ssm.mamba2 import Mamba2
 from fast_llm.layers.ssm.mamba_layer import MambaLayer
 from fast_llm.layers.transformer.transformer import TransformerLayer
+from fast_llm.models.gpt.config import GPTBatchConfig
 from fast_llm.models.gpt.model import GPTBaseModel, GPTModel
 from fast_llm.models.ssm.config import HybridSSMBaseModelConfig, HybridSSMModelConfig, SSMBlockType
 
@@ -164,3 +166,8 @@ class HybridSSMModel[ConfigType: HybridSSMModelConfig](GPTModel[ConfigType]):
 
     config_class: typing.ClassVar[type[HybridSSMModelConfig]] = HybridSSMModelConfig
     base_model_class: typing.ClassVar[type[HybridSSMBaseModel]] = HybridSSMBaseModel
+
+
+class HybridSSMInferenceRunner(InferenceRunner):
+    model_class: typing.ClassVar[type[HybridSSMModel]] = HybridSSMModel
+    batch_config_class: typing.ClassVar[type[GPTBatchConfig]] = GPTBatchConfig

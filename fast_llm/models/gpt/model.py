@@ -150,7 +150,11 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             micro_sequence_length = sequence_length
 
         if self._config.vision_encoder.enabled:
-            max_image_size = batch_meta.max_image_size
+            try:
+                max_image_size = batch_meta.max_image_size
+            except AttributeError:
+                max_image_size = 256
+                logger.warning("Inference mode: max_image_size not provided, defaulting to 256")
             image_mean = [
                 self._config.vision_encoder.image_normalization.mean_r,
                 self._config.vision_encoder.image_normalization.mean_g,
