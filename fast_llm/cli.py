@@ -59,7 +59,8 @@ def fast_llm_main(args: list[str] | None = None):
             "accelerate",
             "launch",
             "--config_file",
-            "/app/fast_llm/diffullama/accelerate_configs/single_node.yaml",
+            "fast_llm/diffullama/accelerate_configs/fsdp.yaml",
+            # "/app/fast_llm/diffullama/accelerate_configs/single_node.yaml",
             # "fast_llm/diffullama/accelerate_configs/single_node.yaml",
             "--main_process_ip",
             os.environ.get("MASTER_ADDR", "localhost"),
@@ -68,11 +69,11 @@ def fast_llm_main(args: list[str] | None = None):
             "--machine_rank",
             os.environ.get("NODEID", "0"),
             "--num_processes",
-            os.environ.get("WORLD_SIZE", "1"),
+            os.environ.get("WORLD_SIZE", "4"),
             "--num_machines",
             os.environ.get("NNODES", "1"),
-            # "fast_llm/diffullama/train_updated.py",
-            "/app/fast_llm/diffullama/train_updated.py",
+            "fast_llm/diffullama/train_updated_fsdp.py",
+            # "/app/fast_llm/diffullama/train_updated.py",
         ] + train_args
         subprocess.run(accelerate_cmd, check=True)
         return
