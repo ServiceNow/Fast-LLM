@@ -8,7 +8,7 @@ from fast_llm.engine.config_utils.tensor_space import TensorSpace
 from fast_llm.functional.config import ActivationType
 from fast_llm.layers.common.linear import Linear
 from fast_llm.layers.ssm.config import SSMConfig, SSMDimNames
-from fast_llm.layers.transformer.config import TransformerDimNames, TransformerKwargs
+from fast_llm.layers.transformer.config import TransformerConfig, TransformerDimNames, TransformerKwargs
 from fast_llm.layers.transformer.transformer import Mixer
 from fast_llm.tensor import ParameterMeta, init_kaiming_, init_ones_
 from fast_llm.utils import Assert, get_lr_scale
@@ -58,13 +58,16 @@ def init_dtprojbias(
 
 
 class MambaLayer(Mixer):
+    _mixer_name: typing.ClassVar[str] = "mamba"
+
     def __init__(
         self,
         config: SSMConfig,
-        layer_idx: int,
+        block_index: int,
         tensor_space: TensorSpace,
+        transformer_config: TransformerConfig,
     ):
-        super().__init__()
+        super().__init__(tensor_space, block_index, debug_level=transformer_config.debug_transformer)
         assert tensor_space.distributed_config.tensor_parallel == 1, "Tensor-parallel not supported for MambaLayer"
         self._config = config
         # TODO: It's not silu?
@@ -73,7 +76,7 @@ class MambaLayer(Mixer):
         # Tensor dims:
         inner_dim = tensor_space.get_tensor_dim(SSMDimNames.composite_heads_and_state)
         hidden_dim = tensor_space.get_tensor_dim(TransformerDimNames.hidden)
-        layer_lr_scale = config.per_layer_lr_scale[layer_idx] if config.per_layer_lr_scale else None
+        layer_lr_scale = config.per_layer_lr_scale[block_index] if config.per_layer_lr_scale else None
         lr_scale = get_lr_scale(self._config.mamba_lr_scale, layer_lr_scale)
 
         # TODO: Backward compatibility?

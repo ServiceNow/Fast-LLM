@@ -34,7 +34,7 @@ class CustomBaseModel[ConfigType: CustomBaseModelConfig](GPTBaseModel[ConfigType
                 TransformerBlock(
                     self._config.transformer,
                     self._tensor_space,
-                    layer_index=i + 1,
+                    block_index=i + 1,
                 )
                 for i in range(self._config.transformer.num_layers)
             ],

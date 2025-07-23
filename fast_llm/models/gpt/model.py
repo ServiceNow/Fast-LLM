@@ -72,7 +72,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                         self._config.transformer,
                         self._tensor_space,
                         # TODO MTP: which index?
-                        layer_index=max(self._config.transformer.num_layers + i, 1),
+                        block_index=max(self._config.transformer.num_layers + i, 1),
                         # The last layer only returns the transformer output.
                         # The previous layers return a stack of shared_hidden and transformer_output.
                         return_input=i < self._config.prediction_heads - 1,
@@ -94,7 +94,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                 TransformerBlock(
                     self._config.transformer,
                     self._tensor_space,
-                    layer_index=i + 1,
+                    block_index=i + 1,
                     # The last layer only returns the transformer output.
                     # The previous layers return a stack of shared_hidden and transformer_output.
                     return_input=self._config.prediction_heads > 1 and i == self._config.transformer.num_layers - 1,

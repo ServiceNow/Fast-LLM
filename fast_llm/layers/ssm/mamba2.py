@@ -1,4 +1,5 @@
 import logging
+import typing
 
 import torch
 
@@ -7,7 +8,7 @@ from fast_llm.functional.config import ActivationType
 from fast_llm.layers.common.linear import InputParallelLinear, Linear, OutputParallelLinear
 from fast_llm.layers.ssm.config import SSMConfig, SSMDimNames
 from fast_llm.layers.ssm.mamba_layer import init_A, init_dtprojbias
-from fast_llm.layers.transformer.config import TransformerDimNames, TransformerKwargs
+from fast_llm.layers.transformer.config import TransformerConfig, TransformerDimNames, TransformerKwargs
 from fast_llm.layers.transformer.transformer import Mixer
 from fast_llm.tensor import ParameterMeta, init_kaiming_, init_ones_, init_uniform_centered_
 from fast_llm.utils import Assert, div, get_lr_scale
@@ -34,16 +35,31 @@ class Mamba2(Mixer):
     This code is adapted from https://github.com/jxiw/M1/blob/537a1ca5407a786a99dc6c721873493cf8750d5e/mamba/hybrid_mamba_layer.py
     """
 
+    _mixer_name: typing.ClassVar[str] = "mamba_2"
+
+    _XZ_DIMS = (
+        TransformerDimNames.batch,
+        SSMDimNames.composite_heads_and_state,
+        TransformerDimNames.sequence_q,
+    )
+    _BC_DIMS = (
+        TransformerDimNames.batch,
+        SSMDimNames.composite_heads,
+        SSMDimNames.state,
+        TransformerDimNames.sequence_q,
+    )
+
     def __init__(
         self,
         config: SSMConfig,
-        layer_idx: int,
         tensor_space: TensorSpace,
+        block_index: int,
+        transformer_config: TransformerConfig,
     ):
-        super().__init__()
+        super().__init__(tensor_space, block_index, debug_level=transformer_config.debug_transformer)
         self._config: SSMConfig = config
         Assert.eq(self._config.activation_type, ActivationType.silu)
-        layer_lr_scale: float | None = config.per_layer_lr_scale[layer_idx] if config.per_layer_lr_scale else None
+        layer_lr_scale: float | None = config.per_layer_lr_scale[block_index] if config.per_layer_lr_scale else None
         lr_scale: float | tuple[float | None, ...] | None = get_lr_scale(self._config.mamba_lr_scale, layer_lr_scale)
 
         inner_dim: TensorDim = tensor_space.get_tensor_dim(name=SSMDimNames.composite_heads_and_state)
@@ -72,7 +88,8 @@ class Mamba2(Mixer):
             hidden_dim,
             tensor_space.get_tensor_dim(name=SSMDimNames.concatenated_inner_projection),
             bias=config.add_bias_linear,
-            weight_init_method=init_kaiming_(hidden_dim.global_size),
+            weight_init_method=init_kaiming_(transformer_config.hidden_size),
+            sequence_parallel=self._sequence_parallel,
             lr_scale=lr_scale,
         )
 
@@ -80,7 +97,7 @@ class Mamba2(Mixer):
             hidden_dim,
             dt_rank_dim,
             bias=config.add_bias_linear,
-            weight_init_method=init_kaiming_(hidden_dim.global_size),
+            weight_init_method=init_kaiming_(transformer_config.hidden_size),
             lr_scale=lr_scale,
         )
         self.dt_proj = OutputParallelLinear(
@@ -91,6 +108,7 @@ class Mamba2(Mixer):
             weight_init_method=self._config.dt_init.get_init_method(
                 self._config.dt_rank**-0.5 * self._config.dt_scale
             ),
+            sequence_parallel=self._sequence_parallel,
             lr_scale=lr_scale,
         )
         # define bias outside the linear layer since its also used in the selective_scan_fn
@@ -116,6 +134,8 @@ class Mamba2(Mixer):
             hidden_dim,
             bias=config.add_bias_linear,
             weight_init_method=init_kaiming_(self._config.d_inner),
+            sequence_parallel=self._sequence_parallel,
+            # TODO: lr_scale?
         )
 
     def forward(self, hidden_states, kwargs):
@@ -123,11 +143,12 @@ class Mamba2(Mixer):
         assert _causal_conv1d_available
 
         inner_projection = self.in_proj(hidden_states)
-        dt = self.dt_in_proj(hidden_states)
+        dt = self.dt_proj(self.dt_in_proj(hidden_states)) + self.dt_proj_bias
         # Standardize to (batch, sequence, inner_projection)
         if kwargs[TransformerKwargs.sequence_first]:
             inner_projection = inner_projection.transpose(0, 1)
             dt = dt.transpose(0, 1)
+
         sequence_length = inner_projection.size(1)
 
         z, x, b, c = torch.split(
@@ -166,8 +187,15 @@ class Mamba2(Mixer):
         # c: (batch, sequence, heads * state) -> (batch, heads, state, sequence)
         c = c.transpose(1, 2).unflatten(1, (self._local_heads, self._config.state_size))
 
-        # dt: (batch, sequence, dt_rank) -> (batch, heads * state, sequence)
-        dt = (self.dt_proj(dt) + self.dt_proj_bias).transpose(1, 2)
+        # dt: (batch, sequence, heads * state) -> (batch, heads * state, sequence)
+        dt = dt.transpose(1, 2)
+
+        if self._debug_level:
+            self._debug_log(z, "z", self._XZ_DIMS, kwargs)
+            self._debug_log(x, "x", self._XZ_DIMS, kwargs)
+            self._debug_log(b, "b", self._BC_DIMS, kwargs)
+            self._debug_log(c, "c", self._BC_DIMS, kwargs)
+            self._debug_log(dt, "dt", self._XZ_DIMS, kwargs)
 
         y = selective_scan_fn(
             x,
@@ -181,11 +209,12 @@ class Mamba2(Mixer):
             delta_softplus=True,
         )
 
+        if self._debug_level:
+            self._debug_log(y, "y", self._XZ_DIMS, kwargs)
+
         # y: (batch, heads * state, sequence) -> (batch, sequence, heads * state)
         y = y.transpose(1, 2)[:, :sequence_length]
         if kwargs[TransformerKwargs.sequence_first]:
             # TODO: Is contiguous needed?
             y = y.transpose(0, 1).contiguous()
-        a, b = self.out_proj(y)
-        Assert.eq(a.shape, hidden_states.shape)
-        return a, b
+        return self.out_proj(y)

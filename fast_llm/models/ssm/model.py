@@ -45,7 +45,7 @@ class HybridSSMBaseModel[ConfigType: HybridSSMBaseModelConfig](GPTBaseModel[Conf
                         TransformerBlock(
                             self._config.transformer,
                             self._tensor_space,
-                            layer_index=len(self._config.hybrid_block_layout),
+                            block_index=len(self._config.hybrid_block_layout),
                             return_input=i != self._config.prediction_heads - 1,
                         )
                     )
@@ -55,7 +55,7 @@ class HybridSSMBaseModel[ConfigType: HybridSSMBaseModelConfig](GPTBaseModel[Conf
                             transformer_config=self._config.transformer,
                             ssm_config=self._config.ssm,
                             mixer_cls=self._config.ssm_block_type.get_mixer_class(),
-                            layer_index=len(self._config.hybrid_block_layout),
+                            block_index=len(self._config.hybrid_block_layout),
                             tensor_space=self._tensor_space,
                             return_input=i != self._config.prediction_heads - 1,
                         )
@@ -79,7 +79,7 @@ class HybridSSMBaseModel[ConfigType: HybridSSMBaseModelConfig](GPTBaseModel[Conf
                     TransformerBlock(
                         self._config.transformer,
                         self._tensor_space,
-                        layer_index=i + 1,
+                        block_index=i + 1,
                         return_input=(
                             i == len(self._config.hybrid_block_layout) - 1 and self._config.prediction_heads > 1
                         ),
@@ -91,7 +91,7 @@ class HybridSSMBaseModel[ConfigType: HybridSSMBaseModelConfig](GPTBaseModel[Conf
                         transformer_config=self._config.transformer,
                         ssm_config=self._config.ssm,
                         mixer_cls=self._config.ssm_block_type.get_mixer_class(),
-                        layer_index=i + 1,
+                        block_index=i + 1,
                         tensor_space=self._tensor_space,
                         return_input=(
                             i == len(self._config.hybrid_block_layout) - 1 and self._config.prediction_heads > 1

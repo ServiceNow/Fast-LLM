@@ -517,6 +517,7 @@ _update_and_add_testing_config(
         "model.base_model.ssm.d_inner=512",
         "model.base_model.ssm.state_size=8",
         "model.base_model.ssm.d_xb=256",
+        # f"model.base_model.transformer.debug_transformer={_LOG_LEVEL}"
     ],
     megatron_args=None,
     checkpoint_format=None,
@@ -530,7 +531,10 @@ _update_and_add_testing_config(
     },
     compare_factor=2.0,
     # Micro-sequence split not supported.
-    skip_tests=("sdp", "ms"),
+    skip_tests=(
+        "sdp",
+        "ms",
+    ),  # "pp","dp", "ce","16", "bf", "df", "stp"),
 )
 
 
