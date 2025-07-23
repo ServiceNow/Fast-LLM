@@ -17,7 +17,8 @@ from fast_llm.engine.schedule.runner import ScheduleRunner
 from fast_llm.engine.schedule.schedule import Schedule
 from fast_llm.engine.training.config import WandbConfig
 from fast_llm.engine.training.wandb import Wandb
-from fast_llm.logging import format_metrics, get_memory_usage_mib
+from fast_llm.logging import format_metrics
+from fast_llm.utils import get_and_reset_memory_usage_mib
 
 # from fast_llm.engine.training.lm_eval.evaluator import simple_evaluate as lm_eval_simple_evaluate
 
@@ -124,9 +125,13 @@ class EvaluatorLoss[ConfigType: EvaluatorLossConfig](Evaluator[ConfigType]):
         self._is_setup = True
 
     def get_sampling_parameters(self) -> EvaluatorSamplingParameters | None:
-        return EvaluatorSamplingParameters(
-            (self._name if self._config.dataset_name is None else self._config.dataset_name),
-            self._config.iterations * self._batch_config.batch_size,
+        return (
+            None
+            if self._config.iterations is None
+            else EvaluatorSamplingParameters(
+                (self._name if self._config.dataset_name is None else self._config.dataset_name),
+                self._config.iterations * self._batch_config.batch_size,
+            )
         )
 
     def run(
@@ -139,7 +144,6 @@ class EvaluatorLoss[ConfigType: EvaluatorLossConfig](Evaluator[ConfigType]):
             run_index = 0
 
         metrics = {}
-        formatted_metrics = None
 
         if self._evaluation_iterator is None:
             self._evaluation_iterator = self._get_data_iterator(self._get_completed_evaluation_steps(run_index))
@@ -223,7 +227,7 @@ class EvaluatorLoss[ConfigType: EvaluatorLossConfig](Evaluator[ConfigType]):
                 / self._schedule._distributed.world_size
                 / time_per_iteration
             ),
-            **get_memory_usage_mib(),
+            **get_and_reset_memory_usage_mib(),
         }
         return metrics
 

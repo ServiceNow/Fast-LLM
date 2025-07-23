@@ -13,12 +13,16 @@ class SSMDimNames:
     inner_dim = "inner_dim"  # Inner dimension after expansion
     dt_rank = "dt_rank"  # Rank of Δ
     inner_proj_mamba = "inner_proj_mamba"  # Inner projection dimension for mamba
+    inner_proj_discrete_mamba2 = "inner_proj_discrete_mamba2"  # Inner projection dimension for discrete mamba2
     inner_proj_mamba2 = "inner_proj_mamba2"  # Inner projection dimension for mamba2
     x_proj_dim = "x_proj_dim"  # X projection dimension
     head_dim = "head_dim"  # Dimension of the mamba2 head (P)
     conv_kernel_size = "conv_kernel_size"  # Kernel size of the conv1d in mamba layers
     qk_heads = "qk_heads"  # Number of QK heads
     v_heads = "v_heads"  # Number of V heads
+
+    # Mamba 2
+    x_proj_dim_2 = "x_proj_dim"  # d_xb
 
 
 class SSMBlockType(enum.StrEnum):
@@ -28,6 +32,7 @@ class SSMBlockType(enum.StrEnum):
 
     mamba = "m"
     mamba2_discrete = "m2d"
+    mamba2 = "m2"
     transformer = "t"
 
 
@@ -101,12 +106,6 @@ class SSMConfig(LLMBlockConfig):
         hint=FieldHint.core,
         valid=check_field(Assert.gt, 0),
     )
-    dt_max: float = Field(
-        default=0.1,
-        desc="Maximum step size for discretization",
-        hint=FieldHint.core,
-        valid=check_field(Assert.gt, 0),
-    )
     dt_init_floor: float = Field(
         default=1e-4,
         desc="Minimum value for initializing dt",
@@ -126,10 +125,50 @@ class SSMConfig(LLMBlockConfig):
         valid=skip_valid_if_none(check_field(Assert.geq, 0)),
     )
 
+    # Mamba 2
+    repeat_kv_before_conv: bool = Field(
+        default=True,
+        desc="Whether to repeat the KV before the conv1d in Mamba2 blocks.",
+        hint=FieldHint.architecture,
+    )
+    d_xb: int = Field(
+        default=None,
+        desc="Dimension of the xB in Mamba2 blocks.",
+        hint=FieldHint.architecture,
+    )
+    dt_init: str = Field(
+        default="random",
+        desc="Initialization method for dt",
+        hint=FieldHint.core,
+    )
+    dt_max: float = Field(
+        default=0.1,
+        desc="Maximum step size for discretization",
+        hint=FieldHint.core,
+        valid=check_field(Assert.gt, 0),
+    )
+    dt_min: float = Field(
+        default=0.001,
+        desc="Minimum step size for discretization",
+        hint=FieldHint.core,
+        valid=check_field(Assert.gt, 0),
+    )
+    dt_init_floor: float = Field(
+        default=1e-4,
+        desc="Minimum value for initializing dt",
+        hint=FieldHint.core,
+        valid=check_field(Assert.gt, 0),
+    )
+    dt_scale: float = Field(
+        default=1.0,
+        desc="Scale for dt",
+        hint=FieldHint.core,
+        valid=check_field(Assert.gt, 0),
+    )
+
     def _validate(self) -> None:
         with self._set_implicit_default():
             if self.activation_type is None:
                 self.activation_type = ActivationType.silu
-
         super()._validate()
         Assert.geq(self.dt_max, self.dt_min)

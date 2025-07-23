@@ -29,6 +29,7 @@ class RunnableConfig(Config):
         with NoAutoValidate():
             config: "RunnableConfig" = cls._from_parsed_args(parsed, unparsed)
         try:
+            # Configure logging so validation errors are logged properly.
             config.configure_logging()
             config.validate()
             if not parsed.do_run:

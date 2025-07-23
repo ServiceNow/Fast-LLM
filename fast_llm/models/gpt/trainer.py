@@ -29,6 +29,7 @@ class GPTTrainer[ConfigType: GPTTrainerConfig](Trainer[ConfigType]):
                 "use_loss_masking_spans": self._config.batch.use_loss_masking_spans,
                 "use_preference_loss_spans": self._config.model.base_model.enable_dpo,
                 "cross_document_attention": self._config.batch.cross_document_attention,
+                "truncate_documents": self._config.batch.truncate_documents,
                 "extra_tokens": self._config.model.base_model.prediction_heads,
             }
         )

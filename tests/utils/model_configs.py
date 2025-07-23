@@ -8,6 +8,7 @@ import pytest
 
 from fast_llm.engine.checkpoint.config import CheckpointFormat
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig
+from fast_llm.engine.training.config import TrainerConfig
 from fast_llm.models.gpt.config import (
     DiffusionDreamGPTHuggingfaceCheckpointFormat,
     DiffusionLlamaGPTHuggingfaceCheckpointFormat,
@@ -19,7 +20,8 @@ from fast_llm.models.gpt.config import (
     Starcoder2GPTHuggingfaceCheckpointFormat,
 )
 from fast_llm.models.ssm.config import LLambaHuggingfaceCheckpointFormat
-from tests.utils.dataset import DATASET_PREFIX, TEST_VOCAB_SIZE
+from tests.utils.dataset import MODEL_DATASET_PREFIX, MODEL_TEST_VOCAB_SIZE
+from tests.utils.distributed_configs import DistributedTestingConfig
 
 _LOG_LEVEL = int(os.environ.get("LOG_LEVEL", 13))
 
@@ -52,13 +54,30 @@ class ModelTestingConfig:
     model_type: str
     config_args: list[str]
     megatron_args: list[str] | None
-    checkpoint_format: CheckpointFormat | None
+    checkpoint_format: type[CheckpointFormat] | None
     groups: dict[ModelTestingGroup, ModelTestingGroupAction]
+    # Scale the comparison thresholds for specific models.
+    compare_factor: float = 1.0
+    # Option to skip specific distributed configuration with name containing any of the provided strings.
+    skip_tests: tuple[str] = ()
 
     @functools.cached_property
-    def model_config_class(self):
+    def trainer_config_class(self) -> type[TrainerConfig]:
+        return TrainerConfig.get_subclass(self.model_type)
+
+    @functools.cached_property
+    def trainer_config(self) -> TrainerConfig:
+        # See `RunnableConfig._from_parsed_args`
+        return self.trainer_config_class.from_dict(self.trainer_config_class._parse_updates(self.config_args))
+
+    @functools.cached_property
+    def model_config_class(self) -> type[FastLLMModelConfig]:
         # TODO: Ok to assume the model and trainer have the same name?
         return FastLLMModelConfig.get_subclass(self.model_type)
+
+    @functools.cached_property
+    def model_config(self) -> FastLLMModelConfig:
+        return self.trainer_config.model
 
     @functools.cached_property
     def huggingface_model_for_causal_lm_class(self):
@@ -72,6 +91,9 @@ class ModelTestingConfig:
     def base_model_config_class(self):
         return self.model_config_class.get_base_model_config_class()
 
+    def should_skip(self, distributed_config: DistributedTestingConfig) -> bool:
+        return any(key in distributed_config.name for key in self.skip_tests)
+
 
 def _update_and_add_testing_config(
     old_name: str,
@@ -80,10 +102,10 @@ def _update_and_add_testing_config(
     model_type: str | None = None,
     extra_args: list[str] | None = None,
     megatron_args: list[str] | None = ...,
-    checkpoint_format: CheckpointFormat | None = ...,
     groups: dict[ModelTestingGroup, ModelTestingGroupAction],
+    **kwargs,
 ):
-    config = _MODEL_CONFIGS[old_name]
+    config = MODEL_CONFIGS[old_name]
     updates: dict[str, typing.Any] = {
         "name": new_name,
         "groups": groups,
@@ -99,16 +121,15 @@ def _update_and_add_testing_config(
             updates["megatron_args"] = megatron_args
         else:
             updates["megatron_args"] = config.megatron_args + megatron_args
-    if checkpoint_format is not ...:
-        updates["checkpoint_format"] = checkpoint_format
+    updates.update(kwargs)
 
-    _MODEL_CONFIGS[new_name] = dataclasses.replace(config, **updates)
-
-
-_MODEL_CONFIGS: dict[str, ModelTestingConfig] = {}
+    MODEL_CONFIGS[new_name] = dataclasses.replace(config, **updates)
 
 
-_MODEL_CONFIGS["gpt2"] = ModelTestingConfig(
+MODEL_CONFIGS: dict[str, ModelTestingConfig] = {}
+
+
+MODEL_CONFIGS["gpt2"] = ModelTestingConfig(
     # Tests gpt2 features (absolute embeddings, layer norm,  relu activation, tied embeddings, MHA, linear biases).
     name="gpt2",
     model_type="gpt",
@@ -122,7 +143,7 @@ _MODEL_CONFIGS["gpt2"] = ModelTestingConfig(
         "model.base_model.transformer.num_attention_heads=8",
         "model.base_model.transformer.head_groups=8",
         "model.base_model.transformer.init_method_std=0.022",
-        f"model.base_model.vocab_size={TEST_VOCAB_SIZE}",
+        f"model.base_model.vocab_size={MODEL_TEST_VOCAB_SIZE}",
         f"model.multi_stage.debug_param_init={_LOG_LEVEL}",
         f"model.multi_stage.debug_layer_outputs={_LOG_LEVEL}",
         f"model.multi_stage.debug_layer_gradients={_LOG_LEVEL}",
@@ -130,7 +151,6 @@ _MODEL_CONFIGS["gpt2"] = ModelTestingConfig(
         "model.multi_stage.debug_tensor_parallel=True",
         "model.distributed.reproducible_init=True",
         "model.distributed.timeout=20",
-        "model.distributed.training_dtype=bf16",
         "training.train_iters=2",
         "training.num_workers=0",
         "training.timeout=30",
@@ -139,17 +159,17 @@ _MODEL_CONFIGS["gpt2"] = ModelTestingConfig(
         "data.datasets.training.type=slice",
         "data.datasets.training.end=0.969",
         "data.datasets.training.dataset.type=memmap",
-        f"data.datasets.training.dataset.path={DATASET_PREFIX}",
+        f"data.datasets.training.dataset.path={MODEL_DATASET_PREFIX}",
         "data.datasets.validation.type=slice",
         "data.datasets.validation.begin=0.969",
         "data.datasets.validation.end=0.999",
         "data.datasets.validation.dataset.type=memmap",
-        f"data.datasets.validation.dataset.path={DATASET_PREFIX}",
+        f"data.datasets.validation.dataset.path={MODEL_DATASET_PREFIX}",
         "data.datasets.test.type=slice",
         "data.datasets.test.begin=0.999",
         "data.datasets.test.end=1",
         "data.datasets.test.dataset.type=memmap",
-        f"data.datasets.test.dataset.path={DATASET_PREFIX}",
+        f"data.datasets.test.dataset.path={MODEL_DATASET_PREFIX}",
         "optimizer.learning_rate.base=0.0001",
     ],
     megatron_args=[
@@ -176,8 +196,8 @@ _MODEL_CONFIGS["gpt2"] = ModelTestingConfig(
         "--valid-num-workers=0",
         "--tokenizer-type=NullTokenizer",
         # Megatron messes with the vocab size, so we have to subtract 1.
-        f"--vocab-size={TEST_VOCAB_SIZE - 1}",
-        f"--data-path={DATASET_PREFIX}",
+        f"--vocab-size={MODEL_TEST_VOCAB_SIZE - 1}",
+        f"--data-path={MODEL_DATASET_PREFIX}",
         "--lr-decay-style=constant",
         # Initialization is set up to match MCore models (MCore inverts self-attn qkv and dense layers compared to original Megatron)
         "--use-mcore-models",
@@ -344,6 +364,7 @@ _update_and_add_testing_config(
         ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
         ModelTestingGroup.distributed: ModelTestingGroupAction.unimportant,
     },
+    compare_factor=2.0,
 )
 
 _update_and_add_testing_config(
@@ -419,13 +440,14 @@ _update_and_add_testing_config(
     checkpoint_format=MixtralGPTHuggingfaceCheckpointFormat,
     # TODO: New base image broke mixtral
     groups={
-        ModelTestingGroup.basic: ModelTestingGroupAction.broken,
-        ModelTestingGroup.checkpoint: ModelTestingGroupAction.broken,
-        ModelTestingGroup.convert: ModelTestingGroupAction.broken,
+        ModelTestingGroup.basic: ModelTestingGroupAction.normal,
+        ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
+        ModelTestingGroup.convert: ModelTestingGroupAction.normal,
         ModelTestingGroup.generate: ModelTestingGroupAction.broken,
-        ModelTestingGroup.megatron: ModelTestingGroupAction.broken,
-        ModelTestingGroup.distributed: ModelTestingGroupAction.broken,
+        ModelTestingGroup.megatron: ModelTestingGroupAction.normal,
+        ModelTestingGroup.distributed: ModelTestingGroupAction.normal,
     },
+    compare_factor=2.0,
 )
 
 _update_and_add_testing_config(
@@ -453,13 +475,16 @@ _update_and_add_testing_config(
         # TODO: Fix and bring back to `testing_groups`
         ModelTestingGroup.distributed: ModelTestingGroupAction.broken,
     },
+    compare_factor=2.0,
+    # SSMs don't support sequence-first configurations.
+    skip_tests=("sf", "sdp", "stp", "ms"),
 )
 
 
 _update_and_add_testing_config(
     # Tests hybrid ssm, llamba converter.
     "llamba",
-    "hybrid_mamba_2",
+    "hybrid_discrete_mamba2",
     model_type="hybrid_ssm",
     extra_args=[
         "model.base_model.hybrid_block_layout=['t','m2d']",
@@ -476,18 +501,41 @@ _update_and_add_testing_config(
     },
 )
 
+_update_and_add_testing_config(
+    # Tests hybrid ssm, llamba converter.
+    "llamba",
+    "hybrid_mamba2",
+    model_type="hybrid_ssm",
+    extra_args=[
+        "model.base_model.hybrid_block_layout=['t','m2']",
+    ],
+    megatron_args=None,
+    checkpoint_format=None,
+    groups={
+        ModelTestingGroup.basic: ModelTestingGroupAction.normal,
+        ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
+        ModelTestingGroup.convert: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.generate: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.distributed: ModelTestingGroupAction.unimportant,
+    },
+)
 
-@pytest.fixture(scope="session", params=_MODEL_CONFIGS.keys())
+
+@pytest.fixture(scope="session", params=MODEL_CONFIGS.keys())
 def model_testing_config(request) -> ModelTestingConfig:
-    return _MODEL_CONFIGS[request.param]
+    models = request.config.getoption("--models")
+    if models and request.param not in models:
+        pytest.skip(f"Skipping model {request.param}")
+    return MODEL_CONFIGS[request.param]
 
 
 def testing_group_enabled(item: pytest.Function, skip_slow: bool, skip_extra_slow: bool, show_skipped: bool) -> bool:
     if "model_testing_group" in item.keywords:
-        assert "model_testing_config" in item.callspec.params, item.nodeid
+        assert hasattr(item, "callspec") and "model_testing_config" in item.callspec.params, item.nodeid
         groups: tuple[ModelTestingGroup] = item.keywords["model_testing_group"].args
         model_testing_config = item.callspec.params["model_testing_config"]
-        model_config: ModelTestingConfig = _MODEL_CONFIGS[model_testing_config]
+        model_config: ModelTestingConfig = MODEL_CONFIGS[model_testing_config]
         for group in groups:
             action = model_config.groups[group]
             if action == ModelTestingGroupAction.main:

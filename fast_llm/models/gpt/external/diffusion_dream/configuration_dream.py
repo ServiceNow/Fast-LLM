@@ -1,4 +1,3 @@
-# coding=utf-8
 # Copyright 2024 The Dream team, HKUNLP Group and the HuggingFace Inc. team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -17,7 +16,6 @@
 from transformers.configuration_utils import PretrainedConfig
 from transformers.modeling_rope_utils import rope_config_validation
 from transformers.utils import logging
-
 
 logger = logging.get_logger(__name__)
 
@@ -47,7 +45,7 @@ class DreamConfig(PretrainedConfig):
         max_window_layers=28,
         attention_dropout=0.0,
         mask_token_id=151666,
-        pad_token_id=151643, # vocab_size is set to 8192 for test cases this would fail on Embedding layer check: # pad_token_id=None, 
+        pad_token_id=None,  # vocab_size is set to 8192 for test cases this would fail on Embedding layer check: # pad_token_id=151643,
         **kwargs,
     ):
         self.vocab_size = vocab_size
@@ -77,7 +75,7 @@ class DreamConfig(PretrainedConfig):
         if self.rope_scaling is not None and "type" in self.rope_scaling:
             self.rope_scaling["rope_type"] = self.rope_scaling["type"]
         rope_config_validation(self)
-        
+
         super().__init__(
             tie_word_embeddings=tie_word_embeddings,
             **kwargs,

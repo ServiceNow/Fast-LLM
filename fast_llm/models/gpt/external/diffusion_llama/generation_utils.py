@@ -1,4 +1,4 @@
-# Copyright 2024 The Dream team, HKUNLP Group and the HuggingFace Inc. team. All rights reserved.
+# Copyright 2024 ServiceNow. team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -130,12 +130,12 @@ def batch_sample_tokens(
 
 
 @dataclass
-class DreamModelOutput(ModelOutput):
+class SLAMModelOutput(ModelOutput):
     sequences: torch.LongTensor = None
     history: Optional[tuple[torch.FloatTensor]] = None
 
 
-class DreamGenerationConfig(GenerationConfig):
+class SLAMGenerationConfig(GenerationConfig):
     def __init__(self, **kwargs):
         self.temperature: float = kwargs.pop("temperature", 0.0)
         self.top_p: Optional[float] = kwargs.pop("top_p", None)
@@ -186,7 +186,7 @@ class DreamGenerationConfig(GenerationConfig):
         pass
 
 
-class DreamGenerationMixin(GenerationMixin):
+class SLAMGenerationMixin(GenerationMixin):
     @staticmethod
     def _expand_inputs_for_generation(
         expand_size: int = 1,
@@ -247,7 +247,7 @@ class DreamGenerationMixin(GenerationMixin):
             generation_config.max_length = generation_config.max_new_tokens + input_ids_length
 
         elif has_default_max_length:
-            if generation_config.max_length == DreamGenerationConfig().max_length:
+            if generation_config.max_length == SLAMGenerationConfig().max_length:
                 generation_config.max_length = generation_config.max_length + input_ids_length
                 max_position_embeddings = getattr(self.config, "max_position_embeddings", None)
                 if max_position_embeddings is not None:
@@ -256,8 +256,8 @@ class DreamGenerationMixin(GenerationMixin):
         return generation_config
 
     def _prepare_generation_config(
-        self, generation_config: Optional[DreamGenerationConfig], **kwargs: dict
-    ) -> DreamGenerationConfig:
+        self, generation_config: Optional[SLAMGenerationConfig], **kwargs: dict
+    ) -> SLAMGenerationConfig:
         """
         Prepares the base generation config, then applies any generation configuration options from kwargs. This
         function handles retrocompatibility with respect to configuration files.
@@ -265,7 +265,7 @@ class DreamGenerationMixin(GenerationMixin):
         # priority: `generation_config` argument > `model.generation_config` (the default generation config)
         using_model_generation_config = False
         if generation_config is None:
-            generation_config = DreamGenerationConfig.from_model_config(self.config)
+            generation_config = SLAMGenerationConfig.from_model_config(self.config)
             using_model_generation_config = True
 
         # `torch.compile` can't compile `copy.deepcopy`, arguments in `kwargs` that are part of `generation_config`
@@ -289,7 +289,7 @@ class DreamGenerationMixin(GenerationMixin):
 
     def _prepare_special_tokens(
         self,
-        generation_config: DreamGenerationConfig,
+        generation_config: SLAMGenerationConfig,
         device: Optional[Union[torch.device, str]] = None,
     ):
         """
@@ -338,9 +338,9 @@ class DreamGenerationMixin(GenerationMixin):
     def diffusion_generate(
         self,
         inputs: Optional[torch.Tensor] = None,
-        generation_config: Optional[DreamGenerationConfig] = None,
+        generation_config: Optional[SLAMGenerationConfig] = None,
         **kwargs,
-    ) -> Union[DreamModelOutput, torch.LongTensor]:
+    ) -> Union[SLAMModelOutput, torch.LongTensor]:
         # fix seed for reproducability torch.random.manual_seed - lm-eval is setting it
         torch.random.manual_seed(0)
 
@@ -443,10 +443,10 @@ class DreamGenerationMixin(GenerationMixin):
         self,
         input_ids: torch.LongTensor,
         attention_mask: Optional[torch.LongTensor],
-        generation_config: DreamGenerationConfig,
+        generation_config: SLAMGenerationConfig,
         generation_tokens_hook_func,
         generation_logits_hook_func,
-    ) -> Union[DreamModelOutput, torch.LongTensor]:
+    ) -> Union[SLAMModelOutput, torch.LongTensor]:
         # init values
         output_history = generation_config.output_history
         return_dict_in_generate = generation_config.return_dict_in_generate
@@ -570,7 +570,7 @@ class DreamGenerationMixin(GenerationMixin):
                 histories.append(x.clone())
 
         if return_dict_in_generate:
-            return DreamModelOutput(
+            return SLAMModelOutput(
                 sequences=x,
                 history=histories,
             )
@@ -582,12 +582,12 @@ class DreamGenerationMixin(GenerationMixin):
         self,
         input_ids: torch.LongTensor,
         attention_mask: Optional[torch.LongTensor],
-        generation_config: DreamGenerationConfig,
+        generation_config: SLAMGenerationConfig,
         block_size: int,
         use_cache: bool,
         generation_tokens_hook_func,
         generation_logits_hook_func,
-    ) -> Union[DreamModelOutput, torch.LongTensor]:
+    ) -> Union[SLAMModelOutput, torch.LongTensor]:
         # init values
         output_history = generation_config.output_history
         return_dict_in_generate = generation_config.return_dict_in_generate
@@ -790,7 +790,7 @@ class DreamGenerationMixin(GenerationMixin):
             settled_length += block_size
 
         if return_dict_in_generate:
-            return DreamModelOutput(
+            return SLAMModelOutput(
                 sequences=x,
                 history=histories,
             )
@@ -802,11 +802,11 @@ class DreamGenerationMixin(GenerationMixin):
         self,
         input_ids: torch.LongTensor,
         attention_mask: Optional[torch.LongTensor],
-        generation_config: DreamGenerationConfig,
+        generation_config: SLAMGenerationConfig,
         block_size: int,
         generation_tokens_hook_func,
         generation_logits_hook_func,
-    ) -> Union[DreamModelOutput, torch.LongTensor]:
+    ) -> Union[SLAMModelOutput, torch.LongTensor]:
         # init values
         output_history = generation_config.output_history
         return_dict_in_generate = generation_config.return_dict_in_generate
@@ -1032,7 +1032,7 @@ class DreamGenerationMixin(GenerationMixin):
             # print(f"settled_length: {settled_length} past_length: {past_length} x_input: {x_input.shape} past_key_values: {past_key_values.get_seq_length()}")
 
         if return_dict_in_generate:
-            return DreamModelOutput(
+            return SLAMModelOutput(
                 sequences=x,
                 history=histories,
             )

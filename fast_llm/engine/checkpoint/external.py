@@ -35,6 +35,8 @@ class ParamConverter(abc.ABC):
 
 @dataclasses.dataclass(kw_only=True)
 class RenameParamConverter(ParamConverter):
+    ignore_missing: bool = False
+    default_value: typing.Any = None
 
     def __post_init__(self) -> None:
         Assert.eq(len(self.fast_llm_names), 1)
@@ -44,6 +46,14 @@ class RenameParamConverter(ParamConverter):
         return fast_llm_values
 
     def import_params(self, export_values: tuple[typing.Any, ...]) -> tuple[typing.Any, ...]:
+        if self.ignore_missing:
+            if export_values[0] == MISSING:
+                logger.warning(
+                    "The configuration parameter `%s=%s` is ignored during conversion as it is not present in the checkpoint.",
+                    self.export_names[0],
+                    export_values[0],
+                )
+                return (self.default_value,)
         return export_values
 
 
@@ -97,8 +107,10 @@ class IgnoreImportParamConverter(ParamConverter):
     def import_params(self, export_values):
         if export_values[0] not in (self.ignore_export_value, MISSING):
             logger.warning(
-                f"The configuration parameter `{self.export_names[0]}={export_values[0]}` is ignored during conversion."
-                f" If you intend to use it in Fast-LLM, make sure to set it explicitly in the model configuration."
+                "The configuration parameter `%s=%s` is ignored during conversion."
+                " If you intend to use it in Fast-LLM, make sure to set it explicitly in the model configuration.",
+                self.export_names[0],
+                export_values[0],
             )
         return ()
 

@@ -10,7 +10,7 @@ from fast_llm.config import Config, Field, FieldHint, FieldVerboseLevel, config_
 from fast_llm.engine.config_utils.logging import TensorLogs, TensorLogsConfig, configure_logging
 from fast_llm.engine.config_utils.runnable import RunnableConfig
 from fast_llm.engine.distributed.config import DistributedConfig
-from fast_llm.utils import Assert, log
+from fast_llm.utils import log
 
 if typing.TYPE_CHECKING:
     from fast_llm.engine.distributed.distributed import Distributed
@@ -82,12 +82,14 @@ class ExperimentConfig(RunnableConfig):
         if is_main_rank():
             return super()._show(verbose, log_fn=log_fn, title=title, width=width, fill_char=fill_char)
 
-    def configure_logging(self, directory: pathlib.Path | str | None = None) -> None:
+    def configure_logging(
+        self, directory: pathlib.Path | str | None = None, distributed: DistributedConfig | None = None
+    ) -> None:
         configure_logging(
             log_timestamps=self.run.log_timestamps,
             enable_all_loggers=self.run.enable_all_loggers,
-            rank=DistributedConfig.default_rank,
-            world_size=DistributedConfig.default_world_size,
+            rank=DistributedConfig.default_rank if distributed is None else distributed.rank,
+            world_size=DistributedConfig.default_world_size if distributed is None else distributed.world_size,
             directory=directory,
         )
 
@@ -131,17 +133,13 @@ class Run:
         distributed: "Distributed",
     ):
         self._config = config.run
-        self._distributed_config = distributed.config
-        Assert.eq(self._distributed_config.world_size, DistributedConfig.default_world_size)
-        Assert.eq(self._distributed_config.local_world_size, DistributedConfig.default_local_world_size)
-        Assert.eq(self._distributed_config.rank, DistributedConfig.default_rank)
         self._distributed = distributed
 
         # TODO: Main rank should contain the last pipeline stage so it calculates loss
-        self._is_main_rank = self._distributed_config.rank == _MAIN_RANK
-        self._is_model_parallel_main_rank = self._distributed_config.data_rank == 0
+        self._is_main_rank = self._distributed.config.rank == _MAIN_RANK
+        self._is_model_parallel_main_rank = self._distributed.config.data_rank == 0
         self._is_pipeline_parallel_main_rank = (
-            self._distributed_config.data_rank == 0 and self._distributed_config.tensor_rank == 0
+            self._distributed.config.data_rank == 0 and self._distributed.config.tensor_rank == 0
         )
         config_dict = config.to_dict()
         config_dict_verbose = config.to_dict(verbose=FieldVerboseLevel.performance)
@@ -160,14 +158,14 @@ class Run:
             # Make sure all the workers agree on the run. This also acts as a barrier.
             self.index = self.broadcast_int(run)
             run_dir = self._experiment_directory / "runs" / str(self.index)
-            self._artifact_dir = run_dir / "artifacts" / str(self._distributed_config.rank)
+            self._artifact_dir = run_dir / "artifacts" / str(self._distributed.config.rank)
             log_dir = run_dir / "logs"
         else:
             self._experiment_directory, self._artifact_dir, log_dir = None, None, None
             self.index = None
 
-        if self._config.structured_logs:
-            config.configure_logging(log_dir)
+        # Finalize logging configuration.
+        config.configure_logging(log_dir)
 
         self._experiment_name = self._config.experiment_name or (
             "default" if self._experiment_directory is None else self._experiment_directory.name
