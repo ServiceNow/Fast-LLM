@@ -90,6 +90,25 @@ def test_lm_eval_evaluation_last_checkpoint(
     run_test_script_for_all_models(distributed_testing_config=distributed_testing_config, runnable_type="evaluate")
 
 
+@requires_cuda
+@pytest.mark.depends_on(on=["test_lm_eval_in_training[{model_testing_config}]"])
+@pytest.mark.model_testing_group(ModelTestingGroup.generate)
+def test_lm_eval_evaluation_from_pretrained(
+    run_test_script_for_all_models, run_test_script_base_path, get_lm_eval_config
+):
+    run_test_script_for_all_models(
+        distributed_testing_config=DistributedTestingConfig(
+            name="lm_eval_evaluation_from_pretrained",
+            config_args=get_lm_eval_config(run_test_script_base_path / "lm_eval_evaluation_from_pretrained")
+            + [
+                "pretrained.format=distributed",
+                f"pretrained.path={run_test_script_base_path/'lm_eval_in_training/checkpoint/2'}",
+                "pretrained.model_weights=True",
+            ],
+        )
+    )
+
+
 # TODO: rewrite for a new distributed test function
 # @requires_cuda
 # @pytest.mark.depends_on(on=["test_lm_eval_in_training[{model_testing_config}]"])
