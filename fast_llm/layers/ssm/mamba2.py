@@ -7,6 +7,8 @@ import torch
 from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
 from fast_llm.layers.common.linear import Linear
 from fast_llm.layers.ssm.config import SSMConfig, SSMDimNames
+from fast_llm.layers.transformer.config import TransformerConfig, TransformerDimNames
+from fast_llm.layers.transformer.transformer import Mixer
 from fast_llm.tensor import ParameterMeta, init_fill_, init_ones_, init_uniform_, kaiming_init_
 from fast_llm.utils import get_lr_scale
 
@@ -43,24 +45,36 @@ def bias_init_method(conv_weight):
     return init_uniform_(-bound, bound)
 
 
-class Mamba2(torch.nn.Module):
+class Mamba2(Mixer):
     """
     This code is adapted from https://github.com/jxiw/M1/blob/537a1ca5407a786a99dc6c721873493cf8750d5e/mamba/hybrid_mamba_layer.py
     """
 
+    _mixer_name: typing.ClassVar[str] = "mamba_2"
+
+    _XZ_DIMS = (
+        TransformerDimNames.batch,
+        SSMDimNames.inner_dim,
+        TransformerDimNames.sequence_q,
+    )
+    _BC_DIMS = (
+        TransformerDimNames.batch,
+        SSMDimNames.c_heads,
+        SSMDimNames.state_dim,
+        TransformerDimNames.sequence_q,
+    )
+
     def __init__(
         self,
         config: SSMConfig,
-        layer_idx: int,
         tensor_space: TensorSpace,
-        return_input: bool = False,
+        block_index: int,
+        transformer_config: TransformerConfig,
     ):
-        super().__init__()
+        super().__init__(tensor_space, block_index, debug_level=transformer_config.debug_transformer)
         self.config: SSMConfig = config
         bias: bool = config.add_bias_linear
-        self.layer_idx = layer_idx
-        self._return_input = return_input
-        layer_lr_scale: float | None = config.per_layer_lr_scale[layer_idx] if config.per_layer_lr_scale else None
+        layer_lr_scale: float | None = config.per_layer_lr_scale[block_index] if config.per_layer_lr_scale else None
         mamba_layer_lr_scale: float | tuple[float | None, ...] | None = get_lr_scale(
             self.config.mamba_lr_scale, layer_lr_scale
         )
@@ -236,6 +250,13 @@ class Mamba2(torch.nn.Module):
             x = repeat_kv(x, self.repeat_group)
             x = einops.rearrange(x, "b n_group l dstate -> b (n_group dstate) l")
 
+        if self._debug_level:
+            self._debug_log(z, "z", self._XZ_DIMS, kwargs)
+            self._debug_log(x, "x", self._XZ_DIMS, kwargs)
+            self._debug_log(B, "b", self._BC_DIMS, kwargs)
+            self._debug_log(C, "c", self._BC_DIMS, kwargs)
+            self._debug_log(dt, "dt", self._XZ_DIMS, kwargs)
+
         y = selective_scan_fn(
             x,
             dt,
@@ -248,6 +269,9 @@ class Mamba2(torch.nn.Module):
             delta_softplus=True,
             return_last_state=False,
         )
+
+        if self._debug_level:
+            self._debug_log(y, "y", self._XZ_DIMS, kwargs)
 
         if ssm_state is not None:
             y, last_state = y
