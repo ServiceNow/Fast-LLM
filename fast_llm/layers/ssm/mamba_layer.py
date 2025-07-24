@@ -4,7 +4,7 @@ import typing
 
 import torch
 
-from fast_llm.engine.config_utils.tensor_space import TensorSpace
+from fast_llm.engine.config_utils.tensor_space import DefaultDimNames, TensorSpace
 from fast_llm.functional.config import ActivationType
 from fast_llm.layers.common.linear import Linear
 from fast_llm.layers.ssm.config import SSMConfig, SSMDimNames
@@ -87,7 +87,11 @@ class MambaLayer(Mixer):
         )
 
         self.conv1d_weight = ParameterMeta.from_dims(
-            (inner_dim, tensor_space.get_tensor_dim(SSMDimNames.conv_kernel)),
+            (
+                inner_dim,
+                tensor_space.get_tensor_dim(DefaultDimNames.scalar),
+                tensor_space.get_tensor_dim(SSMDimNames.conv_kernel),
+            ),
             init_method=init_kaiming_(inner_dim.size),
             lr_scale=lr_scale,
         )
@@ -146,7 +150,7 @@ class MambaLayer(Mixer):
         # not, if we wanbt to support inference, we would need to imp.lement slow path here, see https://github.com/Zyphra/Zamba2/blob/1b182f40f2257f822cc06dd785df53d67d691a15/mamba_layer.py#L172s
         out = _mamba_inner_fn(
             in_proj,
-            self.conv1d_weight.unsqueeze(1),
+            self.conv1d_weight,
             None,
             self.x_proj.weight,
             self.dt_proj_weight,

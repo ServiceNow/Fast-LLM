@@ -3,7 +3,7 @@ import typing
 
 import torch
 
-from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
+from fast_llm.engine.config_utils.tensor_space import DefaultDimNames, TensorDim, TensorSpace
 from fast_llm.functional.config import ActivationType
 from fast_llm.layers.common.linear import InputParallelLinear, Linear, OutputParallelLinear
 from fast_llm.layers.ssm.config import SSMConfig, SSMDimNames
@@ -75,7 +75,11 @@ class Mamba2(Mixer):
 
         conv1d_dim = inner_dim if self._config.repeat_kv_before_conv else xb_dim
         self.conv1d_weight = ParameterMeta.from_dims(
-            (conv1d_dim, tensor_space.get_tensor_dim(name=SSMDimNames.conv_kernel)),
+            (
+                conv1d_dim,
+                tensor_space.get_tensor_dim(DefaultDimNames.scalar),
+                tensor_space.get_tensor_dim(name=SSMDimNames.conv_kernel),
+            ),
             init_method=init_uniform_centered_((conv1d_dim.global_size * self._config.conv_kernel_dimension) ** -0.5),
             lr_scale=lr_scale,
         )
@@ -168,9 +172,9 @@ class Mamba2(Mixer):
                 .repeat_interleave(self._group_heads, 1, output_size=self._local_heads)
                 .flatten(1, 2)
             )
-            x = _causal_conv1d_fn(x=x, weight=self.conv1d_weight, bias=self.conv1d_bias, activation="silu")
+            x = _causal_conv1d_fn(x=x, weight=self.conv1d_weight, bias=self.conv1d_bias.squeeze(1), activation="silu")
         else:
-            x = _causal_conv1d_fn(x=x, weight=self.conv1d_weight, bias=self.conv1d_bias, activation="silu")
+            x = _causal_conv1d_fn(x=x, weight=self.conv1d_weight, bias=self.conv1d_bias.squeeze(1), activation="silu")
             x = (
                 x.unflatten(1, (self._local_head_groups, self._config.state_size))
                 .repeat_interleave(self._group_heads, 1, output_size=self._local_heads)
