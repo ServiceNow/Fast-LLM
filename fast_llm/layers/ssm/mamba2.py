@@ -4,7 +4,7 @@ import typing
 import einops
 import torch
 
-from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
+from fast_llm.engine.config_utils.tensor_space import DefaultDimNames, TensorDim, TensorSpace
 from fast_llm.layers.common.linear import Linear
 from fast_llm.layers.ssm.config import SSMConfig, SSMDimNames
 from fast_llm.layers.ssm.mamba_layer import init_A, init_dtprojbias
@@ -98,7 +98,7 @@ class Mamba2(Mixer):
 
         if self.repeat_kv_before_conv:
             self.conv1d_weight = ParameterMeta.from_dims(
-                (td_inner, td_conv_kernel),
+                (td_inner, tensor_space.get_tensor_dim(DefaultDimNames.scalar), td_conv_kernel),
                 init_method=init_uniform_(
                     -1 / math.sqrt(td_inner.size * td_conv_kernel.size),
                     1 / math.sqrt(td_inner.size * td_conv_kernel.size),
@@ -111,7 +111,7 @@ class Mamba2(Mixer):
             )
         else:
             self.conv1d_weight = ParameterMeta.from_dims(
-                (td_xb, td_conv_kernel),
+                (td_xb, tensor_space.get_tensor_dim(DefaultDimNames.scalar), td_conv_kernel),
                 init_method=init_uniform_(
                     -1 / math.sqrt(td_xb.size * td_conv_kernel.size),
                     1 / math.sqrt(td_xb.size * td_conv_kernel.size),
@@ -225,7 +225,7 @@ class Mamba2(Mixer):
         if _causal_conv1d_available:
             x = _causal_conv1d_fn(
                 x=x,
-                weight=self.conv1d_weight,
+                weight=einops.rearrange(self.conv1d_weight, "d 1 w -> d w"),
                 bias=self.conv1d_bias,
                 activation=self.activation,
             )  # B, L, D

@@ -523,7 +523,6 @@ _update_and_add_testing_config(
     model_type="hybrid_ssm",
     extra_args=[
         "model.base_model.hybrid_block_layout=['t','m2']",
-        # f"model.base_model.transformer.debug_transformer={_LOG_LEVEL}",
     ],
     megatron_args=None,
     checkpoint_format=None,

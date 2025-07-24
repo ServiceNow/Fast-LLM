@@ -5,7 +5,7 @@ from typing import Callable
 import einops
 import torch
 
-from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
+from fast_llm.engine.config_utils.tensor_space import DefaultDimNames, TensorSpace
 from fast_llm.layers.common.linear import Linear
 from fast_llm.layers.ssm.config import SSMConfig, SSMDimNames
 from fast_llm.layers.transformer.config import TransformerConfig
@@ -98,7 +98,7 @@ class MambaLayer(Mixer):
         )
 
         self.conv1d_weight = ParameterMeta.from_dims(
-            (td_inner, TensorDim("D_inner_2", self.d_inner // self.d_inner), td_conv_kernel),
+            (td_inner, tensor_space.get_tensor_dim(DefaultDimNames.scalar), td_conv_kernel),
             init_method=kaiming_init_(td_inner.size),
             lr_scale=mamba_layer_lr_scale,
         )
