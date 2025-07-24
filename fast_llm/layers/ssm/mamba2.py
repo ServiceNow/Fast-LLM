@@ -7,6 +7,7 @@ import torch
 from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
 from fast_llm.layers.common.linear import Linear
 from fast_llm.layers.ssm.config import SSMConfig, SSMDimNames
+from fast_llm.layers.ssm.mamba_layer import init_A, init_dtprojbias
 from fast_llm.layers.transformer.config import TransformerConfig, TransformerDimNames
 from fast_llm.layers.transformer.transformer import Mixer
 from fast_llm.tensor import ParameterMeta, init_fill_, init_ones_, init_uniform_, kaiming_init_
@@ -97,9 +98,9 @@ class Mamba2(Mixer):
 
         if self.repeat_kv_before_conv:
             self.conv1d_weight = ParameterMeta.from_dims(
-                (td_inner, TensorDim("1", 1), td_conv_kernel),
+                (td_inner, td_conv_kernel),
                 init_method=init_uniform_(
-                    1 / math.sqrt(td_inner.size * td_conv_kernel.size),
+                    -1 / math.sqrt(td_inner.size * td_conv_kernel.size),
                     1 / math.sqrt(td_inner.size * td_conv_kernel.size),
                 ),  # see https://github.com/pytorch/pytorch/blob/1eba9b3aa3c43f86f4a2c807ac8e12c4a7767340/torch/nn/modules/conv.py#L180C53-L180C67
                 lr_scale=mamba_layer_lr_scale,
@@ -110,9 +111,9 @@ class Mamba2(Mixer):
             )
         else:
             self.conv1d_weight = ParameterMeta.from_dims(
-                (td_xb, TensorDim("1", 1), td_conv_kernel),
+                (td_xb, td_conv_kernel),
                 init_method=init_uniform_(
-                    1 / math.sqrt(td_xb.size * td_conv_kernel.size),
+                    -1 / math.sqrt(td_xb.size * td_conv_kernel.size),
                     1 / math.sqrt(td_xb.size * td_conv_kernel.size),
                 ),
             )
@@ -133,7 +134,13 @@ class Mamba2(Mixer):
             weight_init_method=kaiming_init_(td_model.size),
             lr_scale=mamba_layer_lr_scale,
         )
-
+        self.dt_in_proj = Linear(
+            td_model,
+            tdt_rank,
+            bias=config.add_bias_linear,
+            weight_init_method=kaiming_init_(transformer_config.hidden_size),
+            lr_scale=mamba_layer_lr_scale,
+        )
         # Initialize special dt projection to preserve variance at initialization
         dt_scale = config.dt_scale  # 1.0
         dt_init_std = self.dt_rank**-0.5 * dt_scale
@@ -144,24 +151,6 @@ class Mamba2(Mixer):
         else:
             raise NotImplementedError
 
-        # Initialize dt bias so that F.softplus(dt_bias) is between dt_min and dt_max
-        dt_max = config.dt_max  # or 0.1
-        dt_min = config.dt_min  # or 0.001
-        dt_init_floor = config.dt_init_floor  # or 1e-4
-        dt = torch.exp(torch.rand(self.d_inner) * (math.log(dt_max) - math.log(dt_min)) + math.log(dt_min)).clamp(
-            min=dt_init_floor
-        )
-        # Inverse of softplus: https://github.com/pytorch/pytorch/issues/72759
-        inv_dt = dt + torch.log(-torch.expm1(-dt))
-
-        def init_from_tensor_(
-            value: torch.Tensor,
-        ) -> typing.Callable[[ParameterMeta, torch.Tensor, torch.Generator], torch.Tensor]:
-            def init_(meta: ParameterMeta, tensor: torch.Tensor, generator: torch.Generator):  # noqa
-                return tensor.copy_(value)
-
-            return init_
-
         self.dt_proj = Linear(
             tdt_rank,
             td_inner,
@@ -171,18 +160,16 @@ class Mamba2(Mixer):
         )
         # define bias outside the linear layer since its also used in the selective_scan_fn
         self.dt_proj_bias = ParameterMeta.from_dims(
-            (td_inner,), init_method=init_from_tensor_(inv_dt), lr_scale=mamba_layer_lr_scale
+            (td_inner,),
+            init_method=init_dtprojbias(
+                self.d_inner, self.config.dt_max, self.config.dt_min, self.config.dt_init_floor
+            ),
+            lr_scale=mamba_layer_lr_scale,
         )
 
-        A = einops.repeat(
-            torch.arange(1, self.d_state + 1, dtype=torch.float32),
-            "n -> d n",
-            d=self.d_inner,
-        ).contiguous()
-        A_log = torch.log(A).flatten()  # Keep A_log in fp32
         self.A_log = ParameterMeta.from_dims(
             (td_inner, td_state),
-            init_method=init_from_tensor_(A_log),
+            init_method=init_A(self.config.state_size, self.config.d_inner),
             lr_scale=mamba_layer_lr_scale,
             weight_decay=False,
         )
@@ -214,8 +201,8 @@ class Mamba2(Mixer):
 
         A = -torch.exp(self.A_log.float())  # (d_inner, d_state)
 
-        zxbcdt = self.in_proj(hidden_states)
-        z, x, B, C, dt = torch.split(zxbcdt, [self.d_inner, self.d_xb, self.d_xb, self.d_inner, self.dt_rank], dim=-1)
+        zxbc = self.in_proj(hidden_states)
+        z, x, B, C = torch.split(zxbc, [self.d_inner, self.d_xb, self.d_xb, self.d_inner], dim=-1)
 
         x = einops.rearrange(x, "b l d -> b d l")
         z = einops.rearrange(z, "b l d -> b d l")
@@ -225,7 +212,7 @@ class Mamba2(Mixer):
         B = einops.rearrange(B, "b n_group l dstate -> b n_group dstate l").contiguous()
         C = einops.rearrange(C, "b l (n_group dstate) -> b n_group dstate l", dstate=self.d_state).contiguous()
 
-        dt = self.dt_proj(dt) + self.dt_proj_bias  # B, L, d_inner
+        dt = self.dt_proj(self.dt_in_proj(hidden_states)) + self.dt_proj_bias  # B, L, d_inner
         dt = einops.rearrange(dt, "b l d -> b d l")  # B, d_inner, L
 
         if self.repeat_kv_before_conv:
@@ -238,7 +225,7 @@ class Mamba2(Mixer):
         if _causal_conv1d_available:
             x = _causal_conv1d_fn(
                 x=x,
-                weight=einops.rearrange(self.conv1d_weight, "d 1 w -> d w"),
+                weight=self.conv1d_weight,
                 bias=self.conv1d_bias,
                 activation=self.activation,
             )  # B, L, D
