@@ -1,13 +1,14 @@
 import logging
+import math
 import typing
 
 import torch
 
 from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
 from fast_llm.functional.config import ActivationType
-from fast_llm.layers.common.linear import InputParallelLinear, Linear, OutputParallelLinear
+from fast_llm.layers.common.linear import InputParallelLinear, OutputParallelLinear
 from fast_llm.layers.ssm.config import SSMConfig, SSMDimNames
-from fast_llm.layers.ssm.mamba_layer import init_A, init_dtprojbias
+from fast_llm.layers.ssm.mamba_layer import init_A
 from fast_llm.layers.transformer.config import TransformerConfig, TransformerDimNames, TransformerKwargs
 from fast_llm.layers.transformer.transformer import Mixer
 from fast_llm.tensor import ParameterMeta, init_kaiming_, init_ones_, init_uniform_centered_
@@ -93,13 +94,13 @@ class Mamba2(Mixer):
             lr_scale=lr_scale,
         )
 
-        self.dt_in_proj = Linear(
-            hidden_dim,
-            dt_rank_dim,
-            bias=config.add_bias_linear,
-            weight_init_method=init_kaiming_(transformer_config.hidden_size),
-            lr_scale=lr_scale,
-        )
+        # self.dt_in_proj = Linear(
+        #    hidden_dim,
+        #    dt_rank_dim,
+        #    bias=config.add_bias_linear,
+        #    weight_init_method=init_kaiming_(transformer_config.hidden_size),
+        #    lr_scale=lr_scale,
+        # )
         self.dt_proj = OutputParallelLinear(
             dt_rank_dim,
             inner_dim,
@@ -111,10 +112,30 @@ class Mamba2(Mixer):
             sequence_parallel=self._sequence_parallel,
             lr_scale=lr_scale,
         )
+
+        # Initialize dt bias so that F.softplus(dt_bias) is between dt_min and dt_max
+        dt_max = config.dt_max  # or 0.1
+        dt_min = config.dt_min  # or 0.001
+        dt_init_floor = config.dt_init_floor  # or 1e-4
+        dt = torch.exp(
+            torch.rand(self._config.d_inner) * (math.log(dt_max) - math.log(dt_min)) + math.log(dt_min)
+        ).clamp(min=dt_init_floor)
+        # Inverse of softplus: https://github.com/pytorch/pytorch/issues/72759
+        inv_dt = dt + torch.log(-torch.expm1(-dt))
+
+        def init_from_tensor_(
+            value: torch.Tensor,
+        ) -> typing.Callable[[ParameterMeta, torch.Tensor, torch.Generator], torch.Tensor]:
+            def init_(meta: ParameterMeta, tensor: torch.Tensor, generator: torch.Generator):  # noqa
+                return tensor.copy_(value)
+
+            return init_
+
         # define bias outside the linear layer since its also used in the selective_scan_fn
         self.dt_proj_bias = ParameterMeta.from_dims(
             (inner_dim,),
-            init_method=init_dtprojbias(self._config.dt_max, self._config.dt_min, self._config.dt_init_floor),
+            init_method=init_from_tensor_(inv_dt),
+            # init_method=init_dtprojbias(self._config.dt_max, self._config.dt_min, self._config.dt_init_floor),
             lr_scale=lr_scale,
         )
         self.A_log = ParameterMeta.from_dims(
@@ -143,19 +164,26 @@ class Mamba2(Mixer):
         assert _causal_conv1d_available
 
         inner_projection = self.in_proj(hidden_states)
-        dt = self.dt_proj(self.dt_in_proj(hidden_states)) + self.dt_proj_bias
+        # dt = self.dt_proj(self.dt_in_proj(hidden_states)) + self.dt_proj_bias
         # Standardize to (batch, sequence, inner_projection)
         if kwargs[TransformerKwargs.sequence_first]:
             inner_projection = inner_projection.transpose(0, 1)
-            dt = dt.transpose(0, 1)
+            # dt = dt.transpose(0, 1)
 
         sequence_length = inner_projection.size(1)
 
-        z, x, b, c = torch.split(
+        z, x, b, c, dt = torch.split(
             inner_projection,
-            [self._local_inner_size, self._local_xb_size, self._local_xb_size, self._local_inner_size],
+            [
+                self._local_inner_size,
+                self._local_xb_size,
+                self._local_xb_size,
+                self._local_inner_size,
+                self._config.dt_rank,
+            ],
             dim=2,
         )
+        dt = self.dt_proj(dt) + self.dt_proj_bias
 
         # z: (batch, sequence, heads * state) -> (batch, heads * state, sequence)
         z = z.transpose(1, 2)

@@ -245,7 +245,7 @@ class SSMConfig(LLMBlockConfig):
 
         # DT projection
         if block_type in (SSMBlockType.mamba, SSMBlockType.mamba2):
-            tensor_space.add_tensor_dim(TensorDim(SSMDimNames.dt_rank, self.dt_rank))
+            tensor_space.add_tensor_dim(dt_rank := TensorDim(SSMDimNames.dt_rank, self.dt_rank))
 
         if block_type == SSMBlockType.mamba:
             tensor_space.add_tensor_dim(TensorDim(SSMDimNames.x_proj_dim, self.dt_rank + self.state_size * 2))
@@ -258,7 +258,8 @@ class SSMConfig(LLMBlockConfig):
             tensor_space.add_tensor_dim(
                 ConcatenatedTensorDim(
                     SSMDimNames.concatenated_inner_projection,
-                    (heads_and_state, head_groups_and_state, head_groups_and_state, heads_and_state),
+                    # (heads_and_state, head_groups_and_state, head_groups_and_state, heads_and_state),
+                    (heads_and_state, head_groups_and_state, head_groups_and_state, heads_and_state, dt_rank),
                 )
             )
         elif block_type == SSMBlockType.mamba2_discrete:
