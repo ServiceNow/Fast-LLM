@@ -57,7 +57,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
     def _tokenize_prompt_completion_batch(self, batch: dict[str, list[typing.Any]]) -> dict[str, list[typing.Any]]:
         """
         Tokenize prompt and completion columns separately, then concatenate.
-        Returns input_ids, token_spans (prompt and completion), and num_tokens.
+        Returns input_ids, token_spans (prompt len), and num_tokens.
         """
         prompt_col = self._config.dataset.source_schema.prompt_column
         completion_col = self._config.dataset.source_schema.completion_column
