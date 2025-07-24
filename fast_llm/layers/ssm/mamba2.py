@@ -142,12 +142,12 @@ class Mamba2(Mixer):
             # TODO: lr_scale?
         )
 
-    def forward(self, hidden_states, kwargs):
+    def forward(self, input_: torch.Tensor, kwargs: dict[str, typing.Any]) -> tuple[torch.Tensor, torch.Tensor | None]:
         assert _mamba_available
         assert _causal_conv1d_available
 
-        inner_projection = self.in_proj(hidden_states)
-        dt = self.dt_proj(self.dt_in_proj(hidden_states)) + self.dt_proj_bias
+        inner_projection = self.in_proj(input_)
+        dt = self.dt_proj(self.dt_in_proj(input_)) + self.dt_proj_bias
         # Standardize to (batch, sequence, inner_projection)
         if kwargs[TransformerKwargs.sequence_first]:
             inner_projection = inner_projection.transpose(0, 1)

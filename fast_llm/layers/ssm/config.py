@@ -211,23 +211,25 @@ class SSMConfig(LLMBlockConfig):
     def setup_tensor_space(self, tensor_space: TensorSpace, block_type: SSMBlockType) -> None:
         tensor = tensor_space.distributed_config.get_distributed_dim(DistributedDimNames.tensor)
 
-        num_heads = div(self.d_inner, self.state_size)
         # Head groups are configured differently depending on the block type.
         if block_type == SSMBlockType.mamba:
+            num_heads = div(self.d_inner, self.state_size)
             num_head_groups = num_heads
         elif block_type == SSMBlockType.mamba2:
+            num_heads = div(self.d_inner, self.state_size)
             num_head_groups = div(self.d_xb, self.state_size)
         elif block_type == SSMBlockType.mamba2_discrete:
-            Assert.eq(num_heads, self.n_v_heads)
+            # TODO: Use different variables?
+            num_heads = self.n_v_heads
             num_head_groups = self.n_qk_heads
+            # v_heads have size `headdim` that may be different from `state_size`.
+            Assert.multiple(self.d_inner, num_heads)
         else:
             raise NotImplementedError(block_type)
 
         tensor_space.add_tensor_dim(state_dim := TensorDim(SSMDimNames.state, self.state_size))
         tensor_space.add_tensor_dim(head_groups := TensorDim(SSMDimNames.head_groups, num_head_groups, tensor))
-        tensor_space.add_tensor_dim(
-            group_heads := TensorDim(SSMDimNames.group_heads, num_group_heads := div(num_heads, num_head_groups))
-        )
+        tensor_space.add_tensor_dim(group_heads := TensorDim(SSMDimNames.group_heads, div(num_heads, num_head_groups)))
         tensor_space.add_tensor_dim(
             heads := CompositeTensorDim(SSMDimNames.composite_heads, (head_groups, group_heads))
         )
