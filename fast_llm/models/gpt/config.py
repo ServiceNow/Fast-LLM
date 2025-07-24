@@ -257,6 +257,9 @@ class GPTTrainerConfig(PretrainedGPTModelConfig, TrainerConfig):
             Assert.none(reference_model.model.base_model.cross_entropy_splits)
             Assert.eq(reference_model.model.base_model.parallel_embeddings, self.model.base_model.parallel_embeddings)
             Assert.geq(reference_model.model.base_model.prediction_heads, self.model.base_model.prediction_heads)
+        if self.model.base_model.vision_encoder.enabled:
+            assert self.batch.max_image_size is not None, "max_image_size must be set when using vision encoder"
+            Assert.gt(self.batch.max_image_size, 0)
 
     @classmethod
     def _from_dict(
