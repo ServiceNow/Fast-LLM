@@ -48,9 +48,7 @@ def init_dtprojbias(
     dt_max: float, dt_min: float, dt_init_floor: float
 ) -> typing.Callable[[ParameterMeta, torch.Tensor, torch.Generator], torch.Tensor]:
     def init_(meta: ParameterMeta, tensor: torch.Tensor, generator: torch.Generator):  # noqa
-        tensor = (
-            tensor.uniform_(math.log(dt_min), math.log(dt_max), generator=generator).exp_().clamp_min(dt_init_floor)
-        )
+        tensor.uniform_(math.log(dt_min), math.log(dt_max), generator=generator).exp_().clamp_min_(dt_init_floor)
         # Inverse of softplus: https://github.com/pytorch/pytorch/issues/72759
         return tensor.add_(torch.log(-torch.expm1(-tensor)))
 

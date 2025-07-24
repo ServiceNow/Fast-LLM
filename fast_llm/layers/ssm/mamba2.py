@@ -111,7 +111,7 @@ class Mamba2(Mixer):
             sequence_parallel=self._sequence_parallel,
             lr_scale=lr_scale,
         )
-        # define bias outside the linear layer since its also used in the selective_scan_fn
+        # define bias outside the linear layer since it's also used in the selective_scan_fn
         self.dt_proj_bias = ParameterMeta.from_dims(
             (inner_dim,),
             init_method=init_dtprojbias(self._config.dt_max, self._config.dt_min, self._config.dt_init_floor),
