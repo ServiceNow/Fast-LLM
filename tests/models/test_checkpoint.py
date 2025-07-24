@@ -309,7 +309,7 @@ def test_huggingface_model(model_testing_config, get_convert_path):
     errors = []
     if model_testing_config.name in ("diffusion_llama", "dream"):
         auto_model = transformers.AutoModel
-    elif model_testing_config.name == "vision_hybrid_mamba2":
+    elif model_testing_config.name in ("llava", "vision_hybrid_mamba2"):
         auto_model = transformers.AutoModelForVision2Seq
     else:
         auto_model = transformers.AutoModelForCausalLM
