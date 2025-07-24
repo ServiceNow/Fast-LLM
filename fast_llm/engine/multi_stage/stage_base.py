@@ -191,6 +191,8 @@ class StageBase(Configurable[StageConfig]):
                     # Initialize all global weights on every gpu, then select the appropriate slice if applicable.
                     global_param = parameter.new_empty(global_shape, device=self._distributed.device)
                     meta.init_parameter(global_param, distributed=self._distributed)
+                    # It happens.
+                    Assert.eq(global_param.shape, global_shape)
                     if self._mode.on_device:
                         parameter.copy_(fsdp.parameter_global_to_shard(global_param, meta.tensor_name))
                 elif self._mode.on_device:
