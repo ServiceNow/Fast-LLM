@@ -23,6 +23,10 @@ from fast_llm.models.ssm.config import LLambaHuggingfaceCheckpointFormat
 from tests.utils.dataset import MODEL_DATASET_PREFIX, MODEL_TEST_VOCAB_SIZE
 from tests.utils.distributed_configs import DistributedTestingConfig
 
+from fast_llm.engine.evaluation.evaluators import (  # isort:skip  # needed for dynamic type registration
+    EvaluatorsConfig,
+)
+
 _LOG_LEVEL = int(os.environ.get("LOG_LEVEL", 13))
 
 
@@ -69,6 +73,17 @@ class ModelTestingConfig:
     def trainer_config(self) -> TrainerConfig:
         # See `RunnableConfig._from_parsed_args`
         return self.trainer_config_class.from_dict(self.trainer_config_class._parse_updates(self.config_args))
+
+    @functools.cached_property
+    def evaluators_config_class(self) -> type[EvaluatorsConfig]:
+        # EvaluatorsConfig is a base class that, during parse_and_run, replaces itself with the appropriate TrainingConfig subclass.
+        # Therefore, the arguments passed to EvaluatorsConfig.parse_and_run must include the model type as the first element.
+        return EvaluatorsConfig
+
+    @functools.cached_property
+    def evaluators_config(self) -> EvaluatorsConfig:
+        # See `RunnableConfig._from_parsed_args`
+        return self.evaluators_config_class.from_dict(self.evaluators_config_class._parse_updates(self.config_args))
 
     @functools.cached_property
     def model_config_class(self) -> type[FastLLMModelConfig]:
