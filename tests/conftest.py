@@ -8,8 +8,12 @@ import shutil
 import pytest
 import xdist.scheduler
 
-from fast_llm.utils import get_and_reset_memory_usage_mib
+from fast_llm.utils import get_and_reset_memory_usage_mib, set_global_variables
 from tests.utils.depends import DependencyManager
+
+# TODO: Is this early enough?
+set_global_variables()  # isort: skip
+
 
 if worker_name := os.environ.get("PYTEST_XDIST_WORKER"):
     if gpus := os.environ.get("CUDA_VISIBLE_DEVICES"):
@@ -225,7 +229,9 @@ def pytest_terminal_summary(terminalreporter):
     terminalreporter.write_sep("=", "Highest gpu memory usage", bold=True)
     sorted_nodeids = sorted(
         resource_reports.keys(),
-        key=lambda nodeid: resource_reports[nodeid]["max_reserved"],
+        key=lambda nodeid: (
+            resource_reports[nodeid]["max_reserved"] if "max_reserved" in resource_reports[nodeid] else 0
+        ),
         reverse=True,
     )
     for nodeid in sorted_nodeids[: terminalreporter.config.getoption("--show-gpu-memory")]:

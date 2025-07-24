@@ -303,7 +303,16 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
         else:
             metrics = {}
             done = True
-            self._evaluator_runner.run(metrics=metrics)
+            self._evaluator_runner.run(
+                metrics=metrics,
+                # This is set to ensure that evaluators like lm_eval log results at the correct step if a checkpoint was loaded.
+                training_progress=TrainingProgress(
+                    done=done,
+                    completed_steps=self._completed_steps,
+                    consumed_samples=self._consumed_samples,
+                    consumed_tokens=self._consumed_tokens,
+                ),
+            )
 
         if done and PhaseType.test in self._samples_per_split:
             log_main_rank(lambda: f"Running test phase ...")
@@ -318,7 +327,7 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
             log_main_rank(formatted_metrics)
             self._wandb.alert("Testing results", formatted_metrics, "WARN")
             # TODO: This may erase some metrics.
-            self._wandb.log_metrics(self._completed_steps, metrics)
+            self._wandb.log_metrics(self._completed_steps, metrics, commit=True)
 
     def _train(self) -> tuple[bool, dict[PhaseType, dict[str, typing.Any]]]:
         # Tracking loss.
@@ -338,6 +347,8 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
             self._completed_steps,
             self._config.training.prefetch_factor,
         )
+
+        has_test_phase = PhaseType.test in self._samples_per_split
 
         log_main_rank("Training ...")
 
@@ -456,7 +467,7 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
                 )
 
                 if is_main_rank() and metrics:
-                    self._wandb.log_metrics(self._completed_steps, metrics)
+                    self._wandb.log_metrics(self._completed_steps, metrics, commit=not (done and has_test_phase))
 
                 stop = done or self._config.training.shutdown.enabled(self._completed_steps)
 
