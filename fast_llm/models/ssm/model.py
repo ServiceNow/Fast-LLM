@@ -10,7 +10,7 @@ from fast_llm.layers.ssm.llamba_block import LlambaBlock
 from fast_llm.layers.ssm.mamba2 import Mamba2
 from fast_llm.layers.ssm.mamba_layer import MambaLayer
 from fast_llm.layers.transformer.transformer import TransformerLayer
-from fast_llm.models.gpt.model import GPTBaseModel, GPTModel
+from fast_llm.models.gpt.model import GPTBaseModel, GPTInferenceRunner, GPTModel
 from fast_llm.models.ssm.config import HybridSSMBaseModelConfig, HybridSSMModelConfig, SSMBlockType
 
 logger = logging.getLogger(__name__)
@@ -165,3 +165,7 @@ class HybridSSMModel[ConfigType: HybridSSMModelConfig](GPTModel[ConfigType]):
 
     config_class: typing.ClassVar[type[HybridSSMModelConfig]] = HybridSSMModelConfig
     base_model_class: typing.ClassVar[type[HybridSSMBaseModel]] = HybridSSMBaseModel
+
+
+class HybridSSMInferenceRunner(GPTInferenceRunner):
+    model_class: typing.ClassVar[type[HybridSSMModel]] = HybridSSMModel
