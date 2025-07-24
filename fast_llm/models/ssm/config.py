@@ -158,6 +158,7 @@ class AprielSSMHHybridHuggingfaceCheckpointFormat(CheckpointFormat):
 class AprielThinkerSSMHHybridHuggingfaceCheckpointFormat(CheckpointFormat):
     support_optimizer: typing.ClassVar[bool] = False
     name: typing.ClassVar[str] = "apriel_ssm_thinker_hybrid"
+    trust_remote_code: typing.ClassVar[bool] = True
 
     @classmethod
     def get_handler_class(cls) -> type[CheckpointHandler]:

@@ -727,6 +727,7 @@ class AprielSSMHHybridHuggingfaceCheckpointHandler(
 
 
 class AprielThinkerSSMHHybridHuggingfaceCheckpointHandler(
+    CustomModelingExportMixin,
     HybridModelCheckpointHandler,  # handles the block structure parameter
     CommonSSMHuggingfaceCheckpointHandler,  # handles the SSM layers
     CommonLlamaHuggingfaceCheckpointHandler,  # handles the LLama layers
@@ -741,6 +742,11 @@ class AprielThinkerSSMHHybridHuggingfaceCheckpointHandler(
     _default_block_type: str = SSMBlockType.mamba2_discrete.value
     _hf_prefix: str = "model"
     architecture: typing.ClassVar[str] = "AprielThinkerSSMHybridForCausalLM"
+    modeling_file = modeling_ssm_hybrid_apriel15b.__file__
+    configuration_file = configuration_ssm_hybrid_apriel15b.__file__
+    configuration_cls: typing.ClassVar[type[PretrainedConfig]] = (
+        configuration_ssm_hybrid_apriel15b.AprielSSMHybridConfig
+    )
 
     def _create_weight_converters(
         self,
@@ -767,6 +773,14 @@ class AprielThinkerSSMHHybridHuggingfaceCheckpointHandler(
     @classmethod
     def _create_config_converters(cls) -> list[ParamConverter]:
         return super()._create_config_converters() + [
+            ConstantExportParamConverter(
+                export_names=(("auto_map",),),
+                export_value={
+                    "AutoConfig": "configuration_ssm_hybrid_apriel15b.AprielSSMHybridConfig",
+                    "AutoModel": "modeling_ssm_hybrid_apriel15b.AprielThinkerSSMHybridModel",
+                    "AutoModelForCausalLM": "modeling_ssm_hybrid_apriel15b.AprielThinkerSSMHybridForCausalLM",
+                },
+            ),
             RenameParamConverter(
                 fast_llm_names=(("ssm", "d_inner"),),
                 export_names=(("ssm_cfg", "d_inner"),),
@@ -791,19 +805,19 @@ class AprielThinkerSSMHHybridHuggingfaceCheckpointHandler(
             ),
         ]
 
-    @classmethod
-    def _load_config(cls, directory: pathlib.Path | str) -> dict:
-        if not os.path.exists(directory / "config.json"):
-            raise FileNotFoundError(f"config.json not found in {directory}")
-        with open(directory / "config.json") as f:
-            config = json.load(f)
-        Assert.eq(config["model_type"], cls.get_huggingface_model_type())
-        return config
+    # @classmethod
+    # def _load_config(cls, directory: pathlib.Path | str) -> dict:
+    #     if not os.path.exists(directory / "config.json"):
+    #         raise FileNotFoundError(f"config.json not found in {directory}")
+    #     with open(directory / "config.json") as f:
+    #         config = json.load(f)
+    #     Assert.eq(config["model_type"], cls.get_huggingface_model_type())
+    #     return config
 
-    @classmethod
-    def _save_config(cls, directory: pathlib.Path | str, config: dict[str, typing.Any]) -> None:
-        with open(directory / "config.json", "w") as f:
-            json.dump(config, f)
+    # @classmethod
+    # def _save_config(cls, directory: pathlib.Path | str, config: dict[str, typing.Any]) -> None:
+    #     with open(directory / "config.json", "w") as f:
+    #         json.dump(config, f)
 
 
 class LlavaHybridHuggingfaceCheckpointHandler(CustomModelingExportMixin, LlavaHuggingfaceCheckpointHandler):
