@@ -18,7 +18,7 @@ from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutpu
 from transformers.modeling_utils import PreTrainedModel
 from transformers.models.mistral.modeling_mistral import MistralDecoderLayer, MistralMLP, MistralModel, MistralRMSNorm
 from transformers.processing_utils import Unpack
-from transformers.utils import LossKwargs, logging
+from transformers.utils import LossKwargs, can_return_tuple, logging
 from transformers.utils.generic import ModelOutput
 
 from fast_llm.models.ssm.external.apriel_15b_hybrid.configuration_ssm_hybrid_apriel15b import AprielSSMHybridConfig
@@ -1208,6 +1208,37 @@ class AprielThinkerSSMHybridModel(MistralModel):
 
         # Initialize weights and apply final processing
         self.post_init()
+
+    @can_return_tuple
+    def forward(
+        self,
+        input_ids: Optional[torch.LongTensor] = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        position_ids: Optional[torch.LongTensor] = None,
+        past_key_values: Optional[Cache] = None,
+        inputs_embeds: Optional[torch.FloatTensor] = None,
+        use_cache: Optional[bool] = None,
+        output_attentions: Optional[bool] = None,
+        output_hidden_states: Optional[bool] = None,
+        cache_position: Optional[torch.LongTensor] = None,
+        **flash_attn_kwargs: Unpack[FlashAttentionKwargs],
+    ) -> BaseModelOutputWithPast:
+        use_cache = use_cache if use_cache is not None else self.config.use_cache
+        if use_cache and past_key_values is None:
+            batch_size = input_ids.shape[0] if input_ids is not None else inputs_embeds.shape[0]
+            past_key_values = HybridMambaAttentionDynamicCache(self.config, batch_size, self.dtype, device=self.device)
+        return super().forward(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            past_key_values=past_key_values,
+            inputs_embeds=inputs_embeds,
+            use_cache=use_cache,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            cache_position=cache_position,
+            **flash_attn_kwargs,
+        )
 
 
 class KwargsForCausalLM(FlashAttentionKwargs, LossKwargs): ...
