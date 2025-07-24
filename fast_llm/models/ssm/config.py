@@ -40,9 +40,6 @@ class HybridSSMBaseModelConfig(GPTBaseModelConfig):
         desc="Multi-token prediction mixer to use in the model. If None, will use the last block type in `hybrid_block_layout`.",
         hint=FieldHint.optional,
     )
-    use_megatron_initialization: bool = Field(
-        default=False, desc="Exactly match the initialization of a Megatron model.", hint=FieldHint.testing
-    )  # TODO: is this needed?
     # TODO: Support combination of different SSM block types.
     ssm_block_type: SSMBlockType | None = Field(init=False)
 
