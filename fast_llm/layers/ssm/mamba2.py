@@ -11,7 +11,7 @@ from fast_llm.layers.ssm.config import SSMConfig, SSMDimNames
 from fast_llm.layers.ssm.mamba_layer import init_A
 from fast_llm.layers.transformer.config import TransformerConfig, TransformerDimNames, TransformerKwargs
 from fast_llm.layers.transformer.transformer import Mixer
-from fast_llm.tensor import ParameterMeta, init_kaiming_, init_ones_, init_uniform_centered_
+from fast_llm.tensor import ParameterMeta, init_kaiming_, init_ones_, init_uniform_, init_uniform_centered_
 from fast_llm.utils import Assert, div, get_lr_scale
 
 try:
@@ -76,8 +76,12 @@ class Mamba2(Mixer):
 
         conv1d_dim = inner_dim if self._config.repeat_kv_before_conv else xb_dim
         self.conv1d_weight = ParameterMeta.from_dims(
-            (conv1d_dim, tensor_space.get_tensor_dim(name=SSMDimNames.conv_kernel)),
-            init_method=init_uniform_centered_((conv1d_dim.global_size * self._config.conv_kernel_dimension) ** -0.5),
+            (conv1d_dim, TensorDim("a", 1), tensor_space.get_tensor_dim(name=SSMDimNames.conv_kernel)),
+            # init_method=init_uniform_centered_((conv1d_dim.global_size * self._config.conv_kernel_dimension) ** -0.5),
+            init_method=init_uniform_(
+                (conv1d_dim.global_size * self._config.conv_kernel_dimension) ** -0.5,
+                (conv1d_dim.global_size * self._config.conv_kernel_dimension) ** -0.5,
+            ),
             lr_scale=lr_scale,
         )
         self.conv1d_bias = ParameterMeta.from_dims(
@@ -196,7 +200,7 @@ class Mamba2(Mixer):
                 .repeat_interleave(self._group_heads, 1, output_size=self._local_heads)
                 .flatten(1, 2)
             )
-            x = _causal_conv1d_fn(x=x, weight=self.conv1d_weight, bias=self.conv1d_bias, activation="silu")
+            x = _causal_conv1d_fn(x=x, weight=self.conv1d_weight.squeeze(1), bias=self.conv1d_bias, activation="silu")
         else:
             x = _causal_conv1d_fn(x=x, weight=self.conv1d_weight, bias=self.conv1d_bias, activation="silu")
             x = (
