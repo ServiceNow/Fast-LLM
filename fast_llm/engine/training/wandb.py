@@ -44,12 +44,12 @@ class Wandb:
         else:
             self._wandb = None
 
-    def log_metrics(self, completed_steps: int, metrics: dict[str, dict[str, float | int]]) -> None:
+    def log_metrics(self, completed_steps: int, metrics: dict[str, dict[str, float | int]], commit: bool) -> None:
         # Note: metrics modified in-place
         if self._wandb is not None:
             import wandb
 
-            wandb.log(metrics, step=completed_steps)  # noqa
+            wandb.log(metrics, step=completed_steps, commit=commit)  # noqa
 
     def alert(self, title, text, level="INFO", wait=0.001) -> None:
         if self._wandb is not None and self._config.alert.post_alerts:
