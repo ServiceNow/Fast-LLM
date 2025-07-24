@@ -57,6 +57,7 @@ class LlavaHybridConfig(PretrainedConfig):
         text_config=None,
         image_token_index=32000,
         projector_hidden_act="gelu",
+        projector_intermediate_size=4096,
         vision_feature_select_strategy="default",
         vision_feature_layer=-2,
         image_seq_length=576,
@@ -65,6 +66,8 @@ class LlavaHybridConfig(PretrainedConfig):
     ):
         self.image_token_index = image_token_index
         self.projector_hidden_act = projector_hidden_act
+        # projector_intermediate_size is an addition to the original Llava config
+        self.projector_intermediate_size = projector_intermediate_size
         self.image_seq_length = image_seq_length
 
         if vision_feature_select_strategy not in ["default", "full"]:
@@ -96,6 +99,7 @@ class LlavaHybridConfig(PretrainedConfig):
         self.vision_config = vision_config
 
         if isinstance(text_config, dict):
+            # Load the custom SSM hybrid config if specified
             if text_config.get("model_type") == "apriel_ssm_thinker_hybrid":
                 text_config = AprielSSMHybridConfig(**text_config)
             else:
@@ -108,3 +112,6 @@ class LlavaHybridConfig(PretrainedConfig):
         self.multimodal_projector_bias = multimodal_projector_bias
 
         super().__init__(**kwargs)
+
+
+__all__ = ["LlavaHybridConfig"]

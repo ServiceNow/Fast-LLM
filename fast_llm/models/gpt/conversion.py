@@ -872,6 +872,7 @@ class PixtralHuggingfaceCheckpointHandler(WeightAndBiasConverterMixin, Huggingfa
 
 class LlavaHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
     format: typing.ClassVar[type[CheckpointFormat]] = LlavaGPTHuggingfaceCheckpointFormat
+    architecture: typing.ClassVar[str] = "LlavaForConditionalGeneration"
     _model_class: typing.ClassVar[FastLLMModelConfig] = GPTModelConfig
 
     @classmethod
@@ -912,9 +913,7 @@ class LlavaHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
     @classmethod
     def _create_config_converters(cls) -> list[ParamConverter]:
         return super()._create_config_converters() + [
-            ConstantExportParamConverter(
-                export_names=(("architectures",),), export_value=["LlavaForConditionalGeneration"]
-            ),
+            ConstantExportParamConverter(export_names=(("architectures",),), export_value=[cls.architecture]),
             MappedConfigParamConverter(
                 fast_llm_names=(("vision_encoder", "adapter_activation_type"),),
                 export_names=(("projector_hidden_act",),),
