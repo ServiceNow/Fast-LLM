@@ -43,14 +43,13 @@ class GPTBatch:
     in_context: torch.Tensor | None = None
 
 
-def do_mask(x, mask, mask_token_id):
+def _do_mask(x, mask, mask_token_id):
     x = x.clone()
     x[mask] = mask_token_id
     return x
 
 
-def do_uniform(x, is_uniform, vocab_size):
-    # WARNING! "Shuffle" was really meant to mean "uniformly sample among all non-mask tokens"
+def _do_uniform(x, is_uniform, vocab_size):
     x = x.clone()
     uniform = torch.randint(0, vocab_size, x.size())
     x[is_uniform] = uniform[is_uniform]
@@ -58,28 +57,26 @@ def do_uniform(x, is_uniform, vocab_size):
 
 
 def prepare_batch(
-    data_ids,
-    positions,
-    padded,
-    mask_token_id,
-    vocab_size,
-    context_length,
-    p_mask,
-    *,
-    p_uniform=0.0,
-    ar_factor=1.0,
-    un_factor=1.0,
-    last_factor=0.0,
-    in_mask=None,
-    in_uniform=None,
-):
+    data_ids: torch.Tensor,
+    positions: torch.Tensor,
+    padded: torch.Tensor,
+    mask_token_id: int,
+    vocab_size: int,
+    context_length: torch.Tensor,
+    p_mask: torch.Tensor,
+    p_uniform: float = 0.0,
+    ar_factor: float = 1.0,
+    un_factor: float = 1.0,
+    last_factor: float = 0.0,
+    in_mask: torch.Tensor = None,
+    in_uniform: torch.Tensor = None,
+) -> dict[str, torch.Tensor]:
 
     B, L = positions.size()
     context_length = context_length.unsqueeze(1).expand(B, L)
     p_mask = p_mask.unsqueeze(1)
-    # print(f"p_mask: {p_mask} {p_mask.shape}")
-
-    # Reminder: a context_length of zero still has one in_context token (à la <BOS>)
+    
+    # Reminder: a context_length of zero still has one in_context token (<BOS>)
     in_context = positions <= context_length
     if in_mask is None:
         in_mask = (~in_context) & (torch.rand(B, L) < p_mask)
@@ -98,19 +95,7 @@ def prepare_batch(
         dim=1,
     )
 
-    input_ids = do_uniform(do_mask(data_ids[:, :-1], in_mask, mask_token_id), in_uniform, vocab_size)
-
-    # print(
-    #     f"{'Name':<20} {'Shape/Value':<30}\n"
-    #     f"{'-'*50}\n"
-    #     f"{'input_ids':<20} {str(input_ids.shape):<30}\n"
-    #     f"{'in_context':<20} {str(in_context.shape):<30}\n"
-    #     f"{'in_mask':<20} {str(in_mask.shape):<30}\n"
-    #     f"{'in_uniform':<20} {str(in_uniform.shape):<30}\n"
-    #     f"{'in_clean':<20} {str(in_clean.shape):<30}\n"
-    #     f"{'loss_weights':<20} {str(loss_weights.shape):<30}\n"
-    #     f"{'in_context_length':<20} {str(context_length):<30}\n"
-    # )
+    input_ids = _do_uniform(_do_mask(data_ids[:, :-1], in_mask, mask_token_id), in_uniform, vocab_size)
 
     return {
         "in_context": in_context,  # Only for tokens to be predicted
@@ -203,6 +188,7 @@ def gpt_data_collate_fn(batch: list[GPTSample], sampling_parameters: GPTSampling
         loss_weights = batch_data["loss_weights"]
         # in_context_length = C
         in_context = batch_data["in_context"]
+        print(f"Input: {masked_token_ids}, Mask: {mask_indexes}")
 
     elif sampling_parameters.diffusion.style == DiffusionStyle.ar_masked:
         diffusion_config = sampling_parameters.diffusion
