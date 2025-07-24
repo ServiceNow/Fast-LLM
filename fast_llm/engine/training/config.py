@@ -54,7 +54,7 @@ class IntervalConfig(Config):
 
     def _validate(self) -> None:
         if self.interval:
-            with self._set_implicit_default():
+            with self._set_implicit_default(None):
                 self.offset %= self.interval
         super()._validate()
 

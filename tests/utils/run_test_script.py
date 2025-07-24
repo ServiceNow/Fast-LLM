@@ -69,12 +69,13 @@ def do_run_test_script_for_all_models(
     distributed_testing_config: DistributedTestingConfig,
     model_testing_config: ModelTestingConfig,
     base_path: pathlib.Path,
+    runnable_type: str = "train",
 ):
     Assert.leq(distributed_testing_config.num_gpus, DistributedConfig.default_world_size)
     get_model_test_dataset()
     args = [
         "fast-llm",
-        "train",
+        runnable_type,
         model_testing_config.model_type,
         *model_testing_config.config_args,
         *distributed_testing_config.config_args,
@@ -83,7 +84,12 @@ def do_run_test_script_for_all_models(
         f"run.experiment_dir={base_path/distributed_testing_config.name}",
     ]
     print(" ".join(args))
-    model_testing_config.trainer_config_class.parse_and_run(args[3:])
+    if runnable_type == "train":
+        model_testing_config.trainer_config_class.parse_and_run(args[3:])
+    elif runnable_type == "evaluate":
+        model_testing_config.evaluators_config_class.parse_and_run(args[2:])
+    else:
+        raise ValueError(f"Unknown runnable_type {runnable_type}")
 
 
 @pytest.fixture(scope="function")

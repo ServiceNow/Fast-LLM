@@ -10,7 +10,7 @@ from fast_llm.data.data.abstract import Data
 from fast_llm.engine.config_utils.run import Run, log_main_rank
 from fast_llm.engine.distributed.config import PhaseType
 from fast_llm.engine.distributed.distributed import Distributed
-from fast_llm.engine.evaluation.config import EvaluatorConfig, EvaluatorConfigBase, EvaluatorLossConfig
+from fast_llm.engine.evaluation.config import EvaluatorConfig, EvaluatorConfigBase, LossEvaluatorConfig
 from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
 from fast_llm.engine.schedule.config import BatchConfig
 from fast_llm.engine.schedule.runner import ScheduleRunner
@@ -19,8 +19,6 @@ from fast_llm.engine.training.config import WandbConfig
 from fast_llm.engine.training.wandb import Wandb
 from fast_llm.logging import format_metrics
 from fast_llm.utils import get_and_reset_memory_usage_mib
-
-# from fast_llm.engine.training.lm_eval.evaluator import simple_evaluate as lm_eval_simple_evaluate
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +51,7 @@ class Evaluator[ConfigType: EvaluatorConfig](Configurable[ConfigType], abc.ABC):
     def __init__(
         self,
         name: str,
-        eval_config: EvaluatorLossConfig,
+        eval_config: LossEvaluatorConfig,
         batch_config: BatchConfig,
         data_load_num_proc: int,
         train_iters: int | None = None,
@@ -97,8 +95,8 @@ class Evaluator[ConfigType: EvaluatorConfig](Configurable[ConfigType], abc.ABC):
         """
 
 
-class EvaluatorLoss[ConfigType: EvaluatorLossConfig](Evaluator[ConfigType]):
-    config_class: typing.ClassVar[type[EvaluatorLossConfig]] = EvaluatorLossConfig
+class LossEvaluator[ConfigType: LossEvaluatorConfig](Evaluator[ConfigType]):
+    config_class: typing.ClassVar[type[LossEvaluatorConfig]] = LossEvaluatorConfig
 
     def setup(
         self,

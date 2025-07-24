@@ -1,3 +1,4 @@
+import logging
 import os
 import pathlib
 import typing
@@ -13,6 +14,8 @@ from fast_llm.engine.multi_stage.config import StageMode
 from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
 from fast_llm.engine.schedule.runner import ScheduleRunner
 from fast_llm.utils import Assert
+
+logger = logging.getLogger(__name__)
 
 
 class HuggingfacePreTrainedModel(transformers.PreTrainedModel):
@@ -41,6 +44,8 @@ class HuggingfacePreTrainedModel(transformers.PreTrainedModel):
         # The HF constructor performs a deep copy of the config,
         # but config.fast_llm_config may contain non-picklable items like process groups.
         # Temporarily remove it before the call and restore it afterward.
+        # TODO: Find a clean solution — overriding __deepcopy__ doesn't work here
+        # because internally they use copy.deepcopy(self.__dict__).
         fast_llm_config = config.fast_llm_config
         config.fast_llm_config = None
         super().__init__(config, **kwargs)
@@ -63,6 +68,11 @@ class HuggingfacePreTrainedModel(transformers.PreTrainedModel):
 
         with transformers.modeling_utils.no_init_weights():
             self.post_init()
+
+        if fast_llm_model.config.multi_stage.zero_stage == 3:
+            logger.warning(
+                "zero_stage=3 is used for the model; forward and generate will be extremely slow during inference."
+            )
 
     @classmethod
     def from_pretrained(

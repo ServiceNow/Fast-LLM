@@ -179,6 +179,7 @@ nav:
       - Configuration: user_guide/configuration.md
       - Multi-Stage: user_guide/multi-stage.md
       - Parallelism: user_guide/parallelism.md
+      - Evaluators: user_guide/evaluators.md
     - Developer Guide:
       - Configuration: developer_guide/configuration.md
       - Model:
