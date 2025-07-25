@@ -15,9 +15,8 @@ from fast_llm.models.gpt.config import GPTBatchConfig, PretrainedGPTModelConfig
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
-    from fast_llm.models.gpt.model import GPTInferenceRunner
     from fast_llm.models.ssm.huggingface import HuggingfaceHybridSSMModelForCausalLM
-    from fast_llm.models.ssm.model import HybridSSMModel
+    from fast_llm.models.ssm.model import HybridSSMInferenceRunner, HybridSSMModel
     from fast_llm.models.ssm.trainer import HybridSSMTrainer
 
 logger = logging.getLogger(__name__)
@@ -185,7 +184,7 @@ class HybridSSMModelConfig(FastLLMModelConfig):
         return HybridSSMModel
 
     @classmethod
-    def get_huggingface_model_class(cls) -> type["HuggingfaceHybridSSMModelForCausalLM"]:
+    def get_huggingface_model_for_causal_lm_class(cls) -> type["HuggingfaceHybridSSMModelForCausalLM"]:
         from fast_llm.models.ssm.huggingface import HuggingfaceHybridSSMModelForCausalLM
 
         return HuggingfaceHybridSSMModelForCausalLM
@@ -240,12 +239,11 @@ class HybridSSMTrainerConfig(PretrainedHybridSSMModelConfig, TrainerConfig):
             Assert.geq(reference_model.model.base_model.prediction_heads, self.model.base_model.prediction_heads)
 
     @classmethod
-    def get_inference_runner_class(cls) -> type["GPTInferenceRunner"]:
-        from fast_llm.models.gpt.model import GPTInferenceRunner
+    def get_inference_runner_class(cls) -> type["HybridSSMInferenceRunner"]:
+        from fast_llm.models.ssm.model import HybridSSMInferenceRunner
 
-        # TODO: we dont have inference runner for SSM/Hybrid yet, should return None?
         logger.warning(
-            "No inference runner for SSM/Hybrid yet, using GPTInferenceRunner for now, which does not support SSM/Hybrid"
+            "HybridSSMInferenceRunner only supports training-style forward pass. Use generate with cache disabled."
         )
 
-        return GPTInferenceRunner
+        return HybridSSMInferenceRunner
