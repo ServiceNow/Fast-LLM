@@ -5,6 +5,7 @@ import typing
 
 from transformers.configuration_utils import PretrainedConfig
 
+from fast_llm.config import MISSING
 from fast_llm.engine.checkpoint.config import CheckpointFormat
 from fast_llm.engine.checkpoint.external import (
     ConstantExportParamConverter,
@@ -22,7 +23,7 @@ from fast_llm.engine.checkpoint.huggingface import CustomModelingExportMixin, Hu
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig
 from fast_llm.functional.config import ActivationType
 from fast_llm.layers.common.config import RMSNormalizationConfig
-from fast_llm.layers.ssm.config import SSMBlockType
+from fast_llm.layers.ssm.config import DTInitType, SSMBlockType
 from fast_llm.models.gpt.conversion import (
     CommonLlamaHuggingfaceCheckpointHandler,
     LlavaHuggingfaceCheckpointHandler,
@@ -55,11 +56,11 @@ class HybridModelCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
 
     @classmethod
     def _create_config_converters(cls) -> list[ParamConverter]:
-        block_converter = RenameParamConverter(
+        block_converter = MappedConfigParamConverter(
             fast_llm_names=(("hybrid_block_layout",),),
             export_names=(("hybrid_block_layout",),),
-            ignore_missing=True,
-            default_value=[cls._default_block_type],
+            fast_llm_value=lambda x: [cls._default_block_type] if x == MISSING else x,
+            export_value=lambda x: [x_.value for x_ in x],
         )
         return super()._create_config_converters() + [block_converter]
 
@@ -215,7 +216,7 @@ class CommonSSMHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandle
                 ignore_missing=True,
                 default_value=4,
             ),
-            RenameParamConverter(
+            MappedConfigParamConverter(
                 fast_llm_names=(("ssm", "dt_init"),),
                 export_names=(
                     (
@@ -223,8 +224,8 @@ class CommonSSMHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandle
                         "dt_init",
                     ),
                 ),
-                ignore_missing=True,
-                default_value="random",
+                fast_llm_value=lambda x: DTInitType.random if x == MISSING else DTInitType(x),
+                export_value=lambda x: x.value,
             ),
         ]
 
@@ -289,6 +290,9 @@ class CommonSSMHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandle
             )
             # ================================================
             # Mamba2 specific parameters
+            converters += self._get_weight_and_bias_converters(
+                f"layers.{offset+i+1}.mixer.dt_in_proj", f"{hf_base_prefix}model.layers.{i}.mixer.dt_in_proj", ssm_bias
+            )
             converters += self._get_weight_and_bias_converters(
                 f"layers.{offset+i+1}.mixer.dt_proj", f"{hf_base_prefix}model.layers.{i}.mixer.dt_proj", False
             )

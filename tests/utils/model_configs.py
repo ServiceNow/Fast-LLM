@@ -28,6 +28,10 @@ from fast_llm.models.ssm.config import (
 from tests.utils.dataset import MODEL_DATASET_PREFIX, MODEL_TEST_VOCAB_SIZE
 from tests.utils.distributed_configs import DistributedTestingConfig
 
+from fast_llm.engine.evaluation.evaluators import (  # isort:skip  # needed for dynamic type registration
+    EvaluatorsConfig,
+)
+
 _LOG_LEVEL = int(os.environ.get("LOG_LEVEL", 13))
 
 
@@ -74,6 +78,17 @@ class ModelTestingConfig:
     def trainer_config(self) -> TrainerConfig:
         # See `RunnableConfig._from_parsed_args`
         return self.trainer_config_class.from_dict(self.trainer_config_class._parse_updates(self.config_args))
+
+    @functools.cached_property
+    def evaluators_config_class(self) -> type[EvaluatorsConfig]:
+        # EvaluatorsConfig is a base class that, during parse_and_run, replaces itself with the appropriate TrainingConfig subclass.
+        # Therefore, the arguments passed to EvaluatorsConfig.parse_and_run must include the model type as the first element.
+        return EvaluatorsConfig
+
+    @functools.cached_property
+    def evaluators_config(self) -> EvaluatorsConfig:
+        # See `RunnableConfig._from_parsed_args`
+        return self.evaluators_config_class.from_dict(self.evaluators_config_class._parse_updates(self.config_args))
 
     @functools.cached_property
     def model_config_class(self) -> type[FastLLMModelConfig]:
@@ -456,7 +471,7 @@ _update_and_add_testing_config(
 )
 
 _update_and_add_testing_config(
-    # Tests hybrid ssm, llamba converter.
+    # Tests hybrid Mamba, llamba converter.
     "llama",
     "llava",
     extra_args=[
@@ -497,10 +512,8 @@ _update_and_add_testing_config(
     model_type="hybrid_ssm",
     extra_args=[
         "model.base_model.hybrid_block_layout=['t','m']",
-        "model.base_model.ssm.state_size=8",
-        "model.base_model.ssm.chunk_size=32",
-        "model.base_model.ssm.n_qk_heads=8",
-        "model.base_model.ssm.n_v_heads=8",
+        "model.base_model.ssm.d_inner=512",
+        "model.base_model.ssm.state_size=16",
     ],
     megatron_args=None,
     checkpoint_format=LLambaHuggingfaceCheckpointFormat,
@@ -508,46 +521,28 @@ _update_and_add_testing_config(
     groups={
         ModelTestingGroup.basic: ModelTestingGroupAction.normal,
         ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
-        ModelTestingGroup.convert: ModelTestingGroupAction.broken,
         # TODO: Fix and bring back to `testing_groups`
+        ModelTestingGroup.convert: ModelTestingGroupAction.broken,
         ModelTestingGroup.generate: ModelTestingGroupAction.broken,
         ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
-        # TODO: Fix and bring back to `testing_groups`
-        ModelTestingGroup.distributed: ModelTestingGroupAction.broken,
+        ModelTestingGroup.distributed: ModelTestingGroupAction.not_implemented,
     },
     compare_factor=2.0,
-    # SSMs don't support sequence-first configurations.
-    skip_tests=("sf", "sdp", "stp", "ms"),
-)
-
-
-_update_and_add_testing_config(
-    # Tests hybrid ssm, llamba converter.
-    "llamba",
-    "hybrid_discrete_mamba2",
-    model_type="hybrid_ssm",
-    extra_args=[
-        "model.base_model.hybrid_block_layout=['t','m2d']",
-    ],
-    megatron_args=None,
-    checkpoint_format=None,
-    groups={
-        ModelTestingGroup.basic: ModelTestingGroupAction.normal,
-        ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
-        ModelTestingGroup.convert: ModelTestingGroupAction.not_implemented,
-        ModelTestingGroup.generate: ModelTestingGroupAction.not_implemented,
-        ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
-        ModelTestingGroup.distributed: ModelTestingGroupAction.unimportant,
-    },
+    # Micro-sequence split not supported.
+    skip_tests=("sdp", "ms"),
 )
 
 _update_and_add_testing_config(
-    # Tests hybrid ssm, llamba converter.
-    "llamba",
+    # Tests hybrid Mamba 2.
+    "llama",
     "hybrid_mamba2",
     model_type="hybrid_ssm",
     extra_args=[
         "model.base_model.hybrid_block_layout=['t','m2']",
+        "model.base_model.ssm.d_inner=512",
+        "model.base_model.ssm.state_size=8",
+        "model.base_model.ssm.d_xb=256",
+        # f"model.base_model.transformer.debug_transformer={_LOG_LEVEL}"
     ],
     megatron_args=None,
     checkpoint_format=AprielThinkerSSMHHybridHuggingfaceCheckpointFormat,
@@ -557,8 +552,44 @@ _update_and_add_testing_config(
         ModelTestingGroup.convert: ModelTestingGroupAction.normal,
         ModelTestingGroup.generate: ModelTestingGroupAction.not_implemented,
         ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
-        ModelTestingGroup.distributed: ModelTestingGroupAction.unimportant,
+        ModelTestingGroup.distributed: ModelTestingGroupAction.normal,
     },
+    compare_factor=2.0,
+    # Micro-sequence split not supported.
+    skip_tests=(
+        "sdp",
+        "ms",
+    ),  # "pp","dp", "ce","16", "bf", "df", "stp"),
+)
+
+
+_update_and_add_testing_config(
+    # Tests hybrid discrete Mamba 2.
+    "llama",
+    "hybrid_discrete_mamba2",
+    model_type="hybrid_ssm",
+    extra_args=[
+        "model.base_model.hybrid_block_layout=['t','m2d']",
+        "model.base_model.ssm.d_inner=512",
+        "model.base_model.ssm.state_size=8",
+        "model.base_model.ssm.n_qk_heads=8",
+        "model.base_model.ssm.n_v_heads=16",
+        "model.base_model.ssm.chunk_size=32",
+    ],
+    megatron_args=None,
+    checkpoint_format=AprielThinkerSSMHHybridHuggingfaceCheckpointFormat,
+    groups={
+        ModelTestingGroup.basic: ModelTestingGroupAction.normal,
+        ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
+        ModelTestingGroup.convert: ModelTestingGroupAction.normal,
+        ModelTestingGroup.generate: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
+        # TODO: Implement
+        ModelTestingGroup.distributed: ModelTestingGroupAction.not_implemented,
+    },
+    compare_factor=2.0,
+    # Micro-sequence split and sequence-first not supported.
+    skip_tests=("sf", "stp", "sdp", "ms"),
 )
 
 _update_and_add_testing_config(

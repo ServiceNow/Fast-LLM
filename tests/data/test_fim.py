@@ -58,6 +58,7 @@ def test_gpt_fim():
 
 
 def test_gpt_fim_data():
+    get_test_dataset()
     get_test_data_and_compare_samples(
         {
             "datasets": {
@@ -81,6 +82,7 @@ def test_gpt_fim_data():
 
 
 def test_gpt_fim_data_legacy():
+    get_test_dataset()
     get_test_data_and_compare_samples(
         {
             "format": "list",

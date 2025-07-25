@@ -24,7 +24,7 @@ from fast_llm.layers.transformer.config import (
     VisionTransformerKwargs,
 )
 from fast_llm.layers.transformer.preprocessing import BackupAttentionPreprocessor, FlashAttnVarlenPreprocessor
-from fast_llm.layers.transformer.transformer import TransformerLayer, VisionTransformerLayer
+from fast_llm.layers.transformer.transformer import TransformerBlock, VisionTransformerLayer
 from fast_llm.layers.vision_encoder.adapter import VisionAdapter
 from fast_llm.layers.vision_encoder.config import VisionEncoderDimNames, VisionEncoderKwargs
 from fast_llm.layers.vision_encoder.patch_conv import PatchConv
@@ -79,11 +79,11 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
         for i in range(self._config.prediction_heads):
             if i > 0:
                 layers.append(
-                    TransformerLayer(
+                    TransformerBlock(
                         self._config.transformer,
                         self._tensor_space,
                         # TODO MTP: which index?
-                        layer_index=max(self._config.transformer.num_layers + i, 1),
+                        block_index=max(self._config.transformer.num_layers + i, 1),
                         # The last layer only returns the transformer output.
                         # The previous layers return a stack of shared_hidden and transformer_output.
                         return_input=i < self._config.prediction_heads - 1,
@@ -120,10 +120,10 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
         return [
             *(self.get_embedding_layers()),
             *[
-                TransformerLayer(
+                TransformerBlock(
                     self._config.transformer,
                     self._tensor_space,
-                    layer_index=i + 1,
+                    block_index=i + 1,
                     # The last layer only returns the transformer output.
                     # The previous layers return a stack of shared_hidden and transformer_output.
                     return_input=self._config.prediction_heads > 1 and i == self._config.transformer.num_layers - 1,
@@ -452,7 +452,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
         return self.layers[self.embedding_layer_index]
 
     @property
-    def transformer_layers(self) -> list[TransformerLayer]:
+    def transformer_layers(self) -> list[TransformerBlock]:
         return self.layers[self.embedding_layer_index + 1 : -1]
 
     @property

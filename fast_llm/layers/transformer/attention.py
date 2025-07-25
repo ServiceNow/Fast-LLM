@@ -8,9 +8,9 @@ from fast_llm.engine.config_utils.tensor_space import TensorSpace
 from fast_llm.functional.autograd import wrap_forward_backward
 from fast_llm.layers.common.linear import InputParallelLinear, OutputParallelLinear
 from fast_llm.layers.transformer.config import TransformerConfig, TransformerKwargs, TransformerSubLayerName
-from fast_llm.logging import log_distributed_grad, log_distributed_tensor
-from fast_llm.tensor import TensorMeta, init_normal_, init_zeros_
-from fast_llm.utils import Assert, get_lr_scale
+from fast_llm.layers.transformer.transformer import Mixer
+from fast_llm.tensor import init_normal_, init_zeros_
+from fast_llm.utils import get_lr_scale
 
 try:
     from flash_attn.flash_attn_interface import flash_attn_func as _flash_attn_func  # noqa
@@ -45,27 +45,19 @@ class AttachGrad(torch.autograd.Function):
         return grad, None
 
 
-class Attention(torch.nn.Module):
+class Attention(Mixer):
     """
     A self-attention layer.
     """
 
-    def __init__(
-        self,
-        config: TransformerConfig,
-        tensor_space: TensorSpace,
-        layer_index,
-    ):
-        super().__init__()
+    _mixer_name: typing.ClassVar[str] = "attn"
+
+    def __init__(self, config: TransformerConfig, tensor_space: TensorSpace, block_index: int):
+        super().__init__(tensor_space, block_index, config.debug_transformer)
         self._transformer_dim_names = config._transformer_dim_names
         self._transformer_kwargs = config._transformer_kwargs
         self._config = config
-        self._tensor_space = tensor_space
-        # TODO Soham: fix assert
-        # Assert.in_range_incl(layer_index, 1, max(self._config.num_layers, 1))
-        self._layer_index = layer_index
-        self._sequence_parallel = self._tensor_space.distributed_config.sequence_tensor_parallel
-        self._debug_transformer = self._config.debug_transformer
+
         self._causal = self._config.causal
         self._use_flash_attention = self._config.do_use_flash_attention(self._tensor_space.distributed_config)
 
@@ -89,7 +81,7 @@ class Attention(torch.nn.Module):
 
         hidden_dim = self._tensor_space.get_tensor_dim(self._transformer_dim_names.hidden)
 
-        layer_lr_scale = config.per_layer_lr_scale[layer_index] if config.per_layer_lr_scale else None
+        layer_lr_scale = config.per_layer_lr_scale[block_index] if config.per_layer_lr_scale else None
         attention_lr_scale = get_lr_scale(self._config.attention_lr_scale, layer_lr_scale)
 
         # TODO: Merge the query and key-value computations? (harder with sequence parallel.)
@@ -159,10 +151,10 @@ class Attention(torch.nn.Module):
             query,
             key,
             beta=0,
-            alpha=self._softmax_scale / self._layer_index,
+            alpha=self._softmax_scale / self._block_index,
         ).view(b, self._local_head_groups, sq, self._local_heads_per_group, sk)
 
-        attn_weights = attn_weights.to(torch.float32) * self._layer_index
+        attn_weights = attn_weights.to(torch.float32) * self._block_index
         attn_weights = torch.where(mask, attn_weights, mask_value)
         attn_weights = torch.nn.functional.softmax(attn_weights, dim=-1).to(query.dtype)
 
@@ -180,19 +172,6 @@ class Attention(torch.nn.Module):
                 .transpose(1, 2)
                 .flatten(2)
             )
-
-    def _get_meta(
-        self, input_: torch.Tensor, name: str, dim_names: tuple[str, ...], kwargs: dict[str, typing.Any]
-    ) -> TensorMeta:
-        hidden_dims = {dim.name: dim for dim in kwargs[self._transformer_kwargs.hidden_dims]}
-        return TensorMeta.from_dims(
-            tuple(
-                hidden_dims[dim_name] if dim_name in hidden_dims else self._tensor_space.get_tensor_dim(dim_name)
-                for dim_name in dim_names
-            ),
-            tensor_name=f"transformer layer {self._layer_index} attn {name}",
-            dtype=input_.dtype,
-        )
 
     @property
     def _query_dims(self):
@@ -219,27 +198,6 @@ class Attention(torch.nn.Module):
             self._transformer_dim_names.sequence_q,
             self._transformer_dim_names.composite_dense,
         )
-
-    def _debug_log(
-        self, tensor: torch.Tensor, name: str, dim_names: tuple[str, ...], kwargs: dict[str, typing.Any]
-    ) -> None:
-        # TODO: Local vs global
-        Assert.gt(self._debug_transformer, 0)
-        log_distributed_tensor(
-            "",
-            tensor,
-            level=self._debug_transformer,
-            meta=self._get_meta(tensor, name, dim_names, kwargs),
-            distributed=self._tensor_space.distributed,
-        )
-        if tensor.requires_grad:
-            log_distributed_grad(
-                "",
-                tensor,
-                level=self._debug_transformer,
-                meta=self._get_meta(tensor, name + " grad", dim_names, kwargs),
-                distributed=self._tensor_space.distributed,
-            )
 
     def _query_key_value_forward(
         self, input_: torch.Tensor, sequence_first: bool
@@ -307,7 +265,7 @@ class Attention(torch.nn.Module):
         # https://github.com/huggingface/transformers/blob/5e2183f344911aa82aba0b83778a4f196cff378e/src/transformers/models/qwen2/modular_qwen2.py#L71
         # TODO: make universal per layer config
         window_size = self._config.window_size
-        if self._config.max_window_layers is not None and self._layer_index < self._config.max_window_layers:
+        if self._config.max_window_layers is not None and self._block_index < self._config.max_window_layers:
             window_size = None
 
         return window_size
@@ -348,7 +306,7 @@ class Attention(torch.nn.Module):
         key = key.view(*key.shape[:2], self._local_head_groups, self._kv_channels)
         value = value.view(*value.shape[:2], self._local_head_groups, self._kv_channels)
 
-        if self._debug_transformer:
+        if self._debug_level:
             self._debug_log(query, "query_rotary_input", self._QUERY_DIMS, kwargs)
             self._debug_log(
                 key,
@@ -402,7 +360,7 @@ class Attention(torch.nn.Module):
                 kwargs[self._transformer_kwargs.attention_mask_value],
             )
 
-        if self._debug_transformer:
+        if self._debug_level:
             self._debug_log(query, "query", self._query_dims, kwargs)
             self._debug_log(
                 key,
