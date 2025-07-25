@@ -217,5 +217,5 @@ class TransformerBlock(BaseBlock):
         return Attention(self._config, self._tensor_space, self._block_index)
 
 
-class VisionTransformerLayer(TransformerLayer):
+class VisionTransformerBlock(TransformerBlock):
     _name: str = "Vision transformer layer"

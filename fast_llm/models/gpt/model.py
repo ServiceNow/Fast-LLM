@@ -24,7 +24,7 @@ from fast_llm.layers.transformer.config import (
     VisionTransformerKwargs,
 )
 from fast_llm.layers.transformer.preprocessing import BackupAttentionPreprocessor, FlashAttnVarlenPreprocessor
-from fast_llm.layers.transformer.transformer import TransformerBlock, VisionTransformerLayer
+from fast_llm.layers.transformer.transformer import TransformerBlock, VisionTransformerBlock
 from fast_llm.layers.vision_encoder.adapter import VisionAdapter
 from fast_llm.layers.vision_encoder.config import VisionEncoderDimNames, VisionEncoderKwargs
 from fast_llm.layers.vision_encoder.patch_conv import PatchConv
@@ -100,7 +100,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
 
     def get_vision_layers(self) -> list[Layer]:
         vit_layers = [
-            VisionTransformerLayer(self._config.vision_encoder.transformer, self._tensor_space, layer_index=idx + 1)
+            VisionTransformerBlock(self._config.vision_encoder.transformer, self._tensor_space, layer_index=idx + 1)
             for idx in range(self._config.vision_encoder.transformer.num_layers)
         ]
         return [
