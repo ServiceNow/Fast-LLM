@@ -39,7 +39,7 @@ class Mamba2(Mixer):
 
     _XZ_DIMS = (
         TransformerDimNames.batch,
-        SSMDimNames.composite_heads_and_state,
+        SSMDimNames.composite_heads_and_head_dim,
         TransformerDimNames.sequence_q,
     )
     _BC_DIMS = (
@@ -62,7 +62,7 @@ class Mamba2(Mixer):
         layer_lr_scale: float | None = config.per_layer_lr_scale[block_index] if config.per_layer_lr_scale else None
         lr_scale: float | tuple[float | None, ...] | None = get_lr_scale(self._config.mamba_lr_scale, layer_lr_scale)
 
-        inner_dim: TensorDim = tensor_space.get_tensor_dim(name=SSMDimNames.composite_heads_and_state)
+        inner_dim: TensorDim = tensor_space.get_tensor_dim(name=SSMDimNames.composite_heads_and_head_dim)
         xb_dim = tensor_space.get_tensor_dim(name=SSMDimNames.composite_head_groups_and_state)
         hidden_dim: TensorDim = tensor_space.get_tensor_dim(name=TransformerDimNames.hidden)
         dt_rank_dim = tensor_space.get_tensor_dim(name=SSMDimNames.dt_rank)
@@ -78,7 +78,7 @@ class Mamba2(Mixer):
             (
                 conv1d_dim,
                 tensor_space.get_tensor_dim(DefaultDimNames.scalar),
-                tensor_space.get_tensor_dim(name=SSMDimNames.conv_kernel),
+                tensor_space.get_tensor_dim(name=SSMDimNames.convolution_kernel),
             ),
             init_method=init_uniform_centered_((conv1d_dim.global_size * self._config.conv_kernel_dimension) ** -0.5),
             lr_scale=lr_scale,
@@ -146,6 +146,8 @@ class Mamba2(Mixer):
         assert _mamba_available
         assert _causal_conv1d_available
 
+        # inner_projection : (batch/local_sequence, local_sequence/batch, hidden)
+        #   -> (batch/sequence, sequence/batch, inner_projection)
         inner_projection = self.in_proj(input_)
         dt = self.dt_proj(self.dt_in_proj(input_)) + self.dt_proj_bias
         # Standardize to (batch, sequence, inner_projection)
@@ -161,10 +163,10 @@ class Mamba2(Mixer):
             dim=2,
         )
 
-        # z: (batch, sequence, heads * state) -> (batch, heads * state, sequence)
+        # z: (batch, sequence, local_heads * state) -> (batch, local_heads * state, sequence)
         z = z.transpose(1, 2)
 
-        # x: (batch, sequence, head_groups * state) -> (batch, heads * state, sequence)
+        # x: (batch, sequence, local_head_groups * state) -> (batch, local_heads * state, sequence)
         x = x.transpose(1, 2)
         if self._config.repeat_kv_before_conv:
             x = (
@@ -172,16 +174,16 @@ class Mamba2(Mixer):
                 .repeat_interleave(self._group_heads, 1, output_size=self._local_heads)
                 .flatten(1, 2)
             )
-            x = _causal_conv1d_fn(x=x, weight=self.conv1d_weight, bias=self.conv1d_bias.squeeze(1), activation="silu")
+            x = _causal_conv1d_fn(x=x, weight=self.conv1d_weight.squeeze(1), bias=self.conv1d_bias, activation="silu")
         else:
-            x = _causal_conv1d_fn(x=x, weight=self.conv1d_weight, bias=self.conv1d_bias.squeeze(1), activation="silu")
+            x = _causal_conv1d_fn(x=x, weight=self.conv1d_weight.squeeze(1), bias=self.conv1d_bias, activation="silu")
             x = (
                 x.unflatten(1, (self._local_head_groups, self._config.state_size))
                 .repeat_interleave(self._group_heads, 1, output_size=self._local_heads)
                 .flatten(1, 2)
             )
 
-        # b: (batch, sequence, head_groups * state) -> (batch, heads, state, sequence)
+        # b: (batch, sequence, local_head_groups * state) -> (batch, local_heads, state, sequence)
         b = (
             b.transpose(1, 2)
             .unflatten(1, (self._local_head_groups, self._config.state_size))
@@ -216,9 +218,11 @@ class Mamba2(Mixer):
         if self._debug_level:
             self._debug_log(y, "y", self._XZ_DIMS, kwargs)
 
-        # y: (batch, heads * state, sequence) -> (batch, sequence, heads * state)
+        # y: (batch, local_heads * state, sequence) -> (batch, sequence, local_heads * state)
         y = y.transpose(1, 2)[:, :sequence_length]
         if kwargs[TransformerKwargs.sequence_first]:
             # TODO: Is contiguous needed?
             y = y.transpose(0, 1).contiguous()
+        # (batch/sequence, sequence/batch, local_heads * state)
+        #   -> (batch/local_sequence, local_sequence/batch, hidden)
         return self.out_proj(y)

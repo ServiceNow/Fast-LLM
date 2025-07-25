@@ -585,11 +585,11 @@ _update_and_add_testing_config(
         ModelTestingGroup.generate: ModelTestingGroupAction.not_implemented,
         ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
         # TODO: Implement
-        ModelTestingGroup.distributed: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.distributed: ModelTestingGroupAction.normal,
     },
     compare_factor=2.0,
     # Micro-sequence split and sequence-first not supported.
-    skip_tests=("sf", "stp", "sdp", "ms"),
+    skip_tests=("sdp", "ms"),
 )
 
 _update_and_add_testing_config(

@@ -10,7 +10,7 @@ from fast_llm.layers.common.linear import Linear
 from fast_llm.layers.ssm.config import SSMConfig, SSMDimNames
 from fast_llm.layers.transformer.config import TransformerConfig, TransformerDimNames, TransformerKwargs
 from fast_llm.layers.transformer.transformer import Mixer
-from fast_llm.tensor import ParameterMeta, init_kaiming_, init_ones_
+from fast_llm.tensor import LambdaInitializer, ParameterMeta, init_kaiming_, init_ones_
 from fast_llm.utils import Assert, get_lr_scale
 
 try:
@@ -29,30 +29,27 @@ This works with triton 3.1.0
 """
 
 
-def init_A(d_state, d_inner) -> typing.Callable[[ParameterMeta, torch.Tensor, torch.Generator], torch.Tensor]:
-    def init_(meta: ParameterMeta, tensor: torch.Tensor, generator: torch.Generator):  # noqa
-        # TODO: adopt this initialization to work for tensor parallel setting!
+def init_A(d_state, d_inner) -> LambdaInitializer:
+    def init_(meta: ParameterMeta, tensor: torch.Tensor, generator: torch.Generator) -> None:  # noqa
         if tensor.numel() != d_state * d_inner:
-            raise ValueError(f"_init_A requires not supported for tensor slices.")
-        return torch.log(
+            raise ValueError("_init_A requires not supported for tensor slices.")
+        torch.log(
             torch.arange(1, d_state + 1, dtype=torch.float32, device=tensor.device)
             .unsqueeze(0)
             .expand(d_inner, d_state),
             out=tensor,
         )
 
-    return init_
+    return LambdaInitializer(init_, requires_global_initialization=True)
 
 
-def init_dtprojbias(
-    dt_max: float, dt_min: float, dt_init_floor: float
-) -> typing.Callable[[ParameterMeta, torch.Tensor, torch.Generator], torch.Tensor]:
+def init_dtprojbias(dt_max: float, dt_min: float, dt_init_floor: float) -> LambdaInitializer:
     def init_(meta: ParameterMeta, tensor: torch.Tensor, generator: torch.Generator):  # noqa
         tensor.uniform_(math.log(dt_min), math.log(dt_max), generator=generator).exp_().clamp_min_(dt_init_floor)
         # Inverse of softplus: https://github.com/pytorch/pytorch/issues/72759
-        return tensor.add_(torch.log(-torch.expm1(-tensor)))
+        tensor.add_(torch.log(-torch.expm1(-tensor)))
 
-    return init_
+    return LambdaInitializer(init_)
 
 
 class MambaLayer(Mixer):
@@ -72,7 +69,7 @@ class MambaLayer(Mixer):
         Assert.eq(self._config.activation_type, ActivationType.silu)
 
         # Tensor dims:
-        inner_dim = tensor_space.get_tensor_dim(SSMDimNames.composite_heads_and_state)
+        inner_dim = tensor_space.get_tensor_dim(SSMDimNames.composite_heads_and_head_dim)
         hidden_dim = tensor_space.get_tensor_dim(TransformerDimNames.hidden)
         layer_lr_scale = config.per_layer_lr_scale[block_index] if config.per_layer_lr_scale else None
         lr_scale = get_lr_scale(self._config.mamba_lr_scale, layer_lr_scale)
@@ -90,7 +87,7 @@ class MambaLayer(Mixer):
             (
                 inner_dim,
                 tensor_space.get_tensor_dim(DefaultDimNames.scalar),
-                tensor_space.get_tensor_dim(SSMDimNames.conv_kernel),
+                tensor_space.get_tensor_dim(SSMDimNames.convolution_kernel),
             ),
             init_method=init_kaiming_(inner_dim.size),
             lr_scale=lr_scale,
@@ -98,7 +95,7 @@ class MambaLayer(Mixer):
 
         self.x_proj = Linear(
             inner_dim,
-            tensor_space.get_tensor_dim(SSMDimNames.x_proj_dim),
+            tensor_space.get_tensor_dim(SSMDimNames.concatenated_x_projection),
             weight_init_method=init_kaiming_(inner_dim.size),
             bias=False,
             lr_scale=lr_scale,

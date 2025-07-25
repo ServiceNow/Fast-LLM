@@ -49,14 +49,18 @@ class DiscreteMamba2(Mixer):
         layer_lr_scale = config.per_layer_lr_scale[block_index] if config.per_layer_lr_scale else None
         lr_scale = get_lr_scale(self._config.mamba_lr_scale, layer_lr_scale)
 
-        inner_dim = tensor_space.get_tensor_dim(SSMDimNames.composite_heads_and_state)
+        inner_dim = tensor_space.get_tensor_dim(SSMDimNames.composite_heads_and_head_dim)
         hidden_dim = tensor_space.get_tensor_dim(TransformerDimNames.hidden)
-        conv1d_dim = tensor_space.get_tensor_dim(SSMDimNames.conv_dim)
+        conv1d_dim = tensor_space.get_tensor_dim(SSMDimNames.concatenated_convolution)
         heads_dim = tensor_space.get_tensor_dim(SSMDimNames.composite_heads)
 
-        self._local_heads = heads_dim.size
+        # local_head_groups = head_groups / TP
         self._local_head_groups = tensor_space.get_tensor_dim(SSMDimNames.head_groups).size
+        # local_heads = local_head_groups * group_heads
+        self._local_heads = heads_dim.size
+        # local_inner_size = local_heads * head_size
         self._local_inner_size = inner_dim.size
+        # local_bc_size = local_head_groups * state
         self._local_bc_size = tensor_space.get_tensor_dim(SSMDimNames.composite_head_groups_and_state).size
 
         # TODO: double check initializations
@@ -80,7 +84,7 @@ class DiscreteMamba2(Mixer):
             (
                 conv1d_dim,
                 tensor_space.get_tensor_dim(DefaultDimNames.scalar),
-                tensor_space.get_tensor_dim(name=SSMDimNames.conv_kernel),
+                tensor_space.get_tensor_dim(name=SSMDimNames.convolution_kernel),
             ),
             init_method=init_uniform_centered_((conv1d_dim.global_size * self._config.conv_kernel_dimension) ** -0.5),
             lr_scale=lr_scale,
@@ -107,24 +111,25 @@ class DiscreteMamba2(Mixer):
         )
 
     def forward(self, input_: torch.Tensor, kwargs: dict[str, typing.Any]) -> tuple[torch.Tensor, torch.Tensor | None]:
-        if kwargs[TransformerKwargs.sequence_first]:
-            raise NotImplementedError(f"Sequence-first not supported for SSMs.")
-
         assert _mamba_available
 
-        sequence_length = input_.size(0 if kwargs[TransformerKwargs.sequence_first] else 1)
+        sequence_length = kwargs[TransformerKwargs.sequence_q_dim].global_size
 
         # Pad input to nearest multiple of chunklen
         padded_length = (1 + (sequence_length - 1) // self._config.chunk_size) * self._config.chunk_size
         if padded_length != sequence_length:
-            assert not kwargs[TransformerKwargs.sequence_first] and not self._sequence_parallel
+            assert not kwargs[TransformerKwargs.sequence_first] and input_.size(1) == sequence_length
             input_ = torch.nn.functional.pad(input_, (0, 0, 0, padded_length - sequence_length))
 
+        # inner_projection : (batch/local_or_padded_sequence, local_sequence/batch, hidden)
+        #   -> (batch/local_or_padded_sequence, local_sequence/batch, inner_projection)
+        # inner_projection: (batch, local_or_padded_sequence, hidden) -> (batch, padded_sequence, local_inner_size)
         inner_projection = self.in_proj(input_)
-        # Standardize to (batch, sequence, inner_projection)
+        # Standardize to (batch, padded_sequence, inner_projection)
         if kwargs[TransformerKwargs.sequence_first]:
             inner_projection = inner_projection.transpose(0, 1)
 
+        print("QAIKOFNMJOWENM inner_projection", inner_projection.shape)
         xBC, z, A_log = torch.split(
             inner_projection,
             [
@@ -134,9 +139,13 @@ class DiscreteMamba2(Mixer):
             ],
             dim=-1,
         )
+        print("QAIKOFNMJOWENM xBC", xBC.shape, self._local_inner_size, self._local_bc_size)
+        print("QAIKOFNMJOWENM z", z.shape)
+        print("QAIKOFNMJOWENM A_log", A_log.shape)
 
         # Convolutional layer
-        xBC = self.convolutional_forward(xBC, sequence_length)
+        # xbc: (batch, padded_sequence, local_heads * head_size + 2 * local_head_groups * state)
+        xBC = self.convolutional_forward(xBC, padded_length)
 
         x, B, C = torch.split(
             xBC,
@@ -148,13 +157,16 @@ class DiscreteMamba2(Mixer):
             dim=-1,
         )
 
+        # x: (batch, padded_sequence, local_heads * head_size) -> (batch, padded_sequence, local_heads, head_size)
         x = einops.rearrange(x, "b l (h n) -> b l h n", h=self._local_heads)
+
+        # b,c: (batch, padded_sequence, local_head_groups * state) -> (batch, padded_sequence, local_head_groups, state)
         B = einops.rearrange(B, "b l (h n) -> b l h n", h=self._local_head_groups)
         C = einops.rearrange(C, "b l (h n) -> b l h n", h=self._local_head_groups)
 
         # SSM forward
         y = _mamba_chunk_scan_combined(
-            x=x / torch.nn.functional.softplus(A_log).to(x.dtype).unsqueeze(-1),
+            x=self._apply_a_log(x, A_log),
             dt=A_log,
             dt_softplus=True,
             A=-torch.ones(self._local_heads, device=A_log.device),
@@ -169,23 +181,31 @@ class DiscreteMamba2(Mixer):
         if not self._config.add_bias_linear:
             z = z + self.z_bias
 
-        # y: (batch, sequence, heads, state) -> (batch, sequence, heads * state)
+        # y: (batch, padded_sequence, local_heads, head_size) -> (batch, sequence, local_heads * head_size)
         y = ((y + Du).flatten(2, 3) * torch.nn.functional.silu(z))[:, :sequence_length]
         if kwargs[TransformerKwargs.sequence_first]:
             # TODO: Is contiguous needed?
             y = y.transpose(0, 1).contiguous()
+        # out_proj: (batch/sequence, sequence/batch, local_heads * head_size)
+        #   -> (batch/local_sequence, local_sequence/batch, hidden)
+        a, b = self.out_proj(y)
+        logger.info(f"EKFBN y {y.shape}")
+        logger.info(f"EKFBN a {a.shape}")
         return self.out_proj(y)
+
+    @torch.compile
+    def _apply_a_log(self, x: torch.Tensor, A_log: torch.Tensor) -> torch.Tensor:
+        return x / torch.nn.functional.softplus(A_log).to(x.dtype).unsqueeze(-1)
 
     def convolutional_forward(self, xBC, padded_len):
         """Convolutional layer forward pass for the full sequence."""
         if _causal_conv1d_available and self._config.activation_type in (
             ActivationType.silu,
-            "swish",
             ActivationType.identity,
         ):
             xBC = _causal_conv1d_fn(
                 xBC.transpose(1, 2),
-                einops.rearrange(self.conv1d_weight, "d 1 w -> d w"),
+                self.conv1d_weight.squeeze(1),
                 self.conv1d_bias,
                 activation=(
                     None
