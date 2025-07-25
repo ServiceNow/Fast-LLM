@@ -100,7 +100,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
 
     def get_vision_layers(self) -> list[Layer]:
         vit_layers = [
-            VisionTransformerBlock(self._config.vision_encoder.transformer, self._tensor_space, layer_index=idx + 1)
+            VisionTransformerBlock(self._config.vision_encoder.transformer, self._tensor_space, block_index=idx + 1)
             for idx in range(self._config.vision_encoder.transformer.num_layers)
         ]
         return [
