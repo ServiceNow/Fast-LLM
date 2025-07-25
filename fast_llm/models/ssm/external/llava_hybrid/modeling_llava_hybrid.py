@@ -4,6 +4,16 @@ from transformers.activations import ACT2FN
 
 from .configuration_llava_hybrid import LlavaHybridConfig
 
+try:
+    # In the fast-llm repo, import from the SSM modeling file
+    from ..apriel_15b_hybrid.modeling_ssm_hybrid_apriel15b import (
+        AprielThinkerSSMHybridModel,
+        HybridMambaAttentionDynamicCache,
+    )
+except ImportError:
+    # In the exported checkpoint, import from local file
+    from .modeling_ssm_hybrid_apriel15b import AprielThinkerSSMHybridModel, HybridMambaAttentionDynamicCache
+
 
 class LlavaMultiModalProjector(nn.Module):
     def __init__(self, config: LlavaHybridConfig):
@@ -42,7 +52,6 @@ class LlavaHybridModel(LlavaModel):
         assert (
             config.text_config.model_type == "apriel_ssm_thinker_hybrid"
         ), "Only Apriel SSM Hybrid model is supported in LlavaHybridModel"
-        from .modeling_ssm_hybrid_apriel15b import AprielThinkerSSMHybridModel
 
         self.language_model = AprielThinkerSSMHybridModel(config.text_config)
         self.post_init()
@@ -69,8 +78,6 @@ class LlavaHybridForConditionalGeneration(LlavaForConditionalGeneration):
         use_cache=True,
         **kwargs,
     ):
-        from .modeling_ssm_hybrid_apriel15b import HybridMambaAttentionDynamicCache
-
         # Copy of the method from `AprielThinkerSSMHybridForCausalLM`
         # Overwritten -- has a unique cache type, `HybridMambaAttentionDynamicCache`
 
