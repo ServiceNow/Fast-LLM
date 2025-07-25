@@ -20,6 +20,7 @@ from fast_llm.models.gpt.config import (
     Starcoder2GPTHuggingfaceCheckpointFormat,
 )
 from fast_llm.models.ssm.config import (
+    AprielSSMHHybridHuggingfaceCheckpointFormat,
     AprielThinkerSSMHHybridHuggingfaceCheckpointFormat,
     LLambaHuggingfaceCheckpointFormat,
 )
@@ -540,19 +541,19 @@ _update_and_add_testing_config(
         "model.base_model.ssm.chunk_size=32",
     ],
     megatron_args=None,
-    checkpoint_format=None,
+    checkpoint_format=AprielSSMHHybridHuggingfaceCheckpointFormat,
     groups={
         ModelTestingGroup.basic: ModelTestingGroupAction.normal,
         ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
-        ModelTestingGroup.convert: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.convert: ModelTestingGroupAction.normal,
         ModelTestingGroup.generate: ModelTestingGroupAction.not_implemented,
         ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
         # TODO: Implement
-        ModelTestingGroup.distributed: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.distributed: ModelTestingGroupAction.normal,
     },
     compare_factor=2.0,
     # Micro-sequence split and sequence-first not supported.
-    skip_tests=("sf", "stp", "sdp", "ms"),
+    skip_tests=("sdp", "ms"),
 )
 
 
