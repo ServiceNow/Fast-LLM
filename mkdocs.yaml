@@ -189,5 +189,6 @@ nav:
     - Contribution Guide: contributing/contributing.md
     - Style Guide: contributing/style-guide.md
     - Development Practices: contributing/dev-practices.md
+    - Testing: contributing/testing.md
   - About Us: about-us.md
   - Join Us: join-us.md
