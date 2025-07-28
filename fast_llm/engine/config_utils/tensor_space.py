@@ -263,8 +263,5 @@ class TensorSpace:
                 )
             self._tensor_dims[tensor_dim.name] = tensor_dim
 
-    def get_tensor_dim(self, name: str) -> TensorDim:
+    def __getitem__(self, name: str) -> TensorDim:
         return self._tensor_dims[name]
-
-    # TODO: Replace uses
-    __getitem__ = get_tensor_dim

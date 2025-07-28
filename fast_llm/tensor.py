@@ -150,7 +150,7 @@ class TensorMeta(torch.Tensor):
         reductions: tuple[tuple[str, ReduceOp], ...] = (),
         **kwargs: typing.Any,
     ) -> typing.Self:
-        dims = tuple(tensor_space.get_tensor_dim(dim_name) for dim_name in dim_names)
+        dims = tuple(tensor_space[dim_name] for dim_name in dim_names)
         if reductions:
             # kwarg not available for ParameterMeta, so we only provide if necessary.
             kwargs["reductions"] = tuple(

@@ -155,7 +155,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             sequence_first = self._config.sequence_first
             assert not (need_sequence_first and not sequence_first)
 
-        hidden_dim = self._tensor_space.get_tensor_dim(TransformerDimNames.hidden)
+        hidden_dim = self._tensor_space[TransformerDimNames.hidden]
         hidden_dims = (
             (hidden_sequence_q_dim, batch_dim, hidden_dim)
             if sequence_first
