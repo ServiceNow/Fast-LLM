@@ -99,7 +99,7 @@ class LayerNormalizationBaseConfig(NormalizationConfig):
     )
 
     def get_layer(self, hidden_dim: "TensorDim", lr_scale: float | None = None) -> "LayerNorm | RMSNorm":
-        from fast_llm.tensor import init_uniform_
+        from fast_llm.tensor import init_uniform_centered_
 
         kwargs = {
             "hidden_dim": hidden_dim,
@@ -110,9 +110,7 @@ class LayerNormalizationBaseConfig(NormalizationConfig):
         }
         if self.initialization_range:
             mean = 0 if self.zero_centered else 1
-            kwargs["weight_init_method"] = init_uniform_(
-                mean - self.initialization_range, mean + self.initialization_range
-            )
+            kwargs["weight_init_method"] = init_uniform_centered_(self.initialization_range, mean=mean)
         return self.module_class(**kwargs)
 
     @property
