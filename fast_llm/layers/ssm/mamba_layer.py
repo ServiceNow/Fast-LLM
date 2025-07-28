@@ -10,7 +10,7 @@ from fast_llm.layers.common.linear import Linear
 from fast_llm.layers.ssm.config import SSMConfig, SSMDimNames
 from fast_llm.layers.transformer.config import TransformerConfig
 from fast_llm.layers.transformer.transformer import Mixer
-from fast_llm.tensor import ParameterMeta, init_ones_, kaiming_init_
+from fast_llm.tensor import ParameterMeta, init_kaiming_, init_ones_
 from fast_llm.utils import get_lr_scale
 
 try:
@@ -75,15 +75,13 @@ class MambaLayer(Mixer):
         self.config: SSMConfig = config
 
         # Tensor dims:
-        td_inner = tensor_space.get_tensor_dim(SSMDimNames.inner_dim)
-        td_inner_proj = tensor_space.get_tensor_dim(
-            SSMDimNames.inner_proj_mamba
-        )  # TensorDim("D_inner_2", self.d_inner * 2)
-        tdt_rank = tensor_space.get_tensor_dim(SSMDimNames.dt_rank)
-        td_x_proj = tensor_space.get_tensor_dim(SSMDimNames.x_proj_dim)
-        td_state = tensor_space.get_tensor_dim(SSMDimNames.state_dim)
-        td_model = tensor_space.get_tensor_dim(SSMDimNames.model_dim)
-        td_conv_kernel = tensor_space.get_tensor_dim(SSMDimNames.conv_kernel_size)
+        td_inner = tensor_space[SSMDimNames.inner_dim]
+        td_inner_proj = tensor_space[SSMDimNames.inner_proj_mamba]  # TensorDim("D_inner_2", self.d_inner * 2)
+        tdt_rank = tensor_space[SSMDimNames.dt_rank]
+        td_x_proj = tensor_space[SSMDimNames.x_proj_dim]
+        td_state = tensor_space[SSMDimNames.state_dim]
+        td_model = tensor_space[SSMDimNames.model_dim]
+        td_conv_kernel = tensor_space[SSMDimNames.conv_kernel_size]
         self.d_conv = td_conv_kernel.size
         self.d_inner = td_inner.size
         self.d_state = td_state.size
@@ -94,12 +92,12 @@ class MambaLayer(Mixer):
 
         self.in_proj_weight = ParameterMeta.from_dims(
             (td_inner_proj, td_model),
-            init_method=kaiming_init_(td_model.size),
+            init_method=init_kaiming_(td_model.size),
         )
 
         self.conv1d_weight = ParameterMeta.from_dims(
-            (td_inner, tensor_space.get_tensor_dim(DefaultDimNames.scalar), td_conv_kernel),
-            init_method=kaiming_init_(td_inner.size),
+            (td_inner, tensor_space[DefaultDimNames.scalar], td_conv_kernel),
+            init_method=init_kaiming_(td_inner.size),
             lr_scale=mamba_layer_lr_scale,
         )
 
@@ -111,7 +109,7 @@ class MambaLayer(Mixer):
         self.x_proj = Linear(
             td_inner,
             td_x_proj,
-            weight_init_method=kaiming_init_(td_inner.size),
+            weight_init_method=init_kaiming_(td_inner.size),
             bias=False,
             lr_scale=mamba_layer_lr_scale,
         )
@@ -120,7 +118,7 @@ class MambaLayer(Mixer):
         # TODO: the weights are initialized a bit differently here https://github.com/state-spaces/mamba/blob/0cce0fa645f100f00620ddf2333c2b7712abfdec/mamba_ssm/modules/mamba_simple.py#L82
         self.dt_proj_weight = ParameterMeta.from_dims(
             (td_inner, tdt_rank),
-            init_method=kaiming_init_(tdt_rank.size),
+            init_method=init_kaiming_(tdt_rank.size),
             lr_scale=mamba_layer_lr_scale,
         )
 
@@ -151,7 +149,7 @@ class MambaLayer(Mixer):
             td_inner,
             td_model,
             bias=False,  # TODO: note, if bias is used there is a problem in the MambaInnerFn.backward for the bias grads. I think this bias is not used in other mamba repos.
-            weight_init_method=kaiming_init_(td_model.size),
+            weight_init_method=init_kaiming_(td_model.size),
             lr_scale=mamba_layer_lr_scale,
         )
         self.out_proj.weight.auto_grad_accumulation = True

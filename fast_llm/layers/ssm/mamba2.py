@@ -10,7 +10,7 @@ from fast_llm.layers.ssm.config import SSMConfig, SSMDimNames
 from fast_llm.layers.ssm.mamba_layer import init_A, init_dtprojbias
 from fast_llm.layers.transformer.config import TransformerConfig, TransformerDimNames
 from fast_llm.layers.transformer.transformer import Mixer
-from fast_llm.tensor import ParameterMeta, init_fill_, init_ones_, init_uniform_, kaiming_init_
+from fast_llm.tensor import ParameterMeta, init_fill_, init_kaiming_, init_ones_, init_uniform_
 from fast_llm.utils import get_lr_scale
 
 try:
@@ -80,13 +80,13 @@ class Mamba2(Mixer):
             self.config.mamba_lr_scale, layer_lr_scale
         )
 
-        td_inner: TensorDim = tensor_space.get_tensor_dim(name=SSMDimNames.inner_dim)
-        td_state: TensorDim = tensor_space.get_tensor_dim(name=SSMDimNames.state_dim)
-        td_model: TensorDim = tensor_space.get_tensor_dim(name=SSMDimNames.model_dim)
-        tdt_rank: TensorDim = tensor_space.get_tensor_dim(name=SSMDimNames.dt_rank)
-        td_xb: TensorDim = tensor_space.get_tensor_dim(name=SSMDimNames.x_proj_dim_2)
-        td_inner_proj: TensorDim = tensor_space.get_tensor_dim(name=SSMDimNames.inner_proj_mamba2)
-        td_conv_kernel: TensorDim = tensor_space.get_tensor_dim(name=SSMDimNames.conv_kernel_size)
+        td_inner: TensorDim = tensor_space[SSMDimNames.inner_dim]
+        td_state: TensorDim = tensor_space[SSMDimNames.state_dim]
+        td_model: TensorDim = tensor_space[SSMDimNames.model_dim]
+        tdt_rank: TensorDim = tensor_space[SSMDimNames.dt_rank]
+        td_xb: TensorDim = tensor_space[SSMDimNames.x_proj_dim_2]
+        td_inner_proj: TensorDim = tensor_space[SSMDimNames.inner_proj_mamba2]
+        td_conv_kernel: TensorDim = tensor_space[SSMDimNames.conv_kernel_size]
 
         self.repeat_kv_before_conv = config.repeat_kv_before_conv
 
@@ -98,7 +98,7 @@ class Mamba2(Mixer):
 
         if self.repeat_kv_before_conv:
             self.conv1d_weight = ParameterMeta.from_dims(
-                (td_inner, tensor_space.get_tensor_dim(DefaultDimNames.scalar), td_conv_kernel),
+                (td_inner, tensor_space[DefaultDimNames.scalar], td_conv_kernel),
                 init_method=init_uniform_(
                     -1 / math.sqrt(td_inner.size * td_conv_kernel.size),
                     1 / math.sqrt(td_inner.size * td_conv_kernel.size),
@@ -111,7 +111,7 @@ class Mamba2(Mixer):
             )
         else:
             self.conv1d_weight = ParameterMeta.from_dims(
-                (td_xb, tensor_space.get_tensor_dim(DefaultDimNames.scalar), td_conv_kernel),
+                (td_xb, tensor_space[DefaultDimNames.scalar], td_conv_kernel),
                 init_method=init_uniform_(
                     -1 / math.sqrt(td_xb.size * td_conv_kernel.size),
                     1 / math.sqrt(td_xb.size * td_conv_kernel.size),
@@ -131,14 +131,14 @@ class Mamba2(Mixer):
             td_model,
             td_inner_proj,
             bias=bias,
-            weight_init_method=kaiming_init_(td_model.size),
+            weight_init_method=init_kaiming_(td_model.size),
             lr_scale=mamba_layer_lr_scale,
         )
         self.dt_in_proj = Linear(
             td_model,
             tdt_rank,
             bias=config.add_bias_linear,
-            weight_init_method=kaiming_init_(transformer_config.hidden_size),
+            weight_init_method=init_kaiming_(transformer_config.hidden_size),
             lr_scale=mamba_layer_lr_scale,
         )
         # Initialize special dt projection to preserve variance at initialization
@@ -185,7 +185,7 @@ class Mamba2(Mixer):
             td_inner,
             td_model,
             bias=bias,
-            weight_init_method=kaiming_init_(td_inner.size),
+            weight_init_method=init_kaiming_(td_inner.size),
         )
 
     def forward(self, hidden_states, kwargs):
