@@ -1106,6 +1106,6 @@ class DiffusionStyle(str, enum.Enum):
     Type of diffusion masking to use.
     """
 
-    masked = "masked"
-    ar_masked = "autoregressive_masked"
+    masked = "masked"  # masked diffusion with shift
+    ar_masked = "autoregressive_masked"  # autoregressive context with masked diffusion and shift
     none = None

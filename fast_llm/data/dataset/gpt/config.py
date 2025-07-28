@@ -65,17 +65,6 @@ class DiffusionMaskingConfig(Config):
         default=1e-3, desc="Minimum masking probability", hint=FieldHint.performance, valid=check_field(Assert.gt, 0)
     )
 
-    max_mask_prob: float = Field(
-        default=0.15, desc="Maximum masking probability", hint=FieldHint.performance, valid=check_field(Assert.gt, 0)
-    )
-
-    pad_prob: float = Field(
-        default=0.01,
-        desc="Probability of padding tokens for 1% of samples",
-        hint=FieldHint.optional,
-        valid=check_field(Assert.geq, 0),
-    )
-
     mask_token_id: int = Field(default=103, desc="Token ID to use for masking", hint=FieldHint.optional)
     ar_factor: float = Field(
         default=1.0,
