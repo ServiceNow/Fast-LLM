@@ -8,6 +8,9 @@ from fast_llm.engine.config_utils.tensor_space import DefaultDimNames, TensorDim
 from fast_llm.layers.transformer.config import TransformerConfig, TransformerKwargs
 from fast_llm.tensor import TensorMeta
 
+# Import the new masked-bidirectional preprocessor for export
+from .preprocessing_masked_bidirectional import MaskedBidirectionalAttentionPreprocessor
+
 logger = logging.getLogger(__name__)
 
 
@@ -160,3 +163,44 @@ class FlashAttnVarlenPreprocessor(Preprocessor):
         )
         kwargs[TransformerKwargs.max_seqlen_q] = seqlens_q.max()
         kwargs[TransformerKwargs.max_seqlen_k] = seqlens_k.max()
+
+
+class MaskedBidirectionalAttentionPreprocessor(BackupAttentionPreprocessor):
+    """
+    Preprocessor for masked-bidirectional attention, as used in masked diffusion mode.
+    Sets up a bidirectional attention mask for the transformer.
+    """
+
+    def __init__(self, config: TransformerConfig, tensor_space):
+        self._config = config
+        self._tensor_space = tensor_space
+        self._distributed_config = self._tensor_space.distributed_config
+        self._scalar_dim = self._tensor_space.get_tensor_dim(DefaultDimNames.scalar)
+
+    def preprocess(self, batch, kwargs: dict[str, object]) -> None:
+        sequence_length = kwargs[TransformerKwargs.sequence_length]
+        sequence_k = kwargs[TransformerKwargs.sequence_k_dim].size
+        sequence_q = kwargs[TransformerKwargs.sequence_q_dim].size
+        device = self._tensor_space.distributed.device
+        dtype = self._tensor_space.distributed_config.training_dtype.torch
+
+        # TODO: Attention masks are created but not used in the current implementation. Only flash attention is used for masked diffusion.
+        attention_mask = torch.ones(
+            (sequence_length, sequence_length),
+            dtype=torch.bool,
+            device=device,
+        )
+        # Following BackupAttentionPreprocessor
+        # k and q are same so can use sequence_length
+        kwargs[TransformerKwargs.attention_mask] = attention_mask[
+            None, None, sequence_k - sequence_q : sequence_k, None, :sequence_k
+        ]
+        kwargs[TransformerKwargs.attention_mask_value] = torch.full(
+            [],
+            torch.finfo(dtype).min,
+            dtype=dtype,
+            device=device,
+        )
+
+        # Set causal to False, for flash attention function
+        kwargs[TransformerKwargs.causal] = False

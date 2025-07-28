@@ -21,7 +21,11 @@ from fast_llm.layers.transformer.config import (
     TransformerKwargs,
     TransformerLossNames,
 )
-from fast_llm.layers.transformer.preprocessing import BackupAttentionPreprocessor, FlashAttnVarlenPreprocessor
+from fast_llm.layers.transformer.preprocessing import (
+    BackupAttentionPreprocessor,
+    FlashAttnVarlenPreprocessor,
+    MaskedBidirectionalAttentionPreprocessor,
+)
 from fast_llm.layers.transformer.transformer import TransformerLayer
 from fast_llm.models.gpt.config import GPTBaseModelConfig, GPTBatchConfig, GPTModelConfig
 from fast_llm.models.gpt.megatron import get_init_megatron
@@ -57,7 +61,13 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
         # TODO: Find a better solution.
         self._preprocessors.append(self._config.transformer.rotary.build(self._tensor_space))
 
-        if self._config.transformer.diffusion is None:
+        # --- Add new preprocessor for masked-bidirectional attention ---
+        if self._config.transformer.diffusion is not None:
+            if self._config.transformer.diffusion == DiffusionStyle.masked:
+                self._preprocessors.append(
+                    MaskedBidirectionalAttentionPreprocessor(self._config.transformer, self._tensor_space)
+                )
+        else:
             if self._use_flash_attention:
                 self._preprocessors.append(FlashAttnVarlenPreprocessor(self._config.transformer, self._tensor_space))
             else:
@@ -341,36 +351,15 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                     assert batch.loss_weights is not None, "masked-diffusion mode needs to set loss_weights"
                     if self._config.transformer.diffusion == DiffusionStyle.masked:
 
-                        # Setup bidirection attention for masked diffusion, If uses _flash_attn_func attention_mask and attention_mask_value won't be used.
-                        # Set causal to False, for flash attention function
-                        kwargs[TransformerKwargs.causal] = False
+                        if not self._use_flash_attention:
+                            raise ValueError(
+                                f"Diffusion style '{DiffusionStyle.masked}' is only implemented with flash-attention."
+                            )
+
                         kwargs[LanguageModelKwargs.loss_weights] = batch.loss_weights.to(
                             device=self._tensor_space.distributed.device,
                             dtype=self._tensor_space.distributed_config.training_dtype.torch,
                         )
-
-                        sequence_length = kwargs[TransformerKwargs.sequence_length]
-                        attention_mask = torch.ones(
-                            (sequence_length, sequence_length),
-                            dtype=torch.bool,
-                            device=self._tensor_space.distributed.device,
-                        )
-                        # Following BackupAttentionPreprocessor
-                        # k and q are same so can use sequence_length
-                        sequence_k = kwargs[TransformerKwargs.sequence_k_dim].size
-                        sequence_q = kwargs[TransformerKwargs.sequence_q_dim].size
-                        kwargs[TransformerKwargs.attention_mask] = attention_mask[
-                            None, None, sequence_k - sequence_q : sequence_k, None, :sequence_k
-                        ]
-
-                        kwargs[TransformerKwargs.attention_mask_value] = torch.full(
-                            [],
-                            torch.finfo(self._tensor_space.distributed_config.training_dtype.torch).min,
-                            dtype=self._tensor_space.distributed_config.training_dtype.torch,
-                            device=self._tensor_space.distributed.device,
-                        )
-
-                        # print(f"labels shape: {labels}\ntokens: {batch.token_ids}\nmask indexes shape: {batch.mask_indexes}\nmask input: {batch.masked_token_ids}")
 
                         # set token ids to masked tokens
                         batch.token_ids = batch.masked_token_ids.to(
@@ -378,9 +367,16 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                             dtype=torch.int64,
                             non_blocking=True,
                         )
+                        # IMPORTANT: Need to set both variables
                         tokens = batch.token_ids
 
+                    # TODO: Bi-direction attention with fused-attention (_attn_fused) function needs to be correctly imnplemented.
                     elif self._config.transformer.diffusion == DiffusionStyle.ar_masked:
+
+                        if self._use_flash_attention:
+                            raise ValueError(
+                                f"Diffusion style '{DiffusionStyle.ar_masked}' dose not use flash attention."
+                            )
 
                         # We are in masked-diffusion mode, so we need to add the mask indexes and probabilities to kwargs
                         kwargs[LanguageModelKwargs.mask_indexes] = batch.mask_indexes.to(
@@ -396,7 +392,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                         )
 
                         # Setup bidirection attention for diffusion should we set this in a preprocessor? BackupAttentionPreprocessor?
-                        # batch_size, seq_len = batch.token_ids.shape
+                        batch_size, seq_len = batch.token_ids.shape
                         # seq_len -= 1  # last token is drop from the input
                         # # Compute attention mask for diffusion
                         C = batch.in_context_length.to(device=self._tensor_space.distributed.device)
@@ -453,15 +449,15 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                             dtype=self._tensor_space.distributed_config.training_dtype.torch,
                             device=self._tensor_space.distributed.device,
                         )
-                        batch.token_ids = batch.masked_token_ids
-                        # print(f"C: {C}")
-                        # print(f"masked_token_ids: {batch.masked_token_ids}")
-                        # print(f"token_ids: {batch.token_ids}")
-                        # print(f"labels: {labels}")
-                        # print(f"loss_weights: {batch.loss_weights}")
-                        # print(f"mask indexes: {batch.mask_indexes}")
-                        # print(f"in_context: {batch.in_context}")
-                        # print(f"attention_mask: {attention_mask}")
+
+                        # set token ids to masked tokens
+                        batch.token_ids = batch.masked_token_ids.to(
+                            device=self._tensor_space.distributed.device,
+                            dtype=torch.int64,
+                            non_blocking=True,
+                        )
+                        # IMPORTANT: Need to set both variables
+                        tokens = batch.token_ids
 
             kwargs.update(reference_logits[i])
 

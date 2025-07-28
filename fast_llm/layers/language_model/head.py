@@ -425,6 +425,7 @@ class MLMHead(LanguageModelHead):
                 masked_index = torch.cat([masked_index[:, 1:], torch.zeros(B, 1, device=loss_weights.device)], dim=1)
                 context_index = torch.cat([context_index[:, 1:], torch.zeros(B, 1, device=loss_weights.device)], dim=1)
 
+                # TODO: Need to update cross-entropy implementation to support per-token loss weights.
                 loss, grad, per_token_loss_b4_weight = cross_entropy_forward_backward(
                     logits.flatten(0, -2),
                     target=target,
