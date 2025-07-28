@@ -851,6 +851,7 @@ class LlavaHybridHuggingfaceCheckpointHandler(CustomModelingExportMixin, LlavaHu
                     "AutoConfig": "configuration_llava_hybrid.LlavaHybridConfig",
                     "AutoModel": "modeling_llava_hybrid.LlavaHybridModel",
                     "AutoModelForVision2Seq": "modeling_llava_hybrid.LlavaHybridForConditionalGeneration",
+                    "AutoModelForCausalLM": "modeling_llava_hybrid.LlavaHybridForConditionalGeneration",
                 },
             ),
         ]
