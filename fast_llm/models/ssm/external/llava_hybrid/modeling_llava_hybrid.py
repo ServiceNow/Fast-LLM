@@ -6,7 +6,7 @@ from .configuration_llava_hybrid import LlavaHybridConfig
 
 try:
     # In the fast-llm repo, import from the SSM modeling file
-    from ..apriel_15b_hybrid.modeling_ssm_hybrid_apriel15b import (
+    from fast_llm.models.ssm.external.apriel_15b_hybrid.modeling_ssm_hybrid_apriel15b import (
         AprielThinkerSSMHybridModel,
         HybridMambaAttentionDynamicCache,
     )
