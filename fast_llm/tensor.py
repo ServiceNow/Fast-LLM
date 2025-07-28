@@ -1,5 +1,6 @@
 import abc
 import functools
+import logging
 import math
 import typing
 
@@ -12,6 +13,8 @@ from fast_llm.engine.distributed.config import DistributedDim, DistributedDimNam
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.functional.triton.pointwise import triton_add, triton_copy
 from fast_llm.utils import Assert
+
+logger = logging.getLogger(__name__)
 
 
 class _SafeTensorSliceMeta(type):
@@ -159,12 +162,11 @@ class TensorMeta(torch.Tensor):
     def global_shape(self) -> torch.Size:
         return torch.Size([dim.global_size for dim in self.dims])
 
-    def local_to_global(
-        self,
-        tensor: torch.Tensor,
-        *,
-        distributed: Distributed,
-    ) -> tuple[torch.Tensor, ...]:
+    def local_to_global(self, tensor: torch.Tensor, *, distributed: Distributed) -> tuple[torch.Tensor, ...]:
+        """
+        Reconstruct a global tensor from its distributed slices. Support lazy-loaded safetensor slices.
+        Returns a view of the input tensor (or the input tensor itself) when possible.
+        """
         if tensor.ndim == 0:
             tensor = tensor[None]
         Assert.eq(tensor.shape, self.shape)
@@ -188,14 +190,32 @@ class TensorMeta(torch.Tensor):
         Assert.eq(tensor.shape, self.global_shape)
         return tensor, is_first_rank
 
-    def global_to_local(
-        self,
-        tensor: torch.Tensor | SafeTensorSlice,
-        # Return an expanded tensor, avoiding `flatten` which copies the data. TODO: Rework.
-        expand: bool = False,
-    ) -> torch.Tensor:
+    def local_to_global_partial(self, tensor: torch.Tensor, fill_value: float | int = -1) -> torch.Tensor:
         """
-        Recover the tensor-parallel slice of a tensor. Support lazy-loaded safetensor slices.
+        Construct a tensor of shape `self.global_shape` that contains its local slice at the appropriate location,
+        i.e. for which `self.global_to_local(self.local_to_global_partial(tensor)) == tensor`.
+        Other entries are filled with `fill_value`.
+        Returns a view of the input tensor (or the input tensor itself) when possible.
+        """
+        if tensor.ndim == 0:
+            tensor = tensor[None]
+        Assert.eq(tensor.shape, self.shape)
+        assert not self._reductions
+        logger.info(f"AAAA {self.tensor_name} {self.shape} {self.global_shape} {tensor.shape}")
+        for dim, tensor_dim in enumerate(self.dims):
+            if tensor_dim.is_parallel:
+                tensor = tensor_dim.local_to_global_partial(tensor, dim, fill_value)
+            logger.info(
+                f"BBBB {self.tensor_name} {self.shape} {self.global_shape} {tensor.shape} {tensor_dim.is_parallel}"
+            )
+
+        Assert.eq(tensor.shape, self.global_shape)
+        return tensor
+
+    def global_to_local(self, tensor: torch.Tensor | SafeTensorSlice) -> torch.Tensor:
+        """
+        Select the local slice of a global tensor. Support lazy-loaded safetensor slices.
+        Returns a view of the input tensor (or the input tensor itself) when possible.
         """
         # Take a trivial slice to convert safetensor slices.
         tensor = tensor[:]
@@ -205,9 +225,9 @@ class TensorMeta(torch.Tensor):
         Assert.eq(tensor.shape, self.global_shape)
 
         for dim, tensor_dim in reversed(list(enumerate(self.dims))):
-            tensor = tensor_dim.global_to_local(tensor, dim, expand)
-        if not expand:
-            Assert.eq(tensor.shape, self.shape)
+            tensor = tensor_dim.global_to_local(tensor, dim)
+
+        Assert.eq(tensor.shape, self.shape)
         return tensor
 
     @classmethod
@@ -302,7 +322,11 @@ class ParameterMeta(TensorMeta):
 
     def init_parameter(self, tensor: torch.Tensor, distributed: Distributed) -> None:
         assert self.param_init_method is not None
-        if distributed.config.tensor_parallel == 1 or distributed.config.reproducible_init:
+        if (
+            distributed.config.tensor_parallel == 1
+            or distributed.config.reproducible_init
+            or self.param_init_method.requires_global_initialization
+        ):
             generator = distributed.pp_init_generator
         else:
             generator = distributed.tp_init_generator if self.is_tensor_parallel else distributed.pp_init_generator
