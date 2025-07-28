@@ -843,9 +843,8 @@ class Mamba2(nn.Module):
         self.num_C_head = self.d_inner // self.d_state
         self.repeat_group = self.num_C_head // self.num_xb_head
 
-        self.in_proj = nn.Linear(
-            self.d_model, 2 * self.d_xb + 2 * self.d_inner + self.dt_rank, bias=bias, **factory_kwargs
-        )
+        self.in_proj = nn.Linear(self.d_model, 2 * self.d_xb + 2 * self.d_inner, bias=bias, **factory_kwargs)
+        self.dt_in_proj = nn.Linear(self.d_model, self.dt_rank, bias=bias, **factory_kwargs)
         self.dt_proj = nn.Linear(self.dt_rank, self.d_inner, bias=dt_proj_bias, **factory_kwargs)
 
         # Initialize special dt projection to preserve variance at initialization
@@ -933,8 +932,17 @@ class Mamba2(nn.Module):
         outputs = {}
         A = -torch.exp(self.A_log.float())  # (d_inner, d_state)
 
-        zxbcdt = self.in_proj(hidden_states)
-        z, x, B, C, dt = torch.split(zxbcdt, [self.d_inner, self.d_xb, self.d_xb, self.d_inner, self.dt_rank], dim=-1)
+        zxbc = self.in_proj(hidden_states)
+        z, x, B, C = torch.split(
+            zxbc,
+            [
+                self.d_inner,
+                self.d_xb,
+                self.d_xb,
+                self.d_inner,
+            ],
+            dim=-1,
+        )
 
         x = rearrange(x, "b l d -> b d l")
         z = rearrange(z, "b l d -> b d l")
@@ -944,7 +952,7 @@ class Mamba2(nn.Module):
         B = rearrange(B, "b n_group l dstate -> b n_group dstate l").contiguous()
         C = rearrange(C, "b l (n_group dstate) -> b n_group dstate l", dstate=self.d_state).contiguous()
 
-        dt = self.dt_proj(dt)  # B, L, d_inner
+        dt = self.dt_proj(self.dt_in_proj(hidden_states))  # B, L, d_inner
         dt = rearrange(dt, "b l d -> b d l")  # B, d_inner, L
 
         if self.repeat_kv_before_conv:

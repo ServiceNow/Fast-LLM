@@ -19,12 +19,12 @@ def lora_linear(
 ):
     layer.weight.requires_grad = False
     in_dim = layer._in_dim
+    assert not in_dim.is_parallel, "LoRA not supported with tensor parallelism."
     if in_dim.parallel_dim is not None:
-        assert in_dim.parallel_dim.size == 1, "LoRA not supported with tensor parallelism."
         in_dim = TensorDim(in_dim.name, in_dim.global_size)
     out_dim = layer._out_dim
+    assert not out_dim.is_parallel, "LoRA not supported with tensor parallelism."
     if out_dim.parallel_dim is not None:
-        assert out_dim.parallel_dim.size == 1, "LoRA not supported with tensor parallelism."
         out_dim = TensorDim(out_dim.name, out_dim.global_size)
     if out_channel_begin is not None or out_channel_end is not None:
         if out_channel_begin is None:
