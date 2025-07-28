@@ -6,20 +6,22 @@ title: Writing and running tests
 
 ### Selecting tests
 
-When debugging, it is often practical to target specific tests that will run quickly. While Pytest supports targeting specific directory, files or tests, the complex parameterization and dependencies of our tests often makes explicit targeting tedious and/or impractical. We provide several options for selecting tests:
+When debugging, it is often advisable to target specific tests that can be executed efficiently. Although Pytest allows targeting specific tests or files, complex parameterization and dependencies in our suite often make explicit selection difficult. To address this, several options for test selection are available:
 
-* `--skip-slow`: This will run a subset of "fast" tests that cover the majority of our codebase. This is useful for quickly checking that changes did not break Fast-LLM too badly before running the full test suite. Note that parallel testing (`-n`) is not needed (and may be counter-productive) with this argument.
-* `--run-extra-slow`: Some tests are disabled by default because they take too long to run (ex. complex integration tests) and/or are not particularly important. This argument re-enables them.
-* `--models MODEL0 MODEL1 ...`: This allows targeting one or more specific models from the model tests (see below), and is particularly useful when debugging a model. For example, `pytest tests/models/test_models/test_checkpoint.py -v -ra --models llama` will test checkpoints specifically for the llama model. (Note that `-n` may not be needed here as model tests for a given model are only partly distributed dure to dependency constraints.)
+* `--skip-slow`: Executes a subset of expedited tests that encompass much of the codebase. This option is effective for quickly checking for major regressions prior to executing the comprehensive test suite. Please note, parallel testing (`-n`) is typically unnecessary—and may even be counterproductive—when using this argument.
+* `--run-extra-slow`: Certain tests are disabled by default due to their lengthy execution times (e.g., complex integration tests) or limited criticality. Use this flag to re-enable them.
+* `--models MODEL0 MODEL1 ...`: Enables targeting of one or more specific models within the model testing suite. This feature is particularly useful during model-specific debugging efforts. For instance, running `pytest tests/models/test_models/test_checkpoint.py -v -ra --models llama` will specifically test checkpointing functionality for the llama model. Note that parallelization (`-n`) may be unnecessary in this context, as model tests for a given model are only partially distributed due to dependency constraints.
 
 ### Monitoring distributed tests
 
-`--no-distributed-capture`
+Distributed tests are generally the slowest due to the overhead associated with starting processes and process groups. To mitigate this, Fast-LLM incorporates several bundled tests that execute multiple subtests within a single subprocess call. As bundled calls can generate substantial output and potentially reduce report readability, Fast-LLM captures the output from each subtest and forwards it to an associated test. If necessary, this output capture can be disabled using `--no-distributed-capture`—for instance, if a severe crash hinders output capture or to disable pytest capture entirely (`-s`). Captured logs are stored in the testing cache directory; please consult individual tests for specific locations.
+
+For example, `test_run_model_distributed[llama]` tries various distributed configurations for the `llama` model, each reported under an associated test such as `test_model_distributed[llama-distributed]`. Should a distributed subtest, say `tp2` (tensor-parallel), encounter a failure, `test_run_model_distributed` will log the issue, continue executing remaining subtests, and ultimately raise an error to designate the bundled test as failed. The associated test, `test_model_distributed[llama-tp2]`, will also fail and display the captured output (retrieved from `/tmp/fast_llm_tests/models/llama/tp2/`), separated by type (stdout, stderr and traceback) as would happen for a normal test (minus some advanced formating), but also by rank.
 
 ### Other options
 
-* `--show-gpu-memory N`: Our testing suite monitors GPU memory usage and reports the highest users. Use this option to adjust the number of reported tests (10 by default). Note that this option is mainly intended to make sure tests don't use too much memory (which could cause crashes with lots of parallel tests) and may not be an accurate measurement.
-* `--show-skipped`: Many tests skipped for obvious reasons (ex. marked as slow or extra slow, skipped model testing groups (see below)) are removed entirely from the report to reduce clutter. This option may be used to show them explicitly.
+* `--show-gpu-memory N`: Monitors GPU memory use and reports the top N tests (default 10). Mainly helps ensure tests don't exceed memory limits, but results may not be precise.
+* `--show-skipped`: Many tests skipped for obvious reasons (ex. marked as slow or extra slow, skipped model testing groups (see below)) are removed entirely from the report to reduce clutter. Use this flag to display them.
 
 ## Best practices
 
@@ -28,15 +30,6 @@ When debugging, it is often practical to target specific tests that will run qui
 [Model integration tests](https://github.com/ServiceNow/Fast-LLM/blob/main/tests/models) are the most important part of our testing suite, ensuring that Fast-LLM works and yields consistent results for a variety of models, training configurations, optimizations, etc.
 
 For each tested model, we run a series of tests divided into several groups. Much of these tests consist of running a short Fast-LLM training run, then comparing intermediate tensors (ex. parameter initialization, layer outputs and gradients, parameter gradients) against a baseline.
-
-### What is being tested
-
-Coming soon.
-
-!!! warning "Don't forget about unit tests!"
-
-    While adding a model is a quick and efficient way to increase coverage, it is **not a replacement for unit tests**.
-    The model testing suite performs intensive consistency checks, but does little to make sure those results are correct to begin with. See [functional tests](https://github.com/ServiceNow/Fast-LLM/blob/main/tests/functional) and [test_lm_head](https://github.com/ServiceNow/Fast-LLM/blob/main/tests/layers/test_lm_head.py) for good examples of unit tests for individual components and an entire layer.
 
 ### Adding a model
 
@@ -70,6 +63,11 @@ _update_and_add_testing_config(
     compare_factor=2.0, # Optionally adjust comparison thresholds, ex. for a model that comes with unusually high variances.
 )
 ```
+
+!!! warning "Don't forget about unit tests!"
+
+    While adding a model is a quick and efficient way to increase coverage, it is **not a replacement for unit tests**.
+    The model testing suite performs intensive consistency checks, but does little to make sure those results are correct to begin with. See [functional tests](https://github.com/ServiceNow/Fast-LLM/blob/main/tests/functional) and [test_lm_head](https://github.com/ServiceNow/Fast-LLM/blob/main/tests/layers/test_lm_head.py) for good examples of unit tests for individual components and an entire layer.
 
 #### Reference for groups
 
