@@ -1,6 +1,6 @@
 import typing
 
-from fast_llm.layers.transformer.transformer import BaseBlock
+from fast_llm.layers.transformer.transformer import BaseBlock, Mixer
 
 if typing.TYPE_CHECKING:
     from fast_llm.engine.config_utils.tensor_space import TensorSpace
@@ -8,27 +8,30 @@ if typing.TYPE_CHECKING:
     from fast_llm.layers.transformer.config import TransformerConfig
 
 
-class LlambaBlock(BaseBlock):
+class SSMBlock(BaseBlock):
     """
     A transformer-like decoder block with a SSM mixer, see https://arxiv.org/abs/2502.14458
     """
 
     _name = "Llamba block"
-    _mixer_module_name = "mixer"
 
     def __init__(
         self,
-        config_transformer: "TransformerConfig",
-        config_ssm: "SSMConfig",
+        transformer_config: "TransformerConfig",
+        ssm_config: "SSMConfig",
         tensor_space: "TensorSpace",
-        mixer_cls,
-        layer_index: int,
+        mixer_cls: type[Mixer],
+        block_index: int,
         return_input: bool = False,
     ):
-        self.mixer_cls = mixer_cls
-        self._config_ssm = config_ssm
-        self._debug_mode = self._config_ssm.debug_ssm
-        super().__init__(config_transformer, tensor_space, layer_index, return_input)
+        self._ssm_config = ssm_config
+        self._mixer_cls = mixer_cls
+        super().__init__(transformer_config, tensor_space, block_index, return_input)
 
-    def _create_mixer(self):
-        self.mixer = self.mixer_cls(self._config_ssm, layer_idx=self._layer_index, tensor_space=self._tensor_space)
+    def _create_mixer(self) -> Mixer:
+        return self._mixer_cls(
+            self._ssm_config,
+            tensor_space=self._tensor_space,
+            block_index=self._block_index,
+            transformer_config=self._config,
+        )
