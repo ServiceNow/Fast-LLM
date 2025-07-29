@@ -7,7 +7,7 @@ from fast_llm.engine.base_model.base_model import Layer, LossDef
 from fast_llm.engine.distributed.config import DistributedConfig, PhaseType
 from fast_llm.engine.schedule.config import BatchConfig
 from fast_llm.layers.language_model.embedding import LanguageModelEmbedding
-from fast_llm.layers.transformer.transformer import TransformerBlock
+from fast_llm.layers.transformer.block import TransformerBlock
 from fast_llm.models.custom.config import CustomBaseModelConfig, CustomModelConfig
 from fast_llm.models.custom.head import CustomHead
 from fast_llm.models.gpt.config import GPTBaseModelConfig

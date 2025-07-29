@@ -5,7 +5,7 @@ import torch
 
 from fast_llm.engine.config_utils.tensor_space import DefaultDimNames, TensorDim, TensorSpace
 from fast_llm.functional.config import ActivationType
-from fast_llm.layers.block.config import BlockConfig
+from fast_llm.layers.block.config import BlockConfig, BlockKwargs
 from fast_llm.layers.block.mixer import Mixer
 from fast_llm.layers.common.linear import InputParallelLinear, Linear, OutputParallelLinear
 from fast_llm.layers.ssm.config import SSMConfig, SSMDimNames

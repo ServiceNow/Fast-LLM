@@ -36,7 +36,6 @@ class TransformerKwargs(BlockKwargs):
     rotary_freq_k = "rotary_freq_k"
     attention_mask = "attention_mask"
     attention_mask_value = "attention_mask_value"
-    sequence_lengths = "sequence_lengths"
     cu_seqlens_q = "cu_seqlens_q"
     cu_seqlens_k = "cu_seqlens_k"
     max_seqlen_q = "max_seqlen_q"
@@ -46,6 +45,7 @@ class TransformerKwargs(BlockKwargs):
     past_key_values = "past_key_values"
 
 
+@config_class()
 class AttentionConfig(Config):
     # TODO: Make mixer class dynamic.
     _abstract = False
@@ -126,6 +126,7 @@ class AttentionConfig(Config):
     def setup_tensor_space(self, tensor_space: TensorSpace) -> None:
         tensor = tensor_space.distributed_config.get_distributed_dim(DistributedDimNames.tensor)
         # Needed for multiple inheritance.
+        super().setup_tensor_space(tensor_space)  # Noqa
 
         tensor_space.add_tensor_dim(
             head_groups := TensorDim(

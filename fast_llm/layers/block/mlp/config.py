@@ -1,6 +1,6 @@
 import enum
 
-from fast_llm.config import Config, Field, FieldHint, check_field, skip_valid_if_none
+from fast_llm.config import Config, Field, FieldHint, check_field, config_class, skip_valid_if_none
 from fast_llm.engine.config_utils.tensor_space import CompositeTensorDim, TensorDim, TensorSpace
 from fast_llm.engine.distributed.config import DistributedDimNames
 from fast_llm.functional.config import ActivationType, MLPRecomputeLevel
@@ -32,6 +32,7 @@ class RoutingType(str, enum.Enum):
     sinkhorn = "sinkhorn"
 
 
+@config_class()
 class MLPConfig(Config):
     # TODO: Review names
     _abstract = False

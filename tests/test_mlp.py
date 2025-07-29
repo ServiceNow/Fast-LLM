@@ -1,7 +1,7 @@
 from fast_llm.engine.config_utils.tensor_space import TensorSpace
 from fast_llm.engine.distributed.config import DistributedConfig
-from fast_llm.layers.block.mlp import MLP
 from fast_llm.layers.block.mlp.mixture_of_experts import MixtureOfExpertMLP
+from fast_llm.layers.block.mlp.mlp import MLP
 from fast_llm.layers.transformer.config import TransformerConfig
 
 

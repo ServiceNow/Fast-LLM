@@ -8,13 +8,13 @@ import typing
 
 from fast_llm.config import Field, FieldHint, config_class
 from fast_llm.layers.common.config import LoRAConfig, NoPeftConfig, PeftConfig
-from fast_llm.tensor import ParameterMeta
 from fast_llm.utils import div
 
 if typing.TYPE_CHECKING:
     import torch
 
     from fast_llm.layers.common.linear import LinearBase, LinearLike
+    from fast_llm.tensor import ParameterMeta
 
 
 class TransformerSubLayerName(str, enum.Enum):

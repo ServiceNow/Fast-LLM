@@ -15,7 +15,7 @@ from fast_llm.tensor import init_normal_, init_zeros_
 from fast_llm.utils import Assert, get_lr_scale
 
 
-class MLPBase[ConfigType: BlockConfig](Layer, Configurable[ConfigType]):
+class MLPBase[ConfigType: BlockConfig](Configurable[ConfigType], Layer):
     def __init__(self, config: BlockConfig, tensor_space: TensorSpace, name: str = "mlp", block_index: int = 0):
         super().__init__(config)
         self._name = name

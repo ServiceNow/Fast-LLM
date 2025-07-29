@@ -5,8 +5,8 @@ from fast_llm.engine.base_model.base_model import Layer
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.layers.language_model.embedding import LanguageModelEmbedding
 from fast_llm.layers.language_model.head import LanguageModelHead
-from fast_llm.layers.ssm.llamba_block import SSMBlock
-from fast_llm.layers.transformer.transformer import TransformerBlock
+from fast_llm.layers.ssm.block import SSMBlock
+from fast_llm.layers.transformer.block import TransformerBlock
 from fast_llm.models.gpt.model import GPTBaseModel, GPTInferenceRunner, GPTModel
 from fast_llm.models.ssm.config import HybridSSMBaseModelConfig, HybridSSMModelConfig, SSMBlockType
 
@@ -52,7 +52,7 @@ class HybridSSMBaseModel[ConfigType: HybridSSMBaseModelConfig](GPTBaseModel[Conf
                 else:
                     layers.append(
                         SSMBlock(
-                            transformer_config=self._config.transformer,
+                            config=self._config.transformer,
                             ssm_config=self._config.ssm,
                             mixer_cls=self._config.ssm_block_type.get_mixer_class(),
                             block_index=len(self._config.hybrid_block_layout),
@@ -88,7 +88,7 @@ class HybridSSMBaseModel[ConfigType: HybridSSMBaseModelConfig](GPTBaseModel[Conf
             else:
                 layers.append(
                     SSMBlock(
-                        transformer_config=self._config.transformer,
+                        config=self._config.transformer,
                         ssm_config=self._config.ssm,
                         mixer_cls=self._config.ssm_block_type.get_mixer_class(),
                         block_index=i + 1,
