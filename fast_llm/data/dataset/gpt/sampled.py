@@ -143,7 +143,7 @@ class GPTSampledIndexedDataset(SampledDataset):
         # Get the document sizes, the main information needed for sampling.
         document_sizes, image_sizes = self._indexed_dataset.get_document_sizes()
         document_sizes = torch.from_numpy(document_sizes).to(self._device)
-        if image_sizes.any():
+        if image_sizes:
             image_token_sizes = []
             for i, sizes in enumerate(image_sizes):
                 image_token_sizes.append(
