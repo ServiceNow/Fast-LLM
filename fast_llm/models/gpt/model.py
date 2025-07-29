@@ -342,19 +342,20 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                 reference_model.forward(reference_tokens, reference_kwargs, iteration=iteration)
                 reference_logits[i][f"{name}_logits"] = reference_kwargs["logits"]
 
+        token_ids = batch.token_ids
         if sequence_first:
             # Move the sequence dimension first to make sequence parallel ops more efficient.
-            batch.token_ids = batch.token_ids.transpose(0, 1).contiguous()
+            token_ids = token_ids.transpose(0, 1).contiguous()
 
         preprocessed = []
         presents = None
         for i, (_, kwargs_meta) in enumerate(preprocessed_meta):
             sequence_k = kwargs_meta[TransformerKwargs.sequence_k_dim].size
             if sequence_first:
-                tokens = batch.token_ids[sequence_k - sequence_q : sequence_k]
+                tokens = token_ids[sequence_k - sequence_q : sequence_k]
             else:
                 # TODO: Avoid multiple contiguous calls?
-                tokens = batch.token_ids[:, sequence_k - sequence_q : sequence_k].contiguous()
+                tokens = token_ids[:, sequence_k - sequence_q : sequence_k].contiguous()
             if batch.sequence_lengths is not None:
                 kwargs_meta[TransformerKwargs.sequence_lengths] = batch.sequence_lengths
             if batch.chosen_spans is not None:
@@ -374,10 +375,10 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             if phase != PhaseType.inference:
                 sequence_offset = sequence_k - sequence_q + 1  # +1 for shift in labels
                 if sequence_first:
-                    labels = batch.token_ids[sequence_offset : sequence_k + prediction_heads]
+                    labels = token_ids[sequence_offset : sequence_k + prediction_heads]
                 else:
                     # TODO: Avoid multiple contiguous calls?
-                    labels = batch.token_ids[:, sequence_offset : sequence_k + prediction_heads].contiguous()
+                    labels = token_ids[:, sequence_offset : sequence_k + prediction_heads].contiguous()
                     # We set label indices to -100 for masked spans, inline with ignore_index in torch.nn.CrossEntropyLoss
                     # TODO: take ignore_index from config
                 labels_cloned = False
