@@ -201,13 +201,9 @@ class TensorMeta(torch.Tensor):
             tensor = tensor[None]
         Assert.eq(tensor.shape, self.shape)
         assert not self._reductions
-        logger.info(f"AAAA {self.tensor_name} {self.shape} {self.global_shape} {tensor.shape}")
         for dim, tensor_dim in enumerate(self.dims):
             if tensor_dim.is_parallel:
                 tensor = tensor_dim.local_to_global_partial(tensor, dim, fill_value)
-            logger.info(
-                f"BBBB {self.tensor_name} {self.shape} {self.global_shape} {tensor.shape} {tensor_dim.is_parallel}"
-            )
 
         Assert.eq(tensor.shape, self.global_shape)
         return tensor

@@ -95,7 +95,7 @@ class CompositeTensorDim(TensorDim):
     def __init__(self, name: str, tensor_dims: tuple[TensorDim, ...]):
         parallel_dim = None
         for dim, tensor_dim in enumerate(tensor_dims):
-            if tensor_dim.is_parallel:
+            if tensor_dim.parallel_dim is not None:
                 # TODO: Allow more than one parallel subdim?
                 assert parallel_dim is None
                 parallel_dim = tensor_dim.parallel_dim
