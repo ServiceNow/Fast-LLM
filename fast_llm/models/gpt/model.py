@@ -27,7 +27,7 @@ from fast_llm.layers.transformer.preprocessing import BackupAttentionPreprocesso
 from fast_llm.layers.transformer.transformer import TransformerLayer, VisionTransformerLayer
 from fast_llm.layers.vision_encoder.adapter import VisionAdapter
 from fast_llm.layers.vision_encoder.config import VisionEncoderDimNames, VisionEncoderKwargs
-from fast_llm.layers.vision_encoder.patch_conv import PatchConv
+from fast_llm.layers.vision_encoder.patch_conv import PatchConvolution
 from fast_llm.layers.vision_encoder.preprocessing import VisionPreprocessor
 from fast_llm.models.gpt.config import GPTBaseModelConfig, GPTBatchConfig, GPTModelConfig
 from fast_llm.models.gpt.megatron import get_init_megatron
@@ -104,7 +104,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             for idx in range(self._config.vision_encoder.transformer.num_layers)
         ]
         return [
-            PatchConv(self._config.vision_encoder, self._tensor_space),
+            PatchConvolution(self._config.vision_encoder, self._tensor_space),
             *vit_layers,
             VisionAdapter(self._config.vision_encoder, self._tensor_space),
             MultiModalEmbedding(self._config, self._tensor_space),
@@ -150,14 +150,14 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
         if self._config.vision_encoder.enabled:
             max_image_size = batch_meta.max_image_size
             image_mean = [
-                self._config.vision_encoder.image_normalization.mean_r,
-                self._config.vision_encoder.image_normalization.mean_g,
-                self._config.vision_encoder.image_normalization.mean_b,
+                self._config.vision_encoder.image_normalization.mean_red,
+                self._config.vision_encoder.image_normalization.mean_green,
+                self._config.vision_encoder.image_normalization.mean_blue,
             ]
             image_std = [
-                self._config.vision_encoder.image_normalization.std_r,
-                self._config.vision_encoder.image_normalization.std_g,
-                self._config.vision_encoder.image_normalization.std_b,
+                self._config.vision_encoder.image_normalization.std_red,
+                self._config.vision_encoder.image_normalization.std_green,
+                self._config.vision_encoder.image_normalization.std_blue,
             ]
             image_rescale_factor = self._config.vision_encoder.image_normalization.rescale_factor
             vision_kwargs = {

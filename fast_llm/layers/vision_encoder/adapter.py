@@ -13,7 +13,7 @@ from fast_llm.tensor import TensorMeta, init_normal_
 
 class VisionAdapter(Layer):
     """
-    Vision adapter layer for the LLM.
+    Vision adapter layer that projects vision encoder features into the language model token embeddings.
     """
 
     def __init__(self, config: VisionEncoderConfig, tensor_space: TensorSpace):

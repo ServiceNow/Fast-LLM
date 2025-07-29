@@ -72,22 +72,6 @@ def resize(image: torch.Tensor, max_height: int, max_width: int, patch_size: int
     )
 
 
-def normalize(image: torch.Tensor, mean: list[float], std: list[float]) -> torch.Tensor:
-    """
-    Normalize the image using the specified mean and standard deviation.
-    """
-    return torchvision_transforms.functional.normalize(image, mean=mean, std=std)
-
-
-def pad(image: torch.Tensor, max_height, max_width) -> torch.Tensor:
-    """
-    Pad images on the right and bottom with 0s untitl max_height and max_width
-    """
-    width_padding = max(0, max_height - image.size(1))
-    depth_padding = max(0, max_width - image.size(2))
-    return torchvision_transforms.functional.pad(image, (0, 0, depth_padding, width_padding), 0)
-
-
 def create_inv_freqs(rope_theta: int, kv_channels: int, max_image_size: int, patch_size: int) -> torch.Tensor:
     freqs = 1.0 / (rope_theta ** (torch.arange(0, kv_channels, 2).float() / kv_channels))
     max_patches_per_side = max_image_size // patch_size
@@ -150,7 +134,7 @@ class VisionPreprocessor(Preprocessor):
         kwargs[VisionEncoderKwargs.image_sizes] = image_sizes
         images = [
             [
-                normalize(
+                torchvision_transforms.functional.normalize(
                     resize(image, max_image_size, im_width, patch_size).to(
                         dtype=self._tensor_space.distributed_config.training_dtype.torch
                     )

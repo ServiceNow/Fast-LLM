@@ -39,32 +39,32 @@ class VisionEncoderKwargs:
 
 @config_class()
 class ImageNormalizationConfig(Config):
-    mean_r: float = Field(
+    mean_red: float = Field(
         default=0.48145466,
         desc="Mean value for the red channel in the image normalization process.",
         hint=FieldHint.optional,
     )
-    mean_g: float = Field(
+    mean_green: float = Field(
         default=0.4578275,
         desc="Mean value for the green channel in the image normalization process.",
         hint=FieldHint.optional,
     )
-    mean_b: float = Field(
+    mean_blue: float = Field(
         default=0.40821073,
         desc="Mean value for the blue channel in the image normalization process.",
         hint=FieldHint.optional,
     )
-    std_r: float = Field(
+    std_red: float = Field(
         default=0.26862954,
         desc="Standard deviation value for the red channel in the image normalization process.",
         hint=FieldHint.optional,
     )
-    std_g: float = Field(
+    std_green: float = Field(
         default=0.26130258,
         desc="Standard deviation value for the green channel in the image normalization process.",
         hint=FieldHint.optional,
     )
-    std_b: float = Field(
+    std_blue: float = Field(
         default=0.27577711,
         desc="Standard deviation value for the blue channel in the image normalization process.",
         hint=FieldHint.optional,
@@ -105,7 +105,7 @@ class VisionEncoderConfig(BaseModelConfig):
         desc="Whether to use bias in the convolutional layer.",
         hint=FieldHint.optional,
     )
-    patch_norm: NormalizationConfig = Field(
+    patch_normalization: NormalizationConfig = Field(
         desc="Configuration for the normalization layers applied to the image patches.",
         hint=FieldHint.optional,
     )

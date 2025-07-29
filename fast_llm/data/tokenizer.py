@@ -49,7 +49,7 @@ class Tokenizer:
         )
 
     def tokenize(
-        self, text: str, char_spans=None, image_positions=None
+        self, text: str, add_bos=True, add_eos=True, char_spans=None, image_positions=None
     ) -> tuple[list[int], list[tuple[int, int]], list[int]]:
         """
         Tokenize the input text and return the tokenized input_ids, token spans, and image token positions.
@@ -81,7 +81,9 @@ class Tokenizer:
             # We only tokenize if there is at least one character, else we might potentially add begin/end multiple times
             if char_pos < position[0]:
                 tokenized_text = self._tokenize(
-                    text[char_pos : position[0]], begin=(char_pos == 0), end=position[0] > len(text) - 1
+                    text[char_pos : position[0]],
+                    begin=(char_pos == 0) and add_bos,
+                    end=position[0] > len(text) - 1 and add_eos,
                 )
                 token_ids.extend(tokenized_text)
             char_pos = position[0]
@@ -106,7 +108,7 @@ class Tokenizer:
                 current_span_start = None
         # Handle any remaining text after the last position and add EOS token
         if char_pos < len(text):
-            tokenized_text = self._tokenize(text[char_pos:], begin=(char_pos == 0), end=True)
+            tokenized_text = self._tokenize(text[char_pos:], begin=(char_pos == 0) and add_bos, end=add_eos)
             token_ids.extend(tokenized_text)
 
         return token_ids, token_spans, image_token_positions

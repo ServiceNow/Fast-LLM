@@ -143,7 +143,7 @@ def test_pretrained_config(load_config: ModelConfigType, result_path):
                     "rotary": {"type": "none"},
                     "peft": {"type": "none"},
                 },
-                "patch_norm": {"type": "layer_norm"},
+                "patch_normalization": {"type": "layer_norm"},
             },
         }
     else:
@@ -160,7 +160,7 @@ def test_pretrained_config(load_config: ModelConfigType, result_path):
                 "rotary": {"type": "none"},
                 "peft": {"type": "none"},
             },
-            "patch_norm": {"type": "layer_norm"},
+            "patch_normalization": {"type": "layer_norm"},
         }
         expected_config["base_model"] = base_model_update
 

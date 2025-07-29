@@ -234,7 +234,7 @@ class TransformerLoRAConfig(LoRAConfig, TransformerPeftConfig):
 
 
 class TransformerType(str, enum.Enum):
-    lm_decoder = "lm_decoder"
+    language_model_decoder = "language_model_decoder"
     image_encoder = "image_encoder"
 
 
@@ -242,7 +242,7 @@ class TransformerType(str, enum.Enum):
 class TransformerConfig(LLMBlockConfig):
     _abstract = False
     type: TransformerType = Field(
-        default=TransformerType.lm_decoder,
+        default=TransformerType.language_model_decoder,
         desc="Type of the transformer. Choices: lm_decoder, image_encoder.",
         hint=FieldHint.architecture,
     )
