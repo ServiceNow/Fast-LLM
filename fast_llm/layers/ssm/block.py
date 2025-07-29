@@ -31,5 +31,5 @@ class SSMBlock[ConfigType: BlockConfig](Block[BlockConfig]):
             self._ssm_config,
             tensor_space=self._tensor_space,
             block_index=self._block_index,
-            transformer_config=self._config,
+            block_config=self._config,
         )
