@@ -185,8 +185,9 @@ class StageBase(Configurable[StageConfig]):
                 # Multi-gpu init may be different because of TP or FSDP (different shape), or PP (not on device)
                 global_shape = meta.global_shape
 
-                if self._distributed_config.reproducible_init and (
-                    global_shape.numel() != parameter.numel() or not self._mode.on_device
+                if meta.requires_global_initialization or (
+                    self._distributed_config.reproducible_init
+                    and (global_shape.numel() != parameter.numel() or not self._mode.on_device)
                 ):
                     # Initialize all global weights on every gpu, then select the appropriate slice if applicable.
                     global_param = parameter.new_empty(global_shape, device=self._distributed.device)

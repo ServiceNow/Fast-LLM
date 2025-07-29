@@ -28,7 +28,7 @@ class BackupAttentionPreprocessor(Preprocessor):
         self._tensor_space = tensor_space
         self._distributed_config = self._tensor_space.distributed_config
         assert not self._config.do_use_flash_attention(self._distributed_config)
-        self._scalar_dim = self._tensor_space.get_tensor_dim(DefaultDimNames.scalar)
+        self._scalar_dim = self._tensor_space[DefaultDimNames.scalar]
 
     def _create_tensors(self, sequence_length: int) -> None:
         if sequence_length <= self._tensor_cache_max_sequence_length:

@@ -46,10 +46,10 @@ class LanguageModelEmbedding[ConfigType: LanguageModelBaseConfig](Configurable[L
         self._dropout_p = config.transformer.hidden_dropout
         self._use_absolute_position_embeddings = config.use_absolute_position_embeddings
 
-        hidden_dim = tensor_space.get_tensor_dim(TransformerDimNames.hidden)
-        vocab_dim = tensor_space.get_tensor_dim(
+        hidden_dim = tensor_space[TransformerDimNames.hidden]
+        vocab_dim = tensor_space[
             LanguageModelDimNames.vocab_tp if self._parallel_embeddings else LanguageModelDimNames.vocab
-        )
+        ]
 
         if self._parallel_embeddings:
             self._vocab_start_index = self._distributed_config.tensor_rank * vocab_dim.size
@@ -66,7 +66,7 @@ class LanguageModelEmbedding[ConfigType: LanguageModelBaseConfig](Configurable[L
         )
         if self._use_absolute_position_embeddings:
             self.position_embeddings_weight = ParameterMeta.from_dims(
-                (tensor_space.get_tensor_dim(LanguageModelDimNames.position_embed), hidden_dim),
+                (tensor_space[LanguageModelDimNames.position_embed], hidden_dim),
                 init_method=init_normal_(
                     std=config.init_method_std_embed,
                     min_val=config.init_method_min_embed,

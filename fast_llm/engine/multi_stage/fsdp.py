@@ -441,39 +441,21 @@ class FSDP:
         where it is located in the shard if it exists, or -1 if it's not in the shard.
         Used to determine the location of each entry in a different distributed configuration.
         """
-
-        # Create an empty index for the global parameter.
-        index = torch.full(
-            parameter_meta.global_shape,
-            -1,
-            dtype=torch.int64,
-            device=device,
-        )
         # Set the shard slice of the global parameter to corresponding indices of the parameter slice of the shard
         begin, end = self._get_parameter_range_in_shard(parameter_name)
 
-        buffer_index = parameter_meta.global_to_local(index, expand=True)
-        # Copying directly into `buffer_index` requires a view of the tensor, which may not be feasible.
-        # In that case, we work with a separate tensor to be copied back into `buffer_index`.
-        try:
-            buffer_index_flat = buffer_index.view(-1)
-            is_view = True
-        except RuntimeError:
-            buffer_index_flat = buffer_index.new_full((buffer_index.numel(),), -1)
-            is_view = False
+        # Create an empty local index to hold the local shard indices.
+        buffer_index = torch.full_like(parameter_meta, -1, dtype=torch.int64, device=device)
 
-        # Copy the shard indices at their respective positions in the flat buffer index.
-        buffer_index_flat[
+        # Copy the shard indices at their respective positions in the buffer index.
+        buffer_index.flatten()[
             self._index_buffer_to_param(
                 self._fsdp_dim.rank * self._shard_size, parameter_name
             ) : self._index_buffer_to_param((self._fsdp_dim.rank + 1) * self._shard_size, parameter_name)
         ].copy_(torch.arange(begin, end, dtype=torch.int64, device=device))
 
-        # If needed, copy the flat buffer index back into the index.
-        if not is_view:
-            buffer_index.copy_(buffer_index_flat.view_as(buffer_index))
-
-        return index
+        # Create a global index from the local one.
+        return parameter_meta.local_to_global_partial(buffer_index, -1)
 
     def copy_shard_overlaps(
         self,

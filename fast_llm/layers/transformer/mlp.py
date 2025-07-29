@@ -30,8 +30,8 @@ class MLPBase(Layer, ABC):
             max_val=config.init_method_max_mlp_2,
         )
 
-        hidden_dim = tensor_space.get_tensor_dim(TransformerDimNames.hidden)
-        self._intermediate_dim = tensor_space.get_tensor_dim(TransformerDimNames.composite_expert_mlp)
+        hidden_dim = tensor_space[TransformerDimNames.hidden]
+        self._intermediate_dim = tensor_space[TransformerDimNames.composite_expert_mlp]
         self._sequence_parallel = tensor_space.distributed_config.sequence_tensor_parallel
         self._recompute_level = config.mlp_recompute_level
 
@@ -46,7 +46,7 @@ class MLPBase(Layer, ABC):
         # So both layers' weights have shape (num_experts [* gate_up] * ffn, hidden_size)
         self.layer_1 = LinearBase(
             hidden_dim,
-            tensor_space.get_tensor_dim(TransformerDimNames.composite_gated_expert_mlp),
+            tensor_space[TransformerDimNames.composite_gated_expert_mlp],
             bias=config.add_mlp_bias,
             weight_init_method=init_method_1,
             bias_init_method=init_method_1 if config.random_bias_init else init_zeros_,
