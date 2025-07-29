@@ -1,0 +1,120 @@
+import enum
+
+from fast_llm.config import Field, FieldHint, check_field, config_class
+from fast_llm.engine.base_model.config import BaseModelConfig
+from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
+from fast_llm.layers.block.mlp.config import MLPConfig
+from fast_llm.layers.block.peft_config import TransformerPeftConfig
+from fast_llm.layers.common.config import NormalizationConfig
+from fast_llm.utils import Assert
+
+
+class BlockDimNames:
+    # A set of common tensor dim names packed into a namespace.
+    # Input dimensions (variable)
+    # TODO: Does batch belong here?
+    batch = "batch"
+    # TODO: Distinguish micro-sequence?
+    sequence_q = "sequence_q"
+    sequence_q_tp = "sequence_q_tp"
+    sequence_k = "sequence_k"
+    hidden = "hidden"
+
+
+class BlockKwargs:
+    sequence_first = "sequence_first"
+    hidden_dims = "hidden_dims"
+    sequence_q_dim = "sequence_q_dim"
+    sequence_k_dim = "sequence_k_dim"
+    sequence_length = "sequence_length"
+    # TODO: Belongs elsewhere?
+    grad_output = "grad_output"
+
+
+@config_class()
+# TODO: Use composition for MLP config
+class BlockConfig(MLPConfig, BaseModelConfig):
+
+    # TODO: Review names
+    normalization: NormalizationConfig = Field(
+        desc="Configuration for the normalization layers architecture.",
+        hint=FieldHint.architecture,
+    )
+    peft: TransformerPeftConfig = Field(
+        desc="Configuration for the parameter-efficient fine tuning.",
+        hint=FieldHint.architecture,
+    )
+    hidden_dropout: float = Field(
+        default=0.0,
+        desc="Dropout applied to the residual connections.",
+        hint=FieldHint.feature,
+        valid=check_field(Assert.geq, 0),
+    )
+    full_precision_residual: bool = Field(
+        default=False,
+        desc="Store the residuals for the transformer in full precision (`optimization_dtype`).",
+        hint=FieldHint.stability,
+    )
+    debug_transformer: int = Field(
+        default=0,
+        desc="Log the output of each operation in a transformer layer.",
+        hint=FieldHint.logging,
+        valid=check_field(Assert.geq, 0),
+    )
+    debug_transformer_memory: bool = Field(
+        default=False,
+        desc="Log the memory usage after each operation in a transformer layer..",
+        hint=FieldHint.logging,
+    )
+    add_linear_biases: bool | AddLinearBiasChoices = Field(
+        default=True,
+        desc="Add biases to all, none or Q, K, V layers. Accepted values: True, False, or AddLinearBiasChoices.",
+        hint=FieldHint.architecture,
+    )
+
+    # TODO: Move these, not specific to a single block.
+    num_layers: int = Field(
+        default=12,
+        desc="Number of layers in the transformer.",
+        hint=FieldHint.architecture,
+        valid=check_field(Assert.geq, 0),
+    )
+    hidden_size: int = Field(
+        default=1024,
+        desc="Size of the transformer's main hidden dimension, e.g., for its input and output layers.",
+        hint=FieldHint.architecture,
+        valid=check_field(Assert.gt, 0),
+    )
+    per_layer_lr_scale: list[float] | None = Field(
+        default=None,
+        desc="Custom learning rate scale for each layer.",
+        doc="May be used to freeze some layers by setting their scale to zero.",
+        hint=FieldHint.feature,
+    )
+
+    def _validate(self) -> None:
+        with self._set_implicit_default():
+            if self.ffn_hidden_size is None:
+                self.ffn_hidden_size = 4 * self.hidden_size
+
+        super()._validate()
+
+    @property
+    def add_mlp_bias(self) -> bool:
+        if isinstance(self.add_linear_biases, bool):
+            return self.add_linear_biases
+        if self.add_linear_biases == AddLinearBiasChoices.everywhere:
+            return True
+        return False
+
+    def setup_tensor_space(self, tensor_space: TensorSpace) -> None:
+        super().setup_tensor_space(tensor_space)
+
+        # Hidden dimension
+        tensor_space.add_tensor_dim(TensorDim(BlockDimNames.hidden, self.hidden_size))
+
+
+class AddLinearBiasChoices(str, enum.Enum):
+    nowhere = "nowhere"
+    everywhere = "everywhere"
+    only_attn_qkv = "only_attn_qkv"

@@ -1,18 +1,18 @@
 import enum
 import typing
 
-from fast_llm.config import Field, FieldHint, check_field, config_class, skip_valid_if_none
+from fast_llm.config import Config, Field, FieldHint, check_field, config_class, skip_valid_if_none
 from fast_llm.engine.config_utils.tensor_space import CompositeTensorDim, ConcatenatedTensorDim, TensorDim, TensorSpace
 from fast_llm.engine.distributed.config import DistributedDimNames
 from fast_llm.functional.config import ActivationType
-from fast_llm.layers.common.config import LLMBlockConfig, NormalizationConfig
+from fast_llm.layers.block.config import BlockDimNames
 from fast_llm.utils import Assert, div
 
 if typing.TYPE_CHECKING:
     from fast_llm.tensor import Initializer
 
 
-class SSMDimNames:
+class SSMDimNames(BlockDimNames):
     # TODO: Use separate tensor space for different mixers so there is no risk of name conflict.
     state = "ssm_state"  # State dimension (N), aka head size / num channels
     head_dim = "ssm_head_dim"
@@ -72,14 +72,8 @@ class DTInitType(enum.StrEnum):
 
 
 @config_class()
-class SSMConfig(LLMBlockConfig):
+class SSMConfig(Config):
     _abstract = False
-
-    # Normalization
-    normalization: NormalizationConfig = Field(
-        desc="Configuration for the normalization layers architecture.",
-        hint=FieldHint.architecture,
-    )
 
     # Model dimensions
     # TODO: Remove (redundant default)

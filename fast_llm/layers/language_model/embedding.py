@@ -8,7 +8,6 @@ from fast_llm.core.ops import reduce_forward, split
 from fast_llm.engine.base_model.base_model import Layer
 from fast_llm.engine.config_utils.tensor_space import TensorSpace
 from fast_llm.layers.language_model.config import LanguageModelBaseConfig, LanguageModelDimNames, LanguageModelKwargs
-from fast_llm.layers.transformer.config import TransformerDimNames, TransformerKwargs
 from fast_llm.tensor import ParameterMeta, TensorMeta, init_normal_
 from fast_llm.utils import Assert
 
@@ -46,7 +45,7 @@ class LanguageModelEmbedding[ConfigType: LanguageModelBaseConfig](Configurable[L
         self._dropout_p = config.transformer.hidden_dropout
         self._use_absolute_position_embeddings = config.use_absolute_position_embeddings
 
-        hidden_dim = tensor_space[TransformerDimNames.hidden]
+        hidden_dim = tensor_space[LanguageModelDimNames.hidden]
         vocab_dim = tensor_space[
             LanguageModelDimNames.vocab_tp if self._parallel_embeddings else LanguageModelDimNames.vocab
         ]
@@ -129,7 +128,7 @@ class LanguageModelEmbedding[ConfigType: LanguageModelBaseConfig](Configurable[L
     ) -> torch.Tensor:
         if isinstance(input_, TensorMeta):
             return TensorMeta.from_dims(
-                kwargs[TransformerKwargs.hidden_dims],
+                kwargs[LanguageModelKwargs.hidden_dims],
                 tensor_name="Embedding output",
                 dtype=self._residual_dtype,
             )

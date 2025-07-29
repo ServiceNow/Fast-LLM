@@ -5,12 +5,13 @@ from fast_llm.engine.base_model.config import BaseModelConfig
 from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
 from fast_llm.engine.distributed.config import DistributedDimNames
 from fast_llm.functional.config import CrossEntropyImpl, DistillationLossImpl
+from fast_llm.layers.block.config import BlockDimNames, BlockKwargs
 from fast_llm.layers.transformer.config import TransformerConfig
 from fast_llm.layers.transformer.rotary.config import NoRotaryConfig
 from fast_llm.utils import Assert
 
 
-class LanguageModelDimNames:
+class LanguageModelDimNames(BlockDimNames):
     # Embedding dimensions
     position_embed = "position_embed"
     vocab = "vocab"
@@ -33,7 +34,7 @@ class LanguageModelLossNames:
         return f"language_model_loss_{index}"
 
 
-class LanguageModelKwargs:
+class LanguageModelKwargs(BlockKwargs):
     position_ids = "position_ids"
     # TODO: These are generic
     labels = "labels"
@@ -46,6 +47,7 @@ class LanguageModelKwargs:
 
 @config_class()
 class LanguageModelBaseConfig(BaseModelConfig):
+    # TODO: block
     transformer: TransformerConfig = Field(
         desc="Configuration for the transformer architecture.",
         hint=FieldHint.architecture,

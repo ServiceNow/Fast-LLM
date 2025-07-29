@@ -9,16 +9,11 @@ from fast_llm.engine.config_utils.run import log_pipeline_parallel_main_rank
 from fast_llm.engine.config_utils.tensor_space import TensorSpace
 from fast_llm.functional.triton.mlp import mlp_autograd, mlp_autograd_looped
 from fast_llm.functional.triton.sparse_copy import get_sparse_map
+from fast_llm.layers.block.config import BlockConfig, BlockDimNames, BlockKwargs
+from fast_llm.layers.block.mlp.config import MLPDimNames, MLPLossNames, RoutingType
+from fast_llm.layers.block.mlp.mlp import MLPBase
 from fast_llm.layers.common.auxiliary_loss import AuxiliaryLoss, z_loss
 from fast_llm.layers.common.linear import Linear
-from fast_llm.layers.transformer.config import (
-    RoutingType,
-    TransformerConfig,
-    TransformerDimNames,
-    TransformerKwargs,
-    TransformerLossNames,
-)
-from fast_llm.layers.transformer.mlp import MLPBase
 from fast_llm.logging import log_distributed_grad, log_distributed_tensor, log_memory_usage
 from fast_llm.tensor import TensorMeta, init_normal_
 from fast_llm.utils import Assert, get_lr_scale
@@ -26,7 +21,7 @@ from fast_llm.utils import Assert, get_lr_scale
 logger = logging.getLogger(__name__)
 
 
-class MixtureOfExpertMLP(MLPBase):
+class MixtureOfExpertMLP[ConfigType: BlockConfig](MLPBase[ConfigType]):
     """
     MoeLayer following implementation from
     https://github.com/NVIDIA/Megatron-LM/blob/46ebc0e4202c980d98900000d455f754a7ff9d4b/megatron/model/transformer.py#L346
@@ -40,12 +35,11 @@ class MixtureOfExpertMLP(MLPBase):
 
     _group: ProcessGroup
 
-    def __init__(self, config: TransformerConfig, tensor_space: TensorSpace, name: str = "mlp", block_index: int = 0):
+    def __init__(self, config: BlockConfig, tensor_space: TensorSpace, name: str = "mlp", block_index: int = 0):
         Assert.gt(config.num_experts, 1)
         # TODO: Implement?
         assert not config.add_linear_biases, "Biases not supported for MoE."
         super().__init__(config, tensor_space, name, block_index)
-        self._config = config
         self._tensor_space = tensor_space
         self._debug_mode = self._config.debug_transformer or self._config.debug_transformer_memory
 
@@ -63,8 +57,8 @@ class MixtureOfExpertMLP(MLPBase):
         router_lr_scale = get_lr_scale(config.router_lr_scale, layer_lr_scale)
 
         self.router = Linear(
-            tensor_space[TransformerDimNames.hidden],
-            tensor_space[TransformerDimNames.unshared_experts],
+            tensor_space[BlockDimNames.hidden],
+            tensor_space[MLPDimNames.unshared_experts],
             bias=False,
             weight_init_method=init_normal_(
                 std=config.init_method_std, min_val=config.init_method_min, max_val=config.init_method_max
@@ -86,7 +80,7 @@ class MixtureOfExpertMLP(MLPBase):
         hidden_states = input_.flatten(0, -2)
         logits = self.router(hidden_states)
         if self._debug_mode:
-            self._debug_log(logits, "Router logits", TransformerDimNames.experts, kwargs)
+            self._debug_log(logits, "Router logits", MLPDimNames.experts, kwargs)
 
         # Apply z_loss if applicable
         if self._z_loss_factor > 0.0:
@@ -96,7 +90,7 @@ class MixtureOfExpertMLP(MLPBase):
                 self.training,
                 grad_scale=kwargs.get("grad_output"),
                 losses=losses,
-                loss_name=TransformerLossNames.router_z_loss,
+                loss_name=MLPLossNames.router_z_loss,
             )
 
         # Apply input_jitter if applicable:
@@ -106,7 +100,7 @@ class MixtureOfExpertMLP(MLPBase):
 
         # Routing
         if self._routing_type == RoutingType.topk:
-            scores, top_experts = self._topk_routing(logits, kwargs.get(TransformerKwargs.grad_output), losses)
+            scores, top_experts = self._topk_routing(logits, kwargs.get(BlockKwargs.grad_output), losses)
             if self._num_shared_experts > 0:
                 scores, top_experts = self._add_shared_experts(top_experts, scores)
         elif self._routing_type == RoutingType.sinkhorn:
@@ -116,8 +110,8 @@ class MixtureOfExpertMLP(MLPBase):
 
         if self._debug_mode:
             # To log all ranks set `global_=False`
-            self._debug_log(scores, "Router scores", TransformerDimNames.top_experts, kwargs)
-            self._debug_log(top_experts, "Router top experts", TransformerDimNames.top_experts, kwargs)
+            self._debug_log(scores, "Router scores", MLPDimNames.top_experts, kwargs)
+            self._debug_log(top_experts, "Router top experts", MLPDimNames.top_experts, kwargs)
 
         return self._mlp_forward(hidden_states, scores, top_experts).view_as(input_), None  # noqa
 
@@ -135,12 +129,12 @@ class MixtureOfExpertMLP(MLPBase):
             None,
             self.layer_2.weight,
             None,
-            gated=self._gated,
-            activation_type=self._activation_type,
+            gated=self._config.gated,
+            activation_type=self._config.activation_type,
             group=self._intermediate_dim.parallel_group,
             sequence_parallel=self._sequence_parallel,
             training=self.training,
-            recompute_level=self._recompute_level,
+            recompute_level=self._config.mlp_recompute_level,
             transposed_layer_2_weight=True,
             sparse_map=sparse_map,
         )
@@ -155,12 +149,12 @@ class MixtureOfExpertMLP(MLPBase):
             self.layer_1.weight,
             self.layer_2.weight,
             self._num_experts,
-            self._gated,
-            self._activation_type,
+            self._config.gated,
+            self._config.activation_type,
             self._intermediate_dim.parallel_group,
             self._sequence_parallel,
             self.training,
-            self._recompute_level,
+            self._config.mlp_recompute_level,
         )
 
     @torch.compile
@@ -185,7 +179,7 @@ class MixtureOfExpertMLP(MLPBase):
                 probs.flatten(0, -2).mean(dim=0) * mask.flatten(0, -2).mean(dim=0, dtype=torch.float32)
             )
             if losses is not None:
-                losses[TransformerLossNames.load_balancing_loss].append(aux_loss.detach())
+                losses[MLPLossNames.load_balancing_loss].append(aux_loss.detach())
             if self.training and grad_scale is not None:
                 scores = AuxiliaryLoss.apply(
                     scores, aux_loss, self._num_unshared_experts * self._load_balancing_factor * grad_scale
@@ -255,7 +249,7 @@ class MixtureOfExpertMLP(MLPBase):
 
     def _get_meta(self, tensor: torch.Tensor, name: str, dim_name: str, kwargs: dict[str, typing.Any]) -> TensorMeta:
         return TensorMeta.from_dims(
-            kwargs[TransformerKwargs.hidden_dims][:-1] + (self._tensor_space[dim_name],),
+            kwargs[BlockKwargs.hidden_dims][:-1] + (self._tensor_space[dim_name],),
             tensor_name=f"{self._name} {name}",
             dtype=tensor.dtype,
         )

@@ -14,18 +14,6 @@ if typing.TYPE_CHECKING:
     from fast_llm.layers.common.normalization import LayerNorm, RMSNorm
 
 
-@config_class()
-class LLMBlockConfig(BaseModelConfig):
-    _abstract = False
-
-    per_layer_lr_scale: list[float] | None = Field(
-        default=None,
-        desc="Custom learning rate scale for each layer.",
-        doc="May be used to freeze some layers by setting their scale to zero.",
-        hint=FieldHint.feature,
-    )
-
-
 class NormalizationImplementation(str, enum.Enum):
     """
     An enum for the available implementations of layer norm.

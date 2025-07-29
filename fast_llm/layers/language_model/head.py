@@ -23,7 +23,6 @@ from fast_llm.layers.language_model.config import (
     LanguageModelLossNames,
 )
 from fast_llm.layers.language_model.embedding import WORD_EMBEDDINGS_WEIGHT
-from fast_llm.layers.transformer.config import TransformerDimNames, TransformerKwargs
 from fast_llm.logging import log_distributed_tensor
 from fast_llm.tensor import ParameterMeta, TensorMeta, init_normal_
 from fast_llm.utils import Assert, div, get_unique
@@ -61,7 +60,7 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
         if self._cross_entropy_splits is not None and self._sequence_parallel:
             assert not self._parallel_embeddings
 
-        hidden_dim = self._tensor_space[TransformerDimNames.hidden]
+        hidden_dim = self._tensor_space[LanguageModelDimNames.hidden]
 
         self._loss_coefficient = (
             config.prediction_loss_coefficient[prediction_distance] if config.prediction_loss_coefficient else 1.0
@@ -168,20 +167,22 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
             if "output_hidden_states" in kwargs and kwargs["output_hidden_states"]:
                 # The last hidden layer output is returned normalized in the HF Transformers-style output, at least for LLama style models.
                 # So, if needed, we gather the data after normalization and set it as the output of the previous layer.
-                dims = list(kwargs[TransformerKwargs.hidden_dims])
-                sequence_index = 1 - int(kwargs[TransformerKwargs.sequence_first])
+                dims = list(kwargs[LanguageModelKwargs.hidden_dims])
+                sequence_index = 1 - int(kwargs[LanguageModelKwargs.sequence_first])
                 dims[sequence_index] = (
                     TensorDim(
-                        TransformerDimNames.sequence_q_tp, dims[sequence_index].global_size, DistributedDimNames.tensor
+                        LanguageModelDimNames.sequence_q_tp,
+                        dims[sequence_index].global_size,
+                        DistributedDimNames.tensor,
                     )
                     if self._sequence_parallel_logits
-                    else TensorDim(TransformerDimNames.sequence_q, dims[sequence_index].global_size)
+                    else TensorDim(LanguageModelDimNames.sequence_q, dims[sequence_index].global_size)
                 )
                 meta = TensorMeta.from_dims(tuple(dims), tensor_name="transformer hidden_state", dtype=ln_output.dtype)
                 hidden_state, _ = meta.local_to_global(ln_output.detach(), distributed=self._tensor_space.distributed)
                 kwargs["hidden_states"][len(kwargs["hidden_states"]) - 1]["tensor"] = hidden_state
 
-        grad_output = kwargs[TransformerKwargs.grad_output] / (
+        grad_output = kwargs[LanguageModelKwargs.grad_output] / (
             self._group_size if self._sequence_parallel_logits else 1
         )
 
@@ -221,18 +222,18 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
                 if lm_target is not None:
                     # MTP: Shift the labels
                     lm_target_sequence_length = (
-                        lm_target.size(1 - kwargs[TransformerKwargs.sequence_first])
+                        lm_target.size(1 - kwargs[LanguageModelKwargs.sequence_first])
                         + 1
                         - self._config.prediction_heads
                     )
-                    if TransformerKwargs.sequence_q_dim in kwargs:
-                        Assert.eq(lm_target_sequence_length, kwargs[TransformerKwargs.sequence_q_dim].size)
+                    if LanguageModelKwargs.sequence_q_dim in kwargs:
+                        Assert.eq(lm_target_sequence_length, kwargs[LanguageModelKwargs.sequence_q_dim].size)
                     lm_target_slice = slice(
                         self._prediction_distance, self._prediction_distance + lm_target_sequence_length
                     )
                     lm_target = (
                         lm_target[lm_target_slice]
-                        if kwargs[TransformerKwargs.sequence_first]
+                        if kwargs[LanguageModelKwargs.sequence_first]
                         else lm_target[:, lm_target_slice]
                     ).flatten()
             else:
@@ -341,23 +342,23 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
             vocab_dim = self._tensor_space[
                 LanguageModelDimNames.vocab if self._sequence_parallel_logits else LanguageModelDimNames.vocab_tp
             ]
-            dims = [*kwargs[TransformerKwargs.hidden_dims][:-1], vocab_dim]
-            sequence_index = 1 - int(kwargs[TransformerKwargs.sequence_first])
+            dims = [*kwargs[LanguageModelKwargs.hidden_dims][:-1], vocab_dim]
+            sequence_index = 1 - int(kwargs[LanguageModelKwargs.sequence_first])
             dims[sequence_index] = (
                 TensorDim(
-                    TransformerDimNames.sequence_q_tp, dims[sequence_index].global_size, DistributedDimNames.tensor
+                    LanguageModelDimNames.sequence_q_tp, dims[sequence_index].global_size, DistributedDimNames.tensor
                 )
                 if self._sequence_parallel_logits
-                else TensorDim(TransformerDimNames.sequence_q, dims[sequence_index].global_size)
+                else TensorDim(LanguageModelDimNames.sequence_q, dims[sequence_index].global_size)
             )
 
             dim_names = (
-                [TransformerDimNames.sequence_q_tp, LanguageModelDimNames.vocab]
+                [LanguageModelDimNames.sequence_q_tp, LanguageModelDimNames.vocab]
                 if self._sequence_parallel_logits
-                else [TransformerDimNames.sequence_q, LanguageModelDimNames.vocab_tp]
+                else [LanguageModelDimNames.sequence_q, LanguageModelDimNames.vocab_tp]
             )
 
-            dim_names.insert(int(kwargs[TransformerKwargs.sequence_first]), TransformerDimNames.batch)
+            dim_names.insert(int(kwargs[LanguageModelKwargs.sequence_first]), LanguageModelDimNames.batch)
             log_distributed_tensor(
                 "",
                 logits,

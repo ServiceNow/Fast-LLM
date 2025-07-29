@@ -1,21 +1,23 @@
 import typing
-from abc import ABC
 
 import torch
 
+from fast_llm.config import Configurable
 from fast_llm.engine.base_model.base_model import Layer
 from fast_llm.engine.config_utils.tensor_space import TensorSpace
 from fast_llm.functional.config import TritonConfig
 from fast_llm.functional.triton.mlp import mlp_autograd, torch_mlp_activation, triton_mlp_activation_autograd
+from fast_llm.layers.block.config import BlockConfig, BlockDimNames
+from fast_llm.layers.block.mlp.config import MLPDimNames
+from fast_llm.layers.block.peft import TransformerSubLayerName
 from fast_llm.layers.common.linear import LinearBase
-from fast_llm.layers.transformer.config import TransformerConfig, TransformerDimNames, TransformerSubLayerName
 from fast_llm.tensor import init_normal_, init_zeros_
 from fast_llm.utils import Assert, get_lr_scale
 
 
-class MLPBase(Layer, ABC):
-    def __init__(self, config: TransformerConfig, tensor_space: TensorSpace, name: str = "mlp", block_index: int = 0):
-        super().__init__()
+class MLPBase[ConfigType: BlockConfig](Layer, Configurable[ConfigType]):
+    def __init__(self, config: BlockConfig, tensor_space: TensorSpace, name: str = "mlp", block_index: int = 0):
+        super().__init__(config)
         self._name = name
         self._block_index = block_index
 
@@ -30,13 +32,9 @@ class MLPBase(Layer, ABC):
             max_val=config.init_method_max_mlp_2,
         )
 
-        hidden_dim = tensor_space[TransformerDimNames.hidden]
-        self._intermediate_dim = tensor_space[TransformerDimNames.composite_expert_mlp]
+        hidden_dim = tensor_space[BlockDimNames.hidden]
+        self._intermediate_dim = tensor_space[MLPDimNames.composite_expert_mlp]
         self._sequence_parallel = tensor_space.distributed_config.sequence_tensor_parallel
-        self._recompute_level = config.mlp_recompute_level
-
-        self._gated = config.gated
-        self._activation_type = config.activation_type
         self._activation_fn = triton_mlp_activation_autograd if TritonConfig.TRITON_ENABLED else torch_mlp_activation
 
         layer_lr_scale = config.per_layer_lr_scale[block_index] if config.per_layer_lr_scale else None
@@ -46,7 +44,7 @@ class MLPBase(Layer, ABC):
         # So both layers' weights have shape (num_experts [* gate_up] * ffn, hidden_size)
         self.layer_1 = LinearBase(
             hidden_dim,
-            tensor_space[TransformerDimNames.composite_gated_expert_mlp],
+            tensor_space[MLPDimNames.composite_gated_expert_mlp],
             bias=config.add_mlp_bias,
             weight_init_method=init_method_1,
             bias_init_method=init_method_1 if config.random_bias_init else init_zeros_,
@@ -68,8 +66,8 @@ class MLPBase(Layer, ABC):
         self.layer_2 = config.peft.apply_linear(self.layer_2, TransformerSubLayerName.mlp_2)
 
 
-class MLP(MLPBase):
-    def __init__(self, config: TransformerConfig, tensor_space: TensorSpace, name: str = "mlp", block_index: int = 0):
+class MLP[ConfigType: BlockConfig](MLPBase[ConfigType]):
+    def __init__(self, config: BlockConfig, tensor_space: TensorSpace, name: str = "mlp", block_index: int = 0):
         Assert.eq(config.num_experts, 1)
         super().__init__(config, tensor_space, name, block_index)
 
@@ -89,12 +87,12 @@ class MLP(MLPBase):
                 self.layer_1.bias,
                 self.layer_2.weight,
                 None if parallel_group else self.layer_2.bias,
-                gated=self._gated,
-                activation_type=self._activation_type,
+                gated=self._config.gated,
+                activation_type=self._config.activation_type,
                 group=parallel_group,
                 sequence_parallel=self._sequence_parallel,
                 training=self.training,
-                recompute_level=self._recompute_level,
+                recompute_level=self._config.mlp_recompute_level,
                 transposed_layer_2_weight=self.layer_2.transposed_weight,
             ),
             self.layer_2.bias if parallel_group else None,
