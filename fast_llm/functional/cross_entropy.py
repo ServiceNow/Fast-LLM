@@ -151,7 +151,8 @@ def _fused_cross_entropy_forward_backward(
 
     loss = per_sample_loss.mean()
     if target_format != TargetFormat.labels and group is not None:
-        all_reduce(loss, op=ReduceOp.MEAN, group=group)
+        all_reduce(loss, op=ReduceOp.SUM, group=group)
+        loss /= group.size()
 
     return loss, grad
 
