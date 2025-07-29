@@ -278,7 +278,8 @@ def _torch_reverse_kl_forward_backward(
             loss = (loss_per_sample * loss_mask).mean()
 
         if group is not None and target_format != TargetFormat.labels:
-            all_reduce(loss, op=ReduceOp.MEAN, group=group)
+            all_reduce(loss, op=ReduceOp.SUM, group=group)
+            loss /= group.size()
 
         if grad_output is not None:
             loss.backward(torch.full_like(loss, grad_output))
