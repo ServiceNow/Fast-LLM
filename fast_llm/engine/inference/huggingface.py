@@ -13,7 +13,6 @@ from fast_llm.engine.inference.runner import InferenceRunner
 from fast_llm.engine.multi_stage.config import StageMode
 from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
 from fast_llm.engine.schedule.runner import ScheduleRunner
-from fast_llm.utils import Assert
 
 logger = logging.getLogger(__name__)
 
@@ -56,10 +55,6 @@ class HuggingfacePreTrainedModel(transformers.PreTrainedModel):
         # A model can be created from pretrained which set it up in the current HF wrapper api
         # or set existing model which  also must be setup, so, do not accept not setup model
         assert fast_llm_model.is_setup
-
-        # We only support data parallel for now
-        Assert.eq(fast_llm_model.distributed.config.model_parallel, 1)
-        Assert.eq(fast_llm_model.distributed.config.sequence_data_parallel, 1)
 
         self._inference_runner.setup()
 

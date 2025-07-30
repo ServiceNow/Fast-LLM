@@ -267,6 +267,9 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
             )
             if targets is None:
                 # TODO: Make a proper way of returning the model output.
+                if "global_logits" in kwargs and kwargs["global_logits"] == True:
+                    logits_meta = self._get_logits_meta(kwargs, loss)
+                    loss, _ = logits_meta.local_to_global(loss.detach(), distributed=self._tensor_space.distributed)
                 kwargs["logits" if self._prediction_distance == 0 else f"logits_{self._prediction_distance}"] = loss
                 return None, None
         else:
@@ -306,6 +309,19 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
             all_reduce(loss, group=self._tensor_space.distributed.tensor_group)
         return loss, logit_input_grad.view_as(input_) if logit_input_grad is not None else None
 
+    def _get_logits_meta(self, kwargs: dict, logits: torch.Tensor, logits_name: str = "transformer logits"):
+        vocab_dim = self._tensor_space.get_tensor_dim(
+            LanguageModelDimNames.vocab if self._sequence_parallel_logits else LanguageModelDimNames.vocab_tp
+        )
+        dims = [*kwargs[TransformerKwargs.hidden_dims][:-1], vocab_dim]
+        sequence_index = 1 - int(kwargs[TransformerKwargs.sequence_first])
+        dims[sequence_index] = (
+            TensorDim(TransformerDimNames.sequence_q_tp, dims[sequence_index].global_size, DistributedDimNames.tensor)
+            if self._sequence_parallel_logits
+            else TensorDim(TransformerDimNames.sequence_q, dims[sequence_index].global_size)
+        )
+        return TensorMeta.from_dims(tuple(dims), tensor_name=logits_name, dtype=logits.dtype)
+
     def _logits_cross_entropy_forward_backward(
         self,
         input_: torch.Tensor,
@@ -334,19 +350,7 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
                 logits_scale_factor=self._logits_scale_factor,
             )
         if self._debug_transformer and self._cross_entropy_splits is None:
-            vocab_dim = self._tensor_space.get_tensor_dim(
-                LanguageModelDimNames.vocab if self._sequence_parallel_logits else LanguageModelDimNames.vocab_tp
-            )
-            dims = [*kwargs[TransformerKwargs.hidden_dims][:-1], vocab_dim]
-            sequence_index = 1 - int(kwargs[TransformerKwargs.sequence_first])
-            dims[sequence_index] = (
-                TensorDim(
-                    TransformerDimNames.sequence_q_tp, dims[sequence_index].global_size, DistributedDimNames.tensor
-                )
-                if self._sequence_parallel_logits
-                else TensorDim(TransformerDimNames.sequence_q, dims[sequence_index].global_size)
-            )
-
+            # TODO: what for we are creating dim names list here?
             dim_names = (
                 [TransformerDimNames.sequence_q_tp, LanguageModelDimNames.vocab]
                 if self._sequence_parallel_logits
@@ -358,7 +362,7 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
                 "",
                 logits,
                 level=self._debug_transformer,
-                meta=TensorMeta.from_dims(tuple(dims), tensor_name="transformer logits", dtype=logits.dtype),
+                meta=self._get_logits_meta(kwargs, logits),
                 distributed=self._tensor_space.distributed,
                 scale=self._logits_scale_factor,
             )
