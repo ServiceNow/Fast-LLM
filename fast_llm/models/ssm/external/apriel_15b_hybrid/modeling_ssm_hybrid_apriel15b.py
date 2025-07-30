@@ -1048,14 +1048,14 @@ class Mamba2(nn.Module):
 
         A = -torch.exp(self.A_log.float())  # (d_inner, d_state)
 
-        zxbcdt = self.in_proj(hidden_states_input)
-        z, x, B, C, dt = torch.split(zxbcdt, [self.d_inner, self.d_xb, self.d_xb, self.d_inner, self.dt_rank], dim=-1)
+        zxbc = self.in_proj(hidden_states_input)
+        z, x, B, C = torch.split(zxbc, [self.d_inner, self.d_xb, self.d_xb, self.d_inner], dim=-1)
 
         B = rearrange(B, "b (n_group dstate) -> b n_group dstate", dstate=self.d_state)
         B = torch.repeat_interleave(B, dim=1, repeats=self.repeat_group)
         C = rearrange(C, "b (n_group dstate) -> b n_group dstate", dstate=self.d_state).contiguous()
 
-        dt = self.dt_proj(dt)  # B, d_inner
+        dt = self.dt_proj(self.dt_in_proj(hidden_states_input))  # B, d_inner
 
         if self.repeat_kv_before_conv:
             x = rearrange(x, "b (n_group dstate) -> b n_group dstate", dstate=self.d_state)
