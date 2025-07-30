@@ -413,6 +413,7 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
                     target_format=(
                         TargetFormat.labels if self._config.distillation_model is None else TargetFormat.logits
                     ),
+                    vocab_parallel=logits.shape[-1] != self._config.vocab_size,
                 )
             elif self._distillation_loss_implementation == DistillationLossImpl.cross_entropy:
                 distillation_loss, distillation_grad = cross_entropy_forward_backward(
