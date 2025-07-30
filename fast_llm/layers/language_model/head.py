@@ -239,7 +239,8 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
                 lm_target = None
 
         targets = (dpo_target, lm_target, distillation_target, loss_mask)
-        if self._sequence_parallel_logits:
+        if self._sequence_parallel_logits and not self._parallel_embeddings and not self._sequence_parallel:
+            # We dont split targets if they already have been split in the embedding layer!
             targets = [
                 None if target is None else split_op(target, self._tensor_space.distributed.tensor_group, 0)
                 for target in targets
