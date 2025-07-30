@@ -113,7 +113,8 @@ class Stage(StageBase):
                 losses,
                 metrics,
             )
-            self._log_layer_forward(output, kwargs, i)
+            if output is not None:
+                self._log_layer_forward(output, kwargs, i)
 
             # TODO: very slow and memory consuming, only use for debugging for now
             # TODO: decide if and how we want to return

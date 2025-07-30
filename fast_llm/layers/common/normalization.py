@@ -158,7 +158,7 @@ class LayerNorm(torch.nn.Module):
         lr_scale: float | None = None,
     ):
         super().__init__()
-        assert hidden_dim.parallel_dim is None
+        assert not hidden_dim.is_parallel
         self._eps = eps
         self._zero_centered = zero_centered
         if implementation == NormalizationImplementation.auto:
@@ -242,7 +242,7 @@ class RMSNorm(torch.nn.Module):
         lr_scale: float | None = None,
     ):
         super().__init__()
-        assert hidden_dim.parallel_dim is None
+        assert not hidden_dim.is_parallel
         self._eps = eps
         self._zero_centered = zero_centered
         if implementation == NormalizationImplementation.auto:

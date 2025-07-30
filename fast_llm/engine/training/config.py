@@ -54,7 +54,7 @@ class IntervalConfig(Config):
 
     def _validate(self) -> None:
         if self.interval:
-            with self._set_implicit_default():
+            with self._set_implicit_default(None):
                 self.offset %= self.interval
         super()._validate()
 
@@ -388,7 +388,7 @@ class TrainerConfig(PretrainedFastLLMModelConfig, ExperimentConfig):
             # TODO: Add support.
             Assert.eq(self.model.distributed.pipeline_parallel, 1)
             # TODO: Check if these work.
-            Assert.eq(self.model.distributed.tensor_parallel, 1)
+            # Assert.eq(self.model.distributed.tensor_parallel, 1)
             Assert.eq(self.model.distributed.sequence_data_parallel, 1)
         if self.run.experiment_dir is None:
             assert not self.training.checkpoint.enabled()

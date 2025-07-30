@@ -24,7 +24,7 @@ from fast_llm.layers.transformer.config import (
     VisionTransformerKwargs,
 )
 from fast_llm.layers.transformer.preprocessing import BackupAttentionPreprocessor, FlashAttnVarlenPreprocessor
-from fast_llm.layers.transformer.transformer import TransformerLayer, VisionTransformerLayer
+from fast_llm.layers.transformer.transformer import TransformerBlock, VisionTransformerBlock
 from fast_llm.layers.vision_encoder.adapter import VisionAdapter
 from fast_llm.layers.vision_encoder.config import VisionEncoderDimNames, VisionEncoderKwargs
 from fast_llm.layers.vision_encoder.patch_conv import PatchConv
@@ -79,11 +79,11 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
         for i in range(self._config.prediction_heads):
             if i > 0:
                 layers.append(
-                    TransformerLayer(
+                    TransformerBlock(
                         self._config.transformer,
                         self._tensor_space,
                         # TODO MTP: which index?
-                        layer_index=max(self._config.transformer.num_layers + i, 1),
+                        block_index=max(self._config.transformer.num_layers + i, 1),
                         # The last layer only returns the transformer output.
                         # The previous layers return a stack of shared_hidden and transformer_output.
                         return_input=i < self._config.prediction_heads - 1,
@@ -100,7 +100,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
 
     def get_vision_layers(self) -> list[Layer]:
         vit_layers = [
-            VisionTransformerLayer(self._config.vision_encoder.transformer, self._tensor_space, layer_index=idx + 1)
+            VisionTransformerBlock(self._config.vision_encoder.transformer, self._tensor_space, block_index=idx + 1)
             for idx in range(self._config.vision_encoder.transformer.num_layers)
         ]
         return [
@@ -120,10 +120,10 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
         return [
             *(self.get_embedding_layers()),
             *[
-                TransformerLayer(
+                TransformerBlock(
                     self._config.transformer,
                     self._tensor_space,
-                    layer_index=i + 1,
+                    block_index=i + 1,
                     # The last layer only returns the transformer output.
                     # The previous layers return a stack of shared_hidden and transformer_output.
                     return_input=self._config.prediction_heads > 1 and i == self._config.transformer.num_layers - 1,
@@ -342,19 +342,20 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                 reference_model.forward(reference_tokens, reference_kwargs, iteration=iteration)
                 reference_logits[i][f"{name}_logits"] = reference_kwargs["logits"]
 
+        token_ids = batch.token_ids
         if sequence_first:
             # Move the sequence dimension first to make sequence parallel ops more efficient.
-            batch.token_ids = batch.token_ids.transpose(0, 1).contiguous()
+            token_ids = token_ids.transpose(0, 1).contiguous()
 
         preprocessed = []
         presents = None
         for i, (_, kwargs_meta) in enumerate(preprocessed_meta):
             sequence_k = kwargs_meta[TransformerKwargs.sequence_k_dim].size
             if sequence_first:
-                tokens = batch.token_ids[sequence_k - sequence_q : sequence_k]
+                tokens = token_ids[sequence_k - sequence_q : sequence_k]
             else:
                 # TODO: Avoid multiple contiguous calls?
-                tokens = batch.token_ids[:, sequence_k - sequence_q : sequence_k].contiguous()
+                tokens = token_ids[:, sequence_k - sequence_q : sequence_k].contiguous()
             if batch.sequence_lengths is not None:
                 kwargs_meta[TransformerKwargs.sequence_lengths] = batch.sequence_lengths
             if batch.chosen_spans is not None:
@@ -374,10 +375,10 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             if phase != PhaseType.inference:
                 sequence_offset = sequence_k - sequence_q + 1  # +1 for shift in labels
                 if sequence_first:
-                    labels = batch.token_ids[sequence_offset : sequence_k + prediction_heads]
+                    labels = token_ids[sequence_offset : sequence_k + prediction_heads]
                 else:
                     # TODO: Avoid multiple contiguous calls?
-                    labels = batch.token_ids[:, sequence_offset : sequence_k + prediction_heads].contiguous()
+                    labels = token_ids[:, sequence_offset : sequence_k + prediction_heads].contiguous()
                     # We set label indices to -100 for masked spans, inline with ignore_index in torch.nn.CrossEntropyLoss
                     # TODO: take ignore_index from config
                 labels_cloned = False
@@ -452,7 +453,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
         return self.layers[self.embedding_layer_index]
 
     @property
-    def transformer_layers(self) -> list[TransformerLayer]:
+    def transformer_layers(self) -> list[TransformerBlock]:
         return self.layers[self.embedding_layer_index + 1 : -1]
 
     @property
