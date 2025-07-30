@@ -239,7 +239,7 @@ def _torch_reverse_kl_forward_backward_vocab_parallel(
     # For reverse KL: KL(q||p) = Σ q * log(q/p) = Σ q * (log(q) - log(p))
     # Use kl_div with: input=log(p), target=q, log_target=False
     # This gives: Σ q * (log(q) - log(p)) = exactly what we want!
-    batch_size = logits.shape[0]
+    # batch_size = logits.shape[0]
     with torch.enable_grad():
         logits_ = logits.detach().requires_grad_(grad_output is not None)
 
@@ -248,11 +248,12 @@ def _torch_reverse_kl_forward_backward_vocab_parallel(
         student_log_probs = torch.log(student_probs + 1e-8)  # log(q)
 
         # Reverse KL: input=teacher_log_probs, target=student_probs
+        # should be equivalent to doing batchmean locally and just summing over groups
         if loss_mask is None:
             loss = torch.nn.functional.kl_div(
                 teacher_log_probs,  # input = log(p)
                 student_log_probs,  # target = log(q)
-                reduction="sum",
+                reduction="batchmean",
                 log_target=True,
             )
         else:
@@ -264,7 +265,7 @@ def _torch_reverse_kl_forward_backward_vocab_parallel(
 
         if group is not None and target_format != TargetFormat.labels:
             all_reduce(loss, op=ReduceOp.SUM, group=group)
-            loss /= batch_size
+            # loss /= batch_size
 
         if grad_output is not None:
             loss.backward(torch.full_like(loss, grad_output))
@@ -303,11 +304,13 @@ def _torch_reverse_kl_forward_backward(
     # teacher_log_probs = torch.log(teacher_probs)
 
     # Scale target logits more carefully
-    scaled_target = target * (logits_scale_factor / teacher_softmax_temperature)
+    # scaled_target = target * (logits_scale_factor / teacher_softmax_temperature)
 
     # Clamp to prevent extreme values before log_softmax
-    scaled_target = torch.clamp(scaled_target, min=-50, max=50)
-    teacher_log_probs = torch.log_softmax(scaled_target, dim=-1)
+    # scaled_target = torch.clamp(scaled_target, min=-50, max=50)
+    # teacher_log_probs = torch.log_softmax(scaled_target, dim=-1)
+    teacher_probs = _fused_softmax(target, logits_scale_factor * (1 / teacher_softmax_temperature), group)
+    teacher_log_probs = torch.log(teacher_probs + 1e-8)  # log(p)
 
     # For reverse KL: KL(q||p) = Σ q * log(q/p) = Σ q * (log(q) - log(p))
     # Use kl_div with: input=log(p), target=q, log_target=False
@@ -317,9 +320,11 @@ def _torch_reverse_kl_forward_backward(
         logits_ = logits.detach().requires_grad_(grad_output is not None)
 
         # Use log_softmax for consistency instead of _fused_softmax
-        scaled_logits = logits_ * logits_scale_factor
-        scaled_logits = torch.clamp(scaled_logits, min=-50, max=50)
-        student_log_probs = torch.log_softmax(scaled_logits, dim=-1)
+        # scaled_logits = logits_ * logits_scale_factor
+        # scaled_logits = torch.clamp(scaled_logits, min=-50, max=50)
+        # student_log_probs = torch.log_softmax(scaled_logits, dim=-1)
+        student_probs = _fused_softmax(logits_, logits_scale_factor, group)
+        student_log_probs = torch.log(student_probs + 1e-8)  # log(q)
 
         # Convert to probabilities for kl_div
         # student_probs_ = torch.exp(student_log_probs)
