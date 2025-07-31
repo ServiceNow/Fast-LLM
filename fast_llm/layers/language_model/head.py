@@ -8,6 +8,7 @@ from torch.distributed import all_reduce
 from fast_llm.config import Configurable
 from fast_llm.core.ops import split_op
 from fast_llm.engine.base_model.base_model import Layer
+from fast_llm.engine.config_utils.initialization import init_normal_
 from fast_llm.engine.config_utils.tensor_space import DefaultDimNames, TensorDim, TensorSpace
 from fast_llm.engine.distributed.config import DistributedDimNames
 from fast_llm.functional.autograd import grad_is_context, wrap_forward_backward
@@ -25,7 +26,7 @@ from fast_llm.layers.language_model.config import (
 )
 from fast_llm.layers.language_model.embedding import WORD_EMBEDDINGS_WEIGHT
 from fast_llm.logging import log_distributed_tensor
-from fast_llm.tensor import ParameterMeta, TensorMeta, init_normal_
+from fast_llm.tensor import ParameterMeta, TensorMeta
 from fast_llm.utils import Assert, div, get_unique
 
 logger = logging.getLogger(__name__)

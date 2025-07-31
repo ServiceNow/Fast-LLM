@@ -2,6 +2,7 @@ import typing
 
 import torch
 
+from fast_llm.engine.config_utils.initialization import init_normal_, init_zeros_
 from fast_llm.engine.config_utils.tensor_space import TensorSpace
 from fast_llm.functional.config import TritonConfig
 from fast_llm.functional.triton.mlp import mlp_autograd, torch_mlp_activation, triton_mlp_activation_autograd
@@ -10,7 +11,6 @@ from fast_llm.layers.block.config import BlockConfig, BlockDimNames
 from fast_llm.layers.block.mlp.config import MLPDimNames
 from fast_llm.layers.block.peft import TransformerSubLayerName
 from fast_llm.layers.common.linear import LinearBase
-from fast_llm.tensor import init_normal_, init_zeros_
 from fast_llm.utils import Assert, get_lr_scale
 
 

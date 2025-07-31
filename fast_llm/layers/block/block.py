@@ -102,7 +102,7 @@ class BlockLayer(torch.nn.Module, abc.ABC):
         self._sequence_parallel: bool = self._tensor_space.distributed_config.sequence_tensor_parallel
         self._debug = DebugLayer(
             tensor_space,
-            f"Block {self._block_index} {self._name}",
+            self._name,
             debug_level,
             debug_memory,
         )
@@ -128,19 +128,19 @@ class Block[ConfigType: BlockConfig](Configurable[ConfigType], Layer):
 
     def __init__(self, config: ConfigType, tensor_space: TensorSpace, block_index: int, return_input: bool = False):
         super().__init__(config)
+        # TODO: Argument?
+        self._name = f"Block {self._block_index}"
         self._tensor_space: TensorSpace = tensor_space
         self._dropout_p: float = self._config.hidden_dropout
+        # For multi-token prediction, return a stack of shared_hidden and transformer_output.
+        self._return_input: bool = return_input
+        self._block_index = block_index
         self._debug = DebugLayer(
             tensor_space,
-            f"Block {self._block_index} {self._name}",
+            self._name,
             self._config.debug_transformer,
             self._config.debug_transformer_memory,
         )
-        # For multi-token prediction, return a stack of shared_hidden and transformer_output.
-        self._return_input: bool = return_input
-
-        self._block_index = block_index
-        self._debug_mode = self._config.debug_transformer or self._config.debug_transformer_memory
         hidden_dim = self._tensor_space[BlockDimNames.hidden]
         # Note, layer_lr_scale does not impact the norms
         # TODO: add a separate norm_lr_scale
@@ -187,35 +187,33 @@ class Block[ConfigType: BlockConfig](Configurable[ConfigType], Layer):
             dims = kwargs[BlockKwargs.hidden_dims]
             if self._return_input:
                 dims = (TensorDim("stacked_input_output", 2),) + dims
-            return TensorMeta.from_dims(
-                dims, tensor_name=f"{self._name} {self._block_index} output", dtype=input_.dtype
-            )
+            return TensorMeta.from_dims(dims, tensor_name=f"{self._name} output", dtype=input_.dtype)
         generator = (
             self._tensor_space.distributed.tp_generator
             if self._tensor_space.distributed_config.sequence_tensor_parallel
             else self._tensor_space.distributed.pp_generator
         )
         if self._debug.enabled:
-            self._debug(None, "Begin", kwargs[BlockKwargs.hidden_dims], kwargs)
+            self._debug(None, "begin", kwargs[BlockKwargs.hidden_dims], kwargs)
         fw_input = input_
         hidden_states = self.norm_1(input_)
         if self._debug.enabled:
-            self._debug(hidden_states, "Norm 1", kwargs[BlockKwargs.hidden_dims], kwargs)
+            self._debug(hidden_states, "norm 1", kwargs[BlockKwargs.hidden_dims], kwargs)
         hidden_states, bias = getattr(self, self._mixer_module_name)(hidden_states, kwargs)
         if self._debug.enabled:
             self._debug(
                 hidden_states if bias is None else hidden_states + bias,
-                f"{self._mixer_module_name} output",
+                "mixer output",
                 kwargs[BlockKwargs.hidden_dims],
                 kwargs,
             )
         with set_generator(generator):
             input_ = self._bias_dropout_add(hidden_states, bias, input_)
         if self._debug.enabled:
-            self._debug(input_, f"{self._mixer_module_name} residual", kwargs[BlockKwargs.hidden_dims], kwargs)
+            self._debug(input_, "mixer residual", kwargs[BlockKwargs.hidden_dims], kwargs)
         hidden_states = self.norm_2(input_)
         if self._debug.enabled:
-            self._debug(hidden_states, "Norm 2", kwargs[BlockKwargs.hidden_dims], kwargs)
+            self._debug(hidden_states, "norm 2", kwargs[BlockKwargs.hidden_dims], kwargs)
         hidden_states, bias = self.mlp(hidden_states, kwargs, losses, metrics)
         if self._debug.enabled:
             self._debug(

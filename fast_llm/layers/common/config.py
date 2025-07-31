@@ -87,7 +87,7 @@ class LayerNormalizationBaseConfig(NormalizationConfig):
     )
 
     def get_layer(self, hidden_dim: "TensorDim", lr_scale: float | None = None) -> "LayerNorm | RMSNorm":
-        from fast_llm.tensor import init_uniform_centered_
+        from fast_llm.engine.config_utils.initialization import init_uniform_centered_
 
         kwargs = {
             "hidden_dim": hidden_dim,
