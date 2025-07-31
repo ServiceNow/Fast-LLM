@@ -4,15 +4,13 @@ import typing
 import einops
 import torch
 
-from fast_llm.engine.config_utils.initialization import init_ones_, init_uniform_centered_, init_zeros_
 from fast_llm.engine.config_utils.tensor_space import DefaultDimNames, TensorSpace
 from fast_llm.functional.config import ActivationType
 from fast_llm.layers.block.config import BlockConfig, BlockKwargs
 from fast_llm.layers.block.mixer import Mixer
 from fast_llm.layers.common.linear import InputParallelLinear, OutputParallelLinear
 from fast_llm.layers.ssm.config import SSMConfig, SSMDimNames
-from fast_llm.layers.ssm.mamba_layer import init_kaiming_
-from fast_llm.tensor import ParameterMeta
+from fast_llm.tensor import ParameterMeta, init_kaiming_, init_ones_, init_uniform_centered_, init_zeros_
 from fast_llm.utils import get_lr_scale
 
 logger = logging.getLogger(__name__)

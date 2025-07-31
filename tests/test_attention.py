@@ -6,7 +6,7 @@ from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.layers.transformer.attention import Attention
-from fast_llm.layers.transformer.config import AttentionDimNames, AttentionKwargs, TransformerConfig
+from fast_llm.layers.transformer.config import TransformerConfig, TransformerDimNames, TransformerKwargs
 from fast_llm.layers.transformer.preprocessing import FlashAttnVarlenPreprocessor
 from fast_llm.utils import Assert
 
@@ -77,13 +77,13 @@ def test_varlen_preprocessor():
     varlen_preprocessor = FlashAttnVarlenPreprocessor(transformer_cfg, tensor_space=tensor_space)
     for micro_seq_idx in range(int(sequence_length / micro_sequence_length)):
         kwargs = {
-            AttentionKwargs.sequence_q_dim: TensorDim(AttentionDimNames.sequence_k, micro_sequence_length),
-            AttentionKwargs.sequence_k_dim: TensorDim(
-                AttentionDimNames.sequence_k, (micro_seq_idx + 1) * micro_sequence_length
+            TransformerKwargs.sequence_q_dim: TensorDim(TransformerDimNames.sequence_k, micro_sequence_length),
+            TransformerKwargs.sequence_k_dim: TensorDim(
+                TransformerDimNames.sequence_k, (micro_seq_idx + 1) * micro_sequence_length
             ),
-            AttentionKwargs.sequence_length: sequence_length,
-            AttentionKwargs.sequence_lengths: sequence_lengths,
+            TransformerKwargs.sequence_length: sequence_length,
+            TransformerKwargs.sequence_lengths: sequence_lengths,
         }
         varlen_preprocessor.preprocess(None, kwargs)
-        Assert.all_equal(kwargs[AttentionKwargs.cu_seqlens_q], cumulative_sequences_q[micro_seq_idx])
-        Assert.all_equal(kwargs[AttentionKwargs.cu_seqlens_k], cumulative_sequences_k[micro_seq_idx])
+        Assert.all_equal(kwargs[TransformerKwargs.cu_seqlens_q], cumulative_sequences_q[micro_seq_idx])
+        Assert.all_equal(kwargs[TransformerKwargs.cu_seqlens_k], cumulative_sequences_k[micro_seq_idx])

@@ -1,12 +1,13 @@
+import abc
 import functools
 import logging
+import math
 import typing
 
 import torch
 
 from fast_llm.core.distributed import ReduceOp
 from fast_llm.core.ops import reduce_op
-from fast_llm.engine.config_utils.initialization import Initializer, LambdaInitializer
 from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
 from fast_llm.engine.distributed.config import DistributedDim, DistributedDimNames
 from fast_llm.engine.distributed.distributed import Distributed
@@ -360,3 +361,70 @@ def accumulate_gradient(param: torch.Tensor, grad: torch.Tensor) -> None:
         triton_copy(grad, param.grad_buffer)  # noqa
     else:
         triton_add(grad, param.grad_buffer, out=param.grad_buffer)  # noqa
+
+
+class Initializer(abc.ABC):
+    @abc.abstractmethod
+    def __call__(self, meta: ParameterMeta, tensor: torch.Tensor, generator: torch.Generator) -> None:
+        pass
+
+    requires_global_initialization = False
+
+
+class LambdaInitializer(Initializer):
+    def __init__(
+        self,
+        init_method: typing.Callable[[ParameterMeta, torch.Tensor, torch.Generator], None],
+        requires_global_initialization: bool = False,
+    ) -> None:
+        self._init_method = init_method
+        self.requires_global_initialization = requires_global_initialization
+
+    def __call__(self, meta: ParameterMeta, tensor: torch.Tensor, generator: torch.Generator) -> None:
+        return self._init_method(meta, tensor, generator)
+
+
+def init_fill_(value: float) -> LambdaInitializer:
+    def init_(meta: ParameterMeta, tensor: torch.Tensor, generator: torch.Generator) -> None:  # noqa
+        tensor.fill_(value)
+
+    return LambdaInitializer(init_)
+
+
+init_zeros_ = init_fill_(0.0)
+init_ones_ = init_fill_(1.0)
+
+
+def init_normal_(
+    mean: float = 0.0, std: float = 1.0, min_val: float | None = None, max_val: float | None = None
+) -> LambdaInitializer:
+    def init_(meta: ParameterMeta, tensor: torch.Tensor, generator: torch.Generator) -> None:  # noqa
+        tensor = tensor.normal_(mean, std, generator=generator)
+        if min_val is not None or max_val is not None:
+            tensor.clamp_(min=min_val, max=max_val)
+
+    return LambdaInitializer(init_)
+
+
+def init_kaiming_(d_in: float) -> LambdaInitializer:
+    return init_normal_(0.0, math.sqrt(2.0 / d_in))
+
+
+def init_uniform_(
+    low: float = 0.0, high: float = 1.0, min_val: float | None = None, max_val: float | None = None
+) -> LambdaInitializer:
+    def init_(meta: ParameterMeta, tensor: torch.Tensor, generator: torch.Generator) -> None:  # noqa
+        tensor = tensor.uniform_(low, high, generator=generator)
+        if min_val is not None or max_val is not None:
+            tensor.clamp_(min=min_val, max=max_val)
+
+    return LambdaInitializer(init_)
+
+
+def init_uniform_centered_(high: float, max_val: float | None = None, mean: float = 0.0) -> LambdaInitializer:
+    return init_uniform_(
+        mean - high,
+        mean + high,
+        min_val=None if max_val is None else mean - max_val,
+        max_val=None if max_val is None else mean + max_val,
+    )

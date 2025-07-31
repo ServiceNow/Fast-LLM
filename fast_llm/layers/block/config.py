@@ -1,20 +1,12 @@
-import abc
 import enum
-import functools
-import typing
 
 from fast_llm.config import Field, FieldHint, check_field, config_class
 from fast_llm.engine.base_model.config import BaseModelConfig
 from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
+from fast_llm.layers.block.mlp.config import MLPConfig
 from fast_llm.layers.block.peft import TransformerPeftConfig
 from fast_llm.layers.common.config import NormalizationConfig
 from fast_llm.utils import Assert
-
-if typing.TYPE_CHECKING:
-    from fast_llm.layers.block.block import Block, BlockLayer
-
-
-# TODO: Generalize these beyond language models? (Ex. vision)
 
 
 class BlockDimNames:
@@ -47,76 +39,10 @@ class AddLinearBiasChoices(str, enum.Enum):
     only_attn_qkv = "only_attn_qkv"
 
 
-@config_class(registry=True)
-class BlockLayerConfig(BaseModelConfig):
-    _abstract = True
-    block: "BlockConfig" = Field(init=False)
-
-    def _validate(self) -> None:
-        assert hasattr(self, "block")
-        Assert.is_(self.block.mlp, self)
-        super()._validate()
-
-    @property
-    def layer_class(self) -> "type[BlockLayer]":
-        raise NotImplementedError()
-
-    def get_layer(self, tensor_space: TensorSpace, block_index: int, name: str) -> "BlockLayer":
-        return self.layer_class(self, tensor_space, block_index, name)
-
-
 @config_class()
-class MixerConfig(BlockLayerConfig):
-    _abstract = True
+# TODO: Use composition for MLP config
+class BlockConfig(MLPConfig, BaseModelConfig):
 
-    # Needed for backward compatibility.
-    module_name: typing.ClassVar[str] = "mixer"
-
-    @classmethod
-    def _from_dict(
-        cls,
-        default: dict[str, typing.Any],
-        strict: bool = True,
-        flat: bool = False,
-    ) -> typing.Self:
-        if cls is MixerConfig and cls.get_subclass(default.get("type")) is None:
-            from fast_llm.layers.transformer.config import AttentionConfig
-
-            # Default subclass.
-            return AttentionConfig._from_dict(default, strict, flat)
-        return super()._from_dict(default, strict=strict, flat=flat)
-
-
-@config_class()
-class MLPBaseConfig(BlockLayerConfig):
-    _abstract = True
-
-    @classmethod
-    def _from_dict(
-        cls,
-        default: dict[str, typing.Any],
-        strict: bool = True,
-        flat: bool = False,
-    ) -> typing.Self:
-        if cls is MLPBaseConfig and cls.get_subclass(default.get("type")) is None:
-            from fast_llm.layers.block.mlp.config import MLPConfig
-
-            # Default subclass.
-            return MLPConfig._from_dict(default, strict, flat)
-        return super()._from_dict(default, strict=strict, flat=flat)
-
-
-@config_class()
-class BlockConfig(BaseModelConfig):
-    _abstract = False
-    mixer: MixerConfig = Field(
-        desc="Configuration for the mixer.",
-        hint=FieldHint.architecture,
-    )
-    mlp: MLPBaseConfig = Field(
-        desc="Configuration for the MLP.",
-        hint=FieldHint.architecture,
-    )
     # TODO: Review names
     normalization: NormalizationConfig = Field(
         desc="Configuration for the normalization layers architecture.",
@@ -131,6 +57,11 @@ class BlockConfig(BaseModelConfig):
         desc="Dropout applied to the residual connections.",
         hint=FieldHint.feature,
         valid=check_field(Assert.geq, 0),
+    )
+    full_precision_residual: bool = Field(
+        default=False,
+        desc="Store the residuals for the transformer in full precision (`optimization_dtype`).",
+        hint=FieldHint.stability,
     )
     debug_transformer: int = Field(
         default=0,
@@ -149,45 +80,8 @@ class BlockConfig(BaseModelConfig):
         hint=FieldHint.architecture,
     )
 
-    block_sequence: "BlockSequenceConfig" = Field(init=False)
-
-    def _validate(self) -> None:
-        assert hasattr(self, "block_sequence")
-        Assert.incl(self, self.block_sequence.blocks.values())
-        self.mixer.block = self
-        self.mlp.block = self
-        super()._validate()
-
-    def setup_tensor_space(self, tensor_space: TensorSpace) -> None:
-        self.mlp.setup_tensor_space(tensor_space)
-        self.mixer.setup_tensor_space(tensor_space)
-
-        # Hidden dimension
-        tensor_space.add_tensor_dim(TensorDim(BlockDimNames.hidden, self.block_sequence.hidden_size))
-
-    @abc.abstractmethod
-    def get_block(self) -> "Block":
-        pass
-
-
-@config_class()
-class BlockSequenceConfig(BaseModelConfig):
-    _abstract = True
-
-    blocks: dict[str, BlockConfig] = Field()
-    block_pattern: tuple[str, ...] = Field(
-        default=None,
-        desc="The pattern of blocks (referred by name) to use. The sequence is repeated until reaching `num_blocks`."
-        " Default: cycle over `blocks` in the order they are defined.",
-    )
-    default_block: str = Field(
-        default=None,
-        desc="The default block configuration to use when referring to the model."
-        " Used to set some defaults in the language model.",
-    )
-
     # TODO: Move these, not specific to a single block.
-    num_blocks: int = Field(
+    num_layers: int = Field(
         default=12,
         desc="Number of layers in the transformer.",
         hint=FieldHint.architecture,
@@ -199,28 +93,30 @@ class BlockSequenceConfig(BaseModelConfig):
         hint=FieldHint.architecture,
         valid=check_field(Assert.gt, 0),
     )
-    full_precision_residual: bool = Field(
-        default=False,
-        desc="Store the residuals for the transformer in full precision (`optimization_dtype`).",
-        hint=FieldHint.stability,
+    per_layer_lr_scale: list[float] | None = Field(
+        default=None,
+        desc="Custom learning rate scale for each layer.",
+        doc="May be used to freeze some layers by setting their scale to zero.",
+        hint=FieldHint.feature,
     )
 
     def _validate(self) -> None:
-        for block in self.blocks.values():
-            block.validate()
-        if self.block_pattern is None:
-            self.block_pattern = tuple(self.blocks)
-        if self.default_block is None:
-            self.default_block = self.block_pattern[0]
+        with self._set_implicit_default():
+            if self.ffn_hidden_size is None:
+                self.ffn_hidden_size = 4 * self.hidden_size
+
         super()._validate()
 
-    def get_block_config(self, block_index: int) -> BlockConfig:
-        return self.blocks[self.block_pattern[block_index % len(self.block_pattern)]]
+    @property
+    def add_mlp_bias(self) -> bool:
+        if isinstance(self.add_linear_biases, bool):
+            return self.add_linear_biases
+        if self.add_linear_biases == AddLinearBiasChoices.everywhere:
+            return True
+        return False
 
     def setup_tensor_space(self, tensor_space: TensorSpace) -> None:
-        for block in self.blocks.values():
-            block.setup_tensor_space(tensor_space)
+        super().setup_tensor_space(tensor_space)
 
-    @functools.cached_property
-    def default_block_config(self) -> BlockConfig:
-        return self.blocks[self.default_block]
+        # Hidden dimension
+        tensor_space.add_tensor_dim(TensorDim(BlockDimNames.hidden, self.hidden_size))

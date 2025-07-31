@@ -176,7 +176,7 @@ class CommonHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
         self,
     ) -> list[WeightConverter]:
         converters = []
-        num_layers = self._model.config.base_model.transformer.num_blocks
+        num_layers = self._model.config.base_model.transformer.num_layers
 
         # Embeddings
         converters.append(WeightConverter("layers.0.word_embeddings_weight", "model.embed_tokens.weight"))
@@ -256,7 +256,7 @@ class CommonHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
         return converters
 
     def _create_lm_head_converters(self) -> list[WeightConverter]:
-        num_layers = self._model.config.base_model.transformer.num_blocks
+        num_layers = self._model.config.base_model.transformer.num_layers
         prediction_heads = self._model.config.base_model.prediction_heads
         norm_bias: bool = isinstance(self._model.config.base_model.transformer.normalization, LayerNormalizationConfig)
         converters = []
@@ -654,7 +654,7 @@ class MTPLlamaHuggingfaceCheckpointHandler(CustomModelingExportMixin, CommonLlam
 
     # Override base method to handle the MTP heads
     def _create_lm_head_converters(self) -> list[WeightConverter]:
-        num_layers = self._model.config.base_model.transformer.num_blocks
+        num_layers = self._model.config.base_model.transformer.num_layers
         prediction_heads = self._model.config.base_model.prediction_heads
         norm_bias: bool = isinstance(self._model.config.base_model.transformer.normalization, LayerNormalizationConfig)
         converters = []

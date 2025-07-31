@@ -1,24 +1,27 @@
 import logging
+import typing
 import warnings
 
 import torch
 
 from fast_llm.core.distributed import ProcessGroup, set_generator
-from fast_llm.engine.config_utils.initialization import init_normal_
+from fast_llm.engine.config_utils.run import log_pipeline_parallel_main_rank
 from fast_llm.engine.config_utils.tensor_space import TensorSpace
 from fast_llm.functional.triton.mlp import mlp_autograd, mlp_autograd_looped
 from fast_llm.functional.triton.sparse_copy import get_sparse_map
-from fast_llm.layers.block.config import BlockDimNames, BlockKwargs
-from fast_llm.layers.block.mlp.config import MLPConfig, MLPDimNames, MLPLossNames, RoutingType
+from fast_llm.layers.block.config import BlockConfig, BlockDimNames, BlockKwargs
+from fast_llm.layers.block.mlp.config import MLPDimNames, MLPLossNames, RoutingType
 from fast_llm.layers.block.mlp.mlp import MLPBase
 from fast_llm.layers.common.auxiliary_loss import AuxiliaryLoss, z_loss
 from fast_llm.layers.common.linear import Linear
-from fast_llm.utils import get_lr_scale
+from fast_llm.logging import log_distributed_grad, log_distributed_tensor, log_memory_usage
+from fast_llm.tensor import TensorMeta, init_normal_
+from fast_llm.utils import Assert, get_lr_scale
 
 logger = logging.getLogger(__name__)
 
 
-class MixtureOfExpertMLP[ConfigType: MLPConfig](MLPBase[ConfigType]):
+class MixtureOfExpertMLP[ConfigType: BlockConfig](MLPBase[ConfigType]):
     """
     MoeLayer following implementation from
     https://github.com/NVIDIA/Megatron-LM/blob/46ebc0e4202c980d98900000d455f754a7ff9d4b/megatron/model/transformer.py#L346
@@ -32,10 +35,23 @@ class MixtureOfExpertMLP[ConfigType: MLPConfig](MLPBase[ConfigType]):
 
     _group: ProcessGroup
 
-    def __init__(self, config: ConfigType, tensor_space: TensorSpace, block_index: int, name: str):
-        super().__init__(config, tensor_space, block_index, name)
+    def __init__(self, config: BlockConfig, tensor_space: TensorSpace, name: str = "mlp", block_index: int = 0):
+        Assert.gt(config.num_experts, 1)
         # TODO: Implement?
-        assert not self._config.add_linear_biases, "Biases not supported for MoE."
+        assert not config.add_linear_biases, "Biases not supported for MoE."
+        super().__init__(config, tensor_space, name, block_index)
+        self._tensor_space = tensor_space
+        self._debug_mode = self._config.debug_transformer or self._config.debug_transformer_memory
+
+        self._num_experts = config.num_experts
+        self._experts_per_token = config.num_experts_per_token
+        self._num_shared_experts = config.num_shared_experts
+        self._num_unshared_experts = config.num_unshared_experts
+
+        self._routing_type = config.expert_routing_type
+        self._load_balancing_factor = config.expert_auxiliary_loss_coefficient
+        self._z_loss_factor = config.expert_z_loss_coefficient
+        self._moe_jitter_eps = config.moe_jitter_eps
 
         layer_lr_scale = config.per_layer_lr_scale[block_index] if config.per_layer_lr_scale else None
         router_lr_scale = get_lr_scale(config.router_lr_scale, layer_lr_scale)
@@ -56,20 +72,21 @@ class MixtureOfExpertMLP[ConfigType: MLPConfig](MLPBase[ConfigType]):
             )
             dropless_moe = False
         self._mlp_forward = self._forward_dropless if dropless_moe else self._forward_looped
+        self._dynamic_shape = config.dropless_dynamic_shape
 
     def forward(
         self, input_: torch.Tensor, kwargs: dict, losses: dict | None = None, metrics: dict | None = None
     ) -> torch.Tensor:
         hidden_states = input_.flatten(0, -2)
         logits = self.router(hidden_states)
-        if self._debug.enabled:
-            self._debug(logits, "Router logits", kwargs[BlockKwargs.hidden_dims][:-1] + (MLPDimNames.experts,), kwargs)
+        if self._debug_mode:
+            self._debug_log(logits, "Router logits", MLPDimNames.experts, kwargs)
 
         # Apply z_loss if applicable
-        if self._config.expert_z_loss_coefficient > 0.0:
+        if self._z_loss_factor > 0.0:
             logits = z_loss(
                 logits,
-                self._config.expert_z_loss_coefficient,
+                self._z_loss_factor,
                 self.training,
                 grad_scale=kwargs.get("grad_output"),
                 losses=losses,
@@ -77,31 +94,24 @@ class MixtureOfExpertMLP[ConfigType: MLPConfig](MLPBase[ConfigType]):
             )
 
         # Apply input_jitter if applicable:
-        if self.training and self._config.moe_jitter_eps > 0.0:
+        if self.training and self._moe_jitter_eps > 0.0:
             with set_generator(self._tensor_space.distributed.pp_generator):
                 logits = self._apply_input_jitter(logits)
 
         # Routing
-        if self._config.expert_routing_type == RoutingType.topk:
+        if self._routing_type == RoutingType.topk:
             scores, top_experts = self._topk_routing(logits, kwargs.get(BlockKwargs.grad_output), losses)
-            if self._config.num_shared_experts > 0:
+            if self._num_shared_experts > 0:
                 scores, top_experts = self._add_shared_experts(top_experts, scores)
-        elif self._config.expert_routing_type == RoutingType.sinkhorn:
+        elif self._routing_type == RoutingType.sinkhorn:
             scores, top_experts = self._sinkhorn_routing(logits)
         else:
-            raise NotImplementedError(self._config.expert_routing_type)
+            raise NotImplementedError(self._routing_type)
 
-        if self._debug.enabled:
+        if self._debug_mode:
             # To log all ranks set `global_=False`
-            self._debug(
-                scores, "Router scores", kwargs[BlockKwargs.hidden_dims][:-1] + (MLPDimNames.top_experts,), kwargs
-            )
-            self._debug(
-                top_experts,
-                "Router top experts",
-                kwargs[BlockKwargs.hidden_dims][:-1] + (MLPDimNames.top_experts,),
-                kwargs,
-            )
+            self._debug_log(scores, "Router scores", MLPDimNames.top_experts, kwargs)
+            self._debug_log(top_experts, "Router top experts", MLPDimNames.top_experts, kwargs)
 
         return self._mlp_forward(hidden_states, scores, top_experts).view_as(input_), None  # noqa
 
@@ -109,9 +119,7 @@ class MixtureOfExpertMLP[ConfigType: MLPConfig](MLPBase[ConfigType]):
         self, hidden_states: torch.Tensor, scores: torch.Tensor, top_experts: torch.Tensor
     ) -> torch.Tensor:
         # Compute token counts and the sparse mapping (dense_row, top_index) -> sparse_row.
-        sparse_map = get_sparse_map(
-            top_experts, self._config.num_experts, dynamic_shape=self._config.dropless_dynamic_shape
-        )
+        sparse_map = get_sparse_map(top_experts, self._num_experts, dynamic_shape=self._dynamic_shape)
 
         # Sparse MLP
         return mlp_autograd(
@@ -140,7 +148,7 @@ class MixtureOfExpertMLP[ConfigType: MLPConfig](MLPBase[ConfigType]):
             top_experts,
             self.layer_1.weight,
             self.layer_2.weight,
-            self._config.num_experts,
+            self._num_experts,
             self._config.gated,
             self._config.activation_type,
             self._intermediate_dim.parallel_group,
@@ -151,9 +159,7 @@ class MixtureOfExpertMLP[ConfigType: MLPConfig](MLPBase[ConfigType]):
 
     @torch.compile
     def _apply_input_jitter(self, logits: torch.Tensor) -> torch.Tensor:
-        return logits * torch.empty_like(logits).uniform_(
-            1.0 - self._config.moe_jitter_eps, 1.0 + self._config.moe_jitter_eps
-        )
+        return logits * torch.empty_like(logits).uniform_(1.0 - self._moe_jitter_eps, 1.0 + self._moe_jitter_eps)
 
     def _topk_routing(
         self,
@@ -161,11 +167,11 @@ class MixtureOfExpertMLP[ConfigType: MLPConfig](MLPBase[ConfigType]):
         grad_scale: float | None = None,
         losses: dict | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        top_logits, top_experts = torch.topk(logits, k=self._config.num_experts_per_token, dim=-1)
+        top_logits, top_experts = torch.topk(logits, k=self._experts_per_token, dim=-1)
         scores = torch.softmax(top_logits, dim=-1, dtype=torch.float32)
         if losses is not None or (self.training and grad_scale is not None):
             probs = torch.softmax(logits, dim=-1, dtype=torch.float32)
-            mask = torch.nn.functional.one_hot(top_experts, num_classes=self._config.num_unshared_experts).sum(dim=1)
+            mask = torch.nn.functional.one_hot(top_experts, num_classes=self._num_unshared_experts).sum(dim=1)
             # Auxiliary loss, corresponding to the sum of probabilities for the top experts.
             # In the optimal case (uniform distribution), loss = experts_per_token / num_experts.
             # In the worst case (whole distribution in the top experts), loss = 1.
@@ -176,9 +182,7 @@ class MixtureOfExpertMLP[ConfigType: MLPConfig](MLPBase[ConfigType]):
                 losses[MLPLossNames.load_balancing_loss].append(aux_loss.detach())
             if self.training and grad_scale is not None:
                 scores = AuxiliaryLoss.apply(
-                    scores,
-                    aux_loss,
-                    self._config.num_unshared_experts * self._config.expert_auxiliary_loss_coefficient * grad_scale,
+                    scores, aux_loss, self._num_unshared_experts * self._load_balancing_factor * grad_scale
                 )
         return scores, top_experts
 
@@ -187,31 +191,67 @@ class MixtureOfExpertMLP[ConfigType: MLPConfig](MLPBase[ConfigType]):
     ) -> tuple[torch.Tensor, torch.Tensor]:
         # Add the shared experts (last ones) to the top experts.
         shared_experts = torch.arange(
-            self._config.num_unshared_experts,
-            self._config.num_experts,
-            device=top_experts.device,
-            dtype=top_experts.dtype,
+            self._num_unshared_experts, self._num_experts, device=top_experts.device, dtype=top_experts.dtype
         )[None].repeat(top_experts.size(0), 1)
         top_experts = torch.cat((shared_experts, top_experts), dim=1)
         # Add scores of 1 to scores for shared experts.
-        scores = torch.cat((scores.new_ones(scores.size(0), self._config.num_shared_experts), scores), dim=1)
+        scores = torch.cat((scores.new_ones(scores.size(0), self._num_shared_experts), scores), dim=1)
         return scores, top_experts
 
     def _sinkhorn_routing(self, logits: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         if self.training:
-            _, top_experts = torch.topk(sinkhorn(logits), k=self._config.num_experts_per_token, dim=-1)
+            _, top_experts = torch.topk(sinkhorn(logits), k=self._experts_per_token, dim=-1)
             logits = self._sinkhorn_activation(logits)
             scores = torch.gather(logits, -1, top_experts)
         else:
             logits = self._sinkhorn_activation(logits)
-            scores, top_experts = torch.topk(logits, k=self._config.num_experts_per_token, dim=-1)
+            scores, top_experts = torch.topk(logits, k=self._experts_per_token, dim=-1)
         return scores, top_experts
 
     def _sinkhorn_activation(self, logits: torch.Tensor) -> torch.Tensor:
         return (
             torch.sigmoid(logits)
-            if self._config.num_experts_per_token == 1
+            if self._experts_per_token == 1
             else torch.softmax(logits, dim=-1, dtype=torch.float32).type_as(logits)
+        )
+
+    def _debug_log(
+        self,
+        tensor: torch.Tensor | None,
+        name: str,
+        dim_name: str,
+        kwargs: dict[str, typing.Any],
+        global_: bool = True,
+    ) -> None:
+        if self._config.debug_transformer_memory:
+            log_pipeline_parallel_main_rank(lambda: log_memory_usage(f"{self._name} {name}", str))
+        if self._config.debug_transformer and tensor is not None:
+            # TODO: Local vs global
+            meta = self._get_meta(tensor, name, dim_name, kwargs)
+            log_distributed_tensor(
+                "",
+                tensor.view_as(meta),
+                level=self._config.debug_transformer,
+                meta=meta,
+                distributed=self._tensor_space.distributed,
+                global_=global_,
+            )
+            if tensor.requires_grad:
+                log_distributed_grad(
+                    "",
+                    tensor,
+                    level=self._config.debug_transformer,
+                    meta=self._get_meta(tensor, name + " grad", dim_name, kwargs),
+                    distributed=self._tensor_space.distributed,
+                    grad_fn=lambda tensor_: tensor_.view_as(meta),
+                    global_=global_,
+                )
+
+    def _get_meta(self, tensor: torch.Tensor, name: str, dim_name: str, kwargs: dict[str, typing.Any]) -> TensorMeta:
+        return TensorMeta.from_dims(
+            kwargs[BlockKwargs.hidden_dims][:-1] + (self._tensor_space[dim_name],),
+            tensor_name=f"{self._name} {name}",
+            dtype=tensor.dtype,
         )
 
 

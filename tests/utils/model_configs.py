@@ -162,7 +162,6 @@ MODEL_CONFIGS["gpt2"] = ModelTestingConfig(
         "model.base_model.transformer.num_attention_heads=8",
         "model.base_model.transformer.head_groups=8",
         "model.base_model.transformer.init_method_std=0.022",
-        "model.base_model.transformer.use_position_embeddings=True",
         f"model.base_model.vocab_size={MODEL_TEST_VOCAB_SIZE}",
         f"model.multi_stage.debug_param_init={_LOG_LEVEL}",
         f"model.multi_stage.debug_layer_outputs={_LOG_LEVEL}",
@@ -259,7 +258,6 @@ _update_and_add_testing_config(
     extra_args=[
         "model.base_model.transformer.head_groups=4",
         "model.base_model.transformer.rotary.type=default",
-        "model.base_model.transformer.use_position_embeddings=False",
         # Unused, but prevents issues with conversion tests.
         "model.base_model.max_position_embeddings=2048",
     ],

@@ -1,11 +1,13 @@
-import functools
+import typing
 
 from fast_llm.config import Field, FieldHint, check_field, config_class, skip_valid_if_none
-from fast_llm.engine.config_utils.initialization import InitializationConfig, Initializer
+from fast_llm.engine.base_model.config import BaseModelConfig
 from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
 from fast_llm.engine.distributed.config import DistributedDimNames
 from fast_llm.functional.config import CrossEntropyImpl, DistillationLossImpl
-from fast_llm.layers.block.config import BlockDimNames, BlockKwargs, BlockSequenceConfig
+from fast_llm.layers.block.config import BlockDimNames, BlockKwargs
+from fast_llm.layers.transformer.config import TransformerConfig
+from fast_llm.layers.transformer.rotary.config import NoRotaryConfig
 from fast_llm.utils import Assert
 
 
@@ -44,9 +46,17 @@ class LanguageModelKwargs(BlockKwargs):
 
 
 @config_class()
-class LanguageModelConfig(BlockSequenceConfig):
-    decoder: BlockSequenceConfig = Field(
+class LanguageModelBaseConfig(BaseModelConfig):
+    # TODO: block
+    transformer: TransformerConfig = Field(
+        desc="Configuration for the transformer architecture.",
         hint=FieldHint.architecture,
+    )
+    max_position_embeddings: int = Field(
+        default=2048,
+        desc="Number of absolute position embeddings, if applicable.",
+        hint=FieldHint.architecture,
+        valid=check_field(Assert.gt, 0),
     )
     vocab_size: int = Field(
         default=49152,
@@ -54,17 +64,9 @@ class LanguageModelConfig(BlockSequenceConfig):
         hint=FieldHint.architecture,
         valid=check_field(Assert.gt, 0),
     )
-    embedding_dropout: float = Field(
-        # TODO: backward compatibility?
-        default=0.0,
-        desc="Dropout applied to the embedding layer.",
-        hint=FieldHint.feature,
-        valid=check_field(Assert.geq, 0),
-    )
-    absolute_position_embeddings: int | None = Field(
-        # TODO: backward compatibility?
+    use_position_embeddings: bool = Field(
         default=None,
-        desc="Number of absolute position embeddings, if applicable.",
+        desc="Enable absolute position embeddings. Default: Enable unless using rotary embeddings.",
         hint=FieldHint.architecture,
     )
     tie_word_embeddings: bool = Field(
@@ -77,6 +79,22 @@ class LanguageModelConfig(BlockSequenceConfig):
         desc="Number of multi-token prediction heads.",
         hint=FieldHint.architecture,
         valid=check_field(Assert.gt, 0),
+    )
+    init_method_std_embed: float = Field(
+        default=None,
+        desc="Initialization scale for the vocabulary embedding and output weights (logits).",
+        hint=FieldHint.feature,
+        valid=check_field(Assert.geq, 0),
+    )
+    init_method_max_embed: float | None = Field(
+        default=None,
+        desc="Max value for clamping initialized weights of the vocabulary embedding and output (logits).",
+        hint=FieldHint.feature,
+    )
+    init_method_min_embed: float | None = Field(
+        default=None,
+        desc="Min value for clamping initialized weights of the vocabulary embedding and output (logits).",
+        hint=FieldHint.feature,
     )
     enable_dpo: bool | None = Field(
         default=False,
@@ -185,27 +203,26 @@ class LanguageModelConfig(BlockSequenceConfig):
         doc="If not provided, all heads are equally weighted.",
         hint=FieldHint.feature,
     )
-    word_embedding_weight_initialization: InitializationConfig = Field(
-        desc="Initialization configuration for word embeddings. Default: hidden_size**-0.5",
-        hint=FieldHint.feature,
-    )
-    position_embedding_weight_initialization: InitializationConfig = Field(
-        desc="Initialization configuration for position embeddings. Default: hidden_size**-0.5",
-        hint=FieldHint.feature,
-    )
-    output_weight_initialization: InitializationConfig = Field(
-        desc="Initialization configuration for untied output weights. Default: hidden_size**-0.5",
-        hint=FieldHint.feature,
-    )
 
     def _validate(self) -> None:
+        self.transformer.validate()
         with self._set_implicit_default():
             if self.language_model_loss_factor is None:
                 if self.distillation_model is None:
                     self.language_model_loss_factor = 1.0
                 else:
                     self.language_model_loss_factor = 0.0
+            if self.use_position_embeddings is None:
+                self.use_position_embeddings = isinstance(self.transformer.rotary, NoRotaryConfig)
+            if self.init_method_std_embed is None:
+                self.init_method_std_embed = self.transformer.init_method_std
+            if self.init_method_max_embed is None:
+                self.init_method_max_embed = self.transformer.init_method_max
+            if self.init_method_min_embed is None:
+                self.init_method_min_embed = self.transformer.init_method_min
         super()._validate()
+        if self.init_method_max_embed is not None and self.init_method_min_embed is not None:
+            Assert.leq(self.init_method_min_embed, self.init_method_max_embed)
         if self.distillation_model is not None:
             if self.prediction_heads > 1:
                 raise NotImplementedError("Multi-token prediction not supported with distillation.")
@@ -213,40 +230,43 @@ class LanguageModelConfig(BlockSequenceConfig):
             Assert.eq(len(self.prediction_loss_coefficient), self.prediction_heads)
             for coeff in self.prediction_loss_coefficient:
                 Assert.geq(coeff, 0)
-
-        if self.output_weight_initialization.has_initialization:
-            assert self.use_absolute_position_embeddings
-        if self.output_weight_initialization.has_initialization:
-            assert not self.tie_word_embeddings
+        if self.transformer.per_layer_lr_scale is not None:
+            # -1 because the first prediction head's transformer layer is accounted for in num_layers
+            # +1 because the layer index starts at 1
+            Assert.eq(
+                len(self.transformer.per_layer_lr_scale), self.transformer.num_layers + self.prediction_heads - 1 + 1
+            )
 
     def setup_tensor_space(self, tensor_space: TensorSpace) -> None:
-        super().setup_tensor_space(tensor_space)
+        self.transformer.setup_tensor_space(tensor_space)
         tensor = tensor_space.distributed_config.get_distributed_dim(DistributedDimNames.tensor)
 
         # Embedding dimensions
-        if self.use_absolute_position_embeddings:
-            tensor_space.add_tensor_dim(
-                TensorDim(LanguageModelDimNames.position_embed, self.absolute_position_embeddings)
-            )
+        tensor_space.add_tensor_dim(TensorDim(LanguageModelDimNames.position_embed, self.max_position_embeddings))
         # TODO: Need both?
         tensor_space.add_tensor_dim(TensorDim(LanguageModelDimNames.vocab, self.vocab_size))
         tensor_space.add_tensor_dim(TensorDim(LanguageModelDimNames.vocab_tp, self.vocab_size, tensor))
 
-    @functools.cached_property
-    def word_embedding_weight_initialization_method(self) -> Initializer:
-        if self.word_embedding_weight_initialization.has_initialization:
-            return self.word_embedding_weight_initialization.get_initializer()
-        else:
-            return self.hidden_size**-0.5
+    @property
+    def num_absolute_position_embeddings(self) -> int:
+        # TODO: Rename from max embeddings.
+        return self.max_position_embeddings if self.use_absolute_position_embeddings else None
 
     @property
     def use_absolute_position_embeddings(self) -> int:
         # TODO: Set through num embeddings instead instead.
-        return self.absolute_position_embeddings is not None
+        return self.use_position_embeddings
 
-    @functools.cached_property
-    def output_weight_initialization_method(self) -> Initializer:
-        if self.output_weight_initialization.has_initialization:
-            return self.output_weight_initialization.get_initializer()
-        else:
-            return self.hidden_size**-0.5
+    @classmethod
+    def from_flat_dict(
+        cls,
+        default: dict[str, typing.Any],
+        strict: bool = True,
+    ) -> typing.Self:
+        # The backward compatibility fix in `NormalizationArchitectureConfig`
+        # won't work for older checkpoints saved with a flat config.
+        # TODO v0.3: Remove flat format
+        cls._handle_renamed_field(default, "normalization_type", "type")
+        cls._handle_renamed_field(default, "layer_norm_eps", "epsilon")
+        cls._handle_renamed_field(default, "zero_centered_normalization", "zero_centered")
+        return super().from_flat_dict(default, strict)

@@ -4,7 +4,7 @@ import torch
 
 from fast_llm.engine.base_model.config import Preprocessor
 from fast_llm.engine.config_utils.tensor_space import DefaultDimNames, TensorDim, TensorSpace
-from fast_llm.layers.transformer.config import AttentionDimNames, AttentionKwargs
+from fast_llm.layers.transformer.config import TransformerDimNames, TransformerKwargs
 from fast_llm.layers.transformer.rotary.config import DefaultRotaryConfig
 from fast_llm.tensor import TensorMeta
 
@@ -26,34 +26,34 @@ class RotaryEmbeddingPreprocessor(Preprocessor):
         self._tensor_space = tensor_space
         self._distributed_config = self._tensor_space.distributed_config
         self._scalar_dim = self._tensor_space[DefaultDimNames.scalar]
-        self._kv_channels_dim = self._tensor_space[AttentionDimNames.kv_channels]
+        self._kv_channels_dim = self._tensor_space[TransformerDimNames.kv_channels]
 
     def preprocess(self, batch, kwargs: dict[str, typing.Any]) -> None:
-        self._create_tensors(kwargs[AttentionKwargs.sequence_length])
-        sequence_k = kwargs[AttentionKwargs.sequence_k_dim].size
-        kwargs[AttentionKwargs.rotary_freq_q] = self._rotary_embedding_frequencies[
-            :, sequence_k - kwargs[AttentionKwargs.sequence_q_dim].size : sequence_k
+        self._create_tensors(kwargs[TransformerKwargs.sequence_length])
+        sequence_k = kwargs[TransformerKwargs.sequence_k_dim].size
+        kwargs[TransformerKwargs.rotary_freq_q] = self._rotary_embedding_frequencies[
+            :, sequence_k - kwargs[TransformerKwargs.sequence_q_dim].size : sequence_k
         ]
-        kwargs[AttentionKwargs.rotary_freq_k] = self._rotary_embedding_frequencies[:, :sequence_k]
+        kwargs[TransformerKwargs.rotary_freq_k] = self._rotary_embedding_frequencies[:, :sequence_k]
 
     def preprocess_meta(self, kwargs: dict[str, typing.Any]) -> None:
-        kwargs[AttentionKwargs.rotary_freq_q] = TensorMeta.from_dims(
+        kwargs[TransformerKwargs.rotary_freq_q] = TensorMeta.from_dims(
             (
                 self._scalar_dim,
-                kwargs[AttentionKwargs.sequence_q_dim],
+                kwargs[TransformerKwargs.sequence_q_dim],
                 self._scalar_dim,
                 self._kv_channels_dim,
             ),
-            tensor_name=AttentionKwargs.rotary_freq_q,
+            tensor_name=TransformerKwargs.rotary_freq_q,
         )
-        kwargs[AttentionKwargs.rotary_freq_k] = TensorMeta.from_dims(
+        kwargs[TransformerKwargs.rotary_freq_k] = TensorMeta.from_dims(
             (
                 self._scalar_dim,
-                kwargs[AttentionKwargs.sequence_q_dim],
+                kwargs[TransformerKwargs.sequence_q_dim],
                 self._scalar_dim,
                 self._kv_channels_dim,
             ),
-            tensor_name=AttentionKwargs.rotary_freq_k,
+            tensor_name=TransformerKwargs.rotary_freq_k,
         )
 
     def _create_tensors(self, sequence_length: int) -> None:
