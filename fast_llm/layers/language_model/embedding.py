@@ -7,28 +7,28 @@ from fast_llm.core.distributed import set_generator
 from fast_llm.core.ops import reduce_forward, split
 from fast_llm.engine.base_model.base_model import Layer
 from fast_llm.engine.config_utils.tensor_space import TensorSpace
-from fast_llm.layers.language_model.config import LanguageModelConfig, LanguageModelDimNames, LanguageModelKwargs
+from fast_llm.layers.language_model.config import LanguageModelBaseConfig, LanguageModelDimNames, LanguageModelKwargs
 from fast_llm.tensor import ParameterMeta, TensorMeta
 from fast_llm.utils import Assert
 
 WORD_EMBEDDINGS_WEIGHT = "word_embeddings_weight"
 
 
-class LanguageModelEmbedding[ConfigType: LanguageModelConfig](Configurable[ConfigType], Layer):
+class LanguageModelEmbedding[ConfigType: LanguageModelBaseConfig](Configurable[ConfigType], Layer):
     """
     A language model embedding layer.
     Consists of word embeddings (tensor-parallel or sequence-tensor-parallel),
     together with optional absolute position embeddings and dropout.
     """
 
-    config_class: typing.ClassVar[type[LanguageModelConfig]] = LanguageModelConfig
+    config_class: typing.ClassVar[type[LanguageModelBaseConfig]] = LanguageModelBaseConfig
 
     # Ensure the layer is on its own stage.
     layer_count: float = 1000.0
 
     def __init__(
         self,
-        config: LanguageModelConfig,
+        config: LanguageModelBaseConfig,
         tensor_space: TensorSpace,
     ):
         super().__init__(config)

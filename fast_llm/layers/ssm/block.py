@@ -1,7 +1,6 @@
 from fast_llm.engine.config_utils.tensor_space import TensorSpace
-from fast_llm.layers.block.block import Block
+from fast_llm.layers.block.block import Block, BlockLayer
 from fast_llm.layers.block.config import BlockConfig
-from fast_llm.layers.block.mixer import Mixer
 from fast_llm.layers.ssm.config import SSMConfig
 
 
@@ -18,7 +17,7 @@ class SSMBlock[ConfigType: BlockConfig](Block[BlockConfig]):
         config: BlockConfig,
         ssm_config: SSMConfig,
         tensor_space: TensorSpace,
-        mixer_cls: type[Mixer],
+        mixer_cls: type[BlockLayer],
         block_index: int,
         return_input: bool = False,
     ):
@@ -26,7 +25,7 @@ class SSMBlock[ConfigType: BlockConfig](Block[BlockConfig]):
         self._mixer_cls = mixer_cls
         super().__init__(config, tensor_space, block_index, return_input)
 
-    def _create_mixer(self) -> Mixer:
+    def _create_mixer(self) -> BlockLayer:
         return self._mixer_cls(
             self._ssm_config,
             tensor_space=self._tensor_space,

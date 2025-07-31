@@ -9,7 +9,7 @@ from fast_llm.engine.config_utils.runnable import RunnableConfig
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig, PretrainedFastLLMModelConfig
 from fast_llm.engine.schedule.config import BatchConfig
 from fast_llm.engine.training.config import TrainerConfig
-from fast_llm.layers.language_model.config import LanguageModelConfig
+from fast_llm.layers.language_model.config import LanguageModelBaseConfig
 from fast_llm.models.gpt.megatron import set_megatron_distributed_seeds
 from fast_llm.utils import Assert, div
 
@@ -119,7 +119,7 @@ class GPTBatchConfig(BatchConfig):
 
 
 @config_class()
-class GPTBaseModelConfig(LanguageModelConfig):
+class GPTBaseModelConfig(LanguageModelBaseConfig):
     _abstract = False
 
     # Debug, to get an exact match with megatron init.

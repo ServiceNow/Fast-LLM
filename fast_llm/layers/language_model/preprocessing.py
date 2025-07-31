@@ -5,7 +5,7 @@ import torch
 
 from fast_llm.engine.base_model.config import Preprocessor
 from fast_llm.engine.config_utils.tensor_space import DefaultDimNames, TensorDim, TensorSpace
-from fast_llm.layers.language_model.config import LanguageModelConfig, LanguageModelKwargs
+from fast_llm.layers.language_model.config import LanguageModelBaseConfig, LanguageModelKwargs
 from fast_llm.tensor import TensorMeta
 from fast_llm.utils import Assert
 
@@ -20,7 +20,7 @@ class PositionEmbeddingPreprocessor(Preprocessor):
 
     def __init__(
         self,
-        config: LanguageModelConfig,
+        config: LanguageModelBaseConfig,
         tensor_space: TensorSpace,
     ):
         self._config = config
@@ -71,7 +71,7 @@ class PositionEmbeddingPreprocessor(Preprocessor):
 
 
 class PreferenceSpanPreprocessor(Preprocessor):
-    def __init__(self, config: LanguageModelConfig, tensor_space: TensorSpace):
+    def __init__(self, config: LanguageModelBaseConfig, tensor_space: TensorSpace):
         self._config = config
         self._tensor_space = tensor_space
         self._distributed_config = self._tensor_space.distributed_config

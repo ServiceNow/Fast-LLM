@@ -44,7 +44,7 @@ class LanguageModelKwargs(BlockKwargs):
 
 
 @config_class()
-class LanguageModelConfig(BlockSequenceConfig):
+class LanguageModelBaseConfig(BlockSequenceConfig):
     decoder: BlockSequenceConfig = Field(
         hint=FieldHint.architecture,
     )

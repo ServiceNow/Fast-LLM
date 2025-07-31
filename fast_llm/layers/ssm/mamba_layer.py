@@ -7,8 +7,8 @@ import torch
 from fast_llm.engine.config_utils.initialization import LambdaInitializer, init_normal_, init_ones_
 from fast_llm.engine.config_utils.tensor_space import DefaultDimNames, TensorSpace
 from fast_llm.functional.config import ActivationType
+from fast_llm.layers.block.block import BlockLayer
 from fast_llm.layers.block.config import BlockConfig, BlockKwargs
-from fast_llm.layers.block.mixer import Mixer
 from fast_llm.layers.common.linear import Linear
 from fast_llm.layers.ssm.config import SSMConfig, SSMDimNames
 from fast_llm.tensor import ParameterMeta
@@ -53,7 +53,7 @@ def init_dtprojbias(dt_max: float, dt_min: float, dt_init_floor: float) -> Lambd
     return LambdaInitializer(init_)
 
 
-class MambaLayer(Mixer):
+class MambaLayer(BlockLayer):
     _mixer_name: typing.ClassVar[str] = "mamba"
 
     def __init__(
@@ -140,7 +140,13 @@ class MambaLayer(Mixer):
         )
         self.out_proj.weight.auto_grad_accumulation = True
 
-    def forward(self, input_: torch.Tensor, kwargs: dict[str, typing.Any]) -> tuple[torch.Tensor, torch.Tensor | None]:
+    def forward(
+        self,
+        input_: torch.Tensor,
+        kwargs: dict[str, typing.Any],
+        losses: dict[str, typing.Any] | None = None,
+        metrics: dict[str, typing.Any] | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
         assert _mamba_available
         in_proj = self.in_proj(input_).permute((1, 2, 0) if kwargs[BlockKwargs.sequence_first] else (0, 2, 1))
 

@@ -7,8 +7,8 @@ import torch
 from fast_llm.engine.config_utils.initialization import init_ones_, init_uniform_centered_, init_zeros_
 from fast_llm.engine.config_utils.tensor_space import DefaultDimNames, TensorSpace
 from fast_llm.functional.config import ActivationType
+from fast_llm.layers.block.block import BlockLayer
 from fast_llm.layers.block.config import BlockConfig, BlockKwargs
-from fast_llm.layers.block.mixer import Mixer
 from fast_llm.layers.common.linear import InputParallelLinear, OutputParallelLinear
 from fast_llm.layers.ssm.config import SSMConfig, SSMDimNames
 from fast_llm.layers.ssm.mamba_layer import init_kaiming_
@@ -34,7 +34,7 @@ except (ImportError, RuntimeError):
     _causal_conv1d_available = False
 
 
-class DiscreteMamba2(Mixer):
+class DiscreteMamba2(BlockLayer):
     """DiscreteMamba2 (This code is adapted from https://github.com/cartesia-ai/edge/blob/main/cartesia-pytorch/cartesia_pytorch/Llamba/mixers/discrete_mamba2.py)."""
 
     _mixer_name: typing.ClassVar[str] = "discrete_mamba_2"
@@ -112,7 +112,13 @@ class DiscreteMamba2(Mixer):
             lr_scale=lr_scale,
         )
 
-    def forward(self, input_: torch.Tensor, kwargs: dict[str, typing.Any]) -> tuple[torch.Tensor, torch.Tensor | None]:
+    def forward(
+        self,
+        input_: torch.Tensor,
+        kwargs: dict[str, typing.Any],
+        losses: dict[str, typing.Any] | None = None,
+        metrics: dict[str, typing.Any] | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
         assert _mamba_available
 
         sequence_length = kwargs[BlockKwargs.sequence_q_dim].global_size

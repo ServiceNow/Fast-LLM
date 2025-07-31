@@ -18,7 +18,7 @@ from fast_llm.functional.linear import output_parallel_linear_backward, output_p
 from fast_llm.layers.block.block import DebugLayer
 from fast_llm.layers.common.auxiliary_loss import AuxiliaryLoss, z_loss
 from fast_llm.layers.language_model.config import (
-    LanguageModelConfig,
+    LanguageModelBaseConfig,
     LanguageModelDimNames,
     LanguageModelKwargs,
     LanguageModelLossNames,
@@ -32,16 +32,16 @@ logger = logging.getLogger(__name__)
 OUTPUT_WEIGHTS = "output_weights"
 
 
-class LanguageModelHead[ConfigType: LanguageModelConfig](Configurable[ConfigType], Layer):
+class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[ConfigType], Layer):
     """
     A language model head (GPT), which combines the final layer norm, logits and cross-entropy (if applicable).
     """
 
-    config_class: typing.ClassVar[type[LanguageModelConfig]] = LanguageModelConfig
+    config_class: typing.ClassVar[type[LanguageModelBaseConfig]] = LanguageModelBaseConfig
 
     def __init__(
         self,
-        config: LanguageModelConfig,
+        config: LanguageModelBaseConfig,
         tensor_space: TensorSpace,
         prediction_distance: int,
     ):
@@ -49,7 +49,7 @@ class LanguageModelHead[ConfigType: LanguageModelConfig](Configurable[ConfigType
         # TODO: Avoid default_block_config?
         self._debug = DebugLayer(
             tensor_space,
-            f"Block {self._block_index} {self._name}",
+            f"Language model head",
             self._config.default_block_config.debug_transformer,
             self._config.default_block_config.debug_transformer_memory,
         )
@@ -89,7 +89,17 @@ class LanguageModelHead[ConfigType: LanguageModelConfig](Configurable[ConfigType
         self._prediction_distance = prediction_distance
         self._is_last_head = self._prediction_distance == self._config.prediction_heads - 1
 
-        self._init_output_weights(hidden_dim, self._config)
+        # Only the first head defines the output weights
+        if self._prediction_distance == 0 and not self._config.tie_word_embeddings:
+            # untie embedding weights
+            vocab_dim = self._tensor_space[
+                LanguageModelDimNames.vocab_tp if self._parallel_embeddings else LanguageModelDimNames.vocab
+            ]
+            self.output_weights = ParameterMeta.from_dims(
+                (vocab_dim, hidden_dim),
+                init_method=self._config.output_weight_initialization_method,
+                lr_scale=config.output_lr_scale,
+            )
 
         if not self._config.enable_dpo:
             self._cross_entropy_impl = self._config.cross_entropy_impl
@@ -107,20 +117,6 @@ class LanguageModelHead[ConfigType: LanguageModelConfig](Configurable[ConfigType
         self.final_norm = self._config.transformer.peft.apply_other(self.final_norm)
         if hasattr(self, "output_weights"):
             self.output_weights = self._config.transformer.peft.apply_weight(self.output_weights)
-
-    def _init_output_weights(self, hidden_dim: TensorDim, config) -> None:
-        # Only the first head defines the output weights
-        if self._config.tie_word_embeddings or self._prediction_distance > 0:
-            return
-        # untie embedding weights
-        vocab_dim = self._tensor_space[
-            LanguageModelDimNames.vocab_tp if self._parallel_embeddings else LanguageModelDimNames.vocab
-        ]
-        self.output_weights = ParameterMeta.from_dims(
-            (vocab_dim, hidden_dim),
-            init_method=self._config.output_weight_initialization_method,
-            lr_scale=config.output_lr_scale,
-        )
 
     def forward(
         self, input_: torch.Tensor, kwargs: dict, losses: dict | None = None, metrics: dict | None = None
@@ -415,7 +411,9 @@ class LanguageModelHead[ConfigType: LanguageModelConfig](Configurable[ConfigType
                     target_format=TargetFormat.logits,
                 )
             else:
-                raise ValueError(f"Invalid distillation loss implementation: {self._distillation_loss_implementation}")
+                raise ValueError(
+                    f"Invalid distillation loss implementation: {self._config.distillation_loss_implementation}"
+                )
             distillation_loss = distillation_loss * self._distillation_loss_factor
         else:
             distillation_loss, distillation_grad = None, None
