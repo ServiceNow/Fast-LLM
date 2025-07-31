@@ -357,13 +357,12 @@ class HybridMambaAttentionDynamicCache(DynamicCache):
         layer_idx = self.transformer_layers[0] if layer_idx not in self.transformer_layers else layer_idx
         if len(self.key_cache) <= layer_idx:
             return 0
-        # is_empty_layer = (
-        #     len(self.key_cache) == 0  # no cache in any layer
-        #     or len(self.key_cache) <= layer_idx  # skipped `layer_idx` and hasn't run a layer with cache after it
-        #     or not self.key_cache[layer_idx].numel()  # the layer has no cache
-        # )
-        # return self.key_cache[layer_idx].shape[-2] if not is_empty_layer else 0
-        return self.key_cache[layer_idx].shape[-2]
+        is_empty_layer = (
+            len(self.key_cache) == 0  # no cache in any layer
+            or len(self.key_cache) <= layer_idx  # skipped `layer_idx` and hasn't run a layer with cache after it
+            or not self.key_cache[layer_idx].numel()  # the layer has no cache
+        )
+        return self.key_cache[layer_idx].shape[-2] if not is_empty_layer else 0
 
     def reset(self):
         self.conv_states.zero_()
@@ -849,8 +848,9 @@ class Mamba2(nn.Module):
         self.num_C_head = self.d_inner // self.d_state
         self.repeat_group = self.num_C_head // self.num_xb_head
 
-        self.in_proj = nn.Linear(self.d_model, 2 * self.d_xb + 2 * self.d_inner, bias=bias, **factory_kwargs)
-        self.dt_in_proj = nn.Linear(self.d_model, self.dt_rank, bias=bias, **factory_kwargs)
+        self.in_proj = nn.Linear(
+            self.d_model, 2 * self.d_xb + 2 * self.d_inner + self.dt_rank, bias=bias, **factory_kwargs
+        )
         self.dt_proj = nn.Linear(self.dt_rank, self.d_inner, bias=dt_proj_bias, **factory_kwargs)
 
         # Initialize special dt projection to preserve variance at initialization
@@ -938,17 +938,8 @@ class Mamba2(nn.Module):
         outputs = {}
         A = -torch.exp(self.A_log.float())  # (d_inner, d_state)
 
-        zxbc = self.in_proj(hidden_states)
-        z, x, B, C = torch.split(
-            zxbc,
-            [
-                self.d_inner,
-                self.d_xb,
-                self.d_xb,
-                self.d_inner,
-            ],
-            dim=-1,
-        )
+        zxbcdt = self.in_proj(hidden_states)
+        z, x, B, C, dt = torch.split(zxbcdt, [self.d_inner, self.d_xb, self.d_xb, self.d_inner, self.dt_rank], dim=-1)
 
         x = rearrange(x, "b l d -> b d l")
         z = rearrange(z, "b l d -> b d l")
@@ -958,7 +949,7 @@ class Mamba2(nn.Module):
         B = rearrange(B, "b n_group l dstate -> b n_group dstate l").contiguous()
         C = rearrange(C, "b l (n_group dstate) -> b n_group dstate l", dstate=self.d_state).contiguous()
 
-        dt = self.dt_proj(self.dt_in_proj(hidden_states))  # B, L, d_inner
+        dt = self.dt_proj(dt)  # B, L, d_inner
         dt = rearrange(dt, "b l d -> b d l")  # B, d_inner, L
 
         if self.repeat_kv_before_conv:
@@ -1048,14 +1039,14 @@ class Mamba2(nn.Module):
 
         A = -torch.exp(self.A_log.float())  # (d_inner, d_state)
 
-        zxbc = self.in_proj(hidden_states_input)
-        z, x, B, C = torch.split(zxbc, [self.d_inner, self.d_xb, self.d_xb, self.d_inner], dim=-1)
+        zxbcdt = self.in_proj(hidden_states_input)
+        z, x, B, C, dt = torch.split(zxbcdt, [self.d_inner, self.d_xb, self.d_xb, self.d_inner, self.dt_rank], dim=-1)
 
         B = rearrange(B, "b (n_group dstate) -> b n_group dstate", dstate=self.d_state)
         B = torch.repeat_interleave(B, dim=1, repeats=self.repeat_group)
         C = rearrange(C, "b (n_group dstate) -> b n_group dstate", dstate=self.d_state).contiguous()
 
-        dt = self.dt_proj(self.dt_in_proj(hidden_states_input))  # B, d_inner
+        dt = self.dt_proj(dt)  # B, d_inner
 
         if self.repeat_kv_before_conv:
             x = rearrange(x, "b (n_group dstate) -> b n_group dstate", dstate=self.d_state)
