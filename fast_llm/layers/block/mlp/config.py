@@ -158,9 +158,11 @@ class MLPConfig(Config):
 
     def _validate(self) -> None:
         with self._set_implicit_default():
-            # TODO: Make this work without inheritance.
             if self.activation_type is None:
                 self.activation_type = ActivationType.silu if self.gated else ActivationType.gelu
+            # TODO: Make this work without inheritance.
+            if self.ffn_hidden_size is None:
+                self.ffn_hidden_size = 4 * self.hidden_size
             # TODO: Review initialization
             if self.init_method_std_mlp_1 is None:
                 self.init_method_std_mlp_1 = self.init_method_std

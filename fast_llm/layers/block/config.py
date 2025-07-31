@@ -120,8 +120,6 @@ class BlockConfig(MLPConfig, BaseModelConfig):
 
     def _validate(self) -> None:
         with self._set_implicit_default():
-            if self.ffn_hidden_size is None:
-                self.ffn_hidden_size = 4 * self.hidden_size
             # TODO: Review initialization
             if self.init_method_std is None:
                 self.init_method_std = self.hidden_size**-0.5

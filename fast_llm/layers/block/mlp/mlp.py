@@ -23,52 +23,54 @@ class MLPBase(BlockLayer):
             debug_level=config.debug_transformer,
             debug_memory=config.debug_transformer_memory,
         )
-        self._name = name
-        self._block_index = block_index
+        self._config = config
 
         init_method_1 = init_normal_(
-            std=config.init_method_std_mlp_1,
-            min_val=config.init_method_min_mlp_1,
-            max_val=config.init_method_max_mlp_1,
+            std=self._config.init_method_std_mlp_1,
+            min_val=self._config.init_method_min_mlp_1,
+            max_val=self._config.init_method_max_mlp_1,
         )
         init_method_2 = init_normal_(
-            std=config.init_method_std_mlp_2,
-            min_val=config.init_method_min_mlp_2,
-            max_val=config.init_method_max_mlp_2,
+            std=self._config.init_method_std_mlp_2,
+            min_val=self._config.init_method_min_mlp_2,
+            max_val=self._config.init_method_max_mlp_2,
         )
 
-        hidden_dim = tensor_space[BlockDimNames.hidden]
-        self._intermediate_dim = tensor_space[MLPDimNames.composite_expert_mlp]
-        self._sequence_parallel = tensor_space.distributed_config.sequence_tensor_parallel
+        hidden_dim = self._tensor_space[BlockDimNames.hidden]
+        self._intermediate_dim = self._tensor_space[MLPDimNames.composite_expert_mlp]
         self._activation_fn = triton_mlp_activation_autograd if TritonConfig.TRITON_ENABLED else torch_mlp_activation
 
-        layer_lr_scale = config.per_layer_lr_scale[block_index] if config.per_layer_lr_scale else None
-        lr_scale = tuple(config.mlp_lr_scale) if isinstance(config.mlp_lr_scale, list) else config.mlp_lr_scale
+        layer_lr_scale = self._config.per_layer_lr_scale[block_index] if self._config.per_layer_lr_scale else None
+        lr_scale = (
+            tuple(self._config.mlp_lr_scale)
+            if isinstance(self._config.mlp_lr_scale, list)
+            else self._config.mlp_lr_scale
+        )
         lr_scale = get_lr_scale(lr_scale, layer_lr_scale)
 
         # So both layers' weights have shape (num_experts [* gate_up] * ffn, hidden_size)
         self.layer_1 = LinearBase(
             hidden_dim,
-            tensor_space[MLPDimNames.composite_gated_expert_mlp],
-            bias=config.add_mlp_bias,
+            self._tensor_space[MLPDimNames.composite_gated_expert_mlp],
+            bias=self._config.add_mlp_bias,
             weight_init_method=init_method_1,
-            bias_init_method=init_method_1 if config.random_bias_init else init_zeros_,
+            bias_init_method=init_zeros_,
             lr_scale=lr_scale,
         )
         self.layer_2 = LinearBase(
             self._intermediate_dim,
             hidden_dim,
-            bias=config.add_mlp_bias,
+            bias=self._config.add_mlp_bias,
             weight_init_method=init_method_2,
-            bias_init_method=init_method_2 if config.random_bias_init else init_zeros_,
+            bias_init_method=init_zeros_,
             auto_bias_grad_accumulation=tensor_space.distributed_config.tensor_parallel > 1,
             transposed_weight=True,
             lr_scale=lr_scale,
         )
 
         # PEFT.
-        self.layer_1 = config.peft.apply_linear(self.layer_1, TransformerSubLayerName.mlp_1)
-        self.layer_2 = config.peft.apply_linear(self.layer_2, TransformerSubLayerName.mlp_2)
+        self.layer_1 = self._config.peft.apply_linear(self.layer_1, TransformerSubLayerName.mlp_1)
+        self.layer_2 = self._config.peft.apply_linear(self.layer_2, TransformerSubLayerName.mlp_2)
 
 
 class MLP[ConfigType: BlockConfig](MLPBase[ConfigType]):
