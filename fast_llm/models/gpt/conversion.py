@@ -199,19 +199,19 @@ class CommonHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
             (
                 f"{fast_llm_layer_name}.self_attn.query",
                 f"{hf_layer_name}.self_attn.q_proj",
-                transformer_config.add_attn_qkv_bias,
+                transformer_config.add_qkv_bias,
                 QueryWeightConverter,
             ),
             (
                 f"{fast_llm_layer_name}.self_attn.key_value",
                 (f"{hf_layer_name}.self_attn.k_proj", f"{hf_layer_name}.self_attn.v_proj"),
-                transformer_config.add_attn_qkv_bias,
+                transformer_config.add_qkv_bias,
                 KeyValueWeightConverter,
             ),
             (
                 f"{fast_llm_layer_name}.self_attn.dense",
                 f"{hf_layer_name}.self_attn.o_proj",
-                transformer_config.add_attn_dense_bias,
+                transformer_config.add_dense_bias,
                 WeightConverter,
             ),
             # Norm

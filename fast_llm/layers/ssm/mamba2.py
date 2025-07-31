@@ -224,8 +224,8 @@ class Mamba2(BlockLayer):
             delta_softplus=True,
         )
 
-        if self._debug_level:
-            self._debug_log(y, "y", self._XZ_DIMS, kwargs)
+        if self._debug.enabled:
+            self._debug(y, "y", self._XZ_DIMS, kwargs)
 
         # y: (batch, local_heads * state, sequence) -> (batch, sequence, local_heads * state)
         y = y.transpose(1, 2)[:, :sequence_length]

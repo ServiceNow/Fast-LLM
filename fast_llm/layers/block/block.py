@@ -133,13 +133,11 @@ class Block[ConfigType: BlockConfig](Configurable[ConfigType], Layer):
         self._dropout_p: float = self._config.hidden_dropout
         # For multi-token prediction, return a stack of shared_hidden and transformer_output.
         self._return_input: bool = return_input
-
         self._block_index = block_index
-
         self._debug = DebugLayer(
             tensor_space,
             self._name,
-            self.config.debug_transformer,
+            self._config.debug_transformer,
             self._config.debug_transformer_memory,
         )
         hidden_dim = self._tensor_space[BlockDimNames.hidden]

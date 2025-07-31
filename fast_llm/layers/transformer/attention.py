@@ -73,16 +73,6 @@ class Attention[ConfigType: AttentionConfig](BlockLayer[ConfigType]):
         self._config = config
         self._use_flash_attention = self._config.do_use_flash_attention(self._tensor_space.distributed_config)
 
-        # init_method_qkv = init_normal_(
-        #    std=self._config.init_method_std_qkv,
-        #    min_val=self._config.init_method_min_qkv,
-        #    max_val=self._config.init_method_max_qkv,
-        # )
-        # init_method_std_attn_proj = init_normal_(
-        #    std=self._config.init_method_std_attn_proj,
-        #    min_val=self._config.init_method_min_attn_proj,
-        #    max_val=self._config.init_method_max_attn_proj,
-        # )
         self._kv_channels = self._tensor_space[AttentionDimNames.kv_channels].size
         self._head_groups = self._tensor_space[AttentionDimNames.head_groups].global_size
         self._local_head_groups = self._tensor_space[AttentionDimNames.head_groups].size
@@ -99,7 +89,7 @@ class Attention[ConfigType: AttentionConfig](BlockLayer[ConfigType]):
         self.query = OutputParallelLinear(
             hidden_dim,
             self._tensor_space[AttentionDimNames.composite_query],
-            bias=self._config.add_attn_qkv_bias,
+            bias=self._config.add_qkv_bias,
             weight_init_method=self._config.qkv_weight_initialization_method,
             bias_init_method=self._config.qkv_bias_initialization_method,
             sequence_parallel=self._sequence_parallel,
@@ -108,7 +98,7 @@ class Attention[ConfigType: AttentionConfig](BlockLayer[ConfigType]):
         self.key_value = OutputParallelLinear(
             hidden_dim,
             self._tensor_space[AttentionDimNames.composite_key_value],
-            bias=self._config.add_attn_qkv_bias,
+            bias=self._config.add_qkv_bias,
             weight_init_method=self._config.qkv_weight_initialization_method,
             bias_init_method=self._config.qkv_bias_initialization_method,
             sequence_parallel=self._sequence_parallel,
@@ -123,7 +113,7 @@ class Attention[ConfigType: AttentionConfig](BlockLayer[ConfigType]):
         self.dense = InputParallelLinear(
             self._tensor_space[AttentionDimNames.composite_dense],
             hidden_dim,
-            bias=self._config.add_attn_dense_bias,
+            bias=self._config.add_dense_bias,
             weight_init_method=self._config.dense_weight_initialization_method,
             bias_init_method=self._config.dense_bias_initialization_method,
             sequence_parallel=self._sequence_parallel,
@@ -299,12 +289,7 @@ class Attention[ConfigType: AttentionConfig](BlockLayer[ConfigType]):
 
         if self._debug.enabled:
             self._debug(query, "query_rotary_input", self._QUERY_DIMS, kwargs)
-            self._debug(
-                key,
-                "key_rotary_input",
-                self._KV_DIMS,
-                kwargs,
-            )
+            self._debug(key, "key_rotary_input", self._KV_DIMS, kwargs)
         query, key = self._rotary(query, key, kwargs)
 
         window_size = self._decide_window_size()
