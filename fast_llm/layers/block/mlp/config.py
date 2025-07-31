@@ -80,8 +80,6 @@ class MLPConfig(BlockLayerConfig):
         hint=FieldHint.architecture,
     )
     gated: bool = Field(default=False, desc="Enable gated MLP.", hint=FieldHint.architecture)
-    # Default: hidden_size**-0.5
-    # TODO: Allow custom initialization (InitializationConfig?)
     activation_type: ActivationType = Field(
         default=None,
         desc="The MLP intermediate activation type. Default: SiLU for gated MLP, GeLU otherwise.",

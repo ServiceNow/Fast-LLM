@@ -37,19 +37,21 @@ class MixtureOfExpertMLP[ConfigType: MLPConfig](MLPBase[ConfigType]):
         # TODO: Implement?
         assert not self._config.add_linear_biases, "Biases not supported for MoE."
 
-        layer_lr_scale = config.per_layer_lr_scale[block_index] if config.per_layer_lr_scale else None
-        router_lr_scale = get_lr_scale(config.router_lr_scale, layer_lr_scale)
+        layer_lr_scale = self._config.per_layer_lr_scale[block_index] if self._config.per_layer_lr_scale else None
+        router_lr_scale = get_lr_scale(self._config.router_lr_scale, layer_lr_scale)
 
         self.router = Linear(
             tensor_space[BlockDimNames.hidden],
             tensor_space[MLPDimNames.unshared_experts],
             bias=False,
             weight_init_method=init_normal_(
-                std=config.init_method_std, min_val=config.init_method_min, max_val=config.init_method_max
+                std=self._config.init_method_std,
+                min_val=self._config.init_method_min,
+                max_val=self._config.init_method_max,
             ),
             lr_scale=router_lr_scale,
         )
-        dropless_moe = config.dropless_moe
+        dropless_moe = self._config.dropless_moe
         if dropless_moe and tensor_space.distributed_config.sequence_tensor_parallel:
             warnings.warn(
                 "Dropless MoE not supported for sequence-tensor-parallel, falling back to looped implementation."

@@ -21,19 +21,19 @@ class LanguageModelEmbedding[ConfigType: LanguageModelBaseConfig](Configurable[C
     together with optional absolute position embeddings and dropout.
     """
 
-    config_class: typing.ClassVar[type[LanguageModelBaseConfig]] = LanguageModelBaseConfig
+    config_class: typing.ClassVar[type[LanguageModelBaseConfig]] = ConfigType
 
     # Ensure the layer is on its own stage.
     layer_count: float = 1000.0
 
     def __init__(
         self,
-        config: LanguageModelBaseConfig,
+        config: ConfigType,
         tensor_space: TensorSpace,
     ):
         super().__init__(config)
-        self._distributed_config = tensor_space.distributed_config
         self._tensor_space = tensor_space
+        self._distributed_config = tensor_space.distributed_config
         self._residual_dtype = (
             self._distributed_config.optimization_dtype
             if self._config.full_precision_residual
@@ -42,11 +42,11 @@ class LanguageModelEmbedding[ConfigType: LanguageModelBaseConfig](Configurable[C
         self._group_size = self._distributed_config.tensor_parallel
         self._sequence_parallel = self._distributed_config.sequence_tensor_parallel
         self._parallel_embeddings = (
-            tensor_space.distributed_config.tensor_parallel > 1 and self._config.parallel_embeddings
+            self._tensor_space.distributed_config.tensor_parallel > 1 and self._config.parallel_embeddings
         )
 
-        hidden_dim = tensor_space[LanguageModelDimNames.hidden]
-        vocab_dim = tensor_space[
+        hidden_dim = self._tensor_space[LanguageModelDimNames.hidden]
+        vocab_dim = self._tensor_space[
             LanguageModelDimNames.vocab_tp if self._parallel_embeddings else LanguageModelDimNames.vocab
         ]
 
@@ -61,7 +61,7 @@ class LanguageModelEmbedding[ConfigType: LanguageModelBaseConfig](Configurable[C
         )
         if self._config.use_absolute_position_embeddings:
             self.position_embeddings_weight = ParameterMeta.from_dims(
-                (tensor_space[LanguageModelDimNames.position_embed], hidden_dim),
+                (self._tensor_space[LanguageModelDimNames.position_embed], hidden_dim),
                 init_method=self._config.position_embedding_weight_initialization_method,
                 allow_sequence_tensor_parallel=not self._config.parallel_embeddings,
                 lr_scale=self._config.embeddings_lr_scale,
