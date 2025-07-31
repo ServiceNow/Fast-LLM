@@ -40,7 +40,7 @@ class AddLinearBiasChoices(str, enum.Enum):
 
 
 @config_class()
-# TODO: Use composition for MLP config
+# TODO: Use composition instead
 class BlockConfig(MLPConfig, BaseModelConfig):
 
     # TODO: Review names
@@ -100,10 +100,33 @@ class BlockConfig(MLPConfig, BaseModelConfig):
         hint=FieldHint.feature,
     )
 
+    # TODO: Review initialization
+    init_method_std: float = Field(
+        default=None,
+        desc="Default scale for weight initialization. Default: hidden_size**-0.5",
+        hint=FieldHint.optional,
+        valid=check_field(Assert.geq, 0),
+    )
+    init_method_max: float | None = Field(
+        default=None,
+        desc="Max value for clamping initialized weights. Default: float('inf')",
+        hint=FieldHint.optional,
+    )
+    init_method_min: float | None = Field(
+        default=None,
+        desc="Min value for clamping initialized weights. Default: -float('inf')",
+        hint=FieldHint.optional,
+    )
+
     def _validate(self) -> None:
         with self._set_implicit_default():
             if self.ffn_hidden_size is None:
                 self.ffn_hidden_size = 4 * self.hidden_size
+            # TODO: Review initialization
+            if self.init_method_std is None:
+                self.init_method_std = self.hidden_size**-0.5
+            if self.init_method_min is not None and self.init_method_max is not None:
+                Assert.leq(self.init_method_min, self.init_method_max)
 
         super()._validate()
 

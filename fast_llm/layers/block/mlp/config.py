@@ -72,8 +72,6 @@ class MLPConfig(Config):
         hint=FieldHint.architecture,
     )
     gated: bool = Field(default=False, desc="Enable gated MLP.", hint=FieldHint.architecture)
-    # Default: hidden_size**-0.5
-    # TODO: Allow custom initialization (InitializationConfig?)
     activation_type: ActivationType = Field(
         default=None,
         desc="The MLP intermediate activation type. Default: SiLU for gated MLP, GeLU otherwise.",
@@ -124,11 +122,63 @@ class MLPConfig(Config):
         " Reduces memory usage, but increases fragmentation and requires CPU synchronisation. Not recommended.",
         hint=FieldHint.expert,
     )
+    # TODO: Review initialization
+    init_method_std_mlp_1: float = Field(
+        default=None,
+        desc="Scale for the MLP first layer weight initialization. Default: init_method_std",
+        hint=FieldHint.optional,
+        valid=check_field(Assert.geq, 0),
+    )
+    init_method_max_mlp_1: float | None = Field(
+        default=None,
+        desc="Max value for clamping initialized weights for MLP first layer. Default: float('inf')",
+        hint=FieldHint.optional,
+    )
+    init_method_min_mlp_1: float | None = Field(
+        default=None,
+        desc="Min value for clamping initialized weights for MLP first layer. Default: -float('inf')",
+        hint=FieldHint.optional,
+    )
+    init_method_std_mlp_2: float = Field(
+        default=None,
+        desc="Scale for the MLP second layer weight initialization. Default: init_method_std",
+        hint=FieldHint.optional,
+        valid=check_field(Assert.geq, 0),
+    )
+    init_method_max_mlp_2: float | None = Field(
+        default=None,
+        desc="Max value for clamping initialized weights for MLP second layer. Default: float('inf')",
+        hint=FieldHint.optional,
+    )
+    init_method_min_mlp_2: float | None = Field(
+        default=None,
+        desc="Min value for clamping initialized weights for MLP second layer. Default: -float('inf')",
+        hint=FieldHint.optional,
+    )
 
     def _validate(self) -> None:
         with self._set_implicit_default():
+            # TODO: Make this work without inheritance.
             if self.activation_type is None:
                 self.activation_type = ActivationType.silu if self.gated else ActivationType.gelu
+            # TODO: Review initialization
+            if self.init_method_std_mlp_1 is None:
+                self.init_method_std_mlp_1 = self.init_method_std
+            if self.init_method_std_mlp_2 is None:
+                self.init_method_std_mlp_2 = self.init_method_std / max(2 * self.num_layers, 1) ** 0.5
+            if self.init_method_max_mlp_1 is None:
+                self.init_method_max_mlp_1 = self.init_method_max
+            if self.init_method_min_mlp_1 is None:
+                self.init_method_min_mlp_1 = self.init_method_min
+            if self.init_method_max_mlp_2 is None:
+                self.init_method_max_mlp_2 = self.init_method_max
+            if self.init_method_min_mlp_2 is None:
+                self.init_method_min_mlp_2 = self.init_method_min
+            if self.init_method_min_mlp_1 is not None and self.init_method_max_mlp_1 is not None:
+                Assert.leq(self.init_method_min_mlp_1, self.init_method_max_mlp_1)
+            if self.init_method_min_mlp_2 is not None and self.init_method_max_mlp_2 is not None:
+                Assert.leq(self.init_method_min_mlp_2, self.init_method_max_mlp_2)
+
         self.num_unshared_experts = self.num_experts - self.num_shared_experts
 
         super()._validate()

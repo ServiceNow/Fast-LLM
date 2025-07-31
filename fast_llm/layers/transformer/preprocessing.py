@@ -5,7 +5,7 @@ import torch
 
 from fast_llm.engine.base_model.config import Preprocessor
 from fast_llm.engine.config_utils.tensor_space import DefaultDimNames, TensorDim, TensorSpace
-from fast_llm.layers.transformer.config import TransformerConfig, TransformerKwargs
+from fast_llm.layers.transformer.config import AttentionKwargs, TransformerConfig
 from fast_llm.tensor import TensorMeta
 
 logger = logging.getLogger(__name__)
@@ -51,13 +51,13 @@ class BackupAttentionPreprocessor(Preprocessor):
         )
 
     def preprocess(self, batch, kwargs: dict[str, typing.Any]) -> None:
-        self._create_tensors(kwargs[TransformerKwargs.sequence_length])
-        sequence_k = kwargs[TransformerKwargs.sequence_k_dim].size
-        sequence_q = kwargs[TransformerKwargs.sequence_q_dim].size
-        kwargs[TransformerKwargs.attention_mask] = self._mask[
+        self._create_tensors(kwargs[AttentionKwargs.sequence_length])
+        sequence_k = kwargs[AttentionKwargs.sequence_k_dim].size
+        sequence_q = kwargs[AttentionKwargs.sequence_q_dim].size
+        kwargs[AttentionKwargs.attention_mask] = self._mask[
             None, None, sequence_k - sequence_q : sequence_k, None, :sequence_k
         ]
-        if (sequence_lengths := kwargs.get(TransformerKwargs.sequence_lengths, None)) is not None:
+        if (sequence_lengths := kwargs.get(AttentionKwargs.sequence_lengths, None)) is not None:
             seq_ids = torch.stack(
                 [
                     torch.cat([torch.full((x,), i) for i, x in enumerate(sample_lens)])
@@ -65,27 +65,27 @@ class BackupAttentionPreprocessor(Preprocessor):
                 ]
             )
             document_mask = (seq_ids[:, None, :] == seq_ids[:, :, None]).to(self._tensor_space.distributed.device)
-            kwargs[TransformerKwargs.attention_mask] = (
-                kwargs[TransformerKwargs.attention_mask]
+            kwargs[AttentionKwargs.attention_mask] = (
+                kwargs[AttentionKwargs.attention_mask]
                 & document_mask[:, None, sequence_k - sequence_q : sequence_k, None, :sequence_k]
             )
-        kwargs[TransformerKwargs.attention_mask_value] = self._mask_value
+        kwargs[AttentionKwargs.attention_mask_value] = self._mask_value
 
     def preprocess_meta(self, kwargs: dict[str, typing.Any]) -> None:
-        kwargs[TransformerKwargs.attention_mask] = TensorMeta.from_dims(
+        kwargs[AttentionKwargs.attention_mask] = TensorMeta.from_dims(
             (
                 self._scalar_dim,
                 self._scalar_dim,
-                kwargs[TransformerKwargs.sequence_q_dim],
+                kwargs[AttentionKwargs.sequence_q_dim],
                 self._scalar_dim,
-                kwargs[TransformerKwargs.sequence_k_dim],
+                kwargs[AttentionKwargs.sequence_k_dim],
             ),
-            tensor_name=TransformerKwargs.attention_mask,
+            tensor_name=AttentionKwargs.attention_mask,
             dtype=torch.bool,
         )
-        kwargs[TransformerKwargs.attention_mask_value] = TensorMeta.from_dims(
+        kwargs[AttentionKwargs.attention_mask_value] = TensorMeta.from_dims(
             (self._scalar_dim,),
-            tensor_name=TransformerKwargs.attention_mask_value,
+            tensor_name=AttentionKwargs.attention_mask_value,
             dtype=self._tensor_space.distributed_config.training_dtype.torch,
         )
 
@@ -107,12 +107,12 @@ class FlashAttnVarlenPreprocessor(Preprocessor):
         also contain previous tokens from the first document in micro-sequence.
         We use individual sequence lengths of each document to (optionally) find the micro-sequences in the batch and compute the cumulative lengths.
         """
-        if TransformerKwargs.sequence_lengths not in kwargs:
+        if AttentionKwargs.sequence_lengths not in kwargs:
             return
-        sequence_lengths = kwargs[TransformerKwargs.sequence_lengths]
-        sequence_k = kwargs[TransformerKwargs.sequence_k_dim].size
-        sequence_q = kwargs[TransformerKwargs.sequence_q_dim].size
-        if sequence_q < kwargs[TransformerKwargs.sequence_length]:
+        sequence_lengths = kwargs[AttentionKwargs.sequence_lengths]
+        sequence_k = kwargs[AttentionKwargs.sequence_k_dim].size
+        sequence_q = kwargs[AttentionKwargs.sequence_q_dim].size
+        if sequence_q < kwargs[AttentionKwargs.sequence_length]:
             cumsums = [torch.cumsum(x, dim=0) for x in sequence_lengths]
             # The first and last documents in a microsequence need to be handled separately. Include all tokens from other documents
             # in the microsequence. We need to consider all keys computed so far from the first sample. We also store the offsets
@@ -146,17 +146,17 @@ class FlashAttnVarlenPreprocessor(Preprocessor):
         else:
             seqlens_q = torch.cat(sequence_lengths)
             seqlens_k = torch.cat(sequence_lengths)
-        kwargs[TransformerKwargs.cu_seqlens_q] = torch.cat(
+        kwargs[AttentionKwargs.cu_seqlens_q] = torch.cat(
             (
                 torch.zeros(1, dtype=torch.int32, device=self._tensor_space.distributed.device),
                 torch.cumsum(seqlens_q, dim=0, dtype=torch.int32).to(self._tensor_space.distributed.device),
             )
         )
-        kwargs[TransformerKwargs.cu_seqlens_k] = torch.cat(
+        kwargs[AttentionKwargs.cu_seqlens_k] = torch.cat(
             (
                 torch.zeros(1, dtype=torch.int32, device=self._tensor_space.distributed.device),
                 torch.cumsum(seqlens_k, dim=0, dtype=torch.int32).to(self._tensor_space.distributed.device),
             )
         )
-        kwargs[TransformerKwargs.max_seqlen_q] = seqlens_q.max()
-        kwargs[TransformerKwargs.max_seqlen_k] = seqlens_k.max()
+        kwargs[AttentionKwargs.max_seqlen_q] = seqlens_q.max()
+        kwargs[AttentionKwargs.max_seqlen_k] = seqlens_k.max()

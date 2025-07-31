@@ -9,7 +9,7 @@ from fast_llm.engine.distributed.config import DistributedConfig, PhaseType
 from fast_llm.engine.schedule.config import ScheduleConfig
 from fast_llm.engine.schedule.runner import ScheduleRunner
 from fast_llm.engine.schedule.schedule import Schedule
-from fast_llm.layers.transformer.config import TransformerKwargs
+from fast_llm.layers.transformer.config import AttentionKwargs
 from fast_llm.models.gpt.config import GPTBatchConfig
 from fast_llm.models.ssm.config import LLambaHuggingfaceCheckpointFormat
 from fast_llm.models.ssm.model import HybridSSMModel
@@ -71,8 +71,8 @@ def test_load_from_llamba_checkpoint():
     schedule_runner.setup(model.distributed, optimizer=None)
 
     common_kwargs = {
-        TransformerKwargs.sequence_first: True,
-        TransformerKwargs.grad_output: False,
+        AttentionKwargs.sequence_first: True,
+        AttentionKwargs.grad_output: False,
     }
     input_data = [(x, common_kwargs)]
 
