@@ -247,18 +247,11 @@ def _torch_reverse_kl_forward_backward_vocab_parallel(
 
     # Compute log probabilities - let _fused_softmax handle scaling internally
     teacher_log_probs = distributed_log_softmax(target, group=group)
-    # teacher_log_probs = torch.log(teacher_probs + 1e-8)  # log(p)
-
-    # For reverse KL: KL(q||p) = Σ q * log(q/p) = Σ q * (log(q) - log(p))
-    # Use kl_div with: input=log(p), target=q, log_target=False
-    # This gives: Σ q * (log(q) - log(p)) = exactly what we want!
     batch_size = logits.shape[0]
     with torch.enable_grad():
         logits_ = logits.detach().requires_grad_(grad_output is not None)
-
         # Use log_softmax for consistency instead of _fused_softmax
         student_log_probs = distributed_log_softmax(logits_, group=group)
-        # student_log_probs = torch.log(student_probs + 1e-8)  # log(q)
 
         # Reverse KL: input=teacher_log_probs, target=student_probs
         if loss_mask is None:
@@ -270,6 +263,7 @@ def _torch_reverse_kl_forward_backward_vocab_parallel(
             )
         else:
             # Apply loss mask - this requires some reshaping
+            raise NotImplementedError("Loss mask not implemented with TP for reverse KL , it must be doublechecked")
             loss_per_sample = torch.nn.functional.kl_div(
                 teacher_log_probs, student_log_probs, reduction="none", log_target=True
             ).sum(dim=-1)
