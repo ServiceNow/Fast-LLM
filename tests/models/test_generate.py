@@ -354,7 +354,7 @@ def _test_forward_return_hidden_states(
 
     # hidden_states include embeddings layer
     assert (
-        len(res_fast_llm.hidden_states) - 1 == fast_llm_model.config.fast_llm_config.base_model.transformer.num_layers
+        len(res_fast_llm.hidden_states) - 1 == fast_llm_model.config.fast_llm_config.base_model.transformer.num_blocks
     )
 
 

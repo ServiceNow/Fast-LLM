@@ -219,7 +219,7 @@ class CommonSSMHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandle
     def _create_weight_converters(self) -> list[WeightConverter]:
         converters = super()._create_weight_converters() or []
 
-        num_layers = self._model.config.base_model.transformer.num_layers
+        num_layers = self._model.config.base_model.transformer.num_blocks
         ssm_bias: bool = self._model.config.base_model.ssm.add_bias_linear
 
         for i in range(num_layers):
@@ -383,7 +383,7 @@ class LLambaHuggingfaceCheckpointHandler(CommonSSMHuggingfaceCheckpointHandler):
     def _create_weight_converters(self) -> list[WeightConverter]:
         # not using super() because LLamba model is called backbone in the checkpoints
         converters = []
-        num_layers = self._model.config.base_model.transformer.num_layers
+        num_layers = self._model.config.base_model.transformer.num_blocks
         norm_bias: bool = False
         ssm_bias: bool = self._model.config.base_model.ssm.add_bias_linear
 
@@ -572,7 +572,7 @@ class AprielSSMHuggingfaceCheckpointHandler(CommonSSMHuggingfaceCheckpointHandle
 
     def _create_weight_converters(self) -> list[WeightConverter]:
         converters = super()._create_weight_converters()
-        num_layers = self._model.config.base_model.transformer.num_layers
+        num_layers = self._model.config.base_model.transformer.num_blocks
         norm_bias: bool = False
 
         # Embedding and output

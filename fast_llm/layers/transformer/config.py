@@ -3,22 +3,29 @@ import logging
 import typing
 import warnings
 
-from fast_llm.config import Config, Field, FieldHint, check_field, config_class, skip_valid_if_none
+from fast_llm.config import Field, FieldHint, check_field, config_class, skip_valid_if_none
 from fast_llm.engine.config_utils.data_type import DataType
+from fast_llm.engine.config_utils.initialization import InitializationConfig, Initializer, init_zeros_
 from fast_llm.engine.config_utils.tensor_space import CompositeTensorDim, TensorDim, TensorSpace
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
 from fast_llm.functional.config import TritonConfig
-from fast_llm.layers.block.config import AddLinearBiasChoices, BlockConfig, BlockDimNames, BlockKwargs
+from fast_llm.layers.block.config import (
+    AddLinearBiasChoices,
+    BlockDimNames,
+    BlockKwargs,
+    BlockLayerConfig,
+    MixerConfig,
+)
 from fast_llm.layers.transformer.rotary.config import RotaryConfig
 from fast_llm.utils import Assert, div
 
 if typing.TYPE_CHECKING:
-    pass
+    from fast_llm.layers.transformer.attention import Attention
 
 logger = logging.getLogger(__name__)
 
 
-class TransformerDimNames(BlockDimNames):
+class AttentionDimNames(BlockDimNames):
     # A set of common tensor dim names packed into a namespace.
     # Self-attention dimensions
     head_groups = "head_groups"
@@ -31,7 +38,7 @@ class TransformerDimNames(BlockDimNames):
     composite_dense = "composite_dense"
 
 
-class TransformerKwargs(BlockKwargs):
+class AttentionKwargs(BlockKwargs):
     rotary_freq_q = "rotary_freq_q"
     rotary_freq_k = "rotary_freq_k"
     attention_mask = "attention_mask"
@@ -45,9 +52,8 @@ class TransformerKwargs(BlockKwargs):
     past_key_values = "past_key_values"
 
 
-@config_class()
-class AttentionConfig(Config):
-    # TODO: Make mixer class dynamic.
+@config_class(dynamic_type={BlockLayerConfig: "attention"})
+class AttentionConfig(MixerConfig):
     _abstract = False
 
     # TODO: Review names
@@ -107,7 +113,30 @@ class AttentionConfig(Config):
         valid=skip_valid_if_none(check_field(Assert.geq, 0)),
     )
 
+    qkv_weight_initialization: InitializationConfig = Field(
+        desc="Initialization configuration for the query, key and value layer weights. Default: hidden_size**-0.5",
+        hint=FieldHint.feature,
+    )
+    qkv_bias_initialization: InitializationConfig = Field(
+        desc="Initialization configuration for the query, key and value layer biases. Default: fill with zeros.",
+        hint=FieldHint.feature,
+    )
+    dense_weight_initialization: InitializationConfig = Field(
+        desc="Initialization configuration for the dense layer weight. Default: (2 * num_blocks * hidden_size)**-0.5",
+        hint=FieldHint.feature,
+    )
+    dense_bias_initialization: InitializationConfig = Field(
+        desc="Initialization configuration for the dense layer biases. Default: fill with zeros.",
+        hint=FieldHint.feature,
+    )
+
     def _validate(self) -> None:
+
+        with self._set_implicit_default():
+            if self.kv_channels is None:
+                # TODO: hidden_size not yet validated.
+                self.kv_channels = div(self.block.block_sequence.hidden_size, self.num_attention_heads)
+
         super()._validate()
 
         if not TritonConfig.TRITON_ENABLED:
@@ -130,182 +159,74 @@ class AttentionConfig(Config):
 
         tensor_space.add_tensor_dim(
             head_groups := TensorDim(
-                TransformerDimNames.head_groups, self.head_groups, tensor if self.head_groups > 1 else None
+                AttentionDimNames.head_groups, self.head_groups, tensor if self.head_groups > 1 else None
             )
         )
         tensor_space.add_tensor_dim(
             group_heads := TensorDim(
-                TransformerDimNames.group_heads,
+                AttentionDimNames.group_heads,
                 div(self.num_attention_heads, self.head_groups),
                 None if self.head_groups > 1 else tensor,
             )
         )
-        tensor_space.add_tensor_dim(key_and_value := TensorDim(TransformerDimNames.key_and_value, 2))
-        tensor_space.add_tensor_dim(kv_channels := TensorDim(TransformerDimNames.kv_channels, self.kv_channels))
+        tensor_space.add_tensor_dim(key_and_value := TensorDim(AttentionDimNames.key_and_value, 2))
+        tensor_space.add_tensor_dim(kv_channels := TensorDim(AttentionDimNames.kv_channels, self.kv_channels))
+        tensor_space.add_tensor_dim(CompositeTensorDim(AttentionDimNames.composite_heads, (head_groups, group_heads)))
         tensor_space.add_tensor_dim(
-            CompositeTensorDim(TransformerDimNames.composite_heads, (head_groups, group_heads))
+            CompositeTensorDim(AttentionDimNames.composite_query, (head_groups, group_heads, kv_channels))
         )
         tensor_space.add_tensor_dim(
-            CompositeTensorDim(TransformerDimNames.composite_query, (head_groups, group_heads, kv_channels))
+            CompositeTensorDim(AttentionDimNames.composite_key_value, (key_and_value, head_groups, kv_channels))
         )
         tensor_space.add_tensor_dim(
-            CompositeTensorDim(TransformerDimNames.composite_key_value, (key_and_value, head_groups, kv_channels))
-        )
-        tensor_space.add_tensor_dim(
-            CompositeTensorDim(TransformerDimNames.composite_dense, (head_groups, group_heads, kv_channels))
+            CompositeTensorDim(AttentionDimNames.composite_dense, (head_groups, group_heads, kv_channels))
         )
 
+    def get_block(self) -> "Attention":
+        pass
 
-@config_class()
-# TODO: Use composition for attention config
-class TransformerConfig(AttentionConfig, BlockConfig):
-    _abstract = False
-
-    # TODO: Review names
-    init_method_std: float = Field(
-        default=None,
-        desc="Default scale for weight initialization. Default: hidden_size**-0.5",
-        hint=FieldHint.optional,
-        valid=check_field(Assert.geq, 0),
-    )
-    init_method_max: float | None = Field(
-        default=None,
-        desc="Max value for clamping initialized weights. Default: float('inf')",
-        hint=FieldHint.optional,
-    )
-    init_method_min: float | None = Field(
-        default=None,
-        desc="Min value for clamping initialized weights. Default: -float('inf')",
-        hint=FieldHint.optional,
-    )
-    init_method_std_qkv: float = Field(
-        default=None,
-        desc="Scale for the query, key and value weight initialization. Default: init_method_std",
-        hint=FieldHint.optional,
-        valid=check_field(Assert.geq, 0),
-    )
-    init_method_max_qkv: float | None = Field(
-        default=None,
-        desc="Max value for clamping initialized weights for query, key and value matrices. Default: float('inf')",
-        hint=FieldHint.optional,
-    )
-    init_method_min_qkv: float | None = Field(
-        default=None,
-        desc="Min value for clamping initialized weights for query, key and value matrices. Default: -float('inf')",
-        hint=FieldHint.optional,
-    )
-    init_method_std_attn_proj: float = Field(
-        default=None,
-        desc="Scale for the attention projection weight initialization. Default: init_method_std",
-        hint=FieldHint.optional,
-        valid=check_field(Assert.geq, 0),
-    )
-    init_method_max_attn_proj: float | None = Field(
-        default=None,
-        desc="Max value for clamping initialized weights for attention projection. Default: float('inf')",
-        hint=FieldHint.optional,
-    )
-    init_method_min_attn_proj: float | None = Field(
-        default=None,
-        desc="Min value for clamping initialized weights for attention projection. Default: -float('inf')",
-        hint=FieldHint.optional,
-    )
-    init_method_std_mlp_1: float = Field(
-        default=None,
-        desc="Scale for the MLP first layer weight initialization. Default: init_method_std",
-        hint=FieldHint.optional,
-        valid=check_field(Assert.geq, 0),
-    )
-    init_method_max_mlp_1: float | None = Field(
-        default=None,
-        desc="Max value for clamping initialized weights for MLP first layer. Default: float('inf')",
-        hint=FieldHint.optional,
-    )
-    init_method_min_mlp_1: float | None = Field(
-        default=None,
-        desc="Min value for clamping initialized weights for MLP first layer. Default: -float('inf')",
-        hint=FieldHint.optional,
-    )
-    init_method_std_mlp_2: float = Field(
-        default=None,
-        desc="Scale for the MLP second layer weight initialization. Default: init_method_std",
-        hint=FieldHint.optional,
-        valid=check_field(Assert.geq, 0),
-    )
-    init_method_max_mlp_2: float | None = Field(
-        default=None,
-        desc="Max value for clamping initialized weights for MLP second layer. Default: float('inf')",
-        hint=FieldHint.optional,
-    )
-    init_method_min_mlp_2: float | None = Field(
-        default=None,
-        desc="Min value for clamping initialized weights for MLP second layer. Default: -float('inf')",
-        hint=FieldHint.optional,
-    )
-    # Use random inits instead of constant values, useful for debugging.
-    random_bias_init: bool = Field(
-        default=False,
-        desc="Initialize the biases using the initialization method of their respective weights instead of setting them to zero. Used to test for issues that may not be visible when the biases are zero.",
-        hint=FieldHint.testing,
-    )
-
-    def _validate(self) -> None:
-        with self._set_implicit_default():
-            if self.kv_channels is None:
-                self.kv_channels = div(self.hidden_size, self.num_attention_heads)
-            if self.init_method_std is None:
-                self.init_method_std = self.hidden_size**-0.5
-            if self.init_method_std_qkv is None:
-                self.init_method_std_qkv = self.init_method_std
-            if self.init_method_std_attn_proj is None:
-                self.init_method_std_attn_proj = self.init_method_std / max(2 * self.num_layers, 1) ** 0.5
-            if self.init_method_std_mlp_1 is None:
-                self.init_method_std_mlp_1 = self.init_method_std
-            if self.init_method_std_mlp_2 is None:
-                self.init_method_std_mlp_2 = self.init_method_std / max(2 * self.num_layers, 1) ** 0.5
-            if self.init_method_max_qkv is None:
-                self.init_method_max_qkv = self.init_method_max
-            if self.init_method_min_qkv is None:
-                self.init_method_min_qkv = self.init_method_min
-            if self.init_method_max_attn_proj is None:
-                self.init_method_max_attn_proj = self.init_method_max
-            if self.init_method_min_attn_proj is None:
-                self.init_method_min_attn_proj = self.init_method_min
-            if self.init_method_max_mlp_1 is None:
-                self.init_method_max_mlp_1 = self.init_method_max
-            if self.init_method_min_mlp_1 is None:
-                self.init_method_min_mlp_1 = self.init_method_min
-            if self.init_method_max_mlp_2 is None:
-                self.init_method_max_mlp_2 = self.init_method_max
-            if self.init_method_min_mlp_2 is None:
-                self.init_method_min_mlp_2 = self.init_method_min
-            if self.init_method_min is not None and self.init_method_max is not None:
-                Assert.leq(self.init_method_min, self.init_method_max)
-            if self.init_method_min_qkv is not None and self.init_method_max_qkv is not None:
-                Assert.leq(self.init_method_min, self.init_method_max)
-            if self.init_method_min_qkv is not None and self.init_method_max_qkv is not None:
-                Assert.leq(self.init_method_min_qkv, self.init_method_max_qkv)
-            if self.init_method_min_attn_proj is not None and self.init_method_max_attn_proj is not None:
-                Assert.leq(self.init_method_min_attn_proj, self.init_method_max_attn_proj)
-            if self.init_method_min_mlp_1 is not None and self.init_method_max_mlp_1 is not None:
-                Assert.leq(self.init_method_min_mlp_1, self.init_method_max_mlp_1)
-            if self.init_method_min_mlp_2 is not None and self.init_method_max_mlp_2 is not None:
-                Assert.leq(self.init_method_min_mlp_2, self.init_method_max_mlp_2)
-
-        super()._validate()
-
-    @property
-    def add_attn_qkv_bias(self) -> bool:
-        if isinstance(self.add_linear_biases, bool):
-            return self.add_linear_biases
-        if self.add_linear_biases == AddLinearBiasChoices.nowhere:
+    @functools.cached_property
+    def add_qkv_bias(self) -> bool:
+        if isinstance(self.block.add_linear_biases, bool):
+            return self.block.add_linear_biases
+        if self.block.add_linear_biases == AddLinearBiasChoices.nowhere:
             return False
         return True
 
-    @property
-    def add_attn_dense_bias(self) -> bool:
-        if isinstance(self.add_linear_biases, bool):
-            return self.add_linear_biases
-        if self.add_linear_biases == AddLinearBiasChoices.everywhere:
+    @functools.cached_property
+    def add_dense_bias(self) -> bool:
+        if isinstance(self.block.add_linear_biases, bool):
+            return self.block.add_linear_biases
+        if self.block.add_linear_biases == AddLinearBiasChoices.everywhere:
             return True
         return False
+
+    @functools.cached_property
+    def qkv_weight_initialization_method(self) -> Initializer:
+        if self.qkv_weight_initialization.has_initialization:
+            return self.qkv_weight_initialization.get_initializer()
+        else:
+            return self.block.block_sequence.hidden_size**-0.5
+
+    @functools.cached_property
+    def qkv_bias_initialization_method(self) -> Initializer:
+        if self.qkv_bias_initialization.has_initialization:
+            assert self.add_qkv_bias
+            return self.qkv_bias_initialization.get_initializer()
+        else:
+            return init_zeros_
+
+    @functools.cached_property
+    def dense_weight_initialization_method(self) -> Initializer:
+        if self.dense_weight_initialization.has_initialization:
+            return self.dense_weight_initialization.get_initializer()
+        else:
+            return self.block.block_sequence.hidden_size**-0.5 / max(2 * self.block.block_sequence.num_blocks, 1)
+
+    @functools.cached_property
+    def dense_bias_initialization_method(self) -> Initializer:
+        if self.dense_bias_initialization.has_initialization:
+            assert self.add_dense_bias
+            return self.dense_bias_initialization.get_initializer()
+        else:
+            return init_zeros_

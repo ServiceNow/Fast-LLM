@@ -62,13 +62,13 @@ class HybridSSMBaseModelConfig(GPTBaseModelConfig):
 
         if self.hybrid_block_layout is None:
             with self._set_implicit_default():
-                self.hybrid_block_layout = [SSMBlockType.mamba2_discrete] * self.transformer.num_layers
+                self.hybrid_block_layout = [SSMBlockType.mamba2_discrete] * self.transformer.num_blocks
 
-        if len(self.hybrid_block_layout) != self.transformer.num_layers:
-            message = f"hybrid_block_layout length {len(self.hybrid_block_layout)} does not match num_layers {self.transformer.num_layers}"
-            if self.transformer.num_layers % len(self.hybrid_block_layout) != 0:
+        if len(self.hybrid_block_layout) != self.transformer.num_blocks:
+            message = f"hybrid_block_layout length {len(self.hybrid_block_layout)} does not match num_layers {self.transformer.num_blocks}"
+            if self.transformer.num_blocks % len(self.hybrid_block_layout) != 0:
                 raise ValueError(message)
-            num_repeats = self.transformer.num_layers // len(self.hybrid_block_layout)
+            num_repeats = self.transformer.num_blocks // len(self.hybrid_block_layout)
             logger.warning(f"{message}, will repeat {self.hybrid_block_layout} {num_repeats} times.")
             self.hybrid_block_layout = self.hybrid_block_layout * num_repeats
 
