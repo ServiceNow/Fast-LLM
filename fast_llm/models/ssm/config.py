@@ -158,12 +158,34 @@ class AprielSSMHHybridHuggingfaceCheckpointFormat(CheckpointFormat):
 class AprielThinkerSSMHHybridHuggingfaceCheckpointFormat(CheckpointFormat):
     support_optimizer: typing.ClassVar[bool] = False
     name: typing.ClassVar[str] = "apriel_ssm_thinker_hybrid"
+    trust_remote_code: typing.ClassVar[bool] = True
 
     @classmethod
     def get_handler_class(cls) -> type[CheckpointHandler]:
         from fast_llm.models.ssm.conversion import AprielThinkerSSMHHybridHuggingfaceCheckpointHandler
 
         return AprielThinkerSSMHHybridHuggingfaceCheckpointHandler
+
+
+# class LlavaGPTHuggingfaceCheckpointFormat(GPTHuggingfaceCheckpointFormat):
+#     name: typing.ClassVar[str] = "llava"
+#     # Using default values for vision and text models. Can be overridden in the config
+#     vision_name: typing.ClassVar[str] = "pixtral"
+#     text_name: typing.ClassVar[str] = "mistral"
+
+
+class LlavaHybridHuggingfaceCheckpointFormat(CheckpointFormat):
+    support_optimizer: typing.ClassVar[bool] = False
+    name: typing.ClassVar[str] = "llava_hybrid"
+    vision_name: typing.ClassVar[str] = "pixtral"
+    text_name: typing.ClassVar[str] = "apriel_ssm_thinker_hybrid"
+    trust_remote_code: typing.ClassVar[bool] = True
+
+    @classmethod
+    def get_handler_class(cls) -> type[CheckpointHandler]:
+        from fast_llm.models.ssm.conversion import LlavaHybridHuggingfaceCheckpointHandler
+
+        return LlavaHybridHuggingfaceCheckpointHandler
 
 
 @config_class(dynamic_type={FastLLMModelConfig: "hybrid_ssm"})
@@ -176,6 +198,7 @@ class HybridSSMModelConfig(FastLLMModelConfig):
         AprielSSMHuggingfaceCheckpointFormat,
         AprielSSMHHybridHuggingfaceCheckpointFormat,
         AprielThinkerSSMHHybridHuggingfaceCheckpointFormat,
+        LlavaHybridHuggingfaceCheckpointFormat,
     )
 
     @classmethod
@@ -185,7 +208,7 @@ class HybridSSMModelConfig(FastLLMModelConfig):
         return HybridSSMModel
 
     @classmethod
-    def get_huggingface_model_class(cls) -> type["HuggingfaceHybridSSMModelForCausalLM"]:
+    def get_huggingface_model_for_causal_lm_class(cls) -> type["HuggingfaceHybridSSMModelForCausalLM"]:
         from fast_llm.models.ssm.huggingface import HuggingfaceHybridSSMModelForCausalLM
 
         return HuggingfaceHybridSSMModelForCausalLM
