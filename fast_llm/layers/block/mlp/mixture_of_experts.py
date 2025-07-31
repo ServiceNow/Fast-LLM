@@ -35,11 +35,16 @@ class MixtureOfExpertMLP[ConfigType: BlockConfig](MLPBase[ConfigType]):
 
     _group: ProcessGroup
 
-    def __init__(self, config: BlockConfig, tensor_space: TensorSpace, name: str = "mlp", block_index: int = 0):
+    def __init__(self, config: BlockConfig, tensor_space: TensorSpace, block_index: int = 0, name: str = "mlp"):
         Assert.gt(config.num_experts, 1)
         # TODO: Implement?
         assert not config.add_linear_biases, "Biases not supported for MoE."
-        super().__init__(config, tensor_space, name, block_index)
+        super().__init__(
+            config,
+            tensor_space,
+            block_index,
+            name,
+        )
         self._tensor_space = tensor_space
         self._debug_mode = self._config.debug_transformer or self._config.debug_transformer_memory
 

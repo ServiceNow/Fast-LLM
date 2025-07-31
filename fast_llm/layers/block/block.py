@@ -1,5 +1,6 @@
 import abc
 import functools
+import logging
 import typing
 
 import torch
@@ -14,6 +15,8 @@ from fast_llm.layers.block.mlp.mixture_of_experts import MixtureOfExpertMLP
 from fast_llm.layers.block.mlp.mlp import MLP
 from fast_llm.logging import log_distributed_grad, log_distributed_tensor, log_memory_usage
 from fast_llm.tensor import TensorMeta
+
+logger = logging.getLogger(__name__)
 
 
 class DebugLayer:
@@ -47,9 +50,11 @@ class DebugLayer:
     def enabled(self) -> bool:
         return self._debug_level > 0 or self._debug_memory
 
-    def __call__(
+    def __call__[
+        T
+    ](
         self,
-        tensor: torch.Tensor,
+        tensor: torch.Tensor | None,
         name: str,
         dims: tuple[TensorDim | str, ...],
         kwargs: dict[str, typing.Any],
@@ -60,7 +65,7 @@ class DebugLayer:
         # TODO: Local vs global?
         if self._debug_memory:
             log_pipeline_parallel_main_rank(lambda: log_memory_usage(f"{self._name} {name}", str))
-        if self._debug_level > 0:
+        if self._debug_level > 0 and tensor is not None:
             log_distributed_tensor(
                 "",
                 tensor,
@@ -112,11 +117,8 @@ class BlockLayer(torch.nn.Module, abc.ABC):
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
         pass
 
-    def _debug_log(self, tensor: torch.Tensor) -> None:
-        pass
 
-
-class Block[ConfigType: BlockConfig](Layer, Configurable[ConfigType]):
+class Block[ConfigType: BlockConfig](Configurable[ConfigType], Layer):
     """
     A transformer-like decoder base block with abstract mixer.
     """
@@ -125,10 +127,15 @@ class Block[ConfigType: BlockConfig](Layer, Configurable[ConfigType]):
     _mixer_module_name: typing.ClassVar[str] = "mixer"
 
     def __init__(self, config: ConfigType, tensor_space: TensorSpace, block_index: int, return_input: bool = False):
-        super().__init__()
-        self._config = config
+        super().__init__(config)
         self._tensor_space: TensorSpace = tensor_space
         self._dropout_p: float = self._config.hidden_dropout
+        self._debug = DebugLayer(
+            tensor_space,
+            f"Block {self._block_index} {self._name}",
+            self._config.debug_transformer,
+            self._config.debug_transformer_memory,
+        )
         # For multi-token prediction, return a stack of shared_hidden and transformer_output.
         self._return_input: bool = return_input
 
@@ -144,7 +151,9 @@ class Block[ConfigType: BlockConfig](Layer, Configurable[ConfigType]):
         setattr(self, self._mixer_module_name, self._create_mixer())
 
         self.mlp = (MixtureOfExpertMLP if self._config.num_experts > 1 else MLP)(
-            self._config, self._tensor_space, f"{self.name} mlp", block_index=block_index
+            self._config,
+            self._tensor_space,
+            self._block_index,
         )
 
         # PEFT.
@@ -163,35 +172,9 @@ class Block[ConfigType: BlockConfig](Layer, Configurable[ConfigType]):
             input_ = input_ + bias
         return residual + torch.dropout(input_, self._dropout_p, self.training)
 
-    @property
-    def name(self) -> str:
-        return f"{self._name} {self._block_index}"
-
-    def _get_meta(self, tensor: torch.Tensor, name: str, kwargs: dict):
-        dims = kwargs[BlockKwargs.hidden_dims]
-        if self._return_input:
-            dims = (TensorDim("stacked_input_output", 2),) + dims
-        return TensorMeta.from_dims(dims, tensor_name=f"{self.name} {name}", dtype=tensor.dtype)
-
-    def _debug_log(self, tensor: torch.Tensor | None, name: str, kwargs: dict[str, typing.Any], *, bias=None) -> None:
-        if self._config.debug_transformer_memory:
-            log_pipeline_parallel_main_rank(lambda: log_memory_usage(f"{self.name} {name}", str))
-        if self._config.debug_transformer and tensor is not None:
-            # TODO: Local vs global
-            log_distributed_tensor(
-                "",
-                tensor if bias is None else tensor + bias,
-                level=self._config.debug_transformer,
-                meta=self._get_meta(tensor, name, kwargs),
-                distributed=self._tensor_space.distributed,
-            )
-            log_distributed_grad(
-                "",
-                tensor,
-                level=self._config.debug_transformer,
-                meta=self._get_meta(tensor, name + " grad", kwargs),
-                distributed=self._tensor_space.distributed,
-            )
+    # @property
+    # def name(self) -> str:
+    #    return f"{self._name} {self._block_index}"
 
     def forward(
         self,
@@ -201,35 +184,50 @@ class Block[ConfigType: BlockConfig](Layer, Configurable[ConfigType]):
         metrics: dict[str, typing.Any] | None = None,
     ) -> torch.Tensor:
         if isinstance(input_, TensorMeta):
-            return self._get_meta(input_, "output", kwargs)
+            dims = kwargs[BlockKwargs.hidden_dims]
+            if self._return_input:
+                dims = (TensorDim("stacked_input_output", 2),) + dims
+            return TensorMeta.from_dims(
+                dims, tensor_name=f"{self._name} {self._block_index} output", dtype=input_.dtype
+            )
         generator = (
             self._tensor_space.distributed.tp_generator
             if self._tensor_space.distributed_config.sequence_tensor_parallel
             else self._tensor_space.distributed.pp_generator
         )
-        if self._debug_mode:
-            self._debug_log(None, "Begin", kwargs)
+        if self._debug.enabled:
+            self._debug(None, "Begin", kwargs[BlockKwargs.hidden_dims], kwargs)
         fw_input = input_
         hidden_states = self.norm_1(input_)
-        if self._debug_mode:
-            self._debug_log(hidden_states, "Norm 1", kwargs)
+        if self._debug.enabled:
+            self._debug(hidden_states, "Norm 1", kwargs[BlockKwargs.hidden_dims], kwargs)
         hidden_states, bias = getattr(self, self._mixer_module_name)(hidden_states, kwargs)
-        if self._debug_mode:
-            self._debug_log(hidden_states, f"{self._mixer_module_name} output", kwargs, bias=bias)
+        if self._debug.enabled:
+            self._debug(
+                hidden_states if bias is None else hidden_states + bias,
+                f"{self._mixer_module_name} output",
+                kwargs[BlockKwargs.hidden_dims],
+                kwargs,
+            )
         with set_generator(generator):
             input_ = self._bias_dropout_add(hidden_states, bias, input_)
-        if self._debug_mode:
-            self._debug_log(input_, f"{self._mixer_module_name} residual", kwargs)
+        if self._debug.enabled:
+            self._debug(input_, f"{self._mixer_module_name} residual", kwargs[BlockKwargs.hidden_dims], kwargs)
         hidden_states = self.norm_2(input_)
-        if self._debug_mode:
-            self._debug_log(hidden_states, "Norm 2", kwargs)
+        if self._debug.enabled:
+            self._debug(hidden_states, "Norm 2", kwargs[BlockKwargs.hidden_dims], kwargs)
         hidden_states, bias = self.mlp(hidden_states, kwargs, losses, metrics)
-        if self._debug_mode:
-            self._debug_log(hidden_states, "MLP output", kwargs, bias=bias)
+        if self._debug.enabled:
+            self._debug(
+                hidden_states if bias is None else hidden_states + bias,
+                "MLP output",
+                kwargs[BlockKwargs.hidden_dims],
+                kwargs,
+            )
         with set_generator(generator):
             hidden_states = self._bias_dropout_add(hidden_states, bias, input_)
-        if self._debug_mode:
-            self._debug_log(None, "MLP residual", kwargs, bias=bias)
+        if self._debug.enabled:
+            self._debug(None, "MLP residual", kwargs[BlockKwargs.hidden_dims], kwargs)
         if self._return_input:
             hidden_states = torch.stack((fw_input, hidden_states), dim=0)
         return hidden_states

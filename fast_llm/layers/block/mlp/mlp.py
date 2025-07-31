@@ -2,11 +2,10 @@ import typing
 
 import torch
 
-from fast_llm.config import Configurable
-from fast_llm.engine.base_model.base_model import Layer
 from fast_llm.engine.config_utils.tensor_space import TensorSpace
 from fast_llm.functional.config import TritonConfig
 from fast_llm.functional.triton.mlp import mlp_autograd, torch_mlp_activation, triton_mlp_activation_autograd
+from fast_llm.layers.block.block import BlockLayer
 from fast_llm.layers.block.config import BlockConfig, BlockDimNames
 from fast_llm.layers.block.mlp.config import MLPDimNames
 from fast_llm.layers.block.peft import TransformerSubLayerName
@@ -15,9 +14,15 @@ from fast_llm.tensor import init_normal_, init_zeros_
 from fast_llm.utils import Assert, get_lr_scale
 
 
-class MLPBase[ConfigType: BlockConfig](Configurable[ConfigType], Layer):
-    def __init__(self, config: BlockConfig, tensor_space: TensorSpace, name: str = "mlp", block_index: int = 0):
-        super().__init__(config)
+class MLPBase(BlockLayer):
+    def __init__(self, config: BlockConfig, tensor_space: TensorSpace, block_index: int = 0, name: str = "mlp"):
+        super().__init__(
+            tensor_space,
+            block_index,
+            name,
+            debug_level=config.debug_transformer,
+            debug_memory=config.debug_transformer_memory,
+        )
         self._name = name
         self._block_index = block_index
 
@@ -67,9 +72,9 @@ class MLPBase[ConfigType: BlockConfig](Configurable[ConfigType], Layer):
 
 
 class MLP[ConfigType: BlockConfig](MLPBase[ConfigType]):
-    def __init__(self, config: BlockConfig, tensor_space: TensorSpace, name: str = "mlp", block_index: int = 0):
+    def __init__(self, config: BlockConfig, tensor_space: TensorSpace, block_index: int = 0, name: str = "mlp"):
         Assert.eq(config.num_experts, 1)
-        super().__init__(config, tensor_space, name, block_index)
+        super().__init__(config, tensor_space, block_index, name)
 
     def forward(
         self,
