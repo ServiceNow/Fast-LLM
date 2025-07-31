@@ -13,6 +13,7 @@ from fast_llm.engine.inference.runner import InferenceRunner
 from fast_llm.engine.multi_stage.config import StageMode
 from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
 from fast_llm.engine.schedule.runner import ScheduleRunner
+from fast_llm.utils import Assert
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +58,10 @@ class HuggingfacePreTrainedModel(transformers.PreTrainedModel):
         assert fast_llm_model.is_setup
 
         self._inference_runner.setup()
+
+        # We only support data parallel and tensor parallel for now
+        Assert.eq(fast_llm_model.distributed.config.pipeline_parallel, 1)
+        Assert.eq(fast_llm_model.distributed.config.sequence_data_parallel, 1)
 
         # Transformers needs to be able to inspect the base model.
         self.fast_llm_base_model = fast_llm_model.base_model
