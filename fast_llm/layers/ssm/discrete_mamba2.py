@@ -6,8 +6,8 @@ import torch
 
 from fast_llm.engine.config_utils.tensor_space import DefaultDimNames, TensorSpace
 from fast_llm.functional.config import ActivationType
+from fast_llm.layers.block.block import BlockLayer
 from fast_llm.layers.block.config import BlockConfig, BlockKwargs
-from fast_llm.layers.block.mixer import Mixer
 from fast_llm.layers.common.linear import InputParallelLinear, OutputParallelLinear
 from fast_llm.layers.ssm.config import SSMConfig, SSMDimNames
 from fast_llm.tensor import ParameterMeta, init_kaiming_, init_ones_, init_uniform_centered_, init_zeros_
@@ -32,7 +32,7 @@ except (ImportError, RuntimeError):
     _causal_conv1d_available = False
 
 
-class DiscreteMamba2(Mixer):
+class DiscreteMamba2(BlockLayer):
     """DiscreteMamba2 (This code is adapted from https://github.com/cartesia-ai/edge/blob/main/cartesia-pytorch/cartesia_pytorch/Llamba/mixers/discrete_mamba2.py)."""
 
     _mixer_name: typing.ClassVar[str] = "discrete_mamba_2"
@@ -44,7 +44,13 @@ class DiscreteMamba2(Mixer):
         tensor_space: TensorSpace,
         block_config: BlockConfig,
     ):
-        super().__init__(tensor_space, block_index, debug_level=block_config.debug_transformer)
+        super().__init__(
+            tensor_space,
+            block_index,
+            self._mixer_name,
+            debug_level=block_config.debug_transformer,
+            debug_memory=block_config.debug_transformer_memory,
+        )
         self._config: SSMConfig = config
         layer_lr_scale = block_config.per_layer_lr_scale[block_index] if block_config.per_layer_lr_scale else None
         lr_scale = get_lr_scale(self._config.mamba_lr_scale, layer_lr_scale)

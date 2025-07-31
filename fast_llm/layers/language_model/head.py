@@ -15,6 +15,7 @@ from fast_llm.functional.config import CrossEntropyImpl, DistillationLossImpl, T
 from fast_llm.functional.cross_entropy import cross_entropy_forward_backward, reverse_kl_forward_backward
 from fast_llm.functional.dpo import compute_dpo_loss
 from fast_llm.functional.linear import output_parallel_linear_backward, output_parallel_linear_forward
+from fast_llm.layers.block.block import DebugLayer
 from fast_llm.layers.common.auxiliary_loss import AuxiliaryLoss, z_loss
 from fast_llm.layers.language_model.config import (
     LanguageModelBaseConfig,
@@ -46,47 +47,66 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
         prediction_distance: int,
     ):
         super().__init__(config)
-        self._debug_transformer = config.transformer.debug_transformer
-        self._tie_word_embeddings = config.tie_word_embeddings
+        self._debug = DebugLayer(
+            tensor_space,
+            f"Language model head",
+            self._config.transformer.debug_transformer,
+            self._config.transformer.debug_transformer_memory,
+        )
         self._tensor_space = tensor_space
 
         self._group_size = tensor_space.distributed_config.tensor_parallel
         self._sequence_parallel = tensor_space.distributed_config.sequence_tensor_parallel
-        self._parallel_embeddings = tensor_space.distributed_config.tensor_parallel > 1 and config.parallel_embeddings
-        self._sequence_parallel_logits = (
-            tensor_space.distributed_config.sequence_tensor_parallel and not config.parallel_embeddings
+        self._parallel_embeddings = (
+            tensor_space.distributed_config.tensor_parallel > 1 and self._config.parallel_embeddings
         )
-        self._cross_entropy_splits = config.cross_entropy_splits
+        self._sequence_parallel_logits = (
+            tensor_space.distributed_config.sequence_tensor_parallel and not self._config.parallel_embeddings
+        )
+        self._cross_entropy_splits = self._config.cross_entropy_splits
         if self._cross_entropy_splits is not None and self._sequence_parallel:
             assert not self._parallel_embeddings
 
         hidden_dim = self._tensor_space[LanguageModelDimNames.hidden]
 
         self._loss_coefficient = (
-            config.prediction_loss_coefficient[prediction_distance] if config.prediction_loss_coefficient else 1.0
+            self._config.prediction_loss_coefficient[prediction_distance]
+            if self._config.prediction_loss_coefficient
+            else 1.0
         )
         self._loss_name = LanguageModelLossNames.multi_token_prediction_loss(prediction_distance)
-        self.final_norm = config.transformer.normalization.get_layer(hidden_dim)
-        self._logits_scale_factor = config.logits_scale_factor
-        self._language_model_loss_factor = config.language_model_loss_factor
-        self._distillation_loss_factor = config.distillation_loss_factor
-        self._z_loss_factor = config.logit_z_loss
+        self.final_norm = self._config.transformer.normalization.get_layer(hidden_dim)
+        self._logits_scale_factor = self._config.logits_scale_factor
+        self._language_model_loss_factor = self._config.language_model_loss_factor
+        self._distillation_loss_factor = self._config.distillation_loss_factor
+        self._z_loss_factor = self._config.logit_z_loss
 
         # Distance of the target token prediction
         # 0: next-token prediction
         # >0: multi-token prediction (MTP)
         Assert.geq(prediction_distance, 0)
         self._prediction_distance = prediction_distance
-        self._is_last_head = self._prediction_distance == config.prediction_heads - 1
+        self._is_last_head = self._prediction_distance == self._config.prediction_heads - 1
 
-        self._init_output_weights(hidden_dim, config)
+        # Only the first head defines the output weights
+        if self._prediction_distance == 0 and not self._config.tie_word_embeddings:
+            # untie embedding weights
+            vocab_dim = self._tensor_space[
+                LanguageModelDimNames.vocab_tp if self._parallel_embeddings else LanguageModelDimNames.vocab
+            ]
+            self.output_weights = ParameterMeta.from_dims(
+                (vocab_dim, hidden_dim),
+                init_method=init_normal_(
+                    std=self._config.init_method_std_embed,
+                    min_val=self._config.init_method_min_embed,
+                    max_val=self._config.init_method_max_embed,
+                ),
+                lr_scale=self._config.output_lr_scale,
+            )
 
-        self._use_dpo_loss = config.enable_dpo
-        if self._use_dpo_loss:
-            self.dpo_beta = config.dpo_beta
-        else:
-            self._cross_entropy_impl = config.cross_entropy_impl
-            self._distillation_loss_implementation = config.distillation_loss_implementation
+        self._use_dpo_loss = self._config.enable_dpo
+        if not self._use_dpo_loss:
+            self._cross_entropy_impl = self._config.cross_entropy_impl
             if self._cross_entropy_impl == CrossEntropyImpl.auto:
                 if self._parallel_embeddings:
                     self._cross_entropy_impl = CrossEntropyImpl.fused
@@ -101,24 +121,6 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
         self.final_norm = self._config.transformer.peft.apply_other(self.final_norm)
         if hasattr(self, "output_weights"):
             self.output_weights = self._config.transformer.peft.apply_weight(self.output_weights)
-
-    def _init_output_weights(self, hidden_dim: TensorDim, config) -> None:
-        # Only the first head defines the output weights
-        if self._tie_word_embeddings or self._prediction_distance > 0:
-            return
-        # untie embedding weights
-        vocab_dim = self._tensor_space[
-            LanguageModelDimNames.vocab_tp if self._parallel_embeddings else LanguageModelDimNames.vocab
-        ]
-        self.output_weights = ParameterMeta.from_dims(
-            (vocab_dim, hidden_dim),
-            init_method=init_normal_(
-                std=config.init_method_std_embed,
-                min_val=config.init_method_min_embed,
-                max_val=config.init_method_max_embed,
-            ),
-            lr_scale=config.output_lr_scale,
-        )
 
     def forward(
         self, input_: torch.Tensor, kwargs: dict, losses: dict | None = None, metrics: dict | None = None
@@ -251,7 +253,7 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
         return targets
 
     def _get_output_weights(self, kwargs: dict) -> torch.Tensor:
-        if self._tie_word_embeddings:
+        if self._config.tie_word_embeddings:
             return kwargs[WORD_EMBEDDINGS_WEIGHT]
         if self._prediction_distance > 0:
             return kwargs[OUTPUT_WEIGHTS]
@@ -379,7 +381,7 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
                 kwargs.get(f"{self._config.dpo_reference_model}_logits"),
                 kwargs[LanguageModelKwargs.chosen_spans],
                 kwargs[LanguageModelKwargs.rejected_spans],
-                self.dpo_beta,
+                self._config.dpo_beta,
                 grad_output * self._loss_coefficient,
             )
         else:
@@ -401,7 +403,7 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
             lm_loss, lm_grad = None, None
 
         if distillation_target is not None and self._distillation_loss_factor > 0.0:
-            if self._distillation_loss_implementation == DistillationLossImpl.reverse_kl:
+            if self._config.distillation_loss_implementation == DistillationLossImpl.reverse_kl:
                 distillation_loss, distillation_grad = reverse_kl_forward_backward(
                     logits.flatten(0, -2),
                     distillation_target,
@@ -414,7 +416,7 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
                         TargetFormat.labels if self._config.distillation_model is None else TargetFormat.logits
                     ),
                 )
-            elif self._distillation_loss_implementation == DistillationLossImpl.cross_entropy:
+            elif self._config.distillation_loss_implementation == DistillationLossImpl.cross_entropy:
                 distillation_loss, distillation_grad = cross_entropy_forward_backward(
                     logits.flatten(0, -2),
                     distillation_target,
@@ -426,7 +428,9 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
                     target_format=TargetFormat.logits,
                 )
             else:
-                raise ValueError(f"Invalid distillation loss implementation: {self._distillation_loss_implementation}")
+                raise ValueError(
+                    f"Invalid distillation loss implementation: {self._config.distillation_loss_implementation}"
+                )
             distillation_loss = distillation_loss * self._distillation_loss_factor
         else:
             distillation_loss, distillation_grad = None, None

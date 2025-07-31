@@ -5,8 +5,8 @@ import torch
 
 from fast_llm.engine.config_utils.tensor_space import DefaultDimNames, TensorDim, TensorSpace
 from fast_llm.functional.config import ActivationType
+from fast_llm.layers.block.block import BlockLayer
 from fast_llm.layers.block.config import BlockConfig, BlockKwargs
-from fast_llm.layers.block.mixer import Mixer
 from fast_llm.layers.common.linear import InputParallelLinear, Linear, OutputParallelLinear
 from fast_llm.layers.ssm.config import SSMConfig, SSMDimNames
 from fast_llm.layers.ssm.mamba_layer import init_A, init_dtprojbias
@@ -30,7 +30,7 @@ except (ImportError, RuntimeError):
 logger = logging.getLogger(__name__)
 
 
-class Mamba2(Mixer):
+class Mamba2(BlockLayer):
     """
     This code is adapted from https://github.com/jxiw/M1/blob/537a1ca5407a786a99dc6c721873493cf8750d5e/mamba/hybrid_mamba_layer.py
     """
@@ -56,7 +56,13 @@ class Mamba2(Mixer):
         block_index: int,
         block_config: BlockConfig,
     ):
-        super().__init__(tensor_space, block_index, debug_level=block_config.debug_transformer)
+        super().__init__(
+            tensor_space,
+            block_index,
+            self._mixer_name,
+            debug_level=block_config.debug_transformer,
+            debug_memory=block_config.debug_transformer_memory,
+        )
         self._config: SSMConfig = config
         Assert.eq(self._config.activation_type, ActivationType.silu)
         layer_lr_scale: float | None = (
@@ -144,7 +150,13 @@ class Mamba2(Mixer):
             # TODO: lr_scale?
         )
 
-    def forward(self, input_: torch.Tensor, kwargs: dict[str, typing.Any]) -> tuple[torch.Tensor, torch.Tensor | None]:
+    def forward(
+        self,
+        input_: torch.Tensor,
+        kwargs: dict[str, typing.Any],
+        losses: dict[str, typing.Any] | None = None,
+        metrics: dict[str, typing.Any] | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
         assert _mamba_available
         assert _causal_conv1d_available
 
@@ -198,12 +210,12 @@ class Mamba2(Mixer):
         # dt: (batch, sequence, heads * state) -> (batch, heads * state, sequence)
         dt = dt.transpose(1, 2)
 
-        if self._debug_level:
-            self._debug_log(z, "z", self._XZ_DIMS, kwargs)
-            self._debug_log(x, "x", self._XZ_DIMS, kwargs)
-            self._debug_log(b, "b", self._BC_DIMS, kwargs)
-            self._debug_log(c, "c", self._BC_DIMS, kwargs)
-            self._debug_log(dt, "dt", self._XZ_DIMS, kwargs)
+        if self._debug.enabled:
+            self._debug(z, "z", self._XZ_DIMS, kwargs)
+            self._debug(x, "x", self._XZ_DIMS, kwargs)
+            self._debug(b, "b", self._BC_DIMS, kwargs)
+            self._debug(c, "c", self._BC_DIMS, kwargs)
+            self._debug(dt, "dt", self._XZ_DIMS, kwargs)
 
         y = selective_scan_fn(
             x,
@@ -217,8 +229,8 @@ class Mamba2(Mixer):
             delta_softplus=True,
         )
 
-        if self._debug_level:
-            self._debug_log(y, "y", self._XZ_DIMS, kwargs)
+        if self._debug.enabled:
+            self._debug(y, "y", self._XZ_DIMS, kwargs)
 
         # y: (batch, local_heads * state, sequence) -> (batch, sequence, local_heads * state)
         y = y.transpose(1, 2)[:, :sequence_length]

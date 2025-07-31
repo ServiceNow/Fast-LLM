@@ -6,8 +6,8 @@ import torch
 
 from fast_llm.engine.config_utils.tensor_space import DefaultDimNames, TensorSpace
 from fast_llm.functional.config import ActivationType
+from fast_llm.layers.block.block import BlockLayer
 from fast_llm.layers.block.config import BlockConfig, BlockKwargs
-from fast_llm.layers.block.mixer import Mixer
 from fast_llm.layers.common.linear import Linear
 from fast_llm.layers.ssm.config import SSMConfig, SSMDimNames
 from fast_llm.tensor import LambdaInitializer, ParameterMeta, init_kaiming_, init_ones_
@@ -52,7 +52,7 @@ def init_dtprojbias(dt_max: float, dt_min: float, dt_init_floor: float) -> Lambd
     return LambdaInitializer(init_)
 
 
-class MambaLayer(Mixer):
+class MambaLayer(BlockLayer):
     _mixer_name: typing.ClassVar[str] = "mamba"
 
     def __init__(
@@ -62,7 +62,13 @@ class MambaLayer(Mixer):
         tensor_space: TensorSpace,
         block_config: BlockConfig,
     ):
-        super().__init__(tensor_space, block_index, debug_level=block_config.debug_transformer)
+        super().__init__(
+            tensor_space,
+            block_index,
+            self._mixer_name,
+            debug_level=block_config.debug_transformer,
+            debug_memory=block_config.debug_transformer_memory,
+        )
         assert tensor_space.distributed_config.tensor_parallel == 1, "Tensor-parallel not supported for MambaLayer"
         self._config = config
         # TODO: It's not silu?

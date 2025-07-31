@@ -6,7 +6,7 @@ from fast_llm.core.distributed import set_generator
 from fast_llm.core.ops import gather_op, reduce_op, reduce_scatter_op, swap_mult_dim
 from fast_llm.engine.config_utils.tensor_space import TensorSpace
 from fast_llm.functional.autograd import wrap_forward_backward
-from fast_llm.layers.block.mixer import Mixer
+from fast_llm.layers.block.block import BlockLayer
 from fast_llm.layers.block.peft import TransformerSubLayerName
 from fast_llm.layers.common.linear import InputParallelLinear, OutputParallelLinear
 from fast_llm.layers.transformer.config import AttentionDimNames, AttentionKwargs, TransformerConfig
@@ -46,7 +46,7 @@ class AttachGrad(torch.autograd.Function):
         return grad, None
 
 
-class Attention(Mixer):
+class Attention(BlockLayer):
     """
     A self-attention layer.
     """
@@ -72,7 +72,13 @@ class Attention(Mixer):
     )
 
     def __init__(self, config: TransformerConfig, tensor_space: TensorSpace, block_index: int):
-        super().__init__(tensor_space, block_index, config.debug_transformer)
+        super().__init__(
+            tensor_space,
+            block_index,
+            self._mixer_name,
+            debug_level=config.debug_transformer,
+            debug_memory=config.debug_transformer_memory,
+        )
         self._config = config
         self._use_flash_attention = self._config.do_use_flash_attention(self._tensor_space.distributed_config)
 
@@ -259,7 +265,13 @@ class Attention(Mixer):
 
         return window_size
 
-    def forward(self, input_: torch.Tensor, kwargs: dict[str, typing.Any]) -> tuple[torch.Tensor, torch.Tensor | None]:
+    def forward(
+        self,
+        input_: torch.Tensor,
+        kwargs: dict[str, typing.Any],
+        losses: dict[str, typing.Any] | None = None,
+        metrics: dict[str, typing.Any] | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
         sequence_first = kwargs[AttentionKwargs.sequence_first]
         query, key_value = self._query_key_value(input_, sequence_first)
 
@@ -295,14 +307,9 @@ class Attention(Mixer):
         key = key.view(*key.shape[:2], self._local_head_groups, self._kv_channels)
         value = value.view(*value.shape[:2], self._local_head_groups, self._kv_channels)
 
-        if self._debug_level:
-            self._debug_log(query, "query_rotary_input", self._QUERY_DIMS, kwargs)
-            self._debug_log(
-                key,
-                "key_rotary_input",
-                self._KV_DIMS,
-                kwargs,
-            )
+        if self._debug.enabled:
+            self._debug(query, "query_rotary_input", self._QUERY_DIMS, kwargs)
+            self._debug(key, "key_rotary_input", self._KV_DIMS, kwargs)
         query, key = self._rotary(query, key, kwargs)
 
         window_size = self._decide_window_size()
@@ -349,21 +356,11 @@ class Attention(Mixer):
                 kwargs[AttentionKwargs.attention_mask_value],
             )
 
-        if self._debug_level:
-            self._debug_log(query, "query", self._QUERY_DIMS, kwargs)
-            self._debug_log(
-                key,
-                "key",
-                self._KV_DIMS,
-                kwargs,
-            )
-            self._debug_log(
-                value,
-                "value",
-                self._KV_DIMS,
-                kwargs,
-            )
-            self._debug_log(input_, "context", self._CONTEXT_DIMS, kwargs)
+        if self._debug.enabled:
+            self._debug(query, "query", self._QUERY_DIMS, kwargs)
+            self._debug(key, "key", self._KV_DIMS, kwargs)
+            self._debug(value, "value", self._KV_DIMS, kwargs)
+            self._debug(input_, "context", self._CONTEXT_DIMS, kwargs)
 
         if sequence_first:
             # TODO: Optimize (is contiguous avoidable? Transpose dense output?)
