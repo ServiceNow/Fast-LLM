@@ -4,6 +4,7 @@ from fast_llm.config import Config, Field, FieldHint, check_field, config_class,
 from fast_llm.engine.config_utils.tensor_space import CompositeTensorDim, TensorDim, TensorSpace
 from fast_llm.engine.distributed.config import DistributedDimNames
 from fast_llm.functional.config import ActivationType, MLPRecomputeLevel
+from fast_llm.layers.block.config import AddLinearBiasChoices
 from fast_llm.utils import Assert
 
 
@@ -155,6 +156,15 @@ class MLPConfig(Config):
         desc="Min value for clamping initialized weights for MLP second layer. Default: -float('inf')",
         hint=FieldHint.optional,
     )
+
+    @property
+    def add_mlp_bias(self) -> bool:
+        # TODO: Make this work without inheritance.
+        if isinstance(self.add_linear_biases, bool):
+            return self.add_linear_biases
+        if self.add_linear_biases == AddLinearBiasChoices.everywhere:
+            return True
+        return False
 
     def _validate(self) -> None:
         with self._set_implicit_default():

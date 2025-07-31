@@ -128,14 +128,6 @@ class BlockConfig(MLPConfig, BaseModelConfig):
 
         super()._validate()
 
-    @property
-    def add_mlp_bias(self) -> bool:
-        if isinstance(self.add_linear_biases, bool):
-            return self.add_linear_biases
-        if self.add_linear_biases == AddLinearBiasChoices.everywhere:
-            return True
-        return False
-
     def setup_tensor_space(self, tensor_space: TensorSpace) -> None:
         super().setup_tensor_space(tensor_space)
 

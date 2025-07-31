@@ -5,7 +5,7 @@ import torch
 
 from fast_llm.engine.base_model.config import Preprocessor
 from fast_llm.engine.config_utils.tensor_space import DefaultDimNames, TensorDim, TensorSpace
-from fast_llm.layers.transformer.config import AttentionKwargs, TransformerConfig
+from fast_llm.layers.transformer.config import AttentionConfig, AttentionKwargs
 from fast_llm.tensor import TensorMeta
 
 logger = logging.getLogger(__name__)
@@ -21,7 +21,7 @@ class BackupAttentionPreprocessor(Preprocessor):
 
     def __init__(
         self,
-        config: TransformerConfig,
+        config: AttentionConfig,
         tensor_space: TensorSpace,
     ):
         self._config = config
@@ -91,7 +91,7 @@ class BackupAttentionPreprocessor(Preprocessor):
 
 
 class FlashAttnVarlenPreprocessor(Preprocessor):
-    def __init__(self, config: TransformerConfig, tensor_space: TensorSpace):
+    def __init__(self, config: AttentionConfig, tensor_space: TensorSpace):
         self._config = config
         self._tensor_space = tensor_space
         self._distributed_config = self._tensor_space.distributed_config

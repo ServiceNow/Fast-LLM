@@ -25,7 +25,6 @@ from fast_llm.layers.language_model.config import (
     LanguageModelLossNames,
 )
 from fast_llm.layers.language_model.embedding import WORD_EMBEDDINGS_WEIGHT
-from fast_llm.logging import log_distributed_tensor
 from fast_llm.tensor import ParameterMeta, TensorMeta
 from fast_llm.utils import Assert, div, get_unique
 
@@ -34,16 +33,16 @@ logger = logging.getLogger(__name__)
 OUTPUT_WEIGHTS = "output_weights"
 
 
-class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[LanguageModelBaseConfig], Layer):
+class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[ConfigType], Layer):
     """
     A language model head (GPT), which combines the final layer norm, logits and cross-entropy (if applicable).
     """
 
-    config_class: typing.ClassVar[type[LanguageModelBaseConfig]] = LanguageModelBaseConfig
+    config_class: typing.ClassVar[type[LanguageModelBaseConfig]] = ConfigType
 
     def __init__(
         self,
-        config: LanguageModelBaseConfig,
+        config: ConfigType,
         tensor_space: TensorSpace,
         prediction_distance: int,
     ):
@@ -105,8 +104,7 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
                 lr_scale=self._config.output_lr_scale,
             )
 
-        self._use_dpo_loss = self._config.enable_dpo
-        if not self._use_dpo_loss:
+        if not self._config.enable_dpo:
             self._cross_entropy_impl = self._config.cross_entropy_impl
             if self._cross_entropy_impl == CrossEntropyImpl.auto:
                 if self._parallel_embeddings:
@@ -204,7 +202,7 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
         self, kwargs: dict
     ) -> tuple[torch.Tensor | None, torch.Tensor | None, torch.Tensor | None, torch.Tensor | None] | None:
         # Loss mask for distillation. (Labels are already masked.)
-        if self._use_dpo_loss:
+        if self._config.enable_dpo:
             dpo_target = kwargs.get(LanguageModelKwargs.labels)
             lm_target = None
             distillation_target = None
@@ -341,35 +339,22 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
                 LanguageModelLossNames.z_loss,
                 logits_scale_factor=self._logits_scale_factor,
             )
-        if self._debug_transformer and self._cross_entropy_splits is None:
-            vocab_dim = self._tensor_space[
+        if self._debug.enabled and self._cross_entropy_splits is None:
+            vocab_dim = (
                 LanguageModelDimNames.vocab if self._sequence_parallel_logits else LanguageModelDimNames.vocab_tp
-            ]
-            dims = [*kwargs[LanguageModelKwargs.hidden_dims][:-1], vocab_dim]
-            sequence_index = 1 - int(kwargs[LanguageModelKwargs.sequence_first])
-            dims[sequence_index] = (
-                TensorDim(
-                    LanguageModelDimNames.sequence_q_tp, dims[sequence_index].global_size, DistributedDimNames.tensor
-                )
+            )
+            sequence_dim = (
+                LanguageModelDimNames.sequence_q_tp
                 if self._sequence_parallel_logits
-                else TensorDim(LanguageModelDimNames.sequence_q, dims[sequence_index].global_size)
+                else LanguageModelDimNames.sequence_q
             )
-
-            dim_names = (
-                [LanguageModelDimNames.sequence_q_tp, LanguageModelDimNames.vocab]
-                if self._sequence_parallel_logits
-                else [LanguageModelDimNames.sequence_q, LanguageModelDimNames.vocab_tp]
+            batch_dim = kwargs[LanguageModelKwargs.hidden_dims][1 if kwargs[LanguageModelKwargs.sequence_first] else 0]
+            dims = (
+                (sequence_dim, batch_dim, vocab_dim)
+                if kwargs[LanguageModelKwargs.sequence_first]
+                else (batch_dim, sequence_dim, vocab_dim)
             )
-
-            dim_names.insert(int(kwargs[LanguageModelKwargs.sequence_first]), LanguageModelDimNames.batch)
-            log_distributed_tensor(
-                "",
-                logits,
-                level=self._debug_transformer,
-                meta=TensorMeta.from_dims(tuple(dims), tensor_name="transformer logits", dtype=logits.dtype),
-                distributed=self._tensor_space.distributed,
-                scale=self._logits_scale_factor,
-            )
+            self._debug(logits, "Language model logits", dims, kwargs, scale=self._logits_scale_factor)
 
         if targets is None:
             return logits * self._logits_scale_factor, None

@@ -4,7 +4,7 @@ import typing
 
 import torch
 
-from fast_llm.engine.config_utils.initialization import LambdaInitializer, init_kaiming_, init_ones_
+from fast_llm.engine.config_utils.initialization import LambdaInitializer, init_normal_, init_ones_
 from fast_llm.engine.config_utils.tensor_space import DefaultDimNames, TensorSpace
 from fast_llm.functional.config import ActivationType
 from fast_llm.layers.block.block import BlockLayer
@@ -146,7 +146,13 @@ class MambaLayer(BlockLayer):
         )
         self.out_proj.weight.auto_grad_accumulation = True
 
-    def forward(self, input_: torch.Tensor, kwargs: dict[str, typing.Any]) -> tuple[torch.Tensor, torch.Tensor | None]:
+    def forward(
+        self,
+        input_: torch.Tensor,
+        kwargs: dict[str, typing.Any],
+        losses: dict[str, typing.Any] | None = None,
+        metrics: dict[str, typing.Any] | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
         assert _mamba_available
         in_proj = self.in_proj(input_).permute((1, 2, 0) if kwargs[BlockKwargs.sequence_first] else (0, 2, 1))
 
@@ -170,3 +176,7 @@ class MambaLayer(BlockLayer):
         if kwargs[BlockKwargs.sequence_first]:
             out = out.transpose(0, 1)
         return out, None
+
+
+def init_kaiming_(d_in: float) -> LambdaInitializer:
+    return init_normal_(0.0, math.sqrt(2.0 / d_in))

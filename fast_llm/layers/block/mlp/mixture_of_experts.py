@@ -59,7 +59,6 @@ class MixtureOfExpertMLP[ConfigType: BlockConfig](MLPBase[ConfigType]):
             )
             dropless_moe = False
         self._mlp_forward = self._forward_dropless if dropless_moe else self._forward_looped
-        self._dynamic_shape = self._config.dropless_dynamic_shape
 
     def forward(
         self, input_: torch.Tensor, kwargs: dict, losses: dict | None = None, metrics: dict | None = None
@@ -67,7 +66,7 @@ class MixtureOfExpertMLP[ConfigType: BlockConfig](MLPBase[ConfigType]):
         hidden_states = input_.flatten(0, -2)
         logits = self.router(hidden_states)
         if self._debug.enabled:
-            self._debug(logits, "Router logits", MLPDimNames.experts, kwargs)
+            self._debug(logits, "Router logits", kwargs[BlockKwargs.hidden_dims][:-1] + (MLPDimNames.experts,), kwargs)
 
         # Apply z_loss if applicable
         if self._config.expert_z_loss_coefficient > 0.0:
@@ -97,8 +96,15 @@ class MixtureOfExpertMLP[ConfigType: BlockConfig](MLPBase[ConfigType]):
 
         if self._debug.enabled:
             # To log all ranks set `global_=False`
-            self._debug(scores, "Router scores", MLPDimNames.top_experts, kwargs)
-            self._debug(top_experts, "Router top experts", MLPDimNames.top_experts, kwargs)
+            self._debug(
+                scores, "Router scores", kwargs[BlockKwargs.hidden_dims][:-1] + (MLPDimNames.top_experts,), kwargs
+            )
+            self._debug(
+                top_experts,
+                "Router top experts",
+                kwargs[BlockKwargs.hidden_dims][:-1] + (MLPDimNames.top_experts,),
+                kwargs,
+            )
 
         return self._mlp_forward(hidden_states, scores, top_experts).view_as(input_), None  # noqa
 
@@ -106,7 +112,9 @@ class MixtureOfExpertMLP[ConfigType: BlockConfig](MLPBase[ConfigType]):
         self, hidden_states: torch.Tensor, scores: torch.Tensor, top_experts: torch.Tensor
     ) -> torch.Tensor:
         # Compute token counts and the sparse mapping (dense_row, top_index) -> sparse_row.
-        sparse_map = get_sparse_map(top_experts, self._config.num_experts, dynamic_shape=self._dynamic_shape)
+        sparse_map = get_sparse_map(
+            top_experts, self._config.num_experts, dynamic_shape=self._config.dropless_dynamic_shape
+        )
 
         # Sparse MLP
         return mlp_autograd(

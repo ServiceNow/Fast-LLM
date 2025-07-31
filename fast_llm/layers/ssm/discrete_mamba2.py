@@ -4,13 +4,14 @@ import typing
 import einops
 import torch
 
-from fast_llm.engine.config_utils.initialization import init_kaiming_, init_ones_, init_uniform_centered_, init_zeros_
+from fast_llm.engine.config_utils.initialization import init_ones_, init_uniform_centered_, init_zeros_
 from fast_llm.engine.config_utils.tensor_space import DefaultDimNames, TensorSpace
 from fast_llm.functional.config import ActivationType
 from fast_llm.layers.block.block import BlockLayer
 from fast_llm.layers.block.config import BlockConfig, BlockKwargs
 from fast_llm.layers.common.linear import InputParallelLinear, OutputParallelLinear
 from fast_llm.layers.ssm.config import SSMConfig, SSMDimNames
+from fast_llm.layers.ssm.mamba_layer import init_kaiming_
 from fast_llm.tensor import ParameterMeta
 from fast_llm.utils import get_lr_scale
 
@@ -117,7 +118,13 @@ class DiscreteMamba2(BlockLayer):
             lr_scale=lr_scale,
         )
 
-    def forward(self, input_: torch.Tensor, kwargs: dict[str, typing.Any]) -> tuple[torch.Tensor, torch.Tensor | None]:
+    def forward(
+        self,
+        input_: torch.Tensor,
+        kwargs: dict[str, typing.Any],
+        losses: dict[str, typing.Any] | None = None,
+        metrics: dict[str, typing.Any] | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
         assert _mamba_available
 
         sequence_length = kwargs[BlockKwargs.sequence_q_dim].global_size

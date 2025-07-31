@@ -63,7 +63,7 @@ class MLPBase(BlockLayer):
             bias=self._config.add_mlp_bias,
             weight_init_method=init_method_2,
             bias_init_method=init_zeros_,
-            auto_bias_grad_accumulation=tensor_space.distributed_config.tensor_parallel > 1,
+            auto_bias_grad_accumulation=self._tensor_space.distributed_config.tensor_parallel > 1,
             transposed_weight=True,
             lr_scale=lr_scale,
         )
