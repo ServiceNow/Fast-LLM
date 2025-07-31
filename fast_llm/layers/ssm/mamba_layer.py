@@ -4,13 +4,14 @@ import typing
 
 import torch
 
+from fast_llm.engine.config_utils.initialization import LambdaInitializer, init_normal_, init_ones_
 from fast_llm.engine.config_utils.tensor_space import DefaultDimNames, TensorSpace
 from fast_llm.functional.config import ActivationType
 from fast_llm.layers.block.config import BlockConfig, BlockKwargs
 from fast_llm.layers.block.mixer import Mixer
 from fast_llm.layers.common.linear import Linear
 from fast_llm.layers.ssm.config import SSMConfig, SSMDimNames
-from fast_llm.tensor import LambdaInitializer, ParameterMeta, init_kaiming_, init_ones_
+from fast_llm.tensor import ParameterMeta
 from fast_llm.utils import Assert, get_lr_scale
 
 try:
@@ -163,3 +164,7 @@ class MambaLayer(Mixer):
         if kwargs[BlockKwargs.sequence_first]:
             out = out.transpose(0, 1)
         return out, None
+
+
+def init_kaiming_(d_in: float) -> LambdaInitializer:
+    return init_normal_(0.0, math.sqrt(2.0 / d_in))

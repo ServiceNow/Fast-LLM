@@ -9,7 +9,7 @@ from fast_llm.engine.config_utils.runnable import RunnableConfig
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig, PretrainedFastLLMModelConfig
 from fast_llm.engine.schedule.config import BatchConfig
 from fast_llm.engine.training.config import TrainerConfig
-from fast_llm.layers.language_model.config import LanguageModelBaseConfig
+from fast_llm.layers.language_model.config import LanguageModelConfig
 from fast_llm.models.gpt.megatron import set_megatron_distributed_seeds
 from fast_llm.utils import Assert, div
 
@@ -119,7 +119,7 @@ class GPTBatchConfig(BatchConfig):
 
 
 @config_class()
-class GPTBaseModelConfig(LanguageModelBaseConfig):
+class GPTBaseModelConfig(LanguageModelConfig):
     _abstract = False
 
     # Debug, to get an exact match with megatron init.
@@ -192,15 +192,12 @@ class GPTTrainerConfig(PretrainedGPTModelConfig, TrainerConfig):
     reference_models: dict[str, PretrainedGPTModelConfig] = FieldUpdate()
 
     def _validate(self) -> None:
-        if self.batch.sequence_length is None:
-            # TODO: Drop this.
-            self.batch.sequence_length = self.model.base_model.max_position_embeddings
         if self.model.base_model.use_megatron_initialization:
             set_megatron_distributed_seeds(self.model.distributed)
         super()._validate()
 
         if self.model.base_model.use_absolute_position_embeddings:
-            Assert.geq(self.model.base_model.num_absolute_position_embeddings, self.batch.sequence_length)
+            Assert.geq(self.model.base_model.absolute_position_embeddings, self.batch.sequence_length)
 
         distillation_model = self.model.base_model.distillation_model
         dpo_reference_model = self.model.base_model.dpo_reference_model

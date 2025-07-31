@@ -2,75 +2,77 @@ import typing
 
 import torch
 
-from fast_llm.config import Configurable
-from fast_llm.engine.base_model.base_model import Layer
+from fast_llm.engine.config_utils.initialization import init_normal_, init_zeros_
 from fast_llm.engine.config_utils.tensor_space import TensorSpace
 from fast_llm.functional.config import TritonConfig
 from fast_llm.functional.triton.mlp import mlp_autograd, torch_mlp_activation, triton_mlp_activation_autograd
-from fast_llm.layers.block.config import BlockConfig, BlockDimNames
-from fast_llm.layers.block.mlp.config import MLPDimNames
+from fast_llm.layers.block.block import BlockLayer
+from fast_llm.layers.block.config import BlockDimNames
+from fast_llm.layers.block.mlp.config import MLPConfig, MLPDimNames
 from fast_llm.layers.block.peft import TransformerSubLayerName
 from fast_llm.layers.common.linear import LinearBase
-from fast_llm.tensor import init_normal_, init_zeros_
-from fast_llm.utils import Assert, get_lr_scale
+from fast_llm.utils import get_lr_scale
 
 
-class MLPBase[ConfigType: BlockConfig](Configurable[ConfigType], Layer):
-    def __init__(self, config: BlockConfig, tensor_space: TensorSpace, name: str = "mlp", block_index: int = 0):
-        super().__init__(config)
-        self._name = name
-        self._block_index = block_index
+class MLPBase[ConfigType: MLPConfig](BlockLayer[ConfigType]):
+    _name: typing.ClassVar[str] = "mlp"
+
+    def __init__(self, config: ConfigType, tensor_space: TensorSpace, block_index: int, name: str):
+        super().__init__(config, tensor_space, block_index, name)
 
         init_method_1 = init_normal_(
-            std=config.init_method_std_mlp_1,
-            min_val=config.init_method_min_mlp_1,
-            max_val=config.init_method_max_mlp_1,
+            std=self._config.init_method_std_mlp_1,
+            min_val=self._config.init_method_min_mlp_1,
+            max_val=self._config.init_method_max_mlp_1,
         )
         init_method_2 = init_normal_(
-            std=config.init_method_std_mlp_2,
-            min_val=config.init_method_min_mlp_2,
-            max_val=config.init_method_max_mlp_2,
+            std=self._config.init_method_std_mlp_2,
+            min_val=self._config.init_method_min_mlp_2,
+            max_val=self._config.init_method_max_mlp_2,
         )
 
-        hidden_dim = tensor_space[BlockDimNames.hidden]
-        self._intermediate_dim = tensor_space[MLPDimNames.composite_expert_mlp]
-        self._sequence_parallel = tensor_space.distributed_config.sequence_tensor_parallel
+        hidden_dim = self._tensor_space[BlockDimNames.hidden]
+        self._intermediate_dim = self._tensor_space[MLPDimNames.composite_expert_mlp]
         self._activation_fn = triton_mlp_activation_autograd if TritonConfig.TRITON_ENABLED else torch_mlp_activation
 
-        layer_lr_scale = config.per_layer_lr_scale[block_index] if config.per_layer_lr_scale else None
-        lr_scale = tuple(config.mlp_lr_scale) if isinstance(config.mlp_lr_scale, list) else config.mlp_lr_scale
+        layer_lr_scale = (
+            self._config.block.block_sequence.per_layer_lr_scale[self._block_index]
+            if self._config.block.block_sequence.per_layer_lr_scale
+            else None
+        )
+        lr_scale = (
+            tuple(self._config.mlp_lr_scale)
+            if isinstance(self._config.mlp_lr_scale, list)
+            else self._config.mlp_lr_scale
+        )
         lr_scale = get_lr_scale(lr_scale, layer_lr_scale)
 
         # So both layers' weights have shape (num_experts [* gate_up] * ffn, hidden_size)
         self.layer_1 = LinearBase(
             hidden_dim,
-            tensor_space[MLPDimNames.composite_gated_expert_mlp],
-            bias=config.add_mlp_bias,
+            self._tensor_space[MLPDimNames.composite_gated_expert_mlp],
+            bias=self._config.add_bias,
             weight_init_method=init_method_1,
-            bias_init_method=init_method_1 if config.random_bias_init else init_zeros_,
+            bias_init_method=init_method_1 if self._config.random_bias_init else init_zeros_,
             lr_scale=lr_scale,
         )
         self.layer_2 = LinearBase(
             self._intermediate_dim,
             hidden_dim,
-            bias=config.add_mlp_bias,
+            bias=self._config.add_bias,
             weight_init_method=init_method_2,
-            bias_init_method=init_method_2 if config.random_bias_init else init_zeros_,
-            auto_bias_grad_accumulation=tensor_space.distributed_config.tensor_parallel > 1,
+            bias_init_method=init_method_2 if self._config.random_bias_init else init_zeros_,
+            auto_bias_grad_accumulation=self._tensor_space.distributed_config.tensor_parallel > 1,
             transposed_weight=True,
             lr_scale=lr_scale,
         )
 
         # PEFT.
-        self.layer_1 = config.peft.apply_linear(self.layer_1, TransformerSubLayerName.mlp_1)
-        self.layer_2 = config.peft.apply_linear(self.layer_2, TransformerSubLayerName.mlp_2)
+        self.layer_1 = self._config.block.peft.apply_linear(self.layer_1, TransformerSubLayerName.mlp_1)
+        self.layer_2 = self._config.block.peft.apply_linear(self.layer_2, TransformerSubLayerName.mlp_2)
 
 
-class MLP[ConfigType: BlockConfig](MLPBase[ConfigType]):
-    def __init__(self, config: BlockConfig, tensor_space: TensorSpace, name: str = "mlp", block_index: int = 0):
-        Assert.eq(config.num_experts, 1)
-        super().__init__(config, tensor_space, name, block_index)
-
+class MLP[ConfigType: MLPConfig](MLPBase[ConfigType]):
     def forward(
         self,
         input_: torch.Tensor,
