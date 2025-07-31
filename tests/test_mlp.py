@@ -15,7 +15,7 @@ def test_mlp_constructor():
     tensor_space = TensorSpace(distributed_config=distributed_config)
     transformer_conf.setup_tensor_space(tensor_space)
 
-    MLP(transformer_conf, tensor_space, "name")
+    MLP(transformer_conf, tensor_space, 0, "name")
 
 
 def test_moe_mlp_constructor():
@@ -26,4 +26,4 @@ def test_moe_mlp_constructor():
     tensor_space = TensorSpace(distributed_config=distributed_config)
     transformer_conf.setup_tensor_space(tensor_space)
 
-    MixtureOfExpertMLP(transformer_conf, tensor_space, "name")
+    MixtureOfExpertMLP(transformer_conf, tensor_space, 0, "name")
