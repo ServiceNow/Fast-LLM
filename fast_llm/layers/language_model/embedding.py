@@ -36,15 +36,14 @@ class LanguageModelEmbedding[ConfigType: LanguageModelBaseConfig](Configurable[C
         self._distributed_config = self._tensor_space.distributed_config
         self._residual_dtype = (
             self._distributed_config.optimization_dtype
-            if config.transformer.full_precision_residual
+            if self._config.transformer.full_precision_residual
             else self._distributed_config.training_dtype
         ).torch
         self._group_size = self._distributed_config.tensor_parallel
         self._sequence_parallel = self._distributed_config.sequence_tensor_parallel
         self._parallel_embeddings = (
-            self._tensor_space.distributed_config.tensor_parallel > 1 and config.parallel_embeddings
+            self._tensor_space.distributed_config.tensor_parallel > 1 and self._config.parallel_embeddings
         )
-        self._use_absolute_position_embeddings = config.use_absolute_position_embeddings
 
         hidden_dim = self._tensor_space[LanguageModelDimNames.hidden]
         vocab_dim = self._tensor_space[
@@ -58,14 +57,14 @@ class LanguageModelEmbedding[ConfigType: LanguageModelBaseConfig](Configurable[C
         self.word_embeddings_weight = ParameterMeta.from_dims(
             (vocab_dim, hidden_dim),
             init_method=self._config.word_embedding_weight_initialization_method,
-            lr_scale=config.embeddings_lr_scale,
+            lr_scale=self._config.embeddings_lr_scale,
         )
-        if self._use_absolute_position_embeddings:
+        if self._config.use_absolute_position_embeddings:
             self.position_embeddings_weight = ParameterMeta.from_dims(
                 (self._tensor_space[LanguageModelDimNames.position_embed], hidden_dim),
                 init_method=self._config.position_embedding_weight_initialization_method,
-                allow_sequence_tensor_parallel=not config.parallel_embeddings,
-                lr_scale=config.embeddings_lr_scale,
+                allow_sequence_tensor_parallel=not self._config.parallel_embeddings,
+                lr_scale=self._config.embeddings_lr_scale,
             )
 
         # PEFT.
@@ -77,21 +76,21 @@ class LanguageModelEmbedding[ConfigType: LanguageModelBaseConfig](Configurable[C
 
     @torch.compile
     def _forward(self, input_: torch.Tensor, position_ids: torch.Tensor | None, mask_inputs: bool) -> torch.Tensor:
-        Assert.eq(position_ids is not None, self._use_absolute_position_embeddings)
+        Assert.eq(position_ids is not None, self._config.use_absolute_position_embeddings)
         group = self._tensor_space.distributed.tensor_group
         if self._parallel_embeddings:
             input_mask = (input_ >= self._vocab_start_index) * (input_ < self._vocab_end_index)
             masked_input = (input_ - self._vocab_start_index) * input_mask
             embeddings = torch.embedding(self.word_embeddings_weight, masked_input) * input_mask.unsqueeze(2)  # noqa
             embeddings = reduce_forward(embeddings, group)
-            if self._use_absolute_position_embeddings:
+            if self._config.use_absolute_position_embeddings:
                 embeddings = embeddings + torch.nn.functional.embedding(position_ids, self.position_embeddings_weight)
             if self._sequence_parallel:
                 embeddings = split(embeddings, group=group, dim=0)
         else:
             if self._sequence_parallel:
                 input_ = split(input_, group=group, dim=0)
-                if self._use_absolute_position_embeddings:
+                if self._config.use_absolute_position_embeddings:
                     position_ids = split(position_ids, group=group, dim=0)
             # handle masked tokens
             if mask_inputs:
@@ -100,7 +99,7 @@ class LanguageModelEmbedding[ConfigType: LanguageModelBaseConfig](Configurable[C
                 embeddings = torch.embedding(self.word_embeddings_weight, masked_input)
             else:
                 embeddings = torch.embedding(self.word_embeddings_weight, input_)
-            if self._use_absolute_position_embeddings:
+            if self._config.use_absolute_position_embeddings:
                 embeddings = embeddings + torch.nn.functional.embedding(position_ids, self.position_embeddings_weight)
             if mask_inputs:
                 embeddings = embeddings * input_mask.unsqueeze(2)

@@ -199,7 +199,7 @@ class BlockSequenceConfig(BaseModelConfig):
     # TODO: Move these, not specific to a single block.
     num_blocks: int = Field(
         default=12,
-        desc="Number of blocks in the transformer.",
+        desc="Number of blocks in the model.",
         hint=FieldHint.architecture,
         valid=check_field(Assert.geq, 0),
     )
