@@ -14,7 +14,7 @@ from fast_llm.utils import get_lr_scale
 
 
 class MLPBase[ConfigType: MLPConfig](BlockLayer[ConfigType]):
-    def __init__(self, config: BlockConfig, tensor_space: TensorSpace, block_index: int = 0, name: str = "mlp"):
+    def __init__(self, config: BlockConfig, tensor_space: TensorSpace, block_index: int, name: str):
         super().__init__(config, tensor_space, block_index, name)
 
         hidden_dim = self._tensor_space[BlockDimNames.hidden]

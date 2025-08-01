@@ -120,7 +120,6 @@ class BlockLayer[ConfigType: BlockLayerConfig](BlockLayerBase[ConfigType], torch
 
     def __init__(self, config: ConfigType, tensor_space: TensorSpace, block_index: int, name: str):
         super().__init__(config, tensor_space, block_index, name, config.block)
-        self._block_index = block_index
 
     @abc.abstractmethod
     def forward(

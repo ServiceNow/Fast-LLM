@@ -5,16 +5,13 @@ import warnings
 
 from fast_llm.config import Field, FieldHint, check_field, config_class, skip_valid_if_none
 from fast_llm.engine.config_utils.data_type import DataType
-from fast_llm.engine.config_utils.initialization import InitializationConfig, Initializer, init_zeros_
+from fast_llm.engine.config_utils.initialization import InitializationConfig, Initializer, init_normal_, init_zeros_
 from fast_llm.engine.config_utils.tensor_space import CompositeTensorDim, TensorDim, TensorSpace
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
 from fast_llm.functional.config import TritonConfig
 from fast_llm.layers.block.config import AddLinearBiasChoices, BlockConfig, BlockDimNames, BlockKwargs, MixerConfig
 from fast_llm.layers.transformer.rotary.config import RotaryConfig
 from fast_llm.utils import Assert, div
-
-if typing.TYPE_CHECKING:
-    pass
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +45,6 @@ class AttentionKwargs(BlockKwargs):
 
 @config_class(dynamic_type={MixerConfig: "attention"})
 class AttentionConfig(MixerConfig):
-    # TODO: Make mixer class dynamic.
     _abstract = False
 
     # Needed for backward compatibility. TODO: remove
@@ -111,7 +107,8 @@ class AttentionConfig(MixerConfig):
         valid=skip_valid_if_none(check_field(Assert.geq, 0)),
     )
     qkv_weight_initialization: InitializationConfig = Field(
-        desc="Initialization configuration for the query, key and value layer weights. Default: normal(std=hidden_size**-0.5)",
+        desc="Initialization configuration for the query, key and value layer weights."
+        " Default: normal(std=hidden_size**-0.5)",
         hint=FieldHint.feature,
     )
     qkv_bias_initialization: InitializationConfig = Field(
@@ -119,7 +116,8 @@ class AttentionConfig(MixerConfig):
         hint=FieldHint.feature,
     )
     dense_weight_initialization: InitializationConfig = Field(
-        desc="Initialization configuration for the dense layer weight. Default: normal(std=(2 * num_blocks * hidden_size)**-0.5)",
+        desc="Initialization configuration for the dense layer weight."
+        " Default: normal(std=(2 * num_blocks * hidden_size)**-0.5)",
         hint=FieldHint.feature,
     )
     dense_bias_initialization: InitializationConfig = Field(
@@ -129,7 +127,7 @@ class AttentionConfig(MixerConfig):
 
     def _validate(self) -> None:
         with self._set_implicit_default():
-            # TODO: Make this work without inheritance.
+            # TODO: hidden_size not yet validated.
             if self.kv_channels is None:
                 self.kv_channels = div(self.block.hidden_size, self.num_attention_heads)
 
@@ -182,16 +180,14 @@ class AttentionConfig(MixerConfig):
             CompositeTensorDim(AttentionDimNames.composite_dense, (head_groups, group_heads, kv_channels))
         )
 
-    @property
+    @functools.cached_property
     def add_qkv_bias(self) -> bool:
-        # TODO: Make this work without inheritance.
         if isinstance(self.block.add_linear_biases, bool):
             return self.block.add_linear_biases
         return self.block.add_linear_biases != AddLinearBiasChoices.nowhere
 
-    @property
+    @functools.cached_property
     def add_dense_bias(self) -> bool:
-        # TODO: Make this work without inheritance.
         if isinstance(self.block.add_linear_biases, bool):
             return self.block.add_linear_biases
         return self.block.add_linear_biases == AddLinearBiasChoices.everywhere
@@ -201,7 +197,7 @@ class AttentionConfig(MixerConfig):
         if self.qkv_weight_initialization.has_initialization:
             return self.qkv_weight_initialization.get_initializer()
         else:
-            return self.block.hidden_size**-0.5
+            return init_normal_(0, self.block.hidden_size**-0.5)
 
     @functools.cached_property
     def qkv_bias_initialization_method(self) -> Initializer:
@@ -215,7 +211,7 @@ class AttentionConfig(MixerConfig):
         if self.dense_weight_initialization.has_initialization:
             return self.dense_weight_initialization.get_initializer()
         else:
-            return self.block.hidden_size**-0.5 / max(2 * self.block.num_blocks, 1)
+            return init_normal_(0, self.block.hidden_size**-0.5 / max(2 * self.block.num_blocks, 1))
 
     @functools.cached_property
     def dense_bias_initialization_method(self) -> Initializer:
