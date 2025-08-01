@@ -58,13 +58,13 @@ class NormalInitializationConfig(InitializationConfig):
 
 
 @config_class(dynamic_type={InitializationConfig: "zeros"})
-class ZeroInitializationConfig(InitializationConfig):
+class ZerosInitializationConfig(InitializationConfig):
     def get_initializer(self):
         return init_zeros_
 
 
 @config_class(dynamic_type={InitializationConfig: "ones"})
-class ZeroInitializationConfig(InitializationConfig):
+class OnesInitializationConfig(InitializationConfig):
     def get_initializer(self):
         return init_ones_
 

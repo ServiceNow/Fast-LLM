@@ -179,7 +179,7 @@ class HybridSSMTrainerConfig(PretrainedHybridSSMModelConfig, TrainerConfig):
         else:
             Assert.eq(self.reference_models.keys(), {name})
         if self.model.base_model.use_absolute_position_embeddings:
-            Assert.geq(self.model.base_model.num_absolute_position_embeddings, self.batch.sequence_length)
+            Assert.geq(self.model.base_model.absolute_position_embeddings, self.batch.sequence_length)
         # if self.model.base_model.distillation_model is not None:
         #     # TODO: Support loss masking for distillation?
         #     assert not self.batch.use_loss_masking_spans
