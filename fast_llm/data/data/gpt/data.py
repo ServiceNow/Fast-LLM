@@ -65,6 +65,8 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
     TODO: Separate generic and GPT classes.
     """
 
+    config_class: typing.ClassVar[type[GPTDataConfig]] = GPTDataConfig
+
     _datasets: dict[str, SampledDataset]
     _sampling_parameters: dict[str, GPTSamplingParameters]
     _tokenizer: Tokenizer | None

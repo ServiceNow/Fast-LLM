@@ -8,7 +8,7 @@ from fast_llm.config import Configurable
 from fast_llm.engine.base_model.config import Preprocessor
 from fast_llm.engine.config_utils.tensor_space import DefaultDimNames, TensorSpace
 from fast_llm.functional.triton.rotary import triton_rotary_autograd_
-from fast_llm.layers.transformer.config import TransformerDimNames, TransformerKwargs
+from fast_llm.layers.transformer.config import AttentionDimNames, AttentionKwargs
 from fast_llm.layers.transformer.rotary.config import (
     DefaultRotaryConfig,
     Llama3RotaryConfig,
@@ -42,6 +42,8 @@ def apply_rotary_embeddings(tensor: torch.Tensor, rope_frequencies: torch.Tensor
 
 
 class Rotary[ConfigType: RotaryConfig](Configurable[RotaryConfig], torch.nn.Module, Preprocessor):
+    config_class: typing.ClassVar[type[RotaryConfig]] = RotaryConfig
+
     def __init__(
         self,
         config: ConfigType,
@@ -58,6 +60,8 @@ class Rotary[ConfigType: RotaryConfig](Configurable[RotaryConfig], torch.nn.Modu
 
 
 class NoRotary[ConfigType: NoRotaryConfig](Rotary[NoRotaryConfig]):
+    config_class: typing.ClassVar[type[NoRotaryConfig]] = NoRotaryConfig
+
     def forward(
         self, query: torch.Tensor, key: torch.Tensor, kwargs: dict[str, typing.Any]
     ) -> tuple[torch.Tensor, torch.Tensor]:
@@ -71,6 +75,7 @@ class NoRotary[ConfigType: NoRotaryConfig](Rotary[NoRotaryConfig]):
 
 
 class DefaultRotary[ConfigType: DefaultRotaryConfig](Rotary[DefaultRotaryConfig]):
+    config_class: typing.ClassVar[type[DefaultRotaryConfig]] = DefaultRotaryConfig
     _rotary_embedding_frequencies: torch.Tensor
     _tensor_cache_max_sequence_length: int = -1
 
@@ -83,44 +88,44 @@ class DefaultRotary[ConfigType: DefaultRotaryConfig](Rotary[DefaultRotaryConfig]
         self._tensor_space = tensor_space
         if self._tensor_space is not None:
             self._scalar_dim = self._tensor_space[DefaultDimNames.scalar]
-            self._kv_channels_dim = self._tensor_space[TransformerDimNames.kv_channels]
+            self._kv_channels_dim = self._tensor_space[AttentionDimNames.kv_channels]
 
     def preprocess(self, batch, kwargs: dict[str, typing.Any]) -> None:
         assert self._tensor_space is not None
-        self._create_tensors(kwargs[TransformerKwargs.sequence_length])
-        sequence_k = kwargs[TransformerKwargs.sequence_k_dim].size
-        kwargs[TransformerKwargs.rotary_freq_q] = self._rotary_embedding_frequencies[
-            :, sequence_k - kwargs[TransformerKwargs.sequence_q_dim].size : sequence_k
+        self._create_tensors(kwargs[AttentionKwargs.sequence_length])
+        sequence_k = kwargs[AttentionKwargs.sequence_k_dim].size
+        kwargs[AttentionKwargs.rotary_freq_q] = self._rotary_embedding_frequencies[
+            :, sequence_k - kwargs[AttentionKwargs.sequence_q_dim].size : sequence_k
         ]
-        kwargs[TransformerKwargs.rotary_freq_k] = self._rotary_embedding_frequencies[:, :sequence_k]
+        kwargs[AttentionKwargs.rotary_freq_k] = self._rotary_embedding_frequencies[:, :sequence_k]
 
     def preprocess_meta(self, kwargs: dict[str, typing.Any]) -> None:
         assert self._tensor_space is not None
-        kwargs[TransformerKwargs.rotary_freq_q] = TensorMeta.from_dims(
+        kwargs[AttentionKwargs.rotary_freq_q] = TensorMeta.from_dims(
             (
                 self._scalar_dim,
-                kwargs[TransformerKwargs.sequence_q_dim],
+                kwargs[AttentionKwargs.sequence_q_dim],
                 self._scalar_dim,
                 self._kv_channels_dim,
             ),
-            tensor_name=TransformerKwargs.rotary_freq_q,
+            tensor_name=AttentionKwargs.rotary_freq_q,
         )
-        kwargs[TransformerKwargs.rotary_freq_k] = TensorMeta.from_dims(
+        kwargs[AttentionKwargs.rotary_freq_k] = TensorMeta.from_dims(
             (
                 self._scalar_dim,
-                kwargs[TransformerKwargs.sequence_q_dim],
+                kwargs[AttentionKwargs.sequence_q_dim],
                 self._scalar_dim,
                 self._kv_channels_dim,
             ),
-            tensor_name=TransformerKwargs.rotary_freq_k,
+            tensor_name=AttentionKwargs.rotary_freq_k,
         )
 
     def forward(
         self, query: torch.Tensor, key: torch.Tensor, kwargs: dict[str, typing.Any]
     ) -> tuple[torch.Tensor, torch.Tensor]:
         rotary_fn = triton_rotary_autograd_ if self._config.triton else apply_rotary_embeddings
-        query = rotary_fn(query, kwargs[TransformerKwargs.rotary_freq_q])
-        key = rotary_fn(key, kwargs[TransformerKwargs.rotary_freq_k])
+        query = rotary_fn(query, kwargs[AttentionKwargs.rotary_freq_q])
+        key = rotary_fn(key, kwargs[AttentionKwargs.rotary_freq_k])
         return query, key
 
     def _create_tensors(self, sequence_length: int) -> None:
@@ -154,6 +159,8 @@ class DefaultRotary[ConfigType: DefaultRotaryConfig](Rotary[DefaultRotaryConfig]
 
 
 class Llama3Rotary[ConfigType: Llama3RotaryConfig](DefaultRotary[Llama3RotaryConfig]):
+    config_class: typing.ClassVar[type[Llama3RotaryConfig]] = Llama3RotaryConfig
+
     def _get_angle_scales(self, kv_channels: int, device="cuda") -> torch.Tensor:
         scales = super()._get_angle_scales(kv_channels, device)
         low_frequency_wavelength = self._config.original_context_length / self._config.low_frequency_factor
@@ -179,6 +186,8 @@ class YarnRotary[ConfigType: YarnRotaryConfig](DefaultRotary[YarnRotaryConfig]):
     https://github.com/huggingface/transformers/blob/006d9249ec0270ff6c4d3840979d23fe94bdc763/src/transformers/modeling_rope_utils.py#L163
     [original paper](https://arxiv.org/abs/2309.00071)
     """
+
+    config_class: typing.ClassVar[type[YarnRotaryConfig]] = YarnRotaryConfig
 
     def _get_frequencies(self, sequence_length: int, kv_channels: int, device="cuda") -> torch.Tensor:
         return super()._get_frequencies(sequence_length, kv_channels, device) * self._config.attention_factor

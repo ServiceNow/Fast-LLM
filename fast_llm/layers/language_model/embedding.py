@@ -6,10 +6,10 @@ from fast_llm.config import Configurable
 from fast_llm.core.distributed import set_generator
 from fast_llm.core.ops import reduce_forward, split
 from fast_llm.engine.base_model.base_model import Layer
+from fast_llm.engine.config_utils.initialization import init_normal_
 from fast_llm.engine.config_utils.tensor_space import TensorSpace
 from fast_llm.layers.language_model.config import LanguageModelBaseConfig, LanguageModelDimNames, LanguageModelKwargs
-from fast_llm.layers.transformer.config import TransformerDimNames, TransformerKwargs
-from fast_llm.tensor import ParameterMeta, TensorMeta, init_normal_
+from fast_llm.tensor import ParameterMeta, TensorMeta
 from fast_llm.utils import Assert
 
 WORD_EMBEDDINGS_WEIGHT = "word_embeddings_weight"
@@ -29,12 +29,12 @@ class LanguageModelEmbedding[ConfigType: LanguageModelBaseConfig](Configurable[L
 
     def __init__(
         self,
-        config: LanguageModelBaseConfig,
+        config: ConfigType,
         tensor_space: TensorSpace,
     ):
         super().__init__(config)
-        self._distributed_config = tensor_space.distributed_config
         self._tensor_space = tensor_space
+        self._distributed_config = self._tensor_space.distributed_config
         self._residual_dtype = (
             self._distributed_config.optimization_dtype
             if config.transformer.full_precision_residual
@@ -42,12 +42,14 @@ class LanguageModelEmbedding[ConfigType: LanguageModelBaseConfig](Configurable[L
         ).torch
         self._group_size = self._distributed_config.tensor_parallel
         self._sequence_parallel = self._distributed_config.sequence_tensor_parallel
-        self._parallel_embeddings = tensor_space.distributed_config.tensor_parallel > 1 and config.parallel_embeddings
+        self._parallel_embeddings = (
+            self._tensor_space.distributed_config.tensor_parallel > 1 and config.parallel_embeddings
+        )
         self._dropout_p = config.transformer.hidden_dropout
         self._use_absolute_position_embeddings = config.use_absolute_position_embeddings
 
-        hidden_dim = tensor_space[TransformerDimNames.hidden]
-        vocab_dim = tensor_space[
+        hidden_dim = self._tensor_space[LanguageModelDimNames.hidden]
+        vocab_dim = self._tensor_space[
             LanguageModelDimNames.vocab_tp if self._parallel_embeddings else LanguageModelDimNames.vocab
         ]
 
@@ -66,7 +68,7 @@ class LanguageModelEmbedding[ConfigType: LanguageModelBaseConfig](Configurable[L
         )
         if self._use_absolute_position_embeddings:
             self.position_embeddings_weight = ParameterMeta.from_dims(
-                (tensor_space[LanguageModelDimNames.position_embed], hidden_dim),
+                (self._tensor_space[LanguageModelDimNames.position_embed], hidden_dim),
                 init_method=init_normal_(
                     std=config.init_method_std_embed,
                     min_val=config.init_method_min_embed,
@@ -129,7 +131,7 @@ class LanguageModelEmbedding[ConfigType: LanguageModelBaseConfig](Configurable[L
     ) -> torch.Tensor:
         if isinstance(input_, TensorMeta):
             return TensorMeta.from_dims(
-                kwargs[TransformerKwargs.hidden_dims],
+                kwargs[LanguageModelKwargs.hidden_dims],
                 tensor_name="Embedding output",
                 dtype=self._residual_dtype,
             )

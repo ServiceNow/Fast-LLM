@@ -6,7 +6,6 @@ import torch
 from fast_llm.engine.base_model.config import Preprocessor
 from fast_llm.engine.config_utils.tensor_space import DefaultDimNames, TensorDim, TensorSpace
 from fast_llm.layers.language_model.config import LanguageModelBaseConfig, LanguageModelKwargs
-from fast_llm.layers.transformer.config import TransformerKwargs
 from fast_llm.tensor import TensorMeta
 from fast_llm.utils import Assert
 
@@ -41,29 +40,29 @@ class PositionEmbeddingPreprocessor(Preprocessor):
         )
 
     def preprocess(self, batch, kwargs: dict[str, typing.Any]) -> None:
-        self._create_tensors(kwargs[TransformerKwargs.sequence_length])
-        sequence_k = kwargs[TransformerKwargs.sequence_k_dim].size
-        sequence_q = kwargs[TransformerKwargs.sequence_q_dim].size
-        if (sequence_lengths := kwargs.get(TransformerKwargs.sequence_lengths)) is not None:
+        self._create_tensors(kwargs[LanguageModelKwargs.sequence_length])
+        sequence_k = kwargs[LanguageModelKwargs.sequence_k_dim].size
+        sequence_q = kwargs[LanguageModelKwargs.sequence_q_dim].size
+        if (sequence_lengths := kwargs.get(LanguageModelKwargs.sequence_lengths)) is not None:
             position_ids = torch.stack(
                 [torch.cat([torch.arange(x) for x in sample_lens]) for sample_lens in sequence_lengths]
             ).to(self._tensor_space.distributed.device, dtype=torch.int64)
             position_ids = position_ids[:, sequence_k - sequence_q : sequence_k]
-            if kwargs[TransformerKwargs.sequence_first]:
+            if kwargs[LanguageModelKwargs.sequence_first]:
                 position_ids = position_ids.transpose(0, 1)
             kwargs[LanguageModelKwargs.position_ids] = position_ids
         else:
             kwargs[LanguageModelKwargs.position_ids] = self._position_ids[
                 sequence_k - sequence_q : sequence_k
-            ].unsqueeze(int(kwargs[TransformerKwargs.sequence_first]))
+            ].unsqueeze(int(kwargs[LanguageModelKwargs.sequence_first]))
 
     def preprocess_meta(self, kwargs: dict[str, typing.Any]) -> None:
         # Position embeddings will be broadcast.
-        sequence_q_dim = kwargs[TransformerKwargs.sequence_q_dim]
+        sequence_q_dim = kwargs[LanguageModelKwargs.sequence_q_dim]
         kwargs[LanguageModelKwargs.position_ids] = TensorMeta.from_dims(
             (
                 (sequence_q_dim, self._scalar_dim)
-                if kwargs[TransformerKwargs.sequence_first]
+                if kwargs[LanguageModelKwargs.sequence_first]
                 else (self._scalar_dim, sequence_q_dim)
             ),
             tensor_name=LanguageModelKwargs.position_ids,
@@ -82,8 +81,8 @@ class PreferenceSpanPreprocessor(Preprocessor):
         return
 
     def preprocess(self, batch, kwargs: dict[str, typing.Any]) -> None:
-        sequence_q = kwargs[TransformerKwargs.sequence_q_dim].size
-        sequence_k = kwargs[TransformerKwargs.sequence_k_dim].size
+        sequence_q = kwargs[LanguageModelKwargs.sequence_q_dim].size
+        sequence_k = kwargs[LanguageModelKwargs.sequence_k_dim].size
         sequence_offset = sequence_k - sequence_q + 1  # +1 for shift in labels
 
         if LanguageModelKwargs.chosen_spans not in kwargs or LanguageModelKwargs.rejected_spans not in kwargs:

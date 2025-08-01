@@ -4,13 +4,15 @@ import typing
 import einops
 import torch
 
+from fast_llm.engine.config_utils.initialization import init_ones_, init_uniform_centered_, init_zeros_
 from fast_llm.engine.config_utils.tensor_space import DefaultDimNames, TensorSpace
 from fast_llm.functional.config import ActivationType
+from fast_llm.layers.block.block import BlockLayer
+from fast_llm.layers.block.config import BlockConfig, BlockKwargs
 from fast_llm.layers.common.linear import InputParallelLinear, OutputParallelLinear
 from fast_llm.layers.ssm.config import SSMConfig, SSMDimNames
-from fast_llm.layers.transformer.config import TransformerConfig, TransformerDimNames, TransformerKwargs
-from fast_llm.layers.transformer.transformer import Mixer
-from fast_llm.tensor import ParameterMeta, init_kaiming_, init_ones_, init_uniform_centered_, init_zeros_
+from fast_llm.layers.ssm.mamba_layer import init_kaiming_
+from fast_llm.tensor import ParameterMeta
 from fast_llm.utils import get_lr_scale
 
 logger = logging.getLogger(__name__)
@@ -32,7 +34,7 @@ except (ImportError, RuntimeError):
     _causal_conv1d_available = False
 
 
-class DiscreteMamba2(Mixer):
+class DiscreteMamba2(BlockLayer):
     """DiscreteMamba2 (This code is adapted from https://github.com/cartesia-ai/edge/blob/main/cartesia-pytorch/cartesia_pytorch/Llamba/mixers/discrete_mamba2.py)."""
 
     _mixer_name: typing.ClassVar[str] = "discrete_mamba_2"
@@ -42,15 +44,21 @@ class DiscreteMamba2(Mixer):
         config: SSMConfig,
         block_index: int,
         tensor_space: TensorSpace,
-        transformer_config: TransformerConfig,
+        block_config: BlockConfig,
     ):
-        super().__init__(tensor_space, block_index, debug_level=transformer_config.debug_transformer)
+        super().__init__(
+            tensor_space,
+            block_index,
+            self._mixer_name,
+            debug_level=block_config.debug_transformer,
+            debug_memory=block_config.debug_transformer_memory,
+        )
         self._config: SSMConfig = config
-        layer_lr_scale = config.per_layer_lr_scale[block_index] if config.per_layer_lr_scale else None
+        layer_lr_scale = block_config.per_layer_lr_scale[block_index] if block_config.per_layer_lr_scale else None
         lr_scale = get_lr_scale(self._config.mamba_lr_scale, layer_lr_scale)
 
         inner_dim = tensor_space[SSMDimNames.composite_heads_and_head_dim]
-        hidden_dim = tensor_space[TransformerDimNames.hidden]
+        hidden_dim = tensor_space[SSMDimNames.hidden]
         conv1d_dim = tensor_space[SSMDimNames.concatenated_convolution]
         heads_dim = tensor_space[SSMDimNames.composite_heads]
 
@@ -69,7 +77,7 @@ class DiscreteMamba2(Mixer):
             hidden_dim,
             tensor_space[SSMDimNames.concatenated_inner_projection],
             bias=config.add_bias_linear,
-            weight_init_method=init_kaiming_(transformer_config.hidden_size),
+            weight_init_method=init_kaiming_(block_config.hidden_size),
             sequence_parallel=self._sequence_parallel,
             lr_scale=lr_scale,
         )
@@ -110,15 +118,21 @@ class DiscreteMamba2(Mixer):
             lr_scale=lr_scale,
         )
 
-    def forward(self, input_: torch.Tensor, kwargs: dict[str, typing.Any]) -> tuple[torch.Tensor, torch.Tensor | None]:
+    def forward(
+        self,
+        input_: torch.Tensor,
+        kwargs: dict[str, typing.Any],
+        losses: dict[str, typing.Any] | None = None,
+        metrics: dict[str, typing.Any] | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
         assert _mamba_available
 
-        sequence_length = kwargs[TransformerKwargs.sequence_q_dim].global_size
+        sequence_length = kwargs[BlockKwargs.sequence_q_dim].global_size
 
         # Pad input to nearest multiple of chunklen
         padded_length = (1 + (sequence_length - 1) // self._config.chunk_size) * self._config.chunk_size
         if padded_length != sequence_length:
-            assert not kwargs[TransformerKwargs.sequence_first] and input_.size(1) == sequence_length
+            assert not kwargs[BlockKwargs.sequence_first] and input_.size(1) == sequence_length
             input_ = torch.nn.functional.pad(input_, (0, 0, 0, padded_length - sequence_length))
 
         # inner_projection : (batch/local_or_padded_sequence, local_sequence/batch, hidden)
@@ -126,10 +140,9 @@ class DiscreteMamba2(Mixer):
         # inner_projection: (batch, local_or_padded_sequence, hidden) -> (batch, padded_sequence, local_inner_size)
         inner_projection = self.in_proj(input_)
         # Standardize to (batch, padded_sequence, inner_projection)
-        if kwargs[TransformerKwargs.sequence_first]:
+        if kwargs[BlockKwargs.sequence_first]:
             inner_projection = inner_projection.transpose(0, 1)
 
-        print("QAIKOFNMJOWENM inner_projection", inner_projection.shape)
         xBC, z, A_log = torch.split(
             inner_projection,
             [
@@ -139,10 +152,6 @@ class DiscreteMamba2(Mixer):
             ],
             dim=-1,
         )
-        print("QAIKOFNMJOWENM xBC", xBC.shape, self._local_inner_size, self._local_bc_size)
-        print("QAIKOFNMJOWENM z", z.shape)
-        print("QAIKOFNMJOWENM A_log", A_log.shape)
-
         # Convolutional layer
         # xbc: (batch, padded_sequence, local_heads * head_size + 2 * local_head_groups * state)
         xBC = self.convolutional_forward(xBC, padded_length)
@@ -183,14 +192,12 @@ class DiscreteMamba2(Mixer):
 
         # y: (batch, padded_sequence, local_heads, head_size) -> (batch, sequence, local_heads * head_size)
         y = ((y + Du).flatten(2, 3) * torch.nn.functional.silu(z))[:, :sequence_length]
-        if kwargs[TransformerKwargs.sequence_first]:
+        if kwargs[BlockKwargs.sequence_first]:
             # TODO: Is contiguous needed?
             y = y.transpose(0, 1).contiguous()
         # out_proj: (batch/sequence, sequence/batch, local_heads * head_size)
         #   -> (batch/local_sequence, local_sequence/batch, hidden)
         a, b = self.out_proj(y)
-        logger.info(f"EKFBN y {y.shape}")
-        logger.info(f"EKFBN a {a.shape}")
         return self.out_proj(y)
 
     @torch.compile
