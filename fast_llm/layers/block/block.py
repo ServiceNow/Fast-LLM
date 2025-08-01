@@ -113,7 +113,7 @@ class BlockLayerBase[ConfigType: BaseModelConfig](Configurable[ConfigType], torc
     #   return self._name
 
 
-class BlockLayer[ConfigType: BlockLayerConfig](Configurable[ConfigType], torch.nn.Module):
+class BlockLayer[ConfigType: BlockLayerConfig](BlockLayerBase[ConfigType], torch.nn.Module):
     """
     Base class for mixer and MLP modules.
     """
@@ -137,8 +137,13 @@ class Block[ConfigType: BlockConfig](BlockLayerBase[ConfigType], Layer):
     A transformer-like decoder base block with abstract mixer.
     """
 
-    # TODO: Standardize to `mixer`
-    _mixer_module_name: typing.ClassVar[str] = "mixer"
+    # TODO: Needed for pycharm?
+    _config: ConfigType
+    _tensor_space: TensorSpace
+    _block_index: int
+    _name: str
+    _sequence_parallel: bool
+    _debug: DebugLayer
 
     def __init__(
         self, config: ConfigType, tensor_space: TensorSpace, block_index: int, name: str, return_input: bool = False
@@ -152,21 +157,17 @@ class Block[ConfigType: BlockConfig](BlockLayerBase[ConfigType], Layer):
         self.norm_1 = self._config.peft.apply_other(self._config.normalization.get_layer(hidden_dim))
         self.norm_2 = self._config.peft.apply_other(self._config.normalization.get_layer(hidden_dim))
 
-        # The mixer needs to be created here for backward-compatible weight ordering.
+        # Attribute should be mixer, but Attention uses a different name for backward compatibility. TODO: Fix.
         setattr(
             self,
-            self._mixer_module_name,
+            self._config.mixer.module_name,
             self._config.mixer.get_layer(
                 self._tensor_space,
                 self._block_index,
                 f"{self._name} mixer",
             ),
         )
-        self._config.mlp.get_layer(
-            self._tensor_space,
-            self._block_index,
-            f"{self._name} mlp",
-        )
+        self.mlp = self._config.mlp.get_layer(self._tensor_space, self._block_index, f"{self._name} mlp")
 
     @torch.compile
     def _bias_dropout_add(
@@ -199,7 +200,7 @@ class Block[ConfigType: BlockConfig](BlockLayerBase[ConfigType], Layer):
         hidden_states = self.norm_1(input_)
         if self._debug.enabled:
             self._debug(hidden_states, "norm 1", kwargs[BlockKwargs.hidden_dims], kwargs)
-        hidden_states, bias = getattr(self, self._mixer_module_name)(hidden_states, kwargs)
+        hidden_states, bias = getattr(self, self._config.mixer.module_name)(hidden_states, kwargs)
         if self._debug.enabled:
             self._debug(
                 hidden_states if bias is None else hidden_states + bias,

@@ -64,7 +64,7 @@ class BlockLayerConfig(BaseModelConfig):
 class MixerConfig(BlockLayerConfig):
     _abstract = True
 
-    # Needed for backward compatibility.
+    # Needed for backward compatibility. TODO: Standardize to `mixer`
     module_name: typing.ClassVar[str] = "mixer"
 
     def _validate(self) -> None:

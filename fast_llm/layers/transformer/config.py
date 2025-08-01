@@ -51,6 +51,9 @@ class AttentionConfig(MixerConfig):
     # TODO: Make mixer class dynamic.
     _abstract = False
 
+    # Needed for backward compatibility. TODO: remove
+    module_name: typing.ClassVar[str] = "attn"
+
     # TODO: Review names
     rotary: RotaryConfig = Field(
         desc="Configuration for the rotary positional embeddings.",

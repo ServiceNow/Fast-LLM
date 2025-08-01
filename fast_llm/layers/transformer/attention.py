@@ -50,8 +50,6 @@ class Attention[ConfigType: AttentionConfig](BlockLayer[ConfigType]):
     A self-attention layer.
     """
 
-    _mixer_name: typing.ClassVar[str] = "attn"
-
     _QUERY_DIMS = (
         AttentionDimNames.batch,
         AttentionDimNames.sequence_q,
