@@ -14,8 +14,8 @@ if typing.TYPE_CHECKING:
 
 def get_init_megatron(
     meta: "ParameterMeta", config: TransformerConfig
-) -> typing.Callable[["torch.Tensor", "Distributed"], "torch.Tensor"]:
-    def init_megatron(tensor: "torch.Tensor", distributed: "Distributed"):
+) -> typing.Callable[["torch.Tensor", "Distributed"], None]:
+    def init_megatron(tensor: "torch.Tensor", distributed: "Distributed") -> None:
         Assert.eq(distributed.config.world_size, 1)
         if "bias" in meta.tensor_name:
             # Generator unused.
@@ -29,11 +29,11 @@ def get_init_megatron(
         elif config.num_experts > 1 and "mlp.layer_" in meta.tensor_name:
             tensor_ = _init_moe_mlp_megatron(config, meta, tensor, distributed)
         elif "mlp.layer_2" in meta.tensor_name:
-            tensor_ = _init_transposed_mlp_weight_megatron(config, meta, tensor, distributed)
+            tensor_ = _init_transposed_mlp_weight_megatron(meta, tensor, distributed)
         else:
             # Word embedding (override generator), layer norm (generator unused), other mlp weights.
             return meta.param_init_method(meta, tensor, distributed.tp_init_generator)
-        return tensor.copy_(tensor_.reshape_as(tensor))
+        tensor.copy_(tensor_.reshape_as(tensor))
 
     return init_megatron
 
@@ -58,9 +58,9 @@ def _init_attention_megatron(
     generator = distributed.tp_init_generator
     state = generator.get_state()
     # Initialize a mock dense layer to advance the random state
-    dense_tensor_ = meta.param_init_method(
+    meta.param_init_method(
         meta,
-        tensor.new_empty(
+        dense_tensor_ := tensor.new_empty(
             config.kv_channels * config.num_attention_heads,
             config.hidden_size,
         ),
@@ -68,9 +68,9 @@ def _init_attention_megatron(
     )
     #  QKV is split differently. (Assuming no tensor-parallel.)
     heads_per_group = div(config.num_attention_heads, config.head_groups)
-    qkv_tensor_ = meta.param_init_method(
+    meta.param_init_method(
         meta,
-        tensor.new_empty(
+        qkv_tensor_ := tensor.new_empty(
             config.head_groups,
             heads_per_group + 2,
             config.kv_channels,
@@ -110,18 +110,19 @@ def _init_position_embeddings_megatron(
     # Megatron initializes the position embeddings on cpu twice.
     assert meta.param_init_method is not None
     generator = distributed.default_cpu_generator
-    tensor_ = meta.param_init_method(meta, torch.empty(tensor.shape, dtype=tensor.dtype), generator)
-    return meta.param_init_method(meta, tensor_, generator)
+    meta.param_init_method(meta, tensor_ := torch.empty(tensor.shape, dtype=tensor.dtype), generator)
+    meta.param_init_method(meta, tensor_, generator)
+    return tensor_
 
 
 def _init_transposed_mlp_weight_megatron(
-    config: TransformerConfig, meta: "ParameterMeta", tensor: "torch.Tensor", distributed: "Distributed"
+    meta: "ParameterMeta", tensor: "torch.Tensor", distributed: "Distributed"
 ) -> "torch.Tensor":
     import torch
 
     # Megatron never transposes the mlp layer 2 weight.
     assert meta.param_init_method is not None
-    tensor_ = meta.param_init_method(meta, torch.empty_like(tensor), distributed.tp_init_generator)
+    meta.param_init_method(meta, tensor_ := torch.empty_like(tensor), distributed.tp_init_generator)
     return tensor_.view(meta.size(1), meta.size(0)).t()
 
 
@@ -132,8 +133,8 @@ def _init_moe_router_megatron(
 
     # Megatron initializes the router on cpu.
     assert meta.param_init_method is not None
-    tensor_ = meta.param_init_method(
-        meta, torch.empty(tensor.shape, dtype=tensor.dtype), distributed.default_cpu_generator
+    meta.param_init_method(
+        meta, tensor_ := torch.empty(tensor.shape, dtype=tensor.dtype), distributed.default_cpu_generator
     )
     return tensor_
 

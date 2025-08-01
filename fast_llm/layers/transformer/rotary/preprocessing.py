@@ -25,8 +25,8 @@ class RotaryEmbeddingPreprocessor(Preprocessor):
         self._config = config
         self._tensor_space = tensor_space
         self._distributed_config = self._tensor_space.distributed_config
-        self._scalar_dim = self._tensor_space.get_tensor_dim(DefaultDimNames.scalar)
-        self._kv_channels_dim = self._tensor_space.get_tensor_dim(TransformerDimNames.kv_channels)
+        self._scalar_dim = self._tensor_space[DefaultDimNames.scalar]
+        self._kv_channels_dim = self._tensor_space[TransformerDimNames.kv_channels]
 
     def preprocess(self, batch, kwargs: dict[str, typing.Any]) -> None:
         self._create_tensors(kwargs[TransformerKwargs.sequence_length])

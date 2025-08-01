@@ -66,10 +66,20 @@ class TensorDim:
         return TensorDim(self.name, self.size * distributed_dim.size, distributed_dim)
 
     def local_to_global(self, tensor: "torch.Tensor", dim: int = 0) -> "torch.Tensor":
-        if self.parallel_group is not None:
+        if self.is_parallel:
             from fast_llm.core.ops import gather_op
 
             return gather_op(tensor, self.parallel_group, dim)
+        else:
+            return tensor
+
+    def local_to_global_partial(
+        self, tensor: "torch.Tensor", dim: int = 0, fill_value: float | int = -1
+    ) -> "torch.Tensor":
+        if self.is_parallel:
+            output = tensor.new_full((*tensor.shape[:dim], self.parallel_dim.size, *tensor.shape[dim:]), fill_value)
+            output.narrow(dim, self.parallel_dim.rank, 1).copy_(tensor.unsqueeze(dim)).squeeze(dim)
+            return output.flatten(dim, dim + 1)
         else:
             return tensor
 
@@ -85,7 +95,7 @@ class CompositeTensorDim(TensorDim):
     def __init__(self, name: str, tensor_dims: tuple[TensorDim, ...]):
         parallel_dim = None
         for dim, tensor_dim in enumerate(tensor_dims):
-            if tensor_dim.is_parallel:
+            if tensor_dim.parallel_dim is not None:
                 # TODO: Allow more than one parallel subdim?
                 assert parallel_dim is None
                 parallel_dim = tensor_dim.parallel_dim
@@ -108,6 +118,15 @@ class CompositeTensorDim(TensorDim):
         tensor = tensor.unflatten(dim, [tensor_dim.size for tensor_dim in self._tensor_dims])
         for i, tensor_dim in enumerate(self._tensor_dims):
             tensor = tensor_dim.local_to_global(tensor, dim + i)
+
+        return tensor.flatten(dim, dim + len(self._tensor_dims) - 1)
+
+    def local_to_global_partial(
+        self, tensor: "torch.Tensor", dim: int = 0, fill_value: float | int = -1
+    ) -> "torch.Tensor":
+        tensor = tensor.unflatten(dim, [tensor_dim.size for tensor_dim in self._tensor_dims])
+        for i, tensor_dim in enumerate(self._tensor_dims):
+            tensor = tensor_dim.local_to_global_partial(tensor, dim + i)
 
         return tensor.flatten(dim, dim + len(self._tensor_dims) - 1)
 
@@ -145,6 +164,27 @@ class ConcatenatedTensorDim(TensorDim):
             torch.concatenate(
                 [
                     tensor_dim.local_to_global(tensor_, dim)
+                    for tensor_, tensor_dim in zip(
+                        tensor.split([tensor_dim.size for tensor_dim in self._tensor_dims], dim),
+                        self._tensor_dims,
+                        strict=True,
+                    )
+                ],
+                dim,
+            )
+            if self.is_parallel
+            else tensor
+        )
+
+    def local_to_global_partial(
+        self, tensor: "torch.Tensor", dim: int = 0, fill_value: float | int = -1
+    ) -> "torch.Tensor":
+        import torch
+
+        return (
+            torch.concatenate(
+                [
+                    tensor_dim.local_to_global_partial(tensor_, dim)
                     for tensor_, tensor_dim in zip(
                         tensor.split([tensor_dim.size for tensor_dim in self._tensor_dims], dim),
                         self._tensor_dims,
@@ -223,8 +263,5 @@ class TensorSpace:
                 )
             self._tensor_dims[tensor_dim.name] = tensor_dim
 
-    def get_tensor_dim(self, name: str) -> TensorDim:
+    def __getitem__(self, name: str) -> TensorDim:
         return self._tensor_dims[name]
-
-    # TODO: Replace uses
-    __getitem__ = get_tensor_dim

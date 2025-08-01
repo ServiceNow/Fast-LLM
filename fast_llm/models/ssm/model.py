@@ -7,7 +7,7 @@ from fast_llm.layers.language_model.embedding import LanguageModelEmbedding
 from fast_llm.layers.language_model.head import LanguageModelHead
 from fast_llm.layers.ssm.llamba_block import SSMBlock
 from fast_llm.layers.transformer.transformer import TransformerBlock
-from fast_llm.models.gpt.model import GPTBaseModel, GPTModel
+from fast_llm.models.gpt.model import GPTBaseModel, GPTInferenceRunner, GPTModel
 from fast_llm.models.ssm.config import HybridSSMBaseModelConfig, HybridSSMModelConfig, SSMBlockType
 
 logger = logging.getLogger(__name__)
@@ -112,3 +112,7 @@ class HybridSSMModel[ConfigType: HybridSSMModelConfig](GPTModel[ConfigType]):
 
     config_class: typing.ClassVar[type[HybridSSMModelConfig]] = HybridSSMModelConfig
     base_model_class: typing.ClassVar[type[HybridSSMBaseModel]] = HybridSSMBaseModel
+
+
+class HybridSSMInferenceRunner(GPTInferenceRunner):
+    model_class: typing.ClassVar[type[HybridSSMModel]] = HybridSSMModel
