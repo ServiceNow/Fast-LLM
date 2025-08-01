@@ -118,16 +118,6 @@ class BlockConfig(MLPConfig, BaseModelConfig):
         hint=FieldHint.optional,
     )
 
-    def _validate(self) -> None:
-        with self._set_implicit_default():
-            # TODO: Review initialization
-            if self.init_method_std is None:
-                self.init_method_std = self.hidden_size**-0.5
-            if self.init_method_min is not None and self.init_method_max is not None:
-                Assert.leq(self.init_method_min, self.init_method_max)
-
-        super()._validate()
-
     def setup_tensor_space(self, tensor_space: TensorSpace) -> None:
         super().setup_tensor_space(tensor_space)
 

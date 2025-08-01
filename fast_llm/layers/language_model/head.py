@@ -38,7 +38,7 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Config
     A language model head (GPT), which combines the final layer norm, logits and cross-entropy (if applicable).
     """
 
-    config_class: typing.ClassVar[type[LanguageModelBaseConfig]] = ConfigType
+    config_class: typing.ClassVar[type[LanguageModelBaseConfig]] = LanguageModelBaseConfig
 
     def __init__(
         self,

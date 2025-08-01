@@ -42,6 +42,8 @@ def apply_rotary_embeddings(tensor: torch.Tensor, rope_frequencies: torch.Tensor
 
 
 class Rotary[ConfigType: RotaryConfig](Configurable[RotaryConfig], torch.nn.Module, Preprocessor):
+    config_class: typing.ClassVar[type[RotaryConfig]] = RotaryConfig
+
     def __init__(
         self,
         config: ConfigType,
@@ -58,6 +60,8 @@ class Rotary[ConfigType: RotaryConfig](Configurable[RotaryConfig], torch.nn.Modu
 
 
 class NoRotary[ConfigType: NoRotaryConfig](Rotary[NoRotaryConfig]):
+    config_class: typing.ClassVar[type[NoRotaryConfig]] = NoRotaryConfig
+
     def forward(
         self, query: torch.Tensor, key: torch.Tensor, kwargs: dict[str, typing.Any]
     ) -> tuple[torch.Tensor, torch.Tensor]:
@@ -71,6 +75,7 @@ class NoRotary[ConfigType: NoRotaryConfig](Rotary[NoRotaryConfig]):
 
 
 class DefaultRotary[ConfigType: DefaultRotaryConfig](Rotary[DefaultRotaryConfig]):
+    config_class: typing.ClassVar[type[DefaultRotaryConfig]] = DefaultRotaryConfig
     _rotary_embedding_frequencies: torch.Tensor
     _tensor_cache_max_sequence_length: int = -1
 
@@ -154,6 +159,8 @@ class DefaultRotary[ConfigType: DefaultRotaryConfig](Rotary[DefaultRotaryConfig]
 
 
 class Llama3Rotary[ConfigType: Llama3RotaryConfig](DefaultRotary[Llama3RotaryConfig]):
+    config_class: typing.ClassVar[type[Llama3RotaryConfig]] = Llama3RotaryConfig
+
     def _get_angle_scales(self, kv_channels: int, device="cuda") -> torch.Tensor:
         scales = super()._get_angle_scales(kv_channels, device)
         low_frequency_wavelength = self._config.original_context_length / self._config.low_frequency_factor
@@ -179,6 +186,8 @@ class YarnRotary[ConfigType: YarnRotaryConfig](DefaultRotary[YarnRotaryConfig]):
     https://github.com/huggingface/transformers/blob/006d9249ec0270ff6c4d3840979d23fe94bdc763/src/transformers/modeling_rope_utils.py#L163
     [original paper](https://arxiv.org/abs/2309.00071)
     """
+
+    config_class: typing.ClassVar[type[YarnRotaryConfig]] = YarnRotaryConfig
 
     def _get_frequencies(self, sequence_length: int, kv_channels: int, device="cuda") -> torch.Tensor:
         return super()._get_frequencies(sequence_length, kv_channels, device) * self._config.attention_factor

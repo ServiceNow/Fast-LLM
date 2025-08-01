@@ -4,7 +4,6 @@ from fast_llm.config import Config, Field, FieldHint, check_field, config_class,
 from fast_llm.engine.config_utils.tensor_space import CompositeTensorDim, TensorDim, TensorSpace
 from fast_llm.engine.distributed.config import DistributedDimNames
 from fast_llm.functional.config import ActivationType, MLPRecomputeLevel
-from fast_llm.layers.block.config import AddLinearBiasChoices
 from fast_llm.utils import Assert
 
 
@@ -159,6 +158,8 @@ class MLPConfig(Config):
 
     @property
     def add_mlp_bias(self) -> bool:
+        from fast_llm.layers.block.config import AddLinearBiasChoices
+
         # TODO: Make this work without inheritance.
         if isinstance(self.add_linear_biases, bool):
             return self.add_linear_biases

@@ -22,7 +22,7 @@ class LanguageModelEmbedding[ConfigType: LanguageModelBaseConfig](Configurable[L
     together with optional absolute position embeddings and dropout.
     """
 
-    config_class: typing.ClassVar[type[LanguageModelBaseConfig]] = ConfigType
+    config_class: typing.ClassVar[type[LanguageModelBaseConfig]] = LanguageModelBaseConfig
 
     # Ensure the layer is on its own stage.
     layer_count: float = 1000.0

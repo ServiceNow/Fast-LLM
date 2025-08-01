@@ -73,7 +73,7 @@ class MLPBase(BlockLayer):
         self.layer_2 = self._config.peft.apply_linear(self.layer_2, TransformerSubLayerName.mlp_2)
 
 
-class MLP[ConfigType: BlockConfig](MLPBase[ConfigType]):
+class MLP(MLPBase):
     def __init__(self, config: BlockConfig, tensor_space: TensorSpace, block_index: int = 0, name: str = "mlp"):
         Assert.eq(config.num_experts, 1)
         super().__init__(config, tensor_space, block_index, name)

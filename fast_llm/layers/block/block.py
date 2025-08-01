@@ -11,8 +11,6 @@ from fast_llm.engine.base_model.base_model import Layer
 from fast_llm.engine.config_utils.run import log_pipeline_parallel_main_rank
 from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
 from fast_llm.layers.block.config import BlockConfig, BlockDimNames, BlockKwargs
-from fast_llm.layers.block.mlp.mixture_of_experts import MixtureOfExpertMLP
-from fast_llm.layers.block.mlp.mlp import MLP
 from fast_llm.logging import log_distributed_grad, log_distributed_tensor, log_memory_usage
 from fast_llm.tensor import TensorMeta
 
@@ -123,18 +121,19 @@ class Block[ConfigType: BlockConfig](Configurable[ConfigType], Layer):
     A transformer-like decoder base block with abstract mixer.
     """
 
+    config_class: typing.ClassVar[type[BlockConfig]] = BlockConfig
     # TODO: Standardize to `mixer`
     _mixer_module_name: typing.ClassVar[str] = "mixer"
 
     def __init__(self, config: ConfigType, tensor_space: TensorSpace, block_index: int, return_input: bool = False):
         super().__init__(config)
         # TODO: Argument?
+        self._block_index = block_index
         self._name = f"Block {self._block_index}"
         self._tensor_space: TensorSpace = tensor_space
         self._dropout_p: float = self._config.hidden_dropout
         # For multi-token prediction, return a stack of shared_hidden and transformer_output.
         self._return_input: bool = return_input
-        self._block_index = block_index
         self._debug = DebugLayer(
             tensor_space,
             self._name,
@@ -149,6 +148,10 @@ class Block[ConfigType: BlockConfig](Configurable[ConfigType], Layer):
 
         # The mixer needs to be created here for backward-compatible weight ordering.
         setattr(self, self._mixer_module_name, self._create_mixer())
+
+        # TODO: Use dynamic type.
+        from fast_llm.layers.block.mlp.mixture_of_experts import MixtureOfExpertMLP
+        from fast_llm.layers.block.mlp.mlp import MLP
 
         self.mlp = (MixtureOfExpertMLP if self._config.num_experts > 1 else MLP)(
             self._config,

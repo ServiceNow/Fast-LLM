@@ -18,7 +18,7 @@ from fast_llm.utils import Assert, get_lr_scale
 logger = logging.getLogger(__name__)
 
 
-class MixtureOfExpertMLP[ConfigType: BlockConfig](MLPBase[ConfigType]):
+class MixtureOfExpertMLP(MLPBase):
     """
     MoeLayer following implementation from
     https://github.com/NVIDIA/Megatron-LM/blob/46ebc0e4202c980d98900000d455f754a7ff9d4b/megatron/model/transformer.py#L346

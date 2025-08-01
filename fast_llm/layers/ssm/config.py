@@ -9,7 +9,7 @@ from fast_llm.layers.block.config import BlockDimNames
 from fast_llm.utils import Assert, div
 
 if typing.TYPE_CHECKING:
-    from fast_llm.engine.config_utils.initialization import Initializer, init_fill_, init_uniform_centered_
+    from fast_llm.engine.config_utils.initialization import Initializer
 
 
 class SSMDimNames(BlockDimNames):
@@ -66,6 +66,8 @@ class DTInitType(enum.StrEnum):
     random = "random"
 
     def get_init_method(self, scale: float) -> "Initializer":
+        from fast_llm.engine.config_utils.initialization import init_fill_, init_uniform_centered_
+
         return init_fill_(scale) if self == DTInitType.constant else init_uniform_centered_(scale)
 
 
