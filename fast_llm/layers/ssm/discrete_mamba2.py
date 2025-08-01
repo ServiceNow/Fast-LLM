@@ -46,13 +46,7 @@ class DiscreteMamba2(BlockLayer):
         tensor_space: TensorSpace,
         block_config: BlockConfig,
     ):
-        super().__init__(
-            tensor_space,
-            block_index,
-            self._mixer_name,
-            debug_level=block_config.debug_transformer,
-            debug_memory=block_config.debug_transformer_memory,
-        )
+        super().__init__(tensor_space, block_index, debug_level=block_config.debug_transformer)
         self._config: SSMConfig = config
         layer_lr_scale = block_config.per_layer_lr_scale[block_index] if block_config.per_layer_lr_scale else None
         lr_scale = get_lr_scale(self._config.mamba_lr_scale, layer_lr_scale)

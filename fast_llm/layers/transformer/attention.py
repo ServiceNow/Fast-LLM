@@ -78,7 +78,7 @@ class Attention[ConfigType: AttentionConfig](BlockLayer[ConfigType]):
         self._local_head_groups = self._tensor_space[AttentionDimNames.head_groups].size
         self._local_heads_per_group = self._tensor_space[AttentionDimNames.group_heads].size
         self._local_heads = self._local_head_groups * self._local_heads_per_group
-        self._softmax_scale = self._kv_channels ** (-self._config.attention_softmax_scale_power)
+        self._softmax_scale: float = self._kv_channels ** (-self._config.attention_softmax_scale_power)
 
         hidden_dim = self._tensor_space[AttentionDimNames.hidden]
 

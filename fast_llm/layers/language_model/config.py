@@ -1,12 +1,11 @@
 import functools
 
 from fast_llm.config import Field, FieldHint, check_field, config_class, skip_valid_if_none
-from fast_llm.engine.base_model.config import BaseModelConfig
 from fast_llm.engine.config_utils.initialization import InitializationConfig, Initializer, init_normal_
 from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
 from fast_llm.engine.distributed.config import DistributedDimNames
 from fast_llm.functional.config import CrossEntropyImpl, DistillationLossImpl
-from fast_llm.layers.block.config import BlockConfig, BlockDimNames, BlockKwargs
+from fast_llm.layers.block.config import BlockDimNames, BlockKwargs, BlockSequenceConfig
 from fast_llm.utils import Assert
 
 
@@ -45,10 +44,8 @@ class LanguageModelKwargs(BlockKwargs):
 
 
 @config_class()
-class LanguageModelBaseConfig(BaseModelConfig):
-    # TODO: block
-    transformer: BlockConfig = Field(
-        desc="Configuration for the transformer architecture.",
+class LanguageModelBaseConfig(BlockSequenceConfig):
+    decoder: BlockSequenceConfig = Field(
         hint=FieldHint.architecture,
     )
     vocab_size: int = Field(
@@ -56,6 +53,13 @@ class LanguageModelBaseConfig(BaseModelConfig):
         desc="Size of the vocabulary, i.e., number of vocabulary embeddings and logits.",
         hint=FieldHint.architecture,
         valid=check_field(Assert.gt, 0),
+    )
+    embedding_dropout: float = Field(
+        # TODO: backward compatibility?
+        default=0.0,
+        desc="Dropout applied to the embedding layer.",
+        hint=FieldHint.feature,
+        valid=check_field(Assert.geq, 0),
     )
     absolute_position_embeddings: int | None = Field(
         # TODO: backward compatibility?
@@ -209,19 +213,14 @@ class LanguageModelBaseConfig(BaseModelConfig):
             Assert.eq(len(self.prediction_loss_coefficient), self.prediction_heads)
             for coeff in self.prediction_loss_coefficient:
                 Assert.geq(coeff, 0)
-        if self.transformer.per_layer_lr_scale is not None:
-            # -1 because the first prediction head's transformer layer is accounted for in num_layers
-            # +1 because the layer index starts at 1
-            Assert.eq(
-                len(self.transformer.per_layer_lr_scale), self.transformer.num_blocks + self.prediction_heads - 1 + 1
-            )
+
         if self.output_weight_initialization.has_initialization:
             assert self.use_absolute_position_embeddings
         if self.output_weight_initialization.has_initialization:
             assert not self.tie_word_embeddings
 
     def setup_tensor_space(self, tensor_space: TensorSpace) -> None:
-        self.transformer.setup_tensor_space(tensor_space)
+        super().setup_tensor_space(tensor_space)
         tensor = tensor_space.distributed_config.get_distributed_dim(DistributedDimNames.tensor)
 
         # Embedding dimensions
@@ -235,6 +234,7 @@ class LanguageModelBaseConfig(BaseModelConfig):
 
     @property
     def use_absolute_position_embeddings(self) -> int:
+        # TODO: Set through num embeddings instead instead.
         return self.absolute_position_embeddings is not None
 
     @functools.cached_property
@@ -242,18 +242,18 @@ class LanguageModelBaseConfig(BaseModelConfig):
         if self.word_embedding_weight_initialization.has_initialization:
             return self.word_embedding_weight_initialization.get_initializer()
         else:
-            return init_normal_(self.transformer.hidden_size**-0.5)
+            return init_normal_(self.hidden_size**-0.5)
 
     @functools.cached_property
     def position_embedding_weight_initialization_method(self) -> Initializer:
         if self.position_embedding_weight_initialization.has_initialization:
             return self.position_embedding_weight_initialization.get_initializer()
         else:
-            return init_normal_(self.transformer.hidden_size**-0.5)
+            return init_normal_(self.hidden_size**-0.5)
 
     @functools.cached_property
     def output_weight_initialization_method(self) -> Initializer:
         if self.output_weight_initialization.has_initialization:
             return self.output_weight_initialization.get_initializer()
         else:
-            return init_normal_(self.transformer.hidden_size**-0.5)
+            return init_normal_(self.hidden_size**-0.5)

@@ -63,13 +63,7 @@ class MambaLayer(BlockLayer):
         tensor_space: TensorSpace,
         block_config: BlockConfig,
     ):
-        super().__init__(
-            tensor_space,
-            block_index,
-            self._mixer_name,
-            debug_level=block_config.debug_transformer,
-            debug_memory=block_config.debug_transformer_memory,
-        )
+        super().__init__(tensor_space, block_index, debug_level=block_config.debug_transformer)
         assert tensor_space.distributed_config.tensor_parallel == 1, "Tensor-parallel not supported for MambaLayer"
         self._config = config
         # TODO: It's not silu?

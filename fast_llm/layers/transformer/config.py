@@ -9,9 +9,12 @@ from fast_llm.engine.config_utils.initialization import InitializationConfig, In
 from fast_llm.engine.config_utils.tensor_space import CompositeTensorDim, TensorDim, TensorSpace
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
 from fast_llm.functional.config import TritonConfig
-from fast_llm.layers.block.config import AddLinearBiasChoices, BlockConfig, BlockDimNames, BlockKwargs, MixerConfig
+from fast_llm.layers.block.config import AddLinearBiasChoices, BlockDimNames, BlockKwargs, MixerConfig
 from fast_llm.layers.transformer.rotary.config import RotaryConfig
 from fast_llm.utils import Assert, div
+
+if typing.TYPE_CHECKING:
+    from fast_llm.layers.transformer.attention import Attention
 
 logger = logging.getLogger(__name__)
 
@@ -46,9 +49,6 @@ class AttentionKwargs(BlockKwargs):
 @config_class(dynamic_type={MixerConfig: "attention"})
 class AttentionConfig(MixerConfig):
     _abstract = False
-
-    # Needed for backward compatibility. TODO: remove
-    module_name: typing.ClassVar[str] = "attn"
 
     # TODO: Review names
     rotary: RotaryConfig = Field(
@@ -106,6 +106,7 @@ class AttentionConfig(MixerConfig):
         " Under muP (if scaling number of heads instead of kv_channels): use 0.5.",
         valid=skip_valid_if_none(check_field(Assert.geq, 0)),
     )
+
     qkv_weight_initialization: InitializationConfig = Field(
         desc="Initialization configuration for the query, key and value layer weights."
         " Default: normal(std=hidden_size**-0.5)",
@@ -127,9 +128,9 @@ class AttentionConfig(MixerConfig):
 
     def _validate(self) -> None:
         with self._set_implicit_default():
-            # TODO: hidden_size not yet validated.
             if self.kv_channels is None:
-                self.kv_channels = div(self.block.hidden_size, self.num_attention_heads)
+                # TODO: hidden_size not yet validated.
+                self.kv_channels = div(self.block.block_sequence.hidden_size, self.num_attention_heads)
 
         super()._validate()
 
@@ -180,6 +181,9 @@ class AttentionConfig(MixerConfig):
             CompositeTensorDim(AttentionDimNames.composite_dense, (head_groups, group_heads, kv_channels))
         )
 
+    def get_block(self) -> "Attention":
+        pass
+
     @functools.cached_property
     def add_qkv_bias(self) -> bool:
         if isinstance(self.block.add_linear_biases, bool):
@@ -197,7 +201,7 @@ class AttentionConfig(MixerConfig):
         if self.qkv_weight_initialization.has_initialization:
             return self.qkv_weight_initialization.get_initializer()
         else:
-            return init_normal_(0, self.block.hidden_size**-0.5)
+            return init_normal_(0, self.block.block_sequence.hidden_size**-0.5)
 
     @functools.cached_property
     def qkv_bias_initialization_method(self) -> Initializer:
@@ -211,7 +215,9 @@ class AttentionConfig(MixerConfig):
         if self.dense_weight_initialization.has_initialization:
             return self.dense_weight_initialization.get_initializer()
         else:
-            return init_normal_(0, self.block.hidden_size**-0.5 / max(2 * self.block.num_blocks, 1))
+            return init_normal_(
+                0, self.block.block_sequence.hidden_size**-0.5 / max(2 * self.block.block_sequence.num_blocks, 1)
+            )
 
     @functools.cached_property
     def dense_bias_initialization_method(self) -> Initializer:
@@ -219,9 +225,3 @@ class AttentionConfig(MixerConfig):
             return self.dense_bias_initialization.get_initializer()
         else:
             return init_zeros_
-
-
-@config_class()
-# TODO: Remove
-class TransformerConfig(BlockConfig):
-    pass

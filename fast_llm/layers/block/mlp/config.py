@@ -181,7 +181,7 @@ class MLPConfig(BlockLayerConfig):
                 self.activation_type = ActivationType.silu if self.gated else ActivationType.gelu
             # TODO: `hidden_size` not yet validated.
             if self.ffn_hidden_size is None:
-                self.ffn_hidden_size = 4 * self.block.hidden_size
+                self.ffn_hidden_size = 4 * self.block.block_sequence.hidden_size
 
         self.num_unshared_experts = self.num_experts - self.num_shared_experts
 
@@ -206,7 +206,7 @@ class MLPConfig(BlockLayerConfig):
         if self.layer_1_weight_initialization.has_initialization:
             return self.layer_1_weight_initialization.get_initializer()
         else:
-            return init_normal_(0, self.block.hidden_size**-0.5)
+            return init_normal_(0, self.block.block_sequence.hidden_size**-0.5)
 
     @functools.cached_property
     def layer_1_bias_initialization_method(self) -> Initializer:
@@ -220,7 +220,9 @@ class MLPConfig(BlockLayerConfig):
         if self.layer_2_weight_initialization.has_initialization:
             return self.layer_2_weight_initialization.get_initializer()
         else:
-            return init_normal_(0, self.block.hidden_size**-0.5 / max(2 * self.block.num_blocks, 1))
+            return init_normal_(
+                0, self.block.block_sequence.hidden_size**-0.5 / max(2 * self.block.block_sequence.num_blocks, 1)
+            )
 
     @functools.cached_property
     def layer_2_bias_initialization_method(self) -> Initializer:
