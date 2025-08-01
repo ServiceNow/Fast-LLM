@@ -42,6 +42,7 @@ class BlockKwargs:
 
 
 class AddLinearBiasChoices(str, enum.Enum):
+    # TODO: Review
     nowhere = "nowhere"
     everywhere = "everywhere"
     only_attn_qkv = "only_attn_qkv"
@@ -49,6 +50,10 @@ class AddLinearBiasChoices(str, enum.Enum):
 
 @config_class()
 class BlockLayerConfig(BaseModelConfig):
+    """
+    A common class for mixers and mlps, which have the exact same interface.
+    """
+
     _abstract = True
     block: "BlockConfig" = Field(init=False)
 
@@ -64,7 +69,7 @@ class BlockLayerConfig(BaseModelConfig):
 class MixerConfig(BlockLayerConfig):
     _abstract = True
 
-    # Needed for backward compatibility.
+    # Needed for backward compatibility. TODO: Standardize to `mixer`
     module_name: typing.ClassVar[str] = "mixer"
 
     def _validate(self) -> None:

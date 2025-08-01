@@ -41,7 +41,7 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Config
 
     def __init__(
         self,
-        config: LanguageModelBaseConfig,
+        config: ConfigType,
         tensor_space: TensorSpace,
         prediction_distance: int,
     ):

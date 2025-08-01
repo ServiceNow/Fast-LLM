@@ -1,7 +1,7 @@
 import functools
 
 from fast_llm.config import Field, FieldHint, check_field, config_class, skip_valid_if_none
-from fast_llm.engine.config_utils.initialization import InitializationConfig, Initializer
+from fast_llm.engine.config_utils.initialization import InitializationConfig, Initializer, init_normal_
 from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
 from fast_llm.engine.distributed.config import DistributedDimNames
 from fast_llm.functional.config import CrossEntropyImpl, DistillationLossImpl
@@ -186,15 +186,15 @@ class LanguageModelBaseConfig(BlockSequenceConfig):
         hint=FieldHint.feature,
     )
     word_embedding_weight_initialization: InitializationConfig = Field(
-        desc="Initialization configuration for word embeddings. Default: hidden_size**-0.5",
+        desc="Initialization configuration for word embeddings. Default: normal(std=hidden_size**-0.5)",
         hint=FieldHint.feature,
     )
     position_embedding_weight_initialization: InitializationConfig = Field(
-        desc="Initialization configuration for position embeddings. Default: hidden_size**-0.5",
+        desc="Initialization configuration for position embeddings. Default: normal(hidden_size**-0.5)",
         hint=FieldHint.feature,
     )
     output_weight_initialization: InitializationConfig = Field(
-        desc="Initialization configuration for untied output weights. Default: hidden_size**-0.5",
+        desc="Initialization configuration for untied output weights. Default: normal(hidden_size**-0.5)",
         hint=FieldHint.feature,
     )
 
@@ -232,21 +232,28 @@ class LanguageModelBaseConfig(BlockSequenceConfig):
         tensor_space.add_tensor_dim(TensorDim(LanguageModelDimNames.vocab, self.vocab_size))
         tensor_space.add_tensor_dim(TensorDim(LanguageModelDimNames.vocab_tp, self.vocab_size, tensor))
 
-    @functools.cached_property
-    def word_embedding_weight_initialization_method(self) -> Initializer:
-        if self.word_embedding_weight_initialization.has_initialization:
-            return self.word_embedding_weight_initialization.get_initializer()
-        else:
-            return self.hidden_size**-0.5
-
     @property
     def use_absolute_position_embeddings(self) -> int:
         # TODO: Set through num embeddings instead instead.
         return self.absolute_position_embeddings is not None
 
     @functools.cached_property
+    def word_embedding_weight_initialization_method(self) -> Initializer:
+        if self.word_embedding_weight_initialization.has_initialization:
+            return self.word_embedding_weight_initialization.get_initializer()
+        else:
+            return init_normal_(self.hidden_size**-0.5)
+
+    @functools.cached_property
+    def position_embedding_weight_initialization_method(self) -> Initializer:
+        if self.position_embedding_weight_initialization.has_initialization:
+            return self.position_embedding_weight_initialization.get_initializer()
+        else:
+            return init_normal_(self.hidden_size**-0.5)
+
+    @functools.cached_property
     def output_weight_initialization_method(self) -> Initializer:
         if self.output_weight_initialization.has_initialization:
             return self.output_weight_initialization.get_initializer()
         else:
-            return self.hidden_size**-0.5
+            return init_normal_(self.hidden_size**-0.5)

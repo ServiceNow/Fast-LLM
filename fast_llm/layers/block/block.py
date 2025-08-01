@@ -137,6 +137,14 @@ class Block[ConfigType: BlockConfig](BlockLayerBase[ConfigType], Layer):
     A transformer-like decoder base block with abstract mixer.
     """
 
+    # TODO: Needed for pycharm?
+    _config: ConfigType
+    _tensor_space: TensorSpace
+    _block_index: int
+    _name: str
+    _sequence_parallel: bool
+    _debug: DebugLayer
+
     def __init__(
         self, config: ConfigType, tensor_space: TensorSpace, block_index: int, name: str, return_input: bool = False
     ):
@@ -155,7 +163,6 @@ class Block[ConfigType: BlockConfig](BlockLayerBase[ConfigType], Layer):
             self._config.mixer.module_name,
             self._config.mixer.get_layer(self._tensor_space, self._block_index, f"{self._name} mixer"),
         )
-
         self.mlp = self._config.mlp.get_layer(self._tensor_space, self._block_index, f"{self._name} mlp")
 
     @torch.compile
