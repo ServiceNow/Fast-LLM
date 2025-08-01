@@ -121,19 +121,19 @@ class Block[ConfigType: BlockConfig](Configurable[ConfigType], Layer):
     A transformer-like decoder base block with abstract mixer.
     """
 
-    # TODO: Standardize to `mixer`
+    config_class: typing.ClassVar[type[BlockConfig]] = BlockConfig
 
     def __init__(
         self, config: ConfigType, tensor_space: TensorSpace, block_index: int = 0, return_input: bool = False
     ):
         super().__init__(config)
         # TODO: Argument?
+        self._block_index = block_index
         self._name = f"Block {self._block_index}"
         self._tensor_space: TensorSpace = tensor_space
         self._dropout_p: float = self._config.hidden_dropout
         # For multi-token prediction, return a stack of shared_hidden and transformer_output.
         self._return_input: bool = return_input
-        self._block_index = block_index
         self._debug = DebugLayer(
             tensor_space,
             self._name,

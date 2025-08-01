@@ -10,7 +10,7 @@ from fast_llm.functional.config import ActivationType, MLPRecomputeLevel
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
-    from fast_llm.layers.block.config import AddLinearBiasChoices, BlockLayerConfig
+    from fast_llm.layers.block.config import BlockLayerConfig
     from fast_llm.layers.block.mlp.mlp import MLPBase
 
 
@@ -163,6 +163,8 @@ class MLPConfig(BlockLayerConfig):
     def add_bias(self) -> bool:
         if isinstance(self.block.add_linear_biases, bool):
             return self.block.add_linear_biases
+        from fast_llm.layers.block.config import AddLinearBiasChoices
+
         if self.block.add_linear_biases == AddLinearBiasChoices.everywhere:
             return True
         return False
