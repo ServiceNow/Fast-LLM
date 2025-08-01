@@ -11,6 +11,8 @@ from fast_llm.utils import Assert
 if typing.TYPE_CHECKING:
     from fast_llm.layers.block.block import BlockLayer
 
+# TODO: Generalize these beyond language models? (Ex. vision)
+
 
 class BlockDimNames:
     # A set of common tensor dim names packed into a namespace.
@@ -112,7 +114,6 @@ class MLPBaseConfig(BlockLayerConfig):
 
 
 @config_class()
-# TODO: Use composition instead
 class BlockConfig(BaseModelConfig):
     _abstract = False
     mixer: MixerConfig = Field(
@@ -156,11 +157,6 @@ class BlockConfig(BaseModelConfig):
     )
 
     # TODO: Move these, not specific to a single block.
-    full_precision_residual: bool = Field(
-        default=False,
-        desc="Store the residuals for the transformer in full precision (`optimization_dtype`).",
-        hint=FieldHint.stability,
-    )
     num_blocks: int = Field(
         default=12,
         desc="Number of blocks in the model.",
@@ -172,6 +168,11 @@ class BlockConfig(BaseModelConfig):
         desc="Size of the transformer's main hidden dimension, e.g., for its input and output layers.",
         hint=FieldHint.architecture,
         valid=check_field(Assert.gt, 0),
+    )
+    full_precision_residual: bool = Field(
+        default=False,
+        desc="Store the residuals for the transformer in full precision (`optimization_dtype`).",
+        hint=FieldHint.stability,
     )
     per_layer_lr_scale: list[float] | None = Field(
         default=None,

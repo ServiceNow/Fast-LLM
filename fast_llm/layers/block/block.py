@@ -88,7 +88,7 @@ class DebugLayer:
                 )
 
 
-class BlockLayerBase[ConfigType: BaseModelConfig](Configurable[ConfigType], torch.nn.Module):
+class BlockLayerBase[ConfigType: BaseModelConfig](Configurable[ConfigType], torch.nn.Module, abc.ABC):
     """
     Base class for blocks, mixer and MLP modules.
     """
@@ -120,6 +120,7 @@ class BlockLayer[ConfigType: BlockLayerConfig](BlockLayerBase[ConfigType], torch
 
     def __init__(self, config: ConfigType, tensor_space: TensorSpace, block_index: int, name: str):
         super().__init__(config, tensor_space, block_index, name, config.block)
+        self._block_index = block_index
 
     @abc.abstractmethod
     def forward(
@@ -137,14 +138,6 @@ class Block[ConfigType: BlockConfig](BlockLayerBase[ConfigType], Layer):
     A transformer-like decoder base block with abstract mixer.
     """
 
-    # TODO: Needed for pycharm?
-    _config: ConfigType
-    _tensor_space: TensorSpace
-    _block_index: int
-    _name: str
-    _sequence_parallel: bool
-    _debug: DebugLayer
-
     def __init__(
         self, config: ConfigType, tensor_space: TensorSpace, block_index: int, name: str, return_input: bool = False
     ):
@@ -161,11 +154,7 @@ class Block[ConfigType: BlockConfig](BlockLayerBase[ConfigType], Layer):
         setattr(
             self,
             self._config.mixer.module_name,
-            self._config.mixer.get_layer(
-                self._tensor_space,
-                self._block_index,
-                f"{self._name} mixer",
-            ),
+            self._config.mixer.get_layer(self._tensor_space, self._block_index, f"{self._name} mixer"),
         )
         self.mlp = self._config.mlp.get_layer(self._tensor_space, self._block_index, f"{self._name} mlp")
 

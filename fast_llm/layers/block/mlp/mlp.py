@@ -10,7 +10,7 @@ from fast_llm.layers.block.config import BlockConfig, BlockDimNames
 from fast_llm.layers.block.mlp.config import MLPConfig, MLPDimNames
 from fast_llm.layers.block.peft import TransformerSubLayerName
 from fast_llm.layers.common.linear import LinearBase
-from fast_llm.utils import Assert, get_lr_scale
+from fast_llm.utils import get_lr_scale
 
 
 class MLPBase[ConfigType: MLPConfig](BlockLayer[ConfigType]):
@@ -54,11 +54,7 @@ class MLPBase[ConfigType: MLPConfig](BlockLayer[ConfigType]):
         self.layer_2 = self._config.peft.apply_linear(self.layer_2, TransformerSubLayerName.mlp_2)
 
 
-class MLP(MLPBase):
-    def __init__(self, config: BlockConfig, tensor_space: TensorSpace, block_index: int = 0, name: str = "mlp"):
-        Assert.eq(config.num_experts, 1)
-        super().__init__(config, tensor_space, block_index, name)
-
+class MLP[ConfigType: MLPConfig](MLPBase[ConfigType]):
     def forward(
         self,
         input_: torch.Tensor,

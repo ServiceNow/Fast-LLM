@@ -5,7 +5,6 @@ import torch
 from torch._C._distributed_c10d import ReduceOp  # noqa
 from torch.distributed import all_reduce
 
-from fast_llm.config import Configurable
 from fast_llm.core.ops import split_op
 from fast_llm.engine.base_model.base_model import Layer
 from fast_llm.engine.config_utils.tensor_space import DefaultDimNames, TensorDim, TensorSpace
@@ -15,7 +14,7 @@ from fast_llm.functional.config import CrossEntropyImpl, DistillationLossImpl, T
 from fast_llm.functional.cross_entropy import cross_entropy_forward_backward, reverse_kl_forward_backward
 from fast_llm.functional.dpo import compute_dpo_loss
 from fast_llm.functional.linear import output_parallel_linear_backward, output_parallel_linear_forward
-from fast_llm.layers.block.block import DebugLayer
+from fast_llm.layers.block.block import BlockLayerBase
 from fast_llm.layers.common.auxiliary_loss import AuxiliaryLoss, z_loss
 from fast_llm.layers.language_model.config import (
     LanguageModelBaseConfig,
@@ -32,30 +31,16 @@ logger = logging.getLogger(__name__)
 OUTPUT_WEIGHTS = "output_weights"
 
 
-class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[ConfigType], Layer):
+class LanguageModelHead[ConfigType: LanguageModelBaseConfig](BlockLayerBase[ConfigType], Layer):
     """
     A language model head (GPT), which combines the final layer norm, logits and cross-entropy (if applicable).
     """
 
     config_class: typing.ClassVar[type[LanguageModelBaseConfig]] = LanguageModelBaseConfig
 
-    def __init__(
-        self,
-        config: ConfigType,
-        tensor_space: TensorSpace,
-        prediction_distance: int,
-    ):
-        super().__init__(config)
-        self._debug = DebugLayer(
-            tensor_space,
-            f"Language model head",
-            self._config.transformer.debug_transformer,
-            self._config.transformer.debug_transformer_memory,
-        )
-        self._tensor_space = tensor_space
-
+    def __init__(self, config: ConfigType, tensor_space: TensorSpace, prediction_distance: int):
+        super().__init__(config, tensor_space, None, "embedding layer", config.transformer)
         self._group_size = tensor_space.distributed_config.tensor_parallel
-        self._sequence_parallel = tensor_space.distributed_config.sequence_tensor_parallel
         self._parallel_embeddings = (
             tensor_space.distributed_config.tensor_parallel > 1 and self._config.parallel_embeddings
         )

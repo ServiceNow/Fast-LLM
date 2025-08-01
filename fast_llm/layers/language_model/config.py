@@ -2,7 +2,7 @@ import functools
 
 from fast_llm.config import Field, FieldHint, check_field, config_class, skip_valid_if_none
 from fast_llm.engine.base_model.config import BaseModelConfig
-from fast_llm.engine.config_utils.initialization import InitializationConfig, Initializer
+from fast_llm.engine.config_utils.initialization import InitializationConfig, Initializer, init_normal_
 from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
 from fast_llm.engine.distributed.config import DistributedDimNames
 from fast_llm.functional.config import CrossEntropyImpl, DistillationLossImpl
@@ -73,22 +73,6 @@ class LanguageModelBaseConfig(BaseModelConfig):
         desc="Number of multi-token prediction heads.",
         hint=FieldHint.architecture,
         valid=check_field(Assert.gt, 0),
-    )
-    init_method_std_embed: float = Field(
-        default=None,
-        desc="Initialization scale for the vocabulary embedding and output weights (logits).",
-        hint=FieldHint.feature,
-        valid=check_field(Assert.geq, 0),
-    )
-    init_method_max_embed: float | None = Field(
-        default=None,
-        desc="Max value for clamping initialized weights of the vocabulary embedding and output (logits).",
-        hint=FieldHint.feature,
-    )
-    init_method_min_embed: float | None = Field(
-        default=None,
-        desc="Min value for clamping initialized weights of the vocabulary embedding and output (logits).",
-        hint=FieldHint.feature,
     )
     enable_dpo: bool | None = Field(
         default=False,
@@ -211,7 +195,6 @@ class LanguageModelBaseConfig(BaseModelConfig):
     )
 
     def _validate(self) -> None:
-        self.transformer.validate()
         with self._set_implicit_default():
             if self.language_model_loss_factor is None:
                 if self.distillation_model is None:
@@ -219,8 +202,6 @@ class LanguageModelBaseConfig(BaseModelConfig):
                 else:
                     self.language_model_loss_factor = 0.0
         super()._validate()
-        if self.init_method_max_embed is not None and self.init_method_min_embed is not None:
-            Assert.leq(self.init_method_min_embed, self.init_method_max_embed)
         if self.distillation_model is not None:
             if self.prediction_heads > 1:
                 raise NotImplementedError("Multi-token prediction not supported with distillation.")
@@ -261,18 +242,18 @@ class LanguageModelBaseConfig(BaseModelConfig):
         if self.word_embedding_weight_initialization.has_initialization:
             return self.word_embedding_weight_initialization.get_initializer()
         else:
-            return self.transformer.hidden_size**-0.5
+            return init_normal_(self.transformer.hidden_size**-0.5)
 
     @functools.cached_property
     def position_embedding_weight_initialization_method(self) -> Initializer:
         if self.position_embedding_weight_initialization.has_initialization:
             return self.position_embedding_weight_initialization.get_initializer()
         else:
-            return self.transformer.hidden_size**-0.5
+            return init_normal_(self.transformer.hidden_size**-0.5)
 
     @functools.cached_property
     def output_weight_initialization_method(self) -> Initializer:
         if self.output_weight_initialization.has_initialization:
             return self.output_weight_initialization.get_initializer()
         else:
-            return self.transformer.hidden_size**-0.5
+            return init_normal_(self.transformer.hidden_size**-0.5)
