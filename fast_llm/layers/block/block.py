@@ -8,6 +8,7 @@ import torch
 from fast_llm.config import Configurable
 from fast_llm.core.distributed import set_generator
 from fast_llm.engine.base_model.base_model import Layer
+from fast_llm.engine.base_model.config import BaseModelConfig
 from fast_llm.engine.config_utils.run import log_pipeline_parallel_main_rank
 from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
 from fast_llm.layers.block.config import BlockConfig, BlockDimNames, BlockKwargs, BlockLayerConfig
@@ -87,12 +88,14 @@ class DebugLayer:
                 )
 
 
-class BlockLayer[ConfigType: BlockLayerConfig](Configurable[ConfigType], torch.nn.Module):
+class BlockLayerBase[ConfigType: BaseModelConfig](Configurable[ConfigType], torch.nn.Module):
     """
-    Base class for mixer and MLP modules.
+    Base class for blocks, mixer and MLP modules.
     """
 
-    def __init__(self, config: ConfigType, tensor_space: TensorSpace, block_index: int, name: str):
+    def __init__(
+        self, config: ConfigType, tensor_space: TensorSpace, block_index: int, name: str, block_config: BlockConfig
+    ):
         super().__init__(config)
         self._tensor_space = tensor_space
         self._block_index = block_index
@@ -101,9 +104,22 @@ class BlockLayer[ConfigType: BlockLayerConfig](Configurable[ConfigType], torch.n
         self._debug = DebugLayer(
             tensor_space,
             self._name,
-            self.config.block.debug_transformer,
-            self._config.block.debug_transformer_memory,
+            block_config.debug_transformer,
+            block_config.debug_transformer_memory,
         )
+
+    # @property
+    # def name(self) -> str:
+    #   return self._name
+
+
+class BlockLayer[ConfigType: BlockLayerConfig](BlockLayerBase[ConfigType], torch.nn.Module):
+    """
+    Base class for mixer and MLP modules.
+    """
+
+    def __init__(self, config: ConfigType, tensor_space: TensorSpace, block_index: int, name: str):
+        super().__init__(config, tensor_space, block_index, name, config.block)
 
     @abc.abstractmethod
     def forward(
@@ -116,48 +132,31 @@ class BlockLayer[ConfigType: BlockLayerConfig](Configurable[ConfigType], torch.n
         pass
 
 
-class Block[ConfigType: BlockConfig](Configurable[ConfigType], Layer):
+class Block[ConfigType: BlockConfig](BlockLayerBase[ConfigType], Layer):
     """
     A transformer-like decoder base block with abstract mixer.
     """
 
-    config_class: typing.ClassVar[type[BlockConfig]] = BlockConfig
-
     def __init__(
-        self, config: ConfigType, tensor_space: TensorSpace, block_index: int = 0, return_input: bool = False
+        self, config: ConfigType, tensor_space: TensorSpace, block_index: int, name: str, return_input: bool = False
     ):
-        super().__init__(config)
-        # TODO: Argument?
-        self._block_index = block_index
-        self._name = f"Block {self._block_index}"
-        self._tensor_space: TensorSpace = tensor_space
-        self._dropout_p: float = self._config.hidden_dropout
+        super().__init__(config, tensor_space, block_index, name, config)
         # For multi-token prediction, return a stack of shared_hidden and transformer_output.
         self._return_input: bool = return_input
-        self._debug = DebugLayer(
-            tensor_space,
-            self._name,
-            self._config.debug_transformer,
-            self._config.debug_transformer_memory,
-        )
         hidden_dim = self._tensor_space[BlockDimNames.hidden]
         # Note, layer_lr_scale does not impact the norms
         # TODO: add a separate norm_lr_scale
-        self.norm_1 = self._config.normalization.get_layer(hidden_dim)
-        self.norm_2 = self._config.normalization.get_layer(hidden_dim)
+        self.norm_1 = self._config.peft.apply_other(self._config.normalization.get_layer(hidden_dim))
+        self.norm_2 = self._config.peft.apply_other(self._config.normalization.get_layer(hidden_dim))
 
         # Attribute should be mixer, but Attention uses a different name for backward compatibility. TODO: Fix.
         setattr(
             self,
             self._config.mixer.module_name,
-            self._config.mixer.get_layer(self._tensor_space, block_index, f"{self._name} mixer"),
+            self._config.mixer.get_layer(self._tensor_space, self._block_index, f"{self._name} mixer"),
         )
 
-        self.mlp = self._config.mlp.get_layer(self._tensor_space, block_index, f"{self._name} mlp")
-
-        # PEFT.
-        self.norm_1 = self._config.peft.apply_other(self.norm_1)
-        self.norm_2 = self._config.peft.apply_other(self.norm_2)
+        self.mlp = self._config.mlp.get_layer(self._tensor_space, self._block_index, f"{self._name} mlp")
 
     @torch.compile
     def _bias_dropout_add(
@@ -165,11 +164,7 @@ class Block[ConfigType: BlockConfig](Configurable[ConfigType], Layer):
     ) -> torch.Tensor:
         if bias is not None:
             input_ = input_ + bias
-        return residual + torch.dropout(input_, self._dropout_p, self.training)
-
-    # @property
-    # def name(self) -> str:
-    #    return f"{self._name} {self._block_index}"
+        return residual + torch.dropout(input_, self._config.hidden_dropout, self.training)
 
     def forward(
         self,

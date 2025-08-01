@@ -1,11 +1,19 @@
+import abc
+
 import torch
 
-from fast_llm.engine.config_utils.initialization import init_ones_, init_zeros_
+from fast_llm.config import Configurable
 from fast_llm.engine.config_utils.run import log_main_rank
 from fast_llm.engine.config_utils.tensor_space import TensorDim
 from fast_llm.functional.config import TritonConfig
 from fast_llm.functional.triton.normalization import triton_normalization_autograd
-from fast_llm.layers.common.config import NormalizationImplementation
+from fast_llm.layers.common.config import (
+    LayerNormalizationConfig,
+    NoNormalizationConfig,
+    NormalizationConfig,
+    NormalizationImplementation,
+    RMSNormalizationConfig,
+)
 from fast_llm.tensor import ParameterMeta, accumulate_gradient
 from fast_llm.utils import Assert
 
@@ -139,7 +147,29 @@ class FusedRMSNorm(torch.autograd.Function):
         return grad_input, None, None, None
 
 
-class LayerNorm(torch.nn.Module):
+class Normalization[ConfigType: NormalizationConfig](Configurable[ConfigType], torch.nn.Module):
+    def __init__(
+        self,
+        config: NormalizationConfig,
+        hidden_dim: TensorDim,
+        lr_scale: float | None = None,
+    ):
+        super().__init__(config)
+        self._hidden_dim = hidden_dim
+        self._lr_scale = lr_scale
+        assert not self._hidden_dim.is_parallel
+
+    @abc.abstractmethod
+    def forward(self, input_: torch.Tensor) -> torch.Tensor:
+        pass
+
+
+class NoNormalization[ConfigType: NoNormalizationConfig](Normalization[ConfigType]):
+    def forward(self, input_: torch.Tensor) -> torch.Tensor:
+        return input_
+
+
+class LayerNormalization[ConfigType: LayerNormalizationConfig](Normalization[ConfigType]):
     """
     A layer normalization layer, supporting multiple implementations.
     Note: Converting input automatically to training dtype to match Apex behaviour,
@@ -149,23 +179,20 @@ class LayerNorm(torch.nn.Module):
 
     def __init__(
         self,
+        config: LayerNormalizationConfig,
         hidden_dim: TensorDim,
-        *,
-        eps=1e-5,
-        implementation: NormalizationImplementation = NormalizationImplementation.auto,
-        weight_init_method=None,
-        bias_init_method=init_zeros_,
-        zero_centered: bool = False,
         lr_scale: float | None = None,
     ):
-        super().__init__()
-        assert not hidden_dim.is_parallel
-        self._eps = eps
-        self._zero_centered = zero_centered
+        super().__init__(config, hidden_dim, lr_scale)
+        implementation = self._config.implementation
         if implementation == NormalizationImplementation.auto:
-            if _fast_normalization_available and hidden_dim.size in _PERSIST_LN_SIZES and not self._zero_centered:
+            if (
+                _fast_normalization_available
+                and hidden_dim.size in _PERSIST_LN_SIZES
+                and not self._config.zero_centered
+            ):
                 implementation = NormalizationImplementation.fast
-            elif TritonConfig.TRITON_ENABLED or self._zero_centered:
+            elif TritonConfig.TRITON_ENABLED or self._config.zero_centered:
                 log_main_rank("Fast layer norm unavailable, using backup triton implementation.")
                 implementation = NormalizationImplementation.triton
             elif _fused_normalization_available:
@@ -174,7 +201,7 @@ class LayerNorm(torch.nn.Module):
             else:
                 log_main_rank("Fast and fused layer norm unavailable, using backup pytorch implementation.")
                 implementation = NormalizationImplementation.torch
-        if self._zero_centered:
+        if self._config.zero_centered:
             assert implementation == NormalizationImplementation.triton
         if implementation == NormalizationImplementation.triton:
             self._forward = self._forward_triton
@@ -187,44 +214,43 @@ class LayerNorm(torch.nn.Module):
         else:
             raise NotImplementedError(implementation)
 
-        if weight_init_method is None:
-            weight_init_method = init_zeros_ if self._zero_centered else init_ones_
-
         self.weight = ParameterMeta.from_dims(
             (hidden_dim,),
-            init_method=weight_init_method,
+            init_method=self._config.weight_initialization_method,
             weight_decay=False,
             auto_grad_accumulation=implementation == NormalizationImplementation.torch,
             lr_scale=lr_scale,
         )
         self.bias = ParameterMeta.from_dims(
             (hidden_dim,),
-            init_method=bias_init_method,
+            init_method=self._config.bias_initialization_method,
             weight_decay=False,
             auto_grad_accumulation=implementation == NormalizationImplementation.torch,
             lr_scale=lr_scale,
         )
-        self.normalized_shape = self.weight.shape
+        self._normalized_shape = self.weight.shape
 
     def forward(self, input_: torch.Tensor) -> torch.Tensor:
-        return self._forward(input_.view(-1, *self.normalized_shape)).view_as(input_)
+        return self._forward(input_.view(-1, *self._normalized_shape)).view_as(input_)
 
     def _forward_triton(self, input_: torch.Tensor) -> torch.Tensor:
         return triton_normalization_autograd(
-            input_, self.weight, self.bias, self._eps, self.training, self._zero_centered
+            input_, self.weight, self.bias, self._config.epsilon, self.training, self._config.zero_centered
         )
 
     def _forward_fast(self, input_: torch.Tensor) -> torch.Tensor:
-        return FastLayerNorm.apply(input_, self.normalized_shape, self.weight, self.bias, self._eps)
+        return FastLayerNorm.apply(input_, self._normalized_shape, self.weight, self.bias, self._config.epsilon)
 
     def _forward_fused(self, input_: torch.Tensor) -> torch.Tensor:
-        return FusedLayerNorm.apply(input_, self.normalized_shape, self.weight, self.bias, self._eps)
+        return FusedLayerNorm.apply(input_, self._normalized_shape, self.weight, self.bias, self._config.epsilon)
 
     def _forward_torch(self, input_: torch.Tensor) -> torch.Tensor:
-        return torch.layer_norm(input_.to(self.weight.dtype), self.normalized_shape, self.weight, self.bias, self._eps)
+        return torch.layer_norm(
+            input_.to(self.weight.dtype), self._normalized_shape, self.weight, self.bias, self._config.epsilon
+        )
 
 
-class RMSNorm(torch.nn.Module):
+class RMSNormalization[ConfigType: RMSNormalizationConfig](Configurable[ConfigType], torch.nn.Module):
     """
     A RMS normalization layer.
     Note: Converting input automatically to training dtype to match Apex behaviour,
@@ -234,20 +260,15 @@ class RMSNorm(torch.nn.Module):
 
     def __init__(
         self,
+        config: RMSNormalizationConfig,
         hidden_dim: TensorDim,
-        *,
-        eps=1e-5,
-        implementation: NormalizationImplementation = NormalizationImplementation.auto,
-        weight_init_method=None,
-        zero_centered: bool = False,
         lr_scale: float | None = None,
     ):
-        super().__init__()
+        super().__init__(config, hidden_dim, lr_scale)
         assert not hidden_dim.is_parallel
-        self._eps = eps
-        self._zero_centered = zero_centered
+        implementation = self._config.implementation
         if implementation == NormalizationImplementation.auto:
-            if TritonConfig.TRITON_ENABLED or self._zero_centered:
+            if TritonConfig.TRITON_ENABLED or self._config.zero_centered:
                 implementation = NormalizationImplementation.triton
             elif _fused_normalization_available:
                 log_main_rank("Triton RMS norm unavailable, using fused implementation.")
@@ -255,7 +276,7 @@ class RMSNorm(torch.nn.Module):
             else:
                 log_main_rank("Fused RMS norm unavailable, using backup implementation.")
                 implementation = NormalizationImplementation.torch
-        if self._zero_centered:
+        if self._config.zero_centered:
             assert implementation == NormalizationImplementation.triton
         if implementation == NormalizationImplementation.triton:
             self._forward = self._forward_triton
@@ -266,26 +287,25 @@ class RMSNorm(torch.nn.Module):
         else:
             raise NotImplementedError(implementation)
 
-        if weight_init_method is None:
-            weight_init_method = init_zeros_ if self._zero_centered else init_ones_
-
         self.weight = ParameterMeta.from_dims(
             (hidden_dim,),
-            init_method=weight_init_method,
+            init_method=self._config.weight_initialization_method,
             weight_decay=False,
             auto_grad_accumulation=True,
             lr_scale=lr_scale,
         )
-        self.normalized_shape = self.weight.shape
+        self._normalized_shape = self.weight.shape
 
     def forward(self, input_: torch.Tensor) -> torch.Tensor:
-        return self._forward(input_.view(-1, *self.normalized_shape)).view_as(input_)
+        return self._forward(input_.view(-1, *self._normalized_shape)).view_as(input_)
 
     def _forward_triton(self, input_: torch.Tensor) -> torch.Tensor:
-        return triton_normalization_autograd(input_, self.weight, None, self._eps, self.training, self._zero_centered)
+        return triton_normalization_autograd(
+            input_, self.weight, None, self._config.epsilon, self.training, self._config.zero_centered
+        )
 
     def _forward_fused(self, input_: torch.Tensor) -> torch.Tensor:
-        return FusedRMSNorm.apply(input_, self.normalized_shape, self.weight, self._eps)
+        return FusedRMSNorm.apply(input_, self._normalized_shape, self.weight, self._config.epsilon)
 
     def _forward_torch(self, input_: torch.Tensor) -> torch.Tensor:
-        return torch.rms_norm(input_.to(self.weight.dtype), self.normalized_shape, self.weight, self._eps)
+        return torch.rms_norm(input_.to(self.weight.dtype), self._normalized_shape, self.weight, self._config.epsilon)

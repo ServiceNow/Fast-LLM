@@ -3,14 +3,14 @@ import functools
 import typing
 
 from fast_llm.config import Field, FieldHint, check_field, config_class, skip_valid_if_none
-from fast_llm.engine.config_utils.initialization import InitializationConfig, Initializer, init_zeros_
+from fast_llm.engine.config_utils.initialization import InitializationConfig, Initializer, init_normal_, init_zeros_
 from fast_llm.engine.config_utils.tensor_space import CompositeTensorDim, TensorDim, TensorSpace
 from fast_llm.engine.distributed.config import DistributedDimNames
 from fast_llm.functional.config import ActivationType, MLPRecomputeLevel
+from fast_llm.layers.block.config import BlockLayerConfig
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
-    from fast_llm.layers.block.config import BlockLayerConfig
     from fast_llm.layers.block.mlp.mlp import MLPBase
 
 
@@ -131,7 +131,7 @@ class MLPConfig(BlockLayerConfig):
         hint=FieldHint.expert,
     )
     layer_1_weight_initialization: InitializationConfig = Field(
-        desc="Initialization configuration for the first mlp layer weights. Default: hidden_size**-0.5",
+        desc="Initialization configuration for the first mlp layer weights. Default: normal(0, hidden_size**-0.5).",
         hint=FieldHint.feature,
     )
     layer_1_bias_initialization: InitializationConfig = Field(
@@ -140,11 +140,16 @@ class MLPConfig(BlockLayerConfig):
     )
     layer_2_weight_initialization: InitializationConfig = Field(
         desc="Initialization configuration for the second mlp layer weights."
-        " Default: (2 * num_blocks * hidden_size)**-0.5",
+        " Default: normal((2 * num_blocks * hidden_size)**-0.5)",
         hint=FieldHint.feature,
     )
     layer_2_bias_initialization: InitializationConfig = Field(
         desc="Initialization configuration for the second mlp layer biases. Default: fill with zeros.",
+        hint=FieldHint.feature,
+    )
+    router_weight_initialization: InitializationConfig = Field(
+        # TODO: Improve default?
+        desc="Initialization configuration for the MoE router weight. Default: normal(0, hidden_size**-0.5).",
         hint=FieldHint.feature,
     )
 
@@ -161,23 +166,23 @@ class MLPConfig(BlockLayerConfig):
 
     @property
     def add_bias(self) -> bool:
-        if isinstance(self.block.add_linear_biases, bool):
-            return self.block.add_linear_biases
         from fast_llm.layers.block.config import AddLinearBiasChoices
 
+        if isinstance(self.block.add_linear_biases, bool):
+            return self.block.add_linear_biases
         if self.block.add_linear_biases == AddLinearBiasChoices.everywhere:
             return True
         return False
 
     def _validate(self) -> None:
         assert hasattr(self, "block")
-
         with self._set_implicit_default():
             if self.activation_type is None:
                 self.activation_type = ActivationType.silu if self.gated else ActivationType.gelu
+            # TODO: `hidden_size` not yet validated.
             if self.ffn_hidden_size is None:
-                # TODO: hidden_size not yet validated.
                 self.ffn_hidden_size = 4 * self.block.block_sequence.hidden_size
+
         self.num_unshared_experts = self.num_experts - self.num_shared_experts
 
         super()._validate()
@@ -193,29 +198,46 @@ class MLPConfig(BlockLayerConfig):
         elif self.mlp_lr_scale is not None:
             Assert.geq(self.mlp_lr_scale, 0)
 
+        if self.layer_1_bias_initialization.has_initialization or self.layer_2_bias_initialization.has_initialization:
+            assert self.add_bias
+
     @functools.cached_property
     def layer_1_weight_initialization_method(self) -> Initializer:
-        if not self.layer_1_weight_initialization.has_initialization:
+        if self.layer_1_weight_initialization.has_initialization:
             return self.layer_1_weight_initialization.get_initializer()
-        return self.block.block_sequence.hidden_size**-0.5
+        else:
+            return init_normal_(0, self.block.block_sequence.hidden_size**-0.5)
 
     @functools.cached_property
     def layer_1_bias_initialization_method(self) -> Initializer:
-        if not self.layer_1_bias_initialization.has_initialization:
+        if self.layer_1_bias_initialization.has_initialization:
             return self.layer_1_bias_initialization.get_initializer()
-        return init_zeros_
+        else:
+            return init_zeros_
 
     @functools.cached_property
     def layer_2_weight_initialization_method(self) -> Initializer:
         if self.layer_2_weight_initialization.has_initialization:
             return self.layer_2_weight_initialization.get_initializer()
-        return self.block.block_sequence.hidden_size**-0.5 / max(2 * self.block.block_sequence.num_blocks, 1)
+        else:
+            return init_normal_(
+                0, self.block.block_sequence.hidden_size**-0.5 / max(2 * self.block.block_sequence.num_blocks, 1)
+            )
 
     @functools.cached_property
     def layer_2_bias_initialization_method(self) -> Initializer:
         if self.layer_2_bias_initialization.has_initialization:
             return self.layer_2_bias_initialization.get_initializer()
-        return init_zeros_
+        else:
+            return init_zeros_
+
+    @functools.cached_property
+    def router_weight_initialization_method(self) -> Initializer:
+        if self.router_weight_initialization.has_initialization:
+            assert self.add_bias
+            return self.router_weight_initialization.get_initializer()
+        else:
+            return init_zeros_
 
     def setup_tensor_space(self, tensor_space: TensorSpace) -> None:
         tensor = tensor_space.distributed_config.get_distributed_dim(DistributedDimNames.tensor)

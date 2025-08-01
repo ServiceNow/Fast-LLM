@@ -24,7 +24,7 @@ class PositionEmbeddingPreprocessor(Preprocessor):
         tensor_space: TensorSpace,
     ):
         self._config = config
-        assert config.absolute_position_embeddings is not None
+        assert config.use_absolute_position_embeddings
         self._tensor_space = tensor_space
         self._distributed_config = self._tensor_space.distributed_config
         self._scalar_dim = self._tensor_space[DefaultDimNames.scalar]

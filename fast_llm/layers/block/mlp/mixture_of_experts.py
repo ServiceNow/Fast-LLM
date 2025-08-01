@@ -4,7 +4,6 @@ import warnings
 import torch
 
 from fast_llm.core.distributed import ProcessGroup, set_generator
-from fast_llm.engine.config_utils.initialization import init_normal_
 from fast_llm.engine.config_utils.tensor_space import TensorSpace
 from fast_llm.functional.triton.mlp import mlp_autograd, mlp_autograd_looped
 from fast_llm.functional.triton.sparse_copy import get_sparse_map
@@ -13,7 +12,7 @@ from fast_llm.layers.block.mlp.config import MLPConfig, MLPDimNames, MLPLossName
 from fast_llm.layers.block.mlp.mlp import MLPBase
 from fast_llm.layers.common.auxiliary_loss import AuxiliaryLoss, z_loss
 from fast_llm.layers.common.linear import Linear
-from fast_llm.utils import get_lr_scale
+from fast_llm.utils import Assert, get_lr_scale
 
 logger = logging.getLogger(__name__)
 
@@ -33,9 +32,10 @@ class MixtureOfExpertMLP[ConfigType: MLPConfig](MLPBase[ConfigType]):
     _group: ProcessGroup
 
     def __init__(self, config: ConfigType, tensor_space: TensorSpace, block_index: int, name: str):
-        super().__init__(config, tensor_space, block_index, name)
+        Assert.gt(config.num_experts, 1)
         # TODO: Implement?
-        assert not self._config.add_linear_biases, "Biases not supported for MoE."
+        assert not config.add_linear_biases, "Biases not supported for MoE."
+        super().__init__(config, tensor_space, block_index, name)
 
         layer_lr_scale = self._config.per_layer_lr_scale[block_index] if self._config.per_layer_lr_scale else None
         router_lr_scale = get_lr_scale(self._config.router_lr_scale, layer_lr_scale)

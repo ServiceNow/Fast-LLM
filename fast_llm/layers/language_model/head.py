@@ -98,7 +98,7 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Config
             self.output_weights = ParameterMeta.from_dims(
                 (vocab_dim, hidden_dim),
                 init_method=self._config.output_weight_initialization_method,
-                lr_scale=config.output_lr_scale,
+                lr_scale=self._config.output_lr_scale,
             )
 
         if not self._config.enable_dpo:

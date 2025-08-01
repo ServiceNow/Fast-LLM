@@ -2,7 +2,6 @@ import typing
 
 import torch
 
-from fast_llm.engine.config_utils.initialization import init_normal_, init_zeros_
 from fast_llm.engine.config_utils.tensor_space import TensorSpace
 from fast_llm.functional.config import TritonConfig
 from fast_llm.functional.triton.mlp import mlp_autograd, torch_mlp_activation, triton_mlp_activation_autograd
@@ -15,21 +14,8 @@ from fast_llm.utils import get_lr_scale
 
 
 class MLPBase[ConfigType: MLPConfig](BlockLayer[ConfigType]):
-    _name: typing.ClassVar[str] = "mlp"
-
     def __init__(self, config: ConfigType, tensor_space: TensorSpace, block_index: int, name: str):
         super().__init__(config, tensor_space, block_index, name)
-
-        init_method_1 = init_normal_(
-            std=self._config.init_method_std_mlp_1,
-            min_val=self._config.init_method_min_mlp_1,
-            max_val=self._config.init_method_max_mlp_1,
-        )
-        init_method_2 = init_normal_(
-            std=self._config.init_method_std_mlp_2,
-            min_val=self._config.init_method_min_mlp_2,
-            max_val=self._config.init_method_max_mlp_2,
-        )
 
         hidden_dim = self._tensor_space[BlockDimNames.hidden]
         self._intermediate_dim = self._tensor_space[MLPDimNames.composite_expert_mlp]
@@ -52,16 +38,16 @@ class MLPBase[ConfigType: MLPConfig](BlockLayer[ConfigType]):
             hidden_dim,
             self._tensor_space[MLPDimNames.composite_gated_expert_mlp],
             bias=self._config.add_bias,
-            weight_init_method=init_method_1,
-            bias_init_method=init_method_1 if self._config.random_bias_init else init_zeros_,
+            weight_init_method=self._config.layer_1_weight_initialization_method,
+            bias_init_method=self._config.layer_1_bias_initialization_method,
             lr_scale=lr_scale,
         )
         self.layer_2 = LinearBase(
             self._intermediate_dim,
             hidden_dim,
             bias=self._config.add_bias,
-            weight_init_method=init_method_2,
-            bias_init_method=init_method_2 if self._config.random_bias_init else init_zeros_,
+            weight_init_method=self._config.layer_2_weight_initialization_method,
+            bias_init_method=self._config.layer_2_bias_initialization_method,
             auto_bias_grad_accumulation=self._tensor_space.distributed_config.tensor_parallel > 1,
             transposed_weight=True,
             lr_scale=lr_scale,

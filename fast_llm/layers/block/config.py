@@ -47,15 +47,10 @@ class AddLinearBiasChoices(str, enum.Enum):
     only_attn_qkv = "only_attn_qkv"
 
 
-@config_class(registry=True)
+@config_class()
 class BlockLayerConfig(BaseModelConfig):
     _abstract = True
     block: "BlockConfig" = Field(init=False)
-
-    def _validate(self) -> None:
-        assert hasattr(self, "block")
-        Assert.is_(self.block.mlp, self)
-        super()._validate()
 
     @property
     def layer_class(self) -> "type[BlockLayer]":
@@ -65,12 +60,17 @@ class BlockLayerConfig(BaseModelConfig):
         return self.layer_class(self, tensor_space, block_index, name)
 
 
-@config_class()
+@config_class(registry=True)
 class MixerConfig(BlockLayerConfig):
     _abstract = True
 
     # Needed for backward compatibility.
     module_name: typing.ClassVar[str] = "mixer"
+
+    def _validate(self) -> None:
+        assert hasattr(self, "block")
+        Assert.is_(self.block.mixer, self)
+        super()._validate()
 
     @classmethod
     def _from_dict(
@@ -87,9 +87,14 @@ class MixerConfig(BlockLayerConfig):
         return super()._from_dict(default, strict=strict, flat=flat)
 
 
-@config_class()
+@config_class(registry=True)
 class MLPBaseConfig(BlockLayerConfig):
     _abstract = True
+
+    def _validate(self) -> None:
+        assert hasattr(self, "block")
+        Assert.is_(self.block.mlp, self)
+        super()._validate()
 
     @classmethod
     def _from_dict(
@@ -189,7 +194,7 @@ class BlockSequenceConfig(BaseModelConfig):
     # TODO: Move these, not specific to a single block.
     num_blocks: int = Field(
         default=12,
-        desc="Number of layers in the transformer.",
+        desc="Number of blocks in the transformer.",
         hint=FieldHint.architecture,
         valid=check_field(Assert.geq, 0),
     )
