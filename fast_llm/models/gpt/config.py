@@ -192,15 +192,12 @@ class GPTTrainerConfig(PretrainedGPTModelConfig, TrainerConfig):
     reference_models: dict[str, PretrainedGPTModelConfig] = FieldUpdate()
 
     def _validate(self) -> None:
-        if self.batch.sequence_length is None:
-            # TODO: Drop this.
-            self.batch.sequence_length = self.model.base_model.max_position_embeddings
         if self.model.base_model.use_megatron_initialization:
             set_megatron_distributed_seeds(self.model.distributed)
         super()._validate()
 
         if self.model.base_model.use_absolute_position_embeddings:
-            Assert.geq(self.model.base_model.num_absolute_position_embeddings, self.batch.sequence_length)
+            Assert.geq(self.model.base_model.absolute_position_embeddings, self.batch.sequence_length)
 
         distillation_model = self.model.base_model.distillation_model
         dpo_reference_model = self.model.base_model.dpo_reference_model

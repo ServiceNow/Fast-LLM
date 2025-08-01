@@ -34,7 +34,7 @@ class PositionEmbeddingPreprocessor(Preprocessor):
             return
         self._tensor_cache_max_sequence_length = sequence_length
 
-        Assert.leq(sequence_length, self._config.num_absolute_position_embeddings)
+        Assert.leq(sequence_length, self._config.absolute_position_embeddings)
         self._position_ids = torch.arange(
             0, sequence_length, device=self._tensor_space.distributed.device, dtype=torch.int64
         )

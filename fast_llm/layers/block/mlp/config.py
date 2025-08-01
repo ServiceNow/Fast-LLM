@@ -1,10 +1,17 @@
 import enum
+import functools
+import typing
 
-from fast_llm.config import Config, Field, FieldHint, check_field, config_class, skip_valid_if_none
+from fast_llm.config import Field, FieldHint, check_field, config_class, skip_valid_if_none
+from fast_llm.engine.config_utils.initialization import InitializationConfig, Initializer, init_normal_, init_zeros_
 from fast_llm.engine.config_utils.tensor_space import CompositeTensorDim, TensorDim, TensorSpace
 from fast_llm.engine.distributed.config import DistributedDimNames
 from fast_llm.functional.config import ActivationType, MLPRecomputeLevel
+from fast_llm.layers.block.config import BlockLayerConfig
 from fast_llm.utils import Assert
+
+if typing.TYPE_CHECKING:
+    from fast_llm.layers.block.mlp.mlp import MLPBase
 
 
 class MLPDimNames:
@@ -32,9 +39,10 @@ class RoutingType(str, enum.Enum):
     sinkhorn = "sinkhorn"
 
 
-@config_class()
-class MLPConfig(Config):
+@config_class(dynamic_type={BlockLayerConfig: "mlp"})
+class MLPConfig(BlockLayerConfig):
     # TODO: Review names
+    # TODO: Separate MoE?
     _abstract = False
     ffn_hidden_size: int = Field(
         default=None,
@@ -122,75 +130,58 @@ class MLPConfig(Config):
         " Reduces memory usage, but increases fragmentation and requires CPU synchronisation. Not recommended.",
         hint=FieldHint.expert,
     )
-    # TODO: Review initialization
-    init_method_std_mlp_1: float = Field(
-        default=None,
-        desc="Scale for the MLP first layer weight initialization. Default: init_method_std",
-        hint=FieldHint.optional,
-        valid=check_field(Assert.geq, 0),
+    layer_1_weight_initialization: InitializationConfig = Field(
+        desc="Initialization configuration for the first mlp layer weights. Default: normal(0, hidden_size**-0.5).",
+        hint=FieldHint.feature,
     )
-    init_method_max_mlp_1: float | None = Field(
-        default=None,
-        desc="Max value for clamping initialized weights for MLP first layer. Default: float('inf')",
-        hint=FieldHint.optional,
+    layer_1_bias_initialization: InitializationConfig = Field(
+        desc="Initialization configuration for the first mlp layer biases. Default: fill with zeros.",
+        hint=FieldHint.feature,
     )
-    init_method_min_mlp_1: float | None = Field(
-        default=None,
-        desc="Min value for clamping initialized weights for MLP first layer. Default: -float('inf')",
-        hint=FieldHint.optional,
+    layer_2_weight_initialization: InitializationConfig = Field(
+        desc="Initialization configuration for the second mlp layer weights."
+        " Default: normal((2 * num_blocks * hidden_size)**-0.5)",
+        hint=FieldHint.feature,
     )
-    init_method_std_mlp_2: float = Field(
-        default=None,
-        desc="Scale for the MLP second layer weight initialization. Default: init_method_std",
-        hint=FieldHint.optional,
-        valid=check_field(Assert.geq, 0),
+    layer_2_bias_initialization: InitializationConfig = Field(
+        desc="Initialization configuration for the second mlp layer biases. Default: fill with zeros.",
+        hint=FieldHint.feature,
     )
-    init_method_max_mlp_2: float | None = Field(
-        default=None,
-        desc="Max value for clamping initialized weights for MLP second layer. Default: float('inf')",
-        hint=FieldHint.optional,
-    )
-    init_method_min_mlp_2: float | None = Field(
-        default=None,
-        desc="Min value for clamping initialized weights for MLP second layer. Default: -float('inf')",
-        hint=FieldHint.optional,
+    router_weight_initialization: InitializationConfig = Field(
+        # TODO: Improve default?
+        desc="Initialization configuration for the MoE router weight. Default: normal(0, hidden_size**-0.5).",
+        hint=FieldHint.feature,
     )
 
     @property
-    def add_mlp_bias(self) -> bool:
+    def layer_class(self) -> "type[MLPBase]":
+        if self.num_experts > 1:
+            from fast_llm.layers.block.mlp.mixture_of_experts import MixtureOfExpertMLP
+
+            return MixtureOfExpertMLP
+        else:
+            from fast_llm.layers.block.mlp.mlp import MLP
+
+            return MLP
+
+    @property
+    def add_bias(self) -> bool:
         from fast_llm.layers.block.config import AddLinearBiasChoices
 
-        # TODO: Make this work without inheritance.
-        if isinstance(self.add_linear_biases, bool):
-            return self.add_linear_biases
-        if self.add_linear_biases == AddLinearBiasChoices.everywhere:
+        if isinstance(self.block.add_linear_biases, bool):
+            return self.block.add_linear_biases
+        if self.block.add_linear_biases == AddLinearBiasChoices.everywhere:
             return True
         return False
 
     def _validate(self) -> None:
+        assert hasattr(self, "block")
         with self._set_implicit_default():
             if self.activation_type is None:
                 self.activation_type = ActivationType.silu if self.gated else ActivationType.gelu
-            # TODO: Make this work without inheritance.
+            # TODO: `hidden_size` not yet validated.
             if self.ffn_hidden_size is None:
-                self.ffn_hidden_size = 4 * self.hidden_size
-            # TODO: Review initialization
-            if self.init_method_std_mlp_1 is None:
-                self.init_method_std_mlp_1 = self.init_method_std
-            if self.init_method_std_mlp_2 is None:
-                self.init_method_std_mlp_2 = self.init_method_std / max(2 * self.num_layers, 1) ** 0.5
-            if self.init_method_max_mlp_1 is None:
-                self.init_method_max_mlp_1 = self.init_method_max
-            if self.init_method_min_mlp_1 is None:
-                self.init_method_min_mlp_1 = self.init_method_min
-            if self.init_method_max_mlp_2 is None:
-                self.init_method_max_mlp_2 = self.init_method_max
-            if self.init_method_min_mlp_2 is None:
-                self.init_method_min_mlp_2 = self.init_method_min
-            if self.init_method_min_mlp_1 is not None and self.init_method_max_mlp_1 is not None:
-                Assert.leq(self.init_method_min_mlp_1, self.init_method_max_mlp_1)
-            if self.init_method_min_mlp_2 is not None and self.init_method_max_mlp_2 is not None:
-                Assert.leq(self.init_method_min_mlp_2, self.init_method_max_mlp_2)
+                self.ffn_hidden_size = 4 * self.block.hidden_size
 
         self.num_unshared_experts = self.num_experts - self.num_shared_experts
 
@@ -206,6 +197,45 @@ class MLPConfig(Config):
                     Assert.geq(scale, 0)
         elif self.mlp_lr_scale is not None:
             Assert.geq(self.mlp_lr_scale, 0)
+
+        if self.layer_1_bias_initialization.has_initialization or self.layer_2_bias_initialization.has_initialization:
+            assert self.add_bias
+
+    @functools.cached_property
+    def layer_1_weight_initialization_method(self) -> Initializer:
+        if self.layer_1_weight_initialization.has_initialization:
+            return self.layer_1_weight_initialization.get_initializer()
+        else:
+            return init_normal_(0, self.block.hidden_size**-0.5)
+
+    @functools.cached_property
+    def layer_1_bias_initialization_method(self) -> Initializer:
+        if self.layer_1_bias_initialization.has_initialization:
+            return self.layer_1_bias_initialization.get_initializer()
+        else:
+            return init_zeros_
+
+    @functools.cached_property
+    def layer_2_weight_initialization_method(self) -> Initializer:
+        if self.layer_2_weight_initialization.has_initialization:
+            return self.layer_2_weight_initialization.get_initializer()
+        else:
+            return init_normal_(0, self.block.hidden_size**-0.5 / max(2 * self.block.num_blocks, 1))
+
+    @functools.cached_property
+    def layer_2_bias_initialization_method(self) -> Initializer:
+        if self.layer_2_bias_initialization.has_initialization:
+            return self.layer_2_bias_initialization.get_initializer()
+        else:
+            return init_zeros_
+
+    @functools.cached_property
+    def router_weight_initialization_method(self) -> Initializer:
+        if self.router_weight_initialization.has_initialization:
+            assert self.add_bias
+            return self.router_weight_initialization.get_initializer()
+        else:
+            return init_zeros_
 
     def setup_tensor_space(self, tensor_space: TensorSpace) -> None:
         tensor = tensor_space.distributed_config.get_distributed_dim(DistributedDimNames.tensor)

@@ -68,7 +68,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                         self._config.transformer,
                         self._tensor_space,
                         # TODO MTP: which index?
-                        block_index=max(self._config.transformer.num_layers + i, 1),
+                        block_index=max(self._config.transformer.num_blocks + i, 1),
                         # The last layer only returns the transformer output.
                         # The previous layers return a stack of shared_hidden and transformer_output.
                         return_input=i < self._config.prediction_heads - 1,
@@ -93,9 +93,9 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                     block_index=i + 1,
                     # The last layer only returns the transformer output.
                     # The previous layers return a stack of shared_hidden and transformer_output.
-                    return_input=self._config.prediction_heads > 1 and i == self._config.transformer.num_layers - 1,
+                    return_input=self._config.prediction_heads > 1 and i == self._config.transformer.num_blocks - 1,
                 )
-                for i in range(self._config.transformer.num_layers)
+                for i in range(self._config.transformer.num_blocks)
             ],
             *self.get_output_layers(),
         ]
@@ -372,7 +372,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                 LossDef(
                     name=MLPLossNames.load_balancing_loss,
                     formatted_name="load balancing loss",
-                    count=self._config.transformer.num_layers,
+                    count=self._config.transformer.num_blocks,
                 )
             )
             if self._config.transformer.expert_z_loss_coefficient:
@@ -380,7 +380,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                     LossDef(
                         name=MLPLossNames.router_z_loss,
                         formatted_name="router z loss",
-                        count=self._config.transformer.num_layers,
+                        count=self._config.transformer.num_blocks,
                     )
                 )
         if self._config.logit_z_loss:
@@ -421,7 +421,7 @@ class GPTModel[ConfigType: GPTModelConfig](FastLLMModel[ConfigType]):
 
         consumed_tokens_per_iteration = sequence_length * batch_size
 
-        num_transformer_layers = transformer_config.num_layers + self._config.base_model.prediction_heads - 1
+        num_transformer_layers = transformer_config.num_blocks + self._config.base_model.prediction_heads - 1
         transformer_flops_base = (
             2 * checkpoint_activations_factor * consumed_tokens_per_iteration * num_transformer_layers
         )

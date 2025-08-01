@@ -1,17 +1,17 @@
 import abc
 import enum
+import functools
 import typing
 
 from fast_llm.config import Field, FieldHint, check_field, config_class
 from fast_llm.engine.base_model.config import BaseModelConfig
+from fast_llm.engine.config_utils.initialization import InitializationConfig, Initializer, init_ones_, init_zeros_
+from fast_llm.engine.config_utils.tensor_space import TensorDim
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
-    import torch
-
-    from fast_llm.engine.config_utils.tensor_space import TensorDim
     from fast_llm.layers.common.linear import LinearBase, LinearLike
-    from fast_llm.layers.common.normalization import LayerNorm, RMSNorm
+    from fast_llm.layers.common.normalization import Normalization
 
 
 class NormalizationImplementation(str, enum.Enum):
@@ -30,9 +30,13 @@ class NormalizationImplementation(str, enum.Enum):
 class NormalizationConfig(BaseModelConfig):
     pass
 
+    @property
     @abc.abstractmethod
-    def get_layer(self, hidden_dim: "TensorDim") -> "torch.nn.Module":
+    def module_class(self) -> type["Normalization"]:
         pass
+
+    def get_layer(self, hidden_dim: "TensorDim", lr_scale: float | None = None) -> "Normalization":
+        return self.module_class(self, hidden_dim, lr_scale)
 
     @classmethod
     def _from_dict(
@@ -51,8 +55,11 @@ class NormalizationConfig(BaseModelConfig):
 class NoNormalizationConfig(NormalizationConfig):
     _abstract = False
 
-    def get_layer(self, hidden_dim: "TensorDim") -> "torch.nn.Module":
-        return torch.nn.Identity()
+    @property
+    def module_class(self) -> type["Normalization"]:
+        from fast_llm.layers.common.normalization import NoNormalization
+
+        return NoNormalization
 
 
 @config_class()
@@ -78,33 +85,10 @@ class LayerNormalizationBaseConfig(NormalizationConfig):
         desc="The implementation to use for the normalization layer.",
         hint=FieldHint.performance,
     )
-    # TODO: Rename to normalization_init_range
-    initialization_range: float = Field(
-        default=0.0,
-        desc="Randomize the initialization with a uniform noise. Used to test for issues that may not be visible with the default initialization.",
-        hint=FieldHint.testing,
-        valid=check_field(Assert.geq, 0),
+    weight_initialization: InitializationConfig = Field(
+        desc="Initialization configuration for the normalization weights. Default: fill with ones",
+        hint=FieldHint.feature,
     )
-
-    def get_layer(self, hidden_dim: "TensorDim", lr_scale: float | None = None) -> "LayerNorm | RMSNorm":
-        from fast_llm.engine.config_utils.initialization import init_uniform_centered_
-
-        kwargs = {
-            "hidden_dim": hidden_dim,
-            "eps": self.epsilon,
-            "implementation": self.implementation,
-            "zero_centered": self.zero_centered,
-            "lr_scale": lr_scale,
-        }
-        if self.initialization_range:
-            mean = 0 if self.zero_centered else 1
-            kwargs["weight_init_method"] = init_uniform_centered_(self.initialization_range, mean=mean)
-        return self.module_class(**kwargs)
-
-    @property
-    @abc.abstractmethod
-    def module_class(self):
-        pass
 
     @classmethod
     def _from_dict(
@@ -120,16 +104,34 @@ class LayerNormalizationBaseConfig(NormalizationConfig):
         cls._handle_renamed_field(default, "layer_norm_init_range", "initialization_range")
         return super()._from_dict(default, strict, flat)
 
+    @functools.cached_property
+    def weight_initialization_method(self) -> Initializer:
+        if self.weight_initialization.has_initialization:
+            return self.weight_initialization.get_initializer()
+        else:
+            return init_ones_
+
 
 @config_class(dynamic_type={NormalizationConfig: "layer_norm"})
 class LayerNormalizationConfig(LayerNormalizationBaseConfig):
     _abstract = False
+    bias_initialization: InitializationConfig = Field(
+        desc="Initialization configuration for the normalization biases. Default: fill with zeros",
+        hint=FieldHint.feature,
+    )
+
+    @functools.cached_property
+    def bias_initialization_method(self) -> Initializer:
+        if self.bias_initialization.has_initialization:
+            return self.bias_initialization.get_initializer()
+        else:
+            return init_zeros_
 
     @property
     def module_class(self):
-        from fast_llm.layers.common.normalization import LayerNorm
+        from fast_llm.layers.common.normalization import LayerNormalization
 
-        return LayerNorm
+        return LayerNormalization
 
 
 @config_class(dynamic_type={NormalizationConfig: "rms_norm"})
@@ -138,9 +140,9 @@ class RMSNormalizationConfig(LayerNormalizationBaseConfig):
 
     @property
     def module_class(self):
-        from fast_llm.layers.common.normalization import RMSNorm
+        from fast_llm.layers.common.normalization import RMSNormalization
 
-        return RMSNorm
+        return RMSNormalization
 
 
 @config_class()
