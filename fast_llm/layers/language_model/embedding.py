@@ -6,7 +6,6 @@ from fast_llm.config import Configurable
 from fast_llm.core.distributed import set_generator
 from fast_llm.core.ops import reduce_forward, split
 from fast_llm.engine.base_model.base_model import Layer
-from fast_llm.engine.config_utils.initialization import init_normal_
 from fast_llm.engine.config_utils.tensor_space import TensorSpace
 from fast_llm.layers.language_model.config import LanguageModelBaseConfig, LanguageModelDimNames, LanguageModelKwargs
 from fast_llm.tensor import ParameterMeta, TensorMeta
@@ -59,21 +58,13 @@ class LanguageModelEmbedding[ConfigType: LanguageModelBaseConfig](Configurable[L
 
         self.word_embeddings_weight = ParameterMeta.from_dims(
             (vocab_dim, hidden_dim),
-            init_method=init_normal_(
-                std=config.init_method_std_embed,
-                min_val=config.init_method_min_embed,
-                max_val=config.init_method_max_embed,
-            ),
+            init_method=self._config.word_embedding_weight_initialization_method,
             lr_scale=config.embeddings_lr_scale,
         )
         if self._use_absolute_position_embeddings:
             self.position_embeddings_weight = ParameterMeta.from_dims(
                 (self._tensor_space[LanguageModelDimNames.position_embed], hidden_dim),
-                init_method=init_normal_(
-                    std=config.init_method_std_embed,
-                    min_val=config.init_method_min_embed,
-                    max_val=config.init_method_max_embed,
-                ),
+                init_method=self._config.position_embedding_weight_initialization_method,
                 allow_sequence_tensor_parallel=not config.parallel_embeddings,
                 lr_scale=config.embeddings_lr_scale,
             )

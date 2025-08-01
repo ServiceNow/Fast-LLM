@@ -8,7 +8,6 @@ from torch.distributed import all_reduce
 from fast_llm.config import Configurable
 from fast_llm.core.ops import split_op
 from fast_llm.engine.base_model.base_model import Layer
-from fast_llm.engine.config_utils.initialization import init_normal_
 from fast_llm.engine.config_utils.tensor_space import DefaultDimNames, TensorDim, TensorSpace
 from fast_llm.engine.distributed.config import DistributedDimNames
 from fast_llm.functional.autograd import grad_is_context, wrap_forward_backward
@@ -96,11 +95,7 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Config
             ]
             self.output_weights = ParameterMeta.from_dims(
                 (vocab_dim, hidden_dim),
-                init_method=init_normal_(
-                    std=self._config.init_method_std_embed,
-                    min_val=self._config.init_method_min_embed,
-                    max_val=self._config.init_method_max_embed,
-                ),
+                init_method=self._config.output_weight_initialization_method,
                 lr_scale=self._config.output_lr_scale,
             )
 

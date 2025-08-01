@@ -2,39 +2,20 @@ import typing
 
 import torch
 
-from fast_llm.engine.config_utils.initialization import init_normal_, init_zeros_
 from fast_llm.engine.config_utils.tensor_space import TensorSpace
 from fast_llm.functional.config import TritonConfig
 from fast_llm.functional.triton.mlp import mlp_autograd, torch_mlp_activation, triton_mlp_activation_autograd
 from fast_llm.layers.block.block import BlockLayer
 from fast_llm.layers.block.config import BlockConfig, BlockDimNames
-from fast_llm.layers.block.mlp.config import MLPDimNames
+from fast_llm.layers.block.mlp.config import MLPConfig, MLPDimNames
 from fast_llm.layers.block.peft import TransformerSubLayerName
 from fast_llm.layers.common.linear import LinearBase
 from fast_llm.utils import Assert, get_lr_scale
 
 
-class MLPBase(BlockLayer):
+class MLPBase[ConfigType: MLPConfig](BlockLayer[ConfigType]):
     def __init__(self, config: BlockConfig, tensor_space: TensorSpace, block_index: int = 0, name: str = "mlp"):
-        super().__init__(
-            tensor_space,
-            block_index,
-            name,
-            debug_level=config.debug_transformer,
-            debug_memory=config.debug_transformer_memory,
-        )
-        self._config = config
-
-        init_method_1 = init_normal_(
-            std=self._config.init_method_std_mlp_1,
-            min_val=self._config.init_method_min_mlp_1,
-            max_val=self._config.init_method_max_mlp_1,
-        )
-        init_method_2 = init_normal_(
-            std=self._config.init_method_std_mlp_2,
-            min_val=self._config.init_method_min_mlp_2,
-            max_val=self._config.init_method_max_mlp_2,
-        )
+        super().__init__(config, tensor_space, block_index, name)
 
         hidden_dim = self._tensor_space[BlockDimNames.hidden]
         self._intermediate_dim = self._tensor_space[MLPDimNames.composite_expert_mlp]
@@ -52,17 +33,17 @@ class MLPBase(BlockLayer):
         self.layer_1 = LinearBase(
             hidden_dim,
             self._tensor_space[MLPDimNames.composite_gated_expert_mlp],
-            bias=self._config.add_mlp_bias,
-            weight_init_method=init_method_1,
-            bias_init_method=init_zeros_,
+            bias=self._config.add_bias,
+            weight_init_method=self._config.layer_1_weight_initialization_method,
+            bias_init_method=self._config.layer_1_bias_initialization_method,
             lr_scale=lr_scale,
         )
         self.layer_2 = LinearBase(
             self._intermediate_dim,
             hidden_dim,
-            bias=self._config.add_mlp_bias,
-            weight_init_method=init_method_2,
-            bias_init_method=init_zeros_,
+            bias=self._config.add_bias,
+            weight_init_method=self._config.layer_2_weight_initialization_method,
+            bias_init_method=self._config.layer_2_bias_initialization_method,
             auto_bias_grad_accumulation=self._tensor_space.distributed_config.tensor_parallel > 1,
             transposed_weight=True,
             lr_scale=lr_scale,

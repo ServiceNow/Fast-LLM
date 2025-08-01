@@ -4,13 +4,12 @@ import torch
 
 from fast_llm.core.distributed import set_generator
 from fast_llm.core.ops import gather_op, reduce_op, reduce_scatter_op, swap_mult_dim
-from fast_llm.engine.config_utils.initialization import init_normal_, init_zeros_
 from fast_llm.engine.config_utils.tensor_space import TensorSpace
 from fast_llm.functional.autograd import wrap_forward_backward
 from fast_llm.layers.block.block import BlockLayer
 from fast_llm.layers.block.peft import TransformerSubLayerName
 from fast_llm.layers.common.linear import InputParallelLinear, OutputParallelLinear
-from fast_llm.layers.transformer.config import AttentionDimNames, AttentionKwargs, TransformerConfig
+from fast_llm.layers.transformer.config import AttentionConfig, AttentionDimNames, AttentionKwargs
 from fast_llm.utils import get_lr_scale
 
 try:
@@ -46,7 +45,7 @@ class AttachGrad(torch.autograd.Function):
         return grad, None
 
 
-class Attention(BlockLayer):
+class Attention[ConfigType: AttentionConfig](BlockLayer[ConfigType]):
     """
     A self-attention layer.
     """
@@ -71,27 +70,10 @@ class Attention(BlockLayer):
         AttentionDimNames.composite_dense,
     )
 
-    def __init__(self, config: TransformerConfig, tensor_space: TensorSpace, block_index: int):
-        super().__init__(
-            tensor_space,
-            block_index,
-            self._mixer_name,
-            debug_level=config.debug_transformer,
-            debug_memory=config.debug_transformer_memory,
-        )
+    def __init__(self, config: ConfigType, tensor_space: TensorSpace, block_index: int, name: str):
+        super().__init__(config, tensor_space, block_index, name)
         self._config = config
         self._use_flash_attention = self._config.do_use_flash_attention(self._tensor_space.distributed_config)
-
-        init_method_qkv = init_normal_(
-            std=self._config.init_method_std_qkv,
-            min_val=self._config.init_method_min_qkv,
-            max_val=self._config.init_method_max_qkv,
-        )
-        init_method_std_attn_proj = init_normal_(
-            std=self._config.init_method_std_attn_proj,
-            min_val=self._config.init_method_min_attn_proj,
-            max_val=self._config.init_method_max_attn_proj,
-        )
 
         self._kv_channels = self._tensor_space[AttentionDimNames.kv_channels].size
         self._head_groups = self._tensor_space[AttentionDimNames.head_groups].global_size
@@ -110,8 +92,8 @@ class Attention(BlockLayer):
             hidden_dim,
             self._tensor_space[AttentionDimNames.composite_query],
             bias=self._config.add_qkv_bias,
-            weight_init_method=init_method_qkv,
-            bias_init_method=init_zeros_,
+            weight_init_method=self._config.qkv_weight_initialization_method,
+            bias_init_method=self._config.qkv_bias_initialization_method,
             sequence_parallel=self._sequence_parallel,
             lr_scale=attention_lr_scale,
         )
@@ -119,8 +101,8 @@ class Attention(BlockLayer):
             hidden_dim,
             self._tensor_space[AttentionDimNames.composite_key_value],
             bias=self._config.add_qkv_bias,
-            weight_init_method=init_method_qkv,
-            bias_init_method=init_zeros_,
+            weight_init_method=self._config.qkv_weight_initialization_method,
+            bias_init_method=self._config.qkv_bias_initialization_method,
             sequence_parallel=self._sequence_parallel,
             lr_scale=attention_lr_scale,
         )
@@ -134,8 +116,8 @@ class Attention(BlockLayer):
             self._tensor_space[AttentionDimNames.composite_dense],
             hidden_dim,
             bias=self._config.add_dense_bias,
-            weight_init_method=init_method_std_attn_proj,
-            bias_init_method=init_zeros_,
+            weight_init_method=self._config.dense_weight_initialization_method,
+            bias_init_method=self._config.dense_bias_initialization_method,
             sequence_parallel=self._sequence_parallel,
             lr_scale=attention_lr_scale,
         )
