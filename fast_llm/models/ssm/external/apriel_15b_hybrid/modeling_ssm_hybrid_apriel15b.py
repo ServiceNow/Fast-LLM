@@ -357,13 +357,13 @@ class HybridMambaAttentionDynamicCache(DynamicCache):
         layer_idx = self.transformer_layers[0] if layer_idx not in self.transformer_layers else layer_idx
         if len(self.key_cache) <= layer_idx:
             return 0
-        is_empty_layer = (
-            len(self.key_cache) == 0  # no cache in any layer
-            or len(self.key_cache) <= layer_idx  # skipped `layer_idx` and hasn't run a layer with cache after it
-            or not self.key_cache[layer_idx].numel()  # the layer has no cache
-        )
-        return self.key_cache[layer_idx].shape[-2] if not is_empty_layer else 0
-        # return self.key_cache[layer_idx].shape[-2]
+        # is_empty_layer = (
+        #     len(self.key_cache) == 0  # no cache in any layer
+        #     or len(self.key_cache) <= layer_idx  # skipped `layer_idx` and hasn't run a layer with cache after it
+        #     or not self.key_cache[layer_idx].numel()  # the layer has no cache
+        # )
+        # return self.key_cache[layer_idx].shape[-2] if not is_empty_layer else 0
+        return self.key_cache[layer_idx].shape[-2]
 
     def reset(self):
         self.conv_states.zero_()
