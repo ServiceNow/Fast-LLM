@@ -239,7 +239,15 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
                 lm_target = None
 
         targets = (dpo_target, lm_target, distillation_target, loss_mask)
-        if self._sequence_parallel_logits:
+        # If we do distillation, no need to split it here as it has already been split in the embedding layer!
+        # if we do CPT/language modeling, we need to split the targets here!
+        if (
+            self._config.distillation_model is not None
+            and self._sequence_parallel_logits
+            and not self._parallel_embeddings
+            and not self._sequence_parallel
+        ) or (self._config.distillation_model is None and self._sequence_parallel_logits):
+            # We dont split targets if they already have been split in the embedding layer!
             targets = [
                 None if target is None else split_op(target, self._tensor_space.distributed.tensor_group, 0)
                 for target in targets
@@ -412,6 +420,7 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
                     target_format=(
                         TargetFormat.labels if self._config.distillation_model is None else TargetFormat.logits
                     ),
+                    vocab_parallel=logits.shape[-1] != self._config.vocab_size,
                 )
             elif self._distillation_loss_implementation == DistillationLossImpl.cross_entropy:
                 distillation_loss, distillation_grad = cross_entropy_forward_backward(
