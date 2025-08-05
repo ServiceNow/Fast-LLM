@@ -193,8 +193,6 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ScheduleConfig]):
         for step in schedule:
             self._train_step(context, step)
 
-        logger.info("End of the schedule steps")
-
         # Make sure we used all the data. This also ensures the generator terminates and prevents a memory leak.
         try:
             next(context.data_iterator)
@@ -204,7 +202,6 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ScheduleConfig]):
             raise AssertionError("Data iterator did not terminate")
 
         assert context.done, context
-        logger.info("End data-iterator")
 
         if self._multi_stage.config.multi_stage.debug_activation_memory:
             log_pipeline_parallel_main_rank(lambda: log_memory_usage(f"End of the schedule steps", str))
@@ -243,9 +240,7 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ScheduleConfig]):
         # TODO: Option to update with reduce (needs per-layer grad_norm and update_successful)
         # TODO: Avoid blocking synchronizations: async transfer, turn noop_flag into a real noop flag
         #  (uncomment line in apex).
-        logger.info("Updating weights")
         update_successful = self._optimizer.step(metrics)
-        logger.info("Weights updated")
 
         if self._multi_stage.config.multi_stage.debug_tensor_parallel and self._distributed.tensor_group is not None:
             for stage in self._stages_on_device:
@@ -280,7 +275,6 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ScheduleConfig]):
         return self._reduce_losses(context), update_successful, metrics
 
     def _reduce_losses(self, context: BatchContext) -> dict[str, float | int]:
-        logger.info("Reducing losses")
         reduced_losses = {}
         num_inputs = self._distributed_config.data_parallel * context.schedule.batch_config.num_inputs
         for name, losses in context.losses.items():
@@ -296,7 +290,6 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ScheduleConfig]):
             else:
                 reduced_loss = 0.0
             reduced_losses[name] = reduced_loss
-        logger.info(f"Reduced losses: {reduced_losses}")
         return {
             name: reduced_loss.item() if isinstance(reduced_loss, torch.Tensor) else reduced_loss
             for name, reduced_loss in reduced_losses.items()
