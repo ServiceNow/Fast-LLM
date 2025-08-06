@@ -1112,22 +1112,21 @@ class Mamba2(nn.Module):
         #     inference_params.key_value_memory_dict[self.layer_idx] = self.allocate_inference_cache(
         #         batch_size, inference_params.max_seqlen, dtype=torch.float32
         #     )
-        
+
         ### VLLM dummy run w/o cache
         # Handle None or missing cache
         if inference_params is None:
             return None, None
-        
+
         # Check if it's your custom cache type
-        if not hasattr(inference_params, 'ssm_states') or not hasattr(inference_params, 'conv_states'):
+        if not hasattr(inference_params, "ssm_states") or not hasattr(inference_params, "conv_states"):
             return None, None
-        
+
         # Make sure the layer exists in cache
-        if (self.layer_idx >= len(inference_params.ssm_states) or 
-            self.layer_idx >= len(inference_params.conv_states)):
+        if self.layer_idx >= len(inference_params.ssm_states) or self.layer_idx >= len(inference_params.conv_states):
             return None, None
         ### VLLM dummy run w/o cache
-        
+
         # Get states
         ssm_states = inference_params.ssm_states[self.layer_idx]
         conv_states = inference_params.conv_states[self.layer_idx]
@@ -1203,21 +1202,21 @@ class AprielThinkerSSMHybridModel(MistralModel):
     Args:
         config: AprielSSMHybridConfig
     """
+
     ### VLLM
     # setting config_class to AprielSSMHybridConfig w/o this is takes MistralConfig
     config_class = AprielSSMHybridConfig
     ### VLLM
 
     def __init__(self, config: AprielSSMHybridConfig, **kwargs):
-        print("🔥 AprielThinkerSSMHybridModel: CUSTOM MODEL FILE LOADED!")
-        
+
         config_copy = copy.deepcopy(config)
         config_copy.num_hidden_layers = 0
         super().__init__(config_copy, **kwargs)
         self.config = config
         blocks = []
         logger.info(f"Loading hyubrid model with the following layout: {config.hybrid_block_layout}")
-        print(f"🔥 AprielThinkerSSMHybridModel: config.hybrid_block_layout: {config.hybrid_block_layout}")
+
         for layer_idx, type in enumerate(config.hybrid_block_layout):
             if type == "m2d":
                 blocks.append(AprielSSMDecoderLayer(config, layer_idx))
@@ -1246,20 +1245,10 @@ class AprielThinkerSSMHybridModel(MistralModel):
         use_cache=True,
         **kwargs,
     ):
-        print("🔥 AprielThinkerSSMHybridModel: CUSTOM prepare_inputs_for_generation LOADED!")
+
         # Overwritten -- has a unique cache type, `HybridMambaAttentionDynamicCache`
-        
-        print(f"🔥 AprielThinkerSSMHybridModel.prepare_inputs_for_generation input_ids: {input_ids} {input_ids.shape if input_ids is not None else None}")
-        print(f"🔥 AprielThinkerSSMHybridModel.prepare_inputs_for_generation past_key_values: {type(past_key_values)}")
-        print(f"🔥 AprielThinkerSSMHybridModel.prepare_inputs_for_generation attention_mask: {attention_mask} {attention_mask.shape if attention_mask is not None else None}")
-        print(f"🔥 AprielThinkerSSMHybridModel.prepare_inputs_for_generation inputs_embeds: {inputs_embeds} {inputs_embeds.shape if inputs_embeds is not None else None}")
-        print(f"🔥 AprielThinkerSSMHybridModel.prepare_inputs_for_generation output_router_logits: {output_router_logits}")
-        print(f"🔥 AprielThinkerSSMHybridModel.prepare_inputs_for_generation cache_position: {cache_position} {cache_position.shape if cache_position is not None else None}")
-        print(f"🔥 AprielThinkerSSMHybridModel.prepare_inputs_for_generation position_ids: {position_ids} {position_ids.shape if position_ids is not None else None}")
-        print(f"🔥 AprielThinkerSSMHybridModel.prepare_inputs_for_generation use_cache: {use_cache}")
 
         empty_past_kv = past_key_values is None or not isinstance(past_key_values, HybridMambaAttentionDynamicCache)
-        print(f"🔥 AprielThinkerSSMHybridModel.prepare_inputs_for_generation empty_past_kv: {empty_past_kv}")
 
         # If we have cache: let's slice `input_ids` through `cache_position`, to keep only the unprocessed tokens
         # Exception 1: when passing input_embeds, input_ids may be missing entries
@@ -1267,7 +1256,9 @@ class AprielThinkerSSMHybridModel(MistralModel):
         # Exception 3: with synced GPUs cache_position may go out of bounds, but we only want dummy token in that case.
         #              (we can't check exception 3 while compiling)
         if not empty_past_kv:
-            if inputs_embeds is not None or cache_position[-1] >= input_ids.shape[1]:  # Exception 1  # Exception 3
+            if inputs_embeds is not None or (
+                cache_position.max().item() >= input_ids.shape[1]
+            ):  # Exception 1  # Exception 3
                 input_ids = input_ids[:, -cache_position.shape[0] :]
             elif input_ids.shape[1] != cache_position.shape[0]:  # Default case (the "else", a no op, is Exception 2)
                 input_ids = input_ids[:, cache_position]
@@ -1301,19 +1292,13 @@ class AprielThinkerSSMHybridModel(MistralModel):
             }
         )
         return model_inputs
-    
+
     # def forward(self, input_ids, **kwargs):
-    #     print(f"🔥 AprielThinkerSSMHybridModel: kwargs {kwargs.keys()}")
     #     # model_inputs = self.prepare_inputs_for_generation(input_ids, **kwargs)
-    #     # print(f"🔥 AprielThinkerSSMHybridModel: model_inputs: {model_inputs}")
     #     output: BaseModelOutputWithPast = super().forward(input_ids, **kwargs)
-    #     print(f"🔥 AprielThinkerSSMHybridModel: input: {input_ids} {input_ids.shape}")
-    #     print(f"🔥 AprielThinkerSSMHybridModel: output: {output} {output[0].shape}")
     #     past_key_values: HybridMambaAttentionDynamicCache = output.past_key_values if hasattr(output, "past_key_values") else None
-        
     #     if past_key_values and not past_key_values.has_previous_state:
     #         past_key_values.has_previous_state = True
-        
     #     return output
 
     # forward from MistralModel - Need to use our custom cache here than in casusalLM class
@@ -1330,43 +1315,28 @@ class AprielThinkerSSMHybridModel(MistralModel):
         cache_position: Optional[torch.LongTensor] = None,
         **flash_attn_kwargs: Unpack[FlashAttentionKwargs],
     ) -> BaseModelOutputWithPast:
-        
-        print(f"🔥 AprielThinkerSSMHybridModel: forward ")
-        ## Manually set change this 
-        torch.manual_seed(42)
-        # use_cache = True
-        
+
         # vllm does not provide cache_position, so we need to set it to position_ids
         cache_position = position_ids.clone()
-        
+
         # Calling prepare_inputs_for_generation to set up past_key_values
-        model_inputs = self.prepare_inputs_for_generation(input_ids=input_ids,\
-                past_key_values=past_key_values,\
-                attention_mask=attention_mask,\
-                inputs_embeds=inputs_embeds,\
-                cache_position=cache_position,\
-                position_ids=position_ids,\
-                use_cache=use_cache,
-                )
-        
+        model_inputs = self.prepare_inputs_for_generation(
+            input_ids=input_ids,
+            past_key_values=past_key_values,
+            attention_mask=attention_mask,
+            inputs_embeds=inputs_embeds,
+            cache_position=cache_position,
+            position_ids=position_ids,
+            use_cache=use_cache,
+        )
+
         position_ids = model_inputs["position_ids"]
         past_key_values = model_inputs["past_key_values"]
         use_cache = model_inputs["use_cache"]
         attention_mask = model_inputs["attention_mask"]
-        output_router_logits = model_inputs["output_router_logits"]
+        model_inputs["output_router_logits"]
         cache_position = model_inputs["cache_position"]
-        
-        print(f"🔥 AprielThinkerSSMHybridModel: use_cache: {use_cache}")
-        print(f"🔥 AprielThinkerSSMHybridModel: input: {input_ids} {input_ids.shape}")
-        print(f"🔥 AprielThinkerSSMHybridModel: past_key_values:  {type(past_key_values)} {past_key_values.get_seq_length() if past_key_values else None}")
-        print(f"🔥 AprielThinkerSSMHybridModel: attention_mask: {attention_mask} {attention_mask.shape if attention_mask is not None else None}")
 
-        print(f"🔥 AprielThinkerSSMHybridModel: position_ids: {position_ids} {position_ids.shape if position_ids is not None else None}")
-        print(f"🔥 AprielThinkerSSMHybridModel: cache_position: {cache_position} {cache_position.shape if cache_position is not None else None}")
-        print(f"🔥 AprielThinkerSSMHybridModel: inputs_embeds: {inputs_embeds} {inputs_embeds.shape if inputs_embeds is not None else None}")
-
-        
-        
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
             output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
@@ -1388,9 +1358,6 @@ class AprielThinkerSSMHybridModel(MistralModel):
 
         if inputs_embeds is None:
             inputs_embeds = self.embed_tokens(input_ids)
-        
-        
-        print(f"🔥 AprielThinkerSSMHybridModel: inputs_embeds: {inputs_embeds.shape}")
 
         # prepare_inputs_for_generation should already set the cache
         # if use_cache and past_key_values is None:
@@ -1401,8 +1368,6 @@ class AprielThinkerSSMHybridModel(MistralModel):
             cache_position = torch.arange(
                 past_seen_tokens, past_seen_tokens + inputs_embeds.shape[1], device=inputs_embeds.device
             )
-        
-        print(f"🔥 AprielThinkerSSMHybridModel: cache_position: {cache_position} {cache_position.shape}")
 
         if position_ids is None:
             position_ids = cache_position.unsqueeze(0)
@@ -1415,17 +1380,12 @@ class AprielThinkerSSMHybridModel(MistralModel):
 
         # create position embeddings to be shared across the decoder layers
         position_embeddings = self.rotary_emb(hidden_states, position_ids)
-        # print(f"🔥 AprielThinkerSSMHybridModel: position_embeddings: {position_embeddings}")
-        print(f"🔥 AprielThinkerSSMHybridModel: hidden_states: {hidden_states} {hidden_states.shape}")
-        print(f"🔥 AprielThinkerSSMHybridModel: causal_mask: {causal_mask}")
 
         # decoder layers
         all_hidden_states = () if output_hidden_states else None
         all_self_attns = () if output_attentions else None
 
-        indx_layer = 0
         for decoder_layer in self.layers[: self.config.num_hidden_layers]:
-            print(f"🔥 AprielThinkerSSMHybridModel: decoder_layer {indx_layer}: {decoder_layer.__class__.__name__} {self.config._attn_implementation}")
             if output_hidden_states:
                 all_hidden_states += (hidden_states,)
 
@@ -1442,10 +1402,7 @@ class AprielThinkerSSMHybridModel(MistralModel):
             )
 
             hidden_states = layer_outputs[0]
-            print(f"🔥 AprielThinkerSSMHybridModel: decoder output: {hidden_states.sum(dim=1)} {hidden_states.shape}")
-            
-            indx_layer += 1
-            
+
             if output_attentions:
                 all_self_attns += (layer_outputs[1],)
 
@@ -1454,20 +1411,18 @@ class AprielThinkerSSMHybridModel(MistralModel):
         # add hidden states from the last decoder layer
         if output_hidden_states:
             all_hidden_states += (hidden_states,)
-       
+
         past_key_values: HybridMambaAttentionDynamicCache = past_key_values if past_key_values is not None else None
         if past_key_values and not past_key_values.has_previous_state:
             past_key_values.has_previous_state = True
-        
+
         output = BaseModelOutputWithPast(
             last_hidden_state=hidden_states,
             past_key_values=past_key_values if use_cache else None,
             hidden_states=all_hidden_states,
             attentions=all_self_attns,
         )
-        
-        print(f"🔥 AprielThinkerSSMHybridModel: output: {output} {output[0].shape}")
-        
+
         return output
 
 
@@ -1507,7 +1462,7 @@ class AprielThinkerSSMHybridForCausalLM(AprielThinkerSSMHybridPreTrainedModel, G
 
     def __init__(self, config: AprielSSMHybridConfig, **kwargs):
         print("🔥 AprielThinkerSSMHybridForCausalLM: CUSTOM MODEL FILE LOADED!")
-        
+
         super().__init__(config, **kwargs)
         self.model = AprielThinkerSSMHybridModel(config)
         self.vocab_size = config.vocab_size
@@ -1516,87 +1471,27 @@ class AprielThinkerSSMHybridForCausalLM(AprielThinkerSSMHybridPreTrainedModel, G
         # Initialize weights and apply final processing
         self.post_init()
 
+    # matching vllm CausalLM class https://github.com/vllm-project/vllm/blob/b6553be1bc75f046b00046a4ad7576364d03c835/vllm/model_executor/models/transformers.py
     # def get_input_embeddings(self):
-    #     print(f"🔥 AprielThinkerSSMHybridForCausalLM: get_input_embeddings LOADED!")
     #     return self.model.embed_tokens
 
     # def set_input_embeddings(self, value):
-    #     print(f"🔥 AprielThinkerSSMHybridForCausalLM: set_input_embeddings LOADED!")
     #     self.model.embed_tokens = value
 
     # def get_output_embeddings(self):
-    #     print(f"🔥 AprielThinkerSSMHybridForCausalLM: get_output_embeddings LOADED!")
     #     return self.lm_head
 
     # def set_output_embeddings(self, new_embeddings):
-    #     print(f"🔥 AprielThinkerSSMHybridForCausalLM: set_output_embeddings LOADED!")
     #     self.lm_head = new_embeddings
 
     # def set_decoder(self, decoder):
-    #     print(f"🔥 AprielThinkerSSMHybridForCausalLM: set_decoder LOADED! {decoder}")
     #     self.model = decoder
 
     # def get_decoder(self):
     #     return self.model
 
-    # def prepare_inputs_for_generation(
-    #     self,
-    #     input_ids,
-    #     past_key_values=None,
-    #     attention_mask=None,
-    #     inputs_embeds=None,
-    #     output_router_logits=False,
-    #     cache_position=None,
-    #     position_ids=None,
-    #     use_cache=True,
-    #     **kwargs,
-    # ):
-    #     print("🔥 AprielThinkerSSMHybridForCausalLM: CUSTOM prepare_inputs_for_generation LOADED!")
-    #     # Overwritten -- has a unique cache type, `HybridMambaAttentionDynamicCache`
-
-    #     empty_past_kv = past_key_values is None or not isinstance(past_key_values, HybridMambaAttentionDynamicCache)
-
-    #     # If we have cache: let's slice `input_ids` through `cache_position`, to keep only the unprocessed tokens
-    #     # Exception 1: when passing input_embeds, input_ids may be missing entries
-    #     # Exception 2: some generation methods do special slicing of input_ids, so we don't need to do it here
-    #     # Exception 3: with synced GPUs cache_position may go out of bounds, but we only want dummy token in that case.
-    #     #              (we can't check exception 3 while compiling)
-    #     if not empty_past_kv:
-    #         if inputs_embeds is not None or cache_position[-1] >= input_ids.shape[1]:  # Exception 1  # Exception 3
-    #             input_ids = input_ids[:, -cache_position.shape[0] :]
-    #         elif input_ids.shape[1] != cache_position.shape[0]:  # Default case (the "else", a no op, is Exception 2)
-    #             input_ids = input_ids[:, cache_position]
-    #     else:
-    #         past_key_values = HybridMambaAttentionDynamicCache(
-    #             self.config, input_ids.shape[0], self.dtype, device=self.device
-    #         )
-
-    #     if attention_mask is not None and position_ids is None:
-    #         # create position_ids on the fly for batch generation
-    #         position_ids = attention_mask.long().cumsum(-1) - 1
-    #         position_ids.masked_fill_(attention_mask == 0, 1)
-    #         if not empty_past_kv:
-    #             position_ids = position_ids[:, -input_ids.shape[1] :]
-
-    #     # if `inputs_embeds` are passed, we only want to use them in the 1st generation step
-    #     if inputs_embeds is not None and empty_past_kv:
-    #         model_inputs = {"inputs_embeds": inputs_embeds}
-    #     else:
-    #         model_inputs = {"input_ids": input_ids.contiguous()}  # `contiguous()` needed for compilation use cases
-
-    #     model_inputs.update(
-    #         {
-    #             "position_ids": position_ids,
-    #             "past_key_values": past_key_values,
-    #             "use_cache": use_cache,
-    #             "attention_mask": attention_mask,
-    #             "output_router_logits": output_router_logits,
-    #             # "logits_to_keep": self.config.num_logits_to_keep,
-    #             "cache_position": cache_position,
-    #         }
-    #     )
-    #     print(f"🔥 AprielThinkerSSMHybridForCausalLM: model_inputs: {model_inputs}")
-    #     return model_inputs
+    # moved into AprielThinkerSSMHybridModel
+    # def prepare_inputs_for_generation ...
 
     def forward(
         self,
@@ -1644,29 +1539,13 @@ class AprielThinkerSSMHybridForCausalLM(AprielThinkerSSMHybridPreTrainedModel, G
         >>> tokenizer.batch_decode(generate_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False)[0]
         "Hey, are you conscious? Can you talk to me?\nI'm not conscious, but I can talk to you."
         ```"""
-        
-        
-        print("🔥 AprielThinkerSSMHybridForCausalLM: forward!")
-        # print(f"input_ids: {input_ids} {input_ids.shape}")
-        # print(f"attention_mask: {attention_mask} {attention_mask.shape if attention_mask is not None else None}")
-        # print(f"position_ids: {position_ids} {position_ids.shape if position_ids is not None else None}")
-        # print(f"past_key_values: {len(past_key_values) if past_key_values is not None else None}")
-        # print(f"inputs_embeds: {inputs_embeds} {inputs_embeds.shape if inputs_embeds is not None else None}")
-        # print(f"labels: {labels} {labels.shape if labels is not None else None}")
-        # print(f"use_cache: {use_cache}")
-        # print(f"output_attentions: {output_attentions}")
-        # print(f"output_hidden_states: {output_hidden_states}")
-        # print(f"cache_position: {cache_position} {cache_position.shape if cache_position is not None else None}")
-        # print(f"logits_to_keep: {logits_to_keep}")
-        # print(f"kwargs: {kwargs}")
-        
 
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
             output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
         )
 
-        # decoder outputs consists of (dec_features, layer_state, dec_hidden, dec_attn)
+        # matching vllm inputs
         outputs: BaseModelOutputWithPast = self.model(
             input_ids=input_ids,
             # attention_mask=attention_mask,
@@ -1683,7 +1562,6 @@ class AprielThinkerSSMHybridForCausalLM(AprielThinkerSSMHybridPreTrainedModel, G
         hidden_states = outputs.last_hidden_state
         # Only compute necessary logits, and do not upcast them to float if we are not computing the loss
         slice_indices = slice(-logits_to_keep, None) if isinstance(logits_to_keep, int) else logits_to_keep
-        print(f"🔥 AprielThinkerSSMHybridForCausalLM: slice_indices: {slice_indices} hidden_states: {hidden_states.shape} hidden_states[:, slice_indices, :] {hidden_states[:, slice_indices, :].shape}")
         logits = self.lm_head(hidden_states[:, slice_indices, :])
 
         loss = None
