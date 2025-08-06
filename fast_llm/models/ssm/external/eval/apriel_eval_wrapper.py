@@ -174,6 +174,85 @@ class AprielHybridSSMWrapper(HFLM):
         )
 
 
+@register_model("apriel_hybrid_ssm_15b_no_tp")
+class AprielHybrid15bSSMWrapper(HFLM):
+    """Wrapper for AprielHybridSSM model for compatibility with lm-evaluation-harness."""
+
+    def __init__(self, pretrained, **kwargs) -> None:
+        if "backend" in kwargs:
+            assert kwargs["backend"] == "causal"
+
+        super().__init__(
+            pretrained=pretrained,
+            backend=kwargs.pop("backend", "causal"),
+            tokenizer=kwargs.pop("tokenizer", "/mnt/checkpoints/upstream/Apriel-Nemotron-15b-Thinker"),
+            **kwargs,
+        )
+
+        # Override device detection for distributed settings
+        self._device = _get_device()
+
+    def _get_config(self, pretrained: str, **kwargs) -> None:
+        """Get the model configuration."""
+        from fast_llm.models.ssm.external.apriel_15b_hybrid.configuration_ssm_hybrid_apriel15b import (
+            AprielSSMHybridConfig,
+        )
+
+        self._config = AprielSSMHybridConfig.from_pretrained(pretrained, trust_remote_code=True)
+
+    def _create_model(self, pretrained: str, dtype: Optional[Union[str, torch.dtype]] = "float16", **kwargs) -> None:
+        """Create the model."""
+        from fast_llm.models.ssm.external.apriel_15b_hybrid.modeling_ssm_hybrid_apriel15b_no_tp import (
+            AprielThinkerSSMHybridForCausalLM,
+        )
+
+        # Ensure we're using the correct device
+        device = _get_device()
+        self._device = device
+
+        self._model = AprielThinkerSSMHybridForCausalLM.from_pretrained(
+            pretrained,
+            device=device,
+            torch_dtype=torch.bfloat16 if dtype == "auto" else lm_eval.models.utils.get_dtype(dtype),
+            **kwargs,
+        )
+
+    def _model_generate(self, context, max_length, stop, **generation_kwargs):
+        # Ensure we're using the correct device
+        device = _get_device()
+
+        # Ensure context is on the same device as the model
+        context = context.to(device)
+        self.model.to(device)
+
+        # Move any tensors in generation_kwargs to the correct device
+        generation_kwargs = _move_tensors_to_device(generation_kwargs, device)
+
+        stopping_criteria = lm_eval.models.utils.stop_sequences_criteria(
+            self.tokenizer,
+            stop,
+            context.shape[1],
+            context.shape[0],
+        )
+
+        generation_kwargs["temperature"] = generation_kwargs.get("temperature", 0.0)
+        do_sample = generation_kwargs.get("do_sample", None)
+
+        # The temperature has to be a strictly positive float -- if it is 0.0, use greedy decoding strategies
+        if generation_kwargs.get("temperature") == 0.0 and do_sample is None:
+            generation_kwargs["do_sample"] = do_sample = False
+        if do_sample is False and generation_kwargs.get("temperature") == 0.0:
+            generation_kwargs.pop("temperature")
+        return self.model.generate(
+            input_ids=context,
+            max_length=max_length,
+            stopping_criteria=stopping_criteria,
+            use_cache=True,
+            **generation_kwargs,
+        )
+
+
+# uses TP split
 @register_model("apriel_hybrid_ssm_15b")
 class AprielHybrid15bSSMWrapper(HFLM):
     """Wrapper for AprielHybridSSM model for compatibility with lm-evaluation-harness."""
