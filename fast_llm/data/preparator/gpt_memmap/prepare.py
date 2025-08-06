@@ -458,7 +458,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
                     text_sizes, image_sizes = dataset.get_document_sizes()
                     tokens_cumsum = text_sizes.cumsum()
                     Assert.eq(tokens_cumsum[-1], dataset_config.num_tokens)
-                    if image_sizes.any():
+                    if image_sizes:
                         num_pixels_cumsum = np.cumsum([x.prod(axis=1).sum() for x in image_sizes])
                         # We use the patch sizes only for the purposes of even splitting and blending weights.
                         # We can always use a different patch size for training without any significant impact

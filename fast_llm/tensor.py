@@ -1,3 +1,4 @@
+import abc
 import functools
 import math
 import typing
@@ -5,7 +6,7 @@ import typing
 import torch
 
 from fast_llm.core.distributed import ReduceOp
-from fast_llm.core.ops import gather_op, reduce_op
+from fast_llm.core.ops import reduce_op
 from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
 from fast_llm.engine.distributed.config import DistributedDim, DistributedDimNames
 from fast_llm.engine.distributed.distributed import Distributed
@@ -164,16 +165,18 @@ class TensorMeta(torch.Tensor):
         *,
         distributed: Distributed,
     ) -> tuple[torch.Tensor, ...]:
+        if tensor.ndim == 0:
+            tensor = tensor[None]
+        Assert.eq(tensor.shape, self.shape)
         # Tensors are always either split or duplicated in the tensor-parallel direction.
         # TODO: Avoid hard-coded assumptions on duplication
-        is_first_rank = distributed.config.tensor_rank == 0
-        modified = False
-        for i, dim in enumerate(self.dims):
-            if dim.parallel_group is not None:
-                tensor = gather_op(
-                    tensor.unflatten(i, dim.expanded_shape), dim.parallel_group, i + dim.parallel_dim_index
-                ).flatten(i, i + len(dim.expanded_shape) - 1)
-                is_first_rank, modified = is_first_rank and dim.parallel_group.rank() == 0, True
+        is_first_rank, modified = distributed.config.tensor_rank == 0, False
+
+        for dim, tensor_dim in enumerate(self.dims):
+            if tensor_dim.is_parallel:
+                tensor = tensor_dim.local_to_global(tensor, dim)
+                is_first_rank &= tensor_dim.parallel_dim.rank == 0
+                modified = True
 
         for distributed_dim, op in self._reductions:
             if distributed_dim.group is not None:
@@ -182,28 +185,30 @@ class TensorMeta(torch.Tensor):
                     tensor = tensor.clone()
                 tensor = reduce_op(tensor, distributed_dim.group, op=op)
                 is_first_rank, modified = is_first_rank and distributed_dim.group.rank() == 0, True
+        Assert.eq(tensor.shape, self.global_shape)
         return tensor, is_first_rank
 
     def global_to_local(
         self,
         tensor: torch.Tensor | SafeTensorSlice,
-        # Return an expanded tensor, avoiding `flatten` which copies the data.
+        # Return an expanded tensor, avoiding `flatten` which copies the data. TODO: Rework.
         expand: bool = False,
     ) -> torch.Tensor:
         """
         Recover the tensor-parallel slice of a tensor. Support lazy-loaded safetensor slices.
         """
         # Take a trivial slice to convert safetensor slices.
-        tensor_ = tensor[:]
+        tensor = tensor[:]
         assert not self._reductions
+        if tensor.ndim == 0:
+            tensor = tensor[None]
+        Assert.eq(tensor.shape, self.global_shape)
 
-        for i, dim in reversed(list(enumerate(self.dims))):
-            if dim.parallel_dim is not None and dim.parallel_dim.size > 1:
-                tensor_ = tensor_.unflatten(i, dim.global_expanded_shape).chunk(
-                    dim.parallel_dim.size, i + dim.parallel_dim_index
-                )[dim.parallel_dim.rank]
-
-        return tensor_ if expand else tensor_.reshape(self.shape)
+        for dim, tensor_dim in reversed(list(enumerate(self.dims))):
+            tensor = tensor_dim.global_to_local(tensor, dim, expand)
+        if not expand:
+            Assert.eq(tensor.shape, self.shape)
+        return tensor
 
     @classmethod
     def __torch_function__(cls, func, types, args=(), kwargs=None):
@@ -237,7 +242,7 @@ class ParameterMeta(TensorMeta):
         *,
         tensor_name: str = "",
         dims: tuple[TensorDim, ...],
-        init_method: typing.Callable[["ParameterMeta", torch.Tensor, torch.Generator], torch.Tensor] | None = None,
+        init_method: "Initializer | typing.Callable[[ParameterMeta, torch.Tensor, torch.Generator], None] | None" = None,
         weight_decay: bool = True,
         # Pass a list to split the parameter in contiguous (dim=0) chunks of equal size for optimization.
         lr_scale: float | None | tuple[float | None, ...] = None,
@@ -247,7 +252,11 @@ class ParameterMeta(TensorMeta):
         allow_no_grad: bool = False,
     ):
         super().__init__(data, tensor_name=tensor_name, dims=dims)
-        self.param_init_method = init_method
+        if init_method is not None and not isinstance(init_method, Initializer):
+            # Support non-wrapped callables for convenience.
+            assert callable(init_method)
+            init_method = LambdaInitializer(init_method)
+        self.param_init_method: Initializer | None = init_method
         self.param_weight_decay = weight_decay
         self._is_param = True
         self.param_grad_is_zero = False
@@ -272,7 +281,7 @@ class ParameterMeta(TensorMeta):
         *,
         tensor_name: str = "",
         dims: tuple[TensorDim, ...],
-        init_method: typing.Callable,
+        init_method: "Initializer | typing.Callable[[ParameterMeta, torch.Tensor, torch.Generator], None] | None",
         weight_decay: bool = True,
         lr_scale: float | None | tuple[float | None, ...] = None,
         allow_sequence_tensor_parallel: bool = True,
@@ -298,6 +307,10 @@ class ParameterMeta(TensorMeta):
         else:
             generator = distributed.tp_init_generator if self.is_tensor_parallel else distributed.pp_init_generator
         self.param_init_method(self, tensor, generator)
+
+    @property
+    def requires_global_initialization(self) -> bool:
+        return self.param_init_method.requires_global_initialization
 
     def save(self) -> dict[str, typing.Any]:
         return {
@@ -330,11 +343,32 @@ def accumulate_gradient(param: torch.Tensor, grad: torch.Tensor) -> None:
         triton_add(grad, param.grad_buffer, out=param.grad_buffer)  # noqa
 
 
-def init_fill_(value) -> typing.Callable[[ParameterMeta, torch.Tensor, torch.Generator], torch.Tensor]:
-    def init_(meta: ParameterMeta, tensor: torch.Tensor, generator: torch.Generator):  # noqa
-        return tensor.fill_(value)
+class Initializer(abc.ABC):
+    @abc.abstractmethod
+    def __call__(self, meta: ParameterMeta, tensor: torch.Tensor, generator: torch.Generator) -> None:
+        pass
 
-    return init_
+    requires_global_initialization = False
+
+
+class LambdaInitializer(Initializer):
+    def __init__(
+        self,
+        init_method: typing.Callable[[ParameterMeta, torch.Tensor, torch.Generator], None],
+        requires_global_initialization: bool = False,
+    ) -> None:
+        self._init_method = init_method
+        self.requires_global_initialization = requires_global_initialization
+
+    def __call__(self, meta: ParameterMeta, tensor: torch.Tensor, generator: torch.Generator) -> None:
+        return self._init_method(meta, tensor, generator)
+
+
+def init_fill_(value: float) -> LambdaInitializer:
+    def init_(meta: ParameterMeta, tensor: torch.Tensor, generator: torch.Generator) -> None:  # noqa
+        tensor.fill_(value)
+
+    return LambdaInitializer(init_)
 
 
 init_zeros_ = init_fill_(0.0)
@@ -342,30 +376,35 @@ init_ones_ = init_fill_(1.0)
 
 
 def init_normal_(
-    mean=0.0, std=1.0, min_val=None, max_val=None
-) -> typing.Callable[[ParameterMeta, torch.Tensor, torch.Generator], torch.Tensor]:
-    def init_(meta: ParameterMeta, tensor: torch.Tensor, generator: torch.Generator):  # noqa
+    mean: float = 0.0, std: float = 1.0, min_val: float | None = None, max_val: float | None = None
+) -> LambdaInitializer:
+    def init_(meta: ParameterMeta, tensor: torch.Tensor, generator: torch.Generator) -> None:  # noqa
         tensor = tensor.normal_(mean, std, generator=generator)
         if min_val is not None or max_val is not None:
-            return tensor.clamp_(min=min_val, max=max_val)  # noqa
-        else:
-            return tensor
+            tensor.clamp_(min=min_val, max=max_val)
 
-    return init_
+    return LambdaInitializer(init_)
 
 
-def kaiming_init_(d_in):
+def init_kaiming_(d_in: float) -> LambdaInitializer:
     return init_normal_(0.0, math.sqrt(2.0 / d_in))
 
 
 def init_uniform_(
-    low=0.0, high=1.0, min_val=None, max_val=None
-) -> typing.Callable[[ParameterMeta, torch.Tensor, torch.Generator], torch.Tensor]:
-    def init_(meta: ParameterMeta, tensor: torch.Tensor, generator: torch.Generator):  # noqa
+    low: float = 0.0, high: float = 1.0, min_val: float | None = None, max_val: float | None = None
+) -> LambdaInitializer:
+    def init_(meta: ParameterMeta, tensor: torch.Tensor, generator: torch.Generator) -> None:  # noqa
         tensor = tensor.uniform_(low, high, generator=generator)
         if min_val is not None or max_val is not None:
-            return tensor.clamp_(min=min_val, max=max_val)  # noqa
-        else:
-            return tensor
+            tensor.clamp_(min=min_val, max=max_val)
 
-    return init_
+    return LambdaInitializer(init_)
+
+
+def init_uniform_centered_(high: float, max_val: float | None = None, mean: float = 0.0) -> LambdaInitializer:
+    return init_uniform_(
+        mean - high,
+        mean + high,
+        min_val=None if max_val is None else mean - max_val,
+        max_val=None if max_val is None else mean + max_val,
+    )

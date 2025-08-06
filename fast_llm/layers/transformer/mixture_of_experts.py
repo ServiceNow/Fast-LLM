@@ -40,11 +40,11 @@ class MixtureOfExpertMLP(MLPBase):
 
     _group: ProcessGroup
 
-    def __init__(self, config: TransformerConfig, tensor_space: TensorSpace, name: str = "mlp", layer_index: int = 0):
+    def __init__(self, config: TransformerConfig, tensor_space: TensorSpace, name: str = "mlp", block_index: int = 0):
         Assert.gt(config.num_experts, 1)
         # TODO: Implement?
         assert not config.add_linear_biases, "Biases not supported for MoE."
-        super().__init__(config, tensor_space, name, layer_index)
+        super().__init__(config, tensor_space, name, block_index)
         self._config = config
         self._tensor_space = tensor_space
         self._debug_mode = self._config.debug_transformer or self._config.debug_transformer_memory
@@ -59,7 +59,7 @@ class MixtureOfExpertMLP(MLPBase):
         self._z_loss_factor = config.expert_z_loss_coefficient
         self._moe_jitter_eps = config.moe_jitter_eps
 
-        layer_lr_scale = config.per_layer_lr_scale[layer_index] if config.per_layer_lr_scale else None
+        layer_lr_scale = config.per_layer_lr_scale[block_index] if config.per_layer_lr_scale else None
         router_lr_scale = get_lr_scale(config.router_lr_scale, layer_lr_scale)
 
         self.router = Linear(

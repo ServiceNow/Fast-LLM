@@ -94,8 +94,8 @@ class Linear(LinearBase):
         transposed_weight: bool = False,
         lr_scale: float | None | tuple[float | None, ...] = None,
     ):
-        assert in_dim.parallel_dim is None
-        assert out_dim.parallel_dim is None
+        assert not in_dim.is_parallel
+        assert not out_dim.is_parallel
         super().__init__(
             in_dim,
             out_dim,
@@ -132,7 +132,7 @@ class OutputParallelLinear(LinearBase):
         sequence_parallel: bool = False,
         lr_scale: float | None | tuple[float | None, ...] = None,
     ):
-        assert in_dim.parallel_dim is None
+        assert not in_dim.is_parallel
         self._group_size = 1 if out_dim.parallel_dim is None else out_dim.parallel_dim.size
         self._sequence_parallel = sequence_parallel and self._group_size > 1
         super().__init__(
@@ -176,7 +176,7 @@ class InputParallelLinear(LinearBase):
         transposed_weight: bool = False,
         lr_scale: float | None | tuple[float | None, ...] = None,
     ):
-        assert out_dim.parallel_dim is None
+        assert not out_dim.is_parallel
         self._group_size = 1 if in_dim.parallel_dim is None else in_dim.parallel_dim.size
         self._sequence_parallel = sequence_parallel and self._group_size > 1
         super().__init__(

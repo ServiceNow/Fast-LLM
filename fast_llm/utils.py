@@ -2,8 +2,10 @@ import gc
 import itertools
 import logging
 import math
+import os
 import signal
 import typing
+import warnings
 from typing import Callable
 
 if typing.TYPE_CHECKING:
@@ -393,6 +395,26 @@ class Interrupter:
     @property
     def interrupted(self):
         return self._interrupted
+
+
+def set_global_variables(disable_torch_dynamo: bool = False) -> None:
+    # Set global and environment variables. This needs to be called before importing any third-party package.
+    # TODO: Find an alternative to get reliable tensor-parallel overlap.
+    if os.environ.get("CUDA_DEVICE_MAX_CONNECTIONS", ""):
+        warnings.warn("Setting CUDA_DEVICE_MAX_CONNECTIONS breaks things.")
+    # All distributed workers need the same hash seed for consistent hashing.
+    if "PYTHONHASHSEED" not in os.environ:
+        warnings.warn("PYTHONHASHSEED should be set and to the same value for all workers.")
+    # On systems with more than 64 cores, numexpr may log an error and ignore the thread setting.
+    if "NUMEXPR_MAX_THREADS" not in os.environ:
+        import multiprocessing
+
+        os.environ["NUMEXPR_MAX_THREADS"] = str(multiprocessing.cpu_count())
+
+    if disable_torch_dynamo:
+        import torch._dynamo
+
+        torch._dynamo.config.disable = True  # noqa
 
 
 _global_max_allocated = 0

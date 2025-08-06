@@ -193,6 +193,7 @@ def test_gpt_blended_mixed():
 
 
 def test_gpt_blended_mixed_data():
+    get_test_dataset()
     get_test_data_and_compare_samples(
         {
             "datasets": {

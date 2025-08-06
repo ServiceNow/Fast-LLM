@@ -125,12 +125,16 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
         self, input_: torch.Tensor, kwargs: dict, losses: dict | None = None, metrics: dict | None = None
     ) -> torch.Tensor:
         if isinstance(input_, TensorMeta):
-            return TensorMeta.from_tensor_space(
-                (DefaultDimNames.scalar,),
-                self._tensor_space,
-                tensor_name="Loss",
-                reductions=((DistributedDimNames.data, ReduceOp.AVG),),  # noqa
-            )
+            if self._is_last_head:
+                return TensorMeta.from_tensor_space(
+                    (DefaultDimNames.scalar,),
+                    self._tensor_space,
+                    tensor_name="Loss",
+                    reductions=((DistributedDimNames.data, ReduceOp.AVG),),  # noqa
+                )
+            else:
+                return TensorMeta.from_dims(input_.dims[1:], tensor_name="Shared hidden")
+
         if not self._is_last_head:
             # MTP: split the stacked input
             shared_hidden, input_ = torch.unbind(input_, dim=0)
@@ -234,12 +238,24 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
             else:
                 lm_target = None
 
-        targets = (dpo_target, lm_target, distillation_target, loss_mask)
-        if self._sequence_parallel_logits:
+        targets = (dpo_target, lm_target, distillation_target)
+        # If we do distillation, no need to split it here as it has already been split in the embedding layer!
+        # if we do CPT/language modeling, we need to split the targets here!
+        if (
+            self._config.distillation_model is not None
+            and self._sequence_parallel_logits
+            and not self._parallel_embeddings
+            and not self._sequence_parallel
+        ) or (self._config.distillation_model is None and self._sequence_parallel_logits):
+            # We dont split targets if they already have been split in the embedding layer!
             targets = [
                 None if target is None else split_op(target, self._tensor_space.distributed.tensor_group, 0)
                 for target in targets
             ]
+        # Loss mask may need to be split. It was not split in the embedding layer as it is not used there.
+        if loss_mask is not None and self._sequence_parallel_logits:
+            loss_mask = split_op(loss_mask, self._tensor_space.distributed.tensor_group, 0)
+        targets = (*targets, loss_mask)
         if not any(target is not None for target in targets):
             # Simplify so we don't have to check every time.
             targets = None
@@ -408,6 +424,7 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
                     target_format=(
                         TargetFormat.labels if self._config.distillation_model is None else TargetFormat.logits
                     ),
+                    vocab_parallel=logits.shape[-1] != self._config.vocab_size,
                 )
             elif self._distillation_loss_implementation == DistillationLossImpl.cross_entropy:
                 distillation_loss, distillation_grad = cross_entropy_forward_backward(
