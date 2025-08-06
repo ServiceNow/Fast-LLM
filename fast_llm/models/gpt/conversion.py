@@ -165,7 +165,9 @@ class CommonHuggingfaceCheckpointHandler(WeightAndBiasConverterMixin, Huggingfac
     @classmethod
     def _create_config_converters(cls) -> list[ParamConverter]:
         return super()._create_config_converters() + [
-            ConstantImportParamConverter(fast_llm_names=(("transformer", "type"),), fast_llm_value="lm_decoder"),
+            ConstantImportParamConverter(
+                fast_llm_names=(("transformer", "type"),), fast_llm_value="language_model_decoder"
+            ),
             ConstantExportParamConverter(export_names=(("architectures",),), export_value=[cls.architecture]),
             ConstantImportParamConverter(fast_llm_names=(("use_position_embeddings",),), fast_llm_value=False),
             RenameParamConverter(
@@ -833,9 +835,9 @@ class PixtralHuggingfaceCheckpointHandler(WeightAndBiasConverterMixin, Huggingfa
         converters.append(WeightConverter(f"layers.{offset}.weight", f"{hf_base_prefix}patch_conv.weight"))
         if self._model.config.base_model.vision_encoder.conv_bias:
             converters.append(WeightConverter(f"layers.{offset}.bias", f"{hf_base_prefix}patch_conv.bias"))
-        converters.append(WeightConverter(f"layers.{offset}.norm.weight", f"{hf_base_prefix}ln_pre.weight"))
+        converters.append(WeightConverter(f"layers.{offset}.normalization.weight", f"{hf_base_prefix}ln_pre.weight"))
         if norm_bias:
-            converters.append(WeightConverter(f"layers.{offset}.norm.bias", f"{hf_base_prefix}ln_pre.bias"))
+            converters.append(WeightConverter(f"layers.{offset}.normalization.bias", f"{hf_base_prefix}ln_pre.bias"))
 
         num_layers = self._model.config.base_model.vision_encoder.transformer.num_layers
         for i in range(num_layers):

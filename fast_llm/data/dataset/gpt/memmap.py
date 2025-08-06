@@ -136,7 +136,7 @@ class GPTMemmapDataset(GPTIndexedDataset):
             offset += np.array(self._chosen_spans).nbytes + np.array(self._rejected_spans).nbytes
 
         self._num_pixels = 0
-        self._image_sizes = []
+        self._image_sizes = None
         self._image_positions = None
         if self._has_images and self._version >= 4:
             self._n_images = np.frombuffer(
@@ -177,7 +177,6 @@ class GPTMemmapDataset(GPTIndexedDataset):
             assert self._num_pixels == num_pixels
         if num_tokens is not None:
             assert self._num_tokens == num_tokens
-        self._image_sizes = np.array(self._image_sizes, dtype=np.int32)
 
     def __getstate__(self) -> tuple[str, pathlib.Path, int | None, int | None]:
         return (self._name, self._prefix, self._num_documents, self._num_tokens, self._num_pixels)

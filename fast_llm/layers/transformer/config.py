@@ -243,7 +243,7 @@ class TransformerConfig(LLMBlockConfig):
     _abstract = False
     type: TransformerType = Field(
         default=TransformerType.language_model_decoder,
-        desc="Type of the transformer. Choices: lm_decoder, image_encoder.",
+        desc="Type of the transformer. Choices: language_model_decoder, image_encoder.",
         hint=FieldHint.architecture,
     )
     normalization: NormalizationConfig = Field(

@@ -100,7 +100,9 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
 
     def get_vision_layers(self) -> list[Layer]:
         vit_layers = [
-            VisionTransformerLayer(self._config.vision_encoder.transformer, self._tensor_space, layer_index=idx + 1)
+            VisionTransformerLayer(
+                self._config.vision_encoder.transformer, self._tensor_space, layer_index=idx + 1, layer_offset=1
+            )
             for idx in range(self._config.vision_encoder.transformer.num_layers)
         ]
         return [
@@ -111,6 +113,9 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
         ]
 
     def get_layers(self) -> list[Layer]:
+        lm_layer_offset = (
+            self._config.vision_encoder.transformer.num_layers + 3 if self._config.vision_encoder.enabled else 1
+        )
         return [
             *(
                 [LanguageModelEmbedding(self._config, self._tensor_space)]
@@ -121,10 +126,13 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                 TransformerLayer(
                     self._config.transformer,
                     self._tensor_space,
-                    layer_index=i + 1,
+                    layer_index=i + 1 + lm_layer_offset,
                     # The last layer only returns the transformer output.
                     # The previous layers return a stack of shared_hidden and transformer_output.
                     return_input=self._config.prediction_heads > 1 and i == self._config.transformer.num_layers - 1,
+                    # optionally account for patch convolution, vision transformer, vision adapter
+                    # by default we only have the embedding layer
+                    layer_offset=lm_layer_offset,
                 )
                 for i in range(self._config.transformer.num_layers)
             ],

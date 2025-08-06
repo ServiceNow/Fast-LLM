@@ -26,7 +26,11 @@ class BaseBlock(Layer, abc.ABC):
     _mixer_module_name = "self_attn"
 
     def __init__(
-        self, config: TransformerConfig, tensor_space: TensorSpace, layer_index: int, return_input: bool = False
+        self,
+        config: TransformerConfig,
+        tensor_space: TensorSpace,
+        layer_index: int,
+        return_input: bool = False,
     ):
         super().__init__()
         self._transformer_dim_names = config._transformer_dim_names
@@ -145,12 +149,18 @@ class TransformerLayer(BaseBlock):
     _mixer_module_name = "self_attn"
 
     def __init__(
-        self, config: TransformerConfig, tensor_space: TensorSpace, layer_index: int, return_input: bool = False
+        self,
+        config: TransformerConfig,
+        tensor_space: TensorSpace,
+        layer_index: int,
+        return_input: bool = False,
+        layer_offset: int = 1,
     ):
+        self._layer_offset = layer_offset
         super().__init__(config, tensor_space, layer_index, return_input)
 
     def _create_mixer(self):
-        self.self_attn = Attention(self._config, self._tensor_space, self._layer_index)
+        self.self_attn = Attention(self._config, self._tensor_space, self._layer_index, self._layer_offset)
 
 
 class VisionTransformerLayer(TransformerLayer):

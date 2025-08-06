@@ -55,14 +55,14 @@ class Attention(torch.nn.Module):
         config: TransformerConfig,
         tensor_space: TensorSpace,
         layer_index,
+        layer_offset: int = 1,
     ):
         super().__init__()
         self._transformer_dim_names = config._transformer_dim_names
         self._transformer_kwargs = config._transformer_kwargs
         self._config = config
         self._tensor_space = tensor_space
-        # TODO Soham: fix assert
-        # Assert.in_range_incl(layer_index, 1, max(self._config.num_layers, 1))
+        Assert.in_range_incl(layer_index, layer_offset, max(self._config.num_layers + layer_offset, layer_offset))
         self._layer_index = layer_index
         self._sequence_parallel = self._tensor_space.distributed_config.sequence_tensor_parallel
         self._debug_transformer = self._config.debug_transformer
