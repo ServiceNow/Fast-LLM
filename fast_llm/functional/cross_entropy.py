@@ -245,6 +245,7 @@ def _torch_reverse_kl_forward_backward(
     scaled_target = target * (logits_scale_factor / teacher_softmax_temperature)
 
     # Clamp to prevent extreme values before log_softmax
+    scaled_target = torch.clamp(scaled_target, min=-50, max=50)
     teacher_log_probs = torch.log_softmax(scaled_target, dim=-1)
 
     # For reverse KL: KL(q||p) = Σ q * log(q/p) = Σ q * (log(q) - log(p))
@@ -255,6 +256,7 @@ def _torch_reverse_kl_forward_backward(
         logits_ = logits.detach().requires_grad_(grad_output is not None)
 
         scaled_logits = logits_ * logits_scale_factor
+        scaled_logits = torch.clamp(scaled_logits, min=-50, max=50)
         student_log_probs = torch.log_softmax(scaled_logits, dim=-1)
 
         # Reverse KL: input=teacher_log_probs, target=student_probs
