@@ -35,12 +35,11 @@ def _torch_cross_entropy_forward_backward(
                 logits_ if logits_scale_factor == 1 else logits_ * logits_scale_factor, target
             )
         else:
-            loss = (
-                torch.nn.functional.cross_entropy(
-                    logits_ if logits_scale_factor == 1 else logits_ * logits_scale_factor, target, reduction="none"
-                )
-                * loss_mask
-            ).mean()
+            per_token_loss = torch.nn.functional.cross_entropy(
+                logits_ if logits_scale_factor == 1 else logits_ * logits_scale_factor, target, reduction="none"
+            )
+            loss = (per_token_loss * loss_mask).sum() / loss_mask.sum()
+
         if grad_output is None:
             grad = None
         else:
@@ -133,7 +132,9 @@ def _fused_cross_entropy_forward_backward(
         if logits_scale_factor != 1.0:
             grad *= logits_scale_factor
         if loss_mask is not None:
-            grad *= loss_mask
+            # Take into account the modified denominator due to loss masking.
+            loss_masking_grad_factor = logits.size(0) / loss_mask.sum() if loss_mask.sum() > 0 else 1.0
+            grad *= loss_mask * loss_masking_grad_factor
         grad = grad.to(logits.dtype)
 
     # loss = mean(log(sum_exp_logits) - sum(probabilities * logits))
@@ -149,9 +150,11 @@ def _fused_cross_entropy_forward_backward(
     if loss_mask is not None:
         per_sample_loss = per_sample_loss * loss_mask
 
-    loss = per_sample_loss.mean()
+    loss = per_sample_loss.sum() / (
+        loss_mask.sum() if loss_mask is not None else torch.tensor(per_sample_loss.numel())
+    )
     if target_format != TargetFormat.labels and group is not None:
-        all_reduce(loss, op=ReduceOp.MEAN, group=group)
+        all_reduce(loss, op=ReduceOp.AVG, group=group)
 
     return loss, grad
 
@@ -274,10 +277,10 @@ def _torch_reverse_kl_forward_backward(
             loss_per_sample = torch.nn.functional.kl_div(
                 teacher_log_probs, student_log_probs, reduction="none", log_target=True
             ).sum(dim=-1)
-            loss = (loss_per_sample * loss_mask).mean()
+            loss = (loss_per_sample * loss_mask).sum() / loss_mask.sum()
 
         if group is not None and target_format != TargetFormat.labels:
-            all_reduce(loss, op=ReduceOp.MEAN, group=group)
+            all_reduce(loss, op=ReduceOp.AVG, group=group)
 
         if grad_output is not None:
             loss.backward(torch.full_like(loss, grad_output))

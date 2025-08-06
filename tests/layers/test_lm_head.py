@@ -23,7 +23,7 @@ def _reverse_kl_loss(
 ):
     scaled_target = target / teacher_softmax_temperature
 
-    scaled_target = torch.clamp(target, min=-50, max=50)
+    scaled_target = torch.clamp(scaled_target, min=-50, max=50)
     teacher_log_probs = torch.log_softmax(scaled_target, dim=-1)
 
     with torch.enable_grad():
@@ -42,7 +42,7 @@ def _reverse_kl_loss(
             loss_per_sample = torch.nn.functional.kl_div(
                 teacher_log_probs, student_log_probs, reduction="none", log_target=True
             ).sum(dim=-1)
-            loss = (loss_per_sample * loss_mask.flatten()).mean()
+            loss = (loss_per_sample * loss_mask.flatten()).sum() / loss_mask.sum()
     return loss
 
 
@@ -84,7 +84,7 @@ def _lm_head(
         )
         if loss_mask is not None:
             loss = loss * loss_mask.flatten()
-        loss = loss.mean()
+        loss = loss.sum() / (loss_mask.sum() if loss_mask is not None else torch.tensor(loss.numel()))
     else:
         loss = torch.nn.functional.cross_entropy(logits.flatten(0, -2), target.flatten())
     loss.backward(torch.full_like(loss, grad_output))
