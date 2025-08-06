@@ -238,6 +238,11 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
             else:
                 lm_target = None
 
+        # we need to split the loss masks if we are using loss masking spans
+        if loss_mask is not None and self._sequence_parallel_logits:
+            # TODO: this only works for parallel embeddings = False
+            loss_mask = split_op(loss_mask, self._tensor_space.distributed.tensor_group, 0)
+
         targets = (dpo_target, lm_target, distillation_target, loss_mask)
         # If we do distillation, no need to split it here as it has already been split in the embedding layer!
         # if we do CPT/language modeling, we need to split the targets here!

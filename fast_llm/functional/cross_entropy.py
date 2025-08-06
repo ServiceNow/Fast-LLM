@@ -327,10 +327,10 @@ def _torch_reverse_kl_forward_backward(
             )
         else:
             # Apply loss mask - this requires some reshaping
-            loss_per_sample = torch.nn.functional.kl_div(
+            loss_per_token = torch.nn.functional.kl_div(
                 teacher_log_probs, student_log_probs, reduction="none", log_target=True
             ).sum(dim=-1)
-            loss = (loss_per_sample * loss_mask).mean()
+            loss = (loss_per_token * loss_mask).mean()
 
         if group is not None and target_format != TargetFormat.labels:
             all_reduce(loss, op=ReduceOp.SUM, group=group)
