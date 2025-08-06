@@ -69,6 +69,7 @@ class MultiModalEmbedding(LanguageModelEmbedding):
                 for position, size in zip(positions, sizes):
                     num_patches = get_num_patches(*size, self._config.vision_encoder.patch_size)
                     if image_embedding_offset + num_patches < patch_start_offset:
+                        image_embedding_offset += num_patches
                         continue
                     if self._config.vision_encoder.image_break_token is not None:
                         patch_height = div(size[0], self._config.vision_encoder.patch_size)
@@ -83,7 +84,7 @@ class MultiModalEmbedding(LanguageModelEmbedding):
 
                             input_start_index = max(row_start_src, patch_start_offset) - patch_start_offset
                             input_end_index = min(row_start_src + patch_width, patch_end_offset) - patch_start_offset
-                            embeddings_start_index = row_start_dst - max(patch_start_offset - row_start_src, 0)
+                            embeddings_start_index = row_start_dst + max(patch_start_offset - row_start_src, 0)
                             embeddings_end_index = (
                                 row_start_dst + patch_width - max(row_start_src + patch_width - patch_end_offset, 0)
                             )
