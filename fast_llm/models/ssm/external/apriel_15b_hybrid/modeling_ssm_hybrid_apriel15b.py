@@ -849,9 +849,8 @@ class Mamba2(nn.Module):
         self.num_C_head = self.d_inner // self.d_state
         self.repeat_group = self.num_C_head // self.num_xb_head
 
-        self.in_proj = nn.Linear(
-            self.d_model, 2 * self.d_xb + 2 * self.d_inner + self.dt_rank, bias=bias, **factory_kwargs
-        )
+        self.in_proj = nn.Linear(self.d_model, 2 * self.d_xb + 2 * self.d_inner, bias=bias, **factory_kwargs)
+        self.dt_in_proj = nn.Linear(self.d_model, self.dt_rank, bias=bias, **factory_kwargs)
         self.dt_proj = nn.Linear(self.dt_rank, self.d_inner, bias=dt_proj_bias, **factory_kwargs)
 
         # Initialize special dt projection to preserve variance at initialization
@@ -894,7 +893,7 @@ class Mamba2(nn.Module):
         self,
         hidden_states: torch.Tensor,
         past_key_value: Optional[HybridMambaAttentionDynamicCache] = None,
-        attention_mask: Optional[torch.Tensor] = None,
+        mamba_mask: Optional[torch.Tensor] = None,
         return_mixer_matrix=False,
         **kwargs,
     ):
@@ -906,6 +905,10 @@ class Mamba2(nn.Module):
         assert is_fast_path_available and "cuda" in self.in_proj.weight.device.type, "Only support fast path on cuda"
         cache_position = kwargs.get("cache_position", None)
         batch, seqlen, dim = hidden_states.shape
+        mamba_mask = (
+            None if seqlen == 1 else mamba_mask
+        )  # prevent that hidden_states are expanded to mask's seq. dimention., i.e. we do not need apply_mask_to_padding_states when generating single token at a time
+        hidden_states = apply_mask_to_padding_states(hidden_states, mamba_mask)
 
         ssm_state, conv_state = None, None
         use_precomputed_states = False
@@ -939,8 +942,17 @@ class Mamba2(nn.Module):
         outputs = {}
         A = -torch.exp(self.A_log.float())  # (d_inner, d_state)
 
-        zxbcdt = self.in_proj(hidden_states)
-        z, x, B, C, dt = torch.split(zxbcdt, [self.d_inner, self.d_xb, self.d_xb, self.d_inner, self.dt_rank], dim=-1)
+        zxbc = self.in_proj(hidden_states)
+        z, x, B, C = torch.split(
+            zxbc,
+            [
+                self.d_inner,
+                self.d_xb,
+                self.d_xb,
+                self.d_inner,
+            ],
+            dim=-1,
+        )
 
         x = rearrange(x, "b l d -> b d l")
         z = rearrange(z, "b l d -> b d l")
@@ -950,7 +962,7 @@ class Mamba2(nn.Module):
         B = rearrange(B, "b n_group l dstate -> b n_group dstate l").contiguous()
         C = rearrange(C, "b l (n_group dstate) -> b n_group dstate l", dstate=self.d_state).contiguous()
 
-        dt = self.dt_proj(dt)  # B, L, d_inner
+        dt = self.dt_proj(self.dt_in_proj(hidden_states))  # B, L, d_inner
         dt = rearrange(dt, "b l d -> b d l")  # B, d_inner, L
 
         if self.repeat_kv_before_conv:
@@ -977,7 +989,7 @@ class Mamba2(nn.Module):
                 # Update state (B D W)
                 conv_state.copy_(F.pad(x, (self.d_conv - x.shape[-1], 0)))
             if causal_conv1d_fn is None:
-                x = self.act(self.conv1d(x)[..., :seqlen])
+                x = self.act(self.conv1d(x)[..., :seqlen]).transpose(1, 2)
             else:
                 assert self.activation in ["silu", "swish"]
                 x = causal_conv1d_fn(
@@ -985,7 +997,10 @@ class Mamba2(nn.Module):
                     weight=rearrange(self.conv1d.weight, "d 1 w -> d w"),
                     bias=self.conv1d.bias,
                     activation=self.activation,
-                )
+                ).transpose(1, 2)
+        x = apply_mask_to_padding_states(x, mamba_mask).transpose(
+            1, 2
+        )  # zero out everything that comes from padding tokens
 
         if not self.repeat_kv_before_conv:
             x = rearrange(x, "b (n_group dstate) l -> b n_group l dstate", dstate=self.d_state)
@@ -1040,14 +1055,14 @@ class Mamba2(nn.Module):
 
         A = -torch.exp(self.A_log.float())  # (d_inner, d_state)
 
-        zxbcdt = self.in_proj(hidden_states_input)
-        z, x, B, C, dt = torch.split(zxbcdt, [self.d_inner, self.d_xb, self.d_xb, self.d_inner, self.dt_rank], dim=-1)
+        zxbc = self.in_proj(hidden_states_input)
+        z, x, B, C = torch.split(zxbc, [self.d_inner, self.d_xb, self.d_xb, self.d_inner], dim=-1)
 
         B = rearrange(B, "b (n_group dstate) -> b n_group dstate", dstate=self.d_state)
         B = torch.repeat_interleave(B, dim=1, repeats=self.repeat_group)
         C = rearrange(C, "b (n_group dstate) -> b n_group dstate", dstate=self.d_state).contiguous()
 
-        dt = self.dt_proj(dt)  # B, d_inner
+        dt = self.dt_proj(self.dt_in_proj(hidden_states_input))  # B, d_inner
 
         if self.repeat_kv_before_conv:
             x = rearrange(x, "b (n_group dstate) -> b n_group dstate", dstate=self.d_state)
@@ -1403,6 +1418,7 @@ class AprielThinkerSSMHybridForCausalLM(AprielThinkerSSMHybridPreTrainedModel, G
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
             cache_position=cache_position,
+            mamba_mask=attention_mask,  # non-expended mask
             **kwargs,
         )
 

@@ -1,7 +1,7 @@
 import copy
 import math
 from dataclasses import dataclass
-from typing import Any, Optional, TypedDict, Union
+from typing import Any, Optional, Union
 
 import torch
 import torch.nn.functional as F
@@ -18,10 +18,10 @@ from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutpu
 from transformers.modeling_utils import PreTrainedModel
 from transformers.models.mistral.modeling_mistral import MistralDecoderLayer, MistralMLP, MistralModel, MistralRMSNorm
 from transformers.processing_utils import Unpack
-from transformers.utils import logging
+from transformers.utils import LossKwargs, logging
 from transformers.utils.generic import ModelOutput
 
-from .configuration_ssm_hybrid_apriel15b import AprielSSMHybridConfig
+from fast_llm.models.ssm.external.apriel_15b_hybrid.configuration_ssm_hybrid_apriel15b import AprielSSMHybridConfig
 
 # from vllm.model_executor.layers.mamba.ops.mamba_ssm import selective_scan_fn as varlen_selective_scan_fn
 # from vllm.model_executor.layers.mamba.ops.causal_conv1d import causal_conv1d_fn as varlen_causal_conv1d_fn
@@ -894,7 +894,7 @@ class Mamba2(nn.Module):
         self,
         hidden_states: torch.Tensor,
         past_key_value: Optional[HybridMambaAttentionDynamicCache] = None,
-        attention_mask: Optional[torch.Tensor] = None,
+        mamba_mask: Optional[torch.Tensor] = None,
         return_mixer_matrix=False,
         **kwargs,
     ):
@@ -906,6 +906,10 @@ class Mamba2(nn.Module):
         assert is_fast_path_available and "cuda" in self.in_proj.weight.device.type, "Only support fast path on cuda"
         cache_position = kwargs.get("cache_position", None)
         batch, seqlen, dim = hidden_states.shape
+        mamba_mask = (
+            None if seqlen == 1 else mamba_mask
+        )  # prevent that hidden_states are expanded to mask's seq. dimention., i.e. we do not need apply_mask_to_padding_states when generating single token at a time
+        hidden_states = apply_mask_to_padding_states(hidden_states, mamba_mask)
 
         ssm_state, conv_state = None, None
         use_precomputed_states = False
@@ -977,7 +981,7 @@ class Mamba2(nn.Module):
                 # Update state (B D W)
                 conv_state.copy_(F.pad(x, (self.d_conv - x.shape[-1], 0)))
             if causal_conv1d_fn is None:
-                x = self.act(self.conv1d(x)[..., :seqlen])
+                x = self.act(self.conv1d(x)[..., :seqlen]).transpose(1, 2)
             else:
                 assert self.activation in ["silu", "swish"]
                 x = causal_conv1d_fn(
@@ -985,7 +989,10 @@ class Mamba2(nn.Module):
                     weight=rearrange(self.conv1d.weight, "d 1 w -> d w"),
                     bias=self.conv1d.bias,
                     activation=self.activation,
-                )
+                ).transpose(1, 2)
+        x = apply_mask_to_padding_states(x, mamba_mask).transpose(
+            1, 2
+        )  # zero out everything that comes from padding tokens
 
         if not self.repeat_kv_before_conv:
             x = rearrange(x, "b (n_group dstate) l -> b n_group l dstate", dstate=self.d_state)
@@ -1192,8 +1199,6 @@ class AprielThinkerSSMHybridModel(MistralModel):
         config: AprielSSMHybridConfig
     """
 
-    config_class = AprielSSMHybridConfig
-
     def __init__(self, config: AprielSSMHybridConfig, **kwargs):
         config_copy = copy.deepcopy(config)
         config_copy.num_hidden_layers = 0
@@ -1217,18 +1222,12 @@ class AprielThinkerSSMHybridModel(MistralModel):
         # Initialize weights and apply final processing
         self.post_init()
 
-
-class LossKwargs(TypedDict, total=False):
-    """
-    Keyword arguments to be passed to the loss function
-
-    Attributes:
-        num_items_in_batch (`Optional[torch.Tensor]`, *optional*):
-            Number of items in the batch. It is recommended to pass it when
-            you are doing gradient accumulation.
-    """
-
-    num_items_in_batch: Optional["torch.Tensor"]
+    def forward(self, input_ids, **kwargs):
+        output: BaseModelOutputWithPast = super().forward(input_ids, **kwargs)
+        past_key_values: HybridMambaAttentionDynamicCache = output.past_key_values
+        if past_key_values and not past_key_values.has_previous_state:
+            past_key_values.has_previous_state = True
+        return output
 
 
 class KwargsForCausalLM(FlashAttentionKwargs, LossKwargs): ...
@@ -1411,6 +1410,7 @@ class AprielThinkerSSMHybridForCausalLM(AprielThinkerSSMHybridPreTrainedModel, G
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
             cache_position=cache_position,
+            mamba_mask=attention_mask,  # non-expended mask
             **kwargs,
         )
 
