@@ -397,40 +397,25 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                             valid_spans[:, 0].clamp_(min=sequence_offset)
                             valid_spans[:, 1].clamp_(max=sequence_k + prediction_heads - 1)
                             valid_spans -= sequence_offset
-                            loss_mask = torch.ones_like(labels, dtype=torch.bool)
                             for start, end in valid_spans:
                                 if sequence_first:
-                                    loss_mask[start : end + 1, i] = False
+                                    labels[start : end + 1, i] = -100
                                 else:
-                                    loss_mask[i, start : end + 1] = False
-                            if self._config.distillation_model is not None:
-                                kwargs[LanguageModelKwargs.loss_mask] = loss_mask
-                            labels = torch.where(loss_mask, labels, -100)
+                                    labels[i, start : end + 1] = -100
                 if self._config.vision_encoder.enabled:
-                    loss_mask = kwargs.get(LanguageModelKwargs.loss_mask, torch.ones_like(labels, dtype=torch.bool))
                     if self._config.vision_encoder.image_break_token is not None:
                         if not labels_cloned:
                             labels = labels.clone()
                             labels_cloned = True
                         labels = torch.where(labels == self._config.vision_encoder.image_break_token, -100, labels)
-                        loss_mask = torch.where(
-                            labels == self._config.vision_encoder.image_break_token, False, loss_mask
-                        )
-                        if self._config.distillation_model is not None:
-                            kwargs[LanguageModelKwargs.loss_mask] = loss_mask
                     if self._config.vision_encoder.image_end_token is not None:
                         if not labels_cloned:
                             labels = labels.clone()
                             labels_cloned = True
                         labels = torch.where(labels == self._config.vision_encoder.image_end_token, -100, labels)
-                        loss_mask = torch.where(
-                            labels == self._config.vision_encoder.image_end_token, False, loss_mask
-                        )
-                        if self._config.distillation_model is not None:
-                            kwargs[LanguageModelKwargs.loss_mask] = loss_mask
-                # TODO: Check that this works. Can we remove previous loss_masking?
+                # Loss-masking for distillation losses
                 if self._config.distillation_model is not None:
-                    loss_mask = kwargs.get(LanguageModelKwargs.loss_mask, torch.ones_like(labels, dtype=torch.bool))
+                    loss_mask = torch.ones_like(labels, dtype=torch.bool)
                     loss_mask = torch.where(labels == -100, False, loss_mask)
                     kwargs[LanguageModelKwargs.loss_mask] = loss_mask
                 kwargs[LanguageModelKwargs.labels] = labels
