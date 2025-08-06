@@ -981,7 +981,7 @@ class Mamba2(nn.Module):
                 # Update state (B D W)
                 conv_state.copy_(F.pad(x, (self.d_conv - x.shape[-1], 0)))
             if causal_conv1d_fn is None:
-                x = self.act(self.conv1d(x)[..., :seqlen])
+                x = self.act(self.conv1d(x)[..., :seqlen]).transpose(1, 2)
             else:
                 assert self.activation in ["silu", "swish"]
                 x = causal_conv1d_fn(
@@ -1410,7 +1410,7 @@ class AprielThinkerSSMHybridForCausalLM(AprielThinkerSSMHybridPreTrainedModel, G
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
             cache_position=cache_position,
-            mamba_mask=attention_mask,
+            mamba_mask=attention_mask,  # non-expended mask
             **kwargs,
         )
 
