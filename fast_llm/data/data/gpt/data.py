@@ -1,6 +1,7 @@
 import dataclasses
 import logging
 import pathlib
+import time
 import typing
 import warnings
 from functools import partial
@@ -39,6 +40,8 @@ class GPTBatch:
 
 
 def gpt_data_collate_fn(batch: list[GPTSample], sampling_parameters: GPTSamplingParameters) -> GPTBatch:
+    start_time = time.perf_counter()
+
     stacked_ids = np.stack([sample.token_ids for sample in batch])
     stacked_spans = None
     sequence_lengths = None
@@ -65,6 +68,12 @@ def gpt_data_collate_fn(batch: list[GPTSample], sampling_parameters: GPTSampling
             batch_image_positions.append(torch.from_numpy(sample.image_positions))
         else:
             batch_image_positions.append([])
+
+    data_time = (time.perf_counter() - start_time) * 1000
+    if data_time > 1000:
+        logger.warning(
+            f"Data collate-fn took {data_time:,.2f} ms, Num images: {len(batch_images[0]) if has_images else 0}"
+        )
     return GPTBatch(
         token_ids=torch.from_numpy(stacked_ids),
         loss_masking_spans=stacked_spans,
