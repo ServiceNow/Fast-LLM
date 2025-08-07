@@ -14,8 +14,9 @@ from fast_llm.models.gpt.config import GPTBaseModelConfig, GPTBatchConfig, Pretr
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
+    from fast_llm.models.gpt.model import GPTInferenceRunner
     from fast_llm.models.ssm.huggingface import HuggingfaceHybridSSMModelForCausalLM
-    from fast_llm.models.ssm.model import HybridSSMInferenceRunner, HybridSSMModel
+    from fast_llm.models.ssm.model import HybridSSMModel
     from fast_llm.models.ssm.trainer import HybridSSMTrainer
 
 logger = logging.getLogger(__name__)
@@ -214,11 +215,13 @@ class HybridSSMTrainerConfig(PretrainedHybridSSMModelConfig, TrainerConfig):
             Assert.geq(reference_model.model.base_model.prediction_heads, self.model.base_model.prediction_heads)
 
     @classmethod
-    def get_inference_runner_class(cls) -> type["HybridSSMInferenceRunner"]:
-        from fast_llm.models.ssm.model import HybridSSMInferenceRunner
+    def get_inference_runner_class(cls) -> type["GPTInferenceRunner"]:
+        # from fast_llm.models.ssm.model import HybridSSMInferenceRunner
+        from fast_llm.models.gpt.model import GPTInferenceRunner
 
         logger.warning(
             "HybridSSMInferenceRunner only supports training-style forward pass. Use generate with cache disabled."
         )
 
-        return HybridSSMInferenceRunner
+        # TODO: switch back to HybridSSMInferenceRunner (fix reference-model inference-runner initialization)
+        return GPTInferenceRunner
