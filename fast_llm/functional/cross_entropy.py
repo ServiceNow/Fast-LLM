@@ -304,8 +304,9 @@ def _torch_reverse_kl_forward_backward(
         Assert.eq(loss_mask.shape, logits.shape[:-1])
     # Scale target logits more carefully
     scaled_target = target * (logits_scale_factor / teacher_softmax_temperature)
+    # Clamp to prevent extreme values that cause NaNs in log_softmax
+    scaled_target = torch.clamp(scaled_target, min=-100.0, max=100.0)
 
-    # Clamp to prevent extreme values before log_softmax
     teacher_log_probs = torch.log_softmax(scaled_target, dim=-1)
 
     # For reverse KL: KL(q||p) = Σ q * log(q/p) = Σ q * (log(q) - log(p))
@@ -316,7 +317,14 @@ def _torch_reverse_kl_forward_backward(
         logits_ = logits.detach().requires_grad_(grad_output is not None)
 
         scaled_logits = logits_ * logits_scale_factor
+        # Clamp to prevent extreme values that cause NaNs in log_softmax
+        scaled_logits = torch.clamp(scaled_logits, min=-100.0, max=100.0)
         student_log_probs = torch.log_softmax(scaled_logits, dim=-1)
+
+        # Check for NaNs in intermediate computations
+        if torch.isnan(teacher_log_probs).any() or torch.isnan(student_log_probs).any():
+            raise RuntimeError("NaN detected in log probabilities")
+
         # Reverse KL: input=teacher_log_probs, target=student_probs
         if loss_mask is None:
             loss = torch.nn.functional.kl_div(
