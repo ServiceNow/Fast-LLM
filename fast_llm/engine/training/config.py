@@ -32,7 +32,6 @@ from fast_llm.profile import ProfilingConfig
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
-    from fast_llm.engine.inference.runner import InferenceRunner
     from fast_llm.engine.training.trainer import Trainer, TrainingEvaluator
 
 
@@ -401,10 +400,6 @@ class TrainerConfig(PretrainedFastLLMModelConfig, ExperimentConfig):
 
     @classmethod
     def get_trainer_class(cls) -> type["Trainer"]:
-        raise NotImplementedError
-
-    @classmethod
-    def get_inference_runner_class(cls) -> type["InferenceRunner"]:
         raise NotImplementedError
 
     def _get_runnable(self) -> typing.Callable[[], None]:

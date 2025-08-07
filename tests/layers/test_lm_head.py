@@ -23,12 +23,10 @@ def _reverse_kl_loss(
 ):
     scaled_target = target / teacher_softmax_temperature
 
-    scaled_target = torch.clamp(target, min=-50, max=50)
     teacher_log_probs = torch.log_softmax(scaled_target, dim=-1)
 
     with torch.enable_grad():
         # Use log_softmax for consistency instead of _fused_softmax
-        logits = torch.clamp(logits, min=-50, max=50)
         student_log_probs = torch.log_softmax(logits, dim=-1)
         if loss_mask is None:
             loss = torch.nn.functional.kl_div(

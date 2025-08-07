@@ -1,12 +1,15 @@
 import enum
+import typing
 
 from fast_llm.config import Field, FieldHint, check_field, config_class, skip_valid_if_none
 from fast_llm.engine.config_utils.tensor_space import CompositeTensorDim, ConcatenatedTensorDim, TensorDim, TensorSpace
 from fast_llm.engine.distributed.config import DistributedDimNames
 from fast_llm.functional.config import ActivationType
 from fast_llm.layers.common.config import LLMBlockConfig, NormalizationConfig
-from fast_llm.tensor import Initializer
 from fast_llm.utils import Assert, div
+
+if typing.TYPE_CHECKING:
+    from fast_llm.tensor import Initializer
 
 
 class SSMDimNames:
@@ -16,6 +19,8 @@ class SSMDimNames:
     head_groups = "ssm_head_groups"
     group_heads = "ssm_group_heads"
 
+    # Mamba 2
+    x_proj_dim_2 = "x_proj_dim_2"  # d_xb
     convolution_kernel = "ssm_convolution_kernel"  # Kernel dimension of the conv1d in mamba layers
 
     dt_rank = "ssm_dt_rank"
@@ -62,7 +67,7 @@ class DTInitType(enum.StrEnum):
     constant = "constant"
     random = "random"
 
-    def get_init_method(self, scale: float) -> Initializer:
+    def get_init_method(self, scale: float) -> "Initializer":
         from fast_llm.tensor import init_fill_, init_uniform_centered_
 
         return init_fill_(scale) if self == DTInitType.constant else init_uniform_centered_(scale)

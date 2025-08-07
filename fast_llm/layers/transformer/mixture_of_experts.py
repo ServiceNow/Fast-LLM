@@ -63,8 +63,8 @@ class MixtureOfExpertMLP(MLPBase):
         router_lr_scale = get_lr_scale(config.router_lr_scale, layer_lr_scale)
 
         self.router = Linear(
-            tensor_space.get_tensor_dim(TransformerDimNames.hidden),
-            tensor_space.get_tensor_dim(TransformerDimNames.unshared_experts),
+            tensor_space[TransformerDimNames.hidden],
+            tensor_space[TransformerDimNames.unshared_experts],
             bias=False,
             weight_init_method=init_normal_(
                 std=config.init_method_std, min_val=config.init_method_min, max_val=config.init_method_max
@@ -255,7 +255,7 @@ class MixtureOfExpertMLP(MLPBase):
 
     def _get_meta(self, tensor: torch.Tensor, name: str, dim_name: str, kwargs: dict[str, typing.Any]) -> TensorMeta:
         return TensorMeta.from_dims(
-            kwargs[TransformerKwargs.hidden_dims][:-1] + (self._tensor_space.get_tensor_dim(dim_name),),
+            kwargs[TransformerKwargs.hidden_dims][:-1] + (self._tensor_space[dim_name],),
             tensor_name=f"{self._name} {name}",
             dtype=tensor.dtype,
         )

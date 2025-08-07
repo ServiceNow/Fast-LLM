@@ -62,13 +62,13 @@ class Mamba2(Mixer):
         layer_lr_scale: float | None = config.per_layer_lr_scale[block_index] if config.per_layer_lr_scale else None
         lr_scale: float | tuple[float | None, ...] | None = get_lr_scale(self._config.mamba_lr_scale, layer_lr_scale)
 
-        inner_dim: TensorDim = tensor_space.get_tensor_dim(name=SSMDimNames.composite_heads_and_head_dim)
-        xb_dim = tensor_space.get_tensor_dim(name=SSMDimNames.composite_head_groups_and_state)
-        hidden_dim: TensorDim = tensor_space.get_tensor_dim(name=TransformerDimNames.hidden)
-        dt_rank_dim = tensor_space.get_tensor_dim(name=SSMDimNames.dt_rank)
+        inner_dim: TensorDim = tensor_space[SSMDimNames.composite_heads_and_head_dim]
+        xb_dim = tensor_space[SSMDimNames.composite_head_groups_and_state]
+        hidden_dim: TensorDim = tensor_space[TransformerDimNames.hidden]
+        dt_rank_dim = tensor_space[SSMDimNames.dt_rank]
 
-        self._local_heads = tensor_space.get_tensor_dim(name=SSMDimNames.composite_heads).size
-        self._local_head_groups = tensor_space.get_tensor_dim(name=SSMDimNames.head_groups).size
+        self._local_heads = tensor_space[SSMDimNames.composite_heads].size
+        self._local_head_groups = tensor_space[SSMDimNames.head_groups].size
         self._group_heads = div(self._local_heads, self._local_head_groups)
         self._local_inner_size = inner_dim.size
         self._local_xb_size = xb_dim.size
@@ -77,8 +77,8 @@ class Mamba2(Mixer):
         self.conv1d_weight = ParameterMeta.from_dims(
             (
                 conv1d_dim,
-                tensor_space.get_tensor_dim(DefaultDimNames.scalar),
-                tensor_space.get_tensor_dim(name=SSMDimNames.convolution_kernel),
+                tensor_space[DefaultDimNames.scalar],
+                tensor_space[SSMDimNames.convolution_kernel],
             ),
             init_method=init_uniform_centered_((conv1d_dim.global_size * self._config.conv_kernel_dimension) ** -0.5),
             lr_scale=lr_scale,
@@ -90,7 +90,7 @@ class Mamba2(Mixer):
         )
         self.in_proj = OutputParallelLinear(
             hidden_dim,
-            tensor_space.get_tensor_dim(name=SSMDimNames.concatenated_inner_projection),
+            tensor_space[SSMDimNames.concatenated_inner_projection],
             bias=config.add_bias_linear,
             weight_init_method=init_kaiming_(transformer_config.hidden_size),
             sequence_parallel=self._sequence_parallel,
@@ -122,7 +122,7 @@ class Mamba2(Mixer):
             lr_scale=lr_scale,
         )
         self.A_log = ParameterMeta.from_dims(
-            (inner_dim, tensor_space.get_tensor_dim(name=SSMDimNames.state)),
+            (inner_dim, tensor_space[SSMDimNames.state]),
             init_method=init_A(self._config.state_size, self._config.d_inner),
             lr_scale=lr_scale,
             weight_decay=False,

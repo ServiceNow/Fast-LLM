@@ -4,19 +4,23 @@ import typing
 
 from fast_llm.config import Field, FieldHint, FieldUpdate, config_class
 from fast_llm.data.data.gpt.config import GPTDataConfig
-from fast_llm.engine.checkpoint.config import CheckpointFormat, CheckpointHandler
+from fast_llm.engine.checkpoint.config import CheckpointHandler
 from fast_llm.engine.config_utils.runnable import RunnableConfig
 from fast_llm.engine.config_utils.tensor_space import TensorSpace
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig, PretrainedFastLLMModelConfig
 from fast_llm.engine.training.config import TrainerConfig
 from fast_llm.layers.ssm.config import SSMBlockType, SSMConfig
-from fast_llm.models.gpt.config import GPTBaseModelConfig, GPTBatchConfig, PretrainedGPTModelConfig
+from fast_llm.models.gpt.config import (
+    GPTBaseModelConfig,
+    GPTBatchConfig,
+    GPTHuggingfaceCheckpointFormat,
+    PretrainedGPTModelConfig,
+)
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
-    from fast_llm.models.gpt.model import GPTInferenceRunner
     from fast_llm.models.ssm.huggingface import HuggingfaceHybridSSMModelForCausalLM
-    from fast_llm.models.ssm.model import HybridSSMModel
+    from fast_llm.models.ssm.model import HybridSSMInferenceRunner, HybridSSMModel
     from fast_llm.models.ssm.trainer import HybridSSMTrainer
 
 logger = logging.getLogger(__name__)
@@ -80,8 +84,7 @@ class HybridSSMBaseModelConfig(GPTBaseModelConfig):
         self.ssm_block_type = ssm_block_types.pop() if ssm_block_types else None
 
 
-class LLambaHuggingfaceCheckpointFormat(CheckpointFormat):
-    support_optimizer: typing.ClassVar[bool] = False
+class LLambaHuggingfaceCheckpointFormat(GPTHuggingfaceCheckpointFormat):
     name: typing.ClassVar[str] = "llamba"
 
     @classmethod
@@ -91,8 +94,7 @@ class LLambaHuggingfaceCheckpointFormat(CheckpointFormat):
         return LLambaHuggingfaceCheckpointHandler
 
 
-class AprielSSMHuggingfaceCheckpointFormat(CheckpointFormat):
-    support_optimizer: typing.ClassVar[bool] = False
+class AprielSSMHuggingfaceCheckpointFormat(GPTHuggingfaceCheckpointFormat):
     name: typing.ClassVar[str] = "apriel_ssm"
 
     @classmethod
@@ -102,8 +104,7 @@ class AprielSSMHuggingfaceCheckpointFormat(CheckpointFormat):
         return AprielSSMHuggingfaceCheckpointHandler
 
 
-class AprielSSMHHybridHuggingfaceCheckpointFormat(CheckpointFormat):
-    support_optimizer: typing.ClassVar[bool] = False
+class AprielSSMHHybridHuggingfaceCheckpointFormat(GPTHuggingfaceCheckpointFormat):
     name: typing.ClassVar[str] = "apriel_ssm_hybrid"
 
     @classmethod
@@ -113,8 +114,7 @@ class AprielSSMHHybridHuggingfaceCheckpointFormat(CheckpointFormat):
         return AprielSSMHHybridHuggingfaceCheckpointHandler
 
 
-class AprielThinkerSSMHHybridHuggingfaceCheckpointFormat(CheckpointFormat):
-    support_optimizer: typing.ClassVar[bool] = False
+class AprielThinkerSSMHHybridHuggingfaceCheckpointFormat(GPTHuggingfaceCheckpointFormat):
     name: typing.ClassVar[str] = "apriel_ssm_thinker_hybrid"
     trust_remote_code: typing.ClassVar[bool] = True
 
@@ -166,6 +166,16 @@ class HybridSSMModelConfig(FastLLMModelConfig):
         return HybridSSMModel
 
     @classmethod
+    def get_inference_runner_class(cls) -> type["HybridSSMInferenceRunner"]:
+        from fast_llm.models.ssm.model import HybridSSMInferenceRunner
+
+        logger.warning(
+            "HybridSSMInferenceRunner only supports training-style forward pass. Use generate with cache disabled."
+        )
+
+        return HybridSSMInferenceRunner
+
+    @classmethod
     def get_huggingface_model_for_causal_lm_class(cls) -> type["HuggingfaceHybridSSMModelForCausalLM"]:
         from fast_llm.models.ssm.huggingface import HuggingfaceHybridSSMModelForCausalLM
 
@@ -213,14 +223,3 @@ class HybridSSMTrainerConfig(PretrainedHybridSSMModelConfig, TrainerConfig):
             Assert.none(reference_model.model.base_model.cross_entropy_splits)
             Assert.eq(reference_model.model.base_model.parallel_embeddings, self.model.base_model.parallel_embeddings)
             Assert.geq(reference_model.model.base_model.prediction_heads, self.model.base_model.prediction_heads)
-
-    @classmethod
-    def get_inference_runner_class(cls) -> type["GPTInferenceRunner"]:
-        from fast_llm.models.gpt.model import GPTInferenceRunner
-
-        # TODO: we dont have inference runner for SSM/Hybrid yet, should return None?
-        logger.warning(
-            "No inference runner for SSM/Hybrid yet, using GPTInferenceRunner for now, which does not support SSM/Hybrid"
-        )
-
-        return GPTInferenceRunner

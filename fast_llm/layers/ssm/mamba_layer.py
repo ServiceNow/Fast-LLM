@@ -69,8 +69,8 @@ class MambaLayer(Mixer):
         Assert.eq(self._config.activation_type, ActivationType.silu)
 
         # Tensor dims:
-        inner_dim = tensor_space.get_tensor_dim(SSMDimNames.composite_heads_and_head_dim)
-        hidden_dim = tensor_space.get_tensor_dim(TransformerDimNames.hidden)
+        inner_dim = tensor_space[SSMDimNames.composite_heads_and_head_dim]
+        hidden_dim = tensor_space[TransformerDimNames.hidden]
         layer_lr_scale = config.per_layer_lr_scale[block_index] if config.per_layer_lr_scale else None
         lr_scale = get_lr_scale(self._config.mamba_lr_scale, layer_lr_scale)
 
@@ -78,7 +78,7 @@ class MambaLayer(Mixer):
         # TODO: lr_scale?
         self.in_proj = Linear(
             hidden_dim,
-            tensor_space.get_tensor_dim(SSMDimNames.concatenated_inner_projection),
+            tensor_space[SSMDimNames.concatenated_inner_projection],
             bias=False,
             weight_init_method=init_kaiming_(hidden_dim.size),
         )
@@ -86,8 +86,8 @@ class MambaLayer(Mixer):
         self.conv1d_weight = ParameterMeta.from_dims(
             (
                 inner_dim,
-                tensor_space.get_tensor_dim(DefaultDimNames.scalar),
-                tensor_space.get_tensor_dim(SSMDimNames.convolution_kernel),
+                tensor_space[DefaultDimNames.scalar],
+                tensor_space[SSMDimNames.convolution_kernel],
             ),
             init_method=init_kaiming_(inner_dim.size),
             lr_scale=lr_scale,
@@ -95,7 +95,7 @@ class MambaLayer(Mixer):
 
         self.x_proj = Linear(
             inner_dim,
-            tensor_space.get_tensor_dim(SSMDimNames.concatenated_x_projection),
+            tensor_space[SSMDimNames.concatenated_x_projection],
             weight_init_method=init_kaiming_(inner_dim.size),
             bias=False,
             lr_scale=lr_scale,
@@ -104,7 +104,7 @@ class MambaLayer(Mixer):
 
         # TODO: the weights are initialized a bit differently here https://github.com/state-spaces/mamba/blob/0cce0fa645f100f00620ddf2333c2b7712abfdec/mamba_ssm/modules/mamba_simple.py#L82
         self.dt_proj_weight = ParameterMeta.from_dims(
-            (inner_dim, tensor_space.get_tensor_dim(SSMDimNames.dt_rank)),
+            (inner_dim, tensor_space[SSMDimNames.dt_rank]),
             init_method=init_kaiming_(self._config.dt_rank),
             lr_scale=lr_scale,
         )
@@ -116,7 +116,7 @@ class MambaLayer(Mixer):
         )
 
         self.A_log = ParameterMeta.from_dims(
-            (inner_dim, tensor_space.get_tensor_dim(SSMDimNames.state)),
+            (inner_dim, tensor_space[SSMDimNames.state]),
             weight_decay=False,
             init_method=init_A(self._config.state_size, inner_dim.size),
             lr_scale=lr_scale,

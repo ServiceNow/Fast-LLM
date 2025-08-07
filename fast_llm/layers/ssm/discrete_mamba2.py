@@ -49,25 +49,25 @@ class DiscreteMamba2(Mixer):
         layer_lr_scale = config.per_layer_lr_scale[block_index] if config.per_layer_lr_scale else None
         lr_scale = get_lr_scale(self._config.mamba_lr_scale, layer_lr_scale)
 
-        inner_dim = tensor_space.get_tensor_dim(SSMDimNames.composite_heads_and_head_dim)
-        hidden_dim = tensor_space.get_tensor_dim(TransformerDimNames.hidden)
-        conv1d_dim = tensor_space.get_tensor_dim(SSMDimNames.concatenated_convolution)
-        heads_dim = tensor_space.get_tensor_dim(SSMDimNames.composite_heads)
+        inner_dim = tensor_space[SSMDimNames.composite_heads_and_head_dim]
+        hidden_dim = tensor_space[TransformerDimNames.hidden]
+        conv1d_dim = tensor_space[SSMDimNames.concatenated_convolution]
+        heads_dim = tensor_space[SSMDimNames.composite_heads]
 
         # local_head_groups = head_groups / TP
-        self._local_head_groups = tensor_space.get_tensor_dim(SSMDimNames.head_groups).size
+        self._local_head_groups = tensor_space[SSMDimNames.head_groups].size
         # local_heads = local_head_groups * group_heads
         self._local_heads = heads_dim.size
         # local_inner_size = local_heads * head_size
         self._local_inner_size = inner_dim.size
         # local_bc_size = local_head_groups * state
-        self._local_bc_size = tensor_space.get_tensor_dim(SSMDimNames.composite_head_groups_and_state).size
+        self._local_bc_size = tensor_space[SSMDimNames.composite_head_groups_and_state].size
 
         # TODO: double check initializations
         # Projections
         self.in_proj = OutputParallelLinear(
             hidden_dim,
-            tensor_space.get_tensor_dim(name=SSMDimNames.concatenated_inner_projection),
+            tensor_space[SSMDimNames.concatenated_inner_projection],
             bias=config.add_bias_linear,
             weight_init_method=init_kaiming_(transformer_config.hidden_size),
             sequence_parallel=self._sequence_parallel,
@@ -83,8 +83,8 @@ class DiscreteMamba2(Mixer):
         self.conv1d_weight = ParameterMeta.from_dims(
             (
                 conv1d_dim,
-                tensor_space.get_tensor_dim(DefaultDimNames.scalar),
-                tensor_space.get_tensor_dim(name=SSMDimNames.convolution_kernel),
+                tensor_space[DefaultDimNames.scalar],
+                tensor_space[SSMDimNames.convolution_kernel],
             ),
             init_method=init_uniform_centered_((conv1d_dim.global_size * self._config.conv_kernel_dimension) ** -0.5),
             lr_scale=lr_scale,

@@ -72,14 +72,14 @@ class Attention(Mixer):
             max_val=self._config.init_method_max_attn_proj,
         )
 
-        self._kv_channels = self._tensor_space.get_tensor_dim(self._transformer_dim_names.kv_channels).size
-        self._head_groups = self._tensor_space.get_tensor_dim(self._transformer_dim_names.head_groups).global_size
-        self._local_head_groups = self._tensor_space.get_tensor_dim(self._transformer_dim_names.head_groups).size
-        self._local_heads_per_group = self._tensor_space.get_tensor_dim(self._transformer_dim_names.group_heads).size
+        self._kv_channels = self._tensor_space[self._transformer_dim_names.kv_channels].size
+        self._head_groups = self._tensor_space[self._transformer_dim_names.head_groups].global_size
+        self._local_head_groups = self._tensor_space[self._transformer_dim_names.head_groups].size
+        self._local_heads_per_group = self._tensor_space[self._transformer_dim_names.group_heads].size
         self._local_heads = self._local_head_groups * self._local_heads_per_group
         self._softmax_scale = self._kv_channels ** (-self._config.attention_softmax_scale_power)
 
-        hidden_dim = self._tensor_space.get_tensor_dim(self._transformer_dim_names.hidden)
+        hidden_dim = self._tensor_space[self._transformer_dim_names.hidden]
 
         layer_lr_scale = config.per_layer_lr_scale[block_index] if config.per_layer_lr_scale else None
         attention_lr_scale = get_lr_scale(self._config.attention_lr_scale, layer_lr_scale)
@@ -87,7 +87,7 @@ class Attention(Mixer):
         # TODO: Merge the query and key-value computations? (harder with sequence parallel.)
         self.query = OutputParallelLinear(
             hidden_dim,
-            self._tensor_space.get_tensor_dim(self._transformer_dim_names.composite_query),
+            self._tensor_space[self._transformer_dim_names.composite_query],
             bias=self._config.add_attn_qkv_bias,
             weight_init_method=init_method_qkv,
             bias_init_method=init_method_qkv if self._config.random_bias_init else init_zeros_,
@@ -96,7 +96,7 @@ class Attention(Mixer):
         )
         self.key_value = OutputParallelLinear(
             hidden_dim,
-            self._tensor_space.get_tensor_dim(self._transformer_dim_names.composite_key_value),
+            self._tensor_space[self._transformer_dim_names.composite_key_value],
             bias=self._config.add_attn_qkv_bias,
             weight_init_method=init_method_qkv,
             bias_init_method=init_method_qkv if self._config.random_bias_init else init_zeros_,
@@ -110,7 +110,7 @@ class Attention(Mixer):
 
         # Output.
         self.dense = InputParallelLinear(
-            self._tensor_space.get_tensor_dim(self._transformer_dim_names.composite_dense),
+            self._tensor_space[self._transformer_dim_names.composite_dense],
             hidden_dim,
             bias=self._config.add_attn_dense_bias,
             weight_init_method=init_method_std_attn_proj,
