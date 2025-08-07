@@ -357,13 +357,13 @@ class HybridMambaAttentionDynamicCache(DynamicCache):
         layer_idx = self.transformer_layers[0] if layer_idx not in self.transformer_layers else layer_idx
         if len(self.key_cache) <= layer_idx:
             return 0
-        # is_empty_layer = (
-        #     len(self.key_cache) == 0  # no cache in any layer
-        #     or len(self.key_cache) <= layer_idx  # skipped `layer_idx` and hasn't run a layer with cache after it
-        #     or not self.key_cache[layer_idx].numel()  # the layer has no cache
-        # )
-        # return self.key_cache[layer_idx].shape[-2] if not is_empty_layer else 0
-        return self.key_cache[layer_idx].shape[-2]
+        is_empty_layer = (
+            len(self.key_cache) == 0  # no cache in any layer
+            or len(self.key_cache) <= layer_idx  # skipped `layer_idx` and hasn't run a layer with cache after it
+            or not self.key_cache[layer_idx].numel()  # the layer has no cache
+        )
+        return self.key_cache[layer_idx].shape[-2] if not is_empty_layer else 0
+        # return self.key_cache[layer_idx].shape[-2]
 
     def reset(self):
         self.conv_states.zero_()
@@ -893,7 +893,7 @@ class Mamba2(nn.Module):
         self,
         hidden_states: torch.Tensor,
         past_key_value: Optional[HybridMambaAttentionDynamicCache] = None,
-        attention_mask: Optional[torch.Tensor] = None,
+        mamba_mask: Optional[torch.Tensor] = None,
         return_mixer_matrix=False,
         **kwargs,
     ):
@@ -905,6 +905,10 @@ class Mamba2(nn.Module):
         assert is_fast_path_available and "cuda" in self.in_proj.weight.device.type, "Only support fast path on cuda"
         cache_position = kwargs.get("cache_position", None)
         batch, seqlen, dim = hidden_states.shape
+        # mamba_mask = (
+        #     None if seqlen == 1 else mamba_mask
+        # )  # prevent that hidden_states are expanded to mask's seq. dimention., i.e. we do not need apply_mask_to_padding_states when generating single token at a time
+        # hidden_states = apply_mask_to_padding_states(hidden_states, mamba_mask)
 
         ssm_state, conv_state = None, None
         use_precomputed_states = False
@@ -985,7 +989,7 @@ class Mamba2(nn.Module):
                 # Update state (B D W)
                 conv_state.copy_(F.pad(x, (self.d_conv - x.shape[-1], 0)))
             if causal_conv1d_fn is None:
-                x = self.act(self.conv1d(x)[..., :seqlen])
+                x = self.act(self.conv1d(x)[..., :seqlen]).transpose(1, 2)
             else:
                 assert self.activation in ["silu", "swish"]
                 x = causal_conv1d_fn(
@@ -993,7 +997,10 @@ class Mamba2(nn.Module):
                     weight=rearrange(self.conv1d.weight, "d 1 w -> d w"),
                     bias=self.conv1d.bias,
                     activation=self.activation,
-                )
+                )  # .transpose(1, 2)
+        # x = apply_mask_to_padding_states(x, mamba_mask).transpose(
+        #     1, 2
+        # )  # zero out everything that comes from padding tokens
 
         if not self.repeat_kv_before_conv:
             x = rearrange(x, "b (n_group dstate) l -> b n_group l dstate", dstate=self.d_state)
@@ -1411,6 +1418,7 @@ class AprielThinkerSSMHybridForCausalLM(AprielThinkerSSMHybridPreTrainedModel, G
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
             cache_position=cache_position,
+            mamba_mask=attention_mask,  # non-expended mask
             **kwargs,
         )
 
