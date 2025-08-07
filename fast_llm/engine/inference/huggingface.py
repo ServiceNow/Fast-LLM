@@ -57,11 +57,11 @@ class HuggingfacePreTrainedModel(transformers.PreTrainedModel):
         # or set existing model which  also must be setup, so, do not accept not setup model
         assert fast_llm_model.is_setup
 
-        # We only support data parallel for now
-        Assert.eq(fast_llm_model.distributed.config.model_parallel, 1)
-        Assert.eq(fast_llm_model.distributed.config.sequence_data_parallel, 1)
-
         self._inference_runner.setup()
+
+        # We only support data parallel and tensor parallel for now
+        Assert.eq(fast_llm_model.distributed.config.pipeline_parallel, 1)
+        Assert.eq(fast_llm_model.distributed.config.sequence_data_parallel, 1)
 
         # Transformers needs to be able to inspect the base model.
         self.fast_llm_base_model = fast_llm_model.base_model
