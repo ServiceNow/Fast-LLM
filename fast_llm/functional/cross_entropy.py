@@ -330,7 +330,11 @@ def _torch_reverse_kl_forward_backward(
             loss_per_token = torch.nn.functional.kl_div(
                 teacher_log_probs, student_log_probs, reduction="none", log_target=True
             ).sum(dim=-1)
-            loss = (loss_per_token * loss_mask).mean()
+            mask_sum = loss_mask.sum()
+            if mask_sum > 0:  # can happen for inputs containing only prompts?
+                loss = (loss_per_token * loss_mask).sum() / mask_sum
+            else:
+                loss = (loss_per_token * 0.0).mean()  # preserve grads
 
         if group is not None and target_format != TargetFormat.labels:
             all_reduce(loss, op=ReduceOp.SUM, group=group)
