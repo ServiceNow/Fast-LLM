@@ -20,4 +20,5 @@ class HuggingfaceHybridSSMModelForCausalLM(HuggingfaceGPTModelForCausalLM):
     config: HuggingfaceSSMModelConfig
     runner_class: typing.ClassVar[type[HybridSSMInferenceRunner]] = HybridSSMInferenceRunner
     model_class = HybridSSMModel
+    runner_class: typing.ClassVar[type[HybridSSMInferenceRunner]] = HybridSSMInferenceRunner
     _fast_llm_model: HybridSSMModel
