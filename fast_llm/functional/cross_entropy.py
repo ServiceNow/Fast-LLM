@@ -335,20 +335,17 @@ def _torch_reverse_kl_forward_backward(
             )
         else:
             # Apply loss mask - this requires some reshaping
-            loss_per_token = torch.nn.functional.kl_div(
+            loss_per_sample = torch.nn.functional.kl_div(
                 teacher_log_probs, student_log_probs, reduction="none", log_target=True
             ).sum(dim=-1)
-            mask_sum = loss_mask.sum()
-            if mask_sum > 0:  # can happen for inputs containing only prompts?
-                loss = (loss_per_token * loss_mask).sum() / mask_sum
-            else:
-                loss = (loss_per_token * 0.0).mean()  # preserve grads
+            loss = (loss_per_sample * loss_mask).mean()
 
         if group is not None and target_format != TargetFormat.labels:
             all_reduce(loss, op=ReduceOp.SUM, group=group)
             loss /= group.size()
 
         if grad_output is not None:
+            # note, we never get here in TP over seq. dim.
             loss.backward(torch.full_like(loss, grad_output))
             grad = logits_.grad.to(logits.dtype)
         else:
