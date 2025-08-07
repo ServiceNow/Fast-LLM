@@ -315,13 +315,23 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
                     logit_input_grad_.copy_(grad_)
                 loss = loss_ if loss is None else loss + loss_
                 del grad_, loss_
-        loss_count = (self._cross_entropy_splits or 1) * (self._group_size if self._sequence_parallel_logits else 1)
+        loss_count = self._get_loss_count(targets, self._tensor_space.distributed.tensor_group)
         if loss_count != 1:
             loss.div_(loss_count)
         if self._sequence_parallel_logits:
             # TODO: Async
             all_reduce(loss, group=self._tensor_space.distributed.tensor_group)
         return loss, logit_input_grad.view_as(input_) if logit_input_grad is not None else None
+
+    def _get_loss_count(self, targets, group) -> int:
+        loss_masks = targets[3]
+        if loss_masks is None:
+            return (self._cross_entropy_splits or 1) * (self._group_size if self._sequence_parallel_logits else 1)
+        # when using loss masks we need to make sure to only reduce over ranks with non-zero loss
+        valid_rank_indicator = loss_masks.sum(dim=0) > 0.0
+        all_reduce(valid_rank_indicator, op=ReduceOp.SUM, group=group)
+        valid_ranks = valid_rank_indicator.item()
+        return (self._cross_entropy_splits or 1) * (valid_ranks if self._sequence_parallel_logits else 1)
 
     def _logits_cross_entropy_forward_backward(
         self,
