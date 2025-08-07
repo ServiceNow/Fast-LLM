@@ -38,7 +38,7 @@ def _torch_cross_entropy_forward_backward(
             per_token_loss = torch.nn.functional.cross_entropy(
                 logits_ if logits_scale_factor == 1 else logits_ * logits_scale_factor, target, reduction="none"
             )
-            loss = (per_token_loss * loss_mask).sum() / loss_mask.sum()
+            loss = (per_token_loss * loss_mask).sum() / (loss_mask.sum() if loss_mask.sum() > 0 else 1.0)
 
         if grad_output is None:
             grad = None
@@ -150,9 +150,8 @@ def _fused_cross_entropy_forward_backward(
     if loss_mask is not None:
         per_sample_loss = per_sample_loss * loss_mask
 
-    loss = per_sample_loss.sum() / (
-        loss_mask.sum() if loss_mask is not None else torch.tensor(per_sample_loss.numel())
-    )
+    loss_mask_sum = loss_mask.sum() if loss_mask is not None else torch.tensor(per_sample_loss.numel())
+    loss = per_sample_loss.sum() / (loss_mask_sum if loss_mask_sum > 0 else 1.0)
     if target_format != TargetFormat.labels and group is not None:
         all_reduce(loss, op=ReduceOp.AVG, group=group)
 
@@ -277,7 +276,7 @@ def _torch_reverse_kl_forward_backward(
             loss_per_sample = torch.nn.functional.kl_div(
                 teacher_log_probs, student_log_probs, reduction="none", log_target=True
             ).sum(dim=-1)
-            loss = (loss_per_sample * loss_mask).sum() / loss_mask.sum()
+            loss = (loss_per_sample * loss_mask).sum() / (loss_mask.sum() if loss_mask.sum() > 0 else 1.0)
 
         if group is not None and target_format != TargetFormat.labels:
             all_reduce(loss, op=ReduceOp.AVG, group=group)
