@@ -237,13 +237,7 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
                     ).flatten()
             else:
                 lm_target = None
-
-        # we need to split the loss masks if we are using loss masking spans
-        if loss_mask is not None and self._sequence_parallel_logits:
-            # TODO: this only works for parallel embeddings = False
-            loss_mask = split_op(loss_mask, self._tensor_space.distributed.tensor_group, 0)
-
-        targets = (dpo_target, lm_target, distillation_target, loss_mask)
+        targets = (dpo_target, lm_target, distillation_target)
         # If we do distillation, no need to split it here as it has already been split in the embedding layer!
         # if we do CPT/language modeling, we need to split the targets here!
         if (
@@ -257,6 +251,10 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
                 None if target is None else split_op(target, self._tensor_space.distributed.tensor_group, 0)
                 for target in targets
             ]
+        # Loss mask may need to be split. It was not split in the embedding layer as it is not used there.
+        if loss_mask is not None and self._sequence_parallel_logits:
+            loss_mask = split_op(loss_mask, self._tensor_space.distributed.tensor_group, 0)
+        targets = (*targets, loss_mask)
         if not any(target is not None for target in targets):
             # Simplify so we don't have to check every time.
             targets = None

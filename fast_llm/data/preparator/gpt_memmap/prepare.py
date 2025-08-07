@@ -1,3 +1,5 @@
+import io
+import itertools
 import json
 import logging
 import multiprocessing
@@ -8,6 +10,7 @@ import typing
 import datasets
 import huggingface_hub
 import numpy as np
+import PIL.Image
 import requests
 import torch.distributed
 import tqdm
@@ -24,7 +27,11 @@ from fast_llm.data.dataset.gpt.config import (
 from fast_llm.data.dataset.gpt.memmap import GPTMemmapDataset
 from fast_llm.data.dataset.gpt.sampled import GPTSample
 from fast_llm.data.preparator.config import DatasetPreparator
-from fast_llm.data.preparator.gpt_memmap.config import GPTMemmapDatasetPreparatorConfig, TextColumnConfig
+from fast_llm.data.preparator.gpt_memmap.config import (
+    GPTMemmapDatasetPreparatorConfig,
+    TextColumnConfig,
+    TextImageColumnConfig,
+)
 from fast_llm.data.tokenizer import Tokenizer
 from fast_llm.engine.config_utils.data_type import DataType, get_unsigned_integer_type
 from fast_llm.utils import Assert, normalize_probabilities, padded_cumsum
@@ -41,36 +48,44 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
     _loss_masking_spans_column: str | None
 
     def _tokenize_batch(self, batch: dict[str, list[typing.Any]]) -> dict[str, list[typing.Any]]:
-        input_ids = [
-            np.array(self._tokenizer.tokenize(text), dtype=self._data_type.numpy) for text in batch[self._text_column]
-        ]
-        num_tokens = [len(x) for x in input_ids]
-        return {
-            "input_ids": input_ids,
-            "num_tokens": num_tokens,
-        }
-
-    def _tokenize_batch_with_spans(self, batch: dict[str, list[typing.Any]]) -> dict[str, list[typing.Any]]:
-        input_ids, token_spans = map(
+        input_ids, token_spans, image_token_positions = map(
             list,
             zip(
                 *[
                     (
                         np.array(input_ids, dtype=self._data_type.numpy),
                         np.array(token_spans, dtype=np.int32).reshape(-1, 2),
+                        np.array(image_token_positions, dtype=np.int32),
                     )
-                    for input_ids, token_spans in [
-                        self._tokenizer.tokenize_with_spans(text, char_spans)
-                        for text, char_spans in zip(batch[self._text_column], batch[self._loss_masking_spans_column])
+                    for input_ids, token_spans, image_token_positions in [
+                        self._tokenizer.tokenize(
+                            text,
+                            loss_mask_spans,
+                            im_char_positions,
+                        )
+                        for text, loss_mask_spans, im_char_positions in zip(
+                            batch[self._text_column],
+                            batch.get(self._loss_masking_spans_column, itertools.repeat(None)),
+                            batch.get(self._image_positions_column, itertools.repeat(None)),
+                        )
                     ]
                 ]
             ),
         )
         num_tokens = [len(x) for x in input_ids]
+        num_pixels = [0] * len(input_ids)
+        for idx, images in enumerate(batch.get("images", [])):
+            for bytes_im in images:
+                with PIL.Image.open(io.BytesIO(bytes_im["bytes"])) as im:
+                    width, height = im.size
+                    num_pixels[idx] += width * height * 3
+
         return {
             "input_ids": input_ids,
+            "image_positions": image_token_positions,
             "token_spans": token_spans,
             "num_tokens": num_tokens,
+            "num_pixels": num_pixels,
         }
 
     def _tokenize_preference_batch_with_spans(self, batch: dict[str, list[typing.Any]]) -> dict[str, list[typing.Any]]:
@@ -143,27 +158,22 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
         shard_output_path = self._config.output_path / prefix
 
         def _document_generator():
-            if "token_spans" in shard_dataset.column_names and self._loss_masking_spans_column is not None:
-                for item in tqdm.tqdm(shard_dataset, desc=f"Saving shard {shard_idx}", unit="docs"):
-                    yield GPTSample(
-                        np.array(item["input_ids"], dtype=self._data_type.numpy),
-                        np.array(item["token_spans"], dtype=np.int32).reshape(-1, 2),
-                    )
-            elif (
-                "chosen_token_spans" in shard_dataset.column_names
-                and "rejected_token_spans" in shard_dataset.column_names
-                and self._config.dataset.chosen_text is not None
-                and self._config.dataset.rejected_text is not None
-            ):
-                for item in tqdm.tqdm(shard_dataset, desc=f"Saving shard {shard_idx}", unit="docs"):
-                    yield GPTSample(
-                        token_ids=np.array(item["input_ids"], dtype=self._data_type.numpy),
-                        chosen_span=np.array(item["chosen_token_spans"], dtype=np.int32).reshape(-1, 2),
-                        rejected_span=np.array(item["rejected_token_spans"], dtype=np.int32).reshape(-1, 2),
-                    )
-            else:
-                for item in tqdm.tqdm(shard_dataset, desc=f"Saving shard {shard_idx}", unit="docs"):
-                    yield GPTSample(np.array(item["input_ids"], dtype=self._data_type.numpy))
+            has_preference_spans = (
+                self._config.dataset.chosen_text is not None and self._config.dataset.rejected_text is not None
+            )
+            for item in tqdm.tqdm(shard_dataset, desc=f"Saving shard {shard_idx}", unit="docs"):
+                yield GPTSample(
+                    np.array(item["input_ids"], dtype=self._data_type.numpy),
+                    item["images"] if self._images_column else None,
+                    item["image_positions"] if self._image_positions_column else None,
+                    (
+                        np.array(item["token_spans"], dtype=np.int32).reshape(-1, 2)
+                        if self._loss_masking_spans_column
+                        else None
+                    ),
+                    item["chosen_token_spans"] if has_preference_spans else None,
+                    item["rejected_token_spans"] if has_preference_spans else None,
+                )
 
         GPTMemmapDataset.write_dataset(prefix=shard_output_path, documents=_document_generator())
 
@@ -173,6 +183,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
                 "path": prefix,
                 "num_documents": len(shard_dataset),  # Use the length of the shard dataset directly
                 "num_tokens": sum(len(doc["input_ids"]) for doc in shard_dataset),
+                "num_pixels": sum(doc["num_pixels"] for doc in shard_dataset),
             }
         )
 
@@ -292,6 +303,11 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
         if isinstance(self._config.dataset.source_schema, TextColumnConfig):
             self._text_column = self._config.dataset.source_schema.input_column
             self._loss_masking_spans_column = self._config.dataset.source_schema.loss_masking_spans_column
+            if isinstance(self._config.dataset.source_schema, TextImageColumnConfig):
+                self._images_column = self._config.dataset.source_schema.images_column
+                self._image_positions_column = self._config.dataset.source_schema.image_positions_column
+                # decoding bytes to images is slow and should be done only when needed
+                dataset = dataset.cast_column("images", datasets.Sequence(datasets.Image(decode=False)))
         else:
             raise ValueError(
                 f"Dataset source_schema set incorrectly. source_schema: '{self._config.dataset.source_schema}'."
@@ -300,18 +316,17 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
         if self._text_column not in dataset.column_names:
             raise ValueError(f"Dataset does not have field '{self._text_column}'.")
 
-        if self._config.dataset.source_schema.loss_masking_spans_column is not None and (
+        if self._loss_masking_spans_column is not None and (
             self._config.dataset.chosen_text is not None or self._config.dataset.rejected_text is not None
         ):
-            raise ValueError(f"Can not enable both loss masking spans and chosen/rejected loss masking spans.")
+            if self._config.dataset.chosen_text is not None and self._config.dataset.rejected_text is not None:
+                raise ValueError(f"Can not enable both loss masking spans and chosen/rejected loss masking spans.")
+            if self._loss_masking_spans_column not in dataset.column_names:
+                raise ValueError(f"Dataset does not have spans field '{self._loss_masking_spans_column}'.")
         if (self._config.dataset.chosen_text is None) != (self._config.dataset.rejected_text is None):
             raise ValueError(f"Both chosen and rejected loss masking spans must be specified if one is specified.")
 
         # route tokenize function
-        if self._loss_masking_spans_column is not None:
-            if self._loss_masking_spans_column not in dataset.column_names:
-                raise ValueError(f"Dataset does not have spans field '{self._loss_masking_spans_column}'.")
-            tokenize_fn = self._tokenize_batch_with_spans
         elif self._config.dataset.chosen_text is not None and self._config.dataset.rejected_text is not None:
             if self._config.dataset.chosen_text not in dataset.column_names:
                 raise ValueError(f"Dataset does not have chosen spans field '{self._config.dataset.chosen_text}'.")
@@ -331,6 +346,13 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
 
         # Calculate total number of tokens
         total_tokens = sum(tqdm.tqdm(tokenized_dataset["num_tokens"], desc="Counting tokens", unit="tokens"))
+        total_pixels = (
+            sum(tqdm.tqdm(tokenized_dataset["num_pixels"], desc="Counting pixels", unit="pixels"))
+            if self._images_column
+            else 0
+        )
+        # Add the token-equivalent bytes of pixels to determine shard size
+        total_tokens += total_pixels // np.dtype(self._data_type.numpy).itemsize
 
         # Split dataset into shards based on number of tokens
         num_shards = int(np.ceil(total_tokens / self._config.tokens_per_shard))
@@ -359,7 +381,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
             # Create the config file(s) on rank 0
             if self._config.splits:
                 for split_name, split_config in self._split_and_blend_dataset_configs(
-                    dataset_configs, self._config.splits, self._config.output_path
+                    dataset_configs, self._config.splits, self._config.output_path, self._config.image_patch_size
                 ).items():
                     self._save_dataset_config(
                         split_config, self._config.output_path / f"fast_llm_config_{split_name}.yaml"
@@ -399,7 +421,11 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
 
     @classmethod
     def _split_and_blend_dataset_configs(
-        cls, dataset_configs: list[GPTMemmapDatasetConfig], splits: dict[str, int | float], output_path: pathlib.Path
+        cls,
+        dataset_configs: list[GPTMemmapDatasetConfig],
+        splits: dict[str, int | float],
+        output_path: pathlib.Path,
+        image_patch_size: None | int = None,
     ) -> dict[str, GPTSampledDatasetConfig]:
         split_cumsum = padded_cumsum(normalize_probabilities(list(splits.values()), return_array=True)).tolist()
         dataset_sizes = [dataset_config.num_tokens for dataset_config in dataset_configs]
@@ -429,10 +455,20 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
                     # Part of the dataset belongs to the split.
                     # TODO: Somehow getting a segfault when merging two lines below (numpy bug?).
                     dataset = dataset_config.to_copy({"path": output_path / dataset_config.path}).build()
-                    sizes_cumsum = dataset.get_document_sizes().cumsum()
-                    Assert.eq(sizes_cumsum[-1], dataset_config.num_tokens)
-                    begin_index = _get_nearest_split(sizes_cumsum, split_begin_in_dataset * dataset_config.num_tokens)
-                    end_index = _get_nearest_split(sizes_cumsum, split_end_in_dataset * dataset_config.num_tokens)
+                    text_sizes, image_sizes = dataset.get_document_sizes()
+                    tokens_cumsum = text_sizes.cumsum()
+                    Assert.eq(tokens_cumsum[-1], dataset_config.num_tokens)
+                    if image_sizes:
+                        num_pixels_cumsum = np.cumsum([x.prod(axis=1).sum() for x in image_sizes])
+                        # We use the patch sizes only for the purposes of even splitting and blending weights.
+                        # We can always use a different patch size for training without any significant impact
+                        # Unless the patch size used at training time is significantly different from the one used here
+                        image_tokens_cumsum = num_pixels_cumsum // (image_patch_size**2)
+                        tokens_cumsum += image_tokens_cumsum
+                        num_pixels_cumsum = num_pixels_cumsum * 3
+                        Assert.eq(num_pixels_cumsum[-1], dataset_config.num_pixels)
+                    begin_index = _get_nearest_split(tokens_cumsum, split_begin_in_dataset * tokens_cumsum[-1])
+                    end_index = _get_nearest_split(tokens_cumsum, split_end_in_dataset * tokens_cumsum[-1])
                     if end_index > begin_index:
                         datasets_in_split.append(
                             GPTDatasetSliceConfig.from_dict(
@@ -445,8 +481,8 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
                             )
                         )
                         dataset_tokens_in_split.append(
-                            sizes_cumsum[end_index - 1].item()
-                            - (sizes_cumsum[begin_index - 1].item() if begin_index > 0 else 0)
+                            tokens_cumsum[end_index - 1].item()
+                            - (tokens_cumsum[begin_index - 1].item() if begin_index > 0 else 0)
                         )
 
                 # [else] None of the dataset belongs to the split.

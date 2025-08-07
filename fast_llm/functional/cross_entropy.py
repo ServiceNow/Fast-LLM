@@ -160,7 +160,7 @@ def _fused_cross_entropy_forward_backward(
 
     per_sample_loss = sum_exp_logits.log() - predicted_logits
     if loss_mask is not None:
-        per_sample_loss = per_sample_loss * loss_mask
+        per_sample_loss = per_sample_loss[loss_mask]
 
     loss = per_sample_loss.mean()
     if target_format != TargetFormat.labels and group is not None:
@@ -238,6 +238,8 @@ def _torch_reverse_kl_forward_backward_vocab_parallel(
     """
     Reverse KL using PyTorch's native kl_div function.
     This is used for TP version where we split accross vocab dimantion.
+    This works with sequence-tensor-parallel (distributing over the sequence dimention) as well as a non-TP case.
+    In sequence-tensor-parallel, where we split along sequence dim., we compute per split loss and then average the loss.
     """
     # TODO: merge into single function _torch_reverse_kl_forward_backward
     Assert.eq(target_format, TargetFormat.logits, msg="Reverse KL only supports logits format")
@@ -320,11 +322,7 @@ def _torch_reverse_kl_forward_backward(
         # Clamp to prevent extreme values that cause NaNs in log_softmax
         scaled_logits = torch.clamp(scaled_logits, min=-100.0, max=100.0)
         student_log_probs = torch.log_softmax(scaled_logits, dim=-1)
-
-        # Check for NaNs in intermediate computations
-        if torch.isnan(teacher_log_probs).any() or torch.isnan(student_log_probs).any():
-            raise RuntimeError("NaN detected in log probabilities")
-
+        
         # Reverse KL: input=teacher_log_probs, target=student_probs
         if loss_mask is None:
             loss = torch.nn.functional.kl_div(
@@ -410,6 +408,7 @@ def reverse_kl_forward_backward(
     if vocab_parallel:
         Assert.eq(teacher_softmax_temperature, 1)
         Assert.eq(logits_scale_factor, 1)
+        raise NotImplementedError("Vocab parallel reverse KL is not implemented yet.")
         return _torch_reverse_kl_forward_backward_vocab_parallel(
             logits,
             target,

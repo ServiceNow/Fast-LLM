@@ -283,7 +283,7 @@ class ExternalStateDictCheckpointHandler(StateDictCheckpointHandler):
         return exported_config  # Noqa
 
     @classmethod
-    def _import_config(cls, config: dict[str, typing.Any]) -> BaseModelConfig:  # noqa
+    def _import_config_dict(cls, config: dict[str, typing.Any]) -> dict[str | tuple[str, ...], typing.Any]:
         kwargs = {}
         for converter in cls._get_config_converters():
             try:
@@ -306,7 +306,11 @@ class ExternalStateDictCheckpointHandler(StateDictCheckpointHandler):
                     kwargs[fast_llm_name] = value
             except Exception as e:
                 raise RuntimeError(f"Config conversion failed for converter {converter}", *e.args)
+        return kwargs
 
+    @classmethod
+    def _import_config(cls, config: dict[str, typing.Any]) -> BaseModelConfig:  # noqa
+        kwargs = cls._import_config_dict(config)
         return cls._model_class.get_base_model_config_class().from_dict({}, kwargs)
 
     def _convert_state_dict(

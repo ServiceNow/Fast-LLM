@@ -312,11 +312,12 @@ def test_huggingface_model(model_testing_config, get_convert_path):
         )
     )
     errors = []
-    auto_model = (
-        transformers.AutoModel
-        if model_testing_config.name in ("diffusion_llama", "dream")
-        else transformers.AutoModelForCausalLM
-    )
+    if model_testing_config.name in ("diffusion_llama", "dream"):
+        auto_model = transformers.AutoModel
+    elif model_testing_config.name in ("llava", "vision_hybrid_mamba2"):
+        auto_model = transformers.AutoModelForVision2Seq
+    else:
+        auto_model = transformers.AutoModelForCausalLM
     model_as_hf = auto_model.from_pretrained(
         hf_path, trust_remote_code=model_testing_config.checkpoint_format.trust_remote_code
     ).cuda()

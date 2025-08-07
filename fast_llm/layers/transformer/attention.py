@@ -7,12 +7,7 @@ from fast_llm.core.ops import gather_op, reduce_op, reduce_scatter_op, swap_mult
 from fast_llm.engine.config_utils.tensor_space import TensorSpace
 from fast_llm.functional.autograd import wrap_forward_backward
 from fast_llm.layers.common.linear import InputParallelLinear, OutputParallelLinear
-from fast_llm.layers.transformer.config import (
-    TransformerConfig,
-    TransformerDimNames,
-    TransformerKwargs,
-    TransformerSubLayerName,
-)
+from fast_llm.layers.transformer.config import TransformerConfig, TransformerKwargs, TransformerSubLayerName
 from fast_llm.layers.transformer.transformer import Mixer
 from fast_llm.tensor import init_normal_, init_zeros_
 from fast_llm.utils import get_lr_scale
@@ -57,27 +52,13 @@ class Attention(Mixer):
 
     _mixer_name: typing.ClassVar[str] = "attn"
 
-    _QUERY_DIMS = (
-        TransformerDimNames.batch,
-        TransformerDimNames.sequence_q,
-        TransformerDimNames.composite_heads,
-        TransformerDimNames.kv_channels,
-    )
-    _KV_DIMS = (
-        TransformerDimNames.batch,
-        TransformerDimNames.sequence_q,
-        TransformerDimNames.head_groups,
-        TransformerDimNames.kv_channels,
-    )
-    _CONTEXT_DIMS = (
-        TransformerDimNames.batch,
-        TransformerDimNames.sequence_q,
-        TransformerDimNames.composite_dense,
-    )
-
     def __init__(self, config: TransformerConfig, tensor_space: TensorSpace, block_index: int):
         super().__init__(tensor_space, block_index, config.debug_transformer)
+        self._transformer_dim_names = config._transformer_dim_names
+        self._transformer_kwargs = config._transformer_kwargs
         self._config = config
+
+        self._causal = self._config.causal
         self._use_flash_attention = self._config.do_use_flash_attention(self._tensor_space.distributed_config)
 
         init_method_qkv = init_normal_(
@@ -91,14 +72,14 @@ class Attention(Mixer):
             max_val=self._config.init_method_max_attn_proj,
         )
 
-        self._kv_channels = self._tensor_space[TransformerDimNames.kv_channels].size
-        self._head_groups = self._tensor_space[TransformerDimNames.head_groups].global_size
-        self._local_head_groups = self._tensor_space[TransformerDimNames.head_groups].size
-        self._local_heads_per_group = self._tensor_space[TransformerDimNames.group_heads].size
+        self._kv_channels = self._tensor_space[self._transformer_dim_names.kv_channels].size
+        self._head_groups = self._tensor_space[self._transformer_dim_names.head_groups].global_size
+        self._local_head_groups = self._tensor_space[self._transformer_dim_names.head_groups].size
+        self._local_heads_per_group = self._tensor_space[self._transformer_dim_names.group_heads].size
         self._local_heads = self._local_head_groups * self._local_heads_per_group
         self._softmax_scale = self._kv_channels ** (-self._config.attention_softmax_scale_power)
 
-        hidden_dim = self._tensor_space[TransformerDimNames.hidden]
+        hidden_dim = self._tensor_space[self._transformer_dim_names.hidden]
 
         layer_lr_scale = config.per_layer_lr_scale[block_index] if config.per_layer_lr_scale else None
         attention_lr_scale = get_lr_scale(self._config.attention_lr_scale, layer_lr_scale)
@@ -106,7 +87,7 @@ class Attention(Mixer):
         # TODO: Merge the query and key-value computations? (harder with sequence parallel.)
         self.query = OutputParallelLinear(
             hidden_dim,
-            self._tensor_space[TransformerDimNames.composite_query],
+            self._tensor_space[self._transformer_dim_names.composite_query],
             bias=self._config.add_attn_qkv_bias,
             weight_init_method=init_method_qkv,
             bias_init_method=init_method_qkv if self._config.random_bias_init else init_zeros_,
@@ -115,7 +96,7 @@ class Attention(Mixer):
         )
         self.key_value = OutputParallelLinear(
             hidden_dim,
-            self._tensor_space[TransformerDimNames.composite_key_value],
+            self._tensor_space[self._transformer_dim_names.composite_key_value],
             bias=self._config.add_attn_qkv_bias,
             weight_init_method=init_method_qkv,
             bias_init_method=init_method_qkv if self._config.random_bias_init else init_zeros_,
@@ -129,7 +110,7 @@ class Attention(Mixer):
 
         # Output.
         self.dense = InputParallelLinear(
-            self._tensor_space[TransformerDimNames.composite_dense],
+            self._tensor_space[self._transformer_dim_names.composite_dense],
             hidden_dim,
             bias=self._config.add_attn_dense_bias,
             weight_init_method=init_method_std_attn_proj,
@@ -191,6 +172,32 @@ class Attention(Mixer):
                 .transpose(1, 2)
                 .flatten(2)
             )
+
+    @property
+    def _query_dims(self):
+        return (
+            self._transformer_dim_names.batch,
+            self._transformer_dim_names.sequence_q,
+            self._transformer_dim_names.composite_heads,
+            self._transformer_dim_names.kv_channels,
+        )
+
+    @property
+    def _kv_dims(self):
+        return (
+            self._transformer_dim_names.batch,
+            self._transformer_dim_names.sequence_q,
+            self._transformer_dim_names.group_heads,
+            self._transformer_dim_names.kv_channels,
+        )
+
+    @property
+    def _context_dims(self):
+        return (
+            self._transformer_dim_names.batch,
+            self._transformer_dim_names.sequence_q,
+            self._transformer_dim_names.composite_dense,
+        )
 
     def _query_key_value_forward(
         self, input_: torch.Tensor, sequence_first: bool
@@ -269,12 +276,12 @@ class Attention(Mixer):
 
         # TODO: Move the rest to function.
 
-        if (past_key_values := kwargs.get(TransformerKwargs.past_key_values)) is not None:
+        if (past_key_values := kwargs.get(self._transformer_kwargs.past_key_values)) is not None:
             assert sequence_first
             # Clear the lists so tensors can be de-allocated
             key_value = torch.cat((past_key_values.pop(0), key_value), dim=0)
 
-        if (presents := kwargs.get(TransformerKwargs.presents)) is not None:
+        if (presents := kwargs.get(self._transformer_kwargs.presents)) is not None:
             # Return the presents as a leaf tensors so the gradients from later micro-sequences
             # don't propagate to this one.
             presents.append(present := key_value.detach().requires_grad_())
@@ -314,7 +321,7 @@ class Attention(Mixer):
         if self._use_flash_attention:
             assert _flash_available
             with set_generator(self._tensor_space.distributed.tp_generator):
-                if (cu_seqlens_q := kwargs.get(TransformerKwargs.cu_seqlens_q, None)) is not None:
+                if (cu_seqlens_q := kwargs.get(self._transformer_kwargs.cu_seqlens_q, None)) is not None:
                     out_dims = query.size()
                     query = query.view(-1, query.size(-2), query.size(-1))
                     key = key.view(-1, key.size(-2), key.size(-1))
@@ -324,12 +331,12 @@ class Attention(Mixer):
                         key,
                         value,
                         cu_seqlens_q=cu_seqlens_q,
-                        cu_seqlens_k=kwargs.get(TransformerKwargs.cu_seqlens_k),
-                        max_seqlen_q=kwargs.get(TransformerKwargs.max_seqlen_q),
-                        max_seqlen_k=kwargs.get(TransformerKwargs.max_seqlen_k),
+                        cu_seqlens_k=kwargs.get(self._transformer_kwargs.cu_seqlens_k),
+                        max_seqlen_q=kwargs.get(self._transformer_kwargs.max_seqlen_q),
+                        max_seqlen_k=kwargs.get(self._transformer_kwargs.max_seqlen_k),
                         dropout_p=self._config.attention_dropout if self.training else 0.0,
                         window_size=(-1, -1) if window_size is None else (window_size - 1, 0),
-                        causal=True,
+                        causal=self._causal,
                         softmax_scale=self._softmax_scale,
                     ).view(*out_dims)
                 else:
@@ -339,7 +346,7 @@ class Attention(Mixer):
                         value,
                         window_size=(-1, -1) if window_size is None else (window_size - 1, 0),
                         dropout_p=self._config.attention_dropout if self.training else 0.0,
-                        causal=True,
+                        causal=self._causal,
                         softmax_scale=self._softmax_scale,
                     )
             input_ = input_.flatten(-2)
@@ -349,25 +356,25 @@ class Attention(Mixer):
                 query.flatten(-2),
                 key.flatten(-2),
                 value.flatten(-2),
-                kwargs[TransformerKwargs.attention_mask],
-                kwargs[TransformerKwargs.attention_mask_value],
+                kwargs[self._transformer_kwargs.attention_mask],
+                kwargs[self._transformer_kwargs.attention_mask_value],
             )
 
         if self._debug_level:
-            self._debug_log(query, "query", self._QUERY_DIMS, kwargs)
+            self._debug_log(query, "query", self._query_dims, kwargs)
             self._debug_log(
                 key,
                 "key",
-                self._KV_DIMS,
+                self._kv_dims,
                 kwargs,
             )
             self._debug_log(
                 value,
                 "value",
-                self._KV_DIMS,
+                self._kv_dims,
                 kwargs,
             )
-            self._debug_log(input_, "context", self._CONTEXT_DIMS, kwargs)
+            self._debug_log(input_, "context", self._context_dims, kwargs)
 
         if sequence_first:
             # TODO: Optimize (is contiguous avoidable? Transpose dense output?)

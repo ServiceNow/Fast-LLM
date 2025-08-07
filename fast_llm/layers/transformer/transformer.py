@@ -8,7 +8,7 @@ from fast_llm.core.distributed import set_generator
 from fast_llm.engine.base_model.base_model import Layer
 from fast_llm.engine.config_utils.run import log_pipeline_parallel_main_rank
 from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
-from fast_llm.layers.transformer.config import TransformerConfig, TransformerDimNames, TransformerKwargs
+from fast_llm.layers.transformer.config import TransformerConfig
 from fast_llm.layers.transformer.mixture_of_experts import MixtureOfExpertMLP
 from fast_llm.layers.transformer.mlp import MLP
 from fast_llm.logging import log_distributed_grad, log_distributed_tensor, log_memory_usage
@@ -89,6 +89,8 @@ class BaseBlock(Layer, abc.ABC):
         self, config: TransformerConfig, tensor_space: TensorSpace, block_index: int, return_input: bool = False
     ):
         super().__init__()
+        self._transformer_dim_names = config._transformer_dim_names
+        self._transformer_kwargs = config._transformer_kwargs
         self._config: TransformerConfig = config
         self._tensor_space: TensorSpace = tensor_space
         self._dropout_p: float = self._config.hidden_dropout
@@ -97,7 +99,7 @@ class BaseBlock(Layer, abc.ABC):
 
         self._block_index = block_index
         self._debug_mode = self._config.debug_transformer or self._config.debug_transformer_memory
-        hidden_dim = self._tensor_space[TransformerDimNames.hidden]
+        hidden_dim = self._tensor_space[self._transformer_dim_names.hidden]
         # Note, layer_lr_scale does not impact the norms
         # TODO: add a separate norm_lr_scale
         self.norm_1 = self._config.normalization.get_layer(hidden_dim)
@@ -131,7 +133,7 @@ class BaseBlock(Layer, abc.ABC):
         return f"{self._name} {self._block_index}"
 
     def _get_meta(self, tensor: torch.Tensor, name: str, kwargs: dict):
-        dims = kwargs[TransformerKwargs.hidden_dims]
+        dims = kwargs[self._transformer_kwargs.hidden_dims]
         if self._return_input:
             dims = (TensorDim("stacked_input_output", 2),) + dims
         return TensorMeta.from_dims(dims, tensor_name=f"{self.name} {name}", dtype=tensor.dtype)
@@ -212,3 +214,7 @@ class TransformerBlock(BaseBlock):
         from fast_llm.layers.transformer.attention import Attention
 
         return Attention(self._config, self._tensor_space, self._block_index)
+
+
+class VisionTransformerBlock(TransformerBlock):
+    _name: str = "Vision transformer layer"
