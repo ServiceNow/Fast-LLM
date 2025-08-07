@@ -115,5 +115,4 @@ class HybridSSMModel[ConfigType: HybridSSMModelConfig](GPTModel[ConfigType]):
 
 
 class HybridSSMInferenceRunner(GPTInferenceRunner):
-    model_class: typing.ClassVar[type[HybridSSMModel]] = GPTModel
-    # TODO: I set this to GPTModel to prevent some inference runner related asserts in runner.py
+    model_class: typing.ClassVar[type[HybridSSMModel]] = HybridSSMModel
