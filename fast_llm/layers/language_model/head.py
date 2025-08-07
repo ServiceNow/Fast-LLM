@@ -6,7 +6,7 @@ from torch._C._distributed_c10d import ReduceOp  # noqa
 from torch.distributed import all_reduce
 
 from fast_llm.config import Configurable
-from fast_llm.core.ops import split_op
+from fast_llm.core.ops import gather_op, split_op
 from fast_llm.engine.base_model.base_model import Layer
 from fast_llm.engine.config_utils.tensor_space import DefaultDimNames, TensorDim, TensorSpace
 from fast_llm.engine.distributed.config import DistributedDimNames
@@ -267,9 +267,17 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
             )
             if targets is None:
                 # TODO: Make a proper way of returning the model output.
-                if "global_logits" in kwargs and kwargs["global_logits"] == True:
-                    logits_meta = self._get_logits_meta(kwargs, loss)
-                    loss, _ = logits_meta.local_to_global(loss.detach(), distributed=self._tensor_space.distributed)
+                loss = loss.detach()
+                if kwargs.get("global_logits"):
+                    dims, sequence_index = self._get_logits_dims(kwargs, loss)
+                    # Only gather along the sequence dimension (for sequence tensor parallelism)
+                    # or the vocabulary dimension (for tensor parallelism), if applicable.
+                    for i in (sequence_index, len(dims) - 1):
+                        dim = dims[i]
+                        if dim.parallel_group is not None:
+                            loss = gather_op(
+                                loss.unflatten(i, dim.expanded_shape), dim.parallel_group, i + dim.parallel_dim_index
+                            ).flatten(i, i + len(dim.expanded_shape) - 1)
                 kwargs["logits" if self._prediction_distance == 0 else f"logits_{self._prediction_distance}"] = loss
                 return None, None
         else:
@@ -309,7 +317,7 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
             all_reduce(loss, group=self._tensor_space.distributed.tensor_group)
         return loss, logit_input_grad.view_as(input_) if logit_input_grad is not None else None
 
-    def _get_logits_meta(self, kwargs: dict, logits: torch.Tensor, logits_name: str = "transformer logits"):
+    def _get_logits_dims(self, kwargs: dict, logits: torch.Tensor):
         vocab_dim = self._tensor_space.get_tensor_dim(
             LanguageModelDimNames.vocab if self._sequence_parallel_logits else LanguageModelDimNames.vocab_tp
         )
@@ -320,7 +328,7 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
             if self._sequence_parallel_logits
             else TensorDim(TransformerDimNames.sequence_q, dims[sequence_index].global_size)
         )
-        return TensorMeta.from_dims(tuple(dims), tensor_name=logits_name, dtype=logits.dtype)
+        return dims, sequence_index
 
     def _logits_cross_entropy_forward_backward(
         self,
@@ -362,7 +370,11 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
                 "",
                 logits,
                 level=self._debug_transformer,
-                meta=self._get_logits_meta(kwargs, logits),
+                meta=TensorMeta.from_dims(
+                    tuple(self._get_logits_dims(kwargs, logits)[0]),
+                    tensor_name="transformer logits",
+                    dtype=logits.dtype,
+                ),
                 distributed=self._tensor_space.distributed,
                 scale=self._logits_scale_factor,
             )
