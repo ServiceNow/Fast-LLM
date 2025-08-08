@@ -133,7 +133,6 @@ class AprielThinkerSSMHHybridHuggingfaceCheckpointFormat(GPTHuggingfaceCheckpoin
 
 
 class LlavaHybridHuggingfaceCheckpointFormat(GPTHuggingfaceCheckpointFormat):
-    support_optimizer: typing.ClassVar[bool] = False
     name: typing.ClassVar[str] = "llava_hybrid"
     vision_name: typing.ClassVar[str] = "pixtral"
     text_name: typing.ClassVar[str] = "apriel_ssm_thinker_hybrid"

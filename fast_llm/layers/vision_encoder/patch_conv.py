@@ -19,23 +19,23 @@ class PatchConv(Layer):
         self._lr_scale = config.adapter_lr_scale
         self.weight = ParameterMeta.from_dims(
             (
-                self._tensor_space.get_tensor_dim(VisionEncoderDimNames.out_channels),
-                self._tensor_space.get_tensor_dim(VisionEncoderDimNames.in_channels),
-                self._tensor_space.get_tensor_dim(VisionEncoderDimNames.patch_size),
-                self._tensor_space.get_tensor_dim(VisionEncoderDimNames.patch_size),
+                self._tensor_space[VisionEncoderDimNames.out_channels],
+                self._tensor_space[VisionEncoderDimNames.in_channels],
+                self._tensor_space[VisionEncoderDimNames.patch_size],
+                self._tensor_space[VisionEncoderDimNames.patch_size],
             ),
             init_method=init_normal_(),
             lr_scale=self._lr_scale,
         )
         if config.conv_bias:
             self.bias = ParameterMeta.from_dims(
-                (self._tensor_space.get_tensor_dim(VisionEncoderDimNames.out_channels),),
+                (self._tensor_space[VisionEncoderDimNames.out_channels],),
                 init_method=init_normal_(),
-                lr_sclae=self._lr_scale,
+                lr_scale=self._lr_scale,
             )
         else:
             self.bias = None
-        self.norm = config.patch_norm.get_layer(tensor_space.get_tensor_dim(VisionEncoderDimNames.out_channels))
+        self.norm = config.patch_norm.get_layer(tensor_space[VisionEncoderDimNames.out_channels])
         self.stride = config.patch_size
 
     def forward(

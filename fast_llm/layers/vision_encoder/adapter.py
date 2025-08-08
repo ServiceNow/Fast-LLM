@@ -18,18 +18,18 @@ class VisionAdapter(Layer):
 
     def __init__(self, config: VisionEncoderConfig, tensor_space: TensorSpace):
         super().__init__()
-        input_dim = tensor_space.get_tensor_dim(VisionEncoderDimNames.out_channels)
+        input_dim = tensor_space[VisionEncoderDimNames.out_channels]
         self._activation_type = config.adapter_activation_type
         self.layer_1 = Linear(
             input_dim,
-            tensor_space.get_tensor_dim(VisionEncoderDimNames.adapter_size),
+            tensor_space[VisionEncoderDimNames.adapter_size],
             bias=True,
             weight_init_method=init_normal_(std=config.adapter_init_method_std),
             bias_init_method=init_normal_(std=config.adapter_init_method_std),
         )
         self.layer_2 = Linear(
-            tensor_space.get_tensor_dim(VisionEncoderDimNames.adapter_size),
-            tensor_space.get_tensor_dim(TransformerDimNames.hidden),
+            tensor_space[VisionEncoderDimNames.adapter_size],
+            tensor_space[TransformerDimNames.hidden],
             bias=True,
             weight_init_method=init_normal_(std=config.adapter_init_method_std),
             bias_init_method=init_normal_(std=config.adapter_init_method_std),

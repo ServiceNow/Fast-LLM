@@ -173,12 +173,8 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                 VisionEncoderKwargs.image_std: image_std,
                 VisionEncoderKwargs.image_rescale_factor: image_rescale_factor,
                 VisionEncoderKwargs.rope_theta: self._config.vision_encoder.transformer.rotary.theta,
-                VisionEncoderKwargs.kv_channels: self._tensor_space.get_tensor_dim(
-                    VisionTransformerDimNames.kv_channels
-                ).size,
-                VisionEncoderKwargs.out_channels: self._tensor_space.get_tensor_dim(
-                    VisionEncoderDimNames.out_channels
-                ).size,
+                VisionEncoderKwargs.kv_channels: self._tensor_space[VisionTransformerDimNames.kv_channels].size,
+                VisionEncoderKwargs.out_channels: self._tensor_space[VisionEncoderDimNames.out_channels].size,
             }
         else:
             vision_kwargs = {}
@@ -226,7 +222,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             else (batch_dim, hidden_sequence_q_dim, hidden_dim)
         )
         if self._config.vision_encoder.enabled:
-            vision_hidden_dim = self._tensor_space.get_tensor_dim(VisionTransformerDimNames.hidden)
+            vision_hidden_dim = self._tensor_space[VisionTransformerDimNames.hidden]
             vision_hidden_dims = (
                 (hidden_sequence_q_dim, batch_dim, vision_hidden_dim)
                 if sequence_first
