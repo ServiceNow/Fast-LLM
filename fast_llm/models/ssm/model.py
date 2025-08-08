@@ -20,7 +20,6 @@ class HybridSSMBaseModel[ConfigType: HybridSSMBaseModelConfig](GPTBaseModel[Conf
     As for the mixer, transformer uses MHA. For the LlambaBlock we support Mamba1 and discrete mamba2.
     """
 
-    config_class: typing.ClassVar[type[HybridSSMBaseModelConfig]] = HybridSSMBaseModelConfig
     _is_setup: bool = False
 
     def __init__(
@@ -110,7 +109,6 @@ class HybridSSMModel[ConfigType: HybridSSMModelConfig](GPTModel[ConfigType]):
     A hybrid model that combines Transformer and SSM blocks.
     """
 
-    config_class: typing.ClassVar[type[HybridSSMModelConfig]] = HybridSSMModelConfig
     base_model_class: typing.ClassVar[type[HybridSSMBaseModel]] = HybridSSMBaseModel
 
 

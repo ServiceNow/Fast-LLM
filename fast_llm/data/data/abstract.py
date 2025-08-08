@@ -13,7 +13,6 @@ if typing.TYPE_CHECKING:
 
 
 class Data[ConfigType: DataConfig](Configurable[ConfigType], abc.ABC):
-    config_class: typing.ClassVar[type[DataConfig]] = DataConfig
     _distributed: "Distributed"
     _sampling_parameters: dict[str, SamplingParameters]
     _cache_directory: pathlib.Path | None

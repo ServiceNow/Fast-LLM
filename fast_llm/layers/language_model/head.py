@@ -1,5 +1,4 @@
 import logging
-import typing
 
 import torch
 from torch._C._distributed_c10d import ReduceOp  # noqa
@@ -36,8 +35,6 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Config
     """
     A language model head (GPT), which combines the final layer norm, logits and cross-entropy (if applicable).
     """
-
-    config_class: typing.ClassVar[type[LanguageModelBaseConfig]] = LanguageModelBaseConfig
 
     def __init__(self, config: ConfigType, tensor_space: TensorSpace, prediction_distance: int):
         super().__init__(config)

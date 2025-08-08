@@ -31,8 +31,6 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
     A transformer-based language model generalizing the GPT model architecture.
     """
 
-    config_class: typing.ClassVar[type[GPTBaseModelConfig]] = GPTBaseModelConfig
-
     def __init__(
         self,
         config: GPTBaseModelConfig,
@@ -410,7 +408,6 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
 
 
 class GPTModel[ConfigType: GPTModelConfig](FastLLMModel[ConfigType]):
-    config_class: typing.ClassVar[type[GPTModelConfig]] = GPTModelConfig
     base_model_class: typing.ClassVar[type[GPTBaseModel]] = GPTBaseModel
 
     def get_tflops(self, phase: PhaseType, elapsed_time_per_iteration, batch_size, sequence_length) -> tuple[int, int]:

@@ -26,7 +26,6 @@ logger = logging.getLogger(__name__)
 
 
 class MultiStageModel[ConfigType: FastLLMModelConfig](Configurable[ConfigType]):
-    config_class: typing.ClassVar[type[FastLLMModelConfig]] = FastLLMModelConfig
     base_model_class: typing.ClassVar[type[BaseModel]] = BaseModel
     _is_setup: bool = False
     _flat_shard: torch.Tensor

@@ -1028,6 +1028,12 @@ class Configurable[ConfigType: Config](abc.ABC):
         # Handle multiple inheritance.
         super().__init__(*args, **kwargs)
 
+    def __init_subclass__(cls):
+        # Automatically set `config_class` based on the bound type.
+        # Make sure `ConfigType` is bound and respects class hierarchy.
+        Assert.custom(issubclass, config_class := ConfigType.__bound__, cls.config_class)
+        cls.config_class = config_class
+
     @property
     def config(self) -> ConfigType:
         return self._config
