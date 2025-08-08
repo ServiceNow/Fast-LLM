@@ -3,6 +3,8 @@ import os
 import pathlib
 import typing
 
+from transformers import PretrainedConfig
+
 from fast_llm.config import MISSING
 from fast_llm.engine.checkpoint.config import CheckpointFormat
 from fast_llm.engine.checkpoint.external import (
@@ -16,7 +18,7 @@ from fast_llm.engine.checkpoint.external import (
     SplitWeightConverter,
     WeightConverter,
 )
-from fast_llm.engine.checkpoint.huggingface import HuggingfaceStateDictCheckpointHandler
+from fast_llm.engine.checkpoint.huggingface import CustomModelingExportMixin, HuggingfaceStateDictCheckpointHandler
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig
 from fast_llm.functional.config import ActivationType
 from fast_llm.layers.common.config import RMSNormalizationConfig
@@ -29,11 +31,13 @@ from fast_llm.models.ssm.config import (
     HybridSSMModelConfig,
     LLambaHuggingfaceCheckpointFormat,
 )
+from fast_llm.models.ssm.external.apriel_15b_hybrid import (
+    configuration_ssm_hybrid_apriel15b,
+    modeling_ssm_hybrid_apriel15b,
+)
+from fast_llm.models.ssm.external.apriel_hybrid import configuration_ssm_hybrid_apriel, modeling_ssm_hybrid_apriel
 from fast_llm.models.ssm.model import HybridSSMModel
 from fast_llm.utils import Assert
-
-if typing.TYPE_CHECKING:
-    pass
 
 
 class HybridModelCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
@@ -523,6 +527,11 @@ class AprielSSMHuggingfaceCheckpointHandler(CommonSSMHuggingfaceCheckpointHandle
     _model_class: typing.ClassVar[FastLLMModelConfig] = HybridSSMModelConfig
     format: typing.ClassVar[type[CheckpointFormat]] = AprielSSMHuggingfaceCheckpointFormat
     architecture: typing.ClassVar[str] = "AprielSSMForCausalLM"
+    modeling_file = modeling_ssm_hybrid_apriel15b.__file__
+    configuration_file = configuration_ssm_hybrid_apriel15b.__file__
+    configuration_cls: typing.ClassVar[type["PretrainedConfig"]] = (
+        configuration_ssm_hybrid_apriel15b.AprielSSMHybridConfig
+    )
 
     @classmethod
     def _create_config_converters(cls) -> list[ParamConverter]:
@@ -635,6 +644,7 @@ class AprielSSMHuggingfaceCheckpointHandler(CommonSSMHuggingfaceCheckpointHandle
 
 
 class AprielSSMHHybridHuggingfaceCheckpointHandler(
+    CustomModelingExportMixin,
     HybridModelCheckpointHandler,  # handles the block structure parameter
     CommonSSMHuggingfaceCheckpointHandler,  # handles the SSM layers
     CommonLlamaHuggingfaceCheckpointHandler,  # handles the LLama layers
@@ -648,10 +658,21 @@ class AprielSSMHHybridHuggingfaceCheckpointHandler(
     format: typing.ClassVar[type[CheckpointFormat]] = AprielSSMHHybridHuggingfaceCheckpointFormat
     _default_block_type: str = SSMBlockType.mamba2_discrete.value
     architecture: typing.ClassVar[str] = "AprielSSMHybridForCausalLM"
+    modeling_file = modeling_ssm_hybrid_apriel.__file__
+    configuration_file = configuration_ssm_hybrid_apriel.__file__
+    configuration_cls: typing.ClassVar[type["PretrainedConfig"]] = modeling_ssm_hybrid_apriel.AprielSSMHybridConfig
 
     @classmethod
     def _create_config_converters(cls) -> list[ParamConverter]:
         return super()._create_config_converters() + [
+            ConstantExportParamConverter(
+                export_names=(("auto_map",),),
+                export_value={
+                    "AutoConfig": "configuration_ssm_hybrid_apriel.AprielSSMHybridConfig",
+                    "AutoModel": "modeling_ssm_hybrid_apriel.AprielSSMHybridModel",
+                    "AutoModelForCausalLM": "modeling_ssm_hybrid_apriel.AprielSSMHybridForCausalLM",
+                },
+            ),
             RenameParamConverter(
                 fast_llm_names=(("ssm", "d_inner"),),
                 export_names=(("ssm_cfg", "d_inner"),),
@@ -693,6 +714,7 @@ class AprielSSMHHybridHuggingfaceCheckpointHandler(
 
 
 class AprielThinkerSSMHHybridHuggingfaceCheckpointHandler(
+    CustomModelingExportMixin,
     HybridModelCheckpointHandler,  # handles the block structure parameter
     CommonSSMHuggingfaceCheckpointHandler,  # handles the SSM layers
     CommonLlamaHuggingfaceCheckpointHandler,  # handles the LLama layers
@@ -707,28 +729,23 @@ class AprielThinkerSSMHHybridHuggingfaceCheckpointHandler(
     _default_block_type: str = SSMBlockType.mamba2_discrete.value
     _hf_prefix: str = "model"
     architecture: typing.ClassVar[str] = "AprielThinkerSSMHybridForCausalLM"
-
-    def _create_weight_converters(self) -> list[WeightConverter]:
-        converters = super()._create_weight_converters()
-        # num_layers = self._model.config.base_model.transformer.num_layers
-        # # Embedding and output
-        # if self._model.config.base_model.tie_word_embeddings:
-        #     converters.append(
-        #         WeightConverter("layers.0.word_embeddings_weight", f"{self._hf_prefix}.embedding.weight")
-        #     )
-        #     converters.append(IgnoreImportWeightConverter((), f"{self._hf_prefix}.lm_head.weight"))
-        # else:
-        #     converters.append(
-        #         WeightConverter("layers.0.word_embeddings_weight", f"{self._hf_prefix}.embedding.weight")
-        #     )
-        #     converters.append(
-        #         WeightConverter(f"layers.{num_layers + 1}.output_weights", f"{self._hf_prefix}.lm_head.weight")
-        #     )
-        return converters
+    modeling_file = modeling_ssm_hybrid_apriel15b.__file__
+    configuration_file = configuration_ssm_hybrid_apriel15b.__file__
+    configuration_cls: typing.ClassVar[type["PretrainedConfig"]] = (
+        configuration_ssm_hybrid_apriel15b.AprielSSMHybridConfig
+    )
 
     @classmethod
     def _create_config_converters(cls) -> list[ParamConverter]:
         return super()._create_config_converters() + [
+            ConstantExportParamConverter(
+                export_names=(("auto_map",),),
+                export_value={
+                    "AutoConfig": "configuration_ssm_hybrid_apriel15b.AprielSSMHybridConfig",
+                    "AutoModel": "modeling_ssm_hybrid_apriel15b.AprielThinkerSSMHybridModel",
+                    "AutoModelForCausalLM": "modeling_ssm_hybrid_apriel15b.AprielThinkerSSMHybridForCausalLM",
+                },
+            ),
             RenameParamConverter(
                 fast_llm_names=(("ssm", "d_inner"),),
                 export_names=(("ssm_cfg", "d_inner"),),

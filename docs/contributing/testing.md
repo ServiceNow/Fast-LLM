@@ -1,6 +1,29 @@
 ---
-title: Writing tests
+title: Writing and running tests
 ---
+
+## Debugging with tests
+
+### Selecting tests
+
+When debugging, it is often advisable to target specific tests that can be executed efficiently. Although Pytest allows targeting specific tests or files, complex parameterization and dependencies in our suite often make explicit selection difficult. To address this, several options for test selection are available:
+
+* `--skip-slow`: Executes a subset of expedited tests that encompass much of the codebase. This option is effective for quickly checking for major regressions prior to executing the comprehensive test suite. Please note, parallel testing (`-n`) is typically unnecessary—and may even be counterproductive—when using this argument.
+* `--run-extra-slow`: Certain tests are disabled by default due to their lengthy execution times (e.g., complex integration tests) or limited criticality. Use this flag to re-enable them.
+* `--models MODEL0 MODEL1 ...`: Enables targeting of one or more specific models within the model testing suite. This feature is particularly useful during model-specific debugging efforts. For instance, running `pytest tests/models/test_models/test_checkpoint.py -v -ra --models llama` will specifically test checkpointing functionality for the llama model. Note that parallelization (`-n`) may be unnecessary in this context, as model tests for a given model are only partially distributed due to dependency constraints.
+
+### Monitoring distributed tests
+
+Distributed tests are generally the slowest due to the overhead associated with starting processes and process groups. To mitigate this, Fast-LLM incorporates several bundled tests that execute multiple subtests within a single subprocess call. As bundled calls can generate substantial output and potentially reduce report readability, Fast-LLM captures the output from each subtest and forwards it to an associated test. If necessary, this output capture can be disabled using `--no-distributed-capture`—for instance, if a severe crash hinders output capture or to disable pytest capture entirely (`-s`). Captured logs are stored in the testing cache directory; please consult individual tests for specific locations.
+
+For example, `test_run_model_distributed[llama]` tries various distributed configurations for the `llama` model, each reported under an associated test such as `test_model_distributed[llama-distributed]`. Should a distributed subtest, say `tp2` (tensor-parallel), encounter a failure, `test_run_model_distributed` will log the issue, continue executing remaining subtests, and ultimately raise an error to designate the bundled test as failed. The associated test, `test_model_distributed[llama-tp2]`, will also fail and display the captured output (retrieved from `/tmp/fast_llm_tests/models/llama/tp2/`), separated by type (stdout, stderr and traceback) as would happen for a normal test (minus some advanced formating), but also by rank.
+
+### Other options
+
+* `--show-gpu-memory N`: Monitors GPU memory use and reports the top N tests (default 10). Mainly helps ensure tests don't exceed memory limits, but results may not be precise.
+* `--show-skipped`: Many tests skipped for obvious reasons (ex. marked as slow or extra slow, skipped model testing groups (see below)) are removed entirely from the report to reduce clutter. Use this flag to display them.
+
+## Best practices
 
 ## Testing models
 
