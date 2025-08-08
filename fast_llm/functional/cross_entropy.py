@@ -258,10 +258,10 @@ def _torch_reverse_kl_forward_backward_vocab_parallel(
         Assert.eq(loss_mask.shape, logits.shape[:-1])
 
     # Compute log probabilities - let _fused_softmax handle scaling internally
-    teacher_log_probs = distributed_log_softmax(target, group=group)
+    teacher_log_probs = distributed_log_softmax(target.float(), group=group)
     batch_size = logits.shape[0]
     with torch.enable_grad():
-        logits_ = logits.detach().requires_grad_(grad_output is not None)
+        logits_ = logits.float().detach().requires_grad_(grad_output is not None)
         student_log_probs = distributed_log_softmax(logits_, group=group)
 
         # Reverse KL: input=teacher_log_probs, target=student_probs
@@ -317,19 +317,19 @@ def _torch_reverse_kl_forward_backward_no_tp(
     # Clamp to prevent extreme values that cause NaNs in log_softmax
     scaled_target = torch.clamp(scaled_target, min=-100.0, max=100.0)
 
-    teacher_log_probs = torch.log_softmax(scaled_target, dim=-1)
+    teacher_log_probs = torch.log_softmax(scaled_target.float(), dim=-1)
 
     # For reverse KL: KL(q||p) = Σ q * log(q/p) = Σ q * (log(q) - log(p))
     # Use kl_div with: input=log(p), target=q, log_target=False
     # This gives: Σ q * (log(q) - log(p)) = exactly what we want!
 
     with torch.enable_grad():
-        logits_ = logits.detach().requires_grad_(grad_output is not None)
+        logits_ = logits.float().detach().requires_grad_(grad_output is not None)
 
         scaled_logits = logits_ * logits_scale_factor
         # Clamp to prevent extreme values that cause NaNs in log_softmax
         scaled_logits = torch.clamp(scaled_logits, min=-100.0, max=100.0)
-        student_log_probs = torch.log_softmax(scaled_logits, dim=-1)
+        student_log_probs = torch.log_softmax(scaled_logits.float(), dim=-1)
 
         # Reverse KL: input=teacher_log_probs, target=student_probs
         if loss_mask is None:
@@ -391,19 +391,19 @@ def _torch_reverse_kl_forward_backward_sequence_tensor_parallel(
     # Clamp to prevent extreme values that cause NaNs in log_softmax
     scaled_target = torch.clamp(scaled_target, min=-100.0, max=100.0)
 
-    teacher_log_probs = torch.log_softmax(scaled_target, dim=-1)
+    teacher_log_probs = torch.log_softmax(scaled_target.float(), dim=-1)
 
     # For reverse KL: KL(q||p) = Σ q * log(q/p) = Σ q * (log(q) - log(p))
     # Use kl_div with: input=log(p), target=q, log_target=False
     # This gives: Σ q * (log(q) - log(p)) = exactly what we want!
 
     with torch.enable_grad():
-        logits_ = logits.detach().requires_grad_(grad_output is not None)
+        logits_ = logits.float().detach().requires_grad_(grad_output is not None)
 
         scaled_logits = logits_ * logits_scale_factor
         # Clamp to prevent extreme values that cause NaNs in log_softmax
         scaled_logits = torch.clamp(scaled_logits, min=-100.0, max=100.0)
-        student_log_probs = torch.log_softmax(scaled_logits, dim=-1)
+        student_log_probs = torch.log_softmax(scaled_logits.float(), dim=-1)
 
         # Reverse KL: input=teacher_log_probs, target=student_probs
         if loss_mask is None:
