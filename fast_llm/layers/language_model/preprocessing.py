@@ -28,7 +28,7 @@ class PositionEmbeddingPreprocessor(Preprocessor):
         assert config.use_absolute_position_embeddings
         self._tensor_space = tensor_space
         self._distributed_config = self._tensor_space.distributed_config
-        self._scalar_dim = self._tensor_space.get_tensor_dim(DefaultDimNames.scalar)
+        self._scalar_dim = self._tensor_space[DefaultDimNames.scalar]
 
     def _create_tensors(self, sequence_length: int) -> None:
         if sequence_length <= self._tensor_cache_max_sequence_length:
@@ -76,7 +76,7 @@ class PreferenceSpanPreprocessor(Preprocessor):
         self._config = config
         self._tensor_space = tensor_space
         self._distributed_config = self._tensor_space.distributed_config
-        self._scalar_dim = self._tensor_space.get_tensor_dim(DefaultDimNames.scalar)
+        self._scalar_dim = self._tensor_space[DefaultDimNames.scalar]
 
     def preprocess_meta(self, kwargs: dict[str, typing.Any]) -> None:
         return

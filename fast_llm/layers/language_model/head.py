@@ -61,7 +61,7 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
         if self._cross_entropy_splits is not None and self._sequence_parallel:
             assert not self._parallel_embeddings
 
-        hidden_dim = self._tensor_space.get_tensor_dim(TransformerDimNames.hidden)
+        hidden_dim = self._tensor_space[TransformerDimNames.hidden]
 
         self._loss_coefficient = (
             config.prediction_loss_coefficient[prediction_distance] if config.prediction_loss_coefficient else 1.0
@@ -108,9 +108,9 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
         if self._tie_word_embeddings or self._prediction_distance > 0:
             return
         # untie embedding weights
-        vocab_dim = self._tensor_space.get_tensor_dim(
+        vocab_dim = self._tensor_space[
             LanguageModelDimNames.vocab_tp if self._parallel_embeddings else LanguageModelDimNames.vocab
-        )
+        ]
         self.output_weights = ParameterMeta.from_dims(
             (vocab_dim, hidden_dim),
             init_method=init_normal_(
@@ -338,9 +338,9 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
                 logits_scale_factor=self._logits_scale_factor,
             )
         if self._debug_transformer and self._cross_entropy_splits is None:
-            vocab_dim = self._tensor_space.get_tensor_dim(
+            vocab_dim = self._tensor_space[
                 LanguageModelDimNames.vocab if self._sequence_parallel_logits else LanguageModelDimNames.vocab_tp
-            )
+            ]
             dims = [*kwargs[TransformerKwargs.hidden_dims][:-1], vocab_dim]
             sequence_index = 1 - int(kwargs[TransformerKwargs.sequence_first])
             dims[sequence_index] = (
