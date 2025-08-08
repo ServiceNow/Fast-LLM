@@ -258,10 +258,10 @@ def _torch_reverse_kl_forward_backward_vocab_parallel(
         Assert.eq(loss_mask.shape, logits.shape[:-1])
 
     # Compute log probabilities - let _fused_softmax handle scaling internally
-    teacher_log_probs = distributed_log_softmax(target, group=group)
+    teacher_log_probs = distributed_log_softmax(target.float(), group=group)
     batch_size = logits.shape[0]
     with torch.enable_grad():
-        logits_ = logits.detach().requires_grad_(grad_output is not None)
+        logits_ = logits.float().detach().requires_grad_(grad_output is not None)
         student_log_probs = distributed_log_softmax(logits_, group=group)
 
         # Reverse KL: input=teacher_log_probs, target=student_probs
