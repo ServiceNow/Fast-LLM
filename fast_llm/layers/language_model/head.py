@@ -7,7 +7,6 @@ from torch.distributed import all_reduce
 from fast_llm.config import Configurable
 from fast_llm.core.ops import split_op
 from fast_llm.engine.base_model.base_model import Layer
-from fast_llm.engine.config_utils.initialization import init_normal_
 from fast_llm.engine.config_utils.tensor_space import DefaultDimNames, TensorDim, TensorSpace
 from fast_llm.engine.distributed.config import DistributedDimNames
 from fast_llm.functional.autograd import grad_is_context, wrap_forward_backward
@@ -37,12 +36,7 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Config
     A language model head (GPT), which combines the final layer norm, logits and cross-entropy (if applicable).
     """
 
-    def __init__(
-        self,
-        config: ConfigType,
-        tensor_space: TensorSpace,
-        prediction_distance: int,
-    ):
+    def __init__(self, config: ConfigType, tensor_space: TensorSpace, prediction_distance: int):
         super().__init__(config)
         self._debug = DebugLayer(
             tensor_space,
@@ -50,8 +44,6 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Config
             self._config.transformer.debug_transformer,
             self._config.transformer.debug_transformer_memory,
         )
-        self._tensor_space = tensor_space
-
         self._group_size = tensor_space.distributed_config.tensor_parallel
         self._sequence_parallel = tensor_space.distributed_config.sequence_tensor_parallel
         self._parallel_embeddings = (
@@ -93,11 +85,7 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Config
             ]
             self.output_weights = ParameterMeta.from_dims(
                 (vocab_dim, hidden_dim),
-                init_method=init_normal_(
-                    std=self._config.init_method_std_embed,
-                    min_val=self._config.init_method_min_embed,
-                    max_val=self._config.init_method_max_embed,
-                ),
+                init_method=self._config.output_weight_initialization_method,
                 lr_scale=self._config.output_lr_scale,
             )
 

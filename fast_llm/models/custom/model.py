@@ -33,7 +33,7 @@ class CustomBaseModel[ConfigType: CustomBaseModelConfig](GPTBaseModel[ConfigType
                     self._tensor_space,
                     block_index=i + 1,
                 )
-                for i in range(self._config.transformer.num_layers)
+                for i in range(self._config.transformer.num_blocks)
             ],
             CustomHead(self._config, self._tensor_space),
         ]
