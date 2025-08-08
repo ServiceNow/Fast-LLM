@@ -57,13 +57,7 @@ class Mamba2(BlockLayer):
         block_index: int,
         block_config: BlockConfig,
     ):
-        super().__init__(
-            tensor_space,
-            block_index,
-            self._mixer_name,
-            debug_level=block_config.debug_transformer,
-            debug_memory=block_config.debug_transformer_memory,
-        )
+        super().__init__(tensor_space, block_index, debug_level=block_config.debug_transformer)
         self._config: SSMConfig = config
         Assert.eq(self._config.activation_type, ActivationType.silu)
         layer_lr_scale: float | None = (

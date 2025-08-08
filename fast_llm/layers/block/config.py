@@ -1,4 +1,6 @@
+import abc
 import enum
+import functools
 import typing
 
 from fast_llm.config import Field, FieldHint, check_field, config_class
@@ -9,7 +11,8 @@ from fast_llm.layers.common.config import NormalizationConfig
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
-    from fast_llm.layers.block.block import BlockLayer
+    from fast_llm.layers.block.block import Block, BlockLayer
+
 
 # TODO: Generalize these beyond language models? (Ex. vision)
 
@@ -156,6 +159,43 @@ class BlockConfig(BaseModelConfig):
         hint=FieldHint.architecture,
     )
 
+    block_sequence: "BlockSequenceConfig" = Field(init=False)
+
+    def _validate(self) -> None:
+        assert hasattr(self, "block_sequence")
+        Assert.incl(self, self.block_sequence.blocks.values())
+        self.mixer.block = self
+        self.mlp.block = self
+        super()._validate()
+
+    def setup_tensor_space(self, tensor_space: TensorSpace) -> None:
+        self.mlp.setup_tensor_space(tensor_space)
+        self.mixer.setup_tensor_space(tensor_space)
+
+        # Hidden dimension
+        tensor_space.add_tensor_dim(TensorDim(BlockDimNames.hidden, self.block_sequence.hidden_size))
+
+    @abc.abstractmethod
+    def get_block(self) -> "Block":
+        pass
+
+
+@config_class()
+class BlockSequenceConfig(BaseModelConfig):
+    _abstract = True
+
+    blocks: dict[str, BlockConfig] = Field()
+    block_pattern: tuple[str, ...] = Field(
+        default=None,
+        desc="The pattern of blocks (referred by name) to use. The sequence is repeated until reaching `num_blocks`."
+        " Default: cycle over `blocks` in the order they are defined.",
+    )
+    default_block: str = Field(
+        default=None,
+        desc="The default block configuration to use when referring to the model."
+        " Used to set some defaults in the language model.",
+    )
+
     # TODO: Move these, not specific to a single block.
     num_blocks: int = Field(
         default=12,
@@ -174,15 +214,23 @@ class BlockConfig(BaseModelConfig):
         desc="Store the residuals for the transformer in full precision (`optimization_dtype`).",
         hint=FieldHint.stability,
     )
-    per_layer_lr_scale: list[float] | None = Field(
-        default=None,
-        desc="Custom learning rate scale for each layer.",
-        doc="May be used to freeze some layers by setting their scale to zero.",
-        hint=FieldHint.feature,
-    )
+
+    def _validate(self) -> None:
+        for block in self.blocks.values():
+            block.validate()
+        if self.block_pattern is None:
+            self.block_pattern = tuple(self.blocks)
+        if self.default_block is None:
+            self.default_block = self.block_pattern[0]
+        super()._validate()
+
+    def get_block_config(self, block_index: int) -> BlockConfig:
+        return self.blocks[self.block_pattern[block_index % len(self.block_pattern)]]
 
     def setup_tensor_space(self, tensor_space: TensorSpace) -> None:
-        super().setup_tensor_space(tensor_space)
+        for block in self.blocks.values():
+            block.setup_tensor_space(tensor_space)
 
-        # Hidden dimension
-        tensor_space.add_tensor_dim(TensorDim(BlockDimNames.hidden, self.hidden_size))
+    @functools.cached_property
+    def default_block_config(self) -> BlockConfig:
+        return self.blocks[self.default_block]

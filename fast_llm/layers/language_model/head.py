@@ -39,14 +39,22 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Config
 
     config_class: typing.ClassVar[type[LanguageModelBaseConfig]] = LanguageModelBaseConfig
 
-    def __init__(self, config: ConfigType, tensor_space: TensorSpace, prediction_distance: int):
+    def __init__(
+        self,
+        config: ConfigType,
+        tensor_space: TensorSpace,
+        prediction_distance: int,
+    ):
         super().__init__(config)
+        # TODO: Avoid default_block_config?
         self._debug = DebugLayer(
             tensor_space,
             f"Language model head",
-            self._config.transformer.debug_transformer,
-            self._config.transformer.debug_transformer_memory,
+            self._config.default_block_config.debug_transformer,
+            self._config.default_block_config.debug_transformer_memory,
         )
+        self._tensor_space = tensor_space
+
         self._group_size = tensor_space.distributed_config.tensor_parallel
         self._sequence_parallel = tensor_space.distributed_config.sequence_tensor_parallel
         self._parallel_embeddings = (
@@ -67,7 +75,8 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Config
             else 1.0
         )
         self._loss_name = LanguageModelLossNames.multi_token_prediction_loss(prediction_distance)
-        self.final_norm = self._config.transformer.normalization.get_layer(hidden_dim)
+        # TODO: Avoid default_block_config?
+        self.final_norm = self._config.default_block_config.normalization.get_layer(hidden_dim)
         self._logits_scale_factor = self._config.logits_scale_factor
         self._language_model_loss_factor = self._config.language_model_loss_factor
         self._distillation_loss_factor = self._config.distillation_loss_factor

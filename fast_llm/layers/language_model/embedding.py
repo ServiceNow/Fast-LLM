@@ -14,7 +14,7 @@ from fast_llm.utils import Assert
 WORD_EMBEDDINGS_WEIGHT = "word_embeddings_weight"
 
 
-class LanguageModelEmbedding[ConfigType: LanguageModelBaseConfig](Configurable[LanguageModelBaseConfig], Layer):
+class LanguageModelEmbedding[ConfigType: LanguageModelBaseConfig](Configurable[ConfigType], Layer):
     """
     A language model embedding layer.
     Consists of word embeddings (tensor-parallel or sequence-tensor-parallel),
@@ -44,6 +44,7 @@ class LanguageModelEmbedding[ConfigType: LanguageModelBaseConfig](Configurable[L
         self._parallel_embeddings = (
             self._tensor_space.distributed_config.tensor_parallel > 1 and self._config.parallel_embeddings
         )
+
         hidden_dim = self._tensor_space[LanguageModelDimNames.hidden]
         vocab_dim = self._tensor_space[
             LanguageModelDimNames.vocab_tp if self._parallel_embeddings else LanguageModelDimNames.vocab
@@ -107,7 +108,7 @@ class LanguageModelEmbedding[ConfigType: LanguageModelBaseConfig](Configurable[L
             if self._sequence_parallel
             else self._tensor_space.distributed.pp_generator
         ):
-            embeddings = torch.dropout(embeddings, self._config.transformer.hidden_dropout, self.training)
+            embeddings = torch.dropout(embeddings, self._config.embedding_dropout, self.training)
         return embeddings.to(dtype=self._residual_dtype)
 
     def forward(
