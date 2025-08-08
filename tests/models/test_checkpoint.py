@@ -317,9 +317,7 @@ def test_huggingface_model(model_testing_config, get_convert_path):
         if model_testing_config.name in ("diffusion_llama", "dream")
         else transformers.AutoModelForCausalLM
     )
-    model_as_hf = auto_model.from_pretrained(
-        hf_path, trust_remote_code=model_testing_config.checkpoint_format.trust_remote_code
-    ).cuda()
+    model_as_hf = auto_model.from_pretrained(hf_path, trust_remote_code=True).cuda()
     for name, model in zip(
         ("From state dict", "From Huggingface", "Native Huggingface"),
         (model_from_fast_llm, model_from_hf, model_as_hf),

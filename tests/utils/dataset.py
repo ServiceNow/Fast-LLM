@@ -1,27 +1,21 @@
 import pathlib
 import random
-import string
 
 import numpy as np
 import yaml
 
 from fast_llm.data.dataset.gpt.memmap import GPTMemmapDataset
 from fast_llm.data.dataset.gpt.sampled import GPTSample
-from tests.utils.utils import SHARED_RESULT_PATH, TEST_RESULTS_PATH
-
-# TODO: Fixtures
-TOKENIZER_PATH = SHARED_RESULT_PATH / "tokenizer"
-TOKENIZER_FILE = TOKENIZER_PATH / "tokenizer.json"
-DATASET_CACHE = SHARED_RESULT_PATH / "dataset"
-DATASET_PREFIX = DATASET_CACHE / "common_dataset"
-DATASET_SAMPLING_CACHE = TEST_RESULTS_PATH / "dataset_sampling_cache"
-TEST_VOCAB_SIZE = 8192
-# Random lowercase: 80.7% (3.1% each); space: 18.6%; doc end: 0.6%
-TEST_CHARACTERS = (string.ascii_lowercase) * 5 + " " * 30 + "\n"
-TEST_DATASET_TOKENS = 1000000
-
-MODEL_DATASET_PREFIX = DATASET_CACHE / "model_dataset"
-MODEL_TEST_VOCAB_SIZE = 384
+from tests.utils.global_variables import (
+    DATASET_PREFIX,
+    MODEL_DATASET_PREFIX,
+    MODEL_TEST_VOCAB_SIZE,
+    TEST_CHARACTERS,
+    TEST_DATASET_TOKENS,
+    TEST_VOCAB_SIZE,
+    TOKENIZER_FILE,
+    TOKENIZER_PATH,
+)
 
 
 def download_santacoder_tokenizer():

@@ -24,8 +24,8 @@ from fast_llm.models.ssm.config import (
     AprielThinkerSSMHHybridHuggingfaceCheckpointFormat,
     LLambaHuggingfaceCheckpointFormat,
 )
-from tests.utils.dataset import MODEL_DATASET_PREFIX, MODEL_TEST_VOCAB_SIZE
 from tests.utils.distributed_configs import DistributedTestingConfig
+from tests.utils.global_variables import MODEL_DATASET_PREFIX, MODEL_TEST_VOCAB_SIZE
 
 from fast_llm.engine.evaluation.evaluators import (  # isort:skip  # needed for dynamic type registration
     EvaluatorsConfig,
