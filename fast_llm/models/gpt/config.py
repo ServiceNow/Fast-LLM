@@ -23,7 +23,6 @@ logger = logging.getLogger(__name__)
 
 class GPTHuggingfaceCheckpointFormat(CheckpointFormat):
     support_optimizer: typing.ClassVar[bool] = False
-    trust_remote_code: typing.ClassVar[bool] = False
 
     @classmethod
     def get_handler_class(cls) -> type[CheckpointHandler]:
@@ -58,17 +57,14 @@ class MixtralGPTHuggingfaceCheckpointFormat(GPTHuggingfaceCheckpointFormat):
 
 class MTPLlamaGPTHuggingfaceCheckpointFormat(GPTHuggingfaceCheckpointFormat):
     name: typing.ClassVar[str] = "mtp_llama"
-    trust_remote_code: typing.ClassVar[bool] = True
 
 
 class DiffusionDreamGPTHuggingfaceCheckpointFormat(GPTHuggingfaceCheckpointFormat):
     name: typing.ClassVar[str] = "dream"
-    trust_remote_code: typing.ClassVar[bool] = True
 
 
 class DiffusionLlamaGPTHuggingfaceCheckpointFormat(GPTHuggingfaceCheckpointFormat):
     name: typing.ClassVar[str] = "diffusion_llama"
-    trust_remote_code: typing.ClassVar[bool] = True
 
 
 @config_class()
