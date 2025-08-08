@@ -344,7 +344,7 @@ def _torch_reverse_kl_forward_backward_no_tp(
             loss_per_sample = torch.nn.functional.kl_div(
                 teacher_log_probs, student_log_probs, reduction="none", log_target=True
             ).sum(dim=-1)
-            loss = (loss_per_sample * loss_mask) / loss_mask.sum()
+            loss = (loss_per_sample * loss_mask).sum() / loss_mask.sum()
 
         if grad_output is not None:
             # note, we never get here in TP over seq. dim.
