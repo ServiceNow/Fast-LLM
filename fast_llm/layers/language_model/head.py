@@ -11,7 +11,13 @@ from fast_llm.engine.base_model.base_model import Layer
 from fast_llm.engine.config_utils.tensor_space import DefaultDimNames, TensorDim, TensorSpace
 from fast_llm.engine.distributed.config import DistributedDimNames
 from fast_llm.functional.autograd import grad_is_context, wrap_forward_backward
-from fast_llm.functional.config import CrossEntropyImpl, DistillationLossImpl, TargetFormat, TritonConfig
+from fast_llm.functional.config import (
+    CrossEntropyImpl,
+    DistillationLossImpl,
+    ReverseKLImpl,
+    TargetFormat,
+    TritonConfig,
+)
 from fast_llm.functional.cross_entropy import cross_entropy_forward_backward, reverse_kl_forward_backward
 from fast_llm.functional.dpo import compute_dpo_loss
 from fast_llm.functional.linear import output_parallel_linear_backward, output_parallel_linear_forward
@@ -313,12 +319,13 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
                     logit_input_grad_.copy_(grad_)
                 loss = loss_ if loss is None else loss + loss_
                 del grad_, loss_
-        loss_count = (self._cross_entropy_splits or 1) * (self._group_size if self._sequence_parallel_logits else 1)
-        if loss_count != 1:
-            loss.div_(loss_count)
-        if self._sequence_parallel_logits:
-            # TODO: Async
-            all_reduce(loss, group=self._tensor_space.distributed.tensor_group)
+        assert self._cross_entropy_splits is None, "This is not supported for now"
+        # loss_count = (self._cross_entropy_splits or 1) * (self._group_size if self._sequence_parallel_logits else 1)
+        # if loss_count != 1:
+        #     loss.div_(loss_count)
+        # if self._sequence_parallel_logits:
+        #     # TODO: Async
+        #     all_reduce(loss, group=self._tensor_space.distributed.tensor_group)
         return loss, logit_input_grad.view_as(input_) if logit_input_grad is not None else None
 
     def _logits_cross_entropy_forward_backward(
@@ -412,6 +419,29 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
 
         if distillation_target is not None and self._distillation_loss_factor > 0.0:
             if self._distillation_loss_implementation == DistillationLossImpl.reverse_kl:
+                local_valid_tokens = total_valid_tokens = logits.shape[0]
+                if logits.shape[-1] != self._config.vocab_size:
+                    reverse_kl_impl = ReverseKLImpl.tp
+                    assert loss_mask is None, "Loss mask is not implemented for TP (vocab dim) reverse KL yet"
+                elif self._sequence_parallel_logits:
+                    # grad_output already reflects scaling 1/ number of ranks (group_size), see _forward_backward
+                    reverse_kl_impl = ReverseKLImpl.stp
+                    if loss_mask is not None:
+                        local_valid_tokens = loss_mask.sum()
+                        total_valid_tokens = local_valid_tokens.clone()
+                        all_reduce(
+                            total_valid_tokens, op=ReduceOp.SUM, group=self._tensor_space.distributed.tensor_group
+                        )
+                    else:
+                        local_valid_tokens = logits.shape[0]
+                        total_valid_tokens = local_valid_tokens * self._group_size
+                    # in the loss function we compute grads w.r.t sum of losses,
+                    # so we need to multiply back by the group size and divide by the number of valid tokens to get the correct scaling
+                    # note, the function returns the sum of local losses, so we need to handle this properly for reporting
+                    grad_output *= self._group_size / total_valid_tokens  # multiply back by the group size
+                else:
+                    reverse_kl_impl = ReverseKLImpl.no_tp
+
                 distillation_loss, distillation_grad = reverse_kl_forward_backward(
                     logits.flatten(0, -2),
                     distillation_target,
@@ -423,8 +453,14 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
                     target_format=(
                         TargetFormat.labels if self._config.distillation_model is None else TargetFormat.logits
                     ),
-                    vocab_parallel=logits.shape[-1] != self._config.vocab_size,
+                    reverse_kl_impl=reverse_kl_impl,
+                    total_valid_tokens=total_valid_tokens,
                 )
+                if self._sequence_parallel_logits:
+                    # distillation_loss is local sum, so we need to divide by the number of valid tokens to get the correct scaling
+                    all_reduce(distillation_loss, op=ReduceOp.SUM, group=self._tensor_space.distributed.tensor_group)
+                    distillation_loss /= total_valid_tokens  # final global loss
+
             elif self._distillation_loss_implementation == DistillationLossImpl.cross_entropy:
                 distillation_loss, distillation_grad = cross_entropy_forward_backward(
                     logits.flatten(0, -2),
