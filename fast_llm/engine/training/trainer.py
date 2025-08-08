@@ -43,8 +43,6 @@ logger = logging.getLogger(__name__)
 
 
 class TrainingEvaluator[ConfigType: TrainingEvaluatorConfig](Evaluator[ConfigType]):
-    config_class: typing.ClassVar[type[TrainingEvaluatorConfig]] = TrainingEvaluatorConfig
-
     evaluator: Evaluator
 
     def __init__(
@@ -114,7 +112,6 @@ class TrainingEvaluator[ConfigType: TrainingEvaluatorConfig](Evaluator[ConfigTyp
 
 
 class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
-    config_class: typing.ClassVar[type[TrainerConfig]] = TrainerConfig
     # TODO: Generalize data, schedule, logging, etc.
     _is_setup: bool = False
     _distributed: Distributed

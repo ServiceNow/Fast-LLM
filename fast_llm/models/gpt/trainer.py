@@ -10,8 +10,6 @@ logger = logging.getLogger(__name__)
 
 
 class GPTTrainer[ConfigType: GPTTrainerConfig](Trainer[ConfigType]):
-    config_class: typing.ClassVar[type[GPTTrainerConfig]] = GPTTrainerConfig
-
     def _get_data(self) -> GPTData:
         return GPTData(
             config=self._config.data,

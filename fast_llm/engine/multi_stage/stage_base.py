@@ -21,7 +21,6 @@ logger = logging.getLogger(__name__)
 
 
 class StageBase(Configurable[StageConfig]):
-    config_class: typing.ClassVar[type[StageConfig]] = StageConfig
     _distributed: Distributed
     _mode: StageMode
 

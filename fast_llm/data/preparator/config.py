@@ -19,8 +19,6 @@ class DatasetPreparatorConfig(RunnableConfig):
 
 
 class DatasetPreparator[ConfigType: DatasetPreparatorConfig](Configurable[ConfigType], abc.ABC):
-    config_class: typing.ClassVar[type[DatasetPreparatorConfig]] = DatasetPreparatorConfig
-
     @abc.abstractmethod
     def run(self) -> None:
         raise NotImplementedError

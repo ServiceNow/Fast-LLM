@@ -121,7 +121,6 @@ class Block[ConfigType: BlockConfig](Configurable[ConfigType], Layer):
     A transformer-like decoder base block with abstract mixer.
     """
 
-    config_class: typing.ClassVar[type[BlockConfig]] = BlockConfig
     # TODO: Standardize to `mixer`
     _mixer_module_name: typing.ClassVar[str] = "mixer"
 

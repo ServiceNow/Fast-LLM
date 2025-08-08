@@ -8,16 +8,13 @@ from fast_llm.engine.distributed.config import DistributedConfig, PhaseType
 from fast_llm.engine.schedule.config import BatchConfig
 from fast_llm.layers.language_model.embedding import LanguageModelEmbedding
 from fast_llm.layers.transformer.block import TransformerBlock
-from fast_llm.models.custom.config import CustomBaseModelConfig, CustomModelConfig
+from fast_llm.models.custom.config import CustomBaseModelConfig
 from fast_llm.models.custom.head import CustomHead
-from fast_llm.models.gpt.config import GPTBaseModelConfig
 from fast_llm.models.gpt.model import GPTBaseModel, GPTModel
 from fast_llm.tensor import TensorMeta
 
 
 class CustomBaseModel[ConfigType: CustomBaseModelConfig](GPTBaseModel[ConfigType]):
-    config_class: typing.ClassVar[type[GPTBaseModelConfig]] = GPTBaseModelConfig
-
     def __init__(
         self,
         config: CustomBaseModelConfig,
@@ -66,5 +63,4 @@ class CustomBaseModel[ConfigType: CustomBaseModelConfig](GPTBaseModel[ConfigType
 
 
 class CustomModel[ConfigType: CustomBaseModelConfig](GPTModel[ConfigType]):
-    config_class: typing.ClassVar[type[CustomModelConfig]] = CustomModelConfig
     base_model_class: typing.ClassVar[type[CustomBaseModel]] = CustomBaseModel
