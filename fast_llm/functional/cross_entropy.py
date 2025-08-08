@@ -160,7 +160,7 @@ def _fused_cross_entropy_forward_backward(
 
     per_sample_loss = sum_exp_logits.log() - predicted_logits
     if loss_mask is not None:
-        per_sample_loss = per_sample_loss[loss_mask]
+        per_sample_loss = per_sample_loss * loss_mask
 
     loss = per_sample_loss.mean()
     if target_format != TargetFormat.labels and group is not None:
@@ -322,7 +322,7 @@ def _torch_reverse_kl_forward_backward(
         # Clamp to prevent extreme values that cause NaNs in log_softmax
         scaled_logits = torch.clamp(scaled_logits, min=-100.0, max=100.0)
         student_log_probs = torch.log_softmax(scaled_logits, dim=-1)
-        
+
         # Reverse KL: input=teacher_log_probs, target=student_probs
         if loss_mask is None:
             loss = torch.nn.functional.kl_div(
