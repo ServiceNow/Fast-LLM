@@ -11,7 +11,8 @@ from tests.data.common import (
     get_sampling_data,
     get_test_data_and_compare_samples,
 )
-from tests.utils.dataset import DATASET_CACHE, DATASET_PREFIX, get_test_dataset
+from tests.utils.dataset import get_test_dataset
+from tests.utils.global_variables import DATASET_CACHE, DATASET_PREFIX
 
 _DATASET_PREFIX_MIX_1 = DATASET_CACHE / "blended_mix_1" / "dataset"
 

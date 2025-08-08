@@ -9,7 +9,8 @@ from tests.data.common import (
     validate_indexed_dataset_sampling,
 )
 from tests.data.test_memmap import MEMMAP_DATASET_SAMPLES
-from tests.utils.dataset import DATASET_CACHE, get_test_concatenated_memmap_dataset
+from tests.utils.dataset import get_test_concatenated_memmap_dataset
+from tests.utils.global_variables import DATASET_CACHE
 
 _DATASET_PREFIX_MIX_CONCATENATED_MEMMAP = DATASET_CACHE / "concatenated_memmap"
 

@@ -13,7 +13,8 @@ from tests.data.common import (
     get_test_data_and_compare_samples,
     validate_indexed_dataset_sampling,
 )
-from tests.utils.dataset import DATASET_PREFIX, get_test_dataset
+from tests.utils.dataset import get_test_dataset
+from tests.utils.global_variables import DATASET_PREFIX
 
 try:
     from fast_llm.csrc.data import build_padded_token_cumsum  # noqa

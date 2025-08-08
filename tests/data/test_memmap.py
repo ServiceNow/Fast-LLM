@@ -4,7 +4,8 @@ import pytest
 
 from fast_llm.data.dataset.gpt.config import GPTMemmapDatasetConfig
 from tests.data.common import compare_indexed_dataset, get_dataset_config
-from tests.utils.dataset import DATASET_CACHE, DATASET_PREFIX, DATASET_SAMPLING_CACHE, get_test_dataset
+from tests.utils.dataset import get_test_dataset
+from tests.utils.global_variables import DATASET_CACHE, DATASET_PREFIX, DATASET_SAMPLING_CACHE
 
 MEMMAP_DATASET_LENGTH = 6153
 MEMMAP_DATASET_TOKENS = 508327

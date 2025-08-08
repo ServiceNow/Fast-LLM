@@ -7,7 +7,8 @@ from tests.data.common import (
     get_test_data_and_compare_samples,
 )
 from tests.data.test_memmap import MEMMAP_DATASET_LENGTH, MEMMAP_DATASET_SAMPLES, MEMMAP_DATASET_TOKENS
-from tests.utils.dataset import DATASET_PREFIX, get_test_dataset
+from tests.utils.dataset import get_test_dataset
+from tests.utils.global_variables import DATASET_PREFIX
 
 GPT_CONCATENATED_SAMPLES = [
     [4709, 819, 79, 207, 277, 1790],

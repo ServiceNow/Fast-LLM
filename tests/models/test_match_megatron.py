@@ -3,8 +3,9 @@ import os
 import pytest
 
 from tests.utils.compare_tensor_logs import CompareConfig
-from tests.utils.dataset import MODEL_DATASET_PREFIX, get_model_test_dataset
+from tests.utils.dataset import get_model_test_dataset
 from tests.utils.distributed_configs import DistributedTestingConfig
+from tests.utils.global_variables import MODEL_DATASET_PREFIX
 from tests.utils.model_configs import ModelTestingGroup
 from tests.utils.utils import requires_cuda
 

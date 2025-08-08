@@ -23,7 +23,7 @@ from fast_llm.engine.distributed.config import DistributedConfig, PhaseType
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.models.gpt.config import GPTBatchConfig
 from fast_llm.utils import Assert, div
-from tests.utils.dataset import TEST_VOCAB_SIZE
+from tests.utils.global_variables import TEST_VOCAB_SIZE
 
 
 def get_sampling_data(

@@ -8,26 +8,14 @@ import shutil
 import pytest
 import xdist.scheduler
 
-from fast_llm.utils import get_and_reset_memory_usage_mib, set_global_variables
+from fast_llm.utils import get_and_reset_memory_usage_mib
 from tests.utils.depends import DependencyManager
+from tests.utils.global_variables import TEST_RESULTS_PATH, set_testing_global_variables
 
 # TODO: Is this early enough?
-set_global_variables()  # isort: skip
-
-
-if worker_name := os.environ.get("PYTEST_XDIST_WORKER"):
-    if gpus := os.environ.get("CUDA_VISIBLE_DEVICES"):
-        # We set the device through "CUDA_VISIBLE_DEVICES", and this needs to happen before importing torch.
-        assert worker_name.startswith("gw")
-        worker_id = int(worker_name[2:])
-        gpus = [int(i) for i in gpus.split(",")]
-        num_gpus = len(gpus)
-        gpus = [gpus[(i + worker_id) % num_gpus] for i in range(num_gpus)]
-        os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(str(i) for i in gpus)
-
+set_testing_global_variables()  # isort: skip
 
 import torch  # isort: skip
-
 
 from tests.utils.save_load_configs import (  # isort: skip
     distributed_save_load_config,
@@ -44,7 +32,7 @@ from tests.utils.run_test_script import (  # isort: skip
 )
 
 from tests.utils.model_configs import model_testing_config, ModelTestingConfig, testing_group_enabled  # isort: skip
-from tests.utils.utils import result_path, TEST_RESULTS_PATH, format_resource_report, report_subtest  # isort: skip
+from tests.utils.utils import result_path, format_resource_report, report_subtest  # isort: skip
 
 logger = logging.getLogger(__name__)
 

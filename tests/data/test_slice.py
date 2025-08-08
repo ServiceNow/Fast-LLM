@@ -7,7 +7,8 @@ from tests.data.common import (
     validate_indexed_dataset_sampling,
 )
 from tests.data.test_memmap import MEMMAP_DATASET_SAMPLES
-from tests.utils.dataset import DATASET_PREFIX, get_test_dataset
+from tests.utils.dataset import get_test_dataset
+from tests.utils.global_variables import DATASET_PREFIX
 
 GPT_SLICE_TRAINING_SAMPLES = [
     [80, 268, 79, 260, 207, 3086],
