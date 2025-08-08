@@ -142,7 +142,7 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
         self._reference_models = {}
         for name, reference_config in self._config.reference_models.items():
             log_main_rank(f"Creating `{name} reference model...")
-            self._reference_models[name] = self._config.get_inference_runner_class()(
+            self._reference_models[name] = reference_config.model.get_inference_runner_class()(
                 reference_config.model.get_model_class()(reference_config.model)
             )
             self._multi_stage.base_model.add_reference_model(name, self._reference_models[name])

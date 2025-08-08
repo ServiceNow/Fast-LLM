@@ -172,6 +172,12 @@ class GPTModelConfig(FastLLMModelConfig):
         return GPTModel
 
     @classmethod
+    def get_inference_runner_class(cls) -> type["GPTInferenceRunner"]:
+        from fast_llm.models.gpt.model import GPTInferenceRunner
+
+        return GPTInferenceRunner
+
+    @classmethod
     def get_huggingface_model_for_causal_lm_class(cls) -> type["HuggingfaceGPTModelForCausalLM"]:
         from fast_llm.models.gpt.huggingface import HuggingfaceGPTModelForCausalLM
 
@@ -254,9 +260,3 @@ class GPTTrainerConfig(PretrainedGPTModelConfig, TrainerConfig):
         from fast_llm.models.gpt.trainer import GPTTrainer
 
         return GPTTrainer
-
-    @classmethod
-    def get_inference_runner_class(cls) -> type["GPTInferenceRunner"]:
-        from fast_llm.models.gpt.model import GPTInferenceRunner
-
-        return GPTInferenceRunner
