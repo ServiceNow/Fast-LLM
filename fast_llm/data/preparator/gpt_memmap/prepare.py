@@ -33,8 +33,6 @@ logger = logging.getLogger(__name__)
 
 
 class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](DatasetPreparator[ConfigType]):
-    config_class: typing.ClassVar[type[GPTMemmapDatasetPreparatorConfig]] = GPTMemmapDatasetPreparatorConfig
-
     _tokenizer: Tokenizer
     _data_type: DataType
     _text_column: str

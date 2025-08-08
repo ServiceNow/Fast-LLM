@@ -82,7 +82,6 @@ class SequentialLayers(Sequential, abc.ABC):
 
 
 class BaseModel[ConfigType: BaseModelConfig](Configurable[ConfigType], SequentialLayers, abc.ABC):
-    config_class: typing.ClassVar[type[BaseModelConfig]] = BaseModelConfig
     _is_setup: bool = False
 
     def __init__(

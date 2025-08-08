@@ -14,7 +14,6 @@ logger = logging.getLogger(__name__)
 
 
 class FastLLMModel[ConfigType: FastLLMModelConfig](MultiStageModel[ConfigType]):
-    config_class: typing.ClassVar[type[FastLLMModelConfig]] = FastLLMModelConfig
     _is_loaded: bool = False
 
     def save_checkpoint(

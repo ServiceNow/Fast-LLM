@@ -4,13 +4,14 @@ import typing
 
 import torch
 
+from fast_llm.engine.config_utils.initialization import LambdaInitializer, init_normal_, init_ones_
 from fast_llm.engine.config_utils.tensor_space import DefaultDimNames, TensorSpace
 from fast_llm.functional.config import ActivationType
+from fast_llm.layers.block.block import BlockLayer
+from fast_llm.layers.block.config import BlockConfig, BlockKwargs
 from fast_llm.layers.common.linear import Linear
 from fast_llm.layers.ssm.config import SSMConfig, SSMDimNames
-from fast_llm.layers.transformer.config import TransformerConfig, TransformerDimNames, TransformerKwargs
-from fast_llm.layers.transformer.transformer import Mixer
-from fast_llm.tensor import LambdaInitializer, ParameterMeta, init_kaiming_, init_ones_
+from fast_llm.tensor import ParameterMeta
 from fast_llm.utils import Assert, get_lr_scale
 
 try:
@@ -52,7 +53,7 @@ def init_dtprojbias(dt_max: float, dt_min: float, dt_init_floor: float) -> Lambd
     return LambdaInitializer(init_)
 
 
-class MambaLayer(Mixer):
+class MambaLayer(BlockLayer):
     _mixer_name: typing.ClassVar[str] = "mamba"
 
     def __init__(
@@ -60,9 +61,15 @@ class MambaLayer(Mixer):
         config: SSMConfig,
         block_index: int,
         tensor_space: TensorSpace,
-        transformer_config: TransformerConfig,
+        block_config: BlockConfig,
     ):
-        super().__init__(tensor_space, block_index, debug_level=transformer_config.debug_transformer)
+        super().__init__(
+            tensor_space,
+            block_index,
+            self._mixer_name,
+            debug_level=block_config.debug_transformer,
+            debug_memory=block_config.debug_transformer_memory,
+        )
         assert tensor_space.distributed_config.tensor_parallel == 1, "Tensor-parallel not supported for MambaLayer"
         self._config = config
         # TODO: It's not silu?
@@ -70,8 +77,8 @@ class MambaLayer(Mixer):
 
         # Tensor dims:
         inner_dim = tensor_space[SSMDimNames.composite_heads_and_head_dim]
-        hidden_dim = tensor_space[TransformerDimNames.hidden]
-        layer_lr_scale = config.per_layer_lr_scale[block_index] if config.per_layer_lr_scale else None
+        hidden_dim = tensor_space[SSMDimNames.hidden]
+        layer_lr_scale = block_config.per_layer_lr_scale[block_index] if block_config.per_layer_lr_scale else None
         lr_scale = get_lr_scale(self._config.mamba_lr_scale, layer_lr_scale)
 
         # TODO: Backward compatibility?
@@ -139,9 +146,15 @@ class MambaLayer(Mixer):
         )
         self.out_proj.weight.auto_grad_accumulation = True
 
-    def forward(self, input_: torch.Tensor, kwargs: dict[str, typing.Any]) -> tuple[torch.Tensor, torch.Tensor | None]:
+    def forward(
+        self,
+        input_: torch.Tensor,
+        kwargs: dict[str, typing.Any],
+        losses: dict[str, typing.Any] | None = None,
+        metrics: dict[str, typing.Any] | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
         assert _mamba_available
-        in_proj = self.in_proj(input_).permute((1, 2, 0) if kwargs[TransformerKwargs.sequence_first] else (0, 2, 1))
+        in_proj = self.in_proj(input_).permute((1, 2, 0) if kwargs[BlockKwargs.sequence_first] else (0, 2, 1))
 
         # In the backward pass we write dx and dz next to each other to avoid torch.cat
         # not, if we wanbt to support inference, we would need to imp.lement slow path here, see https://github.com/Zyphra/Zamba2/blob/1b182f40f2257f822cc06dd785df53d67d691a15/mamba_layer.py#L172s
@@ -160,6 +173,10 @@ class MambaLayer(Mixer):
             delta_bias=self.dt_proj_bias.float(),
             delta_softplus=True,
         )
-        if kwargs[TransformerKwargs.sequence_first]:
+        if kwargs[BlockKwargs.sequence_first]:
             out = out.transpose(0, 1)
         return out, None
+
+
+def init_kaiming_(d_in: float) -> LambdaInitializer:
+    return init_normal_(0.0, math.sqrt(2.0 / d_in))

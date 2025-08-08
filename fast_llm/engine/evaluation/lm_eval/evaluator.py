@@ -25,8 +25,6 @@ logger = logging.getLogger(__name__)
 
 
 class LmEvalEvaluator[ConfigType: LmEvalEvaluatorConfig](Evaluator[ConfigType]):
-    config_class: typing.ClassVar[type[LmEvalEvaluatorConfig]] = LmEvalEvaluatorConfig
-
     _hf_model: "HuggingfaceBaseModelForCausalLM" = None
     _flm_wrapper: "FastLLMLmEvalWrapper" = None
 

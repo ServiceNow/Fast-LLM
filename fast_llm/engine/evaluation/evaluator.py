@@ -44,8 +44,6 @@ class EvaluatorSamplingParameters:
 
 
 class Evaluator[ConfigType: EvaluatorConfig](Configurable[ConfigType], abc.ABC):
-    config_class: typing.ClassVar[type[EvaluatorConfig]] = EvaluatorConfig
-
     _is_setup: bool = False
 
     def __init__(
@@ -96,8 +94,6 @@ class Evaluator[ConfigType: EvaluatorConfig](Configurable[ConfigType], abc.ABC):
 
 
 class LossEvaluator[ConfigType: LossEvaluatorConfig](Evaluator[ConfigType]):
-    config_class: typing.ClassVar[type[LossEvaluatorConfig]] = LossEvaluatorConfig
-
     def setup(
         self,
         distributed: Distributed,

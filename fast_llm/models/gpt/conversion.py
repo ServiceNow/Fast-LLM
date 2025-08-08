@@ -24,8 +24,9 @@ from fast_llm.engine.checkpoint.external import (
 from fast_llm.engine.checkpoint.huggingface import CustomModelingExportMixin, HuggingfaceStateDictCheckpointHandler
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig
 from fast_llm.functional.config import ActivationType
+from fast_llm.layers.block.mlp.config import RoutingType
 from fast_llm.layers.common.config import LayerNormalizationConfig
-from fast_llm.layers.transformer.config import RoutingType, TransformerConfig
+from fast_llm.layers.transformer.config import TransformerConfig
 from fast_llm.layers.transformer.rotary.config import DefaultRotaryConfig, Llama3RotaryConfig, YarnRotaryConfig
 from fast_llm.layers.transformer.rotary.rotary import convert_rotary_complex_to_real, convert_rotary_real_to_complex
 from fast_llm.models.gpt.config import (
@@ -198,19 +199,19 @@ class CommonHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
             (
                 f"{fast_llm_layer_name}.self_attn.query",
                 f"{hf_layer_name}.self_attn.q_proj",
-                transformer_config.add_attn_qkv_bias,
+                transformer_config.add_qkv_bias,
                 QueryWeightConverter,
             ),
             (
                 f"{fast_llm_layer_name}.self_attn.key_value",
                 (f"{hf_layer_name}.self_attn.k_proj", f"{hf_layer_name}.self_attn.v_proj"),
-                transformer_config.add_attn_qkv_bias,
+                transformer_config.add_qkv_bias,
                 KeyValueWeightConverter,
             ),
             (
                 f"{fast_llm_layer_name}.self_attn.dense",
                 f"{hf_layer_name}.self_attn.o_proj",
-                transformer_config.add_attn_dense_bias,
+                transformer_config.add_dense_bias,
                 WeightConverter,
             ),
             # Norm
