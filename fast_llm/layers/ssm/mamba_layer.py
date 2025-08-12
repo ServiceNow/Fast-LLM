@@ -9,10 +9,10 @@ from fast_llm.engine.config_utils.tensor_space import DefaultDimNames, TensorSpa
 from fast_llm.functional.config import ActivationType
 from fast_llm.layers.block.block import BlockLayer
 from fast_llm.layers.block.config import BlockConfig, BlockKwargs
-from fast_llm.layers.common.linear import Linear
+from fast_llm.layers.common.linear.linear import Linear
 from fast_llm.layers.ssm.config import SSMConfig, SSMDimNames
 from fast_llm.tensor import ParameterMeta
-from fast_llm.utils import Assert, get_lr_scale
+from fast_llm.utils import Assert, combine_lr_scales
 
 try:
     from mamba_ssm.ops.selective_scan_interface import mamba_inner_fn as _mamba_inner_fn  # noqa
@@ -79,7 +79,7 @@ class MambaLayer(BlockLayer):
         inner_dim = tensor_space[SSMDimNames.composite_heads_and_head_dim]
         hidden_dim = tensor_space[SSMDimNames.hidden]
         layer_lr_scale = block_config.per_layer_lr_scale[block_index] if block_config.per_layer_lr_scale else None
-        lr_scale = get_lr_scale(self._config.mamba_lr_scale, layer_lr_scale)
+        lr_scale = combine_lr_scales(self._config.mamba_lr_scale, layer_lr_scale)
 
         # TODO: Backward compatibility?
         # TODO: lr_scale?

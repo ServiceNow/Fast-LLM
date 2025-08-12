@@ -13,7 +13,7 @@ if typing.TYPE_CHECKING:
 @config_class(registry=True)
 class InitializationConfig(Config):
     _abstract = True
-    has_initialization: typing.ClassVar[bool] = True
+    is_default: typing.ClassVar[bool] = False
 
     @classmethod
     def _from_dict(
@@ -35,7 +35,7 @@ class InitializationConfig(Config):
 class DefaultInitializationConfig(InitializationConfig):
     # A placeholder indicating that the class default should be used instead.
     _abstract = False
-    has_initialization = False
+    is_default = True
 
 
 @config_class(dynamic_type={InitializationConfig: "fill"})

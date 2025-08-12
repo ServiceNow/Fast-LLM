@@ -1,8 +1,6 @@
-import functools
-
 from fast_llm.config import Field, FieldHint, check_field, config_class, skip_valid_if_none
 from fast_llm.engine.base_model.config import BaseModelConfig
-from fast_llm.engine.config_utils.initialization import InitializationConfig, Initializer, init_normal_
+from fast_llm.engine.config_utils.initialization import InitializationConfig
 from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
 from fast_llm.engine.distributed.config import DistributedDimNames
 from fast_llm.functional.config import CrossEntropyImpl, DistillationLossImpl
@@ -215,9 +213,9 @@ class LanguageModelBaseConfig(BaseModelConfig):
             Assert.eq(
                 len(self.transformer.per_layer_lr_scale), self.transformer.num_blocks + self.prediction_heads - 1 + 1
             )
-        if self.output_weight_initialization.has_initialization:
+        if not self.output_weight_initialization.is_default:
             assert self.use_absolute_position_embeddings
-        if self.output_weight_initialization.has_initialization:
+        if not self.output_weight_initialization.is_default:
             assert not self.tie_word_embeddings
 
     def setup_tensor_space(self, tensor_space: TensorSpace) -> None:
@@ -237,23 +235,23 @@ class LanguageModelBaseConfig(BaseModelConfig):
     def use_absolute_position_embeddings(self) -> int:
         return self.absolute_position_embeddings is not None
 
-    @functools.cached_property
-    def word_embedding_weight_initialization_method(self) -> Initializer:
-        if self.word_embedding_weight_initialization.has_initialization:
-            return self.word_embedding_weight_initialization.get_initializer()
-        else:
-            return init_normal_(self.transformer.hidden_size**-0.5)
+    # @functools.cached_property
+    # def word_embedding_weight_initialization_method(self) -> Initializer:
+    #    if self.word_embedding_weight_initialization.is_default:
+    #        return self.word_embedding_weight_initialization.get_initializer()
+    #    else:
+    #        return init_normal_(self.transformer.hidden_size**-0.5)
 
-    @functools.cached_property
-    def position_embedding_weight_initialization_method(self) -> Initializer:
-        if self.position_embedding_weight_initialization.has_initialization:
-            return self.position_embedding_weight_initialization.get_initializer()
-        else:
-            return init_normal_(self.transformer.hidden_size**-0.5)
+    # @functools.cached_property
+    # def position_embedding_weight_initialization_method(self) -> Initializer:
+    #    if self.position_embedding_weight_initialization.is_default:
+    #        return self.position_embedding_weight_initialization.get_initializer()
+    #    else:
+    #        return init_normal_(self.transformer.hidden_size**-0.5)
 
-    @functools.cached_property
-    def output_weight_initialization_method(self) -> Initializer:
-        if self.output_weight_initialization.has_initialization:
-            return self.output_weight_initialization.get_initializer()
-        else:
-            return init_normal_(self.transformer.hidden_size**-0.5)
+    # @functools.cached_property
+    # def output_weight_initialization_method(self) -> Initializer:
+    #    if self.output_weight_initialization.is_default:
+    #        return self.output_weight_initialization.get_initializer()
+    #    else:
+    #        return init_normal_(self.transformer.hidden_size**-0.5)

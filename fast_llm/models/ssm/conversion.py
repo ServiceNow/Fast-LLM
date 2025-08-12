@@ -21,7 +21,7 @@ from fast_llm.engine.checkpoint.external import (
 from fast_llm.engine.checkpoint.huggingface import CustomModelingExportMixin, HuggingfaceStateDictCheckpointHandler
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig
 from fast_llm.functional.config import ActivationType
-from fast_llm.layers.common.config import RMSNormalizationConfig
+from fast_llm.layers.common.normalization.config import RMSNormalizationConfig
 from fast_llm.layers.ssm.config import DTInitType, SSMBlockType
 from fast_llm.models.gpt.conversion import CommonLlamaHuggingfaceCheckpointHandler, MLPLayer2Converter
 from fast_llm.models.ssm.config import (

@@ -5,33 +5,33 @@ from fast_llm.config import Config, Field, FieldHint, check_field, config_class,
 from fast_llm.engine.config_utils.tensor_space import CompositeTensorDim, ConcatenatedTensorDim, TensorDim, TensorSpace
 from fast_llm.engine.distributed.config import DistributedDimNames
 from fast_llm.functional.config import ActivationType
-from fast_llm.layers.block.config import BlockDimNames
+from fast_llm.layers.attention.config import MixerDimNames, setup_mqa_dims
 from fast_llm.utils import Assert, div
 
 if typing.TYPE_CHECKING:
     from fast_llm.engine.config_utils.initialization import Initializer
 
 
-class SSMDimNames(BlockDimNames):
+class SSMDimNames(MixerDimNames):
     # TODO: Use separate tensor space for different mixers so there is no risk of name conflict.
-    state = "ssm_state"  # State dimension (N), aka head size / num channels
-    head_dim = "ssm_head_dim"
-    head_groups = "ssm_head_groups"
-    group_heads = "ssm_group_heads"
+    # state = "ssm_state"  # State dimension (N), aka head size / num channels
+    # head_dim = "ssm_head_dim"
+    # head_groups = "ssm_head_groups"
+    # group_heads = "ssm_group_heads"
 
     convolution_kernel = "ssm_convolution_kernel"  # Kernel dimension of the conv1d in mamba layers
 
     dt_rank = "ssm_dt_rank"
 
     # Composite dimensions
-    composite_heads = "ssm_composite_heads"
-    composite_heads_and_head_dim = "ssm_composite_heads_and_head_dim"
-    composite_head_groups_and_state = "ssm_composite_head_groups_and_state"
+    # composite_heads = "ssm_composite_heads"
+    # composite_heads_and_head_dim = "ssm_composite_heads_and_head_dim"
+    # composite_head_groups_and_state = "ssm_composite_head_groups_and_state"
 
     # Concatenated dimensions
     concatenated_convolution = "ssm_concatenated_convolution"
     concatenated_x_projection = "ssm_x_concatenated_x_projection"
-    concatenated_inner_projection = "ssm_concatenated_inner_projection"
+    # concatenated_inner_projection = "ssm_concatenated_inner_projection"
 
 
 class SSMBlockType(enum.StrEnum):
@@ -109,7 +109,7 @@ class SSMConfig(Config):
         desc="Number of QK heads for Mamba2 blocks.",
         hint=FieldHint.architecture,
     )
-    # heads [DiscreteMamba2]# TODO: Remove? (redundant)
+    # heads [DiscreteMamba2]
     n_v_heads: int = Field(
         default=32,
         desc="Number of V heads for Mamba2 blocks.",
@@ -207,6 +207,34 @@ class SSMConfig(Config):
 
     def setup_tensor_space(self, tensor_space: TensorSpace, block_type: SSMBlockType) -> None:
         tensor = tensor_space.distributed_config.get_distributed_dim(DistributedDimNames.tensor)
+
+        if block_type == SSMBlockType.mamba:
+            setup_mqa_dims(
+                tensor_space,
+                div(self.d_inner, self.state_size),
+                div(self.d_inner, self.state_size),
+                self.state_size,
+                self.state_size,
+            )
+
+        elif block_type == SSMBlockType.mamba2:
+            setup_mqa_dims(
+                tensor_space,
+                div(self.d_inner, self.state_size),
+                div(self.d_xb, self.state_size),
+                self.state_size,
+                self.state_size,
+            )
+
+        elif block_type == SSMBlockType.mamba2_discrete:
+            # TODO: Use different variables?
+            num_heads = self.n_v_heads
+            num_head_groups = self.n_qk_heads
+            setup_mqa_dims(
+                tensor_space, self.n_v_heads, self.n_qk_heads, div(self.d_inner, self.n_v_heads), self.state_size
+            )
+        else:
+            raise NotImplementedError(block_type)
 
         # Head groups are configured differently depending on the block type.
         if block_type == SSMBlockType.mamba:

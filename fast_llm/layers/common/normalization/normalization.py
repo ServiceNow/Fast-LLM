@@ -7,7 +7,7 @@ from fast_llm.engine.config_utils.run import log_main_rank
 from fast_llm.engine.config_utils.tensor_space import TensorDim
 from fast_llm.functional.config import TritonConfig
 from fast_llm.functional.triton.normalization import triton_normalization_autograd
-from fast_llm.layers.common.config import (
+from fast_llm.layers.common.normalization.config import (
     LayerNormalizationConfig,
     NoNormalizationConfig,
     NormalizationConfig,
@@ -15,7 +15,7 @@ from fast_llm.layers.common.config import (
     RMSNormalizationConfig,
 )
 from fast_llm.tensor import ParameterMeta, accumulate_gradient
-from fast_llm.utils import Assert
+from fast_llm.utils import Assert, combine_lr_scales
 
 try:
     import fused_layer_norm_cuda  # noqa
@@ -156,7 +156,7 @@ class Normalization[ConfigType: NormalizationConfig](Configurable[ConfigType], t
     ):
         super().__init__(config)
         self._hidden_dim = hidden_dim
-        self._lr_scale = lr_scale
+        self._lr_scale = combine_lr_scales(self._config.lr_scale, lr_scale)
         assert not self._hidden_dim.is_parallel
 
     @abc.abstractmethod

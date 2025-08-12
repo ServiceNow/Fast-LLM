@@ -2,59 +2,61 @@ import typing
 
 import torch
 
-from fast_llm.engine.config_utils.tensor_space import TensorSpace
+from fast_llm.engine.config_utils.tensor_space import ConcatenatedTensorDim, TensorDim
+from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
 from fast_llm.functional.config import TritonConfig
 from fast_llm.functional.triton.mlp import mlp_autograd, torch_mlp_activation, triton_mlp_activation_autograd
 from fast_llm.layers.block.block import BlockLayer
-from fast_llm.layers.block.config import BlockConfig, BlockDimNames
-from fast_llm.layers.block.mlp.config import MLPConfig, MLPDimNames
-from fast_llm.layers.block.peft import TransformerSubLayerName
-from fast_llm.layers.common.linear import LinearBase
-from fast_llm.utils import get_lr_scale
+from fast_llm.layers.block.mlp.config import MLPConfig
 
 
 class MLPBase[ConfigType: MLPConfig](BlockLayer[ConfigType]):
-    def __init__(self, config: BlockConfig, tensor_space: TensorSpace, block_index: int, name: str):
-        super().__init__(config, tensor_space, block_index, name)
+    def __init__(
+        self,
+        config: ConfigType,
+        distributed_config: DistributedConfig,
+        hidden_dim: TensorDim,
+        block_index: int,
+        name: str,
+    ):
+        super().__init__(config, distributed_config, hidden_dim, block_index, name)
+        self._parallel_dim = self._distributed_config.get_distributed_dim(DistributedDimNames.tensor)
 
-        hidden_dim = self._tensor_space[BlockDimNames.hidden]
-        self._intermediate_dim = self._tensor_space[MLPDimNames.composite_expert_mlp]
+        intermediate_1_dim, intermediate_2_dim = self._get_intermediate_dims()
+
         self._activation_fn = triton_mlp_activation_autograd if TritonConfig.TRITON_ENABLED else torch_mlp_activation
 
-        layer_lr_scale = self._config.per_layer_lr_scale[block_index] if self._config.per_layer_lr_scale else None
-        lr_scale = (
-            tuple(self._config.mlp_lr_scale)
-            if isinstance(self._config.mlp_lr_scale, list)
-            else self._config.mlp_lr_scale
-        )
-        lr_scale = get_lr_scale(lr_scale, layer_lr_scale)
+        lr_scale = self._config.per_layer_lr_scale[block_index] if self._config.per_layer_lr_scale else None
 
         # So both layers' weights have shape (num_experts [* gate_up] * ffn, hidden_size)
-        self.layer_1 = LinearBase(
+        self.layer_1 = self._config.layer_1.get_layer(
             hidden_dim,
-            self._tensor_space[MLPDimNames.composite_gated_expert_mlp],
-            bias=self._config.add_bias,
-            weight_init_method=self._config.layer_1_weight_initialization_method,
-            bias_init_method=self._config.layer_1_bias_initialization_method,
+            intermediate_1_dim,
+            sequence_parallel=self._sequence_parallel,
             lr_scale=lr_scale,
+            peft=self._config.block.peft,
         )
-        self.layer_2 = LinearBase(
-            self._intermediate_dim,
+        self.layer_2 = self._config.layer_2.get_layer(
+            intermediate_2_dim,
             hidden_dim,
-            bias=self._config.add_bias,
-            weight_init_method=self._config.layer_2_weight_initialization_method,
-            bias_init_method=self._config.layer_2_bias_initialization_method,
-            auto_bias_grad_accumulation=self._tensor_space.distributed_config.tensor_parallel > 1,
+            auto_bias_grad_accumulation=self._parallel_dim.size > 1,
             transposed_weight=True,
             lr_scale=lr_scale,
+            peft=self._config.block.peft,
         )
 
-        # PEFT.
-        self.layer_1 = self._config.peft.apply_linear(self.layer_1, TransformerSubLayerName.mlp_1)
-        self.layer_2 = self._config.peft.apply_linear(self.layer_2, TransformerSubLayerName.mlp_2)
+    def _get_intermediate_dims(self):
+        intermediate_2_dim = TensorDim("intermediate", self._config.ffn_hidden_size, self._parallel_dim)
+        if self.gated:
+            TensorDim("gate_and_up", 2)
+            intermediate_1_dim = ConcatenatedTensorDim("gate_and_up", (intermediate_2_dim, intermediate_2_dim))
+        else:
+            intermediate_1_dim = intermediate_2_dim
+        return intermediate_1_dim, intermediate_2_dim
 
 
 class MLP[ConfigType: MLPConfig](MLPBase[ConfigType]):
+
     def forward(
         self,
         input_: torch.Tensor,
@@ -62,7 +64,6 @@ class MLP[ConfigType: MLPConfig](MLPBase[ConfigType]):
         losses: dict[str, typing.Any] | None = None,
         metrics: dict[str, typing.Any] | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
-        parallel_group = self._intermediate_dim.parallel_group
         return (
             mlp_autograd(
                 input_,
@@ -70,14 +71,14 @@ class MLP[ConfigType: MLPConfig](MLPBase[ConfigType]):
                 self.layer_1.weight,
                 self.layer_1.bias,
                 self.layer_2.weight,
-                None if parallel_group else self.layer_2.bias,
+                None if self._parallel_dim.group else self.layer_2.bias,
                 gated=self._config.gated,
                 activation_type=self._config.activation_type,
-                group=parallel_group,
+                group=self._parallel_dim.group,
                 sequence_parallel=self._sequence_parallel,
                 training=self.training,
                 recompute_level=self._config.mlp_recompute_level,
                 transposed_layer_2_weight=self.layer_2.transposed_weight,
             ),
-            self.layer_2.bias if parallel_group else None,
+            self.layer_2.bias if self._parallel_dim.group else None,
         )

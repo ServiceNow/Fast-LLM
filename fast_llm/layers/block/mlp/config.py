@@ -1,13 +1,13 @@
 import enum
-import functools
 import typing
 
 from fast_llm.config import Field, FieldHint, check_field, config_class, skip_valid_if_none
-from fast_llm.engine.config_utils.initialization import InitializationConfig, Initializer, init_normal_, init_zeros_
+from fast_llm.engine.config_utils.initialization import init_normal_, init_zeros_
 from fast_llm.engine.config_utils.tensor_space import CompositeTensorDim, TensorDim, TensorSpace
 from fast_llm.engine.distributed.config import DistributedDimNames
 from fast_llm.functional.config import ActivationType, MLPRecomputeLevel
 from fast_llm.layers.block.config import BlockLayerConfig
+from fast_llm.layers.common.linear.config import LinearConfig
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
@@ -15,18 +15,19 @@ if typing.TYPE_CHECKING:
 
 
 class MLPDimNames:
+    pass
     # MLP dimensions
-    mlp = "mlp"
-    gate_and_up = "gate_and_up"
-    composite_gated_mlp = "composite_gated_mlp"
-    experts = "experts"
-    top_experts = "top_experts"
-    shared_experts = "shared_experts"
-    unshared_experts = "unshared_experts"
-    composite_expert_mlp = "composite_expert_mlp"
-    composite_gated_expert_mlp = "composite_gated_expert_mlp"
-    composite_shared_expert_mlp = "composite_shared_expert_mlp"
-    composite_gated_shared_expert_mlp = "composite_gated_shared_expert_mlp"
+    # mlp = "mlp"
+    # gate_and_up = "gate_and_up"
+    # composite_gated_mlp = "composite_gated_mlp"
+    # experts = "experts"
+    # top_experts = "top_experts"
+    # shared_experts = "shared_experts"
+    # unshared_experts = "unshared_experts"
+    # composite_expert_mlp = "composite_expert_mlp"
+    # composite_gated_expert_mlp = "composite_gated_expert_mlp"
+    # composite_shared_expert_mlp = "composite_shared_expert_mlp"
+    # composite_gated_shared_expert_mlp = "composite_gated_shared_expert_mlp"
 
 
 class MLPLossNames:
@@ -130,26 +131,17 @@ class MLPConfig(BlockLayerConfig):
         " Reduces memory usage, but increases fragmentation and requires CPU synchronisation. Not recommended.",
         hint=FieldHint.expert,
     )
-    layer_1_weight_initialization: InitializationConfig = Field(
-        desc="Initialization configuration for the first mlp layer weights. Default: normal(0, hidden_size**-0.5).",
-        hint=FieldHint.feature,
+    layer_1: LinearConfig = Field(
+        desc="Configuration for the first MLP layer.",
+        hint=FieldHint.architecture,
     )
-    layer_1_bias_initialization: InitializationConfig = Field(
-        desc="Initialization configuration for the first mlp layer biases. Default: fill with zeros.",
-        hint=FieldHint.feature,
+    layer_2: LinearConfig = Field(
+        desc="Configuration for the second MLP layer.",
+        hint=FieldHint.architecture,
     )
-    layer_2_weight_initialization: InitializationConfig = Field(
-        desc="Initialization configuration for the second mlp layer weights."
-        " Default: normal((2 * num_blocks * hidden_size)**-0.5)",
-        hint=FieldHint.feature,
-    )
-    layer_2_bias_initialization: InitializationConfig = Field(
-        desc="Initialization configuration for the second mlp layer biases. Default: fill with zeros.",
-        hint=FieldHint.feature,
-    )
-    router_weight_initialization: InitializationConfig = Field(
+    router: LinearConfig = Field(
         # TODO: Improve default?
-        desc="Initialization configuration for the MoE router weight. Default: normal(0, hidden_size**-0.5).",
+        desc="Configuration for the MoE router.",
         hint=FieldHint.feature,
     )
 
@@ -164,18 +156,20 @@ class MLPConfig(BlockLayerConfig):
 
             return MLP
 
-    @property
-    def add_bias(self) -> bool:
-        from fast_llm.layers.block.config import AddLinearBiasChoices
-
-        if isinstance(self.block.add_linear_biases, bool):
-            return self.block.add_linear_biases
-        if self.block.add_linear_biases == AddLinearBiasChoices.everywhere:
-            return True
-        return False
-
     def _validate(self) -> None:
         assert hasattr(self, "block")
+        for layer, bias, scale in zip(
+            (self.layer_1, self.layer_2, self.router),
+            (self.block.add_linear_biases, self.block.add_linear_biases, False),
+            (1, max(self.block.num_blocks, 1), 1),
+        ):
+            layer.default = LinearConfig(
+                bias=bias,
+                weight_initialization=init_normal_(0, (self.block.hidden_size * scale) ** -0.5),
+                bias_initialization=init_zeros_,
+                apply_peft=False,
+            )
+
         with self._set_implicit_default():
             if self.activation_type is None:
                 self.activation_type = ActivationType.silu if self.gated else ActivationType.gelu
@@ -198,45 +192,6 @@ class MLPConfig(BlockLayerConfig):
         elif self.mlp_lr_scale is not None:
             Assert.geq(self.mlp_lr_scale, 0)
 
-        if self.layer_1_bias_initialization.has_initialization or self.layer_2_bias_initialization.has_initialization:
-            assert self.add_bias
-
-    @functools.cached_property
-    def layer_1_weight_initialization_method(self) -> Initializer:
-        if self.layer_1_weight_initialization.has_initialization:
-            return self.layer_1_weight_initialization.get_initializer()
-        else:
-            return init_normal_(0, self.block.hidden_size**-0.5)
-
-    @functools.cached_property
-    def layer_1_bias_initialization_method(self) -> Initializer:
-        if self.layer_1_bias_initialization.has_initialization:
-            return self.layer_1_bias_initialization.get_initializer()
-        else:
-            return init_zeros_
-
-    @functools.cached_property
-    def layer_2_weight_initialization_method(self) -> Initializer:
-        if self.layer_2_weight_initialization.has_initialization:
-            return self.layer_2_weight_initialization.get_initializer()
-        else:
-            return init_normal_(0, self.block.hidden_size**-0.5 / max(2 * self.block.num_blocks, 1))
-
-    @functools.cached_property
-    def layer_2_bias_initialization_method(self) -> Initializer:
-        if self.layer_2_bias_initialization.has_initialization:
-            return self.layer_2_bias_initialization.get_initializer()
-        else:
-            return init_zeros_
-
-    @functools.cached_property
-    def router_weight_initialization_method(self) -> Initializer:
-        if self.router_weight_initialization.has_initialization:
-            assert self.add_bias
-            return self.router_weight_initialization.get_initializer()
-        else:
-            return init_zeros_
-
     def setup_tensor_space(self, tensor_space: TensorSpace) -> None:
         tensor = tensor_space.distributed_config.get_distributed_dim(DistributedDimNames.tensor)
 
@@ -250,16 +205,5 @@ class MLPConfig(BlockLayerConfig):
             CompositeTensorDim(MLPDimNames.composite_gated_expert_mlp, (experts, gate_and_up, mlp))
         )
         tensor_space.add_tensor_dim(TensorDim(MLPDimNames.top_experts, self.num_experts_per_token))
-        tensor_space.add_tensor_dim(TensorDim(MLPDimNames.unshared_experts, self.num_unshared_experts))
-
-        # shared_experts
-        if self.num_shared_experts:
-            tensor_space.add_tensor_dim(
-                shared_experts := TensorDim(MLPDimNames.shared_experts, self.num_shared_experts)
-            )
-            tensor_space.add_tensor_dim(
-                CompositeTensorDim(MLPDimNames.composite_shared_expert_mlp, (shared_experts, mlp))
-            )
-            tensor_space.add_tensor_dim(
-                CompositeTensorDim(MLPDimNames.composite_gated_shared_expert_mlp, (shared_experts, gate_and_up, mlp))
-            )
+        # composite_gated_expert_mlp
+        # composite_expert_mlp

@@ -4,15 +4,15 @@ import warnings
 import torch
 
 from fast_llm.core.distributed import ProcessGroup, set_generator
-from fast_llm.engine.config_utils.tensor_space import TensorSpace
+from fast_llm.engine.config_utils.tensor_space import CompositeTensorDim, TensorDim
+from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.functional.triton.mlp import mlp_autograd, mlp_autograd_looped
 from fast_llm.functional.triton.sparse_copy import get_sparse_map
-from fast_llm.layers.block.config import BlockDimNames, BlockKwargs
-from fast_llm.layers.block.mlp.config import MLPConfig, MLPDimNames, MLPLossNames, RoutingType
+from fast_llm.layers.block.config import BlockKwargs
+from fast_llm.layers.block.mlp.config import MLPConfig, MLPLossNames, RoutingType
 from fast_llm.layers.block.mlp.mlp import MLPBase
 from fast_llm.layers.common.auxiliary_loss import AuxiliaryLoss, z_loss
-from fast_llm.layers.common.linear import Linear
-from fast_llm.utils import Assert, get_lr_scale
+from fast_llm.utils import Assert
 
 logger = logging.getLogger(__name__)
 
@@ -31,33 +31,44 @@ class MixtureOfExpertMLP[ConfigType: MLPConfig](MLPBase[ConfigType]):
 
     _group: ProcessGroup
 
-    def __init__(self, config: ConfigType, tensor_space: TensorSpace, block_index: int, name: str):
+    def __init__(
+        self,
+        config: ConfigType,
+        distributed_config: DistributedConfig,
+        hidden_dim: TensorDim,
+        block_index: int,
+        name: str,
+    ):
         Assert.gt(config.num_experts, 1)
         # TODO: Implement?
         assert not config.add_linear_biases, "Biases not supported for MoE."
-        super().__init__(config, tensor_space, block_index, name)
+        super().__init__(config, distributed_config, hidden_dim, block_index, name)
 
         layer_lr_scale = self._config.per_layer_lr_scale[block_index] if self._config.per_layer_lr_scale else None
-        router_lr_scale = get_lr_scale(self._config.router_lr_scale, layer_lr_scale)
 
-        self.router = Linear(
-            tensor_space[BlockDimNames.hidden],
-            tensor_space[MLPDimNames.unshared_experts],
-            bias=False,
-            weight_init_method=init_normal_(
-                std=self._config.init_method_std,
-                min_val=self._config.init_method_min,
-                max_val=self._config.init_method_max,
-            ),
-            lr_scale=router_lr_scale,
+        self.router = self._config.router.get_layer(
+            hidden_dim,
+            TensorDim("router_experts", self._config.num_unshared_experts),
+            lr_scale=layer_lr_scale,
         )
         dropless_moe = self._config.dropless_moe
-        if dropless_moe and tensor_space.distributed_config.sequence_tensor_parallel:
+        if dropless_moe and self._sequence_parallel:
             warnings.warn(
                 "Dropless MoE not supported for sequence-tensor-parallel, falling back to looped implementation."
             )
             dropless_moe = False
         self._mlp_forward = self._forward_dropless if dropless_moe else self._forward_looped
+
+        if self._debug.enabled:
+            self._top_expert_dim = TensorDim("top_experts", self._config.num_experts_per_token)
+
+    def _get_intermediate_dims(self) -> tuple[TensorDim, TensorDim]:
+        intermediate_1_dim, intermediate_2_dim = super()._get_intermediate_dims()
+        experts_dim = TensorDim("experts", self._config.num_experts)
+        return (
+            CompositeTensorDim("moe_intermediate_1", (experts_dim, intermediate_1_dim)),
+            CompositeTensorDim("moe_intermediate_2", (experts_dim, intermediate_2_dim)),
+        )
 
     def forward(
         self, input_: torch.Tensor, kwargs: dict, losses: dict | None = None, metrics: dict | None = None
@@ -65,7 +76,9 @@ class MixtureOfExpertMLP[ConfigType: MLPConfig](MLPBase[ConfigType]):
         hidden_states = input_.flatten(0, -2)
         logits = self.router(hidden_states)
         if self._debug.enabled:
-            self._debug(logits, "Router logits", kwargs[BlockKwargs.hidden_dims][:-1] + (MLPDimNames.experts,), kwargs)
+            self._debug(
+                logits, "Router logits", kwargs[BlockKwargs.hidden_dims][:-1] + (self._top_expert_dim,), kwargs
+            )
 
         # Apply z_loss if applicable
         if self._config.expert_z_loss_coefficient > 0.0:
@@ -96,12 +109,12 @@ class MixtureOfExpertMLP[ConfigType: MLPConfig](MLPBase[ConfigType]):
         if self._debug.enabled:
             # To log all ranks set `global_=False`
             self._debug(
-                scores, "Router scores", kwargs[BlockKwargs.hidden_dims][:-1] + (MLPDimNames.top_experts,), kwargs
+                scores, "Router scores", kwargs[BlockKwargs.hidden_dims][:-1] + (self._top_expert_dim,), kwargs
             )
             self._debug(
                 top_experts,
                 "Router top experts",
-                kwargs[BlockKwargs.hidden_dims][:-1] + (MLPDimNames.top_experts,),
+                kwargs[BlockKwargs.hidden_dims][:-1] + (self._top_expert_dim,),
                 kwargs,
             )
 

@@ -1,7 +1,7 @@
 import typing
 
-from fast_llm.layers.transformer.config import TransformerConfig
-from fast_llm.layers.transformer.rotary.config import DefaultRotaryConfig
+from fast_llm.layers.attention.rotary.config import DefaultRotaryConfig
+from fast_llm.layers.block.config import BlockConfig
 from fast_llm.utils import Assert, div
 
 if typing.TYPE_CHECKING:
@@ -13,7 +13,7 @@ if typing.TYPE_CHECKING:
 
 
 def get_init_megatron(
-    meta: "ParameterMeta", config: TransformerConfig
+    meta: "ParameterMeta", config: BlockConfig
 ) -> typing.Callable[["torch.Tensor", "Distributed"], None]:
     def init_megatron(tensor: "torch.Tensor", distributed: "Distributed") -> None:
         Assert.eq(distributed.config.world_size, 1)
@@ -50,7 +50,7 @@ def set_megatron_distributed_seeds(config: "DistributedConfig") -> None:
 
 
 def _init_attention_megatron(
-    config: TransformerConfig, meta: "ParameterMeta", tensor: "torch.Tensor", distributed: "Distributed"
+    config: BlockConfig, meta: "ParameterMeta", tensor: "torch.Tensor", distributed: "Distributed"
 ) -> "torch.Tensor":
     # Megatron combines q and kv and inverts the initialization order of qkv and dense layers.
     # It also always treats the tensors as tensor-parallel and uses a different rotary embedding format.
@@ -94,7 +94,7 @@ def _init_attention_megatron(
             raise NotImplementedError(meta.tensor_name)
 
     if isinstance(config.rotary, DefaultRotaryConfig) and config.rotary.complex_format:
-        from fast_llm.layers.transformer.rotary.config import convert_rotary_real_to_complex
+        from fast_llm.layers.attention.rotary.config import convert_rotary_real_to_complex
 
         # Megatron uses (2, kv_channels/2) for the complex split; we use (kv_channels/2, 2).
         # TODO: Avoid unnecessarily changing the value and dense tensors.

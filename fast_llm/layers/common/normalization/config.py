@@ -1,16 +1,15 @@
 import abc
 import enum
-import functools
 import typing
 
 from fast_llm.config import Field, FieldHint, check_field, config_class
 from fast_llm.engine.base_model.config import BaseModelConfig
-from fast_llm.engine.config_utils.initialization import InitializationConfig, Initializer, init_ones_, init_zeros_
+from fast_llm.engine.config_utils.initialization import InitializationConfig
 from fast_llm.engine.config_utils.tensor_space import TensorDim
+from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
-    from fast_llm.layers.common.linear import LinearBase, LinearLike
     from fast_llm.layers.common.normalization import Normalization
 
 
@@ -28,15 +27,23 @@ class NormalizationImplementation(str, enum.Enum):
 
 @config_class(registry=True)
 class NormalizationConfig(BaseModelConfig):
-    pass
+    lr_scale: float | None = (None,)
 
     @property
     @abc.abstractmethod
     def module_class(self) -> type["Normalization"]:
         pass
 
-    def get_layer(self, hidden_dim: "TensorDim", lr_scale: float | None = None) -> "Normalization":
-        return self.module_class(self, hidden_dim, lr_scale)
+    def get_layer(
+        self,
+        hidden_dim: "TensorDim",
+        lr_scale: float | None = None,
+        peft: PeftConfig | None = None,
+    ) -> "Normalization":
+        out = self.module_class(self, hidden_dim, lr_scale)
+        if peft:
+            out = peft.apply_other(out)
+        return out
 
     @classmethod
     def _from_dict(
@@ -52,12 +59,21 @@ class NormalizationConfig(BaseModelConfig):
 
 
 @config_class(dynamic_type={NormalizationConfig: "none"})
+class DefaultNormalizationConfig(NormalizationConfig):
+    _abstract = False
+
+    @property
+    def module_class(self) -> type["Normalization"]:
+        raise NotImplementedError()
+
+
+@config_class(dynamic_type={NormalizationConfig: "none"})
 class NoNormalizationConfig(NormalizationConfig):
     _abstract = False
 
     @property
     def module_class(self) -> type["Normalization"]:
-        from fast_llm.layers.common.normalization import NoNormalization
+        from fast_llm.layers.common.normalization.normalization import NoNormalization
 
         return NoNormalization
 
@@ -104,12 +120,12 @@ class LayerNormalizationBaseConfig(NormalizationConfig):
         cls._handle_renamed_field(default, "layer_norm_init_range", "initialization_range")
         return super()._from_dict(default, strict, flat)
 
-    @functools.cached_property
-    def weight_initialization_method(self) -> Initializer:
-        if self.weight_initialization.has_initialization:
-            return self.weight_initialization.get_initializer()
-        else:
-            return init_ones_
+    # @functools.cached_property
+    # def weight_initialization_method(self) -> Initializer:
+    #    if self.weight_initialization.is_default:
+    #        return self.weight_initialization.get_initializer()
+    #    else:
+    #        return init_ones_
 
 
 @config_class(dynamic_type={NormalizationConfig: "layer_norm"})
@@ -120,16 +136,16 @@ class LayerNormalizationConfig(LayerNormalizationBaseConfig):
         hint=FieldHint.feature,
     )
 
-    @functools.cached_property
-    def bias_initialization_method(self) -> Initializer:
-        if self.bias_initialization.has_initialization:
-            return self.bias_initialization.get_initializer()
-        else:
-            return init_zeros_
+    # @functools.cached_property
+    # def bias_initialization_method(self) -> Initializer:
+    #    if self.bias_initialization.is_default:
+    #        return self.bias_initialization.get_initializer()
+    #    else:
+    #        return init_zeros_
 
     @property
     def module_class(self):
-        from fast_llm.layers.common.normalization import LayerNormalization
+        from fast_llm.layers.common.normalization.normalization import LayerNormalization
 
         return LayerNormalization
 
@@ -140,56 +156,6 @@ class RMSNormalizationConfig(LayerNormalizationBaseConfig):
 
     @property
     def module_class(self):
-        from fast_llm.layers.common.normalization import RMSNormalization
+        from fast_llm.layers.common.normalization.normalization import RMSNormalization
 
         return RMSNormalization
-
-
-@config_class()
-class PeftConfig(BaseModelConfig):
-    @abc.abstractmethod
-    def apply_linear(self, linear: "LinearBase", **kwargs) -> "LinearLike":
-        pass
-
-
-@config_class()
-class NoPeftConfig(PeftConfig):
-    _abstract = False
-
-    def apply_linear(self, linear: "LinearBase", **kwargs) -> "LinearLike":
-        return linear
-
-
-@config_class()
-class LoRAConfig(PeftConfig):
-    _abstract = False
-
-    rank: int = Field(
-        default=8,
-        desc="The LoRA rank, i.e. the size of the intermediate dimension.",
-        hint=FieldHint.stability,
-    )
-    alpha: float = Field(
-        default=8.0,
-        desc="The LoRA scaling parameter.",
-        hint=FieldHint.stability,
-    )
-    dropout: float = Field(
-        default=0.0,
-        desc="Dropout rate for LoRA.",
-        hint=FieldHint.stability,
-    )
-
-    def apply_linear(self, linear: "LinearBase", **kwargs) -> "LinearLike":
-        from fast_llm.layers.common.peft import lora_linear
-
-        # TODO: Init method?
-        return lora_linear(
-            linear,
-            linear.weight.param_init_method,
-            linear.weight.param_init_method,
-            self.rank,
-            self.alpha,
-            self.dropout,
-            **kwargs,
-        )

@@ -8,8 +8,8 @@ from fast_llm.config import Configurable
 from fast_llm.engine.base_model.config import Preprocessor
 from fast_llm.engine.config_utils.tensor_space import DefaultDimNames, TensorSpace
 from fast_llm.functional.triton.rotary import triton_rotary_autograd_
-from fast_llm.layers.transformer.config import AttentionDimNames, AttentionKwargs
-from fast_llm.layers.transformer.rotary.config import (
+from fast_llm.layers.attention.config import AttentionDimNames, AttentionKwargs
+from fast_llm.layers.attention.rotary.config import (
     DefaultRotaryConfig,
     Llama3RotaryConfig,
     NoRotaryConfig,
@@ -83,7 +83,7 @@ class DefaultRotary[ConfigType: DefaultRotaryConfig](Rotary[DefaultRotaryConfig]
         self._tensor_space = tensor_space
         if self._tensor_space is not None:
             self._scalar_dim = self._tensor_space[DefaultDimNames.scalar]
-            self._kv_channels_dim = self._tensor_space[AttentionDimNames.kv_channels]
+            self._kv_channels_dim = self._tensor_space[AttentionDimNames.value_head_channels]
 
     def preprocess(self, batch, kwargs: dict[str, typing.Any]) -> None:
         assert self._tensor_space is not None

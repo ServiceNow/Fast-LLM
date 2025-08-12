@@ -64,7 +64,9 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Config
             else 1.0
         )
         self._loss_name = LanguageModelLossNames.multi_token_prediction_loss(prediction_distance)
-        self.final_norm = self._config.transformer.normalization.get_layer(hidden_dim)
+        self.final_norm = self._config.transformer.normalization.get_layer(
+            hidden_dim, peft=self._config.transformer.peft
+        )
         self._logits_scale_factor = self._config.logits_scale_factor
         self._language_model_loss_factor = self._config.language_model_loss_factor
         self._distillation_loss_factor = self._config.distillation_loss_factor
@@ -102,7 +104,6 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Config
         self._forward = wrap_forward_backward(self._forward_backward, grad_is_context)
 
         # PEFT.
-        self.final_norm = self._config.transformer.peft.apply_other(self.final_norm)
         if hasattr(self, "output_weights"):
             self.output_weights = self._config.transformer.peft.apply_weight(self.output_weights)
 

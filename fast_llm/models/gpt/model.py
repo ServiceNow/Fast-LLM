@@ -10,14 +10,14 @@ from fast_llm.engine.config_utils.tensor_space import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames, PhaseType
 from fast_llm.engine.inference.runner import InferenceRunner
 from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
+from fast_llm.layers.attention.config import AttentionDimNames, AttentionKwargs
+from fast_llm.layers.attention.preprocessing import BackupAttentionPreprocessor, FlashAttnVarlenPreprocessor
+from fast_llm.layers.block.block import Block
 from fast_llm.layers.block.mlp.config import MLPLossNames, RoutingType
 from fast_llm.layers.language_model.config import LanguageModelKwargs, LanguageModelLossNames
 from fast_llm.layers.language_model.embedding import WORD_EMBEDDINGS_WEIGHT, LanguageModelEmbedding
 from fast_llm.layers.language_model.head import OUTPUT_WEIGHTS, LanguageModelHead
 from fast_llm.layers.language_model.preprocessing import PositionEmbeddingPreprocessor, PreferenceSpanPreprocessor
-from fast_llm.layers.transformer.block import TransformerBlock
-from fast_llm.layers.transformer.config import AttentionDimNames, AttentionKwargs
-from fast_llm.layers.transformer.preprocessing import BackupAttentionPreprocessor, FlashAttnVarlenPreprocessor
 from fast_llm.models.gpt.config import GPTBaseModelConfig, GPTBatchConfig, GPTModelConfig
 from fast_llm.models.gpt.megatron import get_init_megatron
 from fast_llm.tensor import ParameterMeta, TensorMeta
@@ -48,7 +48,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             self._preprocessors.append(PositionEmbeddingPreprocessor(self._config, self._tensor_space))
         # We have multiple identical rotary modules/preprocessors, so it's simpler to make a new one here.
         # TODO: Find a better solution.
-        self._preprocessors.append(self._config.transformer.rotary.build(self._tensor_space))
+        self._preprocessors.append(self._config.transformer.rotary.get_layer(self._tensor_space))
         if self._use_flash_attention:
             self._preprocessors.append(FlashAttnVarlenPreprocessor(self._config.transformer, self._tensor_space))
         else:
@@ -62,7 +62,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
         for i in range(self._config.prediction_heads):
             if i > 0:
                 layers.append(
-                    TransformerBlock(
+                    Block(
                         self._config.transformer,
                         self._tensor_space,
                         # TODO MTP: which index?
@@ -85,7 +85,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
         return [
             LanguageModelEmbedding(self._config, self._tensor_space),
             *[
-                TransformerBlock(
+                Block(
                     self._config.transformer,
                     self._tensor_space,
                     block_index=i + 1,
@@ -330,7 +330,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
         return self.layers[0]
 
     @property
-    def transformer_layers(self) -> list[TransformerBlock]:
+    def transformer_layers(self) -> list[Block]:
         return self.layers[1:-1]
 
     @property
