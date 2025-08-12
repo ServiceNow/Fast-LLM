@@ -30,6 +30,10 @@ class AprielSSMHybridConfig(MistralConfig):
     model_type = "apriel_ssm_thinker_hybrid"
 
     def __init__(self, hybrid_block_layout=["m2d"], ssm_cfg=None, **kwargs):
+        kwargs["sliding_window"] = None
+        logger.warning(
+            "Note! Sliding_window is not supported for AprielSSMHybridConfig (15B thinker does not use sliding window), setting to None"
+        )
         super().__init__(**kwargs)
         self.hybrid_block_layout = hybrid_block_layout
         self.head_dim = self.head_dim or self.hidden_size // self.num_attention_heads  # as in transformers 4.51.3
