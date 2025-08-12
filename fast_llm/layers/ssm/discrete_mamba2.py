@@ -1,13 +1,15 @@
 import logging
 import math
+import typing
 
 import einops
 import torch
 
-from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
+from fast_llm.engine.config_utils.tensor_space import DefaultDimNames, TensorSpace
 from fast_llm.layers.common.linear import Linear
 from fast_llm.layers.ssm.config import SSMConfig, SSMDimNames
-from fast_llm.layers.transformer.config import TransformerKwargs
+from fast_llm.layers.transformer.config import TransformerConfig, TransformerKwargs
+from fast_llm.layers.transformer.transformer import Mixer
 from fast_llm.tensor import ParameterMeta, init_ones_, init_uniform_, init_zeros_, kaiming_init_
 from fast_llm.utils import get_lr_scale
 
@@ -36,29 +38,29 @@ def bias_init_method(conv_weight):
     return init_uniform_(-bound, bound)
 
 
-class DiscreteMamba2(torch.nn.Module):
+class DiscreteMamba2(Mixer):
     """DiscreteMamba2 (This code is adapted from https://github.com/cartesia-ai/edge/blob/main/cartesia-pytorch/cartesia_pytorch/Llamba/mixers/discrete_mamba2.py)."""
+
+    _mixer_name: typing.ClassVar[str] = "discrete_mamba_2"
 
     def __init__(
         self,
         config: SSMConfig,
-        layer_idx: int,
+        block_index: int,
         tensor_space: TensorSpace,
-        return_input: bool = False,
+        transformer_config: TransformerConfig,
     ):
         """
         See the class .kernel.SSKernel for the kernel constructor which accepts kernel_args.
         Other options are all experimental and should not need to be configured.
         """
         # factory_kwargs = {"device": "meta"}  # , "dtype": torch.bfloat16}
-        super().__init__()
+        super().__init__(tensor_space, block_index, debug_level=transformer_config.debug_transformer)
         self.config: SSMConfig = config
         bias = config.add_bias_linear
-        self.layer_idx = layer_idx
-        self._return_input = return_input
-        layer_lr_scale = config.per_layer_lr_scale[layer_idx] if config.per_layer_lr_scale else None
+        layer_lr_scale = config.per_layer_lr_scale[block_index] if config.per_layer_lr_scale else None
         mamba_layer_lr_scale = get_lr_scale(self.config.mamba_lr_scale, layer_lr_scale)
-        logger.info(f"Setting lr_scale for layer {layer_idx} of type {type(self)}: {mamba_layer_lr_scale}")
+        logger.info(f"Setting lr_scale for layer {block_index} of type {type(self)}: {mamba_layer_lr_scale}")
 
         td_inner = tensor_space.get_tensor_dim(SSMDimNames.inner_dim)
         td_state = tensor_space.get_tensor_dim(SSMDimNames.state_dim)
@@ -101,7 +103,7 @@ class DiscreteMamba2(torch.nn.Module):
         )
 
         self.conv1d_weight = ParameterMeta.from_dims(
-            (td_conv, TensorDim("1", 1), td_conv_kernel),
+            (td_conv, tensor_space.get_tensor_dim(DefaultDimNames.scalar), td_conv_kernel),
             init_method=init_uniform_(
                 1 / math.sqrt(td_conv.size * td_conv_kernel.size), 1 / math.sqrt(td_conv.size * td_conv_kernel.size)
             ),  # see https://github.com/pytorch/pytorch/blob/1eba9b3aa3c43f86f4a2c807ac8e12c4a7767340/torch/nn/modules/conv.py#L180C53-L180C67
@@ -225,9 +227,6 @@ class DiscreteMamba2(torch.nn.Module):
         # Norm and gate
         out = self.out_proj(y * torch.nn.functional.silu(z + self.z_bias))
         outputs["hidden_states"] = out[:, :seqlen, :].contiguous()
-
-        if self._return_input:
-            return torch.stack([input_, outputs["hidden_states"]], dim=0)
 
         # TODO: since we do not support inference for now, we only return the hidden states for now.
         return outputs["hidden_states"], None

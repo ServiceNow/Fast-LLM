@@ -14,10 +14,10 @@ from fast_llm.utils import Assert, get_lr_scale
 
 
 class MLPBase(Layer, ABC):
-    def __init__(self, config: TransformerConfig, tensor_space: TensorSpace, name: str = "mlp", layer_index: int = 0):
+    def __init__(self, config: TransformerConfig, tensor_space: TensorSpace, name: str = "mlp", block_index: int = 0):
         super().__init__()
         self._name = name
-        self._layer_index = layer_index
+        self._block_index = block_index
 
         init_method_1 = init_normal_(
             std=config.init_method_std_mlp_1,
@@ -39,7 +39,7 @@ class MLPBase(Layer, ABC):
         self._activation_type = config.activation_type
         self._activation_fn = triton_mlp_activation_autograd if TritonConfig.TRITON_ENABLED else torch_mlp_activation
 
-        layer_lr_scale = config.per_layer_lr_scale[layer_index] if config.per_layer_lr_scale else None
+        layer_lr_scale = config.per_layer_lr_scale[block_index] if config.per_layer_lr_scale else None
         lr_scale = tuple(config.mlp_lr_scale) if isinstance(config.mlp_lr_scale, list) else config.mlp_lr_scale
         lr_scale = get_lr_scale(lr_scale, layer_lr_scale)
 
@@ -69,9 +69,9 @@ class MLPBase(Layer, ABC):
 
 
 class MLP(MLPBase):
-    def __init__(self, config: TransformerConfig, tensor_space: TensorSpace, name: str = "mlp", layer_index: int = 0):
+    def __init__(self, config: TransformerConfig, tensor_space: TensorSpace, name: str = "mlp", block_index: int = 0):
         Assert.eq(config.num_experts, 1)
-        super().__init__(config, tensor_space, name, layer_index)
+        super().__init__(config, tensor_space, name, block_index)
 
     def forward(
         self,

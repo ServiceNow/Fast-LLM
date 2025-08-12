@@ -125,12 +125,16 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](Configurable[Langua
         self, input_: torch.Tensor, kwargs: dict, losses: dict | None = None, metrics: dict | None = None
     ) -> torch.Tensor:
         if isinstance(input_, TensorMeta):
-            return TensorMeta.from_tensor_space(
-                (DefaultDimNames.scalar,),
-                self._tensor_space,
-                tensor_name="Loss",
-                reductions=((DistributedDimNames.data, ReduceOp.AVG),),  # noqa
-            )
+            if self._is_last_head:
+                return TensorMeta.from_tensor_space(
+                    (DefaultDimNames.scalar,),
+                    self._tensor_space,
+                    tensor_name="Loss",
+                    reductions=((DistributedDimNames.data, ReduceOp.AVG),),  # noqa
+                )
+            else:
+                return TensorMeta.from_dims(input_.dims[1:], tensor_name="Shared hidden")
+
         if not self._is_last_head:
             # MTP: split the stacked input
             shared_hidden, input_ = torch.unbind(input_, dim=0)

@@ -1,12 +1,15 @@
 import math
+import typing
 from typing import Callable
 
 import einops
 import torch
 
-from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
+from fast_llm.engine.config_utils.tensor_space import DefaultDimNames, TensorSpace
 from fast_llm.layers.common.linear import Linear
 from fast_llm.layers.ssm.config import SSMConfig, SSMDimNames
+from fast_llm.layers.transformer.config import TransformerConfig
+from fast_llm.layers.transformer.transformer import Mixer
 from fast_llm.tensor import ParameterMeta, init_ones_, kaiming_init_
 from fast_llm.utils import get_lr_scale
 
@@ -44,12 +47,12 @@ def init_A(d_state, d_inner) -> Callable[[ParameterMeta, torch.Tensor, torch.Gen
 
 
 def init_dtprojbias(
-    d_inner: int, dt_max: float, dt_min: float, dt_init_floor: float, factory_kwargs: dict
+    d_inner: int, dt_max: float, dt_min: float, dt_init_floor: float
 ) -> Callable[[ParameterMeta, torch.Tensor, torch.Generator], torch.Tensor]:
     def init_(meta: ParameterMeta, tensor: torch.Tensor, generator: torch.Generator):  # noqa
-        dt = torch.exp(
-            torch.rand(d_inner, **factory_kwargs) * (math.log(dt_max) - math.log(dt_min)) + math.log(dt_min)
-        ).clamp(min=dt_init_floor)
+        dt = torch.exp(torch.rand(d_inner) * (math.log(dt_max) - math.log(dt_min)) + math.log(dt_min)).clamp(
+            min=dt_init_floor
+        )
         # Inverse of softplus: https://github.com/pytorch/pytorch/issues/72759
         inv_dt = dt + torch.log(-torch.expm1(-dt))
         tensor.copy_(inv_dt)
@@ -58,20 +61,18 @@ def init_dtprojbias(
     return init_
 
 
-class MambaLayer(torch.nn.Module):
+class MambaLayer(Mixer):
+    _mixer_name: typing.ClassVar[str] = "mamba"
+
     def __init__(
         self,
         config: SSMConfig,
-        layer_idx: int,
+        block_index: int,
         tensor_space: TensorSpace,
-        return_input: bool = False,
+        transformer_config: TransformerConfig,
     ):
-        factory_kwargs = {}
-        super().__init__()
+        super().__init__(tensor_space, block_index, debug_level=transformer_config.debug_transformer)
         self.config: SSMConfig = config
-        self.layer_idx = layer_idx
-
-        self._debug_mode = config.debug_ssm
 
         # Tensor dims:
         td_inner = tensor_space.get_tensor_dim(SSMDimNames.inner_dim)
@@ -88,7 +89,7 @@ class MambaLayer(torch.nn.Module):
         self.d_state = td_state.size
         self.d_model = td_model.size
         self.dt_rank = tdt_rank.size
-        layer_lr_scale = config.per_layer_lr_scale[layer_idx] if config.per_layer_lr_scale else None
+        layer_lr_scale = config.per_layer_lr_scale[block_index] if config.per_layer_lr_scale else None
         mamba_layer_lr_scale = get_lr_scale(self.config.mamba_lr_scale, layer_lr_scale)
 
         self.in_proj_weight = ParameterMeta.from_dims(
@@ -97,7 +98,7 @@ class MambaLayer(torch.nn.Module):
         )
 
         self.conv1d_weight = ParameterMeta.from_dims(
-            (td_inner, TensorDim("D_inner_2", self.d_inner // self.d_inner), td_conv_kernel),
+            (td_inner, tensor_space.get_tensor_dim(DefaultDimNames.scalar), td_conv_kernel),
             init_method=kaiming_init_(td_inner.size),
             lr_scale=mamba_layer_lr_scale,
         )
@@ -113,7 +114,6 @@ class MambaLayer(torch.nn.Module):
             weight_init_method=kaiming_init_(td_inner.size),
             bias=False,
             lr_scale=mamba_layer_lr_scale,
-            **factory_kwargs,
         )
         self.x_proj.weight.auto_grad_accumulation = True
 
@@ -127,7 +127,7 @@ class MambaLayer(torch.nn.Module):
         self.dt_proj_bias = ParameterMeta.from_dims(
             (td_inner,),
             init_method=init_dtprojbias(
-                self.d_inner, self.config.dt_max, self.config.dt_min, self.config.dt_init_floor, factory_kwargs
+                self.d_inner, self.config.dt_max, self.config.dt_min, self.config.dt_init_floor
             ),
             lr_scale=mamba_layer_lr_scale,
         )
@@ -153,10 +153,8 @@ class MambaLayer(torch.nn.Module):
             bias=False,  # TODO: note, if bias is used there is a problem in the MambaInnerFn.backward for the bias grads. I think this bias is not used in other mamba repos.
             weight_init_method=kaiming_init_(td_model.size),
             lr_scale=mamba_layer_lr_scale,
-            **factory_kwargs,
         )
         self.out_proj.weight.auto_grad_accumulation = True
-        self._return_input = return_input
 
     def forward(self, hidden_states, kwargs):
         assert _mamba_available
@@ -168,8 +166,6 @@ class MambaLayer(torch.nn.Module):
             "d (b l) -> b d l",
             l=seqlen,
         )
-        if self._debug_mode:
-            print("XZ: ", xz.shape)
 
         A = -torch.exp(self.A_log.float())  # (d_inner, d_state)
         # In the backward pass we write dx and dz next to each other to avoid torch.cat
@@ -189,6 +185,4 @@ class MambaLayer(torch.nn.Module):
             delta_bias=self.dt_proj_bias.float(),
             delta_softplus=True,
         )
-        if self._return_input:
-            out = torch.stack((hidden_states, out), dim=0)
         return out, None
