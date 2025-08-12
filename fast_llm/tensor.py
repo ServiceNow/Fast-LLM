@@ -240,8 +240,12 @@ class TensorMeta(torch.Tensor):
         return validate_tensor(tensor, self, device)
 
     def replace_tensor_parallel_dim(self, distributed_dim: DistributedDim) -> "TensorMeta":
-        # Replace the tensor-parallel `DistributedDim` in `meta`.
-        # Note: This will turn `ParameterMeta` into `TensorMeta`
+        """
+        Replace the tensor-parallel `DistributedDim` in `meta`, preserving the local size.
+        Requires for advanced tensor manipulations,
+        ex. turn tensor-parallel slices of a tensor into slices of a different tensor-parallel size.
+        Note: This will turn `ParameterMeta` into `TensorMeta`
+        """
         if not self.is_tensor_parallel:
             return self
         dims = list(self.dims)
