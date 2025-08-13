@@ -12,6 +12,26 @@ if typing.TYPE_CHECKING:
     from fast_llm.tensor import Initializer
 
 
+class BaseSSMKwargs:
+    _kwargs_attributes = {
+        "cu_seqlens": "cu_seqlens",
+        "seq_idx": "seq_idx",
+        "ssm_position_ids": "ssm_position_ids",
+    }
+
+    _prefix = ""
+
+    def __init_subclass__(cls, prefix="", **kwargs):
+        super().__init_subclass__(**kwargs)
+        cls._prefix = prefix
+        for attr, value in BaseSSMKwargs._kwargs_attributes.items():
+            setattr(cls, value, f"{cls._prefix}_{value}" if cls._prefix else value)
+
+
+class SSMKwargs(BaseSSMKwargs, prefix=""):
+    pass
+
+
 class SSMDimNames:
     # TODO: Use separate tensor space for different mixers so there is no risk of name conflict.
     state = "ssm_state"  # State dimension (N), aka head size / num channels
