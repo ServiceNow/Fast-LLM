@@ -1031,7 +1031,23 @@ class Configurable[ConfigType: Config](abc.ABC):
     def __init_subclass__(cls):
         # Automatically set `config_class` based on the bound type.
         # Make sure `ConfigType` is bound and respects class hierarchy.
-        Assert.custom(issubclass, config_class := ConfigType.__bound__, cls.config_class)
+        try:
+            config_class = None
+            for base in types.get_original_bases(cls):
+                if hasattr(base, "__origin__") and issubclass(base.__origin__, Configurable):
+                    for arg in base.__args__:
+                        if arg.__name__ == "ConfigType":
+                            if config_class is None:
+                                config_class = arg.__bound__
+                            else:
+                                assert arg.__bound__ is config_class
+            assert config_class is not None
+        except Exception as e:
+            raise TypeError(
+                f"Could not determine the configuration class for the configurable class {cls.__name__}: {e.args}. "
+                "Please make sure to declare in the format "
+                f"`class {cls.__name__}[ConfigType: ConfigClass](BaseConfigurable[ConfigType])`.] "
+            )
         cls.config_class = config_class
 
     @property

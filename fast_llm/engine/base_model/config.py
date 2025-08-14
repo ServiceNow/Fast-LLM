@@ -6,7 +6,7 @@ from fast_llm.config import MISSING, Config, Field, FieldHint, FieldVerboseLevel
 from fast_llm.utils import compare_nested, log
 
 if typing.TYPE_CHECKING:
-    from fast_llm.engine.config_utils.tensor_space import TensorSpace
+    import torch
 
 
 @config_class()
@@ -17,9 +17,6 @@ class BaseModelConfig(Config):
     """
 
     _abstract = True
-
-    def setup_tensor_space(self, tensor_space: "TensorSpace") -> None:
-        raise NotImplementedError()
 
     def compare_architecture(
         self,
@@ -64,5 +61,5 @@ class Preprocessor(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def preprocess(self, batch, kwargs: dict[str, typing.Any]) -> None:
+    def preprocess(self, batch: "torch.Tensor", kwargs: dict[str, typing.Any]) -> None:
         pass

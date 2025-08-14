@@ -13,7 +13,6 @@ import torch
 from fast_llm.core.distributed import ProcessGroup, allreduce_scalar, safe_barrier
 from fast_llm.engine.base_model.base_model import BaseModel, Layer
 from fast_llm.engine.config_utils.logging import configure_logging
-from fast_llm.engine.config_utils.tensor_space import TensorSpace
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig, StageConfig
 from fast_llm.engine.multi_stage.stage import Stage
@@ -33,12 +32,8 @@ def result_path():
 def get_base_model(config: FastLLMModelConfig):
     # Create a base model (and distributed).
     # Using a full model config so we have the model type and distributed config in the same argument.
-    distributed = Distributed(config.distributed)
-    tensor_space = TensorSpace(config.distributed)
-    config.base_model.setup_tensor_space(tensor_space)
-    tensor_space.setup(distributed)
     base_model = config.get_model_class().base_model_class(config.base_model, config.distributed)
-    base_model.setup(distributed)
+    base_model.setup(distributed := Distributed(config.distributed))
     return base_model, distributed
 
 

@@ -9,7 +9,7 @@ from torch.distributed import all_reduce, reduce_scatter_tensor
 from fast_llm.core.distributed import ProcessGroup
 from fast_llm.core.ops import gather_op
 from fast_llm.engine.config_utils.data_type import DataType
-from fast_llm.engine.config_utils.tensor_space import TensorDim
+from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDim, DistributedDimNames
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.engine.multi_stage.config import SHARD_PAD_TO_MULTIPLE, ShardName, StageMode
@@ -320,27 +320,31 @@ class FSDP:
         return end - begin
 
     def export_shard(
-        self, shard: torch.Tensor, distributed: Distributed, data_type: DataType | None = None
+        self, shard: torch.Tensor, data_type: DataType | None = None
     ) -> typing.Generator[tuple[str, torch.Tensor], None, None]:
         if data_type is not None:
             shard = shard.to(dtype=data_type.torch)
         tensors = self.split_buffer(self.reconstruct_from_shard(shard))
         for name, meta in self._parameter_metas.items():
-            yield name, meta.local_to_global(tensors[name], distributed=distributed)[0]
+            yield name, meta.local_to_global(tensors[name])[0]
 
     def log_shard(self, name, shard, *, distributed: Distributed, level, global_: bool) -> None:
         # if global_ is None:
         #    global_ = self._config.debug_global_tensors
         parameters = self.split_buffer(self.reconstruct_from_shard(shard)) if global_ else self.split_shard(shard)
         for parameter_name, parameter in parameters.items():
+            meta = self.get_parameter_meta(parameter_name)
             log_distributed_tensor(
                 name,
                 parameter,
                 level=level,
-                distributed=distributed,
                 global_=global_,
-                duplicate_groups=(distributed.data_group,),
-                meta=self.get_parameter_meta(parameter_name),
+                # Assuming all tensors are either duplicated of parallel in the TP direction.
+                duplicate_groups=(
+                    distributed.data_group,
+                    distributed.tensor_group,
+                ),
+                meta=meta,
             )
 
     def restore_parameters(self) -> None:

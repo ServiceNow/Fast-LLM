@@ -5,7 +5,7 @@ import warnings
 
 from fast_llm.config import Field, FieldHint, config_class
 from fast_llm.engine.base_model.config import BaseModelConfig
-from fast_llm.engine.config_utils.tensor_space import TensorSpace
+from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.functional.config import TritonConfig
 from fast_llm.utils import Assert
 
@@ -29,8 +29,8 @@ class RotaryConfig(BaseModelConfig):
             return NoRotaryConfig._from_dict(default, strict, flat)
         return super()._from_dict(default, strict=strict, flat=flat)
 
-    def build(self, tensor_space: TensorSpace | None = None) -> "Rotary":
-        return self._get_configurable_class()(self, tensor_space)
+    def build(self, kv_channels_dim: TensorDim) -> "Rotary":
+        return self._get_configurable_class()(self, kv_channels_dim)
 
     @classmethod
     @abc.abstractmethod
