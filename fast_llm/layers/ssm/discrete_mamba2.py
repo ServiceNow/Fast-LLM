@@ -36,7 +36,9 @@ except (ImportError, RuntimeError):
 
 
 class DiscreteMamba2[ConfigType: SSMConfig](BlockLayer[ConfigType]):
-    """DiscreteMamba2 (This code is adapted from https://github.com/cartesia-ai/edge/blob/main/cartesia-pytorch/cartesia_pytorch/Llamba/mixers/discrete_mamba2.py)."""
+    """
+    This code is adapted from https://github.com/cartesia-ai/edge/blob/main/cartesia-pytorch/cartesia_pytorch/Llamba/mixers/discrete_mamba2.py.
+    """
 
     _mixer_name: typing.ClassVar[str] = "discrete_mamba_2"
 

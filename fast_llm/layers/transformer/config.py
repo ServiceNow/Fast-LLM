@@ -8,24 +8,11 @@ from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.engine.config_utils.initialization import InitializationConfig, Initializer, init_normal_, init_zeros_
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.functional.config import TritonConfig
-from fast_llm.layers.block.config import BlockConfig, BlockDimNames, BlockKwargs, MixerConfig
+from fast_llm.layers.block.config import BlockConfig, BlockKwargs, MixerConfig
 from fast_llm.layers.transformer.rotary.config import RotaryConfig
 from fast_llm.utils import Assert, div
 
 logger = logging.getLogger(__name__)
-
-
-class AttentionDimNames(BlockDimNames):
-    # A set of common tensor dim names packed into a namespace.
-    # Self-attention dimensions
-    head_groups = "head_groups"
-    group_heads = "group_heads"
-    key_and_value = "key_value"
-    kv_channels = "kv_channels"
-    composite_heads = "composite_heads"
-    composite_query = "composite_query"
-    composite_key_value = "composite_key_value"
-    composite_dense = "composite_dense"
 
 
 class AttentionKwargs(BlockKwargs):

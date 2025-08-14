@@ -10,13 +10,14 @@ from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames, PhaseType
 from fast_llm.engine.inference.runner import InferenceRunner
 from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
+from fast_llm.layers.block.config import BlockDimNames
 from fast_llm.layers.block.mlp.config import MLPLossNames, RoutingType
 from fast_llm.layers.language_model.config import LanguageModelKwargs, LanguageModelLossNames
 from fast_llm.layers.language_model.embedding import WORD_EMBEDDINGS_WEIGHT, LanguageModelEmbedding
 from fast_llm.layers.language_model.head import OUTPUT_WEIGHTS, LanguageModelHead
 from fast_llm.layers.language_model.preprocessing import PositionEmbeddingPreprocessor, PreferenceSpanPreprocessor
 from fast_llm.layers.transformer.block import TransformerBlock
-from fast_llm.layers.transformer.config import AttentionDimNames, AttentionKwargs
+from fast_llm.layers.transformer.config import AttentionKwargs
 from fast_llm.layers.transformer.preprocessing import BackupAttentionPreprocessor, FlashAttnVarlenPreprocessor
 from fast_llm.models.gpt.config import GPTBaseModelConfig, GPTBatchConfig, GPTModelConfig
 from fast_llm.models.gpt.megatron import get_init_megatron
@@ -49,7 +50,9 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             self._preprocessors.append(PositionEmbeddingPreprocessor(self._config, self._distributed_config))
         # We have multiple identical rotary modules/preprocessors, so it's simpler to make a new one here.
         # TODO: Find a better solution.
-        self._preprocessors.append(self._config.transformer.rotary.get_layer(self._tensor_space))
+        self._preprocessors.append(
+            self._config.transformer.rotary.get_layer(TensorDim("kv_channels", self._config.transformer.kv_channels))
+        )
         if self._use_flash_attention:
             self._preprocessors.append(FlashAttnVarlenPreprocessor(self._config.transformer, self._distributed_config))
         else:
@@ -137,8 +140,8 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             micro_sequence_length = sequence_length
             truncate_documents = True
 
-        batch_data = self._tensor_space.distributed_config.get_distributed_dim(DistributedDimNames.batch_data)
-        batch_dim = TensorDim(AttentionDimNames.batch, micro_batch_size * batch_data.size, batch_data)
+        batch_data = self._distributed_config.get_distributed_dim(DistributedDimNames.batch_data)
+        batch_dim = TensorDim(BlockDimNames.batch, micro_batch_size * batch_data.size, batch_data)
 
         if micro_sequence_length is None:
             micro_sequence_length = sequence_length
@@ -147,19 +150,17 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
 
         # TODO: Calculate hidden dims elsewhere?
         sequence_q_dim = TensorDim(
-            AttentionDimNames.sequence_q,
+            BlockDimNames.sequence_q,
             micro_sequence_length,
-            self._tensor_space.distributed_config.get_distributed_dim(DistributedDimNames.sequence_data),
+            self._distributed_config.get_distributed_dim(DistributedDimNames.sequence_data),
         )
         hidden_sequence_q_dim = (
             TensorDim(
-                AttentionDimNames.sequence_q_tp,
+                BlockDimNames.sequence_q_tp,
                 micro_sequence_length,
-                self._tensor_space.distributed_config.get_distributed_dim(
-                    DistributedDimNames.tensor_and_sequence_data
-                ),
+                self._distributed_config.get_distributed_dim(DistributedDimNames.tensor_and_sequence_data),
             )
-            if self._tensor_space.distributed_config.sequence_tensor_parallel
+            if self._distributed_config.sequence_tensor_parallel
             else sequence_q_dim
         )
 
@@ -170,11 +171,10 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             sequence_first = self._config.sequence_first
             assert not (need_sequence_first and not sequence_first)
 
-        hidden_dim = self._tensor_space[AttentionDimNames.hidden]
         hidden_dims = (
-            (hidden_sequence_q_dim, batch_dim, hidden_dim)
+            (hidden_sequence_q_dim, batch_dim, self._hidden_dim)
             if sequence_first
-            else (batch_dim, hidden_sequence_q_dim, hidden_dim)
+            else (batch_dim, hidden_sequence_q_dim, self._hidden_dim)
         )
 
         common_kwargs = {
@@ -187,7 +187,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
         }
 
         sequence_k_pasts = range(
-            sequence_q_dim.size * self._tensor_space.distributed_config.sequence_data_rank,
+            sequence_q_dim.size * self._distributed_config.sequence_data_rank,
             sequence_length,
             micro_sequence_length,
         )
@@ -201,7 +201,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
         preprocessed_meta = []
         for i, sequence_k_past in enumerate(sequence_k_pasts):
             sequence_k = sequence_k_past + sequence_q_dim.size
-            sequence_k_dim = TensorDim(AttentionDimNames.sequence_k, sequence_k)
+            sequence_k_dim = TensorDim(BlockDimNames.sequence_k, sequence_k)
 
             tokens = TensorMeta.from_dims(
                 hidden_dims[:2], tensor_name=f"tokens_{sequence_k_past}_to_{sequence_k-1}", dtype=torch.int64
@@ -255,7 +255,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
         prediction_heads: int = self._config.prediction_heads
 
         batch.token_ids = batch.token_ids.to(
-            device=self._tensor_space.distributed.device,
+            device=self._distributed.device,
             dtype=torch.int64,
             non_blocking=True,
         )

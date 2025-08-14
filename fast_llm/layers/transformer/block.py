@@ -11,7 +11,6 @@ logger = logging.getLogger(__name__)
 class TransformerBlock[ConfigType: TransformerConfig](Block[ConfigType]):
     # TODO: Standardize to `mixer`
     _mixer_module_name: typing.ClassVar[str] = "self_attn"
-    _config: TransformerConfig
 
     def _create_mixer(self) -> BlockLayer:
         return Attention(
