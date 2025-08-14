@@ -5,14 +5,15 @@ import typing
 import torch
 
 from fast_llm.engine.config_utils.initialization import LambdaInitializer, init_normal_, init_ones_
-from fast_llm.engine.config_utils.tensor_space import DefaultDimNames, TensorSpace
+from fast_llm.engine.config_utils.tensor_dim import CompositeTensorDim, ConcatenatedTensorDim, TensorDim, scalar_dim
+from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.functional.config import ActivationType
 from fast_llm.layers.block.block import BlockLayer
 from fast_llm.layers.block.config import BlockConfig, BlockKwargs
 from fast_llm.layers.common.linear import Linear
-from fast_llm.layers.ssm.config import SSMConfig, SSMDimNames
+from fast_llm.layers.ssm.config import SSMConfig
 from fast_llm.tensor import ParameterMeta
-from fast_llm.utils import Assert, get_lr_scale
+from fast_llm.utils import Assert, div, get_lr_scale
 
 try:
     from mamba_ssm.ops.selective_scan_interface import mamba_inner_fn as _mamba_inner_fn  # noqa
@@ -53,31 +54,39 @@ def init_dtprojbias(dt_max: float, dt_min: float, dt_init_floor: float) -> Lambd
     return LambdaInitializer(init_)
 
 
-class MambaLayer(BlockLayer):
+class Mamba[ConfigType: SSMConfig](BlockLayer[ConfigType]):
     _mixer_name: typing.ClassVar[str] = "mamba"
 
     def __init__(
         self,
-        config: SSMConfig,
-        block_index: int,
-        tensor_space: TensorSpace,
+        config: ConfigType,
         block_config: BlockConfig,
+        distributed_config: DistributedConfig,
+        hidden_dim: TensorDim,
+        block_index: int,
+        name: str,
     ):
         super().__init__(
-            tensor_space,
+            config,
+            block_config,
+            distributed_config,
+            hidden_dim,
             block_index,
-            self._mixer_name,
-            debug_level=block_config.debug_transformer,
-            debug_memory=block_config.debug_transformer_memory,
+            name,
         )
-        assert tensor_space.distributed_config.tensor_parallel == 1, "Tensor-parallel not supported for MambaLayer"
-        self._config = config
+        assert self._distributed_config.tensor_parallel == 1, "Tensor-parallel not supported for MambaLayer"
         # TODO: It's not silu?
         Assert.eq(self._config.activation_type, ActivationType.silu)
 
         # Tensor dims:
-        inner_dim = tensor_space[SSMDimNames.composite_heads_and_head_dim]
-        hidden_dim = tensor_space[SSMDimNames.hidden]
+        heads_dim = TensorDim("heads", div(self._config.d_inner, self._config.state_size))
+        state_dim = TensorDim("state", self._config.state_size)
+        inner_dim = CompositeTensorDim("inner", (heads_dim, state_dim))
+        convolution_kernel_dim = TensorDim("convolution_kernel", self._config.conv_kernel_dimension)
+        dt_rank_dim = TensorDim("dt_rank", self._config.dt_rank)
+        inner_projection_dim = ConcatenatedTensorDim("inner_projection", (inner_dim, inner_dim))
+        x_projection_dim = ConcatenatedTensorDim("x_projection", (dt_rank_dim, state_dim, state_dim))
+
         layer_lr_scale = block_config.per_layer_lr_scale[block_index] if block_config.per_layer_lr_scale else None
         lr_scale = get_lr_scale(self._config.mamba_lr_scale, layer_lr_scale)
 
@@ -85,7 +94,7 @@ class MambaLayer(BlockLayer):
         # TODO: lr_scale?
         self.in_proj = Linear(
             hidden_dim,
-            tensor_space[SSMDimNames.concatenated_inner_projection],
+            inner_projection_dim,
             bias=False,
             weight_init_method=init_kaiming_(hidden_dim.size),
         )
@@ -93,8 +102,8 @@ class MambaLayer(BlockLayer):
         self.conv1d_weight = ParameterMeta.from_dims(
             (
                 inner_dim,
-                tensor_space[DefaultDimNames.scalar],
-                tensor_space[SSMDimNames.convolution_kernel],
+                scalar_dim,
+                convolution_kernel_dim,
             ),
             init_method=init_kaiming_(inner_dim.size),
             lr_scale=lr_scale,
@@ -102,7 +111,7 @@ class MambaLayer(BlockLayer):
 
         self.x_proj = Linear(
             inner_dim,
-            tensor_space[SSMDimNames.concatenated_x_projection],
+            x_projection_dim,
             weight_init_method=init_kaiming_(inner_dim.size),
             bias=False,
             lr_scale=lr_scale,
@@ -111,11 +120,10 @@ class MambaLayer(BlockLayer):
 
         # TODO: the weights are initialized a bit differently here https://github.com/state-spaces/mamba/blob/0cce0fa645f100f00620ddf2333c2b7712abfdec/mamba_ssm/modules/mamba_simple.py#L82
         self.dt_proj_weight = ParameterMeta.from_dims(
-            (inner_dim, tensor_space[SSMDimNames.dt_rank]),
+            (inner_dim, dt_rank_dim),
             init_method=init_kaiming_(self._config.dt_rank),
             lr_scale=lr_scale,
         )
-
         self.dt_proj_bias = ParameterMeta.from_dims(
             (inner_dim,),
             init_method=init_dtprojbias(self._config.dt_max, self._config.dt_min, self._config.dt_init_floor),
@@ -123,12 +131,11 @@ class MambaLayer(BlockLayer):
         )
 
         self.A_log = ParameterMeta.from_dims(
-            (inner_dim, tensor_space[SSMDimNames.state]),
+            (inner_dim, state_dim),
             weight_decay=False,
             init_method=init_A(self._config.state_size, inner_dim.size),
             lr_scale=lr_scale,
         )
-
         # D "skip" parameter
         self.D = ParameterMeta.from_dims(
             (inner_dim,),
@@ -136,7 +143,6 @@ class MambaLayer(BlockLayer):
             init_method=init_ones_,
             lr_scale=lr_scale,
         )
-
         self.out_proj = Linear(
             inner_dim,
             hidden_dim,

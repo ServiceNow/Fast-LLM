@@ -4,13 +4,14 @@ import typing
 import torch
 
 from fast_llm.engine.config_utils.initialization import init_ones_, init_uniform_centered_
-from fast_llm.engine.config_utils.tensor_space import DefaultDimNames, TensorDim, TensorSpace
+from fast_llm.engine.config_utils.tensor_dim import CompositeTensorDim, ConcatenatedTensorDim, TensorDim, scalar_dim
+from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
 from fast_llm.functional.config import ActivationType
 from fast_llm.layers.block.block import BlockLayer
-from fast_llm.layers.block.config import BlockConfig, BlockKwargs
+from fast_llm.layers.block.config import BlockConfig, BlockDimNames, BlockKwargs
 from fast_llm.layers.common.linear import InputParallelLinear, Linear, OutputParallelLinear
-from fast_llm.layers.ssm.config import SSMConfig, SSMDimNames
-from fast_llm.layers.ssm.mamba_layer import init_A, init_dtprojbias, init_kaiming_
+from fast_llm.layers.ssm.config import SSMConfig
+from fast_llm.layers.ssm.mamba import init_A, init_dtprojbias, init_kaiming_
 from fast_llm.tensor import ParameterMeta
 from fast_llm.utils import Assert, div, get_lr_scale
 
@@ -31,63 +32,71 @@ except (ImportError, RuntimeError):
 logger = logging.getLogger(__name__)
 
 
-class Mamba2(BlockLayer):
+class Mamba2[ConfigType: SSMConfig](BlockLayer[ConfigType]):
     """
     This code is adapted from https://github.com/jxiw/M1/blob/537a1ca5407a786a99dc6c721873493cf8750d5e/mamba/hybrid_mamba_layer.py
     """
 
     _mixer_name: typing.ClassVar[str] = "mamba_2"
 
-    _XZ_DIMS = (
-        SSMDimNames.batch,
-        SSMDimNames.composite_heads_and_head_dim,
-        SSMDimNames.sequence_q,
-    )
-    _BC_DIMS = (
-        SSMDimNames.batch,
-        SSMDimNames.composite_heads,
-        SSMDimNames.state,
-        SSMDimNames.sequence_q,
-    )
-
     def __init__(
         self,
-        config: SSMConfig,
-        tensor_space: TensorSpace,
-        block_index: int,
+        config: ConfigType,
         block_config: BlockConfig,
+        distributed_config: DistributedConfig,
+        hidden_dim: TensorDim,
+        block_index: int,
+        name: str,
     ):
         super().__init__(
-            tensor_space,
+            config,
+            block_config,
+            distributed_config,
+            hidden_dim,
             block_index,
-            self._mixer_name,
-            debug_level=block_config.debug_transformer,
-            debug_memory=block_config.debug_transformer_memory,
+            name,
         )
-        self._config: SSMConfig = config
         Assert.eq(self._config.activation_type, ActivationType.silu)
         layer_lr_scale: float | None = (
             block_config.per_layer_lr_scale[block_index] if block_config.per_layer_lr_scale else None
         )
         lr_scale: float | tuple[float | None, ...] | None = get_lr_scale(self._config.mamba_lr_scale, layer_lr_scale)
 
-        inner_dim: TensorDim = tensor_space[SSMDimNames.composite_heads_and_head_dim]
-        xb_dim = tensor_space[SSMDimNames.composite_head_groups_and_state]
-        hidden_dim: TensorDim = tensor_space[SSMDimNames.hidden]
-        dt_rank_dim = tensor_space[SSMDimNames.dt_rank]
+        num_heads = div(self._config.d_inner, self._config.state_size)
+        num_head_groups = div(self._config.d_xb, self._config.state_size)
 
-        self._local_heads = tensor_space[SSMDimNames.composite_heads].size
-        self._local_head_groups = tensor_space[SSMDimNames.head_groups].size
+        state_dim = TensorDim("state", self._config.state_size)
+
+        head_groups_dim = TensorDim(
+            "head_groups", num_head_groups, self._distributed_config.get_distributed_dim(DistributedDimNames.tensor)
+        )
+        group_heads_dim = TensorDim("group_heads", div(num_heads, num_head_groups))
+
+        heads_dim = CompositeTensorDim("heads", (head_groups_dim, group_heads_dim))
+
+        inner_dim = CompositeTensorDim("inner", (head_groups_dim, group_heads_dim, state_dim))
+        xb_dim = CompositeTensorDim("xb", (head_groups_dim, state_dim))
+        convolution_kernel_dim = TensorDim("convolution_kernel", self._config.conv_kernel_dimension)
+
+        # DT projection
+        dt_rank_dim = TensorDim("dt_rank", self._config.dt_rank)
+
+        inner_projection_dim = ConcatenatedTensorDim(
+            "inner_projection",
+            (inner_dim, xb_dim, xb_dim, inner_dim),
+        )
+
+        self._local_heads = heads_dim.size
+        self._local_head_groups = head_groups_dim.size
         self._group_heads = div(self._local_heads, self._local_head_groups)
         self._local_inner_size = inner_dim.size
         self._local_xb_size = xb_dim.size
-
         conv1d_dim = inner_dim if self._config.repeat_kv_before_conv else xb_dim
         self.conv1d_weight = ParameterMeta.from_dims(
             (
                 conv1d_dim,
-                tensor_space[DefaultDimNames.scalar],
-                tensor_space[SSMDimNames.convolution_kernel],
+                scalar_dim,
+                convolution_kernel_dim,
             ),
             init_method=init_uniform_centered_((conv1d_dim.global_size * self._config.conv_kernel_dimension) ** -0.5),
             lr_scale=lr_scale,
@@ -99,13 +108,12 @@ class Mamba2(BlockLayer):
         )
         self.in_proj = OutputParallelLinear(
             hidden_dim,
-            tensor_space[SSMDimNames.concatenated_inner_projection],
+            inner_projection_dim,
             bias=config.add_bias_linear,
             weight_init_method=init_kaiming_(block_config.hidden_size),
             sequence_parallel=self._sequence_parallel,
             lr_scale=lr_scale,
         )
-
         self.dt_in_proj = Linear(
             hidden_dim,
             dt_rank_dim,
@@ -131,7 +139,7 @@ class Mamba2(BlockLayer):
             lr_scale=lr_scale,
         )
         self.A_log = ParameterMeta.from_dims(
-            (inner_dim, tensor_space[SSMDimNames.state]),
+            (inner_dim, state_dim),
             init_method=init_A(self._config.state_size, self._config.d_inner),
             lr_scale=lr_scale,
             weight_decay=False,
@@ -150,6 +158,19 @@ class Mamba2(BlockLayer):
             sequence_parallel=self._sequence_parallel,
             # TODO: lr_scale?
         )
+
+        if self._debug.enabled:
+            _xz_dims = (
+                BlockDimNames.batch,
+                inner_dim,
+                BlockDimNames.sequence_q,
+            )
+            _bc_dims = (
+                BlockDimNames.batch,
+                heads_dim,
+                state_dim,
+                BlockDimNames.sequence_q,
+            )
 
     def forward(
         self,

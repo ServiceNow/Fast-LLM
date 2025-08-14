@@ -3,20 +3,9 @@ import functools
 from fast_llm.config import Field, FieldHint, check_field, config_class, skip_valid_if_none
 from fast_llm.engine.base_model.config import BaseModelConfig
 from fast_llm.engine.config_utils.initialization import InitializationConfig, Initializer, init_normal_
-from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
-from fast_llm.engine.distributed.config import DistributedDimNames
 from fast_llm.functional.config import CrossEntropyImpl, DistillationLossImpl
-from fast_llm.layers.block.config import BlockConfig, BlockDimNames, BlockKwargs
+from fast_llm.layers.block.config import BlockConfig, BlockKwargs
 from fast_llm.utils import Assert
-
-
-class LanguageModelDimNames(BlockDimNames):
-    # Embedding dimensions
-    position_embed = "position_embed"
-    vocab = "vocab"
-    vocab_tp = "vocab_tp"
-    # Misc
-    scalar = "scalar"
 
 
 class LanguageModelLossNames:
@@ -219,19 +208,6 @@ class LanguageModelBaseConfig(BaseModelConfig):
             assert self.use_absolute_position_embeddings
         if self.output_weight_initialization.has_initialization:
             assert not self.tie_word_embeddings
-
-    def setup_tensor_space(self, tensor_space: TensorSpace) -> None:
-        self.transformer.setup_tensor_space(tensor_space)
-        tensor = tensor_space.distributed_config.get_distributed_dim(DistributedDimNames.tensor)
-
-        # Embedding dimensions
-        if self.use_absolute_position_embeddings:
-            tensor_space.add_tensor_dim(
-                TensorDim(LanguageModelDimNames.position_embed, self.absolute_position_embeddings)
-            )
-        # TODO: Need both?
-        tensor_space.add_tensor_dim(TensorDim(LanguageModelDimNames.vocab, self.vocab_size))
-        tensor_space.add_tensor_dim(TensorDim(LanguageModelDimNames.vocab_tp, self.vocab_size, tensor))
 
     @property
     def use_absolute_position_embeddings(self) -> int:

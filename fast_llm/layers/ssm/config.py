@@ -2,36 +2,11 @@ import enum
 import typing
 
 from fast_llm.config import Config, Field, FieldHint, check_field, config_class, skip_valid_if_none
-from fast_llm.engine.config_utils.tensor_space import CompositeTensorDim, ConcatenatedTensorDim, TensorDim, TensorSpace
-from fast_llm.engine.distributed.config import DistributedDimNames
 from fast_llm.functional.config import ActivationType
-from fast_llm.layers.block.config import BlockDimNames
-from fast_llm.utils import Assert, div
+from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
     from fast_llm.engine.config_utils.initialization import Initializer
-
-
-class SSMDimNames(BlockDimNames):
-    # TODO: Use separate tensor space for different mixers so there is no risk of name conflict.
-    state = "ssm_state"  # State dimension (N), aka head size / num channels
-    head_dim = "ssm_head_dim"
-    head_groups = "ssm_head_groups"
-    group_heads = "ssm_group_heads"
-
-    convolution_kernel = "ssm_convolution_kernel"  # Kernel dimension of the conv1d in mamba layers
-
-    dt_rank = "ssm_dt_rank"
-
-    # Composite dimensions
-    composite_heads = "ssm_composite_heads"
-    composite_heads_and_head_dim = "ssm_composite_heads_and_head_dim"
-    composite_head_groups_and_state = "ssm_composite_head_groups_and_state"
-
-    # Concatenated dimensions
-    concatenated_convolution = "ssm_concatenated_convolution"
-    concatenated_x_projection = "ssm_x_concatenated_x_projection"
-    concatenated_inner_projection = "ssm_concatenated_inner_projection"
 
 
 class SSMBlockType(enum.StrEnum):
@@ -46,9 +21,9 @@ class SSMBlockType(enum.StrEnum):
 
     def get_mixer_class(self):
         if self == SSMBlockType.mamba:
-            from fast_llm.layers.ssm.mamba_layer import MambaLayer
+            from fast_llm.layers.ssm.mamba import Mamba
 
-            return MambaLayer
+            return Mamba
         elif self == SSMBlockType.mamba2:
             from fast_llm.layers.ssm.mamba2 import Mamba2
 
@@ -79,21 +54,21 @@ class SSMConfig(Config):
     # TODO: Remove (redundant default)
     expansion_factor: int = Field(
         default=2,
-        desc="Expansion factor for Mamba blocks.",
+        desc="Expansion factor.",
         hint=FieldHint.architecture,
         valid=check_field(Assert.gt, 0),
     )
     # head_size [MambaLayer, Mamba2, DiscreteMamba2]
     state_size: int = Field(
         default=16,
-        desc="State size for Mamba blocks.",
+        desc="State size.",
         hint=FieldHint.architecture,
         valid=check_field(Assert.gt, 0),
     )
     # [MambaLayer, Mamba2, DiscreteMamba2]
     conv_kernel_dimension: int = Field(
         default=4,
-        desc="Conv kernel dimension for Mamba blocks.",
+        desc="Conv kernel dimensions.",
         hint=FieldHint.architecture,
         valid=check_field(Assert.gt, 0),
     )
@@ -106,19 +81,19 @@ class SSMConfig(Config):
     # head_groups [DiscreteMamba2]
     n_qk_heads: int = Field(
         default=32,
-        desc="Number of QK heads for Mamba2 blocks.",
+        desc="Number of QK heads.",
         hint=FieldHint.architecture,
     )
     # heads [DiscreteMamba2]# TODO: Remove? (redundant)
     n_v_heads: int = Field(
         default=32,
-        desc="Number of V heads for Mamba2 blocks.",
+        desc="Number of V heads.",
         hint=FieldHint.architecture,
     )
     # c_size [MambaLayer, Mamba2, DiscreteMamba2]?
     d_inner: None | int = Field(
         default=None,
-        desc="Inner dimension for Mamba2 blocks.",
+        desc="Inner dimension.",
         hint=FieldHint.core,
     )
     # xb_size [Mamba2]
@@ -204,79 +179,3 @@ class SSMConfig(Config):
                 self.activation_type = ActivationType.silu
         super()._validate()
         Assert.geq(self.dt_max, self.dt_min)
-
-    def setup_tensor_space(self, tensor_space: TensorSpace, block_type: SSMBlockType) -> None:
-        tensor = tensor_space.distributed_config.get_distributed_dim(DistributedDimNames.tensor)
-
-        # Head groups are configured differently depending on the block type.
-        if block_type == SSMBlockType.mamba:
-            num_heads = div(self.d_inner, self.state_size)
-            num_head_groups = num_heads
-        elif block_type == SSMBlockType.mamba2:
-            num_heads = div(self.d_inner, self.state_size)
-            num_head_groups = div(self.d_xb, self.state_size)
-        elif block_type == SSMBlockType.mamba2_discrete:
-            # TODO: Use different variables?
-            num_heads = self.n_v_heads
-            num_head_groups = self.n_qk_heads
-        else:
-            raise NotImplementedError(block_type)
-
-        tensor_space.add_tensor_dim(state := TensorDim(SSMDimNames.state, self.state_size))
-        if block_type == SSMBlockType.mamba2_discrete:
-            tensor_space.add_tensor_dim(head_dim := TensorDim(SSMDimNames.head_dim, div(self.d_inner, num_heads)))
-        else:
-            head_dim = state
-
-        tensor_space.add_tensor_dim(head_groups := TensorDim(SSMDimNames.head_groups, num_head_groups, tensor))
-        tensor_space.add_tensor_dim(group_heads := TensorDim(SSMDimNames.group_heads, div(num_heads, num_head_groups)))
-        tensor_space.add_tensor_dim(
-            heads := CompositeTensorDim(SSMDimNames.composite_heads, (head_groups, group_heads))
-        )
-        tensor_space.add_tensor_dim(
-            heads_and_head_dim := CompositeTensorDim(
-                SSMDimNames.composite_heads_and_head_dim, (head_groups, group_heads, head_dim)
-            )
-        )
-        tensor_space.add_tensor_dim(
-            head_groups_and_state := CompositeTensorDim(
-                SSMDimNames.composite_head_groups_and_state, (head_groups, state)
-            )
-        )
-        tensor_space.add_tensor_dim(TensorDim(SSMDimNames.convolution_kernel, self.conv_kernel_dimension))
-
-        # DT projection
-        if block_type in (SSMBlockType.mamba, SSMBlockType.mamba2):
-            tensor_space.add_tensor_dim(dt_rank := TensorDim(SSMDimNames.dt_rank, self.dt_rank))
-
-        if block_type == SSMBlockType.mamba:
-            tensor_space.add_tensor_dim(
-                ConcatenatedTensorDim(SSMDimNames.concatenated_x_projection, (dt_rank, state, state))
-            )
-            # TODO: Use composition instead
-            tensor_space.add_tensor_dim(
-                ConcatenatedTensorDim(
-                    SSMDimNames.concatenated_inner_projection, (heads_and_head_dim, heads_and_head_dim)
-                )
-            )
-        elif block_type == SSMBlockType.mamba2:
-            # TODO: Factor out state?
-            tensor_space.add_tensor_dim(
-                ConcatenatedTensorDim(
-                    SSMDimNames.concatenated_inner_projection,
-                    (heads_and_head_dim, head_groups_and_state, head_groups_and_state, heads_and_head_dim),
-                )
-            )
-        elif block_type == SSMBlockType.mamba2_discrete:
-            tensor_space.add_tensor_dim(
-                ConcatenatedTensorDim(
-                    SSMDimNames.concatenated_inner_projection,
-                    (heads_and_head_dim, head_groups_and_state, head_groups_and_state, heads_and_head_dim, heads),
-                )
-            )
-            tensor_space.add_tensor_dim(
-                ConcatenatedTensorDim(
-                    SSMDimNames.concatenated_convolution,
-                    (heads_and_head_dim, head_groups_and_state, head_groups_and_state),
-                )
-            )

@@ -6,8 +6,7 @@ import warnings
 from fast_llm.config import Field, FieldHint, check_field, config_class, skip_valid_if_none
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.engine.config_utils.initialization import InitializationConfig, Initializer, init_normal_, init_zeros_
-from fast_llm.engine.config_utils.tensor_space import CompositeTensorDim, TensorDim, TensorSpace
-from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
+from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.functional.config import TritonConfig
 from fast_llm.layers.block.config import AddLinearBiasChoices, BlockConfig, BlockDimNames, BlockKwargs, MixerConfig
 from fast_llm.layers.transformer.rotary.config import RotaryConfig
@@ -149,36 +148,6 @@ class AttentionConfig(MixerConfig):
 
     def do_use_flash_attention(self, distributed_config: DistributedConfig) -> bool:
         return self.use_flash_attention and distributed_config.training_dtype in (DataType.float16, DataType.bfloat16)
-
-    def setup_tensor_space(self, tensor_space: TensorSpace) -> None:
-        tensor = tensor_space.distributed_config.get_distributed_dim(DistributedDimNames.tensor)
-        # Needed for multiple inheritance.
-        super().setup_tensor_space(tensor_space)  # Noqa
-
-        tensor_space.add_tensor_dim(
-            head_groups := TensorDim(
-                AttentionDimNames.head_groups, self.head_groups, tensor if self.head_groups > 1 else None
-            )
-        )
-        tensor_space.add_tensor_dim(
-            group_heads := TensorDim(
-                AttentionDimNames.group_heads,
-                div(self.num_attention_heads, self.head_groups),
-                None if self.head_groups > 1 else tensor,
-            )
-        )
-        tensor_space.add_tensor_dim(key_and_value := TensorDim(AttentionDimNames.key_and_value, 2))
-        tensor_space.add_tensor_dim(kv_channels := TensorDim(AttentionDimNames.kv_channels, self.kv_channels))
-        tensor_space.add_tensor_dim(CompositeTensorDim(AttentionDimNames.composite_heads, (head_groups, group_heads)))
-        tensor_space.add_tensor_dim(
-            CompositeTensorDim(AttentionDimNames.composite_query, (head_groups, group_heads, kv_channels))
-        )
-        tensor_space.add_tensor_dim(
-            CompositeTensorDim(AttentionDimNames.composite_key_value, (key_and_value, head_groups, kv_channels))
-        )
-        tensor_space.add_tensor_dim(
-            CompositeTensorDim(AttentionDimNames.composite_dense, (head_groups, group_heads, kv_channels))
-        )
 
     @functools.cached_property
     def add_qkv_bias(self) -> bool:

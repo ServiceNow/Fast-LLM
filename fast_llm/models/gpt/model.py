@@ -6,7 +6,7 @@ import torch
 from fast_llm.data.data.gpt.data import GPTBatch
 from fast_llm.engine.base_model.base_model import BaseModel, Layer, LossDef
 from fast_llm.engine.base_model.config import Preprocessor
-from fast_llm.engine.config_utils.tensor_space import TensorDim
+from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames, PhaseType
 from fast_llm.engine.inference.runner import InferenceRunner
 from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
@@ -36,6 +36,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
         config: GPTBaseModelConfig,
         distributed_config: DistributedConfig,
     ):
+        self._hidden_dim = TensorDim("hidden", config.transformer.hidden_size)
         super().__init__(config, distributed_config)
         self._use_flash_attention = self._config.transformer.do_use_flash_attention(distributed_config)
         if self._config.use_megatron_initialization:
@@ -45,58 +46,78 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
         # `self._reference_models` is not populated at this point, so we pass a mutable dict.
         self._preprocessors: list[Preprocessor] = []
         if self._config.use_absolute_position_embeddings:
-            self._preprocessors.append(PositionEmbeddingPreprocessor(self._config, self._tensor_space))
+            self._preprocessors.append(PositionEmbeddingPreprocessor(self._config, self._distributed_config))
         # We have multiple identical rotary modules/preprocessors, so it's simpler to make a new one here.
         # TODO: Find a better solution.
         self._preprocessors.append(self._config.transformer.rotary.build(self._tensor_space))
         if self._use_flash_attention:
-            self._preprocessors.append(FlashAttnVarlenPreprocessor(self._config.transformer, self._tensor_space))
+            self._preprocessors.append(FlashAttnVarlenPreprocessor(self._config.transformer, self._distributed_config))
         else:
-            self._preprocessors.append(BackupAttentionPreprocessor(self._config.transformer, self._tensor_space))
+            self._preprocessors.append(BackupAttentionPreprocessor(self._config.transformer, self._distributed_config))
 
         if self._config.enable_dpo:  # TODO better way to pass in?
-            self._preprocessors.append(PreferenceSpanPreprocessor(self._config, self._tensor_space))
+            self._preprocessors.append(PreferenceSpanPreprocessor(self._config, self._distributed_config))
 
-    def get_output_layers(self) -> list[Layer]:
+    def _get_output_layers(self) -> list[Layer]:
         layers = []
         for i in range(self._config.prediction_heads):
             if i > 0:
                 layers.append(
-                    TransformerBlock(
-                        self._config.transformer,
-                        self._tensor_space,
+                    self._get_block(
                         # TODO MTP: which index?
-                        block_index=max(self._config.transformer.num_blocks + i, 1),
+                        max(self._config.transformer.num_layers + i, 1),
+                        f"MPT head {i} block",
                         # The last layer only returns the transformer output.
                         # The previous layers return a stack of shared_hidden and transformer_output.
-                        return_input=i < self._config.prediction_heads - 1,
+                        i < self._config.prediction_heads - 1,
                     )
                 )
-            layers.append(
-                LanguageModelHead(
-                    self._config,
-                    self._tensor_space,
-                    prediction_distance=i,
-                )
-            )
+            layers.append(self._get_head(i))
         return layers
 
     def get_layers(self) -> list[Layer]:
         return [
-            LanguageModelEmbedding(self._config, self._tensor_space),
+            self._get_embeddings(),
             *[
-                TransformerBlock(
-                    self._config.transformer,
-                    self._tensor_space,
-                    block_index=i + 1,
+                self._get_block(
+                    i + 1,
+                    f"Block {i + 1}",
                     # The last layer only returns the transformer output.
                     # The previous layers return a stack of shared_hidden and transformer_output.
-                    return_input=self._config.prediction_heads > 1 and i == self._config.transformer.num_blocks - 1,
+                    self._config.prediction_heads > 1 and i == self._config.transformer.num_layers - 1,
                 )
-                for i in range(self._config.transformer.num_blocks)
+                for i in range(self._config.transformer.num_layers)
             ],
-            *self.get_output_layers(),
+            *self._get_output_layers(),
         ]
+
+    def _get_block(
+        self,
+        block_index: int,
+        name: str,
+        return_input: bool = False,
+    ):
+        return TransformerBlock(
+            self._config.transformer,
+            self._distributed_config,
+            self._hidden_dim,
+            block_index,
+            name,
+            return_input,
+        )
+
+    def _get_embeddings(self):
+        return LanguageModelEmbedding(self._config, self._distributed_config, self._hidden_dim, 0, "Embeddings")
+
+    def _get_head(self, prediction_distance):
+        return LanguageModelHead(
+            self._config,
+            self._distributed_config,
+            self._hidden_dim,
+            max(self._config.transformer.num_layers + prediction_distance, 1),
+            f"Language model head {prediction_distance}",
+            prediction_distance=prediction_distance,
+        )
 
     def preprocess_meta(
         self, batch_meta: GPTBatchConfig | torch.Tensor, phase: PhaseType

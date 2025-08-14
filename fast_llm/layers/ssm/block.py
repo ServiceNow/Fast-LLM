@@ -1,11 +1,12 @@
-from fast_llm.engine.config_utils.tensor_space import TensorSpace
+from fast_llm.engine.config_utils.tensor_dim import TensorDim
+from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.layers.block.block import Block, BlockLayer
 from fast_llm.layers.block.config import BlockConfig
 from fast_llm.layers.ssm.config import SSMConfig
 
 
 # TODO: Sort out configs.
-class SSMBlock[ConfigType: BlockConfig](Block[BlockConfig]):
+class SSMBlock[ConfigType: BlockConfig](Block[ConfigType]):
     """
     A transformer-like decoder block with a SSM mixer, see https://arxiv.org/abs/2502.14458
     """
@@ -14,21 +15,25 @@ class SSMBlock[ConfigType: BlockConfig](Block[BlockConfig]):
 
     def __init__(
         self,
-        config: BlockConfig,
+        config: ConfigType,
         ssm_config: SSMConfig,
-        tensor_space: TensorSpace,
+        distributed_config: DistributedConfig,
+        hidden_dim: TensorDim,
         mixer_cls: type[BlockLayer],
         block_index: int,
+        name: str,
         return_input: bool = False,
     ):
         self._ssm_config = ssm_config
         self._mixer_cls = mixer_cls
-        super().__init__(config, tensor_space, block_index, return_input)
+        super().__init__(config, distributed_config, hidden_dim, block_index, name, return_input)
 
     def _create_mixer(self) -> BlockLayer:
         return self._mixer_cls(
             self._ssm_config,
-            tensor_space=self._tensor_space,
-            block_index=self._block_index,
-            block_config=self._config,
+            self._config,
+            self._distributed_config,
+            self._hidden_dim,
+            self._block_index,
+            f"{self._name} mixer",
         )

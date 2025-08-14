@@ -3,7 +3,8 @@ import typing
 
 from fast_llm.config import Field, FieldHint, check_field, config_class
 from fast_llm.engine.base_model.config import BaseModelConfig
-from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
+from fast_llm.engine.config_utils.tensor_dim import TensorDim
+from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.layers.block.peft import TransformerPeftConfig
 from fast_llm.layers.common.config import NormalizationConfig
 from fast_llm.utils import Assert
@@ -58,8 +59,10 @@ class BlockLayerConfig(BaseModelConfig):
     def layer_class(self) -> "type[BlockLayer]":
         raise NotImplementedError()
 
-    def get_layer(self, tensor_space: TensorSpace, block_index: int, name: str) -> "BlockLayer":
-        return self.layer_class(self, tensor_space, block_index, name)
+    def get_layer(
+        self, distributed_config: DistributedConfig, hidden_dim: TensorDim, block_index: int, name: str
+    ) -> "BlockLayer":
+        return self.layer_class(self, distributed_config, hidden_dim, block_index, name)
 
 
 @config_class(registry=True)
@@ -180,9 +183,3 @@ class BlockConfig(BaseModelConfig):
         doc="May be used to freeze some layers by setting their scale to zero.",
         hint=FieldHint.feature,
     )
-
-    def setup_tensor_space(self, tensor_space: TensorSpace) -> None:
-        super().setup_tensor_space(tensor_space)
-
-        # Hidden dimension
-        tensor_space.add_tensor_dim(TensorDim(BlockDimNames.hidden, self.hidden_size))
