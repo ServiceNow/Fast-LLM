@@ -1,0 +1,158 @@
+import abc
+import enum
+import functools
+import typing
+
+from fast_llm.config import Field, FieldHint, check_field, config_class
+from fast_llm.engine.base_model.config import BaseModelConfig
+from fast_llm.engine.config_utils.initialization import InitializationConfig, Initializer, init_ones_, init_zeros_
+from fast_llm.engine.config_utils.tensor_dim import TensorDim
+from fast_llm.layers.common.config import PeftConfig
+from fast_llm.utils import Assert
+
+if typing.TYPE_CHECKING:
+    from fast_llm.layers.common.normalization.normalization import Normalization
+
+
+class NormalizationImplementation(str, enum.Enum):
+    """
+    An enum for the available implementations of layer norm.
+    """
+
+    auto = "auto"
+    torch = "torch"
+    fused = "fused"
+    fast = "fast"
+    triton = "triton"
+
+
+@config_class(registry=True)
+class NormalizationConfig(BaseModelConfig):
+    pass
+
+    @property
+    @abc.abstractmethod
+    def module_class(self) -> type["Normalization"]:
+        pass
+
+    def get_layer(
+        self,
+        hidden_dim: "TensorDim",
+        lr_scale: float | None = None,
+        peft: PeftConfig | None = None,
+    ) -> "Normalization":
+        out = self.module_class(self, hidden_dim, lr_scale)
+        if peft:
+            out = peft.apply_other(out)
+        return out
+
+    @classmethod
+    def _from_dict(
+        cls,
+        default: dict[str, typing.Any],
+        strict: bool = True,
+        flat: bool = False,
+    ) -> typing.Self:
+        if cls is NormalizationConfig and cls.get_subclass(default.get("type")) is None:
+            # Default subclass.
+            return LayerNormalizationConfig._from_dict(default, strict, flat)
+        return super()._from_dict(default, strict=strict, flat=flat)
+
+
+@config_class(dynamic_type={NormalizationConfig: "none"})
+class NoNormalizationConfig(NormalizationConfig):
+    _abstract = False
+
+    @property
+    def module_class(self) -> type["Normalization"]:
+        from fast_llm.layers.common.normalization.normalization import NoNormalization
+
+        return NoNormalization
+
+
+@config_class()
+class LayerNormalizationBaseConfig(NormalizationConfig):
+    """
+    Common configuration for layer norm and rms norm
+    """
+
+    # TODO: Rename to normalization_epsilon
+    epsilon: float = Field(
+        default=1e-5,
+        desc="Regularizer for the division.",
+        hint=FieldHint.architecture,
+        valid=check_field(Assert.gt, 0),
+    )
+    zero_centered: bool = Field(
+        default=False,
+        desc="Write the normalization weight as `w = 1 + w'`, to improve numerical accuracy when close to one.",
+        hint=FieldHint.architecture,
+    )
+    implementation: NormalizationImplementation = Field(
+        default=NormalizationImplementation.auto,
+        desc="The implementation to use for the normalization layer.",
+        hint=FieldHint.performance,
+    )
+    weight_initialization: InitializationConfig = Field(
+        desc="Initialization configuration for the normalization weights. Default: fill with ones",
+        hint=FieldHint.feature,
+    )
+    lr_scale: float | None = Field(
+        default=None,
+        desc="Learning rate scaling factor.",
+        hint=FieldHint.feature,
+    )
+
+    @functools.cached_property
+    def weight_initialization_method(self) -> Initializer:
+        if self.weight_initialization.is_default:
+            return self.weight_initialization.get_initializer()
+        else:
+            return init_ones_
+
+    @classmethod
+    def _from_dict(
+        cls,
+        default: dict[str, typing.Any],
+        strict: bool = True,
+        flat: bool = False,
+    ) -> typing.Self:
+        cls._handle_renamed_field(default, "normalization_type", "type")
+        cls._handle_renamed_field(default, "layer_norm_eps", "epsilon")
+        cls._handle_renamed_field(default, "zero_centered_normalization", "zero_centered")
+        cls._handle_renamed_field(default, "normalization_implementation", "implementation")
+        cls._handle_renamed_field(default, "layer_norm_init_range", "initialization_range")
+        return super()._from_dict(default, strict, flat)
+
+
+@config_class(dynamic_type={NormalizationConfig: "layer_norm"})
+class LayerNormalizationConfig(LayerNormalizationBaseConfig):
+    _abstract = False
+    bias_initialization: InitializationConfig = Field(
+        desc="Initialization configuration for the normalization biases. Default: fill with zeros",
+        hint=FieldHint.feature,
+    )
+
+    @functools.cached_property
+    def bias_initialization_method(self) -> Initializer:
+        if self.bias_initialization.is_default:
+            return self.bias_initialization.get_initializer()
+        else:
+            return init_zeros_
+
+    @property
+    def module_class(self):
+        from fast_llm.layers.common.normalization.normalization import LayerNormalization
+
+        return LayerNormalization
+
+
+@config_class(dynamic_type={NormalizationConfig: "rms_norm"})
+class RMSNormalizationConfig(LayerNormalizationBaseConfig):
+    _abstract = False
+
+    @property
+    def module_class(self):
+        from fast_llm.layers.common.normalization.normalization import RMSNormalization
+
+        return RMSNormalization

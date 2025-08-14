@@ -8,7 +8,7 @@ from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.engine.config_utils.initialization import InitializationConfig, Initializer, init_normal_, init_zeros_
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.functional.config import TritonConfig
-from fast_llm.layers.block.config import AddLinearBiasChoices, BlockConfig, BlockDimNames, BlockKwargs, MixerConfig
+from fast_llm.layers.block.config import BlockConfig, BlockDimNames, BlockKwargs, MixerConfig
 from fast_llm.layers.transformer.rotary.config import RotaryConfig
 from fast_llm.utils import Assert, div
 
@@ -136,9 +136,9 @@ class AttentionConfig(MixerConfig):
             warnings.warn("Triton is disabled, but triton rotary kernel will be used anyway.")
 
         Assert.multiple(self.num_attention_heads, self.head_groups)
-        if self.qkv_bias_initialization.has_initialization:
+        if not self.qkv_bias_initialization.is_default:
             assert self.add_qkv_bias
-        if self.dense_bias_initialization.has_initialization:
+        if not self.dense_bias_initialization.is_default:
             assert self.add_dense_bias
 
     @functools.cached_property
@@ -151,43 +151,39 @@ class AttentionConfig(MixerConfig):
 
     @functools.cached_property
     def add_qkv_bias(self) -> bool:
-        if isinstance(self.block.add_linear_biases, bool):
-            return self.block.add_linear_biases
-        return self.block.add_linear_biases != AddLinearBiasChoices.nowhere
+        return self.block.add_linear_biases
 
     @functools.cached_property
     def add_dense_bias(self) -> bool:
-        if isinstance(self.block.add_linear_biases, bool):
-            return self.block.add_linear_biases
-        return self.block.add_linear_biases == AddLinearBiasChoices.everywhere
+        return self.block.add_linear_biases
 
     @functools.cached_property
     def qkv_weight_initialization_method(self) -> Initializer:
-        if self.qkv_weight_initialization.has_initialization:
-            return self.qkv_weight_initialization.get_initializer()
-        else:
+        if self.qkv_weight_initialization.is_default:
             return init_normal_(0, self.block.hidden_size**-0.5)
+        else:
+            return self.qkv_weight_initialization.get_initializer()
 
     @functools.cached_property
     def qkv_bias_initialization_method(self) -> Initializer:
-        if self.qkv_bias_initialization.has_initialization:
-            return self.qkv_bias_initialization.get_initializer()
-        else:
+        if self.qkv_bias_initialization.is_default:
             return init_zeros_
+        else:
+            return self.qkv_bias_initialization.get_initializer()
 
     @functools.cached_property
     def dense_weight_initialization_method(self) -> Initializer:
-        if self.dense_weight_initialization.has_initialization:
-            return self.dense_weight_initialization.get_initializer()
-        else:
+        if self.dense_weight_initialization.is_default:
             return init_normal_(0, self.block.hidden_size**-0.5 / max(2 * self.block.num_blocks, 1))
+        else:
+            return self.dense_weight_initialization.get_initializer()
 
     @functools.cached_property
     def dense_bias_initialization_method(self) -> Initializer:
-        if self.dense_bias_initialization.has_initialization:
-            return self.dense_bias_initialization.get_initializer()
-        else:
+        if self.dense_bias_initialization.is_default:
             return init_zeros_
+        else:
+            return self.dense_bias_initialization.get_initializer()
 
 
 @config_class()

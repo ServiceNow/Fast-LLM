@@ -49,7 +49,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             self._preprocessors.append(PositionEmbeddingPreprocessor(self._config, self._distributed_config))
         # We have multiple identical rotary modules/preprocessors, so it's simpler to make a new one here.
         # TODO: Find a better solution.
-        self._preprocessors.append(self._config.transformer.rotary.build(self._tensor_space))
+        self._preprocessors.append(self._config.transformer.rotary.get_layer(self._tensor_space))
         if self._use_flash_attention:
             self._preprocessors.append(FlashAttnVarlenPreprocessor(self._config.transformer, self._distributed_config))
         else:

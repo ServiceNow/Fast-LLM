@@ -149,13 +149,7 @@ class MLPConfig(BlockLayerConfig):
 
     @property
     def add_bias(self) -> bool:
-        from fast_llm.layers.block.config import AddLinearBiasChoices
-
-        if isinstance(self.block.add_linear_biases, bool):
-            return self.block.add_linear_biases
-        if self.block.add_linear_biases == AddLinearBiasChoices.everywhere:
-            return True
-        return False
+        return self.block.add_linear_biases
 
     def _validate(self) -> None:
         assert hasattr(self, "block")
@@ -181,41 +175,41 @@ class MLPConfig(BlockLayerConfig):
         elif self.mlp_lr_scale is not None:
             Assert.geq(self.mlp_lr_scale, 0)
 
-        if self.layer_1_bias_initialization.has_initialization or self.layer_2_bias_initialization.has_initialization:
+        if not (self.layer_1_bias_initialization.is_default and self.layer_2_bias_initialization.is_default):
             assert self.add_bias
 
     @functools.cached_property
     def layer_1_weight_initialization_method(self) -> Initializer:
-        if self.layer_1_weight_initialization.has_initialization:
-            return self.layer_1_weight_initialization.get_initializer()
-        else:
+        if self.layer_1_weight_initialization.is_default:
             return init_normal_(0, self.block.hidden_size**-0.5)
+        else:
+            return self.layer_1_weight_initialization.get_initializer()
 
     @functools.cached_property
     def layer_1_bias_initialization_method(self) -> Initializer:
-        if self.layer_1_bias_initialization.has_initialization:
-            return self.layer_1_bias_initialization.get_initializer()
-        else:
+        if self.layer_1_bias_initialization.is_default:
             return init_zeros_
+        else:
+            return self.layer_1_bias_initialization.get_initializer()
 
     @functools.cached_property
     def layer_2_weight_initialization_method(self) -> Initializer:
-        if self.layer_2_weight_initialization.has_initialization:
-            return self.layer_2_weight_initialization.get_initializer()
-        else:
+        if self.layer_2_weight_initialization.is_default:
             return init_normal_(0, self.block.hidden_size**-0.5 / max(2 * self.block.num_blocks, 1))
+        else:
+            return self.layer_2_weight_initialization.get_initializer()
 
     @functools.cached_property
     def layer_2_bias_initialization_method(self) -> Initializer:
-        if self.layer_2_bias_initialization.has_initialization:
-            return self.layer_2_bias_initialization.get_initializer()
-        else:
+        if self.layer_2_bias_initialization.is_default:
             return init_zeros_
+        else:
+            return self.layer_2_bias_initialization.get_initializer()
 
     @functools.cached_property
     def router_weight_initialization_method(self) -> Initializer:
-        if self.router_weight_initialization.has_initialization:
+        if self.router_weight_initialization.is_default:
+            return init_zeros_
+        else:
             assert self.add_bias
             return self.router_weight_initialization.get_initializer()
-        else:
-            return init_zeros_

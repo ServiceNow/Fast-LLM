@@ -14,7 +14,7 @@ from fast_llm.layers.common.linear import InputParallelLinear, OutputParallelLin
 from fast_llm.layers.ssm.config import SSMConfig
 from fast_llm.layers.ssm.mamba import init_kaiming_
 from fast_llm.tensor import ParameterMeta
-from fast_llm.utils import div, get_lr_scale
+from fast_llm.utils import combine_lr_scales, div
 
 logger = logging.getLogger(__name__)
 
@@ -87,7 +87,7 @@ class DiscreteMamba2[ConfigType: SSMConfig](BlockLayer[ConfigType]):
         self._local_bc_size = bc_dim.size
 
         layer_lr_scale = block_config.per_layer_lr_scale[block_index] if block_config.per_layer_lr_scale else None
-        lr_scale = get_lr_scale(self._config.mamba_lr_scale, layer_lr_scale)
+        lr_scale = combine_lr_scales(self._config.mamba_lr_scale, layer_lr_scale)
 
         # TODO: double check initializations
         # Projections

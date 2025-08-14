@@ -92,7 +92,7 @@ def test_triton_rotary(batch_size, sequence_length, num_heads, kv_channels):
     y1 = apply_rotary_embeddings(
         x,
         DefaultRotaryConfig(triton=False)
-        .build(None)
+        .get_layer(None)
         ._get_frequencies(
             sequence_length,
             kv_channels,
@@ -103,7 +103,9 @@ def test_triton_rotary(batch_size, sequence_length, num_heads, kv_channels):
     y2 = convert_rotary_real_to_complex(
         triton_rotary_(
             convert_rotary_complex_to_real(x, kv_channels, 3),
-            DefaultRotaryConfig(triton=True).build(None)._get_frequencies(sequence_length, kv_channels, device="cuda"),
+            DefaultRotaryConfig(triton=True)
+            .get_layer(None)
+            ._get_frequencies(sequence_length, kv_channels, device="cuda"),
         ),
         kv_channels,
         3,

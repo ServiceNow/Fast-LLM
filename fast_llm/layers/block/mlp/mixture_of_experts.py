@@ -13,7 +13,7 @@ from fast_llm.layers.block.mlp.config import MLPConfig, MLPLossNames, RoutingTyp
 from fast_llm.layers.block.mlp.mlp import MLPBase
 from fast_llm.layers.common.auxiliary_loss import AuxiliaryLoss, z_loss
 from fast_llm.layers.common.linear import Linear
-from fast_llm.utils import Assert, get_lr_scale
+from fast_llm.utils import Assert, combine_lr_scales
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +46,7 @@ class MixtureOfExpertMLP[ConfigType: MLPConfig](MLPBase[ConfigType]):
         super().__init__(config, distributed_config, hidden_dim, block_index, name)
 
         layer_lr_scale = self._config.per_layer_lr_scale[block_index] if self._config.per_layer_lr_scale else None
-        router_lr_scale = get_lr_scale(self._config.router_lr_scale, layer_lr_scale)
+        router_lr_scale = combine_lr_scales(self._config.router_lr_scale, layer_lr_scale)
 
         self.router = Linear(
             self._hidden_dim,

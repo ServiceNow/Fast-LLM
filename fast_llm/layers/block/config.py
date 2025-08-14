@@ -1,4 +1,3 @@
-import enum
 import typing
 
 from fast_llm.config import Field, FieldHint, check_field, config_class
@@ -6,7 +5,7 @@ from fast_llm.engine.base_model.config import BaseModelConfig
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.layers.block.peft import TransformerPeftConfig
-from fast_llm.layers.common.config import NormalizationConfig
+from fast_llm.layers.common.normalization import NormalizationConfig
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
@@ -37,13 +36,6 @@ class BlockKwargs:
     sequence_lengths = "sequence_lengths"
     # TODO: Belongs elsewhere?
     grad_output = "grad_output"
-
-
-class AddLinearBiasChoices(str, enum.Enum):
-    # TODO: Review
-    nowhere = "nowhere"
-    everywhere = "everywhere"
-    only_attn_qkv = "only_attn_qkv"
 
 
 @config_class()
@@ -127,7 +119,7 @@ class BlockConfig(BaseModelConfig):
         desc="Configuration for the MLP.",
         hint=FieldHint.architecture,
     )
-    # TODO: Review names
+    # TODO: Allow separate initializations?
     normalization: NormalizationConfig = Field(
         desc="Configuration for the normalization layers architecture.",
         hint=FieldHint.architecture,
@@ -136,6 +128,7 @@ class BlockConfig(BaseModelConfig):
         desc="Configuration for the parameter-efficient fine tuning.",
         hint=FieldHint.architecture,
     )
+    # TODO: Review names
     hidden_dropout: float = Field(
         default=0.0,
         desc="Dropout applied to the residual connections.",
@@ -153,9 +146,9 @@ class BlockConfig(BaseModelConfig):
         desc="Log the memory usage after each operation in a transformer layer..",
         hint=FieldHint.logging,
     )
-    add_linear_biases: bool | AddLinearBiasChoices = Field(
+    add_linear_biases: bool = Field(
         default=True,
-        desc="Add biases to all, none or Q, K, V layers. Accepted values: True, False, or AddLinearBiasChoices.",
+        desc="Whether to add biases to linear layers. May be overridden in individual layer configs.",
         hint=FieldHint.architecture,
     )
 

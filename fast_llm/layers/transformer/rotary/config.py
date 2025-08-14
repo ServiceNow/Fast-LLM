@@ -29,7 +29,7 @@ class RotaryConfig(BaseModelConfig):
             return NoRotaryConfig._from_dict(default, strict, flat)
         return super()._from_dict(default, strict=strict, flat=flat)
 
-    def build(self, kv_channels_dim: TensorDim) -> "Rotary":
+    def get_layer(self, kv_channels_dim: TensorDim) -> "Rotary":
         return self._get_configurable_class()(self, kv_channels_dim)
 
     @classmethod

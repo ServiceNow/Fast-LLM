@@ -204,9 +204,9 @@ class LanguageModelBaseConfig(BaseModelConfig):
             Assert.eq(
                 len(self.transformer.per_layer_lr_scale), self.transformer.num_blocks + self.prediction_heads - 1 + 1
             )
-        if self.output_weight_initialization.has_initialization:
+        if not self.output_weight_initialization.is_default:
             assert self.use_absolute_position_embeddings
-        if self.output_weight_initialization.has_initialization:
+        if not self.output_weight_initialization.is_default:
             assert not self.tie_word_embeddings
 
     @property
@@ -215,21 +215,21 @@ class LanguageModelBaseConfig(BaseModelConfig):
 
     @functools.cached_property
     def word_embedding_weight_initialization_method(self) -> Initializer:
-        if self.word_embedding_weight_initialization.has_initialization:
-            return self.word_embedding_weight_initialization.get_initializer()
-        else:
+        if self.word_embedding_weight_initialization.is_default:
             return init_normal_(self.transformer.hidden_size**-0.5)
+        else:
+            return self.word_embedding_weight_initialization.get_initializer()
 
     @functools.cached_property
     def position_embedding_weight_initialization_method(self) -> Initializer:
-        if self.position_embedding_weight_initialization.has_initialization:
-            return self.position_embedding_weight_initialization.get_initializer()
-        else:
+        if self.position_embedding_weight_initialization.is_default:
             return init_normal_(self.transformer.hidden_size**-0.5)
+        else:
+            return self.position_embedding_weight_initialization.get_initializer()
 
     @functools.cached_property
     def output_weight_initialization_method(self) -> Initializer:
-        if self.output_weight_initialization.has_initialization:
-            return self.output_weight_initialization.get_initializer()
-        else:
+        if self.output_weight_initialization.is_default:
             return init_normal_(self.transformer.hidden_size**-0.5)
+        else:
+            return self.output_weight_initialization.get_initializer()

@@ -12,7 +12,7 @@ from fast_llm.layers.block.config import BlockConfig, BlockDimNames
 from fast_llm.layers.block.peft import TransformerSubLayerName
 from fast_llm.layers.common.linear import InputParallelLinear, OutputParallelLinear
 from fast_llm.layers.transformer.config import AttentionConfig, AttentionKwargs
-from fast_llm.utils import get_lr_scale
+from fast_llm.utils import combine_lr_scales
 
 try:
     from flash_attn.flash_attn_interface import flash_attn_func as _flash_attn_func  # noqa
@@ -112,7 +112,7 @@ class Attention[ConfigType: AttentionConfig](BlockLayer[ConfigType]):
         )
 
         layer_lr_scale = config.per_layer_lr_scale[block_index] if config.per_layer_lr_scale else None
-        attention_lr_scale = get_lr_scale(self._config.attention_lr_scale, layer_lr_scale)
+        attention_lr_scale = combine_lr_scales(self._config.attention_lr_scale, layer_lr_scale)
 
         # TODO: Merge the query and key-value computations? (harder with sequence parallel.)
         self.query = OutputParallelLinear(
@@ -136,7 +136,7 @@ class Attention[ConfigType: AttentionConfig](BlockLayer[ConfigType]):
         self._query_key_value = wrap_forward_backward(self._query_key_value_forward, self._query_key_value_backward)
 
         # Rotary embeddings.
-        self._rotary = self._config.rotary.build(kv_channels_dim)
+        self._rotary = self._config.rotary.get_layer(kv_channels_dim)
 
         # Output.
         self.dense = InputParallelLinear(
