@@ -25,7 +25,7 @@ from fast_llm.engine.checkpoint.huggingface import CustomModelingExportMixin, Hu
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig
 from fast_llm.functional.config import ActivationType
 from fast_llm.layers.block.mlp.config import RoutingType
-from fast_llm.layers.common.config import LayerNormalizationConfig
+from fast_llm.layers.common.normalization.config import LayerNormalizationConfig
 from fast_llm.layers.transformer.config import TransformerConfig
 from fast_llm.layers.transformer.rotary.config import DefaultRotaryConfig, Llama3RotaryConfig, YarnRotaryConfig
 from fast_llm.layers.transformer.rotary.rotary import convert_rotary_complex_to_real, convert_rotary_real_to_complex

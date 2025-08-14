@@ -12,7 +12,7 @@ from fast_llm.engine.config_utils.run import log_pipeline_parallel_main_rank
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.engine.distributed.distributed import Distributed
-from fast_llm.layers.block.config import BlockConfig, BlockKwargs
+from fast_llm.layers.block.config import BlockConfig, BlockKwargs, BlockLayerConfig
 from fast_llm.logging import log_distributed_grad, log_distributed_tensor, log_memory_usage
 from fast_llm.tensor import TensorMeta
 
@@ -94,27 +94,27 @@ class BlockLayerBase[ConfigType: Config](Configurable[ConfigType], Module):
     def __init__(
         self,
         config: ConfigType,
+        block_config: BlockConfig,
         distributed_config: DistributedConfig,
         # TODO: Review `hidden_dim` and `block_index`
         hidden_dim: TensorDim,
         block_index: int,
         name: str,
-        debug_level: int,
-        debug_memory: bool,
     ):
         super().__init__(config, distributed_config)
+        self._block_config = block_config
         self._hidden_dim = hidden_dim
         self._block_index = block_index
         self._name = name
         self._sequence_parallel: bool = self._distributed_config.sequence_tensor_parallel
         self._debug = DebugLayer(
             self._name,
-            debug_level,
-            debug_memory,
+            self._block_config.debug_transformer,
+            self._block_config.debug_transformer_memory,
         )
 
 
-class BlockLayer[ConfigType: Config](BlockLayerBase[ConfigType]):
+class BlockLayer[ConfigType: BlockLayerConfig](BlockLayerBase[ConfigType]):
     """
     Base class for mixer and MLP modules.
     """
@@ -149,12 +149,11 @@ class Block[ConfigType: BlockConfig](BlockLayerBase[ConfigType], Layer):
     ):
         super().__init__(
             config,
+            config,
             distributed_config,
             hidden_dim,
             block_index,
             name,
-            config.debug_transformer,
-            config.debug_transformer_memory,
         )
         # For multi-token prediction, return a stack of shared_hidden and transformer_output.
         self._return_input: bool = return_input

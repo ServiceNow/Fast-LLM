@@ -1,8 +1,14 @@
 import enum
+import functools
+import typing
 
-from fast_llm.config import Config, Field, FieldHint, check_field, config_class, skip_valid_if_none
+from fast_llm.config import Field, FieldHint, check_field, config_class, skip_valid_if_none
 from fast_llm.functional.config import ActivationType, MLPRecomputeLevel
+from fast_llm.layers.block.config import BlockLayerConfig
 from fast_llm.utils import Assert
+
+if typing.TYPE_CHECKING:
+    from fast_llm.layers.block.mlp.mlp import MLPBase
 
 
 class MLPLossNames:
@@ -16,8 +22,8 @@ class RoutingType(str, enum.Enum):
 
 
 @config_class()
-class MLPConfig(Config):
-    # TODO: Review names
+class MLPConfig(BlockLayerConfig):
+    # TODO: Review names    # TODO: Separate MoE?
     _abstract = False
     ffn_hidden_size: int = Field(
         default=None,
@@ -149,6 +155,17 @@ class MLPConfig(Config):
         if self.add_linear_biases == AddLinearBiasChoices.everywhere:
             return True
         return False
+
+    @functools.cached_property
+    def layer_class(self) -> "type[MLPBase]":
+        if self.num_experts > 1:
+            from fast_llm.layers.block.mlp.mixture_of_experts import MixtureOfExpertMLP
+
+            return MixtureOfExpertMLP
+        else:
+            from fast_llm.layers.block.mlp.mlp import MLP
+
+            return MLP
 
     def _validate(self) -> None:
         with self._set_implicit_default():

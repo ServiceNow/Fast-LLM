@@ -5,7 +5,7 @@ from fast_llm.engine.config_utils.run import log_main_rank
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.functional.config import TritonConfig
 from fast_llm.functional.triton.normalization import triton_normalization_autograd
-from fast_llm.layers.common.config import NormalizationImplementation
+from fast_llm.layers.common.normalization.config import NormalizationImplementation
 from fast_llm.tensor import ParameterMeta, accumulate_gradient
 from fast_llm.utils import Assert
 

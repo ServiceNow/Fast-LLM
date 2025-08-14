@@ -51,7 +51,6 @@ class FastLLMModel[ConfigType: FastLLMModelConfig](MultiStageModel[ConfigType]):
         use_cpu: bool = False,
         stage_filter: set | None = None,
     ) -> typing.Self:
-        print("IUGRGHIOERIO", cls, cls.config_class)
         metadata = cls.config_class.load_metadata(pretrained_config)
         config = cls.config_class.from_dict(metadata.config, *updates, update_type=UpdateType.update)
         if mode.support_training:

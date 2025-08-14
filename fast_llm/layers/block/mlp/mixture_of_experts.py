@@ -10,7 +10,7 @@ from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.functional.triton.mlp import mlp_autograd, mlp_autograd_looped
 from fast_llm.functional.triton.sparse_copy import get_sparse_map
 from fast_llm.layers.block.config import BlockConfig, BlockKwargs
-from fast_llm.layers.block.mlp.config import MLPLossNames, RoutingType
+from fast_llm.layers.block.mlp.config import MLPConfig, MLPLossNames, RoutingType
 from fast_llm.layers.block.mlp.mlp import MLPBase
 from fast_llm.layers.common.auxiliary_loss import AuxiliaryLoss, z_loss
 from fast_llm.layers.common.linear import Linear
@@ -19,7 +19,7 @@ from fast_llm.utils import Assert, get_lr_scale
 logger = logging.getLogger(__name__)
 
 
-class MixtureOfExpertMLP[ConfigType: BlockConfig](MLPBase[ConfigType]):
+class MixtureOfExpertMLP[ConfigType: MLPConfig](MLPBase[ConfigType]):
     """
     MoeLayer following implementation from
     https://github.com/NVIDIA/Megatron-LM/blob/46ebc0e4202c980d98900000d455f754a7ff9d4b/megatron/model/transformer.py#L346
@@ -36,6 +36,7 @@ class MixtureOfExpertMLP[ConfigType: BlockConfig](MLPBase[ConfigType]):
     def __init__(
         self,
         config: ConfigType,
+        block_config: BlockConfig,
         distributed_config: DistributedConfig,
         hidden_dim: TensorDim,
         block_index: int,
@@ -44,19 +45,21 @@ class MixtureOfExpertMLP[ConfigType: BlockConfig](MLPBase[ConfigType]):
         Assert.gt(config.num_experts, 1)
         # TODO: Implement?
         assert not config.add_linear_biases, "Biases not supported for MoE."
-        super().__init__(config, distributed_config, hidden_dim, block_index, name)
+        super().__init__(config, block_config, distributed_config, hidden_dim, block_index, name)
 
-        layer_lr_scale = self._config.per_layer_lr_scale[block_index] if self._config.per_layer_lr_scale else None
+        layer_lr_scale = (
+            self._block_config.per_layer_lr_scale[block_index] if self._block_config.per_layer_lr_scale else None
+        )
         router_lr_scale = get_lr_scale(self._config.router_lr_scale, layer_lr_scale)
 
         self.router = Linear(
-            hidden_dim,
+            self._hidden_dim,
             TensorDim("router_experts", self._config.num_unshared_experts),
             bias=False,
             weight_init_method=init_normal_(
-                std=self._config.init_method_std,
-                min_val=self._config.init_method_min,
-                max_val=self._config.init_method_max,
+                std=self._block_config.init_method_std,
+                min_val=self._block_config.init_method_min,
+                max_val=self._block_config.init_method_max,
             ),
             lr_scale=router_lr_scale,
         )
