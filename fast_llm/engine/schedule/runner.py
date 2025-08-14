@@ -63,7 +63,7 @@ class BatchContext:
         )
 
 
-class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ScheduleConfig]):
+class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
     _is_setup: bool = False
     _compute_stream: torch.cuda.Stream
     _data_stream: torch.cuda.Stream

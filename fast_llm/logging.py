@@ -14,7 +14,6 @@ from fast_llm.utils import format_number, get_and_reset_memory_usage_mib, log
 
 if typing.TYPE_CHECKING:
     from fast_llm.core.distributed import ProcessGroup
-    from fast_llm.engine.distributed.distributed import Distributed
 
 logger = logging.getLogger(__name__)
 
@@ -254,7 +253,6 @@ def log_distributed_tensor[
     scale: float = 1.0,
     level: int = 2,
     storage: bool = False,
-    distributed: "Distributed",
     duplicate_groups: tuple[typing.Optional["ProcessGroup"], ...] = (),
     global_: bool = True,
     log_fn: type[BaseException] | typing.Callable[[str], T] | None = logger.info,
@@ -263,7 +261,7 @@ def log_distributed_tensor[
     if level <= 0:
         return
     if global_:
-        tensor, is_first_rank = meta.local_to_global(tensor, distributed=distributed)
+        tensor, is_first_rank = meta.local_to_global(tensor)
         storage = False
         is_first_rank = is_first_rank and all(group.rank() == 0 for group in duplicate_groups if group)
         if not is_first_rank:
@@ -289,7 +287,6 @@ def log_distributed_grad[
     scale: float = 1.0,
     level: int = 2,
     storage: bool = False,
-    distributed: "Distributed",
     duplicate_groups: tuple[typing.Optional["ProcessGroup"], ...] = (),
     grad_fn: typing.Callable[[torch.Tensor], torch.Tensor] | None = None,
     global_: bool = True,
@@ -305,7 +302,6 @@ def log_distributed_grad[
             scale=scale,
             level=level,
             storage=storage,
-            distributed=distributed,
             duplicate_groups=duplicate_groups,
             global_=global_,
             log_fn=log_fn,

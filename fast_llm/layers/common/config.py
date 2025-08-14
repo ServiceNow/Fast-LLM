@@ -9,7 +9,7 @@ from fast_llm.utils import Assert
 if typing.TYPE_CHECKING:
     import torch
 
-    from fast_llm.engine.config_utils.tensor_space import TensorDim
+    from fast_llm.engine.config_utils.tensor_dim import TensorDim
     from fast_llm.layers.common.linear import LinearBase, LinearLike
     from fast_llm.layers.common.normalization import LayerNorm, RMSNorm
 

@@ -20,7 +20,7 @@ from fast_llm.utils import Assert, div
 logger = logging.getLogger(__name__)
 
 
-class StageBase(Configurable[StageConfig]):
+class StageBase[ConfigType: StageConfig](Configurable[ConfigType]):
     _distributed: Distributed
     _mode: StageMode
 
@@ -314,7 +314,7 @@ class StageBase(Configurable[StageConfig]):
         self, shards: tuple[torch.Tensor], data_type: DataType | None = None
     ) -> typing.Generator[tuple[str, torch.Tensor], None, None]:
         for fsdp, shard in zip(self._fsdps, shards, strict=True):
-            yield from fsdp.export_shard(shard, self._distributed, data_type)
+            yield from fsdp.export_shard(shard, data_type)
 
     def _get_parameter_metas(self) -> tuple[list[ParameterMeta], list[ParameterMeta]]:
         # Get all the stage parameters,

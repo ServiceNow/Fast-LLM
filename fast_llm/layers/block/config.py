@@ -2,7 +2,6 @@ import enum
 
 from fast_llm.config import Field, FieldHint, check_field, config_class
 from fast_llm.engine.base_model.config import BaseModelConfig
-from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
 from fast_llm.layers.block.mlp.config import MLPConfig
 from fast_llm.layers.block.peft import TransformerPeftConfig
 from fast_llm.layers.common.config import NormalizationConfig
@@ -117,9 +116,3 @@ class BlockConfig(MLPConfig, BaseModelConfig):
         desc="Min value for clamping initialized weights. Default: -float('inf')",
         hint=FieldHint.optional,
     )
-
-    def setup_tensor_space(self, tensor_space: TensorSpace) -> None:
-        super().setup_tensor_space(tensor_space)
-
-        # Hidden dimension
-        tensor_space.add_tensor_dim(TensorDim(BlockDimNames.hidden, self.hidden_size))

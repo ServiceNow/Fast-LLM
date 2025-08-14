@@ -1,25 +1,8 @@
 import enum
 
 from fast_llm.config import Config, Field, FieldHint, check_field, config_class, skip_valid_if_none
-from fast_llm.engine.config_utils.tensor_space import CompositeTensorDim, TensorDim, TensorSpace
-from fast_llm.engine.distributed.config import DistributedDimNames
 from fast_llm.functional.config import ActivationType, MLPRecomputeLevel
 from fast_llm.utils import Assert
-
-
-class MLPDimNames:
-    # MLP dimensions
-    mlp = "mlp"
-    gate_and_up = "gate_and_up"
-    composite_gated_mlp = "composite_gated_mlp"
-    experts = "experts"
-    top_experts = "top_experts"
-    shared_experts = "shared_experts"
-    unshared_experts = "unshared_experts"
-    composite_expert_mlp = "composite_expert_mlp"
-    composite_gated_expert_mlp = "composite_gated_expert_mlp"
-    composite_shared_expert_mlp = "composite_shared_expert_mlp"
-    composite_gated_shared_expert_mlp = "composite_gated_shared_expert_mlp"
 
 
 class MLPLossNames:
@@ -206,30 +189,3 @@ class MLPConfig(Config):
                     Assert.geq(scale, 0)
         elif self.mlp_lr_scale is not None:
             Assert.geq(self.mlp_lr_scale, 0)
-
-    def setup_tensor_space(self, tensor_space: TensorSpace) -> None:
-        tensor = tensor_space.distributed_config.get_distributed_dim(DistributedDimNames.tensor)
-
-        # MLP dimensions
-        tensor_space.add_tensor_dim(mlp := TensorDim(MLPDimNames.mlp, self.ffn_hidden_size, tensor))
-        tensor_space.add_tensor_dim(gate_and_up := TensorDim(MLPDimNames.gate_and_up, 2 if self.gated else 1))
-        tensor_space.add_tensor_dim(CompositeTensorDim(MLPDimNames.composite_gated_mlp, (gate_and_up, mlp)))
-        tensor_space.add_tensor_dim(experts := TensorDim(MLPDimNames.experts, self.num_experts))
-        tensor_space.add_tensor_dim(CompositeTensorDim(MLPDimNames.composite_expert_mlp, (experts, mlp)))
-        tensor_space.add_tensor_dim(
-            CompositeTensorDim(MLPDimNames.composite_gated_expert_mlp, (experts, gate_and_up, mlp))
-        )
-        tensor_space.add_tensor_dim(TensorDim(MLPDimNames.top_experts, self.num_experts_per_token))
-        tensor_space.add_tensor_dim(TensorDim(MLPDimNames.unshared_experts, self.num_unshared_experts))
-
-        # shared_experts
-        if self.num_shared_experts:
-            tensor_space.add_tensor_dim(
-                shared_experts := TensorDim(MLPDimNames.shared_experts, self.num_shared_experts)
-            )
-            tensor_space.add_tensor_dim(
-                CompositeTensorDim(MLPDimNames.composite_shared_expert_mlp, (shared_experts, mlp))
-            )
-            tensor_space.add_tensor_dim(
-                CompositeTensorDim(MLPDimNames.composite_gated_shared_expert_mlp, (shared_experts, gate_and_up, mlp))
-            )

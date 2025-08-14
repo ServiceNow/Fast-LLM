@@ -5,15 +5,16 @@ import einops
 import torch
 
 from fast_llm.engine.config_utils.initialization import init_ones_, init_uniform_centered_, init_zeros_
-from fast_llm.engine.config_utils.tensor_space import DefaultDimNames, TensorSpace
+from fast_llm.engine.config_utils.tensor_dim import CompositeTensorDim, ConcatenatedTensorDim, TensorDim, scalar_dim
+from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
 from fast_llm.functional.config import ActivationType
 from fast_llm.layers.block.block import BlockLayer
 from fast_llm.layers.block.config import BlockConfig, BlockKwargs
 from fast_llm.layers.common.linear import InputParallelLinear, OutputParallelLinear
 from fast_llm.layers.ssm.config import SSMConfig, SSMDimNames
-from fast_llm.layers.ssm.mamba_layer import init_kaiming_
+from fast_llm.layers.ssm.mamba import init_kaiming_
 from fast_llm.tensor import ParameterMeta
-from fast_llm.utils import get_lr_scale
+from fast_llm.utils import div, get_lr_scale
 
 logger = logging.getLogger(__name__)
 
@@ -34,48 +35,69 @@ except (ImportError, RuntimeError):
     _causal_conv1d_available = False
 
 
-class DiscreteMamba2(BlockLayer):
-    """DiscreteMamba2 (This code is adapted from https://github.com/cartesia-ai/edge/blob/main/cartesia-pytorch/cartesia_pytorch/Llamba/mixers/discrete_mamba2.py)."""
+class DiscreteMamba2[ConfigType: SSMConfig](BlockLayer[ConfigType]):
+    """
+    This code is adapted from https://github.com/cartesia-ai/edge/blob/main/cartesia-pytorch/cartesia_pytorch/Llamba/mixers/discrete_mamba2.py
+    """
 
     _mixer_name: typing.ClassVar[str] = "discrete_mamba_2"
+    _config: SSMConfig
 
     def __init__(
         self,
-        config: SSMConfig,
-        block_index: int,
-        tensor_space: TensorSpace,
+        config: ConfigType,
         block_config: BlockConfig,
+        distributed_config: DistributedConfig,
+        hidden_dim: TensorDim,
+        block_index: int,
+        name: str,
     ):
         super().__init__(
-            tensor_space,
+            config,
+            distributed_config,
+            hidden_dim,
             block_index,
-            self._mixer_name,
-            debug_level=block_config.debug_transformer,
-            debug_memory=block_config.debug_transformer_memory,
+            name,
+            block_config.debug_transformer,
+            block_config.debug_transformer_memory,
         )
-        self._config: SSMConfig = config
-        layer_lr_scale = block_config.per_layer_lr_scale[block_index] if block_config.per_layer_lr_scale else None
-        lr_scale = get_lr_scale(self._config.mamba_lr_scale, layer_lr_scale)
+        state_dim = TensorDim("state", self._config.state_size)
+        v_head_size_dim = TensorDim(SSMDimNames.head_dim, div(self._config.d_inner, self._config.n_v_heads))
 
-        inner_dim = tensor_space[SSMDimNames.composite_heads_and_head_dim]
-        hidden_dim = tensor_space[SSMDimNames.hidden]
-        conv1d_dim = tensor_space[SSMDimNames.concatenated_convolution]
-        heads_dim = tensor_space[SSMDimNames.composite_heads]
+        head_groups_dim = TensorDim(
+            SSMDimNames.head_groups,
+            self._config.n_qk_heads,
+            self._distributed_config.get_distributed_dim(DistributedDimNames.tensor),
+        )
+        group_heads_dim = TensorDim(SSMDimNames.group_heads, div(self._config.n_v_heads, self._config.n_qk_heads))
+        heads_dim = CompositeTensorDim(SSMDimNames.composite_heads, (head_groups_dim, group_heads_dim))
+        inner_dim = CompositeTensorDim("inner", (head_groups_dim, group_heads_dim, v_head_size_dim))
+        bc_dim = CompositeTensorDim("bc", (head_groups_dim, state_dim))
+        convolution_kernel_dim = TensorDim("convolution_kernel", self._config.conv_kernel_dimension)
+
+        inner_projection_dim = ConcatenatedTensorDim(
+            "inner_projection",
+            (inner_dim, bc_dim, bc_dim, inner_dim, heads_dim),
+        )
+        convolution_dim = ConcatenatedTensorDim("convolution", (inner_dim, bc_dim, bc_dim))
 
         # local_head_groups = head_groups / TP
-        self._local_head_groups = tensor_space[SSMDimNames.head_groups].size
+        self._local_head_groups = head_groups_dim.size
         # local_heads = local_head_groups * group_heads
         self._local_heads = heads_dim.size
         # local_inner_size = local_heads * head_size
         self._local_inner_size = inner_dim.size
         # local_bc_size = local_head_groups * state
-        self._local_bc_size = tensor_space[SSMDimNames.composite_head_groups_and_state].size
+        self._local_bc_size = bc_dim.size
+
+        layer_lr_scale = block_config.per_layer_lr_scale[block_index] if block_config.per_layer_lr_scale else None
+        lr_scale = get_lr_scale(self._config.mamba_lr_scale, layer_lr_scale)
 
         # TODO: double check initializations
         # Projections
         self.in_proj = OutputParallelLinear(
             hidden_dim,
-            tensor_space[SSMDimNames.concatenated_inner_projection],
+            inner_projection_dim,
             bias=config.add_bias_linear,
             weight_init_method=init_kaiming_(block_config.hidden_size),
             sequence_parallel=self._sequence_parallel,
@@ -90,15 +112,17 @@ class DiscreteMamba2(BlockLayer):
             )
         self.conv1d_weight = ParameterMeta.from_dims(
             (
-                conv1d_dim,
-                tensor_space[DefaultDimNames.scalar],
-                tensor_space[SSMDimNames.convolution_kernel],
+                convolution_dim,
+                scalar_dim,
+                convolution_kernel_dim,
             ),
-            init_method=init_uniform_centered_((conv1d_dim.global_size * self._config.conv_kernel_dimension) ** -0.5),
+            init_method=init_uniform_centered_(
+                (convolution_dim.global_size * self._config.conv_kernel_dimension) ** -0.5
+            ),
             lr_scale=lr_scale,
         )
         self.conv1d_bias = ParameterMeta.from_dims(
-            (conv1d_dim,),
+            (convolution_dim,),
             init_method=init_uniform_centered_(self._config.conv_kernel_dimension**-0.5),
             lr_scale=lr_scale,
         )

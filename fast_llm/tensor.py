@@ -7,7 +7,7 @@ import torch
 from fast_llm.core.distributed import ReduceOp
 from fast_llm.core.ops import reduce_op
 from fast_llm.engine.config_utils.initialization import Initializer, LambdaInitializer
-from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
+from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import DistributedDim, DistributedDimNames
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.functional.triton.pointwise import triton_add, triton_copy
@@ -138,30 +138,11 @@ class TensorMeta(torch.Tensor):
             **kwargs,
         )
 
-    @classmethod
-    def from_tensor_space(
-        cls,
-        dim_names: tuple[str, ...],
-        tensor_space: TensorSpace,
-        *,
-        tensor_name: str = "",
-        dtype: torch.dtype = torch.float32,
-        reductions: tuple[tuple[str, ReduceOp], ...] = (),
-        **kwargs: typing.Any,
-    ) -> typing.Self:
-        dims = tuple(tensor_space[dim_name] for dim_name in dim_names)
-        if reductions:
-            # kwarg not available for ParameterMeta, so we only provide if necessary.
-            kwargs["reductions"] = tuple(
-                (tensor_space.distributed_config.get_distributed_dim(name), op) for name, op in reductions
-            )
-        return cls.from_dims(dims, tensor_name=tensor_name, dtype=dtype, **kwargs)
-
     @property
     def global_shape(self) -> torch.Size:
         return torch.Size([dim.global_size for dim in self.dims])
 
-    def local_to_global(self, tensor: torch.Tensor, *, distributed: Distributed) -> tuple[torch.Tensor, ...]:
+    def local_to_global(self, tensor: torch.Tensor) -> tuple[torch.Tensor, ...]:
         """
         Reconstruct a global tensor from its distributed slices. Support lazy-loaded safetensor slices.
         Returns a view of the input tensor (or the input tensor itself) when possible.
@@ -171,7 +152,7 @@ class TensorMeta(torch.Tensor):
         Assert.eq(tensor.shape, self.shape)
         # Tensors are always either split or duplicated in the tensor-parallel direction.
         # TODO: Avoid hard-coded assumptions on duplication
-        is_first_rank, modified = distributed.config.tensor_rank == 0, False
+        is_first_rank, modified = True, False
 
         for dim, tensor_dim in enumerate(self.dims):
             if tensor_dim.is_parallel:

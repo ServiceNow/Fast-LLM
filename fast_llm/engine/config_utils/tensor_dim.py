@@ -2,14 +2,13 @@ import logging
 import math
 import typing
 
-from fast_llm.engine.distributed.config import DistributedConfig, DistributedDim
+from fast_llm.engine.distributed.config import DistributedDim
 from fast_llm.utils import Assert, div
 
 if typing.TYPE_CHECKING:
     import torch
 
     from fast_llm.core.distributed import ProcessGroup
-    from fast_llm.engine.distributed.distributed import Distributed
 
 logger = logging.getLogger(__name__)
 
@@ -219,49 +218,4 @@ class ConcatenatedTensorDim(TensorDim):
         )
 
 
-class DefaultDimNames:
-    # Scalar
-    scalar = "scalar"
-
-
-class TensorSpace:
-    _is_setup: bool = False
-    _distributed: "Distributed"
-
-    def __init__(self, distributed_config: DistributedConfig):
-        self._distributed_config = distributed_config
-        self._tensor_dims: dict[str, TensorDim] = {}
-        self.add_tensor_dim(TensorDim(DefaultDimNames.scalar, 1))
-
-    def setup(self, distributed: "Distributed") -> None:
-        assert not self._is_setup
-        if distributed.config is not self._distributed_config:
-            distributed.config.compare(self._distributed_config, ValueError)
-        self._is_setup = True
-        self._distributed = distributed
-
-    @property
-    def distributed_config(self) -> DistributedConfig:
-        return self._distributed_config
-
-    @property
-    def distributed(self) -> "Distributed":
-        assert self._is_setup
-        return self._distributed
-
-    def add_tensor_dim(self, tensor_dim: TensorDim) -> None:
-        if tensor_dim.name in self._tensor_dims:
-            Assert.eq(tensor_dim, self._tensor_dims[tensor_dim.name])
-        else:
-            if tensor_dim.parallel_dim is not None:
-                assert (
-                    tensor_dim.parallel_dim.name in self._distributed_config.distributed_dims
-                ), tensor_dim.parallel_dim.name
-                Assert.eq(
-                    tensor_dim.parallel_dim.__dict__,
-                    self._distributed_config.distributed_dims[tensor_dim.parallel_dim.name].__dict__,
-                )
-            self._tensor_dims[tensor_dim.name] = tensor_dim
-
-    def __getitem__(self, name: str) -> TensorDim:
-        return self._tensor_dims[name]
+scalar_dim = TensorDim("scalar", 1)

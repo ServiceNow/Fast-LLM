@@ -5,12 +5,14 @@ import typing
 
 import torch
 
-from fast_llm.config import Configurable
+from fast_llm.config import Config, Configurable
 from fast_llm.core.distributed import set_generator
-from fast_llm.engine.base_model.base_model import Layer
+from fast_llm.engine.base_model.base_model import Layer, Module
 from fast_llm.engine.config_utils.run import log_pipeline_parallel_main_rank
-from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
-from fast_llm.layers.block.config import BlockConfig, BlockDimNames, BlockKwargs
+from fast_llm.engine.config_utils.tensor_dim import TensorDim
+from fast_llm.engine.distributed.config import DistributedConfig
+from fast_llm.engine.distributed.distributed import Distributed
+from fast_llm.layers.block.config import BlockConfig, BlockKwargs
 from fast_llm.logging import log_distributed_grad, log_distributed_tensor, log_memory_usage
 from fast_llm.tensor import TensorMeta
 
@@ -19,8 +21,7 @@ logger = logging.getLogger(__name__)
 
 class DebugLayer:
     # TODO: Move elsewhere?
-    def __init__(self, tensor_space: TensorSpace, name: str, debug_level: int = 0, debug_memory: bool = False):
-        self._tensor_space = tensor_space
+    def __init__(self, name: str, debug_level: int = 0, debug_memory: bool = False):
         self._name = name
         self._debug_level = debug_level
         self._debug_memory = debug_memory
@@ -36,9 +37,9 @@ class DebugLayer:
                 (
                     dim
                     if isinstance(dim, TensorDim)
-                    else hidden_dims[dim] if dim in hidden_dims else self._tensor_space[dim]
+                    else hidden_dims[dim] if dim in hidden_dims else TensorDim(dim, tensor.size(i))
                 )
-                for dim in dims
+                for i, dim in enumerate(dims)
             ),
             tensor_name=f"{self._name} {name}",
             dtype=tensor.dtype,
@@ -69,7 +70,6 @@ class DebugLayer:
                 tensor,
                 level=self._debug_level,
                 meta=self._get_meta(tensor, name, dims, kwargs),
-                distributed=self._tensor_space.distributed,
                 global_=global_,
                 log_fn=log_fn,
                 scale=scale,
@@ -80,30 +80,44 @@ class DebugLayer:
                     tensor,
                     level=self._debug_level,
                     meta=self._get_meta(tensor, name + " grad", dims, kwargs),
-                    distributed=self._tensor_space.distributed,
                     global_=global_,
                     log_fn=log_fn,
                     scale=scale,
                 )
 
 
-class BlockLayer(torch.nn.Module, abc.ABC):
+class BlockLayerBase[ConfigType: Config](Configurable[ConfigType], Module):
     """
-    Base class for mixer and MLP modules.
+    Base class for blocks, mixer and MLP modules.
     """
 
-    def __init__(self, tensor_space: TensorSpace, block_index: int, name: str, debug_level: int, debug_memory: bool):
-        super().__init__()
-        self._tensor_space = tensor_space
+    def __init__(
+        self,
+        config: ConfigType,
+        distributed_config: DistributedConfig,
+        # TODO: Review `hidden_dim` and `block_index`
+        hidden_dim: TensorDim,
+        block_index: int,
+        name: str,
+        debug_level: int,
+        debug_memory: bool,
+    ):
+        super().__init__(config, distributed_config)
+        self._hidden_dim = hidden_dim
         self._block_index = block_index
         self._name = name
-        self._sequence_parallel: bool = self._tensor_space.distributed_config.sequence_tensor_parallel
+        self._sequence_parallel: bool = self._distributed_config.sequence_tensor_parallel
         self._debug = DebugLayer(
-            tensor_space,
             self._name,
             debug_level,
             debug_memory,
         )
+
+
+class BlockLayer[ConfigType: Config](BlockLayerBase[ConfigType]):
+    """
+    Base class for mixer and MLP modules.
+    """
 
     @abc.abstractmethod
     def forward(
@@ -116,7 +130,7 @@ class BlockLayer(torch.nn.Module, abc.ABC):
         pass
 
 
-class Block[ConfigType: BlockConfig](Configurable[ConfigType], Layer):
+class Block[ConfigType: BlockConfig](BlockLayerBase[ConfigType], Layer):
     """
     A transformer-like decoder base block with abstract mixer.
     """
@@ -124,26 +138,30 @@ class Block[ConfigType: BlockConfig](Configurable[ConfigType], Layer):
     # TODO: Standardize to `mixer`
     _mixer_module_name: typing.ClassVar[str] = "mixer"
 
-    def __init__(self, config: ConfigType, tensor_space: TensorSpace, block_index: int, return_input: bool = False):
-        super().__init__(config)
-        # TODO: Argument?
-        self._block_index = block_index
-        self._name = f"Block {self._block_index}"
-        self._tensor_space: TensorSpace = tensor_space
-        self._dropout_p: float = self._config.hidden_dropout
+    def __init__(
+        self,
+        config: ConfigType,
+        distributed_config: DistributedConfig,
+        hidden_dim: TensorDim,
+        block_index: int,
+        name: str,
+        return_input: bool = False,
+    ):
+        super().__init__(
+            config,
+            distributed_config,
+            hidden_dim,
+            block_index,
+            name,
+            config.debug_transformer,
+            config.debug_transformer_memory,
+        )
         # For multi-token prediction, return a stack of shared_hidden and transformer_output.
         self._return_input: bool = return_input
-        self._debug = DebugLayer(
-            tensor_space,
-            self._name,
-            self._config.debug_transformer,
-            self._config.debug_transformer_memory,
-        )
-        hidden_dim = self._tensor_space[BlockDimNames.hidden]
         # Note, layer_lr_scale does not impact the norms
         # TODO: add a separate norm_lr_scale
-        self.norm_1 = self._config.normalization.get_layer(hidden_dim)
-        self.norm_2 = self._config.normalization.get_layer(hidden_dim)
+        self.norm_1 = self._config.normalization.get_layer(self._hidden_dim)
+        self.norm_2 = self._config.normalization.get_layer(self._hidden_dim)
 
         # The mixer needs to be created here for backward-compatible weight ordering.
         setattr(self, self._mixer_module_name, self._create_mixer())
@@ -153,14 +171,17 @@ class Block[ConfigType: BlockConfig](Configurable[ConfigType], Layer):
         from fast_llm.layers.block.mlp.mlp import MLP
 
         self.mlp = (MixtureOfExpertMLP if self._config.num_experts > 1 else MLP)(
-            self._config,
-            self._tensor_space,
-            self._block_index,
+            self._config, self._distributed_config, self._hidden_dim, self._block_index, f"{self._name} MLP"
         )
 
         # PEFT.
         self.norm_1 = self._config.peft.apply_other(self.norm_1)
         self.norm_2 = self._config.peft.apply_other(self.norm_2)
+
+    def setup(self, distributed: Distributed) -> None:
+        super().setup(distributed)
+        getattr(self, self._mixer_module_name).setup(distributed)
+        self.mlp.setup(distributed)
 
     @abc.abstractmethod
     def _create_mixer(self) -> BlockLayer:
@@ -172,11 +193,7 @@ class Block[ConfigType: BlockConfig](Configurable[ConfigType], Layer):
     ) -> torch.Tensor:
         if bias is not None:
             input_ = input_ + bias
-        return residual + torch.dropout(input_, self._dropout_p, self.training)
-
-    # @property
-    # def name(self) -> str:
-    #    return f"{self._name} {self._block_index}"
+        return residual + torch.dropout(input_, self._config.hidden_dropout, self.training)
 
     def forward(
         self,
@@ -190,11 +207,7 @@ class Block[ConfigType: BlockConfig](Configurable[ConfigType], Layer):
             if self._return_input:
                 dims = (TensorDim("stacked_input_output", 2),) + dims
             return TensorMeta.from_dims(dims, tensor_name=f"{self._name} output", dtype=input_.dtype)
-        generator = (
-            self._tensor_space.distributed.tp_generator
-            if self._tensor_space.distributed_config.sequence_tensor_parallel
-            else self._tensor_space.distributed.pp_generator
-        )
+        generator = self._distributed.tp_generator if self._sequence_parallel else self._distributed.pp_generator
         if self._debug.enabled:
             self._debug(None, "begin", kwargs[BlockKwargs.hidden_dims], kwargs)
         fw_input = input_
