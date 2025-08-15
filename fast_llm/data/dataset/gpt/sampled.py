@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 @dataclasses.dataclass
 class GPTSample:
     token_ids: np.ndarray
-    images: np.ndarray | None = None
+    images: list[np.ndarray] | None = None
     image_positions: np.ndarray | None = None
     loss_masking_spans: np.ndarray | None = None
     chosen_span: np.ndarray | None = None
@@ -491,7 +491,8 @@ class GPTSampledIndexedDataset(SampledDataset):
             else:
                 document_index = self._document_shuffling[document_sampling_index - self._unshuffled_documents].item()
 
-            text_size, image_lengths = self._indexed_dataset.get_document_size(document_index)
+            (text_size,) = self._indexed_dataset.get_document_size(document_index)
+            image_lengths = self._indexed_dataset.get_image_size(document_index)
 
             resized_image_lengths = [
                 get_resize_dims(

@@ -20,9 +20,23 @@ class GPTIndexedDataset(IndexedDataset):
         """
 
     @abc.abstractmethod
+    def get_image_sizes(self) -> list[np.ndarray]:
+        """
+        The size of each image in the dataset.
+        The resulting array could be very large, so this method should be called cautiously,
+        and derived classes should try to avoid holding the whole array im memory.
+        """
+
+    @abc.abstractmethod
     def get_document_size(self, index: int) -> int:
         """
         The size of a document in the dataset.
+        """
+
+    @abc.abstractmethod
+    def get_image_size(self, index: int) -> np.ndarray:
+        """
+        The size of an image in the dataset.
         """
 
     def sample(self, sampling: GPTSamplingData) -> "GPTSampledIndexedDataset":
@@ -52,11 +66,17 @@ class GPTDatasetSlice[IndexedDatasetType: GPTIndexedDataset](DatasetSlice[Indexe
 
     def get_document_sizes(self) -> np.ndarray:
         # TODO: This can be really big.
-        doc_sizes, im_sizes = self._dataset.get_document_sizes()
-        return doc_sizes[self._begin : self._end], im_sizes[self._begin : self._end] if im_sizes else np.array([])
+        return self._dataset.get_document_sizes()[self._begin : self._end]
+
+    def get_image_sizes(self) -> list[np.ndarray]:
+        # TODO: This can be really big.
+        return self._dataset.get_image_sizes()[self._begin : self._end]
 
     def get_document_size(self, index: int) -> int:
         return self._dataset.get_document_size(self._begin + index)
+
+    def get_image_size(self, index: int) -> np.ndarray:
+        return self._dataset.get_image_size(self._begin + index)
 
     @property
     def has_images(self) -> bool:
@@ -70,16 +90,19 @@ class GPTConcatenatedDataset[IndexedDatasetType: GPTIndexedDataset](
 
     def get_document_sizes(self) -> np.ndarray:
         # TODO: This can be really big.
-        # return np.concatenate([dataset.get_document_sizes() for dataset in self._datasets])
-        sizes = [dataset.get_document_sizes() for dataset in self._datasets]
-        return (
-            np.concatenate([size[0] for size in sizes]),
-            np.concatenate([size[1] for size in sizes]) if sizes[0][1] is not None else np.array([]),
-        )
+        return np.concatenate([dataset.get_document_sizes() for dataset in self._datasets])
+
+    def get_image_sizes(self) -> list[np.ndarray]:
+        # TODO: This can be really big.
+        return sum([dataset.get_image_sizes() for dataset in self._datasets], [])
 
     def get_document_size(self, index: int) -> int:
         dataset = np.searchsorted(self._dataset_splits[1:], index, side="right")
         return self._datasets[dataset].get_document_size(index - self._dataset_splits[dataset].item())
+
+    def get_image_size(self, index: int) -> np.ndarray:
+        dataset = np.searchsorted(self._dataset_splits[1:], index, side="right")
+        return self._datasets[dataset].get_image_size(index - self._dataset_splits[dataset].item())
 
     @property
     def has_images(self) -> bool:
