@@ -100,7 +100,7 @@ class BlockLayerBase[ConfigType: Config](Configurable[ConfigType], Module):
         hidden_dim: TensorDim,
         block_index: int,
         name: str,
-        lr_scale: float | list[float] | None,
+        lr_scale: float | None,
     ):
         super().__init__(config, distributed_config)
         self._block_config = block_config
@@ -147,7 +147,7 @@ class Block[ConfigType: BlockConfig](BlockLayerBase[ConfigType], Layer):
         hidden_dim: TensorDim,
         block_index: int,
         name: str,
-        lr_scale: float | list[float] | None,
+        lr_scale: float | None,
         return_input: bool = False,
     ):
         super().__init__(

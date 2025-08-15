@@ -42,7 +42,8 @@ class HybridSSMBaseModel[ConfigType: HybridSSMBaseModelConfig](GPTBaseModel[Conf
                 self._hidden_dim,
                 block_index,
                 name,
-                lr_scale.return_input,
+                lr_scale,
+                return_input,
             )
         else:
             return SSMBlock(
@@ -52,7 +53,8 @@ class HybridSSMBaseModel[ConfigType: HybridSSMBaseModelConfig](GPTBaseModel[Conf
                 self._hidden_dim,
                 block_index,
                 name,
-                lr_scale.self._config.ssm_block_type.get_mixer_class(),
+                lr_scale,
+                self._config.ssm_block_type.get_mixer_class(),
                 return_input,
             )
 

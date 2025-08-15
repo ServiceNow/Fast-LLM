@@ -20,8 +20,8 @@ class SSMBlock[ConfigType: BlockConfig](Block[ConfigType]):
         distributed_config: DistributedConfig,
         hidden_dim: TensorDim,
         block_index: int,
-        lr_scale: float | list[float] | None,
         name: str,
+        lr_scale: float | None,
         mixer_class: type[BlockLayer],
         return_input: bool = False,
     ):
@@ -35,4 +35,4 @@ class SSMBlock[ConfigType: BlockConfig](Block[ConfigType]):
 
     @property
     def _mixer_config(self) -> SSMConfig:
-        return self._config
+        return self._ssm_config

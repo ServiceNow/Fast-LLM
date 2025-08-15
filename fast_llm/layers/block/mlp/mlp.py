@@ -24,7 +24,7 @@ class MLPBase[ConfigType: MLPConfig](BlockLayer[ConfigType]):
         hidden_dim: TensorDim,
         block_index: int,
         name: str,
-        lr_scale: float | list[float] | None,
+        lr_scale: float | None,
     ):
         super().__init__(config, block_config, distributed_config, hidden_dim, block_index, name, lr_scale)
         self._parallel_dim = self._distributed_config.get_distributed_dim(DistributedDimNames.tensor)
@@ -88,7 +88,7 @@ class MLP[ConfigType: BlockConfig](MLPBase[ConfigType]):
         hidden_dim: TensorDim,
         block_index: int,
         name: str,
-        lr_scale: float | list[float] | None,
+        lr_scale: float | None,
     ):
         Assert.eq(config.num_experts, 1)
         super().__init__(config, block_config, distributed_config, hidden_dim, block_index, name, lr_scale)

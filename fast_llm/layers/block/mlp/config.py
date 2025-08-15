@@ -1,5 +1,4 @@
 import enum
-import functools
 import typing
 
 from fast_llm.config import Config, Field, FieldHint, check_field, config_class, skip_valid_if_none
@@ -7,7 +6,7 @@ from fast_llm.functional.config import ActivationType, MLPRecomputeLevel
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
-    from fast_llm.layers.block.mlp.mlp import MLPBase
+    pass
 
 
 class MLPLossNames:
@@ -89,7 +88,7 @@ class MLPConfig(Config):
         hint=FieldHint.feature,
         valid=check_field(Assert.geq, 0),
     )
-    mlp_lr_scale: float | None | tuple[float | None] = Field(
+    mlp_lr_scale: float | None | tuple[float | None, ...] = Field(
         default=None,
         desc="Custom learning rate scale for each expert.",
         doc="May be used to freeze some experts by setting their scale to zero.",
@@ -155,17 +154,6 @@ class MLPConfig(Config):
             return True
         return False
 
-    @functools.cached_property
-    def layer_class(self) -> "type[MLPBase]":
-        if self.num_experts > 1:
-            from fast_llm.layers.block.mlp.mixture_of_experts import MixtureOfExpertMLP
-
-            return MixtureOfExpertMLP
-        else:
-            from fast_llm.layers.block.mlp.mlp import MLP
-
-            return MLP
-
     def _validate(self) -> None:
         with self._set_implicit_default():
             if self.activation_type is None:
@@ -198,7 +186,7 @@ class MLPConfig(Config):
         Assert.leq(self.num_shared_experts, self.num_experts)
         Assert.leq(self.num_shared_experts + self.num_experts_per_token, self.num_experts)
 
-        if isinstance(self.mlp_lr_scale, list):
+        if isinstance(self.mlp_lr_scale, tuple):
             Assert.eq(len(self.mlp_lr_scale), self.num_experts)
             for scale in self.mlp_lr_scale:
                 if scale is not None:

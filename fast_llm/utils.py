@@ -350,7 +350,7 @@ def check_equal_nested(config_a, config_b):
 
 def combine_lr_scales(*lr_scales: float | None | tuple[float | None, ...]):
     # Remove `None` entries.
-    lr_scales = [lr_scale for lr_scale in lr_scales if lr_scale is not None]
+    lr_scales = tuple(lr_scale for lr_scale in lr_scales if lr_scale is not None)
     if not lr_scales:
         # Everything is None
         return None
@@ -367,10 +367,10 @@ def combine_lr_scales(*lr_scales: float | None | tuple[float | None, ...]):
         return math.prod(lr_scales)
     else:
         # Tuple(s): use recursion.
-        return [
+        return tuple(
             combine_lr_scales(*[lr_scale[i] if isinstance(lr_scale, tuple) else lr_scale for lr_scale in lr_scales])
             for i in range(tuple_length)
-        ]
+        )
 
 
 class Interrupter:

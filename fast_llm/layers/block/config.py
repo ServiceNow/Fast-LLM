@@ -99,7 +99,7 @@ class BlockConfig(MLPConfig, BaseModelConfig):
         hint=FieldHint.architecture,
         valid=check_field(Assert.gt, 0),
     )
-    per_layer_lr_scale: list[float] | None = Field(
+    per_layer_lr_scale: list[float | None] | None = Field(
         default=None,
         desc="Custom learning rate scale for each layer.",
         doc="May be used to freeze some layers by setting their scale to zero.",

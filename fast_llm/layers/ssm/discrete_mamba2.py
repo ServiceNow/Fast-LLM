@@ -50,7 +50,7 @@ class DiscreteMamba2[ConfigType: SSMConfig](BlockLayer[ConfigType]):
         hidden_dim: TensorDim,
         block_index: int,
         name: str,
-        lr_scale: float | list[float] | None,
+        lr_scale: float | None,
     ):
         super().__init__(config, block_config, distributed_config, hidden_dim, block_index, name, lr_scale)
         state_dim = TensorDim("state", self._config.state_size)
