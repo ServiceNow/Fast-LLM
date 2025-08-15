@@ -37,12 +37,13 @@ class LanguageModelEmbedding[ConfigType: LanguageModelBaseConfig](BlockLayerBase
     ):
         super().__init__(
             config,
+            config.transformer,
             distributed_config,
             hidden_dim,
             block_index,
             name,
-            config.transformer.debug_transformer,
-            config.transformer.debug_transformer_memory,
+            # TODO: Add lr scale?
+            None,
         )
         self._residual_dtype = (
             self._distributed_config.optimization_dtype

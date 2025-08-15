@@ -44,12 +44,13 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](BlockLayerBase[Conf
     ):
         super().__init__(
             config,
+            config.transformer,
             distributed_config,
             hidden_dim,
             block_index,
             name,
-            config.transformer.debug_transformer,
-            config.transformer.debug_transformer_memory,
+            # TODO: Add lr scale?
+            None,
         )
         self._parallel_logits = self._distributed_config.tensor_parallel > 1 and config.parallel_embeddings
         self._parallel_dim = self._distributed_config.get_distributed_dim(DistributedDimNames.tensor)
@@ -161,7 +162,7 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](BlockLayerBase[Conf
                     TensorDim(
                         BlockDimNames.sequence_q_tp,
                         dims[sequence_index].global_size,
-                        DistributedDimNames.tensor,
+                        self._distributed_config.get_distributed_dim(DistributedDimNames.tensor),
                     )
                     if self._sequence_parallel_logits
                     else TensorDim(BlockDimNames.sequence_q, dims[sequence_index].global_size)

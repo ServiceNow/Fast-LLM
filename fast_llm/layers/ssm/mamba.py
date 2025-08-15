@@ -91,7 +91,6 @@ class Mamba[ConfigType: SSMConfig](BlockLayer[ConfigType]):
             bias=False,
             weight_init_method=init_kaiming_(hidden_dim.size),
         )
-
         self.conv1d_weight = ParameterMeta.from_dims(
             (
                 inner_dim,
@@ -101,7 +100,6 @@ class Mamba[ConfigType: SSMConfig](BlockLayer[ConfigType]):
             init_method=init_kaiming_(inner_dim.size),
             lr_scale=lr_scale,
         )
-
         self.x_proj = Linear(
             inner_dim,
             x_projection_dim,
@@ -110,27 +108,23 @@ class Mamba[ConfigType: SSMConfig](BlockLayer[ConfigType]):
             lr_scale=lr_scale,
         )
         self.x_proj.weight.auto_grad_accumulation = True
-
         # TODO: the weights are initialized a bit differently here https://github.com/state-spaces/mamba/blob/0cce0fa645f100f00620ddf2333c2b7712abfdec/mamba_ssm/modules/mamba_simple.py#L82
         self.dt_proj_weight = ParameterMeta.from_dims(
             (inner_dim, dt_rank_dim),
             init_method=init_kaiming_(self._config.dt_rank),
             lr_scale=lr_scale,
         )
-
         self.dt_proj_bias = ParameterMeta.from_dims(
             (inner_dim,),
             init_method=init_dtprojbias(self._config.dt_max, self._config.dt_min, self._config.dt_init_floor),
             lr_scale=lr_scale,
         )
-
         self.A_log = ParameterMeta.from_dims(
             (inner_dim, state_dim),
             weight_decay=False,
             init_method=init_A(self._config.state_size, inner_dim.size),
             lr_scale=lr_scale,
         )
-
         # D "skip" parameter
         self.D = ParameterMeta.from_dims(
             (inner_dim,),
@@ -138,7 +132,6 @@ class Mamba[ConfigType: SSMConfig](BlockLayer[ConfigType]):
             init_method=init_ones_,
             lr_scale=lr_scale,
         )
-
         self.out_proj = Linear(
             inner_dim,
             hidden_dim,

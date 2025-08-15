@@ -81,10 +81,10 @@ class Mamba2[ConfigType: SSMConfig](BlockLayer[ConfigType]):
         self._group_heads = div(self._local_heads, self._local_head_groups)
         self._local_inner_size = inner_dim.size
         self._local_xb_size = xb_dim.size
+        conv1d_dim = inner_dim if self._config.repeat_kv_before_conv else xb_dim
 
         lr_scale = combine_lr_scales(self._lr_scale, self._config.mamba_lr_scale)
 
-        conv1d_dim = inner_dim if self._config.repeat_kv_before_conv else xb_dim
         self.conv1d_weight = ParameterMeta.from_dims(
             (
                 conv1d_dim,
@@ -107,7 +107,6 @@ class Mamba2[ConfigType: SSMConfig](BlockLayer[ConfigType]):
             sequence_parallel=self._sequence_parallel,
             lr_scale=lr_scale,
         )
-
         self.dt_in_proj = Linear(
             hidden_dim,
             dt_rank_dim,

@@ -11,7 +11,7 @@ from fast_llm.functional.config import ActivationType
 from fast_llm.layers.block.block import BlockLayer
 from fast_llm.layers.block.config import BlockConfig, BlockKwargs
 from fast_llm.layers.common.linear import InputParallelLinear, OutputParallelLinear
-from fast_llm.layers.ssm.config import SSMConfig, SSMDimNames
+from fast_llm.layers.ssm.config import SSMConfig
 from fast_llm.layers.ssm.mamba import init_kaiming_
 from fast_llm.tensor import ParameterMeta
 from fast_llm.utils import combine_lr_scales, div
@@ -54,15 +54,15 @@ class DiscreteMamba2[ConfigType: SSMConfig](BlockLayer[ConfigType]):
     ):
         super().__init__(config, block_config, distributed_config, hidden_dim, block_index, name, lr_scale)
         state_dim = TensorDim("state", self._config.state_size)
-        v_head_size_dim = TensorDim(SSMDimNames.head_dim, div(self._config.d_inner, self._config.n_v_heads))
+        v_head_size_dim = TensorDim("v_head_size", div(self._config.d_inner, self._config.n_v_heads))
 
         head_groups_dim = TensorDim(
-            SSMDimNames.head_groups,
+            "head_groups",
             self._config.n_qk_heads,
             self._distributed_config.get_distributed_dim(DistributedDimNames.tensor),
         )
-        group_heads_dim = TensorDim(SSMDimNames.group_heads, div(self._config.n_v_heads, self._config.n_qk_heads))
-        heads_dim = CompositeTensorDim(SSMDimNames.composite_heads, (head_groups_dim, group_heads_dim))
+        group_heads_dim = TensorDim("group_heads", div(self._config.n_v_heads, self._config.n_qk_heads))
+        heads_dim = CompositeTensorDim("heads", (head_groups_dim, group_heads_dim))
         inner_dim = CompositeTensorDim("inner", (head_groups_dim, group_heads_dim, v_head_size_dim))
         bc_dim = CompositeTensorDim("bc", (head_groups_dim, state_dim))
         convolution_kernel_dim = TensorDim("convolution_kernel", self._config.conv_kernel_dimension)
