@@ -137,7 +137,7 @@ class Attention[ConfigType: TransformerConfig](BlockLayer[ConfigType]):
         self._query_key_value = wrap_forward_backward(self._query_key_value_forward, self._query_key_value_backward)
 
         # Rotary embeddings.
-        self._rotary = self._config.rotary.build(kv_channels_dim)
+        self._rotary = self._config.rotary.get_layer(kv_channels_dim)
 
         # Output.
         self.dense = InputParallelLinear(

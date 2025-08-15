@@ -51,7 +51,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
         # We have multiple identical rotary modules/preprocessors, so it's simpler to make a new one here.
         # TODO: Find a better solution.
         self._preprocessors.append(
-            self._config.transformer.rotary.build(TensorDim("kv_channels", self._config.transformer.kv_channels))
+            self._config.transformer.rotary.get_layer(TensorDim("kv_channels", self._config.transformer.kv_channels))
         )
         if self._use_flash_attention:
             self._preprocessors.append(FlashAttnVarlenPreprocessor(self._config.transformer, self._distributed_config))
