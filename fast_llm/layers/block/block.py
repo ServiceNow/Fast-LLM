@@ -101,18 +101,19 @@ class BlockLayerBase[ConfigType: Config](Configurable[ConfigType], Module):
         name: str,
     ):
         super().__init__(config, distributed_config)
+        self._block_config = block_config
         self._hidden_dim = hidden_dim
         self._block_index = block_index
         self._name = name
         self._sequence_parallel: bool = self._distributed_config.sequence_tensor_parallel
         self._debug = DebugLayer(
             self._name,
-            block_config.debug_transformer,
-            block_config.debug_transformer_memory,
+            self._block_config.debug_transformer,
+            self._block_config.debug_transformer_memory,
         )
 
 
-class BlockLayer[ConfigType: BlockLayerConfig](BlockLayerBase[ConfigType], torch.nn.Module):
+class BlockLayer[ConfigType: BlockLayerConfig](BlockLayerBase[ConfigType]):
     """
     Base class for mixer and MLP modules.
     """
@@ -154,8 +155,8 @@ class Block[ConfigType: BlockConfig](BlockLayerBase[ConfigType], Layer):
         self._return_input: bool = return_input
         # Note, layer_lr_scale does not impact the norms
         # TODO: add a separate norm_lr_scale
-        self.norm_1 = self._config.peft.apply_other(self._config.normalization.get_layer(hidden_dim))
-        self.norm_2 = self._config.peft.apply_other(self._config.normalization.get_layer(hidden_dim))
+        self.norm_1 = self._config.peft.apply_other(self._config.normalization.get_layer(self._hidden_dim))
+        self.norm_2 = self._config.peft.apply_other(self._config.normalization.get_layer(self._hidden_dim))
         # Attribute should be mixer, but Attention uses a different name for backward compatibility. TODO: Fix.
         setattr(
             self,

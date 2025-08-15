@@ -52,9 +52,21 @@ class BlockLayerConfig(BaseModelConfig):
         raise NotImplementedError()
 
     def get_layer(
-        self, distributed_config: DistributedConfig, hidden_dim: TensorDim, block_index: int, name: str
+        self,
+        block_config: "BlockConfig",
+        distributed_config: DistributedConfig,
+        hidden_dim: TensorDim,
+        block_index: int,
+        name: str,
     ) -> "BlockLayer":
-        return self.layer_class(self, distributed_config, hidden_dim, block_index, name)
+        return self.layer_class(
+            self,
+            block_config,
+            distributed_config,
+            hidden_dim,
+            block_index,
+            name,
+        )
 
 
 @config_class(registry=True)
