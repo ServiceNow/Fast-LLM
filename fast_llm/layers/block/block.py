@@ -210,10 +210,6 @@ class Block[ConfigType: BlockConfig](BlockLayerBase[ConfigType], Layer):
         getattr(self, self._mixer_module_name).setup(distributed)
         self.mlp.setup(distributed)
 
-    @abc.abstractmethod
-    def _create_mixer(self) -> BlockLayer:
-        pass
-
     @torch.compile
     def _bias_dropout_add(
         self, input_: torch.Tensor, bias: torch.Tensor | None, residual: torch.Tensor

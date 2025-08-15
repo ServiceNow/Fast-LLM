@@ -100,12 +100,18 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
         name: str,
         return_input: bool = False,
     ):
+        lr_scale = (
+            None
+            if self._config.transformer.per_layer_lr_scale is None
+            else self._config.transformer.per_layer_lr_scale[block_index]
+        )
         return TransformerBlock(
             self._config.transformer,
             self._distributed_config,
             self._hidden_dim,
             block_index,
             name,
+            lr_scale,
             return_input,
         )
 

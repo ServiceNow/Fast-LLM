@@ -29,6 +29,12 @@ class HybridSSMBaseModel[ConfigType: HybridSSMBaseModelConfig](GPTBaseModel[Conf
             # Decoder block
             block_type = self._config.hybrid_block_layout[block_index - 1]
 
+        lr_scale = (
+            None
+            if self._config.transformer.per_layer_lr_scale is None
+            else self._config.transformer.per_layer_lr_scale[block_index]
+        )
+
         if block_type == SSMBlockType.transformer:
             return TransformerBlock(
                 self._config.transformer,
@@ -36,7 +42,7 @@ class HybridSSMBaseModel[ConfigType: HybridSSMBaseModelConfig](GPTBaseModel[Conf
                 self._hidden_dim,
                 block_index,
                 name,
-                return_input,
+                lr_scale.return_input,
             )
         else:
             return SSMBlock(
@@ -44,9 +50,9 @@ class HybridSSMBaseModel[ConfigType: HybridSSMBaseModelConfig](GPTBaseModel[Conf
                 self._config.ssm,
                 self._distributed_config,
                 self._hidden_dim,
-                self._config.ssm_block_type.get_mixer_class(),
                 block_index,
                 name,
+                lr_scale.self._config.ssm_block_type.get_mixer_class(),
                 return_input,
             )
 
