@@ -4,15 +4,16 @@ import torch
 
 from fast_llm.core.distributed import set_generator
 from fast_llm.core.ops import gather_op, reduce_op, reduce_scatter_op, swap_mult_dim
-from fast_llm.engine.config_utils.tensor_dim import CompositeTensorDim, TensorDim
-from fast_llm.engine.distributed.config import DistributedConfig
+from fast_llm.engine.config_utils.initialization import init_normal_
+from fast_llm.engine.config_utils.tensor_dim import CompositeTensorDim, ConcatenatedTensorDim, TensorDim
+from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
 from fast_llm.functional.autograd import wrap_forward_backward
 from fast_llm.layers.block.block import BlockLayer
 from fast_llm.layers.block.config import BlockConfig, BlockDimNames
 from fast_llm.layers.block.peft import TransformerSubLayerName
 from fast_llm.layers.common.linear import InputParallelLinear, OutputParallelLinear
 from fast_llm.layers.transformer.config import AttentionConfig, AttentionKwargs
-from fast_llm.utils import combine_lr_scales
+from fast_llm.utils import combine_lr_scales, div
 
 try:
     from flash_attn.flash_attn_interface import flash_attn_func as _flash_attn_func  # noqa
@@ -101,14 +102,14 @@ class Attention[ConfigType: AttentionConfig](BlockLayer[ConfigType]):
         self._softmax_scale = self._config.kv_channels ** (-self._config.attention_softmax_scale_power)
 
         init_method_qkv = init_normal_(
-            std=self._config.init_method_std_qkv,
-            min_val=self._config.init_method_min_qkv,
-            max_val=self._config.init_method_max_qkv,
+            std=self._block_config.init_method_std_qkv,
+            min_val=self._block_config.init_method_min_qkv,
+            max_val=self._block_config.init_method_max_qkv,
         )
         init_method_std_attn_proj = init_normal_(
-            std=self._config.init_method_std_attn_proj,
-            min_val=self._config.init_method_min_attn_proj,
-            max_val=self._config.init_method_max_attn_proj,
+            std=self._block_config.init_method_std_attn_proj,
+            min_val=self._block_config.init_method_min_attn_proj,
+            max_val=self._block_config.init_method_max_attn_proj,
         )
 
         layer_lr_scale = config.per_layer_lr_scale[block_index] if config.per_layer_lr_scale else None
@@ -149,9 +150,12 @@ class Attention[ConfigType: AttentionConfig](BlockLayer[ConfigType]):
             lr_scale=attention_lr_scale,
         )
         # PEFT.
-        self.query = self._config.peft.apply_linear(self.query, TransformerSubLayerName.query)
-        self.key_value = self._config.peft.apply_linear(self.key_value, TransformerSubLayerName.key_value)
-        self.dense = self._config.peft.apply_linear(self.dense, TransformerSubLayerName.dense)
+        self.query = self._block_config.peft.apply_linear(self.query, True)
+
+        self.key_value = self._block_config.peft.apply_linear(
+            self.key_value, True, out_channel_begin=div(self.key_value._out_dim.global_size, 2)
+        )
+        self.dense = self._block_config.peft.apply_linear(self.dense, TransformerSubLayerName.dense)
 
         if self._debug.enabled:
             self._query_dims = (

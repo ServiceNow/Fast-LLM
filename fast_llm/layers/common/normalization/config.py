@@ -7,7 +7,7 @@ from fast_llm.config import Field, FieldHint, check_field, config_class
 from fast_llm.engine.base_model.config import BaseModelConfig
 from fast_llm.engine.config_utils.initialization import InitializationConfig, Initializer, init_ones_, init_zeros_
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
-from fast_llm.layers.common.config import PeftConfig
+from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:

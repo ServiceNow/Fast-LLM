@@ -4,8 +4,8 @@ from fast_llm.config import Field, FieldHint, check_field, config_class
 from fast_llm.engine.base_model.config import BaseModelConfig
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig
-from fast_llm.layers.block.peft import TransformerPeftConfig
-from fast_llm.layers.common.normalization import NormalizationConfig
+from fast_llm.layers.common.normalization.config import NormalizationConfig
+from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
@@ -136,7 +136,7 @@ class BlockConfig(BaseModelConfig):
         desc="Configuration for the normalization layers architecture.",
         hint=FieldHint.architecture,
     )
-    peft: TransformerPeftConfig = Field(
+    peft: PeftConfig = Field(
         desc="Configuration for the parameter-efficient fine tuning.",
         hint=FieldHint.architecture,
     )
