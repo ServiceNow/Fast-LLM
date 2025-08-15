@@ -234,7 +234,7 @@ class Attention[ConfigType: AttentionConfig](BlockLayer[ConfigType]):
 
         handle = None
 
-        if self._head_groups == 1 and self._sequence_parallel:
+        if self._config.head_groups == 1 and self._sequence_parallel:
             key_value, handle = gather_op(key_value, group=self._parallel_dim.group, dim=0, async_op=True)
 
         if self._sequence_data_parallel_dim.group:
@@ -277,7 +277,7 @@ class Attention[ConfigType: AttentionConfig](BlockLayer[ConfigType]):
         if handle:
             handle.wait()
 
-        if self._head_groups == 1 and (group := self._parallel_dim.group):
+        if self._config.head_groups == 1 and (group := self._parallel_dim.group):
             if self._sequence_parallel:
                 key_value_grad = reduce_scatter_op(key_value_grad, group=group, dim=0)
             else:

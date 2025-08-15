@@ -47,22 +47,10 @@ class Mamba2[ConfigType: SSMConfig](BlockLayer[ConfigType]):
         hidden_dim: TensorDim,
         block_index: int,
         name: str,
+        lr_scale: float | list[float] | None,
     ):
-        super().__init__(
-            config,
-            block_config,
-            distributed_config,
-            hidden_dim,
-            block_index,
-            name,
-        )
+        super().__init__(config, block_config, distributed_config, hidden_dim, block_index, name, lr_scale)
         Assert.eq(self._config.activation_type, ActivationType.silu)
-        layer_lr_scale: float | None = (
-            block_config.per_layer_lr_scale[block_index] if block_config.per_layer_lr_scale else None
-        )
-        lr_scale: float | tuple[float | None, ...] | None = combine_lr_scales(
-            self._config.mamba_lr_scale, layer_lr_scale
-        )
 
         num_heads = div(self._config.d_inner, self._config.state_size)
         num_head_groups = div(self._config.d_xb, self._config.state_size)
@@ -94,6 +82,9 @@ class Mamba2[ConfigType: SSMConfig](BlockLayer[ConfigType]):
         self._local_inner_size = inner_dim.size
         self._local_xb_size = xb_dim.size
         conv1d_dim = inner_dim if self._config.repeat_kv_before_conv else xb_dim
+
+        lr_scale = combine_lr_scales(self._lr_scale, self._config.mamba_lr_scale)
+
         self.conv1d_weight = ParameterMeta.from_dims(
             (
                 conv1d_dim,

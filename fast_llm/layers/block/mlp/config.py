@@ -92,7 +92,7 @@ class MLPConfig(BlockLayerConfig):
         hint=FieldHint.feature,
         valid=check_field(Assert.geq, 0),
     )
-    mlp_lr_scale: float | None | list[float | None] = Field(
+    mlp_lr_scale: float | None | tuple[float | None] = Field(
         default=None,
         desc="Custom learning rate scale for each expert.",
         doc="May be used to freeze some experts by setting their scale to zero.",

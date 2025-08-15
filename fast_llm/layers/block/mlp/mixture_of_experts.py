@@ -4,6 +4,7 @@ import warnings
 import torch
 
 from fast_llm.core.distributed import ProcessGroup, set_generator
+from fast_llm.engine.config_utils.initialization import init_normal_
 from fast_llm.engine.config_utils.tensor_dim import CompositeTensorDim, TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.functional.triton.mlp import mlp_autograd, mlp_autograd_looped
@@ -39,14 +40,12 @@ class MixtureOfExpertMLP[ConfigType: MLPConfig](MLPBase[ConfigType]):
         hidden_dim: TensorDim,
         block_index: int,
         name: str,
+        lr_scale: float | list[float] | None,
     ):
         Assert.gt(config.num_experts, 1)
         # TODO: Implement?
         assert not config.add_linear_biases, "Biases not supported for MoE."
-        super().__init__(config, distributed_config, hidden_dim, block_index, name)
-
-        layer_lr_scale = self._config.per_layer_lr_scale[block_index] if self._config.per_layer_lr_scale else None
-        router_lr_scale = combine_lr_scales(self._config.router_lr_scale, layer_lr_scale)
+        super().__init__(config, distributed_config, hidden_dim, block_index, name, lr_scale)
 
         self.router = Linear(
             self._hidden_dim,
@@ -57,7 +56,7 @@ class MixtureOfExpertMLP[ConfigType: MLPConfig](MLPBase[ConfigType]):
                 min_val=self._config.init_method_min,
                 max_val=self._config.init_method_max,
             ),
-            lr_scale=router_lr_scale,
+            lr_scale=combine_lr_scales(self._config.router_lr_scale, self._lr_scale),
         )
         dropless_moe = self._config.dropless_moe
         if dropless_moe and self._sequence_parallel:

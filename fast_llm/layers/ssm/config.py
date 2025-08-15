@@ -68,7 +68,7 @@ class SSMConfig(Config):
     # [MambaLayer, Mamba2, DiscreteMamba2]
     conv_kernel_dimension: int = Field(
         default=4,
-        desc="Conv kernel dimensions.",
+        desc="Conv kernel dimension.",
         hint=FieldHint.architecture,
         valid=check_field(Assert.gt, 0),
     )

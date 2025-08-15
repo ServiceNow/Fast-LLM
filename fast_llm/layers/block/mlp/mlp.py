@@ -22,8 +22,9 @@ class MLPBase[ConfigType: MLPConfig](BlockLayer[ConfigType]):
         hidden_dim: TensorDim,
         block_index: int,
         name: str,
+        lr_scale: float | list[float] | None,
     ):
-        super().__init__(config, block_config, distributed_config, hidden_dim, block_index, name)
+        super().__init__(config, block_config, distributed_config, hidden_dim, block_index, name, lr_scale)
 
         self._parallel_dim = self._distributed_config.get_distributed_dim(DistributedDimNames.tensor)
         intermediate_1_dim, intermediate_2_dim = self._get_intermediate_dims()
@@ -77,13 +78,15 @@ class MLP[ConfigType: MLPConfig](MLPBase[ConfigType]):
     def __init__(
         self,
         config: ConfigType,
+        block_config: BlockConfig,
         distributed_config: DistributedConfig,
         hidden_dim: TensorDim,
         block_index: int,
         name: str,
+        lr_scale: float | list[float] | None,
     ):
         Assert.eq(config.num_experts, 1)
-        super().__init__(config, distributed_config, hidden_dim, block_index, name)
+        super().__init__(config, block_config, distributed_config, hidden_dim, block_index, name, lr_scale)
 
     def forward(
         self,

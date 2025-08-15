@@ -37,7 +37,7 @@ except (ImportError, RuntimeError):
 
 class DiscreteMamba2[ConfigType: SSMConfig](BlockLayer[ConfigType]):
     """
-    This code is adapted from https://github.com/cartesia-ai/edge/blob/main/cartesia-pytorch/cartesia_pytorch/Llamba/mixers/discrete_mamba2.py.
+    This code is adapted from https://github.com/cartesia-ai/edge/blob/main/cartesia-pytorch/cartesia_pytorch/Llamba/mixers/discrete_mamba2.py
     """
 
     _mixer_name: typing.ClassVar[str] = "discrete_mamba_2"
@@ -50,15 +50,9 @@ class DiscreteMamba2[ConfigType: SSMConfig](BlockLayer[ConfigType]):
         hidden_dim: TensorDim,
         block_index: int,
         name: str,
+        lr_scale: float | list[float] | None,
     ):
-        super().__init__(
-            config,
-            block_config,
-            distributed_config,
-            hidden_dim,
-            block_index,
-            name,
-        )
+        super().__init__(config, block_config, distributed_config, hidden_dim, block_index, name, lr_scale)
         state_dim = TensorDim("state", self._config.state_size)
         v_head_size_dim = TensorDim("v_head_size", div(self._config.d_inner, self._config.n_v_heads))
 
@@ -88,8 +82,7 @@ class DiscreteMamba2[ConfigType: SSMConfig](BlockLayer[ConfigType]):
         # local_bc_size = local_head_groups * state
         self._local_bc_size = bc_dim.size
 
-        layer_lr_scale = block_config.per_layer_lr_scale[block_index] if block_config.per_layer_lr_scale else None
-        lr_scale = combine_lr_scales(self._config.mamba_lr_scale, layer_lr_scale)
+        lr_scale = combine_lr_scales(self._lr_scale, self._config.mamba_lr_scale)
 
         # TODO: double check initializations
         # Projections

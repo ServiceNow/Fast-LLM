@@ -65,15 +65,9 @@ class Mamba[ConfigType: SSMConfig](BlockLayer[ConfigType]):
         hidden_dim: TensorDim,
         block_index: int,
         name: str,
+        lr_scale: float | list[float] | None,
     ):
-        super().__init__(
-            config,
-            block_config,
-            distributed_config,
-            hidden_dim,
-            block_index,
-            name,
-        )
+        super().__init__(config, block_config, distributed_config, hidden_dim, block_index, name, lr_scale)
         assert self._distributed_config.tensor_parallel == 1, "Tensor-parallel not supported for MambaLayer"
         # TODO: It's not silu?
         Assert.eq(self._config.activation_type, ActivationType.silu)
@@ -87,8 +81,7 @@ class Mamba[ConfigType: SSMConfig](BlockLayer[ConfigType]):
         inner_projection_dim = ConcatenatedTensorDim("inner_projection", (inner_dim, inner_dim))
         x_projection_dim = ConcatenatedTensorDim("x_projection", (dt_rank_dim, state_dim, state_dim))
 
-        layer_lr_scale = block_config.per_layer_lr_scale[block_index] if block_config.per_layer_lr_scale else None
-        lr_scale = combine_lr_scales(self._config.mamba_lr_scale, layer_lr_scale)
+        lr_scale = combine_lr_scales(self._lr_scale, self._config.mamba_lr_scale)
 
         # TODO: Backward compatibility?
         # TODO: lr_scale?

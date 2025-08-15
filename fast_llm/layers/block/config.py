@@ -58,6 +58,7 @@ class BlockLayerConfig(BaseModelConfig):
         hidden_dim: TensorDim,
         block_index: int,
         name: str,
+        lr_scale: float | list[float] | None,
     ) -> "BlockLayer":
         return self.layer_class(
             self,
@@ -66,6 +67,7 @@ class BlockLayerConfig(BaseModelConfig):
             hidden_dim,
             block_index,
             name,
+            lr_scale,
         )
 
 

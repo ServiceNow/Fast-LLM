@@ -11,6 +11,7 @@ from fast_llm.engine.base_model.base_model import Layer, Module
 from fast_llm.engine.config_utils.run import log_pipeline_parallel_main_rank
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig
+from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.layers.block.config import BlockConfig, BlockKwargs, BlockLayerConfig
 from fast_llm.logging import log_distributed_grad, log_distributed_tensor, log_memory_usage
 from fast_llm.tensor import TensorMeta
@@ -99,6 +100,7 @@ class BlockLayerBase[ConfigType: Config](Configurable[ConfigType], Module):
         hidden_dim: TensorDim,
         block_index: int,
         name: str,
+        lr_scale: float | list[float] | None,
     ):
         super().__init__(config, distributed_config)
         self._block_config = block_config
@@ -111,6 +113,7 @@ class BlockLayerBase[ConfigType: Config](Configurable[ConfigType], Module):
             self._block_config.debug_transformer,
             self._block_config.debug_transformer_memory,
         )
+        self._lr_scale = lr_scale
 
 
 class BlockLayer[ConfigType: BlockLayerConfig](BlockLayerBase[ConfigType]):
@@ -141,6 +144,7 @@ class Block[ConfigType: BlockConfig](BlockLayerBase[ConfigType], Layer):
         hidden_dim: TensorDim,
         block_index: int,
         name: str,
+        lr_scale: float | list[float] | None,
         return_input: bool = False,
     ):
         super().__init__(
@@ -150,6 +154,7 @@ class Block[ConfigType: BlockConfig](BlockLayerBase[ConfigType], Layer):
             hidden_dim,
             block_index,
             name,
+            lr_scale,
         )
         # For multi-token prediction, return a stack of shared_hidden and transformer_output.
         self._return_input: bool = return_input
@@ -162,12 +167,22 @@ class Block[ConfigType: BlockConfig](BlockLayerBase[ConfigType], Layer):
             self,
             self._config.mixer.module_name,
             self._config.mixer.get_layer(
-                self._distributed_config, self._hidden_dim, self._block_index, f"{self._name} mixer"
+                self._config,
+                self._distributed_config,
+                self._hidden_dim,
+                self._block_index,
+                f"{self._name} mixer",
+                self._lr_scale,
             ),
         )
         self.mlp = self._config.mlp.get_layer(
-            self._distributed_config, self._hidden_dim, self._block_index, f"{self._name} mlp"
+            self._distributed_config, self._hidden_dim, self._block_index, f"{self._name} mlp", self._lr_scale
         )
+
+    def setup(self, distributed: Distributed) -> None:
+        super().setup(distributed)
+        getattr(self, self._config.mixer.module_name).setup(distributed)
+        self.mlp.setup(distributed)
 
     @torch.compile
     def _bias_dropout_add(
