@@ -9,11 +9,11 @@ from fast_llm.engine.config_utils.tensor_dim import CompositeTensorDim, Concaten
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
 from fast_llm.functional.autograd import wrap_forward_backward
 from fast_llm.layers.block.block import BlockLayer
-from fast_llm.layers.block.config import BlockDimNames
+from fast_llm.layers.block.config import BlockConfig, BlockDimNames
 from fast_llm.layers.block.peft import TransformerSubLayerName
 from fast_llm.layers.common.linear import InputParallelLinear, OutputParallelLinear
-from fast_llm.layers.transformer.config import AttentionKwargs, TransformerConfig
-from fast_llm.utils import div, get_lr_scale
+from fast_llm.layers.transformer.config import AttentionConfig, AttentionKwargs
+from fast_llm.utils import combine_lr_scales, div
 
 try:
     from flash_attn.flash_attn_interface import flash_attn_func as _flash_attn_func  # noqa
@@ -48,7 +48,7 @@ class AttachGrad(torch.autograd.Function):
         return grad, None
 
 
-class Attention[ConfigType: TransformerConfig](BlockLayer[ConfigType]):
+class Attention[ConfigType: AttentionConfig](BlockLayer[ConfigType]):
     """
     A self-attention layer.
     """
@@ -56,20 +56,15 @@ class Attention[ConfigType: TransformerConfig](BlockLayer[ConfigType]):
     def __init__(
         self,
         config: ConfigType,
+        block_config: BlockConfig,
         distributed_config: DistributedConfig,
         hidden_dim: TensorDim,
         block_index: int,
         name: str,
+        lr_scale: float | list[float] | None,
     ):
-        super().__init__(
-            config,
-            distributed_config,
-            hidden_dim,
-            block_index,
-            name,
-            config.debug_transformer,
-            config.debug_transformer_memory,
-        )
+        super().__init__(config, block_config, distributed_config, hidden_dim, block_index, name, lr_scale)
+
         self._use_flash_attention = self._config.do_use_flash_attention(self._distributed_config)
 
         self._parallel_dim = self._distributed_config.get_distributed_dim(DistributedDimNames.tensor)
@@ -112,8 +107,10 @@ class Attention[ConfigType: TransformerConfig](BlockLayer[ConfigType]):
             max_val=self._config.init_method_max_attn_proj,
         )
 
-        layer_lr_scale = config.per_layer_lr_scale[block_index] if config.per_layer_lr_scale else None
-        attention_lr_scale = get_lr_scale(self._config.attention_lr_scale, layer_lr_scale)
+        lr_scale = combine_lr_scales(
+            self._lr_scale,
+            self._config.attention_lr_scale,
+        )
 
         # TODO: Merge the query and key-value computations? (harder with sequence parallel.)
         self.query = OutputParallelLinear(
@@ -123,7 +120,7 @@ class Attention[ConfigType: TransformerConfig](BlockLayer[ConfigType]):
             weight_init_method=init_method_qkv,
             bias_init_method=init_zeros_,
             sequence_parallel=self._sequence_parallel,
-            lr_scale=attention_lr_scale,
+            lr_scale=lr_scale,
         )
         self.key_value = OutputParallelLinear(
             hidden_dim,
@@ -132,7 +129,7 @@ class Attention[ConfigType: TransformerConfig](BlockLayer[ConfigType]):
             weight_init_method=init_method_qkv,
             bias_init_method=init_zeros_,
             sequence_parallel=self._sequence_parallel,
-            lr_scale=attention_lr_scale,
+            lr_scale=lr_scale,
         )
         self._query_key_value = wrap_forward_backward(self._query_key_value_forward, self._query_key_value_backward)
 
@@ -147,13 +144,13 @@ class Attention[ConfigType: TransformerConfig](BlockLayer[ConfigType]):
             weight_init_method=init_method_std_attn_proj,
             bias_init_method=init_zeros_,
             sequence_parallel=self._sequence_parallel,
-            lr_scale=attention_lr_scale,
+            lr_scale=lr_scale,
         )
 
         # PEFT.
-        self.query = self._config.peft.apply_linear(self.query, TransformerSubLayerName.query)
-        self.key_value = self._config.peft.apply_linear(self.key_value, TransformerSubLayerName.key_value)
-        self.dense = self._config.peft.apply_linear(self.dense, TransformerSubLayerName.dense)
+        self.query = self._block_config.peft.apply_linear(self.query, TransformerSubLayerName.query)
+        self.key_value = self._block_config.peft.apply_linear(self.key_value, TransformerSubLayerName.key_value)
+        self.dense = self._block_config.peft.apply_linear(self.dense, TransformerSubLayerName.dense)
 
         if self._debug.enabled:
             self._query_dims = (

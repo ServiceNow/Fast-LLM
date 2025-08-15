@@ -14,7 +14,7 @@ from fast_llm.layers.common.linear import InputParallelLinear, OutputParallelLin
 from fast_llm.layers.ssm.config import SSMConfig, SSMDimNames
 from fast_llm.layers.ssm.mamba import init_kaiming_
 from fast_llm.tensor import ParameterMeta
-from fast_llm.utils import div, get_lr_scale
+from fast_llm.utils import combine_lr_scales, div
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +41,6 @@ class DiscreteMamba2[ConfigType: SSMConfig](BlockLayer[ConfigType]):
     """
 
     _mixer_name: typing.ClassVar[str] = "discrete_mamba_2"
-    _config: SSMConfig
 
     def __init__(
         self,
@@ -51,16 +50,9 @@ class DiscreteMamba2[ConfigType: SSMConfig](BlockLayer[ConfigType]):
         hidden_dim: TensorDim,
         block_index: int,
         name: str,
+        lr_scale: float | list[float] | None,
     ):
-        super().__init__(
-            config,
-            distributed_config,
-            hidden_dim,
-            block_index,
-            name,
-            block_config.debug_transformer,
-            block_config.debug_transformer_memory,
-        )
+        super().__init__(config, block_config, distributed_config, hidden_dim, block_index, name, lr_scale)
         state_dim = TensorDim("state", self._config.state_size)
         v_head_size_dim = TensorDim(SSMDimNames.head_dim, div(self._config.d_inner, self._config.n_v_heads))
 
@@ -90,8 +82,7 @@ class DiscreteMamba2[ConfigType: SSMConfig](BlockLayer[ConfigType]):
         # local_bc_size = local_head_groups * state
         self._local_bc_size = bc_dim.size
 
-        layer_lr_scale = block_config.per_layer_lr_scale[block_index] if block_config.per_layer_lr_scale else None
-        lr_scale = get_lr_scale(self._config.mamba_lr_scale, layer_lr_scale)
+        lr_scale = combine_lr_scales(self._lr_scale, self._config.mamba_lr_scale)
 
         # TODO: double check initializations
         # Projections

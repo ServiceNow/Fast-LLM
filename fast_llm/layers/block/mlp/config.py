@@ -2,9 +2,8 @@ import enum
 import functools
 import typing
 
-from fast_llm.config import Field, FieldHint, check_field, config_class, skip_valid_if_none
+from fast_llm.config import Config, Field, FieldHint, check_field, config_class, skip_valid_if_none
 from fast_llm.functional.config import ActivationType, MLPRecomputeLevel
-from fast_llm.layers.block.config import BlockLayerConfig
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
@@ -22,7 +21,7 @@ class RoutingType(str, enum.Enum):
 
 
 @config_class()
-class MLPConfig(BlockLayerConfig):
+class MLPConfig(Config):
     # TODO: Review names    # TODO: Separate MoE?
     _abstract = False
     ffn_hidden_size: int = Field(
@@ -90,7 +89,7 @@ class MLPConfig(BlockLayerConfig):
         hint=FieldHint.feature,
         valid=check_field(Assert.geq, 0),
     )
-    mlp_lr_scale: float | None | list[float | None] = Field(
+    mlp_lr_scale: float | None | tuple[float | None] = Field(
         default=None,
         desc="Custom learning rate scale for each expert.",
         doc="May be used to freeze some experts by setting their scale to zero.",

@@ -12,7 +12,7 @@ from fast_llm.engine.config_utils.run import log_pipeline_parallel_main_rank
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.engine.distributed.distributed import Distributed
-from fast_llm.layers.block.config import BlockConfig, BlockKwargs, BlockLayerConfig
+from fast_llm.layers.block.config import BlockConfig, BlockKwargs
 from fast_llm.logging import log_distributed_grad, log_distributed_tensor, log_memory_usage
 from fast_llm.tensor import TensorMeta
 
@@ -100,6 +100,7 @@ class BlockLayerBase[ConfigType: Config](Configurable[ConfigType], Module):
         hidden_dim: TensorDim,
         block_index: int,
         name: str,
+        lr_scale: float | list[float] | None,
     ):
         super().__init__(config, distributed_config)
         self._block_config = block_config
@@ -112,9 +113,10 @@ class BlockLayerBase[ConfigType: Config](Configurable[ConfigType], Module):
             self._block_config.debug_transformer,
             self._block_config.debug_transformer_memory,
         )
+        self._lr_scale = lr_scale
 
 
-class BlockLayer[ConfigType: BlockLayerConfig](BlockLayerBase[ConfigType]):
+class BlockLayer[ConfigType: Config](BlockLayerBase[ConfigType]):
     """
     Base class for mixer and MLP modules.
     """
@@ -145,6 +147,7 @@ class Block[ConfigType: BlockConfig](BlockLayerBase[ConfigType], Layer):
         hidden_dim: TensorDim,
         block_index: int,
         name: str,
+        lr_scale: float | list[float] | None,
         return_input: bool = False,
     ):
         super().__init__(
@@ -154,28 +157,53 @@ class Block[ConfigType: BlockConfig](BlockLayerBase[ConfigType], Layer):
             hidden_dim,
             block_index,
             name,
+            lr_scale,
         )
         # For multi-token prediction, return a stack of shared_hidden and transformer_output.
         self._return_input: bool = return_input
         # Note, layer_lr_scale does not impact the norms
         # TODO: add a separate norm_lr_scale
-        self.norm_1 = self._config.normalization.get_layer(self._hidden_dim)
-        self.norm_2 = self._config.normalization.get_layer(self._hidden_dim)
+        self.norm_1 = self._config.peft.apply_other(self._config.normalization.get_layer(self._hidden_dim))
+        self.norm_2 = self._config.peft.apply_other(self._config.normalization.get_layer(self._hidden_dim))
 
-        # The mixer needs to be created here for backward-compatible weight ordering.
-        setattr(self, self._mixer_module_name, self._create_mixer())
+        # Attribute should be mixer, but Attention uses a different name for backward compatibility. TODO: Fix.
+        setattr(
+            self,
+            self._mixer_module_name,
+            self._mixer_class(
+                self._mixer_config,
+                self._config,
+                self._distributed_config,
+                self._hidden_dim,
+                self._block_index,
+                f"{self._name} mixer",
+                self._lr_scale,
+            ),
+        )
 
         # TODO: Use dynamic type.
         from fast_llm.layers.block.mlp.mixture_of_experts import MixtureOfExpertMLP
         from fast_llm.layers.block.mlp.mlp import MLP
 
         self.mlp = (MixtureOfExpertMLP if self._config.num_experts > 1 else MLP)(
-            self._config, self._distributed_config, self._hidden_dim, self._block_index, f"{self._name} MLP"
+            self._config,
+            self._config,
+            self._distributed_config,
+            self._hidden_dim,
+            self._block_index,
+            f"{self._name} MLP",
+            lr_scale,
         )
 
-        # PEFT.
-        self.norm_1 = self._config.peft.apply_other(self.norm_1)
-        self.norm_2 = self._config.peft.apply_other(self.norm_2)
+    @functools.cached_property
+    @abc.abstractmethod
+    def _mixer_class(self) -> type[BlockLayer]:
+        pass
+
+    @property
+    @abc.abstractmethod
+    def _mixer_config(self) -> Config:
+        pass
 
     def setup(self, distributed: Distributed) -> None:
         super().setup(distributed)

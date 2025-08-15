@@ -1,19 +1,17 @@
-import abc
 import enum
-import functools
 import typing
 
 from fast_llm.config import Field, FieldHint, check_field, config_class
 from fast_llm.engine.base_model.config import BaseModelConfig
-from fast_llm.engine.config_utils.tensor_dim import TensorDim
-from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.layers.block.mlp.config import MLPConfig
 from fast_llm.layers.block.peft import TransformerPeftConfig
 from fast_llm.layers.common.normalization.config import NormalizationConfig
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
-    from fast_llm.layers.block.block import BlockLayer
+    pass
+
+# TODO: Generalize these beyond language models? (Ex. vision)
 
 
 class BlockDimNames:
@@ -47,37 +45,6 @@ class AddLinearBiasChoices(str, enum.Enum):
 
 
 @config_class()
-class BlockLayerConfig(BaseModelConfig):
-    """
-    A common class for mixers and mlps, which have the exact same interface.
-    """
-
-    _abstract = True
-
-    @functools.cached_property
-    @abc.abstractmethod
-    def layer_class(self) -> "type[BlockLayer]":
-        raise NotImplementedError()
-
-    def get_layer(
-        self,
-        block_config: "BlockConfig",
-        distributed_config: DistributedConfig,
-        hidden_dim: TensorDim,
-        block_index: int,
-        name: str,
-    ) -> "BlockLayer":
-        return self.layer_class(
-            self,
-            block_config,
-            distributed_config,
-            hidden_dim,
-            block_index,
-            name,
-        )
-
-
-@config_class()
 # TODO: Use composition instead
 class BlockConfig(MLPConfig, BaseModelConfig):
 
@@ -90,6 +57,7 @@ class BlockConfig(MLPConfig, BaseModelConfig):
         desc="Configuration for the parameter-efficient fine tuning.",
         hint=FieldHint.architecture,
     )
+    # TODO: Review names
     hidden_dropout: float = Field(
         default=0.0,
         desc="Dropout applied to the residual connections.",
@@ -121,7 +89,7 @@ class BlockConfig(MLPConfig, BaseModelConfig):
     # TODO: Move these, not specific to a single block.
     num_layers: int = Field(
         default=12,
-        desc="Number of layers in the transformer.",
+        desc="Number of blocks in the model.",
         hint=FieldHint.architecture,
         valid=check_field(Assert.geq, 0),
     )

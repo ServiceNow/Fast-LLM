@@ -13,7 +13,7 @@ from fast_llm.layers.common.linear import InputParallelLinear, Linear, OutputPar
 from fast_llm.layers.ssm.config import SSMConfig
 from fast_llm.layers.ssm.mamba import init_A, init_dtprojbias, init_kaiming_
 from fast_llm.tensor import ParameterMeta
-from fast_llm.utils import Assert, div, get_lr_scale
+from fast_llm.utils import Assert, combine_lr_scales, div
 
 try:
     from mamba_ssm.ops.selective_scan_interface import selective_scan_fn  # noqa
@@ -47,22 +47,10 @@ class Mamba2[ConfigType: SSMConfig](BlockLayer[ConfigType]):
         hidden_dim: TensorDim,
         block_index: int,
         name: str,
+        lr_scale: float | list[float] | None,
     ):
-        super().__init__(
-            config,
-            distributed_config,
-            hidden_dim,
-            block_index,
-            name,
-            block_config.debug_transformer,
-            block_config.debug_transformer_memory,
-        )
-        self._config: SSMConfig = config
+        super().__init__(config, block_config, distributed_config, hidden_dim, block_index, name, lr_scale)
         Assert.eq(self._config.activation_type, ActivationType.silu)
-        layer_lr_scale: float | None = (
-            block_config.per_layer_lr_scale[block_index] if block_config.per_layer_lr_scale else None
-        )
-        lr_scale: float | tuple[float | None, ...] | None = get_lr_scale(self._config.mamba_lr_scale, layer_lr_scale)
 
         num_heads = div(self._config.d_inner, self._config.state_size)
         num_head_groups = div(self._config.d_xb, self._config.state_size)
@@ -93,6 +81,8 @@ class Mamba2[ConfigType: SSMConfig](BlockLayer[ConfigType]):
         self._group_heads = div(self._local_heads, self._local_head_groups)
         self._local_inner_size = inner_dim.size
         self._local_xb_size = xb_dim.size
+
+        lr_scale = combine_lr_scales(self._lr_scale, self._config.mamba_lr_scale)
 
         conv1d_dim = inner_dim if self._config.repeat_kv_before_conv else xb_dim
         self.conv1d_weight = ParameterMeta.from_dims(

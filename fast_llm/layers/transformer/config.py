@@ -1,6 +1,5 @@
 import functools
 import logging
-import typing
 import warnings
 
 from fast_llm.config import Config, Field, FieldHint, check_field, config_class, skip_valid_if_none
@@ -10,9 +9,6 @@ from fast_llm.functional.config import TritonConfig
 from fast_llm.layers.block.config import AddLinearBiasChoices, BlockConfig, BlockKwargs
 from fast_llm.layers.transformer.rotary.config import RotaryConfig
 from fast_llm.utils import Assert, div
-
-if typing.TYPE_CHECKING:
-    pass
 
 logger = logging.getLogger(__name__)
 

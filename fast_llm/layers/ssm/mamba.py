@@ -13,7 +13,7 @@ from fast_llm.layers.block.config import BlockConfig, BlockKwargs
 from fast_llm.layers.common.linear import Linear
 from fast_llm.layers.ssm.config import SSMConfig
 from fast_llm.tensor import ParameterMeta
-from fast_llm.utils import Assert, div, get_lr_scale
+from fast_llm.utils import Assert, combine_lr_scales, div
 
 try:
     from mamba_ssm.ops.selective_scan_interface import mamba_inner_fn as _mamba_inner_fn  # noqa
@@ -65,16 +65,9 @@ class Mamba[ConfigType: SSMConfig](BlockLayer[ConfigType]):
         hidden_dim: TensorDim,
         block_index: int,
         name: str,
+        lr_scale: float | list[float] | None,
     ):
-        super().__init__(
-            config,
-            distributed_config,
-            hidden_dim,
-            block_index,
-            name,
-            block_config.debug_transformer,
-            block_config.debug_transformer_memory,
-        )
+        super().__init__(config, block_config, distributed_config, hidden_dim, block_index, name, lr_scale)
         assert self._distributed_config.tensor_parallel == 1, "Tensor-parallel not supported for MambaLayer"
         # TODO: It's not silu?
         Assert.eq(self._config.activation_type, ActivationType.silu)
@@ -88,8 +81,7 @@ class Mamba[ConfigType: SSMConfig](BlockLayer[ConfigType]):
         inner_projection_dim = ConcatenatedTensorDim("inner_projection", (inner_dim, inner_dim))
         x_projection_dim = ConcatenatedTensorDim("x_projection", (dt_rank_dim, state_dim, state_dim))
 
-        layer_lr_scale = block_config.per_layer_lr_scale[block_index] if block_config.per_layer_lr_scale else None
-        lr_scale = get_lr_scale(self._config.mamba_lr_scale, layer_lr_scale)
+        lr_scale = combine_lr_scales(self._lr_scale, self._config.mamba_lr_scale)
 
         # TODO: Backward compatibility?
         # TODO: lr_scale?

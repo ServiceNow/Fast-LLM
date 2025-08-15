@@ -14,7 +14,7 @@ from fast_llm.layers.block.mlp.config import MLPConfig, MLPLossNames, RoutingTyp
 from fast_llm.layers.block.mlp.mlp import MLPBase
 from fast_llm.layers.common.auxiliary_loss import AuxiliaryLoss, z_loss
 from fast_llm.layers.common.linear import Linear
-from fast_llm.utils import Assert, get_lr_scale
+from fast_llm.utils import Assert, combine_lr_scales
 
 logger = logging.getLogger(__name__)
 
@@ -41,16 +41,12 @@ class MixtureOfExpertMLP[ConfigType: MLPConfig](MLPBase[ConfigType]):
         hidden_dim: TensorDim,
         block_index: int,
         name: str,
+        lr_scale: float | list[float] | None,
     ):
         Assert.gt(config.num_experts, 1)
         # TODO: Implement?
         assert not config.add_linear_biases, "Biases not supported for MoE."
-        super().__init__(config, block_config, distributed_config, hidden_dim, block_index, name)
-
-        layer_lr_scale = (
-            self._block_config.per_layer_lr_scale[block_index] if self._block_config.per_layer_lr_scale else None
-        )
-        router_lr_scale = get_lr_scale(self._config.router_lr_scale, layer_lr_scale)
+        super().__init__(config, block_config, distributed_config, hidden_dim, block_index, name, lr_scale)
 
         self.router = Linear(
             self._hidden_dim,
@@ -61,7 +57,7 @@ class MixtureOfExpertMLP[ConfigType: MLPConfig](MLPBase[ConfigType]):
                 min_val=self._block_config.init_method_min,
                 max_val=self._block_config.init_method_max,
             ),
-            lr_scale=router_lr_scale,
+            lr_scale=combine_lr_scales(self._config.router_lr_scale, self._lr_scale),
         )
         dropless_moe = self._config.dropless_moe
         if dropless_moe and self._sequence_parallel:

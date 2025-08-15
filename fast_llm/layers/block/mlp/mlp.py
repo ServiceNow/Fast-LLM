@@ -12,7 +12,7 @@ from fast_llm.layers.block.config import BlockConfig
 from fast_llm.layers.block.mlp.config import MLPConfig
 from fast_llm.layers.block.peft import TransformerSubLayerName
 from fast_llm.layers.common.linear import LinearBase
-from fast_llm.utils import Assert, get_lr_scale
+from fast_llm.utils import Assert, combine_lr_scales
 
 
 class MLPBase[ConfigType: MLPConfig](BlockLayer[ConfigType]):
@@ -24,8 +24,9 @@ class MLPBase[ConfigType: MLPConfig](BlockLayer[ConfigType]):
         hidden_dim: TensorDim,
         block_index: int,
         name: str,
+        lr_scale: float | list[float] | None,
     ):
-        super().__init__(config, block_config, distributed_config, hidden_dim, block_index, name)
+        super().__init__(config, block_config, distributed_config, hidden_dim, block_index, name, lr_scale)
         self._parallel_dim = self._distributed_config.get_distributed_dim(DistributedDimNames.tensor)
         intermediate_1_dim, intermediate_2_dim = self._get_intermediate_dims()
 
@@ -42,15 +43,7 @@ class MLPBase[ConfigType: MLPConfig](BlockLayer[ConfigType]):
 
         self._activation_fn = triton_mlp_activation_autograd if TritonConfig.TRITON_ENABLED else torch_mlp_activation
 
-        layer_lr_scale = (
-            self._block_config.per_layer_lr_scale[block_index] if self._block_config.per_layer_lr_scale else None
-        )
-        lr_scale = (
-            tuple(self._config.mlp_lr_scale)
-            if isinstance(self._config.mlp_lr_scale, list)
-            else self._config.mlp_lr_scale
-        )
-        lr_scale = get_lr_scale(lr_scale, layer_lr_scale)
+        lr_scale = combine_lr_scales(self._lr_scale, self._config.mlp_lr_scale)
 
         # So both layers' weights have shape (num_experts [* gate_up] * ffn, hidden_size)
         self.layer_1 = LinearBase(
@@ -95,9 +88,10 @@ class MLP[ConfigType: BlockConfig](MLPBase[ConfigType]):
         hidden_dim: TensorDim,
         block_index: int,
         name: str,
+        lr_scale: float | list[float] | None,
     ):
         Assert.eq(config.num_experts, 1)
-        super().__init__(config, block_config, distributed_config, hidden_dim, block_index, name)
+        super().__init__(config, block_config, distributed_config, hidden_dim, block_index, name, lr_scale)
 
     def forward(
         self,

@@ -1,3 +1,5 @@
+import functools
+
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.layers.block.block import Block, BlockLayer
@@ -17,21 +19,20 @@ class SSMBlock[ConfigType: BlockConfig](Block[ConfigType]):
         ssm_config: SSMConfig,
         distributed_config: DistributedConfig,
         hidden_dim: TensorDim,
-        mixer_cls: type[BlockLayer],
         block_index: int,
+        lr_scale: float | list[float] | None,
         name: str,
+        mixer_class: type[BlockLayer],
         return_input: bool = False,
     ):
         self._ssm_config = ssm_config
-        self._mixer_cls = mixer_cls
-        super().__init__(config, distributed_config, hidden_dim, block_index, name, return_input)
+        self._mixer_class = mixer_class
+        super().__init__(config, distributed_config, hidden_dim, block_index, name, lr_scale, return_input)
 
-    def _create_mixer(self) -> BlockLayer:
-        return self._mixer_cls(
-            self._ssm_config,
-            self._config,
-            self._distributed_config,
-            self._hidden_dim,
-            self._block_index,
-            f"{self._name} mixer",
-        )
+    @functools.cached_property
+    def _mixer_class(self) -> type[BlockLayer]:
+        return self._mixer_class
+
+    @property
+    def _mixer_config(self) -> SSMConfig:
+        return self._config
