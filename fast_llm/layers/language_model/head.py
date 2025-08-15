@@ -48,6 +48,8 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](BlockLayerBase[Conf
             hidden_dim,
             block_index,
             name,
+            # TODO: Add lr scale?
+            None,
         )
         self._parallel_logits = self._distributed_config.tensor_parallel > 1 and config.parallel_embeddings
         self._parallel_dim = self._distributed_config.get_distributed_dim(DistributedDimNames.tensor)
@@ -62,7 +64,6 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](BlockLayerBase[Conf
             else 1.0
         )
         self._loss_name = LanguageModelLossNames.multi_token_prediction_loss(prediction_distance)
-        self.final_norm = self._config.transformer.normalization.get_layer(hidden_dim)
 
         # Distance of the target token prediction
         # 0: next-token prediction
@@ -222,10 +223,7 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](BlockLayerBase[Conf
 
         targets = (dpo_target, lm_target, distillation_target, loss_mask)
         if self._sequence_parallel_logits:
-            targets = [
-                None if target is None else split_op(target, self._tensor_space.distributed.tensor_group, 0)
-                for target in targets
-            ]
+            targets = [None if target is None else split_op(target, self._parallel_dim.group, 0) for target in targets]
         if not any(target is not None for target in targets):
             # Simplify so we don't have to check every time.
             targets = None
@@ -247,7 +245,7 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](BlockLayerBase[Conf
         kwargs: dict,
         losses: dict | None = None,
     ) -> tuple[torch.Tensor | None, torch.Tensor | None]:
-        if self._cross_entropy_splits is None or targets is None:
+        if self._config.cross_entropy_splits is None or targets is None:
             loss, logit_input_grad = self._logits_cross_entropy_forward_backward(
                 input_, targets, weight, grad_output, kwargs, losses
             )
@@ -257,18 +255,19 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](BlockLayerBase[Conf
                 return None, None
         else:
             loss = None
-            # TODO MTP: allow a _cross_entropy_splits that is not a divisor of the sequence length
-            grad_output /= self._cross_entropy_splits
+            # TODO MTP: allow a cross_entropy_splits that is not a divisor of the sequence length
+            grad_output /= self._config.cross_entropy_splits
             logit_input = input_.flatten(0, -2)
             if self.training:
                 logit_input_grad = torch.empty_like(logit_input)
             else:
                 logit_input_grad = None
             split_size = div(
-                get_unique(target.size(0) for target in targets if target is not None), self._cross_entropy_splits
+                get_unique(target.size(0) for target in targets if target is not None),
+                self._config.cross_entropy_splits,
             )
             tensors_split = [
-                [None] * self._cross_entropy_splits if tensor is None else tensor.split(split_size)
+                [None] * self._config.cross_entropy_splits if tensor is None else tensor.split(split_size)
                 for tensor in [logit_input, *targets, logit_input_grad]
             ]
             for logit_input_, *targets_, logit_input_grad_ in zip(*tensors_split, strict=True):
@@ -284,14 +283,14 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](BlockLayerBase[Conf
                     logit_input_grad_.copy_(grad_)
                 loss = loss_ if loss is None else loss + loss_
                 del grad_, loss_
-        loss_count = (self._cross_entropy_splits or 1) * (
+        loss_count = (self._config.cross_entropy_splits or 1) * (
             self._parallel_dim.size if self._sequence_parallel_logits else 1
         )
         if loss_count != 1:
             loss.div_(loss_count)
         if self._sequence_parallel_logits:
             # TODO: Async
-            all_reduce(loss, group=self._tensor_space.distributed.tensor_group)
+            all_reduce(loss, group=self._distributed.tensor_group)
         return loss, logit_input_grad.view_as(input_) if logit_input_grad is not None else None
 
     def _logits_cross_entropy_forward_backward(
@@ -303,11 +302,12 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](BlockLayerBase[Conf
         kwargs: dict,
         losses: dict | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
+        group = self._parallel_dim.group if self._parallel_logits else None
         logits, context = output_parallel_linear_forward(
             input_=input_,
             weight=weight,
             bias=None,
-            group=self._tensor_space.distributed.tensor_group if self._parallel_logits else None,
+            group=self._distributed.tensor_group if self._parallel_logits else None,
             sequence_parallel=self._sequence_parallel and self._parallel_logits,
         )
 
@@ -353,7 +353,7 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](BlockLayerBase[Conf
                 logits.flatten(0, -2),
                 lm_target,
                 None,
-                group=self._tensor_space.distributed.tensor_group if self._parallel_logits else None,
+                group=sgroup,
                 grad_output=grad_output * self._loss_coefficient * self._config.language_model_loss_factor,
                 implementation=self._cross_entropy_impl,
                 logits_scale_factor=self._config.logits_scale_factor,
@@ -370,7 +370,7 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](BlockLayerBase[Conf
                     distillation_target,
                     loss_mask,
                     grad_output=grad_output * self._loss_coefficient * self._config.distillation_loss_factor,
-                    group=self._tensor_space.distributed.tensor_group if self._parallel_logits else None,
+                    group=group,
                     logits_scale_factor=self._config.logits_scale_factor,
                     teacher_softmax_temperature=self._config.teacher_softmax_temperature,
                     target_format=(
@@ -382,7 +382,7 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](BlockLayerBase[Conf
                     logits.flatten(0, -2),
                     distillation_target,
                     loss_mask,
-                    group=self._tensor_space.distributed.tensor_group if self._parallel_logits else None,
+                    group=group,
                     grad_output=grad_output * self._loss_coefficient * self._config.distillation_loss_factor,
                     implementation=self._cross_entropy_impl,
                     logits_scale_factor=self._config.logits_scale_factor,

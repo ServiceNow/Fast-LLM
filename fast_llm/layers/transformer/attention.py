@@ -4,7 +4,6 @@ import torch
 
 from fast_llm.core.distributed import set_generator
 from fast_llm.core.ops import gather_op, reduce_op, reduce_scatter_op, swap_mult_dim
-from fast_llm.engine.config_utils.initialization import init_normal_
 from fast_llm.engine.config_utils.tensor_dim import CompositeTensorDim, ConcatenatedTensorDim, TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
 from fast_llm.functional.autograd import wrap_forward_backward
@@ -61,15 +60,9 @@ class Attention[ConfigType: AttentionConfig](BlockLayer[ConfigType]):
         hidden_dim: TensorDim,
         block_index: int,
         name: str,
+        lr_scale: float | list[float] | None,
     ):
-        super().__init__(
-            config,
-            block_config,
-            distributed_config,
-            hidden_dim,
-            block_index,
-            name,
-        )
+        super().__init__(config, block_config, distributed_config, hidden_dim, block_index, name, lr_scale)
         self._use_flash_attention = self._config.do_use_flash_attention(self._distributed_config)
 
         self._parallel_dim = self._distributed_config.get_distributed_dim(DistributedDimNames.tensor)
@@ -101,19 +94,7 @@ class Attention[ConfigType: AttentionConfig](BlockLayer[ConfigType]):
 
         self._softmax_scale = self._config.kv_channels ** (-self._config.attention_softmax_scale_power)
 
-        init_method_qkv = init_normal_(
-            std=self._block_config.init_method_std_qkv,
-            min_val=self._block_config.init_method_min_qkv,
-            max_val=self._block_config.init_method_max_qkv,
-        )
-        init_method_std_attn_proj = init_normal_(
-            std=self._block_config.init_method_std_attn_proj,
-            min_val=self._block_config.init_method_min_attn_proj,
-            max_val=self._block_config.init_method_max_attn_proj,
-        )
-
-        layer_lr_scale = config.per_layer_lr_scale[block_index] if config.per_layer_lr_scale else None
-        attention_lr_scale = combine_lr_scales(self._config.attention_lr_scale, layer_lr_scale)
+        lr_scale = combine_lr_scales(self._lr_scale, self._config.attention_lr_scale)
 
         # TODO: Merge the query and key-value computations? (harder with sequence parallel.)
         self.query = OutputParallelLinear(
@@ -123,7 +104,7 @@ class Attention[ConfigType: AttentionConfig](BlockLayer[ConfigType]):
             weight_init_method=self._config.qkv_weight_initialization_method,
             bias_init_method=self._config.qkv_bias_initialization_method,
             sequence_parallel=self._sequence_parallel,
-            lr_scale=attention_lr_scale,
+            lr_scale=lr_scale,
         )
         self.key_value = OutputParallelLinear(
             hidden_dim,
@@ -132,7 +113,7 @@ class Attention[ConfigType: AttentionConfig](BlockLayer[ConfigType]):
             weight_init_method=self._config.qkv_weight_initialization_method,
             bias_init_method=self._config.qkv_bias_initialization_method,
             sequence_parallel=self._sequence_parallel,
-            lr_scale=attention_lr_scale,
+            lr_scale=lr_scale,
         )
         self._query_key_value = wrap_forward_backward(self._query_key_value_forward, self._query_key_value_backward)
 
@@ -147,7 +128,7 @@ class Attention[ConfigType: AttentionConfig](BlockLayer[ConfigType]):
             weight_init_method=self._config.dense_weight_initialization_method,
             bias_init_method=self._config.dense_bias_initialization_method,
             sequence_parallel=self._sequence_parallel,
-            lr_scale=attention_lr_scale,
+            lr_scale=lr_scale,
         )
         # PEFT.
         self.query = self._block_config.peft.apply_linear(self.query, True)
@@ -252,7 +233,7 @@ class Attention[ConfigType: AttentionConfig](BlockLayer[ConfigType]):
             handle.wait()
 
         if self._sequence_data_parallel_dim.group and not sequence_first:
-            key_value = swap_mult_dim(key_value, self._distributed_config.sequence_data_parallel, 0, 1)
+            key_value = swap_mult_dim(key_value, self._sequence_parallel, 0, 1)
 
         context = {"query": query_context, "key_value": key_value_context, "sequence_first": sequence_first}
         return query, key_value, context
@@ -261,15 +242,12 @@ class Attention[ConfigType: AttentionConfig](BlockLayer[ConfigType]):
         self, query_grad: torch.Tensor, key_value_grad: torch.Tensor, context: dict
     ) -> torch.Tensor:
         # TODO: De-allocate qkv grads quicker.
-        handle = None
-
-        if self._sequence_data_parallel_dim.group:
-            key_value_grad, handle = reduce_scatter_op(
-                key_value_grad,
-                group=self._sequence_data_parallel_dim.group,
-                dim=1 - context["sequence_first"],
-                async_op=True,
-            )
+        key_value_grad, handle = reduce_scatter_op(
+            key_value_grad,
+            group=self._sequence_data_parallel_dim.group,
+            dim=1 - context["sequence_first"],
+            async_op=True,
+        )
 
         # TODO: Overlap with both.
         input_grad = self.query.backward(query_grad, context.pop("query"))

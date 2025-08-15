@@ -41,13 +41,15 @@ class LanguageModelEmbedding[ConfigType: LanguageModelBaseConfig](BlockLayerBase
             hidden_dim,
             block_index,
             name,
+            # TODO: Add lr scale?
+            None,
         )
         self._residual_dtype = (
             self._distributed_config.optimization_dtype
-            if self._config.transformer.full_precision_residual
+            if self._block_config.full_precision_residual
             else self._distributed_config.training_dtype
         ).torch
-        self._parallel_embeddings = self._distributed_config.tensor_parallel > 1 and config.parallel_embeddings
+        self._parallel_embeddings = self._distributed_config.tensor_parallel > 1 and self._config.parallel_embeddings
         self._parallel_dim = self._distributed_config.get_distributed_dim(DistributedDimNames.tensor)
         vocab_dim = TensorDim(
             "vocab", self._config.vocab_size, self._parallel_dim if self._parallel_embeddings else None
@@ -108,7 +110,7 @@ class LanguageModelEmbedding[ConfigType: LanguageModelBaseConfig](BlockLayerBase
         with set_generator(
             self._distributed.tp_generator if self._sequence_parallel else self._distributed.pp_generator
         ):
-            embeddings = torch.dropout(embeddings, self._config.transformer.hidden_dropout, self.training)
+            embeddings = torch.dropout(embeddings, self._block_config.hidden_dropout, self.training)
         return embeddings.to(dtype=self._residual_dtype)
 
     def forward(
