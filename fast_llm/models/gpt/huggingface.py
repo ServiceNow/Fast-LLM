@@ -32,7 +32,7 @@ class HuggingfaceGPTModelForCausalLM(HuggingfaceBaseModelForCausalLM):
     # _supports_cache_class = False
     # _tied_weights_keys = []
 
-    def forward(
+    def inner_forward(
         self,
         input_ids: torch.Tensor | None = None,
         attention_mask: torch.Tensor | None = None,

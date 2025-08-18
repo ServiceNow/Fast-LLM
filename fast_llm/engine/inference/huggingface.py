@@ -7,7 +7,9 @@ import torch
 import transformers.generation.utils
 import transformers.modeling_outputs
 
+from fast_llm.core.distributed import broadcast_object, broadcast_optional, safe_barrier
 from fast_llm.engine.checkpoint.config import CheckpointLoadConfig, FastLLMCheckpointFormat
+from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.engine.inference.config import HuggingfaceModelConfig
 from fast_llm.engine.inference.runner import InferenceRunner
 from fast_llm.engine.multi_stage.config import StageMode
@@ -112,7 +114,7 @@ class HuggingfacePreTrainedModel(transformers.PreTrainedModel):
 
 
 class HuggingfaceBaseModelForCausalLM(HuggingfacePreTrainedModel, transformers.generation.utils.GenerationMixin):
-    def forward(
+    def inner_forward(
         self,
         input_ids: torch.Tensor | None = None,
         attention_mask: torch.Tensor | None = None,
@@ -127,3 +129,109 @@ class HuggingfaceBaseModelForCausalLM(HuggingfacePreTrainedModel, transformers.g
     ) -> tuple | transformers.modeling_outputs.CausalLMOutputWithPast:
         # Meant to be overridden in derived classes
         raise NotImplementedError()
+
+    def forward(
+        self,
+        input_ids: torch.Tensor | None = None,
+        attention_mask: torch.Tensor | None = None,
+        position_ids: torch.Tensor | None = None,
+        past_key_values=None,
+        inputs_embeds: torch.FloatTensor | None = None,
+        labels: torch.LongTensor | None = None,
+        use_cache: bool | None = None,
+        output_attentions: bool | None = None,
+        output_hidden_states: bool | None = None,
+        return_dict: bool | None = None,
+        coordinator_forward: bool = False,
+        continue_work: bool = True,
+    ) -> tuple | transformers.modeling_outputs.CausalLMOutputWithPast | None:
+        """
+        Forward pass compatible with HuggingFace forward.
+
+        Additional arguments:
+            coordinator_forward (bool):
+                If True, only the TP group coordinator (rank 0) should call forward;
+                other ranks must call worker_forward.
+                If False, all TP group ranks call forward independently and return logits.
+            continue_work (bool): Whether to continue processing in a TP group.
+                Only applies for coordinator_forward=True.
+
+        Notes:
+            - In coordinator_forward=True mode, forward on rank 0 distributes data to other ranks.
+            - After processing, the coordinator (rank 0) must call `stop_workers()` before continuing,
+            to unblock worker_forward on other ranks.
+            - This mode augments HuggingFace generate with tensor-parallel capability.
+        """
+        distributed: Distributed = self._inference_runner._fast_llm_model.distributed
+
+        if coordinator_forward and distributed.world_group and distributed.tensor_group:
+            assert distributed.tensor_group.rank() == 0
+            assert past_key_values is None and not use_cache
+
+            broadcast_optional(input_ids, distributed.tensor_group, 0)
+            broadcast_optional(attention_mask, distributed.tensor_group, 0)
+            broadcast_optional(position_ids, distributed.tensor_group, 0)
+            broadcast_optional(inputs_embeds, distributed.tensor_group, 0)
+            broadcast_optional(labels, distributed.tensor_group, 0)
+
+            broadcast_object(
+                (past_key_values, use_cache, output_attentions, output_hidden_states, return_dict, continue_work),
+                distributed.tensor_group,
+                0,
+            )
+
+        if not coordinator_forward or continue_work:
+            return self.inner_forward(
+                input_ids,
+                attention_mask,
+                position_ids,
+                past_key_values,
+                inputs_embeds,
+                labels,
+                use_cache,
+                output_attentions,
+                output_hidden_states,
+                return_dict,
+            )
+
+        return None
+
+    def worker_forward(self):
+        distributed: Distributed = self._inference_runner._fast_llm_model.distributed
+        assert distributed.world_group and distributed.tensor_group and distributed.tensor_group.rank() != 0
+
+        while True:
+            input_ids = broadcast_optional(None, distributed.tensor_group, 0)
+            attention_mask = broadcast_optional(None, distributed.tensor_group, 0)
+            position_ids = broadcast_optional(None, distributed.tensor_group, 0)
+            inputs_embeds = broadcast_optional(None, distributed.tensor_group, 0)
+            labels = broadcast_optional(None, distributed.tensor_group, 0)
+
+            past_key_values, use_cache, output_attentions, output_hidden_states, return_dict, continue_work = (
+                broadcast_object(None, distributed.tensor_group, 0)
+            )
+            if not continue_work:
+                break
+
+            self.inner_forward(
+                input_ids,
+                attention_mask,
+                position_ids,
+                past_key_values,
+                inputs_embeds,
+                labels,
+                use_cache,
+                output_attentions,
+                output_hidden_states,
+                return_dict,
+            )
+
+        safe_barrier(distributed.world_group, "forward_end")
+
+    def stop_workers(self):
+        distributed: Distributed = self._inference_runner._fast_llm_model.distributed
+        # On single gpu or no tp, no worker_forward to stop
+        if distributed.world_group is None or distributed.tensor_group is None:
+            return
+        self.forward(coordinator_forward=True, continue_work=False)
+        safe_barrier(distributed.world_group, "forward_end")
