@@ -76,6 +76,7 @@ class LlavaHybridForConditionalGeneration(LlavaForConditionalGeneration):
         cache_position=None,
         position_ids=None,
         use_cache=True,
+        pixel_values=None,
         **kwargs,
     ):
         # Copy of the method from `AprielThinkerSSMHybridForCausalLM`
@@ -95,7 +96,7 @@ class LlavaHybridForConditionalGeneration(LlavaForConditionalGeneration):
                 input_ids = input_ids[:, cache_position]
         else:
             past_key_values = HybridMambaAttentionDynamicCache(
-                self.config, input_ids.shape[0], self.dtype, device=self.device
+                self.config.text_config, input_ids.shape[0], self.dtype, device=self.device
             )
 
         if attention_mask is not None and position_ids is None:
