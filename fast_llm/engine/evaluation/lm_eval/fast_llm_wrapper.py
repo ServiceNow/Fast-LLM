@@ -264,8 +264,6 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
 
         assert len(input_ids) > 0
 
-        # Data is gathered only from the batch_data_group leaders,
-        # since the forward pass produces the same output on all ranks within the group.
         gather_list = gather_object(result, group=self._leading_batch_data_group)
 
         # Clean gather list from empty shards (from not full batches).
