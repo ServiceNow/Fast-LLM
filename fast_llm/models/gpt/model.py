@@ -112,16 +112,18 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             MultiModalEmbedding(self._config, self._tensor_space),
         ]
 
+    def get_embedding_layers(self) -> list[Layer]:
+        if self._config.vision_encoder.enabled:
+            return self.get_vision_layers()
+        else:
+            return [LanguageModelEmbedding(self._config, self._tensor_space)]
+
     def get_layers(self) -> list[Layer]:
         lm_layer_offset = (
             self._config.vision_encoder.transformer.num_layers + 3 if self._config.vision_encoder.enabled else 1
         )
         return [
-            *(
-                [LanguageModelEmbedding(self._config, self._tensor_space)]
-                if not self._config.vision_encoder.enabled
-                else self.get_vision_layers()
-            ),
+            *(self.get_embedding_layers()),
             *[
                 TransformerLayer(
                     self._config.transformer,
@@ -156,7 +158,11 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             micro_sequence_length = sequence_length
 
         if self._config.vision_encoder.enabled:
-            max_image_size = batch_meta.max_image_size
+            try:
+                max_image_size = batch_meta.max_image_size
+            except AttributeError:
+                max_image_size = 256
+                logger.warning("Inference mode: max_image_size not provided, defaulting to 256")
             image_mean = [
                 self._config.vision_encoder.image_normalization.mean_red,
                 self._config.vision_encoder.image_normalization.mean_green,
