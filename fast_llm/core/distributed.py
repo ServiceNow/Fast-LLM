@@ -107,6 +107,54 @@ def broadcast_scalar(
     return tensor.item()
 
 
+def broadcast_object(input_object: typing.Any | None, group: ProcessGroup | None, src: int = 0) -> typing.Any:
+    """
+    Broadcasts a Python object from src rank to all other ranks in the ProcessGroup.
+    Returns the object on all ranks.
+    """
+    assert group is not None
+
+    if group.rank() == src:
+        tensor = _object_to_tensor(input_object)
+        size = tensor.numel()
+        broadcast_tensor = torch.empty(size, dtype=torch.uint8, device=torch.cuda.current_device())
+        broadcast_tensor.copy_(tensor)
+        broadcast_scalar(size, torch.int64, group, src)
+        broadcast(broadcast_tensor, src, group)
+        return input_object
+    else:
+        size = int(broadcast_scalar(None, torch.int64, group, src))
+        output_tensor = torch.empty(size, dtype=torch.uint8, device=torch.cuda.current_device())
+        broadcast(output_tensor, src, group)
+        return _tensor_to_object(output_tensor)
+
+
+def broadcast_optional(tensor: torch.Tensor | None, group: ProcessGroup = None, src: int = 0) -> torch.Tensor:
+    """
+    Broadcasts an optional tensor of size, shape, and dtype unknown in advance.
+    Returns the tensor on all ranks or None if no tensor was sent.
+    """
+    assert group is not None
+
+    if group.rank() == src:
+        has_tensor = tensor is not None
+        if has_tensor:
+            meta = (has_tensor, tensor.shape, tensor.dtype)
+        else:
+            meta = (has_tensor, None, None)
+        broadcast_object(meta, group, src)
+        if has_tensor:
+            broadcast(tensor.to(torch.cuda.current_device()), src, group)
+        return tensor
+    else:
+        has_tensor, shape, dtype = broadcast_object(None, group, src)
+        if not has_tensor:
+            return None
+        output_tensor = torch.empty(shape, dtype=dtype, device=torch.cuda.current_device())
+        broadcast(output_tensor, src, group)
+        return output_tensor
+
+
 def send(tensor: torch.Tensor, dst: int, group: ProcessGroup, async_op=False, tag: int = 0) -> Work | None:
     assert group is not None
     work = group.send([tensor], dst, tag)
@@ -186,7 +234,11 @@ def scatter(
 def _object_to_tensor(obj: typing.Any) -> torch.Tensor:
     f = io.BytesIO()
     pickle.Pickler(f).dump(obj)
-    return torch.tensor(torch.UntypedStorage.from_buffer(f.getvalue(), dtype=torch.uint8), dtype=torch.uint8)
+    byte_storage = torch.ByteStorage._from_buffer(f.getvalue())  # type: ignore[attr-defined]
+    # Do not replace `torch.ByteTensor` or `torch.LongTensor` with torch.tensor and specifying dtype.
+    # Otherwise, it will casue 100X slowdown.
+    # See: https://github.com/pytorch/pytorch/issues/65696
+    return torch.ByteTensor(byte_storage)
 
 
 def _tensor_to_object(tensor: torch.Tensor) -> typing.Any:
