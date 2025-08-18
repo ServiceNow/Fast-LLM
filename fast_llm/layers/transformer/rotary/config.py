@@ -10,7 +10,14 @@ from fast_llm.functional.config import TritonConfig
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
-    from fast_llm.layers.transformer.rotary.rotary import DefaultRotary, Llama3Rotary, NoRotary, Rotary, YarnRotary
+    from fast_llm.layers.transformer.rotary.rotary import (
+        DefaultRotary,
+        Llama3Rotary,
+        NoRotary,
+        Rotary,
+        Rotary2D,
+        YarnRotary,
+    )
 
 
 @config_class(registry=True)

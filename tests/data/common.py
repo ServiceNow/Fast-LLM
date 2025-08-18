@@ -127,10 +127,10 @@ def compare_indexed_dataset(
     loss_masking_spans: dict[int, list[int]] | None = None,
 ) -> None:
     Assert.eq(len(dataset), length)
-    text_sizes, image_sizes = dataset.get_document_sizes()
+    sizes = dataset.get_document_sizes()
     # Assert.eq(sizes.sum(), num_tokens)
     Assert.all_equal(
-        [len(dataset.get(i).token_ids) for i in range(min(len(dataset), 100))], text_sizes[: min(len(dataset), 100)]
+        [len(dataset.get(i).token_ids) for i in range(min(len(dataset), 100))], sizes[: min(len(dataset), 100)]
     )
     for i, expected_sample in expected_samples.items():
         Assert.all_equal(dataset.get(i).token_ids, np.array(expected_sample, dtype=np.uint16))
@@ -224,9 +224,7 @@ class MockGPTMemmapDataset(GPTIndexedDataset):
         return self._config.num_documents
 
     def get_document_sizes(self) -> np.ndarray:
-        return np.full(self._config.num_documents, self._config.num_tokens_per_document, dtype=np.int64), np.array(
-            [], dtype=np.int64
-        )
+        return np.full(self._config.num_documents, self._config.num_tokens_per_document, dtype=np.int64)
 
     def get_document_size(self, index: int) -> int:
         return self._config.num_tokens_per_document

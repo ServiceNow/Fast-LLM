@@ -19,13 +19,13 @@ class GPTIndexedDataset(IndexedDataset):
         and derived classes should try to avoid holding the whole array im memory.
         """
 
-    @abc.abstractmethod
     def get_image_sizes(self) -> list[np.ndarray]:
         """
         The size of each image in the dataset.
         The resulting array could be very large, so this method should be called cautiously,
         and derived classes should try to avoid holding the whole array im memory.
         """
+        raise NotImplementedError()
 
     @abc.abstractmethod
     def get_document_size(self, index: int) -> int:
@@ -33,11 +33,11 @@ class GPTIndexedDataset(IndexedDataset):
         The size of a document in the dataset.
         """
 
-    @abc.abstractmethod
     def get_image_size(self, index: int) -> np.ndarray:
         """
         The size of an image in the dataset.
         """
+        raise NotImplementedError()
 
     def sample(self, sampling: GPTSamplingData) -> "GPTSampledIndexedDataset":
         from fast_llm.data.dataset.gpt.sampled import GPTSampledIndexedDataset, LegacyGPTSampledIndexedDataset

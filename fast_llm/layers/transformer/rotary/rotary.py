@@ -8,7 +8,7 @@ from fast_llm.config import Configurable
 from fast_llm.engine.base_model.config import Preprocessor
 from fast_llm.engine.config_utils.tensor_space import DefaultDimNames, TensorSpace
 from fast_llm.functional.triton.rotary import triton_rotary_autograd_
-from fast_llm.layers.transformer.config import TransformerDimNames, TransformerKwargs, VisionTransformerKwargs
+from fast_llm.layers.transformer.config import TransformerDimNames, TransformerKwargs, VisionKwargs
 from fast_llm.layers.transformer.rotary.config import (
     DefaultRotaryConfig,
     Llama3RotaryConfig,
@@ -224,29 +224,29 @@ class Rotary2D[ConfigType: DefaultRotaryConfig](DefaultRotary[Rotary2DConfig]):
         assert self._tensor_space is not None
         max_num_patches = kwargs[VisionEncoderKwargs.max_image_size] // kwargs[VisionEncoderKwargs.patch_size]
         self._create_tensors(max_num_patches)
-        position_ids = kwargs[VisionTransformerKwargs.patch_position_ids]
-        kwargs[VisionTransformerKwargs.rotary_freq_q] = self._rotary_embedding_frequencies[:, position_ids]
-        kwargs[VisionTransformerKwargs.rotary_freq_k] = self._rotary_embedding_frequencies[:, position_ids]
+        position_ids = kwargs[VisionKwargs.patch_position_ids]
+        kwargs[TransformerKwargs.rotary_freq_q] = self._rotary_embedding_frequencies[:, position_ids]
+        kwargs[TransformerKwargs.rotary_freq_k] = self._rotary_embedding_frequencies[:, position_ids]
 
     def preprocess_meta(self, kwargs: dict[str, typing.Any]) -> None:
         assert self._tensor_space is not None
-        kwargs[VisionTransformerKwargs.rotary_freq_q] = TensorMeta.from_dims(
+        kwargs[TransformerKwargs.rotary_freq_q] = TensorMeta.from_dims(
             (
                 self._scalar_dim,
                 kwargs[TransformerKwargs.sequence_q_dim],
                 self._scalar_dim,
                 self._kv_channels_dim,
             ),
-            tensor_name=VisionTransformerKwargs.rotary_freq_q,
+            tensor_name=TransformerKwargs.rotary_freq_q,
         )
-        kwargs[VisionTransformerKwargs.rotary_freq_k] = TensorMeta.from_dims(
+        kwargs[TransformerKwargs.rotary_freq_k] = TensorMeta.from_dims(
             (
                 self._scalar_dim,
                 kwargs[TransformerKwargs.sequence_k_dim],
                 self._scalar_dim,
                 self._kv_channels_dim,
             ),
-            tensor_name=VisionTransformerKwargs.rotary_freq_k,
+            tensor_name=TransformerKwargs.rotary_freq_k,
         )
 
     def _create_tensors(self, max_num_patches: int) -> None:

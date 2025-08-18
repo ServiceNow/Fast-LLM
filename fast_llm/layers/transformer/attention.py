@@ -78,7 +78,6 @@ class Attention(torch.nn.Module):
         config: TransformerConfig,
         tensor_space: TensorSpace,
         layer_index,
-        layer_offset: int = 1,
     ):
         super().__init__()
         self._config = config
