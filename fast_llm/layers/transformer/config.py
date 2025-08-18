@@ -29,85 +29,62 @@ class RoutingType(str, enum.Enum):
     sinkhorn = "sinkhorn"
 
 
-class BaseTransformerDimNames:
-    _kwargs_attributes = {
-        "batch": "batch",
-        "sequence_q": "sequence_q",
-        "sequence_q_tp": "sequence_q_tp",
-        "sequence_k": "sequence_k",
-        "hidden": "hidden",
-        "head_groups": "head_groups",
-        "group_heads": "group_heads",
-        "key_and_value": "key_value",
-        "kv_channels": "kv_channels",
-        "composite_heads": "composite_heads",
-        "composite_query": "composite_query",
-        "composite_key_value": "composite_key_value",
-        "composite_dense": "composite_dense",
-        "mlp": "mlp",
-        "gate_and_up": "gate_and_up",
-        "composite_gated_mlp": "composite_gated_mlp",
-        "experts": "experts",
-        "top_experts": "top_experts",
-        "shared_experts": "shared_experts",
-        "unshared_experts": "unshared_experts",
-        "composite_expert_mlp": "composite_expert_mlp",
-        "composite_gated_expert_mlp": "composite_gated_expert_mlp",
-        "composite_shared_expert_mlp": "composite_shared_expert_mlp",
-        "composite_gated_shared_expert_mlp": "composite_gated_shared_expert_mlp",
-    }
-
-    def __init_subclass__(cls, prefix="", **kwargs):
-        super().__init_subclass__(**kwargs)
-        cls._prefix = prefix
-        for attr, value in BaseTransformerDimNames._kwargs_attributes.items():
-            setattr(cls, attr, f"{cls._prefix}_{value}")
+class TransformerDimNames:
+    # A set of common tensor dim names packed into a namespace.
+    # Input dimensions (variable)
+    # TODO: Does batch belong here?
+    batch = "batch"
+    # TODO: Distinguish micro-sequence?
+    sequence_q = "sequence_q"
+    sequence_q_tp = "sequence_q_tp"
+    sequence_k = "sequence_k"
+    hidden = "hidden"
+    # Self-attention dimensions
+    head_groups = "head_groups"
+    group_heads = "group_heads"
+    key_and_value = "key_value"
+    kv_channels = "kv_channels"
+    composite_heads = "composite_heads"
+    composite_query = "composite_query"
+    composite_key_value = "composite_key_value"
+    composite_dense = "composite_dense"
+    # MLP dimensions
+    mlp = "mlp"
+    gate_and_up = "gate_and_up"
+    composite_gated_mlp = "composite_gated_mlp"
+    experts = "experts"
+    top_experts = "top_experts"
+    shared_experts = "shared_experts"
+    unshared_experts = "unshared_experts"
+    composite_expert_mlp = "composite_expert_mlp"
+    composite_gated_expert_mlp = "composite_gated_expert_mlp"
+    composite_shared_expert_mlp = "composite_shared_expert_mlp"
+    composite_gated_shared_expert_mlp = "composite_gated_shared_expert_mlp"
 
 
-class TransformerDimNames(BaseTransformerDimNames, prefix=""):
-    pass
+class TransformerKwargs:
+    rotary_freq_q = "rotary_freq_q"
+    rotary_freq_k = "rotary_freq_k"
+    attention_mask = "attention_mask"
+    attention_mask_value = "attention_mask_value"
+    sequence_lengths = "sequence_lengths"
+    cu_seqlens_q = "cu_seqlens_q"
+    cu_seqlens_k = "cu_seqlens_k"
+    max_seqlen_q = "max_seqlen_q"
+    max_seqlen_k = "max_seqlen_k"
+    # TODO: Review these
+    presents = "presents"
+    past_key_values = "past_key_values"
+    sequence_first = "sequence_first"
+    hidden_dims = "hidden_dims"
+    sequence_q_dim = "sequence_q_dim"
+    sequence_k_dim = "sequence_k_dim"
+    sequence_length = "sequence_length"
+    # TODO: Move
+    grad_output = "grad_output"
 
 
-class VisionTransformerDimNames(BaseTransformerDimNames, prefix="image_encoder"):
-    pass
-
-
-class BaseTransformerKwargs:
-    _kwargs_attributes = {
-        "rotary_freq_q": "rotary_freq_q",
-        "rotary_freq_k": "rotary_freq_k",
-        "attention_mask": "attention_mask",
-        "attention_mask_value": "attention_mask_value",
-        "sequence_lengths": "sequence_lengths",
-        "cu_seqlens_q": "cu_seqlens_q",
-        "cu_seqlens_k": "cu_seqlens_k",
-        "max_seqlen_q": "max_seqlen_q",
-        "max_seqlen_k": "max_seqlen_k",
-        "presents": "presents",
-        "past_key_values": "past_key_values",
-        "sequence_first": "sequence_first",
-        "hidden_dims": "hidden_dims",
-        "sequence_q_dim": "sequence_q_dim",
-        "sequence_k_dim": "sequence_k_dim",
-        "sequence_length": "sequence_length",
-        "micro_batch_size": "micro_batch_size",
-        "grad_output": "grad_output",
-    }
-
-    _prefix = ""
-
-    def __init_subclass__(cls, prefix="", **kwargs):
-        super().__init_subclass__(**kwargs)
-        cls._prefix = prefix
-        for attr, value in BaseTransformerKwargs._kwargs_attributes.items():
-            setattr(cls, value, f"{cls._prefix}_{value}" if cls._prefix else value)
-
-
-class TransformerKwargs(BaseTransformerKwargs, prefix=""):
-    pass
-
-
-class VisionTransformerKwargs(BaseTransformerKwargs, prefix="image_encoder"):
+class VisionKwargs:
     patch_position_ids = "patch_position_ids"
 
 
