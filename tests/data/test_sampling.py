@@ -98,13 +98,7 @@ class SimpleGPTIndexedDataset(GPTIndexedDataset):
         return len(self._samples)
 
     def get_document_sizes(self) -> np.ndarray:
-        doc_sizes = []
-        im_sizes = []
-        for index in range(len(self)):
-            doc_size, im_size = self.get_document_size(index)
-            doc_sizes.append(doc_size)
-            im_sizes.append(im_size)
-        return np.array(doc_sizes, dtype=np.int64)
+        return np.array([self.get_document_size(index) for index in range(len(self))], dtype=np.int64)
 
     def get_document_size(self, index: int) -> int:
         return len(self._samples[index])

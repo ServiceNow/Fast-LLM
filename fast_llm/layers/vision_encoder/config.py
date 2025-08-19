@@ -1,4 +1,4 @@
-import enum
+import typing
 
 from fast_llm.config import Config, Field, FieldHint, check_field, config_class, skip_valid_if_none
 from fast_llm.engine.base_model.config import BaseModelConfig
@@ -76,24 +76,41 @@ class ImageNormalizationConfig(Config):
     )
 
 
-class VisionEncoderType(str, enum.Enum):
-    none = "none"
-    # TODO: better name? normalization, patch size, adapter can change based on implementation, no standard way currently.
-    pixtral = "pixtral"
-
-
 @config_class(registry=True)
 class VisionEncoderConfig(BaseModelConfig):
+    @classmethod
+    def _from_dict(
+        cls,
+        default: dict[str, typing.Any],
+        strict: bool = True,
+        flat: bool = False,
+    ) -> typing.Self:
+        if cls is VisionEncoderConfig and cls.get_subclass(default.get("type")) is None:
+            # Default subclass.
+            return NoVisionEncoderConfig._from_dict(default, strict, flat)
+        return super()._from_dict(default, strict=strict, flat=flat)
+
+
+@config_class(dynamic_type={VisionEncoderConfig: "none"})
+class NoVisionEncoderConfig(BaseModelConfig):
     _abstract = False
 
-    type: VisionEncoderType = Field(
-        default=VisionEncoderType.none,
-        desc="Type of the vision encoder. Choices: none, pixtral.",
-        hint=FieldHint.architecture,
-    )
+
+@config_class(dynamic_type={VisionEncoderConfig: "pixtral"})
+class PixtralVisionEncoderConfig(BaseModelConfig):
+    _abstract = False
+
     transformer: TransformerConfig = Field(
         desc="Configuration for the vision transformer architecture.",
         hint=FieldHint.core,
+    )
+    patch_normalization: NormalizationConfig = Field(
+        desc="Configuration for the normalization layers applied to the image patches.",
+        hint=FieldHint.optional,
+    )
+    image_normalization: ImageNormalizationConfig = Field(
+        desc="Configuration for the normalization layers applied to the image patches.",
+        hint=FieldHint.optional,
     )
     patch_size: int = Field(
         default=16,
@@ -103,10 +120,6 @@ class VisionEncoderConfig(BaseModelConfig):
     conv_bias: bool = Field(
         default=False,
         desc="Whether to use bias in the convolutional layer.",
-        hint=FieldHint.optional,
-    )
-    patch_normalization: NormalizationConfig = Field(
-        desc="Configuration for the normalization layers applied to the image patches.",
         hint=FieldHint.optional,
     )
     adapter_size: int = Field(
@@ -122,10 +135,6 @@ class VisionEncoderConfig(BaseModelConfig):
     adapter_bias: bool = Field(
         default=True,
         desc="Whether to use bias in the adapter linear layer.",
-        hint=FieldHint.optional,
-    )
-    image_normalization: ImageNormalizationConfig = Field(
-        desc="Configuration for the normalization layers applied to the image patches.",
         hint=FieldHint.optional,
     )
     image_break_token: int | None = Field(
@@ -157,13 +166,3 @@ class VisionEncoderConfig(BaseModelConfig):
         tensor_space.add_tensor_dim(TensorDim(VisionEncoderDimNames.patch_size, self.patch_size))
         tensor_space.add_tensor_dim(TensorDim(VisionEncoderDimNames.in_channels, 3))
         self.transformer.setup_tensor_space(tensor_space)
-
-    @property
-    def enabled(self) -> bool:
-        return self.type != VisionEncoderType.none
-
-
-for name in VisionEncoderType:
-    # We need this because we are using the reserved field name `type`.
-    # TODO: Implement proper dynamic typing.
-    VisionEncoderConfig.register_subclass(name.value, VisionEncoderConfig)

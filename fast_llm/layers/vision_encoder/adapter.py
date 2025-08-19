@@ -7,7 +7,7 @@ from fast_llm.engine.config_utils.tensor_space import TensorSpace
 from fast_llm.functional.triton.mlp import torch_mlp_activation
 from fast_llm.layers.common.linear import Linear
 from fast_llm.layers.transformer.config import TransformerDimNames, TransformerKwargs
-from fast_llm.layers.vision_encoder.config import VisionEncoderConfig, VisionEncoderDimNames
+from fast_llm.layers.vision_encoder.config import PixtralVisionEncoderConfig, VisionEncoderDimNames
 from fast_llm.tensor import TensorMeta, init_normal_
 
 
@@ -16,7 +16,7 @@ class VisionAdapter(Layer):
     Vision adapter layer that projects vision encoder features into the language model token embeddings.
     """
 
-    def __init__(self, config: VisionEncoderConfig, tensor_space: TensorSpace):
+    def __init__(self, config: PixtralVisionEncoderConfig, tensor_space: TensorSpace):
         super().__init__()
         input_dim = tensor_space.get_tensor_dim(VisionEncoderDimNames.out_channels)
         self._activation_type = config.adapter_activation_type

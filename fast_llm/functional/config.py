@@ -79,14 +79,12 @@ def _set_activation_fn_map() -> None:
 _ACTIVATION_FN_MAP: dict[ActivationType, typing.Callable[["torch.Tensor"], "torch.Tensor"]] = {}
 
 _ACTIVATION_HF_NAMES = {
-    ActivationType.gelu: "gelu_pytorch_tanh",
     ActivationType.silu: "silu",
     ActivationType.relu: "relu",
     ActivationType.squared_relu: "relu2",
     ActivationType.identity: "identity",
 }
 _ACTIVATION_HF_NAMES_INV = {value: key for key, value in _ACTIVATION_HF_NAMES.items()}
-
 
 MAX_DROPLESS_BLOCK_SIZE_ROW = 128
 

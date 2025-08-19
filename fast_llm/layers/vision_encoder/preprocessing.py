@@ -7,8 +7,12 @@ import torchvision.transforms.v2 as torchvision_transforms
 from fast_llm.engine.base_model.config import Preprocessor
 from fast_llm.engine.config_utils.tensor_space import TensorDim, TensorSpace
 from fast_llm.layers.language_model.config import LanguageModelKwargs
-from fast_llm.layers.transformer.config import TransformerKwargs, VisionTransformerDimNames, VisionTransformerKwargs
-from fast_llm.layers.vision_encoder.config import VisionEncoderConfig, VisionEncoderDimNames, VisionEncoderKwargs
+from fast_llm.layers.transformer.config import TransformerDimNames, TransformerKwargs, VisionKwargs
+from fast_llm.layers.vision_encoder.config import (
+    PixtralVisionEncoderConfig,
+    VisionEncoderDimNames,
+    VisionEncoderKwargs,
+)
 from fast_llm.tensor import TensorMeta
 from fast_llm.utils import div
 
@@ -102,7 +106,7 @@ def position_ids_in_meshgrid(height, width, max_size, patch_size) -> torch.Tenso
 
 
 class VisionPreprocessor(Preprocessor):
-    def __init__(self, config: VisionEncoderConfig, tensor_space: TensorSpace):
+    def __init__(self, config: PixtralVisionEncoderConfig, tensor_space: TensorSpace):
         self._config = config
         self._tensor_space = tensor_space
         self._distributed_config = self._tensor_space.distributed_config
@@ -111,7 +115,7 @@ class VisionPreprocessor(Preprocessor):
         kwargs[VisionEncoderKwargs.image_patches_meta] = TensorMeta.from_dims(
             (
                 TensorDim(
-                    VisionTransformerDimNames.batch,
+                    TransformerDimNames.batch,
                     kwargs[TransformerKwargs.micro_batch_size] * kwargs[TransformerKwargs.sequence_q_dim].size,
                 ),
                 TensorDim(VisionEncoderDimNames.in_channels, 3),
@@ -228,7 +232,7 @@ class VisionPreprocessor(Preprocessor):
         patches = torch.cat(patches)
         patch_position_ids = torch.cat(patch_position_ids)
         kwargs[VisionEncoderKwargs.image_patches] = patches
-        kwargs[VisionTransformerKwargs.patch_position_ids] = patch_position_ids
+        kwargs[VisionKwargs.patch_position_ids] = patch_position_ids
         kwargs[VisionEncoderKwargs.rotary_inv_freq] = create_inv_freqs(
             kwargs[VisionEncoderKwargs.rope_theta],
             kwargs[VisionEncoderKwargs.kv_channels],
@@ -237,12 +241,12 @@ class VisionPreprocessor(Preprocessor):
         ).to(device=self._tensor_space.distributed.device)
         kwargs[VisionEncoderKwargs.max_image_tokens] = div(max_image_size * im_width, patch_size**2)
         # sequence data parallel is not yet supported for images, so we use the same cu_seqlens for q and k
-        kwargs[VisionTransformerKwargs.cu_seqlens_q] = torch.tensor(
+        kwargs[TransformerKwargs.cu_seqlens_q] = torch.tensor(
             cu_seqlens, device=self._tensor_space.distributed.device, dtype=torch.int32
         )
-        kwargs[VisionTransformerKwargs.cu_seqlens_k] = torch.tensor(
+        kwargs[TransformerKwargs.cu_seqlens_k] = torch.tensor(
             cu_seqlens, device=self._tensor_space.distributed.device, dtype=torch.int32
         )
-        kwargs[VisionTransformerKwargs.max_seqlen_q] = max_seqlen
-        kwargs[VisionTransformerKwargs.max_seqlen_k] = max_seqlen
+        kwargs[TransformerKwargs.max_seqlen_q] = max_seqlen
+        kwargs[TransformerKwargs.max_seqlen_k] = max_seqlen
         kwargs[LanguageModelKwargs.labels] = labels

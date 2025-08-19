@@ -5,8 +5,12 @@ import torch
 from fast_llm.core.ops import split
 from fast_llm.engine.base_model.base_model import Layer
 from fast_llm.engine.config_utils.tensor_space import TensorSpace
-from fast_llm.layers.transformer.config import TransformerKwargs, VisionTransformerKwargs
-from fast_llm.layers.vision_encoder.config import VisionEncoderConfig, VisionEncoderDimNames, VisionEncoderKwargs
+from fast_llm.layers.transformer.config import TransformerKwargs
+from fast_llm.layers.vision_encoder.config import (
+    PixtralVisionEncoderConfig,
+    VisionEncoderDimNames,
+    VisionEncoderKwargs,
+)
 from fast_llm.tensor import ParameterMeta, TensorMeta, init_normal_
 
 
@@ -15,7 +19,7 @@ class PatchConvolution(Layer):
     A convolution layer applied to image patches to create embeddings for each patch. These embeddings are fed into the vision transformer.
     """
 
-    def __init__(self, config: VisionEncoderConfig, tensor_space: TensorSpace):
+    def __init__(self, config: PixtralVisionEncoderConfig, tensor_space: TensorSpace):
         super().__init__()
         self._tensor_space = tensor_space
         self._distributed_config = tensor_space.distributed_config
@@ -51,7 +55,7 @@ class PatchConvolution(Layer):
         losses: dict[str, typing.Any] | None = None,
         metrics: dict | None = None,
     ) -> torch.Tensor:
-        hidden_dims = kwargs[VisionTransformerKwargs.hidden_dims]
+        hidden_dims = kwargs[TransformerKwargs.hidden_dims]
         if isinstance(input_, TensorMeta):
             return TensorMeta.from_dims(hidden_dims, tensor_name="patch conv output", dtype=input_.dtype)
         micro_batch_size = kwargs[TransformerKwargs.micro_batch_size]

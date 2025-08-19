@@ -100,9 +100,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
 
     def get_vision_layers(self) -> list[Layer]:
         vit_layers = [
-            VisionTransformerLayer(
-                self._config.vision_encoder.transformer, self._tensor_space, layer_index=idx + 1, layer_offset=1
-            )
+            VisionTransformerLayer(self._config.vision_encoder.transformer, self._tensor_space, layer_index=idx + 1)
             for idx in range(self._config.vision_encoder.transformer.num_layers)
         ]
         return [
@@ -113,26 +111,20 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
         ]
 
     def get_layers(self) -> list[Layer]:
-        lm_layer_offset = (
-            self._config.vision_encoder.transformer.num_layers + 3 if self._config.vision_encoder.enabled else 1
-        )
         return [
             *(
-                [LanguageModelEmbedding(self._config, self._tensor_space)]
+                self.get_vision_layers()
                 if not self._config.vision_encoder.enabled
-                else self.get_vision_layers()
+                else [LanguageModelEmbedding(self._config, self._tensor_space)]
             ),
             *[
                 TransformerLayer(
                     self._config.transformer,
                     self._tensor_space,
-                    layer_index=i + 1 + lm_layer_offset,
+                    layer_index=i + 1,
                     # The last layer only returns the transformer output.
                     # The previous layers return a stack of shared_hidden and transformer_output.
                     return_input=self._config.prediction_heads > 1 and i == self._config.transformer.num_layers - 1,
-                    # optionally account for patch convolution, vision transformer, vision adapter
-                    # by default we only have the embedding layer
-                    layer_offset=lm_layer_offset,
                 )
                 for i in range(self._config.transformer.num_layers)
             ],
@@ -387,7 +379,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                     # avoid changing input tokens
                     labels = labels.clone()
                     labels_cloned = True
-                    for i, spans in enumerate(batch.loss_masking_spans):
+                    for idx, spans in enumerate(batch.loss_masking_spans):
                         if not spans.numel():
                             continue
                         valid_spans = spans[
@@ -401,9 +393,9 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                             loss_mask = torch.ones_like(labels, dtype=torch.bool)
                             for start, end in valid_spans:
                                 if sequence_first:
-                                    loss_mask[start : end + 1, i] = False
+                                    loss_mask[start : end + 1, idx] = False
                                 else:
-                                    loss_mask[i, start : end + 1] = False
+                                    loss_mask[idx, start : end + 1] = False
                             if self._config.distillation_model is not None:
                                 kwargs[LanguageModelKwargs.loss_mask] = loss_mask
                             labels = torch.where(loss_mask, labels, -100)

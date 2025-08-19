@@ -250,8 +250,11 @@ class LanguageModelBaseConfig(BaseModelConfig):
         # TODO: Need both?
         tensor_space.add_tensor_dim(TensorDim(LanguageModelDimNames.vocab, self.vocab_size))
         tensor_space.add_tensor_dim(TensorDim(LanguageModelDimNames.vocab_tp, self.vocab_size, tensor))
+
         if self.vision_encoder.enabled:
-            self.vision_encoder.setup_tensor_space(tensor_space)
+            # TODO: Remove tensor spaces so we don't need this hack.
+            tensor_space.vision = TensorSpace(tensor_space.distributed_config)
+            self.vision_encoder.setup_tensor_space(tensor_space.vision)
 
     @property
     def num_absolute_position_embeddings(self) -> int:
