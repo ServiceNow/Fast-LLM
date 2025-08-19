@@ -1,3 +1,4 @@
+import functools
 import typing
 
 from fast_llm.config import Config, Field, FieldHint, check_field, config_class, skip_valid_if_none
@@ -24,17 +25,11 @@ class VisionEncoderKwargs:
     image_positions = "image_positions"
     max_image_size = "max_image_size"
     image_sizes = "image_sizes"
-    image_mean = "image_normalization_mean"
-    image_std = "image_normalization_std"
     image_rescale_factor = "image_rescale_factor"
-    rope_theta = "vit_rope_theta"
-    rotary_inv_freq = "vit_rotary_inv_freq"
     kv_channels = "vit_kv_channels"
     max_image_tokens = "max_image_tokens"
-    patch_embeddings = "patch_embeddings"
     hidden_dims = "vit_hidden_dims"
     image_patches_meta = "vit_image_patches_meta"
-    out_channels = "vit_out_channels"
 
 
 @config_class()
@@ -74,6 +69,14 @@ class ImageNormalizationConfig(Config):
         desc="Rescale factor for the image normalization process.",
         hint=FieldHint.optional,
     )
+
+    @functools.cached_property
+    def mean(self) -> list[float]:
+        return [self.mean_red, self.mean_green, self.mean_blue]
+
+    @functools.cached_property
+    def std(self) -> list[float]:
+        return [self.std_red, self.std_green, self.std_blue]
 
 
 @config_class(registry=True)

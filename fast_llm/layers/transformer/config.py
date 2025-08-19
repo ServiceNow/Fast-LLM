@@ -80,6 +80,8 @@ class TransformerKwargs:
     sequence_q_dim = "sequence_q_dim"
     sequence_k_dim = "sequence_k_dim"
     sequence_length = "sequence_length"
+    batch_dim = "batch_dim"
+    micro_batch_size = (micro_batch_size,)
     # TODO: Move
     grad_output = "grad_output"
 

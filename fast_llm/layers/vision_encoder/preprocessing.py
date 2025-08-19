@@ -119,8 +119,8 @@ class VisionPreprocessor(Preprocessor):
                     kwargs[TransformerKwargs.micro_batch_size] * kwargs[TransformerKwargs.sequence_q_dim].size,
                 ),
                 TensorDim(VisionEncoderDimNames.in_channels, 3),
-                TensorDim(VisionEncoderDimNames.patch_size, kwargs[VisionEncoderKwargs.patch_size]),
-                TensorDim(VisionEncoderDimNames.patch_size, kwargs[VisionEncoderKwargs.patch_size]),
+                TensorDim(VisionEncoderDimNames.patch_size, self._config.patch_size),
+                TensorDim(VisionEncoderDimNames.patch_size, self._config.patch_size),
             ),
             dtype=self._distributed_config.training_dtype.torch,
         )
@@ -129,22 +129,24 @@ class VisionPreprocessor(Preprocessor):
         images = kwargs.get(VisionEncoderKwargs.images)
         max_image_size = kwargs.get(VisionEncoderKwargs.max_image_size)
         im_width = kwargs.get(VisionEncoderKwargs.max_image_size)
-        patch_size = kwargs[VisionEncoderKwargs.patch_size]
         image_positions = kwargs.get(VisionEncoderKwargs.image_positions)
         image_sizes = [
-            [get_resize_dims(im.size(1), im.size(2), max_image_size, im_width, patch_size=patch_size) for im in ims]
+            [
+                get_resize_dims(im.size(1), im.size(2), max_image_size, im_width, patch_size=self._config.patch_size)
+                for im in ims
+            ]
             for ims in images
         ]
         kwargs[VisionEncoderKwargs.image_sizes] = image_sizes
         images = [
             [
                 torchvision_transforms.functional.normalize(
-                    resize(image, max_image_size, im_width, patch_size).to(
+                    resize(image, max_image_size, im_width, self._config.patch_size).to(
                         dtype=self._tensor_space.distributed_config.training_dtype.torch
                     )
                     / kwargs[VisionEncoderKwargs.image_rescale_factor],
-                    mean=kwargs[VisionEncoderKwargs.image_mean],
-                    std=kwargs[VisionEncoderKwargs.image_std],
+                    mean=self._config.image_normalization.mean,
+                    std=self._config.image_normalization.std,
                 )
                 for image in imgs
             ]
@@ -172,10 +174,10 @@ class VisionPreprocessor(Preprocessor):
             ]
             sample_cu_seqlen = 0
             for image, size, position in zip(imgs, sizes, positions):
-                seqlen = get_num_patches(*size, patch_size)
+                seqlen = get_num_patches(*size, self._config.patch_size)
                 num_tokens = get_num_image_tokens(
                     *size,
-                    patch_size=patch_size,
+                    patch_size=self._config.patch_size,
                     image_break=self._config.image_break_token is not None,
                     image_end=self._config.image_end_token is not None,
                 )
@@ -188,9 +190,9 @@ class VisionPreprocessor(Preprocessor):
                 seq_patches.append(
                     torch.cat(
                         [
-                            torch.nn.functional.unfold(image, kernel_size=patch_size, stride=patch_size).T.reshape(
-                                -1, 3, patch_size, patch_size
-                            ),
+                            torch.nn.functional.unfold(
+                                image, kernel_size=self._config.patch_size, stride=self._config.patch_size
+                            ).T.reshape(-1, 3, self._config.patch_size, self._config.patch_size),
                         ]
                     )
                 )
@@ -202,7 +204,7 @@ class VisionPreprocessor(Preprocessor):
                 torch.cat(
                     [
                         *seq_patches,
-                        torch.zeros(padding_size, 3, patch_size, patch_size).to(
+                        torch.zeros(padding_size, 3, self._config.patch_size, self._config.patch_size).to(
                             dtype=self._tensor_space.distributed_config.training_dtype.torch,
                             device=self._tensor_space.distributed.device,
                         ),
@@ -211,7 +213,12 @@ class VisionPreprocessor(Preprocessor):
             )
             if sizes:
                 position_ids = torch.cat(
-                    [position_ids_in_meshgrid(*size, max_image_size // patch_size, patch_size) for size in sizes]
+                    [
+                        position_ids_in_meshgrid(
+                            *size, max_image_size // self._config.patch_size, self._config.patch_size
+                        )
+                        for size in sizes
+                    ]
                 ).to(device=self._tensor_space.distributed.device)
             else:
                 position_ids = torch.tensor(
@@ -233,13 +240,7 @@ class VisionPreprocessor(Preprocessor):
         patch_position_ids = torch.cat(patch_position_ids)
         kwargs[VisionEncoderKwargs.image_patches] = patches
         kwargs[VisionKwargs.patch_position_ids] = patch_position_ids
-        kwargs[VisionEncoderKwargs.rotary_inv_freq] = create_inv_freqs(
-            kwargs[VisionEncoderKwargs.rope_theta],
-            kwargs[VisionEncoderKwargs.kv_channels],
-            max_image_size,
-            patch_size,
-        ).to(device=self._tensor_space.distributed.device)
-        kwargs[VisionEncoderKwargs.max_image_tokens] = div(max_image_size * im_width, patch_size**2)
+        kwargs[VisionEncoderKwargs.max_image_tokens] = div(max_image_size * im_width, self._config.patch_size**2)
         # sequence data parallel is not yet supported for images, so we use the same cu_seqlens for q and k
         kwargs[TransformerKwargs.cu_seqlens_q] = torch.tensor(
             cu_seqlens, device=self._tensor_space.distributed.device, dtype=torch.int32

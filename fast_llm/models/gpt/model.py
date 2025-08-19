@@ -20,13 +20,11 @@ from fast_llm.layers.transformer.config import (
     TransformerDimNames,
     TransformerKwargs,
     TransformerLossNames,
-    VisionTransformerDimNames,
-    VisionTransformerKwargs,
 )
 from fast_llm.layers.transformer.preprocessing import BackupAttentionPreprocessor, FlashAttnVarlenPreprocessor
 from fast_llm.layers.transformer.transformer import TransformerLayer, VisionTransformerLayer
 from fast_llm.layers.vision_encoder.adapter import VisionAdapter
-from fast_llm.layers.vision_encoder.config import VisionEncoderDimNames, VisionEncoderKwargs
+from fast_llm.layers.vision_encoder.config import VisionEncoderKwargs
 from fast_llm.layers.vision_encoder.patch_conv import PatchConvolution
 from fast_llm.layers.vision_encoder.preprocessing import VisionPreprocessor
 from fast_llm.models.gpt.config import GPTBaseModelConfig, GPTBatchConfig, GPTModelConfig
@@ -147,36 +145,6 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                 sequence_length -= self._config.prediction_heads
             micro_sequence_length = sequence_length
 
-        if self._config.vision_encoder.enabled:
-            max_image_size = batch_meta.max_image_size
-            image_mean = [
-                self._config.vision_encoder.image_normalization.mean_red,
-                self._config.vision_encoder.image_normalization.mean_green,
-                self._config.vision_encoder.image_normalization.mean_blue,
-            ]
-            image_std = [
-                self._config.vision_encoder.image_normalization.std_red,
-                self._config.vision_encoder.image_normalization.std_green,
-                self._config.vision_encoder.image_normalization.std_blue,
-            ]
-            image_rescale_factor = self._config.vision_encoder.image_normalization.rescale_factor
-            vision_kwargs = {
-                VisionEncoderKwargs.patch_size: self._config.vision_encoder.patch_size,
-                VisionEncoderKwargs.max_image_size: max_image_size,
-                VisionEncoderKwargs.image_mean: image_mean,
-                VisionEncoderKwargs.image_std: image_std,
-                VisionEncoderKwargs.image_rescale_factor: image_rescale_factor,
-                VisionEncoderKwargs.rope_theta: self._config.vision_encoder.transformer.rotary.theta,
-                VisionEncoderKwargs.kv_channels: self._tensor_space.get_tensor_dim(
-                    VisionTransformerDimNames.kv_channels
-                ).size,
-                VisionEncoderKwargs.out_channels: self._tensor_space.get_tensor_dim(
-                    VisionEncoderDimNames.out_channels
-                ).size,
-            }
-        else:
-            vision_kwargs = {}
-
         batch_data = self._tensor_space.distributed_config.get_distributed_dim(DistributedDimNames.batch_data)
         batch_dim = TensorDim(TransformerDimNames.batch, micro_batch_size * batch_data.size, batch_data)
 
@@ -219,18 +187,6 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             if sequence_first
             else (batch_dim, hidden_sequence_q_dim, hidden_dim)
         )
-        if self._config.vision_encoder.enabled:
-            vision_hidden_dim = self._tensor_space.get_tensor_dim(VisionTransformerDimNames.hidden)
-            vision_hidden_dims = (
-                (hidden_sequence_q_dim, batch_dim, vision_hidden_dim)
-                if sequence_first
-                else (batch_dim, hidden_sequence_q_dim, vision_hidden_dim)
-            )
-            vision_kwargs.update(
-                {
-                    VisionTransformerKwargs.hidden_dims: vision_hidden_dims,
-                }
-            )
 
         common_kwargs = {
             LanguageModelKwargs.phase: phase,
@@ -238,9 +194,42 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             TransformerKwargs.hidden_dims: hidden_dims,
             TransformerKwargs.sequence_length: sequence_length,
             TransformerKwargs.sequence_q_dim: sequence_q_dim,
-            TransformerKwargs.micro_batch_size: micro_batch_size,
+            TransformerKwargs.batch_dim: batch_dim,
         }
-        common_kwargs.update(vision_kwargs)
+
+        if self._config.vision_encoder.enabled:
+            max_image_size = batch_meta.max_image_size
+            image_mean = [
+                self._config.vision_encoder.image_normalization.mean_red,
+                self._config.vision_encoder.image_normalization.mean_green,
+                self._config.vision_encoder.image_normalization.mean_blue,
+            ]
+            image_std = [
+                self._config.vision_encoder.image_normalization.std_red,
+                self._config.vision_encoder.image_normalization.std_green,
+                self._config.vision_encoder.image_normalization.std_blue,
+            ]
+            image_rescale_factor = self._config.vision_encoder.image_normalization.rescale_factor
+            vision_kwargs = {
+                VisionEncoderKwargs.patch_size: self._config.vision_encoder.patch_size,
+                VisionEncoderKwargs.max_image_size: max_image_size,
+                VisionEncoderKwargs.image_rescale_factor: image_rescale_factor,
+                VisionEncoderKwargs.kv_channels: self._tensor_space.get_tensor_dim(
+                    TransformerDimNames.kv_channels
+                ).size,
+            }
+            vision_hidden_dim = self._tensor_space.vision.get_tensor_dim(TransformerDimNames.hidden)
+            vision_hidden_dims = (
+                (hidden_sequence_q_dim, batch_dim, vision_hidden_dim)
+                if sequence_first
+                else (batch_dim, hidden_sequence_q_dim, vision_hidden_dim)
+            )
+            vision_kwargs.update(
+                {
+                    TransformerKwargs.hidden_dims: vision_hidden_dims,
+                }
+            )
+            common_kwargs["vision"] = vision_kwargs
 
         sequence_k_pasts = range(
             sequence_q_dim.size * self._tensor_space.distributed_config.sequence_data_rank,
@@ -374,11 +363,9 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                     labels = batch.token_ids[:, sequence_offset : sequence_k + prediction_heads].contiguous()
                     # We set label indices to -100 for masked spans, inline with ignore_index in torch.nn.CrossEntropyLoss
                     # TODO: take ignore_index from config
-                labels_cloned = False
                 if batch.loss_masking_spans is not None:
                     # avoid changing input tokens
                     labels = labels.clone()
-                    labels_cloned = True
                     for idx, spans in enumerate(batch.loss_masking_spans):
                         if not spans.numel():
                             continue
@@ -401,14 +388,8 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                             labels = torch.where(loss_mask, labels, -100)
                 if self._config.vision_encoder.enabled:
                     if self._config.vision_encoder.image_break_token is not None:
-                        if not labels_cloned:
-                            labels = labels.clone()
-                            labels_cloned = True
                         labels = torch.where(labels == self._config.vision_encoder.image_break_token, -100, labels)
                     if self._config.vision_encoder.image_end_token is not None:
-                        if not labels_cloned:
-                            labels = labels.clone()
-                            labels_cloned = True
                         labels = torch.where(labels == self._config.vision_encoder.image_end_token, -100, labels)
                 kwargs[LanguageModelKwargs.labels] = labels
             kwargs.update(reference_logits[i])
