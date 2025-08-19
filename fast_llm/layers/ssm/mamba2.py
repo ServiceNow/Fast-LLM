@@ -1,3 +1,4 @@
+import inspect
 import logging
 import typing
 
@@ -6,17 +7,28 @@ import torch
 from fast_llm.engine.config_utils.tensor_space import DefaultDimNames, TensorDim, TensorSpace
 from fast_llm.functional.config import ActivationType
 from fast_llm.layers.common.linear import InputParallelLinear, Linear, OutputParallelLinear
-from fast_llm.layers.ssm.config import SSMConfig, SSMDimNames
+from fast_llm.layers.ssm.config import SSMConfig, SSMDimNames, SSMKwargs
 from fast_llm.layers.ssm.mamba_layer import init_A, init_dtprojbias
 from fast_llm.layers.transformer.config import TransformerConfig, TransformerDimNames, TransformerKwargs
 from fast_llm.layers.transformer.transformer import Mixer
 from fast_llm.tensor import ParameterMeta, init_kaiming_, init_ones_, init_uniform_centered_
 from fast_llm.utils import Assert, div, get_lr_scale
 
+_mamba_varlen = False
 try:
     from mamba_ssm.ops.selective_scan_interface import selective_scan_fn  # noqa
 
     _mamba_available = True
+    sig = inspect.signature(selective_scan_fn)
+    if "position_indices" in sig.parameters:
+        _mamba_varlen = True
+        logging.warning("Using selective_scan_fn from varlen_mamba that supports packing")
+    else:
+        _mamba_varlen = False
+        logging.warning("Using selective_scan_fn from original mamba without packing support")
+        # for training with packing install https://github.com/jxiw/varlen_mamba
+        # see https://github.com/jxiw/M1/blob/main/HYBRID_PACK.md
+
 except (ImportError, RuntimeError):
     _mamba_available = False
 
@@ -143,8 +155,16 @@ class Mamba2(Mixer):
         )
 
     def forward(self, input_: torch.Tensor, kwargs: dict[str, typing.Any]) -> tuple[torch.Tensor, torch.Tensor | None]:
+        """
+        Note, we are nto doing "read" sequence-tensor parallel trainign here, since inner_projection is gathered over all GPUS.
+        This is also desired, since the currently used mamba kernel does not support STP.
+        TODO: use correct kernel from Mamba2!
+        """
         assert _mamba_available
         assert _causal_conv1d_available
+        cu_seqlens = kwargs[SSMKwargs.cu_seqlens]
+        seq_idx = kwargs[SSMKwargs.seq_idx]
+        position_indices = kwargs[SSMKwargs.ssm_position_ids]
 
         # inner_projection : (batch/local_sequence, local_sequence/batch, hidden)
         #   -> (batch/sequence, sequence/batch, inner_projection)
@@ -174,9 +194,20 @@ class Mamba2(Mixer):
                 .repeat_interleave(self._group_heads, 1, output_size=self._local_heads)
                 .flatten(1, 2)
             )
-            x = _causal_conv1d_fn(x=x, weight=self.conv1d_weight.squeeze(1), bias=self.conv1d_bias, activation="silu")
+
+        if cu_seqlens is not None:
+            # from https://github.com/jxiw/M1/blob/d92b53faa640f8ebf624d3e9e771fe24648ef014/rl/verl/verl/models/mamba/hybrid_wrapper.py#L152
+            x = _causal_conv1d_fn(
+                x=x.transpose(1, 2).contiguous().transpose(1, 2),
+                weight=self.conv1d_weight.squeeze(1),
+                bias=self.conv1d_bias,
+                seq_idx=seq_idx,
+                activation="silu",
+            )
         else:
             x = _causal_conv1d_fn(x=x, weight=self.conv1d_weight.squeeze(1), bias=self.conv1d_bias, activation="silu")
+
+        if not self._config.repeat_kv_before_conv:
             x = (
                 x.unflatten(1, (self._local_head_groups, self._config.state_size))
                 .repeat_interleave(self._group_heads, 1, output_size=self._local_heads)
@@ -203,17 +234,34 @@ class Mamba2(Mixer):
             self._debug_log(c, "c", self._BC_DIMS, kwargs)
             self._debug_log(dt, "dt", self._XZ_DIMS, kwargs)
 
-        y = selective_scan_fn(
-            x,
-            dt,
-            -torch.exp(self.A_log.float()),
-            b,
-            c,
-            self.D.float(),
-            z,
-            delta_bias=self.dt_proj_bias.float(),
-            delta_softplus=True,
-        )
+        if not _mamba_varlen:
+            Assert.eq(cu_seqlens, None, msg="This version of Mamba2 does not support cu_seqlens, install verlen mamba")
+            y = selective_scan_fn(
+                x,
+                dt,
+                -torch.exp(self.A_log.float()),
+                b,
+                c,
+                self.D.float(),
+                z,
+                delta_bias=self.dt_proj_bias.float(),
+                delta_softplus=True,
+            )
+        else:
+            position_indices = position_indices if cu_seqlens is not None else None
+
+            y = selective_scan_fn(
+                x,
+                dt,
+                -torch.exp(self.A_log.float()),
+                b,
+                c,
+                self.D.float(),
+                z,
+                delta_bias=self.dt_proj_bias.float(),
+                delta_softplus=True,
+                position_indices=position_indices,
+            )
 
         if self._debug_level:
             self._debug_log(y, "y", self._XZ_DIMS, kwargs)

@@ -207,6 +207,11 @@ class HybridSSMTrainerConfig(PretrainedHybridSSMModelConfig, TrainerConfig):
 
     def _validate(self) -> None:
         super()._validate()
+        Assert.eq(
+            self.batch.micro_sequence_length,
+            self.batch.sequence_length,
+            msg="Micro-sequences not supported for SSMs. at htis point",
+        )
         if (name := self.model.base_model.distillation_model) is None:
             Assert.empty(self.reference_models)
         else:
