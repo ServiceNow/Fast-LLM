@@ -24,8 +24,11 @@ class Mamba2Preprocessor(Preprocessor):
         """
         Simplified preprocessor that does not take into account micro-sequences.
         """
+        if TransformerKwargs.sequence_lengths not in kwargs:
+            return
         sequence_lengths = kwargs[TransformerKwargs.sequence_lengths]
-        if "cu_seqlens" in kwargs:
+        if TransformerKwargs.cu_seqlens_k in kwargs:
+            # already set this in the transformer preprocessor, so we can use it here
             cu_seqlens_k = kwargs[TransformerKwargs.cu_seqlens_k]
             cu_seqlens_q = kwargs[TransformerKwargs.cu_seqlens_q]
             Assert.eq(

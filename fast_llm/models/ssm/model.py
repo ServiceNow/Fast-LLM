@@ -6,7 +6,7 @@ from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.engine.inference.runner import InferenceRunner
 from fast_llm.layers.language_model.head import LanguageModelHead
 from fast_llm.layers.ssm.llamba_block import SSMBlock
-from fast_llm.layers.ssm.preprocessors import Mamba2Preprocessor
+from fast_llm.layers.ssm.preprocessing import Mamba2Preprocessor
 from fast_llm.layers.transformer.transformer import TransformerBlock
 from fast_llm.models.gpt.config import GPTBatchConfig
 from fast_llm.models.gpt.model import GPTBaseModel, GPTModel
