@@ -235,7 +235,7 @@ class Mamba2(Mixer):
             self._debug_log(dt, "dt", self._XZ_DIMS, kwargs)
 
         if not _mamba_varlen:
-
+            Assert.eq(cu_seqlens, None, msg="This version of Mamba2 does not support cu_seqlens, install verlen mamba")
             y = selective_scan_fn(
                 x,
                 dt,
