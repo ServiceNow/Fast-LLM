@@ -144,11 +144,13 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             micro_batch_size = batch_meta.micro_batch_size
             sequence_length = batch_meta.sequence_length
             micro_sequence_length = batch_meta.micro_sequence_length
+            truncate_documents = batch_meta.truncate_documents
         else:
             micro_batch_size, sequence_length = batch_meta.shape
             if phase != PhaseType.inference:
                 sequence_length -= self._config.prediction_heads
             micro_sequence_length = sequence_length
+            truncate_documents = True
 
         if self._config.vision_encoder.enabled:
             try:
@@ -242,6 +244,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
             TransformerKwargs.sequence_length: sequence_length,
             TransformerKwargs.sequence_q_dim: sequence_q_dim,
             TransformerKwargs.micro_batch_size: micro_batch_size,
+            LanguageModelKwargs.mask_inputs: not truncate_documents,
         }
         common_kwargs.update(vision_kwargs)
 
