@@ -68,6 +68,8 @@ class LmEvalEvaluator[ConfigType: LmEvalEvaluatorConfig](Evaluator[ConfigType]):
             add_bos_token=self._config.add_bos_token,
             prefix_token_id=self._config.prefix_token_id,
             max_length=self._config.max_length,
+            batch_config=self._batch_config,
+            communication_timeout_sec=self._config.communication_timeout_sec,
         )
         self._is_setup = True
 

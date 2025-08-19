@@ -16,6 +16,7 @@ from fast_llm.core.distributed import gather_object, safe_barrier, scatter_objec
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.engine.evaluation.lm_eval.utils import prepare_lm_eval_simple_eval_params, process_lm_eval_results
 from fast_llm.engine.inference.huggingface import HuggingfaceBaseModelForCausalLM
+from fast_llm.engine.schedule.config import BatchConfig
 from fast_llm.layers.transformer.rotary.config import NoRotaryConfig
 
 logger = logging.getLogger(__name__)
@@ -34,12 +35,16 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
         add_bos_token: bool | None = False,
         prefix_token_id: int | None = None,
         max_length: int | None = None,
+        batch_config: BatchConfig | None = None,
+        communication_timeout_sec: float = 600.0,
     ):
         super().__init__()
 
         # === Distributed setup ===
         self._rank = 0  # For lm_eval: always run on main rank
         self._world_size = 1  # For lm_eval: always world size 1
+
+        self.communication_timeout_sec = communication_timeout_sec
 
         self._distributed: Distributed = model._inference_runner._fast_llm_model.distributed
 
@@ -79,7 +84,10 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
         # === Batch configuration ===
         self._batch_schedule = 1
         self._batch_sizes = {}  # Not used dynamically by lm_eval
-        self._batch_size_per_gpu = model._inference_runner._batch_config.micro_batch_size
+
+        # NOTE: We can not take batch configuration from inference runner as it has a dummy batch config
+        self._batch_size_per_gpu = batch_config.micro_batch_size if batch_config else 1
+
         self._batch_size = self._batch_size_per_gpu * self._distributed.config.batch_data_parallel
         self._max_batch_size = self._batch_size
 
@@ -179,7 +187,7 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
             if self._leading_batch_data_group:
                 self.worker_model_invoke()
             else:
-                self._model.worker_forward()
+                self._model.worker_forward(communication_timeout_sec=self.communication_timeout_sec)
 
         # Model forward workers end earlier, so sync here for all gpus
         safe_barrier(self._world_group, f"lm_eval Run end")
@@ -247,6 +255,9 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
         else:
             scatter_list = [[[], None, None, None, None, None, False, {}] for _ in range(batch_data_parallel_size)]
 
+        # Some tasks may post-process too slowly, so waiting for the next batch or
+        # the end of work can exceed the standard 60s timeout.
+        safe_barrier(self._leading_batch_data_group, "model_invoke_wait", timeout=self.communication_timeout_sec)
         input_ids, attention_mask, labels, max_length, stop, generate, continue_work, generation_kwargs = (
             scatter_object(
                 scatter_list,
@@ -264,6 +275,11 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
 
         assert len(input_ids) > 0
 
+        # At the end, some data-parallel ranks may have no data, so the wait can
+        # exceed the standard 60s timeout.
+        safe_barrier(
+            self._leading_batch_data_group, "model_invoke_gather_wait", timeout=self.communication_timeout_sec
+        )
         gather_list = gather_object(result, group=self._leading_batch_data_group)
 
         # Clean gather list from empty shards (from not full batches).
@@ -286,14 +302,35 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
         # The function must not be called on the main rank.
         assert self._world_group.rank() != 0
 
+        device = torch.cuda.current_device()
+
         # On worker ranks the function need to wait to be called multiple times
         while True:
+            # Some tasks may post-process too slowly, so waiting for the next batch or
+            # the end of work can exceed the standard 60s timeout.
+            safe_barrier(self._leading_batch_data_group, "model_invoke_wait", timeout=self.communication_timeout_sec)
             input_ids, attention_mask, labels, max_length, stop, generate, continue_work, generation_kwargs = (
                 scatter_object(
                     None,
                     group=self._leading_batch_data_group,
                 )
             )
+            # NOTE: scatter_object keeps tensors on the same device as the source,
+            #       so they must be moved to the current device.
+            # TODO: With scatter_object, tensors are copied GPU → CPU → GPU, then scattered,
+            #       and finally copied again to the correct GPU here. We already have a scatter
+            #       primitive for tensors of known size and type; we need to extend it to
+            #       handle optional tensors of unknown type and size directly (src GPU → dst GPU);
+            #       and use it for scattering tensors like input_ids, attention_mask, labels.
+            if isinstance(input_ids, torch.Tensor):
+                input_ids = input_ids.to(device)
+            if isinstance(attention_mask, torch.Tensor):
+                attention_mask = attention_mask.to(device)
+            if isinstance(labels, torch.Tensor):
+                labels = labels.to(device)
+
+            if continue_work:
+                logger.info(f"worker_model_invoke: input_id device {input_ids.device}, shape {input_ids.shape}")
 
             # Always call inner function to propagate stop signal to TP workers if continue_work is False
             result = self._model_invoke_inner(
@@ -308,6 +345,11 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
             if len(input_ids) == 0:
                 result = input_ids
 
+            # At the end, some data-parallel ranks may have no data, so the wait can
+            # exceed the standard 60s timeout.
+            safe_barrier(
+                self._leading_batch_data_group, "model_invoke_gather_wait", timeout=self.communication_timeout_sec
+            )
             gather_object(result, group=self._leading_batch_data_group)
 
         safe_barrier(self._leading_batch_data_group, "lm_eval_end")
@@ -411,6 +453,7 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
                 output_hidden_states=False,
                 return_dict=True,
                 coordinator_forward=True,
+                communication_timeout_sec=self.communication_timeout_sec,
             ).logits.cpu()
 
     def _model_generate_inner(self, input_ids, attention_mask, max_length, stop, **generation_kwargs):
@@ -440,6 +483,7 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
             pad_token_id=self._tokenizer.pad_token_id,
             use_cache=False,
             coordinator_forward=True,
+            communication_timeout_sec=self.communication_timeout_sec,
             **generation_kwargs,
         )
 

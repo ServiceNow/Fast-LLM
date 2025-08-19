@@ -143,6 +143,7 @@ class HuggingfaceBaseModelForCausalLM(HuggingfacePreTrainedModel, transformers.g
         output_hidden_states: bool | None = None,
         return_dict: bool | None = None,
         coordinator_forward: bool = False,
+        communication_timeout_sec: float = 600.0,
         continue_work: bool = True,
     ) -> tuple | transformers.modeling_outputs.CausalLMOutputWithPast | None:
         """
@@ -167,6 +168,10 @@ class HuggingfaceBaseModelForCausalLM(HuggingfacePreTrainedModel, transformers.g
         if coordinator_forward and distributed.world_group and distributed.tensor_group:
             assert distributed.tensor_group.rank() == 0
             assert past_key_values is None and not use_cache
+
+            # Some tasks may post-process too slowly, so waiting for the next batch or
+            # the end of work can exceed the standard 60s timeout.
+            safe_barrier(distributed.tensor_group, "forward_wait", timeout=communication_timeout_sec)
 
             broadcast_optional(input_ids, distributed.tensor_group, 0)
             broadcast_optional(attention_mask, distributed.tensor_group, 0)
@@ -196,11 +201,18 @@ class HuggingfaceBaseModelForCausalLM(HuggingfacePreTrainedModel, transformers.g
 
         return None
 
-    def worker_forward(self):
+    def worker_forward(
+        self,
+        communication_timeout_sec: float = 600.0,
+    ):
         distributed: Distributed = self._inference_runner._fast_llm_model.distributed
         assert distributed.world_group and distributed.tensor_group and distributed.tensor_group.rank() != 0
 
         while True:
+            # Some tasks may post-process too slowly, so waiting for the next batch or
+            # the end of work can exceed the standard 60s timeout.
+            safe_barrier(distributed.tensor_group, "forward_wait", timeout=communication_timeout_sec)
+
             input_ids = broadcast_optional(None, distributed.tensor_group, 0)
             attention_mask = broadcast_optional(None, distributed.tensor_group, 0)
             position_ids = broadcast_optional(None, distributed.tensor_group, 0)
@@ -210,6 +222,7 @@ class HuggingfaceBaseModelForCausalLM(HuggingfacePreTrainedModel, transformers.g
             past_key_values, use_cache, output_attentions, output_hidden_states, return_dict, continue_work = (
                 broadcast_object(None, distributed.tensor_group, 0)
             )
+
             if not continue_work:
                 break
 
@@ -226,7 +239,7 @@ class HuggingfaceBaseModelForCausalLM(HuggingfacePreTrainedModel, transformers.g
                 return_dict,
             )
 
-        safe_barrier(distributed.world_group, "forward_end")
+        safe_barrier(distributed.world_group, "forward_work_end")
 
     def stop_workers(self):
         distributed: Distributed = self._inference_runner._fast_llm_model.distributed
@@ -234,4 +247,4 @@ class HuggingfaceBaseModelForCausalLM(HuggingfacePreTrainedModel, transformers.g
         if distributed.world_group is None or distributed.tensor_group is None:
             return
         self.forward(coordinator_forward=True, continue_work=False)
-        safe_barrier(distributed.world_group, "forward_end")
+        safe_barrier(distributed.world_group, "forward_work_end")
