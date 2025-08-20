@@ -5,11 +5,8 @@ from fast_llm.engine.base_model.base_model import Layer
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.layers.language_model.embedding import LanguageModelEmbedding
 from fast_llm.layers.language_model.head import LanguageModelHead
-from fast_llm.layers.ssm.discrete_mamba2 import DiscreteMamba2
-from fast_llm.layers.ssm.llamba_block import LlambaBlock
-from fast_llm.layers.ssm.mamba2 import Mamba2
-from fast_llm.layers.ssm.mamba_layer import MambaLayer
-from fast_llm.layers.transformer.transformer import TransformerLayer
+from fast_llm.layers.ssm.llamba_block import SSMBlock
+from fast_llm.layers.transformer.transformer import TransformerBlock
 from fast_llm.models.gpt.model import GPTBaseModel, GPTInferenceRunner, GPTModel
 from fast_llm.models.ssm.config import HybridSSMBaseModelConfig, HybridSSMModelConfig, SSMBlockType
 
@@ -31,7 +28,6 @@ class HybridSSMBaseModel[ConfigType: HybridSSMBaseModelConfig](GPTBaseModel[Conf
         config: HybridSSMBaseModelConfig,
         distributed_config: DistributedConfig,
     ):
-        self.SSM_BLOCK_CLS = LlambaBlock  # TODO: extend to other block types if needed
         super().__init__(config, distributed_config)
 
     def get_output_layers(self) -> list[Layer]:
@@ -39,52 +35,31 @@ class HybridSSMBaseModel[ConfigType: HybridSSMBaseModelConfig](GPTBaseModel[Conf
         Get the output layers of the model.
         This includes the language model head and any additional heads specified in the configuration.
         """
-        layers = [LanguageModelHead(self._config, self._tensor_space, prediction_distance=0)]
+        layers: list[Layer] = [LanguageModelHead(self._config, self._tensor_space, prediction_distance=0)]
 
         if self._config.prediction_heads > 1:
             block_type = self._config.default_mtp_type or self._config.hybrid_block_layout[-1]
             for i in range(1, self._config.prediction_heads):
                 if block_type == SSMBlockType.transformer:
                     layers.append(
-                        TransformerLayer(
+                        TransformerBlock(
                             self._config.transformer,
                             self._tensor_space,
-                            layer_index=len(self._config.hybrid_block_layout),
+                            block_index=len(self._config.hybrid_block_layout),
                             return_input=i != self._config.prediction_heads - 1,
                         )
                     )
-                elif block_type == SSMBlockType.mamba2_discrete:
-                    mamba_block = self.SSM_BLOCK_CLS(
-                        config_transformer=self._config.transformer,
-                        config_ssm=self._config.ssm,
-                        mixer_cls=DiscreteMamba2,
-                        layer_index=len(self._config.hybrid_block_layout),
-                        tensor_space=self._tensor_space,
-                        return_input=i != self._config.prediction_heads - 1,
-                    )
-                    layers.append(mamba_block)
-                elif block_type == SSMBlockType.mamba:
-                    mamba_block = self.SSM_BLOCK_CLS(
-                        config_transformer=self._config.transformer,
-                        config_ssm=self._config.ssm,
-                        mixer_cls=MambaLayer,
-                        layer_index=len(self._config.hybrid_block_layout),
-                        tensor_space=self._tensor_space,
-                        return_input=i != self._config.prediction_heads - 1,
-                    )
-                    layers.append(mamba_block)
-                elif block_type == SSMBlockType.mamba2:
-                    mamba_block = self.SSM_BLOCK_CLS(
-                        config_transformer=self._config.transformer,
-                        config_ssm=self._config.ssm,
-                        mixer_cls=Mamba2,
-                        layer_index=len(self._config.hybrid_block_layout),
-                        tensor_space=self._tensor_space,
-                        return_input=i != self._config.prediction_heads - 1,
-                    )
-                    layers.append(mamba_block)
                 else:
-                    raise ValueError(f"Invalid block type: {block_type}. Must be {SSMBlockType.__members__}")
+                    layers.append(
+                        SSMBlock(
+                            transformer_config=self._config.transformer,
+                            ssm_config=self._config.ssm,
+                            mixer_cls=self._config.ssm_block_type.get_mixer_class(),
+                            block_index=len(self._config.hybrid_block_layout),
+                            tensor_space=self._tensor_space,
+                            return_input=i != self._config.prediction_heads - 1,
+                        )
+                    )
                 layers.append(LanguageModelHead(self._config, self._tensor_space, prediction_distance=i))
 
         return layers
@@ -94,63 +69,35 @@ class HybridSSMBaseModel[ConfigType: HybridSSMBaseModelConfig](GPTBaseModel[Conf
         Create a list of layers for the model, interleaving Transformer and Mamba blocks
         according to the block pattern.
         """
-        layers = [LanguageModelEmbedding(self._config, self._tensor_space)]
+        layers: list[Layer] = [LanguageModelEmbedding(self._config, self._tensor_space)]
 
         # Create blocks according to pattern
         for i, block_type in enumerate(self._config.hybrid_block_layout):
             if block_type == SSMBlockType.transformer:
                 # Transformer block
                 layers.append(
-                    TransformerLayer(
+                    TransformerBlock(
                         self._config.transformer,
                         self._tensor_space,
-                        layer_index=i + 1,
+                        block_index=i + 1,
                         return_input=(
                             i == len(self._config.hybrid_block_layout) - 1 and self._config.prediction_heads > 1
                         ),
                     )
                 )
-            elif block_type == SSMBlockType.mamba2_discrete:
-                mamba_block = self.SSM_BLOCK_CLS(
-                    config_transformer=self._config.transformer,
-                    config_ssm=self._config.ssm,
-                    mixer_cls=DiscreteMamba2,
-                    layer_index=i + 1,
-                    tensor_space=self._tensor_space,
-                    return_input=(
-                        i == len(self._config.hybrid_block_layout) - 1 and self._config.prediction_heads > 1
-                    ),
-                )
-                layers.append(mamba_block)
-
-            elif block_type == SSMBlockType.mamba:
-                # Create Mamba block
-                mamba_block = self.SSM_BLOCK_CLS(
-                    config_transformer=self._config.transformer,
-                    config_ssm=self._config.ssm,
-                    mixer_cls=MambaLayer,
-                    layer_index=i + 1,
-                    tensor_space=self._tensor_space,
-                    return_input=(
-                        i == len(self._config.hybrid_block_layout) - 1 and self._config.prediction_heads > 1
-                    ),
-                )
-                layers.append(mamba_block)
-
-            elif block_type == SSMBlockType.mamba2:
-                mamba_block = self.SSM_BLOCK_CLS(
-                    config_transformer=self._config.transformer,
-                    config_ssm=self._config.ssm,
-                    mixer_cls=Mamba2,
-                    layer_index=i + 1,
-                    tensor_space=self._tensor_space,
-                    return_input=(
-                        i == len(self._config.hybrid_block_layout) - 1 and self._config.prediction_heads > 1
-                    ),
-                )
-                layers.append(mamba_block)
             else:
-                raise ValueError(f"Invalid block type: {block_type}. Must be {SSMBlockType.__members__}")
+                layers.append(
+                    SSMBlock(
+                        transformer_config=self._config.transformer,
+                        ssm_config=self._config.ssm,
+                        mixer_cls=self._config.ssm_block_type.get_mixer_class(),
+                        block_index=i + 1,
+                        tensor_space=self._tensor_space,
+                        return_input=(
+                            i == len(self._config.hybrid_block_layout) - 1 and self._config.prediction_heads > 1
+                        ),
+                    )
+                )
 
         # Add the output layers
         layers += self.get_output_layers()

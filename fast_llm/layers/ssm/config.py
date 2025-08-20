@@ -23,6 +23,7 @@ class SSMDimNames:
 
     # Mamba 2
     x_proj_dim_2 = "x_proj_dim_2"  # d_xb
+    c_heads = "c_heads"
 
 
 class SSMBlockType(enum.StrEnum):
@@ -34,6 +35,22 @@ class SSMBlockType(enum.StrEnum):
     mamba2_discrete = "m2d"
     mamba2 = "m2"
     transformer = "t"
+
+    def get_mixer_class(self):
+        if self == SSMBlockType.mamba:
+            from fast_llm.layers.ssm.mamba_layer import MambaLayer
+
+            return MambaLayer
+        elif self == SSMBlockType.mamba2:
+            from fast_llm.layers.ssm.mamba2 import Mamba2
+
+            return Mamba2
+        elif self == SSMBlockType.mamba2_discrete:
+            from fast_llm.layers.ssm.discrete_mamba2 import DiscreteMamba2
+
+            return DiscreteMamba2
+        else:
+            raise NotImplementedError(self)
 
 
 @config_class()
@@ -95,11 +112,6 @@ class SSMConfig(LLMBlockConfig):
         desc="The MLP intermediate activation type. Default: SiLU for gated MLP, GeLU otherwise.",
         hint=FieldHint.architecture,
     )
-    debug_ssm: bool = Field(
-        default=False,
-        desc="debug_ssm",
-        hint=FieldHint.optional,
-    )
     dt_min: float = Field(
         default=0.001,
         desc="Minimum step size for discretization",
@@ -144,18 +156,6 @@ class SSMConfig(LLMBlockConfig):
     dt_max: float = Field(
         default=0.1,
         desc="Maximum step size for discretization",
-        hint=FieldHint.core,
-        valid=check_field(Assert.gt, 0),
-    )
-    dt_min: float = Field(
-        default=0.001,
-        desc="Minimum step size for discretization",
-        hint=FieldHint.core,
-        valid=check_field(Assert.gt, 0),
-    )
-    dt_init_floor: float = Field(
-        default=1e-4,
-        desc="Minimum value for initializing dt",
         hint=FieldHint.core,
         valid=check_field(Assert.gt, 0),
     )

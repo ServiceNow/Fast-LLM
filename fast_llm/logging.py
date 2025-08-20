@@ -138,6 +138,8 @@ def log_tensor[
     if level < 1:
         return
     tensor = tensor.detach()
+    if tensor.ndim == 0:
+        tensor = tensor[None]
     save_stats = TensorLogs.config.save
     shape = tuple(tensor.shape)
     _, dtype = str(tensor.dtype).split("torch.")

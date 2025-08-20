@@ -39,6 +39,7 @@ def test_gpt_concatenate():
 
 
 def test_gpt_concatenate_data():
+    get_test_dataset()
     get_test_data_and_compare_samples(
         {
             "datasets": {
