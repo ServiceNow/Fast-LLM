@@ -2,10 +2,12 @@ import typing
 
 from fast_llm.config import Field, FieldHint, check_field, config_class, skip_valid_if_none
 from fast_llm.engine.base_model.config import BaseModelConfig
+from fast_llm.engine.config_utils.initialization import init_normal_
 from fast_llm.functional.config import CrossEntropyImpl, DistillationLossImpl
 from fast_llm.layers.attention.config import TransformerConfig
 from fast_llm.layers.attention.rotary.config import NoRotaryConfig
 from fast_llm.layers.block.config import BlockKwargs
+from fast_llm.layers.common.linear.config import LinearWeightConfig
 from fast_llm.utils import Assert
 
 
@@ -41,23 +43,39 @@ class LanguageModelBaseConfig(BaseModelConfig):
         desc="Configuration for the transformer architecture.",
         hint=FieldHint.architecture,
     )
+    word_embeddings_layer: LinearWeightConfig = Field(
+        desc="Configuration for the word embedding (weight).",
+        hint=FieldHint.architecture,
+    )
+    position_embeddings_layer: LinearWeightConfig = Field(
+        desc="Configuration for the word embedding (weight).",
+        hint=FieldHint.architecture,
+    )
+    output_layer: LinearWeightConfig = Field(
+        desc="Configuration for the LM output layer (weight). Ignored for tied embeddings",
+        hint=FieldHint.architecture,
+    )
+    # TODO: Move to `position_embeddings_layer`?
     max_position_embeddings: int = Field(
         default=2048,
         desc="Number of absolute position embeddings, if applicable.",
         hint=FieldHint.architecture,
         valid=check_field(Assert.gt, 0),
     )
+    # TODO: Move to `word_embeddings_layer`/`output_layer`?
     vocab_size: int = Field(
         default=49152,
         desc="Size of the vocabulary, i.e., number of vocabulary embeddings and logits.",
         hint=FieldHint.architecture,
         valid=check_field(Assert.gt, 0),
     )
+    # TODO: Move to `position_embeddings_layer`?
     use_position_embeddings: bool = Field(
         default=None,
         desc="Enable absolute position embeddings. Default: Enable unless using rotary embeddings.",
         hint=FieldHint.architecture,
     )
+    # TODO: Move to `output_layer`? (dynamic type?)
     tie_word_embeddings: bool = Field(
         default=True,
         desc="Tie the output weights (logits) with the vocabulary embedding.",
@@ -68,22 +86,6 @@ class LanguageModelBaseConfig(BaseModelConfig):
         desc="Number of multi-token prediction heads.",
         hint=FieldHint.architecture,
         valid=check_field(Assert.gt, 0),
-    )
-    init_method_std_embed: float = Field(
-        default=None,
-        desc="Initialization scale for the vocabulary embedding and output weights (logits).",
-        hint=FieldHint.feature,
-        valid=check_field(Assert.geq, 0),
-    )
-    init_method_max_embed: float | None = Field(
-        default=None,
-        desc="Max value for clamping initialized weights of the vocabulary embedding and output (logits).",
-        hint=FieldHint.feature,
-    )
-    init_method_min_embed: float | None = Field(
-        default=None,
-        desc="Min value for clamping initialized weights of the vocabulary embedding and output (logits).",
-        hint=FieldHint.feature,
     )
     enable_dpo: bool | None = Field(
         default=False,
@@ -125,6 +127,7 @@ class LanguageModelBaseConfig(BaseModelConfig):
     # Tensor-parallel word embeddings
     # (Default init std is different, dropout won't match, needs seq_first = False.)
     # (disable to allow for sequence-parallel embeddings and logits, better for larger models)
+    # TODO: Rename to `vocab_parallel`? Move to `word_embeddings_layer`/`output_layer`?
     parallel_embeddings: bool = Field(
         default=True,
         desc="Allow for tensor-parallel vocabulary embeddings and output weights.",
@@ -173,19 +176,6 @@ class LanguageModelBaseConfig(BaseModelConfig):
         hint=FieldHint.feature,
         valid=check_field(Assert.geq, 0),
     )
-    embeddings_lr_scale: float | None = Field(
-        default=None,
-        desc="Learning rate scale for the word embeddings.",
-        doc="May be used to freeze some layers by setting their scale to zero.",
-        hint=FieldHint.feature,
-        valid=skip_valid_if_none(check_field(Assert.geq, 0)),
-    )
-    output_lr_scale: float | None = Field(
-        default=None,
-        desc="Custom learning rate scale for the output weights.",
-        doc="May be used to freeze the output weights by setting their scale to zero.",
-        hint=FieldHint.feature,
-    )
     prediction_loss_coefficient: list[float] | None = Field(
         default=None,
         desc="Loss coefficient for each prediction head.",
@@ -194,6 +184,12 @@ class LanguageModelBaseConfig(BaseModelConfig):
     )
 
     def _validate(self) -> None:
+        default_init = init_normal_(0, self.hidden_size**-0.5)
+        self.word_embeddings_layer.default = LinearWeightConfig(weight_initialization=default_init)
+        # TODO: Use `word_embeddings_layer` as default? (More consistent with tied weights)
+        self.output_layer.default = LinearWeightConfig(weight_initialization=default_init)
+        self.position_embeddings_layer.default = LinearWeightConfig(weight_initialization=default_init)
+
         self.transformer.validate()
         with self._set_implicit_default():
             if self.language_model_loss_factor is None:
@@ -203,15 +199,7 @@ class LanguageModelBaseConfig(BaseModelConfig):
                     self.language_model_loss_factor = 0.0
             if self.use_position_embeddings is None:
                 self.use_position_embeddings = isinstance(self.transformer.rotary, NoRotaryConfig)
-            if self.init_method_std_embed is None:
-                self.init_method_std_embed = self.transformer.init_method_std
-            if self.init_method_max_embed is None:
-                self.init_method_max_embed = self.transformer.init_method_max
-            if self.init_method_min_embed is None:
-                self.init_method_min_embed = self.transformer.init_method_min
         super()._validate()
-        if self.init_method_max_embed is not None and self.init_method_min_embed is not None:
-            Assert.leq(self.init_method_min_embed, self.init_method_max_embed)
         if self.distillation_model is not None:
             if self.prediction_heads > 1:
                 raise NotImplementedError("Multi-token prediction not supported with distillation.")

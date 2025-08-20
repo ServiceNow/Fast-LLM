@@ -1,8 +1,10 @@
 import enum
 import typing
 
-from fast_llm.config import Config, Field, FieldHint, check_field, config_class, skip_valid_if_none
+from fast_llm.config import Config, Field, FieldHint, check_field, config_class
+from fast_llm.engine.config_utils.initialization import init_normal_, init_zeros_
 from fast_llm.functional.config import ActivationType, MLPRecomputeLevel
+from fast_llm.layers.common.linear.config import LinearConfig
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
@@ -23,6 +25,19 @@ class RoutingType(str, enum.Enum):
 class MLPConfig(Config):
     # TODO: Review names    # TODO: Separate MoE?
     _abstract = False
+    layer_1: LinearConfig = Field(
+        desc="Configuration for the first MLP layer.",
+        hint=FieldHint.architecture,
+    )
+    layer_2: LinearConfig = Field(
+        desc="Configuration for the second MLP layer.",
+        hint=FieldHint.architecture,
+    )
+    router: LinearConfig = Field(
+        # TODO: Improve default?
+        desc="Configuration for the MoE router.",
+        hint=FieldHint.feature,
+    )
     ffn_hidden_size: int = Field(
         default=None,
         desc="Hidden dimension of the MLP intermediate state. Default: 4 * hidden_size.",
@@ -88,18 +103,6 @@ class MLPConfig(Config):
         hint=FieldHint.feature,
         valid=check_field(Assert.geq, 0),
     )
-    mlp_lr_scale: float | None | tuple[float | None, ...] = Field(
-        default=None,
-        desc="Custom learning rate scale for each expert.",
-        doc="May be used to freeze some experts by setting their scale to zero.",
-        hint=FieldHint.feature,
-    )
-    router_lr_scale: float | None = Field(
-        default=None,
-        desc="Custom learning rate for the MoE router weight.",
-        hint=FieldHint.feature,
-        valid=skip_valid_if_none(check_field(Assert.geq, 0)),
-    )
     dropless_moe: bool = Field(
         default=True, desc="Evaluate all the experts at once using dropless MoE.", hint=FieldHint.expert
     )
@@ -109,75 +112,26 @@ class MLPConfig(Config):
         " Reduces memory usage, but increases fragmentation and requires CPU synchronisation. Not recommended.",
         hint=FieldHint.expert,
     )
-    # TODO: Review initialization
-    init_method_std_mlp_1: float = Field(
-        default=None,
-        desc="Scale for the MLP first layer weight initialization. Default: init_method_std",
-        hint=FieldHint.optional,
-        valid=check_field(Assert.geq, 0),
-    )
-    init_method_max_mlp_1: float | None = Field(
-        default=None,
-        desc="Max value for clamping initialized weights for MLP first layer. Default: float('inf')",
-        hint=FieldHint.optional,
-    )
-    init_method_min_mlp_1: float | None = Field(
-        default=None,
-        desc="Min value for clamping initialized weights for MLP first layer. Default: -float('inf')",
-        hint=FieldHint.optional,
-    )
-    init_method_std_mlp_2: float = Field(
-        default=None,
-        desc="Scale for the MLP second layer weight initialization. Default: init_method_std",
-        hint=FieldHint.optional,
-        valid=check_field(Assert.geq, 0),
-    )
-    init_method_max_mlp_2: float | None = Field(
-        default=None,
-        desc="Max value for clamping initialized weights for MLP second layer. Default: float('inf')",
-        hint=FieldHint.optional,
-    )
-    init_method_min_mlp_2: float | None = Field(
-        default=None,
-        desc="Min value for clamping initialized weights for MLP second layer. Default: -float('inf')",
-        hint=FieldHint.optional,
-    )
-
-    @property
-    def add_mlp_bias(self) -> bool:
-        from fast_llm.layers.block.config import AddLinearBiasChoices
-
-        # TODO: Make this work without inheritance.
-        if isinstance(self.add_linear_biases, bool):
-            return self.add_linear_biases
-        if self.add_linear_biases == AddLinearBiasChoices.everywhere:
-            return True
-        return False
 
     def _validate(self) -> None:
+        # TODO: Make this work without inheritance.
+        for layer, bias, scale in zip(
+            (self.layer_1, self.layer_2, self.router),
+            (self.add_linear_biases, self.add_linear_biases, False),
+            (1, max(self.num_blocks, 1), 1),
+        ):
+            layer.default = LinearConfig(
+                bias=bias,
+                weight_initialization=init_normal_(0, (self.hidden_size * scale) ** -0.5),
+                bias_initialization=init_zeros_,
+                apply_peft=False,
+            )
+
         with self._set_implicit_default():
             if self.activation_type is None:
                 self.activation_type = ActivationType.silu if self.gated else ActivationType.gelu
-            # TODO: Make this work without inheritance.
             if self.ffn_hidden_size is None:
                 self.ffn_hidden_size = 4 * self.hidden_size
-            # TODO: Review initialization
-            if self.init_method_std_mlp_1 is None:
-                self.init_method_std_mlp_1 = self.init_method_std
-            if self.init_method_std_mlp_2 is None:
-                self.init_method_std_mlp_2 = self.init_method_std / max(2 * self.num_layers, 1) ** 0.5
-            if self.init_method_max_mlp_1 is None:
-                self.init_method_max_mlp_1 = self.init_method_max
-            if self.init_method_min_mlp_1 is None:
-                self.init_method_min_mlp_1 = self.init_method_min
-            if self.init_method_max_mlp_2 is None:
-                self.init_method_max_mlp_2 = self.init_method_max
-            if self.init_method_min_mlp_2 is None:
-                self.init_method_min_mlp_2 = self.init_method_min
-            if self.init_method_min_mlp_1 is not None and self.init_method_max_mlp_1 is not None:
-                Assert.leq(self.init_method_min_mlp_1, self.init_method_max_mlp_1)
-            if self.init_method_min_mlp_2 is not None and self.init_method_max_mlp_2 is not None:
-                Assert.leq(self.init_method_min_mlp_2, self.init_method_max_mlp_2)
 
         self.num_unshared_experts = self.num_experts - self.num_shared_experts
 

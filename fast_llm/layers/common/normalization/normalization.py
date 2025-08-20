@@ -3,7 +3,6 @@ import abc
 import torch
 
 from fast_llm.config import Configurable
-from fast_llm.engine.config_utils.initialization import init_ones_, init_uniform_centered_, init_zeros_
 from fast_llm.engine.config_utils.run import log_main_rank
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.functional.config import TritonConfig
@@ -16,7 +15,7 @@ from fast_llm.layers.common.normalization.config import (
     RMSNormalizationConfig,
 )
 from fast_llm.tensor import ParameterMeta, accumulate_gradient
-from fast_llm.utils import Assert
+from fast_llm.utils import Assert, combine_lr_scales
 
 try:
     import fused_layer_norm_cuda  # noqa
@@ -152,7 +151,7 @@ class Normalization[ConfigType: NormalizationConfig](Configurable[ConfigType], t
     def __init__(self, config: ConfigType, hidden_dim: TensorDim, lr_scale: float | None = None):
         super().__init__(config)
         self._hidden_dim = hidden_dim
-        self._lr_scale = lr_scale
+        self._lr_scale = combine_lr_scales(self._config.lr_scale, lr_scale)
         assert not self._hidden_dim.is_parallel
 
     @abc.abstractmethod
@@ -205,22 +204,16 @@ class LayerNormalization[ConfigType: LayerNormalizationConfig](Normalization[Con
         else:
             raise NotImplementedError(implementation)
 
-        if self.config.initialization_range:
-            mean = 0 if self.zero_centered else 1
-            weight_init_method = init_uniform_centered_(self.config.initialization_range, mean=mean)
-        else:
-            weight_init_method = init_zeros_ if self._config.zero_centered else init_ones_
-
         self.weight = ParameterMeta.from_dims(
             (hidden_dim,),
-            init_method=weight_init_method,
+            init_method=self._config.weight_initialization_method,
             weight_decay=False,
             auto_grad_accumulation=implementation == NormalizationImplementation.torch,
             lr_scale=self._lr_scale,
         )
         self.bias = ParameterMeta.from_dims(
             (hidden_dim,),
-            init_method=init_zeros_,
+            init_method=self._config.bias_initialization_method,
             weight_decay=False,
             auto_grad_accumulation=implementation == NormalizationImplementation.torch,
             lr_scale=self._lr_scale,
@@ -279,18 +272,12 @@ class RMSNormalization[ConfigType: RMSNormalizationConfig](Normalization[ConfigT
         else:
             raise NotImplementedError(implementation)
 
-        if self.config.initialization_range:
-            mean = 0 if self.zero_centered else 1
-            weight_init_method = init_uniform_centered_(self.config.initialization_range, mean=mean)
-        else:
-            weight_init_method = init_zeros_ if self._config.zero_centered else init_ones_
-
         self.weight = ParameterMeta.from_dims(
             (hidden_dim,),
-            init_method=weight_init_method,
+            init_method=self._config.weight_initialization_method,
             weight_decay=False,
             auto_grad_accumulation=True,
-            lr_scale=lr_scale,
+            lr_scale=self._lr_scale,
         )
         self._normalized_shape = self.weight.shape
 

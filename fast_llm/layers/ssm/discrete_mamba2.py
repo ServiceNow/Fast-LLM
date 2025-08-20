@@ -10,7 +10,7 @@ from fast_llm.engine.distributed.config import DistributedConfig, DistributedDim
 from fast_llm.functional.config import ActivationType
 from fast_llm.layers.block.block import BlockLayer
 from fast_llm.layers.block.config import BlockConfig, BlockKwargs
-from fast_llm.layers.common.linear import InputParallelLinear, OutputParallelLinear
+from fast_llm.layers.common.linear.linear import InputParallelLinear, OutputParallelLinear
 from fast_llm.layers.ssm.config import SSMConfig
 from fast_llm.layers.ssm.mamba import init_kaiming_
 from fast_llm.tensor import ParameterMeta

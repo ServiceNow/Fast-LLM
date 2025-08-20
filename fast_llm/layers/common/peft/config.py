@@ -1,4 +1,3 @@
-import abc
 import typing
 
 from fast_llm.config import Field, FieldHint, config_class
@@ -7,14 +6,13 @@ from fast_llm.engine.base_model.config import BaseModelConfig
 if typing.TYPE_CHECKING:
     import torch
 
-    from fast_llm.layers.common.linear import LinearBase, LinearLike
+    from fast_llm.layers.common.linear.linear import InputParallelLinear, LinearBase, LinearLike, OutputParallelLinear
     from fast_llm.layers.common.normalization.normalization import Normalization
     from fast_llm.tensor import ParameterMeta
 
 
-@config_class()
+@config_class(registry=True)
 class PeftConfig(BaseModelConfig):
-    @abc.abstractmethod
     def apply_linear(
         self,
         module: "LinearBase",
@@ -36,12 +34,12 @@ class PeftConfig(BaseModelConfig):
         return parameter
 
 
-@config_class()
+@config_class(dynamic_type={PeftConfig: "none"})
 class NoPeftConfig(PeftConfig):
     _abstract = False
 
 
-@config_class()
+@config_class(dynamic_type={PeftConfig: "lora"})
 class LoRAConfig(PeftConfig):
     _abstract = False
 
@@ -75,7 +73,6 @@ class LoRAConfig(PeftConfig):
         if not enabled:
             return self.apply_other(module)
 
-        from fast_llm.layers.common.linear import InputParallelLinear, OutputParallelLinear
         from fast_llm.layers.common.peft.lora import lora_linear
 
         if isinstance(module, InputParallelLinear):

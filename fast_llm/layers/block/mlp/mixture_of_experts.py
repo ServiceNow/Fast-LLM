@@ -4,7 +4,6 @@ import warnings
 import torch
 
 from fast_llm.core.distributed import ProcessGroup, set_generator
-from fast_llm.engine.config_utils.initialization import init_normal_
 from fast_llm.engine.config_utils.tensor_dim import CompositeTensorDim, TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.functional.triton.mlp import mlp_autograd, mlp_autograd_looped
@@ -13,8 +12,7 @@ from fast_llm.layers.block.config import BlockConfig, BlockKwargs
 from fast_llm.layers.block.mlp.config import MLPConfig, MLPLossNames, RoutingType
 from fast_llm.layers.block.mlp.mlp import MLPBase
 from fast_llm.layers.common.auxiliary_loss import AuxiliaryLoss, z_loss
-from fast_llm.layers.common.linear import Linear
-from fast_llm.utils import Assert, combine_lr_scales
+from fast_llm.utils import Assert
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +39,7 @@ class MixtureOfExpertMLP[ConfigType: MLPConfig](MLPBase[ConfigType]):
         hidden_dim: TensorDim,
         block_index: int,
         name: str,
+        # TODO: Vary LR scale (or full config?) per expert.
         lr_scale: float | None,
     ):
         Assert.gt(config.num_experts, 1)
@@ -48,16 +47,11 @@ class MixtureOfExpertMLP[ConfigType: MLPConfig](MLPBase[ConfigType]):
         assert not config.add_linear_biases, "Biases not supported for MoE."
         super().__init__(config, block_config, distributed_config, hidden_dim, block_index, name, lr_scale)
 
-        self.router = Linear(
+        self.router = self._config.router.get_layer(
             self._hidden_dim,
             TensorDim("router_experts", self._config.num_unshared_experts),
-            bias=False,
-            weight_init_method=init_normal_(
-                std=self._block_config.init_method_std,
-                min_val=self._block_config.init_method_min,
-                max_val=self._block_config.init_method_max,
-            ),
-            lr_scale=combine_lr_scales(self._config.router_lr_scale, self._lr_scale),
+            lr_scale=self._lr_scale,
+            peft=self._block_config.peft,
         )
         dropless_moe = self._config.dropless_moe
         if dropless_moe and self._sequence_parallel:

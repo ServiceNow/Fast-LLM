@@ -2,7 +2,7 @@ import typing
 
 import torch
 
-from fast_llm.engine.config_utils.initialization import init_normal_, init_zeros_
+from fast_llm.engine.config_utils.initialization import init_normal_
 from fast_llm.engine.config_utils.tensor_dim import ConcatenatedTensorDim, TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
 from fast_llm.functional.config import TritonConfig
@@ -10,9 +10,7 @@ from fast_llm.functional.triton.mlp import mlp_autograd, torch_mlp_activation, t
 from fast_llm.layers.block.block import BlockLayer
 from fast_llm.layers.block.config import BlockConfig
 from fast_llm.layers.block.mlp.config import MLPConfig
-from fast_llm.layers.block.peft import TransformerSubLayerName
-from fast_llm.layers.common.linear import LinearBase
-from fast_llm.utils import Assert, combine_lr_scales
+from fast_llm.utils import Assert
 
 
 class MLPBase[ConfigType: MLPConfig](BlockLayer[ConfigType]):
@@ -43,31 +41,25 @@ class MLPBase[ConfigType: MLPConfig](BlockLayer[ConfigType]):
 
         self._activation_fn = triton_mlp_activation_autograd if TritonConfig.TRITON_ENABLED else torch_mlp_activation
 
-        lr_scale = combine_lr_scales(self._lr_scale, self._config.mlp_lr_scale)
-
         # So both layers' weights have shape (num_experts [* gate_up] * ffn, hidden_size)
-        self.layer_1 = LinearBase(
+        self.layer_1 = self.config.layer_1.get_layer(
             hidden_dim,
             intermediate_1_dim,
-            bias=self._config.add_mlp_bias,
-            weight_init_method=init_method_1,
-            bias_init_method=init_zeros_,
-            lr_scale=lr_scale,
+            sequence_parallel=self._sequence_parallel,
+            transposed_weight=False,
+            auto_bias_grad_accumulation=False,
+            lr_scale=self._lr_scale,
+            peft=self._block_config.peft,
         )
-        self.layer_2 = LinearBase(
+        self.layer_2 = self.config.layer_2.get_layer(
             intermediate_2_dim,
             hidden_dim,
-            bias=self._config.add_mlp_bias,
-            weight_init_method=init_method_2,
-            bias_init_method=init_zeros_,
-            auto_bias_grad_accumulation=self._distributed_config.tensor_parallel > 1,
+            sequence_parallel=self._sequence_parallel,
             transposed_weight=True,
-            lr_scale=lr_scale,
+            auto_bias_grad_accumulation=self._distributed_config.tensor_parallel > 1,
+            lr_scale=self._lr_scale,
+            peft=self._block_config.peft,
         )
-
-        # PEFT.
-        self.layer_1 = self._block_config.peft.apply_linear(self.layer_1, TransformerSubLayerName.mlp_1)
-        self.layer_2 = self._block_config.peft.apply_linear(self.layer_2, TransformerSubLayerName.mlp_2)
 
     def _get_intermediate_dims(self):
         intermediate_2_dim = TensorDim("intermediate", self._config.ffn_hidden_size, self._parallel_dim)

@@ -4,10 +4,12 @@ import warnings
 
 from fast_llm.config import Config, Field, FieldHint, check_field, config_class, skip_valid_if_none
 from fast_llm.engine.config_utils.data_type import DataType
+from fast_llm.engine.config_utils.initialization import init_normal_, init_zeros_
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.functional.config import TritonConfig
 from fast_llm.layers.attention.rotary.config import RotaryConfig
-from fast_llm.layers.block.config import AddLinearBiasChoices, BlockConfig, BlockKwargs
+from fast_llm.layers.block.config import BlockConfig, BlockKwargs
+from fast_llm.layers.common.linear.config import LinearConfig
 from fast_llm.utils import Assert, div
 
 logger = logging.getLogger(__name__)
@@ -33,6 +35,23 @@ class AttentionConfig(Config):
     _abstract = False
 
     # TODO: Review names
+    query_layer: LinearConfig = Field(
+        desc="Configuration for the query layer.",
+        hint=FieldHint.architecture,
+    )
+    key_layer: LinearConfig = Field(
+        desc="Configuration for the key layer.",
+        hint=FieldHint.architecture,
+    )
+    # TODO: Use
+    value_layer: LinearConfig = Field(
+        desc="Configuration for the value layer.",
+        hint=FieldHint.architecture,
+    )
+    dense_layer: LinearConfig = Field(
+        desc="Initialization configuration for the dense layer.",
+        hint=FieldHint.feature,
+    )
     rotary: RotaryConfig = Field(
         desc="Configuration for the rotary positional embeddings.",
         hint=FieldHint.architecture,
@@ -88,64 +107,28 @@ class AttentionConfig(Config):
         " Under muP (if scaling number of heads instead of kv_channels): use 0.5.",
         valid=skip_valid_if_none(check_field(Assert.geq, 0)),
     )
-    # TODO: Review initialization
-    init_method_std_qkv: float = Field(
-        default=None,
-        desc="Scale for the query, key and value weight initialization. Default: init_method_std",
-        hint=FieldHint.optional,
-        valid=check_field(Assert.geq, 0),
-    )
-    init_method_max_qkv: float | None = Field(
-        default=None,
-        desc="Max value for clamping initialized weights for query, key and value matrices. Default: float('inf')",
-        hint=FieldHint.optional,
-    )
-    init_method_min_qkv: float | None = Field(
-        default=None,
-        desc="Min value for clamping initialized weights for query, key and value matrices. Default: -float('inf')",
-        hint=FieldHint.optional,
-    )
-    init_method_std_attn_proj: float = Field(
-        default=None,
-        desc="Scale for the attention projection weight initialization. Default: init_method_std",
-        hint=FieldHint.optional,
-        valid=check_field(Assert.geq, 0),
-    )
-    init_method_max_attn_proj: float | None = Field(
-        default=None,
-        desc="Max value for clamping initialized weights for attention projection. Default: float('inf')",
-        hint=FieldHint.optional,
-    )
-    init_method_min_attn_proj: float | None = Field(
-        default=None,
-        desc="Min value for clamping initialized weights for attention projection. Default: -float('inf')",
-        hint=FieldHint.optional,
-    )
 
     def _validate(self) -> None:
         with self._set_implicit_default():
             # TODO: Make this work without inheritance.
             if self.kv_channels is None:
                 self.kv_channels = div(self.hidden_size, self.num_attention_heads)
-            # TODO: Review initialization
-            if self.init_method_std_qkv is None:
-                self.init_method_std_qkv = self.init_method_std
-            if self.init_method_std_attn_proj is None:
-                self.init_method_std_attn_proj = self.init_method_std / max(2 * self.num_layers, 1) ** 0.5
-            if self.init_method_max_qkv is None:
-                self.init_method_max_qkv = self.init_method_max
-            if self.init_method_min_qkv is None:
-                self.init_method_min_qkv = self.init_method_min
-            if self.init_method_max_attn_proj is None:
-                self.init_method_max_attn_proj = self.init_method_max
-            if self.init_method_min_attn_proj is None:
-                self.init_method_min_attn_proj = self.init_method_min
-            if self.init_method_min_qkv is not None and self.init_method_max_qkv is not None:
-                Assert.leq(self.init_method_min, self.init_method_max)
-            if self.init_method_min_qkv is not None and self.init_method_max_qkv is not None:
-                Assert.leq(self.init_method_min_qkv, self.init_method_max_qkv)
-            if self.init_method_min_attn_proj is not None and self.init_method_max_attn_proj is not None:
-                Assert.leq(self.init_method_min_attn_proj, self.init_method_max_attn_proj)
+        # TODO: Block variables as defaults?
+        for layer, scale, enable_peft in (
+            zip(
+                (self.query_layer, self.key_layer, self.value_layer, self.dense_layer),
+                (1, 1, 1, 2 * max(self.num_blocks, 1)),
+                (True, False, True, False),
+            ),
+        ):
+            layer.default = LinearConfig(
+                bias=True,
+                weight_initialization=init_normal_(0, (self.hidden_size * scale) ** -0.5),
+                bias_initialization=init_zeros_,
+                lr_scale=None,
+                enable_peft=True,
+            )
+        super()._validate()
 
         super()._validate()
 
@@ -162,37 +145,8 @@ class AttentionConfig(Config):
     def do_use_flash_attention(self, distributed_config: DistributedConfig) -> bool:
         return self.use_flash_attention and distributed_config.training_dtype in (DataType.float16, DataType.bfloat16)
 
-    @property
-    def add_qkv_bias(self) -> bool:
-        # TODO: Make this work without inheritance.
-        if isinstance(self.add_linear_biases, bool):
-            return self.add_linear_biases
-        if self.add_linear_biases == AddLinearBiasChoices.nowhere:
-            return False
-        return True
-
-    @property
-    def add_dense_bias(self) -> bool:
-        # TODO: Make this work without inheritance.
-        if isinstance(self.add_linear_biases, bool):
-            return self.add_linear_biases
-        if self.add_linear_biases == AddLinearBiasChoices.everywhere:
-            return True
-        return False
-
 
 @config_class()
 # TODO: Use composition instead
 class TransformerConfig(AttentionConfig, BlockConfig):
     _abstract = False
-
-    def _validate(self) -> None:
-        with self._set_implicit_default():
-            # Kept here for initialization order.
-            # TODO: Review initialization
-            if self.init_method_std is None:
-                self.init_method_std = self.hidden_size**-0.5
-            if self.init_method_min is not None and self.init_method_max is not None:
-                Assert.leq(self.init_method_min, self.init_method_max)
-
-        super()._validate()

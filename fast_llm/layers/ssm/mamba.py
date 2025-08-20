@@ -10,7 +10,7 @@ from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.functional.config import ActivationType
 from fast_llm.layers.block.block import BlockLayer
 from fast_llm.layers.block.config import BlockConfig, BlockKwargs
-from fast_llm.layers.common.linear import Linear
+from fast_llm.layers.common.linear.linear import Linear
 from fast_llm.layers.ssm.config import SSMConfig
 from fast_llm.tensor import ParameterMeta
 from fast_llm.utils import Assert, combine_lr_scales, div

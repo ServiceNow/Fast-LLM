@@ -1,10 +1,8 @@
-import enum
-
 from fast_llm.config import Field, FieldHint, check_field, config_class
 from fast_llm.engine.base_model.config import BaseModelConfig
 from fast_llm.layers.block.mlp.config import MLPConfig
-from fast_llm.layers.block.peft import TransformerPeftConfig
 from fast_llm.layers.common.normalization.config import NormalizationConfig
+from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.utils import Assert
 
 # TODO: Generalize these beyond language models? (Ex. vision)
@@ -34,22 +32,16 @@ class BlockKwargs:
     grad_output = "grad_output"
 
 
-class AddLinearBiasChoices(str, enum.Enum):
-    nowhere = "nowhere"
-    everywhere = "everywhere"
-    only_attn_qkv = "only_attn_qkv"
-
-
 @config_class()
 # TODO: Use composition instead
 class BlockConfig(MLPConfig, BaseModelConfig):
 
-    # TODO: Review names
+    # TODO: Allow separate config for each normalization layer?
     normalization: NormalizationConfig = Field(
         desc="Configuration for the normalization layers architecture.",
         hint=FieldHint.architecture,
     )
-    peft: TransformerPeftConfig = Field(
+    peft: PeftConfig = Field(
         desc="Configuration for the parameter-efficient fine tuning.",
         hint=FieldHint.architecture,
     )
@@ -76,10 +68,9 @@ class BlockConfig(MLPConfig, BaseModelConfig):
         desc="Log the memory usage after each operation in a transformer layer..",
         hint=FieldHint.logging,
     )
-    add_linear_biases: bool | AddLinearBiasChoices = Field(
+    add_linear_biases: bool = Field(
         default=True,
-        desc="Add biases to all, none or Q, K, V layers. Accepted values: True, False, or AddLinearBiasChoices.",
-        hint=FieldHint.architecture,
+        desc="Whether to add biases to linear layers. May be overridden in individual layer configs.",
     )
 
     # TODO: Move these, not specific to a single block.
@@ -100,22 +91,4 @@ class BlockConfig(MLPConfig, BaseModelConfig):
         desc="Custom learning rate scale for each layer.",
         doc="May be used to freeze some layers by setting their scale to zero.",
         hint=FieldHint.feature,
-    )
-
-    # TODO: Review initialization
-    init_method_std: float = Field(
-        default=None,
-        desc="Default scale for weight initialization. Default: hidden_size**-0.5",
-        hint=FieldHint.optional,
-        valid=check_field(Assert.geq, 0),
-    )
-    init_method_max: float | None = Field(
-        default=None,
-        desc="Max value for clamping initialized weights. Default: float('inf')",
-        hint=FieldHint.optional,
-    )
-    init_method_min: float | None = Field(
-        default=None,
-        desc="Min value for clamping initialized weights. Default: -float('inf')",
-        hint=FieldHint.optional,
     )

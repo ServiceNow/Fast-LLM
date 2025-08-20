@@ -61,14 +61,8 @@ class LanguageModelEmbedding[ConfigType: LanguageModelBaseConfig](BlockLayerBase
             self._vocab_start_index = self._distributed_config.tensor_rank * vocab_dim.size
             self._vocab_end_index = (self._distributed_config.tensor_rank + 1) * vocab_dim.size
 
-        self.word_embeddings_weight = ParameterMeta.from_dims(
-            (vocab_dim, self._hidden_dim),
-            init_method=init_normal_(
-                std=config.init_method_std_embed,
-                min_val=config.init_method_min_embed,
-                max_val=config.init_method_max_embed,
-            ),
-            lr_scale=config.embeddings_lr_scale,
+        self.word_embeddings_weight = self._config.word_embeddings_layer.get_weight(
+            vocab_dim, self._hidden_dim, auto_grad_accumulation=True, lr_scale=self._lr_scale
         )
         if self._config.use_absolute_position_embeddings:
             self.position_embeddings_weight = ParameterMeta.from_dims(

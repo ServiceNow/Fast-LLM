@@ -348,7 +348,7 @@ def check_equal_nested(config_a, config_b):
         raise ValueError("\n".join(errors))
 
 
-def combine_lr_scales(*lr_scales: float | None | tuple[float | None, ...]):
+def combine_lr_scales(*lr_scales: float | None | tuple[float | None, ...]) -> float | None | tuple[float | None, ...]:
     # Remove `None` entries.
     lr_scales = tuple(lr_scale for lr_scale in lr_scales if lr_scale is not None)
     if not lr_scales:

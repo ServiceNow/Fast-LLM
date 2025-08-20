@@ -93,6 +93,9 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](BlockLayerBase[Conf
         # Only the first head defines the output weights
         if self._prediction_distance == 0 and not self._config.tie_word_embeddings:
             # untie embedding weights
+            self.output_weights = self._config.word_embeddings_layer.get_weight(
+                self._vocab_dim, hidden_dim, auto_grad_accumulation=True, lr_scale=self._lr_scale
+            )
             self.output_weights = ParameterMeta.from_dims(
                 (self._vocab_dim, hidden_dim),
                 init_method=init_normal_(

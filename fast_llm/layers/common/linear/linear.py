@@ -3,7 +3,7 @@ import typing
 
 import torch
 
-from fast_llm.engine.config_utils.initialization import init_zeros_
+from fast_llm.config import Configurable
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.functional.autograd import wrap_forward_backward
 from fast_llm.functional.linear import (
@@ -15,7 +15,9 @@ from fast_llm.functional.linear import (
     output_parallel_linear_backward,
     output_parallel_linear_forward,
 )
+from fast_llm.layers.common.linear.config import LinearConfig
 from fast_llm.tensor import ParameterMeta
+from fast_llm.utils import combine_lr_scales
 
 logger = logging.getLogger(__name__)
 
@@ -35,41 +37,41 @@ class LinearLike(torch.nn.Module):
         raise NotImplementedError()
 
 
-class LinearBase(LinearLike):
+class LinearBase(Configurable[LinearConfig], LinearLike):
     """
     A base module for linear layers holding weights and biases.
     """
 
     def __init__(
         self,
+        config: LinearConfig,
         in_dim: TensorDim,
         out_dim: TensorDim,
         *,
-        bias=True,
-        weight_init_method,
-        bias_init_method=init_zeros_,
         transposed_weight: bool = False,
+        sequence_parallel: bool = False,
         auto_bias_grad_accumulation: bool = False,
-        lr_scale: float | None | tuple[float | None, ...] = None,
+        lr_scale: float | None = None,
     ):
-        super().__init__()
+        super().__init__(config)
         self._transposed_weight = transposed_weight
+        self._sequence_parallel = sequence_parallel
         self._in_dim = in_dim
         self._out_dim = out_dim
-        self._weight_init_method = weight_init_method
+        self._lr_scale = combine_lr_scales(self._config.lr_scale, lr_scale)
         self.weight = ParameterMeta.from_dims(
             (self._in_dim, self._out_dim) if self._transposed_weight else (self._out_dim, self._in_dim),
-            init_method=weight_init_method,
+            init_method=self._config.weight_initialization,
             auto_grad_accumulation=False,
-            lr_scale=lr_scale,
+            lr_scale=self._lr_scale,
         )
-        if bias:
+        if self._config.bias:
             self.bias = ParameterMeta.from_dims(
                 (self._out_dim,),
-                init_method=bias_init_method,
+                init_method=self._config.bias_initialization,
                 weight_decay=False,
                 auto_grad_accumulation=auto_bias_grad_accumulation,
-                lr_scale=lr_scale,
+                lr_scale=self._lr_scale,
             )
         else:
             self.bias = None
@@ -77,6 +79,10 @@ class LinearBase(LinearLike):
     @property
     def transposed_weight(self) -> bool:
         return self._transposed_weight
+
+    @property
+    def lr_scale(self) -> float | None:
+        return self._lr_scale
 
 
 class Linear(LinearBase):
@@ -86,24 +92,25 @@ class Linear(LinearBase):
 
     def __init__(
         self,
+        config: LinearConfig,
         in_dim: TensorDim,
         out_dim: TensorDim,
         *,
-        bias=True,
-        weight_init_method,
-        bias_init_method=init_zeros_,
         transposed_weight: bool = False,
-        lr_scale: float | None | tuple[float | None, ...] = None,
+        sequence_parallel: bool = False,
+        auto_bias_grad_accumulation: bool = False,
+        lr_scale: float | None = None,
     ):
         assert not in_dim.is_parallel
         assert not out_dim.is_parallel
+        assert not sequence_parallel
         super().__init__(
+            config,
             in_dim,
             out_dim,
-            bias=bias,
-            weight_init_method=weight_init_method,
-            bias_init_method=bias_init_method,
             transposed_weight=transposed_weight,
+            sequence_parallel=sequence_parallel,
+            auto_bias_grad_accumulation=auto_bias_grad_accumulation,
             lr_scale=lr_scale,
         )
 
@@ -123,26 +130,25 @@ class OutputParallelLinear(LinearBase):
 
     def __init__(
         self,
+        config: LinearConfig,
         in_dim: TensorDim,
         out_dim: TensorDim,
         *,
-        bias=True,
-        weight_init_method,
-        bias_init_method=init_zeros_,
         transposed_weight: bool = False,
         sequence_parallel: bool = False,
-        lr_scale: float | None | tuple[float | None, ...] = None,
+        auto_bias_grad_accumulation: bool = False,
+        lr_scale: float | None = None,
     ):
         assert not in_dim.is_parallel
         self._group_size = 1 if out_dim.parallel_dim is None else out_dim.parallel_dim.size
         self._sequence_parallel = sequence_parallel and self._group_size > 1
         super().__init__(
+            config,
             in_dim,
             out_dim,
-            bias=bias,
-            weight_init_method=weight_init_method,
-            bias_init_method=bias_init_method,
             transposed_weight=transposed_weight,
+            sequence_parallel=sequence_parallel and self._group_size > 1,
+            auto_bias_grad_accumulation=auto_bias_grad_accumulation,
             lr_scale=lr_scale,
         )
 
@@ -167,28 +173,25 @@ class InputParallelLinear(LinearBase):
 
     def __init__(
         self,
+        config: LinearConfig,
         in_dim: TensorDim,
         out_dim: TensorDim,
         *,
-        bias=True,
-        weight_init_method,
-        bias_init_method=init_zeros_,
-        sequence_parallel: bool = False,
         transposed_weight: bool = False,
-        lr_scale: float | None | tuple[float | None, ...] = None,
+        sequence_parallel: bool = False,
+        auto_bias_grad_accumulation: bool = False,
+        lr_scale: float | None = None,
     ):
         assert not out_dim.is_parallel
         self._group_size = 1 if in_dim.parallel_dim is None else in_dim.parallel_dim.size
         self._sequence_parallel = sequence_parallel and self._group_size > 1
         super().__init__(
+            config,
             in_dim,
             out_dim,
-            bias=bias,
-            weight_init_method=weight_init_method,
-            bias_init_method=bias_init_method,
             transposed_weight=transposed_weight,
-            # Tensor-parallel bias is computed in _bias_dropout_grad.
-            auto_bias_grad_accumulation=self._group_size > 1,
+            sequence_parallel=sequence_parallel and self._group_size > 1,
+            auto_bias_grad_accumulation=auto_bias_grad_accumulation,
             lr_scale=lr_scale,
         )
 
