@@ -162,9 +162,9 @@ class Mamba2(Mixer):
         """
         assert _mamba_available
         assert _causal_conv1d_available
-        cu_seqlens = kwargs[SSMKwargs.cu_seqlens]
-        seq_idx = kwargs[SSMKwargs.seq_idx]
-        position_indices = kwargs[SSMKwargs.ssm_position_ids]
+        cu_seqlens = kwargs.get(SSMKwargs.cu_seqlens)
+        seq_idx = kwargs.get(SSMKwargs.seq_idx)
+        position_indices = kwargs.get(SSMKwargs.ssm_position_ids)
 
         # inner_projection : (batch/local_sequence, local_sequence/batch, hidden)
         #   -> (batch/sequence, sequence/batch, inner_projection)
