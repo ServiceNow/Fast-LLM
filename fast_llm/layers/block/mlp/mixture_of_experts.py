@@ -40,7 +40,7 @@ class MixtureOfExpertMLP[ConfigType: MLPConfig](MLPBase[ConfigType]):
         hidden_dim: TensorDim,
         block_index: int,
         name: str,
-        lr_scale: float | list[float] | None,
+        lr_scale: float | None,
     ):
         Assert.gt(config.num_experts, 1)
         # TODO: Implement?

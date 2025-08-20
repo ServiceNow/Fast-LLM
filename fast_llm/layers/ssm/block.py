@@ -20,7 +20,7 @@ class SSMBlock[ConfigType: BlockConfig](Block[ConfigType]):
         distributed_config: DistributedConfig,
         hidden_dim: TensorDim,
         block_index: int,
-        lr_scale: float | list[float] | None,
+        lr_scale: float | None,
         name: str,
         mixer_class: type[BlockLayer],
         return_input: bool = False,

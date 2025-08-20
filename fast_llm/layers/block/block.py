@@ -100,7 +100,7 @@ class BlockLayerBase[ConfigType: Config](Configurable[ConfigType], Module):
         hidden_dim: TensorDim,
         block_index: int,
         name: str,
-        lr_scale: float | list[float] | None,
+        lr_scale: float | None,
     ):
         super().__init__(config, distributed_config)
         self._block_config = block_config
@@ -144,7 +144,7 @@ class Block[ConfigType: BlockConfig](BlockLayerBase[ConfigType], Layer):
         hidden_dim: TensorDim,
         block_index: int,
         name: str,
-        lr_scale: float | list[float] | None,
+        lr_scale: float | None,
         return_input: bool = False,
     ):
         super().__init__(
@@ -162,6 +162,7 @@ class Block[ConfigType: BlockConfig](BlockLayerBase[ConfigType], Layer):
         # TODO: add a separate norm_lr_scale
         self.norm_1 = self._config.peft.apply_other(self._config.normalization.get_layer(self._hidden_dim))
         self.norm_2 = self._config.peft.apply_other(self._config.normalization.get_layer(self._hidden_dim))
+
         # Attribute should be mixer, but Attention uses a different name for backward compatibility. TODO: Fix.
         setattr(
             self,
