@@ -7,7 +7,7 @@ from fast_llm.engine.config_utils.run import log_main_rank
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.functional.config import TritonConfig
 from fast_llm.functional.triton.normalization import triton_normalization_autograd
-from fast_llm.layers.common.normalization import (
+from fast_llm.layers.common.normalization.config import (
     LayerNormalizationConfig,
     NoNormalizationConfig,
     NormalizationConfig,
@@ -148,12 +148,7 @@ class FusedRMSNorm(torch.autograd.Function):
 
 
 class Normalization[ConfigType: NormalizationConfig](Configurable[ConfigType], torch.nn.Module):
-    def __init__(
-        self,
-        config: NormalizationConfig,
-        hidden_dim: TensorDim,
-        lr_scale: float | None = None,
-    ):
+    def __init__(self, config: NormalizationConfig, hidden_dim: TensorDim, lr_scale: float | None = None):
         super().__init__(config)
         self._hidden_dim = hidden_dim
         self._lr_scale = combine_lr_scales(self._config.lr_scale, lr_scale)
@@ -177,12 +172,7 @@ class LayerNormalization[ConfigType: LayerNormalizationConfig](Normalization[Con
     TODO: Review this?
     """
 
-    def __init__(
-        self,
-        config: LayerNormalizationConfig,
-        hidden_dim: TensorDim,
-        lr_scale: float | None = None,
-    ):
+    def __init__(self, config: LayerNormalizationConfig, hidden_dim: TensorDim, lr_scale: float | None = None):
         super().__init__(config, hidden_dim, lr_scale)
         implementation = self._config.implementation
         if implementation == NormalizationImplementation.auto:
@@ -219,14 +209,14 @@ class LayerNormalization[ConfigType: LayerNormalizationConfig](Normalization[Con
             init_method=self._config.weight_initialization_method,
             weight_decay=False,
             auto_grad_accumulation=implementation == NormalizationImplementation.torch,
-            lr_scale=lr_scale,
+            lr_scale=self._lr_scale,
         )
         self.bias = ParameterMeta.from_dims(
             (hidden_dim,),
             init_method=self._config.bias_initialization_method,
             weight_decay=False,
             auto_grad_accumulation=implementation == NormalizationImplementation.torch,
-            lr_scale=lr_scale,
+            lr_scale=self._lr_scale,
         )
         self._normalized_shape = self.weight.shape
 
@@ -258,12 +248,7 @@ class RMSNormalization[ConfigType: RMSNormalizationConfig](Configurable[ConfigTy
     TODO: Review this?
     """
 
-    def __init__(
-        self,
-        config: RMSNormalizationConfig,
-        hidden_dim: TensorDim,
-        lr_scale: float | None = None,
-    ):
+    def __init__(self, config: RMSNormalizationConfig, hidden_dim: TensorDim, lr_scale: float | None = None):
         super().__init__(config, hidden_dim, lr_scale)
         assert not hidden_dim.is_parallel
         implementation = self._config.implementation

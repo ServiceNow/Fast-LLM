@@ -111,7 +111,9 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](BlockLayerBase[Conf
                 return TensorMeta.from_dims(
                     (scalar_dim,),
                     tensor_name="Loss",
-                    reductions=((DistributedDimNames.data, ReduceOp.AVG),),  # noqa
+                    reductions=(
+                        (self._distributed_config.get_distributed_dim(DistributedDimNames.data), ReduceOp.AVG),
+                    ),
                 )
             else:
                 return TensorMeta.from_dims(input_.dims[1:], tensor_name="Shared hidden")
@@ -290,7 +292,7 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](BlockLayerBase[Conf
             loss.div_(loss_count)
         if self._sequence_parallel_logits:
             # TODO: Async
-            all_reduce(loss, group=self._distributed.tensor_group)
+            all_reduce(loss, group=self._parallel_dim.group)
         return loss, logit_input_grad.view_as(input_) if logit_input_grad is not None else None
 
     def _logits_cross_entropy_forward_backward(
@@ -307,7 +309,7 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](BlockLayerBase[Conf
             input_=input_,
             weight=weight,
             bias=None,
-            group=self._distributed.tensor_group if self._parallel_logits else None,
+            group=group,
             sequence_parallel=self._sequence_parallel and self._parallel_logits,
         )
 
@@ -353,7 +355,7 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](BlockLayerBase[Conf
                 logits.flatten(0, -2),
                 lm_target,
                 None,
-                group=sgroup,
+                group=group,
                 grad_output=grad_output * self._loss_coefficient * self._config.language_model_loss_factor,
                 implementation=self._cross_entropy_impl,
                 logits_scale_factor=self._config.logits_scale_factor,

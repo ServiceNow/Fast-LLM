@@ -82,20 +82,21 @@ class LanguageModelEmbedding[ConfigType: LanguageModelBaseConfig](BlockLayerBase
     @torch.compile
     def _forward(self, input_: torch.Tensor, position_ids: torch.Tensor | None, mask_inputs: bool) -> torch.Tensor:
         Assert.eq(position_ids is not None, self._config.use_absolute_position_embeddings)
+        group = self._parallel_dim.group
         if self._parallel_embeddings:
             input_mask = (input_ >= self._vocab_start_index) * (input_ < self._vocab_end_index)
             masked_input = (input_ - self._vocab_start_index) * input_mask
             embeddings = torch.embedding(self.word_embeddings_weight, masked_input) * input_mask.unsqueeze(2)  # noqa
-            embeddings = reduce_forward(embeddings, self._parallel_dim.group)
+            embeddings = reduce_forward(embeddings, group)
             if self._config.use_absolute_position_embeddings:
                 embeddings = embeddings + torch.nn.functional.embedding(position_ids, self.position_embeddings_weight)
             if self._sequence_parallel:
-                embeddings = split(embeddings, group=self._parallel_dim.group, dim=0)
+                embeddings = split(embeddings, group=group, dim=0)
         else:
             if self._sequence_parallel:
-                input_ = split(input_, group=self._parallel_dim.group, dim=0)
+                input_ = split(input_, group=group, dim=0)
                 if self._config.use_absolute_position_embeddings:
-                    position_ids = split(position_ids, group=self._parallel_dim.group, dim=0)
+                    position_ids = split(position_ids, group=group, dim=0)
             # handle masked tokens
             if mask_inputs:
                 input_mask = input_ >= 0
