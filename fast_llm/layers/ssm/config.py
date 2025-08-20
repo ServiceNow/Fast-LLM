@@ -38,6 +38,7 @@ class SSMDimNames:
     head_dim = "ssm_head_dim"
     head_groups = "ssm_head_groups"
     group_heads = "ssm_group_heads"
+    conv1d_dim = "ssm_conv1d_dim"
 
     # Mamba 2
     x_proj_dim_2 = "x_proj_dim_2"  # d_xb
@@ -293,6 +294,11 @@ class SSMConfig(LLMBlockConfig):
                 ConcatenatedTensorDim(
                     SSMDimNames.concatenated_inner_projection,
                     (heads_and_head_dim, head_groups_and_state, head_groups_and_state, heads_and_head_dim),
+                )
+            )
+            tensor_space.add_tensor_dim(
+                ConcatenatedTensorDim(
+                    SSMDimNames.conv1d_dim, (heads_and_head_dim, head_groups_and_state, head_groups_and_state)
                 )
             )
         elif block_type == SSMBlockType.mamba2_discrete:
