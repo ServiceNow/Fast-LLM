@@ -154,6 +154,9 @@ class HuggingfaceBaseModelForCausalLM(HuggingfacePreTrainedModel, transformers.g
                 If True, only the TP group coordinator (rank 0) should call forward;
                 other ranks must call worker_forward.
                 If False, all TP group ranks call forward independently and return logits.
+            communication_timeout_sec (float): Maximum time (in seconds) to wait for the start of
+                forward or for a stop signal to worker ranks before timing out in worker_forward.
+                Must match the value passed to worker_forward.
             continue_work (bool): Whether to continue processing in a TP group.
                 Only applies for coordinator_forward=True.
 
@@ -205,6 +208,29 @@ class HuggingfaceBaseModelForCausalLM(HuggingfacePreTrainedModel, transformers.g
         self,
         communication_timeout_sec: float = 600.0,
     ):
+        """
+        Run the forward loop on worker ranks in coordinated mode.
+
+        This function must be called on all worker ranks (i.e., all ranks except the
+        coordinator/leading data-parallel rank). In coordinated mode, the coordinator
+        rank calls `forward`, which distributes inputs to workers. Each worker then
+        receives its inputs and runs a forward pass.
+
+        Workers stay in this loop until a stop signal is broadcast, which happens when
+        the coordinator rank calls `stop_workers`.
+
+        Args:
+            communication_timeout_sec (float): Maximum time (in seconds) to wait for the
+                start of a forward call or for a stop signal from the coordinator before
+                timing out. Must match the value passed to `forward`.
+
+        Notes:
+            - Coordinator rank: calls `forward` in coordinated mode and later
+              `stop_workers` to unblock workers.
+            - Worker ranks: call `worker_forward` once and remain inside the loop,
+              executing forward passes with broadcasted inputs until a stop signal
+              is received.
+        """
         distributed: Distributed = self._inference_runner._fast_llm_model.distributed
         assert distributed.world_group and distributed.tensor_group and distributed.tensor_group.rank() != 0
 
