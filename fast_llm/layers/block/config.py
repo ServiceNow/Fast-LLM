@@ -1,5 +1,4 @@
 import enum
-import typing
 
 from fast_llm.config import Field, FieldHint, check_field, config_class
 from fast_llm.engine.base_model.config import BaseModelConfig
@@ -7,9 +6,6 @@ from fast_llm.layers.block.mlp.config import MLPConfig
 from fast_llm.layers.block.peft import TransformerPeftConfig
 from fast_llm.layers.common.normalization.config import NormalizationConfig
 from fast_llm.utils import Assert
-
-if typing.TYPE_CHECKING:
-    pass
 
 # TODO: Generalize these beyond language models? (Ex. vision)
 

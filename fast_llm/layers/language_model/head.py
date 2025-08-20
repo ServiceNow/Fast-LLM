@@ -118,7 +118,7 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](BlockLayerBase[Conf
                     tensor_name="Loss",
                     reductions=(
                         (self._distributed_config.get_distributed_dim(DistributedDimNames.data), ReduceOp.AVG),
-                    ),  # noqa
+                    ),
                 )
             else:
                 return TensorMeta.from_dims(input_.dims[1:], tensor_name="Shared hidden")
@@ -262,7 +262,7 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](BlockLayerBase[Conf
                 return None, None
         else:
             loss = None
-            # TODO MTP: allow a _cross_entropy_splits that is not a divisor of the sequence length
+            # TODO MTP: allow a cross_entropy_splits that is not a divisor of the sequence length
             grad_output /= self._config.cross_entropy_splits
             logit_input = input_.flatten(0, -2)
             if self.training:

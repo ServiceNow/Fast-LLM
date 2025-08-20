@@ -7,10 +7,8 @@ from fast_llm.engine.base_model.config import BaseModelConfig
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
-    import torch
-
     from fast_llm.engine.config_utils.tensor_dim import TensorDim
-    from fast_llm.layers.common.normalization import LayerNorm, RMSNorm
+    from fast_llm.layers.common.normalization.normalization import Normalization
 
 
 class NormalizationImplementation(str, enum.Enum):
@@ -29,9 +27,17 @@ class NormalizationImplementation(str, enum.Enum):
 class NormalizationConfig(BaseModelConfig):
     pass
 
+    @property
     @abc.abstractmethod
-    def get_layer(self, hidden_dim: "TensorDim") -> "torch.nn.Module":
+    def module_class(self) -> type["Normalization"]:
         pass
+
+    def get_layer(
+        self,
+        hidden_dim: "TensorDim",
+        lr_scale: float | None = None,
+    ) -> "Normalization":
+        return self.module_class(self, hidden_dim, lr_scale)
 
     @classmethod
     def _from_dict(
@@ -50,8 +56,11 @@ class NormalizationConfig(BaseModelConfig):
 class NoNormalizationConfig(NormalizationConfig):
     _abstract = False
 
-    def get_layer(self, hidden_dim: "TensorDim") -> "torch.nn.Module":
-        return torch.nn.Identity()
+    @property
+    def module_class(self) -> type["Normalization"]:
+        from fast_llm.layers.common.normalization.normalization import NoNormalization
+
+        return NoNormalization
 
 
 @config_class()
@@ -85,21 +94,6 @@ class LayerNormalizationBaseConfig(NormalizationConfig):
         valid=check_field(Assert.geq, 0),
     )
 
-    def get_layer(self, hidden_dim: "TensorDim", lr_scale: float | None = None) -> "LayerNorm | RMSNorm":
-        from fast_llm.engine.config_utils.initialization import init_uniform_centered_
-
-        kwargs = {
-            "hidden_dim": hidden_dim,
-            "eps": self.epsilon,
-            "implementation": self.implementation,
-            "zero_centered": self.zero_centered,
-            "lr_scale": lr_scale,
-        }
-        if self.initialization_range:
-            mean = 0 if self.zero_centered else 1
-            kwargs["weight_init_method"] = init_uniform_centered_(self.initialization_range, mean=mean)
-        return self.module_class(**kwargs)
-
     @property
     @abc.abstractmethod
     def module_class(self):
@@ -126,9 +120,9 @@ class LayerNormalizationConfig(LayerNormalizationBaseConfig):
 
     @property
     def module_class(self):
-        from fast_llm.layers.common.normalization.normalization import LayerNorm
+        from fast_llm.layers.common.normalization.normalization import LayerNormalization
 
-        return LayerNorm
+        return LayerNormalization
 
 
 @config_class(dynamic_type={NormalizationConfig: "rms_norm"})
@@ -137,6 +131,6 @@ class RMSNormalizationConfig(LayerNormalizationBaseConfig):
 
     @property
     def module_class(self):
-        from fast_llm.layers.common.normalization.normalization import RMSNorm
+        from fast_llm.layers.common.normalization.normalization import RMSNormalization
 
-        return RMSNorm
+        return RMSNormalization

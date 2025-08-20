@@ -64,7 +64,6 @@ class Attention[ConfigType: AttentionConfig](BlockLayer[ConfigType]):
         lr_scale: float | None,
     ):
         super().__init__(config, block_config, distributed_config, hidden_dim, block_index, name, lr_scale)
-
         self._use_flash_attention = self._config.do_use_flash_attention(self._distributed_config)
 
         self._parallel_dim = self._distributed_config.get_distributed_dim(DistributedDimNames.tensor)
