@@ -6,10 +6,10 @@ import torch
 from fast_llm.config import UpdateType
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.functional.config import CrossEntropyImpl, DistillationLossImpl
+from fast_llm.layers.attention.config import AttentionKwargs
 from fast_llm.layers.language_model.config import LanguageModelKwargs
 from fast_llm.layers.language_model.embedding import WORD_EMBEDDINGS_WEIGHT
 from fast_llm.layers.language_model.head import OUTPUT_WEIGHTS, LanguageModelHead
-from fast_llm.layers.transformer.config import AttentionKwargs
 from fast_llm.models.gpt.config import GPTBaseModelConfig, GPTModelConfig
 from fast_llm.utils import Assert
 from tests.utils.utils import get_base_model, get_stage, requires_cuda

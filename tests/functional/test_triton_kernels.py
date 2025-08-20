@@ -23,8 +23,8 @@ from fast_llm.functional.triton.normalization import (
 from fast_llm.functional.triton.pointwise import triton_add, triton_copy, triton_fill
 from fast_llm.functional.triton.rotary import triton_rotary_
 from fast_llm.functional.triton.sparse_copy import get_sparse_map
-from fast_llm.layers.transformer.rotary.config import DefaultRotaryConfig
-from fast_llm.layers.transformer.rotary.rotary import (
+from fast_llm.layers.attention.rotary.config import DefaultRotaryConfig
+from fast_llm.layers.attention.rotary.rotary import (
     apply_rotary_embeddings,
     convert_rotary_complex_to_real,
     convert_rotary_real_to_complex,

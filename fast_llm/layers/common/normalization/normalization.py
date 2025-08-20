@@ -247,7 +247,7 @@ class LayerNormalization[ConfigType: LayerNormalizationConfig](Normalization[Con
         )
 
 
-class RMSNormalization[ConfigType: RMSNormalizationConfig](Configurable[ConfigType], torch.nn.Module):
+class RMSNormalization[ConfigType: RMSNormalizationConfig](Normalization[ConfigType], torch.nn.Module):
     """
     A RMS normalization layer.
     Note: Converting input automatically to training dtype to match Apex behaviour,

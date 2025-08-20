@@ -9,7 +9,7 @@ from fast_llm.data.data.gpt.data import GPTBatch
 from fast_llm.engine.distributed.config import PhaseType
 from fast_llm.engine.inference.config import HuggingfaceModelConfig
 from fast_llm.engine.inference.huggingface import HuggingfaceBaseModelForCausalLM
-from fast_llm.layers.transformer.config import AttentionKwargs
+from fast_llm.layers.attention.config import AttentionKwargs
 from fast_llm.models.gpt.config import GPTModelConfig
 from fast_llm.models.gpt.model import GPTBaseModel, GPTInferenceRunner
 

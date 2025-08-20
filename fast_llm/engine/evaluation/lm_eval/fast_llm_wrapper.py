@@ -16,7 +16,7 @@ from fast_llm.core.distributed import gather_object, safe_barrier, scatter_objec
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.engine.evaluation.lm_eval.utils import prepare_lm_eval_simple_eval_params, process_lm_eval_results
 from fast_llm.engine.inference.huggingface import HuggingfaceBaseModelForCausalLM
-from fast_llm.layers.transformer.rotary.config import NoRotaryConfig
+from fast_llm.layers.attention.rotary.config import NoRotaryConfig
 
 logger = logging.getLogger(__name__)
 

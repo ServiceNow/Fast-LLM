@@ -5,10 +5,10 @@ import torch
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.engine.distributed.distributed import Distributed
+from fast_llm.layers.attention.attention import Attention
+from fast_llm.layers.attention.config import AttentionKwargs, TransformerConfig
+from fast_llm.layers.attention.preprocessing import FlashAttnVarlenPreprocessor
 from fast_llm.layers.block.config import BlockDimNames
-from fast_llm.layers.transformer.attention import Attention
-from fast_llm.layers.transformer.config import AttentionKwargs, TransformerConfig
-from fast_llm.layers.transformer.preprocessing import FlashAttnVarlenPreprocessor
 from fast_llm.utils import Assert
 
 

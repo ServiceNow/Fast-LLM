@@ -2,9 +2,9 @@ import functools
 import logging
 import typing
 
+from fast_llm.layers.attention.attention import Attention
+from fast_llm.layers.attention.config import AttentionConfig, TransformerConfig
 from fast_llm.layers.block.block import Block
-from fast_llm.layers.transformer.attention import Attention
-from fast_llm.layers.transformer.config import AttentionConfig, TransformerConfig
 
 logger = logging.getLogger(__name__)
 

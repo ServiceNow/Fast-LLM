@@ -7,7 +7,7 @@ import enum
 import typing
 
 from fast_llm.config import Field, FieldHint, config_class
-from fast_llm.layers.common.config import LoRAConfig, NoPeftConfig, PeftConfig
+from fast_llm.layers.common.peft.config import LoRAConfig, NoPeftConfig, PeftConfig
 from fast_llm.utils import div
 
 if typing.TYPE_CHECKING:

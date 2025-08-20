@@ -3,9 +3,9 @@ import typing
 from fast_llm.config import Field, FieldHint, check_field, config_class, skip_valid_if_none
 from fast_llm.engine.base_model.config import BaseModelConfig
 from fast_llm.functional.config import CrossEntropyImpl, DistillationLossImpl
+from fast_llm.layers.attention.config import TransformerConfig
+from fast_llm.layers.attention.rotary.config import NoRotaryConfig
 from fast_llm.layers.block.config import BlockKwargs
-from fast_llm.layers.transformer.config import TransformerConfig
-from fast_llm.layers.transformer.rotary.config import NoRotaryConfig
 from fast_llm.utils import Assert
 
 

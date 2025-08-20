@@ -44,7 +44,7 @@ class LoRAConfig(PeftConfig):
     )
 
     def apply_linear(self, linear: "LinearBase", **kwargs) -> "LinearLike":
-        from fast_llm.layers.common.peft import lora_linear
+        from fast_llm.layers.common.peft.lora import lora_linear
 
         # TODO: Init method?
         return lora_linear(
