@@ -10,10 +10,10 @@ from fast_llm.functional.config import ActivationType
 from fast_llm.layers.common.linear import InputParallelLinear, Linear, OutputParallelLinear
 from fast_llm.layers.common.normalization import RMSNorm
 from fast_llm.layers.ssm.config import SSMConfig, SSMDimNames, SSMKwargs
-from fast_llm.layers.ssm.mamba_layer import init_A, init_dtprojbias
+from fast_llm.layers.ssm.mamba_layer import init_dtprojbias
 from fast_llm.layers.transformer.config import TransformerConfig, TransformerDimNames, TransformerKwargs
 from fast_llm.layers.transformer.transformer import Mixer
-from fast_llm.tensor import ParameterMeta, init_kaiming_, init_ones_, init_uniform_centered_
+from fast_llm.tensor import LambdaInitializer, ParameterMeta, init_kaiming_, init_ones_, init_uniform_centered_
 from fast_llm.utils import Assert, div, get_lr_scale
 
 _mamba_varlen = False
@@ -283,6 +283,208 @@ logger = logging.getLogger(__name__)
 #         return self.out_proj(y)
 
 
+# class Mamba2M1(Mixer):
+#     """
+#     This code is adapted from https://github.com/jxiw/M1/blob/main/mamba2/hybrid_mamba_layer.py
+#     """
+
+#     _mixer_name: typing.ClassVar[str] = "mamba_2"
+
+#     _XZ_DIMS = (
+#         TransformerDimNames.batch,
+#         SSMDimNames.composite_heads_and_head_dim,
+#         TransformerDimNames.sequence_q,
+#     )
+#     _BC_DIMS = (
+#         TransformerDimNames.batch,
+#         SSMDimNames.composite_heads,
+#         SSMDimNames.state,
+#         TransformerDimNames.sequence_q,
+#     )
+
+#     def __init__(
+#         self,
+#         config: SSMConfig,
+#         tensor_space: TensorSpace,
+#         block_index: int,
+#         transformer_config: TransformerConfig,
+#     ):
+#         super().__init__(tensor_space, block_index, debug_level=transformer_config.debug_transformer)
+#         self._config: SSMConfig = config
+#         Assert.eq(self._config.activation_type, ActivationType.silu)
+#         layer_lr_scale: float | None = config.per_layer_lr_scale[block_index] if config.per_layer_lr_scale else None
+#         lr_scale: float | tuple[float | None, ...] | None = get_lr_scale(self._config.mamba_lr_scale, layer_lr_scale)
+
+#         inner_dim: TensorDim = tensor_space[SSMDimNames.composite_heads_and_head_dim]
+#         xb_dim = tensor_space[SSMDimNames.composite_head_groups_and_state]
+#         hidden_dim: TensorDim = tensor_space[TransformerDimNames.hidden]
+#         tensor_space[SSMDimNames.dt_rank]
+
+#         self._local_heads = tensor_space[SSMDimNames.composite_heads].size
+#         self._local_head_groups = tensor_space[SSMDimNames.head_groups].size
+#         self._group_heads = div(self._local_heads, self._local_head_groups)
+#         self._local_inner_size = inner_dim.size
+#         self._local_xb_size = xb_dim.size
+
+#         conv1d_dim = tensor_space[SSMDimNames.conv1d_dim]
+#         self.conv1d_weight = ParameterMeta.from_dims(
+#             (
+#                 conv1d_dim,
+#                 tensor_space[DefaultDimNames.scalar],
+#                 tensor_space[SSMDimNames.convolution_kernel],
+#             ),
+#             init_method=init_uniform_centered_((conv1d_dim.global_size * self._config.conv_kernel_dimension) ** -0.5),
+#             lr_scale=lr_scale,
+#         )
+#         self.conv1d_bias = ParameterMeta.from_dims(
+#             (conv1d_dim,),
+#             init_method=init_uniform_centered_(self._config.conv_kernel_dimension**-0.5),
+#             lr_scale=lr_scale,
+#         )
+#         self.in_proj = OutputParallelLinear(
+#             hidden_dim,
+#             tensor_space[SSMDimNames.concatenated_inner_projection],
+#             bias=config.add_bias_linear,
+#             weight_init_method=init_kaiming_(transformer_config.hidden_size),
+#             sequence_parallel=self._sequence_parallel,
+#             lr_scale=lr_scale,
+#         )
+
+#         self.dt_in_proj = Linear(
+#             hidden_dim,
+#             tensor_space[SSMDimNames.composite_heads],
+#             bias=config.add_bias_linear,
+#             weight_init_method=init_kaiming_(transformer_config.hidden_size),
+#             lr_scale=lr_scale,
+#         )
+
+#         self.dt_proj_bias = ParameterMeta.from_dims(
+#             (tensor_space[SSMDimNames.composite_heads],),
+#             init_method=init_dtprojbias(self._config.dt_max, self._config.dt_min, self._config.dt_init_floor),
+#             lr_scale=lr_scale,
+#         )
+
+#         def init_A_uniform(A_init_range: tuple[float, float]=(1, 16)) -> LambdaInitializer:
+#             def init_(meta: ParameterMeta, tensor: torch.Tensor, generator: torch.Generator) -> None:  # noqa
+#                 tensor.uniform_(*A_init_range).log_()
+#             return LambdaInitializer(init_, requires_global_initialization=True)
+
+#         self.A_log = ParameterMeta.from_dims(
+#             (tensor_space[SSMDimNames.composite_heads],),
+#             init_method=init_A_uniform(A_init_range=(1, 16)),
+#             lr_scale=lr_scale,
+#             weight_decay=False,
+#         )
+#         self.D = ParameterMeta.from_dims(
+#             (tensor_space[SSMDimNames.composite_heads],), # can also be nheads x headim
+#             weight_decay=False,
+#             init_method=init_ones_,
+#             lr_scale=lr_scale,
+#         )
+#         self.out_proj = InputParallelLinear(
+#             inner_dim,
+#             hidden_dim,
+#             bias=config.add_bias_linear,
+#             weight_init_method=init_kaiming_(self._config.d_inner),
+#             sequence_parallel=self._sequence_parallel,
+#             lr_scale=lr_scale,
+#         )
+#         self.norm = RMSNorm(
+#             inner_dim,
+#             eps=1e-5,
+#             lr_scale=lr_scale,
+#         )
+
+#     def forward(self, input_: torch.Tensor, kwargs: dict[str, typing.Any]) -> tuple[torch.Tensor, torch.Tensor | None]:
+#         """ """
+#         assert _mamba_available
+#         assert _causal_conv1d_available
+#         cu_seqlens = kwargs[SSMKwargs.cu_seqlens]
+#         seq_idx = kwargs[SSMKwargs.seq_idx]
+#         kwargs[SSMKwargs.ssm_position_ids]
+
+#         # inner_projection : (batch/local_sequence, local_sequence/batch, hidden)
+#         #   -> (batch/sequence, sequence/batch, inner_projection)
+#         inner_projection = self.in_proj(input_)
+#         dt = self.dt_in_proj(input_)  # bs, seq, heads   #+ self.dt_proj_bias
+#         # Standardize to (batch, sequence, inner_projection)
+#         if kwargs[TransformerKwargs.sequence_first]:
+#             inner_projection = inner_projection.transpose(0, 1)
+#             dt = dt.transpose(0, 1)
+
+#         sequence_length = inner_projection.size(1)
+
+#         z, xBC = torch.split(
+#             inner_projection,
+#             [self._local_inner_size, self._local_xb_size + self._local_xb_size + self._local_inner_size],
+#             dim=2,
+#         )
+
+#         if cu_seqlens is not None:
+#             # from https://github.com/jxiw/M1/blob/d92b53faa640f8ebf624d3e9e771fe24648ef014/rl/verl/verl/models/mamba/hybrid_wrapper.py#L152
+#             xBC = _causal_conv1d_fn(
+#                 xBC.transpose(1, 2),
+#                 weight=self.conv1d_weight.squeeze(1),
+#                 bias=self.conv1d_bias,
+#                 seq_idx=seq_idx,
+#                 activation="silu",
+#             ).transpose(1, 2)
+#         else:
+#             xBC = _causal_conv1d_fn(
+#                 x=xBC.transpose(1, 2), weight=self.conv1d_weight.squeeze(1), bias=self.conv1d_bias, activation="silu"
+#             ).transpose(1, 2)
+
+#         x, b, c = torch.split(xBC, [self._local_xb_size, self._local_xb_size, self._local_inner_size], dim=-1)
+#         x = einops.rearrange(x, "b l (xb_group dstate) -> b xb_group l dstate", dstate=self._config.state_size)
+#         b = einops.rearrange(b, "b l (xb_group dstate) -> b xb_group l dstate", dstate=self._config.state_size)
+#         batch, num_key_value_heads, slen, head_dim = x.shape
+#         x = x[:, :, None, :, :].expand(batch, num_key_value_heads, self._group_heads, slen, head_dim)
+#         x = x.reshape(batch, num_key_value_heads * self._group_heads, slen, head_dim)
+#         b = b[:, :, None, :, :].expand(batch, num_key_value_heads, self._group_heads, slen, head_dim)
+#         b = b.reshape(batch, num_key_value_heads * self._group_heads, slen, head_dim)
+
+#         if self._debug_level:
+#             self._debug_log(z, "z", self._XZ_DIMS, kwargs)
+#             self._debug_log(x, "x", self._XZ_DIMS, kwargs)
+#             self._debug_log(b, "b", self._BC_DIMS, kwargs)
+#             self._debug_log(c, "c", self._BC_DIMS, kwargs)
+#             self._debug_log(dt, "dt", self._XZ_DIMS, kwargs)
+
+#         dt_limit_kwargs = {}
+#         # c is b x seq x heads * state
+#         y = mamba_chunk_scan_combined(
+#             # rearrange(x, "b l (h p) -> b l h p", p=self.headdim),
+#             einops.rearrange(x, "b g l p -> b l g p"),
+#             dt,
+#             -torch.exp(self.A_log.float()),
+#             # rearrange(B, "b l (g n) -> b l g n", g=self.ngroups),
+#             einops.rearrange(b, "b g l n -> b l g n"),
+#             einops.rearrange(c, "b l (g n) -> b l g n", g=self._local_heads),
+#             chunk_size=self._config.chunk_size,
+#             D=self.D,
+#             z=None,
+#             dt_bias=self.dt_proj_bias,
+#             dt_softplus=True,
+#             seq_idx=seq_idx,
+#             cu_seqlens=cu_seqlens,
+#             **dt_limit_kwargs,
+#             return_final_states=False,
+#             return_varlen_states=False,
+#         )
+
+#         if self._debug_level:
+#             self._debug_log(y, "y", self._XZ_DIMS, kwargs)
+
+#         # y: (batch, local_heads * state, sequence) -> (batch, sequence, local_heads * state)
+#         y = y.transpose(1, 2)[:, :sequence_length]
+#         if kwargs[TransformerKwargs.sequence_first]:
+#             # TODO: Is contiguous needed?
+#             y = y.transpose(0, 1).contiguous()
+#         # (batch/sequence, sequence/batch, local_heads * state)
+#         #   -> (batch/local_sequence, local_sequence/batch, hidden)
+#         return self.out_proj(y)
+
+
 class Mamba2(Mixer):
     """
     This code is adapted from https://github.com/jxiw/M1/blob/main/mamba2/hybrid_mamba_layer.py
@@ -363,14 +565,21 @@ class Mamba2(Mixer):
             init_method=init_dtprojbias(self._config.dt_max, self._config.dt_min, self._config.dt_init_floor),
             lr_scale=lr_scale,
         )
+
+        def init_A_uniform(A_init_range: tuple[float, float] = (1, 16)) -> LambdaInitializer:
+            def init_(meta: ParameterMeta, tensor: torch.Tensor, generator: torch.Generator) -> None:  # noqa
+                tensor.uniform_(*A_init_range).log_()
+
+            return LambdaInitializer(init_, requires_global_initialization=True)
+
         self.A_log = ParameterMeta.from_dims(
             (tensor_space[SSMDimNames.composite_heads],),
-            init_method=init_A(self._config.state_size, self._config.d_inner),
+            init_method=init_A_uniform(A_init_range=(1, 16)),
             lr_scale=lr_scale,
             weight_decay=False,
         )
         self.D = ParameterMeta.from_dims(
-            (inner_dim,),
+            (tensor_space[SSMDimNames.composite_heads],),  # can also be nheads x headim
             weight_decay=False,
             init_method=init_ones_,
             lr_scale=lr_scale,
