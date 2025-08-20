@@ -6,7 +6,7 @@ import torch
 from fast_llm.engine.base_model.config import Preprocessor
 from fast_llm.engine.config_utils.tensor_dim import TensorDim, scalar_dim
 from fast_llm.engine.distributed.config import DistributedConfig
-from fast_llm.layers.transformer.config import AttentionConfig, AttentionKwargs
+from fast_llm.layers.attention.config import AttentionConfig, AttentionKwargs
 from fast_llm.tensor import TensorMeta
 
 logger = logging.getLogger(__name__)

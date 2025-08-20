@@ -2,8 +2,8 @@ import logging
 import typing
 
 from fast_llm.engine.distributed.config import DistributedConfig
+from fast_llm.layers.attention.block import TransformerBlock
 from fast_llm.layers.ssm.block import SSMBlock
-from fast_llm.layers.transformer.block import TransformerBlock
 from fast_llm.models.gpt.model import GPTBaseModel, GPTInferenceRunner, GPTModel
 from fast_llm.models.ssm.config import HybridSSMBaseModelConfig, HybridSSMModelConfig, SSMBlockType
 

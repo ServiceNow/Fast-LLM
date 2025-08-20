@@ -91,7 +91,7 @@ class MixerConfig(BlockLayerConfig):
         flat: bool = False,
     ) -> typing.Self:
         if cls is MixerConfig and cls.get_subclass(default.get("type")) is None:
-            from fast_llm.layers.transformer.config import AttentionConfig
+            from fast_llm.layers.attention.config import AttentionConfig
 
             # Default subclass.
             return AttentionConfig._from_dict(default, strict, flat)

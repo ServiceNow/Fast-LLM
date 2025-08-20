@@ -8,8 +8,8 @@ from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.engine.config_utils.initialization import InitializationConfig, Initializer, init_normal_, init_zeros_
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.functional.config import TritonConfig
+from fast_llm.layers.attention.rotary.config import RotaryConfig
 from fast_llm.layers.block.config import BlockConfig, BlockKwargs, MixerConfig
-from fast_llm.layers.transformer.rotary.config import RotaryConfig
 from fast_llm.utils import Assert, div
 
 logger = logging.getLogger(__name__)

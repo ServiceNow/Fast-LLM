@@ -8,8 +8,8 @@ from fast_llm.config import Configurable
 from fast_llm.engine.base_model.config import Preprocessor
 from fast_llm.engine.config_utils.tensor_dim import TensorDim, scalar_dim
 from fast_llm.functional.triton.rotary import triton_rotary_autograd_
-from fast_llm.layers.transformer.config import AttentionKwargs
-from fast_llm.layers.transformer.rotary.config import (
+from fast_llm.layers.attention.config import AttentionKwargs
+from fast_llm.layers.attention.rotary.config import (
     DefaultRotaryConfig,
     Llama3RotaryConfig,
     NoRotaryConfig,
