@@ -74,7 +74,7 @@ class LoRAConfig(PeftConfig):
             return self.apply_other(module)
 
         from fast_llm.layers.common.linear import InputParallelLinear
-        from fast_llm.layers.common.peft.peft import lora_linear
+        from fast_llm.layers.common.peft.lora import lora_linear
 
         if isinstance(module, InputParallelLinear):
             # TODO: Support InputParallelLinear (different output format).
