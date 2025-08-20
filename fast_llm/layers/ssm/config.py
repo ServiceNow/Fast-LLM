@@ -66,6 +66,7 @@ class SSMBlockType(enum.StrEnum):
     mamba2_discrete = "m2d"
     mamba2 = "m2"
     transformer = "t"
+    nemotron_h_mamba2 = "nm2"
 
     def get_mixer_class(self):
         if self == SSMBlockType.mamba:
@@ -80,6 +81,10 @@ class SSMBlockType(enum.StrEnum):
             from fast_llm.layers.ssm.discrete_mamba2 import DiscreteMamba2
 
             return DiscreteMamba2
+        elif self == SSMBlockType.nemotron_h_mamba2:
+            from fast_llm.layers.ssm.mamba2 import NemotronHMamba2
+
+            return NemotronHMamba2
         else:
             raise NotImplementedError(self)
 
@@ -227,6 +232,13 @@ class SSMConfig(LLMBlockConfig):
         valid=check_field(Assert.gt, 0),
     )
 
+    # Nemotron H
+    n_groups: int = Field(
+        default=8,
+        desc="Number of groups for Nemotron H",
+        hint=FieldHint.architecture,
+    )
+
     def _validate(self) -> None:
         with self._set_implicit_default():
             if self.activation_type is None:
@@ -244,6 +256,9 @@ class SSMConfig(LLMBlockConfig):
         elif block_type == SSMBlockType.mamba2:
             num_heads = div(self.d_inner, self.state_size)
             num_head_groups = div(self.d_xb, self.state_size)
+        elif block_type == SSMBlockType.nemotron_h_mamba2:
+            num_heads = div(self.d_inner, self.state_size)
+            num_head_groups = self.n_groups
         elif block_type == SSMBlockType.mamba2_discrete:
             # TODO: Use different variables?
             num_heads = self.n_v_heads

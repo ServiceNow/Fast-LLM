@@ -485,7 +485,7 @@ logger = logging.getLogger(__name__)
 #         return self.out_proj(y)
 
 
-class Mamba2(Mixer):
+class NemotronHMamba2(Mixer):
     """
     This code is adapted from https://github.com/jxiw/M1/blob/main/mamba2/hybrid_mamba_layer.py
     """
