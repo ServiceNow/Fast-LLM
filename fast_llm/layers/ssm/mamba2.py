@@ -151,7 +151,7 @@ class Mamba2(Mixer):
             bias=config.add_bias_linear,
             weight_init_method=init_kaiming_(self._config.d_inner),
             sequence_parallel=self._sequence_parallel,
-            # TODO: lr_scale?
+            lr_scale=lr_scale,
         )
 
     def forward(self, input_: torch.Tensor, kwargs: dict[str, typing.Any]) -> tuple[torch.Tensor, torch.Tensor | None]:
