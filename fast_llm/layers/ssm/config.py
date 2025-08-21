@@ -11,28 +11,6 @@ if typing.TYPE_CHECKING:
     from fast_llm.tensor import Initializer
 
 
-class SSMDimNames:
-    # TODO: Use separate tensor space for different mixers so there is no risk of name conflict.
-    state = "ssm_state"  # State dimension (N), aka head size / num channels
-    head_dim = "ssm_head_dim"
-    head_groups = "ssm_head_groups"
-    group_heads = "ssm_group_heads"
-
-    convolution_kernel = "ssm_convolution_kernel"  # Kernel dimension of the conv1d in mamba layers
-
-    dt_rank = "ssm_dt_rank"
-
-    # Composite dimensions
-    composite_heads = "ssm_composite_heads"
-    composite_heads_and_head_dim = "ssm_composite_heads_and_head_dim"
-    composite_head_groups_and_state = "ssm_composite_head_groups_and_state"
-
-    # Concatenated dimensions
-    concatenated_convolution = "ssm_concatenated_convolution"
-    concatenated_x_projection = "ssm_x_concatenated_x_projection"
-    concatenated_inner_projection = "ssm_concatenated_inner_projection"
-
-
 class SSMBlockType(enum.StrEnum):
     """
     An enum for the available mamba types for the MLP layer.
