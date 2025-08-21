@@ -2,11 +2,10 @@ import enum
 import typing
 
 from fast_llm.config import Field, FieldHint, check_field, config_class, skip_valid_if_none
-from fast_llm.engine.config_utils.tensor_space import CompositeTensorDim, ConcatenatedTensorDim, TensorDim, TensorSpace
-from fast_llm.engine.distributed.config import DistributedDimNames
+from fast_llm.engine.config_utils.tensor_space import TensorSpace
 from fast_llm.functional.config import ActivationType
 from fast_llm.layers.common.config import LLMBlockConfig, NormalizationConfig
-from fast_llm.utils import Assert, div
+from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
     from fast_llm.tensor import Initializer
@@ -212,77 +211,5 @@ class SSMConfig(LLMBlockConfig):
         Assert.geq(self.dt_max, self.dt_min)
 
     def setup_tensor_space(self, tensor_space: TensorSpace, block_type: SSMBlockType) -> None:
-        tensor = tensor_space.distributed_config.get_distributed_dim(DistributedDimNames.tensor)
-
-        # Head groups are configured differently depending on the block type.
-        if block_type == SSMBlockType.mamba:
-            num_heads = div(self.d_inner, self.state_size)
-            num_head_groups = num_heads
-        elif block_type == SSMBlockType.mamba2:
-            num_heads = div(self.d_inner, self.state_size)
-            num_head_groups = div(self.d_xb, self.state_size)
-        elif block_type == SSMBlockType.mamba2_discrete:
-            # TODO: Use different variables?
-            num_heads = self.n_v_heads
-            num_head_groups = self.n_qk_heads
-        else:
-            raise NotImplementedError(block_type)
-
-        tensor_space.add_tensor_dim(state := TensorDim(SSMDimNames.state, self.state_size))
-        if block_type == SSMBlockType.mamba2_discrete:
-            tensor_space.add_tensor_dim(head_dim := TensorDim(SSMDimNames.head_dim, div(self.d_inner, num_heads)))
-        else:
-            head_dim = state
-
-        tensor_space.add_tensor_dim(head_groups := TensorDim(SSMDimNames.head_groups, num_head_groups, tensor))
-        tensor_space.add_tensor_dim(group_heads := TensorDim(SSMDimNames.group_heads, div(num_heads, num_head_groups)))
-        tensor_space.add_tensor_dim(
-            heads := CompositeTensorDim(SSMDimNames.composite_heads, (head_groups, group_heads))
-        )
-        tensor_space.add_tensor_dim(
-            heads_and_head_dim := CompositeTensorDim(
-                SSMDimNames.composite_heads_and_head_dim, (head_groups, group_heads, head_dim)
-            )
-        )
-        tensor_space.add_tensor_dim(
-            head_groups_and_state := CompositeTensorDim(
-                SSMDimNames.composite_head_groups_and_state, (head_groups, state)
-            )
-        )
-        tensor_space.add_tensor_dim(TensorDim(SSMDimNames.convolution_kernel, self.conv_kernel_dimension))
-
-        # DT projection
-        if block_type in (SSMBlockType.mamba, SSMBlockType.mamba2):
-            tensor_space.add_tensor_dim(dt_rank := TensorDim(SSMDimNames.dt_rank, self.dt_rank))
-
-        if block_type == SSMBlockType.mamba:
-            tensor_space.add_tensor_dim(
-                ConcatenatedTensorDim(SSMDimNames.concatenated_x_projection, (dt_rank, state, state))
-            )
-            # TODO: Use composition instead
-            tensor_space.add_tensor_dim(
-                ConcatenatedTensorDim(
-                    SSMDimNames.concatenated_inner_projection, (heads_and_head_dim, heads_and_head_dim)
-                )
-            )
-        elif block_type == SSMBlockType.mamba2:
-            # TODO: Factor out state?
-            tensor_space.add_tensor_dim(
-                ConcatenatedTensorDim(
-                    SSMDimNames.concatenated_inner_projection,
-                    (heads_and_head_dim, head_groups_and_state, head_groups_and_state, heads_and_head_dim),
-                )
-            )
-        elif block_type == SSMBlockType.mamba2_discrete:
-            tensor_space.add_tensor_dim(
-                ConcatenatedTensorDim(
-                    SSMDimNames.concatenated_inner_projection,
-                    (heads_and_head_dim, head_groups_and_state, head_groups_and_state, heads_and_head_dim, heads),
-                )
-            )
-            tensor_space.add_tensor_dim(
-                ConcatenatedTensorDim(
-                    SSMDimNames.concatenated_convolution,
-                    (heads_and_head_dim, head_groups_and_state, head_groups_and_state),
-                )
-            )
+        # Handled in the model.
+        pass
