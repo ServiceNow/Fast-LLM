@@ -158,7 +158,7 @@ class Mamba2(Mixer):
             sequence_parallel=self._sequence_parallel,
             lr_scale=lr_scale,
         )
-        if self._debug.enabled:
+        if self._debug_level:
             self._xz_dims = (
                 TransformerDimNames.batch,
                 inner_dim,
