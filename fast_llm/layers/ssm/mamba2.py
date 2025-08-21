@@ -64,7 +64,9 @@ class Mamba2(Mixer):
         state_dim = TensorDim("state", self._config.state_size)
 
         head_groups_dim = TensorDim(
-            "head_groups", num_head_groups, self._distributed_config.get_distributed_dim(DistributedDimNames.tensor)
+            "head_groups",
+            num_head_groups,
+            self._tensor_space.distributed_config.get_distributed_dim(DistributedDimNames.tensor),
         )
         group_heads_dim = TensorDim("group_heads", div(num_heads, num_head_groups))
 
@@ -105,7 +107,7 @@ class Mamba2(Mixer):
         )
         self.in_proj = OutputParallelLinear(
             hidden_dim,
-            convolution_kernel_dim,
+            inner_projection_dim,
             bias=config.add_bias_linear,
             weight_init_method=init_kaiming_(transformer_config.hidden_size),
             sequence_parallel=self._sequence_parallel,

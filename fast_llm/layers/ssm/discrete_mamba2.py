@@ -63,7 +63,7 @@ class DiscreteMamba2(Mixer):
         head_groups_dim = TensorDim(
             "head_groups",
             self._config.n_qk_heads,
-            self._distributed_config.get_distributed_dim(DistributedDimNames.tensor),
+            self._tensor_space.distributed_config.get_distributed_dim(DistributedDimNames.tensor),
         )
         group_heads_dim = TensorDim("group_heads", div(self._config.n_v_heads, self._config.n_qk_heads))
         heads_dim = CompositeTensorDim("heads", (head_groups_dim, group_heads_dim))

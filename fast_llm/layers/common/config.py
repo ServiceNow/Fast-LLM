@@ -43,7 +43,7 @@ class NormalizationConfig(BaseModelConfig):
     pass
 
     @abc.abstractmethod
-    def get_layer(self, hidden_dim: "TensorDim") -> "torch.nn.Module":
+    def get_layer(self, hidden_dim: "TensorDim", lr_scale: float | None) -> "torch.nn.Module":
         pass
 
     @classmethod
@@ -63,7 +63,7 @@ class NormalizationConfig(BaseModelConfig):
 class NoNormalizationConfig(NormalizationConfig):
     _abstract = False
 
-    def get_layer(self, hidden_dim: "TensorDim") -> "torch.nn.Module":
+    def get_layer(self, hidden_dim: "TensorDim", lr_scale: float | None) -> "torch.nn.Module":
         return torch.nn.Identity()
 
 
