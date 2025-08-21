@@ -139,7 +139,7 @@ class Mamba2(Mixer):
             lr_scale=lr_scale,
         )
         self.A_log = ParameterMeta.from_dims(
-            (inner_dim, convolution_kernel_dim),
+            (inner_dim, state_dim),
             init_method=init_A(self._config.state_size, self._config.d_inner),
             lr_scale=lr_scale,
             weight_decay=False,
