@@ -3,7 +3,14 @@ import typing
 
 import torch
 
-from fast_llm.engine.config_utils.tensor_space import DefaultDimNames, TensorDim, TensorSpace
+from fast_llm.engine.config_utils.tensor_space import (
+    CompositeTensorDim,
+    ConcatenatedTensorDim,
+    DefaultDimNames,
+    TensorDim,
+    TensorSpace,
+)
+from fast_llm.engine.distributed.config import DistributedDimNames
 from fast_llm.functional.config import ActivationType
 from fast_llm.layers.common.linear import InputParallelLinear, Linear, OutputParallelLinear
 from fast_llm.layers.ssm.config import SSMConfig, SSMDimNames
@@ -62,13 +69,33 @@ class Mamba2(Mixer):
         layer_lr_scale: float | None = config.per_layer_lr_scale[block_index] if config.per_layer_lr_scale else None
         lr_scale: float | tuple[float | None, ...] | None = get_lr_scale(self._config.mamba_lr_scale, layer_lr_scale)
 
-        inner_dim: TensorDim = tensor_space[SSMDimNames.composite_heads_and_head_dim]
-        xb_dim = tensor_space[SSMDimNames.composite_head_groups_and_state]
-        hidden_dim: TensorDim = tensor_space[TransformerDimNames.hidden]
-        dt_rank_dim = tensor_space[SSMDimNames.dt_rank]
+        num_heads = div(self._config.d_inner, self._config.state_size)
+        num_head_groups = div(self._config.d_xb, self._config.state_size)
 
-        self._local_heads = tensor_space[SSMDimNames.composite_heads].size
-        self._local_head_groups = tensor_space[SSMDimNames.head_groups].size
+        hidden_dim: TensorDim = tensor_space[TransformerDimNames.hidden]
+        state_dim = TensorDim("state", self._config.state_size)
+
+        head_groups_dim = TensorDim(
+            "head_groups", num_head_groups, self._distributed_config.get_distributed_dim(DistributedDimNames.tensor)
+        )
+        group_heads_dim = TensorDim("group_heads", div(num_heads, num_head_groups))
+
+        heads_dim = CompositeTensorDim("heads", (head_groups_dim, group_heads_dim))
+
+        inner_dim = CompositeTensorDim("inner", (head_groups_dim, group_heads_dim, state_dim))
+        xb_dim = CompositeTensorDim("xb", (head_groups_dim, state_dim))
+        convolution_kernel_dim = TensorDim("convolution_kernel", self._config.conv_kernel_dimension)
+
+        # DT projection
+        dt_rank_dim = TensorDim("dt_rank", self._config.dt_rank)
+
+        inner_projection_dim = ConcatenatedTensorDim(
+            "inner_projection",
+            (inner_dim, xb_dim, xb_dim, inner_dim),
+        )
+
+        self._local_heads = heads_dim.size
+        self._local_head_groups = head_groups_dim.size
         self._group_heads = div(self._local_heads, self._local_head_groups)
         self._local_inner_size = inner_dim.size
         self._local_xb_size = xb_dim.size
@@ -78,7 +105,7 @@ class Mamba2(Mixer):
             (
                 conv1d_dim,
                 tensor_space[DefaultDimNames.scalar],
-                tensor_space[SSMDimNames.convolution_kernel],
+                convolution_kernel_dim,
             ),
             init_method=init_uniform_centered_((conv1d_dim.global_size * self._config.conv_kernel_dimension) ** -0.5),
             lr_scale=lr_scale,
@@ -90,7 +117,7 @@ class Mamba2(Mixer):
         )
         self.in_proj = OutputParallelLinear(
             hidden_dim,
-            tensor_space[SSMDimNames.concatenated_inner_projection],
+            convolution_kernel_dim,
             bias=config.add_bias_linear,
             weight_init_method=init_kaiming_(transformer_config.hidden_size),
             sequence_parallel=self._sequence_parallel,
@@ -122,7 +149,7 @@ class Mamba2(Mixer):
             lr_scale=lr_scale,
         )
         self.A_log = ParameterMeta.from_dims(
-            (inner_dim, tensor_space[SSMDimNames.state]),
+            (inner_dim, convolution_kernel_dim),
             init_method=init_A(self._config.state_size, self._config.d_inner),
             lr_scale=lr_scale,
             weight_decay=False,
@@ -139,7 +166,7 @@ class Mamba2(Mixer):
             bias=config.add_bias_linear,
             weight_init_method=init_kaiming_(self._config.d_inner),
             sequence_parallel=self._sequence_parallel,
-            # TODO: lr_scale?
+            lr_scale=lr_scale,
         )
 
     def forward(self, input_: torch.Tensor, kwargs: dict[str, typing.Any]) -> tuple[torch.Tensor, torch.Tensor | None]:
@@ -147,10 +174,10 @@ class Mamba2(Mixer):
         assert _causal_conv1d_available
 
         # inner_projection : (batch/local_sequence, local_sequence/batch, hidden)
-        #   -> (batch/sequence, sequence/batch, inner_projection)
+        #   -> (batch/sequence, sequence/batch, local_inner_projection)
         inner_projection = self.in_proj(input_)
         dt = self.dt_proj(self.dt_in_proj(input_)) + self.dt_proj_bias
-        # Standardize to (batch, sequence, inner_projection)
+        # Standardize to (batch, sequence, local_inner_projection)
         if kwargs[TransformerKwargs.sequence_first]:
             inner_projection = inner_projection.transpose(0, 1)
             dt = dt.transpose(0, 1)

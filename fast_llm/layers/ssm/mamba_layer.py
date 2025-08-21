@@ -4,14 +4,20 @@ import typing
 
 import torch
 
-from fast_llm.engine.config_utils.tensor_space import DefaultDimNames, TensorSpace
+from fast_llm.engine.config_utils.tensor_space import (
+    CompositeTensorDim,
+    ConcatenatedTensorDim,
+    DefaultDimNames,
+    TensorDim,
+    TensorSpace,
+)
 from fast_llm.functional.config import ActivationType
 from fast_llm.layers.common.linear import Linear
-from fast_llm.layers.ssm.config import SSMConfig, SSMDimNames
+from fast_llm.layers.ssm.config import SSMConfig
 from fast_llm.layers.transformer.config import TransformerConfig, TransformerDimNames, TransformerKwargs
 from fast_llm.layers.transformer.transformer import Mixer
 from fast_llm.tensor import LambdaInitializer, ParameterMeta, init_kaiming_, init_ones_
-from fast_llm.utils import Assert, get_lr_scale
+from fast_llm.utils import Assert, div, get_lr_scale
 
 try:
     from mamba_ssm.ops.selective_scan_interface import mamba_inner_fn as _mamba_inner_fn  # noqa
@@ -67,27 +73,33 @@ class MambaLayer(Mixer):
         self._config = config
         # TODO: It's not silu?
         Assert.eq(self._config.activation_type, ActivationType.silu)
-
-        # Tensor dims:
-        inner_dim = tensor_space[SSMDimNames.composite_heads_and_head_dim]
-        hidden_dim = tensor_space[TransformerDimNames.hidden]
         layer_lr_scale = config.per_layer_lr_scale[block_index] if config.per_layer_lr_scale else None
         lr_scale = get_lr_scale(self._config.mamba_lr_scale, layer_lr_scale)
 
+        # Tensor dims:
+        hidden_dim = tensor_space[TransformerDimNames.hidden]
+        heads_dim = TensorDim("heads", div(self._config.d_inner, self._config.state_size))
+        state_dim = TensorDim("state", self._config.state_size)
+        inner_dim = CompositeTensorDim("inner", (heads_dim, state_dim))
+        convolution_kernel_dim = TensorDim("convolution_kernel", self._config.conv_kernel_dimension)
+        dt_rank_dim = TensorDim("dt_rank", self._config.dt_rank)
+        inner_projection_dim = ConcatenatedTensorDim("inner_projection", (inner_dim, inner_dim))
+        x_projection_dim = ConcatenatedTensorDim("x_projection", (dt_rank_dim, state_dim, state_dim))
+
         # TODO: Backward compatibility?
-        # TODO: lr_scale?
         self.in_proj = Linear(
             hidden_dim,
-            tensor_space[SSMDimNames.concatenated_inner_projection],
+            inner_projection_dim,
             bias=False,
             weight_init_method=init_kaiming_(hidden_dim.size),
+            lr_scale=lr_scale,
         )
 
         self.conv1d_weight = ParameterMeta.from_dims(
             (
                 inner_dim,
                 tensor_space[DefaultDimNames.scalar],
-                tensor_space[SSMDimNames.convolution_kernel],
+                convolution_kernel_dim,
             ),
             init_method=init_kaiming_(inner_dim.size),
             lr_scale=lr_scale,
@@ -95,7 +107,7 @@ class MambaLayer(Mixer):
 
         self.x_proj = Linear(
             inner_dim,
-            tensor_space[SSMDimNames.concatenated_x_projection],
+            x_projection_dim,
             weight_init_method=init_kaiming_(inner_dim.size),
             bias=False,
             lr_scale=lr_scale,
@@ -104,7 +116,7 @@ class MambaLayer(Mixer):
 
         # TODO: the weights are initialized a bit differently here https://github.com/state-spaces/mamba/blob/0cce0fa645f100f00620ddf2333c2b7712abfdec/mamba_ssm/modules/mamba_simple.py#L82
         self.dt_proj_weight = ParameterMeta.from_dims(
-            (inner_dim, tensor_space[SSMDimNames.dt_rank]),
+            (inner_dim, dt_rank_dim),
             init_method=init_kaiming_(self._config.dt_rank),
             lr_scale=lr_scale,
         )
@@ -116,7 +128,7 @@ class MambaLayer(Mixer):
         )
 
         self.A_log = ParameterMeta.from_dims(
-            (inner_dim, tensor_space[SSMDimNames.state]),
+            (inner_dim, state_dim),
             weight_decay=False,
             init_method=init_A(self._config.state_size, inner_dim.size),
             lr_scale=lr_scale,

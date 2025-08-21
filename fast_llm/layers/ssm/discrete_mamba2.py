@@ -4,14 +4,21 @@ import typing
 import einops
 import torch
 
-from fast_llm.engine.config_utils.tensor_space import DefaultDimNames, TensorSpace
+from fast_llm.engine.config_utils.tensor_space import (
+    CompositeTensorDim,
+    ConcatenatedTensorDim,
+    DefaultDimNames,
+    TensorDim,
+    TensorSpace,
+)
+from fast_llm.engine.distributed.config import DistributedDimNames
 from fast_llm.functional.config import ActivationType
 from fast_llm.layers.common.linear import InputParallelLinear, OutputParallelLinear
-from fast_llm.layers.ssm.config import SSMConfig, SSMDimNames
+from fast_llm.layers.ssm.config import SSMConfig
 from fast_llm.layers.transformer.config import TransformerConfig, TransformerDimNames, TransformerKwargs
 from fast_llm.layers.transformer.transformer import Mixer
 from fast_llm.tensor import ParameterMeta, init_kaiming_, init_ones_, init_uniform_centered_, init_zeros_
-from fast_llm.utils import get_lr_scale
+from fast_llm.utils import div, get_lr_scale
 
 logger = logging.getLogger(__name__)
 
@@ -49,25 +56,41 @@ class DiscreteMamba2(Mixer):
         layer_lr_scale = config.per_layer_lr_scale[block_index] if config.per_layer_lr_scale else None
         lr_scale = get_lr_scale(self._config.mamba_lr_scale, layer_lr_scale)
 
-        inner_dim = tensor_space[SSMDimNames.composite_heads_and_head_dim]
         hidden_dim = tensor_space[TransformerDimNames.hidden]
-        conv1d_dim = tensor_space[SSMDimNames.concatenated_convolution]
-        heads_dim = tensor_space[SSMDimNames.composite_heads]
+        state_dim = TensorDim("state", self._config.state_size)
+        v_head_size_dim = TensorDim("v_head_size", div(self._config.d_inner, self._config.n_v_heads))
+
+        head_groups_dim = TensorDim(
+            "head_groups",
+            self._config.n_qk_heads,
+            self._distributed_config.get_distributed_dim(DistributedDimNames.tensor),
+        )
+        group_heads_dim = TensorDim("group_heads", div(self._config.n_v_heads, self._config.n_qk_heads))
+        heads_dim = CompositeTensorDim("heads", (head_groups_dim, group_heads_dim))
+        inner_dim = CompositeTensorDim("inner", (head_groups_dim, group_heads_dim, v_head_size_dim))
+        bc_dim = CompositeTensorDim("bc", (head_groups_dim, state_dim))
+        convolution_kernel_dim = TensorDim("convolution_kernel", self._config.conv_kernel_dimension)
+
+        inner_projection_dim = ConcatenatedTensorDim(
+            "inner_projection",
+            (inner_dim, bc_dim, bc_dim, inner_dim, heads_dim),
+        )
+        convolution_dim = ConcatenatedTensorDim("convolution", (inner_dim, bc_dim, bc_dim))
 
         # local_head_groups = head_groups / TP
-        self._local_head_groups = tensor_space[SSMDimNames.head_groups].size
+        self._local_head_groups = head_groups_dim.size
         # local_heads = local_head_groups * group_heads
         self._local_heads = heads_dim.size
         # local_inner_size = local_heads * head_size
         self._local_inner_size = inner_dim.size
         # local_bc_size = local_head_groups * state
-        self._local_bc_size = tensor_space[SSMDimNames.composite_head_groups_and_state].size
+        self._local_bc_size = bc_dim.size
 
         # TODO: double check initializations
         # Projections
         self.in_proj = OutputParallelLinear(
             hidden_dim,
-            tensor_space[SSMDimNames.concatenated_inner_projection],
+            inner_projection_dim,
             bias=config.add_bias_linear,
             weight_init_method=init_kaiming_(transformer_config.hidden_size),
             sequence_parallel=self._sequence_parallel,
@@ -82,15 +105,17 @@ class DiscreteMamba2(Mixer):
             )
         self.conv1d_weight = ParameterMeta.from_dims(
             (
-                conv1d_dim,
+                convolution_dim,
                 tensor_space[DefaultDimNames.scalar],
-                tensor_space[SSMDimNames.convolution_kernel],
+                convolution_kernel_dim,
             ),
-            init_method=init_uniform_centered_((conv1d_dim.global_size * self._config.conv_kernel_dimension) ** -0.5),
+            init_method=init_uniform_centered_(
+                (convolution_dim.global_size * self._config.conv_kernel_dimension) ** -0.5
+            ),
             lr_scale=lr_scale,
         )
         self.conv1d_bias = ParameterMeta.from_dims(
-            (conv1d_dim,),
+            (convolution_dim,),
             init_method=init_uniform_centered_(self._config.conv_kernel_dimension**-0.5),
             lr_scale=lr_scale,
         )
@@ -122,14 +147,12 @@ class DiscreteMamba2(Mixer):
             input_ = torch.nn.functional.pad(input_, (0, 0, 0, padded_length - sequence_length))
 
         # inner_projection : (batch/local_or_padded_sequence, local_sequence/batch, hidden)
-        #   -> (batch/local_or_padded_sequence, local_sequence/batch, inner_projection)
-        # inner_projection: (batch, local_or_padded_sequence, hidden) -> (batch, padded_sequence, local_inner_size)
+        #   -> (batch/padded_sequence, sequence/batch, local_inner_projection)
         inner_projection = self.in_proj(input_)
-        # Standardize to (batch, padded_sequence, inner_projection)
+        # Standardize to (batch, padded_sequence, local_inner_projection)
         if kwargs[TransformerKwargs.sequence_first]:
             inner_projection = inner_projection.transpose(0, 1)
 
-        print("QAIKOFNMJOWENM inner_projection", inner_projection.shape)
         xBC, z, A_log = torch.split(
             inner_projection,
             [
@@ -139,9 +162,6 @@ class DiscreteMamba2(Mixer):
             ],
             dim=-1,
         )
-        print("QAIKOFNMJOWENM xBC", xBC.shape, self._local_inner_size, self._local_bc_size)
-        print("QAIKOFNMJOWENM z", z.shape)
-        print("QAIKOFNMJOWENM A_log", A_log.shape)
 
         # Convolutional layer
         # xbc: (batch, padded_sequence, local_heads * head_size + 2 * local_head_groups * state)
@@ -189,8 +209,6 @@ class DiscreteMamba2(Mixer):
         # out_proj: (batch/sequence, sequence/batch, local_heads * head_size)
         #   -> (batch/local_sequence, local_sequence/batch, hidden)
         a, b = self.out_proj(y)
-        logger.info(f"EKFBN y {y.shape}")
-        logger.info(f"EKFBN a {a.shape}")
         return self.out_proj(y)
 
     @torch.compile
