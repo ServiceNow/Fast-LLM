@@ -13,7 +13,7 @@ from fast_llm.engine.config_utils.tensor_space import (
 from fast_llm.engine.distributed.config import DistributedDimNames
 from fast_llm.functional.config import ActivationType
 from fast_llm.layers.common.linear import InputParallelLinear, Linear, OutputParallelLinear
-from fast_llm.layers.ssm.config import SSMConfig, SSMDimNames
+from fast_llm.layers.ssm.config import SSMConfig
 from fast_llm.layers.ssm.mamba_layer import init_A, init_dtprojbias
 from fast_llm.layers.transformer.config import TransformerConfig, TransformerDimNames, TransformerKwargs
 from fast_llm.layers.transformer.transformer import Mixer
@@ -43,18 +43,6 @@ class Mamba2(Mixer):
     """
 
     _mixer_name: typing.ClassVar[str] = "mamba_2"
-
-    _XZ_DIMS = (
-        TransformerDimNames.batch,
-        SSMDimNames.composite_heads_and_head_dim,
-        TransformerDimNames.sequence_q,
-    )
-    _BC_DIMS = (
-        TransformerDimNames.batch,
-        SSMDimNames.composite_heads,
-        SSMDimNames.state,
-        TransformerDimNames.sequence_q,
-    )
 
     def __init__(
         self,
@@ -168,6 +156,18 @@ class Mamba2(Mixer):
             sequence_parallel=self._sequence_parallel,
             lr_scale=lr_scale,
         )
+        if self._debug.enabled:
+            self._xz_dims = (
+                TransformerDimNames.batch,
+                inner_dim,
+                TransformerDimNames.sequence_q,
+            )
+            self._bc_dims = (
+                TransformerDimNames.batch,
+                heads_dim,
+                state_dim,
+                TransformerDimNames.sequence_q,
+            )
 
     def forward(self, input_: torch.Tensor, kwargs: dict[str, typing.Any]) -> tuple[torch.Tensor, torch.Tensor | None]:
         assert _mamba_available
@@ -224,11 +224,11 @@ class Mamba2(Mixer):
         dt = dt.transpose(1, 2)
 
         if self._debug_level:
-            self._debug_log(z, "z", self._XZ_DIMS, kwargs)
-            self._debug_log(x, "x", self._XZ_DIMS, kwargs)
-            self._debug_log(b, "b", self._BC_DIMS, kwargs)
-            self._debug_log(c, "c", self._BC_DIMS, kwargs)
-            self._debug_log(dt, "dt", self._XZ_DIMS, kwargs)
+            self._debug_log(z, "z", self._xz_dims, kwargs)
+            self._debug_log(x, "x", self._xz_dims, kwargs)
+            self._debug_log(b, "b", self._bc_dims, kwargs)
+            self._debug_log(c, "c", self._bc_dims, kwargs)
+            self._debug_log(dt, "dt", self._xz_dims, kwargs)
 
         y = selective_scan_fn(
             x,
@@ -243,7 +243,7 @@ class Mamba2(Mixer):
         )
 
         if self._debug_level:
-            self._debug_log(y, "y", self._XZ_DIMS, kwargs)
+            self._debug_log(y, "y", self._xz_dims, kwargs)
 
         # y: (batch, local_heads * state, sequence) -> (batch, sequence, local_heads * state)
         y = y.transpose(1, 2)[:, :sequence_length]
