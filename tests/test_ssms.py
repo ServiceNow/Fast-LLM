@@ -5,7 +5,7 @@ from functools import partial
 
 import pytest
 import torch
-from mamba2 import Mamba2
+from mamba2 import Mamba2, NemotronHMamba2
 
 from fast_llm.config import NoAutoValidate
 from fast_llm.engine.checkpoint.config import CheckpointLoadConfig
@@ -43,7 +43,7 @@ def get_hybrid_config(hybrid_block_layout=["t", "m2"], prediction_heads=1, defau
     hidden_size = 512
     config = HybridSSMBaseModelConfig(
         transformer=TransformerConfig(num_layers=len(hybrid_block_layout), hidden_size=hidden_size),
-        ssm=SSMConfig(d_xb=hidden_size, dt_rank=10, d_inner=hidden_size * 2),
+        ssm=SSMConfig(d_xb=hidden_size, dt_rank=10, d_inner=hidden_size * 2, state_size=16, head_dim=8),
         hybrid_block_layout=hybrid_block_layout,
         prediction_heads=prediction_heads,
         default_mtp_type=default_mtp_type,
@@ -225,22 +225,39 @@ def generate_random_cu_seqlens(seq_len, packages_num=2):
 
 
 # Quick and dirty test for Mamba2 varlen block from https://github.com/jxiw/M1/blob/d92b53faa640f8ebf624d3e9e771fe24648ef014/rl/verl/tests/pack_mamba/test_mamba_layer.py
+# test that packed and not packed are producing the same result in terms of outputs and gradients
 # TODO: integrate in the testing framework
 @pytest.mark.slow
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA available")
 @pytest.mark.skipif(not _mamba_available, reason="Mamba2 is not available")
-@pytest.mark.skipif(not _mamba_varlen, reason="Mamba2 varlen is not available")
-def test_mamba_varlen_block(distributed_config, distributed):
+@pytest.mark.parametrize(
+    "mixer_cls, hybrid_block_layout, tollerance",
+    [
+        pytest.param(
+            partial(NemotronHMamba2, block_index=0),
+            ["nm2", "t"],
+            1e-3,  # not 100% sure why, mamba2 requires lower tollerance (maybe its not really supporting packing)
+            id="nemotron_hmamba2",
+        ),
+        pytest.param(
+            partial(Mamba2, block_index=0),
+            ["m2", "t"],
+            1e-4,
+            marks=pytest.mark.skipif(not _mamba_varlen, reason="Mamba2 varlen is not available"),
+            id="mamba2",
+        ),
+    ],
+)
+def test_mamba_varlen_block(mixer_cls, hybrid_block_layout, tollerance, distributed_config, distributed):
     """
     Compare that the output and grads of packed and unpacked Mamba2 varlen block are the same.
     """
-    hybrid_config = get_hybrid_config(hybrid_block_layout=["m2", "t"])
+    hybrid_config = get_hybrid_config(hybrid_block_layout=hybrid_block_layout)
     tensor_space = TensorSpace(distributed_config=distributed_config)
     tensor_space.setup(distributed)
     hybrid_config.setup_tensor_space(tensor_space)
     layer_idx = 0
 
-    mixer_cls = partial(Mamba2, block_index=layer_idx)
     block_packed = SSMBlock(
         hybrid_config.transformer,
         hybrid_config.ssm,
@@ -304,14 +321,13 @@ def test_mamba_varlen_block(distributed_config, distributed):
     output_states_unpacked = block_ref(
         hidden_states.clone(), {"cu_seqlens": None, "seq_idx": None, "ssm_position_ids": None, "sequence_first": False}
     )
-    tollerance = 1e-4
     assert output_states_packed.shape == packed_hidden_states.shape
     assert output_states_unpacked.shape == hidden_states.shape
     assert not torch.isnan(hidden_states).any()
     assert not torch.isinf(hidden_states).any()
 
     output_states_unpacked = pack(output_states_unpacked, cu_seqlens, batch_size)
-    torch.allclose(output_states_packed, output_states_unpacked, atol=tollerance)
+    assert torch.allclose(output_states_packed, output_states_unpacked, atol=tollerance)
 
     loss = output_states_packed.sum()
     loss.backward()

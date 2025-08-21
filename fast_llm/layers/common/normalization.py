@@ -9,6 +9,13 @@ from fast_llm.tensor import ParameterMeta, accumulate_gradient, init_ones_, init
 from fast_llm.utils import Assert
 
 try:
+    from mamba_ssm.ops.triton.layernorm_gated import rmsnorm_fn as mamba_rmsnorm_fn
+
+    _mamba_ssm_available = True
+except ImportError:
+    _mamba_ssm_available = False
+
+try:
     import fused_layer_norm_cuda  # noqa
 
     _fused_normalization_available = True
@@ -288,3 +295,22 @@ class RMSNorm(torch.nn.Module):
 
     def _forward_torch(self, input_: torch.Tensor) -> torch.Tensor:
         return torch.rms_norm(input_.to(self.weight.dtype), self.normalized_shape, self.weight, self._eps)
+
+
+class MambaRMSNormGated(RMSNorm):
+    def __init__(self, hidden_dim: TensorDim, group_size: int, eps=1e-5, lr_scale: float | None = None):
+        assert _mamba_ssm_available
+        super().__init__(hidden_dim, eps=eps, lr_scale=lr_scale)
+        self.group_size = group_size
+        self._forward = mamba_rmsnorm_fn
+
+    def forward(self, input_: torch.Tensor, gate=None):
+        return mamba_rmsnorm_fn(
+            x=input_,
+            weight=self.weight,
+            bias=None,  # No bias
+            z=gate,
+            eps=self._eps,
+            group_size=self.group_size,
+            norm_before_gate=False,
+        )
