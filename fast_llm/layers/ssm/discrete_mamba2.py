@@ -150,11 +150,9 @@ class DiscreteMamba2[ConfigType: SSMConfig](BlockLayer[ConfigType]):
             assert not kwargs[BlockKwargs.sequence_first] and input_.size(1) == sequence_length
             input_ = torch.nn.functional.pad(input_, (0, 0, 0, padded_length - sequence_length))
 
-        # inner_projection : (batch/local_or_padded_sequence, local_sequence/batch, hidden)
-        #   -> (batch/local_or_padded_sequence, local_sequence/batch, inner_projection)
-        # inner_projection: (batch, local_or_padded_sequence, hidden) -> (batch, padded_sequence, local_inner_size)
+        # -> (batch/padded_sequence, sequence/batch, local_inner_projection
         inner_projection = self.in_proj(input_)
-        # Standardize to (batch, padded_sequence, inner_projection)
+        # Standardize to (batch, padded_sequence, local_inner_projection)
         if kwargs[BlockKwargs.sequence_first]:
             inner_projection = inner_projection.transpose(0, 1)
 
