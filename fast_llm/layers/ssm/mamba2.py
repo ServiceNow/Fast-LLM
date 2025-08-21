@@ -149,16 +149,16 @@ class Mamba2[ConfigType: SSMConfig](BlockLayer[ConfigType]):
             bias=config.add_bias_linear,
             weight_init_method=init_kaiming_(self._config.d_inner),
             sequence_parallel=self._sequence_parallel,
-            # TODO: lr_scale?
+            lr_scale=lr_scale,
         )
 
         if self._debug.enabled:
-            _xz_dims = (
+            self._xz_dims = (
                 BlockDimNames.batch,
                 inner_dim,
                 BlockDimNames.sequence_q,
             )
-            _bc_dims = (
+            self._bc_dims = (
                 BlockDimNames.batch,
                 heads_dim,
                 state_dim,
@@ -176,10 +176,10 @@ class Mamba2[ConfigType: SSMConfig](BlockLayer[ConfigType]):
         assert _causal_conv1d_available
 
         # inner_projection : (batch/local_sequence, local_sequence/batch, hidden)
-        #   -> (batch/sequence, sequence/batch, inner_projection)
+        #   -> (batch/sequence, sequence/batch, local_inner_projection)
         inner_projection = self.in_proj(input_)
         dt = self.dt_proj(self.dt_in_proj(input_)) + self.dt_proj_bias
-        # Standardize to (batch, sequence, inner_projection)
+        # Standardize to (batch, sequence, local_inner_projection)
         if kwargs[BlockKwargs.sequence_first]:
             inner_projection = inner_projection.transpose(0, 1)
             dt = dt.transpose(0, 1)
@@ -226,11 +226,11 @@ class Mamba2[ConfigType: SSMConfig](BlockLayer[ConfigType]):
         dt = dt.transpose(1, 2)
 
         if self._debug.enabled:
-            self._debug(z, "z", self._XZ_DIMS, kwargs)
-            self._debug(x, "x", self._XZ_DIMS, kwargs)
-            self._debug(b, "b", self._BC_DIMS, kwargs)
-            self._debug(c, "c", self._BC_DIMS, kwargs)
-            self._debug(dt, "dt", self._XZ_DIMS, kwargs)
+            self._debug(z, "z", self._xz_dims, kwargs)
+            self._debug(x, "x", self._xz_dims, kwargs)
+            self._debug(b, "b", self._bc_dims, kwargs)
+            self._debug(c, "c", self._bc_dims, kwargs)
+            self._debug(dt, "dt", self._xz_dims, kwargs)
 
         y = selective_scan_fn(
             x,
@@ -245,7 +245,7 @@ class Mamba2[ConfigType: SSMConfig](BlockLayer[ConfigType]):
         )
 
         if self._debug.enabled:
-            self._debug(y, "y", self._XZ_DIMS, kwargs)
+            self._debug(y, "y", self._xz_dims, kwargs)
 
         # y: (batch, local_heads * state, sequence) -> (batch, sequence, local_heads * state)
         y = y.transpose(1, 2)[:, :sequence_length]

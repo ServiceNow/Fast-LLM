@@ -160,8 +160,12 @@ class Block[ConfigType: BlockConfig](BlockLayerBase[ConfigType], Layer):
         self._return_input: bool = return_input
         # Note, layer_lr_scale does not impact the norms
         # TODO: add a separate norm_lr_scale
-        self.norm_1 = self._config.peft.apply_other(self._config.normalization.get_layer(self._hidden_dim))
-        self.norm_2 = self._config.peft.apply_other(self._config.normalization.get_layer(self._hidden_dim))
+        self.norm_1 = self._config.peft.apply_other(
+            self._config.normalization.get_layer(self._hidden_dim, self._lr_scale)
+        )
+        self.norm_2 = self._config.peft.apply_other(
+            self._config.normalization.get_layer(self._hidden_dim, self._lr_scale)
+        )
 
         # Attribute should be mixer, but Attention uses a different name for backward compatibility. TODO: Fix.
         setattr(
