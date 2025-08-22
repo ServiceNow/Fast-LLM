@@ -23,6 +23,9 @@ ssm_config_default = {
     "dt_scale": 1.0,
     "dt_init_floor": 1e-4,
     "conv_bias": True,
+    # nemotron mamba2
+    "head_dim": 128,
+    "layer_norm_epsilon": 1e-5,
 }
 
 
