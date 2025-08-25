@@ -1001,6 +1001,7 @@ class Config(metaclass=ConfigMeta):
                         compare=value.pop("compare", base_class_field.compare),
                         metadata=value.pop("metadata", base_class_field.metadata),
                         kw_only=value.pop("kw_only", base_class_field.kw_only),
+                        init=value.pop("init", base_class_field.init),
                     ),
                 )
                 if name in cls.__annotations__:

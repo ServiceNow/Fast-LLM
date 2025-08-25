@@ -7,7 +7,7 @@ from fast_llm.config import Field, FieldHint, check_field, config_class
 from fast_llm.engine.base_model.config import BaseModelConfig
 from fast_llm.engine.config_utils.initialization import InitializationConfig, Initializer, init_ones_, init_zeros_
 from fast_llm.layers.common.peft.config import PeftConfig
-from fast_llm.utils import Assert
+from fast_llm.utils import Assert, combine_lr_scales
 
 if typing.TYPE_CHECKING:
     from fast_llm.engine.config_utils.tensor_dim import TensorDim
@@ -102,6 +102,14 @@ class LayerNormalizationBaseConfig(NormalizationConfig):
         desc="Learning rate scaling factor.",
         hint=FieldHint.feature,
     )
+
+    def get_layer(
+        self,
+        hidden_dim: "TensorDim",
+        lr_scale: float | None = None,
+        peft: PeftConfig | None = None,
+    ) -> "Normalization":
+        return super().get_layer(hidden_dim, combine_lr_scales(self.lr_scale, lr_scale), peft)
 
     @functools.cached_property
     def weight_initialization_method(self) -> Initializer:

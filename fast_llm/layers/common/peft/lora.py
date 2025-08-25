@@ -5,7 +5,7 @@ import torch
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.functional.autograd import wrap_forward_backward
 from fast_llm.layers.common.linear.config import LinearConfig
-from fast_llm.layers.common.linear.linear import Linear, LinearBase
+from fast_llm.layers.common.linear.linear import LinearBase
 
 
 def lora_linear(
@@ -36,26 +36,23 @@ def lora_linear(
     middle_dim = TensorDim("lora_middle", rank)
 
     # Use the same config as the wrapped linear
-    config = LinearConfig.from_dict(module.config, {"bias": False, "lr_scale": module.weight.lr_scale})
-    module.lora_0 = Linear(
+
+    config = LinearConfig(weight_initialization=module.config.weight_initialization)
+    module.lora_0 = config.get_layer(
         in_dim,
         middle_dim,
-        bias=False,
-        weight_init_method=module.weight.param_init_method,
         transposed_weight=module.transposed_weight,
+        # TODO: Implement proper backward pass.
+        auto_weight_grad_accumulation=True,
         lr_scale=module.weight.lr_scale,
     )
-    module.lora_1 = Linear(
+    module.lora_1 = config.get_layer(
         middle_dim,
         out_dim,
-        bias=False,
-        weight_init_method=module.weight.param_init_method,
         transposed_weight=module.transposed_weight,
+        auto_weight_grad_accumulation=True,
         lr_scale=module.weight.lr_scale,
     )
-    # TODO: Implement proper backward pass.
-    module.lora_0.weight.auto_grad_accumulation = True
-    module.lora_1.weight.auto_grad_accumulation = True
 
     old_forward = module._forward
 

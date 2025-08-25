@@ -6,7 +6,12 @@ from fast_llm.engine.base_model.config import BaseModelConfig
 if typing.TYPE_CHECKING:
     import torch
 
-    from fast_llm.layers.common.linear.linear import InputParallelLinear, LinearBase, LinearLike, OutputParallelLinear
+    from fast_llm.layers.common.linear.linear import (
+        AffineInputParallelLinear,
+        AffineOutputParallelLinear,
+        LinearBase,
+        LinearLike,
+    )
     from fast_llm.layers.common.normalization.normalization import Normalization
     from fast_llm.tensor import ParameterMeta
 
@@ -75,10 +80,10 @@ class LoRAConfig(PeftConfig):
 
         from fast_llm.layers.common.peft.lora import lora_linear
 
-        if isinstance(module, InputParallelLinear):
+        if isinstance(module, AffineInputParallelLinear):
             # TODO: Support InputParallelLinear (different output format).
             raise NotImplementedError("LoRA not supported for InputParallelLinear.")
-        elif isinstance(module, OutputParallelLinear):
+        elif isinstance(module, AffineOutputParallelLinear):
             assert out_channel_begin is None and out_channel_end is None
 
         # TODO: Init method?

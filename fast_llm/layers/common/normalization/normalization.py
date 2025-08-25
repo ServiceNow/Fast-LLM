@@ -15,7 +15,7 @@ from fast_llm.layers.common.normalization.config import (
     RMSNormalizationConfig,
 )
 from fast_llm.tensor import ParameterMeta, accumulate_gradient
-from fast_llm.utils import Assert, combine_lr_scales
+from fast_llm.utils import Assert
 
 try:
     import fused_layer_norm_cuda  # noqa
@@ -151,7 +151,7 @@ class Normalization[ConfigType: NormalizationConfig](Configurable[ConfigType], t
     def __init__(self, config: ConfigType, hidden_dim: TensorDim, lr_scale: float | None = None):
         super().__init__(config)
         self._hidden_dim = hidden_dim
-        self._lr_scale = combine_lr_scales(self._config.lr_scale, lr_scale)
+        self._lr_scale = lr_scale
         assert not self._hidden_dim.is_parallel
 
     @abc.abstractmethod

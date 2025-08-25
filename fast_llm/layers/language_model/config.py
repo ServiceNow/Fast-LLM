@@ -7,7 +7,7 @@ from fast_llm.functional.config import CrossEntropyImpl, DistillationLossImpl
 from fast_llm.layers.attention.config import TransformerConfig
 from fast_llm.layers.attention.rotary.config import NoRotaryConfig
 from fast_llm.layers.block.config import BlockKwargs
-from fast_llm.layers.common.linear.config import LinearWeightConfig
+from fast_llm.layers.common.linear.config import WeightConfig
 from fast_llm.utils import Assert
 
 
@@ -43,15 +43,15 @@ class LanguageModelBaseConfig(BaseModelConfig):
         desc="Configuration for the transformer architecture.",
         hint=FieldHint.architecture,
     )
-    word_embeddings_layer: LinearWeightConfig = Field(
+    word_embeddings_layer: WeightConfig = Field(
         desc="Configuration for the word embedding (weight).",
         hint=FieldHint.architecture,
     )
-    position_embeddings_layer: LinearWeightConfig = Field(
+    position_embeddings_layer: WeightConfig = Field(
         desc="Configuration for the word embedding (weight).",
         hint=FieldHint.architecture,
     )
-    output_layer: LinearWeightConfig = Field(
+    output_layer: WeightConfig = Field(
         desc="Configuration for the LM output layer (weight). Ignored for tied embeddings",
         hint=FieldHint.architecture,
     )
@@ -185,10 +185,10 @@ class LanguageModelBaseConfig(BaseModelConfig):
 
     def _validate(self) -> None:
         default_init = init_normal_(0, self.hidden_size**-0.5)
-        self.word_embeddings_layer.default = LinearWeightConfig(weight_initialization=default_init)
+        self.word_embeddings_layer.default = WeightConfig(weight_initialization=default_init)
         # TODO: Use `word_embeddings_layer` as default? (More consistent with tied weights)
-        self.output_layer.default = LinearWeightConfig(weight_initialization=default_init)
-        self.position_embeddings_layer.default = LinearWeightConfig(weight_initialization=default_init)
+        self.output_layer.default = WeightConfig(weight_initialization=default_init)
+        self.position_embeddings_layer.default = WeightConfig(weight_initialization=default_init)
 
         self.transformer.validate()
         with self._set_implicit_default():

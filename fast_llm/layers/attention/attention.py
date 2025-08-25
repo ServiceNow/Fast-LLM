@@ -4,7 +4,6 @@ import torch
 
 from fast_llm.core.distributed import set_generator
 from fast_llm.core.ops import gather_op, reduce_op, reduce_scatter_op, swap_mult_dim
-from fast_llm.engine.config_utils.initialization import init_normal_
 from fast_llm.engine.config_utils.tensor_dim import CompositeTensorDim, ConcatenatedTensorDim, TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
 from fast_llm.functional.autograd import wrap_forward_backward
@@ -93,37 +92,21 @@ class Attention[ConfigType: AttentionConfig](BlockLayer[ConfigType]):
 
         self._softmax_scale = self._config.kv_channels ** (-self._config.attention_softmax_scale_power)
 
-        init_method_qkv = init_normal_(
-            std=self._config.init_method_std_qkv,
-            min_val=self._config.init_method_min_qkv,
-            max_val=self._config.init_method_max_qkv,
-        )
-        init_method_std_attn_proj = init_normal_(
-            std=self._config.init_method_std_attn_proj,
-            min_val=self._config.init_method_min_attn_proj,
-            max_val=self._config.init_method_max_attn_proj,
-        )
-
         # TODO: Merge the query and key-value computations? (harder with sequence parallel.)
         self.query = self._config.query_layer.get_layer(
             hidden_dim,
             query_dim,
-            bias=self._block_config.add_linear_biases,
-            weight_init_method=self._config.query_layer.weight_initialization,
-            bias_init_method=self._config.query_layer.bias_initialization,
             sequence_parallel=self._sequence_parallel,
             lr_scale=self._lr_scale,
-            peft=self._config.block.peft,
+            peft=self._block_config.peft,
         )
-        # TODO: Separate Peft (others?) for key and value
+        # TODO: Mix key and value configs
         self.key_value = self._config.query_layer.get_layer(
             hidden_dim,
             query_dim,
-            weight_init_method=self._config.key_layer.weight_initialization,
-            bias_init_method=self._config.key_layer.bias_initialization,
             sequence_parallel=self._sequence_parallel,
             lr_scale=self._lr_scale,
-            peft=self._config.block.peft,
+            peft=self._block_config.peft,
         )
         self._query_key_value = wrap_forward_backward(self._query_key_value_forward, self._query_key_value_backward)
 
@@ -134,11 +117,9 @@ class Attention[ConfigType: AttentionConfig](BlockLayer[ConfigType]):
         self.dense = self._config.dense_layer.get_layer(
             dense_dim,
             hidden_dim,
-            weight_init_method=self._config.dense_layer.weight_initialization,
-            bias_init_method=self._config.dense_layer.bias_initialization,
             sequence_parallel=self._sequence_parallel,
             lr_scale=self._lr_scale,
-            peft=self._config.block.peft,
+            peft=self._block_config.peft,
         )
 
         if self._debug.enabled:

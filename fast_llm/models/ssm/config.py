@@ -53,8 +53,6 @@ class HybridSSMBaseModelConfig(GPTBaseModelConfig):
         with self._set_implicit_default():
             if self.ssm.d_xb is None:
                 self.ssm.d_xb = self.transformer.hidden_size
-            if self.ssm.d_inner is None:
-                self.ssm.d_inner = int(self.ssm.expansion_factor * self.transformer.hidden_size)
 
         if self.hybrid_block_layout is None:
             with self._set_implicit_default():

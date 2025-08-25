@@ -4,7 +4,7 @@ import typing
 from fast_llm.config import Config, Field, FieldHint, check_field, config_class
 from fast_llm.engine.config_utils.initialization import init_normal_, init_zeros_
 from fast_llm.functional.config import ActivationType, MLPRecomputeLevel
-from fast_llm.layers.common.linear.config import LinearConfig
+from fast_llm.layers.common.linear.config import AffineLinearConfig, LinearConfig
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
@@ -23,13 +23,16 @@ class RoutingType(str, enum.Enum):
 
 @config_class()
 class MLPConfig(Config):
-    # TODO: Review names    # TODO: Separate MoE?
+    # TODO: Review names
+    # TODO: Separate MoE?
     _abstract = False
-    layer_1: LinearConfig = Field(
+    # TODO: Configure experts separately?
+    layer_1: AffineLinearConfig = Field(
         desc="Configuration for the first MLP layer.",
         hint=FieldHint.architecture,
     )
-    layer_2: LinearConfig = Field(
+    # TODO: Separate gate and up
+    layer_2: AffineLinearConfig = Field(
         desc="Configuration for the second MLP layer.",
         hint=FieldHint.architecture,
     )
@@ -120,7 +123,7 @@ class MLPConfig(Config):
             (self.add_linear_biases, self.add_linear_biases, False),
             (1, max(self.num_blocks, 1), 1),
         ):
-            layer.default = LinearConfig(
+            layer.default = AffineLinearConfig(
                 bias=bias,
                 weight_initialization=init_normal_(0, (self.hidden_size * scale) ** -0.5),
                 bias_initialization=init_zeros_,

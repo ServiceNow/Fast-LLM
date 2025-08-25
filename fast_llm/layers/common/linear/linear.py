@@ -1,3 +1,4 @@
+import abc
 import logging
 import typing
 
@@ -15,14 +16,17 @@ from fast_llm.functional.linear import (
     output_parallel_linear_backward,
     output_parallel_linear_forward,
 )
-from fast_llm.layers.common.linear.config import LinearConfig
+from fast_llm.layers.common.linear.config import AffineLinearConfig, LinearConfig
 from fast_llm.tensor import ParameterMeta
-from fast_llm.utils import combine_lr_scales
 
 logger = logging.getLogger(__name__)
 
 
 class LinearLike(torch.nn.Module):
+    """
+    An interface for linear-like layers.
+    """
+
     def __init__(self):
         super().__init__()
         self._forward = wrap_forward_backward(self.forward_only, self.backward)
@@ -37,20 +41,20 @@ class LinearLike(torch.nn.Module):
         raise NotImplementedError()
 
 
-class LinearBase(Configurable[LinearConfig], LinearLike):
+class LinearBase[ConfigType: LinearConfig](Configurable[ConfigType], LinearLike):
     """
-    A base module for linear layers holding weights and biases.
+    A base module for linear and affine linear layers that defines weights.
     """
 
     def __init__(
         self,
-        config: LinearConfig,
+        config: ConfigType,
         in_dim: TensorDim,
         out_dim: TensorDim,
         *,
+        auto_weight_grad_accumulation: bool = False,
         transposed_weight: bool = False,
         sequence_parallel: bool = False,
-        auto_bias_grad_accumulation: bool = False,
         lr_scale: float | None = None,
     ):
         super().__init__(config)
@@ -58,23 +62,21 @@ class LinearBase(Configurable[LinearConfig], LinearLike):
         self._sequence_parallel = sequence_parallel
         self._in_dim = in_dim
         self._out_dim = out_dim
-        self._lr_scale = combine_lr_scales(self._config.lr_scale, lr_scale)
+        self._lr_scale = lr_scale
+        self._init()
+        self._config.get_weight()
         self.weight = ParameterMeta.from_dims(
             (self._in_dim, self._out_dim) if self._transposed_weight else (self._out_dim, self._in_dim),
             init_method=self._config.weight_initialization,
-            auto_grad_accumulation=False,
+            auto_grad_accumulation=auto_weight_grad_accumulation,
             lr_scale=self._lr_scale,
         )
-        if self._config.bias:
-            self.bias = ParameterMeta.from_dims(
-                (self._out_dim,),
-                init_method=self._config.bias_initialization,
-                weight_decay=False,
-                auto_grad_accumulation=auto_bias_grad_accumulation,
-                lr_scale=self._lr_scale,
-            )
-        else:
-            self.bias = None
+        self.bias = None
+
+    @abc.abstractmethod
+    def _init(self):
+        # Convenience method to avoid repeating argument lists.
+        pass
 
     @property
     def transposed_weight(self) -> bool:
@@ -85,34 +87,15 @@ class LinearBase(Configurable[LinearConfig], LinearLike):
         return self._lr_scale
 
 
-class Linear(LinearBase):
+class Linear[ConfigType: LinearConfig](LinearBase[ConfigType]):
     """
-    A basic linear layer without tensor parallelism.
+    A (non-affine) linear layer without tensor parallelism.
     """
 
-    def __init__(
-        self,
-        config: LinearConfig,
-        in_dim: TensorDim,
-        out_dim: TensorDim,
-        *,
-        transposed_weight: bool = False,
-        sequence_parallel: bool = False,
-        auto_bias_grad_accumulation: bool = False,
-        lr_scale: float | None = None,
-    ):
-        assert not in_dim.is_parallel
-        assert not out_dim.is_parallel
-        assert not sequence_parallel
-        super().__init__(
-            config,
-            in_dim,
-            out_dim,
-            transposed_weight=transposed_weight,
-            sequence_parallel=sequence_parallel,
-            auto_bias_grad_accumulation=auto_bias_grad_accumulation,
-            lr_scale=lr_scale,
-        )
+    def _init(self):
+        assert not self._in_dim.is_parallel
+        assert not self._out_dim.is_parallel
+        assert not self._sequence_parallel
 
     def forward_only(
         self, input_: torch.Tensor
@@ -123,34 +106,17 @@ class Linear(LinearBase):
         return linear_backward(grad_output, context)
 
 
-class OutputParallelLinear(LinearBase):
+class OutputParallelLinear[ConfigType: LinearConfig](LinearBase[ConfigType]):
     """
-    A linear layer with output (column) tensor parallelism.
+    A (non-affine) linear layer with output (column) tensor parallelism.
     """
 
-    def __init__(
-        self,
-        config: LinearConfig,
-        in_dim: TensorDim,
-        out_dim: TensorDim,
-        *,
-        transposed_weight: bool = False,
-        sequence_parallel: bool = False,
-        auto_bias_grad_accumulation: bool = False,
-        lr_scale: float | None = None,
-    ):
-        assert not in_dim.is_parallel
-        self._group_size = 1 if out_dim.parallel_dim is None else out_dim.parallel_dim.size
-        self._sequence_parallel = sequence_parallel and self._group_size > 1
-        super().__init__(
-            config,
-            in_dim,
-            out_dim,
-            transposed_weight=transposed_weight,
-            sequence_parallel=sequence_parallel and self._group_size > 1,
-            auto_bias_grad_accumulation=auto_bias_grad_accumulation,
-            lr_scale=lr_scale,
-        )
+    _group_size: int
+
+    def _init(self):
+        assert not self._in_dim.is_parallel
+        self._group_size = 1 if self._out_dim.parallel_dim is None else self._out_dim.parallel_dim.size
+        self._sequence_parallel = self._sequence_parallel and self._group_size > 1
 
     def forward_only(self, input_) -> tuple[torch.Tensor, tuple[typing.Any, ...]]:
         return output_parallel_linear_forward(
@@ -166,34 +132,17 @@ class OutputParallelLinear(LinearBase):
         return output_parallel_linear_backward(grad_output, context)
 
 
-class InputParallelLinear(LinearBase):
+class InputParallelLinear[ConfigType: LinearConfig](LinearBase[ConfigType]):
     """
-    A linear layer with input (row) tensor parallelism.
+    A (non-affine) linear layer with input (row) tensor parallelism.
     """
 
-    def __init__(
-        self,
-        config: LinearConfig,
-        in_dim: TensorDim,
-        out_dim: TensorDim,
-        *,
-        transposed_weight: bool = False,
-        sequence_parallel: bool = False,
-        auto_bias_grad_accumulation: bool = False,
-        lr_scale: float | None = None,
-    ):
-        assert not out_dim.is_parallel
-        self._group_size = 1 if in_dim.parallel_dim is None else in_dim.parallel_dim.size
-        self._sequence_parallel = sequence_parallel and self._group_size > 1
-        super().__init__(
-            config,
-            in_dim,
-            out_dim,
-            transposed_weight=transposed_weight,
-            sequence_parallel=sequence_parallel and self._group_size > 1,
-            auto_bias_grad_accumulation=auto_bias_grad_accumulation,
-            lr_scale=lr_scale,
-        )
+    _group_size: int
+
+    def _init(self):
+        assert not self._out_dim.is_parallel
+        self._group_size = 1 if self._in_dim.parallel_dim is None else self._in_dim.parallel_dim.size
+        self._sequence_parallel = self._sequence_parallel and self._group_size > 1
 
     def forward(self, input_: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor | None]:
         # TODO: Use self._forward instead (broken).
@@ -221,3 +170,57 @@ class InputParallelLinear(LinearBase):
     def backward(self, grad_output: torch.Tensor, context: tuple[typing.Any, ...]) -> torch.Tensor:  # noqa
         # TODO: Needs grad_bias as input too?
         return input_parallel_linear_backward(grad_output, context)
+
+
+class AffineLinearBase[ConfigType: AffineLinearConfig](LinearBase[ConfigType]):
+    """
+    A base module for affine linear layers that defines weights and biases.
+    """
+
+    def __init__(
+        self,
+        config: ConfigType,
+        in_dim: TensorDim,
+        out_dim: TensorDim,
+        *,
+        transposed_weight: bool = False,
+        sequence_parallel: bool = False,
+        auto_weight_grad_accumulation: bool = False,
+        auto_bias_grad_accumulation: bool = False,
+        lr_scale: float | None = None,
+    ):
+        super().__init__(
+            config,
+            in_dim,
+            out_dim,
+            transposed_weight=transposed_weight,
+            sequence_parallel=sequence_parallel,
+            auto_weight_grad_accumulation=auto_weight_grad_accumulation,
+            lr_scale=lr_scale,
+        )
+        if self._config.bias:
+            self.bias = ParameterMeta.from_dims(
+                (self._out_dim,),
+                init_method=self._config.bias_initialization,
+                weight_decay=False,
+                auto_grad_accumulation=auto_bias_grad_accumulation,
+                lr_scale=self._lr_scale,
+            )
+
+
+class AffineLinear[ConfigType: AffineLinearConfig](AffineLinearBase, LinearBase[ConfigType]):
+    """
+    An affine linear layer without tensor parallelism.
+    """
+
+
+class AffineOutputParallelLinear[ConfigType: LinearConfig](AffineLinearBase, OutputParallelLinear[ConfigType]):
+    """
+    An affine linear layer with output (column) tensor parallelism.
+    """
+
+
+class AffineInputParallelLinear[ConfigType: LinearConfig](AffineLinearBase, InputParallelLinear[ConfigType]):
+    """
+    An affine linear layer with input (row) tensor parallelism.
+    """

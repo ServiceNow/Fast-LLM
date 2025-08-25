@@ -3,16 +3,17 @@ import typing
 from fast_llm.config import Config, Field, FieldHint, config_class
 from fast_llm.engine.config_utils.initialization import InitializationConfig
 from fast_llm.layers.common.peft.config import PeftConfig
-from fast_llm.utils import combine_lr_scales
+from fast_llm.utils import Assert, combine_lr_scales
 
 if typing.TYPE_CHECKING:
     from fast_llm.engine.config_utils.tensor_dim import TensorDim
-    from fast_llm.layers.common.linear.linear import InputParallelLinear, Linear, LinearLike, OutputParallelLinear
+    from fast_llm.layers.common.linear.linear import LinearLike
     from fast_llm.tensor import ParameterMeta
 
 
+# TODO: Move
 @config_class()
-class LinearWeightConfig(Config):
+class WeightConfig(Config):
     initialization: InitializationConfig = Field(
         desc="Initialization configuration.",
         hint=FieldHint.feature,
@@ -27,57 +28,53 @@ class LinearWeightConfig(Config):
 
     def _validate(self) -> None:
         if hasattr(self, "default"):
+            Assert.eq(type(self), type(self.default))
             self.default.validate()
             with self._set_implicit_default():
-                if self.initialization.is_default:
-                    self.initialization = self.default.initialization
-                if self.lr_scale is None:
-                    self.lr_scale = self.default.lr_scale
-        if None in (self.initialization, self.lr_scale):
-            raise ValueError("Missing default values for linear weight configuration.")
-
+                self._apply_default()
         super()._validate()
+
+    def _apply_default(self) -> None:
+        if self.initialization.is_default:
+            self.initialization = self.default.initialization
+        if self.lr_scale is None:
+            self.lr_scale = self.default.lr_scale
+        if self.initialization.is_default:
+            raise ValueError("Missing default value for `initialization`.")
 
     def get_weight(
         self,
-        in_dim: TensorDim,
-        out_dim: TensorDim,
-        *,
-        transposed_weight: bool = False,
-        auto_grad_accumulation: bool = False,
+        *dims: TensorDim,
+        auto_grad_accumulation: bool,
         lr_scale: float | None,
+        weight_decay: bool = True,
+        peft: PeftConfig | None,
     ) -> "ParameterMeta":
         from fast_llm.tensor import ParameterMeta
 
-        return ParameterMeta.from_dims(
-            (in_dim, out_dim) if transposed_weight else (out_dim, in_dim),
+        out = ParameterMeta.from_dims(
+            dims,
             init_method=self.initialization,
             auto_grad_accumulation=auto_grad_accumulation,
             lr_scale=combine_lr_scales(self.lr_scale, lr_scale),
+            weight_decay=weight_decay,
         )
+        if peft is not None:
+            out = peft.apply_weight(out)
+        return out
 
 
 @config_class()
-class LinearConfig(Config):
+class LinearBaseConfig(Config):
+    """
+    Configuration for a linear-like layer without bias.
+    """
+
     weight_initialization: InitializationConfig = Field(
         desc="Initialization configuration for the weight.",
         hint=FieldHint.feature,
     )
-    bias_initialization: InitializationConfig = Field(
-        desc="Initialization configuration for the bias.",
-        hint=FieldHint.feature,
-    )
-    bias: bool = Field(
-        default=None,
-        desc="Use bias.",
-        hint=FieldHint.architecture,
-    )
     lr_scale: float | None = None
-    apply_peft: bool = Field(
-        default=None,
-        desc="Apply peft on this layer if defined. Otherwise, treat the layer as a non-peft layer (may be frozen).",
-        hint=FieldHint.feature,
-    )
     # Fixed defaults don't make sense because each parent layer uses its own.
     # Instead, we use this variable to set defaults dynamically.
     # This can either be a constant,
@@ -86,22 +83,116 @@ class LinearConfig(Config):
 
     def _validate(self) -> None:
         if hasattr(self, "default"):
+            Assert.custom(isinstance(self.default, type(self)))
             self.default.validate()
             with self._set_implicit_default():
-                if self.bias is None:
-                    self.bias = self.default.bias
-                if self.weight_initialization.is_default:
-                    self.weight_initialization = self.default.weight_initialization
-                if self.bias_initialization.is_default:
-                    self.bias_initialization = self.default.bias_initialization
-                if self.lr_scale is None:
-                    self.lr_scale = self.default.lr_scale
-                if self.apply_peft is None:
-                    self.apply_peft = self.default.apply_peft
-        if None in (self.bias, self.weight_initialization, self.bias_initialization, self.lr_scale, self.apply_peft):
-            raise ValueError("Missing default values for linear layer configuration.")
-
+                self._apply_default()
         super()._validate()
+
+    def _apply_default(self) -> None:
+        if self.weight_initialization.is_default:
+            self.weight_initialization = self.default.weight_initialization
+        if self.lr_scale is None:
+            self.lr_scale = self.default.lr_scale
+        if self.weight_initialization.is_default:
+            raise ValueError("Missing default value for `weight_initialization`.")
+
+    def get_weight(
+        self,
+        in_dim: TensorDim,
+        out_dim: TensorDim,
+        *,
+        auto_grad_accumulation: bool,
+        transposed: bool = False,
+        lr_scale: float | None = None,
+        # Note: weights created this way are treated as generic parameters WRT peft.
+        peft: PeftConfig | None,
+    ) -> "ParameterMeta":
+        from fast_llm.tensor import ParameterMeta
+
+        out = ParameterMeta.from_dims(
+            (in_dim, out_dim) if transposed else (out_dim, in_dim),
+            init_method=self.weight_initialization,
+            auto_grad_accumulation=auto_grad_accumulation,
+            lr_scale=combine_lr_scales(self.lr_scale, lr_scale),
+        )
+        if peft is not None:
+            out = peft.apply_weight(out)
+        return out
+
+
+@config_class()
+class AffineLinearBaseConfig(LinearBaseConfig):
+    """
+    Configuration for a linear-like layer with optional bias.
+    """
+
+    bias_initialization: InitializationConfig = Field(
+        desc="Initialization configuration for the bias.",
+        hint=FieldHint.feature,
+    )
+    # TODO: Could use dynamic type instead?
+    bias: bool = Field(
+        default=None,
+        desc="Use bias.",
+        hint=FieldHint.architecture,
+    )
+
+    def _apply_default(self) -> None:
+        super()._apply_default()
+        if self.bias is None:
+            self.bias = self.default.bias
+        if self.bias_initialization.is_default:
+            self.bias_initialization = self.default.bias_initialization
+        if self.bias is None:
+            raise ValueError("Missing default value for `bias`.")
+        if self.bias_initialization is None:
+            raise ValueError("Missing default value for `bias_initialization`.")
+
+    def get_bias(
+        self,
+        out_dim: TensorDim,
+        *,
+        auto_grad_accumulation: bool,
+        lr_scale: float | None = None,
+        # Note: biases created this way are treated as generic parameters WRT peft.
+        peft: PeftConfig | None,
+    ) -> "ParameterMeta | None":
+        if self.bias:
+            from fast_llm.tensor import ParameterMeta
+
+            out = ParameterMeta.from_dims(
+                (out_dim,),
+                init_method=self.bias_initialization,
+                weight_decay=False,
+                auto_grad_accumulation=auto_grad_accumulation,
+                lr_scale=combine_lr_scales(self.lr_scale, lr_scale),
+            )
+            if peft is not None:
+                out = peft.apply_weight(out)
+            return out
+        else:
+            return None
+
+
+@config_class()
+class LinearConfig(LinearBaseConfig):
+    """
+    Configuration for a linear layer without bias.
+    """
+
+    apply_peft: bool = Field(
+        default=None,
+        desc="Apply peft on this layer if defined. Otherwise, treat the layer as a non-peft layer (may be frozen).",
+        hint=FieldHint.feature,
+    )
+
+    def _apply_default(self) -> None:
+        super()._apply_default()
+        if self.apply_peft is None:
+            self.apply_peft = self.default.apply_peft
+        if self.apply_peft is None:
+            raise ValueError("Missing default value for `apply_peft`.")
 
     def get_layer(
         self,
@@ -110,10 +201,12 @@ class LinearConfig(Config):
         *,
         sequence_parallel: bool = False,
         transposed_weight: bool = False,
-        auto_bias_grad_accumulation: bool = False,
+        auto_weight_grad_accumulation: bool = False,
         lr_scale: float | None,
-        peft: PeftConfig | None = None,
+        peft: PeftConfig | None,
     ) -> "LinearLike":
+        from fast_llm.layers.common.linear.linear import InputParallelLinear, Linear, OutputParallelLinear
+
         if in_dim.parallel_dim is not None:
             assert out_dim.parallel_dim is None
             cls = InputParallelLinear
@@ -128,8 +221,51 @@ class LinearConfig(Config):
             out_dim,
             transposed_weight=transposed_weight,
             sequence_parallel=sequence_parallel,
+            auto_weight_grad_accumulation=auto_weight_grad_accumulation,
+            lr_scale=combine_lr_scales(self.lr_scale, lr_scale),
+        )
+        if peft is not None:
+            out = peft.apply_linear(out, self.apply_peft)
+        return out
+
+
+@config_class()
+class AffineLinearConfig(AffineLinearBaseConfig, LinearConfig):
+    def get_layer(
+        self,
+        in_dim: TensorDim,
+        out_dim: TensorDim,
+        *,
+        sequence_parallel: bool = False,
+        transposed_weight: bool = False,
+        auto_weight_grad_accumulation: bool = False,
+        auto_bias_grad_accumulation: bool = False,
+        lr_scale: float | None,
+        peft: PeftConfig | None,
+    ) -> "LinearLike":
+        from fast_llm.layers.common.linear.linear import (
+            AffineInputParallelLinear,
+            AffineLinear,
+            AffineOutputParallelLinear,
+        )
+
+        if in_dim.parallel_dim is not None:
+            assert out_dim.parallel_dim is None
+            cls = AffineInputParallelLinear
+        elif out_dim.parallel_dim is not None:
+            cls = AffineOutputParallelLinear
+        else:
+            assert not sequence_parallel
+            cls = AffineLinear
+        out = cls(
+            self,
+            in_dim,
+            out_dim,
+            transposed_weight=transposed_weight,
+            sequence_parallel=sequence_parallel,
+            auto_weight_grad_accumulation=auto_weight_grad_accumulation,
             auto_bias_grad_accumulation=auto_bias_grad_accumulation,
-            lr_scale=lr_scale,
+            lr_scale=combine_lr_scales(self.lr_scale, lr_scale),
         )
         if peft is not None:
             out = peft.apply_linear(out, self.apply_peft)

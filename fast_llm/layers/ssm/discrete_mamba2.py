@@ -10,7 +10,7 @@ from fast_llm.engine.distributed.config import DistributedConfig, DistributedDim
 from fast_llm.functional.config import ActivationType
 from fast_llm.layers.block.block import BlockLayer
 from fast_llm.layers.block.config import BlockConfig, BlockKwargs
-from fast_llm.layers.common.linear.linear import InputParallelLinear, OutputParallelLinear
+from fast_llm.layers.common.linear.linear import AffineInputParallelLinear, AffineOutputParallelLinear
 from fast_llm.layers.ssm.config import SSMConfig
 from fast_llm.layers.ssm.mamba import init_kaiming_
 from fast_llm.tensor import ParameterMeta
@@ -86,7 +86,7 @@ class DiscreteMamba2[ConfigType: SSMConfig](BlockLayer[ConfigType]):
 
         # TODO: double check initializations
         # Projections
-        self.in_proj = OutputParallelLinear(
+        self.in_proj = AffineOutputParallelLinear(
             hidden_dim,
             inner_projection_dim,
             bias=config.add_bias_linear,
@@ -124,7 +124,7 @@ class DiscreteMamba2[ConfigType: SSMConfig](BlockLayer[ConfigType]):
             init_method=init_ones_,
             lr_scale=lr_scale,
         )
-        self.out_proj = InputParallelLinear(
+        self.out_proj = AffineInputParallelLinear(
             inner_dim,
             hidden_dim,
             bias=config.add_bias_linear,

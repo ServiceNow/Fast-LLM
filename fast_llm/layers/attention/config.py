@@ -9,7 +9,7 @@ from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.functional.config import TritonConfig
 from fast_llm.layers.attention.rotary.config import RotaryConfig
 from fast_llm.layers.block.config import BlockConfig, BlockKwargs
-from fast_llm.layers.common.linear.config import LinearConfig
+from fast_llm.layers.common.linear.config import AffineLinearConfig
 from fast_llm.utils import Assert, div
 
 logger = logging.getLogger(__name__)
@@ -35,20 +35,20 @@ class AttentionConfig(Config):
     _abstract = False
 
     # TODO: Review names
-    query_layer: LinearConfig = Field(
+    query_layer: AffineLinearConfig = Field(
         desc="Configuration for the query layer.",
         hint=FieldHint.architecture,
     )
-    key_layer: LinearConfig = Field(
+    key_layer: AffineLinearConfig = Field(
         desc="Configuration for the key layer.",
         hint=FieldHint.architecture,
     )
     # TODO: Use
-    value_layer: LinearConfig = Field(
+    value_layer: AffineLinearConfig = Field(
         desc="Configuration for the value layer.",
         hint=FieldHint.architecture,
     )
-    dense_layer: LinearConfig = Field(
+    dense_layer: AffineLinearConfig = Field(
         desc="Initialization configuration for the dense layer.",
         hint=FieldHint.feature,
     )
@@ -121,7 +121,7 @@ class AttentionConfig(Config):
                 (True, False, True, False),
             ),
         ):
-            layer.default = LinearConfig(
+            layer.default = AffineLinearConfig(
                 bias=True,
                 weight_initialization=init_normal_(0, (self.hidden_size * scale) ** -0.5),
                 bias_initialization=init_zeros_,

@@ -3,6 +3,7 @@ import typing
 
 from fast_llm.config import Config, Field, FieldHint, check_field, config_class, skip_valid_if_none
 from fast_llm.functional.config import ActivationType
+from fast_llm.layers.common.linear.config import AffineLinearConfig, LinearConfig, WeightConfig
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
@@ -48,7 +49,56 @@ class DTInitType(enum.StrEnum):
 
 @config_class()
 class SSMConfig(Config):
+    # TODO: Cleanup, separate by ssm type
     _abstract = False
+    # [Mamba, Mamba2, DiscreteMamba2]
+    z_layer: AffineLinearConfig = Field(
+        desc="Configuration for the z layer.",
+        hint=FieldHint.architecture,
+    )
+    # [Mamba, Mamba2, DiscreteMamba2]
+    x_layer: AffineLinearConfig = Field(
+        desc="Configuration for the x layer.",
+        hint=FieldHint.architecture,
+    )
+    # [Mamba2, DiscreteMamba2]
+    b_layer: AffineLinearConfig = Field(
+        desc="Configuration for the b layer.",
+        hint=FieldHint.architecture,
+    )
+    # [Mamba2, DiscreteMamba2]
+    c_layer: AffineLinearConfig = Field(
+        desc="Configuration for the c layer.",
+        hint=FieldHint.architecture,
+    )
+    #  [Mamba, Mamba2, DiscreteMamba2] TODO: Wrong, bias
+    convolution_layer: WeightConfig = Field(
+        desc="Configuration for the convolution weight.",
+        hint=FieldHint.architecture,
+    )
+    # [Mamba] TODO: Can be confused with `x_layer`
+    x_projection_layer: LinearConfig = Field(
+        desc="Configuration for the x projection layer.",
+    )
+    # [Mamba]
+    dt_layer: AffineLinearConfig = Field(
+        desc="Configuration for the dt projection layer.",
+    )
+    # [Mamba]
+    a_log_layer: WeightConfig = Field(
+        desc="Configuration for the A_log layer.",
+        hint=FieldHint.architecture,
+    )
+    # [Mamba]
+    d_layer: WeightConfig = Field(
+        desc="Configuration for the D layer.",
+        hint=FieldHint.architecture,
+    )
+    # [Mamba]
+    # TODO: note, if bias is used there is a problem in the MambaInnerFn.backward for the bias grads. I think this bias is not used in other mamba repos.
+    output_layer: LinearConfig = Field(
+        desc="Configuration for the output layer.",
+    )
 
     # Model dimensions
     # TODO: Remove (redundant default)

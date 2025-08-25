@@ -9,7 +9,7 @@ from fast_llm.engine.distributed.config import DistributedConfig, DistributedDim
 from fast_llm.functional.config import ActivationType
 from fast_llm.layers.block.block import BlockLayer
 from fast_llm.layers.block.config import BlockConfig, BlockDimNames, BlockKwargs
-from fast_llm.layers.common.linear.linear import InputParallelLinear, Linear, OutputParallelLinear
+from fast_llm.layers.common.linear.linear import AffineInputParallelLinear, AffineOutputParallelLinear, Linear
 from fast_llm.layers.ssm.config import SSMConfig
 from fast_llm.layers.ssm.mamba import init_A, init_dtprojbias, init_kaiming_
 from fast_llm.tensor import ParameterMeta
@@ -99,7 +99,7 @@ class Mamba2[ConfigType: SSMConfig](BlockLayer[ConfigType]):
             init_method=init_uniform_centered_(self._config.conv_kernel_dimension**-0.5),
             lr_scale=lr_scale,
         )
-        self.in_proj = OutputParallelLinear(
+        self.in_proj = AffineOutputParallelLinear(
             hidden_dim,
             inner_projection_dim,
             bias=config.add_bias_linear,
@@ -114,7 +114,7 @@ class Mamba2[ConfigType: SSMConfig](BlockLayer[ConfigType]):
             weight_init_method=init_kaiming_(block_config.hidden_size),
             lr_scale=lr_scale,
         )
-        self.dt_proj = OutputParallelLinear(
+        self.dt_proj = AffineOutputParallelLinear(
             dt_rank_dim,
             inner_dim,
             bias=False,
@@ -143,7 +143,7 @@ class Mamba2[ConfigType: SSMConfig](BlockLayer[ConfigType]):
             init_method=init_ones_,
             lr_scale=lr_scale,
         )
-        self.out_proj = InputParallelLinear(
+        self.out_proj = AffineInputParallelLinear(
             inner_dim,
             hidden_dim,
             bias=config.add_bias_linear,
