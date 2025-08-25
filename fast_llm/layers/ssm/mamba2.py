@@ -376,7 +376,7 @@ class NemotronHMamba2(Mixer):
             lr_scale=lr_scale,
         )
 
-        self.dt_bias = ParameterMeta.from_dims(
+        self.dt_proj_bias = ParameterMeta.from_dims(
             (tensor_space[SSMDimNames.composite_heads],),
             init_method=init_dtprojbias(self._config.dt_max, self._config.dt_min, self._config.dt_init_floor),
             lr_scale=lr_scale,
@@ -491,7 +491,7 @@ class NemotronHMamba2(Mixer):
             chunk_size=self._config.chunk_size,
             D=self.D,
             z=None,
-            dt_bias=self.dt_bias,
+            dt_bias=self.dt_proj_bias,
             dt_softplus=True,
             seq_idx=seq_idx,  # assume this is used for packing
             cu_seqlens=cu_seqlens,  # assume this is used for packing, but maybe not needed at training
