@@ -25,7 +25,7 @@ ssm_config_default = {
     "conv_bias": True,
     # nemotron mamba2
     "head_dim": 128,
-    "layer_norm_epsilon": 1e-5,
+    # "layer_norm_epsilon": 1e-5,
 }
 
 

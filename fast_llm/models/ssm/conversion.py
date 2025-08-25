@@ -792,6 +792,10 @@ class AprielThinkerSSMHHybridHuggingfaceCheckpointHandler(
                 fast_llm_names=(("ssm", "d_inner"),),
                 export_names=(("ssm_cfg", "d_inner"),),
             ),
+            RenameParamConverter(
+                fast_llm_names=(("ssm", "head_dim"),),
+                export_names=(("ssm_cfg", "head_dim"),),
+            ),
             IgnoreImportParamConverter(export_names=(("sliding_window",),), ignore_export_value=None),
         ]
 
