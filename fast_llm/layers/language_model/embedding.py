@@ -5,12 +5,11 @@ import torch
 from fast_llm.core.distributed import set_generator
 from fast_llm.core.ops import reduce_forward, split
 from fast_llm.engine.base_model.base_model import Layer
-from fast_llm.engine.config_utils.initialization import init_normal_
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
 from fast_llm.layers.block.block import BlockLayerBase
 from fast_llm.layers.language_model.config import LanguageModelBaseConfig, LanguageModelKwargs
-from fast_llm.tensor import ParameterMeta, TensorMeta
+from fast_llm.tensor import TensorMeta
 from fast_llm.utils import Assert
 
 WORD_EMBEDDINGS_WEIGHT = "word_embeddings_weight"
@@ -62,25 +61,20 @@ class LanguageModelEmbedding[ConfigType: LanguageModelBaseConfig](BlockLayerBase
             self._vocab_end_index = (self._distributed_config.tensor_rank + 1) * vocab_dim.size
 
         self.word_embeddings_weight = self._config.word_embeddings_layer.get_weight(
-            vocab_dim, self._hidden_dim, auto_grad_accumulation=True, lr_scale=self._lr_scale
+            vocab_dim,
+            self._hidden_dim,
+            auto_grad_accumulation=True,
+            lr_scale=self._lr_scale,
+            peft=self._config.transformer.peft,
         )
         if self._config.use_absolute_position_embeddings:
-            self.position_embeddings_weight = ParameterMeta.from_dims(
-                (TensorDim("position_embeddings", self._config.max_position_embeddings), self._hidden_dim),
-                init_method=init_normal_(
-                    std=config.init_method_std_embed,
-                    min_val=config.init_method_min_embed,
-                    max_val=config.init_method_max_embed,
-                ),
+            self.position_embeddings_weight = self._config.position_embeddings_layer.get_weight(
+                TensorDim("position_embeddings", self._config.max_position_embeddings),
+                self._hidden_dim,
+                auto_grad_accumulation=True,
+                lr_scale=self._lr_scale,
                 allow_sequence_tensor_parallel=not config.parallel_embeddings,
-                lr_scale=config.embeddings_lr_scale,
-            )
-
-        # PEFT.
-        self.word_embeddings_weight = self._config.transformer.peft.apply_weight(self.word_embeddings_weight)
-        if hasattr(self, "position_embeddings_weight"):
-            self.position_embeddings_weight = self._config.transformer.peft.apply_weight(
-                self.position_embeddings_weight
+                peft=self._config.transformer.peft,
             )
 
     @torch.compile

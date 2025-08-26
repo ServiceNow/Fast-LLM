@@ -148,6 +148,9 @@ def _update_and_add_testing_config(
 MODEL_CONFIGS: dict[str, ModelTestingConfig] = {}
 
 
+_init = '{"type":"normal","std":0.022}'
+_init_scaled = '{"type":"normal","std":0.011}'
+
 MODEL_CONFIGS["gpt2"] = ModelTestingConfig(
     # Tests gpt2 features (absolute embeddings, layer norm,  relu activation, tied embeddings, MHA, linear biases).
     name="gpt2",
@@ -161,7 +164,15 @@ MODEL_CONFIGS["gpt2"] = ModelTestingConfig(
         "model.base_model.transformer.hidden_size=256",
         "model.base_model.transformer.num_attention_heads=8",
         "model.base_model.transformer.head_groups=8",
-        "model.base_model.transformer.init_method_std=0.022",
+        f"model.base_model.word_embeddings_layer.initialization={_init}",
+        f"model.base_model.position_embeddings_layer.initialization={_init}",
+        f"model.base_model.output_layer.initialization={_init}",
+        f"model.base_model.transformer.query_layer.weight_initialization={_init}",
+        f"model.base_model.transformer.key_layer.weight_initialization={_init}",
+        f"model.base_model.transformer.value_layer.weight_initialization={_init}",
+        f"model.base_model.transformer.dense_layer.weight_initialization={_init_scaled}",
+        f"model.base_model.transformer.layer_1.weight_initialization={_init}",
+        f"model.base_model.transformer.layer_2.weight_initialization={_init_scaled}",
         f"model.base_model.vocab_size={MODEL_TEST_VOCAB_SIZE}",
         f"model.multi_stage.debug_param_init={_LOG_LEVEL}",
         f"model.multi_stage.debug_layer_outputs={_LOG_LEVEL}",

@@ -82,5 +82,5 @@ class MambaConfig(Config):
             weight_initialization=init_normal_(0, (self.hidden_size * scale) ** -0.5),
             bias_initialization=init_zeros_,
             lr_scale=None,
-            enable_peft=False,
+            apply_peft=False,
         )

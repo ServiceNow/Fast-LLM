@@ -3,6 +3,7 @@ import abc
 import torch
 
 from fast_llm.config import Configurable
+from fast_llm.engine.config_utils.initialization import init_ones_, init_zeros_
 from fast_llm.engine.config_utils.run import log_main_rank
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.functional.config import TritonConfig
@@ -206,14 +207,22 @@ class LayerNormalization[ConfigType: LayerNormalizationConfig](Normalization[Con
 
         self.weight = ParameterMeta.from_dims(
             (hidden_dim,),
-            init_method=self._config.weight_initialization_method,
+            init_method=(
+                init_ones_
+                if self._config.weight_initialization.is_default
+                else self._config.weight_initialization.get_initializer()
+            ),
             weight_decay=False,
             auto_grad_accumulation=implementation == NormalizationImplementation.torch,
             lr_scale=self._lr_scale,
         )
         self.bias = ParameterMeta.from_dims(
             (hidden_dim,),
-            init_method=self._config.bias_initialization_method,
+            init_method=(
+                init_zeros_
+                if self._config.bias_initialization.is_default
+                else self._config.bias_initialization.get_initializer()
+            ),
             weight_decay=False,
             auto_grad_accumulation=implementation == NormalizationImplementation.torch,
             lr_scale=self._lr_scale,
@@ -274,7 +283,11 @@ class RMSNormalization[ConfigType: RMSNormalizationConfig](Normalization[ConfigT
 
         self.weight = ParameterMeta.from_dims(
             (hidden_dim,),
-            init_method=self._config.weight_initialization_method,
+            init_method=(
+                init_ones_
+                if self._config.weight_initialization.is_default
+                else self._config.weight_initialization.get_initializer()
+            ),
             weight_decay=False,
             auto_grad_accumulation=True,
             lr_scale=self._lr_scale,

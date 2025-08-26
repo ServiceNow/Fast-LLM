@@ -103,7 +103,7 @@ class Attention[ConfigType: AttentionConfig](BlockLayer[ConfigType]):
         # TODO: Mix key and value configs
         self.key_value = self._config.query_layer.get_layer(
             hidden_dim,
-            query_dim,
+            key_value_dim,
             sequence_parallel=self._sequence_parallel,
             lr_scale=self._lr_scale,
             peft=self._block_config.peft,
@@ -294,7 +294,7 @@ class Attention[ConfigType: AttentionConfig](BlockLayer[ConfigType]):
             query = query.transpose(0, 1).contiguous()
             key_value = key_value.transpose(0, 1).contiguous()
 
-        key, value = key_value.split(self._local_head_groups * self._config.kv_channels, dim=-1)
+        key, value = key_value.chunk(2, dim=-1)
 
         query = query.view(*query.shape[:2], self._local_heads, self._config.kv_channels)
         key = key.view(*key.shape[:2], self._local_head_groups, self._config.kv_channels)

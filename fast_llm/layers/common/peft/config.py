@@ -1,7 +1,6 @@
 import typing
 
-from fast_llm.config import Field, FieldHint, config_class
-from fast_llm.engine.base_model.config import BaseModelConfig
+from fast_llm.config import Config, Field, FieldHint, config_class
 
 if typing.TYPE_CHECKING:
     import torch
@@ -17,7 +16,9 @@ if typing.TYPE_CHECKING:
 
 
 @config_class(registry=True)
-class PeftConfig(BaseModelConfig):
+class PeftConfig(Config):
+    _abstract = True
+
     def apply_linear(
         self,
         module: "LinearBase",
@@ -26,6 +27,18 @@ class PeftConfig(BaseModelConfig):
         out_channel_end: int | None = None,
     ) -> "LinearLike":
         return self.apply_other(module)
+
+    @classmethod
+    def _from_dict(
+        cls,
+        default: dict[str, typing.Any],
+        strict: bool = True,
+        flat: bool = False,
+    ) -> typing.Self:
+        if cls is PeftConfig and cls.get_subclass(default.get("type")) is None:
+            # Default subclass.
+            return NoPeftConfig._from_dict(default, strict, flat)
+        return super()._from_dict(default, strict=strict, flat=flat)
 
     def apply_normalization(self, module: "Normalization") -> "Normalization":
         return self.apply_other(module)

@@ -1,11 +1,10 @@
 import abc
 import enum
-import functools
 import typing
 
 from fast_llm.config import Field, FieldHint, check_field, config_class
 from fast_llm.engine.base_model.config import BaseModelConfig
-from fast_llm.engine.config_utils.initialization import InitializationConfig, Initializer, init_ones_, init_zeros_
+from fast_llm.engine.config_utils.initialization import InitializationConfig
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.utils import Assert, combine_lr_scales
 
@@ -111,13 +110,6 @@ class LayerNormalizationBaseConfig(NormalizationConfig):
     ) -> "Normalization":
         return super().get_layer(hidden_dim, combine_lr_scales(self.lr_scale, lr_scale), peft)
 
-    @functools.cached_property
-    def weight_initialization_method(self) -> Initializer:
-        if self.weight_initialization.is_default:
-            return self.weight_initialization.get_initializer()
-        else:
-            return init_ones_
-
     @classmethod
     def _from_dict(
         cls,
@@ -140,13 +132,6 @@ class LayerNormalizationConfig(LayerNormalizationBaseConfig):
         desc="Initialization configuration for the normalization biases. Default: fill with zeros",
         hint=FieldHint.feature,
     )
-
-    @functools.cached_property
-    def bias_initialization_method(self) -> Initializer:
-        if self.bias_initialization.is_default:
-            return self.bias_initialization.get_initializer()
-        else:
-            return init_zeros_
 
     @property
     def module_class(self):

@@ -2,7 +2,7 @@ import enum
 import typing
 
 from fast_llm.config import Config, Field, FieldHint, check_field, config_class
-from fast_llm.engine.config_utils.initialization import init_normal_, init_zeros_
+from fast_llm.engine.config_utils.initialization import FillInitializationConfig, NormalInitializationConfig
 from fast_llm.functional.config import ActivationType, MLPRecomputeLevel
 from fast_llm.layers.common.linear.config import AffineLinearConfig, LinearConfig
 from fast_llm.utils import Assert
@@ -121,12 +121,12 @@ class MLPConfig(Config):
         for layer, bias, scale in zip(
             (self.layer_1, self.layer_2, self.router),
             (self.add_linear_biases, self.add_linear_biases, False),
-            (1, max(self.num_blocks, 1), 1),
+            (1, max(self.num_layers, 1), 1),
         ):
             layer.default = AffineLinearConfig(
                 bias=bias,
-                weight_initialization=init_normal_(0, (self.hidden_size * scale) ** -0.5),
-                bias_initialization=init_zeros_,
+                weight_initialization=NormalInitializationConfig(std=(self.hidden_size * scale) ** -0.5),
+                bias_initialization=FillInitializationConfig(value=0),
                 apply_peft=False,
             )
 
@@ -142,11 +142,3 @@ class MLPConfig(Config):
 
         Assert.leq(self.num_shared_experts, self.num_experts)
         Assert.leq(self.num_shared_experts + self.num_experts_per_token, self.num_experts)
-
-        if isinstance(self.mlp_lr_scale, tuple):
-            Assert.eq(len(self.mlp_lr_scale), self.num_experts)
-            for scale in self.mlp_lr_scale:
-                if scale is not None:
-                    Assert.geq(scale, 0)
-        elif self.mlp_lr_scale is not None:
-            Assert.geq(self.mlp_lr_scale, 0)

@@ -30,8 +30,9 @@ def test_frozen_weights(model_testing_config):
     model_frozen = _get_trainer_from_args(
         args
         + [
-            f"model.base_model.transformer.mlp_lr_scale={[0]*model_ref.config.base_model.transformer.num_experts}",
-            f"model.base_model.transformer.router_lr_scale=0",
+            f"model.base_model.transformer.layer_1.lr_scale=0",
+            f"model.base_model.transformer.layer_2.lr_scale=0",
+            f"model.base_model.transformer.router.lr_scale=0",
         ],
         model_testing_config.model_type,
     )._multi_stage

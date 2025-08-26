@@ -31,7 +31,7 @@ class InitializationConfig(Config):
         raise NotImplementedError()
 
 
-@config_class(dynamic_type={InitializationConfig: "default"})
+@config_class()
 class DefaultInitializationConfig(InitializationConfig):
     # A placeholder indicating that the class default should be used instead.
     _abstract = False
@@ -39,7 +39,7 @@ class DefaultInitializationConfig(InitializationConfig):
 
 
 @config_class(dynamic_type={InitializationConfig: "fill"})
-class NormalInitializationConfig(InitializationConfig):
+class FillInitializationConfig(InitializationConfig):
     """
     Normal initialization: normal(mean, std).clamp(min,max)
     """
@@ -55,18 +55,6 @@ class NormalInitializationConfig(InitializationConfig):
 
     def get_initializer(self):
         return init_fill_(self.value)
-
-
-@config_class(dynamic_type={InitializationConfig: "zeros"})
-class ZerosInitializationConfig(InitializationConfig):
-    def get_initializer(self):
-        return init_zeros_
-
-
-@config_class(dynamic_type={InitializationConfig: "ones"})
-class OnesInitializationConfig(InitializationConfig):
-    def get_initializer(self):
-        return init_ones_
 
 
 @config_class(dynamic_type={InitializationConfig: "normal"})

@@ -7,7 +7,6 @@ from fast_llm.utils import Assert, combine_lr_scales
 
 if typing.TYPE_CHECKING:
     from fast_llm.engine.config_utils.tensor_dim import TensorDim
-    from fast_llm.layers.common.linear.linear import LinearLike
     from fast_llm.tensor import ParameterMeta
 
 
@@ -18,7 +17,11 @@ class WeightConfig(Config):
         desc="Initialization configuration.",
         hint=FieldHint.feature,
     )
-    lr_scale: float | None = None
+    lr_scale: float | None = Field(
+        default=None,
+        desc="Scaling factor for the learning rate.",
+        hint=FieldHint.feature,
+    )
 
     # Fixed defaults don't make sense because each parent layer uses its own.
     # Instead, we use this variable to set defaults dynamically.
@@ -35,29 +38,36 @@ class WeightConfig(Config):
         super()._validate()
 
     def _apply_default(self) -> None:
-        if self.initialization.is_default:
-            self.initialization = self.default.initialization
+        # Excluding initialization to avoid messing the config, evaluate at runtime instead.
         if self.lr_scale is None:
             self.lr_scale = self.default.lr_scale
-        if self.initialization.is_default:
-            raise ValueError("Missing default value for `initialization`.")
 
     def get_weight(
         self,
-        *dims: TensorDim,
+        *dims: "TensorDim",
         auto_grad_accumulation: bool,
         lr_scale: float | None,
         weight_decay: bool = True,
         peft: PeftConfig | None,
+        allow_sequence_tensor_parallel: bool = True,
     ) -> "ParameterMeta":
         from fast_llm.tensor import ParameterMeta
 
+        # TODO: Recurse to self.default.default?
+        if not self.initialization.is_default:
+            initialization = self.initialization
+        elif hasattr(self, "default") and not self.default.initialization.is_default:
+            initialization = self.default.initialization
+        else:
+            raise ValueError("Missing default value for `initialization`.")
+
         out = ParameterMeta.from_dims(
             dims,
-            init_method=self.initialization,
+            init_method=initialization.get_initializer(),
             auto_grad_accumulation=auto_grad_accumulation,
             lr_scale=combine_lr_scales(self.lr_scale, lr_scale),
             weight_decay=weight_decay,
+            allow_sequence_tensor_parallel=allow_sequence_tensor_parallel,
         )
         if peft is not None:
             out = peft.apply_weight(out)
@@ -74,7 +84,11 @@ class LinearBaseConfig(Config):
         desc="Initialization configuration for the weight.",
         hint=FieldHint.feature,
     )
-    lr_scale: float | None = None
+    lr_scale: float | None = Field(
+        default=None,
+        desc="Scaling factor for the learning rate.",
+        hint=FieldHint.feature,
+    )
     # Fixed defaults don't make sense because each parent layer uses its own.
     # Instead, we use this variable to set defaults dynamically.
     # This can either be a constant,
@@ -83,24 +97,21 @@ class LinearBaseConfig(Config):
 
     def _validate(self) -> None:
         if hasattr(self, "default"):
-            Assert.custom(isinstance(self.default, type(self)))
+            Assert.custom(isinstance, self.default, type(self))
             self.default.validate()
             with self._set_implicit_default():
                 self._apply_default()
         super()._validate()
 
     def _apply_default(self) -> None:
-        if self.weight_initialization.is_default:
-            self.weight_initialization = self.default.weight_initialization
+        # Excluding initialization to avoid messing the config, evaluate at runtime instead.
         if self.lr_scale is None:
             self.lr_scale = self.default.lr_scale
-        if self.weight_initialization.is_default:
-            raise ValueError("Missing default value for `weight_initialization`.")
 
     def get_weight(
         self,
-        in_dim: TensorDim,
-        out_dim: TensorDim,
+        in_dim: "TensorDim",
+        out_dim: "TensorDim",
         *,
         auto_grad_accumulation: bool,
         transposed: bool = False,
@@ -110,9 +121,17 @@ class LinearBaseConfig(Config):
     ) -> "ParameterMeta":
         from fast_llm.tensor import ParameterMeta
 
+        # TODO: Recurse to self.default.default?
+        if not self.weight_initialization.is_default:
+            initialization = self.weight_initialization
+        elif hasattr(self, "default") and not self.default.weight_initialization.is_default:
+            initialization = self.default.weight_initialization
+        else:
+            raise ValueError("Missing default value for `weight_initialization`.")
+
         out = ParameterMeta.from_dims(
             (in_dim, out_dim) if transposed else (out_dim, in_dim),
-            init_method=self.weight_initialization,
+            init_method=initialization.get_initializer(),
             auto_grad_accumulation=auto_grad_accumulation,
             lr_scale=combine_lr_scales(self.lr_scale, lr_scale),
         )
@@ -142,16 +161,12 @@ class AffineLinearBaseConfig(LinearBaseConfig):
         super()._apply_default()
         if self.bias is None:
             self.bias = self.default.bias
-        if self.bias_initialization.is_default:
-            self.bias_initialization = self.default.bias_initialization
         if self.bias is None:
             raise ValueError("Missing default value for `bias`.")
-        if self.bias_initialization is None:
-            raise ValueError("Missing default value for `bias_initialization`.")
 
     def get_bias(
         self,
-        out_dim: TensorDim,
+        out_dim: "TensorDim",
         *,
         auto_grad_accumulation: bool,
         lr_scale: float | None = None,
@@ -161,9 +176,17 @@ class AffineLinearBaseConfig(LinearBaseConfig):
         if self.bias:
             from fast_llm.tensor import ParameterMeta
 
+            # TODO: Recurse to self.default.default?
+            if not self.bias_initialization.is_default:
+                initialization = self.bias_initialization.get_initializer()
+            elif hasattr(self, "default") and not self.default.bias_initialization.is_default:
+                initialization = self.default.bias_initialization
+            else:
+                raise ValueError("Missing default value for `bias_initialization`.")
+
             out = ParameterMeta.from_dims(
                 (out_dim,),
-                init_method=self.bias_initialization,
+                init_method=initialization.get_initializer(),
                 weight_decay=False,
                 auto_grad_accumulation=auto_grad_accumulation,
                 lr_scale=combine_lr_scales(self.lr_scale, lr_scale),
@@ -196,8 +219,8 @@ class LinearConfig(LinearBaseConfig):
 
     def get_layer(
         self,
-        in_dim: TensorDim,
-        out_dim: TensorDim,
+        in_dim: "TensorDim",
+        out_dim: "TensorDim",
         *,
         sequence_parallel: bool = False,
         transposed_weight: bool = False,
@@ -222,7 +245,8 @@ class LinearConfig(LinearBaseConfig):
             transposed_weight=transposed_weight,
             sequence_parallel=sequence_parallel,
             auto_weight_grad_accumulation=auto_weight_grad_accumulation,
-            lr_scale=combine_lr_scales(self.lr_scale, lr_scale),
+            # `combine_lr_scales` called in `get_weight`.
+            lr_scale=lr_scale,
         )
         if peft is not None:
             out = peft.apply_linear(out, self.apply_peft)
@@ -233,8 +257,8 @@ class LinearConfig(LinearBaseConfig):
 class AffineLinearConfig(AffineLinearBaseConfig, LinearConfig):
     def get_layer(
         self,
-        in_dim: TensorDim,
-        out_dim: TensorDim,
+        in_dim: "TensorDim",
+        out_dim: "TensorDim",
         *,
         sequence_parallel: bool = False,
         transposed_weight: bool = False,

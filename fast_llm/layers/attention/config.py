@@ -4,7 +4,7 @@ import warnings
 
 from fast_llm.config import Config, Field, FieldHint, check_field, config_class, skip_valid_if_none
 from fast_llm.engine.config_utils.data_type import DataType
-from fast_llm.engine.config_utils.initialization import init_normal_, init_zeros_
+from fast_llm.engine.config_utils.initialization import FillInitializationConfig, NormalInitializationConfig
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.functional.config import TritonConfig
 from fast_llm.layers.attention.rotary.config import RotaryConfig
@@ -114,22 +114,18 @@ class AttentionConfig(Config):
             if self.kv_channels is None:
                 self.kv_channels = div(self.hidden_size, self.num_attention_heads)
         # TODO: Block variables as defaults?
-        for layer, scale, enable_peft in (
-            zip(
-                (self.query_layer, self.key_layer, self.value_layer, self.dense_layer),
-                (1, 1, 1, 2 * max(self.num_blocks, 1)),
-                (True, False, True, False),
-            ),
+        for layer, scale, apply_peft in zip(
+            (self.query_layer, self.key_layer, self.value_layer, self.dense_layer),
+            (1, 1, 1, 2 * max(self.num_layers, 1)),
+            (True, False, True, False),
         ):
             layer.default = AffineLinearConfig(
                 bias=True,
-                weight_initialization=init_normal_(0, (self.hidden_size * scale) ** -0.5),
-                bias_initialization=init_zeros_,
+                weight_initialization=NormalInitializationConfig(std=(self.hidden_size * scale) ** -0.5),
+                bias_initialization=FillInitializationConfig(value=0),
                 lr_scale=None,
-                enable_peft=True,
+                apply_peft=True,
             )
-        super()._validate()
-
         super()._validate()
 
         if not TritonConfig.TRITON_ENABLED:

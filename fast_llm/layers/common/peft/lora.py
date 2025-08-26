@@ -16,6 +16,7 @@ def lora_linear(
     out_channel_begin: int | None = None,
     out_channel_end: int | None = None,
 ):
+    # TODO: Do we want to freeze the bias?
     module.weight.requires_grad = False
     in_dim = module._in_dim
     assert not in_dim.is_parallel, "LoRA not supported with tensor parallelism."

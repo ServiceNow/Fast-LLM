@@ -2,7 +2,7 @@ import typing
 
 from fast_llm.config import Field, FieldHint, check_field, config_class, skip_valid_if_none
 from fast_llm.engine.base_model.config import BaseModelConfig
-from fast_llm.engine.config_utils.initialization import init_normal_
+from fast_llm.engine.config_utils.initialization import NormalInitializationConfig
 from fast_llm.functional.config import CrossEntropyImpl, DistillationLossImpl
 from fast_llm.layers.attention.config import TransformerConfig
 from fast_llm.layers.attention.rotary.config import NoRotaryConfig
@@ -184,11 +184,11 @@ class LanguageModelBaseConfig(BaseModelConfig):
     )
 
     def _validate(self) -> None:
-        default_init = init_normal_(0, self.hidden_size**-0.5)
-        self.word_embeddings_layer.default = WeightConfig(weight_initialization=default_init)
+        std = self.transformer.hidden_size**-0.5
+        self.word_embeddings_layer.default = WeightConfig(initialization=NormalInitializationConfig(std=std))
         # TODO: Use `word_embeddings_layer` as default? (More consistent with tied weights)
-        self.output_layer.default = WeightConfig(weight_initialization=default_init)
-        self.position_embeddings_layer.default = WeightConfig(weight_initialization=default_init)
+        self.output_layer.default = WeightConfig(initialization=NormalInitializationConfig(std=std))
+        self.position_embeddings_layer.default = WeightConfig(initialization=NormalInitializationConfig(std=std))
 
         self.transformer.validate()
         with self._set_implicit_default():

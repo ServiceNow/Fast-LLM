@@ -127,7 +127,7 @@ def test_pretrained_config(load_config: ModelConfigType, result_path):
             "transformer": {
                 "normalization": {"type": "rms_norm", "implementation": "triton"},
                 "rotary": {"type": "default"},
-                "peft": {"type": "lora", "freeze_others": False, "layers": ["query", "value"]},
+                "peft": {"type": "lora", "freeze_others": False},
                 "num_layers": 12,
                 "hidden_size": 512,
                 "ffn_hidden_size": 4096,
@@ -139,11 +139,7 @@ def test_pretrained_config(load_config: ModelConfigType, result_path):
             "vocab_size": 1000,
         }
     else:
-        base_model_update["transformer"]["peft"] = {
-            "type": "lora",
-            "freeze_others": False,
-            "layers": ["query", "value"],
-        }
+        base_model_update["transformer"]["peft"] = {"type": "lora", "freeze_others": False}
         base_model_update["transformer"]["normalization"]["type"] = "layer_norm"
         base_model_update["transformer"]["rotary"] = {"type": "none"}
         expected_config["base_model"] = base_model_update

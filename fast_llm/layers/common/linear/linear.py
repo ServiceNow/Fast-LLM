@@ -1,4 +1,3 @@
-import abc
 import logging
 import typing
 
@@ -17,7 +16,6 @@ from fast_llm.functional.linear import (
     output_parallel_linear_forward,
 )
 from fast_llm.layers.common.linear.config import AffineLinearConfig, LinearConfig
-from fast_llm.tensor import ParameterMeta
 
 logger = logging.getLogger(__name__)
 
@@ -62,29 +60,20 @@ class LinearBase[ConfigType: LinearConfig](Configurable[ConfigType], LinearLike)
         self._sequence_parallel = sequence_parallel
         self._in_dim = in_dim
         self._out_dim = out_dim
-        self._lr_scale = lr_scale
-        self._init()
-        self._config.get_weight()
-        self.weight = ParameterMeta.from_dims(
-            (self._in_dim, self._out_dim) if self._transposed_weight else (self._out_dim, self._in_dim),
-            init_method=self._config.weight_initialization,
+        self.weight = self._config.get_weight(
+            self._in_dim,
+            self._out_dim,
             auto_grad_accumulation=auto_weight_grad_accumulation,
-            lr_scale=self._lr_scale,
+            transposed=self._transposed_weight,
+            lr_scale=lr_scale,
+            # Peft is applied in `get_layer`.
+            peft=None,
         )
         self.bias = None
-
-    @abc.abstractmethod
-    def _init(self):
-        # Convenience method to avoid repeating argument lists.
-        pass
 
     @property
     def transposed_weight(self) -> bool:
         return self._transposed_weight
-
-    @property
-    def lr_scale(self) -> float | None:
-        return self._lr_scale
 
 
 class Linear[ConfigType: LinearConfig](LinearBase[ConfigType]):
@@ -199,12 +188,8 @@ class AffineLinearBase[ConfigType: AffineLinearConfig](LinearBase[ConfigType]):
             lr_scale=lr_scale,
         )
         if self._config.bias:
-            self.bias = ParameterMeta.from_dims(
-                (self._out_dim,),
-                init_method=self._config.bias_initialization,
-                weight_decay=False,
-                auto_grad_accumulation=auto_bias_grad_accumulation,
-                lr_scale=self._lr_scale,
+            self.bias = self._config.get_bias(
+                self._out_dim, auto_grad_accumulation=auto_bias_grad_accumulation, lr_scale=lr_scale, peft=None
             )
 
 
@@ -224,3 +209,26 @@ class AffineInputParallelLinear[ConfigType: LinearConfig](AffineLinearBase, Inpu
     """
     An affine linear layer with input (row) tensor parallelism.
     """
+
+    def __init__(
+        self,
+        config: ConfigType,
+        in_dim: TensorDim,
+        out_dim: TensorDim,
+        *,
+        transposed_weight: bool = False,
+        sequence_parallel: bool = False,
+        auto_weight_grad_accumulation: bool = False,
+        auto_bias_grad_accumulation: bool = False,
+        lr_scale: float | None = None,
+    ):
+        super().__init__(
+            config,
+            in_dim,
+            out_dim,
+            transposed_weight=transposed_weight,
+            sequence_parallel=sequence_parallel,
+            auto_weight_grad_accumulation=auto_weight_grad_accumulation,
+            auto_bias_grad_accumulation=auto_bias_grad_accumulation or in_dim.parallel_dim.size > 1,
+            lr_scale=lr_scale,
+        )

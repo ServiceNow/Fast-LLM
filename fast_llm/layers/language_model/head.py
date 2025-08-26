@@ -6,7 +6,6 @@ from torch.distributed import all_reduce
 
 from fast_llm.core.ops import split_op
 from fast_llm.engine.base_model.base_model import Layer
-from fast_llm.engine.config_utils.initialization import init_normal_
 from fast_llm.engine.config_utils.tensor_dim import TensorDim, scalar_dim
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
 from fast_llm.functional.autograd import grad_is_context, wrap_forward_backward
@@ -19,7 +18,7 @@ from fast_llm.layers.block.config import BlockDimNames
 from fast_llm.layers.common.auxiliary_loss import AuxiliaryLoss, z_loss
 from fast_llm.layers.language_model.config import LanguageModelBaseConfig, LanguageModelKwargs, LanguageModelLossNames
 from fast_llm.layers.language_model.embedding import WORD_EMBEDDINGS_WEIGHT
-from fast_llm.tensor import ParameterMeta, TensorMeta
+from fast_llm.tensor import TensorMeta
 from fast_llm.utils import Assert, div, get_unique
 
 logger = logging.getLogger(__name__)
@@ -94,22 +93,12 @@ class LanguageModelHead[ConfigType: LanguageModelBaseConfig](BlockLayerBase[Conf
         if self._prediction_distance == 0 and not self._config.tie_word_embeddings:
             # untie embedding weights
             self.output_weights = self._config.word_embeddings_layer.get_weight(
-                self._vocab_dim, hidden_dim, auto_grad_accumulation=True, lr_scale=self._lr_scale
+                self._vocab_dim,
+                hidden_dim,
+                auto_grad_accumulation=True,
+                lr_scale=self._lr_scale,
+                peft=self._config.transformer.peft,
             )
-            self.output_weights = ParameterMeta.from_dims(
-                (self._vocab_dim, hidden_dim),
-                init_method=init_normal_(
-                    std=self._config.init_method_std_embed,
-                    min_val=self._config.init_method_min_embed,
-                    max_val=self._config.init_method_max_embed,
-                ),
-                lr_scale=self._config.output_lr_scale,
-            )
-
-        # PEFT.
-        self.final_norm = self._config.transformer.peft.apply_other(self.final_norm)
-        if hasattr(self, "output_weights"):
-            self.output_weights = self._config.transformer.peft.apply_weight(self.output_weights)
 
     def forward(
         self, input_: torch.Tensor, kwargs: dict, losses: dict | None = None, metrics: dict | None = None

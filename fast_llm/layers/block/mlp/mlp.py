@@ -2,7 +2,6 @@ import typing
 
 import torch
 
-from fast_llm.engine.config_utils.initialization import init_normal_
 from fast_llm.engine.config_utils.tensor_dim import ConcatenatedTensorDim, TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
 from fast_llm.functional.config import TritonConfig
@@ -27,17 +26,6 @@ class MLPBase[ConfigType: MLPConfig](BlockLayer[ConfigType]):
         super().__init__(config, block_config, distributed_config, hidden_dim, block_index, name, lr_scale)
         self._parallel_dim = self._distributed_config.get_distributed_dim(DistributedDimNames.tensor)
         intermediate_1_dim, intermediate_2_dim = self._get_intermediate_dims()
-
-        init_method_1 = init_normal_(
-            std=self._config.init_method_std_mlp_1,
-            min_val=self._config.init_method_min_mlp_1,
-            max_val=self._config.init_method_max_mlp_1,
-        )
-        init_method_2 = init_normal_(
-            std=self._config.init_method_std_mlp_2,
-            min_val=self._config.init_method_min_mlp_2,
-            max_val=self._config.init_method_max_mlp_2,
-        )
 
         self._activation_fn = triton_mlp_activation_autograd if TritonConfig.TRITON_ENABLED else torch_mlp_activation
 

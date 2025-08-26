@@ -229,7 +229,7 @@ def test_lm_head(
             torch.empty(
                 VOCAB_SIZE, HIDDEN_SIZE, dtype=distributed.config.training_dtype.torch, device=distributed.device
             )
-            .normal_(config.transformer.init_method_std)
+            .normal_(std=config.transformer.hidden_size**-0.5)  # config.transformer.init_method_std)
             .requires_grad_(True)
         )
         kwargs[WORD_EMBEDDINGS_WEIGHT if config.tie_word_embeddings else OUTPUT_WEIGHTS] = logit_weight
