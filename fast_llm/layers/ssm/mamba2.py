@@ -408,6 +408,7 @@ class NemotronHMamba2(Mixer):
             sequence_parallel=self._sequence_parallel,
             lr_scale=lr_scale,
         )
+        # TODO: this norm does nto support TP. So we need a workaround!
         self.norm = MambaRMSNormGated(
             inner_dim_non_tp,
             group_size=self._local_inner_size,
@@ -506,12 +507,14 @@ class NemotronHMamba2(Mixer):
         # y: (batch, local_heads * state, sequence) -> (batch, sequence, local_heads * state)
         y = y.view(batch, sequence_length, -1)
 
-        # gate norm
-        y = self.norm(y, gate=z)
-
         if kwargs[TransformerKwargs.sequence_first]:
             # TODO: Is contiguous needed?
             y = y.transpose(0, 1).contiguous()
+            z = z.transpose(0, 1).contiguous()
+        # in tp need to to gather the y and z, cause norm does not
+        # gate norm
+        y = self.norm(y, gate=z)
         # (batch/sequence, sequence/batch, local_heads * state)
         #   -> (batch/local_sequence, local_sequence/batch, hidden)
-        return self.out_proj(y)
+        out = self.out_proj(y)
+        return out

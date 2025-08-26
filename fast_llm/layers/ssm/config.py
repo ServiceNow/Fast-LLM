@@ -331,7 +331,7 @@ class SSMConfig(LLMBlockConfig):
             # for the norm
             tensor_space.add_tensor_dim(
                 TensorDim(
-                    SSMDimNames.composite_heads_and_head_dim_nontp, head_groups.size * group_heads.size * head_dim.size
+                    SSMDimNames.composite_heads_and_head_dim_nontp, num_head_groups * group_heads.size * head_dim.size
                 )
             )
             # state and head dim are not the same
