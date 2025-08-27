@@ -3,8 +3,7 @@ import typing
 
 import torch
 
-from fast_llm.engine.config_utils.initialization import init_zeros_
-from fast_llm.engine.config_utils.tensor_dim import TensorDim
+from fast_llm.engine.distributed.config import DistributedDim
 from fast_llm.functional.autograd import wrap_forward_backward
 from fast_llm.functional.linear import (
     input_parallel_linear_autograd,
@@ -42,37 +41,15 @@ class LinearBase(LinearLike):
 
     def __init__(
         self,
-        in_dim: TensorDim,
-        out_dim: TensorDim,
+        weight: ParameterMeta,
+        bias: ParameterMeta | None,
         *,
-        bias=True,
-        weight_init_method,
-        bias_init_method=init_zeros_,
         transposed_weight: bool = False,
-        auto_bias_grad_accumulation: bool = False,
-        lr_scale: float | None | tuple[float | None, ...] = None,
     ):
         super().__init__()
+        self.weight = weight
+        self.bias = bias
         self._transposed_weight = transposed_weight
-        self._in_dim = in_dim
-        self._out_dim = out_dim
-        self._weight_init_method = weight_init_method
-        self.weight = ParameterMeta.from_dims(
-            (self._in_dim, self._out_dim) if self._transposed_weight else (self._out_dim, self._in_dim),
-            init_method=weight_init_method,
-            auto_grad_accumulation=False,
-            lr_scale=lr_scale,
-        )
-        if bias:
-            self.bias = ParameterMeta.from_dims(
-                (self._out_dim,),
-                init_method=bias_init_method,
-                weight_decay=False,
-                auto_grad_accumulation=auto_bias_grad_accumulation,
-                lr_scale=lr_scale,
-            )
-        else:
-            self.bias = None
 
     @property
     def transposed_weight(self) -> bool:
@@ -83,29 +60,6 @@ class Linear(LinearBase):
     """
     A basic linear layer without tensor parallelism.
     """
-
-    def __init__(
-        self,
-        in_dim: TensorDim,
-        out_dim: TensorDim,
-        *,
-        bias=True,
-        weight_init_method,
-        bias_init_method=init_zeros_,
-        transposed_weight: bool = False,
-        lr_scale: float | None | tuple[float | None, ...] = None,
-    ):
-        assert not in_dim.is_parallel
-        assert not out_dim.is_parallel
-        super().__init__(
-            in_dim,
-            out_dim,
-            bias=bias,
-            weight_init_method=weight_init_method,
-            bias_init_method=bias_init_method,
-            transposed_weight=transposed_weight,
-            lr_scale=lr_scale,
-        )
 
     def forward_only(
         self, input_: torch.Tensor
@@ -123,35 +77,23 @@ class OutputParallelLinear(LinearBase):
 
     def __init__(
         self,
-        in_dim: TensorDim,
-        out_dim: TensorDim,
+        weight: ParameterMeta,
+        bias: ParameterMeta | None,
         *,
-        bias=True,
-        weight_init_method,
-        bias_init_method=init_zeros_,
         transposed_weight: bool = False,
+        parallel_dim: DistributedDim,
         sequence_parallel: bool = False,
-        lr_scale: float | None | tuple[float | None, ...] = None,
     ):
-        assert not in_dim.is_parallel
-        self._group_size = 1 if out_dim.parallel_dim is None else out_dim.parallel_dim.size
-        self._sequence_parallel = sequence_parallel and self._group_size > 1
-        super().__init__(
-            in_dim,
-            out_dim,
-            bias=bias,
-            weight_init_method=weight_init_method,
-            bias_init_method=bias_init_method,
-            transposed_weight=transposed_weight,
-            lr_scale=lr_scale,
-        )
+        super().__init__(weight, bias, transposed_weight=transposed_weight)
+        self._parallel_dim = parallel_dim
+        self._sequence_parallel = sequence_parallel and self._parallel_dim.size > 1
 
     def forward_only(self, input_) -> tuple[torch.Tensor, tuple[typing.Any, ...]]:
         return output_parallel_linear_forward(
             input_,
             weight=self.weight,
             bias=self.bias,
-            group=self._out_dim.parallel_group,
+            group=self._parallel_dim.group,
             sequence_parallel=self._sequence_parallel,
             transposed_weight=self._transposed_weight,
         )
@@ -167,30 +109,16 @@ class InputParallelLinear(LinearBase):
 
     def __init__(
         self,
-        in_dim: TensorDim,
-        out_dim: TensorDim,
+        weight: ParameterMeta,
+        bias: ParameterMeta | None,
         *,
-        bias=True,
-        weight_init_method,
-        bias_init_method=init_zeros_,
-        sequence_parallel: bool = False,
         transposed_weight: bool = False,
-        lr_scale: float | None | tuple[float | None, ...] = None,
+        parallel_dim: DistributedDim,
+        sequence_parallel: bool = False,
     ):
-        assert not out_dim.is_parallel
-        self._group_size = 1 if in_dim.parallel_dim is None else in_dim.parallel_dim.size
-        self._sequence_parallel = sequence_parallel and self._group_size > 1
-        super().__init__(
-            in_dim,
-            out_dim,
-            bias=bias,
-            weight_init_method=weight_init_method,
-            bias_init_method=bias_init_method,
-            transposed_weight=transposed_weight,
-            # Tensor-parallel bias is computed in _bias_dropout_grad.
-            auto_bias_grad_accumulation=self._group_size > 1,
-            lr_scale=lr_scale,
-        )
+        super().__init__(weight, bias, transposed_weight=transposed_weight)
+        self._parallel_dim = parallel_dim
+        self._sequence_parallel = sequence_parallel and self._parallel_dim.size > 1
 
     def forward(self, input_: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor | None]:
         # TODO: Use self._forward instead (broken).
@@ -198,13 +126,13 @@ class InputParallelLinear(LinearBase):
             input_,
             weight=self.weight,
             bias=self.bias,
-            group=self._in_dim.parallel_group,
+            group=self._parallel_dim.group,
             sequence_parallel=self._sequence_parallel,
             transposed_weight=self._transposed_weight,
         )
 
     def forward_only(self, input_: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor | None, tuple[typing.Any, ...]]:
-        group = self._in_dim.parallel_group
+        group = self._parallel_dim.group
         output, context = input_parallel_linear_forward(
             input_,
             weight=self.weight,

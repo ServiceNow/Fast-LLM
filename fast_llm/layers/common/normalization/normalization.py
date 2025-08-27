@@ -215,14 +215,12 @@ class LayerNormalization[ConfigType: LayerNormalizationConfig](Normalization[Con
             (hidden_dim,),
             init_method=weight_init_method,
             weight_decay=False,
-            auto_grad_accumulation=implementation == NormalizationImplementation.torch,
             lr_scale=self._lr_scale,
         )
         self.bias = ParameterMeta.from_dims(
             (hidden_dim,),
             init_method=init_zeros_,
             weight_decay=False,
-            auto_grad_accumulation=implementation == NormalizationImplementation.torch,
             lr_scale=self._lr_scale,
         )
         self._normalized_shape = self.weight.shape
@@ -289,7 +287,6 @@ class RMSNormalization[ConfigType: RMSNormalizationConfig](Normalization[ConfigT
             (hidden_dim,),
             init_method=weight_init_method,
             weight_decay=False,
-            auto_grad_accumulation=True,
             lr_scale=lr_scale,
         )
         self._normalized_shape = self.weight.shape

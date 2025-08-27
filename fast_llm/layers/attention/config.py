@@ -8,6 +8,7 @@ from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.functional.config import TritonConfig
 from fast_llm.layers.attention.rotary.config import RotaryConfig
 from fast_llm.layers.block.config import AddLinearBiasChoices, BlockConfig, BlockKwargs
+from fast_llm.layers.common.linear.config import AffineLinearConfig
 from fast_llm.utils import Assert, div
 
 logger = logging.getLogger(__name__)
@@ -32,6 +33,23 @@ class AttentionConfig(Config):
     # TODO: Make mixer class dynamic.
     _abstract = False
 
+    query_layer: AffineLinearConfig = Field(
+        desc="Configuration for the query layer.",
+        hint=FieldHint.architecture,
+    )
+    key_layer: AffineLinearConfig = Field(
+        desc="Configuration for the key layer.",
+        hint=FieldHint.architecture,
+    )
+    # TODO: Use
+    value_layer: AffineLinearConfig = Field(
+        desc="Configuration for the value layer.",
+        hint=FieldHint.architecture,
+    )
+    dense_layer: AffineLinearConfig = Field(
+        desc="Initialization configuration for the dense layer.",
+        hint=FieldHint.feature,
+    )
     # TODO: Review names
     rotary: RotaryConfig = Field(
         desc="Configuration for the rotary positional embeddings.",

@@ -13,7 +13,6 @@ from fast_llm.layers.block.config import BlockConfig, BlockKwargs
 from fast_llm.layers.block.mlp.config import MLPConfig, MLPLossNames, RoutingType
 from fast_llm.layers.block.mlp.mlp import MLPBase
 from fast_llm.layers.common.auxiliary_loss import AuxiliaryLoss, z_loss
-from fast_llm.layers.common.linear import Linear
 from fast_llm.utils import Assert, combine_lr_scales
 
 logger = logging.getLogger(__name__)
@@ -47,12 +46,10 @@ class MixtureOfExpertMLP[ConfigType: MLPConfig](MLPBase[ConfigType]):
         # TODO: Implement?
         assert not config.add_linear_biases, "Biases not supported for MoE."
         super().__init__(config, block_config, distributed_config, hidden_dim, block_index, name, lr_scale)
-
-        self.router = Linear(
+        self.router = self._config.router.get_layer(
             self._hidden_dim,
             TensorDim("router_experts", self._config.num_unshared_experts),
-            bias=False,
-            weight_init_method=init_normal_(
+            default_weight_initializer=init_normal_(
                 std=self._block_config.init_method_std,
                 min_val=self._block_config.init_method_min,
                 max_val=self._block_config.init_method_max,

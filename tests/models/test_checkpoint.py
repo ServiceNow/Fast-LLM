@@ -80,6 +80,7 @@ def test_resume(run_test_script_for_all_models, compare_results_for_all_models, 
 @pytest.mark.depends_on(on=["test_checkpoint_and_eval[{model_testing_config}]"])
 @pytest.mark.model_testing_group(ModelTestingGroup.checkpoint)
 def test_resume_frozen(run_test_script_for_all_models, prepare_resume):
+    # TODO: No more frozen weights?
     distributed_testing_config = DistributedTestingConfig(
         name="resume_frozen", compare="checkpoint_and_eval", config_args=_CHECKPOINT_AND_EVAL_ARGS
     )

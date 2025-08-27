@@ -244,7 +244,6 @@ class ParameterMeta(TensorMeta):
         lr_scale: float | None | tuple[float | None, ...] = None,
         requires_grad: bool = True,
         allow_sequence_tensor_parallel: bool = True,
-        auto_grad_accumulation: bool = True,
         allow_no_grad: bool = False,
     ):
         super().__init__(data, tensor_name=tensor_name, dims=dims)
@@ -259,9 +258,6 @@ class ParameterMeta(TensorMeta):
         # Almost all parameters are either tensor-parallel or process tensor-sequence-parallel inputs.
         # Except for position embedding weights
         self.sequence_tensor_parallel = allow_sequence_tensor_parallel and not self.is_tensor_parallel
-        # If true, grad accumulation is handled automatically by copying or adding to the grad_buffer.
-        # Can be disabled to allow for a more efficient implementation that accumulates directly to it.
-        self.auto_grad_accumulation = auto_grad_accumulation
         # Disable the check that gradients have been computed for this parameter before the gradient reduction,
         # to support cases where gradients may not always be computed (ex. MOE layers).
         self.allow_no_grad = allow_no_grad
@@ -281,7 +277,6 @@ class ParameterMeta(TensorMeta):
         weight_decay: bool = True,
         lr_scale: float | None | tuple[float | None, ...] = None,
         allow_sequence_tensor_parallel: bool = True,
-        auto_grad_accumulation: bool = True,
         allow_no_grad: bool = False,
     ):
         return super().__new__(
