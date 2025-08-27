@@ -102,13 +102,6 @@ class SSMConfig(MixerConfig):
         hint=FieldHint.core,
     )
 
-    # add_bias_linear [Mamba2, DiscreteMamba2] [hard-coded to False in MambaLayer]
-    add_bias_linear: bool = Field(
-        default=False,
-        desc="Whether to use bias in SSM layers",
-        hint=FieldHint.architecture,
-    )
-
     # Learning rate
     # lr_scale [MambaLayer, Mamba2, DiscreteMamba2]
     mamba_lr_scale: float | None = Field(

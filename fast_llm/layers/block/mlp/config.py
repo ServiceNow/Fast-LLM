@@ -160,17 +160,6 @@ class MLPConfig(Config):
         hint=FieldHint.optional,
     )
 
-    @property
-    def add_mlp_bias(self) -> bool:
-        from fast_llm.layers.block.config import AddLinearBiasChoices
-
-        # TODO: Make this work without inheritance.
-        if isinstance(self.add_linear_biases, bool):
-            return self.add_linear_biases
-        if self.add_linear_biases == AddLinearBiasChoices.everywhere:
-            return True
-        return False
-
     def _validate(self) -> None:
         with self._set_implicit_default():
             if self.activation_type is None:

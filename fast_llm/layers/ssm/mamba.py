@@ -83,7 +83,7 @@ class Mamba[ConfigType: MambaConfig](BlockLayer[ConfigType]):
             hidden_dim,
             inner_projection_dim,
             default_weight_initializer=init_normal_(0, (2 / hidden_dim.global_size) ** 0.5),
-            default_add_bias=config.add_bias_linear,
+            default_add_bias=self._block_config.add_linear_biases,
             lr_scale=lr_scale,
         )
         self.convolution = self._config.convolution_layer.get_layer(

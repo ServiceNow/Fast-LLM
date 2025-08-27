@@ -84,7 +84,7 @@ class Mamba2[ConfigType: Mamba2Config](BlockLayer[ConfigType]):
             hidden_dim,
             inner_projection_dim,
             default_weight_initializer=init_normal_(0, (2 / hidden_dim.global_size) ** 0.5),
-            default_add_bias=config.add_bias_linear,
+            default_add_bias=self._block_config.add_linear_biases,
             sequence_parallel=self._sequence_parallel,
             lr_scale=lr_scale,
         )
@@ -92,7 +92,7 @@ class Mamba2[ConfigType: Mamba2Config](BlockLayer[ConfigType]):
             hidden_dim,
             dt_rank_dim,
             default_weight_initializer=init_normal_(0, (2 / hidden_dim.global_size) ** 0.5),
-            default_add_bias=config.add_bias_linear,
+            default_add_bias=self._block_config.add_linear_biases,
             lr_scale=lr_scale,
         )
         self.dt_proj = self._config.dt_layer.get_layer(
@@ -124,7 +124,7 @@ class Mamba2[ConfigType: Mamba2Config](BlockLayer[ConfigType]):
             inner_dim,
             hidden_dim,
             default_weight_initializer=init_normal_(0, (2 / self._config.d_inner) ** 0.5),
-            default_add_bias=config.add_bias_linear,
+            default_add_bias=self._block_config.add_linear_biases,
             sequence_parallel=self._sequence_parallel,
             lr_scale=lr_scale,
         )

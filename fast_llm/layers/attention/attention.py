@@ -115,7 +115,7 @@ class Attention[ConfigType: AttentionConfig](BlockLayer[ConfigType]):
             hidden_dim,
             query_dim,
             default_weight_initializer=init_method_qkv,
-            default_add_bias=self._config.add_qkv_bias,
+            default_add_bias=self._block_config.add_linear_biases,
             sequence_parallel=self._sequence_parallel,
             lr_scale=lr_scale,
         )
@@ -124,7 +124,7 @@ class Attention[ConfigType: AttentionConfig](BlockLayer[ConfigType]):
             hidden_dim,
             key_value_dim,
             default_weight_initializer=init_method_qkv,
-            default_add_bias=self._config.add_qkv_bias,
+            default_add_bias=self._block_config.add_linear_biases,
             sequence_parallel=self._sequence_parallel,
             lr_scale=lr_scale,
         )
@@ -138,7 +138,7 @@ class Attention[ConfigType: AttentionConfig](BlockLayer[ConfigType]):
             dense_dim,
             hidden_dim,
             default_weight_initializer=init_method_std_attn_proj,
-            default_add_bias=self._config.add_dense_bias,
+            default_add_bias=self._block_config.add_linear_biases,
             sequence_parallel=self._sequence_parallel,
             lr_scale=lr_scale,
         )

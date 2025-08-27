@@ -81,7 +81,7 @@ class DiscreteMamba2[ConfigType: DiscreteMamba2Config](BlockLayer[ConfigType]):
             hidden_dim,
             inner_projection_dim,
             default_weight_initializer=init_normal_(0, (2 / self._config.d_inner) ** 0.5),
-            default_add_bias=config.add_bias_linear,
+            default_add_bias=self._block_config.add_linear_biases,
             sequence_parallel=self._sequence_parallel,
             lr_scale=lr_scale,
         )
@@ -110,7 +110,7 @@ class DiscreteMamba2[ConfigType: DiscreteMamba2Config](BlockLayer[ConfigType]):
             inner_dim,
             hidden_dim,
             default_weight_initializer=init_normal_(0, (2 / self._config.d_inner) ** 0.5),
-            default_add_bias=config.add_bias_linear,
+            default_add_bias=self._block_config.add_linear_biases,
             sequence_parallel=self._sequence_parallel,
             lr_scale=lr_scale,
         )

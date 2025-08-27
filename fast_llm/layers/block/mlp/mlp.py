@@ -49,7 +49,7 @@ class MLPBase[ConfigType: MLPConfig](BlockLayer[ConfigType]):
             hidden_dim,
             intermediate_1_dim,
             default_weight_initializer=init_method_1,
-            default_add_bias=self._config.add_mlp_bias,
+            default_add_bias=self._block_config.add_linear_biases,
             sequence_parallel=self._sequence_parallel,
             lr_scale=lr_scale,
         )
@@ -57,7 +57,7 @@ class MLPBase[ConfigType: MLPConfig](BlockLayer[ConfigType]):
             intermediate_2_dim,
             hidden_dim,
             default_weight_initializer=init_method_2,
-            default_add_bias=self._config.add_mlp_bias,
+            default_add_bias=self._block_config.add_linear_biases,
             sequence_parallel=self._sequence_parallel,
             transposed_weight=True,
             lr_scale=lr_scale,

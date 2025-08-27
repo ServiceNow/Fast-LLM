@@ -1,5 +1,3 @@
-import enum
-
 from fast_llm.config import Field, FieldHint, check_field, config_class
 from fast_llm.engine.base_model.config import BaseModelConfig
 from fast_llm.layers.block.mlp.config import MLPConfig
@@ -32,12 +30,6 @@ class BlockKwargs:
     sequence_lengths = "sequence_lengths"
     # TODO: Belongs elsewhere?
     grad_output = "grad_output"
-
-
-class AddLinearBiasChoices(str, enum.Enum):
-    nowhere = "nowhere"
-    everywhere = "everywhere"
-    only_attn_qkv = "only_attn_qkv"
 
 
 @config_class()
@@ -76,12 +68,11 @@ class BlockConfig(MLPConfig, BaseModelConfig):
         desc="Log the memory usage after each operation in a transformer layer..",
         hint=FieldHint.logging,
     )
-    add_linear_biases: bool | AddLinearBiasChoices = Field(
+    add_linear_biases: bool = Field(
         default=True,
-        desc="Add biases to all, none or Q, K, V layers. Accepted values: True, False, or AddLinearBiasChoices.",
+        desc="Add biases to linear layers. May be overridden for individual layers.",
         hint=FieldHint.architecture,
     )
-
     # TODO: Move these, not specific to a single block.
     num_layers: int = Field(
         default=12,

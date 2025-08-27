@@ -7,7 +7,7 @@ from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.functional.config import TritonConfig
 from fast_llm.layers.attention.rotary.config import RotaryConfig
-from fast_llm.layers.block.config import AddLinearBiasChoices, BlockConfig, BlockKwargs
+from fast_llm.layers.block.config import BlockConfig, BlockKwargs
 from fast_llm.layers.common.linear.config import AffineLinearConfig
 from fast_llm.utils import Assert, div
 
@@ -179,24 +179,6 @@ class AttentionConfig(Config):
 
     def do_use_flash_attention(self, distributed_config: DistributedConfig) -> bool:
         return self.use_flash_attention and distributed_config.training_dtype in (DataType.float16, DataType.bfloat16)
-
-    @property
-    def add_qkv_bias(self) -> bool:
-        # TODO: Make this work without inheritance.
-        if isinstance(self.add_linear_biases, bool):
-            return self.add_linear_biases
-        if self.add_linear_biases == AddLinearBiasChoices.nowhere:
-            return False
-        return True
-
-    @property
-    def add_dense_bias(self) -> bool:
-        # TODO: Make this work without inheritance.
-        if isinstance(self.add_linear_biases, bool):
-            return self.add_linear_biases
-        if self.add_linear_biases == AddLinearBiasChoices.everywhere:
-            return True
-        return False
 
 
 @config_class()

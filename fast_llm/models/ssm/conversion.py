@@ -224,7 +224,7 @@ class CommonSSMHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandle
         converters = super()._create_weight_converters() or []
 
         num_layers = self._model.config.base_model.transformer.num_layers
-        ssm_bias: bool = self._model.config.base_model.ssm.add_bias_linear
+        ssm_bias: bool = self._model.config.base_model.transformer.add_linear_biases
 
         for i in range(num_layers):
             # SSM
@@ -389,7 +389,7 @@ class LLambaHuggingfaceCheckpointHandler(CommonSSMHuggingfaceCheckpointHandler):
         converters = []
         num_layers = self._model.config.base_model.transformer.num_layers
         norm_bias: bool = False
-        ssm_bias: bool = self._model.config.base_model.ssm.add_bias_linear
+        ssm_bias: bool = self._model.config.base_model.transformer.add_linear_biases
 
         # Embedding and output
         if self._model.config.base_model.tie_word_embeddings:
