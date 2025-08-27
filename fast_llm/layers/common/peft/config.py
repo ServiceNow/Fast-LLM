@@ -1,4 +1,3 @@
-import abc
 import typing
 
 from fast_llm.config import Field, FieldHint, config_class
@@ -14,7 +13,6 @@ if typing.TYPE_CHECKING:
 
 @config_class()
 class PeftConfig(BaseModelConfig):
-    @abc.abstractmethod
     def apply_linear(
         self,
         module: "LinearBase",
