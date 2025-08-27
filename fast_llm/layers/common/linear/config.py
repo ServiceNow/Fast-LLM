@@ -173,7 +173,6 @@ class CausalConv1dConfig(AffineLinearBaseConfig):
             lr_scale=lr_scale,
             default_enabled=default_add_bias,
         )
-        print("OIFEHIUWB", default_add_bias, self.bias.enabled, bias is None)
         return CausalConv1d(
             weight, bias, activation=default_activation if self.activation is None else self.activation
         )

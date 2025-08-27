@@ -72,7 +72,8 @@ class LanguageModelBaseConfig(BaseModelConfig):
         default=None,
         desc="Enable absolute position embeddings. Default: Enable unless using rotary embeddings.",
         hint=FieldHint.architecture,
-    )  # TODO: Move to `output_layer`? (dynamic type?)
+    )
+    # TODO: Move to `output_layer`? (dynamic type?)
     tie_word_embeddings: bool = Field(
         default=True,
         desc="Tie the output weights (logits) with the vocabulary embedding.",

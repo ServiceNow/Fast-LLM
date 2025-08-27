@@ -4,7 +4,11 @@ from fast_llm.config import Field, FieldHint, config_class
 from fast_llm.engine.base_model.config import BaseModelConfig
 
 if typing.TYPE_CHECKING:
+    import torch
+
     from fast_llm.layers.common.linear.linear import LinearBase, LinearLike
+    from fast_llm.layers.common.normalization.normalization import Normalization
+    from fast_llm.tensor import ParameterMeta
 
 
 @config_class()
