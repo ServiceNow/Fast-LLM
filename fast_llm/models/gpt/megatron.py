@@ -2,6 +2,7 @@ import typing
 
 from fast_llm.layers.attention.config import TransformerConfig
 from fast_llm.layers.attention.rotary.config import DefaultRotaryConfig
+from fast_llm.layers.block.mlp.config import MoEMLPConfig
 from fast_llm.utils import Assert, div
 
 if typing.TYPE_CHECKING:
@@ -26,7 +27,7 @@ def get_init_megatron(
             tensor_ = _init_position_embeddings_megatron(meta, tensor, distributed)
         elif "mlp.router.weight" in meta.tensor_name:
             tensor_ = _init_moe_router_megatron(meta, tensor, distributed)
-        elif config.mlp.num_experts > 1 and "mlp.layer_" in meta.tensor_name:
+        elif isinstance(config.mlp, MoEMLPConfig) and config.mlp.num_experts > 1 and "mlp.layer_" in meta.tensor_name:
             tensor_ = _init_moe_mlp_megatron(config, meta, tensor, distributed)
         elif "mlp.layer_2" in meta.tensor_name:
             tensor_ = _init_transposed_mlp_weight_megatron(meta, tensor, distributed)

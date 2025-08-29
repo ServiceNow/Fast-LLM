@@ -22,17 +22,13 @@ def _get_trainer_from_args(args: list[str], model_type: str = "gpt") -> Trainer:
 
 
 @requires_cuda
-@pytest.mark.skip  # TODO: mlp.lr_scale
 @pytest.mark.model_testing_group(ModelTestingGroup.basic)
 def test_frozen_weights(model_testing_config):
     get_model_test_dataset()
     args = model_testing_config.config_args + ["run.tensor_logs.save=False"]
     model_ref = _get_trainer_from_args(args, model_testing_config.model_type)._multi_stage
     model_frozen = _get_trainer_from_args(
-        args
-        + [
-            f"model.base_model.transformer.mlp.lr_scale=0",
-        ],
+        args + [f"model.base_model.transformer.mlp.lr_scale=0"],
         model_testing_config.model_type,
     )._multi_stage
 

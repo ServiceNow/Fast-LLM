@@ -54,7 +54,6 @@ class HybridSSMBaseModel[ConfigType: HybridSSMBaseModelConfig](GPTBaseModel[Conf
                 block_index,
                 name,
                 lr_scale,
-                self._config.ssm_block_type.get_mixer_class(),
                 return_input,
             )
 

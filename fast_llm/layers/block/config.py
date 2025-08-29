@@ -1,12 +1,15 @@
-import abc
 import typing
 
-from fast_llm.config import Config, Field, FieldHint, check_field, config_class
+from fast_llm.config import Field, FieldHint, check_field, config_class
 from fast_llm.engine.base_model.config import BaseModelConfig
-from fast_llm.layers.block.mlp.config import MLPConfig
+from fast_llm.engine.config_utils.tensor_dim import TensorDim
+from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.layers.block.peft import TransformerPeftConfig
 from fast_llm.layers.common.normalization.config import NormalizationConfig
 from fast_llm.utils import Assert
+
+if typing.TYPE_CHECKING:
+    from fast_llm.layers.block.block import BlockLayer
 
 # TODO: Generalize these beyond language models? (Ex. vision)
 
@@ -35,18 +38,67 @@ class BlockKwargs:
     grad_output = "grad_output"
 
 
-@config_class(registry=True)
-class MixerConfig(Config):
+@config_class()
+class BlockLayerConfig(BaseModelConfig):
     """
-    Base config class for all mixers.
-    TODO: Generalize to include Attention
+    A common class for mixers and mlps, which have the same interface.
     """
 
     _abstract = True
+    block: "BlockConfig" = Field(init=False)
 
-    @abc.abstractmethod
+    @property
+    def layer_class(self) -> "type[BlockLayer]":
+        raise NotImplementedError()
+
     def set_defaults(self, hidden_size: int):
+        # Opportunity to set defaults that depend on the hidden size.
         pass
+
+    def get_layer(
+        self,
+        block_config: "BlockConfig",
+        distributed_config: DistributedConfig,
+        hidden_dim: TensorDim,
+        block_index: int,
+        name: str,
+        lr_scale: float | None,
+    ) -> "BlockLayer":
+        return self.layer_class(
+            self,
+            block_config,
+            distributed_config,
+            hidden_dim,
+            block_index,
+            name,
+            lr_scale,
+        )
+
+
+@config_class(registry=True)
+class MLPBaseConfig(BlockLayerConfig):
+    _abstract = True
+
+    @classmethod
+    def _from_dict(
+        cls,
+        default: dict[str, typing.Any],
+        strict: bool = True,
+        flat: bool = False,
+    ) -> typing.Self:
+        if cls is MLPBaseConfig and cls.get_subclass(default.get("type")) is None:
+            from fast_llm.layers.block.mlp.config import MLPConfig
+
+            # Default subclass.
+            return MLPConfig._from_dict(default, strict, flat)
+        return super()._from_dict(default, strict=strict, flat=flat)
+
+
+@config_class(registry=True)
+class MixerConfig(BlockLayerConfig):
+    """
+    Base config class for mixers.
+    """
 
     @classmethod
     def _from_dict(
@@ -67,7 +119,7 @@ class MixerConfig(Config):
 # TODO: Use composition instead
 class BlockConfig(BaseModelConfig):
     mixer: MixerConfig = Field()
-    mlp: MLPConfig = Field()
+    mlp: MLPBaseConfig = Field()
     # TODO: Review names
     normalization: NormalizationConfig = Field(
         desc="Configuration for the normalization layers architecture.",

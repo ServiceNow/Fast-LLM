@@ -451,6 +451,7 @@ _update_and_add_testing_config(
     "llama",
     "mixtral",
     extra_args=[
+        "model.base_model.transformer.mlp.type=moe",
         "model.base_model.transformer.mlp.num_experts=4",
         "model.base_model.transformer.mlp.num_experts_per_token=4",
     ],

@@ -14,7 +14,7 @@ from fast_llm.layers.attention.block import TransformerBlock
 from fast_llm.layers.attention.config import AttentionKwargs
 from fast_llm.layers.attention.preprocessing import BackupAttentionPreprocessor, FlashAttnVarlenPreprocessor
 from fast_llm.layers.block.config import BlockDimNames
-from fast_llm.layers.block.mlp.config import MLPLossNames, RoutingType
+from fast_llm.layers.block.mlp.config import MLPLossNames, MoEMLPConfig, RoutingType
 from fast_llm.layers.language_model.config import LanguageModelKwargs, LanguageModelLossNames
 from fast_llm.layers.language_model.embedding import WORD_EMBEDDINGS_WEIGHT, LanguageModelEmbedding
 from fast_llm.layers.language_model.head import OUTPUT_WEIGHTS, LanguageModelHead
@@ -396,7 +396,8 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
     def loss_defs(self) -> list[LossDef]:
         loss_defs = []
         if (
-            self._config.transformer.mlp.num_experts > 1
+            isinstance(self._config.transformer.mlp, MoEMLPConfig)
+            and self._config.transformer.mlp.num_experts > 1
             and self._config.transformer.mlp.expert_routing_type == RoutingType.topk
         ):
             loss_defs.append(
@@ -468,7 +469,7 @@ class GPTModel[ConfigType: GPTModelConfig](FastLLMModel[ConfigType]):
             (2 + transformer_config.mlp.gated)
             * transformer_config.mlp.ffn_hidden_size
             * dense_flops_base
-            * transformer_config.mlp.num_experts_per_token
+            * (transformer_config.mlp.num_experts_per_token if isinstance(transformer_config.mlp, MoEMLPConfig) else 1)
         )
 
         # LM-head

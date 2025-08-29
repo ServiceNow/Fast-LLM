@@ -9,7 +9,9 @@ from fast_llm.layers.common.linear.config import AffineLinearConfig, CausalConv1
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
-    pass
+    from fast_llm.layers.ssm.discrete_mamba2 import DiscreteMamba2
+    from fast_llm.layers.ssm.mamba import Mamba
+    from fast_llm.layers.ssm.mamba2 import Mamba2
 
 
 class SSMBlockType(enum.StrEnum):
@@ -187,6 +189,12 @@ class MambaConfig(MambaBaseConfig):
         #  I think this bias is not used in other mamba repos.
         assert not self.output_layer.bias.enabled
 
+    @property
+    def layer_class(self) -> "type[Mamba]":
+        from fast_llm.layers.ssm.mamba import Mamba
+
+        return Mamba
+
 
 @config_class(dynamic_type={MixerConfig: "mamba_2"})
 class Mamba2Config(MambaBaseConfig):
@@ -249,6 +257,12 @@ class Mamba2Config(MambaBaseConfig):
         if self.d_xb is None:
             self.d_xb = hidden_size
 
+    @property
+    def layer_class(self) -> "type[Mamba2]":
+        from fast_llm.layers.ssm.mamba2 import Mamba2
+
+        return Mamba2
+
 
 @config_class(dynamic_type={MixerConfig: "discrete_mamba_2"})
 class DiscreteMamba2Config(SSMConfig):
@@ -288,3 +302,9 @@ class DiscreteMamba2Config(SSMConfig):
         desc="Chunk size for Mamba2 blocks.",
         hint=FieldHint.architecture,
     )
+
+    @property
+    def layer_class(self) -> "type[DiscreteMamba2]":
+        from fast_llm.layers.ssm.discrete_mamba2 import DiscreteMamba2
+
+        return DiscreteMamba2

@@ -138,6 +138,7 @@ def test_pretrained_config(load_config: ModelConfigType, result_path):
                     "head_groups": 1,
                 },
                 "mlp": {
+                    "type": "mlp",
                     "ffn_hidden_size": 4096,  # Implicit default, default value
                     "activation_type": "silu",  # Implicit default, non-default value
                 },
@@ -158,6 +159,7 @@ def test_pretrained_config(load_config: ModelConfigType, result_path):
         base_model_update["transformer"]["normalization"]["type"] = "layer_norm"
         base_model_update["transformer"]["mixer"]["type"] = "attention"
         base_model_update["transformer"]["mixer"]["rotary"] = {"type": "none"}
+        base_model_update["transformer"]["mlp"] = {"type": "mlp"}
         expected_config["base_model"] = base_model_update
 
     check_equal_nested(serialized_config, expected_config)

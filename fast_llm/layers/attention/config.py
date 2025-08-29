@@ -1,5 +1,6 @@
 import functools
 import logging
+import typing
 import warnings
 
 from fast_llm.config import Field, FieldHint, FieldUpdate, check_field, config_class, skip_valid_if_none
@@ -10,6 +11,9 @@ from fast_llm.layers.attention.rotary.config import RotaryConfig
 from fast_llm.layers.block.config import BlockConfig, BlockKwargs, MixerConfig
 from fast_llm.layers.common.linear.config import AffineLinearConfig
 from fast_llm.utils import Assert, div
+
+if typing.TYPE_CHECKING:
+    from fast_llm.layers.attention.attention import Attention
 
 logger = logging.getLogger(__name__)
 
@@ -119,6 +123,12 @@ class AttentionConfig(MixerConfig):
             warnings.warn("Triton is disabled, but triton rotary kernel will be used anyway.")
 
         Assert.multiple(self.num_attention_heads, self.head_groups)
+
+    @property
+    def layer_class(self) -> "type[Attention]":
+        from fast_llm.layers.attention.attention import Attention
+
+        return Attention
 
     @functools.cached_property
     def projection_size(self):

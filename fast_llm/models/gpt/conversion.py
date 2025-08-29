@@ -580,6 +580,7 @@ class MixtralHuggingfaceCheckpointHandler(CommonLlamaHuggingfaceCheckpointHandle
     @classmethod
     def _create_config_converters(cls) -> list[ParamConverter]:
         return super()._create_config_converters() + [
+            ConstantImportParamConverter(fast_llm_names=(("transformer", "mlp", "type"),), fast_llm_value="moe"),
             ConstantImportParamConverter(
                 fast_llm_names=(("transformer", "mlp", "expert_routing_type"),), fast_llm_value=RoutingType.topk
             ),
