@@ -1,13 +1,15 @@
 import enum
+import math
 import typing
 
-from fast_llm.config import Config, Field, FieldHint, check_field, config_class, skip_valid_if_none
+from fast_llm.config import Field, FieldHint, check_field, config_class, skip_valid_if_none
 from fast_llm.engine.config_utils.parameter import ParameterConfig
+from fast_llm.layers.block.config import MixerConfig
 from fast_llm.layers.common.linear.config import AffineLinearConfig, CausalConv1dConfig, LinearConfig
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
-    from fast_llm.engine.config_utils.initialization import Initializer
+    pass
 
 
 class SSMBlockType(enum.StrEnum):
@@ -45,16 +47,6 @@ class DTInitType(enum.StrEnum):
         from fast_llm.engine.config_utils.initialization import init_fill_, init_uniform_centered_
 
         return init_fill_(scale) if self == DTInitType.constant else init_uniform_centered_(scale)
-
-
-@config_class(registry=True)
-class MixerConfig(Config):
-    """
-    Base config class for all mixers.
-    TODO: Generalize to include Attention
-    """
-
-    _abstract = True
 
 
 @config_class()
@@ -111,6 +103,10 @@ class SSMConfig(MixerConfig):
         valid=skip_valid_if_none(check_field(Assert.geq, 0)),
     )
 
+    def set_defaults(self, hidden_size: int):
+        if self.d_inner is None:
+            self.d_inner = 2 * hidden_size
+
 
 @config_class()
 class MambaBaseConfig(SSMConfig):
@@ -160,6 +156,11 @@ class MambaBaseConfig(SSMConfig):
         hint=FieldHint.core,
         valid=check_field(Assert.gt, 0),
     )
+
+    def set_defaults(self, hidden_size: int):
+        super().set_defaults(hidden_size)
+        if self.dt_rank is None:
+            self.dt_rank = math.ceil(hidden_size / 16)
 
     def _validate(self) -> None:
         super()._validate()
@@ -242,6 +243,11 @@ class Mamba2Config(MambaBaseConfig):
         hint=FieldHint.core,
         valid=check_field(Assert.gt, 0),
     )
+
+    def set_defaults(self, hidden_size: int):
+        super().set_defaults(hidden_size)
+        if self.d_xb is None:
+            self.d_xb = hidden_size
 
 
 @config_class(dynamic_type={MixerConfig: "discrete_mamba_2"})

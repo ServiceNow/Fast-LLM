@@ -44,7 +44,7 @@ class MixtureOfExpertMLP[ConfigType: MLPConfig](MLPBase[ConfigType]):
     ):
         Assert.gt(config.num_experts, 1)
         # TODO: Implement?
-        assert not config.add_linear_biases, "Biases not supported for MoE."
+        assert not block_config.add_linear_biases, "Biases not supported for MoE."
         super().__init__(config, block_config, distributed_config, hidden_dim, block_index, name, lr_scale)
         self.router = self._config.router.get_layer(
             self._hidden_dim,

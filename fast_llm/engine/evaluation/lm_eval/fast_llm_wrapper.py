@@ -104,7 +104,7 @@ class FastLLMLmEvalWrapper(lm_eval.api.model.TemplateLM):
         # check if it is absolute positional encoding and return max_position_embeddings
         if hasattr(self._config.fast_llm_config.base_model, "transformer"):
             # NOTE: will need to extend if more relative encoding types will be added
-            if isinstance(self._config.fast_llm_config.base_model.transformer.rotary, NoRotaryConfig):
+            if isinstance(self._config.fast_llm_config.base_model.transformer.mixer.rotary, NoRotaryConfig):
                 return self._config.fast_llm_config.base_model.max_position_embeddings
 
         # check if tokenizer holds model sequence leigh info

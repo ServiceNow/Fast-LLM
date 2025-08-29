@@ -189,8 +189,8 @@ class Block[ConfigType: BlockConfig](BlockLayerBase[ConfigType], Layer):
         from fast_llm.layers.block.mlp.mixture_of_experts import MixtureOfExpertMLP
         from fast_llm.layers.block.mlp.mlp import MLP
 
-        self.mlp = (MixtureOfExpertMLP if self._config.num_experts > 1 else MLP)(
-            self._config,
+        self.mlp = (MixtureOfExpertMLP if self._config.mlp.num_experts > 1 else MLP)(
+            self._config.mlp,
             self._config,
             self._distributed_config,
             self._hidden_dim,

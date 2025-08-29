@@ -1,4 +1,7 @@
-from fast_llm.config import Field, FieldHint, check_field, config_class
+import abc
+import typing
+
+from fast_llm.config import Config, Field, FieldHint, check_field, config_class
 from fast_llm.engine.base_model.config import BaseModelConfig
 from fast_llm.layers.block.mlp.config import MLPConfig
 from fast_llm.layers.block.peft import TransformerPeftConfig
@@ -32,10 +35,39 @@ class BlockKwargs:
     grad_output = "grad_output"
 
 
+@config_class(registry=True)
+class MixerConfig(Config):
+    """
+    Base config class for all mixers.
+    TODO: Generalize to include Attention
+    """
+
+    _abstract = True
+
+    @abc.abstractmethod
+    def set_defaults(self, hidden_size: int):
+        pass
+
+    @classmethod
+    def _from_dict(
+        cls,
+        default: dict[str, typing.Any],
+        strict: bool = True,
+        flat: bool = False,
+    ) -> typing.Self:
+        if cls is MixerConfig and cls.get_subclass(default.get("type")) is None:
+            from fast_llm.layers.attention.config import AttentionConfig
+
+            # Default subclass.
+            return AttentionConfig._from_dict(default, strict, flat)
+        return super()._from_dict(default, strict=strict, flat=flat)
+
+
 @config_class()
 # TODO: Use composition instead
-class BlockConfig(MLPConfig, BaseModelConfig):
-
+class BlockConfig(BaseModelConfig):
+    mixer: MixerConfig = Field()
+    mlp: MLPConfig = Field()
     # TODO: Review names
     normalization: NormalizationConfig = Field(
         desc="Configuration for the normalization layers architecture.",
@@ -110,3 +142,17 @@ class BlockConfig(MLPConfig, BaseModelConfig):
         desc="Min value for clamping initialized weights. Default: -float('inf')",
         hint=FieldHint.optional,
     )
+
+    def _validate(self) -> None:
+        with self._set_implicit_default():
+            # Kept here for initialization order.
+            # TODO: Review initialization
+            if self.init_method_std is None:
+                self.init_method_std = self.hidden_size**-0.5
+            if self.init_method_min is not None and self.init_method_max is not None:
+                Assert.leq(self.init_method_min, self.init_method_max)
+
+        self.mixer.set_defaults(self.hidden_size)
+        self.mlp.set_defaults(self.hidden_size)
+
+        super()._validate()

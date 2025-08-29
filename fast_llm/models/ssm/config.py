@@ -1,5 +1,4 @@
 import logging
-import math
 import typing
 
 from fast_llm.config import Field, FieldHint, FieldUpdate, config_class
@@ -8,7 +7,7 @@ from fast_llm.engine.checkpoint.config import CheckpointHandler
 from fast_llm.engine.config_utils.runnable import RunnableConfig
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig, PretrainedFastLLMModelConfig
 from fast_llm.engine.training.config import TrainerConfig
-from fast_llm.layers.ssm.config import MixerConfig, SSMBlockType
+from fast_llm.layers.ssm.config import SSMBlockType, SSMConfig
 from fast_llm.models.gpt.config import (
     GPTBaseModelConfig,
     GPTBatchConfig,
@@ -29,7 +28,7 @@ logger = logging.getLogger(__name__)
 class HybridSSMBaseModelConfig(GPTBaseModelConfig):
     _abstract = False
 
-    ssm: MixerConfig = Field(
+    ssm: SSMConfig = Field(
         desc="Configuration for the transformer architecture.",
         hint=FieldHint.architecture,
     )
@@ -47,13 +46,7 @@ class HybridSSMBaseModelConfig(GPTBaseModelConfig):
     ssm_block_type: SSMBlockType | None = Field(init=False)
 
     def _validate(self):
-        with self._set_implicit_default():
-            if getattr(self.ssm, "dt_rank", ...) is None:
-                self.ssm.dt_rank = math.ceil(self.transformer.hidden_size / 16)
-            if getattr(self.ssm, "d_xb", ...) is None:
-                self.ssm.d_xb = self.transformer.hidden_size
-            if getattr(self.ssm, "d_inner", ...) is None:
-                self.ssm.d_inner = int(2 * self.transformer.hidden_size)
+        self.ssm.set_defaults(self.transformer.hidden_size)
 
         if self.hybrid_block_layout is None:
             with self._set_implicit_default():

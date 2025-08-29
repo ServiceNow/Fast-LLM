@@ -4,9 +4,8 @@ import torch
 
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig
-from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.layers.attention.attention import Attention
-from fast_llm.layers.attention.config import AttentionKwargs, TransformerConfig
+from fast_llm.layers.attention.config import AttentionConfig, AttentionKwargs
 from fast_llm.layers.attention.preprocessing import FlashAttnVarlenPreprocessor
 from fast_llm.layers.block.config import BlockDimNames
 from fast_llm.utils import Assert
@@ -17,17 +16,17 @@ def test_decide_window_size():
     attention._decide_window_size = Attention._decide_window_size.__get__(attention)  # Attach real method
 
     # Arrange - Case 1: window_size is returned (layer_index >= max_window_layers)
-    attention._config = TransformerConfig(window_size=512, max_window_layers=2)
+    attention._config = AttentionConfig(kv_channels=64, window_size=512, max_window_layers=2)
     attention._block_index = 2
     assert attention._decide_window_size() == 512
 
     # Arrange - Case 2: window_size is None (layer_index < max_window_layers)
-    attention._config = TransformerConfig(window_size=512, max_window_layers=2)
+    attention._config = AttentionConfig(kv_channels=64, window_size=512, max_window_layers=2)
     attention._block_index = 1
     assert attention._decide_window_size() is None
 
     # Arrange - Case 3: max_window_layers is None (always return window_size)
-    attention._config = TransformerConfig(window_size=512, max_window_layers=None)
+    attention._config = AttentionConfig(kv_channels=64, window_size=512, max_window_layers=None)
     assert attention._decide_window_size() == 512
 
 
@@ -51,15 +50,9 @@ def test_varlen_preprocessor():
     ]
     micro_sequence_length = 12
     sequence_length = 36
-    transformer_config = TransformerConfig(
-        num_layers=2,
-        num_attention_heads=2,
-        hidden_size=16,
-        use_flash_attention=True,
+    varlen_preprocessor = FlashAttnVarlenPreprocessor(
+        AttentionConfig(kv_channels=64), DistributedConfig(training_dtype="bfloat16")
     )
-    distributed_config = DistributedConfig(training_dtype="bfloat16")
-    distributed = Distributed(distributed_config, use_cpu=True)
-    varlen_preprocessor = FlashAttnVarlenPreprocessor(transformer_config, distributed_config=distributed_config)
     for micro_seq_idx in range(int(sequence_length / micro_sequence_length)):
         kwargs = {
             AttentionKwargs.sequence_q_dim: TensorDim(BlockDimNames.sequence_k, micro_sequence_length),

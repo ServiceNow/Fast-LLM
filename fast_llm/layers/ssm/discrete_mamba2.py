@@ -182,7 +182,7 @@ class DiscreteMamba2[ConfigType: DiscreteMamba2Config](BlockLayer[ConfigType]):
         Du = torch.einsum("h,blhp->blhp", self.D, x)
 
         # Norm and gate
-        if not self._config.add_bias_linear:
+        if hasattr(self, "z_bias"):
             z = z + self.z_bias
 
         # y: (batch, padded_sequence, local_heads, head_size) -> (batch, sequence, local_heads * head_size)

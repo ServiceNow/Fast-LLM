@@ -19,4 +19,4 @@ class TransformerBlock[ConfigType: TransformerConfig](Block[ConfigType]):
 
     @property
     def _mixer_config(self) -> AttentionConfig:
-        return self._config
+        return self._config.mixer
