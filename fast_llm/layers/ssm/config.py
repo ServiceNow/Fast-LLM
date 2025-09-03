@@ -2,7 +2,7 @@ import enum
 import math
 import typing
 
-from fast_llm.config import Field, FieldHint, check_field, config_class, skip_valid_if_none
+from fast_llm.config import Field, FieldHint, check_field, config_class
 from fast_llm.engine.config_utils.parameter import ParameterConfig
 from fast_llm.layers.block.config import MixerConfig
 from fast_llm.layers.common.linear.config import AffineLinearConfig, CausalConv1dConfig, LinearConfig
@@ -94,15 +94,6 @@ class SSMConfig(MixerConfig):
         default=None,
         desc="Inner dimension.",
         hint=FieldHint.core,
-    )
-
-    # Learning rate
-    # lr_scale [MambaLayer, Mamba2, DiscreteMamba2]
-    mamba_lr_scale: float | None = Field(
-        default=None,
-        desc="Learning rate scale for Mamba blocks.",
-        hint=FieldHint.feature,
-        valid=skip_valid_if_none(check_field(Assert.geq, 0)),
     )
 
     def set_defaults(self, hidden_size: int):

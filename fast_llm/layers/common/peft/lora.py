@@ -5,6 +5,7 @@ import torch
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.functional.autograd import wrap_forward_backward
 from fast_llm.layers.common.linear.linear import Linear, LinearBase
+from fast_llm.tensor import ParameterMeta
 
 
 def lora_linear(
@@ -35,20 +36,22 @@ def lora_linear(
     middle_dim = TensorDim("lora_middle", rank)
 
     module.lora_0 = Linear(
-        in_dim,
-        middle_dim,
-        bias=False,
-        weight_init_method=module.weight.param_init_method,
+        ParameterMeta.from_dims(
+            (in_dim, middle_dim),
+            init_method=module.weight.param_init_method,
+            lr_scale=module.weight.lr_scale,
+        ),
+        None,
         transposed_weight=module.transposed_weight,
-        lr_scale=module.weight.lr_scale,
     )
     module.lora_1 = Linear(
-        middle_dim,
-        out_dim,
-        bias=False,
-        weight_init_method=module.weight.param_init_method,
+        ParameterMeta.from_dims(
+            (middle_dim, out_dim),
+            init_method=module.weight.param_init_method,
+            lr_scale=module.weight.lr_scale,
+        ),
+        None,
         transposed_weight=module.transposed_weight,
-        lr_scale=module.weight.lr_scale,
     )
 
     old_forward = module._forward

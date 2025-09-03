@@ -10,7 +10,6 @@ from typing import Callable
 
 if typing.TYPE_CHECKING:
     import numpy as np
-    import numpy.typing as npt
     import torch
 
 logger = logging.getLogger(__name__)
@@ -346,31 +345,6 @@ def compare_nested(config_a, config_b, errors: list | None = None, prefix: tuple
 def check_equal_nested(config_a, config_b):
     if errors := compare_nested(config_a, config_b):
         raise ValueError("\n".join(errors))
-
-
-def combine_lr_scales(*lr_scales: float | None | tuple[float | None, ...]):
-    # Remove `None` entries.
-    lr_scales = tuple(lr_scale for lr_scale in lr_scales if lr_scale is not None)
-    if not lr_scales:
-        # Everything is None
-        return None
-    tuple_length = None
-    # Check if we have tuples, and determine the length.
-    for lr_scale in lr_scales:
-        if isinstance(lr_scale, tuple):
-            if tuple_length is None:
-                tuple_length = len(lr_scale)
-            else:
-                assert len(lr_scale) == tuple_length
-    if tuple_length is None:
-        # No tuple: simple product.
-        return math.prod(lr_scales)
-    else:
-        # Tuple(s): use recursion.
-        return tuple(
-            combine_lr_scales(*[lr_scale[i] if isinstance(lr_scale, tuple) else lr_scale for lr_scale in lr_scales])
-            for i in range(tuple_length)
-        )
 
 
 class Interrupter:

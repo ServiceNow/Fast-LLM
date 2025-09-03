@@ -12,7 +12,8 @@ from fast_llm.engine.config_utils.run import log_pipeline_parallel_main_rank
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.engine.distributed.distributed import Distributed
-from fast_llm.layers.block.config import BlockConfig, BlockKwargs, MixerConfig
+from fast_llm.layers.block.config import BlockConfig, BlockKwargs
+from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.logging import log_distributed_grad, log_distributed_tensor, log_memory_usage
 from fast_llm.tensor import TensorMeta
 
@@ -88,7 +89,7 @@ class DebugLayer:
 
 class BlockLayerBase[ConfigType: Config](Configurable[ConfigType], Module):
     """
-    Base class for blocks, mixer and MLP modules.
+    Base class for blocks, mixers, MLPs, etc.
     """
 
     def __init__(
@@ -96,11 +97,13 @@ class BlockLayerBase[ConfigType: Config](Configurable[ConfigType], Module):
         config: ConfigType,
         block_config: BlockConfig,
         distributed_config: DistributedConfig,
+        *,
         # TODO: Review `hidden_dim` and `block_index`
         hidden_dim: TensorDim,
         block_index: int,
         name: str,
         lr_scale: float | None,
+        peft: PeftConfig | None,
     ):
         super().__init__(config, distributed_config)
         self._block_config = block_config
@@ -114,6 +117,7 @@ class BlockLayerBase[ConfigType: Config](Configurable[ConfigType], Module):
             self._block_config.debug_transformer_memory,
         )
         self._lr_scale = lr_scale
+        self._peft = peft
 
 
 class BlockLayer[ConfigType: Config](BlockLayerBase[ConfigType]):
@@ -144,43 +148,43 @@ class Block[ConfigType: BlockConfig](BlockLayerBase[ConfigType], Layer):
         self,
         config: ConfigType,
         distributed_config: DistributedConfig,
+        *,
         hidden_dim: TensorDim,
         block_index: int,
         name: str,
         lr_scale: float | None,
+        peft: PeftConfig | None,
         return_input: bool = False,
     ):
         super().__init__(
             config,
             config,
             distributed_config,
-            hidden_dim,
-            block_index,
-            name,
-            lr_scale,
+            hidden_dim=hidden_dim,
+            block_index=block_index,
+            name=name,
+            lr_scale=lr_scale,
+            peft=peft,
         )
         # For multi-token prediction, return a stack of shared_hidden and transformer_output.
         self._return_input: bool = return_input
         # Note, layer_lr_scale does not impact the norms
         # TODO: add a separate norm_lr_scale
-        self.norm_1 = self._config.peft.apply_other(
-            self._config.normalization.get_layer(self._hidden_dim, self._lr_scale)
-        )
-        self.norm_2 = self._config.peft.apply_other(
-            self._config.normalization.get_layer(self._hidden_dim, self._lr_scale)
-        )
+        self.norm_1 = self._config.normalization.get_layer(self._hidden_dim, lr_scale=self._lr_scale, peft=self._peft)
+        self.norm_2 = self._config.normalization.get_layer(self._hidden_dim, lr_scale=self._lr_scale, peft=self._peft)
 
         # Attribute should be mixer, but Attention uses a different name for backward compatibility. TODO: Fix.
         setattr(
             self,
             self._mixer_module_name,
-            self._mixer_config.get_layer(
+            self._config.mixer.get_layer(
                 self._config,
                 self._distributed_config,
                 self._hidden_dim,
                 self._block_index,
                 f"{self._name} mixer",
                 self._lr_scale,
+                peft=peft,
             ),
         )
 
@@ -191,12 +195,8 @@ class Block[ConfigType: BlockConfig](BlockLayerBase[ConfigType], Layer):
             self._block_index,
             f"{self._name} MLP",
             self._lr_scale,
+            peft=peft,
         )
-
-    @property
-    @abc.abstractmethod
-    def _mixer_config(self) -> MixerConfig:
-        pass
 
     def setup(self, distributed: Distributed) -> None:
         super().setup(distributed)

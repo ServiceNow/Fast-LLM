@@ -10,8 +10,7 @@ from fast_llm.functional.triton.mlp import mlp_autograd, torch_mlp_activation, t
 from fast_llm.layers.block.block import BlockLayer
 from fast_llm.layers.block.config import BlockConfig
 from fast_llm.layers.block.mlp.config import MLPConfig
-from fast_llm.layers.block.peft import TransformerSubLayerName
-from fast_llm.utils import combine_lr_scales
+from fast_llm.layers.common.peft.config import PeftConfig
 
 
 class MLPBase[ConfigType: MLPConfig](BlockLayer[ConfigType]):
@@ -22,43 +21,51 @@ class MLPBase[ConfigType: MLPConfig](BlockLayer[ConfigType]):
         config: ConfigType,
         block_config: BlockConfig,
         distributed_config: DistributedConfig,
+        *,
+        # TODO: Review `hidden_dim` and `block_index`
         hidden_dim: TensorDim,
         block_index: int,
         name: str,
         lr_scale: float | None,
+        peft: PeftConfig | None,
     ):
-        super().__init__(config, block_config, distributed_config, hidden_dim, block_index, name, lr_scale)
+        super().__init__(
+            config,
+            block_config,
+            distributed_config,
+            hidden_dim=hidden_dim,
+            block_index=block_index,
+            name=name,
+            lr_scale=lr_scale,
+            peft=peft,
+        )
         self._parallel_dim = self._distributed_config.get_distributed_dim(DistributedDimNames.tensor)
         intermediate_1_dim, intermediate_2_dim = self._get_intermediate_dims()
 
         self._activation_fn = triton_mlp_activation_autograd if TritonConfig.TRITON_ENABLED else torch_mlp_activation
 
-        lr_scale = combine_lr_scales(self._lr_scale, self._config.lr_scale)
-
         # So both layers' weights have shape (num_experts [* gate_up] * ffn, hidden_size)
         self.layer_1 = self._config.layer_1.get_layer(
             hidden_dim,
             intermediate_1_dim,
-            default_weight_initializer=init_normal_(std=self._block_config.init_method_std),
+            default_weight_initialization=init_normal_(std=self._block_config.init_method_std),
             default_add_bias=self._block_config.add_linear_biases,
             sequence_parallel=self._sequence_parallel,
-            lr_scale=lr_scale,
+            lr_scale=self._lr_scale,
+            peft=self._peft,
         )
         self.layer_2 = self._config.layer_1.get_layer(
             intermediate_2_dim,
             hidden_dim,
-            default_weight_initializer=init_normal_(
+            default_weight_initialization=init_normal_(
                 std=self._block_config.init_method_std / max(2 * self._block_config.num_layers, 1) ** 0.5
             ),
             default_add_bias=self._block_config.add_linear_biases,
             sequence_parallel=self._sequence_parallel,
             transposed_weight=True,
-            lr_scale=lr_scale,
+            lr_scale=self._lr_scale,
+            peft=self._peft,
         )
-
-        # PEFT.
-        self.layer_1 = self._block_config.peft.apply_linear(self.layer_1, TransformerSubLayerName.mlp_1)
-        self.layer_2 = self._block_config.peft.apply_linear(self.layer_2, TransformerSubLayerName.mlp_2)
 
     def _get_intermediate_dims(self):
         intermediate_2_dim = TensorDim("intermediate", self._config.ffn_hidden_size, self._parallel_dim)
@@ -72,18 +79,6 @@ class MLPBase[ConfigType: MLPConfig](BlockLayer[ConfigType]):
 
 class MLP[ConfigType: MLPConfig](MLPBase[ConfigType]):
     _config: MLPConfig
-
-    def __init__(
-        self,
-        config: ConfigType,
-        block_config: BlockConfig,
-        distributed_config: DistributedConfig,
-        hidden_dim: TensorDim,
-        block_index: int,
-        name: str,
-        lr_scale: float | None,
-    ):
-        super().__init__(config, block_config, distributed_config, hidden_dim, block_index, name, lr_scale)
 
     def forward(
         self,

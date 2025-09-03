@@ -107,39 +107,47 @@ VOCAB_SIZE = 500
         ({}, {"training_dtype": DataType.bfloat16}, False),
         ({"transformer": {"full_precision_residual": True}}, {"training_dtype": DataType.bfloat16}, False),
         ({"sequence_first": True}, {}, False),
-        ({"logit_z_loss": 1e-3}, {}, False),
-        ({"logits_scale_factor": 5.0}, {}, False),
-        ({"tie_word_embeddings": False}, {}, False),
-        ({"prediction_heads": 2}, {}, False),
+        ({"output_layer": {"logit_z_loss": 1e-3}}, {}, False),
+        ({"output_layer": {"logits_scale_factor": 5.0}}, {}, False),
+        ({"output_layer": {"tied_weight": False}}, {}, False),
+        ({"output_layer": {"prediction_heads": 2}}, {}, False),
         ({}, {}, True),
         (
             {
-                "distillation_model": "distillation",
-                "distillation_loss_implementation": DistillationLossImpl.cross_entropy,
+                "output_layer": {
+                    "distillation_model": "distillation",
+                    "distillation_loss_implementation": DistillationLossImpl.cross_entropy,
+                }
             },
             {},
             False,
         ),
         (
             {
-                "distillation_model": "distillation",
-                "distillation_loss_implementation": DistillationLossImpl.reverse_kl,
+                "output_layer": {
+                    "distillation_model": "distillation",
+                    "distillation_loss_implementation": DistillationLossImpl.reverse_kl,
+                }
             },
             {},
             False,
         ),
         (
             {
-                "distillation_model": "distillation",
-                "distillation_loss_implementation": DistillationLossImpl.cross_entropy,
+                "output_layer": {
+                    "distillation_model": "distillation",
+                    "distillation_loss_implementation": DistillationLossImpl.cross_entropy,
+                }
             },
             {},
             True,
         ),
         (
             {
-                "distillation_model": "distillation",
-                "distillation_loss_implementation": DistillationLossImpl.reverse_kl,
+                "output_layer": {
+                    "distillation_model": "distillation",
+                    "distillation_loss_implementation": DistillationLossImpl.reverse_kl,
+                }
             },
             {},
             True,
@@ -159,8 +167,8 @@ def test_lm_head(
                 "hidden_size": HIDDEN_SIZE,
                 "num_layers": 0,
             },
-            "vocab_size": VOCAB_SIZE,
-            "cross_entropy_impl": cross_entropy_impl,
+            "embeddings_layer": {"vocab_size": VOCAB_SIZE},
+            "output_layer": {"cross_entropy_implementation": cross_entropy_impl},
         },
         config_dict,
         update_type=UpdateType.update,
@@ -176,7 +184,7 @@ def test_lm_head(
     )
 
     sequence_first = config.sequence_first or (
-        config.cross_entropy_splits is not None and config.cross_entropy_splits > 1
+        config.output_layer.cross_entropy_splits is not None and config.output_layer.cross_entropy_splits > 1
     )
     input_ = torch.randn(
         (SEQUENCE_LENGTH, BATCH_SIZE, HIDDEN_SIZE) if sequence_first else (BATCH_SIZE, SEQUENCE_LENGTH, HIDDEN_SIZE),
@@ -189,9 +197,9 @@ def test_lm_head(
         requires_grad=True,
     )
     label_shape = (
-        (SEQUENCE_LENGTH + config.prediction_heads - 1, BATCH_SIZE)
+        (SEQUENCE_LENGTH + config.output_layer.prediction_heads - 1, BATCH_SIZE)
         if sequence_first
-        else (BATCH_SIZE, SEQUENCE_LENGTH + config.prediction_heads - 1)
+        else (BATCH_SIZE, SEQUENCE_LENGTH + config.output_layer.prediction_heads - 1)
     )
     if loss_masking:
         loss_mask = torch.randint(0, 2, label_shape, dtype=torch.bool, device=distributed.device)
@@ -201,7 +209,7 @@ def test_lm_head(
         AttentionKwargs.sequence_first: sequence_first,
         AttentionKwargs.grad_output: 1.0,
     }
-    if config.distillation_model is None:
+    if config.output_layer.distillation_model is None:
         target = torch.randint(
             0,
             VOCAB_SIZE,
@@ -214,17 +222,17 @@ def test_lm_head(
 
         kwargs[LanguageModelKwargs.labels] = target
     else:
-        assert config.prediction_heads == 1
+        assert config.output_layer.prediction_heads == 1
         target = torch.randn(
             input_.shape[:-1] + (VOCAB_SIZE,),
             dtype=input_.dtype,
             device=distributed.device,
         )
-        kwargs[f"{config.distillation_model}_logits"] = target
+        kwargs[f"{config.output_layer.distillation_model}_logits"] = target
         if loss_mask is not None:
             kwargs[LanguageModelKwargs.loss_mask] = loss_mask
 
-    if config.tie_word_embeddings or config.prediction_heads > 1:
+    if config.output_layer.tied_weight or config.output_layer.prediction_heads > 1:
         logit_weight = (
             torch.empty(
                 VOCAB_SIZE, HIDDEN_SIZE, dtype=distributed.config.training_dtype.torch, device=distributed.device
@@ -232,7 +240,7 @@ def test_lm_head(
             .normal_(config.transformer.init_method_std)
             .requires_grad_(True)
         )
-        kwargs[WORD_EMBEDDINGS_WEIGHT if config.tie_word_embeddings else OUTPUT_WEIGHTS] = logit_weight
+        kwargs[WORD_EMBEDDINGS_WEIGHT if config.output_layer.tied_weight else OUTPUT_WEIGHTS] = logit_weight
     else:
         logit_weight = None
 
@@ -264,9 +272,9 @@ def test_lm_head(
             loss_mask,
             rms_weight=ref_rms_weight,
             logit_weight=ref_logit_weight,
-            logit_scale_factor=config.logits_scale_factor,
-            logit_z_loss=config.logit_z_loss,
-            distillation_loss_implementation=config.distillation_loss_implementation,
+            logit_scale_factor=config.output_layer.logits_scale_factor,
+            logit_z_loss=config.output_layer.logit_z_loss,
+            distillation_loss_implementation=config.output_layer.distillation_loss_implementation,
         )
 
         # Prepare LM head inputs
@@ -283,7 +291,7 @@ def test_lm_head(
         loss_keys = {loss_name}
         if ref_z_loss is not None:
             loss_keys.add("z_loss")
-        if config.distillation_model is not None:
+        if config.output_layer.distillation_model is not None:
             loss_keys.add("distillation_loss")
             loss_keys.add("distil_lm_loss")
         losses = {key: [] for key in loss_keys}
@@ -293,7 +301,7 @@ def test_lm_head(
         threshold = 1e-5 if distributed.config.training_dtype == DataType.float32 else 5e-3
         min_threshold = (
             1e-5 if distributed.config.training_dtype == DataType.float32 else 1e-4
-        ) * config.logits_scale_factor
+        ) * config.output_layer.logits_scale_factor
 
         Assert.eq(losses.keys(), loss_keys)
         Assert.eq(len(losses[loss_name]), 1)

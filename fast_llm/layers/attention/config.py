@@ -3,12 +3,14 @@ import logging
 import typing
 import warnings
 
-from fast_llm.config import Field, FieldHint, FieldUpdate, check_field, config_class, skip_valid_if_none
+from fast_llm.config import Field, FieldHint, check_field, config_class, skip_valid_if_none
+from fast_llm.engine.base_model.config import Preprocessor
 from fast_llm.engine.config_utils.data_type import DataType
+from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.functional.config import TritonConfig
 from fast_llm.layers.attention.rotary.config import RotaryConfig
-from fast_llm.layers.block.config import BlockConfig, BlockKwargs, MixerConfig
+from fast_llm.layers.block.config import BlockKwargs, MixerConfig
 from fast_llm.layers.common.linear.config import AffineLinearConfig
 from fast_llm.utils import Assert, div
 
@@ -95,13 +97,6 @@ class AttentionConfig(MixerConfig):
         hint=FieldHint.optional,
         valid=skip_valid_if_none(check_field(Assert.geq, 0)),
     )
-    attention_lr_scale: float | None = Field(
-        default=None,
-        desc="Custom learning rate scale for the Attention projection weights.",
-        doc="Can be used in muP to scale the Attention learning rate by 1/width_factor",
-        hint=FieldHint.feature,
-        valid=skip_valid_if_none(check_field(Assert.geq, 0)),
-    )
     attention_softmax_scale_power: float = Field(
         default=0.5,
         desc="The scaling power to apply to kv_channel in the attention calculation. "
@@ -138,10 +133,16 @@ class AttentionConfig(MixerConfig):
     def do_use_flash_attention(self, distributed_config: DistributedConfig) -> bool:
         return self.use_flash_attention and distributed_config.training_dtype in (DataType.float16, DataType.bfloat16)
 
+    def get_preprocessors(self, distributed_config: DistributedConfig) -> list[Preprocessor]:
+        # We have multiple identical rotary modules/preprocessors, so it's simpler to make a new one here.
+        # TODO: Find a better solution.
+        preprocessors: list[Preprocessor] = [self.rotary.get_layer(TensorDim("kv_channels", self.kv_channels))]
+        if self.do_use_flash_attention(distributed_config):
+            from fast_llm.layers.attention.preprocessing import FlashAttnVarlenPreprocessor
 
-@config_class()
-# TODO: Use composition instead
-class TransformerConfig(BlockConfig):
-    _abstract = False
-    # TODO: Make this unnecessary
-    mixer: AttentionConfig = FieldUpdate()
+            preprocessors.append(FlashAttnVarlenPreprocessor(self, distributed_config))
+        else:
+            from fast_llm.layers.attention.preprocessing import BackupAttentionPreprocessor
+
+            preprocessors.append(BackupAttentionPreprocessor(self, distributed_config))
+        return preprocessors

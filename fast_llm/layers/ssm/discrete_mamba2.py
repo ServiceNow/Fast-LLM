@@ -10,9 +10,10 @@ from fast_llm.engine.distributed.config import DistributedConfig, DistributedDim
 from fast_llm.functional.config import ActivationType
 from fast_llm.layers.block.block import BlockLayer
 from fast_llm.layers.block.config import BlockConfig, BlockKwargs
+from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.ssm.config import DiscreteMamba2Config
 from fast_llm.tensor import ParameterMeta
-from fast_llm.utils import combine_lr_scales, div
+from fast_llm.utils import div
 
 logger = logging.getLogger(__name__)
 
@@ -37,12 +38,24 @@ class DiscreteMamba2[ConfigType: DiscreteMamba2Config](BlockLayer[ConfigType]):
         config: ConfigType,
         block_config: BlockConfig,
         distributed_config: DistributedConfig,
+        *,
+        # TODO: Review `hidden_dim` and `block_index`
         hidden_dim: TensorDim,
         block_index: int,
         name: str,
         lr_scale: float | None,
+        peft: PeftConfig | None,
     ):
-        super().__init__(config, block_config, distributed_config, hidden_dim, block_index, name, lr_scale)
+        super().__init__(
+            config,
+            block_config,
+            distributed_config,
+            hidden_dim=hidden_dim,
+            block_index=block_index,
+            name=name,
+            lr_scale=lr_scale,
+            peft=peft,
+        )
         state_dim = TensorDim("state", self._config.state_size)
         v_head_size_dim = TensorDim("v_head_size", div(self._config.d_inner, self._config.n_v_heads))
 
@@ -71,8 +84,6 @@ class DiscreteMamba2[ConfigType: DiscreteMamba2Config](BlockLayer[ConfigType]):
         # local_bc_size = local_head_groups * state
         self._local_bc_size = bc_dim.size
 
-        lr_scale = combine_lr_scales(self._lr_scale, self._config.mamba_lr_scale)
-
         # TODO: double check initializations
         # Projections
 
@@ -80,10 +91,11 @@ class DiscreteMamba2[ConfigType: DiscreteMamba2Config](BlockLayer[ConfigType]):
         self.in_proj = self._config.z_layer.get_layer(
             hidden_dim,
             inner_projection_dim,
-            default_weight_initializer=init_normal_(0, (2 / self._config.d_inner) ** 0.5),
+            default_weight_initialization=init_normal_(0, (2 / self._config.d_inner) ** 0.5),
             default_add_bias=self._block_config.add_linear_biases,
             sequence_parallel=self._sequence_parallel,
-            lr_scale=lr_scale,
+            lr_scale=self._lr_scale,
+            peft=self._peft,
         )
         if self.in_proj.bias is None:
             # TODO: Integrate to z_layer config?
@@ -91,28 +103,33 @@ class DiscreteMamba2[ConfigType: DiscreteMamba2Config](BlockLayer[ConfigType]):
                 (inner_dim,),
                 weight_decay=False,
                 init_method=init_zeros_,
-                lr_scale=lr_scale,
+                lr_scale=self._lr_scale,
             )
+            if self._peft is not None:
+                self.z_bias = self._peft.apply_weight(self.z_bias)
 
         self.convolution = self._config.convolution_layer.get_layer(
             convolution_dim,
             default_activation=ActivationType.silu,
-            lr_scale=lr_scale,
+            lr_scale=self._lr_scale,
+            peft=self._peft,
         )
         # D "skip" parameter
         self.D = self._config.d_weight.get_parameter(
             (heads_dim,),
-            default_initializer=init_ones_,
-            lr_scale=lr_scale,
+            default_initialization=init_ones_,
             weight_decay=False,
+            lr_scale=self._lr_scale,
+            peft=self._peft,
         )
         self.out_proj = self._config.output_layer.get_layer(
             inner_dim,
             hidden_dim,
-            default_weight_initializer=init_normal_(0, (2 / self._config.d_inner) ** 0.5),
+            default_weight_initialization=init_normal_(0, (2 / self._config.d_inner) ** 0.5),
             default_add_bias=self._block_config.add_linear_biases,
             sequence_parallel=self._sequence_parallel,
-            lr_scale=lr_scale,
+            lr_scale=self._lr_scale,
+            peft=self._peft,
         )
 
     def forward(

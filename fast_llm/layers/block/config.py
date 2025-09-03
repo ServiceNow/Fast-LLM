@@ -1,15 +1,17 @@
 import typing
 
 from fast_llm.config import Field, FieldHint, check_field, config_class
-from fast_llm.engine.base_model.config import BaseModelConfig
+from fast_llm.engine.base_model.config import BaseModelConfig, Preprocessor
+from fast_llm.engine.config_utils.parameter import combine_lr_scales
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig
-from fast_llm.layers.block.peft import TransformerPeftConfig
 from fast_llm.layers.common.normalization.config import NormalizationConfig
+from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
     from fast_llm.layers.block.block import BlockLayer
+
 
 # TODO: Generalize these beyond language models? (Ex. vision)
 
@@ -47,6 +49,13 @@ class BlockLayerConfig(BaseModelConfig):
     _abstract = True
     block: "BlockConfig" = Field(init=False)
 
+    lr_scale: float | None = Field(
+        default=None,
+        desc="Scaling factor for the layer learning rate."
+        " Combines multiplicatively with the scale set by the parent and child layers, if applicable.",
+        hint=FieldHint.feature,
+    )
+
     @property
     def layer_class(self) -> "type[BlockLayer]":
         raise NotImplementedError()
@@ -63,16 +72,21 @@ class BlockLayerConfig(BaseModelConfig):
         block_index: int,
         name: str,
         lr_scale: float | None,
+        peft: PeftConfig | None,
     ) -> "BlockLayer":
         return self.layer_class(
             self,
             block_config,
             distributed_config,
-            hidden_dim,
-            block_index,
-            name,
-            lr_scale,
+            hidden_dim=hidden_dim,
+            block_index=block_index,
+            name=name,
+            lr_scale=combine_lr_scales(lr_scale, self.lr_scale),
+            peft=peft,
         )
+
+    def get_preprocessors(self, distributed_config: DistributedConfig) -> list[Preprocessor]:
+        return []
 
 
 @config_class(registry=True)
@@ -118,6 +132,7 @@ class MixerConfig(BlockLayerConfig):
 @config_class()
 # TODO: Use composition instead
 class BlockConfig(BaseModelConfig):
+    _abstract = False
     mixer: MixerConfig = Field()
     mlp: MLPBaseConfig = Field()
     # TODO: Review names
@@ -125,9 +140,11 @@ class BlockConfig(BaseModelConfig):
         desc="Configuration for the normalization layers architecture.",
         hint=FieldHint.architecture,
     )
-    peft: TransformerPeftConfig = Field(
-        desc="Configuration for the parameter-efficient fine tuning.",
-        hint=FieldHint.architecture,
+    lr_scale: float | None = Field(
+        default=None,
+        desc="Scaling factor for the layer learning rate."
+        " Combines multiplicatively with the scale set by the parent and child layers, if applicable.",
+        hint=FieldHint.feature,
     )
     # TODO: Review names
     hidden_dropout: float = Field(
@@ -170,29 +187,12 @@ class BlockConfig(BaseModelConfig):
         hint=FieldHint.architecture,
         valid=check_field(Assert.gt, 0),
     )
-    per_layer_lr_scale: list[float | None] | None = Field(
-        default=None,
-        desc="Custom learning rate scale for each layer.",
-        doc="May be used to freeze some layers by setting their scale to zero.",
-        hint=FieldHint.feature,
-    )
-
     # TODO: Review initialization
     init_method_std: float = Field(
         default=None,
         desc="Default scale for weight initialization. Default: hidden_size**-0.5",
         hint=FieldHint.optional,
         valid=check_field(Assert.geq, 0),
-    )
-    init_method_max: float | None = Field(
-        default=None,
-        desc="Max value for clamping initialized weights. Default: float('inf')",
-        hint=FieldHint.optional,
-    )
-    init_method_min: float | None = Field(
-        default=None,
-        desc="Min value for clamping initialized weights. Default: -float('inf')",
-        hint=FieldHint.optional,
     )
 
     def _validate(self) -> None:
@@ -201,10 +201,34 @@ class BlockConfig(BaseModelConfig):
             # TODO: Review initialization
             if self.init_method_std is None:
                 self.init_method_std = self.hidden_size**-0.5
-            if self.init_method_min is not None and self.init_method_max is not None:
-                Assert.leq(self.init_method_min, self.init_method_max)
 
         self.mixer.set_defaults(self.hidden_size)
         self.mlp.set_defaults(self.hidden_size)
 
         super()._validate()
+
+    def get_layer(
+        self,
+        distributed_config: DistributedConfig,
+        hidden_dim: TensorDim,
+        block_index: int,
+        name: str,
+        lr_scale: float | None,
+        peft: PeftConfig | None = None,
+        return_input: bool = False,
+    ):
+        from fast_llm.layers.block.block import Block
+
+        return Block(
+            self,
+            distributed_config,
+            hidden_dim=hidden_dim,
+            block_index=block_index,
+            name=name,
+            lr_scale=combine_lr_scales(lr_scale, self.lr_scale),
+            peft=peft,
+            return_input=return_input,
+        )
+
+    def get_preprocessors(self, distributed_config: DistributedConfig) -> list[Preprocessor]:
+        return self.mixer.get_preprocessors(distributed_config)

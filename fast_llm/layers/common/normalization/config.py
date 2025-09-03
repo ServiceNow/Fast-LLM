@@ -4,6 +4,8 @@ import typing
 
 from fast_llm.config import Field, FieldHint, check_field, config_class
 from fast_llm.engine.base_model.config import BaseModelConfig
+from fast_llm.engine.config_utils.parameter import combine_lr_scales
+from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
@@ -25,7 +27,12 @@ class NormalizationImplementation(str, enum.Enum):
 
 @config_class(registry=True)
 class NormalizationConfig(BaseModelConfig):
-    pass
+    lr_scale: float | None = Field(
+        default=None,
+        desc="Scaling factor for the layer learning rate."
+        " Combines multiplicatively with the scale set by the parent layer and individual parameters, if applicable.",
+        hint=FieldHint.feature,
+    )
 
     @property
     @abc.abstractmethod
@@ -35,9 +42,14 @@ class NormalizationConfig(BaseModelConfig):
     def get_layer(
         self,
         hidden_dim: "TensorDim",
+        *,
         lr_scale: float | None = None,
+        peft: PeftConfig | None,
     ) -> "Normalization":
-        return self.module_class(self, hidden_dim, lr_scale)
+        out = self.module_class(self, hidden_dim, combine_lr_scales(lr_scale, self.lr_scale))
+        if peft is not None:
+            out = peft.apply_normalization(out)
+        return out
 
     @classmethod
     def _from_dict(

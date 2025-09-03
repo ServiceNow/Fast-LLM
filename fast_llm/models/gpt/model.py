@@ -10,15 +10,13 @@ from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames, PhaseType
 from fast_llm.engine.inference.runner import InferenceRunner
 from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
-from fast_llm.layers.attention.block import TransformerBlock
 from fast_llm.layers.attention.config import AttentionKwargs
-from fast_llm.layers.attention.preprocessing import BackupAttentionPreprocessor, FlashAttnVarlenPreprocessor
+from fast_llm.layers.block.block import Block
 from fast_llm.layers.block.config import BlockDimNames
 from fast_llm.layers.block.mlp.config import MLPLossNames, MoEMLPConfig, RoutingType
 from fast_llm.layers.language_model.config import LanguageModelKwargs, LanguageModelLossNames
 from fast_llm.layers.language_model.embedding import WORD_EMBEDDINGS_WEIGHT, LanguageModelEmbedding
 from fast_llm.layers.language_model.head import OUTPUT_WEIGHTS, LanguageModelHead
-from fast_llm.layers.language_model.preprocessing import PositionEmbeddingPreprocessor, PreferenceSpanPreprocessor
 from fast_llm.models.gpt.config import GPTBaseModelConfig, GPTBatchConfig, GPTModelConfig
 from fast_llm.models.gpt.megatron import get_init_megatron
 from fast_llm.tensor import ParameterMeta, TensorMeta
@@ -32,6 +30,8 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
     A transformer-based language model generalizing the GPT model architecture.
     """
 
+    _config: ConfigType
+
     def __init__(
         self,
         config: GPTBaseModelConfig,
@@ -39,37 +39,16 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
     ):
         self._hidden_dim = TensorDim("hidden", config.transformer.hidden_size)
         super().__init__(config, distributed_config)
-        self._use_flash_attention = self._config.transformer.mixer.do_use_flash_attention(distributed_config)
         if self._config.use_megatron_initialization:
             for param in self.parameters():
                 Assert.custom(isinstance, param, ParameterMeta)
                 param.init_parameter = get_init_megatron(param, self._config.transformer)  # Noqa
         # `self._reference_models` is not populated at this point, so we pass a mutable dict.
-        self._preprocessors: list[Preprocessor] = []
-        if self._config.use_absolute_position_embeddings:
-            self._preprocessors.append(PositionEmbeddingPreprocessor(self._config, self._distributed_config))
-        # We have multiple identical rotary modules/preprocessors, so it's simpler to make a new one here.
-        # TODO: Find a better solution.
-        self._preprocessors.append(
-            self._config.transformer.mixer.rotary.get_layer(
-                TensorDim("kv_channels", self._config.transformer.mixer.kv_channels)
-            )
-        )
-        if self._use_flash_attention:
-            self._preprocessors.append(
-                FlashAttnVarlenPreprocessor(self._config.transformer.mixer, self._distributed_config)
-            )
-        else:
-            self._preprocessors.append(
-                BackupAttentionPreprocessor(self._config.transformer.mixer, self._distributed_config)
-            )
-
-        if self._config.enable_dpo:  # TODO better way to pass in?
-            self._preprocessors.append(PreferenceSpanPreprocessor(self._config, self._distributed_config))
+        self._preprocessors: list[Preprocessor] = self._config.get_preprocessors(distributed_config)
 
     def _get_output_layers(self) -> list[Layer]:
         layers = []
-        for i in range(self._config.prediction_heads):
+        for i in range(self._config.output_layer.prediction_heads):
             if i > 0:
                 layers.append(
                     self._get_block(
@@ -78,7 +57,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                         f"MPT head {i} block",
                         # The last layer only returns the transformer output.
                         # The previous layers return a stack of shared_hidden and transformer_output.
-                        i < self._config.prediction_heads - 1,
+                        i < self._config.output_layer.prediction_heads - 1,
                     )
                 )
             layers.append(self._get_head(i))
@@ -93,7 +72,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                     f"Block {i + 1}",
                     # The last layer only returns the transformer output.
                     # The previous layers return a stack of shared_hidden and transformer_output.
-                    self._config.prediction_heads > 1 and i == self._config.transformer.num_layers - 1,
+                    self._config.output_layer.prediction_heads > 1 and i == self._config.transformer.num_layers - 1,
                 )
                 for i in range(self._config.transformer.num_layers)
             ],
@@ -106,31 +85,37 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
         name: str,
         return_input: bool = False,
     ):
-        lr_scale = (
-            None
-            if self._config.transformer.per_layer_lr_scale is None
-            else self._config.transformer.per_layer_lr_scale[block_index]
-        )
-        return TransformerBlock(
-            self._config.transformer,
+        return self._config.transformer.get_layer(
             self._distributed_config,
-            self._hidden_dim,
-            block_index,
-            name,
-            lr_scale,
-            return_input,
+            hidden_dim=self._hidden_dim,
+            block_index=block_index,
+            name=name,
+            lr_scale=None,
+            peft=self._config.peft,
+            return_input=return_input,
         )
 
     def _get_embeddings(self):
-        return LanguageModelEmbedding(self._config, self._distributed_config, self._hidden_dim, 0, "Embeddings")
+        return self._config.embeddings_layer.get_layer(
+            self._config.transformer,
+            self._distributed_config,
+            hidden_dim=self._hidden_dim,
+            block_index=0,
+            name="Embeddings",
+            lr_scale=None,
+            peft=self._config.peft,
+        )
 
     def _get_head(self, prediction_distance):
-        return LanguageModelHead(
-            self._config,
+        return self._config.output_layer.get_layer(
+            self._config.transformer,
             self._distributed_config,
-            self._hidden_dim,
-            max(self._config.transformer.num_layers + prediction_distance, 1),
-            f"Language model head {prediction_distance}",
+            self._config.embeddings_layer,
+            hidden_dim=self._hidden_dim,
+            block_index=max(self._config.transformer.num_layers + prediction_distance, 1),
+            name=f"Language model head {prediction_distance}",
+            lr_scale=None,
+            peft=self._config.peft,
             prediction_distance=prediction_distance,
         )
 
@@ -148,7 +133,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
         else:
             micro_batch_size, sequence_length = batch_meta.shape
             if phase != PhaseType.inference:
-                sequence_length -= self._config.prediction_heads
+                sequence_length -= self._config.output_layer.prediction_heads
             micro_sequence_length = sequence_length
             truncate_documents = True
 
@@ -264,7 +249,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
         _, common_kwargs = preprocessed_meta[0]
         sequence_q = common_kwargs[AttentionKwargs.sequence_q_dim].size
         sequence_first = common_kwargs[AttentionKwargs.sequence_first]
-        prediction_heads: int = self._config.prediction_heads
+        prediction_heads: int = self._config.output_layer.prediction_heads
 
         batch.token_ids = batch.token_ids.to(
             device=self._distributed.device,
@@ -346,7 +331,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                                     loss_mask[start : end + 1, idx] = False
                                 else:
                                     loss_mask[idx, start : end + 1] = False
-                            if self._config.distillation_model is not None:
+                            if self._config.output_layer.distillation_model is not None:
                                 kwargs[LanguageModelKwargs.loss_mask] = loss_mask
                             labels = torch.where(loss_mask, labels, -100)
                 kwargs[LanguageModelKwargs.labels] = labels
@@ -363,7 +348,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
         return self.layers[0]
 
     @property
-    def transformer_layers(self) -> list[TransformerBlock]:
+    def transformer_layers(self) -> list[Block]:
         return self.layers[1:-1]
 
     @property
@@ -372,17 +357,17 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
 
     @property
     def model_head_indices(self) -> list[int]:
-        return sorted([len(self) - 1 - 2 * i for i in range(self._config.prediction_heads)])
+        return sorted([len(self) - 1 - 2 * i for i in range(self._config.output_layer.prediction_heads)])
 
     def get_tied_weights(self) -> dict[str, tuple[ParameterMeta, tuple[int, ...]]]:
-        if self._config.tie_word_embeddings:
+        if self._config.output_layer.tied_weight:
             return {
                 WORD_EMBEDDINGS_WEIGHT: (
                     self.embedding.word_embeddings_weight,
                     (0, *self.model_head_indices),
                 )
             }
-        elif self._config.prediction_heads > 1:
+        elif self._config.output_layer.prediction_heads > 1:
             return {
                 OUTPUT_WEIGHTS: (
                     self.model_head.output_weights,
@@ -415,22 +400,22 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                         count=self._config.transformer.num_layers,
                     )
                 )
-        if self._config.logit_z_loss:
+        if self._config.output_layer.logit_z_loss:
             LossDef(name=LanguageModelLossNames.z_loss, formatted_name="logit z loss", count=1)
 
-        if self._config.enable_dpo:
+        if self._config.output_layer.enable_dpo:
             loss_defs.append(LossDef(name=LanguageModelLossNames.dpo_loss, formatted_name="dpo loss", count=1))
 
-        if self._config.distillation_model is not None:
+        if self._config.output_layer.distillation_model is not None:
             loss_defs.append(
                 LossDef(name=LanguageModelLossNames.distillation_loss, formatted_name="distillation loss", count=1)
             )
-            if self._config.language_model_loss_factor > 0.0:
+            if self._config.output_layer.language_model_loss_factor > 0.0:
                 loss_defs.append(
                     LossDef(name=LanguageModelLossNames.distil_lm_loss, formatted_name="distillation lm loss", count=1)
                 )
 
-        for i in range(self._config.prediction_heads):
+        for i in range(self._config.output_layer.prediction_heads):
             loss_defs.append(
                 LossDef(
                     name=LanguageModelLossNames.multi_token_prediction_loss(i),
@@ -452,7 +437,9 @@ class GPTModel[ConfigType: GPTModelConfig](FastLLMModel[ConfigType]):
 
         consumed_tokens_per_iteration = sequence_length * batch_size
 
-        num_transformer_layers = transformer_config.num_layers + self._config.base_model.prediction_heads - 1
+        num_transformer_layers = (
+            transformer_config.num_layers + self._config.base_model.output_layer.prediction_heads - 1
+        )
         transformer_flops_base = (
             2 * checkpoint_activations_factor * consumed_tokens_per_iteration * num_transformer_layers
         )
@@ -477,8 +464,8 @@ class GPTModel[ConfigType: GPTModelConfig](FastLLMModel[ConfigType]):
             6
             * consumed_tokens_per_iteration
             * transformer_config.hidden_size
-            * self._config.base_model.vocab_size
-            * self._config.base_model.prediction_heads
+            * self._config.base_model.embeddings_layer.vocab_size
+            * self._config.base_model.output_layer.prediction_heads
         )
 
         # Attention-matrix computation

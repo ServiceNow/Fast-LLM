@@ -88,7 +88,7 @@ def test_pretrained_config(load_config: ModelConfigType, result_path):
                     "num_layers": 12,  # Default
                     "hidden_size": 1024,  # Default
                 },
-                "tie_word_embeddings": False,
+                "output_layer": {"tied_weight": False},
             },
             "multi_stage": {"zero_stage": 3},
             "distributed": {"training_dtype": "bfloat16"},
@@ -107,10 +107,10 @@ def test_pretrained_config(load_config: ModelConfigType, result_path):
             },
             # rotary: Don't override nested.
             "normalization": {"implementation": "triton"},  # Update non-default nested
-            "peft": {"type": "lora", "freeze_others": False},  # Update default nested, change type
             "hidden_size": 512,  # Override, affects derived value (kv channels)
         },
-        "vocab_size": 1000,
+        "embeddings_layer": {"vocab_size": 1000},
+        "peft": {"type": "lora", "freeze_others": False},  # Update default nested, change type
     }
     pretrained_config = PretrainedGPTModelConfig.from_dict(
         {
@@ -143,23 +143,19 @@ def test_pretrained_config(load_config: ModelConfigType, result_path):
                     "activation_type": "silu",  # Implicit default, non-default value
                 },
                 "normalization": {"type": "rms_norm", "implementation": "triton"},
-                "peft": {"type": "lora", "freeze_others": False, "layers": ["query", "value"]},
                 "num_layers": 12,
                 "hidden_size": 512,
             },
-            "tie_word_embeddings": False,
-            "vocab_size": 1000,
+            "embeddings_layer": {"vocab_size": 1000},
+            "output_layer": {"tied_weight": False},
+            "peft": {"type": "lora", "freeze_others": False},
         }
     else:
-        base_model_update["transformer"]["peft"] = {
-            "type": "lora",
-            "freeze_others": False,
-            "layers": ["query", "value"],
-        }
         base_model_update["transformer"]["normalization"]["type"] = "layer_norm"
         base_model_update["transformer"]["mixer"]["type"] = "attention"
         base_model_update["transformer"]["mixer"]["rotary"] = {"type": "none"}
         base_model_update["transformer"]["mlp"] = {"type": "mlp"}
+        base_model_update["peft"] = {"type": "lora", "freeze_others": False}
         expected_config["base_model"] = base_model_update
 
     check_equal_nested(serialized_config, expected_config)

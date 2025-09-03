@@ -1,8 +1,6 @@
 import logging
 import typing
 
-from fast_llm.layers.attention.block import TransformerBlock
-from fast_llm.layers.ssm.block import SSMBlock
 from fast_llm.models.gpt.model import GPTBaseModel, GPTInferenceRunner, GPTModel
 from fast_llm.models.ssm.config import HybridSSMBaseModelConfig, HybridSSMModelConfig, SSMBlockType
 
@@ -29,33 +27,20 @@ class HybridSSMBaseModel[ConfigType: HybridSSMBaseModelConfig](GPTBaseModel[Conf
             # Decoder block
             block_type = self._config.hybrid_block_layout[block_index - 1]
 
-        lr_scale = (
-            None
-            if self._config.transformer.per_layer_lr_scale is None
-            else self._config.transformer.per_layer_lr_scale[block_index]
-        )
-
         if block_type == SSMBlockType.transformer:
-            return TransformerBlock(
-                self._config.transformer,
-                self._distributed_config,
-                self._hidden_dim,
-                block_index,
-                name,
-                lr_scale,
-                return_input,
-            )
+            block_config = self._config.transformer
         else:
-            return SSMBlock(
-                self._config.transformer,
-                self._config.ssm,
-                self._distributed_config,
-                self._hidden_dim,
-                block_index,
-                name,
-                lr_scale,
-                return_input,
-            )
+            block_config = self._config.transformer.from_dict(self._config.transformer, {"mixer": self._config.ssm})
+
+        return block_config.get_layer(
+            self._distributed_config,
+            hidden_dim=self._hidden_dim,
+            block_index=block_index,
+            name=name,
+            lr_scale=None,
+            peft=self._config.peft,
+            return_input=return_input,
+        )
 
 
 class HybridSSMModel[ConfigType: HybridSSMModelConfig](GPTModel[ConfigType]):

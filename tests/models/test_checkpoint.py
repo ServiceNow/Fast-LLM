@@ -301,7 +301,11 @@ def test_huggingface_model(model_testing_config, get_convert_path):
         )
     )
     test_input = torch.randint(
-        0, model_ref.config.fast_llm_config.base_model.vocab_size, size=(4, 100), dtype=torch.int64, device="cuda"
+        0,
+        model_ref.config.fast_llm_config.base_model.embeddings_layer.vocab_size,
+        size=(4, 100),
+        dtype=torch.int64,
+        device="cuda",
     )
     output_ref = model_ref(test_input)
     model_from_fast_llm = hf_class.from_pretrained(fast_llm_path)

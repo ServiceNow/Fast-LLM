@@ -6,7 +6,7 @@ import torch
 
 from fast_llm.core.distributed import ReduceOp
 from fast_llm.core.ops import reduce_op
-from fast_llm.engine.config_utils.initialization import Initializer, LambdaInitializer
+from fast_llm.engine.config_utils.initialization import Initialization, Initializer, LambdaInitializer
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import DistributedDim, DistributedDimNames
 from fast_llm.engine.distributed.distributed import Distributed
@@ -238,7 +238,7 @@ class ParameterMeta(TensorMeta):
         *,
         tensor_name: str = "",
         dims: tuple[TensorDim, ...],
-        init_method: "Initializer | typing.Callable[[ParameterMeta, torch.Tensor, torch.Generator], None] | None" = None,
+        init_method: "Initialization | typing.Callable[[ParameterMeta, torch.Tensor, torch.Generator], None] | None" = None,
         weight_decay: bool = True,
         # Pass a list to split the parameter in contiguous (dim=0) chunks of equal size for optimization.
         lr_scale: float | None | tuple[float | None, ...] = None,
@@ -247,7 +247,9 @@ class ParameterMeta(TensorMeta):
         allow_no_grad: bool = False,
     ):
         super().__init__(data, tensor_name=tensor_name, dims=dims)
-        if init_method is not None and not isinstance(init_method, Initializer):
+        if isinstance(init_method, Initialization):
+            init_method = init_method.get_initializer()
+        elif init_method is not None:
             # Support non-wrapped callables for convenience.
             assert callable(init_method)
             init_method = LambdaInitializer(init_method)
