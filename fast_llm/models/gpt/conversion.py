@@ -217,21 +217,21 @@ class CommonHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
             # Self-attn
             (
                 f"{fast_llm_layer_name}.mixer.query",
-                f"{hf_layer_name}.mixer.q_proj",
+                f"{hf_layer_name}.self_attn.q_proj",
                 # TODO: Fix
                 transformer_config.add_linear_biases,
                 QueryWeightConverter,
             ),
             (
                 f"{fast_llm_layer_name}.mixer.key_value",
-                (f"{hf_layer_name}.mixer.k_proj", f"{hf_layer_name}.mixer.v_proj"),
+                (f"{hf_layer_name}.self_attn.k_proj", f"{hf_layer_name}.self_attn.v_proj"),
                 # TODO: Fix
                 transformer_config.add_linear_biases,
                 KeyValueWeightConverter,
             ),
             (
                 f"{fast_llm_layer_name}.mixer.dense",
-                f"{hf_layer_name}.mixer.o_proj",
+                f"{hf_layer_name}.self_attn.o_proj",
                 # TODO: Fix
                 transformer_config.add_linear_biases,
                 WeightConverter,

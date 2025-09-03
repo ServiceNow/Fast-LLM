@@ -121,7 +121,11 @@ class Stage[ConfigType: StageConfig](StageBase[ConfigType]):
                 # Last layer does not provide output
                 if output is not None:
                     meta = self._meta_outputs[i]
-                    output_global, _ = meta.local_to_global(output.detach())
+                    if output.shape == meta.shape:
+                        output_global, _ = meta.local_to_global(output.detach())
+                    else:
+                        # TODO: Handle variable shape.
+                        output_global = output
                     kwargs["hidden_states"][self._layer_range[i]] = {
                         "layer_type": type(layer).__name__,
                         "tensor": output_global,
