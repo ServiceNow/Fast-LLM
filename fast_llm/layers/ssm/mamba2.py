@@ -3,15 +3,14 @@ import typing
 
 import torch
 
-from fast_llm.engine.config_utils.initialization import init_normal_, init_ones_
+from fast_llm.engine.config_utils.initialization import init_normal_, init_ones_, init_uniform_centered_
 from fast_llm.engine.config_utils.tensor_dim import CompositeTensorDim, ConcatenatedTensorDim, TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
 from fast_llm.functional.config import ActivationType
 from fast_llm.layers.block.block import BlockLayer
 from fast_llm.layers.block.config import BlockConfig, BlockDimNames, BlockKwargs
 from fast_llm.layers.common.peft.config import PeftConfig
-from fast_llm.layers.ssm.config import Mamba2Config
-from fast_llm.layers.ssm.mamba import init_A, init_dtprojbias
+from fast_llm.layers.ssm.config import Mamba2Config, init_a, init_dtprojbias
 from fast_llm.utils import div
 
 try:
@@ -112,19 +111,15 @@ class Mamba2[ConfigType: Mamba2Config](BlockLayer[ConfigType]):
         self.dt_proj = self._config.dt_layer.get_layer(
             dt_rank_dim,
             inner_dim,
-            default_weight_initialization=self._config.dt_init.get_init_method(
-                self._config.dt_rank**-0.5 * self._config.dt_scale
-            ),
-            default_bias_initialization=init_dtprojbias(
-                self._config.dt_max, self._config.dt_min, self._config.dt_init_floor
-            ),
+            default_weight_initialization=init_uniform_centered_(self._config.dt_rank**-0.5),
+            default_bias_initialization=init_dtprojbias(),
             sequence_parallel=self._sequence_parallel,
             lr_scale=self._lr_scale,
             peft=self._peft,
         )
         self.A_log = self._config.a_log_weight.get_parameter(
             (inner_dim, state_dim),
-            default_initialization=init_A(self._config.state_size, self._config.d_inner),
+            default_initialization=init_a(self._config.state_size, self._config.d_inner),
             weight_decay=False,
             lr_scale=self._lr_scale,
             peft=self._peft,
