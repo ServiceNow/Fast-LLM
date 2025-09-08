@@ -26,6 +26,7 @@ class VisionAdapter(Layer):
             bias=True,
             weight_init_method=init_normal_(std=config.adapter_init_method_std),
             bias_init_method=init_normal_(std=config.adapter_init_method_std),
+            lr_scale=config.adapter_lr_scale,
         )
         self.layer_2 = Linear(
             tensor_space[VisionEncoderDimNames.adapter_size],
@@ -33,6 +34,7 @@ class VisionAdapter(Layer):
             bias=True,
             weight_init_method=init_normal_(std=config.adapter_init_method_std),
             bias_init_method=init_normal_(std=config.adapter_init_method_std),
+            lr_scale=config.adapter_lr_scale,
         )
 
     def forward(
