@@ -70,7 +70,7 @@ def convert_layers(transformer, mamba_config, hybrid_block_layout, init_with_kqv
 
 
 @click.command()
-@click.option("--m2_indexes", type=int, nargs=-1, required=True)
+@click.option("--m2_indexes", type=int, multiple=True, required=True)
 @click.option("--hybrid_checkpoint", type=str, required=True)
 @click.option("--save_dir", type=str, required=True)
 def main(m2_indexes: list, hybrid_checkpoint: str, save_dir: str):
