@@ -6,7 +6,7 @@ import torch
 import torch.nn
 
 from fast_llm.config import Configurable
-from fast_llm.engine.base_model.config import BaseModelConfig
+from fast_llm.engine.base_model.config import BaseModelConfig, ResourceUsageConfig
 from fast_llm.engine.distributed.config import DistributedConfig, PhaseType
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.tensor import ParameterMeta, TensorMeta
@@ -42,6 +42,9 @@ class Layer(Module):
         self, input_: torch.Tensor, kwargs: dict, losses: dict | None = None, metrics: dict | None = None
     ) -> torch.Tensor:
         pass
+
+    def get_compute_usage(self, input_: TensorMeta, kwargs: dict[str, typing.Any], config: ResourceUsageConfig) -> int:
+        raise NotImplementedError()
 
 
 class Sequential(Layer):
@@ -94,7 +97,8 @@ class BaseModel[ConfigType: BaseModelConfig](Configurable[ConfigType], Sequentia
         distributed_config: DistributedConfig,
     ):
         super().__init__(config, distributed_config)
-
+        for key, value in self.named_modules():
+            value.module_name = key
         for key, value in self.named_parameters():
             Assert.custom(isinstance, value, ParameterMeta)
             # Rename to the parameter full name

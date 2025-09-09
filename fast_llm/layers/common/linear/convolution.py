@@ -1,7 +1,8 @@
 import torch
 
+from fast_llm.engine.base_model.config import ResourceUsageConfig
 from fast_llm.functional.config import ActivationType
-from fast_llm.tensor import ParameterMeta
+from fast_llm.tensor import ParameterMeta, TensorMeta
 
 try:
     from causal_conv1d import causal_conv1d_fn as _causal_conv1d_fn  # noqa
@@ -51,3 +52,6 @@ class CausalConv1d(torch.nn.Module):
             self.bias,
             activation=(None if self._activation == ActivationType.identity else self._activation.value),
         )
+
+    def get_compute_usage(self, input_: TensorMeta, config: ResourceUsageConfig) -> int:
+        raise NotImplementedError()

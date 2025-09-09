@@ -5,11 +5,11 @@ import typing
 
 import yaml
 
-from fast_llm.config import Config, Field, FieldHint, FieldVerboseLevel, config_class
+from fast_llm.config import Config, Field, FieldHint, FieldVerboseLevel, check_field, config_class
 from fast_llm.engine.config_utils.logging import TensorLogs, TensorLogsConfig, configure_logging
 from fast_llm.engine.config_utils.runnable import RunnableConfig
 from fast_llm.engine.distributed.config import DistributedConfig
-from fast_llm.utils import log, set_global_variables
+from fast_llm.utils import Assert, log, set_global_variables
 
 if typing.TYPE_CHECKING:
     from fast_llm.engine.distributed.distributed import Distributed
@@ -57,6 +57,12 @@ class RunConfig(Config):
         default=False,
         desc="Global switch to use triton kernels for linear layers. These may be slightly slower than the defaults.",
         hint=FieldHint.performance,
+    )
+    model_debug_level: int = Field(
+        default=0,
+        desc="Debugging level for the model, ex. for printing intermediate model states.",
+        hint=FieldHint.logging,
+        valid=check_field(Assert.geq, 0),
     )
 
     def _validate(self):
@@ -204,15 +210,21 @@ class Run:
         return path if mode is None else path.open(mode)
 
     def __enter__(self):
+        from fast_llm.logging import set_model_debug_level
+
         assert not self._is_running
         global _run
         _run = self
         TensorLogs.reset(self._config.tensor_logs)
+        set_model_debug_level(self._config.model_debug_level)
 
     def __exit__(self, exc_type, exc_val: OSError, exc_tb):
+        from fast_llm.logging import set_model_debug_level
+
         assert self._is_running
         global _run
         self.save_logged_tensors("none")
+        set_model_debug_level(0)
         _run = None
 
 

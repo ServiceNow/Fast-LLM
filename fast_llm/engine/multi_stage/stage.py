@@ -5,6 +5,7 @@ import typing
 import torch
 
 from fast_llm.core.distributed import check_parallel_match
+from fast_llm.engine.base_model.config import ResourceUsageConfig
 from fast_llm.engine.config_utils.run import log_pipeline_parallel_main_rank
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.engine.multi_stage.config import StageConfig, StageMode
@@ -81,6 +82,7 @@ class Stage[ConfigType: StageConfig](StageBase[ConfigType]):
 
     def forward_meta(self, input_: TensorMeta, kwargs: dict) -> TensorMeta:
         # Store the meta inputs and outputs, for debugging only.
+        # TODO: Varies if there are multiple schedules.
         self._meta_inputs, self._meta_outputs = [], []
         # TODO: use layer.forward_meta
         for layer in self._layers:
@@ -92,6 +94,17 @@ class Stage[ConfigType: StageConfig](StageBase[ConfigType]):
             )
             self._meta_outputs.append(input_)
         return input_
+
+    def get_compute_usage(self, input_: TensorMeta, kwargs: dict[str, typing.Any], config: ResourceUsageConfig) -> int:
+        total = 0
+        for layer in self._layers:
+            total += layer.get_compute_usage(input_, kwargs, config)
+            input_ = layer(
+                input_,
+                kwargs,
+                losses={},
+            )
+        return total
 
     def forward(
         self,

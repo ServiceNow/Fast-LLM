@@ -20,12 +20,12 @@ from fast_llm.tensor import TensorMeta
 from fast_llm.utils import div
 
 
-def convert_rotary_complex_to_real(tensor: torch.Tensor, kv_channels: int, dim: int) -> torch.Tensor:
-    return tensor.unflatten(dim, (-1, div(kv_channels, 2), 2)).movedim(dim + 1, dim + 2).flatten(dim, dim + 2)
+def convert_rotary_complex_to_real(tensor: torch.Tensor, head_size: int, dim: int) -> torch.Tensor:
+    return tensor.unflatten(dim, (-1, div(head_size, 2), 2)).movedim(dim + 1, dim + 2).flatten(dim, dim + 2)
 
 
-def convert_rotary_real_to_complex(tensor: torch.Tensor, kv_channels: int, dim: int) -> torch.Tensor:
-    return tensor.unflatten(dim, (-1, 2, div(kv_channels, 2))).movedim(dim + 1, dim + 2).flatten(dim, dim + 2)
+def convert_rotary_real_to_complex(tensor: torch.Tensor, head_size: int, dim: int) -> torch.Tensor:
+    return tensor.unflatten(dim, (-1, 2, div(head_size, 2))).movedim(dim + 1, dim + 2).flatten(dim, dim + 2)
 
 
 def apply_rotary_embeddings(tensor: torch.Tensor, rope_frequencies: torch.Tensor) -> torch.Tensor:
@@ -45,10 +45,10 @@ class Rotary[ConfigType: RotaryConfig](Configurable[ConfigType], torch.nn.Module
     def __init__(
         self,
         config: ConfigType,
-        kv_channels_dim: TensorDim,
+        head_size_dim: TensorDim,
     ):
         super().__init__(config)
-        self._kv_channels_dim = kv_channels_dim
+        self._head_size_dim = head_size_dim
 
     @abc.abstractmethod
     def forward(
@@ -88,7 +88,7 @@ class DefaultRotary[ConfigType: DefaultRotaryConfig](Rotary[ConfigType]):
                 scalar_dim,
                 kwargs[AttentionKwargs.sequence_q_dim],
                 scalar_dim,
-                self._kv_channels_dim,
+                self._head_size_dim,
             ),
             tensor_name=AttentionKwargs.rotary_freq_q,
         )
@@ -97,7 +97,7 @@ class DefaultRotary[ConfigType: DefaultRotaryConfig](Rotary[ConfigType]):
                 scalar_dim,
                 kwargs[AttentionKwargs.sequence_q_dim],
                 scalar_dim,
-                self._kv_channels_dim,
+                self._head_size_dim,
             ),
             tensor_name=AttentionKwargs.rotary_freq_k,
         )
@@ -117,32 +117,32 @@ class DefaultRotary[ConfigType: DefaultRotaryConfig](Rotary[ConfigType]):
 
         self._rotary_embedding_frequencies = self._get_frequencies(
             sequence_length,
-            self._kv_channels_dim.global_size,
+            self._head_size_dim.global_size,
             device=device,
         )
 
-    def _get_frequencies(self, sequence_length: int, kv_channels: int, device: torch.device) -> torch.Tensor:
+    def _get_frequencies(self, sequence_length: int, head_size: int, device: torch.device) -> torch.Tensor:
         # Calculate the complex frequencies (https://blog.eleuther.ai/rotary-embeddings/)
         # `exp(i * n * a) = cos(n * a) + i sin(n * a)`,
-        # `a = theta ** - (2 * (channel // 2) / kv_channels)`,
+        # `a = theta ** - (2 * (channel // 2) / head_size)`,
         # where n is the position in the sequence.
         # We preform the calculation in high precision because it matters for rotary embeddings.
         positions = torch.arange(sequence_length, device=device, dtype=torch.float64)
-        angles = torch.outer(positions, self._get_angle_scales(kv_channels, device))
+        angles = torch.outer(positions, self._get_angle_scales(head_size, device))
         frequencies = torch.polar(torch.ones_like(angles), angles)[None, :, None, :].to(torch.complex64)
         if not self._config.complex_format:
             frequencies = convert_rotary_complex_to_real(
-                torch.view_as_real(frequencies).flatten(-2), kv_channels, 3
+                torch.view_as_real(frequencies).flatten(-2), head_size, 3
             ).contiguous()
         return frequencies
 
-    def _get_angle_scales(self, kv_channels: int, device: torch.device) -> torch.Tensor:
-        return self._config.theta ** -torch.arange(0, 1, 2 / kv_channels, device=device, dtype=torch.float64)
+    def _get_angle_scales(self, head_size: int, device: torch.device) -> torch.Tensor:
+        return self._config.theta ** -torch.arange(0, 1, 2 / head_size, device=device, dtype=torch.float64)
 
 
 class Llama3Rotary[ConfigType: Llama3RotaryConfig](DefaultRotary[ConfigType]):
-    def _get_angle_scales(self, kv_channels: int, device: torch.device) -> torch.Tensor:
-        scales = super()._get_angle_scales(kv_channels, device)
+    def _get_angle_scales(self, head_size: int, device: torch.device) -> torch.Tensor:
+        scales = super()._get_angle_scales(head_size, device)
         low_frequency_wavelength = self._config.original_context_length / self._config.low_frequency_factor
         high_frequency_wavelength = self._config.original_context_length / self._config.high_frequency_factor
         new_scales = []
@@ -167,21 +167,21 @@ class YarnRotary[ConfigType: YarnRotaryConfig](DefaultRotary[ConfigType]):
     [original paper](https://arxiv.org/abs/2309.00071)
     """
 
-    def _get_frequencies(self, sequence_length: int, kv_channels: int, device: torch.device) -> torch.Tensor:
-        return super()._get_frequencies(sequence_length, kv_channels, device) * self._config.attention_factor
+    def _get_frequencies(self, sequence_length: int, head_size: int, device: torch.device) -> torch.Tensor:
+        return super()._get_frequencies(sequence_length, head_size, device) * self._config.attention_factor
 
-    def _get_angle_scales(self, kv_channels: int, device: torch.device) -> torch.Tensor:
-        scales = super()._get_angle_scales(kv_channels, device)
+    def _get_angle_scales(self, head_size: int, device: torch.device) -> torch.Tensor:
+        scales = super()._get_angle_scales(head_size, device)
         # TODO: max_position_embeddings or original_context_length?
         # see https://huggingface.co/deepseek-ai/DeepSeek-V3/blob/main/modeling_deepseek.py#L304
-        low = max(math.floor(self._get_correction(self._config.beta_fast, kv_channels)), 0)
-        high = min(math.ceil(self._get_correction(self._config.beta_slow, kv_channels)), kv_channels - 1)
+        low = max(math.floor(self._get_correction(self._config.beta_fast, head_size)), 0)
+        high = min(math.ceil(self._get_correction(self._config.beta_slow, head_size)), head_size - 1)
         if low == high:
             high += 0.001  # Prevent singularity
 
         # Get n-dimensional rotational scaling corrected for extrapolation
         extrapolation_factor = torch.clamp(
-            (torch.arange(kv_channels // 2, dtype=torch.float32, device=scales.device) - low) / (high - low), 0, 1
+            (torch.arange(head_size // 2, dtype=torch.float32, device=scales.device) - low) / (high - low), 0, 1
         )
         return scales / self._config.scale_factor * extrapolation_factor + scales * (1 - extrapolation_factor)
 

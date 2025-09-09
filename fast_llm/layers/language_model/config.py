@@ -7,6 +7,7 @@ from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.functional.config import CrossEntropyImpl, DistillationLossImpl
 from fast_llm.layers.block.config import BlockConfig, BlockKwargs, BlockLayerConfig
+from fast_llm.layers.common.normalization.config import NormalizationConfig
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.utils import Assert
 
@@ -63,6 +64,18 @@ class LanguageModelEmbeddingsConfig(BlockLayerConfig):
         hint=FieldHint.architecture,
         valid=check_field(Assert.gt, 0),
     )
+    dropout: float = Field(
+        default=0.0,
+        desc="Dropout applied to the embedding layer.",
+        hint=FieldHint.feature,
+        valid=check_field(Assert.geq, 0),
+    )
+    full_precision_residual: bool = Field(
+        default=False,
+        desc="Store the residuals for the transformer in full precision (`optimization_dtype`).",
+        hint=FieldHint.stability,
+    )
+
     # Tensor-parallel word embeddings
     # (Default init std is different, dropout won't match, needs seq_first = False.)
     # (disable to allow for sequence-parallel embeddings and logits, better for larger models)
@@ -93,6 +106,10 @@ class LanguageModelEmbeddingsConfig(BlockLayerConfig):
 @config_class()
 class LanguageModelHeadConfig(BlockLayerConfig):
     _abstract = False
+    normalization: NormalizationConfig = Field(
+        desc="Configuration for the final normalization layer.",
+        hint=FieldHint.architecture,
+    )
     # TODO: Cleanup
     output_weight: ParameterConfig = Field(
         desc="Configuration for the LM output layer (weight). Ignored for tied embeddings",
@@ -219,25 +236,19 @@ class LanguageModelHeadConfig(BlockLayerConfig):
 
     def get_layer(
         self,
-        block_config: "BlockConfig",
         distributed_config: DistributedConfig,
         embeddings_config: LanguageModelEmbeddingsConfig,
         *,
         hidden_dim: TensorDim,
-        block_index: int,
-        name: str,
         lr_scale: float | None,
         peft: PeftConfig | None,
         prediction_distance: int = 0,
     ):
         return self.layer_class(
             self,
-            block_config,
             distributed_config,
             embeddings_config,
             hidden_dim=hidden_dim,
-            block_index=block_index,
-            name=name,
             lr_scale=combine_lr_scales(lr_scale, self.lr_scale),
             peft=peft,
             prediction_distance=prediction_distance,

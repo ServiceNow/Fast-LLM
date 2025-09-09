@@ -1,6 +1,8 @@
 import abc
 import dataclasses
+import functools
 import logging
+import math
 import time
 import typing
 
@@ -203,12 +205,10 @@ class LossEvaluator[ConfigType: LossEvaluatorConfig](Evaluator[ConfigType]):
         )
         end_time = time.perf_counter()
         time_per_iteration = (end_time - begin_time) / num_iters
-        model_tflops, hardware_tflops = self._multi_stage.get_tflops(
-            phase,
-            time_per_iteration,
-            self._batch_config.batch_size,
-            self._batch_config.sequence_length,
-        )
+
+        model_compute, hardware_compute = self._schedule.compute_usage
+        model_tflops = math.nan if model_compute is None else model_compute / time_per_iteration
+        hardware_tflops = math.nan if hardware_compute is None else hardware_compute / time_per_iteration
         # TODO add other relevant eval metrics
         metrics = {
             "batch_size": self._batch_config.batch_size,
@@ -218,7 +218,7 @@ class LossEvaluator[ConfigType: LossEvaluatorConfig](Evaluator[ConfigType]):
             "hardware_tflops": hardware_tflops,
             "tokens_per_sec_per_gpu": (
                 (self._batch_config.sequence_length * self._batch_config.batch_size)
-                / self._schedule._distributed.world_size
+                / self._schedule._distributed_config.world_size
                 / time_per_iteration
             ),
             **get_and_reset_memory_usage_mib(),
@@ -239,6 +239,10 @@ class LossEvaluator[ConfigType: LossEvaluatorConfig](Evaluator[ConfigType]):
             num_workers=self._data_load_num_proc,
             prefetch_factor=prefetch_factor,
         )
+
+    @functools.cached_property
+    def compute_usage(self) -> tuple[int | None, int | None]:
+        return self._schedule.get_compute_usage(hardware=False), self._schedule.get_compute_usage(hardware=True)
 
 
 # NOTE: This is not a standalone runnable; it's a submodule of Trainer used for code encapsulation.

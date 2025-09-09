@@ -94,6 +94,13 @@ class SSMConfig(MixerConfig):
         hint=FieldHint.core,
     )
 
+    # Model options
+    add_linear_biases: bool = Field(
+        default=True,
+        desc="Add biases to linear layers. May be overridden for individual layers.",
+        hint=FieldHint.architecture,
+    )
+
     def set_defaults(self, hidden_size: int):
         if self.d_inner is None:
             self.d_inner = 2 * hidden_size

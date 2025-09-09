@@ -81,8 +81,8 @@ def test_pretrained_config(load_config: ModelConfigType, result_path):
                         "head_groups": 4,
                     },
                     "mlp": {
-                        "ffn_hidden_size": 4096,  # Implicit default, default value
-                        "activation_type": "silu",  # Implicit default, non-default value
+                        "intermediate_size": 4096,  # Implicit default, default value
+                        "activation": "silu",  # Implicit default, non-default value
                     },
                     "normalization": {"type": "rms_norm"},  # Nested
                     "num_layers": 12,  # Default
@@ -121,7 +121,6 @@ def test_pretrained_config(load_config: ModelConfigType, result_path):
             "pretrained": {"format": "fast_llm", "path": config_path, "load_config": load_config},
         }
     )
-    Assert.eq(pretrained_config.model.base_model.transformer.mixer.kv_channels, 64)
     serialized_config = pretrained_config.model.to_dict()
     expected_config = {"type": "gpt", "distributed": DistributedConfig().to_dict()}
 
@@ -139,15 +138,15 @@ def test_pretrained_config(load_config: ModelConfigType, result_path):
                 },
                 "mlp": {
                     "type": "mlp",
-                    "ffn_hidden_size": 4096,  # Implicit default, default value
-                    "activation_type": "silu",  # Implicit default, non-default value
+                    "intermediate_size": 4096,  # Implicit default, default value
+                    "activation": "silu",  # Implicit default, non-default value
                 },
                 "normalization": {"type": "rms_norm", "implementation": "triton"},
                 "num_layers": 12,
                 "hidden_size": 512,
             },
             "embeddings_layer": {"vocab_size": 1000},
-            "output_layer": {"tied_weight": False},
+            "output_layer": {"tied_weight": False, "normalization": {"type": "layer_norm"}},
             "peft": {"type": "lora", "freeze_others": False},
         }
     else:
@@ -155,9 +154,11 @@ def test_pretrained_config(load_config: ModelConfigType, result_path):
         base_model_update["transformer"]["mixer"]["type"] = "attention"
         base_model_update["transformer"]["mixer"]["rotary"] = {"type": "none"}
         base_model_update["transformer"]["mlp"] = {"type": "mlp"}
+        base_model_update["output_layer"] = {"normalization": {"type": "layer_norm"}}
         base_model_update["peft"] = {"type": "lora", "freeze_others": False}
         expected_config["base_model"] = base_model_update
 
+    print("IKEUFGH", serialized_config, expected_config)
     check_equal_nested(serialized_config, expected_config)
 
 

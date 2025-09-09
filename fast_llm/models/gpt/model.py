@@ -88,8 +88,6 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
         return self._config.transformer.get_layer(
             self._distributed_config,
             hidden_dim=self._hidden_dim,
-            block_index=block_index,
-            name=name,
             lr_scale=None,
             peft=self._config.peft,
             return_input=return_input,
@@ -97,23 +95,17 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
 
     def _get_embeddings(self):
         return self._config.embeddings_layer.get_layer(
-            self._config.transformer,
             self._distributed_config,
             hidden_dim=self._hidden_dim,
-            block_index=0,
-            name="Embeddings",
             lr_scale=None,
             peft=self._config.peft,
         )
 
     def _get_head(self, prediction_distance):
         return self._config.output_layer.get_layer(
-            self._config.transformer,
             self._distributed_config,
             self._config.embeddings_layer,
             hidden_dim=self._hidden_dim,
-            block_index=max(self._config.transformer.num_layers + prediction_distance, 1),
-            name=f"Language model head {prediction_distance}",
             lr_scale=None,
             peft=self._config.peft,
             prediction_distance=prediction_distance,
@@ -382,8 +374,8 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
         loss_defs = []
         if (
             isinstance(self._config.transformer.mlp, MoEMLPConfig)
-            and self._config.transformer.mlp.num_experts > 1
-            and self._config.transformer.mlp.expert_routing_type == RoutingType.topk
+            and self._config.transformer.mlp.experts > 1
+            and self._config.transformer.mlp.routing == RoutingType.topk
         ):
             loss_defs.append(
                 LossDef(
@@ -392,7 +384,7 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                     count=self._config.transformer.num_layers,
                 )
             )
-            if self._config.transformer.mlp.expert_z_loss_coefficient:
+            if self._config.transformer.mlp.z_loss_coefficient:
                 loss_defs.append(
                     LossDef(
                         name=MLPLossNames.router_z_loss,
@@ -428,66 +420,6 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
 
 class GPTModel[ConfigType: GPTModelConfig](FastLLMModel[ConfigType]):
     base_model_class: typing.ClassVar[type[GPTBaseModel]] = GPTBaseModel
-
-    def get_tflops(self, phase: PhaseType, elapsed_time_per_iteration, batch_size, sequence_length) -> tuple[int, int]:
-        # TODO: Do in model, automate/generalize, get other stats
-        """Get tflop/s/GPU from global-batch-size and elapsed-time"""
-        checkpoint_activations_factor = 3 if phase == PhaseType.training else 1
-        transformer_config = self._config.base_model.transformer
-
-        consumed_tokens_per_iteration = sequence_length * batch_size
-
-        num_transformer_layers = (
-            transformer_config.num_layers + self._config.base_model.output_layer.prediction_heads - 1
-        )
-        transformer_flops_base = (
-            2 * checkpoint_activations_factor * consumed_tokens_per_iteration * num_transformer_layers
-        )
-        dense_flops_base = transformer_flops_base * transformer_config.hidden_size
-        # Query, key, value, dense.
-        flops_per_iteration = (
-            2
-            * (transformer_config.mixer.num_attention_heads + transformer_config.mixer.head_groups)
-            * transformer_config.mixer.kv_channels
-            * dense_flops_base
-        )
-        # MLP
-        flops_per_iteration += (
-            (2 + transformer_config.mlp.gated)
-            * transformer_config.mlp.ffn_hidden_size
-            * dense_flops_base
-            * (transformer_config.mlp.num_experts_per_token if isinstance(transformer_config.mlp, MoEMLPConfig) else 1)
-        )
-
-        # LM-head
-        flops_per_iteration += (
-            6
-            * consumed_tokens_per_iteration
-            * transformer_config.hidden_size
-            * self._config.base_model.embeddings_layer.vocab_size
-            * self._config.base_model.output_layer.prediction_heads
-        )
-
-        # Attention-matrix computation
-        attn_flops_base = transformer_flops_base * transformer_config.mixer.projection_size
-        if transformer_config.mixer.window_size is None:
-            # Ignore masked values (s**2/2)
-            attn_flops = attn_flops_base * sequence_length
-            model_tflops = flops_per_iteration + attn_flops
-        else:
-            # s*w - w**2/2
-            attn_flops = (
-                2
-                * attn_flops_base
-                * transformer_config.mixer.window_size
-                * (1 - transformer_config.mixer.window_size / 2 / sequence_length)
-            )
-            model_tflops = flops_per_iteration + attn_flops
-
-        # Partial recomputation (normal is 2 ops * ckpt_factor = 6, adding 1 for recomputing Q x K)
-        hardware_flops = flops_per_iteration + 7 / 6 * attn_flops
-        ratio = elapsed_time_per_iteration * self._config.distributed.world_size * 1e12
-        return model_tflops / ratio, hardware_flops / ratio
 
 
 class GPTInferenceRunner(InferenceRunner):

@@ -38,34 +38,34 @@ class MLPConfig(MLPBaseConfig):
         desc="Configuration for the second MLP layer.",
         hint=FieldHint.architecture,
     )
-    ffn_hidden_size: int = Field(
-        default=None,
-        desc="Hidden dimension of the MLP intermediate state. Default: 4 * hidden_size.",
+    intermediate_size: int = Field(
+        default=4096,
+        desc="Hidden dimension of the MLP intermediate state.",
         hint=FieldHint.architecture,
         valid=check_field(Assert.gt, 0),
     )
+    add_linear_biases: bool = Field(
+        default=True,
+        desc="Add biases to linear layers. May be overridden for individual layers.",
+        hint=FieldHint.architecture,
+    )
     gated: bool = Field(default=False, desc="Enable gated MLP.", hint=FieldHint.architecture)
-    activation_type: ActivationType = Field(
+    activation: ActivationType = Field(
         default=None,
         desc="The MLP intermediate activation type. Default: SiLU for gated MLP, GeLU otherwise.",
         hint=FieldHint.core,
     )
     # normalization_implementation: NormalizationImplementation = NormalizationImplementation.auto
-    mlp_recompute_level: MLPRecomputeLevel = Field(
+    recompute_level: MLPRecomputeLevel = Field(
         default=MLPRecomputeLevel.none,
         desc="Set which of the MLP intermediate activations will be recomputed during the backward passes. This provides a trade-off between memory and speed.",
         hint=FieldHint.performance,
     )
 
-    def set_defaults(self, hidden_size: int):
-        if self.ffn_hidden_size is None:
-            with self._set_implicit_default():
-                self.ffn_hidden_size = 4 * hidden_size
-
     def _validate(self) -> None:
         with self._set_implicit_default():
-            if self.activation_type is None:
-                self.activation_type = ActivationType.silu if self.gated else ActivationType.gelu
+            if self.activation is None:
+                self.activation = ActivationType.silu if self.gated else ActivationType.gelu
 
         super()._validate()
 
@@ -86,48 +86,48 @@ class MoEMLPConfig(MLPConfig):
         desc="Configuration for the MoE router.",
         hint=FieldHint.feature,
     )
-    num_experts: int = Field(
+    experts: int = Field(
         default=1,
         desc="Number of MLP experts in a Mixture of Expert (MoE) model",
         hint=FieldHint.architecture,
         valid=check_field(Assert.gt, 0),
     )
-    num_shared_experts: int = Field(
+    shared_experts: int = Field(
         default=0,
         desc="Number of MLP experts that are shared between all tokens, i.e., always enabled.",
         hint=FieldHint.architecture,
         valid=check_field(Assert.geq, 0),
     )
-    num_experts_per_token: int = Field(
+    experts_per_token: int = Field(
         default=1,
         desc="Active experts for each token in a MoE model.",
         hint=FieldHint.architecture,
         valid=check_field(Assert.gt, 0),
     )
-    expert_routing_type: RoutingType = Field(
+    routing: RoutingType = Field(
         default=RoutingType.topk,
         desc="The routing method, i.e., the method used to assign experts to tokens.",
         hint=FieldHint.architecture,
     )
-    expert_auxiliary_loss_coefficient: float = Field(
+    auxiliary_loss_coefficient: float = Field(
         default=0.01,
         desc="Scale of the load balancing auxiliary loss for topk routing.",
         hint=FieldHint.feature,
         valid=check_field(Assert.geq, 0),
     )
-    expert_z_loss_coefficient: float = Field(
+    z_loss_coefficient: float = Field(
         default=0.0,
         desc="Regularize the router during training by applying Z-loss to the logits.",
         hint=FieldHint.feature,
         valid=check_field(Assert.geq, 0),
     )
-    moe_jitter_eps: float = Field(
+    jitter_eps: float = Field(
         default=0.0,
         desc="Regularize the router during training by applying a random multiplicative noise `uniform(1-eps, 1+eps)` to the logits.",
         hint=FieldHint.feature,
         valid=check_field(Assert.geq, 0),
     )
-    dropless_moe: bool = Field(
+    dropless: bool = Field(
         default=True, desc="Evaluate all the experts at once using dropless MoE.", hint=FieldHint.expert
     )
     dropless_dynamic_shape: bool = Field(
@@ -144,10 +144,10 @@ class MoEMLPConfig(MLPConfig):
         return MixtureOfExpertMLP
 
     @functools.cached_property
-    def num_unshared_experts(self) -> int:
-        return self.num_experts - self.num_shared_experts
+    def unshared_experts(self) -> int:
+        return self.experts - self.shared_experts
 
     def _validate(self) -> None:
         super()._validate()
-        Assert.leq(self.num_shared_experts, self.num_experts)
-        Assert.leq(self.num_shared_experts + self.num_experts_per_token, self.num_experts)
+        Assert.leq(self.shared_experts, self.experts)
+        Assert.leq(self.shared_experts + self.experts_per_token, self.experts)
