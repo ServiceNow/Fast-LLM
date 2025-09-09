@@ -68,19 +68,11 @@ def main(base_checkpoint: str, m2_indices: list[int], hybrid_checkpoint: str, sa
     tokenizer_dir: directory containing tokenizer files to copy over to save_dir.
     """
     m2_indexes = list(m2_indices)  # convert tuple -> list
-    # config = AutoConfig.from_pretrained(base_checkpoint, trust_remote_code=True)
     transformer = AutoModelForVision2Seq.from_pretrained(base_checkpoint, trust_remote_code=True)
-    # hybrid_config = AprielSSMHybridConfig.from_pretrained(hybrid_checkpoint)
     if hybrid_checkpoint == "none":
         print("No hybrid checkpoint provided, creating new config from base model.")
         hybrid_config = make_hybrid_llava_config(transformer)
 
-        # config_dict = transformer.config.to_dict()
-        # config_dict["text_config"]["hybrid_block_layout"] = hybrid_block_layout
-        # config_dict["text_config"]["model_type"] = "apriel_ssm_thinker_hybrid"
-
-        # hybrid_llava_config = LlavaHybridConfig(**config_dict)
-        # hybrid_llava_model = make_hybrid_llava_model(transformer, hybrid_llava_config)
         hybrid_llava_model = None
     else:
         hybrid_config = LlavaHybridConfig.from_pretrained(hybrid_checkpoint)
@@ -105,9 +97,6 @@ def main(base_checkpoint: str, m2_indices: list[int], hybrid_checkpoint: str, sa
     )
     hybrid_config.text_config.ssm_cfg["activation"] = "silu"
 
-    # hybrid_llava_model = LlavaHybridForConditionalGeneration(hybrid_llava_config)
-    # hybrid_llava_model.to(dtype=torch.bfloat16).to(device)
-
     # Load existing SSM layers
     if hybrid_checkpoint != "none":
         llava_state_dict = hybrid_llava_model.state_dict()
@@ -117,10 +106,6 @@ def main(base_checkpoint: str, m2_indices: list[int], hybrid_checkpoint: str, sa
             assert f"model.layers.{m2_index}.self_attn.q_proj.weight" in unexpected
         print("MISSING", missing)
         print("UNEXPECTED", unexpected)
-    # llava_state_dict = llava_model.state_dict()
-    # hybrid_llava_model.load_state_dict(llava_state_dict, strict=False)
-
-    # hybrid_llava_model.save_pretrained(save_dir, save_config=True)
 
     # Save state-dict
     transformer.save_pretrained(save_dir)
