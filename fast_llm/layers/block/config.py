@@ -60,10 +60,6 @@ class BlockLayerConfig(BaseModelConfig):
     def layer_class(self) -> "type[BlockLayer]":
         raise NotImplementedError()
 
-    def set_defaults(self, hidden_size: int):
-        # Opportunity to set defaults that depend on the hidden size.
-        pass
-
     def get_layer(
         self,
         distributed_config: DistributedConfig,
@@ -160,12 +156,6 @@ class BlockConfig(BaseModelConfig):
         hint=FieldHint.architecture,
         valid=check_field(Assert.gt, 0),
     )
-
-    def _validate(self) -> None:
-        self.mixer.set_defaults(self.hidden_size)
-        self.mlp.set_defaults(self.hidden_size)
-
-        super()._validate()
 
     def get_layer(
         self,
