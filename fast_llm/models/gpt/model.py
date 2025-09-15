@@ -1,5 +1,4 @@
 import logging
-import time
 import typing
 
 import torch
@@ -336,14 +335,11 @@ class GPTBaseModel[ConfigType: GPTBaseModelConfig](BaseModel[ConfigType]):
                 batch, reference_preprocessed_meta, phase=PhaseType.inference, iteration=iteration
             )
 
-            start_time = time.perf_counter()
             # TODO: Do things work with >1?
             Assert.eq(len(reference_batch), len(preprocessed_meta), 1)
             for i, (reference_tokens, reference_kwargs) in enumerate(reference_batch):
                 reference_model.forward(reference_tokens, reference_kwargs, iteration=iteration)
                 reference_logits[i][f"{name}_logits"] = reference_kwargs["logits"]
-            elapsed_time = (time.perf_counter() - start_time) * 1000
-            logger.info(f"Ref model {name} took {elapsed_time:.2f} ms for {len(reference_batch)} sequences.")
 
         token_ids = batch.token_ids
         if sequence_first:

@@ -2,7 +2,6 @@ import dataclasses
 import logging
 import math
 import pathlib
-import time
 import typing
 import warnings
 
@@ -421,7 +420,6 @@ class GPTSampledIndexedDataset(SampledDataset):
         The returned sample is ready to be concatenated, then fed to a `GPTModel` (see `GPTModel.preprocess`).
         """
         self._lazy_load()
-        start_time = time.perf_counter()
 
         if self._parameters.use_preference_loss_spans:
             if index < self._unshuffled_documents:
@@ -650,13 +648,6 @@ class GPTSampledIndexedDataset(SampledDataset):
         images = [im for img_list in images for im in img_list] if images else None
         image_positions = np.array(image_positions) if image_positions else None
         Assert.eq(len(token_ids), self._parameters.sequence_length + self._parameters.extra_tokens)
-
-        data_time = (time.perf_counter() - start_time) * 1000
-        if data_time > 100:
-            logger.warning(
-                f"Data loading took {data_time:,.2f} ms for {image_tokens_added} image tokens and "
-                f"{text_tokens_added} text tokens. {len(images) if images else 0} images and {len(token_ids)} total tokens."
-            )
 
         return GPTSample(
             token_ids=token_ids,
