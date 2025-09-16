@@ -253,6 +253,7 @@ def test_mamba_varlen_block(mixer_cls, hybrid_block_layout, tollerance, distribu
     Compare that the output and grads of packed and unpacked Mamba2 varlen block are the same.
     """
     hybrid_config = get_hybrid_config(hybrid_block_layout=hybrid_block_layout)
+
     tensor_space = TensorSpace(distributed_config=distributed_config)
     tensor_space.setup(distributed)
     hybrid_config.setup_tensor_space(tensor_space)

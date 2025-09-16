@@ -157,7 +157,7 @@ class Mamba2(Mixer):
             bias=config.add_bias_linear,
             weight_init_method=init_kaiming_(self._config.d_inner),
             sequence_parallel=self._sequence_parallel,
-            # TODO: lr_scale?
+            lr_scale=lr_scale,
         )
 
     def forward(self, input_: torch.Tensor, kwargs: dict[str, typing.Any]) -> tuple[torch.Tensor, torch.Tensor | None]:
@@ -168,9 +168,9 @@ class Mamba2(Mixer):
         """
         assert _mamba_available
         assert _causal_conv1d_available
-        cu_seqlens = kwargs[SSMKwargs.cu_seqlens]
-        seq_idx = kwargs[SSMKwargs.seq_idx]
-        position_indices = kwargs[SSMKwargs.ssm_position_ids]
+        cu_seqlens = kwargs.get(SSMKwargs.cu_seqlens)
+        seq_idx = kwargs.get(SSMKwargs.seq_idx)
+        position_indices = kwargs.get(SSMKwargs.ssm_position_ids)
 
         # inner_projection : (batch/local_sequence, local_sequence/batch, hidden)
         #   -> (batch/sequence, sequence/batch, inner_projection)
